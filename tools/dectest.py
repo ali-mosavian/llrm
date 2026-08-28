@@ -9,42 +9,53 @@ declen, which isolates length accuracy from resynchronisation -- a single
 wrong length would otherwise desynchronise the walk and every later
 instruction would be counted wrong for one mistake.
 """
-import subprocess, sys, struct, os, collections
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from qbopt.declen import length, T, BAD
+
+import sys
+import struct
+from pathlib import Path
+import subprocess
+import collections
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from qbopt.declen import length  # noqa: E402
+
 
 def segments(exe, mapfile, cls="BC_CODE"):
-    hdr = struct.unpack_from('<H', open(exe,'rb').read(), 8)[0] * 16
+    hdr = struct.unpack_from("<H", Path(exe).read_bytes(), 8)[0] * 16
     out = []
-    for ln in open(mapfile):
+    for ln in Path(mapfile).read_text().splitlines():
         p = ln.split()
         if len(p) >= 5 and p[4] == cls:
-            out.append((p[3], hdr + int(p[0][:-1],16), int(p[2][:-1],16)))
+            out.append((p[3], hdr + int(p[0][:-1], 16), int(p[2][:-1], 16)))
     return out
 
+
 def ndis(blob):
-    r = subprocess.run(["ndisasm","-b16","-"], input=blob,
-                       capture_output=True)
-    for ln in r.stdout.decode('latin1').splitlines():
-        if len(ln) > 10 and ln[8] == ' ':
+    r = subprocess.run(["ndisasm", "-b16", "-"], input=blob, capture_output=True)
+    for ln in r.stdout.decode("latin1").splitlines():
+        if len(ln) > 10 and ln[8] == " ":
             off = int(ln[:8], 16)
-            hx  = ln[10:].split()[0] if ln[10:].strip() else ""
             txt = ln[10:].strip()
             yield off, txt
 
+
 exe, mp = sys.argv[1], sys.argv[2]
-data = open(exe,'rb').read()
+data = Path(exe).read_bytes()
 agree = mismatch = bail = notcode = 0
-badops = collections.Counter(); wrong = collections.Counter()
+badops = collections.Counter()
+wrong = collections.Counter()
 for name, base, size in segments(exe, mp):
-    blob = data[base:base+size]
+    blob = data[base : base + size]
     marks = list(ndis(blob))
-    for k,(off,txt) in enumerate(marks):
-        want = (marks[k+1][0] - off) if k+1 < len(marks) else None
-        if want is None: break
+    for k, (off, txt) in enumerate(marks):
+        want = (marks[k + 1][0] - off) if k + 1 < len(marks) else None
+        if want is None:
+            break
         got = length(blob, off)
         if got is None:
-            bail += 1; badops[blob[off]] += 1
+            bail += 1
+            badops[blob[off]] += 1
         elif " db 0x" in txt:
             # ndisasm refused these bytes, so there is no instruction here to
             # agree about. They are the FP emulator's int 34h-3Dh patch points
@@ -61,13 +72,14 @@ for name, base, size in segments(exe, mp):
     print(f"  {name:16} {size:6} bytes, {len(marks):5} instructions")
 
 tot = agree + mismatch + bail
-print(f"\n  of {tot} real instructions: agree {agree} ({100*agree/tot:.2f}%), "
-      f"mismatch {mismatch}, bail {bail}")
+print(f"\n  of {tot} real instructions: agree {agree} ({100 * agree / tot:.2f}%), mismatch {mismatch}, bail {bail}")
 print(f"  {notcode} further offsets ndisasm would not decode either (not code)")
 if wrong:
     print("  worst length disagreements:")
-    for (op,mn),n in wrong.most_common(8): print(f"     {op:02X} {mn:10} x{n}")
+    for (op, mn), n in wrong.most_common(8):
+        print(f"     {op:02X} {mn:10} x{n}")
 print()
 if badops:
     print("  most common unknown opcodes:")
-    for op,n in badops.most_common(8): print(f"     {op:02X} x{n}")
+    for op, n in badops.most_common(8):
+        print(f"     {op:02X} x{n}")

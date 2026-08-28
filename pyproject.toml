@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "qbopt"
+version = "0.1.0"
+description = "A post-compilation pass over the .OBJ QuickBASIC's BC emits, between BC and LINK"
+readme = "README.md"
+requires-python = ">=3.13"
+authors = [{ name = "Ali Mosavian", email = "ali@42labs.ai" }]
+
+[dependency-groups]
+dev = [
+    "pytest ~= 8.4",
+    "ruff ~= 0.14",
+    "ty ~= 0.0.1a20",
+    "pre-commit ~= 4.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["qbopt"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.isort]
+force-single-line = true
+force-sort-within-sections = true
+length-sort = true
+length-sort-straight = true
+
+[tool.ty.rules]
+unresolved-import = "error"
+
+[tool.pytest.ini_options]
+addopts = ["-ra", "--showlocals", "--strict-markers"]
+testpaths = ["tests"]
+markers = [
+    "corpus: runs the rewriter over the committed .OBJ fixtures (no emulator)",
+    "e2e: compiles, links and runs under DOSBox-X (needs the DOS toolchains)",
+    "slow: measurement runs",
+]

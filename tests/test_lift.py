@@ -17,63 +17,91 @@ about the piece that happened not to run.
 So these are small, exhaustive where they can be, and property-based where
 enumeration would not finish.
 """
-import sys, os, struct, itertools, subprocess
+
+import os
+import sys
+import subprocess
+
 here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, here)
-from qbopt import declen
-from qbopt.declen import length, T as TAB, T0F, BAD
-from qbopt.lift import (decode1, lift, needed, regions, sizeof, encode, emit_region,
-                  LOAD, ALUM, ALUV, STORE, MOVE, NEG, FIXUP, PAIRS, REG, LOREG)
+from qbopt.lift import NEG
+from qbopt.lift import REG
+from qbopt.lift import ALUM
+from qbopt.lift import ALUV
+from qbopt.lift import LOAD
+from qbopt.lift import MOVE
+from qbopt.lift import FIXUP
+from qbopt.lift import PAIRS
+from qbopt.lift import STORE
+from qbopt.lift import lift
+from qbopt.lift import encode
+from qbopt.lift import needed
+from qbopt.lift import sizeof
+from qbopt.lift import decode1
+from qbopt.lift import regions
+from qbopt.lift import emit_region
+from qbopt.declen import BAD
+from qbopt.declen import T as TAB
+from qbopt.declen import length
 
 VERBOSE = "-v" in sys.argv
 fails, checks, group = [], 0, [""]
 
+
 def G(name):
     group[0] = name
-    if VERBOSE: print(f"\n-- {name}")
+    if VERBOSE:
+        print(f"\n-- {name}")
+
 
 def ok(cond, what):
     global checks
     checks += 1
-    if not cond: fails.append(f"[{group[0]}] {what}")
-    elif VERBOSE: print(f"   ok  {what}")
+    if not cond:
+        fails.append(f"[{group[0]}] {what}")
+    elif VERBOSE:
+        print(f"   ok  {what}")
+
 
 def eq(got, want, what):
     ok(got == want, f"{what}" + ("" if got == want else f"  (got {got!r}, want {want!r})"))
 
-def hx(s): return bytes.fromhex(s.replace(" ", ""))
 
-ALU = sorted(PAIRS)                      # 23 and, 0B or, 33 xor, 03 add, 2B sub
-HI  = {lo: PAIRS[lo][0] for lo in ALU}
-BASES = {0x06: 2, 0x46: 1, 0x86: 2}      # ModRM mod/rm -> displacement bytes
+def hx(s):
+    return bytes.fromhex(s.replace(" ", ""))
+
+
+ALU = sorted(PAIRS)  # 23 and, 0B or, 33 xor, 03 add, 2B sub
+HI = {lo: PAIRS[lo][0] for lo in ALU}
+BASES = {0x06: 2, 0x46: 1, 0x86: 2}  # ModRM mod/rm -> displacement bytes
 
 # ==========================================================================
 G("length decoder: the forms BC and the runtime emit")
 for enc, n, what in [
-    ("A1 5E 00",          3, "mov ax,moffs16"),
-    ("66 A1 5E 00",       4, "mov eax,moffs32 -- 66 does not change moffs"),
-    ("8B 16 60 00",       4, "mov dx,[disp16]"),
-    ("8B 46 E8",          3, "mov ax,[bp+disp8]"),
-    ("8B 86 00 01",       4, "mov ax,[bp+disp16]"),
-    ("8B C1",             2, "mov ax,cx -- register direct"),
-    ("83 D2 00",          3, "adc dx,imm8"),
-    ("81 C2 00 01",       4, "add dx,imm16"),
+    ("A1 5E 00", 3, "mov ax,moffs16"),
+    ("66 A1 5E 00", 4, "mov eax,moffs32 -- 66 does not change moffs"),
+    ("8B 16 60 00", 4, "mov dx,[disp16]"),
+    ("8B 46 E8", 3, "mov ax,[bp+disp8]"),
+    ("8B 86 00 01", 4, "mov ax,[bp+disp16]"),
+    ("8B C1", 2, "mov ax,cx -- register direct"),
+    ("83 D2 00", 3, "adc dx,imm8"),
+    ("81 C2 00 01", 4, "add dx,imm16"),
     ("66 81 C2 00 01 00 00", 7, "add edx,imm32 under 66"),
-    ("F7 D8",             2, "neg ax -- F7 /3 takes no immediate"),
+    ("F7 D8", 2, "neg ax -- F7 /3 takes no immediate"),
     ("F7 06 5E 00 34 12", 6, "test [disp16],imm16 -- F7 /0 does"),
-    ("F6 06 5E 00 34",    5, "test [disp16],imm8"),
-    ("0F 85 1A 16",       4, "jnz near"),
-    ("0F B6 C1",          3, "movzx"),
-    ("0F A4 C1 04",       4, "shld r/m,r,imm8"),
-    ("66 FF 36 5E 00",    5, "push dword [disp16]"),
-    ("9A 0F 00 15 00",    5, "call far ptr16:16"),
-    ("EA 0F 00 15 00",    5, "jmp far ptr16:16"),
-    ("C2 08 00",          3, "ret imm16"),
-    ("C8 04 00 00",       4, "enter imm16,imm8"),
-    ("C4 46 E8",          3, "les ax,[bp+disp8]"),
-    ("26 8A 07",          3, "a segment prefix is a prefix"),
-    ("F3 A4",             2, "rep movsb"),
-    ("67 66 8D 04 80",    5, "lea eax,[eax+eax*4] -- 32-bit addressing"),
+    ("F6 06 5E 00 34", 5, "test [disp16],imm8"),
+    ("0F 85 1A 16", 4, "jnz near"),
+    ("0F B6 C1", 3, "movzx"),
+    ("0F A4 C1 04", 4, "shld r/m,r,imm8"),
+    ("66 FF 36 5E 00", 5, "push dword [disp16]"),
+    ("9A 0F 00 15 00", 5, "call far ptr16:16"),
+    ("EA 0F 00 15 00", 5, "jmp far ptr16:16"),
+    ("C2 08 00", 3, "ret imm16"),
+    ("C8 04 00 00", 4, "enter imm16,imm8"),
+    ("C4 46 E8", 3, "les ax,[bp+disp8]"),
+    ("26 8A 07", 3, "a segment prefix is a prefix"),
+    ("F3 A4", 2, "rep movsb"),
+    ("67 66 8D 04 80", 5, "lea eax,[eax+eax*4] -- 32-bit addressing"),
 ]:
     eq(length(hx(enc), 0), n, what)
 
@@ -93,20 +121,28 @@ for mod in range(4):
         m = (mod << 6) | rm
         body = bytes([0x8B, m]) + b"\x11\x22\x33\x44"
         want = 2
-        if mod == 0 and rm == 6: want = 4          # [disp16]
-        elif mod == 1: want = 3                    # disp8
-        elif mod == 2: want = 4                    # disp16
+        if mod == 0 and rm == 6:
+            want = 4  # [disp16]
+        elif mod == 1:
+            want = 3  # disp8
+        elif mod == 2:
+            want = 4  # disp16
         eq(length(body, 0), want, f"16-bit addressing mod={mod} rm={rm}")
 for mod in range(4):
     for rm in range(8):
         m = (mod << 6) | rm
         body = bytes([0x67, 0x8B, m, 0x24]) + b"\x11\x22\x33\x44"
-        want = 3                                    # 67 + opcode + modrm
-        if rm == 4 and mod != 3: want += 1          # a sib byte
-        if mod == 0 and rm == 5: want += 4          # [disp32]
-        elif mod == 0 and rm == 4: want += 0
-        elif mod == 1: want += 1
-        elif mod == 2: want += 4
+        want = 3  # 67 + opcode + modrm
+        if rm == 4 and mod != 3:
+            want += 1  # a sib byte
+        if mod == 0 and rm == 5:
+            want += 4  # [disp32]
+        elif mod == 0 and rm == 4:
+            want += 0
+        elif mod == 1:
+            want += 1
+        elif mod == 2:
+            want += 4
         eq(length(body, 0), want, f"32-bit addressing mod={mod} rm={rm}")
 
 G("length decoder: never runs off the end")
@@ -117,28 +153,27 @@ for n in range(1, 6):
 
 # ==========================================================================
 G("classifier: every register, half, operation and addressing form")
-for opcode, kind in ((0x8B, 'ld'), (0x89, 'st')):
+for opcode, kind in ((0x8B, "ld"), (0x89, "st")):
     for reg in range(4):
         pair, half = REG[reg]
         for base, dl in BASES.items():
             m = base | (reg << 3)
-            b = bytes([opcode, m]) + (b"\xE8" if dl == 1 else b"\x5E\x00")
+            b = bytes([opcode, m]) + (b"\xe8" if dl == 1 else b"\x5e\x00")
             a = decode1(b, 0)
             ok(a is not None, f"{kind} reg={reg} base={base:02X} decodes")
             if a:
                 eq(a[0], kind, f"{kind} reg={reg} base={base:02X} kind")
-                eq((a[1], a[3]), (pair, half),
-                   f"{kind} reg={reg} base={base:02X} pair/half")
-                eq((a[7], a[8]), (base, dl),
-                   f"{kind} reg={reg} base={base:02X} form")
+                eq((a[1], a[3]), (pair, half), f"{kind} reg={reg} base={base:02X} pair/half")
+                eq((a[7], a[8]), (base, dl), f"{kind} reg={reg} base={base:02X} form")
 for lo in ALU:
     for op in (lo, HI[lo]):
         for reg in range(4):
             pair, half = REG[reg]
             m = 0x06 | (reg << 3)
             a = decode1(bytes([op, m, 0x5E, 0x00]), 0)
-            ok(a is not None and a[0] == 'op', f"alu {op:02X} reg={reg}")
-            if a: eq(a[4], op, f"alu {op:02X} keeps its opcode")
+            ok(a is not None and a[0] == "op", f"alu {op:02X} reg={reg}")
+            if a:
+                eq(a[4], op, f"alu {op:02X} keeps its opcode")
 
 G("classifier: register to register")
 for dreg in range(4):
@@ -147,23 +182,27 @@ for dreg in range(4):
         a = decode1(bytes([0x8B, m]), 0)
         same_half = REG[dreg][1] == REG[sreg][1]
         if same_half:
-            ok(a is not None and a[0] == 'mv', f"mov r{dreg},r{sreg} is a move")
-            if a: eq((a[1], a[2]), (REG[dreg][0], REG[sreg][0]),
-                     f"mov r{dreg},r{sreg} pairs")
+            ok(a is not None and a[0] == "mv", f"mov r{dreg},r{sreg} is a move")
+            if a:
+                eq((a[1], a[2]), (REG[dreg][0], REG[sreg][0]), f"mov r{dreg},r{sreg} pairs")
         else:
             eq(a, None, f"mov r{dreg},r{sreg} crosses halves and is not a pair")
 
 G("classifier: what it must refuse")
-eq(decode1(hx("8B 07"), 0), None,     "[bx] is not a form BC uses for a long")
-eq(decode1(hx("8B 20"), 0), None,     "reg=sp is not a long register")
+eq(decode1(hx("8B 07"), 0), None, "[bx] is not a form BC uses for a long")
+eq(decode1(hx("8B 20"), 0), None, "reg=sp is not a long register")
 eq(decode1(hx("8B 36 5E 00"), 0), None, "reg=si is not a long register")
 eq(decode1(hx("87 06 5E 00"), 0), None, "xchg is not one of the operations")
-eq(decode1(hx("8B C4"), 0), None,     "mov ax,sp is not a pair move")
+eq(decode1(hx("8B C4"), 0), None, "mov ax,sp is not a pair move")
 
 # ==========================================================================
 G("lift: one value per idiom")
+
+
 def one(h):
-    b = hx(h); return lift(b, 0, len(b))[0]
+    b = hx(h)
+    return lift(b, 0, len(b))[0]
+
 
 v = one("A1 5E 00 8B 16 60 00   23 06 5A 00 23 16 5C 00   A3 62 00 89 16 64 00")
 eq([x.op for x in v], [LOAD, ALUM, STORE], "load, operate, store")
@@ -190,18 +229,12 @@ eq([x.op for x in v], [LOAD, STORE], "a spill, high half written first")
 eq((v[1].mem, v[1].at), (-24, 7), "keeps the low displacement and the earlier address")
 
 G("lift: what it must refuse")
-eq(one("A1 5E 00 8B 16 62 00"), [],
-   "halves four apart are two variables, not one long")
-eq(one("A1 5E 00 8B 0E 60 00"), [],
-   "halves in different pairs are not a pair")
-eq(one("A1 5E 00 8B 16 60 00 03 06 5A 00 03 16 5C 00")[1:], [],
-   "add/add is two integers; only add/adc is a long")
-eq(one("A1 5E 00 8B 16 60 00 2B 06 5A 00 2B 16 5C 00")[1:], [],
-   "sub/sub likewise")
-eq(one("23 06 5A 00 23 16 5C 00"), [],
-   "an operation with nothing loaded has no value to work from")
-eq(one("A3 5E 00 89 16 60 00"), [],
-   "a store with nothing loaded likewise")
+eq(one("A1 5E 00 8B 16 62 00"), [], "halves four apart are two variables, not one long")
+eq(one("A1 5E 00 8B 0E 60 00"), [], "halves in different pairs are not a pair")
+eq(one("A1 5E 00 8B 16 60 00 03 06 5A 00 03 16 5C 00")[1:], [], "add/add is two integers; only add/adc is a long")
+eq(one("A1 5E 00 8B 16 60 00 2B 06 5A 00 2B 16 5C 00")[1:], [], "sub/sub likewise")
+eq(one("23 06 5A 00 23 16 5C 00"), [], "an operation with nothing loaded has no value to work from")
+eq(one("A3 5E 00 89 16 60 00"), [], "a store with nothing loaded likewise")
 v = one("A1 5E 00 8B 16 60 00  90  23 06 5A 00 23 16 5C 00")
 eq([x.op for x in v], [LOAD], "an opaque instruction invalidates the pairs")
 
@@ -214,42 +247,42 @@ eq(one("8B 06 5E 00 8B 0E 60 00"), [], "ax then cx is not a pair")
 
 # ==========================================================================
 G("regions and liveness")
-b = hx("A1 5E 00 8B 16 60 00 23 06 5A 00 23 16 5C 00"
-       "90 90"
-       "A1 62 00 8B 16 64 00 A3 66 00 89 16 68 00")
+b = hx("A1 5E 00 8B 16 60 00 23 06 5A 00 23 16 5C 0090 90A1 62 00 8B 16 64 00 A3 66 00 89 16 68 00")
 v, _ = lift(b, 0, len(b))
 eq(len(regions(v)), 2, "opaque bytes split a region")
 need = needed(v)
 eq(need[1], True, "a value in a register when a region ends is live")
-eq(all(need[n] for n, x in enumerate(v) if x.op == STORE), True,
-   "a store is always needed")
+eq(all(need[n] for n, x in enumerate(v) if x.op == STORE), True, "a store is always needed")
 
 b = hx("A1 5E 00 8B 16 60 00 23 06 5A 00 23 16 5C 00 A3 62 00 89 16 64 00")
-v, _ = lift(b, 0, len(b)); need = needed(v)
+v, _ = lift(b, 0, len(b))
+need = needed(v)
 eq(all(need), True, "everything feeding a store is needed, transitively")
 
 # ==========================================================================
 G("sizing and encoding agree, for every form")
 # If these disagree the region overruns the code after it or wastes what it
 # claimed. Two parallel switch statements do not stay in step on their own.
-corpus = ("A1 5E 00 8B 16 60 00  23 06 5A 00 23 16 5C 00  A3 62 00 89 16 64 00"
-          "8B 0E 5E 00 8B 1E 60 00  0B 0E 5A 00 0B 1E 5C 00"
-          "8B D3 8B C1  33 C1 33 D3"
-          "F7 D8 83 D2 00 F7 DA"
-          "8B 46 E8 8B 56 EA  03 46 E8 13 56 EA  89 46 E8 89 56 EA"
-          "8B 86 00 01 8B 96 02 01")
+corpus = (
+    "A1 5E 00 8B 16 60 00  23 06 5A 00 23 16 5C 00  A3 62 00 89 16 64 00"
+    "8B 0E 5E 00 8B 1E 60 00  0B 0E 5A 00 0B 1E 5C 00"
+    "8B D3 8B C1  33 C1 33 D3"
+    "F7 D8 83 D2 00 F7 DA"
+    "8B 46 E8 8B 56 EA  03 46 E8 13 56 EA  89 46 E8 89 56 EA"
+    "8B 86 00 01 8B 96 02 01"
+)
 v, _ = lift(hx(corpus), 0, len(hx(corpus)))
 ok(len(v) >= 10, f"the corpus lifted {len(v)} values")
 seen = set()
 for n, x in enumerate(v):
     eq(sizeof(x, None), len(encode(x)), f"v{n} {x.op} base {x.base:02X}")
     seen.add((x.op, x.base, x.pair))
-ok(len({op for op, _, _ in seen}) >= 5, f"covering {len({o for o,_,_ in seen})} value kinds")
+ok(len({op for op, _, _ in seen}) >= 5, f"covering {len({o for o, _, _ in seen})} value kinds")
 
 G("encoding: exact bytes")
 for h, want, what in [
-    ("A1 5E 00 8B 16 60 00",            "66a15e00",    "mov eax,[disp16]"),
-    ("8B 0E 5E 00 8B 1E 60 00",         "668b0e5e00",  "mov ecx,[disp16]"),
+    ("A1 5E 00 8B 16 60 00", "66a15e00", "mov eax,[disp16]"),
+    ("8B 0E 5E 00 8B 1E 60 00", "668b0e5e00", "mov ecx,[disp16]"),
 ]:
     eq(encode(one(h)[0]).hex(), want, what)
 v = one("A1 5E 00 8B 16 60 00  8B 46 E8 8B 56 EA")
@@ -268,25 +301,31 @@ eq(FIXUP[0].hex(), "668bd066c1ea10", "pair 0's high half comes back from eax")
 eq(FIXUP[1].hex(), "668bd966c1eb10", "pair 1's from ecx")
 
 G("emission: a region never grows, and the slack is jumped over")
-for h in ["A1 5E 00 8B 16 60 00 23 06 5A 00 23 16 5C 00 A3 62 00 89 16 64 00",
-          "8B 0E 5E 00 8B 1E 60 00 0B 0E 5A 00 0B 1E 5C 00 89 0E 62 00 89 1E 64 00",
-          "A1 5E 00 8B 16 60 00 F7 D8 83 D2 00 F7 DA A3 62 00 89 16 64 00"]:
-    b = hx(h); v, _ = lift(b, 0, len(b)); need = needed(v)
+for h in [
+    "A1 5E 00 8B 16 60 00 23 06 5A 00 23 16 5C 00 A3 62 00 89 16 64 00",
+    "8B 0E 5E 00 8B 1E 60 00 0B 0E 5A 00 0B 1E 5C 00 89 0E 62 00 89 1E 64 00",
+    "A1 5E 00 8B 16 60 00 F7 D8 83 D2 00 F7 DA A3 62 00 89 16 64 00",
+]:
+    b = hx(h)
+    v, _ = lift(b, 0, len(b))
+    need = needed(v)
     for reg in regions(v):
         span = v[reg[-1]].end - v[reg[0]].at
         out = emit_region(v, need, reg)
-        if out is None: continue
+        if out is None:
+            continue
         eq(len(out), span, f"padded to exactly the {span} bytes it replaced")
         core = sum(sizeof(v[n], None) for n in reg if need[n])
         core += sum(len(FIXUP[p]) for p in {v[n].pair for n in reg if need[n]})
         if span - core >= 2:
             eq(out[core], 0xEB, "the slack begins with a jump")
-            eq(out[core+1], span - core - 2, "clearing exactly the slack")
-            ok(all(x == 0x90 for x in out[core+2:]), "and the rest is nops")
+            eq(out[core + 1], span - core - 2, "clearing exactly the slack")
+            ok(all(x == 0x90 for x in out[core + 2 :]), "and the rest is nops")
 
 G("emission: too small a region is refused, not overrun")
-b = hx("8B 0E 5E 00 8B 1E 60 00 89 0E 62 00 89 1E 64 00")   # 16 bytes, pair 1
-v, _ = lift(b, 0, len(b)); need = needed(v)
+b = hx("8B 0E 5E 00 8B 1E 60 00 89 0E 62 00 89 1E 64 00")  # 16 bytes, pair 1
+v, _ = lift(b, 0, len(b))
+need = needed(v)
 for reg in regions(v):
     out = emit_region(v, need, reg)
     span = v[reg[-1]].end - v[reg[0]].at
@@ -296,44 +335,69 @@ for reg in regions(v):
 G("fuzz: the decoder against ndisasm")
 try:
     import random
+
     random.seed(20260828)
     blob = bytes(random.randrange(256) for _ in range(4000))
-    r = subprocess.run(["ndisasm", "-b16", "-"], input=blob,
-                       capture_output=True, timeout=30)
+    r = subprocess.run(["ndisasm", "-b16", "-"], input=blob, capture_output=True, timeout=30)
     import re
+
     marks = []
-    for ln in r.stdout.decode('latin1').splitlines():
-        m = re.match(r'^([0-9A-F]{8})  (\S+)\s+(.*)$', ln)
-        if m: marks.append((int(m.group(1), 16), m.group(3)))
+    for ln in r.stdout.decode("latin1").splitlines():
+        m = re.match(r"^([0-9A-F]{8})  (\S+)\s+(.*)$", ln)
+        if m:
+            marks.append((int(m.group(1), 16), m.group(3)))
     # ndisasm renders wait, lock and the segment overrides joined to the
     # instruction after them; this decoder treats them separately. The stream
     # of boundaries is the same either way, so those lines are skipped rather
     # than counted as disagreements about length.
-    JOINED = ("wait", "lock", "rep", "repe", "repne", "repz", "repnz",
-              "cs", "ds", "es", "ss", "fs", "gs", "a16", "a32", "o16", "o32")
+    JOINED = (
+        "wait",
+        "lock",
+        "rep",
+        "repe",
+        "repne",
+        "repz",
+        "repnz",
+        "cs",
+        "ds",
+        "es",
+        "ss",
+        "fs",
+        "gs",
+        "a16",
+        "a32",
+        "o16",
+        "o32",
+    )
     agree = disagree = bail = skip = 0
     for k in range(len(marks) - 1):
         off, txt = marks[k]
-        if txt.startswith("db 0x"): continue
+        if txt.startswith("db 0x"):
+            continue
         # bare too: where ndisasm cannot decode what follows a prefix it
         # reports the prefix alone, which is not a claim about length
         if txt.split()[0] in JOINED:
-            skip += 1; continue
-        want = marks[k+1][0] - off
+            skip += 1
+            continue
+        want = marks[k + 1][0] - off
         got = length(blob, off)
-        if got is None: bail += 1
-        elif got == want: agree += 1
-        else: disagree += 1
-    ok(disagree == 0, f"{agree} random instructions agree, {disagree} do not, "
-                      f"{bail} unknown, {skip} prefix-joined")
+        if got is None:
+            bail += 1
+        elif got == want:
+            agree += 1
+        else:
+            disagree += 1
+    ok(disagree == 0, f"{agree} random instructions agree, {disagree} do not, {bail} unknown, {skip} prefix-joined")
     ok(agree > 1000, f"the fuzz corpus produced {agree} comparable instructions")
 except (FileNotFoundError, subprocess.TimeoutExpired):
-    if VERBOSE: print("   skipped -- no ndisasm")
+    if VERBOSE:
+        print("   skipped -- no ndisasm")
 
 # ==========================================================================
 print()
 if fails:
     print(f"{len(fails)} of {checks} checks FAILED")
-    for f in fails: print("   ", f)
+    for f in fails:
+        print("   ", f)
     sys.exit(1)
 print(f"all {checks} checks pass")
