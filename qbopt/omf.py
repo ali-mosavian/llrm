@@ -187,6 +187,14 @@ LOCNAME = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class Thread:
+    """A frame or target a later fixup refers to by number."""
+
+    method: int
+    index: int
+
+
 @dataclass(slots=True)
 class Fixup:
     """One relocation, resolved to where in the segment it patches."""
@@ -197,71 +205,115 @@ class Fixup:
     selfrel: bool
     target: str
     index: int
-    raw: bytes | None
+    # In an object a label's address is not in the code -- the bytes there are
+    # zero and this is where the offset lives.
+    disp: int
+    frame: Thread | int | None
+    record: Record
+    lo: int
+    hi: int
+    disp_pos: int | None
+
+    @property
+    def raw(self) -> bytes:
+        return self.record.body[self.lo : self.hi]
 
     def __repr__(self) -> str:
-        loc = LOCNAME.get(self.loc, self.loc)
-        return f"<{self.seg} {self.offset:04X} {loc} {self.target} {self.index}>"
+        return (
+            f"<{self.seg} {self.offset:04X} {LOCNAME.get(self.loc, self.loc)} {self.target} {self.index}+{self.disp}>"
+        )
 
 
-def fixups(recs: list[Record]) -> list[Fixup]:
+def read_thread(body: bytes, at: int) -> tuple[bool, int, Thread, int]:
+    """(is a frame thread, its number, what it names, where the next starts)."""
+    lead = body[at]
+    at += 1
+    method, number = (lead >> 2) & 7, lead & 3
+    index = 0
+    # Frame methods 4 and 5 -- the location's segment, and the target's frame --
+    # carry no index. Testing method & 3 says both of them do, and eats a byte
+    # that is not there, which desynchronises the rest of the record.
+    if method < 3:
+        index, at = _index(body, at)
+    return bool(lead & 0x40), number, Thread(method, index), at
+
+
+def fixups(records: list[Record]) -> list[Fixup]:
     """Every FIXUP subrecord, with its offset made absolute in the segment.
 
-    A FIXUPP's offsets are relative to the LEDATA it follows, which is why
-    this walks the records in order rather than gathering them by type.
+    A FIXUPP's offsets are relative to the LEDATA it follows, which is why this
+    walks the records in order rather than gathering them by type.
 
-    THREAD subrecords set a default frame or target that later fixups refer
-    to by number, and BC leans on them heavily -- 34 of the 40 fixups in a
-    module with an ON GOTO and a SELECT CASE were thread-based. Anything
-    that means to move code has to resolve them, or it cannot see what most
-    of the relocations point at.
+    THREAD subrecords set a default frame or target that later fixups refer to
+    by number, and BC leans on them heavily -- 34 of the 40 fixups in a module
+    with an ON GOTO and a SELECT CASE were thread-based. Anything that means to
+    move code has to resolve them, or it cannot see what most of the relocations
+    point at.
     """
-    out, seg, base = [], None, 0
-    ftr = [None] * 4  # frame threads
-    ttr = [None] * 4  # target threads
-    for r in recs:
-        if r.type & 0xFE == LEDATA:
-            si, i = _index(r.body, 0)
-            seg, base = si, struct.unpack_from("<H", r.body, i)[0]
+    found: list[Fixup] = []
+    seg: int | None = None
+    base = 0
+    frame_threads: list[Thread | None] = [None] * 4
+    target_threads: list[Thread | None] = [None] * 4
+
+    for record in records:
+        if record.type & 0xFE == LEDATA:
+            segment_index, at = _index(record.body, 0)
+            seg, base = segment_index, struct.unpack_from("<H", record.body, at)[0]
             continue
-        if r.type & 0xFE != FIXUPP:
+        if record.type & 0xFE != FIXUPP:
             continue
-        b_, i = r.body, 0
-        while i < len(b_):
-            if not (b_[i] & 0x80):  # THREAD
-                d = b_[i]
-                i += 1
-                method, thred = (d >> 2) & 7, d & 3
-                idx = 0
-                if (method & 3) < 3:  # SEGDEF/GRPDEF/EXTDEF
-                    idx, i = _index(b_, i)
-                (ftr if (d & 0x40) else ttr)[thred] = (method, idx)
+
+        body, at = record.body, 0
+        while at < len(body):
+            start = at
+            if not body[at] & 0x80:
+                is_frame, number, thread, at = read_thread(body, at)
+                (frame_threads if is_frame else target_threads)[number] = thread
                 continue
 
-            loc = (b_[i] >> 2) & 0x0F
-            selfrel = not (b_[i] & 0x40)
-            off = ((b_[i] & 0x03) << 8) | b_[i + 1]
-            i += 2
-            fd = b_[i]
-            i += 1
+            loc = (body[at] >> 2) & 0x0F
+            selfrel = not body[at] & 0x40
+            offset = ((body[at] & 0x03) << 8) | body[at + 1]
+            at += 2
+            fixdata = body[at]
+            at += 1
 
-            if fd & 0x80:  # frame from a thread
-                pass
-            elif ((fd >> 4) & 7) < 3:  # explicit frame index
-                _, i = _index(b_, i)
+            frame: Thread | int | None = None
+            if fixdata & 0x80:
+                frame = frame_threads[(fixdata >> 4) & 3]
+            elif ((fixdata >> 4) & 7) < 3:
+                frame, at = _index(body, at)
 
-            if fd & 0x08:  # target from a thread
-                th = ttr[fd & 3]
-                method, index = th if th else (7, 0)
+            if fixdata & 0x08:
+                named = target_threads[fixdata & 3]
+                method, index = (named.method, named.index) if named else (7, 0)
             else:
-                method = fd & 3
-                index, i = _index(b_, i)
-            target = TARGET_KIND.get(method & 3, "frame")
+                method = fixdata & 3
+                index, at = _index(body, at)
 
-            if not (fd & 0x04):  # a displacement follows
-                i += 2
-            out.append(Fixup(seg, base + off, loc, selfrel, target, index, None))
-    return out
+            disp, disp_pos = 0, None
+            if not fixdata & 0x04:
+                disp, disp_pos = struct.unpack_from("<H", body, at)[0], at
+                at += 2
+
+            found.append(
+                Fixup(
+                    seg=seg,
+                    offset=base + offset,
+                    loc=loc,
+                    selfrel=selfrel,
+                    target=TARGET_KIND.get(method & 3, "frame"),
+                    index=index,
+                    disp=disp,
+                    frame=frame,
+                    record=record,
+                    lo=start,
+                    hi=at,
+                    disp_pos=disp_pos,
+                )
+            )
+    return found
 
 
 def main(path: Path | str) -> None:
