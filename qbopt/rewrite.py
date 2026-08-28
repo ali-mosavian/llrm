@@ -12,7 +12,6 @@ import sys
 import json
 import hashlib
 import argparse
-from typing import Any
 from pathlib import Path
 from dataclasses import asdict
 from dataclasses import replace
@@ -37,10 +36,11 @@ class Region:
     reason: str | None
 
 
-def _code_segment(recs: list[omf.Record]) -> int | None:
+def _code_segment(recs: list[omf.Record]) -> tuple[int, int] | None:
+    """The module's code segment, as (index, length), or None."""
     for i, s in enumerate(omf.segments(recs)):
         if s and s[0].endswith("_CODE"):
-            return i
+            return i, s[1]
     return None
 
 
@@ -60,10 +60,10 @@ def plan(
     take: set[int] | None = None,
     max_regions: int | None = None,
 ) -> list[Region]:
-    seg = _code_segment(recs)
-    if seg is None:
+    found = _code_segment(recs)
+    if found is None:
         return []
-    size = omf.segments(recs)[seg][1]
+    seg, size = found
     code = bytes(_image(recs, seg, size))
 
     vals, _ = lift(code, 0, len(code))
@@ -95,9 +95,15 @@ def plan(
     return out
 
 
-def rewrite(data: bytes, *, dry_run: bool, **kw: Any) -> tuple[bytes, list[Region]]:
+def rewrite(
+    data: bytes,
+    *,
+    dry_run: bool,
+    take: set[int] | None = None,
+    max_regions: int | None = None,
+) -> tuple[bytes, list[Region]]:
     recs = omf.parse(data)
-    found = plan(recs, **kw)
+    found = plan(recs, take=take, max_regions=max_regions)
     if dry_run:
         return data, [replace(r, taken=False, reason="dry run") for r in found]
     # Nothing is written back yet: the rewriter needs addresses out of the

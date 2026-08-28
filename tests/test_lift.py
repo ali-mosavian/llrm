@@ -11,22 +11,18 @@ about the piece that happened not to run.
 import pytest
 
 from helpers import hx
-from qbopt.lift import NEG
+from qbopt.lift import Op
 from qbopt.lift import REG
-from qbopt.lift import ALUM
-from qbopt.lift import ALUV
-from qbopt.lift import LOAD
-from qbopt.lift import MOVE
+from qbopt.lift import Kind
 from qbopt.lift import lift
 from qbopt.lift import FIXUP
 from qbopt.lift import PAIRS
-from qbopt.lift import STORE
 from qbopt.lift import Value
 from qbopt.lift import encode
 from qbopt.lift import needed
 from qbopt.lift import sizeof
-from qbopt.lift import decode1
 from qbopt.lift import regions
+from qbopt.lift import classify
 from qbopt.lift import emit_region
 
 ALU = sorted(PAIRS)  # 23 and, 0B or, 33 xor, 03 add, 2B sub
@@ -41,38 +37,38 @@ def one(h: str) -> list[Value]:
 
 @pytest.mark.parametrize("base", sorted(BASES), ids=lambda b: f"base{b:02X}")
 @pytest.mark.parametrize("reg", range(4))
-@pytest.mark.parametrize(("opcode", "kind"), ((0x8B, "ld"), (0x89, "st")))
-def test_classifier_every_register_half_and_addressing_form(opcode: int, kind: str, reg: int, base: int) -> None:
-    dl = BASES[base]
-    b = bytes([opcode, base | (reg << 3)]) + (b"\xe8" if dl == 1 else b"\x5e\x00")
-    a = decode1(b, 0)
-    assert a is not None
-    assert a[0] == kind
-    assert (a[1], a[3]) == REG[reg]
-    assert (a[7], a[8]) == (base, dl)
+@pytest.mark.parametrize(("opcode", "kind"), ((0x8B, Kind.LOAD), (0x89, Kind.STORE)))
+def test_classifier_every_register_half_and_addressing_form(opcode: int, kind: Kind, reg: int, base: int) -> None:
+    dlen = BASES[base]
+    code = bytes([opcode, base | (reg << 3)]) + (b"\xe8" if dlen == 1 else b"\x5e\x00")
+    decoded = classify(code, 0)
+    assert decoded is not None
+    assert decoded.kind is kind
+    assert (decoded.pair, decoded.half) == REG[reg]
+    assert (decoded.base, decoded.dlen) == (base, dlen)
 
 
 @pytest.mark.parametrize("reg", range(4))
 @pytest.mark.parametrize("half", (0, 1), ids=("lo", "hi"))
 @pytest.mark.parametrize("lo", ALU, ids=lambda lo: f"{lo:02X}")
 def test_classifier_every_alu_operation(lo: int, half: int, reg: int) -> None:
-    op = HI[lo] if half else lo
-    a = decode1(bytes([op, 0x06 | (reg << 3), 0x5E, 0x00]), 0)
-    assert a is not None
-    assert a[0] == "op"
-    assert a[4] == op
+    opcode = HI[lo] if half else lo
+    decoded = classify(bytes([opcode, 0x06 | (reg << 3), 0x5E, 0x00]), 0)
+    assert decoded is not None
+    assert decoded.kind is Kind.ALU
+    assert decoded.alu == opcode
 
 
 @pytest.mark.parametrize("sreg", range(4))
 @pytest.mark.parametrize("dreg", range(4))
 def test_classifier_register_to_register(dreg: int, sreg: int) -> None:
-    a = decode1(bytes([0x8B, 0xC0 | (dreg << 3) | sreg]), 0)
+    decoded = classify(bytes([0x8B, 0xC0 | (dreg << 3) | sreg]), 0)
     if REG[dreg][1] == REG[sreg][1]:
-        assert a is not None
-        assert a[0] == "mv"
-        assert (a[1], a[2]) == (REG[dreg][0], REG[sreg][0])
+        assert decoded is not None
+        assert decoded.kind is Kind.MOVE
+        assert (decoded.pair, decoded.src_pair) == (REG[dreg][0], REG[sreg][0])
     else:
-        assert a is None, "halves must match for a pair move"
+        assert decoded is None, "halves must match for a pair move"
 
 
 @pytest.mark.parametrize(
@@ -86,25 +82,25 @@ def test_classifier_register_to_register(dreg: int, sreg: int) -> None:
     ],
 )
 def test_classifier_refuses(enc: str, why: str) -> None:
-    assert decode1(hx(enc), 0) is None, why
+    assert classify(hx(enc), 0) is None, why
 
 
 def test_load_operate_store_is_one_chain() -> None:
     v = one("A1 5E 00 8B 16 60 00   23 06 5A 00 23 16 5C 00   A3 62 00 89 16 64 00")
-    assert [x.op for x in v] == [LOAD, ALUM, STORE]
+    assert [x.op for x in v] == [Op.LOAD, Op.ALUM, Op.STORE]
     assert (v[1].s1, v[2].s1) == (0, 1)
     assert v[0].mem == 0x5E, "the load keeps the low half's displacement"
 
 
 def test_a_pair_copy_is_a_value_knowing_both_pairs() -> None:
     v = one("8B 0E 5E 00 8B 1E 60 00   8B D3 8B C1   A3 62 00 89 16 64 00")
-    assert [x.op for x in v] == [LOAD, MOVE, STORE]
+    assert [x.op for x in v] == [Op.LOAD, Op.MOVE, Op.STORE]
     assert (v[1].pair, v[1].src_pair) == (0, 1)
 
 
 def test_a_cross_pair_operation_reads_both_values() -> None:
     v = one("A1 5E 00 8B 16 60 00  8B 0E 62 00 8B 1E 64 00  33 C1 33 D3")
-    assert [x.op for x in v] == [LOAD, LOAD, ALUV]
+    assert [x.op for x in v] == [Op.LOAD, Op.LOAD, Op.ALUV]
     assert (v[2].s1, v[2].s2) == (0, 1)
 
 
@@ -117,13 +113,13 @@ def test_a_cross_pair_operation_reads_both_values() -> None:
 )
 def test_neg_adc_neg_is_one_negate(enc: str, what: str) -> None:
     v = one(enc)
-    assert [x.op for x in v] == [LOAD, NEG]
+    assert [x.op for x in v] == [Op.LOAD, Op.NEG]
     assert v[1].end - v[1].at == 7, "consuming seven bytes"
 
 
 def test_a_spill_written_high_half_first() -> None:
     v = one("A1 5E 00 8B 16 60 00   89 56 EA 89 46 E8")
-    assert [x.op for x in v] == [LOAD, STORE]
+    assert [x.op for x in v] == [Op.LOAD, Op.STORE]
     assert (v[1].mem, v[1].at) == (-24, 7), "the low displacement and the earlier address"
 
 
@@ -159,7 +155,7 @@ def test_lift_refuses_a_carry_blind_pair(enc: str, why: str) -> None:
 
 def test_an_opaque_instruction_invalidates_the_pairs() -> None:
     v = one("A1 5E 00 8B 16 60 00  90  23 06 5A 00 23 16 5C 00")
-    assert [x.op for x in v] == [LOAD]
+    assert [x.op for x in v] == [Op.LOAD]
 
 
 def test_opaque_bytes_split_a_region_and_leave_the_value_live() -> None:
@@ -168,7 +164,7 @@ def test_opaque_bytes_split_a_region_and_leave_the_value_live() -> None:
     assert len(regions(v)) == 2
     need = needed(v)
     assert need[1] is True, "a value in a register when a region ends is live"
-    assert all(need[n] for n, x in enumerate(v) if x.op == STORE), "a store is always needed"
+    assert all(need[n] for n, x in enumerate(v) if x.op == Op.STORE), "a store is always needed"
 
 
 def test_everything_feeding_a_store_is_needed_transitively() -> None:
@@ -177,8 +173,6 @@ def test_everything_feeding_a_store_is_needed_transitively() -> None:
     assert all(needed(v))
 
 
-# If sizeof and encode disagree the region overruns the code after it or wastes
-# what it claimed. Two parallel switch statements do not stay in step on their own.
 CORPUS = (
     "A1 5E 00 8B 16 60 00  23 06 5A 00 23 16 5C 00  A3 62 00 89 16 64 00"
     "8B 0E 5E 00 8B 1E 60 00  0B 0E 5A 00 0B 1E 5C 00"
@@ -199,11 +193,6 @@ def corpus() -> list[Value]:
 def test_the_corpus_covers_enough_to_be_worth_checking(corpus: list[Value]) -> None:
     assert len(corpus) >= 10
     assert len({x.op for x in corpus}) >= 5
-
-
-def test_sizing_and_encoding_agree_for_every_form(corpus: list[Value]) -> None:
-    for n, x in enumerate(corpus):
-        assert sizeof(x, None) == len(encode(x)), f"v{n} {x.op} base {x.base:02X}"
 
 
 @pytest.mark.parametrize(
@@ -251,7 +240,7 @@ def test_a_region_never_grows_and_the_slack_is_jumped_over(enc: str) -> None:
         if out is None:
             continue
         assert len(out) == span, "padded to exactly the bytes it replaced"
-        core = sum(sizeof(v[n], None) for n in reg if need[n])
+        core = sum(sizeof(v[n]) for n in reg if need[n])
         core += sum(len(FIXUP[p]) for p in {v[n].pair for n in reg if need[n]})
         if span - core >= 2:
             assert out[core] == 0xEB, "the slack begins with a jump"

@@ -17,7 +17,7 @@ import pytest
 from helpers import hx
 from qbopt.declen import BAD
 from qbopt.declen import length
-from qbopt.declen import T as TABLE
+from qbopt.declen import OPCODES
 
 FORMS = [
     ("A1 5E 00", 3, "mov ax,moffs16"),
@@ -46,7 +46,7 @@ FORMS = [
     ("67 66 8D 04 80", 5, "lea eax,[eax+eax*4] -- 32-bit addressing"),
 ]
 
-UNKNOWN = [op for op in range(256) if TABLE[op] == BAD]
+UNKNOWN = [op for op in range(256) if OPCODES[op] == BAD]
 
 
 @pytest.mark.parametrize(("enc", "want", "what"), FORMS, ids=[f[2] for f in FORMS])

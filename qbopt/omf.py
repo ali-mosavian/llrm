@@ -74,7 +74,7 @@ class Record:
     def name(self) -> str:
         return NAMES.get(self.type, f"{self.type:02X}")
 
-    def emit(self):
+    def emit(self) -> bytes:
         # the checksum byte makes the record's bytes sum to zero mod 256;
         # a zero byte is also accepted and is what many tools write, but
         # matching what BC wrote keeps a untouched file untouched
@@ -83,12 +83,12 @@ class Record:
         return head + body + bytes([(-sum(head) - sum(body)) & 0xFF])
 
 
-def read(path):
+def read(path: Path | str) -> list[Record]:
     """Every record in the file, in order."""
-    return parse(open(path, "rb").read())
+    return parse(Path(path).read_bytes())
 
 
-def parse(d):
+def parse(d: bytes) -> list[Record]:
     out, i = [], 0
     while i + 3 <= len(d):
         t, n = struct.unpack_from("<BH", d, i)
@@ -101,18 +101,18 @@ def parse(d):
     return out
 
 
-def write(path, recs):
+def write(path: Path | str, recs: list[Record]) -> None:
     Path(path).write_bytes(b"".join(r.emit() for r in recs))
 
 
-def _index(b, i):
+def _index(b: bytes, i: int) -> tuple[int, int]:
     """An OMF index: one byte under 128, otherwise two with the top bit set."""
     if b[i] & 0x80:
         return ((b[i] & 0x7F) << 8) | b[i + 1], i + 2
     return b[i], i + 1
 
 
-def names(recs):
+def names(recs: list[Record]) -> list[str]:
     """The LNAMES strings, 1-based as every other record refers to them."""
     out = [""]
     for r in recs:
@@ -125,7 +125,7 @@ def names(recs):
     return out
 
 
-def segments(recs):
+def segments(recs: list[Record]) -> list[tuple[str, int] | None]:
     """SEGDEFs as (name, length), 1-based by segment index."""
     nm, out = names(recs), [None]
     for r in recs:
@@ -143,7 +143,7 @@ def segments(recs):
     return out
 
 
-def externals(recs):
+def externals(recs: list[Record]) -> list[str]:
     """EXTDEF names, 1-based -- FIXUPP targets refer to these by index."""
     out = [""]
     for r in recs:
@@ -158,7 +158,7 @@ def externals(recs):
     return out
 
 
-def ledata(recs):
+def ledata(recs: list[Record]) -> list[tuple[Record, int, int, bytes]]:
     """Each LEDATA as (record, segment index, offset, bytes)."""
     out = []
     for r in recs:
@@ -204,7 +204,7 @@ class Fixup:
         return f"<{self.seg} {self.offset:04X} {loc} {self.target} {self.index}>"
 
 
-def fixups(recs):
+def fixups(recs: list[Record]) -> list[Fixup]:
     """Every FIXUP subrecord, with its offset made absolute in the segment.
 
     A FIXUPP's offsets are relative to the LEDATA it follows, which is why
@@ -264,7 +264,7 @@ def fixups(recs):
     return out
 
 
-def main(path):
+def main(path: Path | str) -> None:
     recs = read(path)
     segs, exts = segments(recs), externals(recs)
     counts = {}

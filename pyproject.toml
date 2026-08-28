@@ -29,7 +29,7 @@ line-length = 120
 quote-style = "double"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "UP", "B", "SIM"]
+select = ["E", "F", "W", "UP", "B", "SIM", "ANN"]
 
 [tool.isort]
 profile = "black"

@@ -140,10 +140,32 @@ Moving code means updating all of, and the list is finite:
 
 - **Python 3.13+, and `uv` for everything.** `uv run`, `uv sync`, `uv add`. No
   `pip`, no hand-rolled venv.
+- **Write 3.13, not 3.6.** `match` rather than an `if`/`elif` chain, structural
+  patterns over a dataclass rather than a field test, `StrEnum` where a set of
+  string constants would otherwise be matched by name -- a bare name in a
+  `case` is a capture pattern and matches everything, so the constants have to
+  be dotted for the match to mean anything. `type` aliases, `X | None`, the
+  walrus where it shortens.
+- **Names say what the thing is, in as few words as do that.** `value`, not
+  `v`; `from_memory`, not `m`. Not `the_value_being_encoded` either.
+- **The code explains itself, or it is rewritten until it does.** A comment
+  that has to say *what* the code does is a naming or structure problem.
+- **DRY, SRP, open/closed.** One fact in one place -- two parallel switch
+  statements over the same cases will drift, and a test asserting they agree
+  is a patch over a structure that should not allow the disagreement. One
+  function, one job. Extending the pass with a new idiom should mean adding a
+  case, not editing the ones already there.
+- **Functions are pure.** No mutating shared or global state, and no
+  module-level code that does work. Module-level *constants* are fine and
+  wanted -- but a table that has to be computed is computed by a function that
+  returns it and bound once, and a script's body lives in `main()`.
 - **Functions over classes.** A class earns its place only when behaviour and
   state travel together. Data is a `@dataclass(slots=True)`, and `frozen=True`
   unless something has to mutate it.
-- **Type annotations on every parameter and every return.** `ty` checks them.
+- **Type annotations on every parameter and every return.** ruff's `ANN`
+  requires them; `ty` checks they are true. Neither does the other's job --
+  ty has no `disallow-untyped-defs`, and an unannotated parameter is
+  `Unknown`, which is assignable both ways and so can never conflict.
 - `ruff check` and `ruff format`, and `isort` for import order -- configs
   borrowed from capcore: line length 120, double quotes, one import per line.
 - **No docstrings. No comments unless something is not trivial** -- and here
