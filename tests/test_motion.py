@@ -1,0 +1,66 @@
+"""
+Code motion, proved the only way it can be: build a program, move its code,
+link it and run it.
+
+A nop inserted at an instruction boundary changes nothing about what the program
+computes and everything about where it lives. Every offset after it moves, so
+every fixup, public symbol, line number, segment length and branch displacement
+has to move with it. If any one of them is left behind the program still links
+-- and then prints the wrong answer, or does not come back.
+"""
+
+import e2e
+import pytest
+from configs import CONFIGS
+from dosbox import dosbox_bin
+
+from qbopt import omf
+from qbopt.relocate import Edit
+from qbopt.relocate import Shift
+from qbopt.relocate import relocate
+from qbopt.relocate import trusted_decode
+
+pytestmark = [pytest.mark.e2e, pytest.mark.skipif(dosbox_bin() is None, reason="no dosbox-x")]
+
+# one per compiler; the switch axes are covered by the differential itself
+COMPILERS = ["v-g3", "p-g2", "q-O"]
+
+# jumps is deliberately absent: its jump table is data inside the code segment,
+# so no linear decode explains it and relocate refuses to move it at all
+MOVABLE = ["arith", "procs"]
+
+CASES = [
+    pytest.param(
+        tag,
+        program,
+        marks=pytest.mark.skipif(not CONFIGS[tag].available, reason=f"no {tag} toolchain"),
+    )
+    for tag in COMPILERS
+    for program in MOVABLE
+]
+
+
+def insert_a_nop(data: bytes) -> bytes:
+    records = omf.parse(data)
+    found = omf.code_segment(records)
+    assert found is not None
+    seg, _name, size = found
+    image = omf.segment_image(records, seg, size)
+
+    sites = sorted(fixup.offset for fixup in omf.fixups(records) if fixup.seg == seg)
+    decoded = trusted_decode(image, sites)
+    assert not isinstance(decoded, str), decoded
+    _start, instructions = decoded
+    at = next(insn.at for insn in instructions if insn.at >= 0x40)
+
+    moved = relocate(records, seg, image, Shift.of([Edit(at, at, b"\x90")]))
+    assert not isinstance(moved, str), moved
+    assert b"".join(r.emit() for r in moved) != data, "the object must actually have changed"
+    return b"".join(record.emit() for record in moved)
+
+
+@pytest.mark.parametrize(("tag", "program"), CASES)
+def test_a_program_survives_having_its_code_moved(tag: str, program: str) -> None:
+    result = e2e.run(tag, program, transform=insert_a_nop)
+    failed = [v for v in result.verdicts if not v.ok]
+    assert not failed, "; ".join(f"{v.program} {v.status}: {v.detail}" for v in failed)

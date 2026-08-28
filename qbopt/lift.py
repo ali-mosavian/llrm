@@ -31,6 +31,7 @@ from qbopt.declen import run
 from qbopt.declen import Insn
 from qbopt.module import Addr
 from qbopt.module import Space
+from qbopt.declen import to_signed
 from qbopt.module import literal_only
 from qbopt.module import frame_relative
 
@@ -124,12 +125,6 @@ BASES = (STATIC, 0x46, 0x86)  # [disp16], [bp+disp8], [bp+disp16]
 type Resolver = Callable[[int, int], Addr]
 
 
-def signed(insn: Insn) -> int:
-    """The displacement as bp-relative code means it: negative for a local."""
-    raw, width = insn.disp or 0, insn.disp_len * 8
-    return raw - (1 << width) if raw >= 1 << (width - 1) else raw
-
-
 def classify(insn: Insn, resolve: Resolver = literal_only) -> Decoded | None:
     """What one instruction is, in long terms, or None.
 
@@ -155,7 +150,11 @@ def classify(insn: Insn, resolve: Resolver = literal_only) -> Decoded | None:
     base = insn.modrm & 0xC7
 
     if base in BASES and insn.disp_at is not None:
-        mem = resolve(insn.disp_at, insn.disp or 0) if base == STATIC else frame_relative(signed(insn))
+        mem = (
+            resolve(insn.disp_at, insn.disp or 0)
+            if base == STATIC
+            else frame_relative(to_signed(insn.disp or 0, insn.disp_len))
+        )
         match insn.opcode:
             case 0x8B:
                 kind = Kind.LOAD

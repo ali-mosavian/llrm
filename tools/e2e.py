@@ -20,6 +20,7 @@ import argparse
 from pathlib import Path
 from typing import NamedTuple
 from dataclasses import dataclass
+from collections.abc import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -126,7 +127,18 @@ def judge(work: Path, name: str) -> Verdict:
     return Verdict(name, "PASS", f"{len(base) - 1} cases")
 
 
-def run(tag: str, only: str | None = None, *, dry_run: bool = False, timeout: int = 300) -> Result:
+def through_qbopt(data: bytes) -> bytes:
+    return rewrite(data, dry_run=False)[0]
+
+
+def run(
+    tag: str,
+    only: str | None = None,
+    *,
+    dry_run: bool = False,
+    timeout: int = 300,
+    transform: Callable[[bytes], bytes] | None = None,
+) -> Result:
     cfg = CONFIGS[tag]
     if not cfg.available:
         raise SystemExit(f"no toolchain at {cfg.mount}; see docs/testing.md")
@@ -140,8 +152,8 @@ def run(tag: str, only: str | None = None, *, dry_run: bool = False, timeout: in
     for name in names:
         obj = work / f"{name.upper()}.OBJ"
         if obj.is_file():
-            out, _ = rewrite(obj.read_bytes(), dry_run=dry_run)
-            (work / f"{name.upper()}Q.OBJ").write_bytes(out)
+            change = transform or (lambda data: rewrite(data, dry_run=dry_run)[0])
+            (work / f"{name.upper()}Q.OBJ").write_bytes(change(obj.read_bytes()))
     link_and_run(cfg, work, names, timeout)
 
     return Result(tag, [judge(work, n) for n in names])

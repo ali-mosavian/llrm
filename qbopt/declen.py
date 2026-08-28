@@ -215,6 +215,12 @@ def _modrm_bytes(code: bytes, at: int, mod: int, rm: int, addrsize: int) -> tupl
             return at, 0
 
 
+def to_signed(raw: int, width: int) -> int:
+    """A `width`-byte field read as two's complement."""
+    bits = width * 8
+    return raw - (1 << bits) if raw >= 1 << (bits - 1) else raw
+
+
 def decode(code: bytes, at: int, opsize: int = 16, addrsize: int = 16) -> Insn | None:
     """The instruction at `at`, or None if the opcode is unknown."""
     start = at

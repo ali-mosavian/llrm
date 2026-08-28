@@ -270,6 +270,23 @@ WIDE = {MODEND + 1, PUBDEF + 1, LINNUM + 1, SEGDEF + 1, FIXUPP + 1, LEDATA + 1, 
 COMDAT = {0xC2, 0xC3}
 
 
+def last_writers(records: list[Record], seg: int, size: int) -> dict[int, int]:
+    """Per byte of the segment, which LEDATA record finally wrote it.
+
+    BC's backpatch records mean an earlier record's bytes are not what the
+    segment ends up holding at those offsets. A rewriter that hands every record
+    the final image would put the patched value in both, which is harmless to
+    LINK and destroys byte-identity -- and byte-identity on a no-op is the only
+    guard that says the writer disturbs nothing.
+    """
+    owner = {}
+    for record, index, offset, payload in ledata(records):
+        if index == seg:
+            for at in range(offset, min(offset + len(payload), size)):
+                owner[at] = id(record)
+    return owner
+
+
 def refusals(records: list[Record]) -> list[str]:
     """Why this module must be left alone, if it must. Empty means it may be read."""
     reasons = []
@@ -361,6 +378,92 @@ def fixups(records: list[Record]) -> list[Fixup]:
                 )
             )
     return found
+
+
+def reemit(fixup: Fixup, offset: int | None = None, disp: int | None = None) -> bytes:
+    """This fixup's own bytes, with the fields given replaced. None leaves one alone.
+
+    Only two fixed positions ever change. The thread encoding survives because
+    nothing on this path looks at it -- which is the point: expanding threads to
+    explicit form would rewrite every fixup's bytes and turn the diff between
+    input and output from a short list into the whole FIXUPP section.
+    """
+    out = bytearray(fixup.raw)
+    if offset is not None:
+        if not 0 <= offset < 1024:
+            raise ValueError(f"a fixup offset is ten bits; {offset:#x} does not fit")
+        out[0] = (out[0] & 0xFC) | (offset >> 8)
+        out[1] = offset & 0xFF
+    if disp is not None:
+        if fixup.disp_pos is None:
+            raise ValueError("this fixup carries no displacement")
+        struct.pack_into("<H", out, fixup.disp_pos - fixup.lo, disp)
+    return bytes(out)
+
+
+def ledata_record(seg: int, offset: int, payload: bytes) -> Record:
+    if len(payload) > 1024:
+        raise ValueError(f"LEDATA holds at most 1024 bytes, not {len(payload)}")
+    return Record(LEDATA, _emit_index(seg) + struct.pack("<H", offset) + payload)
+
+
+def fixupp_record(subrecords: list[bytes]) -> Record:
+    return Record(FIXUPP, b"".join(subrecords))
+
+
+def _emit_index(value: int) -> bytes:
+    return bytes([value]) if value < 0x80 else bytes([0x80 | (value >> 8), value & 0xFF])
+
+
+def segment_length_at(record: Record) -> int:
+    """Where SEGDEF keeps its length. Absolute segments push it three bytes on."""
+    return 4 if record.body[0] >> 5 == 0 else 1
+
+
+def code_offsets(record: Record, seg: int) -> list[int]:
+    """Byte positions in `record.body` of 16-bit offsets into segment `seg`.
+
+    This is the list AGENTS.md calls finite, minus the fixups themselves and the
+    self-relative branches, which have their own paths.
+    """
+    body = record.body
+    match record.type & 0xFE:
+        case t if t == PUBDEF:
+            _group, at = _index(body, 0)
+            base, at = _index(body, at)
+            if base == 0:  # an absolute segment names its frame instead
+                at += 2
+            if base != seg:
+                return []
+            found = []
+            while at < len(body):
+                at += 1 + body[at]  # the name
+                found.append(at)
+                at += 2  # the offset
+                _type, at = _index(body, at)
+            return found
+        case t if t == LINNUM:
+            _group, at = _index(body, 0)
+            base, at = _index(body, at)
+            if base != seg:
+                return []
+            return list(range(at + 2, len(body), 4))  # (line, offset) pairs
+        case _:
+            return []
+
+
+def patched(record: Record, values: dict[int, int]) -> Record:
+    """A copy of `record` with 16-bit fields replaced. Unchanged records are not copied."""
+    if not values:
+        return record
+    body = bytearray(record.body)
+    for at, value in values.items():
+        struct.pack_into("<H", body, at, value)
+    return Record(record.type, bytes(body))
+
+
+def has_start_address(record: Record) -> bool:
+    return bool(record.body[0] & 0x40)
 
 
 def main(path: Path | str) -> None:
