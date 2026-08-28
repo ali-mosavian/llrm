@@ -27,6 +27,8 @@ from enum import StrEnum
 from dataclasses import dataclass
 from collections.abc import Callable
 
+from qbopt.declen import run
+from qbopt.declen import Insn
 from qbopt.module import Addr
 from qbopt.module import Space
 from qbopt.module import literal_only
@@ -111,90 +113,73 @@ class Value:
                 return str(self.op)
 
 
-def memory_operand(code: bytes, at: int, base: int) -> tuple[int, int] | None:
-    """The displacement and its width, for the ModRM forms BC uses for a long.
-
-    A bare displacement for a static, bp-relative for a local or a spilled
-    temporary. Both are carried through unchanged: the widened instruction
-    keeps the same ModRM and displacement and changes only the register field,
-    so nothing here has to understand what the address means."""
-    match base:
-        case 0x06 if at + 2 <= len(code):
-            return struct.unpack_from("<H", code, at)[0], 2
-        case 0x46 if at + 1 <= len(code):
-            return struct.unpack_from("<b", code, at)[0], 1
-        case 0x86 if at + 2 <= len(code):
-            return struct.unpack_from("<h", code, at)[0], 2
-        case _:
-            return None
-
+# The memory forms BC uses for a long: a bare displacement for a static, and
+# bp-relative for a local or a spilled temporary. Both are carried through
+# unchanged -- the widened instruction keeps the same ModRM and displacement and
+# changes only the register field, so nothing here has to understand what the
+# address means.
+STATIC = 0x06
+BASES = (STATIC, 0x46, 0x86)  # [disp16], [bp+disp8], [bp+disp16]
 
 type Resolver = Callable[[int, int], Addr]
 
 
-def classify(code: bytes, at: int, resolve: Resolver = literal_only) -> Decoded | None:
-    """What the one instruction at `at` is, in long terms, or None.
+def signed(insn: Insn) -> int:
+    """The displacement as bp-relative code means it: negative for a local."""
+    raw, width = insn.disp or 0, insn.disp_len * 8
+    return raw - (1 << width) if raw >= 1 << (width - 1) else raw
+
+
+def classify(insn: Insn, resolve: Resolver = literal_only) -> Decoded | None:
+    """What one instruction is, in long terms, or None.
 
     `resolve` turns the offset of a displacement field, and whatever literal is
     sitting in it, into the address it really names. In an object that literal
     is zero and the address is in a fixup; in a unit test there is no fixup and
-    the literal is the address."""
-    # lift probes for the second half of a pair without knowing whether there
-    # is one, so running off the end is ordinary and answers "not a pair"
-    # rather than raising.
-    if at >= len(code):
+    the literal is the address.
+    """
+    if insn.prefixes:
+        # A 66-prefixed instruction is already 32-bit, so it is not half of
+        # anything. BC emits none inside a pair.
         return None
-    opcode = code[at]
 
     # A1 and A3 are ax with no ModRM at all
-    if opcode in (0xA1, 0xA3):
-        if at + 3 > len(code):
-            return None
-        kind = Kind.LOAD if opcode == 0xA1 else Kind.STORE
-        literal = struct.unpack_from("<H", code, at + 1)[0]
-        return Decoded(kind, pair=0, half=0, length=3, mem=resolve(at + 1, literal), base=0x06, dlen=2)
+    if insn.opcode in (0xA1, 0xA3) and insn.disp_at is not None:
+        kind = Kind.LOAD if insn.opcode == 0xA1 else Kind.STORE
+        mem = resolve(insn.disp_at, insn.disp or 0)
+        return Decoded(kind, pair=0, half=0, length=insn.length, mem=mem, base=STATIC, dlen=2)
 
-    if at + 1 >= len(code):
+    if insn.modrm is None or insn.reg > 3:
         return None
-    modrm = code[at + 1]
-    reg = (modrm >> 3) & 7
-    if reg > 3:
-        return None
-    pair, half = REG[reg]
-    base = modrm & 0xC7
+    pair, half = REG[insn.reg]
+    base = insn.modrm & 0xC7
 
-    if (operand := memory_operand(code, at + 2, base)) is not None:
-        literal, dlen = operand
-        # bp-relative displacements are in the code and no fixup claims them
-        mem = frame_relative(literal) if base != 0x06 else resolve(at + 2, literal)
-        length = 2 + dlen
-        if at + length > len(code):
-            return None
-        match opcode:
+    if base in BASES and insn.disp_at is not None:
+        mem = resolve(insn.disp_at, insn.disp or 0) if base == STATIC else frame_relative(signed(insn))
+        match insn.opcode:
             case 0x8B:
                 kind = Kind.LOAD
             case 0x89:
                 kind = Kind.STORE
-            case _ if opcode in PAIR_OPCODES:
+            case opcode if opcode in PAIR_OPCODES:
                 kind = Kind.ALU
             case _:
                 return None
-        alu = opcode if kind is Kind.ALU else None
-        return Decoded(kind, pair, half, length, alu=alu, mem=mem, base=base, dlen=dlen)
+        alu = insn.opcode if kind is Kind.ALU else None
+        return Decoded(kind, pair, half, insn.length, alu=alu, mem=mem, base=base, dlen=insn.disp_len)
 
-    if modrm & 0xC0 != 0xC0:  # register to register
+    if insn.mod != 3:  # register to register
         return None
-    rm = modrm & 7
-    if rm > 3:
+    if insn.rm > 3:
         return None
-    src_pair, src_half = REG[rm]
+    src_pair, src_half = REG[insn.rm]
     if src_half != half:
         return None  # halves must match
-    match opcode:
+    match insn.opcode:
         case 0x8B:
-            return Decoded(Kind.MOVE, pair, half, length=2, src_pair=src_pair)
-        case _ if opcode in PAIR_OPCODES:
-            return Decoded(Kind.REG_ALU, pair, half, length=2, src_pair=src_pair, alu=opcode)
+            return Decoded(Kind.MOVE, pair, half, insn.length, src_pair=src_pair)
+        case opcode if opcode in PAIR_OPCODES:
+            return Decoded(Kind.REG_ALU, pair, half, insn.length, src_pair=src_pair, alu=opcode)
         case _:
             return None
 
@@ -206,6 +191,14 @@ def classify(code: bytes, at: int, resolve: Resolver = literal_only) -> Decoded 
 NEGATE = {0: bytes([0xF7, 0xD8, 0x83, 0xD2, 0x00, 0xF7, 0xDA]), 1: bytes([0xF7, 0xD9, 0x83, 0xD3, 0x00, 0xF7, 0xDB])}
 
 
+def negate_at(code: bytes, at: int) -> int | None:
+    """The pair a three-instruction long negate at `at` targets, or None."""
+    for pair, pattern in NEGATE.items():
+        if code[at : at + len(pattern)] == pattern:
+            return pair
+    return None
+
+
 def widened(
     op: Op,
     at: int,
@@ -213,6 +206,7 @@ def widened(
     shape: Decoded,
     mem: Addr | None,
     source: int | None = None,
+    second_source: int | None = None,
     alu: str | None = None,
 ) -> Value:
     """One value standing for the instruction pair at `at`."""
@@ -221,50 +215,58 @@ def widened(
         at=at,
         end=at + span,
         pair=shape.pair,
+        src_pair=shape.src_pair,
         base=shape.base,
         dlen=shape.dlen,
         mem=mem,
         s1=source,
+        s2=second_source,
         alu=alu,
+    )
+
+
+def pairs_with(first: Decoded, second: Decoded) -> bool:
+    """Whether two classified instructions are the two halves of one long."""
+    return (
+        second.kind == first.kind
+        and second.pair == first.pair
+        and second.src_pair == first.src_pair
+        and second.half != first.half
+        and second.base == first.base
     )
 
 
 def lift(code: bytes, start: int, end: int, resolve: Resolver = literal_only) -> tuple[list[Value], list[int]]:
     """Values, stores, and the instructions consumed, for one straight run."""
+    instructions, _gave_up = run(code, start, end)
+    index_of = {insn.at: position for position, insn in enumerate(instructions)}
+
     values: list[Value] = []
     stores: list[int] = []
     live: dict[int, int | None] = {0: None, 1: None}
-    at = start
 
     def add(value: Value) -> int:
         values.append(value)
         return len(values) - 1
 
-    while at < end:
-        for pair, pattern in NEGATE.items():
-            if live[pair] is not None and code[at : at + 7] == pattern and at + 7 <= end:
-                live[pair] = add(Value(Op.NEG, s1=live[pair], at=at, end=at + 7, pair=pair))
-                at += 7
-                break
-        if at >= end:
-            break
+    position = 0
+    while position < len(instructions):
+        at = instructions[position].at
 
-        first = classify(code, at, resolve)
-        if first is None:
-            live[0] = live[1] = None
-            at += 1
+        pair = negate_at(code, at)
+        # the negate is three instructions, and may be the last thing in the run
+        after = index_of.get(at + 7, len(instructions) if at + 7 == end else None)
+        if pair is not None and live[pair] is not None and after is not None:
+            live[pair] = add(Value(Op.NEG, s1=live[pair], at=at, end=at + 7, pair=pair))
+            position = after
             continue
-        second = classify(code, at + first.length, resolve)
+
+        first = classify(instructions[position], resolve)
+        second = classify(instructions[position + 1], resolve) if position + 1 < len(instructions) else None
 
         paired = False
-        if second is not None and (
-            second.kind == first.kind
-            and second.pair == first.pair
-            and second.src_pair == first.src_pair
-            and second.half != first.half
-            and second.base == first.base
-        ):
-            span = first.length + second.length
+        if first is not None and second is not None and pairs_with(first, second):
+            span = instructions[position + 1].end - at
             low, high = (first, second) if first.half == 0 else (second, first)
             operation = PAIRS.get(low.alu) if low.alu is not None else None
             paired = low.mem is not None and high.mem == low.mem.plus(2)
@@ -292,16 +294,7 @@ def lift(code: bytes, start: int, end: int, resolve: Resolver = literal_only) ->
                 # mov ax,cx writes sixteen bits and leaves the top half of eax
                 # stale, which a widened store then writes out as garbage. So it
                 # becomes one 32-bit move, three bytes against four.
-                live[first.pair] = add(
-                    Value(
-                        Op.MOVE,
-                        s1=live[first.src_pair],
-                        at=at,
-                        end=at + span,
-                        pair=first.pair,
-                        src_pair=first.src_pair,
-                    )
-                )
+                live[first.pair] = add(widened(Op.MOVE, at, span, first, None, source=live[first.src_pair]))
                 paired = True
 
             elif (
@@ -311,25 +304,28 @@ def lift(code: bytes, start: int, end: int, resolve: Resolver = literal_only) ->
                 and live[first.src_pair] is not None
             ):
                 live[first.pair] = add(
-                    Value(
+                    widened(
                         Op.ALUV,
+                        at,
+                        span,
+                        first,
+                        None,
+                        source=live[first.pair],
+                        second_source=live[first.src_pair],
                         alu=operation[2],
-                        s1=live[first.pair],
-                        s2=live[first.src_pair],
-                        at=at,
-                        end=at + span,
-                        pair=first.pair,
-                        src_pair=first.src_pair,
                     )
                 )
                 paired = True
 
-            if paired:
-                at += span
-                continue
+        if paired:
+            position += 2
+            continue
 
+        # An instruction this does not understand may have written either pair.
+        # Advancing one byte instead of one instruction is how a matcher comes
+        # to rewrite the middle of an instruction.
         live[0] = live[1] = None
-        at += 1
+        position += 1
 
     return values, stores
 

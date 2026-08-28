@@ -2,6 +2,9 @@
 What the object file tells the analysis layer that the loaded image could not.
 """
 
+import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -94,3 +97,26 @@ def test_nothing_in_the_corpus_has_to_be_refused(obj: Path) -> None:
 def test_a_record_nothing_here_decodes_is_refused(fixtures: Path, kind: int, why: str) -> None:
     records = [*omf.read(fixtures / WITH_PAIRS), omf.Record(kind, b"\x00")]
     assert [reason for reason in omf.refusals(records) if why in reason]
+
+
+@pytest.mark.skipif(shutil.which("ndisasm") is None, reason="ndisasm is not installed")
+def test_every_value_starts_where_ndisasm_says_an_instruction_does(obj: Path) -> None:
+    # Stronger than the hand-built case: real BC output, and the boundaries come
+    # from a decoder this project did not write.
+    found = module.load(obj)
+    assert found is not None
+    disassembled = subprocess.run(
+        ["ndisasm", "-b16", "-o", str(found.start), "-"],
+        input=found.code[found.start :],
+        capture_output=True,
+        check=True,
+    )
+    # a long instruction wraps its hex onto a continuation line, which carries
+    # no offset of its own
+    boundaries = {
+        int(seen.group(1), 16)
+        for line in disassembled.stdout.decode("latin1").splitlines()
+        if (seen := re.match(r"^([0-9A-F]{8})  \S", line))
+    }
+    values, _ = lift(found.code, found.start, found.end, found.resolve)
+    assert all(value.at in boundaries for value in values)

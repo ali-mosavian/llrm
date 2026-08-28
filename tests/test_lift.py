@@ -15,6 +15,7 @@ from qbopt.lift import Op
 from qbopt.lift import REG
 from qbopt.lift import Kind
 from qbopt.lift import lift
+from qbopt.declen import run
 from qbopt.lift import FIXUP
 from qbopt.lift import PAIRS
 from qbopt.lift import Value
@@ -24,7 +25,7 @@ from qbopt.lift import sizeof
 from qbopt.module import Addr
 from qbopt.lift import regions
 from qbopt.module import Space
-from qbopt.lift import classify
+from helpers import classify_code
 from qbopt.lift import emit_region
 
 ALU = sorted(PAIRS)  # 23 and, 0B or, 33 xor, 03 add, 2B sub
@@ -43,7 +44,7 @@ def one(h: str) -> list[Value]:
 def test_classifier_every_register_half_and_addressing_form(opcode: int, kind: Kind, reg: int, base: int) -> None:
     dlen = BASES[base]
     code = bytes([opcode, base | (reg << 3)]) + (b"\xe8" if dlen == 1 else b"\x5e\x00")
-    decoded = classify(code, 0)
+    decoded = classify_code(code)
     assert decoded is not None
     assert decoded.kind is kind
     assert (decoded.pair, decoded.half) == REG[reg]
@@ -55,7 +56,7 @@ def test_classifier_every_register_half_and_addressing_form(opcode: int, kind: K
 @pytest.mark.parametrize("lo", ALU, ids=lambda lo: f"{lo:02X}")
 def test_classifier_every_alu_operation(lo: int, half: int, reg: int) -> None:
     opcode = HI[lo] if half else lo
-    decoded = classify(bytes([opcode, 0x06 | (reg << 3), 0x5E, 0x00]), 0)
+    decoded = classify_code(bytes([opcode, 0x06 | (reg << 3), 0x5E, 0x00]))
     assert decoded is not None
     assert decoded.kind is Kind.ALU
     assert decoded.alu == opcode
@@ -64,7 +65,7 @@ def test_classifier_every_alu_operation(lo: int, half: int, reg: int) -> None:
 @pytest.mark.parametrize("sreg", range(4))
 @pytest.mark.parametrize("dreg", range(4))
 def test_classifier_register_to_register(dreg: int, sreg: int) -> None:
-    decoded = classify(bytes([0x8B, 0xC0 | (dreg << 3) | sreg]), 0)
+    decoded = classify_code(bytes([0x8B, 0xC0 | (dreg << 3) | sreg]))
     if REG[dreg][1] == REG[sreg][1]:
         assert decoded is not None
         assert decoded.kind is Kind.MOVE
@@ -84,7 +85,7 @@ def test_classifier_register_to_register(dreg: int, sreg: int) -> None:
     ],
 )
 def test_classifier_refuses(enc: str, why: str) -> None:
-    assert classify(hx(enc), 0) is None, why
+    assert classify_code(hx(enc)) is None, why
 
 
 def test_load_operate_store_is_one_chain() -> None:
@@ -258,3 +259,28 @@ def test_too_small_a_region_is_refused_not_overrun() -> None:
         out = emit_region(v, need, reg)
         span = v[reg[-1]].end - v[reg[0]].at
         assert out is None or len(out) <= span
+
+
+def test_a_pair_inside_an_immediate_is_not_a_pair() -> None:
+    # mov word [0x005E], 0x5EA1 -- whose displacement and immediate together
+    # spell a load pair starting four bytes in. A matcher that retries at every
+    # byte finds it, and would rewrite the middle of an instruction.
+    code = hx("C7 06 5E 00 A1 5E 00 8B 16 60 00")
+    assert classify_code(code[4:]) is not None, "those bytes really do look like a load"
+    values, _ = lift(code, 0, len(code))
+    assert values == []
+
+
+def test_every_value_begins_where_an_instruction_begins() -> None:
+    # the trap above, then filler to a boundary, then a real pair at 0x0a
+    code = hx("C7 06 5E 00 A1 5E   00 8B 16 60   A1 5E 00 8B 16 60 00")
+    boundaries = {insn.at for insn in run(code, 0, len(code))[0]}
+    values, _ = lift(code, 0, len(code))
+    assert values, "there is a pair here to find"
+    assert all(value.at in boundaries for value in values)
+
+
+def test_a_prefixed_instruction_is_not_half_of_a_pair() -> None:
+    # 66 8B 06 is already a 32-bit load, so it is not one half of anything.
+    assert classify_code(hx("8B 06 5E 00")) is not None
+    assert classify_code(hx("66 8B 06 5E 00")) is None
