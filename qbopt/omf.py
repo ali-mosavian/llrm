@@ -31,6 +31,7 @@ them precisely and writes objects LINK accepts.
 import sys
 import struct
 from pathlib import Path
+from dataclasses import dataclass
 
 THEADR, COMENT, MODEND, EXTDEF = 0x80, 0x88, 0x8A, 0x8C
 PUBDEF, LINNUM, LNAMES, SEGDEF = 0x90, 0x94, 0x96, 0x98
@@ -64,14 +65,13 @@ NAMES = {
 }
 
 
+@dataclass(slots=True)
 class Record:
-    __slots__ = ("type", "body")
-
-    def __init__(self, type_, body):
-        self.type, self.body = type_, body
+    type: int
+    body: bytes
 
     @property
-    def name(self):
+    def name(self) -> str:
         return NAMES.get(self.type, f"{self.type:02X}")
 
     def emit(self):
@@ -187,16 +187,19 @@ LOCNAME = {
 }
 
 
+@dataclass(slots=True)
 class Fixup:
     """One relocation, resolved to where in the segment it patches."""
 
-    __slots__ = ("seg", "offset", "loc", "selfrel", "target", "index", "raw")
+    seg: int | None
+    offset: int
+    loc: int
+    selfrel: bool
+    target: str
+    index: int
+    raw: bytes | None
 
-    def __init__(self, seg, offset, loc, selfrel, target, index, raw):
-        self.seg, self.offset, self.loc = seg, offset, loc
-        self.selfrel, self.target, self.index, self.raw = selfrel, target, index, raw
-
-    def __repr__(self):
+    def __repr__(self) -> str:
         loc = LOCNAME.get(self.loc, self.loc)
         return f"<{self.seg} {self.offset:04X} {loc} {self.target} {self.index}>"
 

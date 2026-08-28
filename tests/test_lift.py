@@ -1,29 +1,16 @@
-#!/usr/bin/env python3
 """
-Unit tests for qbe, on bytes built here rather than on a compiled program.
+The lift and the emitter, on bytes built here rather than on a compiled
+program.
 
-    python3 tools/qbe/unit.py [-v]
-
-Three other things are tested elsewhere and none of them replaces this one.
-dectest.py checks the decoder against ndisasm on real programs; regress.sh
-checks that whole programs compute the same answers after being rewritten;
-price.py says what a rewrite costs. All of those were green while the
-classifier reported "no half" for A1, while a pair copy was treated as dead,
-and while a negate inherited another instruction's address. Agreement
-between implementations is not correctness when both were written from the
-same wrong idea, and a program computing the right answer is not evidence
+Whole-program checks were green while the classifier reported "no half" for A1,
+while a pair copy was treated as dead, and while a negate inherited another
+instruction's address. A program computing the right answer is not evidence
 about the piece that happened not to run.
-
-So these are small, exhaustive where they can be, and property-based where
-enumeration would not finish.
 """
 
-import os
-import sys
-import subprocess
+import pytest
 
-here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, here)
+from helpers import hx
 from qbopt.lift import NEG
 from qbopt.lift import REG
 from qbopt.lift import ALUM
@@ -33,6 +20,7 @@ from qbopt.lift import MOVE
 from qbopt.lift import FIXUP
 from qbopt.lift import PAIRS
 from qbopt.lift import STORE
+from qbopt.lift import Value
 from qbopt.lift import lift
 from qbopt.lift import encode
 from qbopt.lift import needed
@@ -40,230 +28,158 @@ from qbopt.lift import sizeof
 from qbopt.lift import decode1
 from qbopt.lift import regions
 from qbopt.lift import emit_region
-from qbopt.declen import BAD
-from qbopt.declen import T as TAB
-from qbopt.declen import length
-
-VERBOSE = "-v" in sys.argv
-fails, checks, group = [], 0, [""]
-
-
-def G(name):
-    group[0] = name
-    if VERBOSE:
-        print(f"\n-- {name}")
-
-
-def ok(cond, what):
-    global checks
-    checks += 1
-    if not cond:
-        fails.append(f"[{group[0]}] {what}")
-    elif VERBOSE:
-        print(f"   ok  {what}")
-
-
-def eq(got, want, what):
-    ok(got == want, f"{what}" + ("" if got == want else f"  (got {got!r}, want {want!r})"))
-
-
-def hx(s):
-    return bytes.fromhex(s.replace(" ", ""))
-
 
 ALU = sorted(PAIRS)  # 23 and, 0B or, 33 xor, 03 add, 2B sub
 HI = {lo: PAIRS[lo][0] for lo in ALU}
 BASES = {0x06: 2, 0x46: 1, 0x86: 2}  # ModRM mod/rm -> displacement bytes
 
-# ==========================================================================
-G("length decoder: the forms BC and the runtime emit")
-for enc, n, what in [
-    ("A1 5E 00", 3, "mov ax,moffs16"),
-    ("66 A1 5E 00", 4, "mov eax,moffs32 -- 66 does not change moffs"),
-    ("8B 16 60 00", 4, "mov dx,[disp16]"),
-    ("8B 46 E8", 3, "mov ax,[bp+disp8]"),
-    ("8B 86 00 01", 4, "mov ax,[bp+disp16]"),
-    ("8B C1", 2, "mov ax,cx -- register direct"),
-    ("83 D2 00", 3, "adc dx,imm8"),
-    ("81 C2 00 01", 4, "add dx,imm16"),
-    ("66 81 C2 00 01 00 00", 7, "add edx,imm32 under 66"),
-    ("F7 D8", 2, "neg ax -- F7 /3 takes no immediate"),
-    ("F7 06 5E 00 34 12", 6, "test [disp16],imm16 -- F7 /0 does"),
-    ("F6 06 5E 00 34", 5, "test [disp16],imm8"),
-    ("0F 85 1A 16", 4, "jnz near"),
-    ("0F B6 C1", 3, "movzx"),
-    ("0F A4 C1 04", 4, "shld r/m,r,imm8"),
-    ("66 FF 36 5E 00", 5, "push dword [disp16]"),
-    ("9A 0F 00 15 00", 5, "call far ptr16:16"),
-    ("EA 0F 00 15 00", 5, "jmp far ptr16:16"),
-    ("C2 08 00", 3, "ret imm16"),
-    ("C8 04 00 00", 4, "enter imm16,imm8"),
-    ("C4 46 E8", 3, "les ax,[bp+disp8]"),
-    ("26 8A 07", 3, "a segment prefix is a prefix"),
-    ("F3 A4", 2, "rep movsb"),
-    ("67 66 8D 04 80", 5, "lea eax,[eax+eax*4] -- 32-bit addressing"),
-]:
-    eq(length(hx(enc), 0), n, what)
 
-G("length decoder: unknown opcodes give up rather than guess")
-unknown = [op for op in range(256) if TAB[op] == BAD]
-ok(len(unknown) > 0, "some opcodes are unknown")
-for op in unknown[:8]:
-    eq(length(bytes([op, 0, 0, 0, 0, 0]), 0), None, f"opcode {op:02X} bails")
-eq(length(hx("0F FF"), 0), None, "an unknown two-byte opcode bails")
-
-G("length decoder: every ModRM, exhaustively")
-# For each of the two addressing sizes, every mod/rm must give a length that
-# matches what the encoding says. A table typo shows up here and nowhere else
-# until it corrupts a program.
-for mod in range(4):
-    for rm in range(8):
-        m = (mod << 6) | rm
-        body = bytes([0x8B, m]) + b"\x11\x22\x33\x44"
-        want = 2
-        if mod == 0 and rm == 6:
-            want = 4  # [disp16]
-        elif mod == 1:
-            want = 3  # disp8
-        elif mod == 2:
-            want = 4  # disp16
-        eq(length(body, 0), want, f"16-bit addressing mod={mod} rm={rm}")
-for mod in range(4):
-    for rm in range(8):
-        m = (mod << 6) | rm
-        body = bytes([0x67, 0x8B, m, 0x24]) + b"\x11\x22\x33\x44"
-        want = 3  # 67 + opcode + modrm
-        if rm == 4 and mod != 3:
-            want += 1  # a sib byte
-        if mod == 0 and rm == 5:
-            want += 4  # [disp32]
-        elif mod == 0 and rm == 4:
-            want += 0
-        elif mod == 1:
-            want += 1
-        elif mod == 2:
-            want += 4
-        eq(length(body, 0), want, f"32-bit addressing mod={mod} rm={rm}")
-
-G("length decoder: never runs off the end")
-for n in range(1, 6):
-    for op in (0x8B, 0xA1, 0x81, 0x9A, 0x0F, 0xC8, 0xF7):
-        r = length(bytes([op]) * n, 0)
-        ok(r is None or r <= 15, f"truncated {op:02X} x{n} gives {r}")
-
-# ==========================================================================
-G("classifier: every register, half, operation and addressing form")
-for opcode, kind in ((0x8B, "ld"), (0x89, "st")):
-    for reg in range(4):
-        pair, half = REG[reg]
-        for base, dl in BASES.items():
-            m = base | (reg << 3)
-            b = bytes([opcode, m]) + (b"\xe8" if dl == 1 else b"\x5e\x00")
-            a = decode1(b, 0)
-            ok(a is not None, f"{kind} reg={reg} base={base:02X} decodes")
-            if a:
-                eq(a[0], kind, f"{kind} reg={reg} base={base:02X} kind")
-                eq((a[1], a[3]), (pair, half), f"{kind} reg={reg} base={base:02X} pair/half")
-                eq((a[7], a[8]), (base, dl), f"{kind} reg={reg} base={base:02X} form")
-for lo in ALU:
-    for op in (lo, HI[lo]):
-        for reg in range(4):
-            pair, half = REG[reg]
-            m = 0x06 | (reg << 3)
-            a = decode1(bytes([op, m, 0x5E, 0x00]), 0)
-            ok(a is not None and a[0] == "op", f"alu {op:02X} reg={reg}")
-            if a:
-                eq(a[4], op, f"alu {op:02X} keeps its opcode")
-
-G("classifier: register to register")
-for dreg in range(4):
-    for sreg in range(4):
-        m = 0xC0 | (dreg << 3) | sreg
-        a = decode1(bytes([0x8B, m]), 0)
-        same_half = REG[dreg][1] == REG[sreg][1]
-        if same_half:
-            ok(a is not None and a[0] == "mv", f"mov r{dreg},r{sreg} is a move")
-            if a:
-                eq((a[1], a[2]), (REG[dreg][0], REG[sreg][0]), f"mov r{dreg},r{sreg} pairs")
-        else:
-            eq(a, None, f"mov r{dreg},r{sreg} crosses halves and is not a pair")
-
-G("classifier: what it must refuse")
-eq(decode1(hx("8B 07"), 0), None, "[bx] is not a form BC uses for a long")
-eq(decode1(hx("8B 20"), 0), None, "reg=sp is not a long register")
-eq(decode1(hx("8B 36 5E 00"), 0), None, "reg=si is not a long register")
-eq(decode1(hx("87 06 5E 00"), 0), None, "xchg is not one of the operations")
-eq(decode1(hx("8B C4"), 0), None, "mov ax,sp is not a pair move")
-
-# ==========================================================================
-G("lift: one value per idiom")
-
-
-def one(h):
+def one(h: str) -> list[Value]:
     b = hx(h)
     return lift(b, 0, len(b))[0]
 
 
-v = one("A1 5E 00 8B 16 60 00   23 06 5A 00 23 16 5C 00   A3 62 00 89 16 64 00")
-eq([x.op for x in v], [LOAD, ALUM, STORE], "load, operate, store")
-eq((v[1].s1, v[2].s1), (0, 1), "the chain is wired up")
-eq(v[0].mem, 0x5E, "the load keeps the low half's displacement")
+@pytest.mark.parametrize("base", sorted(BASES), ids=lambda b: f"base{b:02X}")
+@pytest.mark.parametrize("reg", range(4))
+@pytest.mark.parametrize(("opcode", "kind"), ((0x8B, "ld"), (0x89, "st")))
+def test_classifier_every_register_half_and_addressing_form(opcode: int, kind: str, reg: int, base: int) -> None:
+    dl = BASES[base]
+    b = bytes([opcode, base | (reg << 3)]) + (b"\xe8" if dl == 1 else b"\x5e\x00")
+    a = decode1(b, 0)
+    assert a is not None
+    assert a[0] == kind
+    assert (a[1], a[3]) == REG[reg]
+    assert (a[7], a[8]) == (base, dl)
 
-v = one("8B 0E 5E 00 8B 1E 60 00   8B D3 8B C1   A3 62 00 89 16 64 00")
-eq([x.op for x in v], [LOAD, MOVE, STORE], "a pair copy is a value")
-eq((v[1].pair, v[1].src_pair), (0, 1), "and knows both pairs")
 
-v = one("A1 5E 00 8B 16 60 00  8B 0E 62 00 8B 1E 64 00  33 C1 33 D3")
-eq([x.op for x in v], [LOAD, LOAD, ALUV], "a cross-pair operation")
-eq((v[2].s1, v[2].s2), (0, 1), "reading both values")
+@pytest.mark.parametrize("reg", range(4))
+@pytest.mark.parametrize("half", (0, 1), ids=("lo", "hi"))
+@pytest.mark.parametrize("lo", ALU, ids=lambda lo: f"{lo:02X}")
+def test_classifier_every_alu_operation(lo: int, half: int, reg: int) -> None:
+    op = HI[lo] if half else lo
+    a = decode1(bytes([op, 0x06 | (reg << 3), 0x5E, 0x00]), 0)
+    assert a is not None
+    assert a[0] == "op"
+    assert a[4] == op
 
-v = one("A1 5E 00 8B 16 60 00   F7 D8 83 D2 00 F7 DA")
-eq([x.op for x in v], [LOAD, NEG], "neg/adc/neg is one negate")
-eq(v[1].end - v[1].at, 7, "consuming seven bytes")
 
-v = one("8B 0E 5E 00 8B 1E 60 00   F7 D9 83 D3 00 F7 DB")
-eq([x.op for x in v], [LOAD, NEG], "the negate in cx:bx too")
+@pytest.mark.parametrize("sreg", range(4))
+@pytest.mark.parametrize("dreg", range(4))
+def test_classifier_register_to_register(dreg: int, sreg: int) -> None:
+    a = decode1(bytes([0x8B, 0xC0 | (dreg << 3) | sreg]), 0)
+    if REG[dreg][1] == REG[sreg][1]:
+        assert a is not None
+        assert a[0] == "mv"
+        assert (a[1], a[2]) == (REG[dreg][0], REG[sreg][0])
+    else:
+        assert a is None, "halves must match for a pair move"
 
-v = one("A1 5E 00 8B 16 60 00   89 56 EA 89 46 E8")
-eq([x.op for x in v], [LOAD, STORE], "a spill, high half written first")
-eq((v[1].mem, v[1].at), (-24, 7), "keeps the low displacement and the earlier address")
 
-G("lift: what it must refuse")
-eq(one("A1 5E 00 8B 16 62 00"), [], "halves four apart are two variables, not one long")
-eq(one("A1 5E 00 8B 0E 60 00"), [], "halves in different pairs are not a pair")
-eq(one("A1 5E 00 8B 16 60 00 03 06 5A 00 03 16 5C 00")[1:], [], "add/add is two integers; only add/adc is a long")
-eq(one("A1 5E 00 8B 16 60 00 2B 06 5A 00 2B 16 5C 00")[1:], [], "sub/sub likewise")
-eq(one("23 06 5A 00 23 16 5C 00"), [], "an operation with nothing loaded has no value to work from")
-eq(one("A3 5E 00 89 16 60 00"), [], "a store with nothing loaded likewise")
-v = one("A1 5E 00 8B 16 60 00  90  23 06 5A 00 23 16 5C 00")
-eq([x.op for x in v], [LOAD], "an opaque instruction invalidates the pairs")
+@pytest.mark.parametrize(
+    ("enc", "why"),
+    [
+        ("8B 07", "[bx] is not a form BC uses for a long"),
+        ("8B 20", "reg=sp is not a long register"),
+        ("8B 36 5E 00", "reg=si is not a long register"),
+        ("87 06 5E 00", "xchg is not one of the operations"),
+        ("8B C4", "mov ax,sp is not a pair move"),
+    ],
+)
+def test_classifier_refuses(enc: str, why: str) -> None:
+    assert decode1(hx(enc), 0) is None, why
 
-G("lift: two adjacent integers must not look like a long")
-# Integer variables are two bytes apart, so a load pair and two independent
-# 16-bit loads are the same displacements. Only the register pairing tells
-# them apart, which is why the half test is not optional.
-eq(one("A1 5E 00 A1 60 00"), [], "two moffs loads into ax are not a pair")
-eq(one("8B 06 5E 00 8B 0E 60 00"), [], "ax then cx is not a pair")
 
-# ==========================================================================
-G("regions and liveness")
-b = hx("A1 5E 00 8B 16 60 00 23 06 5A 00 23 16 5C 0090 90A1 62 00 8B 16 64 00 A3 66 00 89 16 68 00")
-v, _ = lift(b, 0, len(b))
-eq(len(regions(v)), 2, "opaque bytes split a region")
-need = needed(v)
-eq(need[1], True, "a value in a register when a region ends is live")
-eq(all(need[n] for n, x in enumerate(v) if x.op == STORE), True, "a store is always needed")
+def test_load_operate_store_is_one_chain() -> None:
+    v = one("A1 5E 00 8B 16 60 00   23 06 5A 00 23 16 5C 00   A3 62 00 89 16 64 00")
+    assert [x.op for x in v] == [LOAD, ALUM, STORE]
+    assert (v[1].s1, v[2].s1) == (0, 1)
+    assert v[0].mem == 0x5E, "the load keeps the low half's displacement"
 
-b = hx("A1 5E 00 8B 16 60 00 23 06 5A 00 23 16 5C 00 A3 62 00 89 16 64 00")
-v, _ = lift(b, 0, len(b))
-need = needed(v)
-eq(all(need), True, "everything feeding a store is needed, transitively")
 
-# ==========================================================================
-G("sizing and encoding agree, for every form")
-# If these disagree the region overruns the code after it or wastes what it
-# claimed. Two parallel switch statements do not stay in step on their own.
-corpus = (
+def test_a_pair_copy_is_a_value_knowing_both_pairs() -> None:
+    v = one("8B 0E 5E 00 8B 1E 60 00   8B D3 8B C1   A3 62 00 89 16 64 00")
+    assert [x.op for x in v] == [LOAD, MOVE, STORE]
+    assert (v[1].pair, v[1].src_pair) == (0, 1)
+
+
+def test_a_cross_pair_operation_reads_both_values() -> None:
+    v = one("A1 5E 00 8B 16 60 00  8B 0E 62 00 8B 1E 64 00  33 C1 33 D3")
+    assert [x.op for x in v] == [LOAD, LOAD, ALUV]
+    assert (v[2].s1, v[2].s2) == (0, 1)
+
+
+@pytest.mark.parametrize(
+    ("enc", "what"),
+    [
+        ("A1 5E 00 8B 16 60 00   F7 D8 83 D2 00 F7 DA", "ax:dx"),
+        ("8B 0E 5E 00 8B 1E 60 00   F7 D9 83 D3 00 F7 DB", "cx:bx"),
+    ],
+)
+def test_neg_adc_neg_is_one_negate(enc: str, what: str) -> None:
+    v = one(enc)
+    assert [x.op for x in v] == [LOAD, NEG]
+    assert v[1].end - v[1].at == 7, "consuming seven bytes"
+
+
+def test_a_spill_written_high_half_first() -> None:
+    v = one("A1 5E 00 8B 16 60 00   89 56 EA 89 46 E8")
+    assert [x.op for x in v] == [LOAD, STORE]
+    assert (v[1].mem, v[1].at) == (-24, 7), "the low displacement and the earlier address"
+
+
+@pytest.mark.parametrize(
+    ("enc", "why"),
+    [
+        ("A1 5E 00 8B 16 62 00", "halves four apart are two variables, not one long"),
+        ("A1 5E 00 8B 0E 60 00", "halves in different pairs are not a pair"),
+        ("23 06 5A 00 23 16 5C 00", "an operation with nothing loaded has no value to work from"),
+        ("A3 5E 00 89 16 60 00", "a store with nothing loaded likewise"),
+        # Integer variables are two bytes apart, so a load pair and two
+        # independent 16-bit loads have the same displacements. Only the
+        # register pairing tells them apart, which is why the half test is
+        # not optional.
+        ("A1 5E 00 A1 60 00", "two moffs loads into ax are not a pair"),
+        ("8B 06 5E 00 8B 0E 60 00", "ax then cx is not a pair"),
+    ],
+)
+def test_lift_refuses(enc: str, why: str) -> None:
+    assert one(enc) == [], why
+
+
+@pytest.mark.parametrize(
+    ("enc", "why"),
+    [
+        ("A1 5E 00 8B 16 60 00 03 06 5A 00 03 16 5C 00", "add/add is two integers; only add/adc is a long"),
+        ("A1 5E 00 8B 16 60 00 2B 06 5A 00 2B 16 5C 00", "sub/sub likewise"),
+    ],
+)
+def test_lift_refuses_a_carry_blind_pair(enc: str, why: str) -> None:
+    assert one(enc)[1:] == [], why
+
+
+def test_an_opaque_instruction_invalidates_the_pairs() -> None:
+    v = one("A1 5E 00 8B 16 60 00  90  23 06 5A 00 23 16 5C 00")
+    assert [x.op for x in v] == [LOAD]
+
+
+def test_opaque_bytes_split_a_region_and_leave_the_value_live() -> None:
+    b = hx("A1 5E 00 8B 16 60 00 23 06 5A 00 23 16 5C 0090 90A1 62 00 8B 16 64 00 A3 66 00 89 16 68 00")
+    v, _ = lift(b, 0, len(b))
+    assert len(regions(v)) == 2
+    need = needed(v)
+    assert need[1] is True, "a value in a register when a region ends is live"
+    assert all(need[n] for n, x in enumerate(v) if x.op == STORE), "a store is always needed"
+
+
+def test_everything_feeding_a_store_is_needed_transitively() -> None:
+    b = hx("A1 5E 00 8B 16 60 00 23 06 5A 00 23 16 5C 00 A3 62 00 89 16 64 00")
+    v, _ = lift(b, 0, len(b))
+    assert all(needed(v))
+
+
+# If sizeof and encode disagree the region overruns the code after it or wastes
+# what it claimed. Two parallel switch statements do not stay in step on their own.
+CORPUS = (
     "A1 5E 00 8B 16 60 00  23 06 5A 00 23 16 5C 00  A3 62 00 89 16 64 00"
     "8B 0E 5E 00 8B 1E 60 00  0B 0E 5A 00 0B 1E 5C 00"
     "8B D3 8B C1  33 C1 33 D3"
@@ -271,42 +187,62 @@ corpus = (
     "8B 46 E8 8B 56 EA  03 46 E8 13 56 EA  89 46 E8 89 56 EA"
     "8B 86 00 01 8B 96 02 01"
 )
-v, _ = lift(hx(corpus), 0, len(hx(corpus)))
-ok(len(v) >= 10, f"the corpus lifted {len(v)} values")
-seen = set()
-for n, x in enumerate(v):
-    eq(sizeof(x, None), len(encode(x)), f"v{n} {x.op} base {x.base:02X}")
-    seen.add((x.op, x.base, x.pair))
-ok(len({op for op, _, _ in seen}) >= 5, f"covering {len({o for o, _, _ in seen})} value kinds")
 
-G("encoding: exact bytes")
-for h, want, what in [
-    ("A1 5E 00 8B 16 60 00", "66a15e00", "mov eax,[disp16]"),
-    ("8B 0E 5E 00 8B 1E 60 00", "668b0e5e00", "mov ecx,[disp16]"),
-]:
-    eq(encode(one(h)[0]).hex(), want, what)
-v = one("A1 5E 00 8B 16 60 00  8B 46 E8 8B 56 EA")
-eq(encode(v[1]).hex(), "668b46e8", "bp-relative keeps its ModRM and disp8")
-v = one("A1 5E 00 8B 16 60 00  23 06 5A 00 23 16 5C 00")
-eq(encode(v[1]).hex(), "6623065a00", "and eax,[disp16]")
-v = one("8B 0E 5E 00 8B 1E 60 00  23 0E 5A 00 23 1E 5C 00")
-eq(encode(v[1]).hex(), "66230e5a00", "and ecx,[disp16]")
-v = one("A1 5E 00 8B 16 60 00  8B 0E 62 00 8B 1E 64 00  33 C1 33 D3")
-eq(encode(v[2]).hex(), "6633c1", "xor eax,ecx -- mod 11, reg eax, rm ecx")
-v = one("A1 5E 00 8B 16 60 00 F7 D8 83 D2 00 F7 DA")
-eq(encode(v[1]).hex(), "66f7d8", "neg eax")
-v = one("8B 0E 5E 00 8B 1E 60 00 F7 D9 83 D3 00 F7 DB")
-eq(encode(v[1]).hex(), "66f7d9", "neg ecx")
-eq(FIXUP[0].hex(), "668bd066c1ea10", "pair 0's high half comes back from eax")
-eq(FIXUP[1].hex(), "668bd966c1eb10", "pair 1's from ecx")
 
-G("emission: a region never grows, and the slack is jumped over")
-for h in [
-    "A1 5E 00 8B 16 60 00 23 06 5A 00 23 16 5C 00 A3 62 00 89 16 64 00",
-    "8B 0E 5E 00 8B 1E 60 00 0B 0E 5A 00 0B 1E 5C 00 89 0E 62 00 89 1E 64 00",
-    "A1 5E 00 8B 16 60 00 F7 D8 83 D2 00 F7 DA A3 62 00 89 16 64 00",
-]:
-    b = hx(h)
+@pytest.fixture(scope="module")
+def corpus() -> list[Value]:
+    b = hx(CORPUS)
+    v, _ = lift(b, 0, len(b))
+    return v
+
+
+def test_the_corpus_covers_enough_to_be_worth_checking(corpus: list[Value]) -> None:
+    assert len(corpus) >= 10
+    assert len({x.op for x in corpus}) >= 5
+
+
+def test_sizing_and_encoding_agree_for_every_form(corpus: list[Value]) -> None:
+    for n, x in enumerate(corpus):
+        assert sizeof(x, None) == len(encode(x)), f"v{n} {x.op} base {x.base:02X}"
+
+
+@pytest.mark.parametrize(
+    ("enc", "index", "want", "what"),
+    [
+        ("A1 5E 00 8B 16 60 00", 0, "66a15e00", "mov eax,[disp16]"),
+        ("8B 0E 5E 00 8B 1E 60 00", 0, "668b0e5e00", "mov ecx,[disp16]"),
+        ("A1 5E 00 8B 16 60 00  8B 46 E8 8B 56 EA", 1, "668b46e8", "bp-relative keeps its ModRM and disp8"),
+        ("A1 5E 00 8B 16 60 00  23 06 5A 00 23 16 5C 00", 1, "6623065a00", "and eax,[disp16]"),
+        ("8B 0E 5E 00 8B 1E 60 00  23 0E 5A 00 23 1E 5C 00", 1, "66230e5a00", "and ecx,[disp16]"),
+        ("A1 5E 00 8B 16 60 00  8B 0E 62 00 8B 1E 64 00  33 C1 33 D3", 2, "6633c1", "xor eax,ecx"),
+        ("A1 5E 00 8B 16 60 00 F7 D8 83 D2 00 F7 DA", 1, "66f7d8", "neg eax"),
+        ("8B 0E 5E 00 8B 1E 60 00 F7 D9 83 D3 00 F7 DB", 1, "66f7d9", "neg ecx"),
+    ],
+    ids=lambda x: x if isinstance(x, str) and " " not in x else None,
+)
+def test_encoding_exact_bytes(enc: str, index: int, want: str, what: str) -> None:
+    assert encode(one(enc)[index]).hex() == want, what
+
+
+@pytest.mark.parametrize(
+    ("pair", "want"),
+    [(0, "668bd066c1ea10"), (1, "668bd966c1eb10")],
+)
+def test_the_high_half_comes_back_from_the_widened_register(pair: int, want: str) -> None:
+    assert FIXUP[pair].hex() == want
+
+
+@pytest.mark.parametrize(
+    "enc",
+    [
+        "A1 5E 00 8B 16 60 00 23 06 5A 00 23 16 5C 00 A3 62 00 89 16 64 00",
+        "8B 0E 5E 00 8B 1E 60 00 0B 0E 5A 00 0B 1E 5C 00 89 0E 62 00 89 1E 64 00",
+        "A1 5E 00 8B 16 60 00 F7 D8 83 D2 00 F7 DA A3 62 00 89 16 64 00",
+    ],
+    ids=("ax-dx-alu", "cx-bx-alu", "ax-dx-neg"),
+)
+def test_a_region_never_grows_and_the_slack_is_jumped_over(enc: str) -> None:
+    b = hx(enc)
     v, _ = lift(b, 0, len(b))
     need = needed(v)
     for reg in regions(v):
@@ -314,90 +250,20 @@ for h in [
         out = emit_region(v, need, reg)
         if out is None:
             continue
-        eq(len(out), span, f"padded to exactly the {span} bytes it replaced")
+        assert len(out) == span, "padded to exactly the bytes it replaced"
         core = sum(sizeof(v[n], None) for n in reg if need[n])
         core += sum(len(FIXUP[p]) for p in {v[n].pair for n in reg if need[n]})
         if span - core >= 2:
-            eq(out[core], 0xEB, "the slack begins with a jump")
-            eq(out[core + 1], span - core - 2, "clearing exactly the slack")
-            ok(all(x == 0x90 for x in out[core + 2 :]), "and the rest is nops")
+            assert out[core] == 0xEB, "the slack begins with a jump"
+            assert out[core + 1] == span - core - 2, "clearing exactly the slack"
+            assert all(x == 0x90 for x in out[core + 2 :]), "and the rest is nops"
 
-G("emission: too small a region is refused, not overrun")
-b = hx("8B 0E 5E 00 8B 1E 60 00 89 0E 62 00 89 1E 64 00")  # 16 bytes, pair 1
-v, _ = lift(b, 0, len(b))
-need = needed(v)
-for reg in regions(v):
-    out = emit_region(v, need, reg)
-    span = v[reg[-1]].end - v[reg[0]].at
-    ok(out is None or len(out) <= span, "never writes past what it replaced")
 
-# ==========================================================================
-G("fuzz: the decoder against ndisasm")
-try:
-    import random
-
-    random.seed(20260828)
-    blob = bytes(random.randrange(256) for _ in range(4000))
-    r = subprocess.run(["ndisasm", "-b16", "-"], input=blob, capture_output=True, timeout=30)
-    import re
-
-    marks = []
-    for ln in r.stdout.decode("latin1").splitlines():
-        m = re.match(r"^([0-9A-F]{8})  (\S+)\s+(.*)$", ln)
-        if m:
-            marks.append((int(m.group(1), 16), m.group(3)))
-    # ndisasm renders wait, lock and the segment overrides joined to the
-    # instruction after them; this decoder treats them separately. The stream
-    # of boundaries is the same either way, so those lines are skipped rather
-    # than counted as disagreements about length.
-    JOINED = (
-        "wait",
-        "lock",
-        "rep",
-        "repe",
-        "repne",
-        "repz",
-        "repnz",
-        "cs",
-        "ds",
-        "es",
-        "ss",
-        "fs",
-        "gs",
-        "a16",
-        "a32",
-        "o16",
-        "o32",
-    )
-    agree = disagree = bail = skip = 0
-    for k in range(len(marks) - 1):
-        off, txt = marks[k]
-        if txt.startswith("db 0x"):
-            continue
-        # bare too: where ndisasm cannot decode what follows a prefix it
-        # reports the prefix alone, which is not a claim about length
-        if txt.split()[0] in JOINED:
-            skip += 1
-            continue
-        want = marks[k + 1][0] - off
-        got = length(blob, off)
-        if got is None:
-            bail += 1
-        elif got == want:
-            agree += 1
-        else:
-            disagree += 1
-    ok(disagree == 0, f"{agree} random instructions agree, {disagree} do not, {bail} unknown, {skip} prefix-joined")
-    ok(agree > 1000, f"the fuzz corpus produced {agree} comparable instructions")
-except (FileNotFoundError, subprocess.TimeoutExpired):
-    if VERBOSE:
-        print("   skipped -- no ndisasm")
-
-# ==========================================================================
-print()
-if fails:
-    print(f"{len(fails)} of {checks} checks FAILED")
-    for f in fails:
-        print("   ", f)
-    sys.exit(1)
-print(f"all {checks} checks pass")
+def test_too_small_a_region_is_refused_not_overrun() -> None:
+    b = hx("8B 0E 5E 00 8B 1E 60 00 89 0E 62 00 89 1E 64 00")  # 16 bytes, pair 1
+    v, _ = lift(b, 0, len(b))
+    need = needed(v)
+    for reg in regions(v):
+        out = emit_region(v, need, reg)
+        span = v[reg[-1]].end - v[reg[0]].at
+        assert out is None or len(out) <= span

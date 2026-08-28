@@ -154,7 +154,8 @@ Moving code means updating all of, and the list is finite:
   `parametrize` wherever one assertion runs over the fixtures, the twelve
   configurations, or an opcode table -- which is most of this suite.
 - `pre-commit` runs ruff, ruff-format, the whitespace hooks, `ty`, and the
-  hermetic test tier.
+  whole test suite -- every tier, including the ones that need DOSBox and the
+  DOS toolchains. Nothing is committed on a partial run.
 
 ## Writing
 

@@ -24,6 +24,7 @@ this does not understand may write either of them.
 
 import struct
 from pathlib import Path
+from dataclasses import dataclass
 
 # the five operations, low half -> (high half, widened)
 PAIRS = {
@@ -40,13 +41,21 @@ LOAD, ALUM, ALUV, STORE, MOVE = "load", "alu-m", "alu-v", "store", "move"
 NEG = "neg"
 
 
+@dataclass(slots=True)
 class Value:
-    def __init__(s, op, alu=None, s1=None, s2=None, mem=None, at=None, end=None, pair=0, src_pair=0, base=0x06, dlen=2):
-        s.op, s.alu, s.s1, s.s2 = op, alu, s1, s2
-        s.mem, s.at, s.end, s.pair = mem, at, end, pair
-        s.src_pair, s.base, s.dlen = src_pair, base, dlen
+    op: str
+    at: int
+    end: int
+    alu: str | None = None  # the mnemonic, which is what OPC is keyed on
+    s1: int | None = None
+    s2: int | None = None
+    mem: int | None = None
+    pair: int = 0
+    src_pair: int = 0
+    base: int = 0x06
+    dlen: int = 2
 
-    def __repr__(s):
+    def __repr__(s) -> str:
         if s.op == LOAD:
             return f"load [{s.mem:#06x}]"
         if s.op == ALUM:
