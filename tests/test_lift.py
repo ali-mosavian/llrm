@@ -14,6 +14,7 @@ from helpers import hx
 from qbopt.lift import Op
 from qbopt.lift import REG
 from qbopt.lift import Kind
+from qbopt.lift import emit
 from qbopt.lift import lift
 from qbopt.declen import run
 from qbopt.flags import Flag
@@ -285,3 +286,21 @@ def test_a_prefixed_instruction_is_not_half_of_a_pair() -> None:
     # 66 8B 06 is already a 32-bit load, so it is not one half of anything.
     assert classify_code(hx("8B 06 5E 00")) is not None
     assert classify_code(hx("66 8B 06 5E 00")) is None
+
+
+def test_a_relocated_operand_is_emitted_as_zero() -> None:
+    # LINK adds what is in the code to the fixup's target -- measured, by poking
+    # 2 into a field and watching the linked address move by 2. So a widened
+    # instruction has to hold zero and let the fixup carry the address, exactly
+    # as BC does.
+    value = Value(Op.LOAD, at=0, end=7, mem=Addr(Space.SEGMENT, 0x1234, 5), mem_at=1, base=0x06, dlen=2)
+    emitted = emit(value)
+    assert emitted.code == hx("66 A1 00 00")
+    assert emitted.relocations == ((2, 1),), "and it says which bytes need the fixup"
+
+
+def test_an_operand_that_is_not_relocated_keeps_its_displacement() -> None:
+    value = Value(Op.LOAD, at=0, end=7, mem=Addr(Space.FRAME, -24), base=0x46, dlen=1)
+    emitted = emit(value)
+    assert emitted.code == hx("66 8B 46 E8")
+    assert emitted.relocations == ()

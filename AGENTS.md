@@ -123,6 +123,12 @@ invisible to a rewriter and would break silently. It is not -- `ON k GOTO
 L1, L2, L3` emits its three labels as three consecutive `offset16` fixups
 into the module's own code segment, and `tests/test_omf.py` asserts it.
 
+**LINK adds whatever is in the code to the fixup's target.** Measured: poking 2
+into a relocated `offset16` field moved the linked address by exactly 2. BC
+writes zero there and so must anything that emits a relocated operand -- a
+widened instruction holds zero in its displacement and the address comes from
+the fixup, or the two are added and the program reads the wrong place.
+
 Moving code means updating all of, and the list is finite:
 
     FIXUPP  the offset the fixup patches, and the addend stored there

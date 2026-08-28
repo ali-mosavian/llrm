@@ -7,8 +7,10 @@ from pathlib import Path
 import pytest
 
 from qbopt import omf
+from helpers import hx
 from qbopt import module
 from qbopt.declen import run
+from qbopt.declen import decode
 from qbopt.relocate import Edit
 from qbopt.relocate import REL8
 from qbopt.relocate import Shift
@@ -19,6 +21,7 @@ from qbopt.relocate import branches
 from qbopt.relocate import relocate
 from qbopt.relocate import retarget
 from qbopt.blocks import instructions
+from qbopt.relocate import retarget_branches
 
 # 0x20..0x30 shrinks to 8 bytes, 0x40..0x50 to 4
 SHRUNK = Shift.of([Edit(0x20, 0x30, bytes(8)), Edit(0x40, 0x50, bytes(4))])
@@ -160,3 +163,43 @@ def test_the_header_ends_before_the_first_instruction_operand(obj: Path) -> None
     assert found is not None
     sites = sorted(fixup.offset for fixup in omf.fixups(records) if fixup.seg == found[0])
     assert not [at for at in sites if 0x20 < at < 0x31]
+
+
+def labels(records: list[omf.Record], seg: int) -> list[int]:
+    """Every offset in this segment that a fixup points at."""
+    return sorted(
+        fixup.disp
+        for fixup in omf.fixups(records)
+        if fixup.target == "segment" and fixup.index == seg and fixup.disp_pos is not None
+    )
+
+
+def test_moving_code_moves_what_the_jump_table_points_at(fixtures: Path) -> None:
+    # The label words are fixups, so each has an offset that moves and a target
+    # displacement that moves too. Shifting one without the other links cleanly
+    # and jumps to the wrong statement, which is the whole class of bug the
+    # relocation list exists for.
+    records = omf.read(fixtures / "jumptable.obj")
+    found = omf.code_segment(records)
+    assert found is not None
+    seg, _name, size = found
+    assert labels(records, seg) == [0x46, 0x52, 0x5E, 0xEA]
+
+    # one byte in at 0x36, which is an instruction boundary ahead of every label
+    out = relocate(records, seg, omf.segment_image(records, seg, size), Shift.of([Edit(0x36, 0x36, b"\x90")]))
+    assert not isinstance(out, str), out
+    moved = omf.parse(b"".join(record.emit() for record in out))
+    assert labels(moved, seg) == [0x47, 0x53, 0x5F, 0xEB]
+
+
+def test_a_branch_that_would_no_longer_reach_refuses_the_whole_segment() -> None:
+    # Truncating wraps mod 256 into the middle of an instruction: no trap, no
+    # diagnostic from LINK, and a program that runs garbage down a rare path.
+    code = hx("EB 7E") + bytes(0x7E) + hx("90")
+    branch = decode(code, 0)
+    assert branch is not None
+    assert isinstance(retarget_branches(code, [branch], Shift.of([])), bytes)
+
+    # grow what the branch jumps over until the displacement will not fit
+    grown = Shift.of([Edit(0x10, 0x20, bytes(0x90))])
+    assert isinstance(retarget_branches(code, [branch], grown), str)
