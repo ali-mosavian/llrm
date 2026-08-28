@@ -17,9 +17,11 @@ from dataclasses import field
 from dataclasses import dataclass
 
 from qbopt import omf
-from qbopt.declen import run
+from qbopt import module
 from qbopt.declen import Insn
+from qbopt.blocks import code_map
 from qbopt.declen import to_signed
+from qbopt.blocks import instructions
 
 # How far in to look for where the header stops and code starts. Measured over
 # the corpus: header fields carry fixups up to 0x20, the earliest operand of an
@@ -88,9 +90,8 @@ class Branch:
     target: int
 
 
-def branches(code: bytes, start: int, end: int) -> tuple[list[Branch], int | None]:
-    """Every self-relative branch, and where decoding gave up."""
-    instructions, gave_up = run(code, start, end)
+def branches(code: bytes, instructions: list[Insn]) -> list[Branch]:
+    """Every self-relative branch among the instructions given."""
     found = []
     for insn in instructions:
         width = 1 if insn.opcode in REL8 else 2 if insn.opcode in REL16 else 0
@@ -98,7 +99,7 @@ def branches(code: bytes, start: int, end: int) -> tuple[list[Branch], int | Non
             continue
         raw = int.from_bytes(code[insn.imm_at : insn.imm_at + insn.imm_len], "little")
         found.append(Branch(insn.at, insn.end, insn.imm_at, insn.imm_len, insn.end + to_signed(raw, insn.imm_len)))
-    return found, gave_up
+    return found
 
 
 def reaches(branch: Branch, displacement: int) -> bool:
@@ -114,36 +115,6 @@ def retarget(branch: Branch, shift: Shift) -> int:
     between the two.
     """
     return shift.at(branch.target) - shift.at(branch.end)
-
-
-def trusted_decode(image: bytes, patched: list[int]) -> tuple[int, list[Insn]] | str:
-    """A linear decode that accounts for every fixup site, and where it starts.
-
-    A module's code segment opens with a header that is data, so decoding from
-    zero misaligns and reports boundaries that fall inside immediates -- which is
-    how a nop inserted "at a boundary" ends up splitting the constant next to it.
-    The fixups are an independent, BC-authored map of where operand fields are,
-    so they are the oracle: a decode is trusted only if every site it should
-    cover falls inside a displacement or an immediate.
-
-    There may be no such decode. A module with an ON GOTO or a SELECT CASE has
-    its jump table in the code segment, and those words are fixup sites that
-    belong to no instruction. Nothing linear can explain them, and motion is
-    refused until the block builder can say which bytes are code.
-    """
-    for start in range(HEADER_SEARCH):
-        instructions, gave_up = run(image, start, len(image))
-        if gave_up is not None:
-            continue
-        fields = set()
-        for insn in instructions:
-            if insn.disp_at is not None:
-                fields |= set(range(insn.disp_at, insn.disp_at + insn.disp_len))
-            if insn.imm_at is not None:
-                fields |= set(range(insn.imm_at, insn.imm_at + insn.imm_len))
-        if all(site in fields for site in patched if site >= start):
-            return start, instructions
-    return "no linear decode accounts for every fixup site; the segment holds data"
 
 
 def apply(image: bytes, shift: Shift) -> bytes:
@@ -164,7 +135,7 @@ def straddled(shift: Shift, lo: int, hi: int) -> Edit | None:
     return None
 
 
-def retarget_branches(image: bytes, start: int, shift: Shift) -> bytes | str:
+def retarget_branches(image: bytes, instructions: list[Insn], shift: Shift) -> bytes | str:
     """The image with every self-relative branch pointing where it used to.
 
     Not fixups, so there is no record to lean on: the displacements have to be
@@ -172,10 +143,7 @@ def retarget_branches(image: bytes, start: int, shift: Shift) -> bytes | str:
     truncated -- truncation wraps mod 256 and lands mid-instruction, with no
     trap and no diagnostic from LINK.
     """
-    found, gave_up = branches(image, start, len(image))
-    if gave_up is not None:
-        return f"the decoder gave up at {gave_up:#x}, so branches cannot be recomputed"
-
+    found = branches(image, instructions)
     out = bytearray(apply(image, shift))
     for branch in found:
         try:
@@ -196,18 +164,25 @@ def relocate(records: list[omf.Record], seg: int, image: bytes, shift: Shift) ->
     rebuilt: BC interleaves data LEDATA and EXTDEF among the code ones, and
     keeping the order keeps every fixup with the data record it is relative to.
     """
-    sites = [fixup.offset for fixup in omf.fixups(records) if fixup.seg == seg]
-    decoded = trusted_decode(image, sorted(sites))
-    if isinstance(decoded, str):
-        return decoded
-    start, instructions = decoded
+    found = module.of(records)
+    if found is None:
+        return "the module has no code segment"
+    mapped = code_map(found)
+    if isinstance(mapped, str):
+        return mapped
+    reached = instructions(found)
+    assert not isinstance(reached, str)
 
-    boundaries = {insn.at for insn in instructions} | {len(image)}
+    boundaries = mapped.starts | {len(image)}
     for edit in shift.edits:
         if edit.lo not in boundaries or edit.hi not in boundaries:
             return f"the region {edit.lo:#x}..{edit.hi:#x} does not begin and end on an instruction"
+        if any(at not in mapped.starts for at in range(edit.lo, edit.hi) if at in boundaries) or any(
+            lo < edit.hi and edit.lo < hi for lo, hi in mapped.tables
+        ):
+            return f"the region {edit.lo:#x}..{edit.hi:#x} covers something that is not an instruction"
 
-    moved = retarget_branches(image, start, shift)
+    moved = retarget_branches(image, reached, shift)
     if isinstance(moved, str):
         return moved
 

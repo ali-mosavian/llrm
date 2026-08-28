@@ -8,6 +8,7 @@ import pytest
 
 from qbopt import omf
 from qbopt import module
+from qbopt.declen import run
 from qbopt.relocate import Edit
 from qbopt.relocate import REL8
 from qbopt.relocate import Shift
@@ -17,6 +18,7 @@ from qbopt.relocate import reaches
 from qbopt.relocate import branches
 from qbopt.relocate import relocate
 from qbopt.relocate import retarget
+from qbopt.blocks import instructions
 
 # 0x20..0x30 shrinks to 8 bytes, 0x40..0x50 to 4
 SHRUNK = Shift.of([Edit(0x20, 0x30, bytes(8)), Edit(0x40, 0x50, bytes(4))])
@@ -56,9 +58,10 @@ def test_a_branch_is_read_relative_to_the_instruction_after_it() -> None:
     #  0: EB 05        jmp +5   -> 0x07
     #  2: 74 FE        jz  -2   -> 0x02
     #  4: E9 03 00     jmp +3   -> 0x0a
-    found, gave_up = branches(bytes.fromhex("EB05 74FE E90300"), 0, 7)
+    code = bytes.fromhex("EB05 74FE E90300")
+    decoded, gave_up = run(code, 0, len(code))
     assert gave_up is None
-    assert [(b.at, b.target) for b in found] == [(0, 7), (2, 2), (4, 10)]
+    assert [(b.at, b.target) for b in branches(code, decoded)] == [(0, 7), (2, 2), (4, 10)]
 
 
 def test_a_branch_is_retargeted_from_its_own_end_not_its_start() -> None:
@@ -77,14 +80,15 @@ def test_a_rel8_that_no_longer_reaches_is_refused_not_truncated() -> None:
     assert not reaches(branch, retarget(branch, Shift.of([Edit(0x10, 0x20, bytes(0x80))])))
 
 
-def test_a_shrinking_shift_can_never_push_a_rel8_out_of_range(obj: Path) -> None:
+def test_a_shrinking_shift_can_never_push_a_rel8_out_of_range(mapped_obj: Path) -> None:
     # Every displacement's magnitude can only fall when the code between the
     # branch and its target shrinks, which is what makes shrink-only motion safe
     # without a relaxation pass.
-    found = module.load(obj)
+    found = module.load(mapped_obj)
     assert found is not None
-    reachable, gave_up = branches(found.code, found.start, found.end)
-    assert gave_up is None, "the corpus decodes end to end"
+    reached = instructions(found)
+    assert not isinstance(reached, str), reached
+    reachable = branches(found.code, reached)
     shift = Shift.of([Edit(at, at + 8, bytes(4)) for at in range(0x40, found.end - 8, 0x20)])
     for branch in reachable:
         if branch.width != 1:
@@ -96,11 +100,12 @@ def test_a_shrinking_shift_can_never_push_a_rel8_out_of_range(obj: Path) -> None
         assert abs(moved) <= abs(branch.target - branch.end)
 
 
-def test_the_rel8_opcodes_are_the_ones_that_take_a_byte(obj: Path) -> None:
-    found = module.load(obj)
+def test_the_rel8_opcodes_are_the_ones_that_take_a_byte(mapped_obj: Path) -> None:
+    found = module.load(mapped_obj)
     assert found is not None
-    reachable, _ = branches(found.code, found.start, found.end)
-    for branch in reachable:
+    reached = instructions(found)
+    assert not isinstance(reached, str), reached
+    for branch in branches(found.code, reached):
         assert branch.width == (1 if found.code[branch.at] in REL8 else 2)
 
 
@@ -119,7 +124,7 @@ def test_moving_nothing_reproduces_the_object_or_says_why_not(obj: Path) -> None
     # Every object either does that or is refused -- there is no third outcome.
     out = relocated(obj, Shift.of([]))
     if isinstance(out, str):
-        assert "no linear decode" in out
+        assert "no entry point" in out
     else:
         assert b"".join(record.emit() for record in out) == obj.read_bytes()
 
@@ -130,12 +135,13 @@ def test_most_of_the_corpus_can_be_moved(fixtures: Path) -> None:
     assert len(accepted) > len(list(fixtures.glob("*.obj"))) // 2
 
 
-def test_a_jump_table_in_the_code_segment_is_refused(fixtures: Path) -> None:
-    # ON GOTO and SELECT CASE put their label words in the code segment. Those
-    # words are fixup sites belonging to no instruction, so no linear decode
-    # explains them, and moving code past them would be a guess.
-    assert isinstance(relocated(fixtures / "jumps-v-g3.obj", Shift.of([])), str)
-    assert isinstance(relocated(fixtures / "jumptable.obj", Shift.of([])), str)
+def test_a_jump_table_in_the_code_segment_is_moved_not_refused(fixtures: Path) -> None:
+    # ON GOTO puts its label words in the code segment. Reachability knows they
+    # are a table rather than instructions, and each word is a fixup whose
+    # target displacement moves with everything else.
+    for name in ("jumps-v-g3.obj", "jumptable.obj"):
+        out = relocated(fixtures / name, Shift.of([]))
+        assert not isinstance(out, str), out
 
 
 def test_a_region_that_is_not_whole_instructions_is_refused(fixtures: Path) -> None:

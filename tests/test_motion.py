@@ -15,19 +15,21 @@ from configs import CONFIGS
 from dosbox import dosbox_bin
 
 from qbopt import omf
+from qbopt import module
 from qbopt.relocate import Edit
 from qbopt.relocate import Shift
 from qbopt.relocate import relocate
-from qbopt.relocate import trusted_decode
+from qbopt.blocks import instructions
 
 pytestmark = [pytest.mark.e2e, pytest.mark.skipif(dosbox_bin() is None, reason="no dosbox-x")]
 
 # one per compiler; the switch axes are covered by the differential itself
 COMPILERS = ["v-g3", "p-g2", "q-O"]
 
-# jumps is deliberately absent: its jump table is data inside the code segment,
-# so no linear decode explains it and relocate refuses to move it at all
-MOVABLE = ["arith", "procs"]
+# jumps included: its ON GOTO table is data inside the code segment, and moving
+# code past it works only because reachability knows the bytes after a B$OGTA
+# call are a table rather than instructions.
+MOVABLE = ["arith", "procs", "jumps"]
 
 CASES = [
     pytest.param(
@@ -47,11 +49,11 @@ def insert_a_nop(data: bytes) -> bytes:
     seg, _name, size = found
     image = omf.segment_image(records, seg, size)
 
-    sites = sorted(fixup.offset for fixup in omf.fixups(records) if fixup.seg == seg)
-    decoded = trusted_decode(image, sites)
-    assert not isinstance(decoded, str), decoded
-    _start, instructions = decoded
-    at = next(insn.at for insn in instructions if insn.at >= 0x40)
+    parsed = module.of(records)
+    assert parsed is not None
+    reached = instructions(parsed)
+    assert not isinstance(reached, str), reached
+    at = next(insn.at for insn in reached if insn.at >= 0x40)
 
     moved = relocate(records, seg, image, Shift.of([Edit(at, at, b"\x90")]))
     assert not isinstance(moved, str), moved

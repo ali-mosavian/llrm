@@ -9,6 +9,7 @@ baked into the code -- which it is not: in an object the displacement field
 holds zero and the address lives in the fixup.
 """
 
+import struct
 from enum import StrEnum
 from pathlib import Path
 from dataclasses import field
@@ -56,6 +57,8 @@ class Module:
     operands: dict[int, Addr] = field(default_factory=dict)
     calls: dict[int, str] = field(default_factory=dict)
     targets: frozenset[int] = frozenset()
+    publics: frozenset[int] = frozenset()
+    sites: frozenset[int] = frozenset()
 
     def resolve(self, field_offset: int, literal: int) -> Addr:
         """What the operand whose displacement field sits here points at."""
@@ -92,8 +95,16 @@ def of(records: list[omf.Record]) -> Module | None:
         and code[fixup.offset - 1 : fixup.offset] == bytes([CALL_FAR])
     }
     targets = frozenset(fixup.disp for fixup in fixups if fixup.target == "segment" and fixup.index == seg)
+    publics = frozenset(
+        struct.unpack_from("<H", record.body, at)[0]
+        for record in records
+        for at in omf.code_offsets(record, seg)
+        if record.type & 0xFE == omf.PUBDEF
+    )
 
-    return Module(records, seg, name, code, 0, len(code), operands, calls, targets)
+    sites = frozenset(fixup.offset for fixup in fixups)
+
+    return Module(records, seg, name, code, 0, len(code), operands, calls, targets, publics, sites)
 
 
 def load(path: Path | str) -> Module | None:
