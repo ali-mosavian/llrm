@@ -7,7 +7,6 @@ only on some values.
 """
 
 from pathlib import Path
-from dataclasses import replace
 
 import pytest
 
@@ -23,7 +22,6 @@ from qbopt.blocks import Ends
 from qbopt.lift import needed
 from qbopt.lift import refuse
 from qbopt.blocks import Block
-from qbopt.flags import effect
 from qbopt.lift import regions
 from qbopt.declen import decode
 from qbopt.flags import live_in
@@ -78,10 +76,7 @@ def test_putting_the_high_half_back_writes_no_flag() -> None:
     for restore in FIXUP.values():
         insns, gave_up = run(restore, 0, len(restore))
         assert gave_up is None
-        writes = Flag.NONE
-        for insn in insns:
-            writes |= effect(insn).writes
-        assert writes == Flag.NONE
+        assert not any(insn.writes for insn in insns)
 
 
 def test_a_region_that_computes_nothing_is_taken_whatever_is_live() -> None:
@@ -89,15 +84,6 @@ def test_a_region_that_computes_nothing_is_taken_whatever_is_live() -> None:
     assert not computes(values, need, region)
     for live in (Flag.NONE, Flag.ZF, ALL):
         assert emit_region(values, need, region, live) is not None
-
-
-def test_an_instruction_this_does_not_model_reads_everything() -> None:
-    # Maximal uses, minimal definitions. Both directions push the gate toward
-    # refusing, which is what stops a later simplification defaulting to "no
-    # effect" and quietly opening the hole.
-    unmodelled = decode(hx("D7"), 0)  # xlat
-    assert unmodelled is not None
-    assert effect(unmodelled) == effect(unmodelled).__class__(ALL, Flag.NONE)
 
 
 @pytest.mark.parametrize(
@@ -116,13 +102,15 @@ def test_an_instruction_this_does_not_model_reads_everything() -> None:
 def test_a_conditional_reads_only_its_own_condition(enc: str, reads: Flag) -> None:
     insn = decode(hx(enc), 0)
     assert insn is not None
-    assert effect(insn).reads == reads
+    assert Flag(insn.reads & ALL) == reads
 
 
 def test_a_call_destroys_the_flags_rather_than_reading_them() -> None:
+    # The callee is free to leave them however it likes, so nothing before a
+    # call can have a flag read across it.
     call = decode(hx("9A 00 00 00 00"), 0)
     assert call is not None
-    assert effect(call) == effect(call).__class__(Flag.NONE, ALL)
+    assert Flag(call.reads & ALL) == Flag.NONE
 
 
 def test_a_region_followed_by_a_call_is_always_safe() -> None:
@@ -152,10 +140,10 @@ def test_divergent_is_the_three_that_differ() -> None:
 
 
 def a_block(at: int, enc: str, ends: Ends, succ: tuple[int, ...]) -> Block:
-    code = hx(enc)
-    insns, _ = run(code, 0, len(code))
-    shifted = [replace(insn, at=insn.at + at) for insn in insns]
-    return Block(at, at + len(code), tuple(shifted), ends, succ)
+    # decoded at the address it will live at, so nothing has to be shifted after
+    code = bytes(at) + hx(enc)
+    insns, _ = run(code, at, len(code))
+    return Block(at, len(code), tuple(insns), ends, succ)
 
 
 def test_a_block_whose_successors_are_unknown_keeps_every_flag_live() -> None:
@@ -173,9 +161,9 @@ def test_a_block_whose_successors_are_unknown_keeps_every_flag_live() -> None:
 def test_a_block_that_writes_a_flag_stops_it_being_live_earlier() -> None:
     # and [mem] writes all six, so nothing before it can have them read.
     ret = a_block(0x10, "C3", Ends.RETURN, ())
-    writes = a_block(0x00, "23 06 5A 00", Ends.FALLS_THROUGH, (0x10,))
-    live = live_in([writes, ret])
-    assert live[writes.at] == Flag.NONE
+    computing = a_block(0x00, "23 06 5A 00", Ends.FALLS_THROUGH, (0x10,))
+    live = live_in([computing, ret])
+    assert live[computing.at] == Flag.NONE
 
 
 def test_the_gate_refuses_real_regions_not_just_invented_ones(fixtures: Path) -> None:

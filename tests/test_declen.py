@@ -1,11 +1,10 @@
 """
-The instruction length decoder, on bytes built here rather than on a compiled
-program.
+The decoder, on bytes built here rather than on a compiled program.
 
-dectest.py checks the same decoder against ndisasm on real programs, and that
-is a different question: agreement between two implementations is not
-correctness when both were written from the same wrong idea. These are small,
-and exhaustive where they can be.
+The decoding is iced's now, so these are not a test of a table qbopt wrote. What
+they check is the part qbopt depends on and could get wrong: that the forms BC
+emits come back with the lengths and field offsets the rest of the pass reads,
+and that a second decoder agrees.
 """
 
 import re
@@ -15,9 +14,9 @@ import subprocess
 import pytest
 
 from helpers import hx
-from qbopt.declen import BAD
+from qbopt.declen import run
+from qbopt.declen import decode
 from qbopt.declen import length
-from qbopt.declen import OPCODES
 
 FORMS = [
     ("A1 5E 00", 3, "mov ax,moffs16"),
@@ -46,69 +45,79 @@ FORMS = [
     ("67 66 8D 04 80", 5, "lea eax,[eax+eax*4] -- 32-bit addressing"),
 ]
 
-UNKNOWN = [op for op in range(256) if OPCODES[op] == BAD]
-
 
 @pytest.mark.parametrize(("enc", "want", "what"), FORMS, ids=[f[2] for f in FORMS])
 def test_the_forms_bc_and_the_runtime_emit(enc: str, want: int, what: str) -> None:
     assert length(hx(enc), 0) == want, what
 
 
-def test_some_opcodes_are_unknown() -> None:
-    assert UNKNOWN
+@pytest.mark.parametrize(
+    ("enc", "disp_at", "disp_len", "imm_at", "imm_len"),
+    [
+        ("66 A1 5E 00", 2, 2, None, 0),  # the moffs is a displacement, not an immediate
+        ("8B 46 E8", 2, 1, None, 0),
+        ("66 C7 06 00 00 78 56 34 12", 3, 2, 5, 4),  # mov dword [disp16], imm32
+        ("7D 09", None, 0, 1, 1),
+        ("8B C1", None, 0, None, 0),
+    ],
+)
+def test_where_the_operand_fields_sit(
+    enc: str, disp_at: int | None, disp_len: int, imm_at: int | None, imm_len: int
+) -> None:
+    # These are the offsets a fixup patches, and so the key into a module's
+    # operands. Everything downstream is wrong if they are.
+    insn = decode(hx(enc), 0)
+    assert insn is not None
+    assert (insn.disp_at, insn.disp_len) == (disp_at, disp_len)
+    assert (insn.imm_at, insn.imm_len) == (imm_at, imm_len)
 
 
-@pytest.mark.parametrize("op", UNKNOWN[:8], ids=lambda op: f"{op:02X}")
-def test_unknown_opcodes_give_up_rather_than_guess(op: int) -> None:
-    assert length(bytes([op, 0, 0, 0, 0, 0]), 0) is None
+@pytest.mark.parametrize(
+    ("enc", "reads", "writes"),
+    [
+        ("74 02", True, False),  # jz reads ZF
+        ("23 06 5A 00", False, True),  # and writes the lot
+        ("8B C1", False, False),  # mov touches none
+        ("66 50", False, False),  # nor push
+        ("D1 E0", False, True),  # shl -- and OF is left undefined, which counts
+    ],
+)
+def test_what_an_instruction_does_to_the_flags(enc: str, reads: bool, writes: bool) -> None:
+    insn = decode(hx(enc), 0)
+    assert insn is not None
+    assert bool(insn.reads) is reads
+    assert bool(insn.writes) is writes
 
 
-def test_an_unknown_two_byte_opcode_bails() -> None:
-    assert length(hx("0F FF"), 0) is None
+def test_a_shift_leaves_a_flag_undefined_and_that_counts_as_written() -> None:
+    # The hand-written table had no notion of this, and a flag left undefined is
+    # as dangerous to read as one left wrong.
+    insn = decode(hx("D3 E0"), 0)  # shl ax,cl
+    assert insn is not None
+    assert insn.insn.rflags_undefined
+    assert insn.writes & insn.insn.rflags_undefined == insn.insn.rflags_undefined
 
 
-# A table typo shows up here and nowhere else until it corrupts a program.
-@pytest.mark.parametrize("rm", range(8))
-@pytest.mark.parametrize("mod", range(4))
-def test_every_modrm_under_16_bit_addressing(mod: int, rm: int) -> None:
-    body = bytes([0x8B, (mod << 6) | rm]) + b"\x11\x22\x33\x44"
-    want = 2
-    if mod == 0 and rm == 6:
-        want = 4  # [disp16]
-    elif mod == 1:
-        want = 3  # disp8
-    elif mod == 2:
-        want = 4  # disp16
-    assert length(body, 0) == want
+@pytest.mark.parametrize("enc", ["FF FF", "0F FF", "C4 C0"])
+def test_bytes_that_are_not_an_instruction_decode_to_nothing(enc: str) -> None:
+    assert decode(hx(enc), 0) is None
 
 
-@pytest.mark.parametrize("rm", range(8))
-@pytest.mark.parametrize("mod", range(4))
-def test_every_modrm_under_32_bit_addressing(mod: int, rm: int) -> None:
-    body = bytes([0x67, 0x8B, (mod << 6) | rm, 0x24]) + b"\x11\x22\x33\x44"
-    want = 3  # 67 + opcode + modrm
-    if rm == 4 and mod != 3:
-        want += 1  # a sib byte
-    if mod == 0 and rm == 5:
-        want += 4  # [disp32]
-    elif mod == 1:
-        want += 1
-    elif mod == 2:
-        want += 4
-    assert length(body, 0) == want
-
-
-@pytest.mark.parametrize("op", (0x8B, 0xA1, 0x81, 0x9A, 0x0F, 0xC8, 0xF7), ids=lambda op: f"{op:02X}")
+@pytest.mark.parametrize("op", ("8B", "A1", "81", "9A", "0F", "C8", "F7"))
 @pytest.mark.parametrize("n", range(1, 6))
-def test_never_runs_off_the_end(n: int, op: int) -> None:
-    got = length(bytes([op]) * n, 0)
-    assert got is None or got <= 15
+def test_never_runs_off_the_end(n: int, op: str) -> None:
+    code = hx(op) * n
+    got = length(code, 0)
+    assert got is None or got <= len(code)
 
 
-# ndisasm renders wait, lock and the segment overrides joined to the instruction
-# after them; this decoder treats them separately. The stream of boundaries is
-# the same either way, so those lines are skipped rather than counted as
-# disagreements about length.
+def test_a_run_stops_where_it_cannot_go_on() -> None:
+    code = hx("90 90 FF FF 90")
+    found, gave_up = run(code, 0, len(code))
+    assert [insn.at for insn in found] == [0, 1]
+    assert gave_up == 2
+
+
 JOINED = ("wait", "lock", "rep", "repe", "repne", "repz", "repnz")
 JOINED += ("cs", "ds", "es", "ss", "fs", "gs", "a16", "a32", "o16", "o32")
 
@@ -119,38 +128,31 @@ def fuzz() -> tuple[bytes, list[tuple[int, str]]]:
 
     random.seed(20260828)
     blob = bytes(random.randrange(256) for _ in range(4000))
-    r = subprocess.run(["ndisasm", "-b16", "-"], input=blob, capture_output=True, timeout=30, check=False)
+    found = subprocess.run(["ndisasm", "-b16", "-"], input=blob, capture_output=True, timeout=30, check=False)
     marks = []
-    for ln in r.stdout.decode("latin1").splitlines():
-        m = re.match(r"^([0-9A-F]{8})  (\S+)\s+(.*)$", ln)
-        if m:
-            marks.append((int(m.group(1), 16), m.group(3)))
+    for line in found.stdout.decode("latin1").splitlines():
+        seen = re.match(r"^([0-9A-F]{8})  (\S+)\s+(.*)$", line)
+        if seen:
+            marks.append((int(seen.group(1), 16), seen.group(3)))
     return blob, marks
 
 
-def _compare(blob: bytes, marks: list[tuple[int, str]]) -> tuple[int, list[str]]:
+@pytest.mark.skipif(shutil.which("ndisasm") is None, reason="ndisasm is not installed")
+def test_random_bytes_agree_with_ndisasm(fuzz: tuple[bytes, list[tuple[int, str]]]) -> None:
+    # Two decoders written by different people from the same manual.
+    blob, marks = fuzz
     agree, wrong = 0, []
-    for k in range(len(marks) - 1):
-        off, txt = marks[k]
-        if txt.startswith("db 0x"):
+    for index in range(len(marks) - 1):
+        at, text = marks[index]
+        if text.startswith("db 0x") or text.split()[0] in JOINED:
             continue
-        # where ndisasm cannot decode what follows a prefix it reports the
-        # prefix alone, which is not a claim about length
-        if txt.split()[0] in JOINED:
-            continue
-        want = marks[k + 1][0] - off
-        got = length(blob, off)
+        want = marks[index + 1][0] - at
+        got = length(blob, at)
         if got is None:
             continue
         if got == want:
             agree += 1
         else:
-            wrong.append(f"{off:04X} {txt!r}: got {got}, ndisasm says {want}")
-    return agree, wrong
-
-
-@pytest.mark.skipif(shutil.which("ndisasm") is None, reason="ndisasm is not installed")
-def test_random_bytes_agree_with_ndisasm(fuzz: tuple[bytes, list[tuple[int, str]]]) -> None:
-    agree, wrong = _compare(*fuzz)
+            wrong.append(f"{at:04X} {text!r}: got {got}, ndisasm says {want}")
     assert wrong == []
     assert agree > 1000

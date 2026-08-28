@@ -12,7 +12,9 @@ import pytest
 from qbopt import omf
 from qbopt import module
 from qbopt.lift import lift
+from qbopt.blocks import code_map
 from qbopt.lift import literal_only
+from qbopt.blocks import instructions
 
 # The operator fixtures are compare-and-divide programs: both are calls into the
 # runtime, so they contain no instruction pair to lift. jumptable.obj is the one
@@ -28,15 +30,20 @@ def test_a_static_operand_is_invisible_without_the_fixups(obj: Path) -> None:
     # pair with no fixup at all.
     found = module.load(obj)
     assert found is not None
-    blind, _ = lift(found.code, found.start, found.end, literal_only)
+    reached = instructions(found)
+    if isinstance(reached, str):
+        return
+    blind, _ = lift(found.code, found.start, found.end, literal_only, reached)
     assert [value for value in blind if value.mem and value.mem.space is module.Space.SEGMENT] == []
 
 
 def test_the_fixups_are_what_make_a_static_pair_visible(fixtures: Path) -> None:
     found = module.load(fixtures / "arith-v-g3.obj")
     assert found is not None
-    blind, _ = lift(found.code, found.start, found.end, literal_only)
-    seeing, _ = lift(found.code, found.start, found.end, found.resolve)
+    reached = instructions(found)
+    assert not isinstance(reached, str)
+    blind, _ = lift(found.code, found.start, found.end, literal_only, reached)
+    seeing, _ = lift(found.code, found.start, found.end, found.resolve, reached)
     assert blind == []
     assert len(seeing) > 20, "a program of long arithmetic, and all of it on statics"
 
@@ -44,7 +51,9 @@ def test_the_fixups_are_what_make_a_static_pair_visible(fixtures: Path) -> None:
 def test_the_fixups_make_the_pairs_visible(fixtures: Path) -> None:
     found = module.load(fixtures / WITH_PAIRS)
     assert found is not None
-    values, _ = lift(found.code, found.start, found.end, found.resolve)
+    reached = instructions(found)
+    assert not isinstance(reached, str)
+    values, _ = lift(found.code, found.start, found.end, found.resolve, reached)
     assert values, "with the fixups resolved there are pairs to lift"
     assert all(value.mem is None or value.mem.space is module.Space.SEGMENT for value in values)
 
@@ -110,10 +119,10 @@ def test_a_record_nothing_here_decodes_is_refused(fixtures: Path, kind: int, why
 
 
 @pytest.mark.skipif(shutil.which("ndisasm") is None, reason="ndisasm is not installed")
-def test_every_value_starts_where_ndisasm_says_an_instruction_does(obj: Path) -> None:
+def test_every_value_starts_where_ndisasm_says_an_instruction_does(mapped_obj: Path) -> None:
     # Stronger than the hand-built case: real BC output, and the boundaries come
     # from a decoder this project did not write.
-    found = module.load(obj)
+    found = module.load(mapped_obj)
     assert found is not None
     disassembled = subprocess.run(
         ["ndisasm", "-b16", "-o", str(found.start), "-"],
@@ -128,5 +137,14 @@ def test_every_value_starts_where_ndisasm_says_an_instruction_does(obj: Path) ->
         for line in disassembled.stdout.decode("latin1").splitlines()
         if (seen := re.match(r"^([0-9A-F]{8})  \S", line))
     }
-    values, _ = lift(found.code, found.start, found.end, found.resolve)
-    assert all(value.at in boundaries for value in values)
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
+    reached = instructions(found)
+    assert not isinstance(reached, str)
+    values, _ = lift(found.code, found.start, found.end, found.resolve, reached)
+
+    # ndisasm decodes straight through, so it cannot know an ON GOTO table is
+    # data and everything after it is out of step. Up to the first one the two
+    # agree, and that is the part worth checking.
+    limit = min((lo for lo, _hi in mapped.tables), default=found.end)
+    assert all(value.at in boundaries for value in values if value.at < limit)

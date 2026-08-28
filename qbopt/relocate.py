@@ -20,7 +20,6 @@ from qbopt import omf
 from qbopt import module
 from qbopt.declen import Insn
 from qbopt.blocks import code_map
-from qbopt.declen import to_signed
 from qbopt.blocks import instructions
 
 # How far in to look for where the header stops and code starts. Measured over
@@ -97,11 +96,9 @@ def branches(code: bytes, instructions: list[Insn]) -> list[Branch]:
     """Every self-relative branch among the instructions given."""
     found = []
     for insn in instructions:
-        width = 1 if insn.opcode in REL8 else 2 if insn.opcode in REL16 else 0
-        if not width or insn.imm_at is None:
+        if insn.target is None or insn.imm_at is None:
             continue
-        raw = int.from_bytes(code[insn.imm_at : insn.imm_at + insn.imm_len], "little")
-        found.append(Branch(insn.at, insn.end, insn.imm_at, insn.imm_len, insn.end + to_signed(raw, insn.imm_len)))
+        found.append(Branch(insn.at, insn.end, insn.imm_at, insn.imm_len, insn.target))
     return found
 
 

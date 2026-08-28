@@ -101,11 +101,18 @@ MUTATIONS = (
         "the flag gate opened",
     ),
     Mutation(
-        "unmodelled-reads-nothing",
-        "qbopt/flags.py",
-        "        case _:\n            return Effect(ALL, Flag.NONE)",
-        "        case _:\n            return Effect(Flag.NONE, Flag.NONE)",
-        "an instruction nothing models assumed harmless",
+        "cleared-is-not-written",
+        "qbopt/declen.py",
+        "self.insn.rflags_written | self.insn.rflags_cleared",
+        "self.insn.rflags_written",
+        "a flag forced to zero counted as untouched -- what `and` does to CF",
+    ),
+    Mutation(
+        "displacement-sign",
+        "qbopt/declen.py",
+        "return to_signed(self.insn.memory_displacement, BITNESS // 8) if self.disp_len else 0",
+        "return to_signed(self.insn.memory_displacement, self.disp_len) if self.disp_len else 0",
+        "a bp-relative displacement widened from its encoded size rather than the address size",
     ),
     Mutation(
         "leaves-not-conservative",
@@ -117,15 +124,15 @@ MUTATIONS = (
     Mutation(
         "call-ends-a-block",
         "qbopt/blocks.py",
-        "        case opcode if opcode in RETURNS:",
-        "        case 0x9A | 0xE8:\n            return Ends.RETURN\n        case opcode if opcode in RETURNS:",
+        "    FlowControl.CALL: Ends.FALLS_THROUGH,",
+        "    FlowControl.CALL: Ends.RETURN,",
         "a call treated as the end of a block, which it is not",
     ),
     Mutation(
         "relocated-operand-not-zero",
         "qbopt/lift.py",
-        '            return b"\\x00" * value.dlen',
-        '            return struct.pack("<H", value.mem.disp)',
+        "case Addr(space=Space.SEGMENT):\n            return MemoryOperand(displ=0, displ_size=2)",
+        "case Addr(space=Space.SEGMENT, disp=d):\n            return MemoryOperand(displ=d, displ_size=2)",
         "a relocated operand emitted with its address in the code, which LINK adds to",
     ),
 )

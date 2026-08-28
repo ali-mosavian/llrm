@@ -22,33 +22,27 @@ Anything not recognised invalidates both pairs, because an instruction
 this does not understand may write either of them.
 """
 
-import struct
 from enum import StrEnum
 from dataclasses import dataclass
 from collections.abc import Callable
+
+from iced_x86 import Code
+from iced_x86 import Encoder
+from iced_x86 import Register
+from iced_x86 import Instruction
+from iced_x86 import MemoryOperand
 
 from qbopt.declen import run
 from qbopt.flags import Flag
 from qbopt.declen import Insn
 from qbopt.module import Addr
 from qbopt.module import Space
+from qbopt.declen import BITNESS
 from qbopt.flags import DIVERGENT
-from qbopt.declen import to_signed
 from qbopt.module import literal_only
 from qbopt.module import frame_relative
 
 # the five operations, low half -> (high half, widened)
-PAIRS = {
-    0x23: (0x23, 0x23, "and"),
-    0x0B: (0x0B, 0x0B, "or"),
-    0x33: (0x33, 0x33, "xor"),
-    0x03: (0x13, 0x03, "add"),
-    0x2B: (0x1B, 0x2B, "sub"),
-}
-PAIR_OPCODES = {op for low, (high, _, _) in PAIRS.items() for op in (low, high)}
-
-# reg field -> (pair, half)   0 ax, 1 cx, 2 dx, 3 bx
-REG = {0: (0, 0), 1: (1, 0), 2: (0, 1), 3: (1, 1)}
 
 
 class Kind(StrEnum):
@@ -119,75 +113,88 @@ class Value:
                 return str(self.op)
 
 
-# The memory forms BC uses for a long: a bare displacement for a static, and
-# bp-relative for a local or a spilled temporary. Both are carried through
-# unchanged -- the widened instruction keeps the same ModRM and displacement and
-# changes only the register field, so nothing here has to understand what the
-# address means.
-STATIC = 0x06
-BASES = (STATIC, 0x46, 0x86)  # [disp16], [bp+disp8], [bp+disp16]
+# The five operations, as iced names each half. BC does the low half with the
+# plain form and the high half with the carry-aware partner where there is one.
+PAIRED = {
+    Code.AND_R16_RM16: (Code.AND_R16_RM16, "and"),
+    Code.OR_R16_RM16: (Code.OR_R16_RM16, "or"),
+    Code.XOR_R16_RM16: (Code.XOR_R16_RM16, "xor"),
+    Code.ADD_R16_RM16: (Code.ADC_R16_RM16, "add"),
+    Code.SUB_R16_RM16: (Code.SBB_R16_RM16, "sub"),
+}
+HIGH_HALVES = {high for high, _name in PAIRED.values()}
+
+LOADS = {Code.MOV_R16_RM16, Code.MOV_AX_MOFFS16}
+STORES = {Code.MOV_RM16_R16, Code.MOV_MOFFS16_AX}
+
+# reg -> (pair, half). ax:dx is pair 0, cx:bx is pair 1.
+HALF_OF = {
+    Register.AX: (0, 0),
+    Register.DX: (0, 1),
+    Register.CX: (1, 0),
+    Register.BX: (1, 1),
+}
 
 type Resolver = Callable[[int, int], Addr]
+
+
+def operand(insn: Insn, resolve: Resolver) -> Addr | None:
+    """Where this instruction's memory operand points, or None if it has none.
+
+    A bare displacement is a static, and its address is not in the code: the
+    field holds zero and the fixup names the target. bp-relative is a local or a
+    spilled temporary, and its displacement really is in the code.
+    """
+    if insn.disp_at is None:
+        return None
+    match insn.memory_base:
+        case Register.NONE:
+            return resolve(insn.disp_at, insn.insn.memory_displacement)
+        case Register.BP:
+            return frame_relative(insn.displacement)
+        case _:
+            return None
 
 
 def classify(insn: Insn, resolve: Resolver = literal_only) -> Decoded | None:
     """What one instruction is, in long terms, or None.
 
-    `resolve` turns the offset of a displacement field, and whatever literal is
-    sitting in it, into the address it really names. In an object that literal
-    is zero and the address is in a fixup; in a unit test there is no fixup and
-    the literal is the address.
+    Everything here is a 16-bit form. iced puts the operand size in the code, so
+    the widened forms this pass emits cannot be mistaken for a half of anything.
     """
-    if insn.prefixes:
-        # A 66-prefixed instruction is already 32-bit, so it is not half of
-        # anything. BC emits none inside a pair.
-        return None
-
-    # A1 and A3 are ax with no ModRM at all
-    if insn.opcode in (0xA1, 0xA3) and insn.disp_at is not None:
-        kind = Kind.LOAD if insn.opcode == 0xA1 else Kind.STORE
-        mem = resolve(insn.disp_at, insn.disp or 0)
-        return Decoded(kind, pair=0, half=0, length=insn.length, mem=mem, base=STATIC, dlen=2, disp_at=insn.disp_at)
-
-    if insn.modrm is None or insn.reg > 3:
-        return None
-    pair, half = REG[insn.reg]
-    base = insn.modrm & 0xC7
-
-    if base in BASES and insn.disp_at is not None:
-        mem = (
-            resolve(insn.disp_at, insn.disp or 0)
-            if base == STATIC
-            else frame_relative(to_signed(insn.disp or 0, insn.disp_len))
-        )
-        match insn.opcode:
-            case 0x8B:
-                kind = Kind.LOAD
-            case 0x89:
-                kind = Kind.STORE
-            case opcode if opcode in PAIR_OPCODES:
-                kind = Kind.ALU
-            case _:
-                return None
-        alu = insn.opcode if kind is Kind.ALU else None
-        return Decoded(
-            kind, pair, half, insn.length, alu=alu, mem=mem, base=base, dlen=insn.disp_len, disp_at=insn.disp_at
-        )
-
-    if insn.mod != 3:  # register to register
-        return None
-    if insn.rm > 3:
-        return None
-    src_pair, src_half = REG[insn.rm]
-    if src_half != half:
-        return None  # halves must match
-    match insn.opcode:
-        case 0x8B:
-            return Decoded(Kind.MOVE, pair, half, insn.length, src_pair=src_pair)
-        case opcode if opcode in PAIR_OPCODES:
-            return Decoded(Kind.REG_ALU, pair, half, insn.length, src_pair=src_pair, alu=opcode)
-        case _:
+    code = insn.code
+    if code in LOADS or code in STORES:
+        register = insn.register(0 if code in LOADS else 1)
+        if register not in HALF_OF:
             return None
+        pair, half = HALF_OF[register]
+        kind = Kind.LOAD if code in LOADS else Kind.STORE
+        if not insn.reads_memory(1 if code in LOADS else 0):
+            # register to register: a pair copy, if the halves line up
+            source = insn.register(1 if code in LOADS else 0)
+            if code not in LOADS or source not in HALF_OF or HALF_OF[source][1] != half:
+                return None
+            return Decoded(Kind.MOVE, pair, half, insn.length, src_pair=HALF_OF[source][0])
+        where = operand(insn, resolve)
+        if where is None:
+            return None
+        return Decoded(kind, pair, half, insn.length, mem=where, dlen=insn.disp_len, disp_at=insn.disp_at)
+
+    if code not in PAIRED and code not in HIGH_HALVES:
+        return None
+    register = insn.register(0)
+    if register not in HALF_OF:
+        return None
+    pair, half = HALF_OF[register]
+    if not insn.reads_memory(1):
+        source = insn.register(1)
+        if source not in HALF_OF or HALF_OF[source][1] != half:
+            return None
+        return Decoded(Kind.REG_ALU, pair, half, insn.length, src_pair=HALF_OF[source][0], alu=code)
+    where = operand(insn, resolve)
+    if where is None:
+        return None
+    return Decoded(Kind.ALU, pair, half, insn.length, alu=code, mem=where, dlen=insn.disp_len, disp_at=insn.disp_at)
 
 
 # neg lo / adc hi,0 / neg hi, per pair. Three instructions, so it does not fit
@@ -288,7 +295,7 @@ def lift(
         if first is not None and second is not None and pairs_with(first, second):
             span = instructions[position + 1].end - at
             low, high = (first, second) if first.half == 0 else (second, first)
-            operation = PAIRS.get(low.alu) if low.alu is not None else None
+            operation = PAIRED.get(low.alu) if low.alu is not None else None
             paired = low.mem is not None and high.mem == low.mem.plus(2)
             if paired and first.kind is Kind.ALU:
                 paired = operation is not None and operation[0] == high.alu
@@ -307,7 +314,7 @@ def lift(
                                 low.mem,
                                 low.disp_at,
                                 source=live[first.pair],
-                                alu=operation[2],
+                                alu=operation[1],
                             )
                         )
                     case Kind.STORE if live[first.pair] is not None:
@@ -343,7 +350,7 @@ def lift(
                         None,
                         source=live[first.pair],
                         second_source=live[first.src_pair],
-                        alu=operation[2],
+                        alu=operation[1],
                     )
                 )
                 paired = True
@@ -410,24 +417,6 @@ def needed(values: list[Value], within: list[list[int]] | None = None) -> list[b
     return need
 
 
-OPC = {"and": 0x23, "or": 0x0B, "xor": 0x33, "add": 0x03, "sub": 0x2B}
-LOREG = {0: 0, 1: 1}  # pair 0 low is eax (000), pair 1 is ecx (001)
-
-
-def displacement(value: Value) -> bytes:
-    match value.mem:
-        case None:
-            return b""
-        case Addr(space=Space.SEGMENT):
-            return b"\x00" * value.dlen
-        case Addr(disp=disp) if value.dlen == 1:
-            return struct.pack("<b", disp)
-        case Addr(disp=disp):
-            return struct.pack("<h" if disp < 0 else "<H", disp)
-        case _:
-            raise ValueError(f"no displacement for {value.mem}")
-
-
 @dataclass(frozen=True, slots=True)
 class Emitted:
     code: bytes
@@ -438,48 +427,79 @@ class Emitted:
     relocations: tuple[tuple[int, int], ...] = ()
 
 
-def relocated_at(value: Value, code: bytes) -> tuple[tuple[int, int], ...]:
-    if value.mem is None or value.mem.space is not Space.SEGMENT or value.mem_at is None:
-        return ()
-    return ((len(code) - value.dlen, value.mem_at),)
+# The widened form of each operation, and the register each pair widens into.
+WIDE = {
+    "and": Code.AND_R32_RM32,
+    "or": Code.OR_R32_RM32,
+    "xor": Code.XOR_R32_RM32,
+    "add": Code.ADD_R32_RM32,
+    "sub": Code.SUB_R32_RM32,
+}
+WIDE_REGISTER = {0: Register.EAX, 1: Register.ECX}
 
 
-def encode(value: Value) -> bytes:
-    """The widened form of one value. Register is the pair BC used."""
-    opcode = OPC.get(value.alu, 0)
-    disp = displacement(value)
-    from_memory = value.base | (LOREG[value.pair] << 3)
-    # mod 11, reg = destination pair's low register, rm = source's
-    from_register = 0xC0 | (LOREG[value.pair] << 3) | LOREG[value.src_pair]
-    match value:
-        case Value(op=Op.LOAD, pair=0, base=0x06):
-            return bytes([0x66, 0xA1]) + disp
-        case Value(op=Op.LOAD):
-            return bytes([0x66, 0x8B, from_memory]) + disp
-        case Value(op=Op.STORE, pair=0, base=0x06):
-            return bytes([0x66, 0xA3]) + disp
-        case Value(op=Op.STORE):
-            return bytes([0x66, 0x89, from_memory]) + disp
-        case Value(op=Op.ALUM):
-            return bytes([0x66, opcode, from_memory]) + disp
-        case Value(op=Op.ALUV):
-            return bytes([0x66, opcode, from_register])
-        case Value(op=Op.MOVE):
-            return bytes([0x66, 0x8B, from_register])
-        case Value(op=Op.NEG):
-            return bytes([0x66, 0xF7, 0xD8 | LOREG[value.pair]])
+def memory(value: Value) -> MemoryOperand:
+    """The operand as the widened instruction has to carry it.
+
+    A relocated address is emitted as zero: LINK adds what is in the code to the
+    fixup's target, so anything else would be added to the real address.
+    """
+    match value.mem:
+        case Addr(space=Space.SEGMENT):
+            return MemoryOperand(displ=0, displ_size=2)
+        case Addr(space=Space.FRAME, disp=disp):
+            return MemoryOperand(base=Register.BP, displ=disp, displ_size=value.dlen or 1)
+        case Addr(disp=disp):
+            return MemoryOperand(displ=disp, displ_size=2)
+        case _:
+            raise ValueError(f"{value.op} has no memory operand")
+
+
+def instruction(value: Value) -> Instruction:
+    """The one 386 instruction this value becomes."""
+    wide = WIDE_REGISTER[value.pair]
+    source = WIDE_REGISTER[value.src_pair]
+    # pair 0 is eax, so a bare displacement takes the shorter moffs form
+    moffs = value.pair == 0 and value.mem is not None and value.mem.space is not Space.FRAME
+    match value.op:
+        case Op.LOAD if moffs:
+            return Instruction.create_reg_mem(Code.MOV_EAX_MOFFS32, wide, memory(value))
+        case Op.LOAD:
+            return Instruction.create_reg_mem(Code.MOV_R32_RM32, wide, memory(value))
+        case Op.STORE if moffs:
+            return Instruction.create_mem_reg(Code.MOV_MOFFS32_EAX, memory(value), wide)
+        case Op.STORE:
+            return Instruction.create_mem_reg(Code.MOV_RM32_R32, memory(value), wide)
+        case Op.ALUM if value.alu is not None:
+            return Instruction.create_reg_mem(WIDE[value.alu], wide, memory(value))
+        case Op.ALUV if value.alu is not None:
+            return Instruction.create_reg_reg(WIDE[value.alu], wide, source)
+        case Op.MOVE:
+            return Instruction.create_reg_reg(Code.MOV_R32_RM32, wide, source)
+        case Op.NEG:
+            return Instruction.create_reg(Code.NEG_RM32, wide)
         case _:
             raise ValueError(f"no widened form for {value.op}")
 
 
-def sizeof(value: Value) -> int:
-    return len(encode(value))
-
-
 def emit(value: Value) -> Emitted:
     """The widened form, and where it needs a fixup of its own."""
-    code = encode(value)
-    return Emitted(code, relocated_at(value, code))
+    encoder = Encoder(BITNESS)
+    encoder.encode(instruction(value), 0)
+    where = encoder.get_constant_offsets()
+    code = encoder.take_buffer()
+
+    if value.mem is None or value.mem.space is not Space.SEGMENT or value.mem_at is None:
+        return Emitted(code)
+    return Emitted(code, ((where.displacement_offset, value.mem_at),))
+
+
+def encode(value: Value) -> bytes:
+    return emit(value).code
+
+
+def sizeof(value: Value) -> int:
+    return len(encode(value))
 
 
 # Putting the high half back. The widened form writes only the 32-bit register,

@@ -22,6 +22,7 @@ from qbopt import module
 from qbopt.flags import ALL
 from qbopt.lift import lift
 from qbopt.flags import Flag
+from qbopt.calls import sites
 from qbopt.lift import needed
 from qbopt.lift import refuse
 from qbopt.blocks import Block
@@ -36,6 +37,7 @@ from qbopt.blocks import partition
 from qbopt.flags import live_after
 from qbopt.lift import emit_region
 from qbopt.relocate import relocate
+from qbopt.calls import emit_compare
 from qbopt.blocks import instructions
 
 
@@ -137,13 +139,45 @@ def plan(
         planned.append(
             Planned(
                 Region(
-                    id=index,
+                    id=len(planned),
                     seg=found.seg,
                     at=at,
                     end=end,
                     before=found.code[at:end].hex(),
                     after=emitted.code.hex() if emitted else None,
                     taken=emitted is not None,
+                    reason=reason,
+                ),
+                edit,
+            )
+        )
+    for site in sites(found, reached):
+        after = flags_after(blocks, live, site.start, site.end)
+        emitted = emit_compare(site, after)
+        reason = anchored_inside(found, mapped, site.start, site.end)
+        if reason is None and isinstance(emitted, str):
+            reason = emitted
+        if reason is None and any(one.edit and one.edit.lo < site.end and site.start < one.edit.hi for one in planned):
+            reason = "it overlaps a region already taken"
+        edit = None
+        if reason is None and not isinstance(emitted, str):
+            edit = Edit(
+                site.start,
+                site.end,
+                emitted.code,
+                tuple((at, found.fixup_at[field]) for at, field in emitted.relocations),
+            )
+        widened = None if edit is None else edit.data.hex()
+        planned.append(
+            Planned(
+                Region(
+                    id=len(planned),
+                    seg=found.seg,
+                    at=site.start,
+                    end=site.end,
+                    before=found.code[site.start : site.end].hex(),
+                    after=widened,
+                    taken=reason is None,
                     reason=reason,
                 ),
                 edit,

@@ -19,21 +19,17 @@ is the EXTDEF the fixup names.
 from enum import StrEnum
 from dataclasses import dataclass
 
+from iced_x86 import FlowControl
+
 from qbopt.declen import Insn
 from qbopt.declen import decode
 from qbopt.module import Module
-from qbopt.declen import to_signed
 
 # Runtime routines that do not return to the byte after the call, because their
 # arguments are sitting there.
 INLINE_TABLE = {"B$OGTA"}
 
 PAD = 0x90
-
-CONDITIONAL = frozenset(range(0x70, 0x80)) | frozenset(range(0xE0, 0xE4)) | frozenset(range(0x0F80, 0x0F90))
-UNCONDITIONAL = {0xEB, 0xE9}
-RETURNS = {0xC2, 0xC3, 0xCA, 0xCB, 0xCF}
-FAR_JUMP = {0xEA}
 
 
 class Ends(StrEnum):
@@ -46,6 +42,23 @@ class Ends(StrEnum):
     TABLE = "table"
 
 
+# What iced calls it, and what it means for a block. The one that matters is
+# that a call is NEXT-like: it comes back, and treating it as an end halved what
+# liveness could see -- 49 of 102 blocks.
+ENDS = {
+    FlowControl.NEXT: Ends.FALLS_THROUGH,
+    FlowControl.CALL: Ends.FALLS_THROUGH,
+    FlowControl.INTERRUPT: Ends.FALLS_THROUGH,
+    FlowControl.INDIRECT_CALL: Ends.FALLS_THROUGH,
+    FlowControl.CONDITIONAL_BRANCH: Ends.CONDITIONAL,
+    FlowControl.UNCONDITIONAL_BRANCH: Ends.JUMP,
+    FlowControl.INDIRECT_BRANCH: Ends.INDIRECT,
+    FlowControl.RETURN: Ends.RETURN,
+    FlowControl.EXCEPTION: Ends.LEAVES,
+    FlowControl.XBEGIN_XABORT_XEND: Ends.LEAVES,
+}
+
+
 @dataclass(frozen=True, slots=True)
 class CodeMap:
     starts: frozenset[int]
@@ -55,31 +68,12 @@ class CodeMap:
 
 
 def terminator(insn: Insn) -> Ends:
-    """What this instruction does to control flow.
-
-    Not terminators, and the reason matters: 9A and E8 calls, FF /2 and /3
-    indirect calls, and CD interrupts all come back.
-    """
-    match insn.opcode:
-        case opcode if opcode in CONDITIONAL:
-            return Ends.CONDITIONAL
-        case opcode if opcode in UNCONDITIONAL:
-            return Ends.JUMP
-        case opcode if opcode in RETURNS:
-            return Ends.RETURN
-        case opcode if opcode in FAR_JUMP:
-            return Ends.LEAVES
-        case 0xFF if insn.reg in (4, 5):
-            return Ends.INDIRECT
-        case _:
-            return Ends.FALLS_THROUGH
-
-
-def branch_target(insn: Insn, code: bytes) -> int | None:
-    if insn.imm_at is None:
-        return None
-    raw = int.from_bytes(code[insn.imm_at : insn.imm_at + insn.imm_len], "little")
-    return insn.end + to_signed(raw, insn.imm_len)
+    """What this instruction does to control flow."""
+    ends = ENDS.get(insn.flow, Ends.LEAVES)
+    # a far jump goes somewhere this module cannot follow
+    if ends is Ends.JUMP and insn.target is None:
+        return Ends.LEAVES
+    return ends
 
 
 def inline_table(module: Module, insn: Insn) -> tuple[int, int, list[int]] | None:
@@ -122,7 +116,7 @@ def walk(module: Module, entry: int) -> CodeMap | str:
 
             ends = terminator(insn)
             if ends in (Ends.CONDITIONAL, Ends.JUMP):
-                target = branch_target(insn, module.code)
+                target = insn.target
                 if target is None or not module.start <= target < module.end:
                     return f"a branch at {insn.at:#x} leaves the module"
                 leaders.add(target)
@@ -328,7 +322,7 @@ def _close(module: Module, run: list[Insn], mapped: CodeMap) -> Block:
         succ = [*sorted(module.targets), table[1]]
         ends = Ends.TABLE
     elif ends in (Ends.CONDITIONAL, Ends.JUMP):
-        target = branch_target(last, module.code)
+        target = last.target
         succ = [target] if target is not None else []
         if ends is Ends.CONDITIONAL:
             succ.append(last.end)

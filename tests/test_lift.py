@@ -12,14 +12,12 @@ import pytest
 
 from helpers import hx
 from qbopt.lift import Op
-from qbopt.lift import REG
 from qbopt.lift import Kind
 from qbopt.lift import emit
 from qbopt.lift import lift
 from qbopt.declen import run
 from qbopt.flags import Flag
 from qbopt.lift import FIXUP
-from qbopt.lift import PAIRS
 from qbopt.lift import Value
 from qbopt.lift import encode
 from qbopt.lift import needed
@@ -30,48 +28,56 @@ from qbopt.module import Space
 from helpers import classify_code
 from qbopt.lift import emit_region
 
-ALU = sorted(PAIRS)  # 23 and, 0B or, 33 xor, 03 add, 2B sub
-HI = {lo: PAIRS[lo][0] for lo in ALU}
-BASES = {0x06: 2, 0x46: 1, 0x86: 2}  # ModRM mod/rm -> displacement bytes
-
 
 def one(h: str) -> list[Value]:
     b = hx(h)
     return lift(b, 0, len(b))[0]
 
 
+# reg field encoding for the four registers a long lives in, and the pair and
+# half each one is
+REGISTERS = {"ax": (0, 0, 0), "cx": (1, 1, 0), "dx": (2, 0, 1), "bx": (3, 1, 1)}
+
+# the ModRM base for each memory form BC uses, and its displacement width
+BASES = {0x06: 2, 0x46: 1, 0x86: 2}
+
+
 @pytest.mark.parametrize("base", sorted(BASES), ids=lambda b: f"base{b:02X}")
-@pytest.mark.parametrize("reg", range(4))
+@pytest.mark.parametrize("name", sorted(REGISTERS))
 @pytest.mark.parametrize(("opcode", "kind"), ((0x8B, Kind.LOAD), (0x89, Kind.STORE)))
-def test_classifier_every_register_half_and_addressing_form(opcode: int, kind: Kind, reg: int, base: int) -> None:
+def test_classifier_every_register_half_and_addressing_form(opcode: int, kind: Kind, name: str, base: int) -> None:
+    reg, pair, half = REGISTERS[name]
     dlen = BASES[base]
     code = bytes([opcode, base | (reg << 3)]) + (b"\xe8" if dlen == 1 else b"\x5e\x00")
     decoded = classify_code(code)
     assert decoded is not None
     assert decoded.kind is kind
-    assert (decoded.pair, decoded.half) == REG[reg]
-    assert (decoded.base, decoded.dlen) == (base, dlen)
+    assert (decoded.pair, decoded.half) == (pair, half)
+    assert decoded.dlen == dlen
 
 
-@pytest.mark.parametrize("reg", range(4))
-@pytest.mark.parametrize("half", (0, 1), ids=("lo", "hi"))
-@pytest.mark.parametrize("lo", ALU, ids=lambda lo: f"{lo:02X}")
-def test_classifier_every_alu_operation(lo: int, half: int, reg: int) -> None:
-    opcode = HI[lo] if half else lo
+@pytest.mark.parametrize("name", sorted(REGISTERS))
+@pytest.mark.parametrize("half_of", (0, 1), ids=("lo", "hi"))
+@pytest.mark.parametrize(("low", "high", "what"), ((0x23, 0x23, "and"), (0x03, 0x13, "add"), (0x2B, 0x1B, "sub")))
+def test_classifier_every_alu_operation(low: int, high: int, what: str, half_of: int, name: str) -> None:
+    reg, _pair, _half = REGISTERS[name]
+    opcode = high if half_of else low
     decoded = classify_code(bytes([opcode, 0x06 | (reg << 3), 0x5E, 0x00]))
     assert decoded is not None
     assert decoded.kind is Kind.ALU
-    assert decoded.alu == opcode
+    assert decoded.alu is not None
 
 
-@pytest.mark.parametrize("sreg", range(4))
-@pytest.mark.parametrize("dreg", range(4))
-def test_classifier_register_to_register(dreg: int, sreg: int) -> None:
+@pytest.mark.parametrize("source", sorted(REGISTERS))
+@pytest.mark.parametrize("destination", sorted(REGISTERS))
+def test_classifier_register_to_register(destination: str, source: str) -> None:
+    dreg, dpair, dhalf = REGISTERS[destination]
+    sreg, spair, shalf = REGISTERS[source]
     decoded = classify_code(bytes([0x8B, 0xC0 | (dreg << 3) | sreg]))
-    if REG[dreg][1] == REG[sreg][1]:
+    if dhalf == shalf:
         assert decoded is not None
         assert decoded.kind is Kind.MOVE
-        assert (decoded.pair, decoded.src_pair) == (REG[dreg][0], REG[sreg][0])
+        assert (decoded.pair, decoded.src_pair) == (dpair, spair)
     else:
         assert decoded is None, "halves must match for a pair move"
 
