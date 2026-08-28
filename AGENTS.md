@@ -136,6 +136,33 @@ Moving code means updating all of, and the list is finite:
   quietly survived on the other two.
 - Nothing ships, and nothing is self-modifying.
 
+## Code
+
+- **Python 3.13+, and `uv` for everything.** `uv run`, `uv sync`, `uv add`. No
+  `pip`, no hand-rolled venv.
+- **Functions over classes.** A class earns its place only when behaviour and
+  state travel together. Data is a `@dataclass(slots=True)`, and `frozen=True`
+  unless something has to mutate it.
+- **Type annotations on every parameter and every return.** `ty` checks them.
+- `ruff check` and `ruff format`: line length 120, double quotes.
+- **No docstrings. No comments unless something is not trivial** -- and here
+  that means a comment carries a *fact that is not in the code*: a
+  measurement, the reason a case is refused, something BC does that nobody
+  would guess. Narrating the next line does not qualify. Module-level facts
+  live in this file or in `docs/`, not in a docstring.
+- **pytest.** No test classes. Fixtures in `conftest.py` for the OMF corpus.
+  `parametrize` wherever one assertion runs over the fixtures, the twelve
+  configurations, or an opcode table -- which is most of this suite.
+- `pre-commit` runs ruff, ruff-format, the whitespace hooks, `ty`, and the
+  hermetic test tier.
+
+## Writing
+
+- **Commit messages are conventional commits**: `type(scope): description`.
+  Short, to the point, no rambling.
+- The same goes for every other description -- PR bodies, docs, comments,
+  replies. Say the thing and stop.
+
 ## Method
 
 - **Write the test first and watch it fail.** A test only ever seen passing
