@@ -165,8 +165,12 @@ Moving code means updating all of, and the list is finite:
 
 ## Method
 
-- **Write the test first and watch it fail.** A test only ever seen passing
-  proves nothing.
+- **A fix starts with a failing test.** Reproduce the bug, watch the test
+  fail, then fix it -- a test only ever seen passing proves nothing. This is
+  about fixes. It is not TDD in general: new code may be written first and
+  covered afterwards, as long as the cover is comprehensive.
+- **Test behaviour, not implementation.** Tests should survive a refactor
+  that changed no behaviour. One that does not is a test to rewrite.
 - **Mutation-check every fix.** Put the bug back, confirm a test notices,
   and confirm the mutation actually applied before believing the result.
 - **When careful measurements of the source all come back clean and the
