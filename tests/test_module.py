@@ -20,15 +20,25 @@ from qbopt.lift import literal_only
 WITH_PAIRS = "jumptable.obj"
 
 
-def test_the_lifter_is_blind_without_the_fixups(obj: Path) -> None:
-    # In an object a static's address is not in the code -- the displacement
-    # field holds zero and the offset is in the fixup. Read the code alone and
-    # every operand looks like address zero, so a load pair's two halves are
-    # both 0 and the hi == lo + 2 test can never hold.
+def test_a_static_operand_is_invisible_without_the_fixups(obj: Path) -> None:
+    # A static's address is not in the code -- the displacement field holds zero
+    # and the offset is in the fixup. Read the code alone and both halves of a
+    # pair look like address zero, so hi == lo + 2 can never hold. bp-relative
+    # operands are different: their displacement really is in the code, and they
+    # pair with no fixup at all.
     found = module.load(obj)
     assert found is not None
     blind, _ = lift(found.code, found.start, found.end, literal_only)
+    assert [value for value in blind if value.mem and value.mem.space is module.Space.SEGMENT] == []
+
+
+def test_the_fixups_are_what_make_a_static_pair_visible(fixtures: Path) -> None:
+    found = module.load(fixtures / "arith-v-g3.obj")
+    assert found is not None
+    blind, _ = lift(found.code, found.start, found.end, literal_only)
+    seeing, _ = lift(found.code, found.start, found.end, found.resolve)
     assert blind == []
+    assert len(seeing) > 20, "a program of long arithmetic, and all of it on statics"
 
 
 def test_the_fixups_make_the_pairs_visible(fixtures: Path) -> None:

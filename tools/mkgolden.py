@@ -46,7 +46,29 @@ def arith() -> list[str]:
     ]
 
 
-PROGRAMS = {"arith": arith}
+def procs() -> list[str]:
+    a, b = 305419896, 252645135
+    r = a & b
+    return [
+        f"AND={num(r)}",
+        f"TWICE={num(s32(r + r))}",
+        f"NESTED={num(s32(s32(r + r) * 2))}",
+        "DONE",
+    ]
+
+
+def jumps() -> list[str]:
+    a, b = 305419896, 252645135
+    branch = {1: a & b, 2: a | b, 3: a ^ b}
+    case = {1: s32(a + b), 2: s32(a - b), 3: s32(-a)}
+    lines = []
+    for k in (1, 2, 3):
+        lines.append(f"ON{seq(k)} ={num(branch[k])}")
+        lines.append(f"CASE{seq(k)} ={num(case[k])}")
+    return [*lines, "DONE"]
+
+
+PROGRAMS = {"arith": arith, "procs": procs, "jumps": jumps}
 
 
 def main() -> int:
