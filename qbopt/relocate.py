@@ -42,6 +42,9 @@ class Edit:
     lo: int
     hi: int
     data: bytes
+    # (offset within `data`, the fixup to put there). Each is one BC already
+    # wrote for the same operand, moved: it names the right target already.
+    fixups: tuple[tuple[int, omf.Fixup], ...] = ()
 
     @property
     def length(self) -> int:
@@ -193,7 +196,7 @@ def relocate(records: list[omf.Record], seg: int, image: bytes, shift: Shift) ->
         by_record.setdefault(id(fixup.record), []).append(fixup)
 
     out: list[omf.Record] = []
-    covered = None  # the new range of the code LEDATA just emitted
+    covered: tuple[int, int] | None = None  # the new range of the code LEDATA just emitted
     for record in records:
         kind = record.type & 0xFE
 
@@ -215,12 +218,14 @@ def relocate(records: list[omf.Record], seg: int, image: bytes, shift: Shift) ->
                 if owner.get(at) != id(record):
                     mine_only[shift.at(at) - lo] = payload[at - offset]
             out.append(omf.ledata_record(seg, lo, bytes(mine_only)))
-            covered = lo
+            covered = (lo, lo + len(mine_only))
             continue
 
         if kind == omf.FIXUPP and (mine := by_record.get(id(record))):
             rebuilt = []
             for fixup in mine:
+                if fixup.seg == seg and any(edit.lo <= fixup.offset < edit.hi for edit in shift.edits):
+                    continue  # the instruction it patched has been replaced
                 into_code = fixup.target == "segment" and fixup.index == seg and fixup.disp_pos is not None
                 disp = shift.at(fixup.disp) if into_code else None
                 if fixup.seg != seg:
@@ -228,7 +233,14 @@ def relocate(records: list[omf.Record], seg: int, image: bytes, shift: Shift) ->
                     continue
                 if covered is None:
                     return "a code fixup does not follow a code LEDATA"
-                rebuilt.append(omf.reemit(fixup, offset=shift.at(fixup.offset) - covered, disp=disp))
+                rebuilt.append(omf.reemit(fixup, offset=shift.at(fixup.offset) - covered[0], disp=disp))
+            if covered is not None:
+                for edit in shift.edits:
+                    placed = shift.at(edit.lo)
+                    if not covered[0] <= placed < covered[1]:
+                        continue
+                    for at, fixup in edit.fixups:
+                        rebuilt.append(omf.reemit(fixup, offset=placed + at - covered[0]))
             threads = record.body[: mine[0].lo]
             rebuilt_body = threads + b"".join(rebuilt)
             out.append(record if rebuilt_body == record.body else omf.fixupp_record([rebuilt_body]))

@@ -74,6 +74,8 @@ class Decoded:
     mem: Addr | None = None
     base: int = 0
     dlen: int = 0
+    # where the displacement field sat, so the fixup that named it can be found
+    disp_at: int | None = None
 
 
 class Op(StrEnum):
@@ -98,6 +100,7 @@ class Value:
     src_pair: int = 0
     base: int = 0x06
     dlen: int = 2
+    mem_at: int | None = None
 
     def __repr__(self) -> str:
         match self.op:
@@ -145,7 +148,7 @@ def classify(insn: Insn, resolve: Resolver = literal_only) -> Decoded | None:
     if insn.opcode in (0xA1, 0xA3) and insn.disp_at is not None:
         kind = Kind.LOAD if insn.opcode == 0xA1 else Kind.STORE
         mem = resolve(insn.disp_at, insn.disp or 0)
-        return Decoded(kind, pair=0, half=0, length=insn.length, mem=mem, base=STATIC, dlen=2)
+        return Decoded(kind, pair=0, half=0, length=insn.length, mem=mem, base=STATIC, dlen=2, disp_at=insn.disp_at)
 
     if insn.modrm is None or insn.reg > 3:
         return None
@@ -168,7 +171,9 @@ def classify(insn: Insn, resolve: Resolver = literal_only) -> Decoded | None:
             case _:
                 return None
         alu = insn.opcode if kind is Kind.ALU else None
-        return Decoded(kind, pair, half, insn.length, alu=alu, mem=mem, base=base, dlen=insn.disp_len)
+        return Decoded(
+            kind, pair, half, insn.length, alu=alu, mem=mem, base=base, dlen=insn.disp_len, disp_at=insn.disp_at
+        )
 
     if insn.mod != 3:  # register to register
         return None
@@ -207,6 +212,7 @@ def widened(
     span: int,
     shape: Decoded,
     mem: Addr | None,
+    mem_at: int | None = None,
     source: int | None = None,
     second_source: int | None = None,
     alu: str | None = None,
@@ -221,6 +227,7 @@ def widened(
         base=shape.base,
         dlen=shape.dlen,
         mem=mem,
+        mem_at=mem_at,
         s1=source,
         s2=second_source,
         alu=alu,
@@ -238,9 +245,21 @@ def pairs_with(first: Decoded, second: Decoded) -> bool:
     )
 
 
-def lift(code: bytes, start: int, end: int, resolve: Resolver = literal_only) -> tuple[list[Value], list[int]]:
-    """Values, stores, and the instructions consumed, for one straight run."""
-    instructions, _gave_up = run(code, start, end)
+def lift(
+    code: bytes,
+    start: int,
+    end: int,
+    resolve: Resolver = literal_only,
+    stream: list[Insn] | None = None,
+) -> tuple[list[Value], list[int]]:
+    """Values and stores, over the instructions given or a straight run of them.
+
+    `stream` is what the block finder reached. Without it this decodes linearly,
+    which is right for a hand-built test and wrong for a module: a linear walk
+    reads jump tables and dead code as instructions, and a region built on one
+    of those does not begin where an instruction does.
+    """
+    instructions = stream if stream is not None else run(code, start, end)[0]
     index_of = {insn.at: position for position, insn in enumerate(instructions)}
 
     values: list[Value] = []
@@ -278,13 +297,24 @@ def lift(code: bytes, start: int, end: int, resolve: Resolver = literal_only) ->
             if paired:
                 match first.kind:
                     case Kind.LOAD:
-                        live[first.pair] = add(widened(Op.LOAD, at, span, first, low.mem))
+                        live[first.pair] = add(widened(Op.LOAD, at, span, first, low.mem, low.disp_at))
                     case Kind.ALU if live[first.pair] is not None and operation is not None:
                         live[first.pair] = add(
-                            widened(Op.ALUM, at, span, first, low.mem, source=live[first.pair], alu=operation[2])
+                            widened(
+                                Op.ALUM,
+                                at,
+                                span,
+                                first,
+                                low.mem,
+                                low.disp_at,
+                                source=live[first.pair],
+                                alu=operation[2],
+                            )
                         )
                     case Kind.STORE if live[first.pair] is not None:
-                        stores.append(add(widened(Op.STORE, at, span, first, low.mem, source=live[first.pair])))
+                        stores.append(
+                            add(widened(Op.STORE, at, span, first, low.mem, low.disp_at, source=live[first.pair]))
+                        )
                     case _:
                         paired = False
 
@@ -381,10 +411,6 @@ def needed(values: list[Value], within: list[list[int]] | None = None) -> list[b
     return need
 
 
-def sizeof(value: Value) -> int:
-    return len(encode(value))
-
-
 OPC = {"and": 0x23, "or": 0x0B, "xor": 0x33, "add": 0x03, "sub": 0x2B}
 LOREG = {0: 0, 1: 1}  # pair 0 low is eax (000), pair 1 is ecx (001)
 
@@ -401,6 +427,22 @@ def displacement(value: Value) -> bytes:
             return struct.pack("<h" if disp < 0 else "<H", disp)
         case _:
             raise ValueError(f"no displacement for {value.mem}")
+
+
+@dataclass(frozen=True, slots=True)
+class Emitted:
+    code: bytes
+    # (offset within `code`, where the operand's field was) for each displacement
+    # that has to be relocated. The fixup BC wrote for that field is reused
+    # rather than a new one constructed: it already names the right target, and
+    # copying it keeps the diff a short list.
+    relocations: tuple[tuple[int, int], ...] = ()
+
+
+def relocated_at(value: Value, code: bytes) -> tuple[tuple[int, int], ...]:
+    if value.mem is None or value.mem.space is not Space.SEGMENT or value.mem_at is None:
+        return ()
+    return ((len(code) - value.dlen, value.mem_at),)
 
 
 def encode(value: Value) -> bytes:
@@ -429,6 +471,16 @@ def encode(value: Value) -> bytes:
             return bytes([0x66, 0xF7, 0xD8 | LOREG[value.pair]])
         case _:
             raise ValueError(f"no widened form for {value.op}")
+
+
+def sizeof(value: Value) -> int:
+    return len(encode(value))
+
+
+def emit(value: Value) -> Emitted:
+    """The widened form, and where it needs a fixup of its own."""
+    code = encode(value)
+    return Emitted(code, relocated_at(value, code))
 
 
 # Putting the high half back. The widened form writes only the 32-bit
@@ -466,41 +518,41 @@ def refuse(values: list[Value], need: list[bool], region: list[int], live: Flag)
     """
     if computes(values, need, region) and live & DIVERGENT:
         return f"widening would change {live & DIVERGENT!r} and something reads it"
-    relocated = (values[i].mem for i in region if need[i])
-    if any(mem is not None and mem.space is Space.SEGMENT for mem in relocated):
-        # The widened instruction is right -- its displacement field holds zero,
-        # exactly as BC's does -- but it needs a FIXUPP of its own to say what
-        # the zero stands for, and nothing here writes records yet.
-        return "operand is relocated and the writer cannot make a fixup"
+    wanted = [values[i] for i in region if need[i]]
+    if any(value.mem is not None and value.mem.space is Space.SEGMENT and value.mem_at is None for value in wanted):
+        # A relocated operand's widened form holds zero, exactly as BC's does,
+        # and the address comes from a fixup. Without knowing which field it
+        # came from there is no fixup to reuse.
+        return "a relocated operand has no field to take its fixup from"
     return None
 
 
-def emit_region(values: list[Value], need: list[bool], region: list[int], live: Flag) -> bytes | None:
-    """Bytes for one region, plus the jump over whatever is left.
+def emit_region(values: list[Value], need: list[bool], region: list[int], live: Flag) -> Emitted | None:
+    """The widened region, and the fixups it needs.
 
     `live` is not optional and has no default: the gate this parameter carries
     was designed into the predecessor and then lost in a refactor, and a default
     would make losing it again invisible.
+
+    Nothing is padded. The runtime pass had to fit its rewrite into the bytes it
+    replaced and jump over what it saved; here the code may move, so the region
+    is exactly as long as it needs to be.
     """
     if refuse(values, need, region, live):
         return None
-    wanted = [i for i in region if need[i]]
-    out = b"".join(encode(values[i]) for i in wanted)
+
+    out = bytearray()
+    relocations: list[tuple[int, int]] = []
+    for index in region:
+        if not need[index]:
+            continue
+        one = emit(values[index])
+        relocations += [(len(out) + at, field) for at, field in one.relocations]
+        out += one.code
 
     restore = b"".join(FIXUP[pair] for pair in restored_pairs(values, need, region))
     if restore and live & ALL:
         # The shr in FIXUP writes every flag but AF, so a region that computes
         # nothing still destroys what follows it. Two bytes buy that back.
         restore = PUSHF + restore + POPF
-    out += restore
-
-    slack = (values[region[-1]].end - values[region[0]].at) - len(out)
-    match slack:
-        case _ if slack < 0:
-            return None
-        case 0:
-            return out
-        case 1:
-            return out + b"\x90"
-        case _:
-            return out + bytes([0xEB, slack - 2]) + b"\x90" * (slack - 2)
+    return Emitted(bytes(out + restore), tuple(relocations))

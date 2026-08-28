@@ -45,9 +45,10 @@ def main() -> int:
         at, end = v[reg[0]].at, v[reg[-1]].end
         # no CFG here, so the flags after a region are unknown and every one of
         # them has to be assumed live. The measurement phase gives this a module.
-        out = emit_region(v, need, reg, ALL)
-        if not out or len(out) > end - at:
+        emitted = emit_region(v, need, reg, ALL)
+        if not emitted or len(emitted.code) > end - at:
             continue
+        out = emitted.code
         core = len(out)
         while core > 0 and out[core - 1] == 0x90:
             core -= 1

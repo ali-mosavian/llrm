@@ -75,9 +75,9 @@ def test_a_region_that_computes_nothing_still_destroys_the_flags() -> None:
     plain = emit_region(values, need, region, Flag.NONE)
     guarded = emit_region(values, need, region, Flag.ZF)
     assert plain is not None and guarded is not None
-    assert len(guarded) == len(plain), "both are padded to the bytes they replace"
-    assert b"\x9c" in guarded and b"\x9d" in guarded, "the restore is wrapped in pushf/popf"
-    assert b"\x9c" not in plain
+    assert len(guarded.code) == len(plain.code) + 2, "pushf and popf, and nothing else"
+    assert b"\x9c" in guarded.code and b"\x9d" in guarded.code
+    assert b"\x9c" not in plain.code
 
 
 def test_an_instruction_this_does_not_model_reads_everything() -> None:

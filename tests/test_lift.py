@@ -234,32 +234,32 @@ def test_the_high_half_comes_back_from_the_widened_register(pair: int, want: str
     ],
     ids=("ax-dx-alu", "cx-bx-alu", "ax-dx-neg"),
 )
-def test_a_region_never_grows_and_the_slack_is_jumped_over(enc: str) -> None:
-    b = hx(enc)
-    v, _ = lift(b, 0, len(b))
-    need = needed(v)
-    for reg in regions(v):
-        span = v[reg[-1]].end - v[reg[0]].at
-        out = emit_region(v, need, reg, Flag.NONE)
-        if out is None:
-            continue
-        assert len(out) == span, "padded to exactly the bytes it replaced"
-        core = sum(sizeof(v[n]) for n in reg if need[n])
-        core += sum(len(FIXUP[p]) for p in {v[n].pair for n in reg if need[n]})
-        if span - core >= 2:
-            assert out[core] == 0xEB, "the slack begins with a jump"
-            assert out[core + 1] == span - core - 2, "clearing exactly the slack"
-            assert all(x == 0x90 for x in out[core + 2 :]), "and the rest is nops"
+def test_a_region_is_exactly_as_long_as_it_needs_to_be(enc: str) -> None:
+    # The runtime pass had to fit its rewrite into the bytes it replaced and
+    # jump over what it saved, which meant the saving could never be lent to a
+    # neighbour. Here the code moves, so nothing is padded.
+    code = hx(enc)
+    values, _ = lift(code, 0, len(code))
+    need = needed(values)
+    for region in regions(values):
+        emitted = emit_region(values, need, region, Flag.NONE)
+        assert emitted is not None
+        wanted = sum(sizeof(values[i]) for i in region if need[i])
+        wanted += sum(len(FIXUP[p]) for p in {values[i].pair for i in region if need[i]})
+        assert len(emitted.code) == wanted
+        assert 0x90 not in emitted.code[wanted:], "there is no padding to hold a nop"
 
 
-def test_too_small_a_region_is_refused_not_overrun() -> None:
-    b = hx("8B 0E 5E 00 8B 1E 60 00 89 0E 62 00 89 1E 64 00")  # 16 bytes, pair 1
-    v, _ = lift(b, 0, len(b))
-    need = needed(v)
-    for reg in regions(v):
-        out = emit_region(v, need, reg, Flag.NONE)
-        span = v[reg[-1]].end - v[reg[0]].at
-        assert out is None or len(out) <= span
+def test_a_widened_operand_says_where_its_fixup_must_go() -> None:
+    # The displacement field holds zero, exactly as BC's does; the address comes
+    # from a fixup, so the emitter has to say which bytes need one.
+    code = hx("A1 5E 00 8B 16 60 00  A3 62 00 89 16 64 00")
+    values, _ = lift(code, 0, len(code))
+    need = needed(values)
+    emitted = emit_region(values, need, regions(values)[0], Flag.NONE)
+    assert emitted is not None
+    # nothing is relocated here: a unit test has no fixups behind it
+    assert emitted.relocations == ()
 
 
 def test_a_pair_inside_an_immediate_is_not_a_pair() -> None:

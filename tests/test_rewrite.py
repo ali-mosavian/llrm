@@ -26,10 +26,18 @@ def test_a_dry_run_takes_no_region(obj: Path) -> None:
     assert [r for r in found if r.taken] == []
 
 
-def test_the_records_survive_a_real_pass(obj: Path) -> None:
+def test_a_real_pass_rewrites_the_code_and_keeps_the_records_readable(obj: Path) -> None:
     data = obj.read_bytes()
-    out, _ = rewrite(data, dry_run=False)
-    assert [(r.type, r.body) for r in omf.parse(out)] == [(r.type, r.body) for r in omf.parse(data)]
+    out, found = rewrite(data, dry_run=False)
+    if not any(region.taken for region in found):
+        assert out == b"".join(record.emit() for record in omf.parse(data))
+        return
+    before, after = omf.code_segment(omf.parse(data)), omf.code_segment(omf.parse(out))
+    assert before is not None and after is not None
+    assert after[2] <= before[2], "widening a region never makes the segment longer"
+    assert omf.externals(omf.parse(out)) == omf.externals(omf.parse(data)), (
+        "an absorbed call may drop its fixup but never its EXTDEF, or every later index shifts"
+    )
 
 
 def test_rewriting_the_output_finds_nothing_new(obj: Path) -> None:
@@ -38,11 +46,28 @@ def test_rewriting_the_output_finds_nothing_new(obj: Path) -> None:
     assert [r for r in again if r.taken] == []
 
 
-def test_a_relocated_operand_is_refused_with_a_reason(obj: Path) -> None:
-    # The widened instruction would be right -- its displacement field holds
-    # zero, exactly as BC's does -- but it needs a FIXUPP of its own to say what
-    # the zero stands for, and nothing writes records yet. Refused, and said so,
-    # rather than emitted with a hardcoded address.
+def test_a_region_is_either_taken_or_says_why_not(obj: Path) -> None:
     _, found = rewrite(obj.read_bytes(), dry_run=False)
-    assert all(not region.taken for region in found)
-    assert all(region.reason for region in found), "a refusal always names itself"
+    for region in found:
+        assert region.taken != bool(region.reason), "taken and refused are exclusive, and one holds"
+
+
+def test_regions_are_taken_and_come_out_smaller(fixtures: Path) -> None:
+    # A pass that refused everything would satisfy every invariant here.
+    #
+    # Measured: 106 of 229 regions are taken and shrink by a tenth. Of the rest,
+    # 87 are refused for growing 15 bytes to 16 -- one byte, and all of it the
+    # seven that put the high half back. That tax is what cross-block liveness
+    # would remove, and this is the number that says what it is worth.
+    taken = total = before = after = 0
+    for path in sorted(fixtures.glob("*.obj")):
+        _, found = rewrite(path.read_bytes(), dry_run=False)
+        total += len(found)
+        for region in found:
+            if region.taken:
+                taken += 1
+                before += region.end - region.at
+                after += len(region.after or "") // 2
+    assert total > 200
+    assert taken > total // 3, f"only {taken} of {total} regions taken"
+    assert after < before * 95 // 100, "a taken region is meaningfully smaller"

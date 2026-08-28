@@ -58,7 +58,13 @@ class Module:
     calls: dict[int, str] = field(default_factory=dict)
     targets: frozenset[int] = frozenset()
     publics: frozenset[int] = frozenset()
+    # line-number table entries, which name code offsets like everything else
+    lines: frozenset[int] = frozenset()
+    # the byte ranges BC split the segment into; a rewrite may not span two
+    chunks: tuple[tuple[int, int], ...] = ()
     sites: frozenset[int] = frozenset()
+    # the fixup that named each operand field, so a widened form can reuse it
+    fixup_at: dict[int, omf.Fixup] = field(default_factory=dict)
 
     def resolve(self, field_offset: int, literal: int) -> Addr:
         """What the operand whose displacement field sits here points at."""
@@ -95,16 +101,38 @@ def of(records: list[omf.Record]) -> Module | None:
         and code[fixup.offset - 1 : fixup.offset] == bytes([CALL_FAR])
     }
     targets = frozenset(fixup.disp for fixup in fixups if fixup.target == "segment" and fixup.index == seg)
-    publics = frozenset(
-        struct.unpack_from("<H", record.body, at)[0]
-        for record in records
-        for at in omf.code_offsets(record, seg)
-        if record.type & 0xFE == omf.PUBDEF
+    named = {
+        kind: frozenset(
+            struct.unpack_from("<H", record.body, at)[0]
+            for record in records
+            for at in omf.code_offsets(record, seg)
+            if record.type & 0xFE == kind
+        )
+        for kind in (omf.PUBDEF, omf.LINNUM)
+    }
+
+    chunks = tuple(
+        (offset, offset + len(payload)) for _record, index, offset, payload in omf.ledata(records) if index == seg
     )
-
     sites = frozenset(fixup.offset for fixup in fixups)
+    fixup_at = {fixup.offset: fixup for fixup in fixups if fixup.offset in operands}
 
-    return Module(records, seg, name, code, 0, len(code), operands, calls, targets, publics, sites)
+    return Module(
+        records,
+        seg,
+        name,
+        code,
+        0,
+        len(code),
+        operands,
+        calls,
+        targets,
+        named[omf.PUBDEF],
+        named[omf.LINNUM],
+        chunks,
+        sites,
+        fixup_at,
+    )
 
 
 def load(path: Path | str) -> Module | None:

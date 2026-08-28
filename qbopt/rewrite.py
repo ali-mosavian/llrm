@@ -27,12 +27,22 @@ from qbopt.lift import refuse
 from qbopt.blocks import Block
 from qbopt.lift import regions
 from qbopt.flags import live_in
+from qbopt.relocate import Edit
 from qbopt.blocks import CodeMap
+from qbopt.relocate import Shift
 from qbopt.blocks import block_at
 from qbopt.blocks import code_map
 from qbopt.blocks import partition
 from qbopt.flags import live_after
 from qbopt.lift import emit_region
+from qbopt.relocate import relocate
+from qbopt.blocks import instructions
+
+
+@dataclass(frozen=True, slots=True)
+class Planned:
+    region: "Region"
+    edit: Edit | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,16 +57,29 @@ class Region:
     reason: str | None
 
 
-def branched_into(mapped: CodeMap, at: int, end: int) -> str | None:
-    """Whether something jumps into the middle of this region.
+def anchored_inside(found: module.Module, mapped: CodeMap, at: int, end: int) -> str | None:
+    """Whether anything names an offset in the middle of this region.
 
     A leader can land inside a single value's two instructions -- a jcc to the
     adc half of an add/adc pair is legal, and BC's IF chains do land mid
-    statement -- so splitting on leaders is not enough; the interior has to be
-    checked.
+    statement -- so splitting on leaders is not enough. Line numbers and public
+    symbols name offsets too, and a region that swallows one has nowhere to put
+    it back.
     """
-    inside = [target for target in mapped.leaders if at < target < end]
-    return f"something branches to {inside[0]:#x}, inside the region" if inside else None
+    named = {
+        "something branches to": mapped.leaders,
+        "a public symbol is at": found.publics,
+        "a line number points at": found.lines,
+    }
+    for why, offsets in named.items():
+        inside = sorted(offset for offset in offsets if at < offset < end)
+        if inside:
+            return f"{why} {inside[0]:#x}, inside the region"
+    if not any(lo <= at and end <= hi for lo, hi in found.chunks):
+        # rewriting across two LEDATA would have to merge them, and BC's
+        # backpatch records make that more than a concatenation
+        return "the region crosses a LEDATA boundary"
+    return None
 
 
 def flags_after(blocks: list[Block], live: dict[int, Flag], at: int, end: int) -> Flag:
@@ -70,7 +93,7 @@ def plan(
     *,
     take: set[int] | None = None,
     max_regions: int | None = None,
-) -> list[Region]:
+) -> list[Planned]:
     found = module.of(records)
     if found is None:
         return []
@@ -81,31 +104,49 @@ def plan(
     blocks = partition(found, mapped)
     live = live_in(blocks)
 
-    values, _ = lift(found.code, found.start, found.end, found.resolve)
+    reached = instructions(found)
+    assert not isinstance(reached, str)
+    values, _ = lift(found.code, found.start, found.end, found.resolve, reached)
     need = needed(values)
 
     planned = []
     for index, region in enumerate(regions(values)):
         at, end = values[region[0]].at, values[region[-1]].end
         after = flags_after(blocks, live, at, end)
-        reason = branched_into(mapped, at, end) or refuse(values, need, region, after)
+        reason = anchored_inside(found, mapped, at, end) or refuse(values, need, region, after)
         if take is not None and index not in take:
             reason = "not selected"
-        elif max_regions is not None and sum(1 for r in planned if r.taken) >= max_regions:
+        elif max_regions is not None and sum(1 for one in planned if one.region.taken) >= max_regions:
             reason = "past --max-regions"
         emitted = None if reason else emit_region(values, need, region, after)
         if emitted is None and reason is None:
-            reason = "does not fit"
+            reason = "nothing survived the region"
+        if emitted is not None and len(emitted.code) > end - at:
+            # The prize is the store and reload between operations, not the
+            # width of any one of them. A region of a single pair widens to more
+            # instructions than BC wrote, because putting the high half back
+            # costs more than the widening saves.
+            reason, emitted = f"widening it grows {end - at} bytes to {len(emitted.code)}", None
+        edit = None
+        if emitted is not None:
+            fixups = tuple((at_in, found.fixup_at[field]) for at_in, field in emitted.relocations)
+            if len(fixups) != len(emitted.relocations):
+                reason, emitted = "an operand has no fixup to reuse", None
+            else:
+                edit = Edit(at, end, emitted.code, fixups)
         planned.append(
-            Region(
-                id=index,
-                seg=found.seg,
-                at=at,
-                end=end,
-                before=found.code[at:end].hex(),
-                after=emitted.hex() if emitted else None,
-                taken=emitted is not None,
-                reason=reason,
+            Planned(
+                Region(
+                    id=index,
+                    seg=found.seg,
+                    at=at,
+                    end=end,
+                    before=found.code[at:end].hex(),
+                    after=emitted.code.hex() if emitted else None,
+                    taken=emitted is not None,
+                    reason=reason,
+                ),
+                edit,
             )
         )
     return planned
@@ -118,14 +159,24 @@ def rewrite(
     take: set[int] | None = None,
     max_regions: int | None = None,
 ) -> tuple[bytes, list[Region]]:
-    recs = omf.parse(data)
-    found = plan(recs, take=take, max_regions=max_regions)
+    records = omf.parse(data)
+    planned = plan(records, take=take, max_regions=max_regions)
     if dry_run:
-        return data, [replace(r, taken=False, reason="dry run") for r in found]
-    # Nothing is written back yet: the rewriter needs addresses out of the
-    # FIXUPPs before a region can fire at all, and the relocation machinery
-    # before one can be placed. Until then this is an honest pass-through.
-    return b"".join(r.emit() for r in recs), found
+        return data, [replace(one.region, taken=False, reason="dry run") for one in planned]
+
+    edits = [one.edit for one in planned if one.edit is not None]
+    if not edits:
+        return b"".join(record.emit() for record in records), [one.region for one in planned]
+
+    segment = omf.code_segment(records)
+    assert segment is not None
+    seg, _name, size = segment
+    moved = relocate(records, seg, omf.segment_image(records, seg, size), Shift.of(edits))
+    if isinstance(moved, str):
+        # the whole module is left alone; a partial rewrite is not a thing
+        refused = [replace(one.region, taken=False, reason=moved) for one in planned]
+        return b"".join(record.emit() for record in records), refused
+    return b"".join(record.emit() for record in moved), [one.region for one in planned]
 
 
 def main(argv: list[str] | None = None) -> int:
