@@ -27,7 +27,6 @@ from enum import StrEnum
 from dataclasses import dataclass
 from collections.abc import Callable
 
-from qbopt.flags import ALL
 from qbopt.declen import run
 from qbopt.flags import Flag
 from qbopt.declen import Insn
@@ -483,18 +482,21 @@ def emit(value: Value) -> Emitted:
     return Emitted(code, relocated_at(value, code))
 
 
-# Putting the high half back. The widened form writes only the 32-bit
-# register, so dx and bx are left holding whatever they held before the
-# region -- and BC reads them, because in its world that is where the top
-# half of the long lives. Without liveness across blocks there is no telling
-# whether anything after the region wants them, so they go back.
-PUSHF = b"\x9c"
-POPF = b"\x9d"
-
+# Putting the high half back. The widened form writes only the 32-bit register,
+# so dx and bx are left holding whatever they held before the region -- and BC
+# reads them, because in its world that is where the top half of the long lives.
+# Without liveness across blocks there is no telling whether anything after the
+# region wants them, so they go back.
+#
+# Through the stack rather than a shift: four bytes against seven, and it writes
+# no flags at all, where `shr` wrote five of the six and made a region that
+# computes nothing still destroy what followed it. tests/test_flags.py asserts
+# that transparency -- if this ever changes, the gate needs the destruction mask
+# back.
 FIXUP = {
-    0: bytes([0x66, 0x8B, 0xD0, 0x66, 0xC1, 0xEA, 0x10]),  # edx=eax, shr 16
-    1: bytes([0x66, 0x8B, 0xD9, 0x66, 0xC1, 0xEB, 0x10]),
-}  # ebx=ecx, shr 16
+    0: bytes([0x66, 0x50, 0x58, 0x5A]),  # push eax / pop ax / pop dx
+    1: bytes([0x66, 0x51, 0x59, 0x5B]),  # push ecx / pop cx / pop bx
+}
 
 
 def computes(values: list[Value], need: list[bool], region: list[int]) -> bool:
@@ -551,8 +553,4 @@ def emit_region(values: list[Value], need: list[bool], region: list[int], live: 
         out += one.code
 
     restore = b"".join(FIXUP[pair] for pair in restored_pairs(values, need, region))
-    if restore and live & ALL:
-        # The shr in FIXUP writes every flag but AF, so a region that computes
-        # nothing still destroys what follows it. Two bytes buy that back.
-        restore = PUSHF + restore + POPF
     return Emitted(bytes(out + restore), tuple(relocations))

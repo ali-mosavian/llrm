@@ -17,6 +17,7 @@ from qbopt.flags import ALL
 from qbopt.lift import lift
 from qbopt.declen import run
 from qbopt.flags import Flag
+from qbopt.lift import FIXUP
 from qbopt.lift import Value
 from qbopt.blocks import Ends
 from qbopt.lift import needed
@@ -66,18 +67,28 @@ def test_the_flags_widening_never_changes_do_not_refuse(live: Flag) -> None:
     assert emit_region(values, need, region, live) is not None
 
 
-def test_a_region_that_computes_nothing_still_destroys_the_flags() -> None:
-    # Only the divergence rule would let this through: the region is load and
-    # store, so no flag's value changes. But putting the high half back is a
-    # shr, which writes five of the six, and a jz after it goes the other way.
+def test_putting_the_high_half_back_writes_no_flag() -> None:
+    # It used to be mov edx,eax / shr edx,16, and the shr wrote five of the six,
+    # so a region of pure load and store changed no flag's value and still
+    # destroyed what followed it. Through the stack it writes nothing, which is
+    # both shorter and why the gate needs only the divergence mask.
+    #
+    # Decoded rather than asserted by hand: if this sequence ever changes to one
+    # that writes flags, this fails, and the destruction mask has to come back.
+    for restore in FIXUP.values():
+        insns, gave_up = run(restore, 0, len(restore))
+        assert gave_up is None
+        writes = Flag.NONE
+        for insn in insns:
+            writes |= effect(insn).writes
+        assert writes == Flag.NONE
+
+
+def test_a_region_that_computes_nothing_is_taken_whatever_is_live() -> None:
     values, need, region = only_region(JUST_LOAD_STORE)
-    assert not any(values[i].op.startswith("alu") for i in region if need[i])
-    plain = emit_region(values, need, region, Flag.NONE)
-    guarded = emit_region(values, need, region, Flag.ZF)
-    assert plain is not None and guarded is not None
-    assert len(guarded.code) == len(plain.code) + 2, "pushf and popf, and nothing else"
-    assert b"\x9c" in guarded.code and b"\x9d" in guarded.code
-    assert b"\x9c" not in plain.code
+    assert not computes(values, need, region)
+    for live in (Flag.NONE, Flag.ZF, ALL):
+        assert emit_region(values, need, region, live) is not None
 
 
 def test_an_instruction_this_does_not_model_reads_everything() -> None:

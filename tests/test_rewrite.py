@@ -55,10 +55,9 @@ def test_a_region_is_either_taken_or_says_why_not(obj: Path) -> None:
 def test_regions_are_taken_and_come_out_smaller(fixtures: Path) -> None:
     # A pass that refused everything would satisfy every invariant here.
     #
-    # Measured: 106 of 229 regions are taken and shrink by a tenth. Of the rest,
-    # 87 are refused for growing 15 bytes to 16 -- one byte, and all of it the
-    # seven that put the high half back. That tax is what cross-block liveness
-    # would remove, and this is the number that says what it is worth.
+    # Measured: 195 of 229 regions are taken and shrink by a fifth. What is left
+    # is 16 that cross a LEDATA boundary, 14 single pairs that still grow, and 4
+    # that swallow a line number.
     taken = total = before = after = 0
     for path in sorted(fixtures.glob("*.obj")):
         _, found = rewrite(path.read_bytes(), dry_run=False)
@@ -69,5 +68,5 @@ def test_regions_are_taken_and_come_out_smaller(fixtures: Path) -> None:
                 before += region.end - region.at
                 after += len(region.after or "") // 2
     assert total > 200
-    assert taken > total // 3, f"only {taken} of {total} regions taken"
-    assert after < before * 95 // 100, "a taken region is meaningfully smaller"
+    assert taken > total * 3 // 4, f"only {taken} of {total} regions taken"
+    assert after < before * 85 // 100, "a taken region is meaningfully smaller"

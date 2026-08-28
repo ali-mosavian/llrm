@@ -219,9 +219,9 @@ def test_encoding_exact_bytes(enc: str, index: int, want: str, what: str) -> Non
 
 @pytest.mark.parametrize(
     ("pair", "want"),
-    [(0, "668bd066c1ea10"), (1, "668bd966c1eb10")],
+    [(0, "6650585a"), (1, "6651595b")],
 )
-def test_the_high_half_comes_back_from_the_widened_register(pair: int, want: str) -> None:
+def test_the_high_half_comes_back_through_the_stack(pair: int, want: str) -> None:
     assert FIXUP[pair].hex() == want
 
 
