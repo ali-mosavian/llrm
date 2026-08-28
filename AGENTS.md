@@ -82,9 +82,20 @@ is the kind of thing that stays green in every test until it does not.
   interrupts come back. 49 of 102 blocks once ended at a far call that was
   not a block end at all, which halves what liveness can see and puts a
   boundary exactly where the store/reload worth removing lives.
-- **`FF /4` and `/5` are indirect jumps and do end a block** -- that is what
-  `ON GOTO` and `SELECT CASE` compile to -- and the opcode tables give `FF`
-  no QFLOW at all. Their targets are not computable from the instruction.
+- **`FF /4` and `/5` are indirect jumps and do end a block**, and the opcode
+  tables give `FF` no QFLOW at all. Their targets are not computable from the
+  instruction.
+- **But `ON GOTO` does not compile to one.** Measured over the whole fixture
+  corpus: not a single `FF /4` or `/5` appears in any module. What BC emits is
+  `call far B$OGTA` followed by *inline data* -- a count byte, then that many
+  `offset16` words, each one a fixup into this segment. The runtime reads the
+  return address to find the table and jumps from there, so the indirect jump
+  is inside `B$OGTA`, which is where the runtime pass would have seen it and
+  the reason the inherited note says otherwise.
+  The consequence is sharp: **`B$OGTA` does not come back to the byte after
+  the call.** A block builder applying the "a call comes back" rule -- which is
+  right everywhere else, and worth 49 of 102 blocks -- decodes the table as
+  instructions. Knowing which call this is, is an EXTDEF lookup.
 - **A call destroys the flags**, and `B$CPI4` returns its answer in them
   through `lahf`/`sahf`. A `jng` after a long operation is usually reading
   the *call's* flags, not the operation's.
