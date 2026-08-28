@@ -81,3 +81,16 @@ def test_the_last_write_to_a_byte_is_the_one_that_counts(fixtures: Path, at: int
 
 def test_nothing_in_the_corpus_has_to_be_refused(obj: Path) -> None:
     assert omf.refusals(omf.read(obj)) == []
+
+
+@pytest.mark.parametrize(
+    ("kind", "why"),
+    [
+        (omf.LIDATA, "LIDATA"),
+        (omf.FIXUPP + 1, "32-bit"),
+        (0xC2, "COMDAT"),
+    ],
+)
+def test_a_record_nothing_here_decodes_is_refused(fixtures: Path, kind: int, why: str) -> None:
+    records = [*omf.read(fixtures / WITH_PAIRS), omf.Record(kind, b"\x00")]
+    assert [reason for reason in omf.refusals(records) if why in reason]

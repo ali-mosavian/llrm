@@ -263,18 +263,25 @@ def segment_image(records: list[Record], seg: int, size: int) -> bytes:
     return bytes(image)
 
 
+# The odd-numbered twin of each record type is its 32-bit form. Every decoder
+# here matches with & 0xFE, so it accepts them, and then reads them with 16-bit
+# struct formats and fixed two-byte skips. BC emits none of them.
+WIDE = {MODEND + 1, PUBDEF + 1, LINNUM + 1, SEGDEF + 1, FIXUPP + 1, LEDATA + 1, LIDATA + 1}
+COMDAT = {0xC2, 0xC3}
+
+
 def refusals(records: list[Record]) -> list[str]:
     """Why this module must be left alone, if it must. Empty means it may be read."""
     reasons = []
     kinds = {record.type for record in records}
-    if LIDATA in kinds or LIDATA + 1 in kinds:
+    if kinds & {LIDATA, LIDATA + 1}:
         # fixups() tracks its base from LEDATA only, so a FIXUPP after a LIDATA
         # is attributed to the previous LEDATA and comes out at the wrong offset
         reasons.append("LIDATA: fixup offsets after it would be wrong")
-    if {0xC2, 0xC3} & kinds:
+    if kinds & COMDAT:
         reasons.append("COMDAT is not decoded")
-    if wide := {kind for kind in kinds if kind & 1 and kind in {t + 1 for t in NAMES}}:
-        reasons.append(f"32-bit record variants are decoded as 16-bit: {sorted(hex(k) for k in wide)}")
+    if wide := kinds & WIDE:
+        reasons.append(f"32-bit records are decoded as 16-bit: {sorted(hex(kind) for kind in wide)}")
     return reasons
 
 
