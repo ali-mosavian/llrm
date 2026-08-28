@@ -21,7 +21,9 @@ which is as dangerous to read as one left wrong.
 from enum import IntFlag
 
 from iced_x86 import RflagsBits
+from iced_x86 import FlowControl
 
+from qbopt.declen import Insn
 from qbopt.blocks import Block
 
 
@@ -42,19 +44,30 @@ ALL = Flag.CF | Flag.PF | Flag.AF | Flag.ZF | Flag.SF | Flag.OF
 DIVERGENT = Flag.ZF | Flag.PF | Flag.AF
 
 
+# iced models the instruction, and a call does not itself write a flag. The
+# callee does, whatever it is: BC's runtime routines are ordinary code and leave
+# the flags however they end. B$CPI4 is the case that proves it deliberately --
+# it returns its answer in them. So nothing set before a call survives it.
+CLOBBERS = {FlowControl.CALL, FlowControl.INDIRECT_CALL, FlowControl.INTERRUPT}
+
+
+def written_by(insn: Insn) -> Flag:
+    return ALL if insn.flow in CLOBBERS else Flag(insn.writes & ALL)
+
+
 def reads(block: Block) -> Flag:
     """What the block reads before writing it."""
     uses = written = Flag.NONE
     for insn in block.insns:
         uses |= Flag(insn.reads & ALL) & ~written
-        written |= Flag(insn.writes & ALL)
+        written |= written_by(insn)
     return uses
 
 
 def writes(block: Block) -> Flag:
     found = Flag.NONE
     for insn in block.insns:
-        found |= Flag(insn.writes & ALL)
+        found |= written_by(insn)
     return found
 
 
@@ -92,7 +105,7 @@ def live_after(block: Block, offset: int, live: dict[int, Flag]) -> Flag:
         if insn.at < offset:
             continue
         needed |= Flag(insn.reads & ALL) & ~written
-        written |= Flag(insn.writes & ALL)
+        written |= written_by(insn)
         if written == ALL:
             return needed
     return needed | (out & ~written)

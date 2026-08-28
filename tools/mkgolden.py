@@ -68,7 +68,41 @@ def jumps() -> list[str]:
     return [*lines, "DONE"]
 
 
-PROGRAMS = {"arith": arith, "procs": procs, "jumps": jumps}
+def cmpord() -> list[str]:
+    pairs = {
+        "A": (-1, 1),
+        "B": (-2147483648, 2147483647),
+        "C": (65535, 65536),
+        "D": (0x12340000, 0x1234FFFF),
+    }
+    ops = {
+        "LT": lambda x, y: x < y,
+        "LE": lambda x, y: x <= y,
+        "GT": lambda x, y: x > y,
+        "GE": lambda x, y: x >= y,
+        "EQ": lambda x, y: x == y,
+        "NE": lambda x, y: x != y,
+    }
+    # BASIC's true is -1
+    lines = []
+    for name, (left, right) in pairs.items():
+        for tag, test in ops.items():
+            lines.append(f"{name}{tag}={seq(-test(left, right), -test(right, left))}")
+    return [*lines, "DONE"]
+
+
+def flags() -> list[str]:
+    return [
+        f"SPLIT={'zero' if (65535 & 61680) == 0 else 'nonzero'}",
+        f"FUSED={'zero' if (65535 & 61680) == 0 else 'nonzero'}",
+        f"MIRROR={'zero' if s32(-65536) & s32(-65536) == 0 else 'nonzero'}",
+        "BOTH=zero",
+        f"SIGN={'neg' if s32(65536 - 1) < 0 else 'pos'}",
+        "DONE",
+    ]
+
+
+PROGRAMS = {"arith": arith, "procs": procs, "jumps": jumps, "cmpord": cmpord, "flags": flags}
 
 
 def main() -> int:

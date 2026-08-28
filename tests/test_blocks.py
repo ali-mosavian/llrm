@@ -18,7 +18,7 @@ from qbopt.blocks import instructions
 
 # /V /W builds put an event stub in the header region that no record names, so
 # nothing can say where it begins; they are refused rather than guessed at.
-UNMAPPABLE = {"jumps-p-evt.obj", "jumps-v-evt.obj", "procs-p-evt.obj", "procs-v-evt.obj"}
+UNMAPPABLE = {f"{program}-{tag}.obj" for program in ("cmpord", "flags", "jumps", "procs") for tag in ("p-evt", "v-evt")}
 
 
 @pytest.mark.parametrize(

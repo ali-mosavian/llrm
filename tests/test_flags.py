@@ -27,6 +27,7 @@ from qbopt.declen import decode
 from qbopt.flags import live_in
 from qbopt.lift import computes
 from qbopt.blocks import code_map
+from qbopt.blocks import instructions
 from qbopt.flags import DIVERGENT
 from qbopt.blocks import partition
 from qbopt.flags import live_after
@@ -166,12 +167,21 @@ def test_a_block_that_writes_a_flag_stops_it_being_live_earlier() -> None:
     assert live[computing.at] == Flag.NONE
 
 
-def test_the_gate_refuses_real_regions_not_just_invented_ones(fixtures: Path) -> None:
-    # A gate that never fires is not a gate. Measured over the corpus: of 241
-    # regions, 25 have a flag live afterwards and 22 of those compute something,
-    # so widening them would change what the following jcc does. That is 9 per
-    # cent of the work silently wrong, not a hypothetical.
-    refused = considered = 0
+def test_no_bc_output_in_the_corpus_reads_a_flag_a_widened_region_leaves(fixtures: Path) -> None:
+    """The gate does not fire on real code, and that is worth knowing.
+
+    Measured over the whole corpus, suite/flags.bas included -- which computes
+    into a value whose high half is zero and branches on it immediately, in both
+    the split and the fused form: no region is followed by a read of ZF, PF or
+    AF. BC cannot use those flags. The ones its own code leaves describe the high
+    half alone, which answers nothing about the long, so it always materialises
+    the result and compares it explicitly.
+
+    So the gate is insurance rather than a working part, and the accept/refuse
+    pair above is what proves it works. If this ever stops being zero, BC has
+    started doing something new and the gate is earning its place.
+    """
+    fired = considered = 0
     for path in sorted(fixtures.glob("*.obj")):
         found = module.load(path)
         assert found is not None
@@ -180,11 +190,13 @@ def test_the_gate_refuses_real_regions_not_just_invented_ones(fixtures: Path) ->
             continue
         blocks = partition(found, mapped)
         live = live_in(blocks)
-        values, _ = lift(found.code, found.start, found.end, found.resolve)
+        reached = instructions(found)
+        assert not isinstance(reached, str)
+        values, _ = lift(found.code, found.start, found.end, found.resolve, reached)
         need = needed(values)
         for region in regions(values):
             considered += 1
             after = flags_after(blocks, live, values[region[0]].at, values[region[-1]].end)
-            refused += computes(values, need, region) and bool(after & DIVERGENT)
-    assert considered > 100
-    assert refused >= 20, f"only {refused} of {considered} regions refused on flags"
+            fired += computes(values, need, region) and bool(after & DIVERGENT)
+    assert considered > 200
+    assert fired == 0, f"{fired} of {considered} regions now read a flag widening changes"

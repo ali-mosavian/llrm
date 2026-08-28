@@ -1,0 +1,6 @@
+SPLIT=nonzero
+FUSED=nonzero
+MIRROR=nonzero
+BOTH=zero
+SIGN=pos
+DONE

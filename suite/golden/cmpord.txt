@@ -1,0 +1,25 @@
+ALT=-1  0
+ALE=-1  0
+AGT= 0 -1
+AGE= 0 -1
+AEQ= 0  0
+ANE=-1 -1
+BLT=-1  0
+BLE=-1  0
+BGT= 0 -1
+BGE= 0 -1
+BEQ= 0  0
+BNE=-1 -1
+CLT=-1  0
+CLE=-1  0
+CGT= 0 -1
+CGE= 0 -1
+CEQ= 0  0
+CNE=-1 -1
+DLT=-1  0
+DLE=-1  0
+DGT= 0 -1
+DGE= 0 -1
+DEQ= 0  0
+DNE=-1 -1
+DONE
