@@ -12,9 +12,9 @@ instruction would be counted wrong for one mistake.
 
 import sys
 import struct
-from pathlib import Path
 import subprocess
 import collections
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 

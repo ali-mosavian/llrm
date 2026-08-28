@@ -17,11 +17,11 @@ from qbopt.lift import ALUM
 from qbopt.lift import ALUV
 from qbopt.lift import LOAD
 from qbopt.lift import MOVE
+from qbopt.lift import lift
 from qbopt.lift import FIXUP
 from qbopt.lift import PAIRS
 from qbopt.lift import STORE
 from qbopt.lift import Value
-from qbopt.lift import lift
 from qbopt.lift import encode
 from qbopt.lift import needed
 from qbopt.lift import sizeof

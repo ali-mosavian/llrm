@@ -144,7 +144,8 @@ Moving code means updating all of, and the list is finite:
   state travel together. Data is a `@dataclass(slots=True)`, and `frozen=True`
   unless something has to mutate it.
 - **Type annotations on every parameter and every return.** `ty` checks them.
-- `ruff check` and `ruff format`: line length 120, double quotes.
+- `ruff check` and `ruff format`, and `isort` for import order -- configs
+  borrowed from capcore: line length 120, double quotes, one import per line.
 - **No docstrings. No comments unless something is not trivial** -- and here
   that means a comment carries a *fact that is not in the code*: a
   measurement, the reason a case is refused, something BC does that nobody

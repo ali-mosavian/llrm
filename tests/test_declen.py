@@ -16,8 +16,8 @@ import pytest
 
 from helpers import hx
 from qbopt.declen import BAD
-from qbopt.declen import T as TABLE
 from qbopt.declen import length
+from qbopt.declen import T as TABLE
 
 FORMS = [
     ("A1 5E 00", 3, "mov ax,moffs16"),
