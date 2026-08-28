@@ -238,6 +238,46 @@ def read_thread(body: bytes, at: int) -> tuple[bool, int, Thread, int]:
     return bool(lead & 0x40), number, Thread(method, index), at
 
 
+def code_segment(records: list[Record]) -> tuple[int, str, int] | None:
+    """The module's code segment as (index, name, length), or None."""
+    for index, segment in enumerate(segments(records)):
+        if segment and segment[0].endswith("_CODE"):
+            return index, segment[0], segment[1]
+    return None
+
+
+def segment_image(records: list[Record], seg: int, size: int) -> bytes:
+    """The segment's bytes, with every LEDATA applied in file order.
+
+    BC emits overlapping LEDATA: short backpatch records arrive later in the
+    file at earlier offsets, filling in forward jump displacements and jump
+    table slots. Measured across the fixtures: 18 doubly-covered bytes in
+    jumptable.obj, 2 each in three others and 0 in pds-g2.obj -- so an
+    assembler checked only against that one looks correct. The last write to a
+    byte is the one that counts.
+    """
+    image = bytearray(size)
+    for _record, index, offset, payload in ledata(records):
+        if index == seg:
+            image[offset : offset + len(payload)] = payload
+    return bytes(image)
+
+
+def refusals(records: list[Record]) -> list[str]:
+    """Why this module must be left alone, if it must. Empty means it may be read."""
+    reasons = []
+    kinds = {record.type for record in records}
+    if LIDATA in kinds or LIDATA + 1 in kinds:
+        # fixups() tracks its base from LEDATA only, so a FIXUPP after a LIDATA
+        # is attributed to the previous LEDATA and comes out at the wrong offset
+        reasons.append("LIDATA: fixup offsets after it would be wrong")
+    if {0xC2, 0xC3} & kinds:
+        reasons.append("COMDAT is not decoded")
+    if wide := {kind for kind in kinds if kind & 1 and kind in {t + 1 for t in NAMES}}:
+        reasons.append(f"32-bit record variants are decoded as 16-bit: {sorted(hex(k) for k in wide)}")
+    return reasons
+
+
 def fixups(records: list[Record]) -> list[Fixup]:
     """Every FIXUP subrecord, with its offset made absolute in the segment.
 

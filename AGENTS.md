@@ -182,8 +182,9 @@ Moving code means updating all of, and the list is finite:
 
 ## Writing
 
-- **Commit messages are conventional commits**: `type(scope): description`.
-  Short, to the point, no rambling.
+- **Commit messages are conventional commits**: `type(scope): description`,
+  and a body. The subject says what changed; the body says what it was and why
+  it had to. Both short and to the point, neither rambling.
 - The same goes for every other description -- PR bodies, docs, comments,
   replies. Say the thing and stop.
 

@@ -38,10 +38,11 @@ def test_rewriting_the_output_finds_nothing_new(obj: Path) -> None:
     assert [r for r in again if r.taken] == []
 
 
-def test_no_region_fires_until_the_lifter_can_see_an_address(obj: Path) -> None:
-    # In an object a static's address is not in the code: the operand is 0x0000
-    # and the offset lives in the FIXUPP's target displacement, which the reader
-    # discards. So lift's hi == lo + 2 pairing test is 0 == 2 and can never
-    # succeed. This asserts the blocker rather than leaving a silent zero.
+def test_a_relocated_operand_is_refused_with_a_reason(obj: Path) -> None:
+    # The widened instruction would be right -- its displacement field holds
+    # zero, exactly as BC's does -- but it needs a FIXUPP of its own to say what
+    # the zero stands for, and nothing writes records yet. Refused, and said so,
+    # rather than emitted with a hardcoded address.
     _, found = rewrite(obj.read_bytes(), dry_run=False)
-    assert found == []
+    assert all(not region.taken for region in found)
+    assert all(region.reason for region in found), "a refusal always names itself"

@@ -13,6 +13,11 @@ OBJECTS = sorted(p.name for p in FIXTURES.glob("*.obj"))
 OPERATOR_OBJECTS = ["pds-g2.obj", "qb45.obj", "vbdos-g2.obj", "vbdos-g3.obj"]
 
 
+@pytest.fixture
+def fixtures() -> Path:
+    return FIXTURES
+
+
 @pytest.fixture(params=OBJECTS)
 def obj(request: pytest.FixtureRequest) -> Path:
     return FIXTURES / request.param

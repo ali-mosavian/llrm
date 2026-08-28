@@ -18,8 +18,10 @@ from dataclasses import replace
 from dataclasses import dataclass
 
 from qbopt import omf
+from qbopt import module
 from qbopt.lift import lift
 from qbopt.lift import needed
+from qbopt.lift import refuse
 from qbopt.lift import regions
 from qbopt.lift import emit_region
 
@@ -36,63 +38,43 @@ class Region:
     reason: str | None
 
 
-def _code_segment(recs: list[omf.Record]) -> tuple[int, int] | None:
-    """The module's code segment, as (index, length), or None."""
-    for i, s in enumerate(omf.segments(recs)):
-        if s and s[0].endswith("_CODE"):
-            return i, s[1]
-    return None
-
-
-def _image(recs: list[omf.Record], seg: int, size: int) -> bytearray:
-    # LEDATA records overlap: BC emits short backpatch records later in the file
-    # at earlier offsets, so the last write to a byte is the one that counts.
-    out = bytearray(size)
-    for _rec, s, off, payload in omf.ledata(recs):
-        if s == seg:
-            out[off : off + len(payload)] = payload
-    return out
-
-
 def plan(
-    recs: list[omf.Record],
+    records: list[omf.Record],
     *,
     take: set[int] | None = None,
     max_regions: int | None = None,
 ) -> list[Region]:
-    found = _code_segment(recs)
+    found = module.of(records)
     if found is None:
         return []
-    seg, size = found
-    code = bytes(_image(recs, seg, size))
 
-    vals, _ = lift(code, 0, len(code))
-    need = needed(vals)
+    values, _ = lift(found.code, found.start, found.end, found.resolve)
+    need = needed(values)
 
-    out = []
-    for i, reg in enumerate(regions(vals)):
-        at, end = vals[reg[0]].at, vals[reg[-1]].end
-        reason = None
-        if take is not None and i not in take:
+    planned = []
+    for index, region in enumerate(regions(values)):
+        at, end = values[region[0]].at, values[region[-1]].end
+        reason = refuse(values, need, region)
+        if take is not None and index not in take:
             reason = "not selected"
-        elif max_regions is not None and len(out) >= max_regions:
+        elif max_regions is not None and sum(1 for r in planned if r.taken) >= max_regions:
             reason = "past --max-regions"
-        emitted = None if reason else emit_region(vals, need, reg)
+        emitted = None if reason else emit_region(values, need, region)
         if emitted is None and reason is None:
             reason = "does not fit"
-        out.append(
+        planned.append(
             Region(
-                id=i,
-                seg=seg,
+                id=index,
+                seg=found.seg,
                 at=at,
                 end=end,
-                before=code[at:end].hex(),
+                before=found.code[at:end].hex(),
                 after=emitted.hex() if emitted else None,
                 taken=emitted is not None,
                 reason=reason,
             )
         )
-    return out
+    return planned
 
 
 def rewrite(

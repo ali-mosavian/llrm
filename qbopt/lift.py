@@ -25,6 +25,12 @@ this does not understand may write either of them.
 import struct
 from enum import StrEnum
 from dataclasses import dataclass
+from collections.abc import Callable
+
+from qbopt.module import Addr
+from qbopt.module import Space
+from qbopt.module import literal_only
+from qbopt.module import frame_relative
 
 # the five operations, low half -> (high half, widened)
 PAIRS = {
@@ -59,7 +65,7 @@ class Decoded:
     length: int
     src_pair: int = 0
     alu: int | None = None
-    mem: int | None = None
+    mem: Addr | None = None
     base: int = 0
     dlen: int = 0
 
@@ -81,7 +87,7 @@ class Value:
     alu: str | None = None  # the mnemonic, which is what OPC is keyed on
     s1: int | None = None
     s2: int | None = None
-    mem: int | None = None
+    mem: Addr | None = None
     pair: int = 0
     src_pair: int = 0
     base: int = 0x06
@@ -90,9 +96,9 @@ class Value:
     def __repr__(self) -> str:
         match self.op:
             case Op.LOAD:
-                return f"load [{self.mem:#06x}]"
+                return f"load {self.mem}"
             case Op.ALUM:
-                return f"v{self.s1} {self.alu} [{self.mem:#06x}]"
+                return f"v{self.s1} {self.alu} {self.mem}"
             case Op.ALUV:
                 return f"v{self.s1} {self.alu} v{self.s2}"
             case Op.MOVE:
@@ -100,7 +106,7 @@ class Value:
             case Op.NEG:
                 return f"neg v{self.s1}"
             case Op.STORE:
-                return f"store v{self.s1} -> [{self.mem:#06x}]"
+                return f"store v{self.s1} -> {self.mem}"
             case _:
                 return str(self.op)
 
@@ -123,8 +129,16 @@ def memory_operand(code: bytes, at: int, base: int) -> tuple[int, int] | None:
             return None
 
 
-def classify(code: bytes, at: int) -> Decoded | None:
-    """What the one instruction at `at` is, in long terms, or None."""
+type Resolver = Callable[[int, int], Addr]
+
+
+def classify(code: bytes, at: int, resolve: Resolver = literal_only) -> Decoded | None:
+    """What the one instruction at `at` is, in long terms, or None.
+
+    `resolve` turns the offset of a displacement field, and whatever literal is
+    sitting in it, into the address it really names. In an object that literal
+    is zero and the address is in a fixup; in a unit test there is no fixup and
+    the literal is the address."""
     # lift probes for the second half of a pair without knowing whether there
     # is one, so running off the end is ordinary and answers "not a pair"
     # rather than raising.
@@ -137,8 +151,8 @@ def classify(code: bytes, at: int) -> Decoded | None:
         if at + 3 > len(code):
             return None
         kind = Kind.LOAD if opcode == 0xA1 else Kind.STORE
-        disp = struct.unpack_from("<H", code, at + 1)[0]
-        return Decoded(kind, pair=0, half=0, length=3, mem=disp, base=0x06, dlen=2)
+        literal = struct.unpack_from("<H", code, at + 1)[0]
+        return Decoded(kind, pair=0, half=0, length=3, mem=resolve(at + 1, literal), base=0x06, dlen=2)
 
     if at + 1 >= len(code):
         return None
@@ -150,7 +164,9 @@ def classify(code: bytes, at: int) -> Decoded | None:
     base = modrm & 0xC7
 
     if (operand := memory_operand(code, at + 2, base)) is not None:
-        disp, dlen = operand
+        literal, dlen = operand
+        # bp-relative displacements are in the code and no fixup claims them
+        mem = frame_relative(literal) if base != 0x06 else resolve(at + 2, literal)
         length = 2 + dlen
         if at + length > len(code):
             return None
@@ -164,7 +180,7 @@ def classify(code: bytes, at: int) -> Decoded | None:
             case _:
                 return None
         alu = opcode if kind is Kind.ALU else None
-        return Decoded(kind, pair, half, length, alu=alu, mem=disp, base=base, dlen=dlen)
+        return Decoded(kind, pair, half, length, alu=alu, mem=mem, base=base, dlen=dlen)
 
     if modrm & 0xC0 != 0xC0:  # register to register
         return None
@@ -195,7 +211,7 @@ def widened(
     at: int,
     span: int,
     shape: Decoded,
-    mem: int | None,
+    mem: Addr | None,
     source: int | None = None,
     alu: str | None = None,
 ) -> Value:
@@ -213,7 +229,7 @@ def widened(
     )
 
 
-def lift(code: bytes, start: int, end: int) -> tuple[list[Value], list[int]]:
+def lift(code: bytes, start: int, end: int, resolve: Resolver = literal_only) -> tuple[list[Value], list[int]]:
     """Values, stores, and the instructions consumed, for one straight run."""
     values: list[Value] = []
     stores: list[int] = []
@@ -233,12 +249,12 @@ def lift(code: bytes, start: int, end: int) -> tuple[list[Value], list[int]]:
         if at >= end:
             break
 
-        first = classify(code, at)
+        first = classify(code, at, resolve)
         if first is None:
             live[0] = live[1] = None
             at += 1
             continue
-        second = classify(code, at + first.length)
+        second = classify(code, at + first.length, resolve)
 
         paired = False
         if second is not None and (
@@ -251,7 +267,7 @@ def lift(code: bytes, start: int, end: int) -> tuple[list[Value], list[int]]:
             span = first.length + second.length
             low, high = (first, second) if first.half == 0 else (second, first)
             operation = PAIRS.get(low.alu) if low.alu is not None else None
-            paired = low.mem is not None and high.mem == low.mem + 2
+            paired = low.mem is not None and high.mem == low.mem.plus(2)
             if paired and first.kind is Kind.ALU:
                 paired = operation is not None and operation[0] == high.alu
 
@@ -376,11 +392,17 @@ LOREG = {0: 0, 1: 1}  # pair 0 low is eax (000), pair 1 is ecx (001)
 
 
 def displacement(value: Value) -> bytes:
-    if value.mem is None:
-        return b""
-    if value.dlen == 1:
-        return struct.pack("<b", value.mem)
-    return struct.pack("<h" if value.mem < 0 else "<H", value.mem)
+    match value.mem:
+        case None:
+            return b""
+        case Addr(space=Space.SEGMENT):
+            return b"\x00" * value.dlen
+        case Addr(disp=disp) if value.dlen == 1:
+            return struct.pack("<b", disp)
+        case Addr(disp=disp):
+            return struct.pack("<h" if disp < 0 else "<H", disp)
+        case _:
+            raise ValueError(f"no displacement for {value.mem}")
 
 
 def encode(value: Value) -> bytes:
@@ -422,8 +444,21 @@ FIXUP = {
 }  # ebx=ecx, shr 16
 
 
+def refuse(values: list[Value], need: list[bool], region: list[int]) -> str | None:
+    """Why this region cannot be rewritten yet, or None."""
+    relocated = (values[i].mem for i in region if need[i])
+    if any(mem is not None and mem.space is Space.SEGMENT for mem in relocated):
+        # The widened instruction is right -- its displacement field holds zero,
+        # exactly as BC's does -- but it needs a FIXUPP of its own to say what
+        # the zero stands for, and nothing here writes records yet.
+        return "operand is relocated and the writer cannot make a fixup"
+    return None
+
+
 def emit_region(values: list[Value], need: list[bool], region: list[int]) -> bytes | None:
     """Bytes for one region, plus the jump over whatever is left."""
+    if refuse(values, need, region):
+        return None
     live = [i for i in region if need[i]]
     out = b"".join(encode(values[i]) for i in live)
     out += b"".join(FIXUP[pair] for pair in sorted({values[i].pair for i in live}))

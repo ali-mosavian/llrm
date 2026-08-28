@@ -21,7 +21,9 @@ from qbopt.lift import Value
 from qbopt.lift import encode
 from qbopt.lift import needed
 from qbopt.lift import sizeof
+from qbopt.module import Addr
 from qbopt.lift import regions
+from qbopt.module import Space
 from qbopt.lift import classify
 from qbopt.lift import emit_region
 
@@ -89,7 +91,7 @@ def test_load_operate_store_is_one_chain() -> None:
     v = one("A1 5E 00 8B 16 60 00   23 06 5A 00 23 16 5C 00   A3 62 00 89 16 64 00")
     assert [x.op for x in v] == [Op.LOAD, Op.ALUM, Op.STORE]
     assert (v[1].s1, v[2].s1) == (0, 1)
-    assert v[0].mem == 0x5E, "the load keeps the low half's displacement"
+    assert v[0].mem == Addr(Space.LITERAL, 0x5E), "the load keeps the low half's displacement"
 
 
 def test_a_pair_copy_is_a_value_knowing_both_pairs() -> None:
@@ -120,7 +122,7 @@ def test_neg_adc_neg_is_one_negate(enc: str, what: str) -> None:
 def test_a_spill_written_high_half_first() -> None:
     v = one("A1 5E 00 8B 16 60 00   89 56 EA 89 46 E8")
     assert [x.op for x in v] == [Op.LOAD, Op.STORE]
-    assert (v[1].mem, v[1].at) == (-24, 7), "the low displacement and the earlier address"
+    assert (v[1].mem, v[1].at) == (Addr(Space.FRAME, -24), 7), "the low displacement and the earlier address"
 
 
 @pytest.mark.parametrize(
