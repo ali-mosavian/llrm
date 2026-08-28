@@ -27,10 +27,13 @@ from enum import StrEnum
 from dataclasses import dataclass
 from collections.abc import Callable
 
+from qbopt.flags import ALL
 from qbopt.declen import run
+from qbopt.flags import Flag
 from qbopt.declen import Insn
 from qbopt.module import Addr
 from qbopt.module import Space
+from qbopt.flags import DIVERGENT
 from qbopt.declen import to_signed
 from qbopt.module import literal_only
 from qbopt.module import frame_relative
@@ -433,14 +436,36 @@ def encode(value: Value) -> bytes:
 # region -- and BC reads them, because in its world that is where the top
 # half of the long lives. Without liveness across blocks there is no telling
 # whether anything after the region wants them, so they go back.
+PUSHF = b"\x9c"
+POPF = b"\x9d"
+
 FIXUP = {
     0: bytes([0x66, 0x8B, 0xD0, 0x66, 0xC1, 0xEA, 0x10]),  # edx=eax, shr 16
     1: bytes([0x66, 0x8B, 0xD9, 0x66, 0xC1, 0xEB, 0x10]),
 }  # ebx=ecx, shr 16
 
 
-def refuse(values: list[Value], need: list[bool], region: list[int]) -> str | None:
-    """Why this region cannot be rewritten yet, or None."""
+def computes(values: list[Value], need: list[bool], region: list[int]) -> bool:
+    """Whether anything in the region leaves a flag whose value widening changes."""
+    return any(values[i].op in (Op.ALUM, Op.ALUV, Op.NEG) for i in region if need[i])
+
+
+def restored_pairs(values: list[Value], need: list[bool], region: list[int]) -> list[int]:
+    """The register pairs whose high half has to be put back after the region."""
+    return sorted({values[i].pair for i in region if need[i]})
+
+
+def refuse(values: list[Value], need: list[bool], region: list[int], live: Flag) -> str | None:
+    """Why this region cannot be rewritten, or None.
+
+    BC leaves the high half's flags and one 32-bit operation leaves the whole
+    result's, so where the region computes anything, ZF, PF and AF may come out
+    different -- measured at 18.7, 37.2 and 12.4 per cent of cases. Nothing can
+    be done about that except refuse, and a jz reading one of them afterwards is
+    exactly the case that stays green until it does not.
+    """
+    if computes(values, need, region) and live & DIVERGENT:
+        return f"widening would change {live & DIVERGENT!r} and something reads it"
     relocated = (values[i].mem for i in region if need[i])
     if any(mem is not None and mem.space is Space.SEGMENT for mem in relocated):
         # The widened instruction is right -- its displacement field holds zero,
@@ -450,13 +475,24 @@ def refuse(values: list[Value], need: list[bool], region: list[int]) -> str | No
     return None
 
 
-def emit_region(values: list[Value], need: list[bool], region: list[int]) -> bytes | None:
-    """Bytes for one region, plus the jump over whatever is left."""
-    if refuse(values, need, region):
+def emit_region(values: list[Value], need: list[bool], region: list[int], live: Flag) -> bytes | None:
+    """Bytes for one region, plus the jump over whatever is left.
+
+    `live` is not optional and has no default: the gate this parameter carries
+    was designed into the predecessor and then lost in a refactor, and a default
+    would make losing it again invisible.
+    """
+    if refuse(values, need, region, live):
         return None
-    live = [i for i in region if need[i]]
-    out = b"".join(encode(values[i]) for i in live)
-    out += b"".join(FIXUP[pair] for pair in sorted({values[i].pair for i in live}))
+    wanted = [i for i in region if need[i]]
+    out = b"".join(encode(values[i]) for i in wanted)
+
+    restore = b"".join(FIXUP[pair] for pair in restored_pairs(values, need, region))
+    if restore and live & ALL:
+        # The shr in FIXUP writes every flag but AF, so a region that computes
+        # nothing still destroys what follows it. Two bytes buy that back.
+        restore = PUSHF + restore + POPF
+    out += restore
 
     slack = (values[region[-1]].end - values[region[0]].at) - len(out)
     match slack:

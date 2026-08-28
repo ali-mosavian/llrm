@@ -19,6 +19,7 @@ from pathlib import Path
 from cycles import report  # ty: ignore[unresolved-import]
 from timings import ARCHS  # ty: ignore[unresolved-import]
 
+from qbopt.flags import ALL
 from qbopt.lift import lift
 from qbopt.lift import needed
 from qbopt.lift import regions
@@ -42,7 +43,9 @@ def main() -> int:
     rows = []
     for reg in regions(v):
         at, end = v[reg[0]].at, v[reg[-1]].end
-        out = emit_region(v, need, reg)
+        # no CFG here, so the flags after a region are unknown and every one of
+        # them has to be assumed live. The measurement phase gives this a module.
+        out = emit_region(v, need, reg, ALL)
         if not out or len(out) > end - at:
             continue
         core = len(out)

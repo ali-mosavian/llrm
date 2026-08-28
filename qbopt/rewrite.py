@@ -19,10 +19,19 @@ from dataclasses import dataclass
 
 from qbopt import omf
 from qbopt import module
+from qbopt.flags import ALL
 from qbopt.lift import lift
+from qbopt.flags import Flag
 from qbopt.lift import needed
 from qbopt.lift import refuse
+from qbopt.blocks import Block
 from qbopt.lift import regions
+from qbopt.flags import live_in
+from qbopt.blocks import CodeMap
+from qbopt.blocks import block_at
+from qbopt.blocks import code_map
+from qbopt.blocks import partition
+from qbopt.flags import live_after
 from qbopt.lift import emit_region
 
 
@@ -38,6 +47,24 @@ class Region:
     reason: str | None
 
 
+def branched_into(mapped: CodeMap, at: int, end: int) -> str | None:
+    """Whether something jumps into the middle of this region.
+
+    A leader can land inside a single value's two instructions -- a jcc to the
+    adc half of an add/adc pair is legal, and BC's IF chains do land mid
+    statement -- so splitting on leaders is not enough; the interior has to be
+    checked.
+    """
+    inside = [target for target in mapped.leaders if at < target < end]
+    return f"something branches to {inside[0]:#x}, inside the region" if inside else None
+
+
+def flags_after(blocks: list[Block], live: dict[int, Flag], at: int, end: int) -> Flag:
+    """The flags something reads after the region, or all of them if unknown."""
+    block = block_at(blocks, at)
+    return live_after(block, end, live) if block is not None else ALL
+
+
 def plan(
     records: list[omf.Record],
     *,
@@ -48,18 +75,25 @@ def plan(
     if found is None:
         return []
 
+    mapped = code_map(found)
+    if isinstance(mapped, str):
+        return []
+    blocks = partition(found, mapped)
+    live = live_in(blocks)
+
     values, _ = lift(found.code, found.start, found.end, found.resolve)
     need = needed(values)
 
     planned = []
     for index, region in enumerate(regions(values)):
         at, end = values[region[0]].at, values[region[-1]].end
-        reason = refuse(values, need, region)
+        after = flags_after(blocks, live, at, end)
+        reason = branched_into(mapped, at, end) or refuse(values, need, region, after)
         if take is not None and index not in take:
             reason = "not selected"
         elif max_regions is not None and sum(1 for r in planned if r.taken) >= max_regions:
             reason = "past --max-regions"
-        emitted = None if reason else emit_region(values, need, region)
+        emitted = None if reason else emit_region(values, need, region, after)
         if emitted is None and reason is None:
             reason = "does not fit"
         planned.append(

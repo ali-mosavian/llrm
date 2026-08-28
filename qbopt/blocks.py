@@ -191,7 +191,7 @@ def benign(module: Module, gap: tuple[int, int]) -> list[Insn] | None:
     return dead if at == hi else None
 
 
-def explains_the_fixups(module: Module, found: CodeMap, entry: int, dead: list[Insn]) -> bool:
+def operand_fields(module: Module, found: CodeMap, dead: list[Insn]) -> set[int] | None:
     """Whether every relocated field sits inside an operand of a reached instruction.
 
     Reachability alone cannot tell a good entry from a bad one: starting inside
@@ -205,12 +205,12 @@ def explains_the_fixups(module: Module, found: CodeMap, entry: int, dead: list[I
     fields = set()
     reached = [insn for at in sorted(found.starts) if (insn := decode(module.code, at)) is not None]
     if len(reached) != len(found.starts):
-        return False
+        return None
     # A real instruction stream tiles. A decode that started inside the header
     # drifts into the middle of the first instruction and reports fragments that
     # overlap it, which is what an entry one or two bytes off looks like.
     if any(earlier.end > later.at for earlier, later in zip(reached, reached[1:], strict=False)):
-        return False
+        return None
     for insn in [*reached, *dead]:
         if insn.disp_at is not None:
             fields |= set(range(insn.disp_at, insn.disp_at + insn.disp_len))
@@ -218,7 +218,7 @@ def explains_the_fixups(module: Module, found: CodeMap, entry: int, dead: list[I
             fields |= set(range(insn.imm_at, insn.imm_at + insn.imm_len))
     for lo, hi in found.tables:
         fields |= set(range(lo, hi))
-    return all(site in fields for site in module.sites if site >= entry)
+    return fields
 
 
 def code_map(module: Module) -> CodeMap | str:
@@ -232,6 +232,8 @@ def code_map(module: Module) -> CodeMap | str:
     no offset works is refused rather than guessed at.
     """
     why = "no offset gives a decode the fixups agree with"
+    best: tuple[int, int, CodeMap] | None = None
+
     for entry in range(HEADER_SEARCH):
         found = walk(module, entry)
         if isinstance(found, str):
@@ -247,8 +249,24 @@ def code_map(module: Module) -> CodeMap | str:
                 why = f"{gap[0]:#x}..{gap[1]:#x} is neither reached nor inert"
                 break
             dead += leftover
-        if not stranded and explains_the_fixups(module, found, entry, dead):
-            return found
+        if stranded:
+            continue
+        fields = operand_fields(module, found, dead)
+        if fields is None or not all(site in fields for site in module.sites if site >= entry):
+            continue
+        # Score by how many relocated fields the decode accounts for. An entry
+        # too early reads header bytes as code; one too late skips real code and
+        # leaves its operands unexplained. Both are accepted by the checks above,
+        # because each exempts whatever lies before the entry it was given. The
+        # count is what separates them, and the largest entry breaks the tie, so
+        # the least data gets decoded.
+        explained = sum(1 for site in module.sites if site in fields)
+        if best is None or (explained, entry) > (best[0], best[1]):
+            best = (explained, entry, found)
+
+    if best is not None:
+        return best[2]
+
     # /V /W puts an event stub in the header region that no record names -- the
     # runtime finds it at a fixed offset -- so those four modules land here.
     return f"no entry point explains the whole segment: {why}"
@@ -260,3 +278,66 @@ def instructions(module: Module) -> list[Insn] | str:
     if isinstance(mapped, str):
         return mapped
     return [insn for at in sorted(mapped.starts) if (insn := decode(module.code, at)) is not None]
+
+
+@dataclass(frozen=True, slots=True)
+class Block:
+    at: int
+    end: int
+    insns: tuple[Insn, ...]
+    ends: Ends
+    succ: tuple[int, ...]
+
+    @property
+    def leaves(self) -> bool:
+        """Whether control goes somewhere this cannot see."""
+        return self.ends in (Ends.RETURN, Ends.LEAVES, Ends.INDIRECT) or not self.succ
+
+
+def partition(module: Module, mapped: CodeMap) -> list[Block]:
+    """The reached instructions cut into basic blocks, with their successors."""
+    reached = {at: insn for at in mapped.starts if (insn := decode(module.code, at)) is not None}
+    out: list[Block] = []
+    run: list[Insn] = []
+
+    for at in sorted(reached):
+        insn = reached[at]
+        if run and (at in mapped.leaders or run[-1].end != at):
+            out.append(_close(module, run, mapped))
+            run = []
+        run.append(insn)
+        if terminator(insn) is not Ends.FALLS_THROUGH or _table_at(module, mapped, insn):
+            out.append(_close(module, run, mapped))
+            run = []
+    if run:
+        out.append(_close(module, run, mapped))
+    return out
+
+
+def _table_at(module: Module, mapped: CodeMap, insn: Insn) -> tuple[int, int] | None:
+    return next((table for table in mapped.tables if table[0] == insn.end), None)
+
+
+def _close(module: Module, run: list[Insn], mapped: CodeMap) -> Block:
+    last = run[-1]
+    ends = terminator(last)
+    succ: list[int] = []
+
+    if (table := _table_at(module, mapped, last)) is not None:
+        # every label it can reach, plus the fall-through past the table
+        succ = [*sorted(module.targets), table[1]]
+        ends = Ends.TABLE
+    elif ends in (Ends.CONDITIONAL, Ends.JUMP):
+        target = branch_target(last, module.code)
+        succ = [target] if target is not None else []
+        if ends is Ends.CONDITIONAL:
+            succ.append(last.end)
+    elif ends is Ends.FALLS_THROUGH:
+        succ = [last.end]
+
+    inside = [at for at in succ if module.start <= at < module.end]
+    return Block(run[0].at, last.end, tuple(run), ends, tuple(sorted(set(inside))) if len(inside) == len(succ) else ())
+
+
+def block_at(blocks: list[Block], offset: int) -> Block | None:
+    return next((block for block in blocks if block.at <= offset < block.end), None)

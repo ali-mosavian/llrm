@@ -16,6 +16,7 @@ from qbopt.lift import REG
 from qbopt.lift import Kind
 from qbopt.lift import lift
 from qbopt.declen import run
+from qbopt.flags import Flag
 from qbopt.lift import FIXUP
 from qbopt.lift import PAIRS
 from qbopt.lift import Value
@@ -239,7 +240,7 @@ def test_a_region_never_grows_and_the_slack_is_jumped_over(enc: str) -> None:
     need = needed(v)
     for reg in regions(v):
         span = v[reg[-1]].end - v[reg[0]].at
-        out = emit_region(v, need, reg)
+        out = emit_region(v, need, reg, Flag.NONE)
         if out is None:
             continue
         assert len(out) == span, "padded to exactly the bytes it replaced"
@@ -256,7 +257,7 @@ def test_too_small_a_region_is_refused_not_overrun() -> None:
     v, _ = lift(b, 0, len(b))
     need = needed(v)
     for reg in regions(v):
-        out = emit_region(v, need, reg)
+        out = emit_region(v, need, reg, Flag.NONE)
         span = v[reg[-1]].end - v[reg[0]].at
         assert out is None or len(out) <= span
 
