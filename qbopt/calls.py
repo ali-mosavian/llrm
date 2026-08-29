@@ -344,13 +344,24 @@ def absorb(site: CallSite, live: Flag) -> Emitted | str:
         return f"something reads {live & ALL!r} after the multiply"
 
     left, right = site.operands
+    # x*x (or x==x): the same address read twice is one load, not two -- the
+    # second step becomes reg,reg and needs no fixup of its own.
+    same_address = left.kind is Kind.STATIC and right.kind is Kind.STATIC and left.addr == right.addr
+    right_step = (
+        Instruction.create_reg_reg(ABSORBED[site.name], RESULT, RESULT) if same_address else apply_to(site.name, right)
+    )
+
     code = bytearray()
     relocations = []
-    for step, operand in ((load_of(left), left), (apply_to(site.name, right), right)):
+    steps: list[tuple[Instruction, Operand | None]] = [
+        (load_of(left), left),
+        (right_step, None if same_address else right),
+    ]
+    for step, operand in steps:
         encoder = Encoder(BITNESS)
         encoder.encode(step, 0)
         where = encoder.get_constant_offsets()
-        if operand.kind is Kind.STATIC and operand.at is not None:
+        if operand is not None and operand.kind is Kind.STATIC and operand.at is not None:
             relocations.append((len(code) + where.displacement_offset, operand.at))
         code += encoder.take_buffer()
 
@@ -430,24 +441,16 @@ def grouped(pushed: tuple[Insn, ...]) -> list[tuple[Insn, ...]] | None:
 # call to one. No fixMul& site in fixtures/omf or build/ ever reaches Consume
 # (every one there is address-or-immediate, absorbed by match() already), so
 # this is unexercised, not merely untested.
-LOW16 = {Register.EAX: Register.AX, Register.ECX: Register.CX, Register.EDX: Register.DX}
 
 
-def popped_into(target: Register_, group: tuple[Insn, ...]) -> list[Instruction]:
-    """One argument, off the real stack and into `target`, matching however
-    BC actually pushed it -- one dword, or two words with the high half
-    pushed first, popped low then high and recombined through the stack the
-    same way restoring() takes a value apart in the other direction.
+def popped_into(target: Register_) -> Instruction:
+    """One argument, off the real stack and into `target`.
+
+    Whether BC pushed it as one dword or two words, high half first, the four
+    bytes already sit in dword layout on top of the stack -- a single 32-bit
+    pop reads them correctly either way, with no recombination needed.
     """
-    if len(group) == 1:
-        return [Instruction.create_reg(Code.POP_R32, target)]
-    return [
-        Instruction.create_reg(Code.POP_R16, LOW16[target]),
-        Instruction.create_reg(Code.POP_R16, Register.BX),
-        Instruction.create_reg(Code.PUSH_R16, Register.BX),
-        Instruction.create_reg(Code.PUSH_R16, LOW16[target]),
-        Instruction.create_reg(Code.POP_R32, target),
-    ]
+    return Instruction.create_reg(Code.POP_R32, target)
 
 
 # Which physical register each pop lands in, topmost group (the one nearest
@@ -497,9 +500,12 @@ def consume(site: CallSite, live: Flag) -> Emitted | str:
     if len(groups) != len(targets):
         return f"{site.name} takes {len(targets)} arguments, not {len(groups)}"
 
-    steps: list[Instruction] = []
-    for target, group in zip(targets, reversed(groups), strict=True):
-        steps.extend(popped_into(target, group))
+    # each argument is exactly one dword, popped topmost (nearest the call)
+    # to deepest, which is CONSUME_TARGETS' own order -- grouped() has
+    # already confirmed there are as many 4-byte groups as targets; their
+    # contents no longer matter, since popped_into() reads any group the
+    # same way.
+    steps: list[Instruction] = [popped_into(target) for target in targets]
 
     if site.name == COMPARE:
         steps.append(Instruction.create_reg_reg(Code.CMP_R32_RM32, Register.EAX, Register.ECX))

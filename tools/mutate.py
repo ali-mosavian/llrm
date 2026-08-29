@@ -138,9 +138,23 @@ MUTATIONS = (
     Mutation(
         "consume-slot-order-not-reversed",
         "qbopt/calls.py",
-        "for target, group in zip(targets, reversed(groups), strict=True):",
-        "for target, group in zip(targets, groups, strict=True):",
+        "steps: list[Instruction] = [popped_into(target) for target in targets]",
+        "steps: list[Instruction] = [popped_into(target) for target in reversed(targets)]",
         "a popped argument landing in the wrong register -- dividend and divisor swapped, not a crash",
+    ),
+    Mutation(
+        "absorb-always-reloads-the-right-operand",
+        "qbopt/calls.py",
+        "same_address = left.kind is Kind.STATIC and right.kind is Kind.STATIC and left.addr == right.addr",
+        "same_address = False",
+        "x*x reloads the same address twice instead of loading it once -- correct, just wasteful",
+    ),
+    Mutation(
+        "popped-into-wrong-width",
+        "qbopt/calls.py",
+        "return Instruction.create_reg(Code.POP_R32, target)",
+        "return Instruction.create_reg(Code.POP_R16, target)",
+        "a popped argument only recovers its low 16 bits, garbage in the rest of the register",
     ),
 )
 

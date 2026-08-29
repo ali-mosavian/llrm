@@ -5,10 +5,12 @@ The runtime calls, and the argument order that is silently a different answer.
 from pathlib import Path
 
 import pytest
+from iced_x86 import Code
 from iced_x86 import Decoder
 from iced_x86 import Mnemonic
 from iced_x86 import Register
 from iced_x86 import Register_
+from iced_x86 import Instruction
 
 from helpers import hx
 from qbopt import module
@@ -150,6 +152,16 @@ def constant_operand(value: int) -> Operand:
     return Operand(Kind.CONSTANT, value=value, length=1)
 
 
+def test_squaring_the_same_address_loads_it_once() -> None:
+    x = static_operand(0x76)
+    site = CallSite(at=0, end=0, start=0, name=MULTIPLY, pushed=(x, x))
+    emitted = absorb(site, Flag.NONE)
+    assert not isinstance(emitted, str)
+    # mov eax,ds:[x] / imul eax,eax / push eax,pop ax,pop dx -- one load, not two
+    assert emitted.code == hx("66 A1 00 00  66 0F AF C0  66 50 58 5A")
+    assert emitted.relocations == ((2, 0x76),), "one fixup, not two, for the one address read"
+
+
 def test_fix_multiply_is_one_imul_and_one_shrd_against_a_static() -> None:
     # mov eax,[a] / imul dword [b] / shrd eax,edx,16, then the high-half
     # restore BC reads through dx:ax the same way it does after a multiply.
@@ -254,11 +266,8 @@ def test_consume_refuses_rather_than_crashes_on_an_ungroupable_frame() -> None:
     assert isinstance(consume(site, Flag.NONE), str)
 
 
-def test_popped_into_a_single_push_is_one_pop() -> None:
-    dword = decode(hx("66 FF 36 00 00"), 0)
-    assert dword is not None
-    steps = popped_into(Register.ECX, (dword,))
-    assert len(steps) == 1
+def test_popped_into_is_a_bare_pop() -> None:
+    assert popped_into(Register.ECX) == Instruction.create_reg(Code.POP_R32, Register.ECX)
 
 
 def test_consume_pops_a_dword_and_a_word_pair_for_compare() -> None:
@@ -269,8 +278,8 @@ def test_consume_pops_a_dword_and_a_word_pair_for_compare() -> None:
     site = CallSite(at=0, end=0, start=0, name=COMPARE, consume=(hi, lo, dword))
     emitted = consume(site, Flag.NONE)
     assert not isinstance(emitted, str)
-    # pop ecx (the dword) / pop ax,bx,push bx,push ax,pop eax (the pair) / cmp
-    assert emitted.code == hx("66 59  58 5B 53 50 66 58  66 3B C1")
+    # pop ecx (the dword) / pop eax (the pair, already dword-contiguous) / cmp
+    assert emitted.code == hx("66 59  66 58  66 3B C1")
     assert emitted.relocations == (), "nothing here is a relocated address"
 
 
