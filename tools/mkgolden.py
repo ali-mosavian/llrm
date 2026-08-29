@@ -266,6 +266,17 @@ def arrays() -> list[str]:
     return [*lines, "DONE"]
 
 
+def udt() -> list[str]:
+    """suite/udt.bas: a TYPE with two LONG fields, plain and arrayed."""
+    c = (305419896, 252645135)
+    pts = [(1, 2), (3, 4), (5, 6)]
+    return [
+        seq(*c),
+        seq(*(v for p in pts for v in p)),
+        "DONE",
+    ]
+
+
 PROGRAMS = {
     "arith": arith,
     "procs": procs,
@@ -278,6 +289,7 @@ PROGRAMS = {
     "nbody": nbody,
     "fixmul": fixmul,
     "arrays": arrays,
+    "udt": udt,
 }
 
 
