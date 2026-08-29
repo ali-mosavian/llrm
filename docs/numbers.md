@@ -123,8 +123,26 @@ reproduced here, for the reason above.
 
 ## Dynamic
 
-None yet. `tools/bench.py` and the high-resolution timer are not written, so
-there is no row here rather than an unpinned one.
+`bench/nbody.bas`, `v-g3`, 25000 steps, 7 repetitions, `conf/pinned.conf`,
+measured 2026-08-29. Read via the 8253, not `TIMER` -- see `docs/measurement.md`
+for why this reads as a spread rather than an exact repeat.
+
+| | base | opt |
+|---|---|---|
+| ticks (median) | 16316618 | 15072480 |
+| ms | 13674.9 | 12632.2 |
+| spread | 23706 (0.15%) | 12446 (0.08%) |
+
+**Base is 8.25 per cent slower than opt** (`base/opt` = 1.0825), consistently
+across every section length tried (1.07-1.09 at 5 s, 1.08 at 14 s) -- the
+first genuine execution-timing number this project has had, closing the "No
+dynamic number exists" item. `bench/nbody.bas` avoids `fixMul&` by construction
+(Q23.9, see `suite/nbody.bas`'s own comment) specifically so BC alone can build
+the base half of this comparison.
+
+dosbox-x 2026.06.02 SDL2; `conf/pinned.conf` sha256
+`6683b8921c4f410f2eeed9c454ebedce03e3587ca7aa9637471b0190fc602c0f`; VBDOS
+BC.EXE sha256 `fa8a089bb6ec4a5dcd81705d704929e7c41894efcc09dc453e7e0311f9331efb`.
 
 ## Predecessor, runtime pass, reconstructed configuration
 

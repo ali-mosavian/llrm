@@ -53,10 +53,6 @@ program means. `tools/mutate.py` catches 14 of 14 seeded bugs.
 
 ## Open, in the order they are worth doing
 
-**No dynamic number exists.** `tools/bench.py` and the 8253 timer are unwritten,
-deliberately: `TIMER` quantises to 54.9 ms and would put 0.2 of error into every
-ratio. `conf/pinned.conf` is committed and ready.
-
 **`docs/metal.md` is a protocol with an empty results table.** Whether the 66h
 prefix cancels the widening win on a 486 or P5 cannot be answered by DOSBox,
 which charges per instruction and will report widening as a win at exactly the
@@ -120,6 +116,15 @@ The guarded-divide sentence was stale in five places, not one -- `numbers.md`,
 was not absorbed at all and carried a pre-absorption census line. Measured:
 eighteen bytes for the divide, twenty-one for the remainder, against fifteen
 under `/G3` and twenty-one elsewhere. `calls.py`'s emitter is `dividing` now.
+
+**A real dynamic number exists.** `bench/nbody.bas` is `suite/nbody.bas`'s
+integrator in Q23.9 rather than 16.16, specifically so it needs no `fixMul&`
+and BC alone can build the base half of the comparison. `tools/bench.py` reads
+the 8253 the way `docs/measurement.md` prescribes; getting a repeatable
+reading out of it took an IRQ0 mask and a guard band, and even then DOSBox-X's
+own tick bookkeeping keeps an absolute noise floor of about one 18.2 Hz period
+regardless -- see `docs/measurement.md`. Measured over a 14 s section, base is
+8.25 per cent slower than opt, spread under 0.15 per cent. See `docs/numbers.md`.
 
 ## The one deliberate behaviour change
 

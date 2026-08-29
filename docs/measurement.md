@@ -32,10 +32,13 @@ executed-instruction ratio, and it answers for an in-order machine and nothing
 else. It will report widening as a win at exactly the instruction-count ratio,
 on every emulated CPU, forever.
 
-Runs use `conf/pinned.conf` and nothing else. `core=normal` makes the PIT
-advance with emulated cycles rather than host time, so two runs of the same
-binary must produce identical readings -- if they do not, the machine was not
-pinned and no number from it is quotable.
+Runs use `conf/pinned.conf` and nothing else. `core=normal` makes CPU
+execution itself cycle-exact, but `tools/bench.py` found that DOSBox-X's own
+BIOS tick bookkeeping is not tied to those cycles closely enough to make a
+PIT-precision reading of the same binary repeat exactly -- see "The timer"
+below. What repeats exactly is base's own bytes read back byte-for-byte
+across runs, and the manifest's static counts; a *timing* reading carries an
+absolute noise floor regardless.
 
 `conf/inherited.conf` reconstructs what the predecessor's parity benchmark ran
 on. It is reconstructed, not recorded; nothing in the inherited documents says
@@ -49,10 +52,28 @@ reading and 0.2 of error into every ratio -- and produced two figures that were
 quoted before being withdrawn.
 
 Read the 8253 instead: latch channel 0 with `OUT &H43, &H00`, read `INP(&H40)`
-twice, and combine with the BIOS tick at `0040:006C`, retrying if the tick
-changes between the two reads. That is 838 ns rather than 54.9 ms. Sections of
-at least five seconds and five repetitions on top, reported as a median with
-its spread and the quantisation bound beside it.
+twice, and combine with the BIOS tick at `0040:006C`. That is 838 ns rather
+than 54.9 ms in principle -- in `dosbox-x` it is not, in practice. Retrying
+when the tick changes between the two reads is not enough: `tools/bench.py`'s
+first version, `bench/nbody.bas`'s first version, measured a one-tick-period
+tear anyway, on the *same binary, same pinned conf*, repeated. Masking IRQ0 at
+the 8259 around the read (BASIC has no `CLI`) did not close it either, which
+says the tear is not guest-side -- DOSBox-X updates that memory location on a
+schedule of its own, not by actually delivering IRQ0 through a handler a mask
+could hold off. A guard band refusing any reading within 12,000 of either edge
+of the counter's own period cut the *rate* of one-tick tears but did not
+remove them: over 11 repetitions of one binary, readings still spread across
+a full 65,536-unit range, and not bimodally -- continuously, which is DOSBox-X
+scheduling noise of about one 18.2 Hz tick's worth, not a snapshot bug to fix
+further.
+
+That noise floor is absolute, not relative: a longer section shrinks it as a
+*fraction* of the reading without shrinking it in ticks. Measured going from a
+~5 s section to a ~14 s one: spread fell from 1.1-1.2 per cent of the median to
+0.08-0.15 per cent. Sections of at least five seconds and five repetitions on
+top, reported as a median with its spread beside it -- and the spread is the
+honest error bar, not the quantisation bound the PIT's own resolution would
+suggest.
 
 ## What makes a number quotable
 
