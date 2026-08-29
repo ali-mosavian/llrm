@@ -53,6 +53,15 @@ program means. `tools/mutate.py` catches 14 of 14 seeded bugs.
 
 ## Open, in the order they are worth doing
 
+**`docs/residue.md` catalogs what survives absorption and widening.** A
+manual liveness trace of `bench/nbody.bas`'s rewritten object, not its tests:
+the object is 137 bytes larger than BC's own, and eight distinct, addressed
+patterns account for essentially all of it, from a genuinely trivial one-line
+fix (`popped_into()` recombines two words that were already contiguous) to
+one that needs real dependence analysis (an interleaved instruction splits a
+region neither pass can currently step over). Five of the eight need no new
+architecture at all.
+
 **`docs/metal.md` is a protocol with an empty results table.** Whether the 66h
 prefix cancels the widening win on a 486 or P5 cannot be answered by DOSBox,
 which charges per instruction and will report widening as a win at exactly the
