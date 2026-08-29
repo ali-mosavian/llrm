@@ -30,6 +30,7 @@ from collections.abc import Callable
 from iced_x86 import Code
 from iced_x86 import Encoder
 from iced_x86 import Register
+from iced_x86 import Register_
 from iced_x86 import Instruction
 from iced_x86 import MemoryOperand
 
@@ -149,7 +150,7 @@ def operand(insn: Insn, resolve: Resolver) -> Addr | None:
     base -- but two elements at the same displacement are different addresses
     unless the register indexing them agrees too, so that register comes along.
     """
-    if insn.disp_at is None or insn.insn.memory_index != Register.NONE:
+    if insn.disp_at is None or insn.memory_index != Register.NONE:
         return None
     match insn.memory_base:
         case Register.NONE:
@@ -454,19 +455,24 @@ WIDE = {
 WIDE_REGISTER = {0: Register.EAX, 1: Register.ECX}
 
 
-def memory(value: Value) -> MemoryOperand:
-    """The operand as the widened instruction has to carry it.
+def relocated_memory(base: Register_) -> MemoryOperand:
+    """A relocated address, always emitted as zero.
 
-    A relocated address is emitted as zero: LINK adds what is in the code to the
-    fixup's target, so anything else would be added to the real address. An
-    array element's fixup names the array's own base the same way, but the
-    element it means also depends on whatever register indexes it -- carried
-    through as the operand's own base, never optimised away to a bare
-    displacement, which would silently mean a different element.
+    LINK adds what is in the code to the fixup's target, so anything else
+    would be added to the real address. An array element's fixup names the
+    array's own base the same way, but the element it means also depends on
+    whatever register indexes it -- carried through as this operand's own
+    base, never optimised away to a bare displacement, which would silently
+    mean a different element.
     """
+    return MemoryOperand(base=base, displ=0, displ_size=2)
+
+
+def memory(value: Value) -> MemoryOperand:
+    """The operand as the widened instruction has to carry it."""
     match value.mem:
         case Addr(space=Space.SEGMENT, base=base):
-            return MemoryOperand(base=base, displ=0, displ_size=2)
+            return relocated_memory(base)
         case Addr(space=Space.FRAME, disp=disp):
             return MemoryOperand(base=Register.BP, displ=disp, displ_size=value.dlen or 1)
         case Addr(disp=disp, base=base):

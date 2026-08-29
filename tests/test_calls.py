@@ -5,6 +5,8 @@ The runtime calls, and the argument order that is silently a different answer.
 from pathlib import Path
 
 import pytest
+from iced_x86 import Register
+from iced_x86 import Register_
 
 from helpers import hx
 from qbopt import module
@@ -80,6 +82,28 @@ def test_a_pushed_constant_is_not_a_static(fixtures: Path) -> None:
     assert static_at(parsed, immediate) is None
 
 
+def test_an_indexed_push_is_a_static_operand_carrying_its_base() -> None:
+    from qbopt.declen import decode
+    from qbopt.calls import static_at
+
+    insn = decode(hx("66 FF B4 10 00"), 0)  # push dword [si+0x10]
+    assert insn is not None and insn.disp_at is not None
+    fake = module.Module([], 1, "test", b"", 0, 0, operands={insn.disp_at: module.Addr(module.Space.SEGMENT, 0, 5)})
+    found = static_at(fake, insn)
+    assert found is not None
+    assert found.addr == module.Addr(module.Space.SEGMENT, 0, 5, base=Register.SI)
+
+
+def test_a_scaled_index_push_is_not_a_static_operand() -> None:
+    from qbopt.declen import decode
+    from qbopt.calls import static_at
+
+    insn = decode(hx("66 67 FF 34 85 10 00 00 00"), 0)  # push dword [eax*4+0x10], no base at all
+    assert insn is not None and insn.disp_at is not None
+    fake = module.Module([], 1, "test", b"", 0, 0, operands={insn.disp_at: module.Addr(module.Space.SEGMENT, 0, 5)})
+    assert static_at(fake, insn) is None
+
+
 def test_an_absorbed_comparison_leaves_no_value_to_restore(fixtures: Path) -> None:
     # A comparison's answer is in the flags. Appending the sequence that puts a
     # long's high half back wastes four bytes and clobbers ax and dx, which the
@@ -102,8 +126,8 @@ SHRD_IMM8 = bytes.fromhex("660fac")
 SHRD_CL = bytes.fromhex("660fad")
 
 
-def static_operand(offset: int) -> Operand:
-    return Operand(Kind.STATIC, at=offset, length=1)
+def static_operand(offset: int, base: Register_ = Register.NONE) -> Operand:
+    return Operand(Kind.STATIC, module.Addr(module.Space.SEGMENT, offset, base=base), at=offset, length=1)
 
 
 def constant_operand(value: int) -> Operand:

@@ -34,6 +34,7 @@ from qbopt.module import Space
 from qbopt.module import Module
 from qbopt.declen import BITNESS
 from qbopt.declen import to_signed
+from qbopt.lift import relocated_memory
 
 COMPARE = "B$CPI4"
 MULTIPLY = "B$MUI4"
@@ -102,11 +103,24 @@ class CallSite:
 
 
 def static_at(module: Module, insn: Insn) -> Operand | None:
-    if insn.code not in PUSHES or insn.disp_at is None or insn.memory_base != Register.NONE:
+    """A pushed operand at a fixed address, or an array element indexed by si/di.
+
+    Two elements at the same displacement are different addresses unless the
+    register indexing them agrees too. static_at has no frame-slot case for
+    an index to be misread against the way lift.py's operand() does -- the
+    base whitelist below refuses bp/bx outright -- but a scaled-index push
+    (`[eax*4+x]`, memory_base NONE with an index) would otherwise slip past
+    that whitelist and needs refusing on its own.
+    """
+    if insn.code not in PUSHES or insn.disp_at is None or insn.memory_index != Register.NONE:
+        return None
+    if insn.memory_base not in (Register.NONE, Register.SI, Register.DI):
         return None
     addr = module.operands.get(insn.disp_at)
     if addr is None or addr.space is not Space.SEGMENT:
         return None
+    if insn.memory_base != Register.NONE:
+        addr = replace(addr, base=insn.memory_base)
     return Operand(Kind.STATIC, addr, insn.disp_at, length=1)
 
 
@@ -227,10 +241,33 @@ DIVIDES = {DIVIDE, REMAINDER}
 RESULT = Register.EAX  # what the runtime returns a long in, as ax:dx
 
 
+def relocated_addr(operand: Operand) -> Addr:
+    """Where a Kind.STATIC operand's value lives, once it is read at codegen
+    time rather than reused from wherever it was pushed.
+
+    static_at is Kind.STATIC's only producer and always gives it a relocated
+    SEGMENT address; a caller passing anything else is a bug in this module,
+    not a shape refuse() left for absorb() to catch, so this raises rather
+    than silently building the address of whatever offset 0 happens to be.
+    """
+    if operand.addr is None or operand.addr.space is not Space.SEGMENT:
+        raise ValueError(f"a {operand.kind} operand has no relocated address")
+    return operand.addr
+
+
+def memory_of(operand: Operand) -> MemoryOperand:
+    return relocated_memory(relocated_addr(operand).base)
+
+
 def load_of(operand: Operand) -> Instruction:
     if operand.kind is Kind.CONSTANT:
         return Instruction.create_reg_i32(Code.MOV_R32_IMM32, RESULT, operand.value)
-    return Instruction.create_reg_mem(Code.MOV_EAX_MOFFS32, RESULT, MemoryOperand(displ=0, displ_size=2))
+    base = relocated_addr(operand).base
+    # the moffs form is shorter, but it has no ModRM byte and so no way to
+    # carry an index register -- the general r32,rm32 form is the only one
+    # that can, and is the one an indexed operand has to fall back to
+    code = Code.MOV_R32_RM32 if base != Register.NONE else Code.MOV_EAX_MOFFS32
+    return Instruction.create_reg_mem(code, RESULT, relocated_memory(base))
 
 
 def fits_in_a_byte(value: int) -> bool:
@@ -239,7 +276,7 @@ def fits_in_a_byte(value: int) -> bool:
 
 def apply_to(name: str, operand: Operand) -> Instruction:
     if operand.kind is not Kind.CONSTANT:
-        return Instruction.create_reg_mem(ABSORBED[name], RESULT, MemoryOperand(displ=0, displ_size=2))
+        return Instruction.create_reg_mem(ABSORBED[name], RESULT, memory_of(operand))
     # the sign-extended byte forms are two or three bytes shorter, and a long
     # compared or multiplied by a small constant is the common case
     short = fits_in_a_byte(operand.value)
@@ -346,7 +383,7 @@ def dividing(site: CallSite, live: Flag) -> Emitted | str:
     if right.kind is Kind.CONSTANT:
         add(Instruction.create_reg_i32(Code.MOV_R32_IMM32, divisor, right.value))
     else:
-        where = add(Instruction.create_reg_mem(Code.MOV_R32_RM32, divisor, MemoryOperand(displ=0, displ_size=2)))
+        where = add(Instruction.create_reg_mem(Code.MOV_R32_RM32, divisor, memory_of(right)))
         if right.at is not None:
             relocated[where] = right.at
 
@@ -393,20 +430,24 @@ def fix_multiply(site: CallSite, live: Flag) -> Emitted | str:
     if a.kind is Kind.STATIC and a.at is not None:
         relocated[where] = a.at
 
-    if b.kind is Kind.STATIC:
-        where = add(Instruction.create_mem(Code.IMUL_RM32, MemoryOperand(displ=0, displ_size=2)))
-        if b.at is not None:
-            relocated[where] = b.at
-    else:
+    if b.kind is Kind.CONSTANT:
         add(Instruction.create_reg_i32(Code.MOV_R32_IMM32, factor, b.value))
         add(Instruction.create_reg(Code.IMUL_RM32, factor))
+    else:
+        # memory_of raises for anything without a relocated address, rather
+        # than treating a kind that is not CONSTANT as license to assume it
+        # must be STATIC -- the one other kind there is today, but not
+        # necessarily the only one there ever will be
+        where = add(Instruction.create_mem(Code.IMUL_RM32, memory_of(b)))
+        if b.at is not None:
+            relocated[where] = b.at
 
     if shift.kind is Kind.CONSTANT:
         if not 0 <= shift.value < 32:
             return f"a shift of {shift.value} normalises nothing back into 32 bits"
         add(Instruction.create_reg_reg_i32(Code.SHRD_RM32_R32_IMM8, RESULT, Register.EDX, shift.value))
     else:
-        where = add(Instruction.create_reg_mem(Code.MOV_R16_RM16, Register.CX, MemoryOperand(displ=0, displ_size=2)))
+        where = add(Instruction.create_reg_mem(Code.MOV_R16_RM16, Register.CX, memory_of(shift)))
         if shift.at is not None:
             relocated[where] = shift.at
         add(Instruction.create_reg_reg_reg(Code.SHRD_RM32_R32_CL, RESULT, Register.EDX, Register.CL))

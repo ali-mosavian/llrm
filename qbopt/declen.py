@@ -78,6 +78,10 @@ class Insn:
         return self.insn.memory_base
 
     @property
+    def memory_index(self) -> int:
+        return self.insn.memory_index
+
+    @property
     def displacement(self) -> int:
         """The displacement as the instruction means it, sign and all.
 
