@@ -65,8 +65,8 @@ class Result:
 NO_BASE = {"fixmul"}
 
 
-def programs() -> list[str]:
-    return sorted(p.stem for p in SUITE.glob("*.bas") if p.stem not in NO_BASE)
+def programs(source_dir: Path = SUITE) -> list[str]:
+    return sorted(p.stem for p in source_dir.glob("*.bas") if p.stem not in NO_BASE)
 
 
 def lines(text: str) -> list[str]:
@@ -82,9 +82,9 @@ def first_difference(want: list[str], got: list[str]) -> str:
     return ""
 
 
-def compile_all(cfg: Config, work: Path, names: list[str], timeout: int) -> None:
+def compile_all(cfg: Config, work: Path, names: list[str], timeout: int, source_dir: Path = SUITE) -> None:
     for name in names:
-        shutil.copy(SUITE / f"{name}.bas", work / f"{name.upper()}.BAS")
+        shutil.copy(source_dir / f"{name}.bas", work / f"{name.upper()}.BAS")
     cached_launch(
         work,
         cfg.mount,
@@ -108,7 +108,7 @@ def link_and_run(cfg: Config, work: Path, names: list[str], timeout: int) -> Non
     cached_launch(work, cfg.mount, steps, identity=toolchain_identity(cfg), timeout=timeout, env={"LIB": r"V:\LIB"})
 
 
-def judge(work: Path, name: str) -> Verdict:
+def judge(work: Path, name: str, golden_dir: Path = SUITE / "golden") -> Verdict:
     u = name.upper()
     obj = work / f"{u}.OBJ"
     if not obj.is_file():
@@ -125,7 +125,7 @@ def judge(work: Path, name: str) -> Verdict:
     base, opt = lines(read_dos(work, f"B_{u}.TXT")), lines(read_dos(work, f"O_{u}.TXT"))
     if not base:
         return Verdict(name, "RUNFAIL", "the baseline produced no output")
-    golden = lines((SUITE / "golden" / f"{name}.txt").read_text())
+    golden = lines((golden_dir / f"{name}.txt").read_text())
 
     diverges = name in DIVERGES
     if base != golden and not diverges:
@@ -153,12 +153,17 @@ def run(
     timeout: int = 300,
     transform: Callable[[bytes], bytes] | None = None,
     work: Path | None = None,
+    names: list[str] | None = None,
+    source_dir: Path = SUITE,
+    golden_dir: Path = SUITE / "golden",
 ) -> Result:
     cfg = CONFIGS[tag]
     if not cfg.available:
         raise SystemExit(f"no toolchain at {cfg.mount}; see docs/testing.md")
 
-    names = [only] if only else programs()
+    # a caller with its own disposable program set (tools/fuzzcheck.py) passes
+    # `names` directly; everyone else still gets the suite via `programs()`
+    names = names if names is not None else ([only] if only else programs(source_dir))
     # BUILD/tag is this function's own default and is owned by the one
     # caller that never passes `work` -- a second caller sharing a tag but
     # wanting a different program set or transform must pass its own, or two
@@ -168,7 +173,7 @@ def run(
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
 
-    compile_all(cfg, work, names, timeout)
+    compile_all(cfg, work, names, timeout, source_dir)
     for name in names:
         obj = work / f"{name.upper()}.OBJ"
         if obj.is_file():
@@ -176,7 +181,7 @@ def run(
             (work / f"{name.upper()}Q.OBJ").write_bytes(change(obj.read_bytes()))
     link_and_run(cfg, work, names, timeout)
 
-    return Result(tag, [judge(work, n) for n in names])
+    return Result(tag, [judge(work, n, golden_dir) for n in names])
 
 
 def main(argv: list[str] | None = None) -> int:
