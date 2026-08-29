@@ -135,6 +135,27 @@ def nots() -> list[str]:
     ]
 
 
+def fpemu() -> list[str]:
+    x, y = 1073741831, 1024
+    q = x // y
+    a, b = float(q), float(y)
+    return [
+        f"DIV={num(q)}",
+        f"FADD={num(int(a + b))}",
+        f"FSUB={num(int(a - b))}",
+        f"MOD={num(x - q * y)}",
+        f"FMUL={num(int(a * b))}",
+        f"FDIV={num(int(a / b))}",
+        f"FHALF={num(int(b / 2048 * 10))}",
+        f"FSQR={num(int(a**0.5))}",
+        f"SADD={num(int(q + 4))}",
+        f"SMUL={num(int(q * 4))}",
+        f"AND={num(x & 1073741824)}",
+        f"FCMP={seq(-(a > b), -(b > a))}",
+        "DONE",
+    ]
+
+
 PROGRAMS = {
     "arith": arith,
     "procs": procs,
@@ -143,6 +164,7 @@ PROGRAMS = {
     "flags": flags,
     "divmod": divmod_,
     "nots": nots,
+    "fpemu": fpemu,
 }
 
 

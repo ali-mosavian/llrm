@@ -29,6 +29,10 @@ COMPILERS = ["v-g3", "p-g2", "q-O"]
 # jumps included: its ON GOTO table is data inside the code segment, and moving
 # code past it works only because reachability knows the bytes after a B$OGTA
 # call are a table rather than instructions.
+# fpemu is deliberately absent: a nop ahead of its FP sites moves all 27 of
+# them and the program still runs, but only once the entry point is right. The
+# search in code_map picks 0x31 for it, one byte into a 66-prefixed store, and
+# the nop then lands inside an instruction. See docs/handover.md.
 MOVABLE = ["arith", "procs", "jumps"]
 
 CASES = [
