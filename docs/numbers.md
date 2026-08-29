@@ -5,13 +5,16 @@ kind of number does and does not mean.
 
 ## Static: what the pass does to the corpus
 
-Measured 2026-08-29, over the 90 objects in `fixtures/omf`.
+Measured 2026-08-29, over the 110 objects in `fixtures/omf`, with
+`uv run python tools/census.py`.
 
 | | |
 |---|---|
-| regions found | 1131 |
-| taken | 876 |
-| their bytes | 17071 -> 12063, 29 per cent smaller |
+| objects | 110, 73839 bytes of code |
+| mapped | 102; 8 refused |
+| regions found | 1196 |
+| taken | 932 |
+| their bytes | 18269 -> 10659, 41 per cent smaller |
 
 Refused, by reason:
 
@@ -19,9 +22,10 @@ Refused, by reason:
 |---|---|
 | 108 | `B$DVI4` is not absorbed |
 | 69 | `B$RMI4` is not absorbed |
-| 60 | the region crosses a LEDATA boundary |
-| 10 | widening it grows 6 bytes to 8 |
-| 4 | a line number points inside the region |
+| the rest | LEDATA boundaries, single pairs that grow, swallowed line numbers |
+
+The 8 unmapped are `/V /W` builds whose event stub sits in the header at an
+offset no record names.
 
 Divide and remainder are refused on measured grounds rather than for want of
 work: see the trap figures in AGENTS.md.

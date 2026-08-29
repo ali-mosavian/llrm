@@ -128,6 +128,18 @@ def divmod_() -> list[str]:
     return [*lines, "DONE"]
 
 
+def nots() -> list[str]:
+    a, b = 305419896, 252645135
+    return [
+        f"NOT={num(s32(~a))}",
+        f"EQV={num(s32(~(a ^ b)))}",
+        f"IMP={num(s32(~a | b))}",
+        f"NAND={num(s32(~(a & b)))}",
+        f"NOTOR={num(s32(~a | b))}",
+        "DONE",
+    ]
+
+
 PROGRAMS = {
     "arith": arith,
     "procs": procs,
@@ -135,6 +147,7 @@ PROGRAMS = {
     "cmpord": cmpord,
     "flags": flags,
     "divmod": divmod_,
+    "nots": nots,
 }
 
 

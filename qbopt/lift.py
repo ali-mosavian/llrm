@@ -51,6 +51,7 @@ class Kind(StrEnum):
     ALU = "op"
     MOVE = "mv"
     REG_ALU = "rr"
+    NOT = "not"
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +79,7 @@ class Op(StrEnum):
     STORE = "store"
     MOVE = "move"
     NEG = "neg"
+    NOT = "not"
 
 
 @dataclass(slots=True)
@@ -179,6 +181,14 @@ def classify(insn: Insn, resolve: Resolver = literal_only) -> Decoded | None:
         if where is None:
             return None
         return Decoded(kind, pair, half, insn.length, mem=where, dlen=insn.disp_len, disp_at=insn.disp_at)
+
+    if code == Code.NOT_RM16 and not insn.reads_memory(0):
+        # NOT, EQV and IMP all go through this pair, and it writes no flag
+        register = insn.register(0)
+        if register not in HALF_OF:
+            return None
+        pair, half = HALF_OF[register]
+        return Decoded(Kind.NOT, pair, half, insn.length)
 
     if code not in PAIRED and code not in HIGH_HALVES:
         return None
@@ -323,6 +333,10 @@ def lift(
                         )
                     case _:
                         paired = False
+
+            elif first.kind is Kind.NOT and live[first.pair] is not None:
+                live[first.pair] = add(widened(Op.NOT, at, span, first, None, source=live[first.pair]))
+                paired = True
 
             elif first.kind is Kind.MOVE and live[first.src_pair] is not None:
                 # A move is a value, not nothing. Dropping it looks tempting --
@@ -478,6 +492,8 @@ def instruction(value: Value) -> Instruction:
             return Instruction.create_reg_reg(Code.MOV_R32_RM32, wide, source)
         case Op.NEG:
             return Instruction.create_reg(Code.NEG_RM32, wide)
+        case Op.NOT:
+            return Instruction.create_reg(Code.NOT_RM32, wide)
         case _:
             raise ValueError(f"no widened form for {value.op}")
 
