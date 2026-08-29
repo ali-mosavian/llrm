@@ -98,10 +98,51 @@ def to_signed(raw: int, width: int) -> int:
     return raw - (1 << bits) if raw >= 1 << (bits - 1) else raw
 
 
+# Under /FPi, BC does not emit x87 instructions. It emits `int 34h`..`3Bh`,
+# which stand in for the ESC opcodes D8..DF, with the operand bytes following
+# inline exactly as they would after the real opcode -- so `CD 35 46 C8` is
+# `D9 46 C8`, fld dword [bp-38h]. A walk that reads the int as two bytes and
+# carries on lands in the middle of the operand.
+#
+# There are 2130 of these in qb-qrender, and they are why reachability explained
+# two of its fifteen modules before this. The emulator patches these sites at
+# run time, which is what makes them look like ordinary interrupts on disk.
+EMULATED = range(0x34, 0x3C)
+ESC = 0xD8
+INTERRUPT = 0xCD
+
+
+def emulated(code: bytes, at: int) -> Insn | None:
+    """An x87 instruction wearing the emulator's interrupt as its first byte."""
+    stood_in = bytes([ESC + code[at + 1] - EMULATED.start]) + code[at + 2 : at + 2 + 15]
+    decoder = Decoder(BITNESS, stood_in, ip=0)
+    if not decoder.can_decode:
+        return None
+    insn = decoder.decode()
+    if insn.is_invalid:
+        return None
+    length = insn.len + 1  # the int is two bytes where the ESC opcode is one
+    if at + length > len(code):
+        return None
+
+    where = decoder.get_constant_offsets(insn)
+    return Insn(
+        at=at,
+        length=length,
+        insn=insn,
+        disp_at=at + 1 + where.displacement_offset if where.has_displacement else None,
+        disp_len=where.displacement_size if where.has_displacement else 0,
+        imm_at=at + 1 + where.immediate_offset if where.has_immediate else None,
+        imm_len=where.immediate_size if where.has_immediate else 0,
+    )
+
+
 def decode(code: bytes, at: int) -> Insn | None:
     """The instruction at `at`, or None if the bytes are not one."""
     if at >= len(code):
         return None
+    if code[at] == INTERRUPT and at + 2 < len(code) and code[at + 1] in EMULATED:
+        return emulated(code, at)
     decoder = Decoder(BITNESS, code[at:], ip=at)
     if not decoder.can_decode:
         return None

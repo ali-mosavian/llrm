@@ -146,6 +146,11 @@ def test_random_bytes_agree_with_ndisasm(fuzz: tuple[bytes, list[tuple[int, str]
         at, text = marks[index]
         if text.startswith("db 0x") or text.split()[0] in JOINED:
             continue
+        # ndisasm reads CD 34h..3Bh as an ordinary interrupt. Under /FPi it is
+        # the emulator standing in for an ESC opcode, with the x87 operand
+        # following inline, so the two decoders differ here on purpose.
+        if blob[at] == 0xCD and at + 1 < len(blob) and 0x34 <= blob[at + 1] < 0x3C:
+            continue
         want = marks[index + 1][0] - at
         got = length(blob, at)
         if got is None:
@@ -156,3 +161,25 @@ def test_random_bytes_agree_with_ndisasm(fuzz: tuple[bytes, list[tuple[int, str]
             wrong.append(f"{at:04X} {text!r}: got {got}, ndisasm says {want}")
     assert wrong == []
     assert agree > 1000
+
+
+@pytest.mark.parametrize(
+    ("enc", "length", "what"),
+    [
+        ("CD 35 46 C8", 4, "fld dword [bp-38h]"),
+        ("CD 34 4E C8", 4, "fmul dword [bp-38h]"),
+        ("CD 3A C1", 3, "faddp"),
+        ("CD 36 06 5E 00", 5, "fiadd word [disp16]"),
+    ],
+)
+def test_the_emulator_interrupt_is_an_x87_instruction(enc: str, length: int, what: str) -> None:
+    # Under /FPi, BC emits int 34h..3Bh where the ESC opcode would go, with the
+    # operand bytes following inline. A walk that reads the int as two bytes and
+    # carries on lands in the middle of the operand -- which is why reachability
+    # explained two of qb-qrender's fifteen modules before this, and all fifteen
+    # after. There are 2130 of them in that program.
+    insn = decode(hx(enc), 0)
+    assert insn is not None
+    assert insn.length == length, what
+    assert insn.disp_at is None or insn.disp_at >= 2, "the operand follows the two-byte int"
+    assert insn.writes & 0x3F == 0, "the x87 status word is not the flags register"

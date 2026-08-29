@@ -116,9 +116,16 @@ is the kind of thing that stays green in every test until it does not.
 - **BC leans on FIXUPP THREADs.** 34 of the 40 fixups in a module with an
   `ON GOTO` and a `SELECT CASE` name a thread rather than a target. Resolve
   them or you cannot see most of the relocations at all.
-- **The FP emulator patches its own call sites** at run time -- `int
-  34h`..`3Dh`, 58 of them in 15.8K of BC code. The runtime pass could not
-  move code out from under an already-patched one. Whether that still
+- **`int 34h`..`3Bh` is not an interrupt, it is an x87 instruction.** Under
+  `/FPi` BC emits the emulator's interrupt where the ESC opcode would go, and
+  the operand follows inline exactly as it would after the real opcode:
+  `CD 35 46 C8` is `D9 46 C8`, `fld dword [bp-38h]`. Reading the int as two
+  bytes and carrying on lands in the middle of the operand. There are 2130 in
+  qb-qrender, and they are why reachability explained two of its fifteen
+  modules before the decoder knew this and all fifteen after. ndisasm does not
+  know it either, so the two decoders differ there on purpose.
+- **The FP emulator patches those sites** at run time. The runtime pass could
+  not move code out from under an already-patched one. Whether that still
   matters when the moving happens before the program has ever run has not
   been established; check before assuming either way.
 
