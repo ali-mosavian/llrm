@@ -368,8 +368,9 @@ than the runtime pass's blunter option of costing the whole module.
 - **When careful measurements of the source all come back clean and the
   program still misbehaves, stop measuring the source and check what was
   actually built.**
-- **Consult an Opus-model agent for design review before writing code, and
-  whenever stuck.** Give it the actual plan and every file it is grounded in,
+- **Consult an Opus-model agent for design review before writing code, to
+  review the code once written, and whenever stuck.** Give it the actual plan
+  or diff and every file it is grounded in,
   and ask it to trace the mechanism against real examples rather than judge
   the prose -- this is what caught a plan whose core mechanism fired on zero
   bytes of its own input, a soundness bug the plan itself would have
