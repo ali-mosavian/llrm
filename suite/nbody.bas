@@ -30,7 +30,6 @@ const BODIES = 6
 const ONE = 512&  ' & matters: untyped, 512*512 folds as INTEGER and wraps to 0
 const SOFTEN = ONE * ONE
 const PULL = ONE
-const DAMP = 4  ' velocity loses 1/(2^DAMP) each step
 
 dim posX(BODIES) as long
 dim posY(BODIES) as long
@@ -74,8 +73,12 @@ for stepNo = 1 to stepCount
         next
         velX(body) = velX(body) + accX
         velY(body) = velY(body) + accY
-        velX(body) = velX(body) - velX(body) \ (2 ^ DAMP)
-        velY(body) = velY(body) - velY(body) \ (2 ^ DAMP)
+        ' velocity loses a sixteenth each step -- 16 rather than `2 ^ 4`,
+        ' whose result BASIC's `^` always returns as a float: measured, it
+        ' compiles to two calls to B$POW4 per body per step, an unrelated
+        ' floating-point cost this integrator has no other use for.
+        velX(body) = velX(body) - velX(body) \ 16
+        velY(body) = velY(body) - velY(body) \ 16
     next
     for body = 0 to BODIES - 1
         posX(body) = posX(body) + velX(body)

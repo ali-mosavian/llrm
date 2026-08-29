@@ -12,7 +12,6 @@ const BODIES = 6
 const ONE = 512&
 const SOFTEN = ONE * ONE
 const PULL = ONE
-const DAMP = 4
 
 dim posX(BODIES) as long
 dim posY(BODIES) as long
@@ -65,8 +64,8 @@ for stepNo = 1 to stepCount
         next
         velX(body) = velX(body) + accX
         velY(body) = velY(body) + accY
-        velX(body) = velX(body) - velX(body) \ (2 ^ DAMP)
-        velY(body) = velY(body) - velY(body) \ (2 ^ DAMP)
+        velX(body) = velX(body) - velX(body) \ 16
+        velY(body) = velY(body) - velY(body) \ 16
     next
     for body = 0 to BODIES - 1
         posX(body) = posX(body) + velX(body)
