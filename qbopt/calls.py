@@ -186,7 +186,7 @@ def apply_to(name: str, operand: Operand) -> Instruction:
     # the sign-extended byte forms are two or three bytes shorter, and a long
     # compared or multiplied by a small constant is the common case
     short = fits_in_a_byte(operand.value)
-    if name is COMPARE:
+    if name == COMPARE:
         code = Code.CMP_RM32_IMM8 if short else Code.CMP_EAX_IMM32
         return Instruction.create_reg_i32(code, RESULT, operand.value)
     code = Code.IMUL_R32_RM32_IMM8 if short else Code.IMUL_R32_RM32_IMM32
@@ -201,9 +201,9 @@ def absorb(site: CallSite, live: Flag) -> Emitted | str:
     """
     if site.name not in ABSORBED:
         return f"{site.name} is not absorbed"
-    if site.name is COMPARE and live & SYNTHESISED:
+    if site.name == COMPARE and live & SYNTHESISED:
         return f"the site's {live & SYNTHESISED!r} comes from the runtime, not from a comparison"
-    if site.name is MULTIPLY and live & ALL:
+    if site.name == MULTIPLY and live & ALL:
         # imul sets the flags where the runtime left whatever it happened to
         return f"something reads {live & ALL!r} after the multiply"
 
@@ -220,5 +220,5 @@ def absorb(site: CallSite, live: Flag) -> Emitted | str:
 
     # a comparison leaves its answer in the flags; a multiply leaves a value, and
     # BC reads its high half from dx
-    restore = b"" if site.name is COMPARE else FIXUP[0]
+    restore = b"" if site.name == COMPARE else FIXUP[0]
     return Emitted(bytes(code) + restore, tuple(relocations))

@@ -50,12 +50,20 @@ rather than captured from a compiler. `base` is BC's own object, linked and run.
 
 `BASEDIFF` fails the run. An unexplained base is not a base.
 
+## Measuring
+
+`docs/measurement.md` says what each kind of number means and which are
+quotable; `docs/numbers.md` holds the results. `docs/metal.md` is the protocol
+for the one question a model cannot answer.
+
 ## Driving it by hand
 
     uv run python tools/matrix.py                  all twelve, in parallel
     uv run python tools/matrix.py --dry-run        the harness proving itself
     uv run python tools/e2e.py v-g3 --prog arith   one configuration
     uv run python -m qbopt.rewrite F.OBJ --report  the region census for one object
+    uv run python -m qbopt.price F.OBJ             what it costs, per architecture
+    uv run python tools/mutate.py                  put each bug back, check something notices
 
 A failing run leaves `build/e2e/<tag>/` complete -- sources, objects, maps,
 both executables, both outputs, the batch files and the generated

@@ -8,9 +8,12 @@ import pytest
 
 from helpers import hx
 from qbopt import module
+from qbopt.flags import Flag
+from qbopt.lift import FIXUP
 from qbopt.calls import match
 from qbopt.calls import sites
 from qbopt.calls import DIVIDE
+from qbopt.calls import absorb
 from qbopt.calls import COMPARE
 from qbopt.calls import LEFT_FIRST
 from qbopt.blocks import instructions
@@ -70,3 +73,19 @@ def test_a_pushed_constant_is_not_a_static(fixtures: Path) -> None:
     immediate = decode(hx("66 68 78 56 34 12"), 0)  # push dword 0x12345678
     assert immediate is not None
     assert static_at(parsed, immediate) is None
+
+
+def test_an_absorbed_comparison_leaves_no_value_to_restore(fixtures: Path) -> None:
+    # A comparison's answer is in the flags. Appending the sequence that puts a
+    # long's high half back wastes four bytes and clobbers ax and dx, which the
+    # code after the call is entitled to still hold. It happened: `site.name is
+    # COMPARE` compares identity, and two equal strings need not be one object.
+    parsed = module.load(fixtures / "cmpord-v-g3.obj")
+    assert parsed is not None
+    reached = instructions(parsed)
+    assert not isinstance(reached, str)
+    site = next(s for s in sites(parsed, reached) if s.name == COMPARE)
+    emitted = absorb(site, Flag.NONE)
+    assert not isinstance(emitted, str)
+    assert len(emitted.code) == 9, "mov eax,[a] then cmp eax,[b], and nothing else"
+    assert FIXUP[0] not in emitted.code

@@ -32,7 +32,13 @@ quote-style = "double"
 [tool.ruff.lint]
 select = ["E", "F", "W", "UP", "B", "SIM", "ANN"]
 
+[tool.ruff.lint.per-file-ignores]
+# vendored from the runtime pass and kept as it was, so the diff against the
+# source stays readable; see the header in each file
+"qbopt/cycles/*" = ["ALL"]
+
 [tool.isort]
+skip_glob = ["qbopt/cycles/*"]
 profile = "black"
 line_length = 120
 force_single_line = true
@@ -43,6 +49,13 @@ known_first_party = ["qbopt", "helpers"]
 
 [tool.ty.environment]
 extra-paths = ["tools", "tests"]
+
+[[tool.ty.overrides]]
+include = ["qbopt/cycles/*"]
+
+[tool.ty.overrides.rules]
+unresolved-attribute = "ignore"
+unresolved-import = "ignore"
 
 [tool.ty.rules]
 unresolved-import = "error"

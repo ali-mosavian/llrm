@@ -1,96 +1,81 @@
-#!/usr/bin/env python3
 """
-Price what the pass does, in cycles rather than bytes.
+What the pass costs, in cycles rather than bytes.
 
-Bytes are a proxy and not the thing: a shorter sequence with a dependency
-chain through one register can be slower than a longer one, and the fixups
-that put dx and bx back are three bytes each but sit at the end of a chain.
-tools/cycles knows the difference, so ask it.
+Bytes are a proxy and not the thing: a shorter sequence with a dependency chain
+through one register can be slower than a longer one, and putting the high half
+back sits at the end of a chain. qbopt/cycles knows the difference, so ask it.
 
-    uv run python -m qbopt.price PROG.EXE PROG.MAP
+    uv run python -m qbopt.price FILE.OBJ
+
+Every figure is a published latency rather than a measurement, so what comes out
+is a ranking. DOSBox charges per instruction and models no latency, so it
+answers only for an in-order machine; these two disagree on purpose.
 """
 
 import sys
-import struct
+import argparse
 from pathlib import Path
+from dataclasses import dataclass
 
-# cycles and timings are not vendored yet, so this module does not run. It is
-# rewritten to take an .OBJ, and they are copied in, in the measurement phase.
-from cycles import report  # ty: ignore[unresolved-import]
-from timings import ARCHS  # ty: ignore[unresolved-import]
+from qbopt import omf
+from qbopt.cycles import ARCHS
+from qbopt.rewrite import plan
+from qbopt.cycles import report
 
-from qbopt.flags import ALL
-from qbopt.lift import lift
-from qbopt.lift import needed
-from qbopt.lift import regions
-from qbopt.lift import emit_region
+# what the two models mean, in the order cycles.report gives them
+STANDING = 0, "standing alone -- the sequence waits on its own chain"
+BACK_TO_BACK = 1, "back to back -- the machine has other work to overlap"
 
 
-def main() -> int:
-    exe, mp = sys.argv[1], sys.argv[2]
-    d = Path(exe).read_bytes()
-    hdr = struct.unpack_from("<H", d, 8)[0] * 16
-    n = 0
-    for line in Path(mp).read_text().splitlines():
-        f = line.split()
-        if len(f) >= 5 and f[4] == "BC_CODE":
-            n = max(n, int(f[1][:-1], 16) + 1)
-    b = d[hdr : hdr + n]
-    v, _ = lift(b, 0, n)
-    need = needed(v)
+@dataclass(frozen=True, slots=True)
+class Priced:
+    at: int
+    before_instructions: int
+    after_instructions: int
+    before: tuple[list[float], ...]
+    after: tuple[list[float], ...]
 
-    tb = ta = 0
-    rows = []
-    for reg in regions(v):
-        at, end = v[reg[0]].at, v[reg[-1]].end
-        # no CFG here, so the flags after a region are unknown and every one of
-        # them has to be assumed live. The measurement phase gives this a module.
-        emitted = emit_region(v, need, reg, ALL)
-        if not emitted or len(emitted.code) > end - at:
+
+def priced(records: list[omf.Record]) -> list[Priced]:
+    out = []
+    for one in plan(records):
+        region = one.region
+        if not region.taken or region.after is None:
             continue
-        out = emitted.code
-        core = len(out)
-        while core > 0 and out[core - 1] == 0x90:
-            core -= 1
-        if core >= 2 and out[core - 2] == 0xEB:
-            core -= 2
-        _, bi, bc, _ = report("before", b[at:end].hex())
-        _, ai, ac, _ = report("after", out[:core].hex())
-        rows.append((at, end - at, bi, ai, bc, ac))
+        _n, before_count, before_cost, _d = report("before", region.before)
+        _n, after_count, after_cost, _d = report("after", region.after)
+        out.append(Priced(region.at, before_count, after_count, before_cost, after_cost))
+    return out
 
+
+def show(rows: list[Priced]) -> None:
     if not rows:
         print("no regions taken")
-        return 0
-    ib = ia = 0
-    for which, title in (
-        (0, "standing alone -- the sequence waits on its own chain"),
-        (1, "back to back -- the machine has other work to overlap"),
-    ):
-        tb = [0] * len(ARCHS)
-        ta = [0] * len(ARCHS)
-        ib = ia = 0
-        for _at, _nb, bi, ai, bc, ac in rows:
-            ib += bi
-            ia += ai
-            for k in range(len(ARCHS)):
-                tb[k] += bc[which][k]
-                ta[k] += ac[which][k]
+        return
+    for which, title in (STANDING, BACK_TO_BACK):
+        before = [sum(row.before[which][n] for row in rows) for n in range(len(ARCHS))]
+        after = [sum(row.after[which][n] for row in rows) for n in range(len(ARCHS))]
         print()
         print(title)
-        print(f"{'':16}" + "".join(f"{a:>8}" for a in ARCHS))
-        print(f"{'BC emits':16}" + "".join(f"{x:>8g}" for x in tb))
-        print(f"{'rewritten':16}" + "".join(f"{x:>8g}" for x in ta))
-        print(f"{'speedup':16}" + "".join(f"{tb[k] / ta[k]:>7.2f}x" for k in range(len(ARCHS))))
+        print(f"{'':16}" + "".join(f"{arch:>8}" for arch in ARCHS))
+        print(f"{'BC emits':16}" + "".join(f"{x:>8g}" for x in before))
+        print(f"{'rewritten':16}" + "".join(f"{x:>8g}" for x in after))
+        print(
+            f"{'speedup':16}"
+            + "".join(f"{b / a:>7.2f}x" if a else f"{'-':>8}" for b, a in zip(before, after, strict=True))
+        )
+
+    kept = sum(row.before_instructions for row in rows)
+    now = sum(row.after_instructions for row in rows)
     print()
-    print(f"instructions {ib} -> {ia}, {ib / ia:.2f}x")
-    print()
-    print("BC's two 16-bit halves are independent chains, one through ax and one")
-    print("through dx, and an out-of-order machine already runs them together.")
-    print("Widening puts everything through one register, so it halves the")
-    print("instruction count and leaves the dependency chain where it was. That")
-    print("is most of the win on an in-order 486 or P5 and almost none of it on")
-    print("anything later. DOSBox charges per instruction, so its 1.41x is the")
-    print("in-order answer.")
+    print(f"{len(rows)} regions, instructions {kept} -> {now}, {kept / now:.2f}x")
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(prog="qbopt.price")
+    ap.add_argument("object", type=Path)
+    args = ap.parse_args(argv)
+    show(priced(omf.read(args.object)))
     return 0
 
 
