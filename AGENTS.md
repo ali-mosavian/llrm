@@ -343,6 +343,10 @@ than the runtime pass's blunter option of costing the whole module.
 - `pre-commit` runs ruff, ruff-format, the whitespace hooks, `ty`, and the
   whole test suite -- every tier, including the ones that need DOSBox and the
   DOS toolchains. Nothing is committed on a partial run.
+- **While working, run only the tests for the files being changed.** The
+  whole suite above is the commit gate, not the inner loop -- point pytest at
+  the specific test file, or use `-m "not e2e"` for a fast host-only pass,
+  and save the full run for right before committing.
 
 ## Writing
 
