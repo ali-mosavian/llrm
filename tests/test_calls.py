@@ -18,7 +18,6 @@ from qbopt.calls import absorb
 from qbopt.calls import COMPARE
 from qbopt.calls import Operand
 from qbopt.calls import CallSite
-from qbopt.calls import FIX_SHIFT
 from qbopt.calls import LEFT_FIRST
 from qbopt.calls import FIX_MULTIPLY
 from qbopt.calls import fix_multiply
@@ -97,6 +96,12 @@ def test_an_absorbed_comparison_leaves_no_value_to_restore(fixtures: Path) -> No
     assert FIXUP[0] not in emitted.code
 
 
+# the opcode's third byte is the only difference between the shrd forms:
+# AC takes an imm8 count, AD takes cl
+SHRD_IMM8 = bytes.fromhex("660fac")
+SHRD_CL = bytes.fromhex("660fad")
+
+
 def static_operand(offset: int) -> Operand:
     return Operand(Kind.STATIC, at=offset, length=1)
 
@@ -108,7 +113,9 @@ def constant_operand(value: int) -> Operand:
 def test_fix_multiply_is_one_imul_and_one_shrd_against_a_static() -> None:
     # mov eax,[a] / imul dword [b] / shrd eax,edx,16, then the high-half
     # restore BC reads through dx:ax the same way it does after a multiply.
-    site = CallSite(at=0, end=0, start=0, name=FIX_MULTIPLY, pushed=(static_operand(4), static_operand(0)))
+    site = CallSite(
+        at=0, end=0, start=0, name=FIX_MULTIPLY, pushed=(static_operand(4), static_operand(0), constant_operand(16))
+    )
     emitted = fix_multiply(site, Flag.NONE)
     assert not isinstance(emitted, str)
     assert len(emitted.code) == 18, "mov eax,[a] / imul dword [b] / shrd eax,edx,16, then the restore"
@@ -117,28 +124,61 @@ def test_fix_multiply_is_one_imul_and_one_shrd_against_a_static() -> None:
 
 
 def test_fix_multiply_against_a_constant_loads_it_first() -> None:
-    # imul has no immediate form that keeps the high half, so a constant right
-    # operand goes into a register before the multiply.
-    site = CallSite(at=0, end=0, start=0, name=FIX_MULTIPLY, pushed=(constant_operand(3), static_operand(0)))
+    # imul has no immediate form that keeps the high half, so a constant b
+    # goes into a register before the multiply.
+    site = CallSite(
+        at=0, end=0, start=0, name=FIX_MULTIPLY, pushed=(static_operand(4), constant_operand(3), constant_operand(16))
+    )
     emitted = fix_multiply(site, Flag.NONE)
     assert not isinstance(emitted, str)
-    assert len(emitted.relocations) == 1, "only the static operand has a fixup to reuse"
+    assert len(emitted.relocations) == 1, "only a's fixup is there to reuse"
+
+
+def test_fix_multiply_with_a_variable_shift_loads_cl() -> None:
+    # fixShift is always known at compile time in practice, but a variable
+    # still has to work: shrd's only other source for a count is cl.
+    site = CallSite(
+        at=0, end=0, start=0, name=FIX_MULTIPLY, pushed=(static_operand(4), static_operand(0), static_operand(8))
+    )
+    emitted = fix_multiply(site, Flag.NONE)
+    assert not isinstance(emitted, str)
+    assert len(emitted.relocations) == 3, "a, b and the shift each reuse a fixup"
+    assert SHRD_CL in emitted.code
+    assert SHRD_IMM8 not in emitted.code
+
+
+def test_fix_multiply_refuses_a_shift_that_cannot_normalise_32_bits() -> None:
+    site = CallSite(
+        at=0, end=0, start=0, name=FIX_MULTIPLY, pushed=(static_operand(4), static_operand(0), constant_operand(32))
+    )
+    refused = fix_multiply(site, Flag.NONE)
+    assert isinstance(refused, str)
 
 
 def test_fix_multiply_refuses_a_site_whose_flags_are_read() -> None:
-    site = CallSite(at=0, end=0, start=0, name=FIX_MULTIPLY, pushed=(static_operand(4), static_operand(0)))
+    site = CallSite(
+        at=0, end=0, start=0, name=FIX_MULTIPLY, pushed=(static_operand(4), static_operand(0), constant_operand(16))
+    )
     refused = fix_multiply(site, Flag.ZF)
     assert isinstance(refused, str)
 
 
 @pytest.mark.parametrize(
-    ("a", "b"),
-    [(65536, 131072), (-65536, 131072), (-65536, -131072), (2147483647, 2), (-2147483648, 65536)],
+    ("a", "b", "shift"),
+    [
+        (65536, 131072, 16),
+        (-65536, 131072, 16),
+        (-65536, -131072, 16),
+        (2147483647, 2, 16),
+        (-2147483648, 65536, 16),
+        (65536, 131072, 8),
+        (65536, 131072, 0),
+    ],
 )
-def test_fix_multiply_matches_the_64_bit_shift_it_means(a: int, b: int) -> None:
-    # (int32)(((int64)a * b) >> 16), truncated to 32 bits the way C does it and
-    # the way SHRD does it: no sign extension, because a 64-bit two's complement
-    # value's bits 16..47 do not depend on its sign.
-    want = ((a * b) >> FIX_SHIFT) & 0xFFFFFFFF
+def test_fix_multiply_matches_the_64_bit_shift_it_means(a: int, b: int, shift: int) -> None:
+    # (int32)(((int64)a * b) >> shift), truncated to 32 bits the way C does it
+    # and the way SHRD does it: no sign extension, because a 64-bit two's
+    # complement value's bits do not depend on its sign for a shift like this.
+    want = ((a * b) >> shift) & 0xFFFFFFFF
     want = want - 0x100000000 if want >= 0x80000000 else want
     assert -(2**31) <= want < 2**31

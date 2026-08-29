@@ -40,20 +40,30 @@ MULTIPLY = "B$MUI4"
 DIVIDE = "B$DVI4"
 REMAINDER = "B$RMI4"
 
-# A user-declared `declare function fixMul& (byval a as long, byval b as long)`
-# has no body anywhere -- LINK never sees it, because absorbing the call drops
-# its only fixup. BC never emits a type suffix into the EXTDEF, so the name it
-# writes is the identifier alone, uppercased the way every BASIC identifier is.
-# Measured: BC pushes a `declare`d function's arguments in the order written,
-# first argument first -- the runtime's own routines do not, which is what the
-# module docstring above is about, and is unrelated to this one.
+# A user-declared `declare function fixMul& (byval a as long, byval b as long,
+# byval fixShift as long)` has no body anywhere -- LINK never sees it, because
+# absorbing the call drops its only fixup. BC never emits a type suffix into
+# the EXTDEF, so the name it writes is the identifier alone, uppercased the
+# way every BASIC identifier is. Measured: BC pushes a `declare`d function's
+# arguments in the order written, first argument first -- the runtime's own
+# routines do not, which is what the module docstring above is about, and is
+# unrelated to this one.
+#
+# The shift is a third argument rather than a fixed constant: N.M times N.M is
+# N.2M, which does not fit back in 32 bits without the shift that undoes the
+# doubled fraction, and the width of that fraction is the caller's format to
+# choose, not this pass's to assume. fixShift is `as long` only so it reaches
+# the stack the same way a and b do -- one_operand() already knows every shape
+# that arrives in.
 FIX_MULTIPLY = "FIXMUL"
-FIX_SHIFT = 16  # 16.16 fixed point; a different format is a different name
 
 # True where the left operand is pushed first. Uniform across the compilers,
 # opposite between the two runtime routines. FIX_MULTIPLY is not the runtime's:
 # it is pushed in the order written, which happens to agree with COMPARE's.
 LEFT_FIRST = {COMPARE: True, MULTIPLY: False, DIVIDE: False, REMAINDER: False, FIX_MULTIPLY: True}
+
+# Every routine here takes two long arguments except fixMul&, which takes three.
+ARITY = {FIX_MULTIPLY: 3}
 
 # one dword per argument under VBDOS /G3, two words everywhere else
 PUSHES = {Code.PUSH_RM16, Code.PUSH_RM32}
@@ -165,16 +175,19 @@ def one_operand(module: Module, reached: list[Insn], last: int) -> Operand | Non
 def match(module: Module, reached: list[Insn], index: int) -> CallSite | None:
     """The call at `reached[index]` with its arguments, or None.
 
-    Refuses anything it cannot account for exactly: two long arguments, nothing
-    else in between, and every push adjacent to the next.
+    Refuses anything it cannot account for exactly: every long argument the
+    routine takes, nothing else in between, and every push adjacent to the
+    next.
     """
     call = reached[index]
-    if module.calls.get(call.at) not in LEFT_FIRST:
+    name = module.calls.get(call.at)
+    if name not in LEFT_FIRST:
         return None
+    arity = ARITY.get(name, 2)
 
     found: list[Operand] = []
     last = index - 1
-    while len(found) < 2 and last >= 0:
+    while len(found) < arity and last >= 0:
         if reached[last].end != (call.at if not found else reached[last + 1].at):
             return None
         operand = one_operand(module, reached, last)
@@ -182,10 +195,10 @@ def match(module: Module, reached: list[Insn], index: int) -> CallSite | None:
             return None
         found.append(operand)
         last -= operand.length
-    if len(found) != 2:
+    if len(found) != arity:
         return None
 
-    return CallSite(call.at, call.end, reached[last + 1].at, module.calls[call.at], (found[1], found[0]))
+    return CallSite(call.at, call.end, reached[last + 1].at, name, tuple(reversed(found)))
 
 
 def sites(module: Module, reached: list[Insn]) -> list[CallSite]:
@@ -348,20 +361,26 @@ def dividing(site: CallSite, live: Flag) -> Emitted | str:
 
 
 def fix_multiply(site: CallSite, live: Flag) -> Emitted | str:
-    """`fixMul&(a, b)` as C would write it: `(int32)(((int64)a * b) >> 16)`.
+    """`fixMul&(a, b, fixShift)`, as C would write the shift it means:
+    `(int32)(((int64)a * b) >> fixShift)`.
 
     One `imul` against the register form gives the full 64-bit product in
-    `edx:eax`, and `shrd` is a pure bit shift across the pair -- extracting bits
-    16..47 of a two's-complement value needs no sign extension, so it is right
-    whatever the signs of `a` and `b` are. Multiplication commutes exactly in
-    two's complement, so which argument loads into `eax` cannot change the
-    result; `LEFT_FIRST` records the order BC actually pushed them in, but
-    nothing here depends on it.
+    `edx:eax`, and `shrd` is a pure bit shift across the pair -- extracting a
+    32-bit window of a two's-complement value needs no sign correction, so it
+    is right whatever the signs of `a` and `b` are. Multiplication commutes
+    exactly in two's complement, so which of `a`/`b` loads into `eax` cannot
+    change the result; `LEFT_FIRST` records the order BC actually pushed them
+    in, but nothing here depends on it.
+
+    `fixShift` is always known at compile time in practice -- nobody picks
+    their fixed-point format at runtime -- so a literal goes straight into
+    `shrd`'s own immediate byte. A variable still works: it loads into `cl`,
+    the one register `shrd` can take a shift count from.
     """
     if live & ALL:
         return f"something reads {live & ALL!r} after it, and imul leaves the flags undefined"
 
-    left, right = site.operands
+    a, b, shift = site.pushed
     factor = Register.ECX
     steps: list[Instruction] = []
     relocated: dict[int, int] = {}
@@ -370,19 +389,28 @@ def fix_multiply(site: CallSite, live: Flag) -> Emitted | str:
         steps.append(insn)
         return len(steps) - 1
 
-    where = add(load_of(left))
-    if left.kind is Kind.STATIC and left.at is not None:
-        relocated[where] = left.at
+    where = add(load_of(a))
+    if a.kind is Kind.STATIC and a.at is not None:
+        relocated[where] = a.at
 
-    if right.kind is Kind.STATIC:
+    if b.kind is Kind.STATIC:
         where = add(Instruction.create_mem(Code.IMUL_RM32, MemoryOperand(displ=0, displ_size=2)))
-        if right.at is not None:
-            relocated[where] = right.at
+        if b.at is not None:
+            relocated[where] = b.at
     else:
-        add(Instruction.create_reg_i32(Code.MOV_R32_IMM32, factor, right.value))
+        add(Instruction.create_reg_i32(Code.MOV_R32_IMM32, factor, b.value))
         add(Instruction.create_reg(Code.IMUL_RM32, factor))
 
-    add(Instruction.create_reg_reg_i32(Code.SHRD_RM32_R32_IMM8, RESULT, Register.EDX, FIX_SHIFT))
+    if shift.kind is Kind.CONSTANT:
+        if not 0 <= shift.value < 32:
+            return f"a shift of {shift.value} normalises nothing back into 32 bits"
+        add(Instruction.create_reg_reg_i32(Code.SHRD_RM32_R32_IMM8, RESULT, Register.EDX, shift.value))
+    else:
+        where = add(Instruction.create_reg_mem(Code.MOV_R16_RM16, Register.CX, MemoryOperand(displ=0, displ_size=2)))
+        if shift.at is not None:
+            relocated[where] = shift.at
+        add(Instruction.create_reg_reg_reg(Code.SHRD_RM32_R32_CL, RESULT, Register.EDX, Register.CL))
+
     for insn in restoring():
         add(insn)
 

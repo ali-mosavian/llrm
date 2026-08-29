@@ -69,12 +69,12 @@ def test_fixmul_absorbs_and_links_where_bc_alone_cannot(tag: str) -> None:
     reached = instructions(parsed)
     assert not isinstance(reached, str)
     found = [s for s in sites(parsed, reached) if s.name == FIX_MULTIPLY]
-    assert len(found) == 5, "one fixMul& call per case in the program"
+    assert len(found) == 7, "one fixMul& call per case in the program"
 
     fixmul_bytes = {parsed.code[s.start : s.end].hex() for s in found}
     out, regions = rewrite(data, dry_run=False)
     fixmul_regions = [r for r in regions if r.before in fixmul_bytes]
-    assert len(fixmul_regions) == 5
+    assert len(fixmul_regions) == 7
     assert all(r.taken for r in fixmul_regions), [r.reason for r in fixmul_regions if not r.taken]
     live = {f.index for f in omf.fixups(omf.parse(out)) if f.target == "external"}
     assert FIX_MULTIPLY not in [n for i, n in enumerate(omf.externals(omf.parse(out))) if i in live], (

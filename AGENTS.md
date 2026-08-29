@@ -76,6 +76,18 @@ full matrix.
 - Procedures open with the frame size in `cx` and a far call into the
   runtime, and close with a far call and `retf n`. Module-level code has no
   prologue at all -- it starts straight after a 0x30-byte header.
+- **A `declare`d function's arguments are pushed in the order written**, first
+  argument first -- unlike the runtime's own routines, which push in whichever
+  order suits the specific one and are never uniform with each other. `AS
+  LONG` on a `DECLARE FUNCTION`'s own return type is rejected by PDS and
+  QB 4.5 with `Syntax error`; only the type suffix (`fixMul&`) compiles on all
+  three. See `qbopt/calls.py`'s `FIX_MULTIPLY`.
+- **A LEDATA record is flushed roughly every 128 bytes**, on QB 4.5 at least,
+  regardless of what statement is mid-emission when the threshold is crossed.
+  It is not a per-statement or per-line boundary; a single call's own pushes
+  and its call instruction can land in different records this way, and that
+  region is refused rather than risked. `suite/fixmul.bas` has to keep its
+  call sites apart for exactly this reason.
 
 ## What the runtime does that an instruction does not
 
