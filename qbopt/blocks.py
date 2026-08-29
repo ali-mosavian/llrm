@@ -87,9 +87,45 @@ def inline_table(module: Module, insn: Insn) -> tuple[int, int, list[int]] | Non
     return lo, hi, entries
 
 
+# MODULE_CODE in the QuickBASIC 4.5 runtime's addr.inc: a signature word, an
+# eight-byte module name and nineteen more words, 48 bytes. The runtime calls
+# the offset past it O_ENT, and rtinit.asm says the beginning of the user's
+# code is at that fixed offset from the module header.
+SIGNATURES = (b"bl", b"bm", b"br")
+ENTRY = 0x30
+
+# U_FLAG, the header's last word, records the switches BC was given. Under /V
+# or /W the module opens with a jump over a sixteen-byte event-poll routine
+# that only the runtime enters, at a fixed offset the same way the code is --
+# so nothing falls into it and reachability cannot find it unaided. QuickBASIC
+# 4.5 sets the bits and emits no stub; PDS and VBDOS emit one, in 14 of the
+# corpus's objects.
+U_FLAG = 0x2E
+EVENTS = 0x400 | 0x800  # u_sw_v, u_sw_w
+
+
+def has_header(module: Module) -> bool:
+    return module.code[:2] in SIGNATURES
+
+
+def event_stub(module: Module) -> int | None:
+    """Where the event-poll routine starts, in a module that carries one."""
+    if not has_header(module) or len(module.code) < U_FLAG + 2:
+        return None
+    if not int.from_bytes(module.code[U_FLAG : U_FLAG + 2], "little") & EVENTS:
+        return None
+    jump = decode(module.code, ENTRY)
+    if jump is None or terminator(jump) is not Ends.JUMP:
+        return None
+    return jump.end
+
+
 def walk(module: Module, entry: int) -> CodeMap | str:
     """Every byte reachable as an instruction, from the entry points on."""
-    entries = sorted({entry} | module.targets | module.publics)
+    seeds = {entry} | module.targets | module.publics
+    if (stub := event_stub(module)) is not None:
+        seeds.add(stub)
+    entries = sorted(seeds)
 
     starts: set[int] = set()
     leaders = set(entries)
@@ -253,19 +289,27 @@ def operand_fields(module: Module, found: CodeMap, dead: list[Insn]) -> set[int]
 
 
 def code_map(module: Module) -> CodeMap | str:
-    """Where the code is, found rather than assumed.
+    """Where the code is: after the header, whose shape the runtime defines.
 
-    Nothing in the records names where module-level code begins: MODEND carries
-    no start address, and the header's own pointer is into the middle of the
-    module. So the entry is the earliest offset from which reachability explains
-    every byte after it. On this corpus that is always 0x30, which is the header
-    size the predecessor recorded -- but it is measured here, and a module where
-    no offset works is refused rather than guessed at.
+    Nothing in the OMF records names it -- MODEND's start-address bit is clear
+    on every object here. The BASIC runtime names it instead: MODULE_CODE in
+    QuickBASIC 4.5's runtime/inc/addr.inc is a fixed structure whose fields sum
+    to 48, and the offset past it is O_ENT = 48. Its first field is a signature
+    word, 'bl' for a BCOM module and 'bm' or 'br' for a BRUN one, so the layout
+    is checked rather than assumed. All 110 objects in the corpus carry one, as
+    do all 15 modules of qb-qrender.
+
+    Searching for the entry instead is what the signature replaces, and it was
+    wrong on 22 of those 110: a /G3 module opens with a 66-prefixed store, and
+    starting one byte into it puts the displacement field at the same offset, so
+    0x30 and 0x31 explain exactly the same fixups and the tie-break took the
+    later one. The search is still here for a module with no signature, where
+    there is nothing else to lean on.
     """
     why = "no offset gives a decode the fixups agree with"
     best: tuple[int, int, CodeMap] | None = None
 
-    for entry in range(HEADER_SEARCH):
+    for entry in [ENTRY] if has_header(module) else range(HEADER_SEARCH):
         found = walk(module, entry)
         if isinstance(found, str):
             continue

@@ -25,8 +25,6 @@ def obj(request: pytest.FixtureRequest) -> Path:
     return FIXTURES / request.param
 
 
-# /V /W builds put an event stub in the header that no record names, so nothing
-# can say where their code begins
 def _mappable(name: str) -> bool:
     found = module.load(FIXTURES / name)
     return found is not None and not isinstance(blocks.code_map(found), str)

@@ -29,11 +29,11 @@ COMPILERS = ["v-g3", "p-g2", "q-O"]
 # jumps included: its ON GOTO table is data inside the code segment, and moving
 # code past it works only because reachability knows the bytes after a B$OGTA
 # call are a table rather than instructions.
-# fpemu is deliberately absent: a nop ahead of its FP sites moves all 27 of
-# them and the program still runs, but only once the entry point is right. The
-# search in code_map picks 0x31 for it, one byte into a 66-prefixed store, and
-# the nop then lands inside an instruction. See docs/handover.md.
-MOVABLE = ["arith", "procs", "jumps"]
+# fpemu included: a nop ahead of it moves all 27 of its int 34h..3Bh sites, the
+# ones the FP emulator patches. It needs the entry to be right -- while that was
+# searched for, the search picked one byte into a 66-prefixed store and the nop
+# landed inside an instruction.
+MOVABLE = ["arith", "procs", "jumps", "fpemu"]
 
 CASES = [
     pytest.param(

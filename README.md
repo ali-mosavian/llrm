@@ -49,7 +49,7 @@ the module's own code segment. `tests/test_omf.py` asserts it.
 Measured over 110 objects of real BC output, across three compilers and twelve
 switch combinations:
 
-    1080 of 1166 regions taken, 21131 bytes -> 13530
+    1237 of 1332 regions taken, 24009 bytes -> 15321
 
 Two kinds of rewrite. A **region** of long arithmetic becomes 386 code: one
 32-bit operation where BC did two 16-bit ones, with the high half put back

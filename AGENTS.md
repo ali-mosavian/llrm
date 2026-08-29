@@ -147,6 +147,33 @@ never tested -- and a `jz` after a widened `AND` could go the other way.
   establishes that it is safe -- it moves all 27 of its sites and gets BC's
   own answers in all twelve configurations.
 
+## Where the code begins
+
+Nothing in the OMF records says: MODEND's start-address bit is clear on every
+object here. **The BASIC runtime says instead.** `MODULE_CODE` in QuickBASIC
+4.5's `runtime/inc/addr.inc` is a fixed structure -- a signature word, an
+eight-byte module name, nineteen more words -- summing to 48, and the offset
+past it is named `O_ENT`. `rtinit.asm` spells out the contract: the first
+module in the link is the entry point, and "the actual beginning of the users
+code is at a fixed offset (O_ENT) from this address". So the entry is 0x30, and
+the signature word makes it checkable rather than assumed: `bl` for a BCOM
+module, `bm` or `br` for a BRUN one. All 110 objects here carry one, as do all
+15 modules of qb-qrender.
+
+Searching for it instead is what this replaced, and the search was wrong on 22
+of the 110. A `/G3` module opens with a 66-prefixed 32-bit store, and starting
+one byte into it puts the displacement field at the same offset -- so 0x30 and
+0x31 explain exactly the same fixups, and a tie-break has nothing to separate
+them. The five `-zd` objects prove it independently: their own LINNUM records
+say 0x30 where the search said 0x31.
+
+**`U_FLAG`, the header's last word, records the switches BC was given** --
+`u_sw_v` is 0x400, `u_sw_w` 0x800, `u_sw_i` 0x4, `u_sw_x` 0x20. Under `/V` or
+`/W`, PDS and VBDOS open the module with `jmp short` over a sixteen-byte
+event-poll routine that only the runtime enters, so nothing falls into it and
+reachability cannot find it unaided. Seeding it is why every module maps now
+where fourteen did not. QuickBASIC 4.5 sets the same bits and emits no stub.
+
 ## Moving code
 
 The runtime pass could not, and that one constraint bounded everything: a

@@ -11,21 +11,23 @@ Measured 2026-08-29, over the 110 objects in `fixtures/omf`, with
 | | |
 |---|---|
 | objects | 110, 71204 bytes of code |
-| mapped | 102; 8 refused |
-| regions found | 1166 |
-| taken | 1080 |
-| their bytes | 21131 -> 13530, 35 per cent smaller |
+| mapped | 110; none refused |
+| regions found | 1332 |
+| taken | 1237 |
+| their bytes | 24009 -> 15321, 36 per cent smaller |
 
 Refused, by reason:
 
 | count | why |
 |---|---|
-| 66 | the region crosses a LEDATA boundary |
-| 14 | a single pair that widens to more bytes than BC wrote |
+| 73 | the region crosses a LEDATA boundary |
+| 16 | a single pair that widens to more bytes than BC wrote |
 | 6 | a line number points inside the region |
 
-The 8 unmapped are `/V /W` builds whose event stub sits in the header at an
-offset no record names.
+Every module maps. It did not before: the entry point was searched for, and the
+search picked one byte late on 22 objects and could not explain the `/V /W`
+event stub at all. Both are settled by the module header the QuickBASIC 4.5
+runtime defines -- see `docs/testing.md` and `AGENTS.md`.
 
 ## The real program
 

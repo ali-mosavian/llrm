@@ -10,15 +10,14 @@ from helpers import hx
 from qbopt import module
 from qbopt.blocks import PAD
 from qbopt.blocks import Ends
+from qbopt.blocks import ENTRY
 from qbopt.blocks import benign
 from qbopt.declen import decode
 from qbopt.blocks import code_map
+from qbopt.blocks import event_stub
+from qbopt.blocks import has_header
 from qbopt.blocks import terminator
 from qbopt.blocks import instructions
-
-# /V /W builds put an event stub in the header region that no record names, so
-# nothing can say where it begins; they are refused rather than guessed at.
-UNMAPPABLE = {f"{program}-{tag}.obj" for program in ("cmpord", "flags", "jumps", "procs") for tag in ("p-evt", "v-evt")}
 
 
 @pytest.mark.parametrize(
@@ -48,15 +47,40 @@ def test_what_ends_a_block(enc: str, ends: Ends) -> None:
     assert terminator(insn) is ends
 
 
-def test_every_module_is_mapped_or_says_why_not(obj: Path) -> None:
+def test_every_module_is_mapped(obj: Path) -> None:
     found = module.load(obj)
     assert found is not None
     mapped = code_map(found)
-    if obj.name in UNMAPPABLE:
-        assert isinstance(mapped, str)
-        assert "no entry point" in mapped
+    assert not isinstance(mapped, str), mapped
+
+
+def test_the_code_begins_where_the_runtime_says_it_does(obj: Path) -> None:
+    # MODULE_CODE in the QuickBASIC 4.5 runtime's addr.inc is 48 bytes and the
+    # offset past it is O_ENT; rtinit.asm calls that the beginning of the
+    # user's code. The signature word is the first field, so the layout can be
+    # checked rather than assumed.
+    found = module.load(obj)
+    assert found is not None
+    assert has_header(found), "every object BC wrote carries a module header"
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
+    assert min(mapped.starts) == ENTRY
+
+
+def test_only_an_event_build_has_a_stub_and_it_sits_after_the_jump(obj: Path) -> None:
+    # Under /V or /W, PDS and VBDOS open the module with a jump over a
+    # sixteen-byte event-poll routine that only the runtime enters. QuickBASIC
+    # 4.5 sets the same U_FLAG bits and emits no stub.
+    found = module.load(obj)
+    assert found is not None
+    stub = event_stub(found)
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
+    if stub is None:
+        assert found.code[ENTRY : ENTRY + 2] != b"\xeb\x10"
     else:
-        assert not isinstance(mapped, str), mapped
+        assert stub == ENTRY + 2
+        assert stub in mapped.starts, "seeded, or nothing reaches it"
 
 
 def test_the_instruction_stream_tiles(mapped_obj: Path) -> None:
