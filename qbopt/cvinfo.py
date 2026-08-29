@@ -119,6 +119,8 @@ from dataclasses import dataclass
 from collections.abc import Iterator
 
 from qbopt import omf
+from qbopt import extent
+from qbopt import module
 
 
 # $$SYMBOLS record kinds -- see docs/codeview.md's own table for each one's data.
@@ -130,14 +132,6 @@ class Kind(IntEnum):
     LDATA = 0x05
     LABEL = 0x0B
 
-
-# Every object measured -- every program in suite/, every compiler -- starts
-# its code segment with exactly this many bytes before the module's own first
-# statement. Fixed, not derived from the BLOCK record: BLOCK's own two u16
-# fields looked like [entry-stub, code-length-after-it] at first, but they
-# just sum to the whole segment's length, procedures included -- not a
-# main-body boundary. This constant is.
-ENTRY_STUB = 0x30
 
 # type_index -> BASIC scalar type, for the codes that turned up on a DIM or a
 # parameter's own record. STRING has two: which one a compiler picks looks
@@ -531,15 +525,6 @@ class Procedure:
 
 
 @dataclass(frozen=True, slots=True)
-class MainBody:
-    """The module's own top-level code: past the entry stub, before the
-    first SUB/FUNCTION -- or to the end of the segment, if there is none."""
-
-    offset: int
-    length: int
-
-
-@dataclass(frozen=True, slots=True)
 class DebugInfo:
     module: str | None
     procedures: list[Procedure]
@@ -547,13 +532,6 @@ class DebugInfo:
     labels: list[Label]
     types: dict[int, TypeEntry] = field(default_factory=dict)
     code_length: int = 0
-
-    @property
-    def main_body(self) -> MainBody | None:
-        if self.code_length <= ENTRY_STUB:
-            return None
-        end = min((p.offset for p in self.procedures), default=self.code_length)
-        return MainBody(ENTRY_STUB, end - ENTRY_STUB)
 
 
 def _pstr(buf: bytes, at: int) -> tuple[str, int]:
@@ -661,16 +639,34 @@ def _fmt_fields(type_index: int, types: dict[int, TypeEntry], indent: str) -> li
     ]
 
 
+def _fmt_body(body: extent.Body) -> str:
+    ranges = ", ".join(f"{lo:#06x}-{hi:#06x}" for lo, hi in body.ranges)
+    label = body.name or body.kind.value
+    return f"  {body.kind.value:9} {label:<12} {ranges}  ({body.length} bytes)"
+
+
 def main(path: Path | str) -> None:
-    info = parse(omf.read(path))
+    records = omf.read(path)
     print(path)
+
+    # No CodeView needed for this part -- extent.py's own reachability answers
+    # it, and does so for every real object in the corpus, /Zi or not.
+    found = module.of(records)
+    if found is None:
+        print("  no code segment")
+    else:
+        found_partition = extent.partition(found)
+        if isinstance(found_partition, str):
+            print(f"  body partition refused: {found_partition}")
+        else:
+            for body in found_partition.bodies:
+                print(_fmt_body(body))
+
+    info = parse(records)
     if info.module is None:
         print("  no /Zi debug info ($$SYMBOLS is empty)")
         return
     print(f"  module: {info.module}")
-    if info.main_body:
-        mb = info.main_body
-        print(f"  main body  off={mb.offset:#06x} len={mb.length}")
     for proc in info.procedures:
         params = ", ".join(f"{p.name}:{_fmt_type(p.type_index, p.type_name)}" for p in proc.params)
         ret = f" returns {proc.return_type}" if proc.return_type else ""
