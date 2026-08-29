@@ -12,6 +12,8 @@ opposite between the two routines, and getting it backwards is a different
 answer rather than a crash.
 """
 
+from enum import StrEnum
+from dataclasses import replace
 from dataclasses import dataclass
 
 from iced_x86 import Code
@@ -41,13 +43,23 @@ LEFT_FIRST = {COMPARE: True, MULTIPLY: False, DIVIDE: False, REMAINDER: False}
 
 # one dword per argument under VBDOS /G3, two words everywhere else
 PUSHES = {Code.PUSH_RM16, Code.PUSH_RM32}
+CONSTANTS = {Code.PUSHW_IMM8, Code.PUSHD_IMM8, Code.PUSH_IMM16, Code.PUSHD_IMM32}
+WIDE_PUSHES = {Code.PUSH_RM32, Code.PUSHD_IMM8, Code.PUSHD_IMM32}
+
+
+class Kind(StrEnum):
+    STATIC = "static"  # a bare displacement, whose address is a fixup
+    CONSTANT = "constant"  # an immediate pushed straight to the stack
 
 
 @dataclass(frozen=True, slots=True)
 class Operand:
-    addr: Addr
-    # the displacement field it came from, so its fixup can be reused
-    at: int
+    kind: Kind
+    addr: Addr | None = None
+    # where the displacement field was, so its fixup can be reused
+    at: int | None = None
+    value: int = 0
+    length: int = 0  # instructions it took to push
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +69,6 @@ class CallSite:
     start: int  # where the first push begins
     name: str
     pushed: tuple[Operand, ...]  # in the order they reach the stack
-    wide: bool  # one dword push per argument, rather than two words
 
     @property
     def operands(self) -> tuple[Operand, Operand]:
@@ -66,51 +77,72 @@ class CallSite:
         return (first, second) if LEFT_FIRST[self.name] else (second, first)
 
 
-def pushed_operand(module: Module, insn: Insn) -> Operand | None:
-    """The static this instruction pushes, if that is what it does."""
+def static_at(module: Module, insn: Insn) -> Operand | None:
     if insn.code not in PUSHES or insn.disp_at is None or insn.memory_base != Register.NONE:
         return None
     addr = module.operands.get(insn.disp_at)
-    return Operand(addr, insn.disp_at) if addr is not None and addr.space is Space.SEGMENT else None
+    if addr is None or addr.space is not Space.SEGMENT:
+        return None
+    return Operand(Kind.STATIC, addr, insn.disp_at, length=1)
+
+
+def constant_at(insn: Insn) -> Operand | None:
+    if insn.code not in CONSTANTS or insn.imm_at is None:
+        return None
+    return Operand(Kind.CONSTANT, value=insn.insn.immediate(0), length=1)
+
+
+def one_operand(module: Module, reached: list[Insn], last: int) -> Operand | None:
+    """The long argument whose pushes end at `reached[last]`, or None.
+
+    A long reaches the stack either as one dword -- VBDOS /G3, and immediates
+    everywhere -- or as two words, high first. The `+2` on the word form is the
+    same discipline as the pair test in the lifter and fails the same silent way
+    if it is dropped.
+    """
+    insn = reached[last]
+    if insn.code in WIDE_PUSHES:
+        return static_at(module, insn) or constant_at(insn)
+
+    low = static_at(module, insn) or constant_at(insn)
+    if low is None or last == 0:
+        return None
+    high = static_at(module, reached[last - 1]) or constant_at(reached[last - 1])
+    if high is None or reached[last - 1].end != insn.at:
+        return None
+    if low.kind is not high.kind:
+        return None
+    if low.kind is Kind.STATIC:
+        if low.addr is None or high.addr != low.addr.plus(2):
+            return None
+        return replace(low, length=2)
+    return replace(low, value=(high.value << 16) | (low.value & 0xFFFF), length=2)
 
 
 def match(module: Module, reached: list[Insn], index: int) -> CallSite | None:
     """The call at `reached[index]` with its arguments, or None.
 
-    Refuses anything it cannot account for exactly: two long arguments, all of
-    them statics, and nothing else in between.
+    Refuses anything it cannot account for exactly: two long arguments, nothing
+    else in between, and every push adjacent to the next.
     """
     call = reached[index]
-    name = module.calls.get(call.at)
-    if name not in LEFT_FIRST:
+    if module.calls.get(call.at) not in LEFT_FIRST:
         return None
 
-    wide = reached[index - 1].code == Code.PUSH_RM32 if index else False
-    count = 2 if wide else 4
-    if index < count:
-        return None
-
-    window = reached[index - count : index]
-    if any(insn.end != later.at for insn, later in zip(window, window[1:], strict=False)):
-        return None
-    if window[-1].end != call.at:
-        return None
-
-    operands = [pushed_operand(module, insn) for insn in window]
-    if any(operand is None for operand in operands):
-        return None
-    found: list[Operand] = [operand for operand in operands if operand is not None]
-
-    if wide:
-        pushed = tuple(found)
-    else:
-        # two words each, high first, so the low one names the long
-        halves = [(found[0], found[1]), (found[2], found[3])]
-        if any(high.addr != low.addr.plus(2) for high, low in halves):
+    found: list[Operand] = []
+    last = index - 1
+    while len(found) < 2 and last >= 0:
+        if reached[last].end != (call.at if not found else reached[last + 1].at):
             return None
-        pushed = tuple(low for _high, low in halves)
+        operand = one_operand(module, reached, last)
+        if operand is None:
+            return None
+        found.append(operand)
+        last -= operand.length
+    if len(found) != 2:
+        return None
 
-    return CallSite(call.at, call.end, window[0].at, name, pushed, wide)
+    return CallSite(call.at, call.end, reached[last + 1].at, module.calls[call.at], (found[1], found[0]))
 
 
 def sites(module: Module, reached: list[Insn]) -> list[CallSite]:
@@ -138,14 +170,36 @@ ABSORBED = {COMPARE: Code.CMP_R32_RM32, MULTIPLY: Code.IMUL_R32_RM32}
 RESULT = Register.EAX  # what the runtime returns a long in, as ax:dx
 
 
+def load_of(operand: Operand) -> Instruction:
+    if operand.kind is Kind.CONSTANT:
+        return Instruction.create_reg_i32(Code.MOV_R32_IMM32, RESULT, operand.value)
+    return Instruction.create_reg_mem(Code.MOV_EAX_MOFFS32, RESULT, MemoryOperand(displ=0, displ_size=2))
+
+
+def fits_in_a_byte(value: int) -> bool:
+    return -128 <= value < 128
+
+
+def apply_to(name: str, operand: Operand) -> Instruction:
+    if operand.kind is not Kind.CONSTANT:
+        return Instruction.create_reg_mem(ABSORBED[name], RESULT, MemoryOperand(displ=0, displ_size=2))
+    # the sign-extended byte forms are two or three bytes shorter, and a long
+    # compared or multiplied by a small constant is the common case
+    short = fits_in_a_byte(operand.value)
+    if name is COMPARE:
+        code = Code.CMP_RM32_IMM8 if short else Code.CMP_EAX_IMM32
+        return Instruction.create_reg_i32(code, RESULT, operand.value)
+    code = Code.IMUL_R32_RM32_IMM8 if short else Code.IMUL_R32_RM32_IMM32
+    return Instruction.create_reg_reg_i32(code, RESULT, RESULT, operand.value)
+
+
 def absorb(site: CallSite, live: Flag) -> Emitted | str:
     """The call replaced by two 386 instructions, or why it cannot be.
 
-    Nine or fourteen bytes against fifteen and twenty-one, and it removes a far
+    Nine to sixteen bytes against fifteen and twenty-one, and it removes a far
     call and the routine behind it.
     """
-    operation = ABSORBED.get(site.name)
-    if operation is None:
+    if site.name not in ABSORBED:
         return f"{site.name} is not absorbed"
     if site.name is COMPARE and live & SYNTHESISED:
         return f"the site's {live & SYNTHESISED!r} comes from the runtime, not from a comparison"
@@ -156,11 +210,12 @@ def absorb(site: CallSite, live: Flag) -> Emitted | str:
     left, right = site.operands
     code = bytearray()
     relocations = []
-    for step, operand in ((Code.MOV_EAX_MOFFS32, left), (operation, right)):
+    for step, operand in ((load_of(left), left), (apply_to(site.name, right), right)):
         encoder = Encoder(BITNESS)
-        encoder.encode(Instruction.create_reg_mem(step, RESULT, MemoryOperand(displ=0, displ_size=2)), 0)
+        encoder.encode(step, 0)
         where = encoder.get_constant_offsets()
-        relocations.append((len(code) + where.displacement_offset, operand.at))
+        if operand.kind is Kind.STATIC and operand.at is not None:
+            relocations.append((len(code) + where.displacement_offset, operand.at))
         code += encoder.take_buffer()
 
     # a comparison leaves its answer in the flags; a multiply leaves a value, and

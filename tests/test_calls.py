@@ -61,12 +61,12 @@ def test_a_call_with_anything_between_the_pushes_is_refused(fixtures: Path) -> N
     assert match(parsed, reached[: index - 1] + reached[index:], index - 1) is None
 
 
-def test_a_push_of_something_that_is_not_a_static_is_not_an_operand(fixtures: Path) -> None:
+def test_a_pushed_constant_is_not_a_static(fixtures: Path) -> None:
     parsed = module.load(fixtures / "vbdos-g3.obj")
     assert parsed is not None
     from qbopt.declen import decode
-    from qbopt.calls import pushed_operand
+    from qbopt.calls import static_at
 
     immediate = decode(hx("66 68 78 56 34 12"), 0)  # push dword 0x12345678
     assert immediate is not None
-    assert pushed_operand(parsed, immediate) is None
+    assert static_at(parsed, immediate) is None
