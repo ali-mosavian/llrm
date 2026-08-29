@@ -16,6 +16,9 @@ from dataclasses import field
 from dataclasses import replace
 from dataclasses import dataclass
 
+from iced_x86 import Register
+from iced_x86 import Register_
+
 from qbopt import omf
 
 CALL_FAR = 0x9A
@@ -27,18 +30,28 @@ class Space(StrEnum):
     LITERAL = "abs"  # a displacement in the code that no fixup claims
 
 
+# base is only ever one of these two -- operand() in lift.py sets nothing
+# else -- so a name outside the pair prints as itself rather than nothing.
+INDEX_NAMES = {Register.SI: "si", Register.DI: "di"}
+
+
 @dataclass(frozen=True, slots=True)
 class Addr:
     space: Space
     disp: int
     index: int = 0
+    # NONE for a bare displacement; an array element also carries the
+    # register its offset was indexed by, since two elements at the same
+    # displacement are not the same address unless that register agrees too.
+    base: Register_ = Register.NONE
 
     def plus(self, bytes_along: int) -> "Addr":
         return replace(self, disp=self.disp + bytes_along)
 
     def __repr__(self) -> str:
         where = f"{self.space}:{self.index}" if self.space is Space.SEGMENT else self.space
-        return f"[{where}{self.disp:+#x}]"
+        indexed = f"+{INDEX_NAMES.get(self.base, f'r{self.base}')}" if self.base != Register.NONE else ""
+        return f"[{where}{indexed}{self.disp:+#x}]"
 
 
 @dataclass(frozen=True, slots=True)

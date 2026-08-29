@@ -131,8 +131,10 @@ MUTATIONS = (
     Mutation(
         "relocated-operand-not-zero",
         "qbopt/lift.py",
-        "case Addr(space=Space.SEGMENT):\n            return MemoryOperand(displ=0, displ_size=2)",
-        "case Addr(space=Space.SEGMENT, disp=d):\n            return MemoryOperand(displ=d, displ_size=2)",
+        "case Addr(space=Space.SEGMENT, base=base):\n"
+        "            return MemoryOperand(base=base, displ=0, displ_size=2)",
+        "case Addr(space=Space.SEGMENT, base=base, disp=d):\n"
+        "            return MemoryOperand(base=base, displ=d, displ_size=2)",
         "a relocated operand emitted with its address in the code, which LINK adds to",
     ),
 )

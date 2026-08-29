@@ -23,6 +23,7 @@ this does not understand may write either of them.
 """
 
 from enum import StrEnum
+from dataclasses import replace
 from dataclasses import dataclass
 from collections.abc import Callable
 
@@ -66,7 +67,6 @@ class Decoded:
     src_pair: int = 0
     alu: int | None = None
     mem: Addr | None = None
-    base: int = 0
     dlen: int = 0
     # where the displacement field sat, so the fixup that named it can be found
     disp_at: int | None = None
@@ -93,7 +93,6 @@ class Value:
     mem: Addr | None = None
     pair: int = 0
     src_pair: int = 0
-    base: int = 0x06
     dlen: int = 2
     mem_at: int | None = None
 
@@ -145,15 +144,20 @@ def operand(insn: Insn, resolve: Resolver) -> Addr | None:
 
     A bare displacement is a static, and its address is not in the code: the
     field holds zero and the fixup names the target. bp-relative is a local or a
-    spilled temporary, and its displacement really is in the code.
+    spilled temporary, and its displacement really is in the code. An array
+    element is still a fixup-backed static -- the fixup names the array's own
+    base -- but two elements at the same displacement are different addresses
+    unless the register indexing them agrees too, so that register comes along.
     """
-    if insn.disp_at is None:
+    if insn.disp_at is None or insn.insn.memory_index != Register.NONE:
         return None
     match insn.memory_base:
         case Register.NONE:
             return resolve(insn.disp_at, insn.insn.memory_displacement)
         case Register.BP:
             return frame_relative(insn.displacement)
+        case Register.SI | Register.DI:
+            return replace(resolve(insn.disp_at, insn.insn.memory_displacement), base=insn.memory_base)
         case _:
             return None
 
@@ -240,7 +244,6 @@ def widened(
         end=at + span,
         pair=shape.pair,
         src_pair=shape.src_pair,
-        base=shape.base,
         dlen=shape.dlen,
         mem=mem,
         mem_at=mem_at,
@@ -257,7 +260,6 @@ def pairs_with(first: Decoded, second: Decoded) -> bool:
         and second.pair == first.pair
         and second.src_pair == first.src_pair
         and second.half != first.half
-        and second.base == first.base
     )
 
 
@@ -456,15 +458,19 @@ def memory(value: Value) -> MemoryOperand:
     """The operand as the widened instruction has to carry it.
 
     A relocated address is emitted as zero: LINK adds what is in the code to the
-    fixup's target, so anything else would be added to the real address.
+    fixup's target, so anything else would be added to the real address. An
+    array element's fixup names the array's own base the same way, but the
+    element it means also depends on whatever register indexes it -- carried
+    through as the operand's own base, never optimised away to a bare
+    displacement, which would silently mean a different element.
     """
     match value.mem:
-        case Addr(space=Space.SEGMENT):
-            return MemoryOperand(displ=0, displ_size=2)
+        case Addr(space=Space.SEGMENT, base=base):
+            return MemoryOperand(base=base, displ=0, displ_size=2)
         case Addr(space=Space.FRAME, disp=disp):
             return MemoryOperand(base=Register.BP, displ=disp, displ_size=value.dlen or 1)
-        case Addr(disp=disp):
-            return MemoryOperand(displ=disp, displ_size=2)
+        case Addr(disp=disp, base=base):
+            return MemoryOperand(base=base, displ=disp, displ_size=2)
         case _:
             raise ValueError(f"{value.op} has no memory operand")
 
@@ -473,8 +479,14 @@ def instruction(value: Value) -> Instruction:
     """The one 386 instruction this value becomes."""
     wide = WIDE_REGISTER[value.pair]
     source = WIDE_REGISTER[value.src_pair]
-    # pair 0 is eax, so a bare displacement takes the shorter moffs form
-    moffs = value.pair == 0 and value.mem is not None and value.mem.space is not Space.FRAME
+    # pair 0 is eax, so a bare displacement takes the shorter moffs form --
+    # but moffs has no ModRM byte at all, so it cannot carry an index register
+    moffs = (
+        value.pair == 0
+        and value.mem is not None
+        and value.mem.space is not Space.FRAME
+        and value.mem.base == Register.NONE
+    )
     match value.op:
         case Op.LOAD if moffs:
             return Instruction.create_reg_mem(Code.MOV_EAX_MOFFS32, wide, memory(value))

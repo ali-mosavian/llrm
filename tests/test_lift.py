@@ -9,6 +9,7 @@ about the piece that happened not to run.
 """
 
 import pytest
+from iced_x86 import Register
 
 from helpers import hx
 from qbopt.lift import Op
@@ -299,14 +300,53 @@ def test_a_relocated_operand_is_emitted_as_zero() -> None:
     # 2 into a field and watching the linked address move by 2. So a widened
     # instruction has to hold zero and let the fixup carry the address, exactly
     # as BC does.
-    value = Value(Op.LOAD, at=0, end=7, mem=Addr(Space.SEGMENT, 0x1234, 5), mem_at=1, base=0x06, dlen=2)
+    value = Value(Op.LOAD, at=0, end=7, mem=Addr(Space.SEGMENT, 0x1234, 5), mem_at=1, dlen=2)
     emitted = emit(value)
     assert emitted.code == hx("66 A1 00 00")
     assert emitted.relocations == ((2, 1),), "and it says which bytes need the fixup"
 
 
 def test_an_operand_that_is_not_relocated_keeps_its_displacement() -> None:
-    value = Value(Op.LOAD, at=0, end=7, mem=Addr(Space.FRAME, -24), base=0x46, dlen=1)
+    value = Value(Op.LOAD, at=0, end=7, mem=Addr(Space.FRAME, -24), dlen=1)
     emitted = emit(value)
     assert emitted.code == hx("66 8B 46 E8")
     assert emitted.relocations == ()
+
+
+def test_an_indexed_operand_keeps_its_index_register() -> None:
+    # A pair 0 load takes the shorter moffs form (`mov eax, [addr]`) when the
+    # operand is a bare displacement -- but moffs has no ModRM byte at all and
+    # cannot encode si, so an array element has to fall back to the general
+    # r32,rm32 form or it silently reads whatever else sits at that fixed
+    # address instead of the element si actually names.
+    value = Value(Op.LOAD, at=0, end=7, mem=Addr(Space.SEGMENT, 0x1234, 5, base=Register.SI), mem_at=1)
+    emitted = emit(value)
+    assert emitted.code == hx("66 8B 84 00 00"), "must be r32,rm32 with si as the base, not the moffs form"
+    assert emitted.relocations == ((3, 1),)
+
+
+def test_a_frame_address_also_indexed_is_refused() -> None:
+    # mov ax,[bp+si+8] -- memory_base is bp, so operand() took the frame
+    # branch and dropped si silently, misreading it as the plain local at
+    # [bp+8]. BC's own [bx+si] shape (176 sites in the corpus) is refused the
+    # same way already; this is the same mistake one register over.
+    assert classify_code(hx("8B 42 08")) is None
+
+
+def test_an_indexed_literal_operand_keeps_its_index_register_too() -> None:
+    # The same hazard as the SEGMENT case, but for an address no fixup claims
+    # -- a `byval as long` parameter dereferenced through si, the shape
+    # procs-*.obj already emits for `[si]` itself; one field further into a
+    # multi-field structure and it would be `[si+4]` and silently lose si.
+    value = Value(Op.LOAD, at=0, end=7, mem=Addr(Space.LITERAL, 4, base=Register.SI))
+    emitted = emit(value)
+    assert emitted.code == hx("66 8B 84 04 00"), "must keep si, not fall back to a bare [0x0004]"
+
+
+def test_two_elements_at_the_same_offset_are_not_the_same_address() -> None:
+    # [si+X] and [di+X] are different addresses -- pairing them as one long's
+    # low and high half would read one array's element through the other's
+    # index register.
+    low = Addr(Space.SEGMENT, 0x10, 5, base=Register.SI)
+    high = Addr(Space.SEGMENT, 0x12, 5, base=Register.DI)
+    assert high != low.plus(2)
