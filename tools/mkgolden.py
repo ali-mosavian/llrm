@@ -177,13 +177,11 @@ def nbody() -> list[str]:
     every negative operand here -- and half the deltas are negative.
     """
 
-    def shift(value: int, by: int) -> int:
-        return -((-value) // by) if value < 0 else value // by
-
     def divide(top: int, bottom: int) -> int:
         return -(-top // bottom) if (top < 0) != (bottom < 0) else top // bottom
 
-    bodies, one, soften, pull = 6, 65536, 65536, 65536
+    bodies, one, damp = 6, 512, 4
+    soften, pull = one * one, one
     pos_x = [(i * 7 - 15) * one for i in range(bodies)]
     pos_y = [(i * 5 - 12) * one for i in range(bodies)]
     vel_x = [0] * bodies
@@ -197,12 +195,14 @@ def nbody() -> list[str]:
                     continue
                 delta_x = pos_x[other] - pos_x[body]
                 delta_y = pos_y[other] - pos_y[body]
-                dist2 = shift(delta_x, 256) ** 2 + shift(delta_y, 256) ** 2 + soften
-                falloff = divide(pull, shift(dist2, one) + 1)
-                acc_x += shift(shift(delta_x, 256) * falloff, 256)
-                acc_y += shift(shift(delta_y, 256) * falloff, 256)
+                dist2 = delta_x * delta_x + delta_y * delta_y + soften
+                falloff = divide(pull, divide(dist2, one * one) + 1)
+                acc_x += divide(delta_x * falloff, one)
+                acc_y += divide(delta_y * falloff, one)
             vel_x[body] += acc_x
             vel_y[body] += acc_y
+            vel_x[body] -= divide(vel_x[body], 1 << damp)
+            vel_y[body] -= divide(vel_y[body], 1 << damp)
         for body in range(bodies):
             pos_x[body] += vel_x[body]
             pos_y[body] += vel_y[body]

@@ -1,27 +1,36 @@
-' A 32-bit fixed-point n-body integrator: what a DOS program does when it has
-' real arithmetic to do and no coprocessor to do it with. Every quantity is a
-' long in 16.16, so the inner loop is long subtract, multiply, divide, add and
-' compare and nothing else -- runs of them, which is the shape the pass exists
-' for and the shape qb-qrender turned out not to have.
+' A 32-bit fixed-point n-body integrator, in a format BC's own long
+' multiply and divide can carry without an intermediate wider than 32 bits.
 '
-' Two multiplies, because 32 bits will not hold a 16.16 product directly:
+' 16.16 needed a 64-bit product for a*b: N.M times N.M is N.2M, and 2*16=32
+' already fills a long before the shift back down. 9 fraction bits does not:
+' the quantity squared here is a position delta, and this simulation never
+' lets one exceed about 5,500 raw, so deltaX * deltaX stays under 15 per
+' cent of a long -- exactly what BC's own `*` compiles to, a call to
+' B$MUI4, which qbopt absorbs into one imul. Nothing here needs a callee
+' with no library body, which is the point: this program has a base build
+' BC alone can link, and fixMul& never does.
 '
-'     both operands large     (a \ 256) * (b \ 256)
-'     the second one small    ((a \ 256) * b) \ 256
+' Measured rather than picked round: 9 is the most fraction bits this
+' simulation's own range affords before a bare `*` overflows. 8 was tried
+' first and needs `PULL` boosted eight times over to keep 1/dist2 from
+' truncating to zero on most steps -- and even then the bodies fly apart
+' fast enough to overflow dist2 within a few thousand steps. 9, at the
+' simulation's natural pull strength and a velocity that loses a sixteenth
+' each step, converges to a stable orbit instead: the worst intermediate
+' measured at 1000 steps is the same one measured at 100, 15 per cent of a
+' long for a single multiply and 23 per cent for dist2's sum of two. 10 is
+' the last width that does not overflow outright, but leaves under 10 per
+' cent of that margin and was not chosen for it.
 '
-' Shifting both operands down by eight annihilates one that is under 1.0, and
-' shifting neither overflows. Which form applies is decided by magnitude, which
-' is the arithmetic a 386 leaves to whoever is writing it. The largest
-' intermediate any of this reaches is 13 per cent of a long.
-'
-' The step count comes from the command line, so one program serves as both the
-' differential's case and the benchmark's: no argument means 100 steps, which
-' is what tools/mkgolden.py authors.
+' The step count comes from the command line, so one program serves as both
+' the differential's case and the benchmark's: no argument means 100 steps,
+' which is what tools/mkgolden.py authors.
 defint a-z
 const BODIES = 6
-const ONE = 65536
-const SOFTEN = 65536
-const PULL = 65536
+const ONE = 512&  ' & matters: untyped, 512*512 folds as INTEGER and wraps to 0
+const SOFTEN = ONE * ONE
+const PULL = ONE
+const DAMP = 4  ' velocity loses 1/(2^DAMP) each step
 
 dim posX(BODIES) as long
 dim posY(BODIES) as long
@@ -57,14 +66,16 @@ for stepNo = 1 to stepCount
             if other <> body then
                 deltaX = posX(other) - posX(body)
                 deltaY = posY(other) - posY(body)
-                dist2 = (deltaX \ 256) * (deltaX \ 256) + (deltaY \ 256) * (deltaY \ 256) + SOFTEN
-                falloff = PULL \ (dist2 \ ONE + 1)
-                accX = accX + ((deltaX \ 256) * falloff) \ 256
-                accY = accY + ((deltaY \ 256) * falloff) \ 256
+                dist2 = deltaX * deltaX + deltaY * deltaY + SOFTEN
+                falloff = PULL \ (dist2 \ (ONE * ONE) + 1)
+                accX = accX + (deltaX * falloff) \ ONE
+                accY = accY + (deltaY * falloff) \ ONE
             end if
         next
         velX(body) = velX(body) + accX
         velY(body) = velY(body) + accY
+        velX(body) = velX(body) - velX(body) \ (2 ^ DAMP)
+        velY(body) = velY(body) - velY(body) \ (2 ^ DAMP)
     next
     for body = 0 to BODIES - 1
         posX(body) = posX(body) + velX(body)
