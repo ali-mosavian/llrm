@@ -73,11 +73,17 @@ CONFIGS = {
 
 # Switches a particular program needs, on top of the configuration's own. /X is
 # what lets an error handler RESUME, and all three compilers take it.
-EXTRA = {"divmod": "/X"}
+EXTRA = {"divmod": "/X", "ctrap": "/X"}
 
 
 def switches_for(config: Config, program: str) -> str:
     return f"{config.switches} {EXTRA[program]}".strip() if program in EXTRA else config.switches
 
+
+# Programs whose rewritten form is meant to disagree with what BC built. There
+# is one, and it is where the divide's C semantics are pinned: the baseline
+# raises a BASIC error on a zero divisor and qbopt's divide does not fault at
+# all. These are checked against the golden alone.
+DIVERGES = {"ctrap"}
 
 TAGS = list(CONFIGS)

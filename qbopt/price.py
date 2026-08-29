@@ -10,6 +10,14 @@ back sits at the end of a chain. qbopt/cycles knows the difference, so ask it.
 Every figure is a published latency rather than a measurement, so what comes out
 is a ranking. DOSBox charges per instruction and models no latency, so it
 answers only for an in-order machine; these two disagree on purpose.
+
+**This prices what is in the object and nothing else.** BC's side of an absorbed
+call is `push / push / call`, three instructions, and the routine behind the
+call is not in this module and is not counted. So an absorbed call reads as a
+large loss here and is not one: a guarded divide replaces a far call into a
+routine that normalises its operands one bit at a time, up to fifteen passes of
+twelve instructions. `python -m qbopt.cycles.cycles` holds those bodies and
+prices them; this cannot.
 """
 
 import sys

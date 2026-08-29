@@ -32,17 +32,6 @@ PRINT "DIVBIG="; b \ a
 PRINT "MODBIG="; b MOD a
 PRINT "MULSMALL="; a * 3
 
-zero = 0
-caught = 0
-r = a \ zero
-PRINT "DIVZERO="; caught
-
-low = -2147483647 - 1
-b = -1
-caught = 0
-r = low \ b
-PRINT "DIVEDGE="; caught
-
 a = 305419896
 b = 252645135
 caught = 0

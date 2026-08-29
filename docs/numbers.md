@@ -5,30 +5,32 @@ kind of number does and does not mean.
 
 ## Static: what the pass does to the corpus
 
-Measured 2026-08-29, over the 110 objects in `fixtures/omf`, with
+Measured 2026-08-29, over the 125 objects in `fixtures/omf`, with
 `uv run python tools/census.py`.
 
 | | |
 |---|---|
-| objects | 110, 73839 bytes of code |
-| mapped | 102; 8 refused |
-| regions found | 1196 |
-| taken | 932 |
-| their bytes | 18269 -> 10659, 41 per cent smaller |
+| objects | 125, 78663 bytes of code |
+| mapped | 117; 8 refused |
+| regions found | 1226 |
+| taken | 1139 |
+| their bytes | 22274 -> 17913, 19 per cent smaller |
 
 Refused, by reason:
 
 | count | why |
 |---|---|
-| 108 | `B$DVI4` is not absorbed |
-| 69 | `B$RMI4` is not absorbed |
-| the rest | LEDATA boundaries, single pairs that grow, swallowed line numbers |
+| 67 | the region crosses a LEDATA boundary |
+| 14 | a single pair that widens to more bytes than BC wrote |
+| 6 | a line number points inside the region |
+
+The byte saving fell from 41 per cent to 19 when divide and remainder were
+absorbed, because a guarded divide is thirty-six bytes against fifteen. That is
+the trade taken deliberately: what it buys is a far call and a routine that
+normalises its operands one bit at a time, which bytes do not measure.
 
 The 8 unmapped are `/V /W` builds whose event stub sits in the header at an
 offset no record names.
-
-Divide and remainder are refused on measured grounds rather than for want of
-work: see the trap figures in AGENTS.md.
 
 ## The real program
 
@@ -58,18 +60,30 @@ Of what is left refused, 96 of 101 are single pairs that widen to more bytes
 than BC wrote -- the shape a whole-procedure rewrite would fix and a per-region
 one cannot.
 
-## Modelled: cmpord-v-g3, 48 absorbed comparisons
+## Modelled
 
-`uv run python -m qbopt.price fixtures/omf/cmpord-v-g3.obj`, qbopt at 06e7967.
-Published latencies, so a ranking.
+`qbopt/price.py` prices what is in the object. That is the right answer for a
+widened region and the wrong one for an absorbed call: BC's side is three
+instructions and the routine behind the call is in the runtime library, so an
+absorbed call reads there as a large loss and is not one.
 
-| | 486 | P5 | P6 | K5 | K6 | K7 | Core |
-|---|---|---|---|---|---|---|---|
-| back to back | 5.60x | 2.00x | 31.00x | 9.00x | 6.71x | 8.14x | 45.00x |
+For the calls, `python -m qbopt.cycles.cycles` carries the routine bodies. A
+long multiply, standing alone, in cycles:
 
-Instructions 144 -> 96, 1.50x. The very large figures are what removing a far
-call and the routine behind it looks like to a model that prices the call; they
-are not a claim about wall-clock.
+| | ins | 486 | P5 | P6 | K5 | K6 | K7 | Core |
+|---|---|---|---|---|---|---|---|---|
+| `call B$MUI4`, fast path | 14 | 68 | 34 | 42 | 11 | 12 | 14 | 43 |
+| `call B$MUI4`, full path | 22 | 103 | 62 | 45 | 15 | 15 | 19 | 45 |
+| one 32-bit `imul` | 2 | 30 | 14 | 10 | 8 | 7 | 10 | 10 |
+
+That is what absorbing a call buys, and it is why a guarded divide is worth
+thirty-six bytes against fifteen. Divide's routine is worse than multiply's: it
+normalises its operands one bit at a time, twelve instructions per pass and up
+to fifteen passes.
+
+For a widened region, `cmpord-v-g3` with its 48 comparisons absorbed reports
+instructions 144 -> 96. The cycle columns from `price.py` on that object are not
+reproduced here, for the reason above.
 
 ## Dynamic
 

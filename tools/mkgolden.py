@@ -117,11 +117,6 @@ def divmod_() -> list[str]:
     lines.append(f"DIVBIG={num(divide(b, a))}")
     lines.append(f"MODBIG={num(remainder(b, a))}")
     lines.append(f"MULSMALL={num(s32(a * 3))}")
-    # Measured, not assumed. Division by zero is error 11. But the runtime
-    # returns from -2147483648 \\ -1 without raising anything, where idiv traps
-    # with #DE -- which is why divide is not absorbed.
-    lines.append(f"DIVZERO={num(11)}")
-    lines.append(f"DIVEDGE={num(0)}")
     # and it does not raise on multiply overflow either -- it wraps, which is
     # what imul does, which is why multiply is absorbed and divide is not
     lines.append(f"MULOVF={num(0)}")
@@ -140,6 +135,24 @@ def nots() -> list[str]:
     ]
 
 
+def ctrap() -> list[str]:
+    """C's answers, with the two traps defined rather than raised.
+
+    A zero divisor gives zero, which C leaves undefined and qbopt defines.
+    -2147483648 \\ -1 gives -2147483648, the wrapping answer idiv would produce
+    if it did not fault. Neither raises, so `caught` stays zero -- which is
+    where this deliberately disagrees with the program BC built.
+    """
+    low = -2147483648
+    return [
+        f"DIVZERO={seq(0, 0)}",
+        f"MODZERO={seq(0, 0)}",
+        f"DIVEDGE={seq(0, low)}",
+        f"MODEDGE={seq(0, 0)}",
+        "DONE",
+    ]
+
+
 PROGRAMS = {
     "arith": arith,
     "procs": procs,
@@ -148,6 +161,7 @@ PROGRAMS = {
     "flags": flags,
     "divmod": divmod_,
     "nots": nots,
+    "ctrap": ctrap,
 }
 
 

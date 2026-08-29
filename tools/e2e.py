@@ -28,6 +28,7 @@ from dosbox import launch
 from configs import Config
 from configs import CONFIGS
 from dosbox import read_dos
+from configs import DIVERGES
 from configs import switches_for
 
 from qbopt.rewrite import rewrite
@@ -118,14 +119,18 @@ def judge(work: Path, name: str) -> Verdict:
         return Verdict(name, "RUNFAIL", "the baseline produced no output")
     golden = lines((SUITE / "golden" / f"{name}.txt").read_text())
 
-    if base != golden:
+    diverges = name in DIVERGES
+    if base != golden and not diverges:
         return Verdict(name, "BASEDIFF", first_difference(golden, base))
     for who, out in (("baseline", base), ("rewritten", opt)):
         if not out or out[-1] != "DONE":
             return Verdict(name, "NODONE", f"the {who} run stopped early")
-    if opt != base:
-        return Verdict(name, "DIFF", first_difference(base, opt))
-    return Verdict(name, "PASS", f"{len(base) - 1} cases")
+    # where the rewrite is meant to disagree with BC, the golden is the only
+    # thing worth comparing against
+    want = golden if diverges else base
+    if opt != want:
+        return Verdict(name, "DIFF", first_difference(want, opt))
+    return Verdict(name, "PASS", f"{len(want) - 1} cases")
 
 
 def through_qbopt(data: bytes) -> bytes:

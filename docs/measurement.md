@@ -20,6 +20,11 @@ Published latencies for 486, P5, P6, K5, K6, K7 and Core.
 the tool most worth arguing with; `qbopt/cycles/timings.py` says so itself.
 Never quote one of these as a speedup.
 
+**And it prices only what is in the object.** BC's side of an absorbed call is
+three instructions; the routine behind the call is in the runtime library and is
+not counted. An absorbed call therefore reads as a large loss and is not one.
+`python -m qbopt.cycles.cycles` carries the routine bodies and prices them.
+
 ## Dynamic, from DOSBox
 
 **DOSBox charges per instruction and models no latency.** A ratio from it is an
