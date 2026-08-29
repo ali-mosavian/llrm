@@ -238,6 +238,34 @@ def fixmul() -> list[str]:
     return [*lines, "DONE"]
 
 
+def arrays() -> list[str]:
+    """suite/arrays.bas: array elements and a chained, unstored subexpression.
+
+    The two shapes the corpus has zero of and calls.py cannot absorb through
+    today -- an operand that is `x(i)`, not a named static, and a term like
+    `s \\ 1000 + 1` that only ever exists in a register.
+    """
+
+    def divide(top: int, bottom: int) -> int:
+        return -(-top // bottom) if (top < 0) != (bottom < 0) else top // bottom
+
+    n = 4
+    x = [s32((i + 1) * 100000) for i in range(n)]
+    y = [s32((i + 2) * 100000) for i in range(n)]
+
+    lines = []
+    for i in range(n):
+        p = s32(x[i] * y[i])
+        s = s32(divide(p, 1000) + 1000000)
+        f = divide(50000, divide(s, 1000) + 1)
+        r = divide(s32(x[i] * f), 512)
+        lines.append(f"P{i}=" + num(p))
+        lines.append(f"S{i}=" + num(s))
+        lines.append(f"F{i}=" + num(f))
+        lines.append(f"R{i}=" + num(r))
+    return [*lines, "DONE"]
+
+
 PROGRAMS = {
     "arith": arith,
     "procs": procs,
@@ -249,6 +277,7 @@ PROGRAMS = {
     "fpemu": fpemu,
     "nbody": nbody,
     "fixmul": fixmul,
+    "arrays": arrays,
 }
 
 
