@@ -74,17 +74,12 @@ Measured with `suite/divmod.bas`, which traps under `/X` and prints `ERR`:
 
 Multiply is absorbed as a bare `imul`, which matches.
 
-**Divide and remainder are C's, and nothing faults.** `idiv` traps where the
-runtime does not, so the divisor is tested first: `-1` is handled by negating,
-which gives the wrapping answer for `-2147483648` and cannot fault, and zero
-yields zero, which C leaves undefined and this defines. Thirty-six bytes against
-fifteen, bought with a far call and a routine that normalises its operands one
-bit at a time.
-
-This is the one place the rewritten program deliberately disagrees with the one
-BC built: a zero divisor raised BASIC error 11 and now raises nothing.
-`suite/ctrap.bas` pins it, and `tools/e2e.py` checks that program against the
-golden alone rather than against the baseline.
+**Divide and remainder are C's**: `mov eax,[a] / mov ecx,[b] / cdq / idiv ecx`,
+and the remainder out of `edx`. No test of the divisor, because C does not make
+one -- `x / 0` and `-2147483648 / -1` are undefined there, and on this machine
+they fault. So BC's error 11 on a zero divisor does not survive, and neither
+does its silent return from the second. That is deliberate, and it is the one
+place a rewritten program can behave worse than the one BC built.
 
 ## What widening changes, exactly
 

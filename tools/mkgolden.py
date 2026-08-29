@@ -135,24 +135,6 @@ def nots() -> list[str]:
     ]
 
 
-def ctrap() -> list[str]:
-    """C's answers, with the two traps defined rather than raised.
-
-    A zero divisor gives zero, which C leaves undefined and qbopt defines.
-    -2147483648 \\ -1 gives -2147483648, the wrapping answer idiv would produce
-    if it did not fault. Neither raises, so `caught` stays zero -- which is
-    where this deliberately disagrees with the program BC built.
-    """
-    low = -2147483648
-    return [
-        f"DIVZERO={seq(0, 0)}",
-        f"MODZERO={seq(0, 0)}",
-        f"DIVEDGE={seq(0, low)}",
-        f"MODEDGE={seq(0, 0)}",
-        "DONE",
-    ]
-
-
 PROGRAMS = {
     "arith": arith,
     "procs": procs,
@@ -161,7 +143,6 @@ PROGRAMS = {
     "flags": flags,
     "divmod": divmod_,
     "nots": nots,
-    "ctrap": ctrap,
 }
 
 

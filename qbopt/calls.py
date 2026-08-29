@@ -164,21 +164,11 @@ SYNTHESISED = Flag.CF | Flag.PF | Flag.AF
 
 ABSORBED = {COMPARE: Code.CMP_R32_RM32, MULTIPLY: Code.IMUL_R32_RM32}
 
-# Divide and remainder are C's, and nothing faults.
-#
-# `idiv` traps twice where the runtime does not: on a zero divisor, and on
-# -2147483648 \\ -1, whose true answer does not fit. B$DVI4 raises BASIC error 11
-# for the first and returns silently from the second. Neither is what C says,
-# and both are traps we will not emit.
-#
-# So the divisor is tested before the divide. -1 is handled by negating, which
-# gives the wrapping answer for -2147483648 and cannot fault; zero yields zero,
-# which C leaves undefined and we define. `x MOD -1` is zero for every x, so
-# remainder folds both cases into one.
-#
-# The cost is real: thirty-odd bytes against fifteen. It buys removing a far
-# call and a routine that normalises its operands one bit at a time.
-GUARDED = {DIVIDE, REMAINDER}
+# Divide and remainder are C's: one idiv, no test of the divisor. `x / 0` and
+# `-2147483648 / -1` are undefined in C and fault on this machine, where BC's
+# runtime raised BASIC error 11 for the first and returned silently from the
+# second. That behaviour does not survive, deliberately.
+DIVIDES = {DIVIDE, REMAINDER}
 
 RESULT = Register.EAX  # what the runtime returns a long in, as ax:dx
 
@@ -212,7 +202,7 @@ def absorb(site: CallSite, live: Flag) -> Emitted | str:
     Nine to sixteen bytes against fifteen and twenty-one, and it removes a far
     call and the routine behind it.
     """
-    if site.name in GUARDED:
+    if site.name in DIVIDES:
         return guarded(site, live)
     if site.name not in ABSORBED:
         return f"{site.name} is not absorbed"
@@ -272,7 +262,15 @@ def restoring() -> list[Instruction]:
 
 
 def guarded(site: CallSite, live: Flag) -> Emitted | str:
-    """A divide or a remainder that cannot fault."""
+    """A long divide, as C compiles one.
+
+        mov eax,[a] / mov ecx,[b] / cdq / idiv ecx
+
+    and the remainder from edx. No test of the divisor, because C does not make
+    one: `x / 0` and `-2147483648 / -1` are undefined, and on this machine they
+    fault. BC's runtime raised BASIC error 11 for the first and returned
+    silently from the second; neither survives, and that is the point.
+    """
     if live & ALL:
         return f"something reads {live & ALL!r} after it, and idiv leaves the flags undefined"
 
@@ -296,36 +294,11 @@ def guarded(site: CallSite, live: Flag) -> Emitted | str:
         if right.at is not None:
             relocated[where] = right.at
 
-    add(Instruction.create_reg(Code.INC_R32, divisor))
-    if_minus_one = add(Instruction.create_branch(Code.JE_REL8_16, 0))
-    add(Instruction.create_reg(Code.DEC_R32, divisor))
-    if_zero = add(Instruction.create_branch(Code.JE_REL8_16, 0))
     add(Instruction.create(Code.CDQ))
     add(Instruction.create_reg(Code.IDIV_RM32, divisor))
-
-    take_remainder = site.name == REMAINDER
-    if take_remainder:
+    if site.name == REMAINDER:
         add(Instruction.create_reg_reg(Code.MOV_R32_RM32, RESULT, Register.EDX))
-    past_the_exceptions = add(Instruction.create_branch(Code.JMP_REL8_16, 0))
-
-    past_zero = None
-    if take_remainder:
-        # x MOD -1 is zero for every x, so both exceptions land in one place
-        negate = zero = add(Instruction.create_reg_reg(Code.XOR_R32_RM32, RESULT, RESULT))
-    else:
-        # -(-2147483648) wraps back to itself, which is the answer idiv would
-        # give if it did not trap
-        negate = add(Instruction.create_reg(Code.NEG_RM32, RESULT))
-        past_zero = add(Instruction.create_branch(Code.JMP_REL8_16, 0))
-        zero = add(Instruction.create_reg_reg(Code.XOR_R32_RM32, RESULT, RESULT))
-
-    done = len(steps)
     for insn in restoring():
         add(insn)
 
-    steps[if_minus_one].near_branch16 = negate
-    steps[if_zero].near_branch16 = zero
-    steps[past_the_exceptions].near_branch16 = done
-    if past_zero is not None:
-        steps[past_zero].near_branch16 = done
     return assemble(steps, relocated)

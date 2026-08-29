@@ -5,29 +5,24 @@ kind of number does and does not mean.
 
 ## Static: what the pass does to the corpus
 
-Measured 2026-08-29, over the 125 objects in `fixtures/omf`, with
+Measured 2026-08-29, over the 110 objects in `fixtures/omf`, with
 `uv run python tools/census.py`.
 
 | | |
 |---|---|
-| objects | 125, 78663 bytes of code |
-| mapped | 117; 8 refused |
-| regions found | 1226 |
-| taken | 1139 |
-| their bytes | 22274 -> 17913, 19 per cent smaller |
+| objects | 110, 71204 bytes of code |
+| mapped | 102; 8 refused |
+| regions found | 1166 |
+| taken | 1080 |
+| their bytes | 21131 -> 13530, 35 per cent smaller |
 
 Refused, by reason:
 
 | count | why |
 |---|---|
-| 67 | the region crosses a LEDATA boundary |
+| 66 | the region crosses a LEDATA boundary |
 | 14 | a single pair that widens to more bytes than BC wrote |
 | 6 | a line number points inside the region |
-
-The byte saving fell from 41 per cent to 19 when divide and remainder were
-absorbed, because a guarded divide is thirty-six bytes against fifteen. That is
-the trade taken deliberately: what it buys is a far call and a routine that
-normalises its operands one bit at a time, which bytes do not measure.
 
 The 8 unmapped are `/V /W` builds whose event stub sits in the header at an
 offset no record names.
