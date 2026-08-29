@@ -9,6 +9,8 @@ has to move with it. If any one of them is left behind the program still links
 -- and then prints the wrong answer, or does not come back.
 """
 
+from pathlib import Path
+
 import e2e
 import pytest
 from configs import CONFIGS
@@ -22,6 +24,8 @@ from qbopt.relocate import relocate
 from qbopt.blocks import instructions
 
 pytestmark = [pytest.mark.e2e, pytest.mark.skipif(dosbox_bin() is None, reason="no dosbox-x")]
+
+ROOT = Path(__file__).resolve().parents[1]
 
 # one per compiler; the switch axes are covered by the differential itself
 COMPILERS = ["v-g3", "p-g2", "q-O"]
@@ -67,6 +71,11 @@ def insert_a_nop(data: bytes) -> bytes:
 
 @pytest.mark.parametrize(("tag", "program"), CASES)
 def test_a_program_survives_having_its_code_moved(tag: str, program: str) -> None:
-    result = e2e.run(tag, program, transform=insert_a_nop)
+    # its own workdir, not e2e.run()'s default BUILD/tag -- that one belongs
+    # to test_e2e.py's own all-programs run under the same tag, and a
+    # pytest-xdist worker running this case concurrently with that one would
+    # otherwise race on the same directory
+    work = ROOT / "build" / "motion" / tag / program
+    result = e2e.run(tag, program, transform=insert_a_nop, work=work)
     failed = [v for v in result.verdicts if not v.ok]
     assert not failed, "; ".join(f"{v.program} {v.status}: {v.detail}" for v in failed)

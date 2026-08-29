@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dosbox import launch
 from configs import CONFIGS
 from dosbox import read_dos
+from dosbox import host_path
 from dosbox import dosbox_bin
 from configs import switches_for
 
@@ -97,22 +98,6 @@ def run(tag: str, exe: Path, steps: int, reps: int) -> list[int]:
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def host_path(mount: Path, dos_path: str) -> Path:
-    """V:\\BIN\\BC.EXE against the host directory V: is mounted from.
-
-    The mount is a case-preserving DOS view of a case-sensitive host
-    directory, so the path on disk is found by matching case-insensitively
-    component by component rather than assumed to match literally.
-    """
-    here = mount
-    for part in dos_path.split("\\")[1:]:  # drop the "V:" drive letter
-        matches = [p for p in here.iterdir() if p.name.lower() == part.lower()]
-        if not matches:
-            raise FileNotFoundError(f"{part} not found under {here}")
-        here = matches[0]
-    return here
 
 
 def main(argv: list[str] | None = None) -> int:

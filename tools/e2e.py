@@ -24,12 +24,13 @@ from collections.abc import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from dosbox import launch
 from configs import Config
 from configs import CONFIGS
 from dosbox import read_dos
 from configs import DIVERGES
+from cache import cached_launch
 from configs import switches_for
+from cache import toolchain_identity
 
 from qbopt.rewrite import rewrite
 
@@ -84,10 +85,11 @@ def first_difference(want: list[str], got: list[str]) -> str:
 def compile_all(cfg: Config, work: Path, names: list[str], timeout: int) -> None:
     for name in names:
         shutil.copy(SUITE / f"{name}.bas", work / f"{name.upper()}.BAS")
-    launch(
+    cached_launch(
         work,
         cfg.mount,
         [f"{cfg.bc} {switches_for(cfg, n)} {n.upper()}.BAS, {n.upper()}.OBJ; >> BC.OUT" for n in names],
+        identity=toolchain_identity(cfg),
         timeout=timeout,
         env={"LIB": r"V:\LIB"},
     )
@@ -103,7 +105,7 @@ def link_and_run(cfg: Config, work: Path, names: list[str], timeout: int) -> Non
             f"B_{u}.EXE > B_{u}.TXT",
             f"O_{u}.EXE > O_{u}.TXT",
         ]
-    launch(work, cfg.mount, steps, timeout=timeout, env={"LIB": r"V:\LIB"})
+    cached_launch(work, cfg.mount, steps, identity=toolchain_identity(cfg), timeout=timeout, env={"LIB": r"V:\LIB"})
 
 
 def judge(work: Path, name: str) -> Verdict:
@@ -150,13 +152,19 @@ def run(
     dry_run: bool = False,
     timeout: int = 300,
     transform: Callable[[bytes], bytes] | None = None,
+    work: Path | None = None,
 ) -> Result:
     cfg = CONFIGS[tag]
     if not cfg.available:
         raise SystemExit(f"no toolchain at {cfg.mount}; see docs/testing.md")
 
     names = [only] if only else programs()
-    work = BUILD / tag
+    # BUILD/tag is this function's own default and is owned by the one
+    # caller that never passes `work` -- a second caller sharing a tag but
+    # wanting a different program set or transform must pass its own, or two
+    # pytest-xdist workers racing on the same directory delete each other's
+    # objects mid-run
+    work = work or BUILD / tag
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
 

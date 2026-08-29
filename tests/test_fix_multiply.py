@@ -9,13 +9,15 @@ rewritten object drops the call site entirely, keeps its EXTDEF the way an
 absorbed call always does, links, and runs to the golden.
 """
 
+import shutil
 from pathlib import Path
 
 import pytest
-from dosbox import launch
 from configs import CONFIGS
 from dosbox import read_dos
 from dosbox import dosbox_bin
+from cache import cached_launch
+from cache import toolchain_identity
 
 from qbopt import omf
 from qbopt import module
@@ -51,13 +53,15 @@ def lines(text: str) -> list[str]:
 def test_fixmul_absorbs_and_links_where_bc_alone_cannot(tag: str) -> None:
     cfg = CONFIGS[tag]
     work = ROOT / "build" / "fixmul" / tag
-    work.mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True)
     (work / "FIXMUL.BAS").write_bytes((SUITE / "fixmul.bas").read_bytes())
 
-    compiled = launch(
+    compiled = cached_launch(
         work,
         cfg.mount,
         [f"{cfg.bc} {cfg.switches} FIXMUL.BAS, FIXMUL.OBJ; > BC.OUT"],
+        identity=toolchain_identity(cfg),
         timeout=180,
         env={"LIB": r"V:\LIB"},
     )
@@ -87,13 +91,14 @@ def test_fixmul_absorbs_and_links_where_bc_alone_cannot(tag: str) -> None:
     )
     (work / "FIXMULQ.OBJ").write_bytes(out)
 
-    ran = launch(
+    ran = cached_launch(
         work,
         cfg.mount,
         [
             f"{cfg.link} FIXMULQ.OBJ, FIXMUL.EXE,, {cfg.runtime}; > LINK.OUT",
             "FIXMUL.EXE > RUN.TXT",
         ],
+        identity=toolchain_identity(cfg),
         timeout=180,
         env={"LIB": r"V:\LIB"},
     )

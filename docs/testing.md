@@ -4,8 +4,18 @@
     uv run pytest -m "not e2e"                     host only, no emulator
     uv run pytest -m corpus                        the rewriter over the fixtures
 
-`pre-commit` runs the whole suite, end-to-end tier included, so a commit takes
-about a minute.
+`pre-commit` runs the whole suite, end-to-end tier included, and runs it in
+parallel (`pytest-xdist`, `-n auto` in `addopts`). Every `tools/cache.py`
+compile/link/run is memoized on disk under `build/launch-cache/`, keyed off
+the exact bytes DOSBox is about to see -- a warm commit (nothing a `.bas`
+fixture, a switch, or the pass itself touches has changed) takes single-digit
+seconds; a cold one still has to boot DOSBox for real and takes about a
+minute. `rm -rf build/launch-cache` forces everything cold again, and
+`QBOPT_NO_LAUNCH_CACHE=1 uv run pytest` bypasses the cache for one run without
+deleting it -- reach for that before trusting a green warm run after a
+toolchain reinstall or a dosbox-x upgrade that didn't change any file the key
+already covers (see `tools/cache.py`'s own docstring for exactly what the key
+does and does not cover).
 
 ## Tiers
 

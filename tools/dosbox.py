@@ -64,6 +64,22 @@ def dos_file(workdir: Path, name: str) -> Path | None:
     return None
 
 
+def host_path(mount: Path, dos_path: str) -> Path:
+    """V:\\BIN\\BC.EXE against the host directory V: is mounted from.
+
+    The mount is a case-preserving DOS view of a case-sensitive host
+    directory, so the path on disk is found by matching case-insensitively
+    component by component rather than assumed to match literally.
+    """
+    here = mount
+    for part in dos_path.split("\\")[1:]:  # drop the "V:" drive letter
+        matches = [p for p in here.iterdir() if p.name.lower() == part.lower()]
+        if not matches:
+            raise FileNotFoundError(f"{part} not found under {here}")
+        here = matches[0]
+    return here
+
+
 def read_dos(workdir: Path, name: str) -> str:
     p = dos_file(workdir, name)
     return p.read_text(encoding="latin1") if p else ""
