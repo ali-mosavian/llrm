@@ -322,6 +322,10 @@ than the runtime pass's blunter option of costing the whole module.
 - **Functions over classes.** A class earns its place only when behaviour and
   state travel together. Data is a `@dataclass(slots=True)`, and `frozen=True`
   unless something has to mutate it.
+- **Prefer a closure where it fits.** A one-field class, or a parameter
+  threaded down through every call just to reach the one function that needs
+  it, is a closure that has not been written as one yet -- close over it
+  instead.
 - **Type annotations on every parameter and every return.** ruff's `ANN`
   requires them; `ty` checks they are true. Neither does the other's job --
   ty has no `disallow-untyped-defs`, and an unannotated parameter is
