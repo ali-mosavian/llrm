@@ -5,7 +5,7 @@ kind of number does and does not mean.
 
 ## Static: what the pass does to the corpus
 
-Measured 2026-08-29, over the 110 objects in `fixtures/omf`, with
+Measured 2026-08-30, over the 110 objects in `fixtures/omf`, with
 `uv run python tools/census.py`.
 
 | | |
@@ -14,7 +14,7 @@ Measured 2026-08-29, over the 110 objects in `fixtures/omf`, with
 | mapped | 110; none refused |
 | regions found | 1404 |
 | taken | 1382 |
-| their bytes | 26233 -> 17414, 33 per cent smaller |
+| their bytes | 26233 -> 16942, 35 per cent smaller |
 
 Refused, by reason:
 
@@ -23,11 +23,20 @@ Refused, by reason:
 | 12 | a single pair that widens to more bytes than BC wrote |
 | 6 | a line number points inside the region |
 
-67 more regions than the previous census, all of them call sites `calls.py`
-could not previously classify at all: an operand pushed from a register
-rather than reloaded from memory (with or without a backing store), or one
-stranded on the stack under an entirely separate, self-contained call. See
-`qbopt/stack.py`'s `frames()` and `calls.py`'s `consume()`.
+472 bytes smaller than the previous census (17414), from two of
+`docs/residue.md`'s patterns, both plain codegen bugs rather than new
+capability: `popped_into()` was recombining two words already contiguous on
+the stack through five wasted instructions (pattern A, corpus-wide, not just
+the one object residue.md measured it on), and `absorb()` reloaded `x*x`'s
+address twice instead of once (pattern C). Neither changed what any region
+computes.
+
+67 more regions than the census before that, all of them call sites
+`calls.py` could not previously classify at all: an operand pushed from a
+register rather than reloaded from memory (with or without a backing
+store), or one stranded on the stack under an entirely separate,
+self-contained call. See `qbopt/stack.py`'s `frames()` and `calls.py`'s
+`consume()`.
 
 Every module maps. It did not before: the entry point was searched for, and the
 search picked one byte late on 22 objects and could not explain the `/V /W`

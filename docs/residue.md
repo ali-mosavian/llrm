@@ -275,15 +275,17 @@ concluded on: memory disambiguation this project does not have.
 
 | pattern | count | bytes | fix scope |
 |---|---|---|---|
-| A -- stack no-op in `popped_into` | 15 | ~60 | one function, always safe |
+| A -- stack no-op in `popped_into` | 15 | ~60 | **fixed**, 2026-08-30 |
 | I -- dead lift.py restores | 6 | ~24 | reuse `flags.py`'s own machinery |
 | B -- restore/re-push identity | 3 | ~24 | peephole, adjacency only |
 | D -- immediate pair ALU missing | 3 | ~15 | table entries + one `Value` field |
-| C -- redundant self-multiply reload | 1 | 2 | one `Addr` comparison |
+| C -- redundant self-multiply reload | 1 | 2 | **fixed**, 2026-08-30 |
 | G+H -- restore blocks widening | 15 | ~107 | feed absorption back into `lift()` |
 | F -- sign-extension invisible | ~9 | ~30 | new value + operand kind |
 | E -- interleaved instruction splits a region | 2 | ~15 | dependence analysis + motion -- the large one |
 
-A, I, B, D and C together are roughly 125 bytes -- on their own, without
-touching this project's architecture, they would take the rewritten object
-from 137 bytes larger than BC's to smaller.
+A and C are fixed (`qbopt/calls.py`'s `popped_into()` and `absorb()`);
+corpus-wide, not just this object, they took the static census from 17414 to
+16942 bytes -- see `docs/numbers.md`. I, B, D together are roughly 65 bytes
+more, on their own, without touching this project's architecture. G+H, F and
+E remain the architectural ones.
