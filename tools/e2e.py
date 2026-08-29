@@ -150,13 +150,19 @@ def run(
     dry_run: bool = False,
     timeout: int = 300,
     transform: Callable[[bytes], bytes] | None = None,
+    work: Path | None = None,
 ) -> Result:
     cfg = CONFIGS[tag]
     if not cfg.available:
         raise SystemExit(f"no toolchain at {cfg.mount}; see docs/testing.md")
 
     names = [only] if only else programs()
-    work = BUILD / tag
+    # BUILD/tag is this function's own default and is owned by the one
+    # caller that never passes `work` -- a second caller sharing a tag but
+    # wanting a different program set or transform must pass its own, or two
+    # pytest-xdist workers racing on the same directory delete each other's
+    # objects mid-run
+    work = work or BUILD / tag
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
 
