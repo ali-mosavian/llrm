@@ -170,6 +170,13 @@ def test_random_bytes_agree_with_ndisasm(fuzz: tuple[bytes, list[tuple[int, str]
         ("CD 34 4E C8", 4, "fmul dword [bp-38h]"),
         ("CD 3A C1", 3, "faddp"),
         ("CD 36 06 5E 00", 5, "fiadd word [disp16]"),
+        # int 3Ch stands in for a one-byte segment override, so the ESC opcode
+        # is a real byte after it and the site is two bytes longer than the x87
+        ("CD 3C D9 07", 4, "override, fld dword [bx]"),
+        ("CD 3C D8 27", 4, "override, fsub dword [bx]"),
+        ("CD 3C DF 06 12 00", 6, "override, fild word [disp16]"),
+        # int 3Dh stands in for the whole of WAIT, and nothing follows it
+        ("CD 3D", 2, "wait"),
     ],
 )
 def test_the_emulator_interrupt_is_an_x87_instruction(enc: str, length: int, what: str) -> None:
@@ -183,3 +190,20 @@ def test_the_emulator_interrupt_is_an_x87_instruction(enc: str, length: int, wha
     assert insn.length == length, what
     assert insn.disp_at is None or insn.disp_at >= 2, "the operand follows the two-byte int"
     assert insn.writes & 0x3F == 0, "the x87 status word is not the flags register"
+
+
+def test_int_3ch_without_an_esc_opcode_is_an_ordinary_interrupt() -> None:
+    # Every one of qb-qrender's 201 int 3Ch sites is followed by a byte in
+    # D8..DF, because it stands in for the segment override in front of one.
+    # With no ESC opcode after it there is nothing being emulated.
+    insn = decode(hx("CD 3C 90"), 0)
+    assert insn is not None
+    assert insn.length == 2
+
+
+@pytest.mark.parametrize("enc", ["CD 34", "CD 35", "CD 3B"])
+def test_an_emulated_escape_with_nothing_after_it_is_refused(enc: str) -> None:
+    # 34h..3Bh carry their operand inline, so reading one as a two-byte
+    # interrupt and carrying on lands in the middle of that operand. A site
+    # that will not decode is refused rather than read as an interrupt.
+    assert decode(hx(enc), 0) is None

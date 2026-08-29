@@ -14,6 +14,7 @@ The instruction itself comes along, so nothing here has to mirror iced's model
 or keep up with it.
 """
 
+from enum import IntEnum
 from dataclasses import dataclass
 
 from iced_x86 import OpKind
@@ -98,41 +99,84 @@ def to_signed(raw: int, width: int) -> int:
     return raw - (1 << bits) if raw >= 1 << (bits - 1) else raw
 
 
-# Under /FPi, BC does not emit x87 instructions. It emits `int 34h`..`3Bh`,
-# which stand in for the ESC opcodes D8..DF, with the operand bytes following
-# inline exactly as they would after the real opcode -- so `CD 35 46 C8` is
-# `D9 46 C8`, fld dword [bp-38h]. A walk that reads the int as two bytes and
-# carries on lands in the middle of the operand.
+# Under /FPi, BC does not emit x87 instructions. It emits the emulator's
+# interrupts, and Open Watcom's bld/watcom/h/fppatche.h names the whole
+# protocol by the library symbol each one is patched through:
 #
-# There are 2130 of these in qb-qrender, and they are why reachability explained
-# two of its fifteen modules before this. The emulator patches these sites at
-# run time, which is what makes them look like ordinary interrupts on disk.
+#   int 34h..3Bh   FIDRQQ    the ESC opcodes D8..DF, operand inline
+#   int 3Ch        FIxRQQ    a segment override; the real ESC opcode follows
+#   int 3Dh        FIWRQQ    the WAIT instruction, and nothing follows
+#
+# So `CD 35 46 C8` is `D9 46 C8`, fld dword [bp-38h] -- two bytes standing in
+# for one, with the operand inline, and a walk that reads the int as an
+# ordinary interrupt lands in the middle of that operand. The other two stand
+# in for a whole instruction or a bare prefix and have no operand of their own,
+# which is why they happen to decode at the right length even when read as
+# interrupts. They are still decoded here, because a prefix separated from its
+# opcode is one edit away from being split.
+#
+# There are 1422 of the first, 201 of the second and 507 of the third in
+# qb-qrender, and the first kind is why reachability explained two of its
+# fifteen modules before this. Every one of that program's int 3Ch sites is
+# followed by a byte in D8..DF, which is the shape asserted below.
 EMULATED = range(0x34, 0x3C)
-ESC = 0xD8
+
+
+class Stands(IntEnum):
+    SEGMENTED = 0x3C  # for a segment override, with the real ESC opcode after it
+    FWAIT = 0x3D  # for the whole of WAIT, with nothing after it
+
+
+WAIT = 0x9B
+ESC = range(0xD8, 0xE0)
 INTERRUPT = 0xCD
+STANDS_IN = range(EMULATED.start, Stands.FWAIT + 1)
+
+
+def stood_in_for(code: bytes, at: int) -> tuple[bytes, int] | None:
+    """The bytes the emulated site means, and how many of them the int hides.
+
+    The site is always two bytes wide. What it replaces is not: an ESC opcode,
+    a one-byte segment override, or a whole WAIT -- so the count says how much
+    of the decode came out of the interrupt rather than from after it.
+    """
+    tail = code[at + 2 : at + 2 + 15]
+    match code[at + 1]:
+        case escape if escape in EMULATED:
+            return bytes([ESC.start + escape - EMULATED.start]) + tail, 1
+        case Stands.SEGMENTED if tail[:1] and tail[0] in ESC:
+            return tail, 0
+        case Stands.FWAIT:
+            return bytes([WAIT]), 1
+        case _:
+            return None
 
 
 def emulated(code: bytes, at: int) -> Insn | None:
     """An x87 instruction wearing the emulator's interrupt as its first byte."""
-    stood_in = bytes([ESC + code[at + 1] - EMULATED.start]) + code[at + 2 : at + 2 + 15]
+    found = stood_in_for(code, at)
+    if found is None:
+        return None
+    stood_in, hidden = found
     decoder = Decoder(BITNESS, stood_in, ip=0)
     if not decoder.can_decode:
         return None
     insn = decoder.decode()
     if insn.is_invalid:
         return None
-    length = insn.len + 1  # the int is two bytes where the ESC opcode is one
+    length = 2 + insn.len - hidden
     if at + length > len(code):
         return None
 
+    operand = at + 2 - hidden
     where = decoder.get_constant_offsets(insn)
     return Insn(
         at=at,
         length=length,
         insn=insn,
-        disp_at=at + 1 + where.displacement_offset if where.has_displacement else None,
+        disp_at=operand + where.displacement_offset if where.has_displacement else None,
         disp_len=where.displacement_size if where.has_displacement else 0,
-        imm_at=at + 1 + where.immediate_offset if where.has_immediate else None,
+        imm_at=operand + where.immediate_offset if where.has_immediate else None,
         imm_len=where.immediate_size if where.has_immediate else 0,
     )
 
@@ -141,8 +185,15 @@ def decode(code: bytes, at: int) -> Insn | None:
     """The instruction at `at`, or None if the bytes are not one."""
     if at >= len(code):
         return None
-    if code[at] == INTERRUPT and at + 2 < len(code) and code[at + 1] in EMULATED:
-        return emulated(code, at)
+    if code[at] == INTERRUPT and at + 1 < len(code) and code[at + 1] in STANDS_IN:
+        if (found := emulated(code, at)) is not None:
+            return found
+        # int 3Ch is the only one that can still be an ordinary interrupt: it
+        # stands in for a prefix, so with no ESC opcode after it nothing is
+        # being emulated. For the others, refusing beats reading an operand as
+        # instructions.
+        if code[at + 1] != Stands.SEGMENTED:
+            return None
     decoder = Decoder(BITNESS, code[at:], ip=at)
     if not decoder.can_decode:
         return None

@@ -133,11 +133,12 @@ never tested -- and a `jz` after a widened `AND` could go the other way.
   two-byte stand-in for the *prefix* only, and the real `D8`..`DF` opcode
   follows it as ordinary bytes; `3Dh` stands in for the whole of `9B` and has
   nothing after it. Both therefore decode at the right length as plain
-  interrupts, which is why `EMULATED` stops at `3Bh` and qb-qrender's 201
-  `3Ch` and 507 `3Dh` sites map anyway. **Widening that range to `3Eh` breaks
-  it**: `3Ch` would swallow the ESC opcode as its operand and `3Dh` would
-  swallow two bytes of real code. Measured on qb-qrender: every one of its 201
-  `3Ch` sites is followed by a byte in `D8`..`DF`.
+  interrupts, which is why qb-qrender's 201 `3Ch` and 507 `3Dh` sites mapped
+  even before `declen` knew them. **The three shapes are not interchangeable**:
+  widening `EMULATED` to `3Eh` and treating them alike makes `3Ch` swallow the
+  ESC opcode as its operand and `3Dh` swallow two bytes of real code. `declen`
+  decodes each for what it is, and refuses a `3Ch` with no `D8`..`DF` after it
+  -- measured on qb-qrender, every one of its 201 has one.
 - **The emulator patch is driven by a linker symbol, not only at run time.**
   An object that does floating point carries `FIDRQQ` as an EXTDEF -- 13
   references across qb-qrender, one in `suite/fpemu.bas`. The runtime pass
