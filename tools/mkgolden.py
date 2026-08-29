@@ -156,6 +156,50 @@ def fpemu() -> list[str]:
     ]
 
 
+def nbody() -> list[str]:
+    """The fixed-point integrator of suite/nbody.bas, in the arithmetic it means.
+
+    BASIC's \\ truncates toward zero where Python's // floors, which differs on
+    every negative operand here -- and half the deltas are negative.
+    """
+
+    def shift(value: int, by: int) -> int:
+        return -((-value) // by) if value < 0 else value // by
+
+    def divide(top: int, bottom: int) -> int:
+        return -(-top // bottom) if (top < 0) != (bottom < 0) else top // bottom
+
+    bodies, one, soften, pull = 6, 65536, 65536, 65536
+    pos_x = [(i * 7 - 15) * one for i in range(bodies)]
+    pos_y = [(i * 5 - 12) * one for i in range(bodies)]
+    vel_x = [0] * bodies
+    vel_y = [0] * bodies
+
+    for _ in range(100):
+        for body in range(bodies):
+            acc_x = acc_y = 0
+            for other in range(bodies):
+                if other == body:
+                    continue
+                delta_x = pos_x[other] - pos_x[body]
+                delta_y = pos_y[other] - pos_y[body]
+                dist2 = shift(delta_x, 256) ** 2 + shift(delta_y, 256) ** 2 + soften
+                falloff = divide(pull, shift(dist2, one) + 1)
+                acc_x += shift(shift(delta_x, 256) * falloff, 256)
+                acc_y += shift(shift(delta_y, 256) * falloff, 256)
+            vel_x[body] += acc_x
+            vel_y[body] += acc_y
+        for body in range(bodies):
+            pos_x[body] += vel_x[body]
+            pos_y[body] += vel_y[body]
+
+    lines = []
+    for body in range(bodies):
+        for name, values in (("PX", pos_x), ("PY", pos_y), ("VX", vel_x), ("VY", vel_y)):
+            lines.append(f"{name}{body}={num(values[body])}")
+    return [*lines, "DONE"]
+
+
 PROGRAMS = {
     "arith": arith,
     "procs": procs,
@@ -165,6 +209,7 @@ PROGRAMS = {
     "divmod": divmod_,
     "nots": nots,
     "fpemu": fpemu,
+    "nbody": nbody,
 }
 
 

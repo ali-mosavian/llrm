@@ -34,7 +34,24 @@ on the table, and in place is all the runtime version could do.
   instruction and models no latency. Use `qbopt/price.py` for 486, P5, P6,
   K5, K6, K7 and Core, and treat those as a ranking -- they are published
   latencies, not measurements.
-- **No type suffixes in BASIC.** `As Long`, `As Integer`, spelled out.
+- **BASIC is written the way the Python here is.** Names are camelCase and
+  descriptive in as few words as do that -- `posX` and `stepCount`, not `p` and
+  not `theNumberOfStepsToRun`. Only a user-defined type's own name is
+  PascalCase. Keywords are lowercase, always. No type suffixes: `as long` and
+  `as integer` spelled out, and a function declares its return type rather than
+  wearing a sigil. Every variable is declared before it is used, with `dim` or
+  `redim`, never brought into being by an assignment.
+- **snake_case is not available, and that is measured.** QuickBASIC 4.5 and
+  PDS 7.1 both reject an underscore in an identifier -- `dim pos_x as long` is
+  `Simple or array variable expected` -- and only VBDOS accepts one. A period is
+  legal in all three, but `pos.x` reads as a field of a UDT, which is why the
+  convention here is camelCase rather than BASIC's traditional separator.
+- **Watch DOSBox, do not wait for it.** The MCP debugger drives it directly:
+  `dosbox_text_screen` and `dosbox_screenshot` say what is on the screen now,
+  `dosbox_run_to` and `dosbox_regs` say where the program is. Launching with a
+  timeout and reading the artifacts afterwards is how a run that stopped at a
+  prompt gets reported as a program that produced no output, and how a
+  diagnosis ends up resting on a file that was never written.
 - **Fixtures are real BC output.** Generated ones agree with whatever the
   generator believed.
 
@@ -112,6 +129,11 @@ never tested -- and a `jz` after a widened `AND` could go the other way.
   builder applying the "a call comes back" rule -- which is right everywhere
   else, and worth 49 of 102 blocks -- decodes the table as instructions.
   Knowing which call this is, is an EXTDEF lookup.
+- **BC writes an .OBJ even when it reports severe errors.** "Did an object
+  appear" is not a compile check, the same way "did an .EXE appear" is not a
+  link check -- read the `Severe Error(s)` count out of BC's own output. An
+  identifier test that trusted the file's existence reported every compiler as
+  accepting underscores when three of its four cases had actually failed.
 - **A call destroys the flags**, and `B$CPI4` returns its answer in them
   through `lahf`/`sahf`. A `jng` after a long operation is usually reading
   the *call's* flags, not the operation's.
