@@ -2,8 +2,7 @@
 
 A post-compilation pass over the `.OBJ` BC produces, between BC and LINK.
 Most of what is here was established the hard way by a runtime version of the
-same idea that still lives in uGL; it was paid for once already, and the
-parts that survive the move are below.
+same idea that still lives in uGL. What survived the move is below.
 
 ## The goal
 
@@ -18,16 +17,15 @@ BC emits for *every single* long operation collapses into
 
 The prize is the store/reload/call traffic between operations, not the width
 of any one of them. A pass that only widens pairs in place leaves most of it
-on the table -- and in place is exactly what the runtime version could do,
-which is why this one exists.
+on the table, and in place is all the runtime version could do.
 
 ## Rules
 
 - **Check BC's output on all three compilers, and with the flags that
-  matter.** They do not agree, and building against one is how you get a
-  pass that fires on a third of what it should. This is not hypothetical:
-  the comparison operand order was read off VBDOS `/G3` alone and looked
-  settled until the other three were checked.
+  matter.** They do not agree, and building against one is how you get a pass
+  that fires on a third of what it should. The comparison operand order was
+  read off VBDOS `/G3` alone and looked settled until the other three were
+  checked.
 - **Round trip first.** Read an object and write it back; the bytes must be
   identical. Nothing that rewrites is trustworthy until nothing it does not
   touch is disturbed. `tests/test_omf.py` asserts it on all four
@@ -91,9 +89,8 @@ place a rewritten program can behave worse than the one BC built.
 BC leaves the **high half's** flags; one 32-bit operation leaves the whole
 result's. So a region whose flags something reads afterwards must be refused
 unless nothing in it writes flags. This gate was designed into the runtime
-pass, then lost when its peephole matcher became a value graph -- set,
-never tested -- and a `jz` after a widened `AND` could go the other way. It
-is the kind of thing that stays green in every test until it does not.
+pass and then lost when its peephole matcher became a value graph -- set,
+never tested -- and a `jz` after a widened `AND` could go the other way.
 
 ## Things that will bite
 
@@ -111,10 +108,10 @@ is the kind of thing that stays green in every test until it does not.
   return address to find the table and jumps from there, so the indirect jump
   is inside `B$OGTA`, which is where the runtime pass would have seen it and
   the reason the inherited note says otherwise.
-  The consequence is sharp: **`B$OGTA` does not come back to the byte after
-  the call.** A block builder applying the "a call comes back" rule -- which is
-  right everywhere else, and worth 49 of 102 blocks -- decodes the table as
-  instructions. Knowing which call this is, is an EXTDEF lookup.
+  So **`B$OGTA` does not come back to the byte after the call.** A block
+  builder applying the "a call comes back" rule -- which is right everywhere
+  else, and worth 49 of 102 blocks -- decodes the table as instructions.
+  Knowing which call this is, is an EXTDEF lookup.
 - **A call destroys the flags**, and `B$CPI4` returns its answer in them
   through `lahf`/`sahf`. A `jng` after a long operation is usually reading
   the *call's* flags, not the operation's.
@@ -227,9 +224,12 @@ Moving code means updating all of, and the list is finite:
 
 - **Commit messages are conventional commits**: `type(scope): description`,
   and a body. The subject says what changed; the body says what it was and why
-  it had to. Both short and to the point, neither rambling.
-- The same goes for every other description -- PR bodies, docs, comments,
-  replies. Say the thing and stop.
+  it had to. Both short and to the point, neither rambling. No
+  `Co-Authored-By` trailer.
+- **Replies in the session are held to the same rule**, and it is the one most
+  often missed. Say the thing and stop: the finding first, no preamble, and no
+  closing paragraph recommending what to do next unless a decision is open.
+- PR bodies, docs and comments, likewise.
 
 ## Method
 
