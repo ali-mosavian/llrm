@@ -57,6 +57,32 @@ Of what is left refused, 96 of 101 are single pairs that widen to more bytes
 than BC wrote -- the shape a whole-procedure rewrite would fix and a per-region
 one cannot.
 
+### Built, linked and run
+
+All 15 modules rewritten, linked against the patched uGL and run under the
+pinned profile, `-campath -ticks 200` against `dm3ish.bsp`. `-ticks` is what
+makes the comparison mean anything: the simulation steps at a fixed `HOST_DT`
+and stops on the budget, where `-bench` counts frames and lets a faster build
+walk further before it stops.
+
+| | base | opt |
+|---|---|---|
+| qrender.exe | 285678 | 285550 |
+| BENCH.BMP | — | byte for byte identical to base |
+| polys, tris | 240, 600 | 240, 600 |
+| px, py, pz | -119.6837, -438.5061, 184.7778 | identical |
+| ticks, cp_pts, clp_cnt | 202, 216, 1648 | identical |
+
+**No measurable speed difference.** frames, seconds and every `ft_*` and `fps_*`
+field came out bit-identical across the two runs -- the timer quantises, and 63
+regions over 924 bytes of a 74,873-byte program is too small a fraction of the
+work to show through it. A `-bench 60` run reported 59.14 ms against 58.12,
+1.7 per cent, but the two runs were not at the same place in the map by then and
+drew different geometry, so that pair is not a measurement of anything.
+
+This is the correctness result, not a speed result. The speed is behind the
+refusals above.
+
 ## Modelled
 
 `qbopt/price.py` prices what is in the object. That is the right answer for a

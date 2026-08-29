@@ -71,6 +71,17 @@ cannot.
 
 ## Fixed since
 
+**qbopt has been run on qb-qrender, end to end.** All 15 modules rewritten
+between BC and LINK, linked against the patched uGL, run under the pinned
+profile with `-campath -ticks 200`: the rendered frame is byte-for-byte
+identical to the baseline's and every simulation and geometry field matches.
+No measurable speed change, for the reason the census already gave -- the
+program declares no LONG, so the pass touches 924 bytes of 74,873. The build
+used the `build/vbd-aa7dc172` snapshot, whose objects and uGL match each other;
+a fresh `tools/dosbox.sh build vbd` does not link today, because
+`build/native-mgl/UGLV.LIB` is stale against `src/` and lacks `UGLZSCALE` and
+the `UGLARR*` family.
+
 **The entry point is not searched for any more, and every module maps.** The
 QuickBASIC 4.5 runtime source in `~/work/ms/msdos_60/45` settles it: `MODULE_CODE`
 in `runtime/inc/addr.inc` is 48 bytes with `O_ENT` named as the offset past it,
