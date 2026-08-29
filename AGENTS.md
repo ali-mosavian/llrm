@@ -368,16 +368,14 @@ than the runtime pass's blunter option of costing the whole module.
 - **When careful measurements of the source all come back clean and the
   program still misbehaves, stop measuring the source and check what was
   actually built.**
-- **Consult an Opus-model agent for design review before writing code, to
-  review the code once written, and whenever stuck.** Give it the actual plan
-  or diff and every file it is grounded in,
-  and ask it to trace the mechanism against real examples rather than judge
-  the prose -- this is what caught a plan whose core mechanism fired on zero
-  bytes of its own input, a soundness bug the plan itself would have
-  introduced, and an "unchanged" claim that was false once checked. For a
-  question spanning multiple rounds, resume the same agent rather than
-  starting fresh each time, so each round builds on what the last one already
-  found. If Opus is unavailable or a call to it fails, fall back to Fable.
+- **Consult an Opus-model agent for design review before writing code, after
+  writing it, and whenever stuck.** Give it the actual plan or diff and every
+  file it is grounded in, and ask it to trace the mechanism against real
+  examples rather than judge the prose -- that is what caught a plan whose
+  core mechanism fired on zero bytes of its own input. Resume the same agent
+  across multiple rounds of one question rather than starting fresh each
+  time, so each round builds on the last. If Opus is unavailable or fails,
+  fall back to Fable.
 - Report what was measured, not what was expected. Several figures here were
   corrected after the fact: a parity number that was timer quantisation, a
   "no absorption" reading that was the relocation artifact above, and a
