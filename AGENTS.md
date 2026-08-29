@@ -126,10 +126,25 @@ never tested -- and a `jz` after a widened `AND` could go the other way.
   qb-qrender, and they are why reachability explained two of its fifteen
   modules before the decoder knew this and all fifteen after. ndisasm does not
   know it either, so the two decoders differ there on purpose.
-- **The FP emulator patches those sites** at run time. The runtime pass could
-  not move code out from under an already-patched one. Whether that still
-  matters when the moving happens before the program has ever run has not
-  been established; check before assuming either way.
+- **The emulator's range is `int 34h`..`3Dh`, and only `34h`..`3Bh` carry an
+  inline operand.** Open Watcom's `bld/watcom/h/fppatche.h` names the whole
+  protocol: `FIDRQQ` is `34h`..`3Bh`, `FIERQQ`/`FICRQQ`/`FISRQQ`/`FIARQQ` are
+  `3Ch` with a segment override, `FIWRQQ` is `3Dh`, the `WAIT`. `3Ch` is a
+  two-byte stand-in for the *prefix* only, and the real `D8`..`DF` opcode
+  follows it as ordinary bytes; `3Dh` stands in for the whole of `9B` and has
+  nothing after it. Both therefore decode at the right length as plain
+  interrupts, which is why `EMULATED` stops at `3Bh` and qb-qrender's 201
+  `3Ch` and 507 `3Dh` sites map anyway. **Widening that range to `3Eh` breaks
+  it**: `3Ch` would swallow the ESC opcode as its operand and `3Dh` would
+  swallow two bytes of real code. Measured on qb-qrender: every one of its 201
+  `3Ch` sites is followed by a byte in `D8`..`DF`.
+- **The emulator patch is driven by a linker symbol, not only at run time.**
+  An object that does floating point carries `FIDRQQ` as an EXTDEF -- 13
+  references across qb-qrender, one in `suite/fpemu.bas`. The runtime pass
+  could not move code out from under an already-patched site; here the moving
+  happens before LINK has resolved that symbol, and `suite/fpemu.bas`
+  establishes that it is safe -- it moves all 27 of its sites and gets BC's
+  own answers in all twelve configurations.
 
 ## Moving code
 
