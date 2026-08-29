@@ -135,6 +135,13 @@ MUTATIONS = (
         "return MemoryOperand(base=base, displ=1, displ_size=2)",
         "a relocated operand emitted with its address in the code, which LINK adds to",
     ),
+    Mutation(
+        "consume-slot-order-not-reversed",
+        "qbopt/calls.py",
+        "for target, group in zip(targets, reversed(groups), strict=True):",
+        "for target, group in zip(targets, groups, strict=True):",
+        "a popped argument landing in the wrong register -- dividend and divisor swapped, not a crash",
+    ),
 )
 
 

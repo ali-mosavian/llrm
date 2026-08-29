@@ -20,6 +20,7 @@ from iced_x86 import Code
 from iced_x86 import Decoder
 from iced_x86 import Encoder
 from iced_x86 import Register
+from iced_x86 import Register_
 from iced_x86 import Instruction
 from iced_x86 import BlockEncoder
 from iced_x86 import MemoryOperand
@@ -29,11 +30,14 @@ from qbopt.flags import Flag
 from qbopt.lift import FIXUP
 from qbopt.declen import Insn
 from qbopt.module import Addr
+from qbopt.blocks import Block
 from qbopt.lift import Emitted
 from qbopt.module import Space
+from qbopt.stack import frames
 from qbopt.module import Module
 from qbopt.declen import BITNESS
 from qbopt.declen import to_signed
+from qbopt.stack import PUSH_BYTES
 from qbopt.lift import relocated_memory
 
 COMPARE = "B$CPI4"
@@ -66,6 +70,15 @@ LEFT_FIRST = {COMPARE: True, MULTIPLY: False, DIVIDE: False, REMAINDER: False, F
 # Every routine here takes two long arguments except fixMul&, which takes three.
 ARITY = {FIX_MULTIPLY: 3}
 
+
+def _arity(name: str | None) -> int | None:
+    """How many long arguments this routine takes, or None if it is not one
+    absorption knows how to handle at all."""
+    if name is None or name not in LEFT_FIRST:
+        return None
+    return ARITY.get(name, 2)
+
+
 # one dword per argument under VBDOS /G3, two words everywhere else
 PUSHES = {Code.PUSH_RM16, Code.PUSH_RM32}
 CONSTANTS = {Code.PUSHW_IMM8, Code.PUSHD_IMM8, Code.PUSH_IMM16, Code.PUSHD_IMM32}
@@ -91,9 +104,14 @@ class Operand:
 class CallSite:
     at: int  # the call instruction
     end: int
-    start: int  # where the first push begins
+    start: int  # where the first push begins -- the call itself, if consume is set
     name: str
-    pushed: tuple[Operand, ...]  # in the order they reach the stack
+    pushed: tuple[Operand, ...] = ()  # in the order they reach the stack -- empty if consume is set
+    # the raw pushes stack.py found for this call, when match()'s own
+    # contiguous-and-classifiable scan could not: nothing here is reloaded
+    # from an address, because nothing here is left standing to reload from
+    # -- consume() pops every byte instead, wherever it actually sits
+    consume: tuple[Insn, ...] = ()
 
     @property
     def operands(self) -> tuple[Operand, Operand]:
@@ -215,11 +233,29 @@ def match(module: Module, reached: list[Insn], index: int) -> CallSite | None:
     return CallSite(call.at, call.end, reached[last + 1].at, name, tuple(reversed(found)))
 
 
-def sites(module: Module, reached: list[Insn]) -> list[CallSite]:
+def sites(module: Module, reached: list[Insn], blocks: list[Block]) -> list[CallSite]:
+    """Every call whose arguments are known -- classified from an address or
+    an immediate where match() can see one, popped from the stack where it
+    cannot.
+
+    match()'s backward scan only sees a push immediately, contiguously before
+    the call; stack.py's block-scoped depth tracking sees further, including
+    a value pushed early and left stranded under an entirely separate,
+    self-contained call. Every site match() already finds is left to it --
+    frames() is only asked about what match() could not classify.
+    """
     found = []
+    handled: set[int] = set()
     for index, insn in enumerate(reached):
         if insn.at in module.calls and (site := match(module, reached, index)) is not None:
             found.append(site)
+            handled.add(insn.at)
+    for block in blocks:
+        for frame in frames(block, module.calls, _arity):
+            if frame.call.at in handled:
+                continue
+            name = module.calls[frame.call.at]
+            found.append(CallSite(frame.call.at, frame.call.end, frame.call.at, name, consume=frame.pushed))
     return found
 
 
@@ -293,6 +329,8 @@ def absorb(site: CallSite, live: Flag) -> Emitted | str:
     Nine to sixteen bytes against fifteen and twenty-one, and it removes a far
     call and the routine behind it.
     """
+    if site.consume:
+        return consume(site, live)
     if site.name == FIX_MULTIPLY:
         return fix_multiply(site, live)
     if site.name in DIVIDES:
@@ -352,6 +390,132 @@ def restoring() -> list[Instruction]:
         Instruction.create_reg(Code.POP_R16, Register.AX),
         Instruction.create_reg(Code.POP_R16, Register.DX),
     ]
+
+
+def grouped(pushed: tuple[Insn, ...]) -> list[tuple[Insn, ...]] | None:
+    """One argument's worth of pushes per group, deepest first, or None if
+    they do not split cleanly into 4-byte arguments.
+
+    Byte-counted from the top rather than address-matched: stack.py's own
+    frames() guarantees the *total* is exactly arity*4, but not that a word
+    pair stays adjacent to its own other half rather than a neighbour's --
+    real BC can't produce that (the low half would have to survive in ax
+    across a call that clobbers it), but this walk does not get to assume it.
+    """
+    groups: list[tuple[Insn, ...]] = []
+    remaining = list(pushed)
+    while remaining:
+        have = 0
+        take: list[Insn] = []
+        while have < 4 and remaining:
+            insn = remaining.pop()
+            have += PUSH_BYTES.get(insn.code, 0)
+            take.append(insn)
+        if have != 4:
+            return None
+        take.reverse()
+        groups.append(tuple(take))
+    groups.reverse()
+    return groups
+
+
+# bx is never a target below and never holds a value this pass has to
+# preserve across the call, so it is always free as scratch -- any other
+# register risks clobbering a different argument already popped into it, or
+# clobbering an array index BC's own code is still holding across this call.
+# For the four runtime routines that rests on the QuickBASIC 4.5 runtime
+# source (stack.py's own docstring): callee-cleanup, clobbers only ax/cx/dx/bx.
+# fixMul& is not a runtime routine -- it is a user-declared FUNCTION this pass
+# invents a body for, and nothing here has measured what BC assumes survives a
+# call to one. No fixMul& site in fixtures/omf or build/ ever reaches Consume
+# (every one there is address-or-immediate, absorbed by match() already), so
+# this is unexercised, not merely untested.
+LOW16 = {Register.EAX: Register.AX, Register.ECX: Register.CX, Register.EDX: Register.DX}
+
+
+def popped_into(target: Register_, group: tuple[Insn, ...]) -> list[Instruction]:
+    """One argument, off the real stack and into `target`, matching however
+    BC actually pushed it -- one dword, or two words with the high half
+    pushed first, popped low then high and recombined through the stack the
+    same way restoring() takes a value apart in the other direction.
+    """
+    if len(group) == 1:
+        return [Instruction.create_reg(Code.POP_R32, target)]
+    return [
+        Instruction.create_reg(Code.POP_R16, LOW16[target]),
+        Instruction.create_reg(Code.POP_R16, Register.BX),
+        Instruction.create_reg(Code.PUSH_R16, Register.BX),
+        Instruction.create_reg(Code.PUSH_R16, LOW16[target]),
+        Instruction.create_reg(Code.POP_R32, target),
+    ]
+
+
+# Which physical register each pop lands in, topmost group (the one nearest
+# the call, popped first) to deepest -- forced by the real stack, independent
+# of LEFT_FIRST's logical left/right. Multiplication commutes, so which of
+# the two operands loads into eax cannot change a*b; comparison and division
+# are not commutative, but eax/ecx here is the same assignment dividing()
+# and ABSORBED's reg,rm forms already use for a Delete site, just populated
+# by a pop instead of a load.
+CONSUME_TARGETS = {
+    COMPARE: (Register.ECX, Register.EAX),
+    MULTIPLY: (Register.EAX, Register.ECX),
+    DIVIDE: (Register.EAX, Register.ECX),
+    REMAINDER: (Register.EAX, Register.ECX),
+    FIX_MULTIPLY: (Register.ECX, Register.EDX, Register.EAX),
+}
+
+
+def consume(site: CallSite, live: Flag) -> Emitted | str:
+    """A call whose arguments only the stack knows, popped rather than reloaded.
+
+    Nothing here is classified as an address or a constant, because nothing
+    here is left standing to classify: match() already owns every site whose
+    operands are contiguous and address-or-immediate, and this is only ever
+    asked about a site it refused. Popping every byte, regardless of what any
+    one push looks like, is what makes that sound -- a site with one static
+    operand and one stack-only operand still has BOTH pushed, and reloading
+    the static one from memory while leaving its push on the stack would
+    leak four bytes of stack per call, forever, since nothing else here ever
+    removes a push.
+
+    fixShift always goes through cl here, even when it turns out to have been
+    a compile-time constant -- shrd's own immediate form needs the value at
+    codegen time, which a popped operand never has. shrd masks its count
+    modulo 32 regardless, so the range refusal fix_multiply() applies to a
+    known-constant shift does not apply and is not needed.
+    """
+    if site.name == COMPARE and live & SYNTHESISED:
+        return f"the site's {live & SYNTHESISED!r} comes from the runtime, not from a comparison"
+    if site.name != COMPARE and live & ALL:
+        return f"something reads {live & ALL!r} after it"
+
+    groups = grouped(site.consume)
+    if groups is None:
+        return f"{site.name}'s pushes do not split cleanly into 4-byte arguments"
+    targets = CONSUME_TARGETS[site.name]
+    if len(groups) != len(targets):
+        return f"{site.name} takes {len(targets)} arguments, not {len(groups)}"
+
+    steps: list[Instruction] = []
+    for target, group in zip(targets, reversed(groups), strict=True):
+        steps.extend(popped_into(target, group))
+
+    if site.name == COMPARE:
+        steps.append(Instruction.create_reg_reg(Code.CMP_R32_RM32, Register.EAX, Register.ECX))
+        return assemble(steps, {})
+    if site.name == MULTIPLY:
+        steps.append(Instruction.create_reg_reg(Code.IMUL_R32_RM32, Register.EAX, Register.ECX))
+    elif site.name in DIVIDES:
+        steps.append(Instruction.create(Code.CDQ))
+        steps.append(Instruction.create_reg(Code.IDIV_RM32, Register.ECX))
+        if site.name == REMAINDER:
+            steps.append(Instruction.create_reg_reg(Code.MOV_R32_RM32, RESULT, Register.EDX))
+    elif site.name == FIX_MULTIPLY:
+        steps.append(Instruction.create_reg(Code.IMUL_RM32, Register.EDX))
+        steps.append(Instruction.create_reg_reg_reg(Code.SHRD_RM32_R32_CL, RESULT, Register.EDX, Register.CL))
+    steps.extend(restoring())
+    return assemble(steps, {})
 
 
 def dividing(site: CallSite, live: Flag) -> Emitted | str:

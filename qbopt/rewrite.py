@@ -159,7 +159,7 @@ def plan(
                 edit,
             )
         )
-    for site in sites(found, reached):
+    for site in sites(found, reached, blocks):
         after = flags_after(blocks, live, site.start, site.end)
         emitted = absorb(site, after)
         reason = anchored_inside(found, mapped, site.start, site.end)

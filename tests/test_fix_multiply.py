@@ -20,7 +20,9 @@ from dosbox import dosbox_bin
 from qbopt import omf
 from qbopt import module
 from qbopt.calls import sites
+from qbopt.blocks import code_map
 from qbopt.rewrite import rewrite
+from qbopt.blocks import partition
 from qbopt.calls import FIX_MULTIPLY
 from qbopt.blocks import instructions
 
@@ -68,7 +70,10 @@ def test_fixmul_absorbs_and_links_where_bc_alone_cannot(tag: str) -> None:
     assert parsed is not None
     reached = instructions(parsed)
     assert not isinstance(reached, str)
-    found = [s for s in sites(parsed, reached) if s.name == FIX_MULTIPLY]
+    mapped = code_map(parsed)
+    assert not isinstance(mapped, str)
+    blocks = partition(parsed, mapped)
+    found = [s for s in sites(parsed, reached, blocks) if s.name == FIX_MULTIPLY]
     assert len(found) == 7, "one fixMul& call per case in the program"
 
     fixmul_bytes = {parsed.code[s.start : s.end].hex() for s in found}
