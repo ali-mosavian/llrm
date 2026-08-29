@@ -63,21 +63,33 @@ which charges per instruction and will report widening as a win at exactly the
 instruction-count ratio on every machine forever. `--no-widen` exists so the
 answer arrives as a configuration change rather than a rewrite.
 
-**95 regions are still refused**: 73 cross a LEDATA boundary, 16 are single
-pairs that widen to more bytes than BC wrote, 6 would swallow a line number. In
-qb-qrender the proportion is worse -- 96 of 101 refusals are the single-pair
-case, which is the shape a whole-procedure rewrite fixes and a per-region one
-cannot.
+**22 regions are still refused**: 16 are single pairs that widen to more bytes
+than BC wrote, 6 would swallow a line number. In qb-qrender the proportion is
+worse -- 98 of 99 refusals are the single-pair case, which is the shape a
+whole-procedure rewrite fixes and a per-region one cannot.
 
 ## Fixed since
+
+**No region is refused for crossing a LEDATA boundary any more.** It was the
+largest refusal category by far, 73 of 1337 regions across the corpus.
+`relocate()` moves the shared boundary between the two records a crossing
+spans to the edit's own edge, rather than merging them: an earlier design
+that dropped the fully-absorbed record instead re-parented every FIXUPP that
+used to follow it to whatever LEDATA happened to precede it after the drop,
+which failed on 72 of the 73 cases. Measured first, not assumed: every one of
+those 73 crossings spans records in plain file order, never one of BC's own
+backpatch records, which is what the fix leans on and does not attempt to
+generalise past. `suite/fixmul.bas` no longer needs the padding statement it
+once did to dodge a call site landing on a flush point. See AGENTS.md's
+"Moving code across a LEDATA boundary".
 
 **qbopt has been run on qb-qrender, end to end.** All 15 modules rewritten
 between BC and LINK, linked against the patched uGL, run under the pinned
 profile with `-campath -ticks 200`: the rendered frame is byte-for-byte
 identical to the baseline's and every simulation and geometry field matches.
 No measurable speed change, for the reason the census already gave -- the
-program declares no LONG, so the pass touches 924 bytes of 74,873. The build
-used the `build/vbd-aa7dc172` snapshot, whose objects and uGL match each other;
+program declares no LONG, so the pass touches under 1,000 bytes of 74,873.
+The build used the `build/vbd-aa7dc172` snapshot, whose objects and uGL match;
 a fresh `tools/dosbox.sh build vbd` does not link today, because
 `build/native-mgl/UGLV.LIB` is stale against `src/` and lacks `UGLZSCALE` and
 the `UGLARR*` family.

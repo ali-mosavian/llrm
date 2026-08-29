@@ -240,6 +240,49 @@ Moving code means updating all of, and the list is finite:
             recomputed by decoding, which is the one part with no
             record to lean on
 
+## Moving code across a LEDATA boundary
+
+BC splits a code segment across several LEDATA records -- a flush roughly
+every 128 bytes, on QuickBASIC 4.5 at least, with no relationship to
+statement or instruction boundaries. A region whose bytes span two of them
+was refused outright for a long time: merging two records looked like it
+would have to reconcile BC's own backpatch records, which arrive later in
+the file at an earlier offset to fill in a forward jump, and untangling that
+looked like more than a concatenation. Measured, over every region the
+corpus actually wants to take: the two records a crossing spans are always in
+plain file order, never a backpatch pair, in all 73 cases. That measurement
+is what the fix rests on -- it does not attempt the general case.
+
+**The fix moves the shared boundary rather than merging the records.** A
+region crossing from record A into record B extends A's own span to the
+edit's own end and shrinks B's to start there; neither is removed. That
+matters because a FIXUPP's offset is relative to whichever LEDATA precedes it
+in the file -- `qbopt/omf.py`'s `fixups()` tracks `base` exactly that way, and
+`relocate()` mirrors it with `covered`, reset on every LEDATA it passes. An
+earlier design that dropped the fully-absorbed record instead re-parented
+every FIXUPP that used to follow it: measured, 72 of 73 corpus crossings have
+a *data*-segment LEDATA between the leader and the record it would have
+merged in, so dropping it left the FIXUPP with nothing to attach to and
+refused the whole module. `qbopt/relocate.py`'s `crossed_pair` and
+`_boundary_overrides` do the moving; a record an edit swallows whole is
+dropped rather than shrunk to nothing, safe only because every fixup that
+would have followed it falls inside the edit and is already refused a home.
+
+**Two edits may move two different boundaries of the same chunk.** One
+region's own crossing can shrink a chunk from the left while a second,
+unrelated region's crossing shrinks it from the right -- both are safe, and
+have to compose into one span rather than either overwriting the other.
+Keying a conflict check by *chunk touched* rather than *boundary moved* was
+tried first, and refused a real pair of regions that did not conflict at
+all -- correct by its own rule, wrong in fact, and caught because a run-twice
+idempotence check found the region on the second pass that the first had
+refused for nothing. Only two edits wanting to move the *same* boundary
+actually conflict, and that needs every taken edit at once to see, which a
+single region's own check cannot -- `qbopt/rewrite.py`'s
+`drop_chained_crossings` runs after every region has been decided
+independently, refusing the later of the two rather
+than the runtime pass's blunter option of costing the whole module.
+
 ## What the OBJ gives that the loaded image did not
 
 - A call site is a FIXUPP naming an EXTDEF. At run time it was a relocated

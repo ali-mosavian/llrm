@@ -40,6 +40,7 @@ from qbopt.lift import emit_region
 from qbopt.relocate import relocate
 from qbopt.calls import FIX_MULTIPLY
 from qbopt.blocks import instructions
+from qbopt.relocate import crossed_pair
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,9 +79,15 @@ def anchored_inside(found: module.Module, mapped: CodeMap, at: int, end: int) ->
         inside = sorted(offset for offset in offsets if at < offset < end)
         if inside:
             return f"{why} {inside[0]:#x}, inside the region"
-    if not any(lo <= at and end <= hi for lo, hi in found.chunks):
-        # rewriting across two LEDATA would have to merge them, and BC's
-        # backpatch records make that more than a concatenation
+    if any(lo <= at and end <= hi for lo, hi in found.chunks):
+        return None
+    # crossing is safe when the region spans exactly two chunks that are
+    # adjacent in file order and byte position -- relocate() moves their
+    # shared boundary to the edit's own edge rather than merging them, which
+    # keeps every fixup with the same LEDATA it always followed. BC's own
+    # backpatch records are a later chunk at an earlier offset, never
+    # adjacent this way, and that shape is refused rather than guessed at.
+    if crossed_pair(found.chunks, at, end) is None:
         return "the region crosses a LEDATA boundary"
     return None
 
@@ -187,7 +194,42 @@ def plan(
                 edit,
             )
         )
-    return planned
+    return drop_chained_crossings(planned, found.chunks)
+
+
+def drop_chained_crossings(planned: list[Planned], chunks: tuple[tuple[int, int], ...]) -> list[Planned]:
+    """Refuse the later of two crossings that would both move the same boundary.
+
+    Each is safe alone -- anchored_inside already checked that. A chunk with a
+    crossing on each side is fine: relocate() moves the two boundaries
+    independently, one region eating into it from the left and another out of
+    it to the right. Only two regions wanting to move the exact same boundary
+    conflict, and that needs every taken edit at once to see, which a single
+    region's own check cannot -- so it runs here, after every region has
+    already been decided independently, rather than refusing the whole module
+    the way relocate() would have to.
+    """
+    touched: set[int] = set()  # the shared offset of each boundary already being moved
+    drop: set[int] = set()
+    for one in sorted(planned, key=lambda p: p.region.at):
+        if one.edit is None:
+            continue
+        pair = crossed_pair(chunks, one.edit.lo, one.edit.hi)
+        if pair is None:
+            continue
+        boundary = pair[0][1]  # == pair[1][0]
+        if boundary in touched:
+            drop.add(one.region.id)
+            continue
+        touched.add(boundary)
+    if not drop:
+        return planned
+    return [
+        Planned(replace(one.region, taken=False, reason="another region already moves this LEDATA boundary"), None)
+        if one.region.id in drop
+        else one
+        for one in planned
+    ]
 
 
 def rewrite(

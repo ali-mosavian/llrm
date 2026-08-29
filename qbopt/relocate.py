@@ -127,11 +127,29 @@ def apply(image: bytes, shift: Shift) -> bytes:
     return bytes(out + image[at:])
 
 
-def straddled(shift: Shift, lo: int, hi: int) -> Edit | None:
-    """An edit that crosses the boundary of the range lo..hi, if there is one."""
-    for edit in shift.edits:
-        if edit.lo < hi and lo < edit.hi and not (lo <= edit.lo and edit.hi <= hi):
-            return edit
+def crossed_pair(
+    chunks: tuple[tuple[int, int], ...], at: int, end: int
+) -> tuple[tuple[int, int], tuple[int, int]] | None:
+    """The two adjacent LEDATA chunks [at, end) spans, if it crosses exactly one boundary safely.
+
+    None both when nothing needs crossing (the region sits inside one chunk)
+    and when crossing would not be safe: a third chunk, or a neighbour that is
+    not exactly adjacent in file order and byte position. BC's own backpatch
+    records are exactly that -- a later record at an earlier offset -- and
+    that shape is refused rather than guessed at, the same way it always was
+    for a region that could not fit in one chunk at all.
+    """
+    for i, (lo, hi) in enumerate(chunks):
+        if not (lo <= at < hi):
+            continue
+        if end <= hi:
+            return None  # wholly inside one chunk; nothing to cross
+        if i + 1 >= len(chunks):
+            return None
+        nxt = chunks[i + 1]
+        if nxt[0] != hi or end > nxt[1]:
+            return None
+        return (lo, hi), nxt
     return None
 
 
@@ -155,6 +173,56 @@ def retarget_branches(image: bytes, instructions: list[Insn], shift: Shift) -> b
             return f"a rel{branch.width * 8} at {branch.at:#x} would no longer reach its target"
         out[field_at : field_at + branch.width] = moved.to_bytes(branch.width, "little", signed=True)
     return bytes(out)
+
+
+def _boundary_overrides(
+    records: list[omf.Record], seg: int, edits: tuple[Edit, ...], chunks: tuple[tuple[int, int], ...]
+) -> tuple[dict[int, tuple[int, int]], set[int]] | str:
+    """Per code-LEDATA record id, the span it actually emits, and which to drop.
+
+    A record not named here emits its own natural span, exactly as before. For
+    an edit that crosses one boundary, the leader's span grows to the edit's
+    own end and the follower's shrinks to start there -- neither record is
+    removed, so no FIXUPP is re-parented to a data LEDATA that never followed
+    it in the file, which is what removing one would do. A follower an edit
+    swallows whole is dropped: every fixup that would have followed it falls
+    inside the edit and is already refused a home below, so nothing is lost.
+    """
+    entries = {(off, off + len(payload)): r for r, index, off, payload in omf.ledata(records) if index == seg}
+    # a chunk with a crossing on each side gets touched twice -- once as a
+    # follower (its start moves right) and once as a leader (its end moves
+    # right too) -- and both have to compose into one span, not overwrite
+    # each other, or whichever edit is processed second silently undoes the
+    # first's own shrink.
+    starts: dict[int, int] = {}
+    ends: dict[int, int] = {}
+    dropped: set[int] = set()
+    boundaries: set[int] = set()
+    for edit in edits:
+        if any(lo <= edit.lo and edit.hi <= hi for lo, hi in chunks):
+            continue  # wholly inside one chunk; nothing to move
+        pair = crossed_pair(chunks, edit.lo, edit.hi)
+        if pair is None:
+            return f"a region at {edit.lo:#x} crosses a LEDATA boundary"
+        leader_span, follower_span = pair
+        boundary = leader_span[1]  # == follower_span[0]
+        if boundary in boundaries:
+            return f"a region at {edit.lo:#x} crosses a LEDATA boundary two edits both reach"
+        boundaries.add(boundary)
+        leader, follower = entries[leader_span], entries[follower_span]
+        if id(leader) in dropped or id(follower) in dropped:
+            return f"a region at {edit.lo:#x} crosses a LEDATA boundary a swallowed record also reaches"
+        ends[id(leader)] = edit.hi
+        if edit.hi < follower_span[1]:
+            starts[id(follower)] = edit.hi
+        else:
+            dropped.add(id(follower))
+    overrides = {
+        id(record): (starts.get(id(record), off), ends.get(id(record), end))
+        for (off, end), record in entries.items()
+        if id(record) in starts or id(record) in ends
+    }
+    return overrides, dropped
 
 
 def relocate(records: list[omf.Record], seg: int, image: bytes, shift: Shift) -> list[omf.Record] | str:
@@ -186,6 +254,11 @@ def relocate(records: list[omf.Record], seg: int, image: bytes, shift: Shift) ->
     if isinstance(moved, str):
         return moved
 
+    overridden = _boundary_overrides(records, seg, shift.edits, found.chunks)
+    if isinstance(overridden, str):
+        return overridden
+    overrides, dropped = overridden
+
     owner = omf.last_writers(records, seg, len(image))
     fixups = omf.fixups(records)
     by_record: dict[int, list[omf.Fixup]] = {}
@@ -205,17 +278,25 @@ def relocate(records: list[omf.Record], seg: int, image: bytes, shift: Shift) ->
                 out.append(record)
                 covered = None
                 continue
-            if crossing := straddled(shift, offset, offset + len(payload)):
-                return f"a region at {crossing.lo:#x} crosses a LEDATA boundary"
-            lo, hi = shift.at(offset), shift.at(offset + len(payload))
-            # only the bytes this record finally owns come from the new image;
-            # the rest are its own, so a no-op rebuild is byte for byte the input
+            if id(record) in dropped:
+                covered = None
+                continue
+            start, end = overrides.get(id(record), (offset, offset + len(payload)))
+            lo, hi = shift.at(start), shift.at(end)
+            if hi - lo > 1024:
+                return f"a region at {start:#x} needs {hi - lo} bytes, more than one LEDATA holds"
+            # only the bytes this record finally owns, and that were ever its
+            # own payload, come from the new image; the rest are its own, so a
+            # no-op rebuild is byte for byte the input. A boundary an edit
+            # moved annexes bytes that were never this record's -- there is
+            # nothing of its own to restore there, only the edit's new code.
             mine_only = bytearray(moved[lo:hi])
-            for at in range(offset, offset + len(payload)):
-                if owner.get(at) != id(record):
+            for at in range(max(start, offset), min(end, offset + len(payload))):
+                inside_edit = any(edit.lo < at < edit.hi for edit in shift.edits)
+                if owner.get(at) != id(record) and not inside_edit:
                     mine_only[shift.at(at) - lo] = payload[at - offset]
             out.append(omf.ledata_record(seg, lo, bytes(mine_only)))
-            covered = (lo, lo + len(mine_only))
+            covered = (lo, hi)
             continue
 
         if kind == omf.FIXUPP and (mine := by_record.get(id(record))):

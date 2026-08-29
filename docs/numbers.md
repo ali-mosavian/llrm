@@ -12,22 +12,29 @@ Measured 2026-08-29, over the 110 objects in `fixtures/omf`, with
 |---|---|
 | objects | 110, 71204 bytes of code |
 | mapped | 110; none refused |
-| regions found | 1332 |
-| taken | 1237 |
-| their bytes | 24009 -> 15321, 36 per cent smaller |
+| regions found | 1337 |
+| taken | 1315 |
+| their bytes | 25898 -> 16473, 36 per cent smaller |
 
 Refused, by reason:
 
 | count | why |
 |---|---|
-| 73 | the region crosses a LEDATA boundary |
-| 16 | a single pair that widens to more bytes than BC wrote |
+| 12 | a single pair that widens to more bytes than BC wrote |
 | 6 | a line number points inside the region |
 
 Every module maps. It did not before: the entry point was searched for, and the
 search picked one byte late on 22 objects and could not explain the `/V /W`
 event stub at all. Both are settled by the module header the QuickBASIC 4.5
 runtime defines -- see `docs/testing.md` and `AGENTS.md`.
+
+No region is refused for crossing a LEDATA boundary any more -- it was the
+largest refusal category, 73 of 1337. `relocate()` moves the shared boundary
+to the edit's own edge instead of merging the two records: neither is removed,
+so no FIXUPP is re-parented to whatever LEDATA happens to precede it after the
+edit, which is the failure mode an earlier, merging design hit on 72 of 73
+corpus cases. See `qbopt/relocate.py`'s `crossed_pair` and
+`_boundary_overrides`, and AGENTS.md's "Moving code across a LEDATA boundary".
 
 ## The real program
 
@@ -38,8 +45,8 @@ Compiled under `v-g3`; census with `tools/census.py`.
 |---|---|
 | modules mapped | 15 of 15 |
 | regions found | 164 |
-| taken | 63 |
-| their bytes | 924 -> 800 |
+| taken | 65 |
+| their bytes | 949 -> 824 |
 
 Two findings, and the second is worth more than the first.
 
@@ -53,9 +60,9 @@ the 15 modules.** `int 34h`..`3Bh` is an x87 instruction with its operand
 inline, and there are 2130 of them here. Nothing in the suite has one. This is
 what measuring against a real program was for.
 
-Of what is left refused, 96 of 101 are single pairs that widen to more bytes
+Of what is left refused, 98 of 99 are single pairs that widen to more bytes
 than BC wrote -- the shape a whole-procedure rewrite would fix and a per-region
-one cannot.
+one cannot. None cross a LEDATA boundary any more.
 
 ### Built, linked and run
 
@@ -74,11 +81,16 @@ walk further before it stops.
 | ticks, cp_pts, clp_cnt | 202, 216, 1648 | identical |
 
 **No measurable speed difference.** frames, seconds and every `ft_*` and `fps_*`
-field came out bit-identical across the two runs -- the timer quantises, and 63
-regions over 924 bytes of a 74,873-byte program is too small a fraction of the
+field came out bit-identical across the two runs -- the timer quantises, and 65
+regions over 949 bytes of a 74,873-byte program is too small a fraction of the
 work to show through it. A `-bench 60` run reported 59.14 ms against 58.12,
 1.7 per cent, but the two runs were not at the same place in the map by then and
 drew different geometry, so that pair is not a measurement of anything.
+
+(The table above is from the specific build the run used, before the LEDATA
+boundary fix; the region count in this paragraph is the current static census.
+Re-running qb-qrender would take slightly fewer bytes now, not a different
+conclusion.)
 
 This is the correctness result, not a speed result. The speed is behind the
 refusals above.

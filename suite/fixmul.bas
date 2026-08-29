@@ -16,58 +16,54 @@
 ' Five value cases at a 16-bit shift: two positive, two negative, one of each,
 ' the extremes, and a constant right operand, which has no immediate form of
 ' imul and needs its own load. m6 repeats the first case at an 8-bit shift, an
-' 8.24 format instead of 16.16, to prove the shift is not fixed.
-'
-' Calls and prints alternate in two groups rather than one straight run: BC
-' flushes a LEDATA record roughly every 128 bytes regardless of what is inside
-' it, and a call whose pushes and call instruction land in different LEDATA
-' records is refused rather than risked. Seven calls in one unbroken run
-' crossed that boundary on QuickBASIC 4.5; two shorter runs do not.
+' 8.24 format instead of 16.16, to prove the shift is not fixed. Each result
+' prints twice, the raw long and the value it means as a double, read straight
+' off BASIC's own PRINT rather than guessed at.
 declare function fixMul& (byval a as long, byval b as long, byval fixShift as long)
 defint a-z
 dim valA as long
 dim valB as long
 dim shiftVar as long
-dim m1 as long
-dim m2 as long
-dim m3 as long
-dim m4 as long
-dim m5 as long
-dim m6 as long
-dim m7 as long
+dim result as long
 
 valA = 65536
 valB = 131072
-m1 = fixMul&(valA, valB, 16)
+result = fixMul&(valA, valB, 16)
+print "M1="; result
+print "F1="; cdbl(result) / 65536
 
 valA = -65536
-m2 = fixMul&(valA, valB, 16)
+result = fixMul&(valA, valB, 16)
+print "M2="; result
+print "F2="; cdbl(result) / 65536
 
 valA = -65536
 valB = -131072
-m3 = fixMul&(valA, valB, 16)
+result = fixMul&(valA, valB, 16)
+print "M3="; result
+print "F3="; cdbl(result) / 65536
 
 valA = 2147483647
-m4 = fixMul&(valA, 2, 16)
+result = fixMul&(valA, 2, 16)
+print "M4="; result
+print "F4="; cdbl(result) / 65536
 
 valA = -2147483648
 valB = 65536
-m5 = fixMul&(valA, valB, 16)
+result = fixMul&(valA, valB, 16)
+print "M5="; result
+print "F5="; cdbl(result) / 65536
 
 valA = 65536
 valB = 131072
-print "M1="; m1
-print "M2="; m2
-print "M3="; m3
-print "M4="; m4
-print "M5="; m5
-
-m6 = fixMul&(valA, valB, 8)
+result = fixMul&(valA, valB, 8)
+print "M6="; result
+print "F6="; cdbl(result) / 256
 
 shiftVar = 16
-m7 = fixMul&(valA, valB, shiftVar)
+result = fixMul&(valA, valB, shiftVar)
+print "M7="; result
+print "F7="; cdbl(result) / 65536
 
-print "M6="; m6
-print "M7="; m7
 print "DONE"
 end
