@@ -203,7 +203,7 @@ def absorb(site: CallSite, live: Flag) -> Emitted | str:
     call and the routine behind it.
     """
     if site.name in DIVIDES:
-        return guarded(site, live)
+        return dividing(site, live)
     if site.name not in ABSORBED:
         return f"{site.name} is not absorbed"
     if site.name == COMPARE and live & SYNTHESISED:
@@ -261,7 +261,7 @@ def restoring() -> list[Instruction]:
     ]
 
 
-def guarded(site: CallSite, live: Flag) -> Emitted | str:
+def dividing(site: CallSite, live: Flag) -> Emitted | str:
     """A long divide, as C compiles one.
 
         mov eax,[a] / mov ecx,[b] / cdq / idiv ecx
