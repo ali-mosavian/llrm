@@ -17,6 +17,7 @@ is the EXTDEF the fixup names.
 """
 
 from enum import StrEnum
+from dataclasses import replace
 from dataclasses import dataclass
 
 from iced_x86 import FlowControl
@@ -160,6 +161,42 @@ def gaps(module: Module, starts: set[int], tables: list[tuple[int, int]]) -> tup
 HEADER_SEARCH = 0x40
 
 
+# A table has at least this many entries. Three is what ON GOTO's smallest form
+# has, and a run that short at a constant stride does not happen by accident.
+SHORTEST_TABLE = 3
+
+
+def unexplained_tables(module: Module, fields: set[int], entry: int) -> tuple[tuple[int, int], ...]:
+    """Runs of relocations no instruction accounts for, which are a table.
+
+    BC puts more than one kind in the code segment. ON GOTO's is found by the
+    call in front of it; this is the other -- under /X, a map from statement to
+    code offset so RESUME can find its way back, thirty-seven entries in a
+    program with one error handler. It sits past the end of the code and the
+    walk falls into it, decoding zeros as instructions, so reachability cannot
+    be what finds it.
+
+    What finds it is the fixups: a run of them at a constant stride that no
+    operand field explains. Misalignment does not produce that.
+    """
+    # the header's own fields are below the entry and already exempt
+    missing = sorted(site for site in module.sites if site >= entry and site not in fields)
+    found, start = [], 0
+    while start < len(missing):
+        stop, stride = start + 1, None
+        while stop < len(missing):
+            step = missing[stop] - missing[stop - 1]
+            if stride is None:
+                stride = step
+            elif step != stride:
+                break
+            stop += 1
+        if stride is not None and stop - start >= SHORTEST_TABLE:
+            found.append((missing[start], missing[stop - 1] + stride))
+        start = stop
+    return tuple(found)
+
+
 def benign(module: Module, gap: tuple[int, int]) -> list[Insn] | None:
     """Whether a byte range nothing reaches can be left where it is.
 
@@ -246,8 +283,20 @@ def code_map(module: Module) -> CodeMap | str:
         if stranded:
             continue
         fields = operand_fields(module, found, dead)
-        if fields is None or not all(site in fields for site in module.sites if site >= entry):
+        if fields is None:
             continue
+        tables = unexplained_tables(module, fields, entry)
+        for lo, hi in tables:
+            fields |= set(range(lo, hi))
+        if not all(site in fields for site in module.sites if site >= entry):
+            continue
+        if tables:
+            covered = {at for lo, hi in tables for at in range(lo, hi)}
+            found = replace(
+                found,
+                starts=frozenset(found.starts - covered),
+                tables=tuple(sorted([*found.tables, *tables])),
+            )
         # Score by how many relocated fields the decode accounts for. An entry
         # too early reads header bytes as code; one too late skips real code and
         # leaves its operands unexplained. Both are accepted by the checks above,

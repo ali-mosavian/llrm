@@ -15,14 +15,20 @@ answer rather than a crash.
 from dataclasses import dataclass
 
 from iced_x86 import Code
+from iced_x86 import Encoder
 from iced_x86 import Register
+from iced_x86 import Instruction
+from iced_x86 import MemoryOperand
 
+from qbopt.flags import ALL
 from qbopt.flags import Flag
+from qbopt.lift import FIXUP
 from qbopt.declen import Insn
 from qbopt.module import Addr
 from qbopt.lift import Emitted
 from qbopt.module import Space
 from qbopt.module import Module
+from qbopt.declen import BITNESS
 
 COMPARE = "B$CPI4"
 MULTIPLY = "B$MUI4"
@@ -122,21 +128,42 @@ def sites(module: Module, reached: list[Insn]) -> list[CallSite]:
 # is read afterwards has to be left alone.
 SYNTHESISED = Flag.CF | Flag.PF | Flag.AF
 
-LOAD_EAX = bytes([0x66, 0xA1])  # mov eax,[disp16]
-CMP_EAX = bytes([0x66, 0x3B, 0x06])  # cmp eax,[disp16]
+# Divide is not here, and the reason is measured rather than assumed.
+# -2147483648 \\ -1 returns from B$DVI4 without raising anything, where idiv
+# traps with #DE; and division by zero raises BASIC error 11 where idiv again
+# traps. Multiply is different: B$MUI4 wraps on overflow and so does imul, so
+# absorbing it changes nothing. suite/divmod.bas holds both measurements.
+ABSORBED = {COMPARE: Code.CMP_R32_RM32, MULTIPLY: Code.IMUL_R32_RM32}
+
+RESULT = Register.EAX  # what the runtime returns a long in, as ax:dx
 
 
-def emit_compare(site: CallSite, live: Flag) -> Emitted | str:
-    """`mov eax,[a] / cmp eax,[b]` in place of the call, or why not.
+def absorb(site: CallSite, live: Flag) -> Emitted | str:
+    """The call replaced by two 386 instructions, or why it cannot be.
 
-    Nine bytes against fifteen or twenty-one, and it removes a far call and the
-    eleven instructions behind it.
+    Nine or fourteen bytes against fifteen and twenty-one, and it removes a far
+    call and the routine behind it.
     """
-    if site.name != COMPARE:
-        return f"{site.name} is not absorbed yet"
-    if live & SYNTHESISED:
+    operation = ABSORBED.get(site.name)
+    if operation is None:
+        return f"{site.name} is not absorbed"
+    if site.name is COMPARE and live & SYNTHESISED:
         return f"the site's {live & SYNTHESISED!r} comes from the runtime, not from a comparison"
+    if site.name is MULTIPLY and live & ALL:
+        # imul sets the flags where the runtime left whatever it happened to
+        return f"something reads {live & ALL!r} after the multiply"
 
     left, right = site.operands
-    code = LOAD_EAX + bytes(2) + CMP_EAX + bytes(2)
-    return Emitted(code, ((len(LOAD_EAX), left.at), (len(LOAD_EAX) + 2 + len(CMP_EAX), right.at)))
+    code = bytearray()
+    relocations = []
+    for step, operand in ((Code.MOV_EAX_MOFFS32, left), (operation, right)):
+        encoder = Encoder(BITNESS)
+        encoder.encode(Instruction.create_reg_mem(step, RESULT, MemoryOperand(displ=0, displ_size=2)), 0)
+        where = encoder.get_constant_offsets()
+        relocations.append((len(code) + where.displacement_offset, operand.at))
+        code += encoder.take_buffer()
+
+    # a comparison leaves its answer in the flags; a multiply leaves a value, and
+    # BC reads its high half from dx
+    restore = b"" if site.name is COMPARE else FIXUP[0]
+    return Emitted(bytes(code) + restore, tuple(relocations))

@@ -27,6 +27,7 @@ from configs import Config
 from configs import CONFIGS
 from dosbox import read_dos
 from dosbox import dosbox_bin
+from configs import switches_for
 
 ROOT = Path(__file__).resolve().parents[1]
 SUITE = ROOT / "suite"
@@ -94,7 +95,7 @@ def build(
     commands = {}
     by_config: dict[str, list[tuple[str, str, str]]] = {}
     for stem, program, config, extra, _suffix in jobs:
-        switches = f"{config.switches} {extra}".strip()
+        switches = f"{switches_for(config, program)} {extra}".strip()
         by_config.setdefault(config.tag, []).append((stem, program, switches))
 
     for tag, batch in by_config.items():

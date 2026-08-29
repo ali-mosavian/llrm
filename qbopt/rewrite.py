@@ -26,6 +26,7 @@ from qbopt.calls import sites
 from qbopt.lift import needed
 from qbopt.lift import refuse
 from qbopt.blocks import Block
+from qbopt.calls import absorb
 from qbopt.lift import regions
 from qbopt.flags import live_in
 from qbopt.relocate import Edit
@@ -37,7 +38,6 @@ from qbopt.blocks import partition
 from qbopt.flags import live_after
 from qbopt.lift import emit_region
 from qbopt.relocate import relocate
-from qbopt.calls import emit_compare
 from qbopt.blocks import instructions
 
 
@@ -153,7 +153,7 @@ def plan(
         )
     for site in sites(found, reached):
         after = flags_after(blocks, live, site.start, site.end)
-        emitted = emit_compare(site, after)
+        emitted = absorb(site, after)
         reason = anchored_inside(found, mapped, site.start, site.end)
         if reason is None and isinstance(emitted, str):
             reason = emitted

@@ -71,4 +71,13 @@ CONFIGS = {
     )
 }
 
+# Switches a particular program needs, on top of the configuration's own. /X is
+# what lets an error handler RESUME, and all three compilers take it.
+EXTRA = {"divmod": "/X"}
+
+
+def switches_for(config: Config, program: str) -> str:
+    return f"{config.switches} {EXTRA[program]}".strip() if program in EXTRA else config.switches
+
+
 TAGS = list(CONFIGS)

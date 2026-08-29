@@ -62,6 +62,20 @@ full matrix.
   runtime, and close with a far call and `retf n`. Module-level code has no
   prologue at all -- it starts straight after a 0x30-byte header.
 
+## What the runtime does that an instruction does not
+
+Measured with `suite/divmod.bas`, which traps under `/X` and prints `ERR`:
+
+- `x \ 0` raises BASIC error 11. `idiv` traps with `#DE`.
+- `-2147483648 \ -1` raises **nothing at all** -- `B$DVI4` returns. `idiv`
+  traps here too.
+- `305419896 * 252645135` overflows and raises **nothing**: `B$MUI4` wraps,
+  which is exactly what `imul` does.
+
+So multiply is absorbed and divide and remainder are not. The difference is not
+a judgement about which behaviour is better; it is that `imul` matches and
+`idiv` does not.
+
 ## What widening changes, exactly
 
 `flageq.py` put both forms side by side over 1125 cases:

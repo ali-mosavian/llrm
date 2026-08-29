@@ -102,7 +102,40 @@ def flags() -> list[str]:
     ]
 
 
-PROGRAMS = {"arith": arith, "procs": procs, "jumps": jumps, "cmpord": cmpord, "flags": flags}
+def divmod_() -> list[str]:
+    def divide(x: int, y: int) -> int:
+        return -(-x // y) if (x < 0) != (y < 0) else x // y
+
+    def remainder(x: int, y: int) -> int:
+        return x - divide(x, y) * y
+
+    a, b = 305419896, 252645135
+    lines = []
+    for n, (x, y) in enumerate(((7, 2), (-7, 2), (-7, -2), (7, -2)), start=1):
+        lines.append(f"DIV{n}={num(divide(x, y))}")
+        lines.append(f"MOD{n}={num(remainder(x, y))}")
+    lines.append(f"DIVBIG={num(divide(b, a))}")
+    lines.append(f"MODBIG={num(remainder(b, a))}")
+    lines.append(f"MULSMALL={num(s32(a * 3))}")
+    # Measured, not assumed. Division by zero is error 11. But the runtime
+    # returns from -2147483648 \\ -1 without raising anything, where idiv traps
+    # with #DE -- which is why divide is not absorbed.
+    lines.append(f"DIVZERO={num(11)}")
+    lines.append(f"DIVEDGE={num(0)}")
+    # and it does not raise on multiply overflow either -- it wraps, which is
+    # what imul does, which is why multiply is absorbed and divide is not
+    lines.append(f"MULOVF={num(0)}")
+    return [*lines, "DONE"]
+
+
+PROGRAMS = {
+    "arith": arith,
+    "procs": procs,
+    "jumps": jumps,
+    "cmpord": cmpord,
+    "flags": flags,
+    "divmod": divmod_,
+}
 
 
 def main() -> int:

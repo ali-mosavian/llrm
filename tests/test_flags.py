@@ -27,11 +27,11 @@ from qbopt.declen import decode
 from qbopt.flags import live_in
 from qbopt.lift import computes
 from qbopt.blocks import code_map
-from qbopt.blocks import instructions
 from qbopt.flags import DIVERGENT
 from qbopt.blocks import partition
 from qbopt.flags import live_after
 from qbopt.lift import emit_region
+from qbopt.blocks import instructions
 from qbopt.rewrite import flags_after
 
 LOAD_AND_STORE = "A1 5E 00 8B 16 60 00  23 06 5A 00 23 16 5C 00  A3 62 00 89 16 64 00"

@@ -28,6 +28,7 @@ from dosbox import launch
 from configs import Config
 from configs import CONFIGS
 from dosbox import read_dos
+from configs import switches_for
 
 from qbopt.rewrite import rewrite
 
@@ -79,7 +80,7 @@ def compile_all(cfg: Config, work: Path, names: list[str], timeout: int) -> None
     launch(
         work,
         cfg.mount,
-        [f"{cfg.bc} {cfg.switches} {n.upper()}.BAS, {n.upper()}.OBJ; >> BC.OUT" for n in names],
+        [f"{cfg.bc} {switches_for(cfg, n)} {n.upper()}.BAS, {n.upper()}.OBJ; >> BC.OUT" for n in names],
         timeout=timeout,
         env={"LIB": r"V:\LIB"},
     )

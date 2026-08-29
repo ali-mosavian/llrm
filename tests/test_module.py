@@ -80,13 +80,13 @@ def test_the_module_header_is_a_data_structure_not_code(obj: Path) -> None:
     # Every module opens with a header BC fills in: a name, then fields
     # relocated into other segments and the module's own entry point. The
     # measurement, on all five fixtures: those fixups stop at 0x20, and the
-    # first operand that belongs to an instruction is at 0x32. What sits in the
+    # first operand that belongs to an instruction is at 0x31. What sits in the
     # gap is not established, so nothing here depends on where it ends.
     found = module.load(obj)
     assert found is not None
     header = [at for at in found.operands if at <= 0x20]
     assert header, "the header carries relocated fields"
-    assert not [at for at in found.operands if 0x20 < at < 0x32], "and nothing between it and the first operand"
+    assert not [at for at in found.operands if 0x20 < at < 0x31], "and nothing between it and the first operand"
 
 
 @pytest.mark.parametrize(("at", "written"), [(0x50, 21), (0x5C, 9), (0x89, 80), (0xA7, 50), (0xC5, 20)])
