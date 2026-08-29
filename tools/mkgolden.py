@@ -277,6 +277,40 @@ def udt() -> list[str]:
     ]
 
 
+def arrudt() -> list[str]:
+    """suite/arrudt.bas: an array of TYPE Coord, module-level and BPREL."""
+    return [seq(11, 33), seq(22, 44), seq(55, 77), seq(66, 88), "DONE"]
+
+
+def nestud() -> list[str]:
+    """suite/nestud.bas: a TYPE nested inside another, plain and arrayed,
+    at module and procedure scope, plus a single-field TYPE used bare."""
+    return [
+        num(111),
+        "AB",
+        seq(1, 2),
+        "CD",
+        "EF",
+        num(333),
+        "GH",
+        seq(4, 5),
+        "IJ",
+        "KL",
+        num(999),
+        "DONE",
+    ]
+
+
+def arrprm() -> list[str]:
+    """suite/arrprm.bas: a SUB taking an array parameter, plain and of a TYPE."""
+    return [seq(7, 8), seq(1, 2, 3, 4), "DONE"]
+
+
+def byref2() -> list[str]:
+    """suite/byref2.bas: BYREF SINGLE and DOUBLE parameters."""
+    return [qbfloat(2.0), qbfloat(16.0), "DONE"]
+
+
 PROGRAMS = {
     "arith": arith,
     "procs": procs,
@@ -290,6 +324,10 @@ PROGRAMS = {
     "fixmul": fixmul,
     "arrays": arrays,
     "udt": udt,
+    "arrudt": arrudt,
+    "nestud": nestud,
+    "arrprm": arrprm,
+    "byref2": byref2,
 }
 
 
