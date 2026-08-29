@@ -9,13 +9,15 @@ code and never touches $$TYPES for it at all). The resolved name is the one
 invariant across all three; see qbopt/cvinfo.py's module docstring.
 """
 
+import tempfile
 from pathlib import Path
 
 import pytest
-from dosbox import launch
 from configs import CONFIGS
 from dosbox import read_dos
 from dosbox import dosbox_bin
+from cache import cached_launch
+from cache import toolchain_identity
 
 from qbopt import omf
 from qbopt import cvinfo
@@ -38,16 +40,21 @@ CASES = [
 
 def compile_with_debug(tag: str, program: str, source_dir: Path = SUITE) -> cvinfo.DebugInfo:
     cfg = CONFIGS[tag]
-    work = ROOT / "build" / "cvinfo" / tag / program
-    work.mkdir(parents=True, exist_ok=True)
+    (root := ROOT / "build" / "cvinfo").mkdir(parents=True, exist_ok=True)
+    # unique per call, not shared by (tag, program) -- several test functions
+    # here compile the same program, and a shared workdir races for real
+    # under pytest-xdist. The cache keys off the workdir's *content*, so a
+    # fresh directory each time costs nothing.
+    work = Path(tempfile.mkdtemp(dir=root, prefix=f"{tag}-{program}-"))
     dos_name = f"{program.upper()[:8]}.BAS"
     (work / dos_name).write_bytes((source_dir / f"{program}.bas").read_bytes())
 
     obj_name = f"{program.upper()[:8]}.OBJ"
-    run = launch(
+    run = cached_launch(
         work,
         cfg.mount,
         [f"{cfg.bc} /Zi {cfg.switches} {dos_name}, {obj_name}; > BC.OUT"],
+        identity=toolchain_identity(cfg),
         timeout=180,
         env={"LIB": r"V:\LIB"},
     )

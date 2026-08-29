@@ -4,13 +4,15 @@ source with /Zi and assert the reachability-derived procedure ranges equal
 cvinfo.Procedure.offset/proc_length exactly.
 """
 
+import tempfile
 from pathlib import Path
 
 import pytest
-from dosbox import launch
 from configs import CONFIGS
 from dosbox import read_dos
 from dosbox import dosbox_bin
+from cache import cached_launch
+from cache import toolchain_identity
 
 from qbopt import omf
 from qbopt import cvinfo
@@ -39,15 +41,18 @@ def compile_with_cv(
     tag: str, program: str, source_dir: Path, extra: str = ""
 ) -> tuple[module.Module, cvinfo.DebugInfo]:
     cfg = CONFIGS[tag]
-    work = ROOT / "build" / "extent" / tag / program
-    work.mkdir(parents=True, exist_ok=True)
+    (root := ROOT / "build" / "extent").mkdir(parents=True, exist_ok=True)
+    # unique per call -- see test_cvinfo.py's compile_with_debug for why a
+    # shared (tag, program) workdir races under pytest-xdist.
+    work = Path(tempfile.mkdtemp(dir=root, prefix=f"{tag}-{program}-"))
     dos_name = f"{program.upper()[:8]}.BAS"
     (work / dos_name).write_bytes((source_dir / f"{program}.bas").read_bytes())
     obj_name = f"{program.upper()[:8]}.OBJ"
-    run = launch(
+    run = cached_launch(
         work,
         cfg.mount,
         [f"{cfg.bc} /Zi {extra} {cfg.switches} {dos_name}, {obj_name}; > BC.OUT"],
+        identity=toolchain_identity(cfg),
         timeout=180,
         env={"LIB": r"V:\LIB"},
     )
