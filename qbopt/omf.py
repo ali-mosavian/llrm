@@ -158,6 +158,33 @@ def externals(recs: list[Record]) -> list[str]:
     return out
 
 
+def pubdef_names(records: list[Record], seg: int) -> dict[int, str]:
+    """PUBDEF's own name for each offset it declares into segment `seg`.
+
+    Mirrors code_offsets()'s PUBDEF branch, but keeps the name it skips past.
+    """
+    out: dict[int, str] = {}
+    for r in records:
+        if r.type & 0xFE != PUBDEF:
+            continue
+        body = r.body
+        _group, at = _index(body, 0)
+        base, at = _index(body, at)
+        if base == 0:  # an absolute segment names its frame instead
+            at += 2
+        if base != seg:
+            continue
+        while at < len(body):
+            namelen = body[at]
+            name = body[at + 1 : at + 1 + namelen].decode("latin1")
+            at += 1 + namelen
+            offset = struct.unpack_from("<H", body, at)[0]
+            at += 2
+            _, at = _index(body, at)  # the type index, unused here
+            out[offset] = name
+    return out
+
+
 def rename_external(records: list[Record], index: int, name: str) -> list[Record]:
     """The EXTDEF at `index` given a different name, its own index untouched.
 
