@@ -35,7 +35,7 @@ def test_a_real_pass_rewrites_the_code_and_keeps_the_records_readable(obj: Path)
     before, after = omf.code_segment(omf.parse(data)), omf.code_segment(omf.parse(out))
     assert before is not None and after is not None
     # The segment may grow. Widening never makes it longer, but absorbing a
-    # call can: a guarded divide is thirty-six bytes against fifteen, and what
+    # call can: a divide is eighteen bytes against fifteen under /G3, and what
     # it buys is a far call and the routine behind it.
     assert after[2] <= before[2] * 2, "and never by more than the code it replaces"
     assert omf.externals(omf.parse(out)) == omf.externals(omf.parse(data)), (

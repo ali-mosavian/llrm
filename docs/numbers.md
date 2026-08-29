@@ -71,10 +71,11 @@ long multiply, standing alone, in cycles:
 | `call B$MUI4`, full path | 22 | 103 | 62 | 45 | 15 | 15 | 19 | 45 |
 | one 32-bit `imul` | 2 | 30 | 14 | 10 | 8 | 7 | 10 | 10 |
 
-That is what absorbing a call buys, and it is why a guarded divide is worth
-thirty-six bytes against fifteen. Divide's routine is worse than multiply's: it
-normalises its operands one bit at a time, twelve instructions per pass and up
-to fifteen passes.
+That is what absorbing a call buys, and it is why divide is taken even where
+it grows: eighteen bytes for the divide and twenty-one for the remainder,
+against a call site of twenty-one, or fifteen under `/G3`. Divide's routine is worse than
+multiply's: it normalises its operands one bit at a time, twelve instructions
+per pass and up to fifteen passes.
 
 For a widened region, `cmpord-v-g3` with its 48 comparisons absorbed reports
 instructions 144 -> 96. The cycle columns from `price.py` on that object are not

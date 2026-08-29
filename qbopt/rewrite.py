@@ -160,8 +160,8 @@ def plan(
         if reason is None and any(one.edit and one.edit.lo < site.end and site.start < one.edit.hi for one in planned):
             reason = "it overlaps a region already taken"
         # A call site may grow. Absorbing removes a far call and the routine
-        # behind it, so the win is cycles rather than bytes -- a guarded divide
-        # is thirty-six bytes against fifteen and still worth it.
+        # behind it, so the win is cycles rather than bytes -- a divide is
+        # eighteen bytes and a remainder twenty-one, against fifteen under /G3.
         edit = None
         if reason is None and not isinstance(emitted, str):
             edit = Edit(

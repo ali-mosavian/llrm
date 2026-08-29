@@ -49,7 +49,7 @@ the module's own code segment. `tests/test_omf.py` asserts it.
 Measured over 110 objects of real BC output, across three compilers and twelve
 switch combinations:
 
-    932 of 1196 regions taken, 18269 bytes -> 10659
+    1080 of 1166 regions taken, 21131 bytes -> 13530
 
 Two kinds of rewrite. A **region** of long arithmetic becomes 386 code: one
 32-bit operation where BC did two 16-bit ones, with the high half put back
@@ -57,10 +57,12 @@ through the stack in four bytes. A **runtime call** is absorbed: a long
 comparison is fifteen or twenty-one bytes and eleven instructions behind a far
 call, and becomes `mov eax,[a]` / `cmp eax,[b]` in nine. Multiply likewise.
 
-Divide and remainder are not absorbed, and the reason is measured rather than
-argued: `B$DVI4` returns from `-2147483648 \ -1` without raising anything,
-where `idiv` traps. `B$MUI4` wraps on overflow, which is what `imul` does, so
-multiply is safe and divide is not.
+Divide and remainder are absorbed as C compiles them, `mov eax,[a]` /
+`mov ecx,[b]` / `cdq` / `idiv ecx`, with no test of the divisor because C makes
+none. That is the one deliberate behaviour change: `x \ 0` and
+`-2147483648 \ -1` fault, where BC's runtime raised error 11 for the first and
+returned silently from the second. `B$MUI4` wraps on overflow, which is what
+`imul` does, so multiply needed no such choice.
 
 Everything is checked by building, linking and running the program: twelve
 configurations, seven suite programs, compared line by line against a golden
