@@ -33,15 +33,27 @@ from qbopt.lift import Emitted
 from qbopt.module import Space
 from qbopt.module import Module
 from qbopt.declen import BITNESS
+from qbopt.declen import to_signed
 
 COMPARE = "B$CPI4"
 MULTIPLY = "B$MUI4"
 DIVIDE = "B$DVI4"
 REMAINDER = "B$RMI4"
 
+# A user-declared `declare function fixMul& (byval a as long, byval b as long)`
+# has no body anywhere -- LINK never sees it, because absorbing the call drops
+# its only fixup. BC never emits a type suffix into the EXTDEF, so the name it
+# writes is the identifier alone, uppercased the way every BASIC identifier is.
+# Measured: BC pushes a `declare`d function's arguments in the order written,
+# first argument first -- the runtime's own routines do not, which is what the
+# module docstring above is about, and is unrelated to this one.
+FIX_MULTIPLY = "FIXMUL"
+FIX_SHIFT = 16  # 16.16 fixed point; a different format is a different name
+
 # True where the left operand is pushed first. Uniform across the compilers,
-# opposite between the two routines.
-LEFT_FIRST = {COMPARE: True, MULTIPLY: False, DIVIDE: False, REMAINDER: False}
+# opposite between the two runtime routines. FIX_MULTIPLY is not the runtime's:
+# it is pushed in the order written, which happens to agree with COMPARE's.
+LEFT_FIRST = {COMPARE: True, MULTIPLY: False, DIVIDE: False, REMAINDER: False, FIX_MULTIPLY: True}
 
 # one dword per argument under VBDOS /G3, two words everywhere else
 PUSHES = {Code.PUSH_RM16, Code.PUSH_RM32}
@@ -94,6 +106,33 @@ def constant_at(insn: Insn) -> Operand | None:
     return Operand(Kind.CONSTANT, value=insn.insn.immediate(0), length=1)
 
 
+def widened_constant_at(reached: list[Insn], last: int) -> Operand | None:
+    """An INTEGER literal, widened to the LONG a `byval` parameter takes.
+
+    `mov ax,imm16 / cwd / push dx / push ax` -- PDS and QB 4.5 have no dword
+    push, so a constant argument to a user function goes through the same
+    sign-extension the language itself does for `INTEGER` to `LONG`, four
+    instructions where a runtime call's own small-constant form is one.
+    """
+    if last < 3:
+        return None
+    mov_ax, cwd, push_dx, push_ax = reached[last - 3], reached[last - 2], reached[last - 1], reached[last]
+    if not (
+        mov_ax.code == Code.MOV_R16_IMM16
+        and mov_ax.insn.op0_register == Register.AX
+        and cwd.code == Code.CWD
+        and cwd.at == mov_ax.end
+        and push_dx.code == Code.PUSH_R16
+        and push_dx.insn.op0_register == Register.DX
+        and push_dx.at == cwd.end
+        and push_ax.code == Code.PUSH_R16
+        and push_ax.insn.op0_register == Register.AX
+        and push_ax.at == push_dx.end
+    ):
+        return None
+    return Operand(Kind.CONSTANT, value=to_signed(mov_ax.insn.immediate(1), 2), length=4)
+
+
 def one_operand(module: Module, reached: list[Insn], last: int) -> Operand | None:
     """The long argument whose pushes end at `reached[last]`, or None.
 
@@ -107,7 +146,9 @@ def one_operand(module: Module, reached: list[Insn], last: int) -> Operand | Non
         return static_at(module, insn) or constant_at(insn)
 
     low = static_at(module, insn) or constant_at(insn)
-    if low is None or last == 0:
+    if low is None:
+        return widened_constant_at(reached, last)
+    if last == 0:
         return None
     high = static_at(module, reached[last - 1]) or constant_at(reached[last - 1])
     if high is None or reached[last - 1].end != insn.at:
@@ -202,6 +243,8 @@ def absorb(site: CallSite, live: Flag) -> Emitted | str:
     Nine to sixteen bytes against fifteen and twenty-one, and it removes a far
     call and the routine behind it.
     """
+    if site.name == FIX_MULTIPLY:
+        return fix_multiply(site, live)
     if site.name in DIVIDES:
         return dividing(site, live)
     if site.name not in ABSORBED:
@@ -298,6 +341,48 @@ def dividing(site: CallSite, live: Flag) -> Emitted | str:
     add(Instruction.create_reg(Code.IDIV_RM32, divisor))
     if site.name == REMAINDER:
         add(Instruction.create_reg_reg(Code.MOV_R32_RM32, RESULT, Register.EDX))
+    for insn in restoring():
+        add(insn)
+
+    return assemble(steps, relocated)
+
+
+def fix_multiply(site: CallSite, live: Flag) -> Emitted | str:
+    """`fixMul&(a, b)` as C would write it: `(int32)(((int64)a * b) >> 16)`.
+
+    One `imul` against the register form gives the full 64-bit product in
+    `edx:eax`, and `shrd` is a pure bit shift across the pair -- extracting bits
+    16..47 of a two's-complement value needs no sign extension, so it is right
+    whatever the signs of `a` and `b` are. Multiplication commutes exactly in
+    two's complement, so which argument loads into `eax` cannot change the
+    result; `LEFT_FIRST` records the order BC actually pushed them in, but
+    nothing here depends on it.
+    """
+    if live & ALL:
+        return f"something reads {live & ALL!r} after it, and imul leaves the flags undefined"
+
+    left, right = site.operands
+    factor = Register.ECX
+    steps: list[Instruction] = []
+    relocated: dict[int, int] = {}
+
+    def add(insn: Instruction) -> int:
+        steps.append(insn)
+        return len(steps) - 1
+
+    where = add(load_of(left))
+    if left.kind is Kind.STATIC and left.at is not None:
+        relocated[where] = left.at
+
+    if right.kind is Kind.STATIC:
+        where = add(Instruction.create_mem(Code.IMUL_RM32, MemoryOperand(displ=0, displ_size=2)))
+        if right.at is not None:
+            relocated[where] = right.at
+    else:
+        add(Instruction.create_reg_i32(Code.MOV_R32_IMM32, factor, right.value))
+        add(Instruction.create_reg(Code.IMUL_RM32, factor))
+
+    add(Instruction.create_reg_reg_i32(Code.SHRD_RM32_R32_IMM8, RESULT, Register.EDX, FIX_SHIFT))
     for insn in restoring():
         add(insn)
 

@@ -38,9 +38,20 @@ def test_a_real_pass_rewrites_the_code_and_keeps_the_records_readable(obj: Path)
     # call can: a divide is eighteen bytes against fifteen under /G3, and what
     # it buys is a far call and the routine behind it.
     assert after[2] <= before[2] * 2, "and never by more than the code it replaces"
-    assert omf.externals(omf.parse(out)) == omf.externals(omf.parse(data)), (
-        "an absorbed call may drop its fixup but never its EXTDEF, or every later index shifts"
+    before_names, after_names = omf.externals(omf.parse(data)), omf.externals(omf.parse(out))
+    assert len(after_names) == len(before_names), "an absorbed call may drop its fixup but never its EXTDEF slot"
+    live = {f.index for f in omf.fixups(omf.parse(out)) if f.target == "external"}
+    assert all(after_names[i] == before_names[i] for i in live), (
+        "a still-referenced external must keep the name its fixups were resolved against"
     )
+    # an orphaned entry may be left with its own name -- the routine's own
+    # .LIB satisfies it regardless of whether anything here still calls it --
+    # or renamed to one something in the object still actually does call, but
+    # never to a third, unrelated, unresolvable name
+    for index in range(1, len(after_names)):
+        if index in live:
+            continue
+        assert after_names[index] in (before_names[index], *(after_names[i] for i in live))
 
 
 def test_rewriting_the_output_finds_nothing_new(obj: Path) -> None:

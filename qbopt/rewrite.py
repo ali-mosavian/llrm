@@ -38,6 +38,7 @@ from qbopt.blocks import partition
 from qbopt.flags import live_after
 from qbopt.lift import emit_region
 from qbopt.relocate import relocate
+from qbopt.calls import FIX_MULTIPLY
 from qbopt.blocks import instructions
 
 
@@ -213,7 +214,38 @@ def rewrite(
         # the whole module is left alone; a partial rewrite is not a thing
         refused = [replace(one.region, taken=False, reason=moved) for one in planned]
         return b"".join(record.emit() for record in records), refused
+    moved = orphaned_externals_renamed(moved)
     return b"".join(record.emit() for record in moved), [one.region for one in planned]
+
+
+# The only names ever renamed by orphaned_externals_renamed. "Zero remaining
+# fixups" is not by itself a safe test for "nothing needs this EXTDEF": FIDRQQ
+# has none in any object that carries it -- LINK recognises the FP emulator
+# patch by that EXTDEF's presence, not by a fixup naming it, so renaming it
+# switches emulator patching off for the whole module. See AGENTS.md. These
+# are the names qbopt itself invented, whose only role is a fixup target, so
+# their absence is provably safe to signal by absence.
+RENAMABLE_IF_ORPHANED = {FIX_MULTIPLY}
+
+
+def orphaned_externals_renamed(records: list[omf.Record]) -> list[omf.Record]:
+    """A qbopt-owned EXTDEF nothing points at any more, renamed to one that resolves.
+
+    Absorbing every call to fixMul& drops every fixup that named it, and that
+    is deliberately not the same as dropping the EXTDEF: doing that would
+    renumber every later index, in every fixup and every THREAD, file-wide.
+    Renaming costs none of that -- the index stays where every fixup and
+    thread already expects it, and only the one EXTDEF entry's bytes change.
+    """
+    names = omf.externals(records)
+    live = {f.index for f in omf.fixups(records) if f.target == "external"}
+    survivor = next((n for i, n in enumerate(names) if i in live and n), None)
+    if survivor is None:
+        return records
+    for index, name in enumerate(names):
+        if name in RENAMABLE_IF_ORPHANED and index not in live:
+            records = omf.rename_external(records, index, survivor)
+    return records
 
 
 def main(argv: list[str] | None = None) -> int:

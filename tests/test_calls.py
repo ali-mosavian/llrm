@@ -8,6 +8,7 @@ import pytest
 
 from helpers import hx
 from qbopt import module
+from qbopt.calls import Kind
 from qbopt.flags import Flag
 from qbopt.lift import FIXUP
 from qbopt.calls import match
@@ -15,7 +16,12 @@ from qbopt.calls import sites
 from qbopt.calls import DIVIDE
 from qbopt.calls import absorb
 from qbopt.calls import COMPARE
+from qbopt.calls import Operand
+from qbopt.calls import CallSite
+from qbopt.calls import FIX_SHIFT
 from qbopt.calls import LEFT_FIRST
+from qbopt.calls import FIX_MULTIPLY
+from qbopt.calls import fix_multiply
 from qbopt.blocks import instructions
 
 
@@ -49,8 +55,8 @@ def test_both_push_shapes_reach_the_same_operands(fixtures: Path) -> None:
 
 
 @pytest.mark.parametrize(("name", "left_first"), sorted(LEFT_FIRST.items()))
-def test_only_comparison_pushes_its_left_operand_first(name: str, left_first: bool) -> None:
-    assert left_first == (name == COMPARE)
+def test_only_comparison_and_fix_multiply_push_their_left_operand_first(name: str, left_first: bool) -> None:
+    assert left_first == (name in (COMPARE, FIX_MULTIPLY))
 
 
 def test_a_call_with_anything_between_the_pushes_is_refused(fixtures: Path) -> None:
@@ -89,3 +95,50 @@ def test_an_absorbed_comparison_leaves_no_value_to_restore(fixtures: Path) -> No
     assert not isinstance(emitted, str)
     assert len(emitted.code) == 9, "mov eax,[a] then cmp eax,[b], and nothing else"
     assert FIXUP[0] not in emitted.code
+
+
+def static_operand(offset: int) -> Operand:
+    return Operand(Kind.STATIC, at=offset, length=1)
+
+
+def constant_operand(value: int) -> Operand:
+    return Operand(Kind.CONSTANT, value=value, length=1)
+
+
+def test_fix_multiply_is_one_imul_and_one_shrd_against_a_static() -> None:
+    # mov eax,[a] / imul dword [b] / shrd eax,edx,16, then the high-half
+    # restore BC reads through dx:ax the same way it does after a multiply.
+    site = CallSite(at=0, end=0, start=0, name=FIX_MULTIPLY, pushed=(static_operand(4), static_operand(0)))
+    emitted = fix_multiply(site, Flag.NONE)
+    assert not isinstance(emitted, str)
+    assert len(emitted.code) == 18, "mov eax,[a] / imul dword [b] / shrd eax,edx,16, then the restore"
+    assert FIXUP[0] in emitted.code
+    assert len(emitted.relocations) == 2
+
+
+def test_fix_multiply_against_a_constant_loads_it_first() -> None:
+    # imul has no immediate form that keeps the high half, so a constant right
+    # operand goes into a register before the multiply.
+    site = CallSite(at=0, end=0, start=0, name=FIX_MULTIPLY, pushed=(constant_operand(3), static_operand(0)))
+    emitted = fix_multiply(site, Flag.NONE)
+    assert not isinstance(emitted, str)
+    assert len(emitted.relocations) == 1, "only the static operand has a fixup to reuse"
+
+
+def test_fix_multiply_refuses_a_site_whose_flags_are_read() -> None:
+    site = CallSite(at=0, end=0, start=0, name=FIX_MULTIPLY, pushed=(static_operand(4), static_operand(0)))
+    refused = fix_multiply(site, Flag.ZF)
+    assert isinstance(refused, str)
+
+
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [(65536, 131072), (-65536, 131072), (-65536, -131072), (2147483647, 2), (-2147483648, 65536)],
+)
+def test_fix_multiply_matches_the_64_bit_shift_it_means(a: int, b: int) -> None:
+    # (int32)(((int64)a * b) >> 16), truncated to 32 bits the way C does it and
+    # the way SHRD does it: no sign extension, because a 64-bit two's complement
+    # value's bits 16..47 do not depend on its sign.
+    want = ((a * b) >> FIX_SHIFT) & 0xFFFFFFFF
+    want = want - 0x100000000 if want >= 0x80000000 else want
+    assert -(2**31) <= want < 2**31

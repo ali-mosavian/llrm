@@ -158,6 +158,38 @@ def externals(recs: list[Record]) -> list[str]:
     return out
 
 
+def rename_external(records: list[Record], index: int, name: str) -> list[Record]:
+    """The EXTDEF at `index` given a different name, its own index untouched.
+
+    Nothing anywhere names an EXTDEF by its bytes -- only FIXUPP subrecords and
+    THREAD definitions do, and always by this ordinal index. So a call site
+    absorbed down to zero remaining fixups leaves an index nothing points at any
+    more, and renaming what it says costs nothing else in the file: every
+    fixup, direct or threaded, keeps reading the same number and gets a
+    different, resolvable symbol back.
+    """
+    seen = 0
+    out = []
+    for r in records:
+        if r.type & 0xFE != EXTDEF:
+            out.append(r)
+            continue
+        body, i, changed = bytearray(), 0, False
+        while i < len(r.body):
+            n = r.body[i]
+            seen += 1
+            entry_name = name.encode("latin1") if seen == index else r.body[i + 1 : i + 1 + n]
+            j = i + 1 + n
+            _, k = _index(r.body, j)
+            body += bytes([len(entry_name)]) + entry_name + r.body[j:k]
+            changed = changed or seen == index
+            i = k
+        out.append(Record(r.type, bytes(body)) if changed else r)
+    if seen < index:
+        raise ValueError(f"only {seen} EXTDEFs; no entry {index}")
+    return out
+
+
 def ledata(recs: list[Record]) -> list[tuple[Record, int, int, bytes]]:
     """Each LEDATA as (record, segment index, offset, bytes)."""
     out = []
