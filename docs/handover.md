@@ -1,6 +1,6 @@
 # Handover
 
-State of qbopt as of 2026-08-29, `main` at `b66747d`.
+State of qbopt as of 2026-08-29, `main` at `9c02db9`.
 
 ## Where the work is
 
@@ -34,8 +34,8 @@ Earlier sessions in this repo are under
 
 ## What the pass does
 
-    110 objects, 71204 bytes    102 mapped, 8 refused
-    1166 regions, 1080 taken    21131 -> 13530 bytes, 35 per cent smaller
+    110 objects, 71204 bytes    110 mapped, 0 refused
+    1404 regions, 1382 taken    26233 -> 17414 bytes, 33 per cent smaller
 
 Twelve configurations across QB 4.5, PDS 7.1 and VBDOS build, link and run, each
 compared against both BC's own object and a golden authored from what the
@@ -43,7 +43,7 @@ program means. `tools/mutate.py` catches 14 of 14 seeded bugs.
 
 ## Verification
 
-    uv run pytest -m "not e2e"          2341 tests, host only, 80 seconds
+    uv run pytest -m "not e2e"          2641 tests, host only, 8 seconds
     uv run pytest                       adds DOSBox; what pre-commit runs
     uv run python tools/matrix.py       twelve configurations, end to end
     uv run python tools/mutate.py       every seeded bug must be caught
@@ -123,8 +123,26 @@ and BC alone can build the base half of the comparison. `tools/bench.py` reads
 the 8253 the way `docs/measurement.md` prescribes; getting a repeatable
 reading out of it took an IRQ0 mask and a guard band, and even then DOSBox-X's
 own tick bookkeeping keeps an absolute noise floor of about one 18.2 Hz period
-regardless -- see `docs/measurement.md`. Measured over a 14 s section, base is
-8.25 per cent slower than opt, spread under 0.15 per cent. See `docs/numbers.md`.
+regardless -- see `docs/measurement.md`. See `docs/numbers.md` for the final
+figure and the two intermediate ones that preceded it.
+
+**`calls.py` absorbs a call whose operands were never a named address at
+all.** The gap `bench/nbody.bas` exposed: BC's optimizer routinely pushes a
+value straight from the register it was just computed in rather than
+reloading it, sometimes with a backing store and sometimes without one, and
+sometimes leaves one argument stranded on the stack under an entirely
+separate, self-contained nested call before pushing the second and calling.
+`match()`'s backward scan only ever saw a push immediately, contiguously
+before the call, and missed all three shapes. `qbopt/stack.py` tracks stack
+depth in raw bytes, block-scoped, to name what fed a call regardless of
+where the pushes sit; `consume()` in `calls.py` pops every one of them
+unconditionally rather than reloading any -- reloading a classifiable operand
+while its own push stays on the stack would leak four bytes per call,
+forever, which is what an earlier, unreviewed draft of this would have done.
+Verified byte-identical on every site already absorbed; `suite/arrays.bas`
+(added because the corpus has zero indexed or stranded-call examples) goes
+from 1 of 8 call sites absorbed to 8 of 8. `bench/nbody.bas` goes from 3
+regions taken to 26 of 28, and the timing number above moved with it.
 
 ## The one deliberate behaviour change
 
