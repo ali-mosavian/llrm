@@ -44,15 +44,45 @@ invisible to a rewriter and would break silently. It is not: `ON k GOTO L1,
 L2, L3` emits its three labels as three consecutive `offset16` fixups into
 the module's own code segment. `tests/test_omf.py` asserts it.
 
+## What it does
+
+Measured over 110 objects of real BC output, across three compilers and twelve
+switch combinations:
+
+    932 of 1196 regions taken, 18269 bytes -> 10659
+
+Two kinds of rewrite. A **region** of long arithmetic becomes 386 code: one
+32-bit operation where BC did two 16-bit ones, with the high half put back
+through the stack in four bytes. A **runtime call** is absorbed: a long
+comparison is fifteen or twenty-one bytes and eleven instructions behind a far
+call, and becomes `mov eax,[a]` / `cmp eax,[b]` in nine. Multiply likewise.
+
+Divide and remainder are not absorbed, and the reason is measured rather than
+argued: `B$DVI4` returns from `-2147483648 \ -1` without raising anything,
+where `idiv` traps. `B$MUI4` wraps on overflow, which is what `imul` does, so
+multiply is safe and divide is not.
+
+Everything is checked by building, linking and running the program: twelve
+configurations, seven suite programs, compared line by line against a golden
+authored from what the program means rather than captured from a compiler.
+
 ## What is here
 
     qbopt/omf.py       read and write OMF; round trips byte-exact
-    qbopt/declen.py    x86 instruction lengths, checked against ndisasm
+    qbopt/module.py    a module as the analysis sees it, addresses and all
+    qbopt/declen.py    instructions, via iced-x86
+    qbopt/blocks.py    which bytes are code, found by reachability
+    qbopt/flags.py     which flags are live
     qbopt/lift.py      decoded code as 32-bit values, and back to bytes
+    qbopt/calls.py     the runtime calls, and what replaces them
+    qbopt/relocate.py  what has to change when code moves
+    qbopt/rewrite.py   the driver: an .OBJ in, an .OBJ out
     qbopt/price.py     cycle costs per part, 486 through Core
-    fixtures/omf/      real BC output, one per configuration that differs
-    tests/             hermetic, host-side
-    docs/inherited-*   the plan and notes from the runtime pass
+    fixtures/omf/      real BC output, with a manifest saying what made it
+    suite/             the programs the differential runs
+    tools/             the DOSBox harness, the corpus generator, the mutations
+
+Start with `docs/testing.md`.
 
 ## What BC actually emits
 
@@ -75,5 +105,9 @@ has to handle. See `docs/inherited-plan.md` for the full matrix.
 
 ## Running
 
-    python3 tests/test_omf.py
-    python3 tests/test_lift.py
+    uv run pytest                                  everything, DOSBox included
+    uv run pytest -m "not e2e"                     host only, seconds
+    uv run python tools/census.py                  what the pass makes of the corpus
+    uv run python -m qbopt.rewrite F.OBJ -o G.OBJ  the pass itself
+
+`docs/testing.md` has the tiers and what each needs.
