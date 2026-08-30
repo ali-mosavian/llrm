@@ -1,0 +1,361 @@
+"""
+What memory already holds, and what still wants it.
+
+flags.py and registers.py answer this for a flag and for one register;
+this answers it for a named memory cell, in both directions and across the
+whole control-flow graph rather than one block at a time. Both directions
+are the same iterate-to-a-fixed-point shape those two already use.
+
+`available()` runs forwards: a cell is available at a point when, on EVERY
+path reaching it, something has already loaded or stored that cell and
+nothing has written over it since. A load whose cells are all available is
+redundant -- BC had the value and went back to memory for it anyway.
+
+`live()` runs backwards: a cell is live when some path from here reads it
+before writing it. A store whose cells are all dead need never have
+happened. The two together are what a register allocator would collect,
+and measuring them is how this pass decides whether building one is worth
+it (tools/memtraffic.py).
+
+Three things decide whether either answer is any good, and all three were
+found by measuring rather than by reasoning:
+
+**The stack is not memory this tracks.** A push or a pop names a cell below
+sp, which is neither a named static nor a frame local -- frame locals live
+above sp. Treating a push's own stack cell as an unknown write is the
+mistake that made every one of nbody's loops unanalysable: `push` is around
+36% of the instructions in this corpus, so one bad classification there
+poisons everything. `used_memory()` reports the stack cell alongside the
+real operand (`push [x]` reads x AND writes a stack cell), which is why the
+entries are filtered by base register rather than taken first.
+
+**An indexed address is settled by its own base register.** module.may_alias
+refuses to say anything about `[si+arr]`, correctly: si is unbounded, so on
+its own that address could be any byte of its segment. But two accesses
+through the SAME base register differ by exactly their displacements
+whatever that register holds, which is the ordinary arithmetic every static
+already gets. That is sound only while the register is unchanged between
+them -- so every tracked cell whose base an instruction writes is dropped
+before that instruction's own access is recorded. Without this, an array
+element can never be forwarded to itself, and BC's array code is nothing
+but indexed accesses.
+
+**A call is what its contract says.** runtime.py, not a name list -- a
+routine with no entry there comes back worst-case, so an unknown call is a
+barrier by construction. Measured, this buys little on its own (the print
+family writes anything, and it dominates), but it is what lets the four
+absorbed arithmetic routines stop cutting a loop in half.
+"""
+
+from dataclasses import dataclass
+
+from iced_x86 import Register
+from iced_x86 import Register_
+from iced_x86 import MemorySizeExt
+
+from qbopt import module
+from qbopt import runtime
+from qbopt.ir import ROOT
+from qbopt.declen import INFO
+from qbopt.declen import Insn
+from qbopt.module import Addr
+from qbopt.blocks import Block
+from qbopt.declen import READS
+from qbopt.lift import operand
+from qbopt.module import Space
+from qbopt.declen import WRITES
+from qbopt.lift import Resolver
+from qbopt.flags import CLOBBERS
+from qbopt.loops import predecessors
+
+# The stack pointer in both widths -- a memory operand based on it is the
+# cell a push or pop moves, never a variable.
+STACK = (Register.SP, Register.ESP)
+
+
+class Unnameable:
+    """Memory this cannot name -- an operand lift.operand() refuses.
+
+    Its own type rather than a string or None, because the two answers it
+    sits between are opposites: None means "nothing to track here" and is
+    safely ignored, this means "something happened and I cannot say what",
+    which no caller may treat as harmless.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "UNKNOWN"
+
+
+UNKNOWN = Unnameable()
+
+
+@dataclass(frozen=True, slots=True)
+class Access:
+    """The one named memory operand an instruction has, if it has one."""
+
+    addr: Addr
+    width: int
+    reads: bool
+    writes: bool
+
+    @property
+    def cells(self) -> tuple[Addr, ...]:
+        """The individual bytes, since BC stores a long as two word writes
+        and reads it back as one dword -- matching by whole access misses it."""
+        return tuple(self.addr.plus(step) for step in range(self.width))
+
+
+def access_of(insn: Insn, resolve: Resolver) -> Access | Unnameable | None:
+    """The memory this names: an Access, UNKNOWN, or None for stack-only.
+
+    None means "nothing this needs to track" -- an instruction with no memory
+    operand at all, or one whose only operand is a push/pop's own stack cell.
+    UNKNOWN means "memory this cannot name", which no caller may treat as
+    harmless.
+    """
+    for one in INFO.info(insn.insn).used_memory():
+        if one.base in STACK:
+            continue
+        addr = operand(insn, resolve)
+        if addr is None:
+            return UNKNOWN
+        return Access(
+            addr,
+            MemorySizeExt.size(one.memory_size),
+            one.access in READS,
+            one.access in WRITES,
+        )
+    return None
+
+
+def aliases(cell: Addr, access: Access, dgroup: frozenset[int]) -> bool:
+    """Whether a write through `access` could land on `cell`.
+
+    module.may_alias, plus the one case it refuses that a shared base
+    register settles -- see this module's own docstring. The precondition is
+    the caller's: `cell` must not have survived a write to its base register,
+    which `_step` enforces by dropping those cells first.
+    """
+    same_base = (
+        cell.base != Register.NONE
+        and cell.base == access.addr.base
+        and cell.space == access.addr.space
+        and cell.index == access.addr.index
+    )
+    if same_base:
+        return cell.disp < access.addr.disp + access.width and access.addr.disp <= cell.disp
+    return module.may_alias(cell, access.addr, dgroup, 1, access.width)
+
+
+def _clobbered(insn: Insn) -> frozenset[Register_]:
+    """The registers this instruction writes, rooted -- a cell indexed by one
+    of them stops meaning what it meant."""
+    return frozenset(
+        ROOT.get(one.register, one.register) for one in INFO.info(insn.insn).used_registers() if one.access in WRITES
+    )
+
+
+def statics_of(blocks: list[Block], resolve: Resolver) -> frozenset[Addr]:
+    """Every SEGMENT cell anything in these blocks names.
+
+    Backward liveness needs it as the conservative answer at a body's exit
+    and at any barrier: a static may be read by another procedure, where a
+    frame slot dies with the frame.
+    """
+    found: set[Addr] = set()
+    for block in blocks:
+        for insn in block.insns:
+            access = access_of(insn, resolve)
+            if isinstance(access, Access) and access.addr.space is Space.SEGMENT:
+                found.update(access.cells)
+    return frozenset(found)
+
+
+def _forward(
+    block: Block,
+    incoming: frozenset[Addr],
+    resolve: Resolver,
+    calls: dict[int, str],
+    dgroup: frozenset[int],
+    found: list[int] | None = None,
+) -> frozenset[Addr]:
+    """Availability after this block; `found` collects redundant loads."""
+    have = set(incoming)
+    for insn in block.insns:
+        if insn.at in calls:
+            if not survives(calls.get(insn.at)):
+                have.clear()
+            continue
+        if insn.flow in CLOBBERS:
+            have.clear()
+            continue
+        access = access_of(insn, resolve)
+        if access is None:
+            continue
+        if not isinstance(access, Access):
+            have.clear()
+            continue
+        if wrote := _clobbered(insn):
+            have = {c for c in have if c.base == Register.NONE or ROOT.get(c.base, c.base) not in wrote}
+        if access.reads and not access.writes and found is not None and all(c in have for c in access.cells):
+            found.append(insn.at)
+        if access.writes:
+            have = {c for c in have if not aliases(c, access, dgroup)}
+        have.update(access.cells)
+    return frozenset(have)
+
+
+def _backward(
+    block: Block,
+    outgoing: frozenset[Addr],
+    resolve: Resolver,
+    calls: dict[int, str],
+    dgroup: frozenset[int],
+    statics: frozenset[Addr],
+    found: list[int] | None = None,
+) -> frozenset[Addr]:
+    """Liveness before this block; `found` collects dead stores."""
+    have = set(outgoing)
+    for insn in reversed(block.insns):
+        if insn.at in calls:
+            if not survives(calls.get(insn.at)):
+                have = set(statics)  # it may read any of them
+            continue
+        if insn.flow in CLOBBERS:
+            have = set(statics)
+            continue
+        access = access_of(insn, resolve)
+        if access is None:
+            continue
+        if not isinstance(access, Access):
+            have = set(statics)
+            continue
+        if access.writes and not access.reads:
+            if found is not None and not any(c in have for c in access.cells):
+                found.append(insn.at)
+            have -= set(access.cells)
+        if access.reads:
+            have.update(access.cells)
+    return frozenset(have)
+
+
+def survives(name: str | None) -> bool:
+    """Whether a call leaves every tracked cell still valid -- runtime.py's
+    own contract, so a routine with no entry is a barrier by construction."""
+    routine = runtime.contract(name)
+    if routine.control is not runtime.Control.RETURNS or runtime.barrier(routine):
+        return False
+    return routine.writes <= runtime.Memory.ARGUMENTS
+
+
+def available(
+    blocks: list[Block],
+    resolve: Resolver,
+    calls: dict[int, str],
+    dgroup: frozenset[int],
+) -> dict[int, frozenset[Addr]]:
+    """What is available on entry to each block, to a fixed point.
+
+    Intersection at a join, so this only ever claims what holds on every
+    path. The universe -- every cell anything names -- is the top element
+    those intersections start from; without one, a block reached only by a
+    back edge would start at "nothing available" and never recover.
+    """
+    if not blocks:
+        return {}
+    entry = blocks[0].at
+    preds = predecessors(blocks)
+    universe = frozenset(
+        cell
+        for block in blocks
+        for insn in block.insns
+        if isinstance(access := access_of(insn, resolve), Access)
+        for cell in access.cells
+    )
+
+    out = {block.at: universe for block in blocks}
+    out[entry] = _forward(blocks[0], frozenset(), resolve, calls, dgroup)
+    incoming = {block.at: frozenset() for block in blocks}
+
+    changing = True
+    while changing:
+        changing = False
+        for block in blocks:
+            if block.at == entry:
+                continue
+            reaching = [out[one] for one in preds[block.at] if one in out]
+            now_in = frozenset.intersection(*reaching) if reaching else frozenset()
+            now_out = _forward(block, now_in, resolve, calls, dgroup)
+            if now_out != out[block.at] or now_in != incoming[block.at]:
+                out[block.at], incoming[block.at] = now_out, now_in
+                changing = True
+    return incoming
+
+
+def live(
+    blocks: list[Block],
+    resolve: Resolver,
+    calls: dict[int, str],
+    dgroup: frozenset[int],
+) -> dict[int, frozenset[Addr]]:
+    """What is still wanted on exit from each block, to a fixed point.
+
+    Union at a branch, and every static is live where control leaves this
+    body: another procedure may read a module-level DIM, where a frame slot
+    dies with the frame. That asymmetry is why a spill is easier to prove
+    dead than a named variable.
+    """
+    if not blocks:
+        return {}
+    statics = statics_of(blocks, resolve)
+    known = {block.at for block in blocks}
+    inside = {block.at: frozenset() for block in blocks}
+    outgoing = {block.at: frozenset() for block in blocks}
+
+    changing = True
+    while changing:
+        changing = False
+        for block in blocks:
+            out = statics if block.leaves else frozenset()
+            for successor in block.succ:
+                out |= inside[successor] if successor in known else statics
+            now = _backward(block, out, resolve, calls, dgroup, statics)
+            if now != inside[block.at] or out != outgoing[block.at]:
+                inside[block.at], outgoing[block.at] = now, out
+                changing = True
+    return outgoing
+
+
+def redundant_loads(
+    blocks: list[Block],
+    resolve: Resolver,
+    calls: dict[int, str],
+    dgroup: frozenset[int],
+) -> dict[int, tuple[int, ...]]:
+    """Per block, the loads whose value was already in hand."""
+    incoming = available(blocks, resolve, calls, dgroup)
+    found: dict[int, tuple[int, ...]] = {}
+    for block in blocks:
+        hits: list[int] = []
+        _forward(block, incoming.get(block.at, frozenset()), resolve, calls, dgroup, hits)
+        found[block.at] = tuple(hits)
+    return found
+
+
+def dead_stores(
+    blocks: list[Block],
+    resolve: Resolver,
+    calls: dict[int, str],
+    dgroup: frozenset[int],
+) -> dict[int, tuple[int, ...]]:
+    """Per block, the stores nothing reads before something overwrites them."""
+    statics = statics_of(blocks, resolve)
+    outgoing = live(blocks, resolve, calls, dgroup)
+    found: dict[int, tuple[int, ...]] = {}
+    for block in blocks:
+        hits: list[int] = []
+        _backward(block, outgoing.get(block.at, statics), resolve, calls, dgroup, statics, hits)
+        found[block.at] = tuple(hits)
+    return found
