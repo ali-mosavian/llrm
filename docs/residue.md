@@ -167,6 +167,42 @@ unmeasured here. Independently found by a parallel line-by-line read of this
 same object, same three addresses, same count -- the strongest cross-check
 of any pattern in this document.
 
+**Fixed, 2026-08-30.** `lift.py` gains `Kind.ALU_IMM`, two opcode-family
+tables (`IMM_FAMILY`, the low-half opcodes; `IMM_HIGH_FAMILY`, per mnemonic,
+the high-half candidates -- three encodings each, since the assembler picks
+whichever of ax-implicit-imm16/rm16+imm16/rm16+imm8-sign-extended is
+shortest, independently per half), a new `Decoded.imm`/`Value.imm` field, and
+an `Op.ALUI` case in `_pair_step()`/`instruction()`. The reconstruction is
+`insn.insn.immediate(1) & 0xFFFF` per half (iced already reports the
+post-sign-extension value for the imm8 form, so the mask alone is correct
+across all three encodings -- verified against 3500 synthetic half-pairs, not
+just the two worked examples above) combined as `to_signed((high<<16)|(low &
+0xFFFF), 4)`. Opus's design review (before implementation, per AGENTS.md's
+Method section) caught three real defects in the first draft, all fixed
+before any code was written: (1) `classify()`'s own gate only checked
+`code in IMM_FAMILY`, which is the LOW-half table alone -- the high half
+(`ADC_RM16_IMM8` etc.) was never recognised at all, so the plan as first
+written would have fired on zero of its own three worked sites; fixed with a
+matching `IMM_HIGH_HALVES` gate. (2) the combined value has to be re-signed
+before reaching `Instruction.create_reg_i32` -- an unsigned 32-bit pattern
+like `0xFFFFFFFF` raises `OverflowError` there outright, confirmed by
+encoding it directly. (3) `Op.ALUI` was missing from `computes()`'s own
+DIVERGENT-flags check -- an immediate ALU op sets flags exactly the way a
+memory-operand one does, and without this a widened `add eax,imm32` followed
+by a live `jz` would have silently taken the wrong branch, the exact class of
+bug AGENTS.md's own "What widening changes, exactly" section warns has been
+lost once already. The imm8-sign-extension-vs-imm16 reconstruction itself
+(the risk flagged before implementation) was independently re-derived by
+Opus against real iced_x86 output, not just re-read from this prose, and
+found correct as designed. Corpus-wide `tools/matrix.py`: 12/12.
+`tools/fuzzcheck.py --count 80`: 0 qbopt regressions. On `bench/nbody.bas`:
+the local three-site win is smaller than the 18-byte floor above suggested
+-- `0x017e`'s own site is now net zero (6 bytes either way) and `0x02ea`'s
+drops from 6 to 4 -- because the real payoff, as flagged, was region
+continuity: `0x02e3-0x02ea` (E's own false-positive twin) is no longer
+truncated to a lone load, so the whole `load+alu+store` statement widens
+together. Net measured on the object: 1440 -> 1435 bytes.
+
 ## E -- one interleaved instruction splits a long expression that lift.py can't step over
 
 **2 confirmed** by `tools/rewrite --report`'s own refusals, the shape is

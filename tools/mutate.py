@@ -230,6 +230,14 @@ MUTATIONS = (
         "a call's own bytes dropped as unneeded while the edit still deletes the original call -- silent "
         "stack corruption when the call's result is overwritten before anything reads it",
     ),
+    Mutation(
+        "immediate-combination-not-resigned",
+        "qbopt/lift.py",
+        "combined = to_signed((high.imm << 16) | (low.imm & 0xFFFF), 4)",
+        "combined = (high.imm << 16) | (low.imm & 0xFFFF)",
+        "a negative immediate pair left as an unsigned 32-bit pattern -- iced's own builders "
+        "reject it outright, or silently encode a different value if they don't",
+    ),
 )
 
 

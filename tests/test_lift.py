@@ -122,6 +122,25 @@ def test_classifier_register_to_register(destination: str, source: str) -> None:
 
 
 @pytest.mark.parametrize(
+    ("name", "enc", "want"),
+    [
+        ("ax-implicit", "05 34 12", 0x1234),
+        ("rm16,imm16", "81 C0 34 12", 0x1234),
+        ("rm16,imm8 positive", "83 C0 04", 4),
+        ("rm16,imm8 negative", "83 C0 FF", 0xFFFF),
+    ],
+)
+def test_classifier_recognises_every_immediate_alu_encoding(name: str, enc: str, want: int) -> None:
+    # docs/residue.md's D: three different encodings BC picks between for the
+    # same operation depending on what's shortest, and classify() has to read
+    # the right 16-bit pattern out of each one.
+    decoded = classify_code(hx(enc))
+    assert decoded is not None, name
+    assert decoded.kind is Kind.ALU_IMM
+    assert decoded.imm == want, name
+
+
+@pytest.mark.parametrize(
     ("enc", "why"),
     [
         ("8B 07", "[bx] is not a form BC uses for a long"),
@@ -201,6 +220,72 @@ def test_lift_refuses(enc: str, why: str) -> None:
 )
 def test_lift_refuses_a_carry_blind_pair(enc: str, why: str) -> None:
     assert one(enc)[1:] == [], why
+
+
+@pytest.mark.parametrize(
+    ("enc", "want_imm", "what"),
+    [
+        # docs/residue.md's own two worked D examples, byte-identical to
+        # bench/nbody.bas at 0x017e and 0x02ea.
+        ("05 00 00 83 D2 04", 0x40000, "add ax,0 / adc dx,4 -- together += 0x40000"),
+        ("83 C0 01 83 D2 00", 1, "add ax,1 / adc dx,0 -- together += 1"),
+    ],
+)
+def test_immediate_pair_combines_low_and_high_into_one_alui(enc: str, want_imm: int, what: str) -> None:
+    v = one("A1 5E 00 8B 16 60 00   " + enc)
+    assert [x.op for x in v] == [Op.LOAD, Op.ALUI], what
+    assert v[1].imm == want_imm, what
+    assert v[1].alu == "add"
+
+
+def test_immediate_pair_reads_a_negative_combination_correctly() -> None:
+    # sub ax,-1 / sbb dx,-1 -- both halves imm8-sign-extended -- combine to
+    # the 32-bit pattern 0xFFFFFFFF, which has to come back as the signed -1
+    # iced's own builders accept, not the raw unsigned pattern they reject.
+    v = one("A1 5E 00 8B 16 60 00   83 E8 FF 83 DA FF")
+    assert [x.op for x in v] == [Op.LOAD, Op.ALUI]
+    assert v[1].imm == -1
+
+
+@pytest.mark.parametrize(
+    ("enc", "why"),
+    [
+        ("05 01 00 83 F2 02", "add ax,1 / xor dx,2 -- different families, not one operation"),
+        ("83 C0 01 83 DA 00", "add ax,1 / sbb dx,0 -- add pairs only with adc, never sbb"),
+    ],
+)
+def test_immediate_pair_refuses_mismatched_families(enc: str, why: str) -> None:
+    v = one("A1 5E 00 8B 16 60 00   " + enc)
+    assert [x.op for x in v] == [Op.LOAD], why
+
+
+def test_immediate_pair_needs_a_loaded_value() -> None:
+    # An immediate ALU pair with nothing already live in the pair is not
+    # something BC emits and not something this invents handling for --
+    # mirrors Kind.ALU's own "nothing loaded" refusal.
+    v = one("05 00 00 83 D2 04")
+    assert v == []
+
+
+@pytest.mark.parametrize(
+    ("enc", "want", "why"),
+    [
+        ("83 C0 05 83 D2 00", "6683c005", "fits a signed byte -- shortest, rm32,imm8"),
+        ("83 E8 FF 83 DA FF", "6683e8ff", "-1 also fits a signed byte"),
+        ("05 00 00 83 D2 04", "660500000400", "0x40000 needs the full 32 bits -- pair 0 takes the eax shortcut"),
+    ],
+)
+def test_immediate_encoding_on_pair_zero(enc: str, want: str, why: str) -> None:
+    v = one("A1 5E 00 8B 16 60 00   " + enc)
+    assert encode(v[1]).hex() == want, why
+
+
+def test_immediate_encoding_on_pair_one_has_no_eax_shortcut() -> None:
+    # cx:bx widens into ecx, which has no 1-byte-opcode immediate form --
+    # a value too big for imm8 has to take the general rm32,imm32 encoding.
+    v = one("8B 0E 5E 00 8B 1E 60 00   81 E1 34 12 81 E3 78 56")
+    assert v[1].op is Op.ALUI
+    assert encode(v[1]).hex() == "6681e134127856"
 
 
 def test_an_opaque_instruction_invalidates_the_pairs() -> None:

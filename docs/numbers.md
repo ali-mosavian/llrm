@@ -6,15 +6,15 @@ kind of number does and does not mean.
 ## Static: what the pass does to the corpus
 
 Measured 2026-08-30, over the 110 objects in `fixtures/omf`, with
-`uv run python tools/census.py`.
+`uv run python tools/census.py`, after `docs/residue.md`'s D landed.
 
 | | |
 |---|---|
 | objects | 110, 71204 bytes of code |
 | mapped | 110; none refused |
 | regions found | 1404 |
-| taken | 1382 |
-| their bytes | 26366 -> 21286, 19 per cent smaller |
+| taken | 1386 |
+| their bytes | 26446 -> 21302, 19 per cent smaller |
 
 Refused, by reason:
 
@@ -22,7 +22,15 @@ Refused, by reason:
 |---|---|
 | 12 | a single pair that widens 6 bytes to 8 |
 | 6 | a line number points inside the region |
-| 4 | a single pair that widens 7 bytes to 8 |
+
+16 bytes bigger before, 16 bytes bigger after, than the census immediately
+before this (26366 -> 21286) -- taken went 1382 -> 1386 and the "widens 7
+bytes to 8" refusal category (4 instances) disappeared outright: D's own
+immediate-operand ALU pairs, previously invisible to `classify()`, are what
+those 4 single-pair regions actually were -- recognising them either lets the
+pair widen on its own where it used to lose to its own restore, or reunites
+it with a neighbouring load/store into one bigger region entirely (the
+`bench/nbody.bas` case documented in `docs/residue.md`'s own D section).
 
 133 bytes bigger, 76 bytes bigger, than the census immediately before this
 (26233 -> 21210) -- neither is a regression. Region *count* is unchanged

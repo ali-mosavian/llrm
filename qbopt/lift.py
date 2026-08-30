@@ -41,6 +41,7 @@ from qbopt.module import Addr
 from qbopt.module import Space
 from qbopt.declen import BITNESS
 from qbopt.flags import DIVERGENT
+from qbopt.declen import to_signed
 from qbopt.module import literal_only
 from qbopt.module import frame_relative
 
@@ -54,6 +55,7 @@ class Kind(StrEnum):
     MOVE = "mv"
     REG_ALU = "rr"
     NOT = "not"
+    ALU_IMM = "opi"
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,12 +73,19 @@ class Decoded:
     dlen: int = 0
     # where the displacement field sat, so the fixup that named it can be found
     disp_at: int | None = None
+    # Kind.ALU_IMM only: this half's own 16-bit operand, already correct
+    # regardless of which of the three immediate encodings (ax-implicit imm16,
+    # rm16+imm16, rm16+imm8 sign-extended) BC picked -- iced's own immediate()
+    # already reports the post-sign-extension value, so `& 0xFFFF` alone gives
+    # the right 16 bits in every case (verified against real encoded bytes).
+    imm: int | None = None
 
 
 class Op(StrEnum):
     LOAD = "load"
     ALUM = "alu-m"
     ALUV = "alu-v"
+    ALUI = "alu-i"
     STORE = "store"
     MOVE = "move"
     NEG = "neg"
@@ -99,6 +108,7 @@ class Value:
     src_pair: int = 0
     dlen: int = 2
     mem_at: int | None = None
+    imm: int | None = None  # Op.ALUI only: the combined 32-bit immediate, signed
     # Op.CALL only: calls.py's own already-assembled replacement for the call
     # site, restore=False (qbopt.calls.absorb) -- emit() returns this
     # verbatim rather than building an iced_x86.Instruction from the other
@@ -111,6 +121,8 @@ class Value:
                 return f"load {self.mem}"
             case Op.ALUM:
                 return f"v{self.s1} {self.alu} {self.mem}"
+            case Op.ALUI:
+                return f"v{self.s1} {self.alu} {self.imm}"
             case Op.ALUV:
                 return f"v{self.s1} {self.alu} v{self.s2}"
             case Op.MOVE:
@@ -135,6 +147,40 @@ PAIRED = {
     Code.SUB_R16_RM16: (Code.SBB_R16_RM16, "sub"),
 }
 HIGH_HALVES = {high for high, _name in PAIRED.values()}
+
+# The immediate-operand mirror of PAIRED: `add ax,imm16 / adc dx,imm8` and the
+# and/or/xor/sub siblings. Three encodings exist per mnemonic because the
+# assembler picks the shortest -- ax-implicit imm16, rm16+imm16, rm16+imm8
+# sign-extended -- and BC chooses the low half's and the high half's encoding
+# independently, so a low half may be any of the three and a high half any of
+# its own family's three; they need not match each other's encoding. AND/OR/XOR
+# have no carry variant, so (mirroring PAIRED's own AND/OR/XOR self-mapping)
+# their own family is both the low and the high candidate set.
+IMM_FAMILY: dict[int, str] = {
+    Code.ADD_AX_IMM16: "add",
+    Code.ADD_RM16_IMM16: "add",
+    Code.ADD_RM16_IMM8: "add",
+    Code.SUB_AX_IMM16: "sub",
+    Code.SUB_RM16_IMM16: "sub",
+    Code.SUB_RM16_IMM8: "sub",
+    Code.AND_AX_IMM16: "and",
+    Code.AND_RM16_IMM16: "and",
+    Code.AND_RM16_IMM8: "and",
+    Code.OR_AX_IMM16: "or",
+    Code.OR_RM16_IMM16: "or",
+    Code.OR_RM16_IMM8: "or",
+    Code.XOR_AX_IMM16: "xor",
+    Code.XOR_RM16_IMM16: "xor",
+    Code.XOR_RM16_IMM8: "xor",
+}
+IMM_HIGH_FAMILY: dict[str, frozenset[int]] = {
+    "add": frozenset({Code.ADC_AX_IMM16, Code.ADC_RM16_IMM16, Code.ADC_RM16_IMM8}),
+    "sub": frozenset({Code.SBB_AX_IMM16, Code.SBB_RM16_IMM16, Code.SBB_RM16_IMM8}),
+    "and": frozenset({Code.AND_AX_IMM16, Code.AND_RM16_IMM16, Code.AND_RM16_IMM8}),
+    "or": frozenset({Code.OR_AX_IMM16, Code.OR_RM16_IMM16, Code.OR_RM16_IMM8}),
+    "xor": frozenset({Code.XOR_AX_IMM16, Code.XOR_RM16_IMM16, Code.XOR_RM16_IMM8}),
+}
+IMM_HIGH_HALVES = frozenset().union(*IMM_HIGH_FAMILY.values())
 
 LOADS = {Code.MOV_R16_RM16, Code.MOV_AX_MOFFS16}
 STORES = {Code.MOV_RM16_R16, Code.MOV_MOFFS16_AX}
@@ -214,6 +260,14 @@ def classify(insn: Insn, resolve: Resolver = literal_only) -> Decoded | None:
         pair, half = HALF_OF[register]
         return Decoded(Kind.NOT, pair, half, insn.length)
 
+    if code in IMM_FAMILY or code in IMM_HIGH_HALVES:
+        register = insn.register(0)
+        if register not in HALF_OF:
+            return None
+        pair, half = HALF_OF[register]
+        imm = insn.insn.immediate(1) & 0xFFFF
+        return Decoded(Kind.ALU_IMM, pair, half, insn.length, alu=code, imm=imm)
+
     if code not in PAIRED and code not in HIGH_HALVES:
         return None
     register = insn.register(0)
@@ -256,6 +310,7 @@ def widened(
     source: int | None = None,
     second_source: int | None = None,
     alu: str | None = None,
+    imm: int | None = None,
 ) -> Value:
     """One value standing for the instruction pair at `at`."""
     return Value(
@@ -270,6 +325,7 @@ def widened(
         s1=source,
         s2=second_source,
         alu=alu,
+        imm=imm,
     )
 
 
@@ -355,6 +411,24 @@ def _pair_step(
         # widened store then writes out as garbage. So it becomes one 32-bit
         # move, three bytes against four.
         live[first.pair] = add(widened(Op.MOVE, at, span, first, None, source=live[first.src_pair]))
+        paired = True
+
+    elif (
+        first.kind is Kind.ALU_IMM
+        and low.alu in IMM_FAMILY
+        and high.alu in IMM_HIGH_FAMILY[IMM_FAMILY[low.alu]]
+        and low.imm is not None
+        and high.imm is not None
+        and live[first.pair] is not None
+    ):
+        # low.imm/high.imm are each already the correct 16-bit pattern
+        # regardless of which of the three immediate encodings BC picked
+        # (classify()'s own doc); combining and re-signing to a genuine
+        # 32-bit int is what instruction()'s own encoding choice needs --
+        # iced's builders reject an out-of-range unsigned pattern outright.
+        combined = to_signed((high.imm << 16) | (low.imm & 0xFFFF), 4)
+        name = IMM_FAMILY[low.alu]
+        live[first.pair] = add(widened(Op.ALUI, at, span, first, None, source=live[first.pair], alu=name, imm=combined))
         paired = True
 
     elif (
@@ -529,6 +603,33 @@ WIDE = {
 }
 WIDE_REGISTER = {0: Register.EAX, 1: Register.ECX}
 
+# Op.ALUI's three candidate encodings, shortest first: rm32,imm8 (sign-extended,
+# 4 bytes with the 16-bit segment's own 0x66 prefix) whenever the combined value
+# fits a signed byte; eax,imm32 (6 bytes, no ModRM -- pair 0 only, and shorter
+# than the general rm32,imm32 form only because it has none); rm32,imm32 (7
+# bytes) otherwise.
+WIDE_IMM8 = {
+    "and": Code.AND_RM32_IMM8,
+    "or": Code.OR_RM32_IMM8,
+    "xor": Code.XOR_RM32_IMM8,
+    "add": Code.ADD_RM32_IMM8,
+    "sub": Code.SUB_RM32_IMM8,
+}
+WIDE_IMM_EAX = {
+    "and": Code.AND_EAX_IMM32,
+    "or": Code.OR_EAX_IMM32,
+    "xor": Code.XOR_EAX_IMM32,
+    "add": Code.ADD_EAX_IMM32,
+    "sub": Code.SUB_EAX_IMM32,
+}
+WIDE_IMM32 = {
+    "and": Code.AND_RM32_IMM32,
+    "or": Code.OR_RM32_IMM32,
+    "xor": Code.XOR_RM32_IMM32,
+    "add": Code.ADD_RM32_IMM32,
+    "sub": Code.SUB_RM32_IMM32,
+}
+
 
 def relocated_memory(base: Register_) -> MemoryOperand:
     """A relocated address, always emitted as zero.
@@ -587,6 +688,12 @@ def instruction(value: Value) -> Instruction:
             return Instruction.create_reg_mem(WIDE[value.alu], wide, memory(value))
         case Op.ALUV if value.alu is not None:
             return Instruction.create_reg_reg(WIDE[value.alu], wide, source)
+        case Op.ALUI if value.alu is not None and value.imm is not None and -128 <= value.imm < 128:
+            return Instruction.create_reg_i32(WIDE_IMM8[value.alu], wide, value.imm)
+        case Op.ALUI if value.alu is not None and value.imm is not None and value.pair == 0:
+            return Instruction.create_reg_i32(WIDE_IMM_EAX[value.alu], wide, value.imm)
+        case Op.ALUI if value.alu is not None and value.imm is not None:
+            return Instruction.create_reg_i32(WIDE_IMM32[value.alu], wide, value.imm)
         case Op.MOVE:
             return Instruction.create_reg_reg(Code.MOV_R32_RM32, wide, source)
         case Op.NEG:
@@ -641,7 +748,7 @@ FIXUP = {
 
 def computes(values: list[Value], need: list[bool], region: list[int]) -> bool:
     """Whether anything in the region leaves a flag whose value widening changes."""
-    return any(values[i].op in (Op.ALUM, Op.ALUV, Op.NEG) for i in region if need[i])
+    return any(values[i].op in (Op.ALUM, Op.ALUV, Op.ALUI, Op.NEG) for i in region if need[i])
 
 
 def restored_pairs(values: list[Value], need: list[bool], region: list[int]) -> list[int]:

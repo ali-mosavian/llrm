@@ -52,6 +52,22 @@ def test_a_widened_operation_is_refused_when_a_flag_is_read() -> None:
     assert emit_region(values, need, region, Flag.ZF) is None
 
 
+IMMEDIATE_LOAD_AND_STORE = "A1 5E 00 8B 16 60 00   05 00 00 83 D2 04   A3 62 00 89 16 64 00"
+
+
+def test_an_immediate_alu_pair_is_refused_when_a_flag_is_read() -> None:
+    # Op.ALUI sets flags the exact same way Op.ALUM does -- BC leaves the high
+    # half's, one 32-bit op leaves the whole result's -- so it has to trip the
+    # same DIVERGENT gate, not just the memory-operand form.
+    values, need, region = only_region(IMMEDIATE_LOAD_AND_STORE)
+    assert emit_region(values, need, region, Flag.ZF) is None
+
+
+def test_an_immediate_alu_pair_is_taken_when_nothing_reads_a_flag() -> None:
+    values, need, region = only_region(IMMEDIATE_LOAD_AND_STORE)
+    assert emit_region(values, need, region, Flag.NONE) is not None
+
+
 def test_the_same_region_is_taken_when_nothing_reads_a_flag() -> None:
     # Byte for byte the same input. A gate stuck shut fails here; a gate stuck
     # open fails above. There is no way to pass both without computing liveness.
