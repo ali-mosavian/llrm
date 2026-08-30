@@ -19,18 +19,23 @@ from dataclasses import dataclass
 
 from qbopt import omf
 from qbopt import module
+from qbopt.lift import Op
 from qbopt.flags import ALL
 from qbopt.lift import lift
+from qbopt.lift import tail
 from qbopt.flags import Flag
+from qbopt.lift import Value
 from qbopt.calls import sites
 from qbopt.lift import needed
 from qbopt.lift import refuse
 from qbopt.blocks import Block
 from qbopt.calls import absorb
 from qbopt.lift import regions
+from qbopt.calls import COMPARE
 from qbopt.flags import live_in
 from qbopt.relocate import Edit
 from qbopt.blocks import CodeMap
+from qbopt.calls import CallSite
 from qbopt.relocate import Shift
 from qbopt.blocks import block_at
 from qbopt.blocks import code_map
@@ -98,6 +103,110 @@ def flags_after(blocks: list[Block], live: dict[int, Flag], at: int, end: int) -
     return live_after(block, end, live) if block is not None else ALL
 
 
+@dataclass(frozen=True, slots=True)
+class Combined:
+    planned: list[Planned]
+    handled: frozenset[int]  # call-instruction addresses folded into one of `planned`'s edits
+
+
+def tail_widened_calls(
+    found: module.Module,
+    mapped: CodeMap,
+    blocks: list[Block],
+    live: dict[int, Flag],
+    call_sites: list[CallSite],
+    already: list[Planned],
+) -> Combined:
+    """docs/residue.md's G and H: BC's own code right after an absorbed call
+    reads eax:edx directly, the way it would after a real call -- so a call
+    site this pass already knows how to absorb, and whose bytes just after it
+    still widen (lift.tail(), seeded with the call's own result already
+    correctly valued in pair 0, per ir.RESTORE_EFFECTS[0]), becomes ONE
+    combined edit: the call's own absorption (calls.absorb(..., restore=False)
+    -- no point putting the high half back only to immediately re-derive it
+    from eax) followed by the widened tail, through the exact same
+    needed()/refuse()/emit_region() machinery an ordinary widening region
+    already goes through. COMPARE is never a candidate here -- its own
+    result is flags (B$CPI4's real effect), not a register value.
+
+    A call's own SYNTHESISED/ALL flags gate (inside absorb()) and lift's
+    DIVERGENT gate (inside refuse(), over the tail's own ALU/NEG values) are
+    BOTH given the SAME, wider `live` -- flags something reads after the
+    *whole* combined span, not just after the call -- which is why Op.CALL is
+    deliberately left out of lift.computes()'s own divergence check: the
+    call's flag safety is entirely absorb()'s gate, checked against this same
+    live set, not a second, narrower one. In practice absorb()'s own gate is
+    `live & ALL` for every name that reaches here (COMPARE is excluded above,
+    and it is the only one of the five whose gate is narrower than ALL), so
+    it already subsumes refuse()'s `live & DIVERGENT` outright -- the
+    DIVERGENT branch never fires on this path today. It is kept, not
+    inlined away, because that subsumption is a fact about today's five
+    routines, not a guarantee a sixth one would keep.
+
+    Anything that does not work out here changes nothing: the site is simply
+    left for the ordinary, unmodified per-call absorb() loop right after this
+    one, at its own narrow site.start/site.end boundary, exactly as before
+    this function existed.
+    """
+    out: list[Planned] = []
+    handled: set[int] = set()
+    for site in call_sites:
+        if site.name == COMPARE:
+            continue
+        call_block = block_at(blocks, site.at)
+        if call_block is None or call_block.at > site.start:
+            continue
+        call_index = next((i for i, insn in enumerate(call_block.insns) if insn.at == site.at), None)
+        if call_index is None:
+            continue
+        following = list(call_block.insns[call_index + 1 :])
+        if not following:
+            continue
+
+        seed = Value(Op.CALL, at=site.start, end=site.end, pair=0)
+        values = tail(following, found.code, call_block.end, found.resolve, seed)
+        if len(values) == 1:
+            continue  # nothing right after the call widens -- no benefit to composing
+
+        chain_end = values[-1].end
+        after = flags_after(blocks, live, site.start, chain_end)
+        emitted = absorb(site, after, restore=False)
+        if isinstance(emitted, str):
+            continue
+        values[0].absorbed = emitted
+
+        need = needed(values)
+        need[0] = True  # the call's own bytes replace the deleted pushes/call outright, never optional
+        region = list(range(len(values)))
+        reason = anchored_inside(found, mapped, site.start, chain_end) or refuse(values, need, region, after)
+        combined = None if reason else emit_region(values, need, region, after)
+        if combined is None:
+            continue
+        if any(one.edit and one.edit.lo < chain_end and site.start < one.edit.hi for one in already + out):
+            continue
+        fixups = tuple((at_in, found.fixup_at[field]) for at_in, field in combined.relocations)
+        if len(fixups) != len(combined.relocations):
+            continue
+
+        handled.add(site.at)
+        out.append(
+            Planned(
+                Region(
+                    id=0,  # rewritten to len(planned) by plan() once it is appended
+                    seg=found.seg,
+                    at=site.start,
+                    end=chain_end,
+                    before=found.code[site.start : chain_end].hex(),
+                    after=combined.code.hex(),
+                    taken=True,
+                    reason=None,
+                ),
+                Edit(site.start, chain_end, combined.code, fixups),
+            )
+        )
+    return Combined(out, frozenset(handled))
+
+
 def plan(
     records: list[omf.Record],
     *,
@@ -159,7 +268,22 @@ def plan(
                 edit,
             )
         )
-    for site in sites(found, reached, blocks):
+    call_sites = sites(found, reached, blocks)
+    # --take exists to make a failure bisectable; folding a call and its tail
+    # into one edit here would make that edit un-selectable by the widening
+    # loop's own region index, so bisecting skips this step entirely and
+    # falls back to plain call absorption for every site instead.
+    combined = (
+        Combined([], frozenset())
+        if take is not None
+        else tail_widened_calls(found, mapped, blocks, live, call_sites, planned)
+    )
+    for one in combined.planned:
+        planned.append(Planned(replace(one.region, id=len(planned)), one.edit))
+
+    for site in call_sites:
+        if site.at in combined.handled:
+            continue
         after = flags_after(blocks, live, site.start, site.end)
         emitted = absorb(site, after)
         reason = anchored_inside(found, mapped, site.start, site.end)

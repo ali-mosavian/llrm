@@ -222,6 +222,34 @@ result fed back in as a synthetic `Value`. That is a pipeline change, not a
 new kind of analysis. Actually dropping the now-provably-unneeded restore
 after that is pattern I's fix, below.
 
+**Fixed, 2026-08-30.** The counts above were stale by the time this was
+built: `f2b6f05`'s compare-absorption fix changed which restore-adjacent
+shapes exist in this object, and a re-measurement against the corrected
+`NBODYQ.OBJ` -- a script against `ir.py`'s own node stream, walking for
+`ir.Restore` and looking at what immediately follows for the same pair,
+rather than manual disassembly reading -- found **12** instances (2 G, 10 H),
+not 15. The fix took the second of the two sub-pieces above: the absorption
+result fed back in as a synthetic `Value`. `qbopt/lift.py` gains an `Op.CALL`
+value (its bytes are `calls.py`'s own already-assembled `Emitted`, verbatim,
+not something `instruction()`/`Encoder` builds) and a `tail()` function that
+seeds pair 0 with it and re-runs `lift()`'s own pairing rules
+(`_negate_step`/`_pair_step`, extracted unchanged so `tests/test_lift.py` is
+the regression proof nothing about ordinary widening moved) -- so the NEGATE
+idiom in the worked example above is covered for free. `calls.py`'s
+`absorb()`/`consume()`/`dividing()`/`fix_multiply()` gain a `restore: bool =
+True` parameter, so a call folded into a wider region drops its own trailing
+restore rather than putting the high half back only to immediately re-derive
+it from eax. `qbopt/rewrite.py`'s new `tail_widened_calls()` composes the
+two -- call plus widened tail -- into one ordinary `Edit`, going through the
+exact same `needed()`/`refuse()`/`emit_region()` machinery (and the same
+DIVERGENT flags gate) an ordinary widening region already does; anything
+that does not work out falls straight through to the unmodified, narrow-
+boundary standalone `absorb()` this project already had. On `bench/nbody.bas`
+specifically: 12 call sites folded, 59 bytes saved over what standalone
+absorption plus an un-widened tail would have produced. Corpus-wide
+(`fixtures/omf`, 110 much smaller, more varied programs), 19 instances, 57
+bytes -- see `docs/numbers.md`.
+
 ## I -- restores that are simply dead
 
 **6 instances** (`00EB`, `0151`, `0155`, `027D`, `0311`, `0315`) -- **all from
@@ -280,12 +308,16 @@ concluded on: memory disambiguation this project does not have.
 | B -- restore/re-push identity | 3 | ~24 | peephole, adjacency only |
 | D -- immediate pair ALU missing | 3 | ~15 | table entries + one `Value` field |
 | C -- redundant self-multiply reload | 1 | 2 | **fixed**, 2026-08-30 |
-| G+H -- restore blocks widening | 15 | ~107 | feed absorption back into `lift()` |
+| G+H -- restore blocks widening | 12 (was 15, stale) | 59 | **fixed**, 2026-08-30 |
 | F -- sign-extension invisible | ~9 | ~30 | new value + operand kind |
 | E -- interleaved instruction splits a region | 2 | ~15 | dependence analysis + motion -- the large one |
 
-A and C are fixed (`qbopt/calls.py`'s `popped_into()` and `absorb()`);
-corpus-wide, not just this object, they took the static census from 17414 to
-16942 bytes -- see `docs/numbers.md`. I, B, D together are roughly 65 bytes
-more, on their own, without touching this project's architecture. G+H, F and
-E remain the architectural ones.
+A, C and G+H are fixed. A and C: `qbopt/calls.py`'s `popped_into()` and
+`absorb()`; corpus-wide, not just this object, they took the static census
+from 17414 to 16942 bytes. G+H: `qbopt/lift.py`'s `tail()`, `qbopt/calls.py`'s
+`restore=` parameter, and `qbopt/rewrite.py`'s `tail_widened_calls()`; static
+census unchanged in region *count* (commit 3 widens 19 existing call regions,
+corpus-wide, rather than adding new ones) but 57 bytes better, net, than
+before it. See `docs/numbers.md` for both. I, B, D together are roughly 65
+bytes more, on their own, without touching this project's architecture. F and
+E remain the architectural ones still open.

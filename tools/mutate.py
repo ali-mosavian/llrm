@@ -206,6 +206,30 @@ MUTATIONS = (
         "        if False:",
         "an inline table's own start considered as a candidate insertion point instead of skipped",
     ),
+    Mutation(
+        "tail-seed-not-preserved",
+        "qbopt/lift.py",
+        "    live: dict[int, int | None] = {0: 0, 1: None}",
+        "    live: dict[int, int | None] = {0: None, 1: None}",
+        "a call's own result treated as fully clobbered instead of the value it always leaves in eax, "
+        "walling off the same G/H shape this commit exists to fix",
+    ),
+    Mutation(
+        "combined-call-keeps-its-restore",
+        "qbopt/rewrite.py",
+        "        emitted = absorb(site, after, restore=False)",
+        "        emitted = absorb(site, after, restore=True)",
+        "a widened region emitted without actually removing the now-redundant restore -- putting the "
+        "high half back only to immediately re-derive it from eax",
+    ),
+    Mutation(
+        "combined-call-need-not-forced",
+        "qbopt/rewrite.py",
+        "        need[0] = True  # the call's own bytes replace the deleted pushes/call outright, never optional\n",
+        "",
+        "a call's own bytes dropped as unneeded while the edit still deletes the original call -- silent "
+        "stack corruption when the call's result is overwritten before anything reads it",
+    ),
 )
 
 

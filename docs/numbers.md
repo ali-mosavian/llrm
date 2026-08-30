@@ -14,7 +14,7 @@ Measured 2026-08-30, over the 110 objects in `fixtures/omf`, with
 | mapped | 110; none refused |
 | regions found | 1404 |
 | taken | 1382 |
-| their bytes | 26233 -> 21210, 19 per cent smaller |
+| their bytes | 26366 -> 21286, 19 per cent smaller |
 
 Refused, by reason:
 
@@ -23,6 +23,21 @@ Refused, by reason:
 | 12 | a single pair that widens 6 bytes to 8 |
 | 6 | a line number points inside the region |
 | 4 | a single pair that widens 7 bytes to 8 |
+
+133 bytes bigger, 76 bytes bigger, than the census immediately before this
+(26233 -> 21210) -- neither is a regression. Region *count* is unchanged
+(1404 found, 1382 taken): commit 3 (docs/residue.md's G and H) never adds or
+removes a region, it widens 19 existing call-absorption regions, corpus-wide,
+into a call *plus* the widened tail BC's own code reads directly out of
+eax:edx right after it, the same way it would after a real call. Those tail
+bytes were never part of any region's own before/after accounting until now
+-- widening across the call's restore is what commit 1 (`ir.py`) made
+representable at all, per `RESTORE_EFFECTS`'s own documented fact that the
+restore leaves the 32-bit result untouched. Net, corpus-wide: 57 more bytes
+saved than before (5080 against 5023). `bench/nbody.bas`'s own VBDOS `/G3`
+object, not part of this census, shows the real payoff more clearly: 12
+combined call+tail edits, 59 bytes saved over what standalone call absorption
+alone would have produced.
 
 4268 bytes bigger than the previous census (16942), from a correctness fix
 to compare absorption in `calls.py`, not a lost optimisation. `B$CPI4`'s own
