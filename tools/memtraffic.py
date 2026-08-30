@@ -48,6 +48,7 @@ from iced_x86 import MemorySizeExt
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from qbopt import omf
+from qbopt import loops
 from qbopt import blocks
 from qbopt import module
 from qbopt.declen import INFO
@@ -171,19 +172,29 @@ def counted(
     return store_load, load_load
 
 
-def measure(path: Path, frames_disjoint: bool) -> tuple[int, int] | None:
+def measure(path: Path, frames_disjoint: bool) -> dict[int, tuple[int, int]] | None:
+    """(store-to-load, load-to-load) per loop nesting depth, or None if unreadable.
+
+    Split by depth because the totals alone mislead: an opportunity in
+    straight-line setup code is worth taking once, and the same one inside
+    two loops is worth taking every trip. loops.py's own caveat applies --
+    the depth is within a body, so this ranks a kernel against its own
+    neighbours and not against another procedure's.
+    """
     found = module.of(omf.parse(path.read_bytes()))
     if found is None:
         return None
     mapped = blocks.code_map(found)
     if isinstance(mapped, str):
         return None
-    store_load = load_load = 0
-    for block in blocks.partition(found, mapped):
+    partitioned = blocks.partition(found, mapped)
+    nesting = loops.depth(partitioned)
+    by_depth: dict[int, tuple[int, int]] = {}
+    for block in partitioned:
         one, two = counted(block, found.resolve, found.calls, found.dgroup, frames_disjoint)
-        store_load += one
-        load_load += two
-    return store_load, load_load
+        was = by_depth.get(nesting.get(block.at, 0), (0, 0))
+        by_depth[nesting.get(block.at, 0)] = (was[0] + one, was[1] + two)
+    return by_depth
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -201,22 +212,28 @@ def main(argv: list[str] | None = None) -> int:
         p for w in args.where for p in ([w] if w.is_file() else sorted(w.rglob("*.obj")) + sorted(w.rglob("*.OBJ")))
     ]
 
-    totals = [0, 0]
+    totals: dict[int, tuple[int, int]] = {}
     skipped = 0
     for path in paths:
         found = measure(path, args.frames_disjoint)
         if found is None:
             skipped += 1
             continue
-        totals[0] += found[0]
-        totals[1] += found[1]
-        if args.per_object and any(found):
-            print(f"  {path.name:<28} store->load {found[0]:>4}  load->load {found[1]:>4}")
+        for at_depth, (one, two) in found.items():
+            was = totals.get(at_depth, (0, 0))
+            totals[at_depth] = (was[0] + one, was[1] + two)
+        if args.per_object and any(any(v) for v in found.values()):
+            one = sum(v[0] for v in found.values())
+            two = sum(v[1] for v in found.values())
+            print(f"  {path.name:<28} store->load {one:>4}  load->load {two:>4}")
 
     scope = "frames disjoint from statics" if args.frames_disjoint else "SS==DS, conservative"
     print(f"\n{len(paths) - skipped} objects ({scope})")
-    print(f"  store->load  {totals[0]}")
-    print(f"  load->load   {totals[1]}")
+    print(f"  {'loop depth':<12} {'store->load':>12} {'load->load':>12}")
+    for at_depth in sorted(totals):
+        one, two = totals[at_depth]
+        print(f"  {at_depth:<12} {one:>12} {two:>12}")
+    print(f"  {'total':<12} {sum(v[0] for v in totals.values()):>12} {sum(v[1] for v in totals.values()):>12}")
     return 0
 
 
