@@ -173,34 +173,66 @@ def statics_of(blocks: list[Block], resolve: Resolver) -> frozenset[Addr]:
     return frozenset(found)
 
 
+@dataclass(frozen=True, slots=True)
+class Step:
+    """One instruction, with everything the fixed point needs already read.
+
+    The transfer functions run once per block per round until nothing
+    changes, and re-deriving an access means an iced info call each time --
+    measured at 4.4 calls per instruction on bench/nbody.bas. Reading them
+    once is what the usual gen/kill formulation is really for; the sets
+    themselves stay ordinary frozensets, because they are tiny (fourteen
+    cells at the widest point in this corpus) and a bitmap over a numbered
+    universe would cost more to maintain than it saves.
+    """
+
+    at: int
+    barrier: bool  # a call this cannot see through, or an unnameable operand
+    access: Access | None
+    clobbers: frozenset[Register_]
+
+
+def prepare(block: Block, resolve: Resolver, calls: dict[int, str]) -> tuple[Step, ...]:
+    """Read every instruction's own effect once, for reuse across rounds."""
+    steps = []
+    for insn in block.insns:
+        if insn.at in calls:
+            steps.append(Step(insn.at, not survives(calls.get(insn.at)), None, frozenset()))
+            continue
+        if insn.flow in CLOBBERS:
+            steps.append(Step(insn.at, True, None, frozenset()))
+            continue
+        access = access_of(insn, resolve)
+        steps.append(
+            Step(
+                insn.at,
+                access is not None and not isinstance(access, Access),
+                access if isinstance(access, Access) else None,
+                _clobbered(insn),
+            )
+        )
+    return tuple(steps)
+
+
 def _forward(
-    block: Block,
+    steps: tuple[Step, ...],
     incoming: frozenset[Addr],
-    resolve: Resolver,
-    calls: dict[int, str],
     dgroup: frozenset[int],
     found: list[int] | None = None,
 ) -> frozenset[Addr]:
     """Availability after this block; `found` collects redundant loads."""
     have = set(incoming)
-    for insn in block.insns:
-        if insn.at in calls:
-            if not survives(calls.get(insn.at)):
-                have.clear()
-            continue
-        if insn.flow in CLOBBERS:
+    for step in steps:
+        if step.barrier:
             have.clear()
             continue
-        access = access_of(insn, resolve)
+        access = step.access
         if access is None:
             continue
-        if not isinstance(access, Access):
-            have.clear()
-            continue
-        if wrote := _clobbered(insn):
+        if wrote := step.clobbers:
             have = {c for c in have if c.base == Register.NONE or ROOT.get(c.base, c.base) not in wrote}
         if access.reads and not access.writes and found is not None and all(c in have for c in access.cells):
-            found.append(insn.at)
+            found.append(step.at)
         if access.writes:
             have = {c for c in have if not aliases(c, access, dgroup)}
         have.update(access.cells)
@@ -208,33 +240,23 @@ def _forward(
 
 
 def _backward(
-    block: Block,
+    steps: tuple[Step, ...],
     outgoing: frozenset[Addr],
-    resolve: Resolver,
-    calls: dict[int, str],
-    dgroup: frozenset[int],
     statics: frozenset[Addr],
     found: list[int] | None = None,
 ) -> frozenset[Addr]:
     """Liveness before this block; `found` collects dead stores."""
     have = set(outgoing)
-    for insn in reversed(block.insns):
-        if insn.at in calls:
-            if not survives(calls.get(insn.at)):
-                have = set(statics)  # it may read any of them
+    for step in reversed(steps):
+        if step.barrier:
+            have = set(statics)  # it may read any of them
             continue
-        if insn.flow in CLOBBERS:
-            have = set(statics)
-            continue
-        access = access_of(insn, resolve)
+        access = step.access
         if access is None:
-            continue
-        if not isinstance(access, Access):
-            have = set(statics)
             continue
         if access.writes and not access.reads:
             if found is not None and not any(c in have for c in access.cells):
-                found.append(insn.at)
+                found.append(step.at)
             have -= set(access.cells)
         if access.reads:
             have.update(access.cells)
@@ -275,8 +297,9 @@ def available(
         for cell in access.cells
     )
 
+    ready = {block.at: prepare(block, resolve, calls) for block in blocks}
     out = {block.at: universe for block in blocks}
-    out[entry] = _forward(blocks[0], frozenset(), resolve, calls, dgroup)
+    out[entry] = _forward(ready[entry], frozenset(), dgroup)
     incoming = {block.at: frozenset() for block in blocks}
 
     changing = True
@@ -287,7 +310,7 @@ def available(
                 continue
             reaching = [out[one] for one in preds[block.at] if one in out]
             now_in = frozenset.intersection(*reaching) if reaching else frozenset()
-            now_out = _forward(block, now_in, resolve, calls, dgroup)
+            now_out = _forward(ready[block.at], now_in, dgroup)
             if now_out != out[block.at] or now_in != incoming[block.at]:
                 out[block.at], incoming[block.at] = now_out, now_in
                 changing = True
@@ -310,6 +333,7 @@ def live(
     if not blocks:
         return {}
     statics = statics_of(blocks, resolve)
+    ready = {block.at: prepare(block, resolve, calls) for block in blocks}
     known = {block.at for block in blocks}
     inside = {block.at: frozenset() for block in blocks}
     outgoing = {block.at: frozenset() for block in blocks}
@@ -321,7 +345,7 @@ def live(
             out = statics if block.leaves else frozenset()
             for successor in block.succ:
                 out |= inside[successor] if successor in known else statics
-            now = _backward(block, out, resolve, calls, dgroup, statics)
+            now = _backward(ready[block.at], out, statics)
             if now != inside[block.at] or out != outgoing[block.at]:
                 inside[block.at], outgoing[block.at] = now, out
                 changing = True
@@ -339,7 +363,7 @@ def redundant_loads(
     found: dict[int, tuple[int, ...]] = {}
     for block in blocks:
         hits: list[int] = []
-        _forward(block, incoming.get(block.at, frozenset()), resolve, calls, dgroup, hits)
+        _forward(prepare(block, resolve, calls), incoming.get(block.at, frozenset()), dgroup, hits)
         found[block.at] = tuple(hits)
     return found
 
@@ -356,6 +380,6 @@ def dead_stores(
     found: dict[int, tuple[int, ...]] = {}
     for block in blocks:
         hits: list[int] = []
-        _backward(block, outgoing.get(block.at, statics), resolve, calls, dgroup, statics, hits)
+        _backward(prepare(block, resolve, calls), outgoing.get(block.at, statics), statics, hits)
         found[block.at] = tuple(hits)
     return found
