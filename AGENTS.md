@@ -368,6 +368,15 @@ than the runtime pass's blunter option of costing the whole module.
   whole suite above is the commit gate, not the inner loop -- point pytest at
   the specific test file, or use `-m "not e2e"` for a fast host-only pass,
   and save the full run for right before committing.
+- **`tools/fuzzcheck.py`/`tools/matrix.py`/`tools/mutate.py` are the gate for
+  a whole batch of related fixes, not for each one inside it.** Landing three
+  fixes in sequence needs three `pytest` runs (cheap, one per commit) but one
+  DOSBox-heavy sweep at the end, not three -- these are real-hardware-emulator
+  runs even with the launch cache warm, and re-running the full sweep after
+  every single fix is exactly the waiting this project has already paid once
+  to avoid (`docs/testing.md`). Use the fast per-fix regression test to catch
+  an obvious break early; save the expensive sweep for confirming the whole
+  batch before it lands.
 
 ## Writing
 
