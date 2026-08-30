@@ -66,17 +66,22 @@ class Shift:
                 raise ValueError(f"edits overlap: {earlier} and {later}")
         return Shift(ordered)
 
-    def at(self, offset: int) -> int:
-        """Where an old offset ends up."""
+    def _delta(self, offset: int, *, insertion_stays_in_front: bool) -> int:
         delta = 0
         for edit in self.edits:
+            if insertion_stays_in_front and edit.lo == edit.hi == offset:
+                break
             if offset >= edit.hi:
                 delta += edit.delta
             elif offset > edit.lo:
                 raise Inside(f"offset {offset:#x} is inside the region {edit.lo:#x}..{edit.hi:#x}")
             else:
                 break
-        return offset + delta
+        return delta
+
+    def at(self, offset: int) -> int:
+        """Where an old offset ends up."""
+        return offset + self._delta(offset, insertion_stays_in_front=False)
 
     def before(self, offset: int) -> int:
         """Where an old offset ends up, an insertion sitting exactly there left in front of it.
@@ -92,17 +97,7 @@ class Shift:
         never be a branch's end without being inside the branch, which at() already
         refuses as Inside.
         """
-        delta = 0
-        for edit in self.edits:
-            if edit.lo == edit.hi == offset:
-                break
-            if offset >= edit.hi:
-                delta += edit.delta
-            elif offset > edit.lo:
-                raise Inside(f"offset {offset:#x} is inside the region {edit.lo:#x}..{edit.hi:#x}")
-            else:
-                break
-        return offset + delta
+        return offset + self._delta(offset, insertion_stays_in_front=True)
 
     @property
     def grows(self) -> bool:

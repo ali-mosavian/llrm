@@ -75,8 +75,8 @@ MUTATIONS = (
     Mutation(
         "branch-from-start",
         "qbopt/relocate.py",
-        "    return shift.at(branch.target) - shift.at(branch.end)",
-        "    return shift.at(branch.target) - shift.at(branch.at)",
+        "    return shift.at(branch.target) - shift.before(branch.end)",
+        "    return shift.at(branch.target) - shift.before(branch.at)",
         "a branch mapped from its own start rather than its end",
     ),
     Mutation(
