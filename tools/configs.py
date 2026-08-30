@@ -80,9 +80,21 @@ def switches_for(config: Config, program: str) -> str:
     return f"{config.switches} {EXTRA[program]}".strip() if program in EXTRA else config.switches
 
 
-# Programs whose rewritten form is meant to disagree with what BC built. None,
-# now that divide is a bare idiv: everything that does not fault gives the same
-# answer as the runtime did.
-DIVERGES: set[str] = set()
+# Programs whose rewritten form is meant to disagree with what BC built. For a
+# name listed here e2e.judge() stops comparing the rewritten run against BC's
+# own and compares it against the golden instead, which is the only thing worth
+# judging either against once the two are known to differ on purpose.
+#
+# suite/cmpof.bas is here because BC is wrong and the rewrite is right. B$CPI4
+# rebuilds a signed answer out of unsigned flags through sahf, which cannot
+# write OF -- so BC's own jl/jle/jg/jge read a flag left over from an unrelated
+# 16-bit compare and answer backwards whenever the high words are equal and the
+# low words straddle 0x8000. That is two consecutive integers, not an exotic
+# pair. calls.py absorbs the call into one real 32-bit cmp, which has no such
+# problem. See the program's own header for the instruction sequence.
+#
+# Divide is not here: a bare idiv changes which inputs fault, not what a
+# non-faulting one answers.
+DIVERGES: set[str] = {"cmpof"}
 
 TAGS = list(CONFIGS)

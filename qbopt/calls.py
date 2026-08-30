@@ -284,6 +284,16 @@ def sites(module: Module, reached: list[Insn], blocks: list[Block]) -> list[Call
 # following jcc wants -- but only the signed and equality ones. CF, PF and AF
 # are the runtime's synthesis rather than the comparison's, so a site whose CF
 # is read afterwards has to be left alone.
+#
+# "The signed ones agree" is true of the cmp this emits and NOT of the runtime
+# it replaces, which is a divergence rather than a hazard. Where the high words
+# are equal B$CPI4 compares the low words unsigned and folds CF into SF through
+# sahf -- and sahf writes only the low byte of FLAGS, so it cannot touch OF at
+# bit 11. OF is left over from that low-word compare, and BC's own jl/jle/jg/jge
+# read SF <> OF against it, answering backwards whenever the low halves straddle
+# 0x8000. ZF is never touched, so = and <> are right either way. This cmp is
+# correct on those operands and the runtime is not; suite/cmpof.bas pins it and
+# configs.DIVERGES records that BC's build is expected to disagree.
 SYNTHESISED = Flag.CF | Flag.PF | Flag.AF
 
 ABSORBED = {COMPARE: Code.CMP_R32_RM32, MULTIPLY: Code.IMUL_R32_RM32}

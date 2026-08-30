@@ -1,0 +1,19 @@
+ELT=-1  0
+ELE=-1  0
+EGT= 0 -1
+EGE= 0 -1
+EEQ= 0  0
+ENE=-1 -1
+FLT=-1  0
+FLE=-1  0
+FGT= 0 -1
+FGE= 0 -1
+FEQ= 0  0
+FNE=-1 -1
+GLT=-1  0
+GLE=-1  0
+GGT= 0 -1
+GGE= 0 -1
+GEQ= 0  0
+GNE=-1 -1
+DONE

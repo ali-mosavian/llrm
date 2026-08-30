@@ -288,8 +288,39 @@ def byref2() -> list[str]:
     return [qbfloat(2.0), qbfloat(16.0), "DONE"]
 
 
+def cmpof() -> list[str]:
+    """suite/cmpof.bas: the comparisons B$CPI4 answers backwards.
+
+    Authored from what the program means, like every other golden here --
+    which is the whole point in this one case, since BC's own build prints
+    something else. See the program's own header for the mechanism, and
+    configs.DIVERGES for why that disagreement is expected rather than a
+    failure.
+    """
+    pairs = {
+        "E": (305430527, 305430528),
+        "F": (2147450879, 2147450880),
+        "G": (-268402689, -268402688),
+    }
+    ops = {
+        "LT": lambda x, y: x < y,
+        "LE": lambda x, y: x <= y,
+        "GT": lambda x, y: x > y,
+        "GE": lambda x, y: x >= y,
+        "EQ": lambda x, y: x == y,
+        "NE": lambda x, y: x != y,
+    }
+    lines = [
+        f"{name}{tag}={seq(-test(left, right), -test(right, left))}"
+        for name, (left, right) in pairs.items()
+        for tag, test in ops.items()
+    ]
+    return [*lines, "DONE"]
+
+
 PROGRAMS = {
     "arith": arith,
+    "cmpof": cmpof,
     "procs": procs,
     "jumps": jumps,
     "cmpord": cmpord,
