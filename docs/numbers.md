@@ -39,6 +39,20 @@ object, not part of this census, shows the real payoff more clearly: 12
 combined call+tail edits, 59 bytes saved over what standalone call absorption
 alone would have produced.
 
+That 59-byte win is against what standalone absorption alone would have cost
+on this file, not against BC's own code -- and it is not enough to make this
+one program a net win yet. Measured directly (`module.of(...).code` on both
+objects, 2026-08-30): `bench/nbody.bas`'s rewritten object is currently **80
+bytes larger** than BC's own, 1440 against 1360 (+5.9 per cent), not smaller.
+Most of that growth is `f2b6f05`'s own necessary correctness fix to compare
+absorption (below), which this one file happens to exercise more heavily,
+relative to its size, than the corpus average; the remainder is
+`docs/residue.md`'s own still-open patterns B, D, E, F and I, re-measured
+fresh in that document as of the same date. The corpus-wide 19 per cent
+smaller above is a real aggregate and does not average out per-file --
+`bench/nbody.bas` is the one program tracked closely enough in this document
+to know it currently regresses.
+
 4268 bytes bigger than the previous census (16942), from a correctness fix
 to compare absorption in `calls.py`, not a lost optimisation. `B$CPI4`'s own
 "Uses: ax,cx,dx,bx" comment overstates what a real call actually clobbers --
