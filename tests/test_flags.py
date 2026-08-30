@@ -42,7 +42,7 @@ JUST_LOAD_STORE = "A1 5E 00 8B 16 60 00  A3 62 00 89 16 64 00A1 66 00 8B 16 68 0
 
 def only_region(enc: str) -> tuple[list[Value], list[bool], list[int]]:
     code = hx(enc)
-    values, _ = lift(code, 0, len(code))
+    values, _, _ = lift(code, 0, len(code))
     need = needed(values)
     return values, need, regions(values)[0]
 
@@ -208,7 +208,7 @@ def test_no_bc_output_in_the_corpus_reads_a_flag_a_widened_region_leaves(fixture
         live = live_in(blocks)
         reached = instructions(found)
         assert not isinstance(reached, str)
-        values, _ = lift(found.code, found.start, found.end, found.resolve, reached)
+        values, _, _ = lift(found.code, found.start, found.end, found.resolve, reached)
         need = needed(values)
         for region in regions(values):
             considered += 1

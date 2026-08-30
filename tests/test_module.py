@@ -33,7 +33,7 @@ def test_a_static_operand_is_invisible_without_the_fixups(obj: Path) -> None:
     reached = instructions(found)
     if isinstance(reached, str):
         return
-    blind, _ = lift(found.code, found.start, found.end, literal_only, reached)
+    blind, _, _ = lift(found.code, found.start, found.end, literal_only, reached)
     assert [value for value in blind if value.mem and value.mem.space is module.Space.SEGMENT] == []
 
 
@@ -42,8 +42,8 @@ def test_the_fixups_are_what_make_a_static_pair_visible(fixtures: Path) -> None:
     assert found is not None
     reached = instructions(found)
     assert not isinstance(reached, str)
-    blind, _ = lift(found.code, found.start, found.end, literal_only, reached)
-    seeing, _ = lift(found.code, found.start, found.end, found.resolve, reached)
+    blind, _, _ = lift(found.code, found.start, found.end, literal_only, reached)
+    seeing, _, _ = lift(found.code, found.start, found.end, found.resolve, reached)
     assert blind == []
     assert len(seeing) > 20, "a program of long arithmetic, and all of it on statics"
 
@@ -53,7 +53,7 @@ def test_the_fixups_make_the_pairs_visible(fixtures: Path) -> None:
     assert found is not None
     reached = instructions(found)
     assert not isinstance(reached, str)
-    values, _ = lift(found.code, found.start, found.end, found.resolve, reached)
+    values, _, _ = lift(found.code, found.start, found.end, found.resolve, reached)
     assert values, "with the fixups resolved there are pairs to lift"
     assert all(value.mem is None or value.mem.space is module.Space.SEGMENT for value in values)
 
@@ -177,7 +177,7 @@ def test_every_value_starts_where_ndisasm_says_an_instruction_does(mapped_obj: P
     assert not isinstance(mapped, str)
     reached = instructions(found)
     assert not isinstance(reached, str)
-    values, _ = lift(found.code, found.start, found.end, found.resolve, reached)
+    values, _, _ = lift(found.code, found.start, found.end, found.resolve, reached)
 
     # ndisasm decodes straight through, so it cannot know an ON GOTO table is
     # data and everything after it is out of step. Up to the first one the two

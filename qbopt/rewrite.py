@@ -246,11 +246,11 @@ def plan(
 
     reached = instructions(found)
     assert not isinstance(reached, str)
-    values, _ = lift(found.code, found.start, found.end, found.resolve, reached)
-    need = needed(values)
+    values, _stores, bridges = lift(found.code, found.start, found.end, found.resolve, reached)
+    need = needed(values, bridges=bridges)
 
     planned = []
-    for index, region in enumerate(regions(values)):
+    for index, region in enumerate(regions(values, bridges)):
         at, end = values[region[0]].at, values[region[-1]].end
         after = flags_after(blocks, live, at, end)
         reason = anchored_inside(found, mapped, at, end) or refuse(values, need, region, after)
@@ -259,7 +259,7 @@ def plan(
         elif max_regions is not None and sum(1 for one in planned if one.region.taken) >= max_regions:
             reason = "past --max-regions"
         dead = dead_pairs_after(blocks, reg_live, at, end)
-        emitted = None if reason else emit_region(values, need, region, after, dead)
+        emitted = None if reason else emit_region(values, need, region, after, dead, found.code, bridges)
         if emitted is None and reason is None:
             reason = "nothing survived the region"
         if emitted is not None and len(emitted.code) > end - at:

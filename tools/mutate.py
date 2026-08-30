@@ -270,6 +270,41 @@ MUTATIONS = (
         "a restore for one pair folded against the next call's pop of the OTHER pair's root -- "
         "the two registers never actually round-trip",
     ),
+    Mutation(
+        "bridge-crosses-control-flow",
+        "qbopt/lift.py",
+        "    if insn.flow != FlowControl.NEXT:\n        return False",
+        "    if False:\n        return False",
+        "a jump or branch bridged like an ordinary instruction -- fixtures/omf's own "
+        "jumps-p-g2-zd.obj has one mid-statement, and what follows it is never actually "
+        "reached the way a fall-through would be",
+    ),
+    Mutation(
+        "bridge-continues-after-a-store",
+        "qbopt/lift.py",
+        "        if not committed and _bridges(insn):",
+        "        if _bridges(insn):",
+        "a gap bridged right after a value is already committed to memory -- suite/nots.bas "
+        "pre-stages a call's own argument at a frame address this pass cannot tell apart from "
+        "an ordinary local, and something landing between that store and the call corrupts it",
+    ),
+    Mutation(
+        "commit-tracked-only-by-the-last-value",
+        "qbopt/lift.py",
+        "                stores.append(len(values) - 1)\n                committed = True",
+        "                stores.append(len(values) - 1)",
+        "a store's own commit forgotten the moment one more, unrelated value (a second pair's "
+        "own fresh load) is added before the gap -- the same bug in a shape one value deeper",
+    ),
+    Mutation(
+        "bridged-fixup-dropped",
+        "qbopt/lift.py",
+        "            fields = (field,) if field is not None else ()",
+        "            fields = ()",
+        "a relocated address inside a bridged instruction (BC's own `mov di,[array]`) spliced "
+        "into a bigger region with no relocation to carry it -- the field is orphaned and reads "
+        "as a bare zero after rewriting",
+    ),
 )
 
 

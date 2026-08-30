@@ -18,24 +18,31 @@ Once the code is values rather than instructions the copies and the
 reloads are visible as what they are, which is the whole point: matching
 instruction patterns can never see that a pair-to-pair copy is dead.
 
-Anything not recognised invalidates both pairs, because an instruction
-this does not understand may write either of them.
+Anything not recognised invalidates both pairs, because an instruction this
+does not understand may write either of them -- unless it provably touches
+neither: docs/residue.md's E, an instruction that BC drops between two halves
+of what is otherwise one contiguous long expression (address arithmetic for
+some other value entirely is the measured case), is exactly this, and
+_bridges() is the one, narrow exception to the rule above.
 """
 
 from enum import StrEnum
 from dataclasses import replace
 from dataclasses import dataclass
 from collections.abc import Callable
+from collections.abc import Sequence
 
 from iced_x86 import Code
 from iced_x86 import Encoder
 from iced_x86 import Register
 from iced_x86 import Register_
+from iced_x86 import FlowControl
 from iced_x86 import Instruction
 from iced_x86 import MemoryOperand
 
 from qbopt.declen import run
 from qbopt.flags import Flag
+from qbopt.declen import INFO
 from qbopt.declen import Insn
 from qbopt.module import Addr
 from qbopt.module import Space
@@ -339,6 +346,81 @@ def pairs_with(first: Decoded, second: Decoded) -> bool:
     )
 
 
+# Every alias of ax/dx/cx/bx this pass ever tracks a value in -- E's own gap
+# test needs "does this instruction touch either half of either pair at all",
+# a different (and broader) question from registers.py's own "is this ONE
+# register's OLD value still wanted downstream", which is why this is not
+# borrowed from there. Deliberately not ir.ROOT either, and for the same
+# underlying reason ir.py itself cannot be imported here: root() answers
+# "which 32-bit register does this belong to", not "does this instruction
+# touch it", and importing ir.py at all would be a cycle -- ir.py already
+# imports FIXUP/Decoded/Resolver/classify/operand from this module.
+TRACKED = frozenset(
+    {
+        Register.AX, Register.AL, Register.AH, Register.EAX,
+        Register.DX, Register.DL, Register.DH, Register.EDX,
+        Register.CX, Register.CL, Register.CH, Register.ECX,
+        Register.BX, Register.BL, Register.BH, Register.EBX,
+    }
+)  # fmt: skip
+
+
+def _bridges(insn: Insn) -> bool:
+    """Whether an unrecognised instruction can sit inside a widened region,
+    unmoved, without disturbing either tracked pair -- docs/residue.md's E.
+
+    Touching neither ax/dx nor cx/bx, in any width, at all means BC's own
+    code between two liftable halves is doing something else entirely (the
+    measured case is address arithmetic for a different value's own index),
+    so lift()'s own walk can step over it without losing what it was already
+    tracking -- regions() then bridges the address gap this instruction's own
+    bytes leave, and emit_region() carries those bytes through unchanged,
+    exactly where they already were relative to what surrounds them.
+
+    `flow != FlowControl.NEXT` refuses anything that is not a plain,
+    unconditionally-falls-through instruction -- a call or interrupt's real
+    effect is the callee's, unknowable here, and a jump or branch does not
+    reliably fall through to what follows it at all (fixtures/omf's own
+    jumps-p-g2-zd.obj has one mid-statement: an unconditional jmp separating
+    two otherwise-liftable statements that are never actually run in
+    sequence). Bridging either would make emit_region() splice in bytes
+    whose own control flow the resulting region's single, atomic replacement
+    cannot honour.
+    """
+    if insn.flow != FlowControl.NEXT:
+        return False
+    return not any(one.register in TRACKED for one in INFO.info(insn.insn).used_registers())
+
+
+@dataclass(frozen=True, slots=True)
+class Bridge:
+    """One span lift() stepped over rather than lifted -- docs/residue.md's E.
+    `fields` names every displacement field inside it that carries a real
+    fixup (almost always none), so emit_region() can carry that relocation
+    forward along with the raw bytes it is already copying unchanged."""
+
+    at: int
+    end: int
+    fields: tuple[int, ...] = ()
+
+
+def _relocatable_field(insn: Insn, resolve: Resolver) -> int | None:
+    """The one displacement field, if any, a bridged instruction's own bytes
+    carry a fixup for -- found the hard way: a bridged `mov di,[array]` (the
+    worked E example's own gap) still holds a relocated address, and nothing
+    else ever sees this instruction again to carry that fixup forward once
+    its bytes are spliced, unchanged, into a bigger region's own edit.
+    Called with the same `resolve` lift() already threads through, bypassing
+    operand()'s own extra refusals (segment override, a GROUP address, an
+    index register) -- those decide whether classify() can treat this as a
+    long's own half, a question this is not asking; a real fixup here still
+    needs relocating whether or not classify() could ever use it.
+    """
+    if insn.disp_at is None:
+        return None
+    return insn.disp_at if resolve(insn.disp_at, insn.insn.memory_displacement).space is Space.SEGMENT else None
+
+
 def _negate_step(
     code: bytes,
     instructions: list[Insn],
@@ -460,20 +542,36 @@ def lift(
     end: int,
     resolve: Resolver = literal_only,
     stream: list[Insn] | None = None,
-) -> tuple[list[Value], list[int]]:
-    """Values and stores, over the instructions given or a straight run of them.
+) -> tuple[list[Value], list[int], list[Bridge]]:
+    """Values, stores and bridged gaps, over the instructions given or a
+    straight run of them.
 
     `stream` is what the block finder reached. Without it this decodes linearly,
     which is right for a hand-built test and wrong for a module: a linear walk
     reads jump tables and dead code as instructions, and a region built on one
     of those does not begin where an instruction does.
+
+    The third return is docs/residue.md's E: every span this walk stepped
+    over without clearing a pair, in address order and already coalesced
+    where several such instructions run together, for regions() to bridge
+    and emit_region() to carry through unchanged.
     """
     instructions = stream if stream is not None else run(code, start, end)[0]
     index_of = {insn.at: position for position, insn in enumerate(instructions)}
 
     values: list[Value] = []
     stores: list[int] = []
+    bridges: list[Bridge] = []
     live: dict[int, int | None] = {0: None, 1: None}
+    # Whether anything since the last real invalidation (both pairs cleared,
+    # below) has already committed to memory -- a single trailing
+    # `values[-1]` check missed a store still reachable across an
+    # intervening, unrelated value (a second pair's own load, say), which is
+    # exactly how the bug below first slipped past this. Reset wherever the
+    # value chain genuinely breaks, since that is also where a *region*
+    # eventually breaks -- committed() answers "since the run regions() will
+    # see as one contiguous piece began", not "was the very last value one".
+    committed = False
 
     def add(value: Value) -> int:
         values.append(value)
@@ -488,16 +586,40 @@ def lift(
         if new_position is not None:
             if len(values) > before and values[-1].op is Op.STORE:
                 stores.append(len(values) - 1)
+                committed = True
             position = new_position
+            continue
+
+        insn = instructions[position]
+        # Only a value still in flight -- not yet committed to memory -- may
+        # have a gap bridged right after it. Found the hard way on
+        # suite/nots.bas: BC sometimes pre-stages a call's own argument at a
+        # frame address this pass cannot tell apart from an ordinary local
+        # (`mov [bp-14h],dx` right before `call far B$PSSD`), and bridging
+        # past that store let a later restore land between the store and the
+        # call, corrupting whatever B$PSSD read from there. residue.md's own
+        # E is never a store followed by a gap -- it is a load, or an
+        # in-progress alu result, with the gap before the operation that
+        # consumes it -- so this loses nothing that shape needs.
+        if not committed and _bridges(insn):
+            field = _relocatable_field(insn, resolve)
+            fields = (field,) if field is not None else ()
+            if bridges and bridges[-1].end == insn.at:
+                last = bridges.pop()
+                bridges.append(Bridge(last.at, insn.end, last.fields + fields))
+            else:
+                bridges.append(Bridge(insn.at, insn.end, fields))
+            position += 1
             continue
 
         # An instruction this does not understand may have written either pair.
         # Advancing one byte instead of one instruction is how a matcher comes
         # to rewrite the middle of an instruction.
         live[0] = live[1] = None
+        committed = False
         position += 1
 
-    return values, stores
+    return values, stores, bridges
 
 
 def tail(instructions: list[Insn], code: bytes, bound: int, resolve: Resolver, seed: Value) -> list[Value]:
@@ -545,14 +667,17 @@ def tail(instructions: list[Insn], code: bytes, bound: int, resolve: Resolver, s
 # pair is one instruction rather than two.
 
 
-def regions(values: list[Value]) -> list[list[int]]:
-    """Maximal runs of values whose instructions are contiguous in the code.
-    Anything unlifted between two values ends a region -- it has to stay
+def regions(values: list[Value], bridges: Sequence[Bridge] = ()) -> list[list[int]]:
+    """Maximal runs of values whose instructions are contiguous in the code,
+    or bridged by one of `bridges` (docs/residue.md's E -- lift()'s own third
+    return, spans it stepped over without disturbing either tracked pair).
+    Anything else unlifted between two values ends a region -- it has to stay
     where it is, so the rewrite cannot span it."""
+    bridge_ends = {bridge.at: bridge.end for bridge in bridges}
     found: list[list[int]] = []
     current: list[int] = []
     for index, value in enumerate(values):
-        if current and values[current[-1]].end != value.at:
+        if current and values[current[-1]].end != value.at and bridge_ends.get(values[current[-1]].end) != value.at:
             found.append(current)
             current = []
         current.append(index)
@@ -561,7 +686,7 @@ def regions(values: list[Value]) -> list[list[int]]:
     return found
 
 
-def needed(values: list[Value], within: list[list[int]] | None = None) -> list[bool]:
+def needed(values: list[Value], within: list[list[int]] | None = None, bridges: Sequence[Bridge] = ()) -> list[bool]:
     """Which values have to be computed.
 
     Stores write memory, so they always count. And whatever is left in a
@@ -571,7 +696,7 @@ def needed(values: list[Value], within: list[list[int]] | None = None) -> list[b
     this globally instead of per region drops exactly those values, and the
     statement that follows then reads one that was never computed."""
     need = [value.op is Op.STORE for value in values]
-    for region in within if within is not None else regions(values):
+    for region in within if within is not None else regions(values, bridges):
         last_in_pair = {values[i].pair: i for i in region if values[i].op is not Op.STORE}
         for index in last_in_pair.values():
             need[index] = True
@@ -777,7 +902,13 @@ def refuse(values: list[Value], need: list[bool], region: list[int], live: Flag)
 
 
 def emit_region(
-    values: list[Value], need: list[bool], region: list[int], live: Flag, dead: frozenset[int]
+    values: list[Value],
+    need: list[bool],
+    region: list[int],
+    live: Flag,
+    dead: frozenset[int],
+    code: bytes = b"",
+    bridges: Sequence[Bridge] = (),
 ) -> Emitted | None:
     """The widened region, and the fixups it needs.
 
@@ -795,6 +926,13 @@ def emit_region(
     restoring one of them actually worth doing" needs the block graph this
     module has no notion of.
 
+    `code`/`bridges` are docs/residue.md's E: `bridges` names the gap, if any,
+    between two consecutive region values that lift() stepped over rather than
+    lifted, and `code` is where those bytes are read from -- carried through
+    unchanged, at the point they already sat, never re-encoded or moved.
+    Neither has to be `dead`/`live`'s own no-default treatment: a region with
+    no bridges (every existing caller, before E) reads no bytes through them.
+
     Nothing is padded. The runtime pass had to fit its rewrite into the bytes it
     replaced and jump over what it saved; here the code may move, so the region
     is exactly as long as it needs to be.
@@ -802,14 +940,24 @@ def emit_region(
     if refuse(values, need, region, live):
         return None
 
+    bridge_by_start = {bridge.at: bridge for bridge in bridges}
     out = bytearray()
     relocations: list[tuple[int, int]] = []
-    for index in region:
-        if not need[index]:
-            continue
-        one = emit(values[index])
-        relocations += [(len(out) + at, field) for at, field in one.relocations]
-        out += one.code
+    for position, index in enumerate(region):
+        if need[index]:
+            one = emit(values[index])
+            relocations += [(len(out) + at, field) for at, field in one.relocations]
+            out += one.code
+        if position + 1 < len(region):
+            gap_start = values[index].end
+            bridge = bridge_by_start.get(gap_start)
+            next_at = values[region[position + 1]].at
+            if bridge is not None and bridge.end == next_at:
+                # every relocated field the gap's own bytes carry (BC's own
+                # `mov di,[array]`, the worked E example -- almost always
+                # none) moves with it, or the fixup it needs is orphaned
+                relocations += [(len(out) + field - gap_start, field) for field in bridge.fields]
+                out += code[gap_start : bridge.end]
 
     restore = b"".join(FIXUP[pair] for pair in restored_pairs(values, need, region) if pair not in dead)
     return Emitted(bytes(out + restore), tuple(relocations))

@@ -21,6 +21,7 @@ from qbopt.declen import run
 from qbopt.flags import Flag
 from qbopt.lift import FIXUP
 from qbopt.lift import Value
+from qbopt.lift import Bridge
 from qbopt.lift import encode
 from qbopt.lift import needed
 from qbopt.lift import refuse
@@ -289,13 +290,28 @@ def test_immediate_encoding_on_pair_one_has_no_eax_shortcut() -> None:
 
 
 def test_an_opaque_instruction_invalidates_the_pairs() -> None:
-    v = one("A1 5E 00 8B 16 60 00  90  23 06 5A 00 23 16 5C 00")
+    # `inc ax` touches a tracked register (ax), so it is not one of E's
+    # bridgeable gaps -- it still clears both pairs, same as before E existed.
+    v = one("A1 5E 00 8B 16 60 00  40  23 06 5A 00 23 16 5C 00")
     assert [x.op for x in v] == [Op.LOAD]
+
+
+def test_an_instruction_touching_no_tracked_register_bridges_the_gap() -> None:
+    # docs/residue.md's E: `inc si` touches neither ax/dx nor cx/bx, so
+    # lift() steps over it without invalidating live[0], and regions() (given
+    # the bridge lift() reports) treats the load and the alu pair after the
+    # gap as one contiguous region.
+    b = hx("A1 5E 00 8B 16 60 00  46  23 06 5A 00 23 16 5C 00")
+    v, _stores, bridges = lift(b, 0, len(b))
+    assert [x.op for x in v] == [Op.LOAD, Op.ALUM]
+    assert bridges == [Bridge(7, 8)]
+    assert len(regions(v, bridges)) == 1
+    assert len(regions(v)) == 2, "without the bridge, the gap still splits the region"
 
 
 def test_opaque_bytes_split_a_region_and_leave_the_value_live() -> None:
     b = hx("A1 5E 00 8B 16 60 00 23 06 5A 00 23 16 5C 0090 90A1 62 00 8B 16 64 00 A3 66 00 89 16 68 00")
-    v, _ = lift(b, 0, len(b))
+    v, _, _ = lift(b, 0, len(b))
     assert len(regions(v)) == 2
     need = needed(v)
     assert need[1] is True, "a value in a register when a region ends is live"
@@ -304,7 +320,7 @@ def test_opaque_bytes_split_a_region_and_leave_the_value_live() -> None:
 
 def test_everything_feeding_a_store_is_needed_transitively() -> None:
     b = hx("A1 5E 00 8B 16 60 00 23 06 5A 00 23 16 5C 00 A3 62 00 89 16 64 00")
-    v, _ = lift(b, 0, len(b))
+    v, _, _ = lift(b, 0, len(b))
     assert all(needed(v))
 
 
@@ -362,7 +378,7 @@ CORPUS = (
 @pytest.fixture(scope="module")
 def corpus() -> list[Value]:
     b = hx(CORPUS)
-    v, _ = lift(b, 0, len(b))
+    v, _, _ = lift(b, 0, len(b))
     return v
 
 
@@ -411,7 +427,7 @@ def test_a_region_is_exactly_as_long_as_it_needs_to_be(enc: str) -> None:
     # jump over what it saved, which meant the saving could never be lent to a
     # neighbour. Here the code moves, so nothing is padded.
     code = hx(enc)
-    values, _ = lift(code, 0, len(code))
+    values, _, _ = lift(code, 0, len(code))
     need = needed(values)
     for region in regions(values):
         emitted = emit_region(values, need, region, Flag.NONE, frozenset())
@@ -427,7 +443,7 @@ def test_emit_region_drops_a_restore_the_caller_proves_dead() -> None:
     # only thing that knows whether dx/bx is ever read again -- emit_region()
     # itself just has to honour what it's told, and honour it per pair.
     code = hx("A1 5E 00 8B 16 60 00   A3 62 00 89 16 64 00")
-    values, _ = lift(code, 0, len(code))
+    values, _, _ = lift(code, 0, len(code))
     need = needed(values)
     region = regions(values)[0]
     live = emit_region(values, need, region, Flag.NONE, frozenset())
@@ -442,7 +458,7 @@ def test_emit_region_only_drops_the_pair_actually_proven_dead() -> None:
     # cx:bx and ax:dx are independent -- proving one dead must never touch
     # the other's own restore.
     code = hx("8B 0E 5E 00 8B 1E 60 00  A1 62 00 8B 16 64 00  0B 0E 66 00 0B 1E 68 00  23 06 6A 00 23 16 6C 00")
-    values, _ = lift(code, 0, len(code))
+    values, _, _ = lift(code, 0, len(code))
     need = needed(values)
     region = regions(values)[0]
     emitted = emit_region(values, need, region, Flag.NONE, frozenset({0}))
@@ -455,7 +471,7 @@ def test_a_widened_operand_says_where_its_fixup_must_go() -> None:
     # The displacement field holds zero, exactly as BC's does; the address comes
     # from a fixup, so the emitter has to say which bytes need one.
     code = hx("A1 5E 00 8B 16 60 00  A3 62 00 89 16 64 00")
-    values, _ = lift(code, 0, len(code))
+    values, _, _ = lift(code, 0, len(code))
     need = needed(values)
     emitted = emit_region(values, need, regions(values)[0], Flag.NONE, frozenset())
     assert emitted is not None
@@ -469,7 +485,7 @@ def test_a_pair_inside_an_immediate_is_not_a_pair() -> None:
     # byte finds it, and would rewrite the middle of an instruction.
     code = hx("C7 06 5E 00 A1 5E 00 8B 16 60 00")
     assert classify_code(code[4:]) is not None, "those bytes really do look like a load"
-    values, _ = lift(code, 0, len(code))
+    values, _, _ = lift(code, 0, len(code))
     assert values == []
 
 
@@ -477,7 +493,7 @@ def test_every_value_begins_where_an_instruction_begins() -> None:
     # the trap above, then filler to a boundary, then a real pair at 0x0a
     code = hx("C7 06 5E 00 A1 5E   00 8B 16 60   A1 5E 00 8B 16 60 00")
     boundaries = {insn.at for insn in run(code, 0, len(code))[0]}
-    values, _ = lift(code, 0, len(code))
+    values, _, _ = lift(code, 0, len(code))
     assert values, "there is a pair here to find"
     assert all(value.at in boundaries for value in values)
 
@@ -543,3 +559,133 @@ def test_two_elements_at_the_same_offset_are_not_the_same_address() -> None:
     low = Addr(Space.SEGMENT, 0x10, 5, base=Register.SI)
     high = Addr(Space.SEGMENT, 0x12, 5, base=Register.DI)
     assert high != low.plus(2)
+
+
+# ---------------------------------------------------------------------------
+# docs/residue.md's E -- an interleaved instruction that touches no tracked
+# register bridges the gap, real shape from bench/nbody.bas (di computes a
+# second array's own index between a load pair and the alu pair that reads
+# through it):
+#
+#     mov ax,[si]      mov dx,[si+2]     load pair, pair 0
+#     mov di,[0x96]    shl di,2          the OTHER array's index -- edi only
+#     sub ax,[di+6]    sbb dx,[di+8]     alu pair, pair 0, resumed
+#     mov [0x76],ax    mov [0x78],dx     store pair, pair 0
+
+
+E_WORKED_EXAMPLE = hx(
+    "8B 44 00"  # mov ax,[si]
+    "8B 54 02"  # mov dx,[si+2]
+    "8B 3E 96 00"  # mov di,[0x96]
+    "C1 E7 02"  # shl di,2
+    "2B 45 06"  # sub ax,[di+6]
+    "1B 55 08"  # sbb dx,[di+8]
+    "89 06 76 00"  # mov [0x76],ax
+    "89 16 78 00"  # mov [0x78],dx
+)
+
+
+def test_e_worked_example_bridges_the_di_gap_into_one_region() -> None:
+    values, _stores, bridges = lift(E_WORKED_EXAMPLE, 0, len(E_WORKED_EXAMPLE))
+    assert [v.op for v in values] == [Op.LOAD, Op.ALUM, Op.STORE]
+    assert bridges == [Bridge(6, 13)], "mov di,[..] and shl di,2 coalesce into one bridged span"
+    assert len(regions(values, bridges)) == 1
+    assert len(regions(values)) == 2, "without the bridge the load is stranded on its own"
+
+
+def test_e_worked_example_emits_smaller_and_carries_the_gap_through_unchanged() -> None:
+    code = E_WORKED_EXAMPLE
+    values, _stores, bridges = lift(code, 0, len(code))
+    need = needed(values, bridges=bridges)
+    region = regions(values, bridges)[0]
+    emitted = emit_region(values, need, region, Flag.NONE, frozenset(), code, bridges)
+    assert emitted is not None
+    assert len(emitted.code) < len(code), f"{len(emitted.code)} bytes must beat BC's own {len(code)}"
+    # the gap's own bytes -- mov di,[0x96]/shl di,2 -- are neither widened nor
+    # moved, so they must still appear verbatim inside the emitted region
+    assert hx("8B 3E 96 00 C1 E7 02") in emitted.code
+
+
+def test_e_carries_a_fixup_inside_a_bridged_instruction_forward() -> None:
+    # The bug this guards against, found on bench/nbody.bas: `mov di,[0x96]`
+    # inside the bridged gap holds a real relocated address (an array's own
+    # base). Splicing its raw bytes into the region without also carrying its
+    # own fixup forward left di loaded with a bare zero after rewriting --
+    # the array's base was gone, and every address computed off di after that
+    # was wrong.
+    code = E_WORKED_EXAMPLE
+    di_load = decode(code, 6)
+    assert di_load is not None and di_load.disp_at is not None
+    di_field = di_load.disp_at
+
+    def resolve(field_offset: int, literal: int) -> Addr:
+        if field_offset == di_field:
+            return Addr(Space.SEGMENT, 0x96, 9)
+        return literal_only(field_offset, literal)
+
+    values, _stores, bridges = lift(code, 0, len(code), resolve)
+    assert bridges == [Bridge(6, 13, (di_field,))]
+
+    need = needed(values, bridges=bridges)
+    region = regions(values, bridges)[0]
+    emitted = emit_region(values, need, region, Flag.NONE, frozenset(), code, bridges)
+    assert emitted is not None
+    matches = [at for at, field in emitted.relocations if field == di_field]
+    assert len(matches) == 1, "the gap's own fixup must survive into the emitted region exactly once"
+    new_at = matches[0]
+    # the field's own bytes moved, unchanged, to wherever the load ahead of
+    # it widened to -- still the same two placeholder bytes BC itself wrote
+    assert emitted.code[new_at : new_at + 2] == code[di_field : di_field + 2]
+
+
+def test_e_does_not_bridge_after_a_store() -> None:
+    # suite/nots.bas's own real bug: BC sometimes pre-stages a call's own
+    # argument at a frame address this pass cannot tell apart from an
+    # ordinary local (`mov [bp-14h],dx` right before `call far B$PSSD`) --
+    # bridging past that store let a later, unrelated value's own restore
+    # land between the store and the call, corrupting what the call read.
+    # Bridging only ever continues a value still in flight in a register,
+    # never one already committed to memory -- `inc si` alone would bridge
+    # fine (docs/residue.md's own E shape), but not right after a store.
+    code = hx("A1 5E 00 8B 16 60 00") + hx("A3 62 00 89 16 64 00") + hx("46") + hx("A1 66 00 8B 16 68 00")
+    values, _stores, bridges = lift(code, 0, len(code))
+    assert [v.op for v in values] == [Op.LOAD, Op.STORE, Op.LOAD]
+    assert bridges == []
+
+
+def test_e_does_not_bridge_after_a_store_of_a_different_pair() -> None:
+    # A single trailing `values[-1]` check misses a store still reachable
+    # across an intervening, unrelated value -- pair 1's own fresh load sits
+    # between pair 0's store and the gap, so `values[-1]` alone is a LOAD,
+    # not a STORE, but pair 0's own commit is still exactly one gap away.
+    code = (
+        hx("A1 5E 00 8B 16 60 00")  # LOAD pair 0
+        + hx("A3 62 00 89 16 64 00")  # STORE pair 0
+        + hx("8B 0E 66 00 8B 1E 68 00")  # LOAD pair 1 -- values[-1], not a store
+        + hx("46")  # inc si -- bridgeable in isolation
+        + hx("23 0E 6A 00 23 1E 6C 00")  # ALU pair 1, would resume live[1] if bridged
+    )
+    values, _stores, bridges = lift(code, 0, len(code))
+    assert [v.op for v in values] == [Op.LOAD, Op.STORE, Op.LOAD]
+    assert bridges == []
+
+
+def test_e_does_not_bridge_across_a_jump() -> None:
+    # a jmp's own FlowControl is not NEXT, so nothing after it is a reliable
+    # fall-through -- fixtures/omf's jumps-p-g2-zd.obj has exactly this shape
+    # mid-statement, and treating it as bridgeable merged three independently
+    # widenable statements into one, which anchored_inside() then refused
+    # outright because the jump's own target landed inside the merged span.
+    code = hx("A1 5E 00") + hx("8B 16 60 00") + hx("EB 00") + hx("23 06 5A 00") + hx("23 16 5C 00")
+    values, _stores, bridges = lift(code, 0, len(code))
+    assert [v.op for v in values] == [Op.LOAD]
+    assert bridges == []
+
+
+def test_e_does_not_bridge_a_call() -> None:
+    # a far call's real effect is the callee's, unknowable here -- CLOBBERS'
+    # own reasoning in flags.py applies just as much to E's own gap test.
+    code = hx("A1 5E 00") + hx("8B 16 60 00") + hx("9A 00 00 00 00") + hx("23 06 5A 00") + hx("23 16 5C 00")
+    values, _stores, bridges = lift(code, 0, len(code))
+    assert [v.op for v in values] == [Op.LOAD]
+    assert bridges == []
