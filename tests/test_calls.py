@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from iced_x86 import Code
+from iced_x86 import OpKind
 from iced_x86 import Decoder
 from iced_x86 import Mnemonic
 from iced_x86 import Register
@@ -29,6 +30,7 @@ from qbopt.calls import grouped
 from qbopt.declen import decode
 from qbopt.calls import CallSite
 from qbopt.calls import MULTIPLY
+from qbopt.declen import BITNESS
 from qbopt.blocks import code_map
 from qbopt.blocks import partition
 from qbopt.calls import LEFT_FIRST
@@ -152,8 +154,46 @@ def test_an_absorbed_comparison_leaves_no_value_to_restore(fixtures: Path) -> No
     site = next(s for s in sites(parsed, reached, blocks_of(parsed)) if s.name == COMPARE)
     emitted = absorb(site, Flag.NONE)
     assert not isinstance(emitted, str)
-    assert len(emitted.code) == 9, "mov eax,[a] then cmp eax,[b], and nothing else"
+    # push eax / mov eax,[a] / cmp eax,[b] / pop eax -- see
+    # test_absorbed_compare_restores_eax for why the wrap is there
+    assert len(emitted.code) == 13
     assert FIXUP[0] not in emitted.code
+
+
+def test_absorbed_compare_restores_eax(fixtures: Path) -> None:
+    # B$CPI4's real body (runtime/rt/helpi4.asm) never touches cx, dx or bx
+    # at all, and its cProc save-list preserves ax too -- a real call to it
+    # changes nothing but the flags, so BC's own code can keep a value live
+    # in eax right across a compare buried inside a larger expression.
+    # Absorbing the call still needs a scratch register to hold one side of
+    # the comparison, but it has to come back exactly as it was found.
+    parsed = module.load(fixtures / "cmpord-v-g3.obj")
+    assert parsed is not None
+    reached = instructions(parsed)
+    assert not isinstance(reached, str)
+    site = next(s for s in sites(parsed, reached, blocks_of(parsed)) if s.name == COMPARE)
+    emitted = absorb(site, Flag.NONE)
+    assert not isinstance(emitted, str)
+    decoded = list(Decoder(BITNESS, emitted.code, ip=0))
+    assert decoded[0].mnemonic == Mnemonic.PUSH and decoded[0].op0_register == Register.EAX
+    assert decoded[-1].mnemonic == Mnemonic.POP and decoded[-1].op0_register == Register.EAX
+    # nothing between the push and the pop writes back to eax -- the load
+    # and the cmp both read/write it, which is exactly what gets undone
+    inner = decoded[1:-1]
+    assert any(insn.op0_register == Register.EAX for insn in inner)
+
+
+def test_absorbed_compare_against_a_constant_wraps_eax_too() -> None:
+    # apply_to's compact eax-specific immediate form (CMP_EAX_IMM32) is still
+    # the one used here -- eax is not off limits, only unrestored, so nothing
+    # stops the short form the way a genuinely different register would.
+    site = CallSite(at=0, end=0, start=0, name=COMPARE, pushed=(static_operand(0x10), constant_operand(70000)))
+    emitted = absorb(site, Flag.NONE)
+    assert not isinstance(emitted, str)
+    decoded = list(Decoder(BITNESS, emitted.code, ip=0))
+    assert decoded[0].mnemonic == Mnemonic.PUSH and decoded[0].op0_register == Register.EAX
+    assert decoded[-1].mnemonic == Mnemonic.POP and decoded[-1].op0_register == Register.EAX
+    assert Mnemonic.CMP in {insn.mnemonic for insn in decoded}
 
 
 # the opcode's third byte is the only difference between the shrd forms:
@@ -289,16 +329,105 @@ def test_popped_into_is_a_bare_pop() -> None:
 
 
 def test_consume_pops_a_dword_and_a_word_pair_for_compare() -> None:
-    # deepest: a word pair, bound for eax; topmost: a dword, bound for ecx.
+    # bp cannot hold anything but the frame it builds here, and sp itself
+    # cannot be a 16-bit addressing base at all -- see compare_consume()'s
+    # own docstring for why the popped arguments are read in place through
+    # bp instead of popped into a register the way every other consumed
+    # call's arguments are.
     hi, lo = decode(hx("52"), 0), decode(hx("50"), 0)  # push dx / push ax
     dword = decode(hx("66 FF 36 00 00"), 0)  # push dword [x]
     assert hi is not None and lo is not None and dword is not None
     site = CallSite(at=0, end=0, start=0, name=COMPARE, consume=(hi, lo, dword))
     emitted = consume(site, Flag.NONE)
     assert not isinstance(emitted, str)
-    # pop ecx (the dword) / pop eax (the pair, already dword-contiguous) / cmp
-    assert emitted.code == hx("66 59  66 58  66 3B C1")
     assert emitted.relocations == (), "nothing here is a relocated address"
+    decoded = list(Decoder(BITNESS, emitted.code, ip=0))
+    assert decoded[0].mnemonic == Mnemonic.PUSH and decoded[0].op0_register == Register.BP
+    assert decoded[1].mnemonic == Mnemonic.PUSH and decoded[1].op0_register == Register.EDX
+    assert Mnemonic.CMP in {insn.mnemonic for insn in decoded}
+    # bp and edx both come back, and sp ends up exactly 8 bytes shallower --
+    # both original 4-byte arguments consumed. Restoring bp is a pop, not a
+    # bp-relative read, because that slot has to be read at or above sp (see
+    # test_consume_compare_never_reads_below_the_stack_pointer); the earlier
+    # bp-relative lea only gets sp to where the parked value sits, one pop
+    # short of the final +8 -- iced's stack_pointer_increment does not
+    # follow an arbitrary write to sp, so the two pushes (-6), this lea's
+    # own displacement (+12) and the final pop (+2) are the whole story.
+    lea = next(insn for insn in decoded if insn.mnemonic == Mnemonic.LEA)
+    assert lea.op0_register == Register.SP
+    assert lea.memory_displacement == 12
+    assert sum(insn.stack_pointer_increment for insn in decoded) + 12 == 8
+    assert decoded[-1].mnemonic == Mnemonic.POP and decoded[-1].op0_register == Register.BP
+
+
+def simulated_reads_never_land_below_sp(code: bytes, entry_sp: int = 0x2000) -> None:
+    """Walk a 16-bit instruction stream, tracking sp/bp and every general
+    register push/pop/mov touches, and fail the moment something reads
+    memory at an address below the *current* sp.
+
+    That memory is not somehow free to use just because nothing here still
+    names it -- DOS services interrupts at instruction boundaries, and every
+    one of them pushes onto whatever stack is live, at addresses at and
+    below sp. A read below sp is reading memory an interrupt handler is free
+    to have already clobbered, whether or not anything happens to be
+    listening on this particular run.
+    """
+    regs: dict[Register_, int] = {Register.BP: 0x4000, Register.EDX: 0x1234_5678, Register.SP: entry_sp}
+    mem: dict[int, int] = {}
+
+    def widths(reg: Register_) -> int:
+        return 4 if reg in (Register.EAX, Register.ECX, Register.EDX, Register.EBX) else 2
+
+    def mem_addr(insn: Instruction) -> int:
+        base = insn.memory_base
+        assert base in regs, f"unhandled base register {base}"
+        return regs[base] + insn.memory_displacement
+
+    def read_mem(addr: int, size: int) -> int:
+        assert addr >= regs[Register.SP], f"read at {addr:#x} is below sp {regs[Register.SP]:#x}"
+        return mem.get(addr, 0) & ((1 << (size * 8)) - 1)
+
+    def write_mem(addr: int, value: int, size: int) -> None:
+        mem[addr] = value & ((1 << (size * 8)) - 1)
+
+    for insn in Decoder(BITNESS, code, ip=0):
+        match insn.mnemonic:
+            case Mnemonic.PUSH:
+                size = widths(insn.op0_register)
+                regs[Register.SP] -= size
+                write_mem(regs[Register.SP], regs[insn.op0_register], size)
+            case Mnemonic.POP:
+                size = widths(insn.op0_register)
+                regs[insn.op0_register] = read_mem(regs[Register.SP], size)
+                regs[Register.SP] += size
+            case Mnemonic.MOV if insn.op1_kind == OpKind.MEMORY:
+                regs[insn.op0_register] = read_mem(mem_addr(insn), widths(insn.op0_register))
+            case Mnemonic.MOV if insn.op0_kind == OpKind.MEMORY:
+                write_mem(mem_addr(insn), regs[insn.op1_register], widths(insn.op1_register))
+            case Mnemonic.MOV:
+                regs[insn.op0_register] = regs[insn.op1_register]
+            case Mnemonic.CMP:
+                read_mem(mem_addr(insn), widths(insn.op0_register))  # value unused, only the safety check matters
+            case Mnemonic.LEA:
+                regs[insn.op0_register] = mem_addr(insn)
+            case other:
+                raise AssertionError(f"simulator does not know {other}")
+
+
+def test_consume_compare_never_reads_below_the_stack_pointer() -> None:
+    # A DOS interrupt handler is free to use everything at and below sp at
+    # any instruction boundary -- compare_consume() borrows bp as a frame
+    # pointer inside the call's own dead argument space, and every register
+    # it restores from there has to be read at or above sp, never below it,
+    # or an interrupt landing between two of its instructions can corrupt
+    # bp or edx before they come back.
+    hi, lo = decode(hx("52"), 0), decode(hx("50"), 0)  # push dx / push ax
+    dword = decode(hx("66 FF 36 00 00"), 0)  # push dword [x]
+    assert hi is not None and lo is not None and dword is not None
+    site = CallSite(at=0, end=0, start=0, name=COMPARE, consume=(hi, lo, dword))
+    emitted = consume(site, Flag.NONE)
+    assert not isinstance(emitted, str)
+    simulated_reads_never_land_below_sp(emitted.code)
 
 
 def test_consume_pops_every_argument_even_one_shaped_like_a_static() -> None:

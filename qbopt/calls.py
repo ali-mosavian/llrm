@@ -18,7 +18,6 @@ from dataclasses import dataclass
 
 from iced_x86 import Code
 from iced_x86 import Decoder
-from iced_x86 import Encoder
 from iced_x86 import Register
 from iced_x86 import Register_
 from iced_x86 import Instruction
@@ -27,7 +26,6 @@ from iced_x86 import MemoryOperand
 
 from qbopt.flags import ALL
 from qbopt.flags import Flag
-from qbopt.lift import FIXUP
 from qbopt.declen import Insn
 from qbopt.module import Addr
 from qbopt.blocks import Block
@@ -44,6 +42,12 @@ COMPARE = "B$CPI4"
 MULTIPLY = "B$MUI4"
 DIVIDE = "B$DVI4"
 REMAINDER = "B$RMI4"
+
+# B$CPI4's sibling B$CMI4 (runtime/rt/helpi4.asm) does the same signed
+# comparison but returns flags meant for an *unsigned* jcc -- ABSORBED's
+# CMP_R32_RM32 mapping is only right for B$CPI4's own convention. B$CMI4 is
+# not in LEFT_FIRST and never reaches here; it must stay that way unless
+# absorb() is taught the different flag meaning.
 
 # A user-declared `declare function fixMul& (byval a as long, byval b as long,
 # byval fixShift as long)` has no body anywhere -- LINK never sees it, because
@@ -292,6 +296,16 @@ DIVIDES = {DIVIDE, REMAINDER}
 
 RESULT = Register.EAX  # what the runtime returns a long in, as ax:dx
 
+# B$CPI4's actual body (runtime/rt/helpi4.asm of the QuickBASIC 4.5 source)
+# never touches cx, dx or bx at all, and its cProc save-list -- <AX>, where
+# B$MUI4/B$DVI4/B$RMI4 all declare an empty one -- preserves ax too. Its own
+# "Uses: ax,cx,dx,bx" comment overstates what a real call actually clobbers:
+# nothing but the flags. BC's own code relies on that, keeping a value live
+# in eax across a compare embedded in a larger expression -- absorbing the
+# call still needs a scratch register to hold one side of the comparison,
+# but wrapping it in push/pop is the only way to match a call that changes
+# no register at all. See absorb()'s COMPARE branch.
+
 
 def relocated_addr(operand: Operand) -> Addr:
     """Where a Kind.STATIC operand's value lives, once it is read at codegen
@@ -340,10 +354,14 @@ def apply_to(name: str, operand: Operand) -> Instruction:
 
 
 def absorb(site: CallSite, live: Flag) -> Emitted | str:
-    """The call replaced by two 386 instructions, or why it cannot be.
+    """The call replaced by 386 instructions, or why it cannot be.
 
-    Nine to sixteen bytes against fifteen and twenty-one, and it removes a far
-    call and the routine behind it.
+    Nine to sixteen bytes against fifteen and twenty-one for multiply, and it
+    removes a far call and the routine behind it. Compare is thirteen against
+    fifteen: four of the nine bytes a bare load-and-cmp would take are a
+    push/pop wrapped around eax, because a real call to B$CPI4 changes no
+    register at all (see the note above RESULT) and BC's own code can be
+    relying on that anywhere around the call, not only in the flags.
     """
     if site.consume:
         return consume(site, live)
@@ -363,28 +381,37 @@ def absorb(site: CallSite, live: Flag) -> Emitted | str:
     # x*x (or x==x): the same address read twice is one load, not two -- the
     # second step becomes reg,reg and needs no fixup of its own.
     same_address = left.kind is Kind.STATIC and right.kind is Kind.STATIC and left.addr == right.addr
-    right_step = (
-        Instruction.create_reg_reg(ABSORBED[site.name], RESULT, RESULT) if same_address else apply_to(site.name, right)
-    )
 
-    code = bytearray()
-    relocations = []
-    steps: list[tuple[Instruction, Operand | None]] = [
-        (load_of(left), left),
-        (right_step, None if same_address else right),
-    ]
-    for step, operand in steps:
-        encoder = Encoder(BITNESS)
-        encoder.encode(step, 0)
-        where = encoder.get_constant_offsets()
-        if operand is not None and operand.kind is Kind.STATIC and operand.at is not None:
-            relocations.append((len(code) + where.displacement_offset, operand.at))
-        code += encoder.take_buffer()
+    steps: list[Instruction] = []
+    relocated: dict[int, int] = {}
 
-    # a comparison leaves its answer in the flags; a multiply leaves a value, and
-    # BC reads its high half from dx
-    restore = b"" if site.name == COMPARE else FIXUP[0]
-    return Emitted(bytes(code) + restore, tuple(relocations))
+    def add(insn: Instruction) -> int:
+        steps.append(insn)
+        return len(steps) - 1
+
+    if site.name == COMPARE:
+        add(Instruction.create_reg(Code.PUSH_R32, RESULT))
+
+    where = add(load_of(left))
+    if left.kind is Kind.STATIC and left.at is not None:
+        relocated[where] = left.at
+
+    if same_address:
+        add(Instruction.create_reg_reg(ABSORBED[site.name], RESULT, RESULT))
+    else:
+        where = add(apply_to(site.name, right))
+        if right.kind is Kind.STATIC and right.at is not None:
+            relocated[where] = right.at
+
+    if site.name == COMPARE:
+        # pop does not touch the flags the cmp above just set
+        add(Instruction.create_reg(Code.POP_R32, RESULT))
+    else:
+        # a multiply leaves a value, and BC reads its high half from dx
+        for insn in restoring():
+            add(insn)
+
+    return assemble(steps, relocated)
 
 
 def assemble(steps: list[Instruction], relocated: dict[int, int]) -> Emitted:
@@ -475,14 +502,68 @@ def popped_into(target: Register_) -> Instruction:
 # the two operands loads into eax cannot change a*b; comparison and division
 # are not commutative, but eax/ecx here is the same assignment dividing()
 # and ABSORBED's reg,rm forms already use for a Delete site, just populated
-# by a pop instead of a load.
+# by a pop instead of a load. COMPARE has no entry: it is never popped into a
+# register at all -- see compare_consume() -- and _arity() already knows how
+# many arguments it takes without this table repeating it.
 CONSUME_TARGETS = {
-    COMPARE: (Register.ECX, Register.EAX),
     MULTIPLY: (Register.EAX, Register.ECX),
     DIVIDE: (Register.EAX, Register.ECX),
     REMAINDER: (Register.EAX, Register.ECX),
     FIX_MULTIPLY: (Register.ECX, Register.EDX, Register.EAX),
 }
+
+
+def compare_consume() -> Emitted:
+    """A popped compare, without popping: B$CPI4 changes no register at all
+    (see the note above RESULT), and its two arguments have to come off the
+    stack the same way a real call's callee-cleanup would remove them.
+
+    bp is the only register 16-bit addressing can use as a base with a
+    displacement -- sp itself cannot be -- so bp stands in as a frame
+    pointer just long enough to read both arguments in place, and one more
+    register (edx) holds one side of the cmp. Both are saved on entry and
+    put back after the flags are set; nothing but the flags is left changed.
+
+    The saved bp cannot simply be read back where push left it: that slot is
+    below sp the moment sp is raised past it, and DOS services interrupts at
+    any instruction boundary -- every one of them pushes onto whatever stack
+    is live, at and below sp, and is free to have clobbered it by the time
+    this code reads it back. So the restore reads bp before sp moves at all,
+    parks it in the call's own dead argument space (still above the final
+    sp), and only the last, final pop ever reads at an address below where
+    sp already sits.
+    """
+    steps: list[Instruction] = [
+        Instruction.create_reg(Code.PUSH_R16, Register.BP),
+        Instruction.create_reg(Code.PUSH_R32, Register.EDX),
+        Instruction.create_reg_reg(Code.MOV_R16_RM16, Register.BP, Register.SP),
+        # +6 pushed ahead of the arguments (bp, then edx) puts left at +10
+        # and right, the topmost original argument, at +6
+        Instruction.create_reg_mem(
+            Code.MOV_R32_RM32, Register.EDX, MemoryOperand(base=Register.BP, displ=10, displ_size=1)
+        ),
+        Instruction.create_reg_mem(
+            Code.CMP_R32_RM32, Register.EDX, MemoryOperand(base=Register.BP, displ=6, displ_size=1)
+        ),
+        # everything from here on must leave the flags alone
+        Instruction.create_reg_mem(
+            Code.MOV_R16_RM16, Register.DX, MemoryOperand(base=Register.BP, displ=4, displ_size=1)
+        ),
+        # +12 is the top two bytes of the left argument's own four -- already
+        # read into edx above, so overwriting them here is safe, and it is
+        # still above where sp ends up
+        Instruction.create_mem_reg(
+            Code.MOV_RM16_R16, MemoryOperand(base=Register.BP, displ=12, displ_size=1), Register.DX
+        ),
+        Instruction.create_reg_mem(
+            Code.MOV_R32_RM32, Register.EDX, MemoryOperand(base=Register.BP, displ=0, displ_size=1)
+        ),
+        Instruction.create_reg_mem(
+            Code.LEA_R16_M, Register.SP, MemoryOperand(base=Register.BP, displ=12, displ_size=1)
+        ),
+        Instruction.create_reg(Code.POP_R16, Register.BP),
+    ]
+    return assemble(steps, {})
 
 
 def consume(site: CallSite, live: Flag) -> Emitted | str:
@@ -512,20 +593,20 @@ def consume(site: CallSite, live: Flag) -> Emitted | str:
     groups = grouped(site.consume)
     if groups is None:
         return f"{site.name}'s pushes do not split cleanly into 4-byte arguments"
-    targets = CONSUME_TARGETS[site.name]
-    if len(groups) != len(targets):
-        return f"{site.name} takes {len(targets)} arguments, not {len(groups)}"
+    arity = _arity(site.name)
+    if arity is None or len(groups) != arity:
+        return f"{site.name} takes {arity} arguments, not {len(groups)}"
+
+    if site.name == COMPARE:
+        return compare_consume()
 
     # each argument is exactly one dword, popped topmost (nearest the call)
     # to deepest, which is CONSUME_TARGETS' own order -- grouped() has
     # already confirmed there are as many 4-byte groups as targets; their
     # contents no longer matter, since popped_into() reads any group the
     # same way.
+    targets = CONSUME_TARGETS[site.name]
     steps: list[Instruction] = [popped_into(target) for target in targets]
-
-    if site.name == COMPARE:
-        steps.append(Instruction.create_reg_reg(Code.CMP_R32_RM32, Register.EAX, Register.ECX))
-        return assemble(steps, {})
     if site.name == MULTIPLY:
         steps.append(Instruction.create_reg_reg(Code.IMUL_R32_RM32, Register.EAX, Register.ECX))
     elif site.name in DIVIDES:
