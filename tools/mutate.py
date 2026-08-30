@@ -191,6 +191,21 @@ MUTATIONS = (
         "",
         "a sub-register no longer normalised to its root -- a node's own def/use set narrowed by one register",
     ),
+    Mutation(
+        "bodyedit-range-edge",
+        "qbopt/bodyedit.py",
+        "    if at == hi and at in owner:",
+        "    if False:",
+        "an insertion exactly on a body range's own edge accepted -- unreachable from a branch "
+        "targeting the leading edge, ambiguous with whatever follows the trailing edge",
+    ),
+    Mutation(
+        "bodyedit-table-not-skipped",
+        "qbopt/bodyedit.py",
+        "        if isinstance(node, ir.Data):",
+        "        if False:",
+        "an inline table's own start considered as a candidate insertion point instead of skipped",
+    ),
 )
 
 
