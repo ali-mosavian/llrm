@@ -87,7 +87,7 @@ def _node_line(node: ir.Node) -> str:
         case ir.Opaque(insn=insn, effects=effects):
             return (
                 f"  {at:#06x}-{end:#06x}  Opaque   {insn.insn}"
-                f"  defs={_regs(effects.defs)} uses={_regs(effects.uses)} flags={effects.flags_written!r}"
+                f"  defs={_regs(effects.defs)} uses={_regs(effects.uses)} flags={effects.flags_written.name}"
             )
         case ir.Long(insn=insn, decoded=decoded):
             return f"  {at:#06x}-{end:#06x}  Long     {decoded.kind:<8} {insn.insn}"
