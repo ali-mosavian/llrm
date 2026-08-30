@@ -35,7 +35,7 @@ Earlier sessions in this repo are under
 ## What the pass does
 
     110 objects, 71204 bytes    110 mapped, 0 refused
-    1404 regions, 1382 taken    26233 -> 17414 bytes, 33 per cent smaller
+    1404 regions, 1382 taken    26233 -> 21210 bytes, 19 per cent smaller
 
 Twelve configurations across QB 4.5, PDS 7.1 and VBDOS build, link and run, each
 compared against both BC's own object and a golden authored from what the
