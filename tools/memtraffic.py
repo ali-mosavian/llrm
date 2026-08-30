@@ -51,6 +51,7 @@ from qbopt import omf
 from qbopt import loops
 from qbopt import blocks
 from qbopt import module
+from qbopt import runtime
 from qbopt.declen import INFO
 from qbopt.declen import Insn
 from qbopt.module import Addr
@@ -64,11 +65,29 @@ from qbopt.flags import CLOBBERS
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# The runtime routines whose own bodies are known not to touch caller memory
-# -- the same four, from the same QuickBASIC 4.5 runtime source
-# (runtime/rt/helpi4.asm), that stack.py already trusts to step over a nested
-# call. Every other call is a barrier: it may read or write anything.
-MEMORY_CLEAN = frozenset({"B$MUI4", "B$DVI4", "B$RMI4", "B$CPI4"})
+
+# What a call can do to memory this is tracking, from runtime.py's own
+# contracts rather than a name list here. A routine with no entry -- a user
+# SUB, an indirect call -- comes back worst-case, so an unknown call is still
+# a barrier by construction.
+#
+# STRINGS is treated exactly like ANY, deliberately. A string descriptor is
+# an ordinary static as far as Addr is concerned, and nothing here can tell
+# one from an INTEGER, so "writes any string anywhere" cannot be narrowed to
+# a set of addresses. Recorded rather than silently rounded off: it is the
+# one contract distinction this measurement throws away.
+def survives(name: str | None) -> bool:
+    """Whether a call leaves everything tracked here still valid."""
+    routine = runtime.contract(name)
+    if routine.control is not runtime.Control.RETURNS or runtime.barrier(routine):
+        return False
+    return routine.writes <= runtime.Memory.ARGUMENTS
+
+
+def observes(name: str | None) -> bool:
+    """Whether a call could read a static, making a store before it live."""
+    routine = runtime.contract(name)
+    return routine.reads > runtime.Memory.ARGUMENTS or not survives(name)
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,8 +133,19 @@ def counted(
     calls: dict[int, str],
     dgroup: frozenset[int],
     frames_disjoint: bool,
-) -> tuple[int, int]:
-    """(store-to-load, load-to-load) opportunities in one block.
+    ignore_calls: bool = False,
+) -> tuple[int, int, int]:
+    """(store-to-load, load-to-load, dead-store) opportunities in one block.
+
+    A dead store is the other half of the prize and the larger one: BC has no
+    registers to keep a value in, so it writes a named static, works on
+    something else, and overwrites it -- and where nothing read it in
+    between, the first write need never have happened. Counted only where
+    the overwrite is in the same block with no read and no observer between,
+    which is the one case a block-scoped walk can prove: a store still
+    pending at the end of a block is treated as live, because whether
+    anything downstream reads a module-level DIM is a module-scope question
+    nothing here answers.
 
     Tracked one byte at a time, not one access at a time, because the shape
     that dominates this corpus does not line up any other way: BC has no
@@ -134,12 +164,19 @@ def counted(
     # every byte whose value something already has, and whether a store put
     # it there rather than a load
     held: dict[Addr, bool] = {}
-    store_load = load_load = 0
+    # a store whose value nothing has read yet, and might never
+    pending: dict[Addr, int] = {}
+    store_load = load_load = dead_store = 0
 
     for insn in block.insns:
-        if (name := calls.get(insn.at)) is not None:
-            if name not in MEMORY_CLEAN:
-                held = {}  # anything else may read or write whatever it likes
+        if insn.at in calls:
+            name = calls.get(insn.at)
+            if ignore_calls:
+                continue
+            if observes(name):
+                pending = {}  # it could read what is sitting there, so nothing is dead
+            if not survives(name):
+                held = {}
             continue
         if insn.flow in CLOBBERS:
             held = {}
@@ -161,18 +198,31 @@ def counted(
             else:
                 load_load += 1
 
+        if access.reads:
+            for byte in wanted:
+                pending.pop(byte, None)  # something wanted it, so it was not dead
+
         if access.writes:
+            covered = {pending[byte] for byte in wanted if byte in pending}
+            for at in covered:
+                if all(one not in pending or pending[one] == at for one in wanted):
+                    dead_store += 1
             held = {one: stored for one, stored in held.items() if not aliases(one, access)}
+            # an aliasing write this cannot pin down leaves the old store readable
+            for one in list(pending):
+                if one not in wanted and aliases(one, access):
+                    pending.pop(one, None)
             for byte in wanted:
                 held[byte] = True
+                pending[byte] = insn.at
         elif access.reads:
             for byte in wanted:
                 held.setdefault(byte, False)
 
-    return store_load, load_load
+    return store_load, load_load, dead_store
 
 
-def measure(path: Path, frames_disjoint: bool) -> dict[int, tuple[int, int]] | None:
+def measure(path: Path, frames_disjoint: bool, ignore_calls: bool = False) -> dict[int, tuple[int, int, int]] | None:
     """(store-to-load, load-to-load) per loop nesting depth, or None if unreadable.
 
     Split by depth because the totals alone mislead: an opportunity in
@@ -189,11 +239,12 @@ def measure(path: Path, frames_disjoint: bool) -> dict[int, tuple[int, int]] | N
         return None
     partitioned = blocks.partition(found, mapped)
     nesting = loops.depth(partitioned)
-    by_depth: dict[int, tuple[int, int]] = {}
+    by_depth: dict[int, tuple[int, int, int]] = {}
     for block in partitioned:
-        one, two = counted(block, found.resolve, found.calls, found.dgroup, frames_disjoint)
-        was = by_depth.get(nesting.get(block.at, 0), (0, 0))
-        by_depth[nesting.get(block.at, 0)] = (was[0] + one, was[1] + two)
+        got = counted(block, found.resolve, found.calls, found.dgroup, frames_disjoint, ignore_calls)
+        at_depth = nesting.get(block.at, 0)
+        was = by_depth.get(at_depth, (0, 0, 0))
+        by_depth[at_depth] = (was[0] + got[0], was[1] + got[1], was[2] + got[2])
     return by_depth
 
 
@@ -206,34 +257,41 @@ def main(argv: list[str] | None = None) -> int:
         help="assume a frame slot never aliases a static -- see the module docstring",
     )
     ap.add_argument("--per-object", action="store_true", help="one line per object, not just the total")
+    ap.add_argument(
+        "--ignore-calls",
+        action="store_true",
+        help="treat every call as memory-clean -- the ceiling perfect contracts could reach",
+    )
     args = ap.parse_args(argv)
 
     paths = [
         p for w in args.where for p in ([w] if w.is_file() else sorted(w.rglob("*.obj")) + sorted(w.rglob("*.OBJ")))
     ]
 
-    totals: dict[int, tuple[int, int]] = {}
+    totals: dict[int, tuple[int, int, int]] = {}
     skipped = 0
     for path in paths:
-        found = measure(path, args.frames_disjoint)
+        found = measure(path, args.frames_disjoint, args.ignore_calls)
         if found is None:
             skipped += 1
             continue
-        for at_depth, (one, two) in found.items():
-            was = totals.get(at_depth, (0, 0))
-            totals[at_depth] = (was[0] + one, was[1] + two)
+        for at_depth, got in found.items():
+            was = totals.get(at_depth, (0, 0, 0))
+            totals[at_depth] = (was[0] + got[0], was[1] + got[1], was[2] + got[2])
         if args.per_object and any(any(v) for v in found.values()):
-            one = sum(v[0] for v in found.values())
-            two = sum(v[1] for v in found.values())
-            print(f"  {path.name:<28} store->load {one:>4}  load->load {two:>4}")
+            each = [sum(v[i] for v in found.values()) for i in range(3)]
+            print(f"  {path.name:<28} store->load {each[0]:>4}  load->load {each[1]:>4}  dead-store {each[2]:>4}")
 
     scope = "frames disjoint from statics" if args.frames_disjoint else "SS==DS, conservative"
     print(f"\n{len(paths) - skipped} objects ({scope})")
-    print(f"  {'loop depth':<12} {'store->load':>12} {'load->load':>12}")
+    print(f"  {'loop depth':<12} {'store->load':>12} {'load->load':>12} {'dead-store':>12}")
     for at_depth in sorted(totals):
-        one, two = totals[at_depth]
-        print(f"  {at_depth:<12} {one:>12} {two:>12}")
-    print(f"  {'total':<12} {sum(v[0] for v in totals.values()):>12} {sum(v[1] for v in totals.values()):>12}")
+        if not any(totals[at_depth]):
+            continue  # RESUME's own dispatch reaches depth 33 and carries nothing
+        one, two, three = totals[at_depth]
+        print(f"  {at_depth:<12} {one:>12} {two:>12} {three:>12}")
+    each = [sum(v[i] for v in totals.values()) for i in range(3)]
+    print(f"  {'total':<12} {each[0]:>12} {each[1]:>12} {each[2]:>12}")
     return 0
 
 
