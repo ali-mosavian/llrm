@@ -108,6 +108,27 @@ they fault. So BC's error 11 on a zero divisor does not survive, and neither
 does its silent return from the second. That is deliberate, and it is the one
 place a rewritten program can behave worse than the one BC built.
 
+## A BC compiler behavior, not a qbopt one
+
+Found by `tools/fuzzcheck.py`'s generated corpus, not by hand: on VBDOS under
+`/O`, `IF <expr> THEN ... ELSE ...` where `NOT` appears anywhere in `<expr>`
+takes the branch as if testing `<expr>`'s own truthiness with the branches
+swapped, not the arithmetic `NOT`'s. Measured directly --
+
+    v = 5   : IF (NOT v) THEN A ELSE B         -> B
+    v = 5   : IF ((NOT v) + 0) THEN A ELSE B   -> B   (still swapped, not buried)
+    PRINT NOT v                                -> -6  (the correct two's-complement value)
+
+-- so it survives `NOT` being a level below the top of the condition, and it
+is not that `NOT` computes wrong: printed directly, it is exactly `~v`. Only
+the branch BC's optimizer takes is wrong for a `NOT` of anything other than a
+canonical `-1`/`0` value, which is why ordinary code never surfaces it --
+`NOT` on a genuine boolean gives the same branch either way `<expr>` is read.
+qbopt does not touch INTEGER control flow at all, so this is not something a
+rewritten object could fix or break; `tools/fuzzgen.py` keeps `NOT` out of
+every generated `IF` condition instead of chasing PDS 7.1 and QB 4.5 for the
+same rule.
+
 ## What widening changes, exactly
 
 `flageq.py` put both forms side by side over 1125 cases:
