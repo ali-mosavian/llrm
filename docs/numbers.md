@@ -185,14 +185,35 @@ widened region and the wrong one for an absorbed call: BC's side is three
 instructions and the routine behind the call is in the runtime library, so an
 absorbed call reads there as a large loss and is not one.
 
-For the calls, `python -m qbopt.cycles.cycles` carries the routine bodies. A
-long multiply, standing alone, in cycles:
+For the calls, `python -m qbopt.cycles.cycles` carries the routine bodies. All
+four rows below are real: the `stock` rows are BC's own call plus the actual
+runtime routine, confirmed 2026-08-30 byte-for-byte against VBDOS's
+`VBDCL10E.LIB` (`..\rt\helpi4.asm`, offset 0x1d00); the `qbopt absorbed` rows
+are `Emitted.code` taken directly from `qbopt/calls.py`'s `absorb()` /
+`dividing()` -- what this pass emits today, not a hand-written guess. Standing
+alone, in cycles:
 
 | | ins | 486 | P5 | P6 | K5 | K6 | K7 | Core |
 |---|---|---|---|---|---|---|---|---|
-| `call B$MUI4`, fast path | 14 | 68 | 34 | 42 | 11 | 12 | 14 | 43 |
-| `call B$MUI4`, full path | 22 | 103 | 62 | 45 | 15 | 15 | 19 | 45 |
-| one 32-bit `imul` | 2 | 30 | 14 | 10 | 8 | 7 | 10 | 10 |
+| multiply, `call B$MUI4` fast path | 14 | 68 | 34 | 42 | 11 | 12 | 14 | 43 |
+| multiply, `call B$MUI4` full path | 22 | 103 | 62 | 45 | 15 | 15 | 19 | 45 |
+| multiply, qbopt absorbed | 5 | 40 | 18 | 14 | 11 | 10 | 13 | 14 |
+| divide, `call B$DVI4` (÷256 short path) | 33 | 138 | 91 | 94 | 63 | 66 | 68 | 91 |
+| divide, qbopt absorbed | 7 | 62 | 58 | 48 | 44 | 43 | 43 | 33 |
+| compare, `call B$CPI4` | 20 | 72 | 34 | 47 | 16 | 16 | 18 | 48 |
+| compare, qbopt absorbed | 4 | 12 | 9 | 11 | 8 | 8 | 9 | 12 |
+| remainder, `call B$RMI4` (MOD 256 short path) | 31 | 133 | 89 | 93 | 63 | 65 | 67 | 91 |
+| remainder, qbopt absorbed | 8 | 64 | 60 | 48 | 44 | 43 | 43 | 33 |
+
+Every `qbopt absorbed` row above is the memory-resident operand shape (`mov
+eax,[a]` against a static address); a register-resident operand (both sides
+already popped off the stack by `consume()`, e.g. `B$MUI4` behind an
+expression rather than a bare variable) costs one instruction more standing
+alone but is otherwise the same shape -- `cycles.py`'s own `CASES` dict
+carries both. `B$MUI4`/`B$DVI4`/`B$RMI4` in the real library are each a
+5-byte far jmp thunk into `__aFlmul`/`__aFldiv`/`__aFlrem`; `B$CPI4` alone has
+its own inline body. `B$RMI4` had no case here before this table -- MOD was
+simply missing.
 
 That is what absorbing a call buys, and it is why divide is taken even where
 it grows: eighteen bytes for the divide and twenty-one for the remainder,
