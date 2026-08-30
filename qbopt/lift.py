@@ -100,6 +100,7 @@ class Op(StrEnum):
     CALL = "call"  # an absorbed call site (calls.py), already correctly
     # valued in pair 0 -- see RESTORE_EFFECTS' documented fact in ir.py, which
     # is the reason this needs no instruction of its own to "compute"
+    MOVSX = "movsx"  # docs/residue.md's F: an INTEGER's own sign extension
 
 
 @dataclass(slots=True)
@@ -121,6 +122,10 @@ class Value:
     # verbatim rather than building an iced_x86.Instruction from the other
     # fields, which do not apply to a multi-instruction call absorption.
     absorbed: "Emitted | None" = None
+    # Op.MOVSX only, and only when the source is a bare register rather than
+    # memory -- mem/mem_at already carry the memory-sourced case, the same
+    # fields Op.LOAD uses.
+    src_reg: Register_ | None = None
 
     def __repr__(self) -> str:
         match self.op:
@@ -140,6 +145,8 @@ class Value:
                 return f"store v{self.s1} -> {self.mem}"
             case Op.CALL:
                 return "call result"
+            case Op.MOVSX:
+                return f"movsx {self.mem if self.mem is not None else self.src_reg}"
             case _:
                 return str(self.op)
 
@@ -421,6 +428,48 @@ def _relocatable_field(insn: Insn, resolve: Resolver) -> int | None:
     return insn.disp_at if resolve(insn.disp_at, insn.insn.memory_displacement).space is Space.SEGMENT else None
 
 
+def _sign_extend_step(
+    instructions: list[Insn],
+    position: int,
+    resolve: Resolver,
+    live: dict[int, int | None],
+    add: Callable[[Value], int],
+) -> int | None:
+    """`mov ax,<source>` / `cwd`, contiguous -- an INTEGER's own sign
+    extension to LONG, invisible to lift() before this: `cwd` is not a value
+    it tracks at all, so it falls straight through to "unrecognised" and
+    clears both pairs (docs/residue.md's F). `movsx eax,<source>` is the one
+    386 instruction this becomes, seeding pair 0 the way a fresh Kind.LOAD
+    already does.
+
+    The source is a register (`mov ax,bx`) or memory (`mov ax,[x]`, already
+    one of classify()'s own LOADS codes) -- never the `mov ax,imm16` immediate
+    form, which is structurally excluded here (neither branch below matches
+    it) because it is calls.widened_constant_at()'s own, narrower shape (`mov
+    ax,imm16/cwd/push dx/push ax`, all four contiguous) and must stay that
+    one's to claim.
+    """
+    if position + 1 >= len(instructions):
+        return None
+    first, cwd = instructions[position], instructions[position + 1]
+    if cwd.code != Code.CWD or cwd.at != first.end or first.register(0) != Register.AX:
+        return None
+    if first.code == Code.MOV_R16_RM16 and not first.reads_memory(1):
+        source = first.register(1)
+        if source == Register.NONE:
+            return None
+        value = Value(Op.MOVSX, at=first.at, end=cwd.end, src_reg=source)
+    elif first.code in LOADS:
+        where = operand(first, resolve)
+        if where is None:
+            return None
+        value = Value(Op.MOVSX, at=first.at, end=cwd.end, mem=where, mem_at=first.disp_at, dlen=first.disp_len)
+    else:
+        return None
+    live[0] = add(value)
+    return position + 2
+
+
 def _negate_step(
     code: bytes,
     instructions: list[Insn],
@@ -583,6 +632,8 @@ def lift(
         new_position = _negate_step(code, instructions, index_of, position, end, live, add)
         if new_position is None:
             new_position = _pair_step(instructions, position, resolve, live, add)
+        if new_position is None:
+            new_position = _sign_extend_step(instructions, position, resolve, live, add)
         if new_position is not None:
             if len(values) > before and values[-1].op is Op.STORE:
                 stores.append(len(values) - 1)
@@ -825,6 +876,10 @@ def instruction(value: Value) -> Instruction:
             return Instruction.create_reg(Code.NEG_RM32, wide)
         case Op.NOT:
             return Instruction.create_reg(Code.NOT_RM32, wide)
+        case Op.MOVSX if value.mem is not None:
+            return Instruction.create_reg_mem(Code.MOVSX_R32_RM16, wide, memory(value))
+        case Op.MOVSX if value.src_reg is not None:
+            return Instruction.create_reg_reg(Code.MOVSX_R32_RM16, wide, value.src_reg)
         case _:
             raise ValueError(f"no widened form for {value.op}")
 

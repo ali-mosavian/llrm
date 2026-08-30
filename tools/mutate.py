@@ -305,6 +305,14 @@ MUTATIONS = (
         "into a bigger region with no relocation to carry it -- the field is orphaned and reads "
         "as a bare zero after rewriting",
     ),
+    Mutation(
+        "sign-extend-not-adjacent",
+        "qbopt/lift.py",
+        "    if cwd.code != Code.CWD or cwd.at != first.end or first.register(0) != Register.AX:",
+        "    if cwd.code != Code.CWD or first.register(0) != Register.AX:",
+        "movsx claimed for a mov and a cwd that are not actually adjacent -- whatever real "
+        "instruction sits between them is silently dropped from the program",
+    ),
 )
 
 

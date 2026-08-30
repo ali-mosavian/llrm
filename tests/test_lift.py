@@ -689,3 +689,68 @@ def test_e_does_not_bridge_a_call() -> None:
     values, _stores, bridges = lift(code, 0, len(code))
     assert [v.op for v in values] == [Op.LOAD]
     assert bridges == []
+
+
+# ---------------------------------------------------------------------------
+# docs/residue.md's F -- an INTEGER's own sign extension to LONG, invisible
+# to lift() before Op.MOVSX existed because cwd is not a value it tracked.
+
+
+def test_movsx_recognises_a_register_sourced_sign_extension() -> None:
+    # bench/nbody.bas's own worked shape: `mov ax,bx` / `cwd`.
+    code = hx("8B C3") + hx("99")
+    values, _stores, _bridges = lift(code, 0, len(code))
+    assert len(values) == 1
+    assert values[0].op is Op.MOVSX
+    assert values[0].src_reg == Register.BX
+    assert values[0].mem is None
+    assert encode(values[0]) == hx("66 0F BF C3"), "movsx eax,bx"
+
+
+def test_movsx_recognises_a_memory_sourced_sign_extension() -> None:
+    # bench/nbody.bas's other worked shape: `mov ax,[bp-18h]` / `cwd` -- the
+    # mov half is already one of classify()'s own LOADS codes.
+    code = hx("8B 46 E8") + hx("99")
+    values, _stores, _bridges = lift(code, 0, len(code))
+    assert len(values) == 1
+    assert values[0].op is Op.MOVSX
+    assert values[0].mem == Addr(Space.FRAME, -0x18)
+    assert encode(values[0]) == hx("66 0F BF 46 E8"), "movsx eax,[bp-18h]"
+
+
+def test_movsx_does_not_claim_the_immediate_constant_shape() -> None:
+    # `mov ax,imm16 / cwd` is calls.widened_constant_at()'s own, narrower
+    # idiom (mov ax,imm16/cwd/push dx/push ax, all four contiguous) --
+    # _sign_extend_step must leave it alone rather than double-claim it.
+    code = hx("B8 01 00") + hx("99")
+    values, _stores, _bridges = lift(code, 0, len(code))
+    assert values == []
+
+
+def test_movsx_does_not_pull_a_following_argument_push_into_the_value_graph() -> None:
+    # `push dx` / `push ax` reads dx and ax -- both tracked registers -- so
+    # it is neither bridged (E) nor recognised as a value of its own; it
+    # simply invalidates pair 0 like any other unrecognised instruction.
+    # Folding BC's own argument push into the widened value graph was tried
+    # and measured net negative (it changed region boundaries enough to stop
+    # pattern B's own restore/re-push fold from firing where it used to,
+    # docs/residue.md's own F section has the numbers) and was dropped.
+    code = hx("8B C3") + hx("99") + hx("52 50")  # mov ax,bx / cwd / push dx / push ax
+    values, _stores, bridges = lift(code, 0, len(code))
+    assert [v.op for v in values] == [Op.MOVSX]
+    assert bridges == []
+
+
+def test_movsx_needs_the_cwd_byte_adjacent_not_just_next_in_the_stream() -> None:
+    # A reachability gap can put a non-adjacent instruction next in the
+    # decoded stream even though it is not next in the bytes -- a jump-over
+    # of dead code between two reached regions is exactly this shape.
+    # _sign_extend_step must not claim a cwd that does not immediately
+    # follow the mov, or whatever real bytes sit in between are silently
+    # dropped from the program.
+    code = hx("8B C3") + hx("00") * 5 + hx("99")  # mov ax,bx ... cwd, 5 bytes apart
+    mov_insn = decode(code, 0)
+    cwd_insn = decode(code, 7)
+    assert mov_insn is not None and cwd_insn is not None
+    values, _stores, _bridges = lift(code, 0, len(code), stream=[mov_insn, cwd_insn])
+    assert values == []

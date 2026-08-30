@@ -21,6 +21,7 @@ from iced_x86 import OpKind
 from iced_x86 import Decoder
 from iced_x86 import OpAccess
 from iced_x86 import Register
+from iced_x86 import Register_
 from iced_x86 import Instruction
 from iced_x86 import InstructionInfoFactory
 
@@ -123,7 +124,7 @@ class Insn:
         """
         return self.insn.segment_prefix != NO_REGISTER
 
-    def register(self, operand: int) -> int:
+    def register(self, operand: int) -> Register_:
         return self.insn.op0_register if operand == 0 else self.insn.op1_register
 
 
