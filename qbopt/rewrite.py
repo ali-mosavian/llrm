@@ -17,6 +17,8 @@ from dataclasses import asdict
 from dataclasses import replace
 from dataclasses import dataclass
 
+from iced_x86 import Register
+
 from qbopt import omf
 from qbopt import module
 from qbopt.lift import Op
@@ -42,6 +44,7 @@ from qbopt.blocks import code_map
 from qbopt.blocks import partition
 from qbopt.flags import live_after
 from qbopt.lift import emit_region
+from qbopt import registers as regs
 from qbopt.relocate import relocate
 from qbopt.calls import FIX_MULTIPLY
 from qbopt.blocks import instructions
@@ -103,6 +106,20 @@ def flags_after(blocks: list[Block], live: dict[int, Flag], at: int, end: int) -
     return live_after(block, end, live) if block is not None else ALL
 
 
+def dead_pairs_after(blocks: list[Block], live: regs.Liveness, at: int, end: int) -> frozenset[int]:
+    """The register pairs whose own dx/bx half is proven dead after the region --
+    docs/residue.md's I: nothing lift.emit_region() should bother restoring."""
+    block = block_at(blocks, at)
+    if block is None:
+        return frozenset()  # unknown -- conservative: prove nothing dead
+    dead = set()
+    if not regs.live_after(block, end, Register.DX, live.dx):
+        dead.add(0)
+    if not regs.live_after(block, end, Register.BX, live.bx):
+        dead.add(1)
+    return frozenset(dead)
+
+
 @dataclass(frozen=True, slots=True)
 class Combined:
     planned: list[Planned]
@@ -114,6 +131,7 @@ def tail_widened_calls(
     mapped: CodeMap,
     blocks: list[Block],
     live: dict[int, Flag],
+    reg_live: regs.Liveness,
     call_sites: list[CallSite],
     already: list[Planned],
 ) -> Combined:
@@ -179,7 +197,8 @@ def tail_widened_calls(
         need[0] = True  # the call's own bytes replace the deleted pushes/call outright, never optional
         region = list(range(len(values)))
         reason = anchored_inside(found, mapped, site.start, chain_end) or refuse(values, need, region, after)
-        combined = None if reason else emit_region(values, need, region, after)
+        dead = dead_pairs_after(blocks, reg_live, site.start, chain_end)
+        combined = None if reason else emit_region(values, need, region, after, dead)
         if combined is None:
             continue
         if any(one.edit and one.edit.lo < chain_end and site.start < one.edit.hi for one in already + out):
@@ -222,6 +241,7 @@ def plan(
         return []
     blocks = partition(found, mapped)
     live = live_in(blocks)
+    reg_live = regs.analyse(blocks)
 
     reached = instructions(found)
     assert not isinstance(reached, str)
@@ -237,7 +257,8 @@ def plan(
             reason = "not selected"
         elif max_regions is not None and sum(1 for one in planned if one.region.taken) >= max_regions:
             reason = "past --max-regions"
-        emitted = None if reason else emit_region(values, need, region, after)
+        dead = dead_pairs_after(blocks, reg_live, at, end)
+        emitted = None if reason else emit_region(values, need, region, after, dead)
         if emitted is None and reason is None:
             reason = "nothing survived the region"
         if emitted is not None and len(emitted.code) > end - at:
@@ -276,7 +297,7 @@ def plan(
     combined = (
         Combined([], frozenset())
         if take is not None
-        else tail_widened_calls(found, mapped, blocks, live, call_sites, planned)
+        else tail_widened_calls(found, mapped, blocks, live, reg_live, call_sites, planned)
     )
     for one in combined.planned:
         planned.append(Planned(replace(one.region, id=len(planned)), one.edit))

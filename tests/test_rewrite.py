@@ -11,6 +11,7 @@ import pytest
 from iced_x86 import Code
 
 from qbopt import omf
+from helpers import hx
 from qbopt import module
 from qbopt.calls import Kind
 from qbopt.lift import FIXUP
@@ -28,8 +29,10 @@ from qbopt.blocks import code_map
 from qbopt.rewrite import rewrite
 from qbopt.blocks import partition
 from qbopt.rewrite import Combined
+from qbopt import registers as regs
 from qbopt.blocks import instructions
 from qbopt.declen import run as decode_run
+from qbopt.rewrite import dead_pairs_after
 from qbopt.rewrite import tail_widened_calls
 
 pytestmark = pytest.mark.corpus
@@ -58,7 +61,33 @@ def _combined(obj: Path) -> Combined:
     live = live_in(blocks)
     reached = instructions(found)
     assert not isinstance(reached, str)
-    return tail_widened_calls(found, mapped, blocks, live, sites(found, reached, blocks), [])
+    reg_live = regs.analyse(blocks)
+    return tail_widened_calls(found, mapped, blocks, live, reg_live, sites(found, reached, blocks), [])
+
+
+def test_dead_pairs_after_finds_a_provably_dead_register() -> None:
+    # mov dx,5 overwrites dx before anything reads it, in a block that then
+    # returns -- pair 0's own restore would be pure waste. bx is untouched,
+    # and a block that leaves keeps anything untouched conservatively live
+    # (the same reasoning flags.py's own live_in applies to the flags: a
+    # FUNCTION can hand its answer back in a register the caller expects).
+    code = hx("BA 05 00 C3")  # mov dx,5 / ret
+    insns, _ = decode_run(code, 0, len(code))
+    block = Block(0, len(code), tuple(insns), Ends.RETURN, ())
+    live = regs.analyse([block])
+    assert dead_pairs_after([block], live, 0, 0) == frozenset({0})
+
+
+def test_dead_pairs_after_keeps_a_register_something_reads() -> None:
+    # add ax,dx reads dx before anything could overwrite it -- pair 0 stays
+    # live. mov bx,7 fully overwrites bx before the ret -- pair 1 is dead.
+    # One block, one call, both answers -- proves the two pairs are judged
+    # independently, not by one shared verdict.
+    code = hx("01 D0 BB 07 00 C3")  # add ax,dx / mov bx,7 / ret
+    insns, _ = decode_run(code, 0, len(code))
+    block = Block(0, len(code), tuple(insns), Ends.RETURN, ())
+    live = regs.analyse([block])
+    assert dead_pairs_after([block], live, 0, 0) == frozenset({1})
 
 
 def test_a_dry_run_writes_the_input_back_unchanged(obj: Path) -> None:
@@ -182,7 +211,8 @@ def test_a_call_whose_result_is_immediately_overwritten_still_keeps_its_own_byte
 
     operand = Operand(Kind.CONSTANT, value=5, length=2)
     site = CallSite(at=0, end=call_insn.end, start=0, name=MULTIPLY, pushed=(operand, operand))
-    combined = tail_widened_calls(found, mapped, [block], live, [site], [])
+    reg_live = regs.analyse([block])
+    combined = tail_widened_calls(found, mapped, [block], live, reg_live, [site], [])
 
     assert combined.planned, "the fresh load still widens against the call's own seeded value"
     edit = combined.planned[0].edit

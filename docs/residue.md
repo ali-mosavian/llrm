@@ -449,6 +449,66 @@ some or all of the gap, but that fact has not been checked here -- 8/32 is
 what this document treats as confirmed; up to 12/48 is plausible pending
 that check.
 
+**Fixed, 2026-08-30**, against the confirmed 8/32 -- the 8-vs-12 gap is
+**not resolved**, for the reason below. New module `qbopt/registers.py`
+mirrors `flags.py`'s own `reads()`/`writes()`/`live_in()`/`live_after()`
+shape exactly, generalised to one literal register (`Register.DX` or
+`Register.BX`, never rooted) instead of a `Flag` bitmask -- deliberately not
+`ir.ROOT`, for the reason this document's own intro already gives.
+`rewrite.py` computes `regs.analyse(blocks)` once per module (mirroring the
+existing single `live_in(blocks)` call for flags) and threads a
+`dead_pairs_after(blocks, reg_live, at, end)` result into `lift.emit_region()`,
+which gained a new required `dead: frozenset[int]` parameter -- required, not
+defaulted, matching this project's own stated reason the `live: Flag`
+parameter has no default. `restored_pairs()`'s own output is filtered by
+`dead` at the one call site that builds the actual restore bytes.
+
+Opus's design review (before implementation) caught one real defect:
+`declen.WRITES` (the table `ir.py`'s own `_register_effects()` uses) includes
+`COND_WRITE`/`READ_COND_WRITE` -- a conditional move or a `rep`-prefixed
+string op that does not fire leaves the target register untouched, so
+counting it as a kill can call a still-live restore dead, the one genuinely
+unsound direction for this analysis (confirmed against real iced_x86 output:
+`cmovz dx,ax` reports `(DX, COND_WRITE)`). Fixed with a narrower `KILLS =
+(WRITE, READ_WRITE)` local to `registers.py`, kept separate from
+`declen.READS` on the read side, where a conditional read is still
+conservatively a real read. The review also flagged a claim in its own first
+pass ("`push eax` reads `dx` through the group") that turned out to be
+straightforwardly wrong -- `eax` and `edx` are different physical registers,
+so `push eax` touches neither `dx` nor `bx` at all -- caught by writing the
+test for it and watching it fail, not by re-reading the prose; `tests/
+test_registers.py`'s own `test_push_eax_does_not_touch_dx_at_all` asserts
+the correct fact directly, as a defence against exactly this kind of
+plausible-sounding error recurring.
+
+Re-measured on the freshly rewritten object, after D above (which shifts
+every address past its own three sites) and before B (which does not touch
+I's own targets): **4 instances remain, 16 bytes** (`0x0146`, `0x01db`,
+`0x0232`, `0x0253`), down from the 8 confirmed before this fix. The 8-to-4
+drop is real -- 4 of the 8 restores this document's own confirmed count named
+are simply no longer emitted at all, not merely still present and re-judged
+-- and the remaining 4 are exactly the gap Opus's own prototype predicted
+before any code was written: `dead_pairs_after()` runs during *planning*,
+over BC's *original* code, so it can only see a restore proven dead against
+what BC itself wrote right after it -- 4 of the original 8 sit right before
+a *different* region that lift.py also widens in the same pass, and it is
+that OTHER widening (not present in the code `dead_pairs_after()` actually
+looks at) which removes the un-widened read of `dx` that made those 4 look
+live to a single, planning-time pass. Closing the remaining 4 needs a second
+liveness pass over the *rewritten* stream, which is architecturally a
+different, larger change (re-planning against the pass's own output) and is
+left open here, same as `tools/residue_census.py`'s own script-level
+measurement already was.
+
+**The 8-vs-12 discrepancy against the manual audit is not resolved.** This
+fix's own conservative model -- `call far` reads and writes `dx`/`bx`
+unconditionally -- is unchanged from the plan `tools/residue_census.py`
+prototyped, and the manual audit's 2 "needs the fact that a specific runtime
+routine doesn't touch dx/bx" cases and its other 2 unaccounted-for cases are
+both still open. Establishing which BC runtime routines never touch `dx`/`bx`
+(the way this session's own `B$CPI4` flags-only finding did for COMPARE) was
+not attempted this round.
+
 ## Inherited from BC, not this pass's doing
 
 Noted for completeness, not proposed as work: **`mov es,[0x0]` reloaded four

@@ -238,6 +238,22 @@ MUTATIONS = (
         "a negative immediate pair left as an unsigned 32-bit pattern -- iced's own builders "
         "reject it outright, or silently encode a different value if they don't",
     ),
+    Mutation(
+        "conditional-write-counted-as-a-kill",
+        "qbopt/registers.py",
+        "KILLS = (OpAccess.WRITE, OpAccess.READ_WRITE)",
+        "KILLS = (OpAccess.WRITE, OpAccess.READ_WRITE, OpAccess.COND_WRITE, OpAccess.READ_COND_WRITE)",
+        "a conditional write that might not fire treated as always overwriting dx/bx -- "
+        "a still-live restore judged dead",
+    ),
+    Mutation(
+        "register-read-not-detected",
+        "qbopt/registers.py",
+        "        if one.access in READS:\n            read = True",
+        "        if False:\n            read = True",
+        "a real read of dx/bx never noticed -- every restore looks dead, including one something "
+        "downstream still needs",
+    ),
 )
 
 

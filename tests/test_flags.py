@@ -49,7 +49,7 @@ def only_region(enc: str) -> tuple[list[Value], list[bool], list[int]]:
 
 def test_a_widened_operation_is_refused_when_a_flag_is_read() -> None:
     values, need, region = only_region(LOAD_AND_STORE)
-    assert emit_region(values, need, region, Flag.ZF) is None
+    assert emit_region(values, need, region, Flag.ZF, frozenset()) is None
 
 
 IMMEDIATE_LOAD_AND_STORE = "A1 5E 00 8B 16 60 00   05 00 00 83 D2 04   A3 62 00 89 16 64 00"
@@ -60,26 +60,26 @@ def test_an_immediate_alu_pair_is_refused_when_a_flag_is_read() -> None:
     # half's, one 32-bit op leaves the whole result's -- so it has to trip the
     # same DIVERGENT gate, not just the memory-operand form.
     values, need, region = only_region(IMMEDIATE_LOAD_AND_STORE)
-    assert emit_region(values, need, region, Flag.ZF) is None
+    assert emit_region(values, need, region, Flag.ZF, frozenset()) is None
 
 
 def test_an_immediate_alu_pair_is_taken_when_nothing_reads_a_flag() -> None:
     values, need, region = only_region(IMMEDIATE_LOAD_AND_STORE)
-    assert emit_region(values, need, region, Flag.NONE) is not None
+    assert emit_region(values, need, region, Flag.NONE, frozenset()) is not None
 
 
 def test_the_same_region_is_taken_when_nothing_reads_a_flag() -> None:
     # Byte for byte the same input. A gate stuck shut fails here; a gate stuck
     # open fails above. There is no way to pass both without computing liveness.
     values, need, region = only_region(LOAD_AND_STORE)
-    assert emit_region(values, need, region, Flag.NONE) is not None
+    assert emit_region(values, need, region, Flag.NONE, frozenset()) is not None
 
 
 @pytest.mark.parametrize("live", [Flag.CF, Flag.SF, Flag.OF, Flag.CF | Flag.SF | Flag.OF])
 def test_the_flags_widening_never_changes_do_not_refuse(live: Flag) -> None:
     # CF, SF, OF and the computed value never differ between the two forms.
     values, need, region = only_region(LOAD_AND_STORE)
-    assert emit_region(values, need, region, live) is not None
+    assert emit_region(values, need, region, live, frozenset()) is not None
 
 
 def test_putting_the_high_half_back_writes_no_flag() -> None:
@@ -100,7 +100,7 @@ def test_a_region_that_computes_nothing_is_taken_whatever_is_live() -> None:
     values, need, region = only_region(JUST_LOAD_STORE)
     assert not computes(values, need, region)
     for live in (Flag.NONE, Flag.ZF, ALL):
-        assert emit_region(values, need, region, live) is not None
+        assert emit_region(values, need, region, live, frozenset()) is not None
 
 
 @pytest.mark.parametrize(

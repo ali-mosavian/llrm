@@ -776,12 +776,24 @@ def refuse(values: list[Value], need: list[bool], region: list[int], live: Flag)
     return None
 
 
-def emit_region(values: list[Value], need: list[bool], region: list[int], live: Flag) -> Emitted | None:
+def emit_region(
+    values: list[Value], need: list[bool], region: list[int], live: Flag, dead: frozenset[int]
+) -> Emitted | None:
     """The widened region, and the fixups it needs.
 
-    `live` is not optional and has no default: the gate this parameter carries
-    was designed into the predecessor and then lost in a refactor, and a default
-    would make losing it again invisible.
+    `live` and `dead` are not optional and have no default: the gates these
+    parameters carry were designed in and then lost once already (`live`, in a
+    refactor -- see this function's own git history), and a default would make
+    losing either again invisible.
+
+    `dead` is the register pairs whose own dx/bx half is proven, by the
+    caller's own cross-block liveness (qbopt.registers), never read before
+    being overwritten again -- so restoring it would be pure waste, the
+    residue.md I pattern. Filtered here rather than inside restored_pairs()
+    itself: that function's own job is "which pairs does this region's value
+    graph leave live", a fact about the region alone, and answering "is
+    restoring one of them actually worth doing" needs the block graph this
+    module has no notion of.
 
     Nothing is padded. The runtime pass had to fit its rewrite into the bytes it
     replaced and jump over what it saved; here the code may move, so the region
@@ -799,5 +811,5 @@ def emit_region(values: list[Value], need: list[bool], region: list[int], live: 
         relocations += [(len(out) + at, field) for at, field in one.relocations]
         out += one.code
 
-    restore = b"".join(FIXUP[pair] for pair in restored_pairs(values, need, region))
+    restore = b"".join(FIXUP[pair] for pair in restored_pairs(values, need, region) if pair not in dead)
     return Emitted(bytes(out + restore), tuple(relocations))

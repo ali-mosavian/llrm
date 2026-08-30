@@ -414,12 +414,41 @@ def test_a_region_is_exactly_as_long_as_it_needs_to_be(enc: str) -> None:
     values, _ = lift(code, 0, len(code))
     need = needed(values)
     for region in regions(values):
-        emitted = emit_region(values, need, region, Flag.NONE)
+        emitted = emit_region(values, need, region, Flag.NONE, frozenset())
         assert emitted is not None
         wanted = sum(sizeof(values[i]) for i in region if need[i])
         wanted += sum(len(FIXUP[p]) for p in {values[i].pair for i in region if need[i]})
         assert len(emitted.code) == wanted
         assert 0x90 not in emitted.code[wanted:], "there is no padding to hold a nop"
+
+
+def test_emit_region_drops_a_restore_the_caller_proves_dead() -> None:
+    # docs/residue.md's I: the caller (rewrite.py, via qbopt.registers) is the
+    # only thing that knows whether dx/bx is ever read again -- emit_region()
+    # itself just has to honour what it's told, and honour it per pair.
+    code = hx("A1 5E 00 8B 16 60 00   A3 62 00 89 16 64 00")
+    values, _ = lift(code, 0, len(code))
+    need = needed(values)
+    region = regions(values)[0]
+    live = emit_region(values, need, region, Flag.NONE, frozenset())
+    dead = emit_region(values, need, region, Flag.NONE, frozenset({0}))
+    assert live is not None and dead is not None
+    assert live.code.endswith(FIXUP[0]), "nothing proven dead -- the restore stays"
+    assert not dead.code.endswith(FIXUP[0]), "pair 0 proven dead -- its restore is dropped"
+    assert dead.code == live.code[: -len(FIXUP[0])]
+
+
+def test_emit_region_only_drops_the_pair_actually_proven_dead() -> None:
+    # cx:bx and ax:dx are independent -- proving one dead must never touch
+    # the other's own restore.
+    code = hx("8B 0E 5E 00 8B 1E 60 00  A1 62 00 8B 16 64 00  0B 0E 66 00 0B 1E 68 00  23 06 6A 00 23 16 6C 00")
+    values, _ = lift(code, 0, len(code))
+    need = needed(values)
+    region = regions(values)[0]
+    emitted = emit_region(values, need, region, Flag.NONE, frozenset({0}))
+    assert emitted is not None
+    assert FIXUP[1] in emitted.code, "pair 1 was never proven dead"
+    assert FIXUP[0] not in emitted.code, "pair 0 was"
 
 
 def test_a_widened_operand_says_where_its_fixup_must_go() -> None:
@@ -428,7 +457,7 @@ def test_a_widened_operand_says_where_its_fixup_must_go() -> None:
     code = hx("A1 5E 00 8B 16 60 00  A3 62 00 89 16 64 00")
     values, _ = lift(code, 0, len(code))
     need = needed(values)
-    emitted = emit_region(values, need, regions(values)[0], Flag.NONE)
+    emitted = emit_region(values, need, regions(values)[0], Flag.NONE, frozenset())
     assert emitted is not None
     # nothing is relocated here: a unit test has no fixups behind it
     assert emitted.relocations == ()
