@@ -27,13 +27,18 @@ either: BC's constant folder applies its own compile-time overflow check
 apparently, perfectly. Since qbopt only ever sees objects BC successfully
 produced, a program BC refuses to compile is out of scope by construction --
 logged as a skip, not chased as a bug.
+
+The launch cache (tools/cache.py) is left on, deliberately. A fixed `--seed`
+regenerates byte-identical source every run, so pass 1 -- BC's own build,
+untouched by anything qbopt does -- is a cache hit on every re-run during
+iteration, not just the first. Pass 2's link+run step is keyed on the
+workdir's own content at call time, which includes the just-rewritten .OBJ:
+a change to qbopt's own code changes those bytes, which changes the key, so
+a stale hit there is not possible by construction -- the same guarantee
+every other `cached_launch()` caller already relies on. Only a genuinely
+new `--seed`/`--count` combination pays full DOSBox cost; re-running the
+same sweep after fixing a bug should not.
 """
-
-import os
-
-# a generated corpus is disposable and different every run -- caching it would
-# only grow build/launch-cache/ forever for objects nothing will reread
-os.environ.setdefault("QBOPT_NO_LAUNCH_CACHE", "1")
 
 import sys
 import shutil
