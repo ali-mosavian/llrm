@@ -26,6 +26,7 @@ from qbopt.flags import ALL
 from qbopt.lift import lift
 from qbopt.lift import tail
 from qbopt.flags import Flag
+from qbopt.lift import FIXUP
 from qbopt.lift import Value
 from qbopt.calls import sites
 from qbopt.lift import needed
@@ -339,7 +340,87 @@ def plan(
                 edit,
             )
         )
+    planned = drop_restore_repush_round_trips(found, mapped, planned)
     return drop_chained_crossings(planned, found.chunks)
+
+
+# docs/residue.md's B: the literal 2 bytes BC's own code puts right after a
+# restore, immediately before a call this pass consumes -- push <hi>, push
+# <lo>, per pair. push eax/pop ax/pop dx (lift.FIXUP -- calls.py's own
+# restoring() is byte-identical) leaves eax completely intact, so push
+# dx/push ax/pop eax right after it reconstructs exactly what eax already
+# held.
+PUSH_HI_LO = {0: bytes([0x52, 0x50]), 1: bytes([0x53, 0x51])}  # push dx,ax / push bx,cx
+POP_ROOT = {0: bytes([0x66, 0x58]), 1: bytes([0x66, 0x59])}  # pop eax / pop ecx
+
+
+def _restore_tail_pair(data: bytes) -> int | None:
+    return next((pair for pair, pattern in FIXUP.items() if data.endswith(pattern)), None)
+
+
+def drop_restore_repush_round_trips(found: module.Module, mapped: CodeMap, planned: list[Planned]) -> list[Planned]:
+    """Fold a restore, BC's own untouched push of the same pair's halves, and
+    the very next absorbed call's own leading pop of that pair's root into
+    one edit with all three removed.
+
+    Adjacency only, no dataflow: nothing between the restore and the pop
+    touches ax/dx or cx/bx (checked byte-for-byte, not inferred), so the
+    round trip is a pure no-op regardless of what the popped value is then
+    used for -- calls.py's own codegen has no view past its own call site,
+    and lift.emit_region() has no view of what comes after its own region,
+    which is why this runs here instead, over the edits both already decided.
+    """
+    by_lo = {one.edit.lo: one for one in planned if one.edit is not None}
+    drop: set[int] = set()
+    extra: list[Planned] = []
+    for a in planned:
+        if a.edit is None or a.region.id in drop:
+            continue
+        pair = _restore_tail_pair(a.edit.data)
+        if pair is None:
+            continue
+        gap_lo = a.edit.hi
+        if found.code[gap_lo : gap_lo + 2] != PUSH_HI_LO[pair]:
+            continue
+        b = by_lo.get(gap_lo + 2)
+        if b is None or b.edit is None or b.region.id in drop or not b.edit.data.startswith(POP_ROOT[pair]):
+            continue
+        if anchored_inside(found, mapped, a.edit.lo, b.edit.hi) is not None:
+            continue
+
+        prefix_len = len(a.edit.data) - len(FIXUP[pair])
+        pop_len = len(POP_ROOT[pair])
+        combined_data = a.edit.data[:prefix_len] + b.edit.data[pop_len:]
+        fixups = a.edit.fixups + tuple((prefix_len + at - pop_len, field) for at, field in b.edit.fixups)
+
+        drop.add(a.region.id)
+        drop.add(b.region.id)
+        extra.append(
+            Planned(
+                Region(
+                    id=0,  # rewritten to len(kept) once appended, below
+                    seg=found.seg,
+                    at=a.edit.lo,
+                    end=b.edit.hi,
+                    before=found.code[a.edit.lo : b.edit.hi].hex(),
+                    after=combined_data.hex(),
+                    taken=True,
+                    reason=None,
+                ),
+                Edit(a.edit.lo, b.edit.hi, combined_data, fixups),
+            )
+        )
+    if not extra:
+        return planned
+    kept = [
+        Planned(replace(one.region, taken=False, reason="folded into a restore/re-push round-trip removal"), None)
+        if one.region.id in drop
+        else one
+        for one in planned
+    ]
+    for one in extra:
+        kept.append(Planned(replace(one.region, id=len(kept)), one.edit))
+    return kept
 
 
 def drop_chained_crossings(planned: list[Planned], chunks: tuple[tuple[int, int], ...]) -> list[Planned]:

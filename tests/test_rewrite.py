@@ -6,6 +6,7 @@ program that links, runs, and quietly computes the wrong thing.
 """
 
 from pathlib import Path
+from dataclasses import replace
 
 import pytest
 from iced_x86 import Code
@@ -22,18 +23,24 @@ from qbopt.calls import Operand
 from qbopt.declen import decode
 from qbopt.flags import live_in
 from qbopt.module import Module
+from qbopt.relocate import Edit
 from qbopt.blocks import CodeMap
 from qbopt.calls import CallSite
 from qbopt.calls import MULTIPLY
+from qbopt.rewrite import Region
 from qbopt.blocks import code_map
+from qbopt.rewrite import Planned
 from qbopt.rewrite import rewrite
 from qbopt.blocks import partition
 from qbopt.rewrite import Combined
+from qbopt.rewrite import POP_ROOT
 from qbopt import registers as regs
+from qbopt.rewrite import PUSH_HI_LO
 from qbopt.blocks import instructions
 from qbopt.declen import run as decode_run
 from qbopt.rewrite import dead_pairs_after
 from qbopt.rewrite import tail_widened_calls
+from qbopt.rewrite import drop_restore_repush_round_trips
 
 pytestmark = pytest.mark.corpus
 
@@ -88,6 +95,84 @@ def test_dead_pairs_after_keeps_a_register_something_reads() -> None:
     block = Block(0, len(code), tuple(insns), Ends.RETURN, ())
     live = regs.analyse([block])
     assert dead_pairs_after([block], live, 0, 0) == frozenset({1})
+
+
+def _round_trip_scaffold(pair: int, a_fixup: tuple = (), b_fixup: tuple = ()) -> tuple[Module, CodeMap, list[Planned]]:
+    # a's own replacement ends in a restore; the object's own untouched bytes
+    # right after a's span are push <hi>, push <lo> for the same pair; b's own
+    # replacement starts with pop <root> for that pair -- docs/residue.md's B,
+    # built directly rather than through a real widened region and a real
+    # absorbed call, since the fold only cares about the final edits' own bytes.
+    lo_a, hi_a = 0, 6
+    gap_lo, gap_hi = hi_a, hi_a + 2
+    lo_b, hi_b = gap_hi, gap_hi + 5
+
+    code = bytearray(hi_b)
+    code[gap_lo:gap_hi] = PUSH_HI_LO[pair]
+    found = Module(records=[], seg=1, name="T", code=bytes(code), start=0, end=len(code), chunks=((0, len(code)),))
+    mapped = CodeMap(starts=frozenset(), leaders=frozenset())
+
+    a_edit = Edit(lo_a, hi_a, b"\x90" + FIXUP[pair], a_fixup)
+    b_edit = Edit(lo_b, hi_b, POP_ROOT[pair] + b"\x90\x90\x90", b_fixup)
+    planned = [
+        Planned(Region(0, 1, lo_a, hi_a, "", a_edit.data.hex(), True, None), a_edit),
+        Planned(Region(1, 1, lo_b, hi_b, "", b_edit.data.hex(), True, None), b_edit),
+    ]
+    return found, mapped, planned
+
+
+@pytest.mark.parametrize("pair", (0, 1))
+def test_drop_restore_repush_round_trips_folds_the_three_pieces(pair: int) -> None:
+    found, mapped, planned = _round_trip_scaffold(pair)
+    result = drop_restore_repush_round_trips(found, mapped, planned)
+
+    assert len(result) == 3
+    assert [one.region.taken for one in result] == [False, False, True]
+    assert result[0].region.reason == "folded into a restore/re-push round-trip removal"
+    assert result[0].edit is None and result[1].edit is None
+
+    merged = result[2]
+    assert merged.edit is not None
+    assert (merged.edit.lo, merged.edit.hi) == (0, 13)
+    assert merged.edit.data == b"\x90\x90\x90\x90", "the restore, the push pair, and the pop are all gone"
+
+
+def test_drop_restore_repush_round_trips_carries_both_edits_own_fixups() -> None:
+    a_fixup = ((0, "A"),)  # offset into a.edit.data's own untouched prefix byte
+    b_fixup = ((3, "B"),)  # offset into b.edit.data, past its own 2-byte pop
+    found, mapped, planned = _round_trip_scaffold(0, a_fixup, b_fixup)
+    merged = drop_restore_repush_round_trips(found, mapped, planned)[2]
+    assert merged.edit is not None
+    # a's own fixup offset is untouched; b's shifts left by pop's own 2 bytes,
+    # then right by what's left of a's own prefix (1 byte: the 0x90 before its
+    # restore)
+    assert merged.edit.fixups == ((0, "A"), (2, "B"))
+
+
+def test_drop_restore_repush_round_trips_leaves_a_mismatched_gap_alone() -> None:
+    found, mapped, planned = _round_trip_scaffold(0)
+    # pair 1's push bytes where pair 0's restore expects its own
+    code = bytearray(found.code)
+    code[6:8] = PUSH_HI_LO[1]
+    found = replace(found, code=bytes(code))
+    assert drop_restore_repush_round_trips(found, mapped, planned) == planned
+
+
+def test_drop_restore_repush_round_trips_leaves_a_non_pop_second_edit_alone() -> None:
+    found, mapped, planned = _round_trip_scaffold(0)
+    original = planned[1].edit
+    assert original is not None
+    b_edit = replace(original, data=b"\x90\x90\x90\x90\x90")  # no leading pop at all
+    planned = [planned[0], Planned(planned[1].region, b_edit)]
+    assert drop_restore_repush_round_trips(found, mapped, planned) == planned
+
+
+def test_drop_restore_repush_round_trips_refuses_when_something_targets_the_gap() -> None:
+    found, mapped, planned = _round_trip_scaffold(0)
+    # a branch lands on the second push byte -- exactly what anchored_inside()
+    # already refuses for an ordinary region, reused here unchanged.
+    mapped = CodeMap(starts=frozenset(), leaders=frozenset({7}))
+    assert drop_restore_repush_round_trips(found, mapped, planned) == planned
 
 
 def test_a_dry_run_writes_the_input_back_unchanged(obj: Path) -> None:

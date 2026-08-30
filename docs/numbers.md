@@ -6,7 +6,8 @@ kind of number does and does not mean.
 ## Static: what the pass does to the corpus
 
 Measured 2026-08-30, over the 110 objects in `fixtures/omf`, with
-`uv run python tools/census.py`, after `docs/residue.md`'s D landed.
+`uv run python tools/census.py`, after `docs/residue.md`'s D, I and B all
+landed.
 
 | | |
 |---|---|
@@ -30,7 +31,13 @@ immediate-operand ALU pairs, previously invisible to `classify()`, are what
 those 4 single-pair regions actually were -- recognising them either lets the
 pair widen on its own where it used to lose to its own restore, or reunites
 it with a neighbouring load/store into one bigger region entirely (the
-`bench/nbody.bas` case documented in `docs/residue.md`'s own D section).
+`bench/nbody.bas` case documented in `docs/residue.md`'s own D section). I
+and B are not visible in this table at all: both need either cross-block
+liveness a call sits in the middle of (I) or a widened region's restore
+sitting directly against a `consume()`-absorbed call (B), neither of which
+the 110 small, single-statement-per-fixture objects in this corpus happen to
+produce -- `bench/nbody.bas`'s own before/after numbers, in `docs/residue.md`,
+are where their real payoff shows.
 
 133 bytes bigger, 76 bytes bigger, than the census immediately before this
 (26233 -> 21210) -- neither is a regression. Region *count* is unchanged
@@ -50,14 +57,22 @@ alone would have produced.
 That 59-byte win is against what standalone absorption alone would have cost
 on this file, not against BC's own code -- and it is not enough to make this
 one program a net win yet. Measured directly (`module.of(...).code` on both
-objects, 2026-08-30): `bench/nbody.bas`'s rewritten object is currently **80
-bytes larger** than BC's own, 1440 against 1360 (+5.9 per cent), not smaller.
-Most of that growth is `f2b6f05`'s own necessary correctness fix to compare
-absorption (below), which this one file happens to exercise more heavily,
-relative to its size, than the corpus average; the remainder is
-`docs/residue.md`'s own still-open patterns B, D, E, F and I, re-measured
-fresh in that document as of the same date. The corpus-wide 19 per cent
-smaller above is a real aggregate and does not average out per-file --
+objects, 2026-08-30): `bench/nbody.bas`'s rewritten object was, at that point,
+**80 bytes larger** than BC's own, 1440 against 1360 (+5.9 per cent), not
+smaller. Most of that growth was `f2b6f05`'s own necessary correctness fix to
+compare absorption (below), which this one file happens to exercise more
+heavily, relative to its size, than the corpus average; the remainder was
+`docs/residue.md`'s own patterns B, D, E, F and I.
+
+**Re-measured again 2026-08-30**, after D, I and B all landed (same day, same
+document): `bench/nbody.bas`'s rewritten object is now **35 bytes larger**
+than BC's own, 1395 against 1360 (+2.6 per cent) -- D, I and B accounted for
+45 of the 80 bytes (-5, -16, -24, in that order; see `docs/residue.md`'s own
+Priority table for the full progression). Still not a net win on this one
+file: what remains is F and E, both still architectural and open, plus I's
+own 4 still-open instances (a second, post-rewrite liveness pass, out of this
+round's scope). The corpus-wide 19 per cent smaller above is a real aggregate
+and does not average out per-file --
 `bench/nbody.bas` is the one program tracked closely enough in this document
 to know it currently regresses.
 

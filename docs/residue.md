@@ -30,6 +30,13 @@ instance below is additional, real slack on top of the +80: fixing all of it
 would not by itself flip the sign on this file, because most of what grew it
 was `f2b6f05`'s own necessary correctness cost.
 
+**Re-measured again 2026-08-30**, after D, I and B's own closures (see their
+own sections and the Priority table, below). `bench/nbody.bas`'s rewritten
+object is now **35 bytes larger** than BC's own (1395 against 1360, +2.6 per
+cent) -- down from +80, still not smaller. D, I and B accounted for a real,
+measured 45 of those 80 bytes (-5, -16, -24); the rest is F and E, both still
+architectural and open.
+
 ## A -- `popped_into`'s recombination is an unconditional no-op
 
 **15 instances.** `qbopt/calls.py`'s `popped_into()` pops a two-word argument
@@ -110,6 +117,30 @@ both are `imul`/`idiv` results already correct in `eax`, restored to `dx:ax`
 and immediately re-collapsed back into `eax` to feed the next absorbed call
 or division, with the restore's own two-word push at `0x0337-0x033c`
 resurfacing bit-for-bit as `pop eax`'s own input three instructions later.
+
+**Fixed, 2026-08-30.** `qbopt/rewrite.py`'s `drop_restore_repush_round_trips()`,
+run once over every `Planned` edit `plan()` has already decided, right before
+`drop_chained_crossings()`. Byte-level, exactly as scoped above: a taken
+edit's own data ending in `lift.FIXUP[pair]`, followed in the *original*
+object by the literal two bytes `push <hi>` / `push <lo>` for that same pair,
+followed by a second taken edit whose own data opens with `pop <root>` for
+that pair, folds into one edit with all three pieces gone -- `anchored_inside()`
+reused unchanged to refuse the fold wherever a branch, public symbol or line
+number targets the two bytes in between (nothing in the corpus does, but
+`tests/test_rewrite.py` exercises the refusal directly). Sound regardless of
+what the popped value is then used for: `push <hi>/push <lo>/pop <root>`
+reconstructs the exact bit pattern the register pair held before the restore
+ran, as a mechanical fact about the stack, not about any one absorbed
+routine's own semantics -- so this fires identically whether the next edit
+is `MULTIPLY`/`DIVIDE`/`REMAINDER`'s single pop or `FIX_MULTIPLY`'s first of
+three. On `bench/nbody.bas` (measured after D and I, both below, are already
+in): all 3 instances gone, 24 bytes, the object's own code segment 1419 ->
+1395 bytes, and `tools/residue_census.py`'s own B count on the freshly
+rewritten object is 0. Not exercised by any of the 110 `fixtures/omf` objects: the shape
+needs both a widened region's own restore *and* an immediately adjacent
+`consume()`-absorbed call, which the small per-fixture corpus does not
+happen to produce -- `tools/matrix.py`'s 12/12 and `tools/fuzzcheck.py`'s
+0 qbopt regressions are the real-program evidence this is safe.
 
 ## C -- squaring reloads the same address twice
 
@@ -488,17 +519,17 @@ I's own targets): **4 instances remain, 16 bytes** (`0x0146`, `0x01db`,
 drop is real -- 4 of the 8 restores this document's own confirmed count named
 are simply no longer emitted at all, not merely still present and re-judged
 -- and the remaining 4 are exactly the gap Opus's own prototype predicted
-before any code was written: `dead_pairs_after()` runs during *planning*,
-over BC's *original* code, so it can only see a restore proven dead against
-what BC itself wrote right after it -- 4 of the original 8 sit right before
-a *different* region that lift.py also widens in the same pass, and it is
-that OTHER widening (not present in the code `dead_pairs_after()` actually
-looks at) which removes the un-widened read of `dx` that made those 4 look
-live to a single, planning-time pass. Closing the remaining 4 needs a second
-liveness pass over the *rewritten* stream, which is architecturally a
-different, larger change (re-planning against the pass's own output) and is
-left open here, same as `tools/residue_census.py`'s own script-level
-measurement already was.
+before any code was written:
+`dead_pairs_after()` runs during *planning*, over BC's *original* code, so it
+can only see a restore proven dead against what BC itself wrote right after
+it -- 4 of the original 8 sit right before a *different* region that lift.py
+also widens in the same pass, and it is that OTHER widening (not present in
+the code `dead_pairs_after()` actually looks at) which removes the
+un-widened read of `dx` that made those 4 look live to a single, planning-time
+pass. Closing the remaining 4 needs a second liveness pass over the
+*rewritten* stream, which is architecturally a different, larger change
+(re-planning against the pass's own output) and is left open here, same as
+`tools/residue_census.py`'s own script-level measurement already was.
 
 **The 8-vs-12 discrepancy against the manual audit is not resolved.** This
 fix's own conservative model -- `call far` reads and writes `dx`/`bx`
@@ -547,35 +578,42 @@ re-measurement had to work from; not attempted here.
 ## Priority
 
 Re-measured 2026-08-30 against the current object (`tools/residue_census.py`;
-see each pattern's own "Re-measured" paragraph above for method and
+see each pattern's own "Re-measured"/"Fixed" paragraph above for method and
 hand-verification). Counts and bytes below supersede the stale ones this
 table originally shipped with.
 
 | pattern | count | bytes | fix scope |
 |---|---|---|---|
 | A -- stack no-op in `popped_into` | 15 | ~60 | **fixed**, 2026-08-30 |
-| I -- dead lift.py restores | 8 confirmed (up to 12) | 32 (up to 48) | reuse `flags.py`'s own machinery |
-| B -- restore/re-push identity | 3 | 24 | peephole, adjacency only |
-| D -- immediate pair ALU missing | 3 | 18 local (floor, real payoff larger) | table entries + one `Value` field |
+| D -- immediate pair ALU missing | 3, net 5 bytes local (real payoff was region continuity) | 5 | **fixed**, 2026-08-30 |
+| I -- dead lift.py restores | 4 confirmed remaining (of 8; up to 12 per the manual audit) | 16 (of 32; up to 48) | **fixed**, 2026-08-30, partial by construction |
+| B -- restore/re-push identity | 3 | 24 | **fixed**, 2026-08-30 |
 | C -- redundant self-multiply reload | 1 | 2 | **fixed**, 2026-08-30 |
 | G+H -- restore blocks widening | 12 (was 15, stale) | 59 | **fixed**, 2026-08-30 |
 | F -- sign-extension invisible | 9 (6 on the narrowest reading) | not locally computable -- architectural | new value + operand kind |
-| E -- interleaved instruction splits a region | 1 (was "2 confirmed", stale -- the other was D's own doing) | not locally computable -- the large one | dependence analysis + motion |
+| E -- interleaved instruction splits a region | 1 (was "2 confirmed", stale -- the other was D's own doing, now also fixed) | not locally computable -- the large one | dependence analysis + motion |
 
-A, C and G+H are fixed. A and C: `qbopt/calls.py`'s `popped_into()` and
-`absorb()`; corpus-wide, not just this object, they took the static census
-from 17414 to 16942 bytes. G+H: `qbopt/lift.py`'s `tail()`, `qbopt/calls.py`'s
-`restore=` parameter, and `qbopt/rewrite.py`'s `tail_widened_calls()`; static
-census unchanged in region *count* (commit 3 widens 19 existing call regions,
-corpus-wide, rather than adding new ones) but 57 bytes better, net, than
-before it. See `docs/numbers.md` for both.
+A, C, D, I, B and G+H are fixed. A and C: `qbopt/calls.py`'s `popped_into()`
+and `absorb()`; corpus-wide, not just this object, they took the static
+census from 17414 to 16942 bytes. G+H: `qbopt/lift.py`'s `tail()`,
+`qbopt/calls.py`'s `restore=` parameter, and `qbopt/rewrite.py`'s
+`tail_widened_calls()`; static census unchanged in region *count* (commit 3
+widens 19 existing call regions, corpus-wide, rather than adding new ones)
+but 57 bytes better, net, than before it. D, I and B: `qbopt/lift.py`'s
+`Kind.ALU_IMM`/`Op.ALUI`, the new `qbopt/registers.py`, and
+`qbopt/rewrite.py`'s `dead_pairs_after()` and
+`drop_restore_repush_round_trips()`; corpus-wide static census 26446 ->
+21302, 19 per cent smaller (110 `fixtures/omf` objects are mostly too small
+to exercise I or B at all -- see each pattern's own paragraph). See
+`docs/numbers.md` for the full progression.
 
-Despite G+H's own closure, `bench/nbody.bas`'s rewritten object is currently
-**80 bytes larger** than BC's own, not smaller -- see the note at the top of
-this document. I and B together are a real, locally-computable 56 bytes (up
-to 80 if I's higher bound holds) without touching this project's
-architecture; D adds a further, not-yet-fully-measured amount once its own
-region-level payoff is counted. F and E remain the architectural ones still
-open, and neither has a locally-computable byte figure -- both need the
-actual fix built before their real payoff is knowable, not a bigger
-regex.
+`bench/nbody.bas`'s rewritten object, tracked closely through this whole
+document, moved from **80 bytes larger** than BC's own (1440 against 1360)
+before this round to **35 bytes larger** (1395 against 1360, +2.6 per cent)
+after D, I and B: D -5, I -16, B -24, in that order (1440 -> 1435 -> 1419 ->
+1395). Real, and not yet a net win on this one file -- I's own remaining 4
+instances (a second, post-rewrite liveness pass, architecturally out of
+scope here) and F and E's still-open, not-locally-computable payoff are what
+is left. F and E remain the architectural ones still open, and neither has a
+locally-computable byte figure -- both need the actual fix built before
+their real payoff is knowable, not a bigger regex.

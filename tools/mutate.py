@@ -254,6 +254,22 @@ MUTATIONS = (
         "a real read of dx/bx never noticed -- every restore looks dead, including one something "
         "downstream still needs",
     ),
+    Mutation(
+        "round-trip-fires-on-a-targeted-gap",
+        "qbopt/rewrite.py",
+        "        if anchored_inside(found, mapped, a.edit.lo, b.edit.hi) is not None:\n            continue",
+        "",
+        "the restore/re-push fold applied even when a branch, public symbol, or line number "
+        "targets the very bytes it removes",
+    ),
+    Mutation(
+        "round-trip-matches-the-wrong-pair",
+        "qbopt/rewrite.py",
+        "        if found.code[gap_lo : gap_lo + 2] != PUSH_HI_LO[pair]:\n            continue",
+        "",
+        "a restore for one pair folded against the next call's pop of the OTHER pair's root -- "
+        "the two registers never actually round-trip",
+    ),
 )
 
 
