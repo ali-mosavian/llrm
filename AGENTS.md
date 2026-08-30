@@ -400,7 +400,8 @@ than the runtime pass's blunter option of costing the whole module.
   core mechanism fired on zero bytes of its own input. Resume the same agent
   across multiple rounds of one question rather than starting fresh each
   time, so each round builds on the last. If Opus is unavailable or fails,
-  fall back to Fable.
+  fall back to Fable. Opus plans, reviews and unblocks; it does not write the
+  diff -- the implementing agent stays on its default model throughout.
 - Report what was measured, not what was expected. Several figures here were
   corrected after the fact: a parity number that was timer quantisation, a
   "no absorption" reading that was the relocation artifact above, and a
