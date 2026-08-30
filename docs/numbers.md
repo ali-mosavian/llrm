@@ -14,16 +14,32 @@ Measured 2026-08-30, over the 110 objects in `fixtures/omf`, with
 | mapped | 110; none refused |
 | regions found | 1404 |
 | taken | 1382 |
-| their bytes | 26233 -> 16942, 35 per cent smaller |
+| their bytes | 26233 -> 21210, 19 per cent smaller |
 
 Refused, by reason:
 
 | count | why |
 |---|---|
-| 12 | a single pair that widens to more bytes than BC wrote |
+| 12 | a single pair that widens 6 bytes to 8 |
 | 6 | a line number points inside the region |
+| 4 | a single pair that widens 7 bytes to 8 |
 
-472 bytes smaller than the previous census (17414), from two of
+4268 bytes bigger than the previous census (16942), from a correctness fix
+to compare absorption in `calls.py`, not a lost optimisation. `B$CPI4`'s own
+"Uses: ax,cx,dx,bx" comment overstates what a real call actually clobbers --
+its body (`runtime/rt/helpi4.asm`) never touches cx, dx or bx, and its
+cProc save-list preserves ax too, so a real call changes nothing but the
+flags. BC's own code can keep a value live in eax right across a compare
+embedded in a larger expression, which absorbing straight into eax silently
+destroyed -- found by `tools/fuzzcheck.py`'s generated corpus (F014, F017).
+The fix wraps the scratch register absorption still needs in push/pop, four
+bytes a plain load-and-cmp did not carry before; a compare popped off the
+stack rather than reloaded needs a heavier bp-relative save/restore for the
+same reason, described in `calls.py`'s `compare_consume()`. Every region
+taken and every byte this pass was already correct about is unchanged --
+only the compare sites' own cost moved.
+
+472 bytes smaller than the census before that (17414), from two of
 `docs/residue.md`'s patterns, both plain codegen bugs rather than new
 capability: `popped_into()` was recombining two words already contiguous on
 the stack through five wasted instructions (pattern A, corpus-wide, not just
@@ -133,8 +149,17 @@ multiply's: it normalises its operands one bit at a time, twelve instructions
 per pass and up to fifteen passes.
 
 For a widened region, `cmpord-v-g3` with its 48 comparisons absorbed reports
-instructions 144 -> 96. The cycle columns from `price.py` on that object are not
-reproduced here, for the reason above.
+instructions 144 -> 192, 0.75x -- more instructions than BC emitted, not
+fewer, and worse than the 144 -> 96 an earlier census measured here. That
+earlier count was the bug this session fixed: a bare load-and-cmp is what a
+comparison absorbs to only if eax is free to clobber, and it was not (see
+the Static section above). The push/pop wrap correctness needs turns three
+instructions (BC's own `push / push / call`) into four; the call itself
+still leaves, so `price.py`'s own back-to-back model -- which is what
+overlaps with a program's other work, unlike the standing-alone one -- still
+shows a real speedup in cycles even where the plain instruction count does
+not. The cycle columns from `price.py` on that object are not reproduced
+here, for the reason above.
 
 ## Dynamic
 
