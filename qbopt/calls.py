@@ -353,7 +353,7 @@ def apply_to(name: str, operand: Operand) -> Instruction:
     return Instruction.create_reg_reg_i32(code, RESULT, RESULT, operand.value)
 
 
-def absorb(site: CallSite, live: Flag) -> Emitted | str:
+def absorb(site: CallSite, live: Flag, restore: bool = True) -> Emitted | str:
     """The call replaced by 386 instructions, or why it cannot be.
 
     Nine to sixteen bytes against fifteen and twenty-one for multiply, and it
@@ -362,13 +362,20 @@ def absorb(site: CallSite, live: Flag) -> Emitted | str:
     push/pop wrapped around eax, because a real call to B$CPI4 changes no
     register at all (see the note above RESULT) and BC's own code can be
     relying on that anywhere around the call, not only in the flags.
+
+    `restore=False` drops the trailing high-half restore MULTIPLY (and
+    consume()/dividing()/fix_multiply(), below) would otherwise emit -- for a
+    site lift.tail() has already proven BC's own following code widens
+    against, so putting the high half back only to immediately re-derive it
+    from eax would be the round trip docs/residue.md calls G and H. COMPARE
+    has no restore to drop: its own result is flags, not a register value.
     """
     if site.consume:
-        return consume(site, live)
+        return consume(site, live, restore)
     if site.name == FIX_MULTIPLY:
-        return fix_multiply(site, live)
+        return fix_multiply(site, live, restore)
     if site.name in DIVIDES:
-        return dividing(site, live)
+        return dividing(site, live, restore)
     if site.name not in ABSORBED:
         return f"{site.name} is not absorbed"
     if site.name == COMPARE and live & SYNTHESISED:
@@ -406,7 +413,7 @@ def absorb(site: CallSite, live: Flag) -> Emitted | str:
     if site.name == COMPARE:
         # pop does not touch the flags the cmp above just set
         add(Instruction.create_reg(Code.POP_R32, RESULT))
-    else:
+    elif restore:
         # a multiply leaves a value, and BC reads its high half from dx
         for insn in restoring():
             add(insn)
@@ -566,7 +573,7 @@ def compare_consume() -> Emitted:
     return assemble(steps, {})
 
 
-def consume(site: CallSite, live: Flag) -> Emitted | str:
+def consume(site: CallSite, live: Flag, restore: bool = True) -> Emitted | str:
     """A call whose arguments only the stack knows, popped rather than reloaded.
 
     Nothing here is classified as an address or a constant, because nothing
@@ -617,11 +624,12 @@ def consume(site: CallSite, live: Flag) -> Emitted | str:
     elif site.name == FIX_MULTIPLY:
         steps.append(Instruction.create_reg(Code.IMUL_RM32, Register.EDX))
         steps.append(Instruction.create_reg_reg_reg(Code.SHRD_RM32_R32_CL, RESULT, Register.EDX, Register.CL))
-    steps.extend(restoring())
+    if restore:
+        steps.extend(restoring())
     return assemble(steps, {})
 
 
-def dividing(site: CallSite, live: Flag) -> Emitted | str:
+def dividing(site: CallSite, live: Flag, restore: bool = True) -> Emitted | str:
     """A long divide, as C compiles one.
 
         mov eax,[a] / mov ecx,[b] / cdq / idiv ecx
@@ -658,13 +666,14 @@ def dividing(site: CallSite, live: Flag) -> Emitted | str:
     add(Instruction.create_reg(Code.IDIV_RM32, divisor))
     if site.name == REMAINDER:
         add(Instruction.create_reg_reg(Code.MOV_R32_RM32, RESULT, Register.EDX))
-    for insn in restoring():
-        add(insn)
+    if restore:
+        for insn in restoring():
+            add(insn)
 
     return assemble(steps, relocated)
 
 
-def fix_multiply(site: CallSite, live: Flag) -> Emitted | str:
+def fix_multiply(site: CallSite, live: Flag, restore: bool = True) -> Emitted | str:
     """`fixMul&(a, b, fixShift)`, as C would write the shift it means:
     `(int32)(((int64)a * b) >> fixShift)`.
 
@@ -719,7 +728,8 @@ def fix_multiply(site: CallSite, live: Flag) -> Emitted | str:
             relocated[where] = shift.at
         add(Instruction.create_reg_reg_reg(Code.SHRD_RM32_R32_CL, RESULT, Register.EDX, Register.CL))
 
-    for insn in restoring():
-        add(insn)
+    if restore:
+        for insn in restoring():
+            add(insn)
 
     return assemble(steps, relocated)
