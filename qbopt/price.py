@@ -18,6 +18,16 @@ large loss here and is not one: an absorbed divide replaces a far call into a
 routine that normalises its operands one bit at a time, up to fifteen passes of
 twelve instructions. `python -m qbopt.cycles.cycles` holds those bodies and
 prices them; this cannot.
+
+**Absorbing every call to a routine does not remove it from the linked
+program.** Measured on `bench/nbody.bas`: `B$MUI4`/`B$DVI4`/`B$CPI4`/`B$RMI4`
+share one 262-byte runtime module (`runtime/rt/helpi4.asm`); the rewrite
+drops every one of the 21 calls into the first three, yet that module's own
+code is byte-identical and present in both `BASE.EXE` and `OPT.EXE` -- linked
+in either way by something else in the runtime, not by this program's own
+calls. The cycle price this module reports for an absorbed call is real, but
+it is not a linked-program-size saving, and nothing here or in `cycles.py`
+prices a `.LIB`.
 """
 
 import sys

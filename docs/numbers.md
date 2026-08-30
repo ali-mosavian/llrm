@@ -213,6 +213,19 @@ shows a real speedup in cycles even where the plain instruction count does
 not. The cycle columns from `price.py` on that object are not reproduced
 here, for the reason above.
 
+**What this table does not price: the routine's own bytes staying linked in
+regardless.** `bench/nbody.bas` drops all 21 calls into
+`B$MUI4`/`B$DVI4`/`B$CPI4` -- every reference to that 262-byte runtime
+module (`runtime/rt/helpi4.asm`, shared with the never-called `B$RMI4`) is
+gone from `NBODYQ.OBJ`. Measured directly against the linked `.EXE`s: the
+module's own code is byte-identical and present in *both* `BASE.EXE` and
+`OPT.EXE` (`build/bench/v-g3`) -- something else in the runtime pulls it in
+either way, not this program's own calls. The cycle price above is real cost
+this program no longer pays at runtime; it is not bytes the linked program
+stops carrying, and `BASE.EXE`/`OPT.EXE`'s own sizes (34232 / 34280) show it:
+`OPT.EXE` is 48 bytes larger, not smaller, once the routine bodies BC still
+links are counted alongside `NBODY.OBJ`'s own code.
+
 ## Dynamic
 
 `bench/nbody.bas`, `v-g3`, 25000 steps, 7 repetitions, `conf/pinned.conf`,
