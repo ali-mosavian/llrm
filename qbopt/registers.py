@@ -1,7 +1,11 @@
 """
-Which of dx/bx is live -- the two registers lift.py's own restore idiom
-(`FIXUP`) puts back after a widened region, and the only two this pass ever
-needs proven dead or live for that one reason.
+Backward liveness for ax/dx/cx/bx, one register at a time.
+
+Built for dx/bx alone -- the two registers lift.py's own restore idiom
+(`FIXUP`) puts back after a widened region -- and generalised to all four
+once the same question ("is this register's own value still wanted") turned
+out to be exactly what a human reading a disassembly by hand keeps asking
+about ax and cx too (see tools/dump.py's live.txt output).
 
 Mirrors flags.py's own reads()/writes()/live_in()/live_after() shape, for one
 literal register instead of a Flag bitmask. Deliberately NOT ir.py's own
@@ -31,15 +35,27 @@ from qbopt.blocks import Block
 from qbopt.declen import READS
 from qbopt.flags import CLOBBERS
 
-# DL/DH folded in defensively -- nothing in the corpus writes them -- but read
-# or written, they are still part of dx's own value.
+# The 8-bit halves folded in defensively -- read or written, they are still
+# part of the 16/32-bit register's own value, even where nothing in the
+# corpus happens to write them today.
 GROUP: dict[Register_, frozenset[Register_]] = {
+    Register.AX: frozenset({Register.EAX, Register.AX, Register.AL, Register.AH}),
     Register.DX: frozenset({Register.EDX, Register.DX, Register.DL, Register.DH}),
+    Register.CX: frozenset({Register.ECX, Register.CX, Register.CL, Register.CH}),
     Register.BX: frozenset({Register.EBX, Register.BX, Register.BL, Register.BH}),
 }
-# A write through one of these fully overwrites the target; a write to DL/DH
-# alone does not.
-FULL_WIDTH = {Register.EDX, Register.DX, Register.EBX, Register.BX}
+# A write through one of these fully overwrites the target; a write to an
+# 8-bit half alone does not.
+FULL_WIDTH = {
+    Register.EAX,
+    Register.AX,
+    Register.EDX,
+    Register.DX,
+    Register.ECX,
+    Register.CX,
+    Register.EBX,
+    Register.BX,
+}
 
 # Only an unconditional write counts as a kill. declen.WRITES also carries
 # COND_WRITE/READ_COND_WRITE (a cmov, a rep-prefixed string op) -- one of
@@ -123,9 +139,16 @@ def live_after(block: Block, offset: int, target: Register_, live: dict[int, boo
 
 @dataclass(frozen=True, slots=True)
 class Liveness:
+    ax: dict[int, bool]
     dx: dict[int, bool]
+    cx: dict[int, bool]
     bx: dict[int, bool]
 
 
 def analyse(blocks: list[Block]) -> Liveness:
-    return Liveness(live_in(blocks, Register.DX), live_in(blocks, Register.BX))
+    return Liveness(
+        live_in(blocks, Register.AX),
+        live_in(blocks, Register.DX),
+        live_in(blocks, Register.CX),
+        live_in(blocks, Register.BX),
+    )

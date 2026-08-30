@@ -1,18 +1,22 @@
 """
 Every real pipeline stage's own output, written to disk per object --
-module, blocks, extent, ir -- so a failure can be inspected directly
+module, blocks, extent, ir, live -- so a failure can be inspected directly
 instead of re-instrumented or re-run.
 
     uv run python tools/dump.py fixtures/omf/nbody-v-g3.obj
     uv run python tools/dump.py fixtures/omf          # every object in a directory
 
-Written under build/dump/<object stem>/{module,blocks,extent,ir}.txt.
+Written under build/dump/<object stem>/{module,blocks,extent,ir,live}.txt.
+live.txt is qbopt.registers' own ax/dx/cx/bx liveness, one line per
+instruction -- what a disassembly alone can't show, and what a manual audit
+of this pass has had to reconstruct by hand more than once.
 """
 
 import sys
 import argparse
 from pathlib import Path
 
+from iced_x86 import Register
 from iced_x86 import Formatter
 from iced_x86 import FormatterSyntax
 
@@ -23,6 +27,7 @@ from qbopt import omf
 from qbopt import blocks
 from qbopt import extent
 from qbopt import module
+from qbopt import registers as regs
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "build" / "dump"
@@ -81,6 +86,33 @@ def _regs(regs: frozenset | None) -> str:
     return "{" + ",".join(sorted(_FMT.format_register(r) for r in regs)) + "}"
 
 
+# ax/dx/cx/bx, in the order registers.Liveness carries them.
+_LIVE_TARGETS = (("ax", Register.AX), ("dx", Register.DX), ("cx", Register.CX), ("bx", Register.BX))
+
+
+def _live_set(block: blocks.Block, at: int, live: regs.Liveness) -> str:
+    names = [name for name, target in _LIVE_TARGETS if regs.live_after(block, at, target, getattr(live, name))]
+    return "{" + ",".join(names) + "}" if names else "{}"
+
+
+def dump_live(found_blocks: list[blocks.Block] | None) -> str:
+    """Per-instruction ax/dx/cx/bx liveness -- what's still wanted before and
+    after each instruction, the thing a plain disassembly can't show and a
+    human auditing one by hand has to reconstruct from scratch every time."""
+    if found_blocks is None:
+        return "code_map failed -- no blocks to analyse\n"
+    live = regs.analyse(found_blocks)
+    out: list[str] = []
+    for block in found_blocks:
+        out.append(f"{block.at:#06x}-{block.end:#06x}  {block.ends}  succ={list(block.succ)}")
+        for insn in block.insns:
+            before = _live_set(block, insn.at, live)
+            after = _live_set(block, insn.end, live)
+            out.append(f"  {insn.at:#06x}  in={before:<14} out={after:<14} {insn.insn}")
+        out.append("")
+    return "\n".join(out)
+
+
 def _node_line(node: ir.Node) -> str:
     at, end = ir.span(node)
     match node:
@@ -129,6 +161,7 @@ def dump_one(path: Path) -> Path:
     (out / "extent.txt").write_text(dump_extent(found_extent) + "\n")
 
     (out / "ir.txt").write_text(dump_ir(ir.decode_module(found)) + "\n")
+    (out / "live.txt").write_text(dump_live(found_blocks) + "\n")
     return out
 
 
