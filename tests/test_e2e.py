@@ -13,6 +13,9 @@ import pytest
 from configs import CONFIGS
 from dosbox import dosbox_bin
 
+from qbopt.extent import BodyKind
+from qbopt.bodyedit import rewritten
+
 pytestmark = [pytest.mark.e2e, pytest.mark.skipif(dosbox_bin() is None, reason="no dosbox-x")]
 
 CASES = [
@@ -27,6 +30,29 @@ CASES = [
 @pytest.mark.parametrize("tag", CASES)
 def test_the_rewritten_program_answers_the_same(tag: str) -> None:
     result = e2e.run(tag)
+    failed = [v for v in result.verdicts if not v.ok]
+    assert not failed, "; ".join(f"{v.program} {v.status}: {v.detail}" for v in failed)
+
+
+# jumps.bas owns an ON GOTO inline table (B$OGTA); divmod.bas always compiles
+# under /X (configs.EXTRA) and so owns a RESUME map. Both are load-bearing:
+# AGENTS.md documents both as places a length change has real risk.
+BODY_EDIT_PROGRAMS = ["jumps", "divmod"]
+
+
+def one_nop(data: bytes) -> bytes:
+    return rewritten(data, BodyKind.MAIN)
+
+
+@pytest.mark.parametrize("tag", CASES)
+def test_a_whole_body_edit_survives_link_and_run(tag: str) -> None:
+    # A same-meaning, one-byte-longer main body -- not a region inside a
+    # block, the whole Body extent.py/ir.py define -- still links and runs
+    # identically. This is commit 2's own gate: not "an object was
+    # produced", the full three-way differential judge() already applies to
+    # every ordinary run.
+    work = Path(__file__).resolve().parents[1] / "build" / "e2e" / f"{tag}-bodyedit"
+    result = e2e.run(tag, transform=one_nop, names=BODY_EDIT_PROGRAMS, work=work)
     failed = [v for v in result.verdicts if not v.ok]
     assert not failed, "; ".join(f"{v.program} {v.status}: {v.detail}" for v in failed)
 
