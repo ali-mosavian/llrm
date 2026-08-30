@@ -108,18 +108,38 @@ def link_and_run(cfg: Config, work: Path, names: list[str], timeout: int) -> Non
     cached_launch(work, cfg.mount, steps, identity=toolchain_identity(cfg), timeout=timeout, env={"LIB": r"V:\LIB"})
 
 
-def judge(work: Path, name: str, golden_dir: Path = SUITE / "golden") -> Verdict:
+LINKER_BANNER = "Microsoft (R) Segmented Executable Linker"
+
+
+def link_report(work: Path, names: list[str]) -> dict[str, str]:
+    """LINK.OUT split into the two invocations `link_and_run` made per name.
+
+    LINK's own banner repeats once per invocation and names no input file on
+    success, so position -- link_and_run's own emission order, two per name
+    -- is the only way to tell which invocation belongs to which program.
+    Without this, one program's link error, read as a substring of the whole
+    shared file, poisoned every other program's LINKFAIL check too: a single
+    BCFAIL early in a large batch (tools/fuzzcheck.py's own generated corpus,
+    which the hand-written suite never had a rejected program in) made LINK
+    complain that the missing object was not found, and every name after it
+    in the batch came back LINKFAIL for a link that had actually succeeded.
+    """
+    chunks = read_dos(work, "LINK.OUT").split(LINKER_BANNER)[1:]
+    return {name: "".join(chunks[2 * i : 2 * i + 2]) for i, name in enumerate(names)}
+
+
+def judge(work: Path, name: str, golden_dir: Path = SUITE / "golden", link_text: str = "") -> Verdict:
     u = name.upper()
     obj = work / f"{u}.OBJ"
     if not obj.is_file():
         errs = [ln for ln in lines(read_dos(work, "BC.OUT")) if "rror" in ln or "arning" in ln]
         return Verdict(name, "BCFAIL", "; ".join(errs[-3:]) or "no object produced")
 
-    link = read_dos(work, "LINK.OUT").lower()
+    link = link_text.lower()
     # LINK emits an .EXE even with unresolved externals, patching the call site
     # to an int 3. "Did an exe appear" is not a link check.
     if "unresolved external" in link or "error l" in link:
-        bad = [ln for ln in lines(read_dos(work, "LINK.OUT")) if "rror" in ln.lower() or "unresolved" in ln.lower()]
+        bad = [ln for ln in lines(link_text) if "rror" in ln.lower() or "unresolved" in ln.lower()]
         return Verdict(name, "LINKFAIL", "; ".join(bad[:3]))
 
     base, opt = lines(read_dos(work, f"B_{u}.TXT")), lines(read_dos(work, f"O_{u}.TXT"))
@@ -174,14 +194,28 @@ def run(
     work.mkdir(parents=True)
 
     compile_all(cfg, work, names, timeout, source_dir)
+    # a pass that raises on one object is itself a verdict, not a reason to
+    # lose every other program in the batch: tools/fuzzcheck.py hits this on
+    # generated input the hand-written suite never happened to construct, and
+    # an uncaught exception here would have taken link_and_run/judge down for
+    # every name, not only the one that crashed
+    crashed: dict[str, str] = {}
     for name in names:
         obj = work / f"{name.upper()}.OBJ"
         if obj.is_file():
             change = transform or (lambda data: rewrite(data, dry_run=dry_run)[0])
-            (work / f"{name.upper()}Q.OBJ").write_bytes(change(obj.read_bytes()))
-    link_and_run(cfg, work, names, timeout)
+            try:
+                (work / f"{name.upper()}Q.OBJ").write_bytes(change(obj.read_bytes()))
+            except Exception as exc:
+                crashed[name] = f"{type(exc).__name__}: {exc}"
 
-    return Result(tag, [judge(work, n, golden_dir) for n in names])
+    survivors = [n for n in names if n not in crashed]
+    link_and_run(cfg, work, survivors, timeout)
+    per_name_link = link_report(work, survivors)
+
+    verdicts = {n: Verdict(n, "REWRITEFAIL", detail) for n, detail in crashed.items()}
+    verdicts |= {n: judge(work, n, golden_dir, per_name_link.get(n, "")) for n in survivors}
+    return Result(tag, [verdicts[n] for n in names])
 
 
 def main(argv: list[str] | None = None) -> int:
