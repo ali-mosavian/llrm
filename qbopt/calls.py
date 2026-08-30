@@ -84,6 +84,16 @@ PUSHES = {Code.PUSH_RM16, Code.PUSH_RM32}
 CONSTANTS = {Code.PUSHW_IMM8, Code.PUSHD_IMM8, Code.PUSH_IMM16, Code.PUSHD_IMM32}
 WIDE_PUSHES = {Code.PUSH_RM32, Code.PUSHD_IMM8, Code.PUSHD_IMM32}
 
+# iced-x86's own immediate() is unsigned: an imm8 source (sign-extended to its
+# push width by the CPU) comes back as a 64-bit-wide unsigned rendering of
+# that sign extension regardless of destination width, an imm16/imm32 source
+# comes back as its own natural width unsigned -- to_signed(value, width)
+# undoes whichever one it is. Measured directly: `66 6A FF` (PUSHW_IMM8, -1)
+# and `6A FF` (PUSHD_IMM8, -1) both read back as 2**64-1; `66 68 FF FF`
+# (PUSH_IMM16, -1) reads back as 65535; `68 FF FF FF FF` (PUSHD_IMM32, -1)
+# reads back as 2**32-1.
+CONSTANT_WIDTH: dict[int, int] = {Code.PUSHW_IMM8: 8, Code.PUSHD_IMM8: 8, Code.PUSH_IMM16: 2, Code.PUSHD_IMM32: 4}
+
 
 class Kind(StrEnum):
     STATIC = "static"  # a bare displacement, whose address is a fixup
@@ -145,7 +155,13 @@ def static_at(module: Module, insn: Insn) -> Operand | None:
 def constant_at(insn: Insn) -> Operand | None:
     if insn.code not in CONSTANTS or insn.imm_at is None:
         return None
-    return Operand(Kind.CONSTANT, value=insn.insn.immediate(0), length=1)
+    # a negative constant pushed straight to the stack (not through a
+    # variable) is otherwise a huge unsigned value here, which a later
+    # absorb() hands to iced-x86's own i32 instruction builder -- which
+    # raises OverflowError. Found by tools/fuzzcheck.py: a generated LONG
+    # multiply against a large negative literal crashed absorb() outright,
+    # where suite/divmod.bas's MULOVF only ever multiplies through variables.
+    return Operand(Kind.CONSTANT, value=to_signed(insn.insn.immediate(0), CONSTANT_WIDTH[insn.code]), length=1)
 
 
 def widened_constant_at(reached: list[Insn], last: int) -> Operand | None:

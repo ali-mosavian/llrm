@@ -100,6 +100,24 @@ def test_a_pushed_constant_is_not_a_static(fixtures: Path) -> None:
     assert static_at(parsed, immediate) is None
 
 
+def test_a_pushed_negative_dword_constant_keeps_its_sign() -> None:
+    # iced-x86's own immediate() is unsigned for every PUSH*_IMM* form (0x68
+    # 78 56 34 12 with no operand-size override, imm32, reads back as
+    # 2324436648 -- confirmed by decoding it directly). constant_at() must
+    # correct that back to the value BASIC actually pushed, or a call site
+    # absorbed against it hands iced-x86's own instruction builder a Python
+    # int outside i32 range and it raises OverflowError -- found by
+    # tools/fuzzcheck.py generating a LONG multiply against a large negative
+    # literal, which crashed qbopt/calls.py's absorb() outright.
+    from qbopt.calls import constant_at
+
+    pushed = decode(hx("66 68 a8 16 8c 8a"), 0)  # push dword -1970530648
+    assert pushed is not None
+    operand = constant_at(pushed)
+    assert operand is not None
+    assert operand.value == -1970530648
+
+
 def test_an_indexed_push_is_a_static_operand_carrying_its_base() -> None:
     from qbopt.declen import decode
     from qbopt.calls import static_at
