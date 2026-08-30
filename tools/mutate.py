@@ -170,6 +170,20 @@ MUTATIONS = (
         "            return resolved",
         "a group-relative fixup treated as a real address instead of refused",
     ),
+    Mutation(
+        "ir-node-dropped-from-emit-order",
+        "qbopt/ir.py",
+        "    return tuple(nodes)",
+        "    return tuple(nodes[1:])",
+        "a node missing from decode_body's own output -- the byte-identical gate must notice",
+    ),
+    Mutation(
+        "ir-root-register-narrowed",
+        "qbopt/ir.py",
+        "    Register.AL: Register.EAX,",
+        "",
+        "a sub-register no longer normalised to its root -- a node's own def/use set narrowed by one register",
+    ),
 )
 
 

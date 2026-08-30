@@ -36,12 +36,12 @@ from dataclasses import dataclass
 from collections.abc import Callable
 
 from iced_x86 import Code
-from iced_x86 import OpAccess
 from iced_x86 import Register
-from iced_x86 import InstructionInfoFactory
 
 from qbopt.declen import Insn
 from qbopt.blocks import Block
+from qbopt.declen import INFO as _INFO
+from qbopt.declen import WRITES as _WRITES
 
 # a candidate argument push, and how many bytes it adds -- not every
 # instruction that moves sp by this much is one of these (`push cs` moves it
@@ -62,8 +62,6 @@ PUSH_BYTES = {
 }
 
 _SP = (Register.SP, Register.ESP)
-_WRITES = (OpAccess.WRITE, OpAccess.READ_WRITE, OpAccess.COND_WRITE, OpAccess.READ_COND_WRITE)
-_INFO = InstructionInfoFactory()
 
 
 def _touches_sp(insn: Insn) -> bool:

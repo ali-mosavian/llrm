@@ -19,14 +19,24 @@ from dataclasses import dataclass
 
 from iced_x86 import OpKind
 from iced_x86 import Decoder
+from iced_x86 import OpAccess
 from iced_x86 import Register
 from iced_x86 import Instruction
+from iced_x86 import InstructionInfoFactory
 
 # BC targets an 8086; everything qbopt emits is a 386 form in a 16-bit segment.
 BITNESS = 16
 
 MEMORY = OpKind.MEMORY
 NO_REGISTER = Register.NONE
+
+# One iced InstructionInfoFactory for the whole pass -- stack.py's own
+# _touches_sp() and ir.py's own instruction_effects() both need a real,
+# iced-derived register/memory-access fact beyond what Insn itself exposes,
+# and both used to keep a private copy of this and of WRITES.
+INFO = InstructionInfoFactory()
+WRITES = (OpAccess.WRITE, OpAccess.READ_WRITE, OpAccess.COND_WRITE, OpAccess.READ_COND_WRITE)
+READS = (OpAccess.READ, OpAccess.READ_WRITE, OpAccess.COND_READ, OpAccess.READ_COND_WRITE)
 
 
 @dataclass(frozen=True, slots=True)
