@@ -267,27 +267,30 @@ spread rather than an exact repeat.
 
 | | base | opt |
 |---|---|---|
-| ticks (median) | 14747860 | 4649876 |
-| ms | 12360.1 | 3897.0 |
-| spread | 2 (0.00001%) | 3240 (0.07%) |
+| ticks (median) | 14747858 | 4519562 |
+| ms | 12360.1 | 3787.8 |
+| spread | 2 (0.00001%) | 8972 (0.20%) |
 
-**Base is 3.17 times slower than opt** (`base/opt` = 3.1717), up from the
-2.18 last recorded at `9c02db9`. Base is unchanged, as it must be -- BC's own
-build does not move. `bench/nbody.bas` avoids `fixMul&` by construction
-(Q23.9, see `suite/nbody.bas`'s own comment) specifically so BC alone can
-build the base half of this comparison.
+**Base is 3.26 times slower than opt** (`base/opt` = 3.2631), up from 3.17
+before E and F, and from 2.18 at `9c02db9`. Base is unchanged, as it must be
+-- BC's own build does not move. `bench/nbody.bas` avoids `fixMul&` by
+construction (Q23.9, see `suite/nbody.bas`'s own comment) specifically so BC
+alone can build the base half of this comparison.
+
+Re-measured, not reasoned: opt dropped from 4649876 to 4519562 ticks (2.8%
+faster) once E and F actually landed, superseding the earlier note that
+predicted no change from E alone (E widens an interleaved statement rather
+than removing a call from the hot path, but the widened form itself still
+runs fewer cycles per iteration -- one fewer memory round trip through the
+16-bit halves, which the reasoning at the time did not account for).
 
 This is the dynamic side of a fact the static census already shows: the
 object is still 26 bytes larger than BC's own build (`build/bench/v-g3`,
 1386 against 1360 after E's own closure -- see the residue.md-driven fixes
-above), yet runs 45% faster than it did at `9c02db9`. Byte count and cycle
-count are different axes -- G+H, D, I and B all remove calls, restores and
-round trips from the *hot path*, which is what the timer reads, not what
-shrinks the object. This timing figure predates E and F's own round and was
-not re-measured against the smaller object -- E moves no call or restore off
-the hot path (it only lets an interleaved statement widen), so there is no
-reason to expect it to move the timing number, but that is reasoning, not a
-new measurement, and is recorded as such.
+above), yet opt itself runs 33% faster than it did at `9c02db9` (6750212 ->
+4519562 ticks). Byte count and cycle count are different axes -- G+H, D, I,
+B and E all remove calls, restores, round trips or extra memory traffic from
+the *hot path*, which is what the timer reads, not what shrinks the object.
 
 One honest gap: `bench/nbody.bas` itself has no golden and prints only
 `TICKS=`, so nothing here checks its own arithmetic. `suite/nbody.bas` --
