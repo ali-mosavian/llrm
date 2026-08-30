@@ -216,32 +216,47 @@ here, for the reason above.
 ## Dynamic
 
 `bench/nbody.bas`, `v-g3`, 25000 steps, 7 repetitions, `conf/pinned.conf`,
-measured 2026-08-29 at qbopt `9c02db9`. Read via the 8253, not `TIMER` -- see
-`docs/measurement.md` for why this reads as a spread rather than an exact
-repeat.
+re-measured 2026-08-30 after phase 2's IR/G+H/D/I/B rounds. Read via the
+8253, not `TIMER` -- see `docs/measurement.md` for why this reads as a
+spread rather than an exact repeat.
 
 | | base | opt |
 |---|---|---|
-| ticks (median) | 14747858 | 6750212 |
-| ms | 12360.1 | 5657.3 |
-| spread | 2 (0.00002%) | 12168 (0.18%) |
+| ticks (median) | 14747860 | 4649876 |
+| ms | 12360.1 | 3897.0 |
+| spread | 2 (0.00001%) | 3240 (0.07%) |
 
-**Base is 2.18 times slower than opt** (`base/opt` = 2.1848) -- the first
-genuine execution-timing number this project has had, closing the "No dynamic
-number exists" item. `bench/nbody.bas` avoids `fixMul&` by construction
+**Base is 3.17 times slower than opt** (`base/opt` = 3.1717), up from the
+2.18 last recorded at `9c02db9`. Base is unchanged, as it must be -- BC's own
+build does not move. `bench/nbody.bas` avoids `fixMul&` by construction
 (Q23.9, see `suite/nbody.bas`'s own comment) specifically so BC alone can
 build the base half of this comparison.
 
-This number moved twice before landing here, and both moves are worth
+This is the dynamic side of a fact the static census already shows: the
+object is still 35 bytes larger than BC's own build (`build/bench/v-g3`,
+1395 against 1360 -- see the residue.md-driven fixes above), yet runs 45%
+faster than it did at `9c02db9`. Byte count and cycle count are different
+axes -- G+H, D, I and B all remove calls, restores and round trips from the
+*hot path*, which is what the timer reads, not what shrinks the object.
+
+One honest gap: `bench/nbody.bas` itself has no golden and prints only
+`TICKS=`, so nothing here checks its own arithmetic. `suite/nbody.bas` --
+the same integrator, Q16.16 instead of Q23.9 -- is golden-checked across all
+twelve configurations by `tools/matrix.py`/`tests/test_e2e.py`, and passes;
+that is the evidence this number rests on for correctness, not an
+independent check of `bench/nbody.bas`'s own object.
+
+This number moved three times before landing here, and every move is worth
 recording rather than only the final figure. The first measurement, before
 `2 ^ DAMP` was replaced with the literal `16` it always evaluated to, read
 8.25 per cent -- diluted by two calls per body per step into `B$POW4`, a
 floating-point routine absorption was never going to touch. The second,
 before `calls.py` could recognise a register-resident or stack-stranded
-operand at all (see `qbopt/stack.py`), read 13 per cent -- most of the hot
-loop's calls were simply not being absorbed. Neither was a wrong
-measurement; both were measuring a program, or a pass, that was not yet
-what it should have been.
+operand at all (see `qbopt/stack.py`), read 13 per cent. The third, 2.18x at
+`9c02db9`, was real but measured before this session's comparison-absorption
+correctness fix and the phase-2 IR work that followed it. None was a wrong
+measurement; each was measuring a program, or a pass, that was not yet what
+it should have been.
 
 dosbox-x 2026.06.02 SDL2; `conf/pinned.conf` sha256
 `6683b8921c4f410f2eeed9c454ebedce03e3587ca7aa9637471b0190fc602c0f`; VBDOS
