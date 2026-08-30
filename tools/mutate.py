@@ -94,6 +94,13 @@ MUTATIONS = (
         "a fixup's offset moved but not what it points at",
     ),
     Mutation(
+        "branch-end-not-before-insertion",
+        "qbopt/relocate.py",
+        "    return shift.at(branch.target) - shift.before(branch.end)",
+        "    return shift.at(branch.target) - shift.at(branch.end)",
+        "a branch ending exactly at a pure insertion shifted past it instead of left in front",
+    ),
+    Mutation(
         "divergence-gate",
         "qbopt/flags.py",
         "DIVERGENT = Flag.ZF | Flag.PF | Flag.AF",

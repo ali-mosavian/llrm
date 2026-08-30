@@ -78,6 +78,32 @@ class Shift:
                 break
         return offset + delta
 
+    def before(self, offset: int) -> int:
+        """Where an old offset ends up, an insertion sitting exactly there left in front of it.
+
+        Only differs from at() for a zero-width edit whose own lo==hi==offset: at()
+        is right-biased, correct for a *target* landing on an insertion's own point
+        (whatever used to be there is now one byte further out, per AGENTS.md's "LINK
+        adds whatever is in the code to the fixup's target"). A branch's own *end* is
+        not a target -- the CPU measures its displacement from the first byte
+        physically after it in the new image, and for an insertion sitting exactly
+        there, that byte is the inserted one itself, not what at()'s delta would place
+        in front of it. A non-zero-width edit needs no such distinction: its own lo can
+        never be a branch's end without being inside the branch, which at() already
+        refuses as Inside.
+        """
+        delta = 0
+        for edit in self.edits:
+            if edit.lo == edit.hi == offset:
+                break
+            if offset >= edit.hi:
+                delta += edit.delta
+            elif offset > edit.lo:
+                raise Inside(f"offset {offset:#x} is inside the region {edit.lo:#x}..{edit.hi:#x}")
+            else:
+                break
+        return offset + delta
+
     @property
     def grows(self) -> bool:
         return any(edit.delta > 0 for edit in self.edits)
@@ -114,7 +140,7 @@ def retarget(branch: Branch, shift: Shift) -> int:
     using the instruction's start is off by its length wherever an edit sits
     between the two.
     """
-    return shift.at(branch.target) - shift.at(branch.end)
+    return shift.at(branch.target) - shift.before(branch.end)
 
 
 def apply(image: bytes, shift: Shift) -> bytes:

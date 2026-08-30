@@ -14,6 +14,7 @@ from qbopt.declen import decode
 from qbopt.relocate import Edit
 from qbopt.relocate import REL8
 from qbopt.relocate import Shift
+from qbopt.relocate import apply
 from qbopt.relocate import Branch
 from qbopt.relocate import Inside
 from qbopt.relocate import reaches
@@ -73,6 +74,21 @@ def test_a_branch_is_retargeted_from_its_own_end_not_its_start() -> None:
     branch = Branch(at=0x10, end=0x12, field_at=0x11, width=1, target=0x30)
     shift = Shift.of([Edit(0x20, 0x30, bytes(8))])
     assert retarget(branch, shift) == 0x28 - 0x12
+
+
+def test_a_branch_ending_exactly_at_a_pure_insertion_is_not_shifted_past_it() -> None:
+    # EB 05 = jmp, ends at 2, targets the CC at 7. A zero-width edit at 2 -- a
+    # pure insertion, nothing removed -- does not move the branch: its bytes
+    # (0, 1) are copied verbatim by apply(). But the physical byte right after
+    # it, in the *new* image, is the inserted one, not whatever the edit's own
+    # delta would place there -- so the branch's own end must not be pushed
+    # past the insertion the way a target landing on that same offset should.
+    code = hx("EB05") + bytes(5) + hx("CC")
+    branch = Branch(at=0, end=2, field_at=1, width=1, target=7)
+    shift = Shift.of([Edit(2, 2, b"\x90")])
+    moved = apply(code, shift)
+    assert moved == hx("EB05") + b"\x90" + bytes(5) + hx("CC")
+    assert retarget(branch, shift) == moved.index(0xCC) - 2
 
 
 def test_a_rel8_that_no_longer_reaches_is_refused_not_truncated() -> None:
