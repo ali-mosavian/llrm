@@ -8,6 +8,25 @@ was worked out.
 These are published latencies rather than measurements, so treat what they give
 as a ranking. DOSBox charges per instruction and models no latency at all, which
 is why this exists alongside it.
+
+`CASES` below is no longer only what was vendored. The `mgl: *` entries
+(renamed 2026-08-30 from `qbext`) price mgl's own design -- a call into a
+small helper routine (`do_mui4` etc.) mgl itself injected into the runtime
+image. That is not what this project's `qbopt/calls.py` emits, and the old
+`qbext` naming invited exactly that confusion. The `*: qbopt absorbed, *`
+entries are this project's own current output, taken directly from
+`absorb()`/`dividing()`/`consume()` against a constructed `CallSite`, the way
+`tests/test_calls.py` builds one, rather than hand-written. The `stock`
+entries (plus the new `rmi4: stock`) were confirmed 2026-08-30 against the
+real `B$MUI4`/`B$DVI4`/`B$CPI4`/`B$RMI4` bytes in VBDOS's `VBDCL10E.LIB`,
+module `..\\rt\\helpi4.asm` (offset 0x1d00, 262 bytes). One finding from that
+pass: `B$MUI4`/`B$DVI4`/`B$RMI4` there are each a 5-byte far jmp thunk into
+`__aFlmul`/`__aFldiv`/`__aFlrem`, defined in sibling library modules
+`lmul.asm`/`ldiv.asm`/`lrem.asm` of the same `.LIB`; only `B$CPI4` has its own
+inline body in `helpi4.asm`. `mul: stock fast/full`, `cmp: stock` and
+`div256: stock` all matched byte-for-byte against those real routines, traced
+along their actual short-path execution; `rmi4: stock` is new, traced the
+same way through `lrem.asm`.
 """
 
 #!/usr/bin/env python3
@@ -274,34 +293,82 @@ CASES = {
     "chain: BC halves": "A15A008B165C00230656002316580003065600131658003306560033165800A35E0089166000",
     "chain: widened": "66A15A0066230656006603065600663306560066A35E00",
     # ---- a long multiply ---------------------------------------------------
-    # B$MUI4 when both high words are zero, which is the case it is written for
+    # B$MUI4 when both high words are zero, which is the case it is written for.
+    # Confirmed 2026-08-30 byte-for-byte against VBDCL10E.LIB's real __aFlmul
+    # (B$MUI4 itself is a 5-byte far jmp thunk into it -- see module docstring).
     "mul: stock fast": CALL4 + "558BEC8B46088B4E0C0BC88B4E0A75098B4606F7E15DCA0800",
-    # and when they are not: three 16 bit muls and the partial products
+    # and when they are not: three 16 bit muls and the partial products. Also
+    # confirmed byte-for-byte, as the taken branch spliced straight in.
     "mul: stock full": CALL4 + "558BEC8B46088B4E0C0BC88B4E0A750953F7E18BD88B4606F7660C03D88B4606F7E103D35B5DCA0800",
-    # do_mui4 -- one 32 bit imul, no cases
-    "mul: qbext call": CALL4 + "558BEC668B460666F76E0A668BD066C1EA105DCA0800",
-    # times 256, recognised and inlined
-    "mul: qbext pow2": "66A15A0066C1E008EB03909090",
+    # mgl's do_mui4 -- a call into a helper mgl itself injected into the
+    # runtime image, one 32 bit imul, no cases. Not what qbopt's calls.py
+    # emits -- see "mul: qbopt absorbed, *" below for that.
+    "mul: mgl call": CALL4 + "558BEC668B460666F76E0A668BD066C1EA105DCA0800",
+    # times 256, recognised and inlined by mgl's own runtime pass
+    "mul: mgl pow2": "66A15A0066C1E008EB03909090",
+    # qbopt's own absorb(), against a memory-resident operand: mov eax,[a] /
+    # imul eax,[b] / restore. Emitted.code from a real CallSite, not hand-written.
+    "mul: qbopt absorbed, memory": "66A10000660FAF0600006650585A",
+    # qbopt's own consume(), both operands popped off the stack: pop eax /
+    # pop ecx / imul eax,ecx / restore.
+    "mul: qbopt absorbed, register": "66586659660FAFC16650585A",
     # ---- a long compare ----------------------------------------------------
-    # B$CPI4: compare the halves, then rebuild the flags by hand
+    # B$CPI4: compare the halves, then rebuild the flags by hand. Confirmed
+    # 2026-08-30 byte-for-byte against VBDCL10E.LIB's real inline body.
     "cmp: stock": CALL4 + "558BEC508B460C3B460875118B460A3B46069F250041D1E8D0E40AE09E585DCA0800",
-    # do_cpi4
-    "cmp: qbext call": CALL4 + "558BEC6650668B460A663B460666585DCA0800",
-    # the inline form, jump and padding included
-    "cmp: inlined": "66A15A00663B065C00EB03909090",
+    # mgl's do_cpi4 -- a call into mgl's own injected helper, not qbopt's.
+    "cmp: mgl call": CALL4 + "558BEC6650668B460A663B460666585DCA0800",
+    # the inline form mgl's own runtime pass generated, jump and padding included
+    "cmp: mgl inlined": "66A15A00663B065C00EB03909090",
+    # qbopt's own absorb() against a memory-resident operand: push eax / mov
+    # eax,[a] / cmp eax,[b] / pop eax -- no restore, because B$CPI4's answer
+    # is flags, not a register value (absorb() special-cases COMPARE for
+    # exactly this; see test_an_absorbed_comparison_leaves_no_value_to_restore).
+    "cmp: qbopt absorbed, memory": "665066A10000663B0600006658",
+    # qbopt's own consume() -- compare_consume()'s heavier bp-relative form,
+    # needed because a real call to B$CPI4 changes nothing but the flags and
+    # both operands only exist on the stack here, never reloaded from memory.
+    "cmp: qbopt absorbed, stack": "5566528BEC668B560A663B56068B560489560C668B56008D660C5D",
     # ---- dividing by 256 ---------------------------------------------------
     # B$DVI4. 256 has a zero high word, so this takes its short path: both
     # signs checked, then two 16 bit divs. The long path below it loops.
+    # Confirmed 2026-08-30 byte-for-byte against VBDCL10E.LIB's real __aFldiv
+    # (B$DVI4 itself is a 5-byte far jmp thunk into it), traced along this
+    # exact execution path.
     "div256: stock": CALL4 + "558BEC57565333FF8B46080BC07D11"
     "8B460C0BC07D11"
     "0BC075158B4E0A8B460833D2F7F18BD8"
     "8B4606F7F18BD3EB38"
     "4F7507"
     "5B5E5F5DCA0800",
-    # do_dvi4, which reaches a single idiv
-    "div256: qbext call": CALL4 + "558BEC6651668B4606668B4E0A669966F7F9668BD066C1EA1066595DCA0800",
-    # the generated shift stub
-    "div256: qbext shift": CALL4 + "558BEC668B4606669966C1EA186603C266C1F808668BD066C1EA105DCA0800",
+    # mgl's do_dvi4, which reaches a single idiv -- mgl's own injected helper.
+    "div256: mgl call": CALL4 + "558BEC6651668B4606668B4E0A669966F7F9668BD066C1EA1066595DCA0800",
+    # the generated shift stub mgl's own runtime pass produced
+    "div256: mgl shift": CALL4 + "558BEC668B4606669966C1EA186603C266C1F808668BD066C1EA105DCA0800",
+    # qbopt's own dividing(), against a memory-resident operand -- C's own
+    # divide, no divisor test: mov eax,[a] / mov ecx,[b] / cdq / idiv ecx / restore.
+    "div: qbopt absorbed, memory": "66A10000668B0E0000669966F7F96650585A",
+    # qbopt's own consume(): pop eax / pop ecx / cdq / idiv ecx / restore.
+    "div: qbopt absorbed, register": "66586659669966F7F96650585A",
+    # ---- B$RMI4, MOD by 256 -------------------------------------------------
+    # B$RMI4 shares B$DVI4's entry logic -- both are far jmp thunks into the
+    # same library, B$RMI4 into __aFlrem (lrem.asm, sibling of ldiv.asm) --
+    # but the two differ from just past the divide: B$RMI4 discards the
+    # quotient and answers from the remainder in dx, and its own sign fixup
+    # is a subtract-back correction rather than a plain negate. No case
+    # existed here before 2026-08-30; this one is traced the same way
+    # div256's was, straight through the real routine's short path.
+    "rmi4: stock": CALL4 + "558BEC535733FF8B46080BC07D11"
+    "8B460C0BC07D10"
+    "0BC075188B4E0A8B460833D2F7F1"
+    "8B4606F7F18BC233D2"
+    "4F7943EB48"
+    "5F5B5DCA0800",
+    # qbopt's own dividing() with REMAINDER: the same load/idiv as divide,
+    # plus mov eax,edx to answer from the remainder, then restore.
+    "rmi4: qbopt absorbed, memory": "66A10000668B0E0000669966F7F9668BC26650585A",
+    # qbopt's own consume(): pop eax / pop ecx / cdq / idiv ecx / mov eax,edx / restore.
+    "rmi4: qbopt absorbed, register": "66586659669966F7F9668BC26650585A",
 }
 
 # B$DVI4's other half. When the divisor does not fit in 16 bits it shifts
