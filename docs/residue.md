@@ -37,6 +37,14 @@ cent) -- down from +80, still not smaller. D, I and B accounted for a real,
 measured 45 of those 80 bytes (-5, -16, -24); the rest is F and E, both still
 architectural and open.
 
+**Re-measured a third time 2026-08-30**, after E's own closure (see E's own
+section and the Priority table, below). `bench/nbody.bas`'s rewritten object
+is now **26 bytes larger** than BC's own (1386 against 1360, +1.9 per cent).
+F's own recognition gap is also closed for two of its four sub-shapes this
+round, but -- measured, not assumed -- it does not change this object's byte
+count at all: every one of F's 9 `cwd` sites is still refused by the
+existing growth check, for reasons F's own section now gives in full.
+
 ## A -- `popped_into`'s recombination is an unconditional no-op
 
 **15 instances.** `qbopt/calls.py`'s `popped_into()` pops a two-word argument
@@ -267,6 +275,112 @@ interleaved instruction is safe to move across the region (`si`/`di`/flags),
 or a region shape that tolerates a hole. Everything else in this document is
 local; this one is architectural.
 
+**Design review (2026-08-30), before any code:** E and F were both candidates
+for a shared, general (pattern, replacement) peephole engine in `qbopt/ir.py`,
+mirroring `lift.PAIRED`/`NEGATE`'s own table-driven idiom matching. Opus's
+review (traced against the actual code, not the prose) came back **bespoke,
+not a general engine**, on two grounds neither of which is "wait for more
+data": first, `ir.py`'s own `Node`/`decode_module()` pipeline is not wired
+into the production rewrite path at all -- `rewrite.plan()` imports `lift`,
+`calls`, `blocks`, `flags`, `registers` and `relocate`, never `ir`, and
+`ir.decode_module()`'s only real consumer today is `bodyedit.py`'s own nop
+proof-of-concept, whose docstring explicitly defers composing an `ir`-based
+edit with a `rewrite.py` region edit in the same `Shift` to "commit 3, when an
+optimizer actually needs both kinds of edit." Building E and F against `ir.py`
+would mean solving that first, an open-ended prerequisite in front of two
+fixes. Second, and more basic: **E is not a (pattern, replacement) at all.**
+It is a policy change in one branch of an existing walk (`lift()`'s own
+fall-through) -- there is no fixed replacement sequence to substitute in,
+only a test for whether it is safe to keep tracking across a gap and, when it
+is, to carry the gap's own bytes through unchanged. F is closer to peephole
+shape (a fixed node sequence, `mov`/`cwd`, in; `movsx` out) but feeds two
+different consumers (`lift.py`'s own value graph and, had the call-argument
+route worked out, `calls.py`'s operand classification) rather than being one
+substitution. E and F share no shape with each other, nor with D (a table
+entry), I (a liveness module) or B (a fold over decided edits) -- five
+patterns, four different mechanisms, and no repetition an engine would
+actually be removing.
+
+**Fixed, 2026-08-30.** `qbopt/lift.py` gains `_bridges(insn) -> bool`: an
+unrecognised instruction may sit inside a widened region, unmoved, only if
+its own `FlowControl` is exactly `NEXT` (a plain, unconditionally-falls-
+through instruction -- neither a call, whose real effect is the callee's and
+unknowable here, nor a jump or branch, which does not reliably fall through
+to what follows it at all) and it touches none of ax/dx/cx/bx in any width.
+`lift()`'s own walk records every such span as a `Bridge(at, end, fields)`
+-- coalescing a run of several into one -- instead of clearing both tracked
+pairs; `regions()` and `emit_region()` both take the resulting `bridges`
+list, the former to stop treating the address gap as a region break, the
+latter to splice the gap's own bytes into the widened output completely
+unchanged, at the position they already held. `fields` names any
+displacement field inside the bridged bytes that carries a real fixup (BC's
+own `mov di,[array]` computing a second array's own index, the worked
+example below), so that relocation moves with the bytes into the bigger
+edit's own fixup list -- found the hard way: the first working version of
+this splice carried the raw bytes but not the fixup, and the rewritten
+object's `mov di,[array]` silently read address zero once nothing named its
+own field any more. `tests/test_lift.py`'s
+`test_e_carries_a_fixup_inside_a_bridged_instruction_forward` asserts this
+directly, with a resolver that mimics one real fixup inside a synthetic
+bridge.
+
+**Bridging is refused past a value already committed to memory.** `lift()`
+tracks one `committed` flag, set the moment anything widens to `Op.STORE` and
+cleared only where the value chain genuinely breaks (both pairs invalidated) --
+so a gap is bridgeable only while everything since that last break is still
+in flight in a register, never once something has been written out. This is
+strictly narrower than E's own claim needs: the pattern is a load, or an
+in-progress ALU result, with the gap *before* the operation that consumes
+it, never after a value is already stored -- so the restriction costs it
+nothing. `Op.STORE` is checked against `values[-1]` at the point a value is
+added, not re-derived from the whole run at the point a gap is found, which
+is what lets `committed` stay true across an intervening, unrelated value
+(a second pair's own fresh load) between the store and the gap -- a shape
+`tests/test_lift.py`'s `test_e_does_not_bridge_after_a_store_of_a_different_pair`
+covers directly, caught by a second-round design review, not by testing.
+
+Two real bugs were found this way before this restriction existed at all --
+built, then caught by `tools/fuzzcheck.py`/`tools/matrix.py`, not by
+inspection. `suite/nots.bas` is why the restriction exists in the first
+place: BC pre-stages one call's own argument at a frame address (`mov
+[bp-14h],dx` right before `call far B$PSSD`) that this pass cannot tell
+apart from an ordinary local spill, and bridging freely after a store the
+same as after a load let that store's own region grow to include a
+*second*, unrelated store and pick up a spurious high-half restore right in
+front of the call -- corrupting whatever `B$PSSD` read from that frame
+address and printing the numeric half of `PRINT "NOT="; r` with the string
+label silently gone. `tests/test_lift.py`'s `test_e_does_not_bridge_after_a_store`
+is the original regression test, and `tools/mutate.py`'s
+`bridge-continues-after-a-store`, `commit-tracked-only-by-the-last-value` and
+`bridge-crosses-control-flow` (the jump case, below) put all three shapes of
+the bug back and confirm the tests notice.
+
+Worked example, real addresses, `bench/nbody.bas`'s rewritten object
+(`build/bench/v-g3/NBODY.OBJ`, VBDOS `/G3`, current addresses -- they have
+moved since the original 2026-08-30 measurement above, as every prior fix in
+this document also shifted them):
+
+```
+0113  mov ax,[si]        liftable LOAD pair
+0117  mov dx,[si+2]
+011b  mov di,ds:[0x96]   the OTHER array's own index -- bridged, unchanged
+011f  shl di,2
+0122  sub ax,[di+6]      liftable ALU pair, resumed across the bridge
+0126  sbb dx,[di+8]
+012a  mov ds:[0x76],ax   liftable STORE pair
+012d  mov ds:[0x78],dx
+```
+
+Region `0x113-0x14c` (57 bytes, extending past the worked statement above
+into the next, cx:bx-paired one right after it) is **taken**, 57 -> 46 bytes.
+`bench/nbody.bas`'s own rewritten object: **1395 -> 1386 bytes**, all of it
+this one region -- corpus-wide (`fixtures/omf`'s 110 objects), the static
+census does not move at all (26446 -> 21302 bytes, unchanged from the D/I/B
+census): none of the 110 small, single-statement fixtures happen to interleave
+an unrelated instruction between two halves of one long expression the way
+this real program does, the same gap this document's own intro already names
+for I and B.
+
 **Re-measured 2026-08-30: 1 confirmed genuine instance, not 2.**
 `tools/rewrite --report` still shows two regions refused with a "widens N
 bytes to M" reason (`0x0113-0x011b` and `0x02e3-0x02ea`), which is what the
@@ -338,6 +452,79 @@ not counting them at all); this document keeps the broader 9, since all nine
 share the identical root cause (no value `lift.py` can hand a `cwd` node),
 but the narrower 6 is the more conservative number if only the literal
 `mov ax,<r16>/cwd` shape from the original worked example is wanted.
+
+**Partly built, 2026-08-30 -- recognition closed, no measured byte win yet.**
+The design review above (E's own section) applies here too: bespoke, not a
+peephole engine, and F itself is two of the register/memory-sourced cwd
+shapes above (`mov ax,bx/cwd` and `mov ax,[mem]/cwd`), not the ALU-result or
+diverted-constant ones. `qbopt/lift.py` gains `Op.MOVSX` and
+`_sign_extend_step()`, tried in `lift()`'s own walk the same way
+`_negate_step()` already is: `mov ax,<register>/cwd` or `mov ax,<memory>/cwd`
+(`classify()`'s own `LOADS` codes), contiguous, becomes a `movsx eax,<source>`
+value seeding pair 0 -- structurally excluding `mov ax,imm16/cwd` (neither
+branch matches an immediate operand), so `calls.widened_constant_at()`'s own
+narrower four-instruction idiom is never double-claimed.
+`tests/test_lift.py` covers the register form, the memory form, the
+non-claim of the constant form, and (found by `tools/mutate.py`'s own
+`sign-extend-not-adjacent`, once written) that the `mov` and the `cwd` must
+be genuinely byte-adjacent, not merely next in a reachability-gapped
+instruction stream.
+
+**Measured, and it does not pay for itself anywhere yet.** `movsx
+eax,<r16-or-m16>` needs the 16-bit segment's mandatory `0x66` operand-size
+prefix plus a two-byte `0F BF` opcode -- four bytes against `mov ax,bx`'s two
+plus `cwd`'s one (three total), or five against `mov ax,[bp-18h]`'s three
+plus `cwd`'s one (four total). The instruction-count win the original F
+section describes is real, but the *byte* count is a wash or a one-byte loss
+before anything downstream is counted, and every one of the 9 measured `cwd`
+sites in `bench/nbody.bas`'s object is still refused by `plan()`'s own
+growth check today -- confirmed by direct measurement, not assumed: the
+region either has nothing following the `cwd` that lift.py itself
+recognises (a lone `movsx` plus its own restore, strictly larger than the
+`mov`/`cwd` it replaces), or it does (a following store, in one case, and
+a following long ALU chain in another) but the STORE's own real savings are
+exactly cancelled by two MOVSX sites' own one-byte tax plus a restore
+`dead_pairs_after()` cannot prove unneeded -- the same call-conservatism gap
+this document's own I section already flags as open (a far call's real
+routine may not touch dx/bx at all, but nothing here has established which
+ones, so it is charged as reading everything). `bench/nbody.bas`'s object is
+unchanged by this alone: 1386 bytes before and after `Op.MOVSX` is added
+(E's own -9 bytes, from 1395, holds either way), and the corpus-wide census
+does not move a single byte (`fixtures/omf`: 26446 -> 21302, identical to
+the D/I/B baseline).
+
+**A second mechanism was tried and reverted.** `mov ax,<r16>/cwd/push
+dx/push ax`, feeding an absorbed call's own argument, was the more
+optimistic worked case -- BC's own two 16-bit pushes are pattern A's own
+already-established fact (contiguous in dword layout on a 386), so an
+`Op.PUSH` value consuming a still-live pair 0 into a single `push eax` looked
+like a clean, `calls.py`-untouched win (`consume()` pops by byte count, not
+instruction count, so it does not care how the four bytes arrived). Measured
+on the real object instead of assumed: `push r16` is one byte in a 16-bit
+segment, not two, so `push dx/push ax` (two bytes) and `push eax` (also two
+bytes, the `0x66` prefix costing what the second instruction saved) are
+byte-neutral on their own -- and, worse, recognising the push at all shifted
+a nearby region's own byte length just enough that pattern B's own
+restore/re-push fold (`drop_restore_repush_round_trips()`, an exact byte-adjacency
+match) stopped firing on an unrelated, adjacent site: 1386 -> 1394 bytes on
+`bench/nbody.bas` (an 8-byte *loss* from `Op.PUSH` alone, against E's own
+1386), and 26446 -> 21302 corpus-wide became 26596 -> 21456 (5140 bytes saved
+against 5144, a 4-byte net loss) with `Op.PUSH` active. `Op.PUSH`,
+`_push_step()` and `PUSH_PAIR` were removed rather than shipped net-negative;
+`Op.MOVSX` alone is kept, since it is measured harmless (identical bytes
+everywhere, no interaction with anything else) and closes the recognition
+gap the original F section names, even though nothing exploits it yet.
+`tests/test_lift.py`'s
+`test_movsx_does_not_pull_a_following_argument_push_into_the_value_graph`
+is the regression test for the revert holding.
+
+**What is actually left, precisely**: the call-argument case needs the same
+fact I's own gap needs -- which BC runtime routines provably do not read
+dx/bx across the call -- before a restore ahead of a `consume()`-absorbed
+call can ever be proven dead here; the ALU-result-then-`cwd` and
+jump-diverted-constant shapes (2 and 1 of the 9, respectively) were not
+attempted this round at all. Both remain open, same as before this round,
+just with real numbers now instead of an estimate.
 
 ## G, H -- the absorbed-call barrier: `lift.py` can't see past a restore
 
@@ -590,13 +777,14 @@ table originally shipped with.
 | B -- restore/re-push identity | 3 | 24 | **fixed**, 2026-08-30 |
 | C -- redundant self-multiply reload | 1 | 2 | **fixed**, 2026-08-30 |
 | G+H -- restore blocks widening | 12 (was 15, stale) | 59 | **fixed**, 2026-08-30 |
-| F -- sign-extension invisible | 9 (6 on the narrowest reading) | not locally computable -- architectural | new value + operand kind |
-| E -- interleaved instruction splits a region | 1 (was "2 confirmed", stale -- the other was D's own doing, now also fixed) | not locally computable -- the large one | dependence analysis + motion |
+| E -- interleaved instruction splits a region | 1 confirmed instance closed | 11 (57 -> 46, this object's own worked statement) | **fixed**, 2026-08-30 |
+| F -- sign-extension invisible | 9 (6 on the narrowest reading); recognition closed for 6 of the 9 (register/memory-sourced) | 0 measured -- every site still refused | **partly built**, 2026-08-30, no byte win yet |
 
-A, C, D, I, B and G+H are fixed. A and C: `qbopt/calls.py`'s `popped_into()`
-and `absorb()`; corpus-wide, not just this object, they took the static
-census from 17414 to 16942 bytes. G+H: `qbopt/lift.py`'s `tail()`,
-`qbopt/calls.py`'s `restore=` parameter, and `qbopt/rewrite.py`'s
+A, C, D, I, B, G+H and E are fixed; F's recognition gap is closed for two of
+its four sub-shapes with no measured payoff yet. A and C: `qbopt/calls.py`'s
+`popped_into()` and `absorb()`; corpus-wide, not just this object, they took
+the static census from 17414 to 16942 bytes. G+H: `qbopt/lift.py`'s
+`tail()`, `qbopt/calls.py`'s `restore=` parameter, and `qbopt/rewrite.py`'s
 `tail_widened_calls()`; static census unchanged in region *count* (commit 3
 widens 19 existing call regions, corpus-wide, rather than adding new ones)
 but 57 bytes better, net, than before it. D, I and B: `qbopt/lift.py`'s
@@ -604,16 +792,26 @@ but 57 bytes better, net, than before it. D, I and B: `qbopt/lift.py`'s
 `qbopt/rewrite.py`'s `dead_pairs_after()` and
 `drop_restore_repush_round_trips()`; corpus-wide static census 26446 ->
 21302, 19 per cent smaller (110 `fixtures/omf` objects are mostly too small
-to exercise I or B at all -- see each pattern's own paragraph). See
-`docs/numbers.md` for the full progression.
+to exercise I or B at all -- see each pattern's own paragraph). E:
+`qbopt/lift.py`'s `_bridges()`, `Bridge`, and the `committed` gate;
+corpus-wide static census does not move (110 fixtures/omf objects do not
+happen to interleave an unrelated instruction the way `bench/nbody.bas`
+does), `bench/nbody.bas` itself -9 bytes. F: `qbopt/lift.py`'s `Op.MOVSX`
+and `_sign_extend_step()`; corpus-wide static census does not move either,
+and neither does `bench/nbody.bas`'s own object. See `docs/numbers.md` for
+the full progression.
 
 `bench/nbody.bas`'s rewritten object, tracked closely through this whole
 document, moved from **80 bytes larger** than BC's own (1440 against 1360)
 before this round to **35 bytes larger** (1395 against 1360, +2.6 per cent)
 after D, I and B: D -5, I -16, B -24, in that order (1440 -> 1435 -> 1419 ->
-1395). Real, and not yet a net win on this one file -- I's own remaining 4
-instances (a second, post-rewrite liveness pass, architecturally out of
-scope here) and F and E's still-open, not-locally-computable payoff are what
-is left. F and E remain the architectural ones still open, and neither has a
-locally-computable byte figure -- both need the actual fix built before
-their real payoff is knowable, not a bigger regex.
+1395). **E's own closure takes it to 26 bytes larger** (1386 against 1360,
++1.9 per cent): a real, if modest, further improvement, and still not a net
+win on this one file. What is left: I's own remaining 4 instances (a second,
+post-rewrite liveness pass, architecturally out of scope here), F's own
+call-argument sub-case (needs the same "which runtime routines don't touch
+dx/bx" fact I's own gap needs, not attempted this round), and F's
+ALU-result/jump-diverted sub-shapes (not attempted at all). Unlike every
+earlier entry in this table, F is now built and measured rather than
+estimated, and the measurement is that it does not pay for itself yet --
+worth recording plainly rather than only recording the wins.

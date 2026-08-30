@@ -76,6 +76,17 @@ and does not average out per-file --
 `bench/nbody.bas` is the one program tracked closely enough in this document
 to know it currently regresses.
 
+**Re-measured a third time 2026-08-30**, after E's own closure (`docs/residue.md`'s
+own E section has the mechanism and the worked example): `bench/nbody.bas`'s
+rewritten object is now **26 bytes larger** than BC's own, 1386 against 1360
+(+1.9 per cent) -- E alone, -9 bytes. F's own recognition gap closed too
+(register- and memory-sourced `cwd`, `Op.MOVSX`), but it does not move this
+object's byte count at all: every one of its 9 measured sites is still
+refused by the same growth check that refuses any region wider than what it
+replaces, for reasons `docs/residue.md`'s own F section now measures in
+full rather than estimates. The 110-object `fixtures/omf` static census
+(below) is unchanged by either -- neither shape occurs in that corpus.
+
 4268 bytes bigger than the previous census (16942), from a correctness fix
 to compare absorption in `calls.py`, not a lost optimisation. `B$CPI4`'s own
 "Uses: ax,cx,dx,bx" comment overstates what a real call actually clobbers --
@@ -267,11 +278,16 @@ build does not move. `bench/nbody.bas` avoids `fixMul&` by construction
 build the base half of this comparison.
 
 This is the dynamic side of a fact the static census already shows: the
-object is still 35 bytes larger than BC's own build (`build/bench/v-g3`,
-1395 against 1360 -- see the residue.md-driven fixes above), yet runs 45%
-faster than it did at `9c02db9`. Byte count and cycle count are different
-axes -- G+H, D, I and B all remove calls, restores and round trips from the
-*hot path*, which is what the timer reads, not what shrinks the object.
+object is still 26 bytes larger than BC's own build (`build/bench/v-g3`,
+1386 against 1360 after E's own closure -- see the residue.md-driven fixes
+above), yet runs 45% faster than it did at `9c02db9`. Byte count and cycle
+count are different axes -- G+H, D, I and B all remove calls, restores and
+round trips from the *hot path*, which is what the timer reads, not what
+shrinks the object. This timing figure predates E and F's own round and was
+not re-measured against the smaller object -- E moves no call or restore off
+the hot path (it only lets an interleaved statement widen), so there is no
+reason to expect it to move the timing number, but that is reasoning, not a
+new measurement, and is recorded as such.
 
 One honest gap: `bench/nbody.bas` itself has no golden and prints only
 `TICKS=`, so nothing here checks its own arithmetic. `suite/nbody.bas` --
