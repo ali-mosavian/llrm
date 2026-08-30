@@ -16,14 +16,17 @@ from qbopt.lift import Op
 from qbopt.lift import Kind
 from qbopt.lift import emit
 from qbopt.lift import lift
+from qbopt.lift import tail
 from qbopt.declen import run
 from qbopt.flags import Flag
 from qbopt.lift import FIXUP
 from qbopt.lift import Value
 from qbopt.lift import encode
 from qbopt.lift import needed
+from qbopt.lift import refuse
 from qbopt.lift import sizeof
 from qbopt.module import Addr
+from qbopt.lift import Emitted
 from qbopt.lift import operand
 from qbopt.lift import regions
 from qbopt.module import Space
@@ -218,6 +221,47 @@ def test_everything_feeding_a_store_is_needed_transitively() -> None:
     b = hx("A1 5E 00 8B 16 60 00 23 06 5A 00 23 16 5C 00 A3 62 00 89 16 64 00")
     v, _ = lift(b, 0, len(b))
     assert all(needed(v))
+
+
+def test_tail_widens_the_negate_idiom_right_after_a_seeded_call() -> None:
+    # docs/residue.md's own G/H worked example: idiv/restore/sub/sbb/neg/adc/
+    # neg/store -- the NEGATE idiom right after a call's own result, provably
+    # already correct in pair 0 (ir.RESTORE_EFFECTS[0]), which lift()'s own
+    # walk could never reach on its own because the call sat in front of it
+    # as a wall it does not understand.
+    b = hx("F7 D8 83 D2 00 F7 DA  A3 5E 00 89 16 60 00")
+    instructions = run(b, 0, len(b))[0]
+    seed = Value(Op.CALL, at=-5, end=0, pair=0, absorbed=Emitted(b"\x01"))
+    values = tail(instructions, b, len(b), literal_only, seed)
+    assert [v.op for v in values] == [Op.CALL, Op.NEG, Op.STORE]
+
+
+def test_tail_stops_outright_on_the_first_unrecognised_instruction() -> None:
+    # Unlike lift()'s own walk, which invalidates and keeps scanning, a call
+    # site's tail has nothing to resume into -- the first instruction it does
+    # not recognise ends the chain rather than being skipped over.
+    b = hx("90  A3 5E 00 89 16 60 00")
+    instructions = run(b, 0, len(b))[0]
+    seed = Value(Op.CALL, at=-5, end=0, pair=0, absorbed=Emitted(b"\x01"))
+    values = tail(instructions, b, len(b), literal_only, seed)
+    assert values == [seed]
+
+
+def test_refuse_still_gates_a_region_a_call_seeds() -> None:
+    # Op.CALL is deliberately excluded from computes()'s own divergence
+    # check (its flag safety is calls.absorb()'s own SYNTHESISED/ALL gate,
+    # checked before this ever runs) -- but the NEG right after it still has
+    # to trip refuse() exactly as it would if a plain LOAD had started the
+    # region instead. A region a call seeds is not a hole in the gate.
+    values = [
+        Value(Op.CALL, at=0, end=5, pair=0, absorbed=Emitted(b"\x01")),
+        Value(Op.NEG, at=5, end=7, pair=0, s1=0),
+    ]
+    need = needed(values)
+    need[0] = True
+    region = [0, 1]
+    assert refuse(values, need, region, Flag.ZF) is not None
+    assert refuse(values, need, region, Flag.NONE) is None
 
 
 CORPUS = (

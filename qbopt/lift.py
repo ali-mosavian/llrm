@@ -81,6 +81,9 @@ class Op(StrEnum):
     MOVE = "move"
     NEG = "neg"
     NOT = "not"
+    CALL = "call"  # an absorbed call site (calls.py), already correctly
+    # valued in pair 0 -- see RESTORE_EFFECTS' documented fact in ir.py, which
+    # is the reason this needs no instruction of its own to "compute"
 
 
 @dataclass(slots=True)
@@ -96,6 +99,11 @@ class Value:
     src_pair: int = 0
     dlen: int = 2
     mem_at: int | None = None
+    # Op.CALL only: calls.py's own already-assembled replacement for the call
+    # site, restore=False (qbopt.calls.absorb) -- emit() returns this
+    # verbatim rather than building an iced_x86.Instruction from the other
+    # fields, which do not apply to a multi-instruction call absorption.
+    absorbed: "Emitted | None" = None
 
     def __repr__(self) -> str:
         match self.op:
@@ -111,6 +119,8 @@ class Value:
                 return f"neg v{self.s1}"
             case Op.STORE:
                 return f"store v{self.s1} -> {self.mem}"
+            case Op.CALL:
+                return "call result"
             case _:
                 return str(self.op)
 
@@ -273,6 +283,103 @@ def pairs_with(first: Decoded, second: Decoded) -> bool:
     )
 
 
+def _negate_step(
+    code: bytes,
+    instructions: list[Insn],
+    index_of: dict[int, int],
+    position: int,
+    bound: int,
+    live: dict[int, int | None],
+    add: Callable[[Value], int],
+) -> int | None:
+    """Tries the three-instruction NEGATE idiom at `instructions[position]`.
+    The position past it, or None if it does not apply here. Shared by
+    lift()'s own walk and tail()'s, so a NEGATE right after a restored call
+    (docs/residue.md's own worked G/H example) is recognised the same way a
+    NEGATE anywhere else in a region already is -- one fact, one place."""
+    at = instructions[position].at
+    pair = negate_at(code, at)
+    # the negate is three instructions, and may be the last thing in the run
+    after = index_of.get(at + 7, len(instructions) if at + 7 == bound else None)
+    if pair is not None and live[pair] is not None and after is not None:
+        live[pair] = add(Value(Op.NEG, s1=live[pair], at=at, end=at + 7, pair=pair))
+        return after
+    return None
+
+
+def _pair_step(
+    instructions: list[Insn],
+    position: int,
+    resolve: Resolver,
+    live: dict[int, int | None],
+    add: Callable[[Value], int],
+) -> int | None:
+    """Tries a classify()-recognised instruction pair at `instructions[position]`.
+    The position past it (`position + 2`), or None if nothing paired."""
+    at = instructions[position].at
+    first = classify(instructions[position], resolve)
+    second = classify(instructions[position + 1], resolve) if position + 1 < len(instructions) else None
+    if first is None or second is None or not pairs_with(first, second):
+        return None
+
+    span = instructions[position + 1].end - at
+    low, high = (first, second) if first.half == 0 else (second, first)
+    operation = PAIRED.get(low.alu) if low.alu is not None else None
+    paired = low.mem is not None and high.mem == low.mem.plus(2)
+    if paired and first.kind is Kind.ALU:
+        paired = operation is not None and operation[0] == high.alu
+
+    if paired:
+        match first.kind:
+            case Kind.LOAD:
+                live[first.pair] = add(widened(Op.LOAD, at, span, first, low.mem, low.disp_at))
+            case Kind.ALU if live[first.pair] is not None and operation is not None:
+                live[first.pair] = add(
+                    widened(Op.ALUM, at, span, first, low.mem, low.disp_at, source=live[first.pair], alu=operation[1])
+                )
+            case Kind.STORE if live[first.pair] is not None:
+                add(widened(Op.STORE, at, span, first, low.mem, low.disp_at, source=live[first.pair]))
+            case _:
+                paired = False
+
+    elif first.kind is Kind.NOT and live[first.pair] is not None:
+        live[first.pair] = add(widened(Op.NOT, at, span, first, None, source=live[first.pair]))
+        paired = True
+
+    elif first.kind is Kind.MOVE and live[first.src_pair] is not None:
+        # A move is a value, not nothing. Dropping it looks tempting -- the
+        # halves are just being copied -- but the source pair is usually
+        # reused straight afterwards, so the copy is what keeps the value
+        # alive. And it cannot be left as BC wrote it either: mov ax,cx
+        # writes sixteen bits and leaves the top half of eax stale, which a
+        # widened store then writes out as garbage. So it becomes one 32-bit
+        # move, three bytes against four.
+        live[first.pair] = add(widened(Op.MOVE, at, span, first, None, source=live[first.src_pair]))
+        paired = True
+
+    elif (
+        first.kind is Kind.REG_ALU
+        and operation is not None
+        and live[first.pair] is not None
+        and live[first.src_pair] is not None
+    ):
+        live[first.pair] = add(
+            widened(
+                Op.ALUV,
+                at,
+                span,
+                first,
+                None,
+                source=live[first.pair],
+                second_source=live[first.src_pair],
+                alu=operation[1],
+            )
+        )
+        paired = True
+
+    return position + 2 if paired else None
+
+
 def lift(
     code: bytes,
     start: int,
@@ -300,89 +407,14 @@ def lift(
 
     position = 0
     while position < len(instructions):
-        at = instructions[position].at
-
-        pair = negate_at(code, at)
-        # the negate is three instructions, and may be the last thing in the run
-        after = index_of.get(at + 7, len(instructions) if at + 7 == end else None)
-        if pair is not None and live[pair] is not None and after is not None:
-            live[pair] = add(Value(Op.NEG, s1=live[pair], at=at, end=at + 7, pair=pair))
-            position = after
-            continue
-
-        first = classify(instructions[position], resolve)
-        second = classify(instructions[position + 1], resolve) if position + 1 < len(instructions) else None
-
-        paired = False
-        if first is not None and second is not None and pairs_with(first, second):
-            span = instructions[position + 1].end - at
-            low, high = (first, second) if first.half == 0 else (second, first)
-            operation = PAIRED.get(low.alu) if low.alu is not None else None
-            paired = low.mem is not None and high.mem == low.mem.plus(2)
-            if paired and first.kind is Kind.ALU:
-                paired = operation is not None and operation[0] == high.alu
-
-            if paired:
-                match first.kind:
-                    case Kind.LOAD:
-                        live[first.pair] = add(widened(Op.LOAD, at, span, first, low.mem, low.disp_at))
-                    case Kind.ALU if live[first.pair] is not None and operation is not None:
-                        live[first.pair] = add(
-                            widened(
-                                Op.ALUM,
-                                at,
-                                span,
-                                first,
-                                low.mem,
-                                low.disp_at,
-                                source=live[first.pair],
-                                alu=operation[1],
-                            )
-                        )
-                    case Kind.STORE if live[first.pair] is not None:
-                        stores.append(
-                            add(widened(Op.STORE, at, span, first, low.mem, low.disp_at, source=live[first.pair]))
-                        )
-                    case _:
-                        paired = False
-
-            elif first.kind is Kind.NOT and live[first.pair] is not None:
-                live[first.pair] = add(widened(Op.NOT, at, span, first, None, source=live[first.pair]))
-                paired = True
-
-            elif first.kind is Kind.MOVE and live[first.src_pair] is not None:
-                # A move is a value, not nothing. Dropping it looks tempting --
-                # the halves are just being copied -- but the source pair is
-                # usually reused straight afterwards, so the copy is what keeps
-                # the value alive. And it cannot be left as BC wrote it either:
-                # mov ax,cx writes sixteen bits and leaves the top half of eax
-                # stale, which a widened store then writes out as garbage. So it
-                # becomes one 32-bit move, three bytes against four.
-                live[first.pair] = add(widened(Op.MOVE, at, span, first, None, source=live[first.src_pair]))
-                paired = True
-
-            elif (
-                first.kind is Kind.REG_ALU
-                and operation is not None
-                and live[first.pair] is not None
-                and live[first.src_pair] is not None
-            ):
-                live[first.pair] = add(
-                    widened(
-                        Op.ALUV,
-                        at,
-                        span,
-                        first,
-                        None,
-                        source=live[first.pair],
-                        second_source=live[first.src_pair],
-                        alu=operation[1],
-                    )
-                )
-                paired = True
-
-        if paired:
-            position += 2
+        before = len(values)
+        new_position = _negate_step(code, instructions, index_of, position, end, live, add)
+        if new_position is None:
+            new_position = _pair_step(instructions, position, resolve, live, add)
+        if new_position is not None:
+            if len(values) > before and values[-1].op is Op.STORE:
+                stores.append(len(values) - 1)
+            position = new_position
             continue
 
         # An instruction this does not understand may have written either pair.
@@ -392,6 +424,40 @@ def lift(
         position += 1
 
     return values, stores
+
+
+def tail(instructions: list[Insn], code: bytes, bound: int, resolve: Resolver, seed: Value) -> list[Value]:
+    """The maximal widenable run starting right after an absorbed call site,
+    seeded with `seed` already correctly valued in pair 0 -- `calls.py`'s own
+    restore idiom, byte-identical to `ir.RESTORE_EFFECTS[0]`, is exactly this
+    fact: the call's real 32-bit result never left eax. Reuses lift()'s own
+    pairing rules (`_negate_step`/`_pair_step`) unchanged, so the NEGATE
+    idiom -- docs/residue.md's own largest single G/H example -- is covered
+    without new logic.
+
+    Unlike lift()'s own walk, this never falls through to "invalidate and
+    keep scanning" on the first unrecognised instruction: there is nothing to
+    resume a call site's tail into, and continuing scanning risks the tail
+    swallowing an unrelated, unwidenable statement for no benefit.
+    """
+    index_of = {insn.at: position for position, insn in enumerate(instructions)}
+    values: list[Value] = [seed]
+    live: dict[int, int | None] = {0: 0, 1: None}
+
+    def add(value: Value) -> int:
+        values.append(value)
+        return len(values) - 1
+
+    position = 0
+    while position < len(instructions):
+        new_position = _negate_step(code, instructions, index_of, position, bound, live, add)
+        if new_position is None:
+            new_position = _pair_step(instructions, position, resolve, live, add)
+        if new_position is None:
+            break
+        position = new_position
+
+    return values
 
 
 # ---------------------------------------------------------------------------
@@ -533,6 +599,11 @@ def instruction(value: Value) -> Instruction:
 
 def emit(value: Value) -> Emitted:
     """The widened form, and where it needs a fixup of its own."""
+    if value.op is Op.CALL:
+        if value.absorbed is None:
+            raise ValueError("an Op.CALL value has no absorbed replacement to emit")
+        return value.absorbed
+
     encoder = Encoder(BITNESS)
     encoder.encode(instruction(value), 0)
     where = encoder.get_constant_offsets()
