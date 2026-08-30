@@ -137,16 +137,44 @@ OTHER = frozenset({9})
         (module.Addr(module.Space.SEGMENT, 0, 9), module.Addr(module.Space.FRAME, -4), False),
         # a DGROUP segment is the documented SS==DS assumption -- conservative True
         (module.Addr(module.Space.FRAME, -4), module.Addr(module.Space.SEGMENT, 0, 1), True),
-        # two statics, or two frame slots, are not this predicate's business --
-        # always conservative
-        (module.Addr(module.Space.SEGMENT, 0, 1), module.Addr(module.Space.SEGMENT, 2, 9), True),
+        # two distinct SEGDEFs are two distinct segments
+        (module.Addr(module.Space.SEGMENT, 0, 1), module.Addr(module.Space.SEGMENT, 2, 9), False),
+        # the same segment, far enough apart that no width could reach
+        (module.Addr(module.Space.SEGMENT, 0, 1), module.Addr(module.Space.SEGMENT, 64, 1), False),
+        # the same segment, overlapping at the default widest access
+        (module.Addr(module.Space.SEGMENT, 0, 1), module.Addr(module.Space.SEGMENT, 2, 1), True),
+        # two frame slots, overlapping only because the width is unstated
         (module.Addr(module.Space.FRAME, -4), module.Addr(module.Space.FRAME, -6), True),
+        # an indexed operand reaches anywhere in its own segment
+        (
+            module.Addr(module.Space.SEGMENT, 0, 1, module.Register.SI),
+            module.Addr(module.Space.SEGMENT, 64, 1),
+            True,
+        ),
         # a group-target address is never provably disjoint from anything
         (module.Addr(module.Space.FRAME, -4), module.Addr(module.Space.GROUP, 0, 1), True),
     ],
 )
 def test_may_alias(a: module.Addr, b: module.Addr, expected: bool) -> None:
     assert module.may_alias(a, b, DGROUP) is expected
+
+
+@pytest.mark.parametrize(
+    ("width", "expected"),
+    [(2, False), (4, True)],
+)
+def test_may_alias_narrows_with_a_known_width(width: int, expected: bool) -> None:
+    """Two adjacent frame slots meet or not depending on how wide the access is."""
+    a = module.Addr(module.Space.FRAME, -4)
+    b = module.Addr(module.Space.FRAME, -6)
+    assert module.may_alias(a, b, DGROUP, width, width) is expected
+
+
+def test_may_alias_over_states_an_unstated_width() -> None:
+    """The default must never report disjoint where a real width could overlap."""
+    a = module.Addr(module.Space.SEGMENT, 0, 1)
+    b = module.Addr(module.Space.SEGMENT, module.WIDEST - 1, 1)
+    assert module.may_alias(a, b, DGROUP) is True
 
 
 def test_may_alias_is_conservative_about_the_unknown() -> None:

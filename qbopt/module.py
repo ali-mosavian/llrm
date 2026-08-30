@@ -112,16 +112,55 @@ def literal_only(field_offset: int, literal: int) -> Addr:
     return Addr(Space.LITERAL, literal)
 
 
-def may_alias(a: Addr | None, b: Addr | None, dgroup: frozenset[int]) -> bool:
+# The widest access anything here can name -- an x87 qword load. Over-stating
+# an access's width only ever makes two ranges overlap that would not have, so
+# it is the answer a caller that does not know its own width should get.
+WIDEST = 8
+
+
+def _overlaps(a: Addr, a_width: int, b: Addr, b_width: int) -> bool:
+    """Whether [disp, disp+width) intersect -- arithmetic, not analysis."""
+    return a.disp < b.disp + b_width and b.disp < a.disp + a_width
+
+
+def may_alias(
+    a: Addr | None,
+    b: Addr | None,
+    dgroup: frozenset[int],
+    a_width: int = WIDEST,
+    b_width: int = WIDEST,
+) -> bool:
     """Whether two addresses could name the same byte, conservatively.
 
-    False only where it is provable from the object alone: a stack slot
-    (Space.FRAME) and a segment that DGROUP never lists can never be the
-    same byte, because DGROUP is exactly the set SS is assumed to overlap.
-    That assumption -- SS==DS, so a frame slot and a DGROUP segment address
-    might coincide -- cannot be *proven* from the object: SS itself does not
-    exist until the runtime sets it up at link/load time. It is centralised
-    here rather than re-derived in prose at every call site.
+    False only where it is provable from the object alone, which -- measured
+    across the corpus -- is most of the time: 94% of explicit memory
+    references resolve through a fixup to an exact (segment, displacement),
+    so disjointness between two of them is arithmetic on the displacements
+    and needs no assumption whatsoever. The cases, in the order they are
+    decided:
+
+    An indexed address is never provably disjoint from anything. `[si+arr]`
+    with si unbounded can reach any byte of its segment, and bounding it
+    needs array extents the object does not carry -- so an indexed operand
+    reads or writes its whole segment as far as this is concerned. That is
+    76 instructions corpus-wide, which is what makes refusing them cheap.
+
+    Two bare displacements are disjoint when their own ranges do not meet.
+    Within one object a SEGDEF index names one segment, and two distinct
+    SEGDEFs are two distinct segments, so a differing index is disjoint
+    outright; a matching one is the range test. Same for two frame slots,
+    where the ranges are bp-relative -- sound only while bp is invariant
+    across the region asking, which is the caller's own obligation to check
+    (nothing here can see whether something wrote bp), the way registers.py
+    already checks a single register's own liveness.
+
+    A frame slot against a segment DGROUP never lists can never be the same
+    byte, because DGROUP is exactly the set SS is assumed to overlap. That
+    assumption -- SS==DS, so a frame slot and a DGROUP segment address might
+    coincide -- cannot be *proven* from the object: SS itself does not exist
+    until the runtime sets it up at link/load time. It is centralised here
+    rather than re-derived in prose at every call site, and it is the one
+    rule here that rests on anything beyond arithmetic.
 
     None stands for "address not known" -- an unresolved operand, or a
     Space.GROUP address (see Space.GROUP's own comment) -- and is never
@@ -129,7 +168,13 @@ def may_alias(a: Addr | None, b: Addr | None, dgroup: frozenset[int]) -> bool:
     """
     if a is None or b is None:
         return True
+    if a.base != Register.NONE or b.base != Register.NONE:
+        return True
     match (a.space, b.space):
+        case (Space.FRAME, Space.FRAME):
+            return _overlaps(a, a_width, b, b_width)
+        case (Space.SEGMENT, Space.SEGMENT):
+            return a.index == b.index and _overlaps(a, a_width, b, b_width)
         case (Space.FRAME, Space.SEGMENT) if b.index not in dgroup:
             return False
         case (Space.SEGMENT, Space.FRAME) if a.index not in dgroup:
