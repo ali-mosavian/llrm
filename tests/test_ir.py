@@ -9,7 +9,10 @@ module's own dependencies and are tested there.
 
 from pathlib import Path
 
+import pytest
+from iced_x86 import Code
 from iced_x86 import Register
+from iced_x86 import Register_
 
 from qbopt import ir
 from qbopt import omf
@@ -18,6 +21,7 @@ from qbopt import module
 from qbopt.flags import ALL
 from qbopt.flags import Flag
 from qbopt.blocks import Ends
+from qbopt.declen import Insn
 from qbopt.extent import Body
 from qbopt.blocks import Block
 from qbopt.declen import decode
@@ -230,13 +234,276 @@ def test_a_call_or_interrupt_gets_the_conservative_answer_not_iceds_own() -> Non
     assert effects.defs is None
     assert effects.uses is None
     assert effects.flags_written is ALL
-    assert effects.touches_memory is True
-    assert effects.memory is None
+    assert effects.flags_read is ALL
+    assert effects.loads == (ir.Mem(None, 0),)
+    assert effects.stores == (ir.Mem(None, 0),)
 
 
-def test_opaque_memory_effect_is_none_for_a_segment_override() -> None:
-    insn = decode(hx("26 8B 06 34 12"), 0)
-    assert insn is not None
-    effects = ir.instruction_effects(insn, module.literal_only)
+def test_opaque_memory_effect_is_unnamed_for_a_segment_override() -> None:
+    effects = _effects("26 8B 06 34 12")
     assert effects.touches_memory is True
-    assert effects.memory is None
+    assert effects.loads == (ir.Mem(None, 2),)
+    assert effects.stores == ()
+
+
+# --- the operation vocabulary ------------------------------------------------
+
+STATIC = module.Addr(module.Space.LITERAL, 0x1234)
+LOCAL = module.Addr(module.Space.FRAME, -4)
+AX = ir.Reg(Register.AX, 2)
+DX = ir.Reg(Register.DX, 2)
+EAX = ir.Reg(Register.EAX, 4)
+ECX = ir.Reg(Register.ECX, 4)
+EDX = ir.Reg(Register.EDX, 4)
+
+
+def _insn(code: str) -> Insn:
+    found = decode(hx(code), 0)
+    assert found is not None
+    return found
+
+
+def _effects(code: str) -> ir.Effects:
+    return ir.instruction_effects(_insn(code), module.literal_only)
+
+
+def _semantics(code: str) -> ir.Semantics:
+    return ir.instruction_semantics(_insn(code), module.literal_only)
+
+
+def _defs(code: str) -> frozenset[Register_]:
+    found = _effects(code).defs
+    assert found is not None, "a real instruction, not a call"
+    return found
+
+
+def _uses(code: str) -> frozenset[Register_]:
+    found = _effects(code).uses
+    assert found is not None, "a real instruction, not a call"
+    return found
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        ("8B 06 34 12", ir.Semantics(ir.Operation.MOVE, "mov", (AX,), (ir.Mem(STATIC, 2),))),
+        ("89 46 FC", ir.Semantics(ir.Operation.MOVE, "mov", (ir.Mem(LOCAL, 2),), (AX,))),
+        ("03 C2", ir.Semantics(ir.Operation.BINARY, "add", (AX,), (AX, DX))),
+        ("13 D3", ir.Semantics(ir.Operation.BINARY, "adc", (DX,), (DX, ir.Reg(Register.BX, 2)))),
+        ("F7 D0", ir.Semantics(ir.Operation.UNARY, "not", (AX,), (AX,))),
+        ("99", ir.Semantics(ir.Operation.EXTEND, "cwd", (DX,), (AX,))),
+        ("FF 36 34 12", ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Mem(STATIC, 2),))),
+        ("58", ir.Semantics(ir.Operation.POP, "pop", (AX,))),
+        (
+            "8D 7E E6",
+            ir.Semantics(
+                ir.Operation.ADDRESS,
+                "lea",
+                (ir.Reg(Register.DI, 2),),
+                (ir.Address(module.Addr(module.Space.FRAME, -0x1A)),),
+            ),
+        ),
+        ("83 3E 34 12 05", ir.Semantics(ir.Operation.COMPARE, "cmp", (), (ir.Mem(STATIC, 2), ir.Imm(5, 2)))),
+        ("75 10", ir.Semantics(ir.Operation.BRANCH, "jne", target=0x12)),
+        ("E9 00 01", ir.Semantics(ir.Operation.JUMP, "jmp", target=0x103)),
+        ("C3", ir.Semantics(ir.Operation.RETURN, "ret")),
+        ("9A 00 00 00 00", ir.Semantics(ir.Operation.CALL, "call")),
+    ],
+)
+def test_one_instructions_own_operation_shape(code: str, expected: ir.Semantics) -> None:
+    assert _semantics(code) == expected
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        # Each of the three immediate encodings BC picks between (lift.py's
+        # own IMM_FAMILY) reports the value it means, sign extension and all,
+        # not the bytes it was encoded in.
+        ("83 C0 FF", ir.Imm(-1, 2)),
+        ("05 FF FF", ir.Imm(-1, 2)),
+        ("6A FE", ir.Imm(-2, 2)),
+        ("66 6A FE", ir.Imm(-2, 4)),
+    ],
+)
+def test_an_immediate_is_reported_as_the_value_it_means(code: str, expected: ir.Imm) -> None:
+    assert _semantics(code).sources[-1] == expected
+
+
+def test_a_dword_immediate_store_carries_both_the_address_and_the_value() -> None:
+    # /G3's own `mov dword [X],12345678h` -- one instruction where a constant
+    # propagation pass has everything it needs and nothing to re-decode.
+    assert _semantics("66 C7 06 34 12 78 56 34 12") == ir.Semantics(
+        ir.Operation.MOVE, "mov", (ir.Mem(STATIC, 4),), (ir.Imm(0x12345678, 4),)
+    )
+
+
+def test_a_push_of_a_static_writes_a_stack_cell_that_is_not_that_static() -> None:
+    # The reason loads and stores are separate: `push [X]` reads X and writes
+    # somewhere below sp. A single "touches memory: X" would let a later pass
+    # believe the push had overwritten X.
+    effects = _effects("FF 36 34 12")
+    assert effects.loads == (ir.Mem(STATIC, 2),)
+    assert effects.stores == (ir.Mem(None, 2),)
+
+
+def test_a_load_writes_no_memory_and_a_store_reads_none() -> None:
+    assert _effects("8B 06 34 12").stores == ()
+    assert _effects("89 46 FC").loads == ()
+    assert _effects("89 46 FC").stores == (ir.Mem(LOCAL, 2),)
+
+
+def test_lea_touches_no_memory_at_all() -> None:
+    # The claim a later pass acts on destructively: `lea` computes an address
+    # and reads nothing, so it neither aliases a store nor is killed by one.
+    effects = _effects("8D 7E E6")
+    assert effects.loads == ()
+    assert effects.stores == ()
+    assert effects.touches_memory is False
+    assert effects.flags_written is Flag.NONE
+
+
+def test_cwd_writes_dx_alone_and_reads_ax() -> None:
+    # It does NOT write ax, which is what makes it safe to treat the ax half
+    # of a widened pair as still holding what it held.
+    assert _defs("99") == frozenset({Register.EDX})
+    assert Register.EAX not in _defs("99")
+    assert _uses("99") == frozenset({Register.EAX, Register.EDX})
+
+
+def test_the_absorbed_divide_names_both_of_its_destinations() -> None:
+    # AGENTS.md's "divide and remainder are C's": one `idiv ecx` produces the
+    # quotient in eax and the remainder in edx. Naming only the quotient
+    # would tell a value-numbering pass edx still held its old value.
+    assert _semantics("66 F7 F9") == ir.Semantics(ir.Operation.DIVIDE, "idiv", (EAX, EDX), (EDX, EAX, ECX))
+    assert _defs("66 F7 F9") == frozenset({Register.EAX, Register.EDX})
+    assert Register.ECX not in _defs("66 F7 F9")
+
+
+def test_the_absorbed_multiply_leaves_edx_alone() -> None:
+    # The two-operand `imul` calls.py emits, not the one-operand form: edx is
+    # untouched, and a pass that thought otherwise would refuse every region
+    # an absorbed B$MUI4 sits in.
+    assert _semantics("66 0F AF C1") == ir.Semantics(ir.Operation.MULTIPLY, "imul", (EAX,), (EAX, ECX))
+    assert _defs("66 0F AF C1") == frozenset({Register.EAX})
+
+
+def test_a_three_operand_multiply_does_not_read_its_own_destination() -> None:
+    # Unlike every BINARY form, `imul eax,ecx,4` overwrites eax without
+    # reading it -- which is exactly the difference Operation.MULTIPLY exists
+    # to record.
+    assert _semantics("66 6B C1 04") == ir.Semantics(ir.Operation.MULTIPLY, "imul", (EAX,), (ECX, ir.Imm(4, 4)))
+    assert Register.EAX not in _uses("66 6B C1 04")
+
+
+def test_a_branch_reads_the_flags_it_tests_and_writes_none() -> None:
+    effects = _effects("75 10")
+    assert effects.flags_read is Flag.ZF
+    assert effects.flags_written is Flag.NONE
+    assert effects.defs == frozenset()
+
+
+def test_add_reads_no_flag_and_adc_reads_the_carry() -> None:
+    # The pair BC emits for every long: the low half reads nothing, the high
+    # half reads CF. Widening a region that splits them is exactly the bug
+    # this distinction exists to make visible.
+    assert _effects("03 C2").flags_read is Flag.NONE
+    assert _effects("13 D3").flags_read is Flag.CF
+
+
+def test_not_writes_no_flags() -> None:
+    # lift.py picked NOT_RM16 for NOT/EQV/IMP precisely because of this.
+    assert _effects("F7 D0").flags_written is Flag.NONE
+
+
+@pytest.mark.parametrize(
+    ("code", "why"),
+    [
+        ("CA 04 00", "retf n"),
+        ("0E", "push cs"),
+        ("16", "push ss"),
+        ("07", "pop es"),
+        ("F3 AB", "rep stosw"),
+        ("C9", "leave"),
+        ("EA 00 00 00 00", "a far jmp, whose target is not in the instruction"),
+        ("F7 E9", "one-operand imul, which writes dx:ax"),
+        ("26 8B 06 34 12", "a segment override"),
+        ("CD 35 46 C8", "the x87 emulator's own int 35h"),
+    ],
+)
+def test_the_deliberately_refused_shapes_stay_opaque(code: str, why: str) -> None:
+    # Refusing is always safe -- a later pass declines the whole region. A
+    # wrong effect is silently catastrophic, which is why none of these is
+    # guessed at. See ir.SHAPE's own comment.
+    assert _semantics(code) is ir.UNMODELLED, why
+
+
+def test_an_opaque_node_still_carries_a_complete_effect() -> None:
+    # The point of the split: a shape with no modelled operation still has an
+    # iced-derived def/use, so liveness across it is exact rather than absent.
+    effects = _effects("C9")
+    assert _defs("C9") == frozenset({Register.EBP, Register.ESP})
+    assert effects.loads == (ir.Mem(None, 2),)
+
+
+def test_semantics_never_claims_a_register_or_cell_the_effects_do_not(mapped_obj: Path) -> None:
+    # The invariant that makes the two views safe to use together: Semantics
+    # is derived by hand, Effects comes from iced, and a builder that shaped
+    # an instruction wrongly would name a destination iced does not report as
+    # written -- or a source it does not report as read. Neither may happen.
+    _found, bodies = _decode(mapped_obj)
+    for body_ir in bodies:
+        for node in body_ir.nodes:
+            semantics, effects = node.semantics, node.effects
+            if not ir.modelled(semantics):
+                continue
+            for where in semantics.dests:
+                if isinstance(where, ir.Reg) and effects.defs is not None:
+                    assert ir.root(where.register) in effects.defs, semantics
+                if isinstance(where, ir.Mem):
+                    assert where in effects.stores, semantics
+            for where in semantics.sources:
+                if isinstance(where, ir.Reg) and effects.uses is not None:
+                    assert ir.root(where.register) in effects.uses, semantics
+                if isinstance(where, ir.Mem):
+                    assert where in effects.loads, semantics
+
+
+# Every encoding in the corpus this pass deliberately declines to model. Not
+# a coverage floor with slack in it: an encoding leaving this set is a
+# regression, and one joining it is a decision to make deliberately.
+REFUSED = {
+    Code.RETFW_IMM16,
+    Code.PUSHW_CS,
+    Code.PUSHW_SS,
+    Code.POPW_ES,
+    Code.STOSW_M16_AX,
+    Code.LEAVEW,
+    Code.JMP_PTR1616,
+}
+
+
+def test_the_corpus_is_modelled_except_for_exactly_the_refused_encodings(fixtures: Path) -> None:
+    unmodelled: set[int] = set()
+    modelled = total = 0
+    for path in sorted(fixtures.glob("*.obj")):
+        found = module.load(path)
+        assert found is not None
+        result = ir.decode_module(found)
+        if isinstance(result, str):
+            continue
+        for body_ir in result:
+            for node in body_ir.nodes:
+                total += 1
+                if ir.modelled(node.semantics):
+                    modelled += 1
+                elif isinstance(node, ir.Opaque | ir.Long | ir.Call):
+                    unmodelled.add(node.insn.code)
+    assert unmodelled == REFUSED
+    assert modelled / total > 0.99, f"{modelled}/{total}"
+
+
+def test_a_restore_and_a_table_carry_their_own_operations() -> None:
+    assert ir.RESTORE_IDIOM.op is ir.Operation.RESTORE
+    assert ir.TABLE_DATA.op is ir.Operation.DATA
+    assert ir.modelled(ir.UNMODELLED) is False

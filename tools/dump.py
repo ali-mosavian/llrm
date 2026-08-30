@@ -113,22 +113,55 @@ def dump_live(found_blocks: list[blocks.Block] | None) -> str:
     return "\n".join(out)
 
 
+def _loc(where: ir.Loc) -> str:
+    match where:
+        case ir.Reg(register=register):
+            return _FMT.format_register(register)
+        case ir.Mem(addr=addr, width=width):
+            return f"{width}:{addr if addr is not None else '?'}"
+        case ir.Imm(value=value):
+            return f"{value:#x}" if value >= 0 else f"-{-value:#x}"
+        case ir.Address(addr=addr):
+            return f"&{addr if addr is not None else '?'}"
+
+
+def _semantics(found: ir.Semantics) -> str:
+    if not ir.modelled(found):
+        return "opaque"
+    dests = ",".join(map(_loc, found.dests))
+    sources = ",".join(map(_loc, found.sources))
+    target = f" -> {found.target:#06x}" if found.target is not None else ""
+    return f"{found.name or found.op}({sources})" + (f" -> {dests}" if dests else target)
+
+
+def _memory(effects: ir.Effects) -> str:
+    cells = [f"ld {_loc(one)}" for one in effects.loads] + [f"st {_loc(one)}" for one in effects.stores]
+    return " ".join(cells)
+
+
+def _what(node: ir.Node) -> str:
+    match node:
+        case ir.Opaque(insn=insn):
+            return str(insn.insn)
+        case ir.Long(insn=insn, decoded=decoded):
+            return f"{decoded.kind:<4} {insn.insn}"
+        case ir.Call(insn=insn, name=name):
+            return f"{name}  {insn.insn}"
+        case ir.Restore(pair=pair):
+            return f"pair={pair}"
+        case ir.Data(kind=kind, entries=entries):
+            return f"{kind}  {len(entries)} entries {list(entries)}"
+
+
 def _node_line(node: ir.Node) -> str:
     at, end = ir.span(node)
-    match node:
-        case ir.Opaque(insn=insn, effects=effects):
-            return (
-                f"  {at:#06x}-{end:#06x}  Opaque   {insn.insn}"
-                f"  defs={_regs(effects.defs)} uses={_regs(effects.uses)} flags={effects.flags_written.name}"
-            )
-        case ir.Long(insn=insn, decoded=decoded):
-            return f"  {at:#06x}-{end:#06x}  Long     {decoded.kind:<8} {insn.insn}"
-        case ir.Call(insn=insn, name=name):
-            return f"  {at:#06x}-{end:#06x}  Call     {name}  {insn.insn}"
-        case ir.Restore(pair=pair):
-            return f"  {at:#06x}-{end:#06x}  Restore  pair={pair}"
-        case ir.Data(kind=kind, entries=entries):
-            return f"  {at:#06x}-{end:#06x}  Data     {kind}  {len(entries)} entries {list(entries)}"
+    effects = node.effects
+    return (
+        f"  {at:#06x}-{end:#06x}  {type(node).__name__:<8} {_what(node):<44}"
+        f"  {_semantics(node.semantics):<40}"
+        f"  defs={_regs(effects.defs)} uses={_regs(effects.uses)}"
+        f" flags={effects.flags_written.name}/{effects.flags_read.name} {_memory(effects)}"
+    )
 
 
 def dump_ir(result: tuple[ir.BodyIR, ...] | str) -> str:
