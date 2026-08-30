@@ -93,6 +93,26 @@ class Insn:
     def reads_memory(self, operand: int) -> bool:
         return (self.insn.op0_kind if operand == 0 else self.insn.op1_kind) == MEMORY
 
+    @property
+    def has_segment_override(self) -> bool:
+        """Whether this instruction carries an explicit segment prefix.
+
+        Nothing in the reachable code of any of the 110 real fixtures has
+        one (measured), so this is a latent gap closed defensively: lift.py's
+        operand() has no notion of a segment at all and would otherwise
+        conflate `es:[x]` with `ds:[x]`.
+
+        Blind to one shape by construction: `emulated()`'s own SEGMENTED
+        stand-in (`stood_in_for()`, above) strips a real `es:`/etc. prefix
+        out of the bytes it hands the decoder before this ever sees them, so
+        an FP-emulator site carrying an override reads as though it had
+        none. Not exercised by anything measured so far -- the corpus's own
+        int 3Ch sites are all plain, unprefixed ESC opcodes -- but a
+        genuinely overridden emulated instruction would silently pass this
+        check rather than fail it.
+        """
+        return self.insn.segment_prefix != NO_REGISTER
+
     def register(self, operand: int) -> int:
         return self.insn.op0_register if operand == 0 else self.insn.op1_register
 

@@ -23,11 +23,26 @@ from qbopt import omf
 
 CALL_FAR = 0x9A
 
+# BC's own linker directive segment group. Measured: the same 11-segment set
+# in every one of the 110 real objects (BC_CN, BC_DATA, BC_DS, BC_FT, BC_SA,
+# BC_SAB, BR_DATA, BR_SKYS, COMMON, ENMALLOC, NMALLOC).
+DGROUP = "DGROUP"
+
 
 class Space(StrEnum):
     SEGMENT = "seg"  # relocated: an offset into the segment `index` names
     FRAME = "bp"  # bp-relative, so the displacement really is in the code
     LITERAL = "abs"  # a displacement in the code that no fixup claims
+    # relocated against a GRPDEF rather than a SEGDEF -- a different index
+    # namespace than SEGMENT's. Measured: 0 of 13,292 code-segment fixups
+    # across all 110 real objects target a group; only "segment" appears.
+    # Kept distinct rather than folded into SEGMENT so nothing ever compares
+    # a group index against a segment index by accident -- resolving which
+    # segments a group covers is out of scope, so an address in this space
+    # is refused everywhere it matters: may_alias() answers True (never
+    # provably disjoint), lift.operand() refuses to resolve one at all, and
+    # lift.memory() raises if one ever reaches it regardless.
+    GROUP = "grp"
 
 
 # base is only ever one of these two -- operand() in lift.py sets nothing
@@ -78,6 +93,10 @@ class Module:
     sites: frozenset[int] = frozenset()
     # the fixup that named each operand field, so a widened form can reuse it
     fixup_at: dict[int, omf.Fixup] = field(default_factory=dict)
+    # segment indices DGROUP's own GRPDEF names -- a stack slot (Space.FRAME)
+    # can never be the same byte as a segment outside this set, which is what
+    # may_alias() rests on.
+    dgroup: frozenset[int] = frozenset()
 
     def resolve(self, field_offset: int, literal: int) -> Addr:
         """What the operand whose displacement field sits here points at."""
@@ -93,6 +112,32 @@ def literal_only(field_offset: int, literal: int) -> Addr:
     return Addr(Space.LITERAL, literal)
 
 
+def may_alias(a: Addr | None, b: Addr | None, dgroup: frozenset[int]) -> bool:
+    """Whether two addresses could name the same byte, conservatively.
+
+    False only where it is provable from the object alone: a stack slot
+    (Space.FRAME) and a segment that DGROUP never lists can never be the
+    same byte, because DGROUP is exactly the set SS is assumed to overlap.
+    That assumption -- SS==DS, so a frame slot and a DGROUP segment address
+    might coincide -- cannot be *proven* from the object: SS itself does not
+    exist until the runtime sets it up at link/load time. It is centralised
+    here rather than re-derived in prose at every call site.
+
+    None stands for "address not known" -- an unresolved operand, or a
+    Space.GROUP address (see Space.GROUP's own comment) -- and is never
+    provably disjoint from anything.
+    """
+    if a is None or b is None:
+        return True
+    match (a.space, b.space):
+        case (Space.FRAME, Space.SEGMENT) if b.index not in dgroup:
+            return False
+        case (Space.SEGMENT, Space.FRAME) if a.index not in dgroup:
+            return False
+        case _:
+            return True
+
+
 def of(records: list[omf.Record]) -> Module | None:
     found = omf.code_segment(records)
     if found is None:
@@ -102,7 +147,7 @@ def of(records: list[omf.Record]) -> Module | None:
     fixups = [fixup for fixup in omf.fixups(records) if fixup.seg == seg]
 
     operands = {
-        fixup.offset: Addr(Space.SEGMENT, fixup.disp, fixup.index)
+        fixup.offset: Addr(Space.SEGMENT if fixup.target == "segment" else Space.GROUP, fixup.disp, fixup.index)
         for fixup in fixups
         if fixup.loc == omf.LOC_OFF16 and fixup.target in ("segment", "group")
     }
@@ -129,6 +174,7 @@ def of(records: list[omf.Record]) -> Module | None:
     )
     sites = frozenset(fixup.offset for fixup in fixups)
     fixup_at = {fixup.offset: fixup for fixup in fixups if fixup.offset in operands}
+    dgroup = frozenset(omf.groups(records).get(DGROUP, ()))
 
     return Module(
         records,
@@ -145,6 +191,7 @@ def of(records: list[omf.Record]) -> Module | None:
         chunks,
         sites,
         fixup_at,
+        dgroup,
     )
 
 

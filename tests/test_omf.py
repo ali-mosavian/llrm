@@ -43,6 +43,32 @@ def test_runtime_call_is_named_not_guessed_at(operator_obj: Path) -> None:
     assert named == ["ptr16:16"]
 
 
+def test_groups_parses_dgroup_the_same_way_everywhere(obj: Path) -> None:
+    # Measured: one GRPDEF per object, named DGROUP, the same eleven segments
+    # in all 110 fixtures -- BC_CN, BC_DATA, BC_DS, BC_FT, BC_SA, BC_SAB,
+    # BR_DATA, BR_SKYS, COMMON, ENMALLOC, NMALLOC.
+    records = omf.read(obj)
+    segs = omf.segments(records)
+    groups = omf.groups(records)
+    assert set(groups) == {"DGROUP"}
+    named = [segs[i] for i in groups["DGROUP"]]
+    assert all(named), "every DGROUP member is a real segment"
+    names = sorted(segment[0] for segment in named if segment is not None)
+    assert names == [
+        "BC_CN",
+        "BC_DATA",
+        "BC_DS",
+        "BC_FT",
+        "BC_SA",
+        "BC_SAB",
+        "BR_DATA",
+        "BR_SKYS",
+        "COMMON",
+        "ENMALLOC",
+        "NMALLOC",
+    ]
+
+
 def test_threads_are_resolved(jumptable: list[omf.Record]) -> None:
     # BC leans on THREAD subrecords: 34 of these 40 fixups name a thread rather
     # than their target. Anything that moves code has to resolve them or it

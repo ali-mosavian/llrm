@@ -118,6 +118,42 @@ def test_a_record_nothing_here_decodes_is_refused(fixtures: Path, kind: int, why
     assert [reason for reason in omf.refusals(records) if why in reason]
 
 
+def test_dgroup_is_populated_on_every_object(obj: Path) -> None:
+    found = module.load(obj)
+    assert found is not None
+    assert len(found.dgroup) == 11
+    assert found.seg not in found.dgroup, "the code segment is never in DGROUP"
+
+
+DGROUP = frozenset({1, 2, 3})
+OTHER = frozenset({9})
+
+
+@pytest.mark.parametrize(
+    ("a", "b", "expected"),
+    [
+        # a frame slot can never be the same byte as a segment DGROUP never lists
+        (module.Addr(module.Space.FRAME, -4), module.Addr(module.Space.SEGMENT, 0, 9), False),
+        (module.Addr(module.Space.SEGMENT, 0, 9), module.Addr(module.Space.FRAME, -4), False),
+        # a DGROUP segment is the documented SS==DS assumption -- conservative True
+        (module.Addr(module.Space.FRAME, -4), module.Addr(module.Space.SEGMENT, 0, 1), True),
+        # two statics, or two frame slots, are not this predicate's business --
+        # always conservative
+        (module.Addr(module.Space.SEGMENT, 0, 1), module.Addr(module.Space.SEGMENT, 2, 9), True),
+        (module.Addr(module.Space.FRAME, -4), module.Addr(module.Space.FRAME, -6), True),
+        # a group-target address is never provably disjoint from anything
+        (module.Addr(module.Space.FRAME, -4), module.Addr(module.Space.GROUP, 0, 1), True),
+    ],
+)
+def test_may_alias(a: module.Addr, b: module.Addr, expected: bool) -> None:
+    assert module.may_alias(a, b, DGROUP) is expected
+
+
+def test_may_alias_is_conservative_about_the_unknown() -> None:
+    assert module.may_alias(None, module.Addr(module.Space.FRAME, -4), DGROUP) is True
+    assert module.may_alias(module.Addr(module.Space.SEGMENT, 0, 9), None, DGROUP) is True
+
+
 @pytest.mark.skipif(shutil.which("ndisasm") is None, reason="ndisasm is not installed")
 def test_every_value_starts_where_ndisasm_says_an_instruction_does(mapped_obj: Path) -> None:
     # Stronger than the hand-built case: real BC output, and the boundaries come

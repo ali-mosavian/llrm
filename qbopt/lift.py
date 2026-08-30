@@ -149,16 +149,25 @@ def operand(insn: Insn, resolve: Resolver) -> Addr | None:
     element is still a fixup-backed static -- the fixup names the array's own
     base -- but two elements at the same displacement are different addresses
     unless the register indexing them agrees too, so that register comes along.
+
+    Refuses a segment-override prefix outright: this pass has no notion of a
+    segment at all, and would otherwise conflate `es:[x]` with `ds:[x]`.
+    Measured: zero instances in the reachable code of any of the 110 real
+    fixtures, so this is a latent gap closed defensively, not a fix to an
+    observed failure. Also refuses a Space.GROUP address -- see that space's
+    own comment in module.py.
     """
-    if insn.disp_at is None or insn.memory_index != Register.NONE:
+    if insn.disp_at is None or insn.memory_index != Register.NONE or insn.has_segment_override:
         return None
     match insn.memory_base:
         case Register.NONE:
-            return resolve(insn.disp_at, insn.insn.memory_displacement)
+            resolved = resolve(insn.disp_at, insn.insn.memory_displacement)
+            return None if resolved.space is Space.GROUP else resolved
         case Register.BP:
             return frame_relative(insn.displacement)
         case Register.SI | Register.DI:
-            return replace(resolve(insn.disp_at, insn.insn.memory_displacement), base=insn.memory_base)
+            resolved = resolve(insn.disp_at, insn.insn.memory_displacement)
+            return None if resolved.space is Space.GROUP else replace(resolved, base=insn.memory_base)
         case _:
             return None
 
@@ -475,6 +484,12 @@ def memory(value: Value) -> MemoryOperand:
             return relocated_memory(base)
         case Addr(space=Space.FRAME, disp=disp):
             return MemoryOperand(base=Register.BP, displ=disp, displ_size=value.dlen or 1)
+        case Addr(space=Space.GROUP):
+            # operand() already refuses this address kind, so no Value should
+            # ever carry one here -- raising rather than falling into the
+            # literal-displacement case below, which would silently emit a
+            # group-relative offset as if it were a real one.
+            raise ValueError(f"{value.op} has a group-relative operand -- operand() should have refused this")
         case Addr(disp=disp, base=base):
             return MemoryOperand(base=base, displ=disp, displ_size=2)
         case _:

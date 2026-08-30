@@ -24,10 +24,45 @@ from qbopt.lift import encode
 from qbopt.lift import needed
 from qbopt.lift import sizeof
 from qbopt.module import Addr
+from qbopt.lift import operand
 from qbopt.lift import regions
 from qbopt.module import Space
+from qbopt.declen import decode
 from helpers import classify_code
 from qbopt.lift import emit_region
+from qbopt.module import literal_only
+
+
+def test_operand_refuses_a_segment_override() -> None:
+    # `es: mov ax,[0x1234]` -- operand() has no notion of a segment at all,
+    # and would otherwise conflate `es:[x]` with `ds:[x]`. Zero instances in
+    # the reachable code of any of the 110 real fixtures (measured), so this
+    # is a defensive refusal, not a fix to an observed failure.
+    insn = decode(hx("26 8B 06 34 12"), 0)
+    assert insn is not None
+    assert insn.has_segment_override
+    assert operand(insn, literal_only) is None
+
+
+def test_operand_resolves_the_same_field_without_the_override() -> None:
+    insn = decode(hx("8B 06 34 12"), 0)
+    assert insn is not None
+    assert not insn.has_segment_override
+    assert operand(insn, literal_only) == Addr(Space.LITERAL, 0x1234)
+
+
+def test_operand_refuses_a_group_relative_address() -> None:
+    # A fixup naming a GRPDEF rather than a SEGDEF: a different index
+    # namespace from Space.SEGMENT's, which operand() has no business
+    # resolving as if it were an ordinary address. Zero instances in the
+    # reachable code of any of the 110 real fixtures (measured), so this is
+    # a defensive refusal too.
+    def group_only(_field_offset: int, literal: int) -> Addr:
+        return Addr(Space.GROUP, literal, 1)
+
+    insn = decode(hx("8B 06 34 12"), 0)
+    assert insn is not None
+    assert operand(insn, group_only) is None
 
 
 def one(h: str) -> list[Value]:

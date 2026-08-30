@@ -156,6 +156,20 @@ MUTATIONS = (
         "return Instruction.create_reg(Code.POP_R16, target)",
         "a popped argument only recovers its low 16 bits, garbage in the rest of the register",
     ),
+    Mutation(
+        "segment-override-not-refused",
+        "qbopt/lift.py",
+        "if insn.disp_at is None or insn.memory_index != Register.NONE or insn.has_segment_override:",
+        "if insn.disp_at is None or insn.memory_index != Register.NONE:",
+        "`es:[x]` conflated with `ds:[x]` -- a segment override silently ignored",
+    ),
+    Mutation(
+        "group-address-not-refused",
+        "qbopt/lift.py",
+        "            return None if resolved.space is Space.GROUP else resolved",
+        "            return resolved",
+        "a group-relative fixup treated as a real address instead of refused",
+    ),
 )
 
 

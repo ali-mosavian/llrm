@@ -143,6 +143,27 @@ def segments(recs: list[Record]) -> list[tuple[str, int] | None]:
     return out
 
 
+def groups(recs: list[Record]) -> dict[str, list[int]]:
+    """GRPDEF's own segment membership, by group name.
+
+    A GRPDEF is a group-name index, then repeated (0xFF, segment-index)
+    pairs -- 0xFF is the only component type BC emits, "segment index".
+    """
+    nm = names(recs)
+    out: dict[str, list[int]] = {}
+    for r in recs:
+        if r.type & 0xFE != GRPDEF:
+            continue
+        gi, i = _index(r.body, 0)
+        members = []
+        while i < len(r.body):
+            i += 1  # the component-type byte, always 0xFF
+            si, i = _index(r.body, i)
+            members.append(si)
+        out[nm[gi] if gi < len(nm) else "?"] = members
+    return out
+
+
 def externals(recs: list[Record]) -> list[str]:
     """EXTDEF names, 1-based -- FIXUPP targets refer to these by index."""
     out = [""]
