@@ -15,6 +15,7 @@ from iced_x86 import Decoder
 from iced_x86 import Register
 
 import corpus
+from qbopt import ir
 from qbopt import select
 from qbopt.declen import BITNESS
 
@@ -305,3 +306,165 @@ def test_a_store_of_an_immediate_takes_the_cell_s_width() -> None:
         made = select.store_imm(ir.Mem(Addr(Space.FRAME, -4), width), 0)
         assert made is not None
         assert text in str(next(iter(Decoder(BITNESS, made.code, ip=0))))
+
+
+@pytest.mark.parametrize(
+    ("value", "want"),
+    [(0, "6a00"), (1, "6a01"), (0x31, "6a31"), (-1, "6aff"), (127, "6a7f"), (-128, "6a80")],
+)
+def test_a_narrow_push_of_a_small_literal_takes_the_byte_form(value: int, want: str) -> None:
+    """`push 0` is `6a 00`, not `68 00 00`.
+
+    PUSHW_IMM8 pushes two bytes from a one-byte sign-extended immediate,
+    which is what BC emits and what this used to say did not exist -- the
+    comment read "there is no PUSH_IMM8 that pushes two, which is why only
+    the wide one shrinks". iced has had PUSHW_IMM8 all along.
+
+    A byte a site, and qb-qrender has 513 of them. Nothing in fixtures/omf
+    made it visible: the suite's pushes are addresses and long literals, so
+    the corpus came out three bytes *shorter* whole-segment while a real
+    program came out 2,776 longer.
+    """
+    made = select.push_imm(value, 2)
+    assert made is not None
+    assert made.code.hex() == want
+
+
+@pytest.mark.parametrize("value", [128, -129, 1000, -1000, 0x7FFF, -0x8000])
+def test_a_narrow_push_that_does_not_fit_a_byte_stays_wide(value: int) -> None:
+    """The sign-extension has to be a fact, not a hope: 128 sign-extends to
+    -128, so anything outside the signed byte range keeps PUSH_IMM16."""
+    made = select.push_imm(value, 2)
+    assert made is not None
+    assert made.code[0] == 0x68, f"{value} took the byte form and does not fit one"
+    assert len(made.code) == 3
+
+
+def test_a_literal_address_through_a_register_uses_the_byte_displacement() -> None:
+    """`add bx,[si+0Ah]` is `03 5c 0a`, not `03 9c 0a 00`.
+
+    Space.LITERAL hardcoded a two-byte displacement. That is right for a
+    bare direct address and a byte too many everywhere BC reaches one
+    through a register, which is how it writes a field of a record: 1,247
+    `add` sites and 785 `mov` sites in qb-qrender, a byte each.
+    """
+    from qbopt.module import Addr
+    from qbopt.module import Space
+
+    cell = ir.Mem(addr=Addr(Space.LITERAL, 0x0A, 0, base=Register.SI), width=2, through=Register.SI, offset=0x0A)
+    made = select.arith_mem("add", Register.BX, cell)
+    assert made is not None
+    assert made.code.hex() == "035c0a"
+
+
+def test_a_bare_literal_address_keeps_two_bytes_however_small_it_is() -> None:
+    """Without a base there is nowhere for a byte displacement to go.
+
+    16-bit mod=00 r/m=110 is the direct-address form and it carries a word;
+    the mod=01 encoding that would hold a byte means `[bp+disp8]`, which is
+    a different address entirely. So the size is the encoding's, not the
+    value's.
+    """
+    from qbopt.module import Addr
+    from qbopt.module import Space
+
+    for value in (0, 1, 0x10, 0x7F):
+        cell = ir.Mem(addr=Addr(Space.LITERAL, value, 0), width=2)
+        made = select.arith_mem("add", Register.BX, cell)
+        assert made is not None, value
+        assert len(made.code) == 4, f"{value:#x} came back {made.code.hex()}"
+        assert made.code[1] & 0xC7 == 0x06, f"{value:#x} is not the direct-address form"
+
+
+def test_a_relocated_push_keeps_the_wide_immediate() -> None:
+    """`push offset X` arrives here as Imm(value=0) and must stay `68 00 00`.
+
+    BC writes the address as zero and lets LINK fill it in, so the operand
+    is indistinguishable from a real `push 0` -- every `push 0` in
+    fixtures/omf is one of these. Shrinking it to `6a 00` leaves the
+    module's two-byte relocation pointing at a one-byte field, which
+    test_every_relocation_points_at_a_field_the_module_really_has caught
+    across 100 objects the moment the byte form was wired.
+    """
+    assert select.push_imm(0, 2, relocated=True).code.hex() == "680000"
+    assert select.push_imm(0, 2, relocated=False).code.hex() == "6a00"
+    # and the wide push shrinks on the same rule
+    assert select.push_imm(3, 4, relocated=True).code.hex() == "666803000000"
+    assert select.push_imm(3, 4, relocated=False).code.hex() == "666a03"
+
+
+@pytest.mark.parametrize(
+    ("name", "reg", "want"),
+    [("shl", Register.AX, "d1e0"), ("shl", Register.BX, "d1e3"), ("sar", Register.AX, "d1f8")],
+)
+def test_a_shift_by_one_takes_its_own_opcode(name: str, reg: Register, want: str) -> None:
+    """`shl ax,1` is `d1 e0`, a byte shorter than `c1 e0 01`.
+
+    The by-1 shape was already in the table and never fired: iced models the
+    implicit 1 as a real operand, so create_reg builds `shl ax,???` and the
+    assembler refuses it. Built with the count, it encodes. 101 sites in
+    qb-qrender, all of them strength reduction's own doubling.
+    """
+    made = select.shift(name, reg, 1)
+    assert made is not None
+    assert made.code.hex() == want
+
+
+def test_a_shift_by_more_than_one_keeps_the_immediate_form() -> None:
+    made = select.shift("shl", Register.AX, 3)
+    assert made is not None
+    assert made.code.hex() == "c1e003"
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "want"),
+    [("add", 0x1286, "058612"), ("cmp", 0x1234, "3d3412"), ("sub", 0x4000, "2d0040")],
+)
+def test_an_accumulator_immediate_takes_the_short_opcode(name: str, value: int, want: str) -> None:
+    """`add ax,1286h` is `05 86 12`, not `81 c0 86 12`.
+
+    The accumulator has its own opcode for every arithmetic immediate, one
+    byte shorter because it needs no modrm. Only for ax, and only where a
+    byte immediate does not already fit -- `add ax,3` stays `83 c0 03`,
+    which is shorter still. 592 sites in qb-qrender.
+    """
+    made = select.arith_imm(name, Register.AX, value)
+    assert made is not None
+    assert made.code.hex() == want
+
+
+def test_a_byte_immediate_still_beats_the_accumulator_form() -> None:
+    """`83 c0 03` is three bytes and `05 03 00` is three too, but the byte
+    form is the one that also works on bx -- so the order stays: byte
+    immediate, then accumulator, then the full word."""
+    assert select.arith_imm("add", Register.AX, 3).code.hex() == "83c003"
+    assert select.arith_imm("add", Register.BX, 3).code.hex() == "83c303"
+    assert select.arith_imm("add", Register.BX, 0x1286).code.hex() == "81c38612"
+
+
+@pytest.mark.parametrize(("value", "want"), [(0x32, "837ee232"), (0, "837ee200"), (-1, "837ee2ff")])
+def test_a_compare_of_memory_against_a_small_literal_takes_the_byte_form(value: int, want: str) -> None:
+    """`cmp word ptr [bp-1Eh],32h` is `83 7e e2 32`, not `81 7e e2 32 00`.
+
+    arith_into_imm has tried the byte form since it was written; compare's
+    own memory arm hardcoded the word one, so every `cmp` against a frame
+    slot paid a byte. 209 sites in qb-qrender, and the fix is to stop having
+    two of these.
+    """
+    from qbopt.module import Addr
+    from qbopt.module import Space
+
+    cell = ir.Mem(addr=Addr(Space.FRAME, -0x1E, 0), width=2)
+    made = select.compare(cell, value)
+    assert made is not None
+    assert made.code.hex() == want
+
+
+def test_a_compare_of_memory_against_a_large_literal_stays_wide() -> None:
+    from qbopt.module import Addr
+    from qbopt.module import Space
+
+    cell = ir.Mem(addr=Addr(Space.FRAME, -0x1E, 0), width=2)
+    made = select.compare(cell, 0x1234)
+    assert made is not None
+    assert made.code.hex() == "817ee23412"

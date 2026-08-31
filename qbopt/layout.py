@@ -346,7 +346,7 @@ def _emitted(ops: list, at: int, found: Module, fields: frozenset[int] = frozens
         if isinstance(op.node, ir.Restore) or what is None or found.code[op.at : op.at + 1] == bytes([0xCD]):
             lengths[op.at] = _length_of(op) or 0
             continue
-        made = select.emit(what, at=at)
+        made = select.emit(what, at=at, relocated=_field_in(found, op, fields) is not None)
         if made is None:
             return f"{op.at:#06x}: {op.name} is not one select.py can emit"
         lengths[op.at] = len(made.code)
@@ -368,7 +368,9 @@ def _emitted(ops: list, at: int, found: Module, fields: frozenset[int] = frozens
             landed = moved.get(what.target)
             if landed is None:
                 continue
-            made = select.emit(what, at=moved[op.at], short=True)
+            made = select.emit(
+                what, at=moved[op.at], short=True, relocated=_field_in(found, op, fields) is not None
+            )
             if made is None:
                 continue  # a call has no short form, and says so by refusing
             if landed - (moved[op.at] + len(made.code)) not in REACH:
@@ -432,7 +434,9 @@ def _emitted(ops: list, at: int, found: Module, fields: frozenset[int] = frozens
         what = _retargeted(before, moved)
         if what is None:
             return f"{op.at:#06x}: its target is not in this body"
-        made = select.emit(what, at=moved[op.at], short=op.at in short)
+        made = select.emit(
+            what, at=moved[op.at], short=op.at in short, relocated=_field_in(found, op, fields) is not None
+        )
         if made is None or len(made.code) != lengths[op.at]:
             return f"{op.at:#06x}: it changed length between the two passes"
         # A fixup goes wherever this instruction's one relocatable field

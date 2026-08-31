@@ -184,7 +184,17 @@ def operand_of(what: ir.Mem) -> tuple[MemoryOperand, bool] | None:
             # A displacement no fixup claims, so the number in the code is
             # the address and nothing has to move with it. BC writes these
             # for the runtime's own fixed locations.
-            return MemoryOperand(base=addr.base, displ=addr.disp, displ_size=2), False
+            #
+            # Two bytes without a base, and only without one: 16-bit mod=00
+            # r/m=110 is the direct-address form and it carries a word,
+            # while the mod=01 encoding that would hold a byte means
+            # `[bp+disp8]` -- a different address. Through a register there
+            # is no such collision and a byte usually fits, which is how BC
+            # reaches a field of a record: `add bx,[si+0Ah]` is `03 5c 0a`.
+            # Hardcoding two cost a byte at 1,247 add sites and 785 mov
+            # sites in qb-qrender, and none at all in fixtures/omf.
+            wide = 2 if addr.base == Register.NONE else _displacement_size(addr.base, addr.disp)
+            return MemoryOperand(base=addr.base, displ=addr.disp, displ_size=wide), False
         case _:
             return None
 
@@ -296,15 +306,38 @@ def fits_in_a_byte(value: int) -> bool:
     return -128 <= value <= 127
 
 
-def arith_imm(name: str, dest: Register_, value: int, at: int = 0) -> Emitted | None:
-    """`<name> dest, imm`, in the shorter form where the value allows."""
+# The accumulator's own arithmetic opcodes, which need no modrm byte and so
+# are a byte shorter than the general form. iced spells them ADD_AX_IMM16 and
+# ADD_EAX_IMM32 rather than by the RM pattern the rest of this table follows.
+ACCUMULATOR = {2: Register.AX, 4: Register.EAX}
+
+
+def arith_imm(name: str, dest: Register_, value: int, at: int = 0, relocated: bool = False) -> Emitted | None:
+    """`<name> dest, imm`, in the shortest form the value and register allow.
+
+    Three encodings, tried shortest first. A sign-extended byte immediate is
+    two bytes plus the modrm and works on any register. The accumulator's
+    own opcode drops the modrm instead, so it is the same length for a small
+    value and a byte shorter for a large one -- `add ax,1286h` is `05 86 12`
+    against `81 c0 86 12`, and qb-qrender has 592 of those. Everything else
+    takes the general form.
+
+    `relocated` keeps the full width, the same reason push_imm has it: an
+    immediate a fixup names has to stay the size the fixup expects.
+    """
     if name not in TWO_OPERAND:
         return None
     width = WIDTHS.get(dest)
     if width is None:
         return None
-    for bits in (8, width * 8) if fits_in_a_byte(value) else (width * 8,):
-        code = _code(f"{name.upper()}_RM{width * 8}_IMM{bits}")
+    shapes: list[tuple[str, int]] = []
+    if fits_in_a_byte(value) and not relocated:
+        shapes.append((f"{name.upper()}_RM{width * 8}_IMM8", 8))
+    if dest is ACCUMULATOR.get(width):
+        shapes.append((f"{name.upper()}_{'AX' if width == 2 else 'EAX'}_IMM{width * 8}", width * 8))
+    shapes.append((f"{name.upper()}_RM{width * 8}_IMM{width * 8}", width * 8))
+    for shape, _bits in shapes:
+        code = _code(shape)
         if code is None:
             continue
         try:
@@ -350,7 +383,7 @@ def push(one: Register_, at: int = 0) -> Emitted | None:
     return None if code is None else _assemble(Instruction.create_reg(code, one), at)
 
 
-def push_imm(value: int, width: int = 2, at: int = 0) -> Emitted | None:
+def push_imm(value: int, width: int = 2, at: int = 0, relocated: bool = False) -> Emitted | None:
     """A literal onto the stack, at the width the operand names.
 
     The width is not decoration: `push 3` puts two bytes on the stack and
@@ -358,13 +391,23 @@ def push_imm(value: int, width: int = 2, at: int = 0) -> Emitted | None:
     reads two bytes of whatever was under it. iced spells the wide one
     PUSHD_IMM32, breaking the PUSH_* pattern the rest of this table follows,
     which is why it is named here rather than built from the width.
+
+    `relocated` is the caller saying a fixup names this immediate, and it
+    keeps the wide form. BC writes `push offset X` as `68 00 00` with the
+    address filled in at link time, so the operand arrives here as
+    Imm(value=0) -- indistinguishable from a real `push 0` until someone
+    who can see the fixups says so. Shrinking one leaves a two-byte
+    relocation pointing at a one-byte field.
     """
-    # PUSHD_IMM8 pushes four bytes from a one-byte immediate, so it is the
-    # wide push in a narrower encoding rather than a narrow push. There is no
-    # PUSH_IMM8 that pushes two, which is why only the wide one shrinks.
+    # Both widths have a one-byte-immediate form, and each pushes its own
+    # width from a sign-extended byte: PUSHD_IMM8 four, PUSHW_IMM8 two. This
+    # used to claim the narrow one did not exist and shrank only the wide
+    # one, which cost a byte at every `push 0` BC writes -- 513 of them in
+    # qb-qrender. fixtures/omf could not show it, because the suite pushes
+    # addresses and long literals rather than small constants.
     names = ["PUSHD_IMM32"] if width == 4 else ["PUSH_IMM16"]
-    if width == 4 and fits_in_a_byte(value):
-        names.insert(0, "PUSHD_IMM8")
+    if fits_in_a_byte(value) and not relocated:
+        names.insert(0, "PUSHD_IMM8" if width == 4 else "PUSHW_IMM8")
     for one in names:
         code = _code(one)
         if code is None:
@@ -598,17 +641,12 @@ def compare(dest: ir.Loc, value: int, at: int = 0) -> Emitted | None:
         case ir.Reg(register=register):
             return arith_imm("cmp", register, value, at)
         case ir.Mem() as cell:
-            built = operand_of(cell)
-            if built is None or cell.width not in (2, 4):
-                return None
-            code = _code(f"CMP_RM{cell.width * 8}_IMM{cell.width * 8}")
-            if code is None:
-                return None
-            where, _relocated = built
-            try:
-                return _assemble(Instruction.create_mem_i32(code, where, value), at)
-            except (ValueError, OverflowError):
-                return None
+            # The same shape arith_into_imm already emits, byte immediate
+            # first. This used to hardcode the word one, so every `cmp`
+            # against a frame slot cost a byte -- 209 of them in qb-qrender.
+            # A compare writes no destination, which is the only thing that
+            # made it look like a different instruction.
+            return arith_into_imm("cmp", cell, value, at)
         case _:
             return None
 
@@ -783,9 +821,12 @@ def shift(name: str, dest: Register_, count: int | None, at: int = 0) -> Emitted
         code = _code(f"{name.upper()}_RM{width * 8}_CL")
         return None if code is None else _assemble(Instruction.create_reg_reg(code, dest, Register.CL), at)
     # `shl reg,1` has its own opcode, a byte shorter than the immediate form
-    # and what BC writes for a doubling.
+    # and what BC writes for a doubling. iced models the implicit 1 as a real
+    # operand, so it is built with the count like the immediate form -- with
+    # create_reg it comes out `shl ax,???` and the assembler refuses it,
+    # which is how this shape sat in the table emitting nothing.
     for shape, build in (
-        (f"{name.upper()}_RM{width * 8}_1", lambda c: Instruction.create_reg(c, dest)),
+        (f"{name.upper()}_RM{width * 8}_1", lambda c: Instruction.create_reg_i32(c, dest, count)),
         (f"{name.upper()}_RM{width * 8}_IMM8", lambda c: Instruction.create_reg_i32(c, dest, count)),
     ):
         if shape.endswith("_1") and count != 1:
@@ -961,6 +1002,7 @@ def emit(
     at: int = 0,
     where: dict[Register_, Register_] | None = None,
     short: bool = False,
+    relocated: bool = False,
 ) -> Emitted | None:
     """One MIR operation as machine bytes, or None where this cannot say it.
 
@@ -1026,7 +1068,7 @@ def emit(
                 case ir.Reg(register=one):
                     return push(_remapped(one, where), at)
                 case ir.Imm(value=value, width=width):
-                    return push_imm(value, width, at)
+                    return push_imm(value, width, at, relocated)
                 case ir.Mem() as cell:
                     return push_mem(cell, at)
         case ir.Operation.BRANCH if what.target is not None:
