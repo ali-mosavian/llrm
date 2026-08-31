@@ -258,7 +258,7 @@ def dump_regalloc(found: module.Module, found_blocks: list[blocks.Block] | None)
         if isinstance(assignment, str):
             out.append(f"  refused: {assignment}")
         else:
-            out.append(f"  moved from BC's own register: {regalloc.moved(assignment)}")
+            out.append(f"  moved from BC's own register: {regalloc.moved(body, assignment)}")
         arriving = regalloc.entry_values(body)
         out.append(f"  values the caller supplied: {sorted(str(v) for v in arriving)}")
         for block in body.blocks:

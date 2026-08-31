@@ -74,7 +74,7 @@ def _addressing(op: Op) -> set[Value]:
 
 
 def _real(values: tuple[Value, ...]) -> list[Value]:
-    return [one for one in values if one.of is not mir.FLAGS]
+    return [one for one in values if not one.flags]
 
 
 def loaded_into(op: Op) -> tuple[MemRef, Value] | None:
@@ -254,6 +254,6 @@ def forwardable(
             if op.at in want and op.loads:
                 who = next((w for cell, w in current.items() if mir.same_bytes(cell, op.loads[0])), None)
                 if who is not None and who in at_point.get(op.at, frozenset()):
-                    found.append(Forward(op.at, who.of))
+                    found.append(Forward(op.at, body.origin[who]))
             current = _after(op, current, dgroup, calls)
     return tuple(found)

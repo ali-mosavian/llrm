@@ -46,8 +46,8 @@ def test_flags_do_not_stop_an_operation_being_folded() -> None:
     """Nearly every arithmetic instruction defines its result and the flags
     together, so a rule wanting one definition rejects all of them. It did,
     and the propagation found nothing but its own seeds until this."""
-    result = mir.Value(1, mir.Register.EAX, 0)
-    flags = mir.Value(2, mir.FLAGS, 0)
+    result = mir.Value(1, 0)
+    flags = mir.Value(2, 0, flags=True)
     assert consts._defined(mir.Op(0, ir.Operation.UNARY, "dec", (flags, result), ())) == result
     assert consts._defined(mir.Op(0, ir.Operation.UNARY, "dec", (flags,), ())) is None
 

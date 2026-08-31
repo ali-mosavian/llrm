@@ -118,15 +118,27 @@ FROM_CONTRACT = {
 
 @dataclass(frozen=True, slots=True)
 class Value:
-    """One SSA value: defined by exactly one Op or Phi, in one place."""
+    """One SSA variable: defined by exactly one Op or Phi, in one place.
+
+    Deliberately says nothing about where it lives. A value used to be named
+    after the machine register BC kept it in -- `eax#155` -- which made the
+    raise/lower round trip checkable and then blocked everything after it:
+    two computations cannot be compared by what they compute while their
+    names contain where they landed, and a 32-bit root has no way to say
+    "the low half of that". docs/variables.md has the measurement.
+
+    Where BC kept it is still known, and is a fact about lowering rather
+    than about the value: MirBody.origin holds it. Reading that map from an
+    analysis is a choice with a reason, not something that happens by
+    accident because the register was sitting on the value.
+    """
 
     id: int
-    of: Register_  # the tracked register or FLAGS this is a version of
     at: int  # the instruction that defined it, or the block for a phi
+    flags: bool = False  # the flags variable, which is not data and holds none
 
     def __repr__(self) -> str:
-        name = "flags" if self.of is FLAGS else NAMES.get(self.of, f"r{self.of}")
-        return f"{name}#{self.id}"
+        return f"{'f' if self.flags else 'v'}{self.id}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,6 +195,7 @@ class MirBlock:
 class MirBody:
     entry: int
     blocks: tuple[MirBlock, ...]
+    origin: dict[Value, Register_] = field(default_factory=dict)  # where BC kept each value
 
     def block(self, at: int) -> MirBlock | None:
         return next((one for one in self.blocks if one.at == at), None)
@@ -243,10 +256,16 @@ class _Namer:
     def __init__(self) -> None:
         self.next = 0
         self.stack: dict[Register_, list[Value]] = {}
+        # Where BC had each value. Kept beside the values rather than on
+        # them, so lowering and regalloc's identity baseline can ask and
+        # nothing else picks it up for free.
+        self.origin: dict[Value, Register_] = {}
 
     def fresh(self, of: Register_, at: int) -> Value:
         self.next += 1
-        return Value(self.next, of, at)
+        made = Value(self.next, at, of is FLAGS)
+        self.origin[made] = of
+        return made
 
     def current(self, of: Register_, at: int) -> Value:
         """The value in scope, inventing one where nothing has defined it yet.
@@ -444,6 +463,7 @@ def raise_body(
             )
             for block in blocks
         ),
+        dict(namer.origin),
     )
 
 

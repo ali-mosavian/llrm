@@ -168,7 +168,7 @@ def test_nothing_reads_a_flag_once_both_folds_are_applied(obj: Path) -> None:
         for block in body.blocks:
             for op in block.ops:
                 for value in op.defines:
-                    if value.of is not mir.FLAGS or value in accounted:
+                    if not value.flags or value in accounted:
                         continue
                     who = consumers.get(value, [])
                     assert all(one is None or one.op is ir.Operation.CALL for one in who), (

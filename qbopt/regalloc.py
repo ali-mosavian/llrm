@@ -137,11 +137,11 @@ def pressure(body: mir.MirBody, found: Liveness | None = None) -> int:
     peak = 0
     for block in body.blocks:
         alive = set(found.live_out[block.at])
-        peak = max(peak, len([one for one in alive if one.of is not mir.FLAGS]))
+        peak = max(peak, len([one for one in alive if not one.flags]))
         for op in reversed(block.ops):
             alive -= set(op.defines)
             alive |= set(op.uses)
-            peak = max(peak, len([one for one in alive if one.of is not mir.FLAGS]))
+            peak = max(peak, len([one for one in alive if not one.flags]))
     return peak
 
 
@@ -158,7 +158,7 @@ def interference(body: mir.MirBody, found: Liveness | None = None) -> dict[Value
     graph: dict[Value, set[Value]] = {}
 
     def meet(alive: set[Value]) -> None:
-        real = [one for one in alive if one.of is not mir.FLAGS]
+        real = [one for one in alive if not one.flags]
         for one in real:
             graph.setdefault(one, set()).update(other for other in real if other != one)
 
@@ -193,6 +193,11 @@ def colour(body: mir.MirBody, pinned: dict[Value, Register_] | None = None) -> d
     """
     graph = interference(body)
     assigned: dict[Value, Register_] = dict(pinned or {})
+    # Where BC had each value. Read from the body rather than off the value
+    # itself: this is the one question in this module that is genuinely
+    # about machine registers, and asking for it explicitly is the point of
+    # the map living there. See docs/variables.md.
+    origin = body.origin
 
     # Identity first, and it is not a heuristic: measured over 27,680 values,
     # none ever interferes with another version of its own register, so
@@ -200,8 +205,8 @@ def colour(body: mir.MirBody, pinned: dict[Value, Register_] | None = None) -> d
     # An allocator that moves anything it was not asked to move is emitting
     # copies for nothing, and greedy-by-degree moved 1,274 values doing
     # exactly that. Only a pin, or a clash with one, makes anything move.
-    if not any(assigned[one] is not one.of for one in assigned):
-        clean = {one: one.of for one in graph}
+    if not any(assigned[one] is not origin.get(one) for one in assigned):
+        clean = {one: origin[one] for one in graph if one in origin}
         clean.update(assigned)
         if all(
             all(clean[other] is not clean[one] for other in graph[one] if other in clean)
@@ -219,7 +224,8 @@ def colour(body: mir.MirBody, pinned: dict[Value, Register_] | None = None) -> d
             return f"{one} interferes with every register at once"
         # its own register first, so an allocation that need not move
         # anything does not
-        assigned[one] = one.of if one.of in free else free[0]
+        was = origin.get(one)
+        assigned[one] = was if was is not None and was in free else free[0]
 
     # The pins are not checked on the way in, so they are checked here: two
     # of them wanting one register for values that are live together is a
@@ -232,6 +238,6 @@ def colour(body: mir.MirBody, pinned: dict[Value, Register_] | None = None) -> d
     return assigned
 
 
-def moved(assignment: dict[Value, Register_]) -> int:
+def moved(body: mir.MirBody, assignment: dict[Value, Register_]) -> int:
     """How many values ended up somewhere other than BC put them."""
-    return sum(1 for one, where in assignment.items() if where is not one.of)
+    return sum(1 for one, where in assignment.items() if where is not body.origin.get(one))

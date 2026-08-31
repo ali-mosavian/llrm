@@ -4,6 +4,7 @@ can reason about, so the invariants are the test.
 """
 
 from pathlib import Path
+from dataclasses import fields
 
 import pytest
 
@@ -114,8 +115,8 @@ def test_a_barrier_reads_and_writes_every_tracked_value(obj: Path) -> None:
             for op in one.ops:
                 if not op.barrier:
                     continue
-                assert {v.of for v in op.defines} >= set(mir.TRACKED)
-                assert {v.of for v in op.uses} >= set(mir.TRACKED)
+                assert {built.origin[v] for v in op.defines} >= set(mir.TRACKED)
+                assert {built.origin[v] for v in op.uses} >= set(mir.TRACKED)
 
 
 def test_the_carry_between_a_pair_is_an_edge_not_an_adjacency() -> None:
@@ -137,7 +138,7 @@ def test_the_carry_between_a_pair_is_an_edge_not_an_adjacency() -> None:
         for first, second in zip(one.ops, one.ops[1:], strict=False):
             if second.name not in ("adc", "sbb"):
                 continue
-            carried = [v for v in first.defines if v.of is mir.FLAGS]
+            carried = [v for v in first.defines if v.flags]
             assert carried, f"{first.name} at {first.at:#06x} feeds {second.name} but defines no flags"
             assert carried[0] in second.uses, "the pair is joined by the flags value"
             pairs += 1
@@ -146,11 +147,16 @@ def test_the_carry_between_a_pair_is_an_edge_not_an_adjacency() -> None:
 
 def test_the_frame_and_the_segments_never_become_values() -> None:
     """They are where values live, not values. Promoting bp would dissolve
-    every local, and a segment register decides which bytes an access names."""
+    every local, and a segment register decides which bytes an access names.
+
+    Asked of body.origin, since a value no longer names a register at all --
+    the question is whether raising ever made one OF bp or a segment, which
+    is a fact about what was raised and lives in that map now.
+    """
     assert not (set(mir.TRACKED) & mir.PHYSICAL)
     for built, _ in raised(Path("fixtures/omf/procs-v-g3.obj")):
         for value in built.values:
-            assert value.of not in mir.PHYSICAL
+            assert built.origin[value] not in mir.PHYSICAL
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
@@ -230,12 +236,12 @@ def test_the_same_address_through_a_rewritten_register_is_not_the_same_bytes() -
     here = mir.MemRef(
         Addr(Space.FAR, 0, base=mir.Register.BX, segment=mir.Register.ES),
         1,
-        base=mir.Value(41, mir.Register.EBX, 0x461),
+        base=mir.Value(41, 0x461),
     )
     there = mir.MemRef(
         Addr(Space.FAR, 0, base=mir.Register.BX, segment=mir.Register.ES),
         1,
-        base=mir.Value(47, mir.Register.EBX, 0x476),
+        base=mir.Value(47, 0x476),
     )
     assert here.addr == there.addr, "the same Addr, which is the point"
     assert not mir.same_bytes(here, there)
@@ -246,3 +252,45 @@ def test_a_reference_nothing_can_name_is_never_known_to_be_anything() -> None:
     unknown = mir.MemRef(None, 2)
     assert not mir.same_bytes(unknown, unknown)
     assert mir.overlapping(unknown, mir.MemRef(Addr(Space.SEGMENT, 0, 5), 2), frozenset())
+
+
+def test_a_value_carries_no_register() -> None:
+    """The invariant docs/variables.md exists for.
+
+    A value used to be named after the register BC kept it in, which made
+    two computations incomparable by what they compute and left no way to
+    say "the low half of that". Guarded here rather than trusted, because
+    re-adding the field would be the easy way to fix any downstream break
+    and would silently undo the whole change.
+    """
+    assert not hasattr(mir.Value(1, 0), "of")
+    assert {field.name for field in fields(mir.Value)} == {"id", "at", "flags"}
+
+
+@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
+def test_every_value_has_an_origin_and_a_distinct_name(obj: Path) -> None:
+    """Nothing is lost by moving the register off the value.
+
+    Every value still has one, and no two values share an id -- which is
+    what lets `v7` be a name rather than a description.
+    """
+    for built, _ in raised(obj):
+        seen: set[int] = set()
+        for value in built.values:
+            assert value in built.origin, f"{value} has no origin"
+            assert value.id not in seen, f"{value.id} names two values"
+            seen.add(value.id)
+
+
+def test_the_flags_variable_is_a_kind_not_a_register() -> None:
+    """`flags` is a bool on the value; mir.FLAGS is only what raising reads.
+
+    Every consumer that used to compare against a sentinel register now
+    asks the value what it is, which is the same question without the
+    machine in it.
+    """
+    assert mir.Value(1, 0).flags is False
+    assert mir.Value(2, 0, flags=True).flags is True
+    for built, _ in raised(Path("fixtures/omf/arith-v-g3.obj")):
+        for value in built.values:
+            assert value.flags == (built.origin[value] is mir.FLAGS)

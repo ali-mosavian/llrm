@@ -94,13 +94,13 @@ def pairs(body: mir.MirBody) -> tuple[Pair, ...]:
     for block in body.blocks:
         for op in block.ops:
             for value in op.defines:
-                if value.of is mir.FLAGS:
+                if value.flags:
                     produced[value] = op
 
     found: list[Pair] = []
     for block in body.blocks:
         for op in block.ops:
-            carried = [one for one in op.uses if one.of is mir.FLAGS]
+            carried = [one for one in op.uses if one.flags]
             if len(carried) != 1:
                 continue
             low = produced.get(carried[0])
@@ -120,7 +120,7 @@ def freed(body: mir.MirBody, folded: tuple[Pair, ...]) -> tuple[int, int]:
     number is really measuring is whether flags are an abstraction this
     layer needs or one it inherited -- see the module docstring.
     """
-    before = sum(1 for block in body.blocks for op in block.ops for v in op.defines if v.of is mir.FLAGS)
+    before = sum(1 for block in body.blocks for op in block.ops for v in op.defines if v.flags)
     return before, before - len(folded)
 
 
@@ -135,7 +135,7 @@ def refused(body: mir.MirBody) -> tuple[tuple[mir.Op, mir.Op, str], ...]:
     for block in body.blocks:
         for op in block.ops:
             for value in op.defines:
-                if value.of is mir.FLAGS:
+                if value.flags:
                     produced[value] = op
 
     out: list[tuple[mir.Op, mir.Op, str]] = []
@@ -143,7 +143,7 @@ def refused(body: mir.MirBody) -> tuple[tuple[mir.Op, mir.Op, str], ...]:
         for op in block.ops:
             if op.op is ir.Operation.BARRIER:
                 continue
-            carried = [one for one in op.uses if one.of is mir.FLAGS]
+            carried = [one for one in op.uses if one.flags]
             if len(carried) != 1 or carried[0] not in produced:
                 continue
             low = produced[carried[0]]
@@ -210,7 +210,7 @@ def tests(body: mir.MirBody, calls: dict[int, str]) -> tuple[Test, ...]:
     for block in body.blocks:
         for op in block.ops:
             for value in op.defines:
-                if value.of is mir.FLAGS:
+                if value.flags:
                     produced[value] = op
 
     found: list[Test] = []
@@ -219,7 +219,7 @@ def tests(body: mir.MirBody, calls: dict[int, str]) -> tuple[Test, ...]:
             if op.op is not ir.Operation.BRANCH:
                 continue
             asked = TESTS.get(op.name)
-            carried = [one for one in op.uses if one.of is mir.FLAGS]
+            carried = [one for one in op.uses if one.flags]
             if asked is None or len(carried) != 1:
                 continue
             source = produced.get(carried[0])

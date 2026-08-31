@@ -51,10 +51,16 @@ def test_a_value_never_interferes_with_another_version_of_itself(obj: Path) -> N
     """Two versions of eax live at once would mean BC had them in one
     register at one moment, which it cannot have. Measured over 27,680
     values: none. This is what makes the identity assignment always valid,
-    and so what the whole allocator rests on."""
+    and so what the whole allocator rests on.
+
+    Asks body.origin rather than the value: a value no longer carries where
+    it lived, which is the point of docs/variables.md -- and this is one of
+    the few questions genuinely about BC's registers, so it asks for them.
+    """
     for body in raised(obj):
+        origin = body.origin
         for one, others in regalloc.interference(body).items():
-            assert not [other for other in others if other.of is one.of]
+            assert not [other for other in others if origin.get(other) is origin.get(one)]
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
@@ -65,7 +71,7 @@ def test_an_unconstrained_body_moves_nothing(obj: Path) -> None:
     for body in raised(obj):
         got = regalloc.colour(body)
         assert not isinstance(got, str), got
-        assert regalloc.moved(got) == 0
+        assert regalloc.moved(body, got) == 0
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)

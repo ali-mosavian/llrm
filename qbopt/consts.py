@@ -72,19 +72,21 @@ def masked(n: int, width: int) -> int:
     return n & ((1 << (width * 8)) - 1)
 
 
-def _source_value(op: mir.Op, register: Register_) -> mir.Value | None:
+def _source_value(op: mir.Op, register: Register_, origin: dict[mir.Value, Register_]) -> mir.Value | None:
     """The SSA value standing for this semantic register operand."""
     root = ir.ROOT.get(register, register)
-    return next((one for one in op.uses if one.of is root), None)
+    return next((one for one in op.uses if origin.get(one) is root), None)
 
 
-def _operand(op: mir.Op, where: ir.Loc, known: dict[mir.Value, Known]) -> Known | None:
+def _operand(
+    op: mir.Op, where: ir.Loc, known: dict[mir.Value, Known], origin: dict[mir.Value, Register_]
+) -> Known | None:
     """One semantic operand as a number, if it is one."""
     match where:
         case ir.Imm(value=value, width=width):
             return Known(masked(value, width), width)
         case ir.Reg(register=register, width=width):
-            value = _source_value(op, register)
+            value = _source_value(op, register, origin)
             fact = known.get(value) if value is not None else None
             return fact if fact is not None and fact.width >= width else None
         case _:
@@ -99,11 +101,11 @@ def _defined(op: mir.Op) -> mir.Value | None:
     them -- which it did, and the propagation found nothing but its own
     seeds until the flags were excluded here.
     """
-    real = [one for one in op.defines if one.of is not mir.FLAGS]
+    real = [one for one in op.defines if not one.flags]
     return real[0] if len(real) == 1 else None
 
 
-def _result(op: mir.Op, known: dict[mir.Value, Known]) -> Known | None:
+def _result(op: mir.Op, known: dict[mir.Value, Known], origin: dict[mir.Value, Register_]) -> Known | None:
     """What this operation computes, where every input is known."""
     semantics = op.node.semantics if op.node is not None else None
     if semantics is None or not ir.modelled(semantics) or _defined(op) is None:
@@ -111,7 +113,7 @@ def _result(op: mir.Op, known: dict[mir.Value, Known]) -> Known | None:
 
     parts: list[Known] = []
     for one in semantics.sources:
-        got = _operand(op, one, known)
+        got = _operand(op, one, known, origin)
         if got is None:
             return None
         parts.append(got)
@@ -148,7 +150,7 @@ def known(body: mir.MirBody) -> dict[mir.Value, Known]:
                 target = _defined(op)
                 if target is None or target in facts:
                     continue
-                found = _result(op, facts)
+                found = _result(op, facts, body.origin)
                 if found is not None:
                     facts[target] = found
                     changing = True
