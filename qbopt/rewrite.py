@@ -27,6 +27,7 @@ from qbopt import module
 from qbopt import forward
 from qbopt.lift import Op
 from qbopt import reencode
+from qbopt import simplify
 from qbopt.flags import ALL
 from qbopt.lift import lift
 from qbopt.lift import tail
@@ -350,9 +351,63 @@ def plan(
         planned.append(Planned(replace(one.region, id=len(planned)), one.edit))
     for one in _substituted(found, mapped, blocks, reached, planned):
         planned.append(Planned(replace(one.region, id=len(planned)), one.edit))
+    for one in _simplified(found, mapped, blocks, reached, planned):
+        planned.append(Planned(replace(one.region, id=len(planned)), one.edit))
 
     planned = drop_restore_repush_round_trips(found, mapped, planned)
     return drop_chained_crossings(planned, found.chunks)
+
+
+def _simplified(
+    found: module.Module,
+    mapped: CodeMap,
+    blocks: list[Block],
+    reached: list[Insn],
+    planned: list[Planned],
+) -> list[Planned]:
+    """Split-and-rejoin idioms that compute nothing, deleted.
+
+    Absorption emits each site in isolation, so one ends by putting the pair
+    back the way BC's 16-bit code reads it and the next rebuilds the 32-bit
+    value from those halves. simplify.py proves the pair is the value that
+    went in; this removes it.
+
+    Deletion, not synthesis: `ir.emit` slices each surviving node's own
+    span, so dropping one needs no instruction selector. That is also the
+    limit -- a rejoin that lands in a *different* register than the split
+    came from would need a `mov` emitting, and simplify.py refuses those
+    rather than this pretending they are free.
+    """
+    at_of = {insn.at: insn for insn in reached}
+    out: list[Planned] = []
+    for _, body in mir.bodies(found, blocks):
+        for trip in simplify.round_trips(body):
+            for at in trip.at:
+                insn = at_of.get(at)
+                if insn is None:
+                    continue
+                reason = anchored_inside(found, mapped, insn.at, insn.end)
+                if reason is None and any(
+                    other.edit and other.edit.lo < insn.end and insn.at < other.edit.hi for other in planned + out
+                ):
+                    reason = "it overlaps a region already taken"
+                edit = None if reason else Edit(insn.at, insn.end, b"", ())
+                out.append(
+                    Planned(
+                        Region(
+                            id=0,
+                            seg=found.seg,
+                            at=insn.at,
+                            end=insn.end,
+                            before=found.code[insn.at : insn.end].hex(),
+                            after="" if edit is not None else None,
+                            taken=edit is not None,
+                            reason=reason,
+                        ),
+                        edit,
+                    )
+                )
+    return out
 
 
 def _substituted(
