@@ -38,8 +38,9 @@ Measured 2026-08-31. Re-measure before trusting it.
 | its x87 sites | 1,766, none optimised |
 | bench/nbody | 2.99× under DOSBox, 21 of 21 calls absorbed, pressure 6/6 |
 | corpus redundant reads | 553 — 73 live provider, 48 dead, 432 none |
-| selector coverage | 20,055 of 20,245 corpus ops, 0 mismatched |
-| segments MIR wrote | 49 of 125 objects; 12 link and run under DOSBox |
+| selector coverage | 20,062 of 20,245 corpus ops, 0 mismatched |
+| segments MIR wrote | 49 of 125 objects; 12 link and run |
+| **optimised and MIR-written** | **half the suite, on PDS /G2 and QuickBASIC /O, running correctly** |
 
 MIR does, end to end:
 

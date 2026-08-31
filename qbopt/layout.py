@@ -66,9 +66,17 @@ def _ordered(body: MirBody) -> list[mir.Op]:
 
 
 def _length_of(op: mir.Op) -> int | None:
-    """How many bytes the op occupied in BC's own image."""
-    found = getattr(op.node, "insn", None)
-    return None if found is None else found.length
+    """How many bytes the op occupied in the image it came from.
+
+    From the node's own span rather than from an instruction, because not
+    every node has one: calls.py's restore idiom is a single node covering
+    four bytes and three instructions, and it is in every object this pass
+    has already absorbed a call in.
+    """
+    if op.node is None:
+        return None
+    lo, hi = ir.span(op.node)
+    return hi - lo
 
 
 def _semantics(op: mir.Op) -> ir.Semantics | None:
@@ -214,6 +222,9 @@ def _emitted(ops: list, at: int, found: Module) -> Laid | str:
         if isinstance(op, Table):
             lengths[op.at] = op.hi - op.lo
             continue
+        if isinstance(op.node, ir.Restore):
+            lengths[op.at] = _length_of(op) or 0
+            continue
         what = _semantics(op)
         if what is None:
             return f"{op.at:#06x}: {op.name} has no semantics to select from"
@@ -262,6 +273,12 @@ def _emitted(ops: list, at: int, found: Module) -> Laid | str:
             out += found.code[op.lo : op.hi]
             for field in sorted(one for one in found.fixup_at if op.lo <= one < op.hi):
                 relocations.append((moved[op.at] - at + (field - op.lo), field))
+            continue
+        if isinstance(op.node, ir.Restore):
+            made = select.restore(op.node.pair)
+            if made is None or len(made.code) != lengths[op.at]:
+                return f"{op.at:#06x}: the restore idiom did not come back its own length"
+            out += made.code
             continue
         before = _semantics(op)
         if before is None:

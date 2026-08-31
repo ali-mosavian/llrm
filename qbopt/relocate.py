@@ -448,7 +448,10 @@ def as_records(
             index, at = omf._index(record.body, 0)
             if index == seg:
                 if n == last:
-                    out += _code_block(seg, image, placed, moved, kept)
+                    block = _code_block(seg, image, placed, moved, kept)
+                    if isinstance(block, str):
+                        return block
+                    out += block
                     written = True
                 continue
         if kind == omf.FIXUPP and id(record) in drop:
@@ -472,17 +475,49 @@ def as_records(
     return _resized(out, seg, len(image))
 
 
+def _boundaries(image: bytes, moved: dict[int, int], kept: int) -> list[int]:
+    """Where the code may be cut into records.
+
+    Not every 1024 bytes: a fixup patches two or four bytes and cannot be
+    split across two records, and an arbitrary cut lands in the middle of
+    one. `cmpof` under QuickBASIC /O has a fixup at 0x3ff whose field runs
+    to 0x401, and LINK rejects the object outright -- `invalid object
+    module`, the same unhelpful line an out-of-order EXTDEF gives.
+
+    So the cuts go on instruction boundaries, which layout knows and which
+    no field ever straddles. The largest one that still fits in a record,
+    each time.
+    """
+    starts = sorted({kept, *moved.values()})
+    cuts = [0]
+    while cuts[-1] < len(image):
+        limit = cuts[-1] + LEDATA_LIMIT
+        if limit >= len(image):
+            cuts.append(len(image))
+            break
+        fits = [one for one in starts if cuts[-1] < one <= limit]
+        if not fits:
+            # No instruction starts in reach, so nothing here can be cut
+            # safely; the caller finds out rather than a wrong object being
+            # written.
+            return []
+        cuts.append(fits[-1])
+    return cuts
+
+
 def _code_block(
     seg: int,
     image: bytes,
     placed: list[tuple[int, omf.Fixup]],
     moved: dict[int, int],
     kept: int,
-) -> list[omf.Record]:
+) -> list[omf.Record] | str:
     """The whole image as LEDATA records, each followed by its own fixups."""
+    cuts = _boundaries(image, moved, kept)
+    if not cuts:
+        return "the image cannot be cut into records on instruction boundaries"
     out: list[omf.Record] = []
-    for start in range(0, len(image), LEDATA_LIMIT):
-        end = min(start + LEDATA_LIMIT, len(image))
+    for start, end in zip(cuts, cuts[1:], strict=False):
         out.append(omf.ledata_record(seg, start, image[start:end]))
         mine = []
         for offset, fixup in placed:

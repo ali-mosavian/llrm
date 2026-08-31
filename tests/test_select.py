@@ -65,10 +65,17 @@ def test_mixed_widths_are_refused_rather_than_guessed() -> None:
 
 
 def test_registers_this_does_not_name_are_refused() -> None:
-    """bp and the segment registers are where values live, not values."""
-    assert select.move(Register.EBP, Register.EAX) is None
+    """A segment register is not one this names.
+
+    bp and sp are, and have to be: a procedure opens `push bp / mov bp,sp`
+    and closes by popping it back, so a selector that could not say them
+    could not emit a prologue. They are still not values -- mir.PHYSICAL
+    keeps them out -- which is a different question from whether an
+    instruction can name them.
+    """
     assert select.move(Register.EAX, Register.ES) is None
-    assert select.move(Register.ESP, Register.EAX) is None
+    assert select.move(Register.ES, Register.EAX) is None
+    assert select.move(Register.EBP, Register.ESP) is not None
 
 
 # --- M1: selection over the corpus -------------------------------------------
@@ -150,7 +157,7 @@ def test_the_covered_share_of_the_corpus_is_what_was_measured() -> None:
                         continue
                     if select.emit(what, at=op.at) is not None:
                         emitted += 1
-    assert (total, emitted) == (20245, 20055)
+    assert (total, emitted) == (20245, 20062)
 
 
 def test_a_wide_push_is_not_a_narrow_one() -> None:

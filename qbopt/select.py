@@ -35,8 +35,13 @@ from qbopt.module import Space
 from qbopt.declen import BITNESS
 
 # The 32-bit roots this can name, and their 16-bit halves.
-_WIDE = {Register.EAX, Register.ECX, Register.EDX, Register.EBX, Register.ESI, Register.EDI}
-_NARROW = {Register.AX, Register.CX, Register.DX, Register.BX, Register.SI, Register.DI}
+# The six mir.py tracks, plus bp and sp. Those two are not values -- they
+# are where values live -- but they are still registers an instruction
+# names, and every procedure opens `push bp / mov bp,sp` and closes by
+# popping it back. A selector that could not say them could not emit a
+# prologue.
+_WIDE = {Register.EAX, Register.ECX, Register.EDX, Register.EBX, Register.ESI, Register.EDI, Register.EBP, Register.ESP}
+_NARROW = {Register.AX, Register.CX, Register.DX, Register.BX, Register.SI, Register.DI, Register.BP, Register.SP}
 
 
 @dataclass(frozen=True, slots=True)
@@ -573,6 +578,57 @@ def arith_into(name: str, cell: ir.Mem, source: Register_, at: int = 0) -> Emitt
     return _assemble(Instruction.create_mem_reg(code, where, source), at)
 
 
+# calls.py's own restore idiom, byte for byte: push the root, pop the two
+# halves back. It is one node with no single instruction behind it, so it is
+# named here rather than selected -- there is nothing to choose.
+RESTORE = {
+    0: bytes([0x66, 0x50, 0x58, 0x5A]),  # push eax / pop ax / pop dx
+    1: bytes([0x66, 0x51, 0x59, 0x5B]),  # push ecx / pop cx / pop bx
+}
+
+
+def restore(pair: int) -> Emitted | None:
+    """The idiom that puts a widened value's halves back where BC reads them."""
+    made = RESTORE.get(pair)
+    return None if made is None else Emitted(made)
+
+
+def divide(name: str, divisor: Register_, at: int = 0) -> Emitted | None:
+    """`idiv` or `div` by a register.
+
+    One named operand: the dividend is edx:eax and the quotient and
+    remainder come back in them, which is why ir.Semantics gives this two
+    dests and three sources and none of them are encoded.
+    """
+    if name not in ("idiv", "div"):
+        return None
+    width = WIDTHS.get(divisor)
+    if width is None:
+        return None
+    code = _code(f"{name.upper()}_RM{width * 8}")
+    return None if code is None else _assemble(Instruction.create_reg(code, divisor), at)
+
+
+def address_of(into: Register_, cell: ir.Address, at: int = 0) -> Emitted | None:
+    """`lea into,[cell]` -- the address as a value, reading no memory."""
+    width = WIDTHS.get(into)
+    if width is None or cell.addr is None:
+        return None
+    built = operand_of(ir.Mem(cell.addr, width))
+    if built is None:
+        return None
+    code = _code(f"LEA_R{width * 8}_M")
+    if code is None:
+        return None
+    where, _relocated = built
+    return _assemble(Instruction.create_reg_mem(code, into, where), at)
+
+
+def compare_mem(dest: Register_, cell: ir.Mem, at: int = 0) -> Emitted | None:
+    """`cmp dest,[cell]`. Flags are the whole result, so there is no dest."""
+    return arith_mem("cmp", dest, cell, at)
+
+
 def emit(
     what: ir.Semantics,
     at: int = 0,
@@ -641,9 +697,23 @@ def emit(
                 case ir.Mem() as cell:
                     return float_memory(what.name or "", cell, at)
         case ir.Operation.COMPARE if len(sources) == 2:
-            match sources[1]:
-                case ir.Imm(value=value):
+            match (sources[0], sources[1]):
+                case (_, ir.Imm(value=value)):
                     return compare(sources[0], value, at)
+                case (ir.Reg(register=into), ir.Mem() as cell):
+                    return compare_mem(_remapped(into, where), cell, at)
+                case (ir.Reg(register=into), ir.Reg(register=outof)):
+                    return arith("cmp", _remapped(into, where), _remapped(outof, where), at)
+                case (ir.Mem() as cell, ir.Reg(register=outof)):
+                    return arith_into("cmp", cell, _remapped(outof, where), at)
+        case ir.Operation.DIVIDE if sources:
+            match sources[-1]:
+                case ir.Reg(register=one):
+                    return divide(what.name or "", _remapped(one, where), at)
+        case ir.Operation.ADDRESS if len(dests) == 1 and len(sources) == 1:
+            match (dests[0], sources[0]):
+                case (ir.Reg(register=into), ir.Address() as cell):
+                    return address_of(_remapped(into, where), cell, at)
         case ir.Operation.EXTEND | ir.Operation.NOTHING:
             return bare(what.name or "", at)
         case ir.Operation.FLOAT_UNARY | ir.Operation.FLOAT_ARITH if not any(

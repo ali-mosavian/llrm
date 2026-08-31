@@ -111,3 +111,35 @@ def test_a_segment_this_pass_wrote_links_and_runs(tag: str, prog: str) -> None:
     assert seen and seen[0] == REBUILT, f"{tag}/{prog} did not rebuild: {seen}"
     bad = [one for one in result.verdicts if not one.ok]
     assert not bad, f"{tag}/{prog}: {bad[0].status} {bad[0].detail}"
+
+
+@pytest.mark.parametrize("tag", [t for t in REBUILDING_TAGS if t in CONFIGS and CONFIGS[t].available])
+def test_optimised_code_this_pass_wrote_links_and_runs(tag: str) -> None:
+    """The milestone: code that is both optimised and MIR's own.
+
+    Absorption removes the runtime calls, which is where every measured win
+    in this project comes from, and then the whole segment is laid out and
+    written from MIR rather than patched. Half the suite's objects go
+    through both on these compilers; the rest fall back to absorption alone
+    because select.py cannot yet emit something in them.
+
+    Whether the composition is sound is not a host question. It took two
+    bugs neither the host suite nor a byte comparison could see: fixups
+    naming an EXTDEF that had not been read, and a fixup field split across
+    a record boundary. LINK calls both `invalid object module`.
+    """
+    from qbopt.rewrite import rewrite
+    from qbopt.wholeseg import REBUILT
+    from qbopt.wholeseg import rebuilt
+
+    seen: list[str] = []
+
+    def change(data: bytes) -> bytes:
+        out, why = rebuilt(rewrite(data, dry_run=False)[0])
+        seen.append(why)
+        return out
+
+    result = e2e.run(tag, None, dry_run=False, transform=change, work=Path("build/e2e") / f"{tag}-opt")
+    assert REBUILT in seen, f"{tag}: nothing was emitted from MIR"
+    bad = [one for one in result.verdicts if not one.ok]
+    assert not bad, f"{tag}: {bad[0].status} {bad[0].program}: {bad[0].detail}"
