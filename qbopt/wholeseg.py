@@ -23,11 +23,12 @@ from qbopt import omf
 from qbopt import layout
 from qbopt import module
 from qbopt import relocate
+from qbopt import transform
 from qbopt import blocks as split
 from qbopt.blocks import code_map
 
 
-def rebuilt(data: bytes) -> tuple[bytes, str]:
+def rebuilt(data: bytes, optimise: bool = True, native_fpu: bool = False) -> tuple[bytes, str]:
     """The object with its code segment rewritten, and what happened.
 
     Returns the input unchanged where anything refuses, so a caller can use
@@ -46,11 +47,20 @@ def rebuilt(data: bytes) -> tuple[bytes, str]:
     if not bodies:
         return data, "no bodies were raised"
 
+    # Optimised as values before being written as bytes. transform.py's own
+    # docstring has why every original byte still has to be accounted for
+    # after a deletion; `optimise=False` emits the body exactly as raised,
+    # which is what a caller bisecting a layout question wants.
+    if optimise:
+        bodies = [
+            (name, transform.applied(body, found.dgroup, found.calls)) for name, body in bodies
+        ]
+
     # Every byte the decoder walked into, so layout.py can tell a gap it may
     # carry from one that is real code it simply did not raise.
     reached = frozenset(at for block in blocks for insn in block.insns for at in range(insn.at, insn.end))
     fields = frozenset(one.offset for one in omf.fixups(records) if one.seg == found.seg)
-    laid = layout.rebuild(found, bodies, mapped.tables, fields, reached)
+    laid = layout.rebuild(found, bodies, mapped.tables, fields, reached, native_fpu)
     if isinstance(laid, str):
         return data, laid
 

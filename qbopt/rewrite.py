@@ -777,12 +777,12 @@ def rewrite(
         out, found = _once(data, dry_run=False, native_fpu=native_fpu)
         regions += found
         if out == data or not any(one.taken for one in found):
-            return _written(out, whole_segment), regions
+            return _written(out, whole_segment, native_fpu), regions
         data = out
-    return _written(data, whole_segment), regions
+    return _written(data, whole_segment, native_fpu), regions
 
 
-def _written(data: bytes, whole_segment: bool) -> bytes:
+def _written(data: bytes, whole_segment: bool, native_fpu: bool = False) -> bytes:
     """The object with its code segment emitted from MIR, where that works.
 
     Every edit above patches BC's own bytes in place and keeps the layout BC
@@ -802,7 +802,7 @@ def _written(data: bytes, whole_segment: bool) -> bytes:
     """
     if not whole_segment:
         return data
-    out, _why = wholeseg.rebuilt(data)
+    out, _why = wholeseg.rebuilt(data, native_fpu=native_fpu)
     return out
 
 
