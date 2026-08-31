@@ -135,12 +135,18 @@ source is gone by then" refusals in `simplify.py` and `avail.py` disappear.
 
 ## M3 — the classic passes
 
-Each needs M1; anything that moves code needs M2.
+Each needs M1; anything that moves code needs M2. **All of them measure
+empty on BC's output**, which reorders the rest of this file: the wins are
+in absorption, not in the textbook passes.
 
-- [ ] constant folding — give `consts.known()` an emitter
-- [ ] dead code elimination — an op whose result nothing reads
-- [ ] CSE — measured 0 sites over SSA values; re-measure once loads are values, not memory
-- [ ] LICM — `loops.py` has the structure and no consumer
+- [x] constant folding — measured, not built: 1,086 results are known
+      constants and every one comes out *longer*, because `xor ax,ax` is
+      two bytes and `mov ax,0` is three
+- [x] dead code elimination — measured, not built: BC emits none
+- [x] CSE — measured, not built: 0 sites over SSA values, because BC
+      reloads from memory rather than recomputing, and the memory
+      redundancy `avail.py` finds is the same thing by another name
+- [ ] LICM — `loops.py` has the structure and no consumer. Unmeasured
 - [ ] array access — the index computation is the invariant worth hoisting
 
 ## M4 — registers
@@ -174,7 +180,11 @@ here will surface it and only a real program will.
 Done when the old path is deleted, not when MIR also does it.
 
 - [ ] widening — `lift.py`; `wide.py` has the analysis
-- [ ] absorption and strength reduction — `calls.py`
+- [ ] absorption and strength reduction — `calls.py`. Measured: 831 of the
+      corpus's 923 absorbable calls have something other than a push
+      immediately before them, so recovering the arguments needs the
+      block-scoped depth model `stack.py` already has, restated over
+      `Space.STACK`. Parity work: the same optimisation either way
 - [ ] load forwarding — `forward.py`; `avail.py` has the cross-block half
 - [ ] dead stores — `memory.py`
 - [ ] native x87 — `fpu.py`
