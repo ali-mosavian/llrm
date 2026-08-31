@@ -108,6 +108,11 @@ def divmod_() -> list[str]:
     lines.append(f"DIVBIG={num(divide(b, a))}")
     lines.append(f"MODBIG={num(remainder(b, a))}")
     lines.append(f"MULSMALL={num(s32(a * 3))}")
+    # a literal power-of-two divisor, the only shape calls.py's shift-with-bias
+    # fires on -- every divisor above is a variable and reaches none of it
+    for n, (x, y) in enumerate(((-7, 2), (-7, 512), (-1000000, 512), (1000000, 512)), start=1):
+        lines.append(f"SHDIV{n}={num(divide(x, y))}")
+        lines.append(f"SHMOD{n}={num(remainder(x, y))}")
     # and it does not raise on multiply overflow either -- it wraps, which is
     # what imul does, which is why multiply is absorbed and divide is not
     lines.append(f"MULOVF={num(0)}")
