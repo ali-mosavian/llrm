@@ -189,6 +189,29 @@ conclusion.)
 This is the correctness result, not a speed result. The speed is behind the
 refusals above.
 
+### What emitting the segment costs
+
+Re-measured 2026-08-31, code bytes only, `v-g3`.
+
+| | fixtures/omf (155) | qb-qrender (15) |
+|---|---|---|
+| BC | 95,189 | 74,855 |
+| absorbed | 89,665 (-5.80%) | 76,198 (+1.79%) |
+| absorbed, then MIR-written | 89,464 (-6.01%) | 75,582 (+0.97%) |
+
+**Writing the segment from MIR is not a size cost. It pays for about half of
+what absorption costs qb-qrender**, and it took four encodings to get there:
+the byte-immediate push, a byte displacement through a base register, the
+accumulator's own arithmetic opcode, the by-1 shift, and the byte immediate
+in a memory compare.
+
+Before those, the same table read +2,776 bytes for qb-qrender, +3.6% on top
+of absorption. **The corpus could not see any of it** -- it came out 3 bytes
+shorter either way, because suite programs push addresses rather than small
+constants and index nothing through a register. Every one of those five
+encodings is something BC writes constantly in a real program and almost
+never in a thirty-line one.
+
 ## Modelled
 
 `qbopt/price.py` prices what is in the object. That is the right answer for a
