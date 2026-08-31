@@ -40,9 +40,12 @@ lowering has no way to emit. Conservative here is the honest floor.
 
 from dataclasses import dataclass
 
+from iced_x86 import Register_
+
 from qbopt import mir
 from qbopt.mir import Op
 from qbopt import runtime
+from qbopt import regalloc
 from qbopt.mir import Value
 from qbopt.mir import MemRef
 from qbopt.mir import MirBody
@@ -202,3 +205,55 @@ def provider(
                 return next((who for one, who in current.items() if mir.same_bytes(one, ref)), None)
             current = _after(op, current, dgroup, calls)
     return None
+
+
+@dataclass(frozen=True, slots=True)
+class Forward:
+    """A redundant memory read whose bytes are in a live register."""
+
+    at: int
+    root: Register_  # the 32-bit root holding them; the operand picks the width
+
+
+def forwardable(
+    body: MirBody,
+    dgroup: frozenset[int],
+    calls: dict[int, str],
+    want: frozenset[int],
+) -> tuple[Forward, ...]:
+    """The reads in `want` that a register can serve instead of memory.
+
+    Both halves of the join, and neither is enough alone: the cell's
+    content has to be known (`want`, from memory.redundant_loads) and the
+    value holding it has to still be live here (regalloc.live). BC spills
+    across calls, and the reload after one is real work -- 42 of the
+    corpus's redundant reads have a provider that is dead by the time they
+    run, and every one of nbody's 27 does.
+
+    What the caller does with this is substitute the *operand*, not the
+    instruction: `add ax,[y]` becomes `add ax,si`, which leaves the
+    destination alone and so needs nothing downstream rewritten. That is
+    why an accumulate is safe here and was not safe to delete.
+    """
+    held = holders(body, dgroup, calls)
+    alive = regalloc.live(body)
+    found: list[Forward] = []
+
+    for block in body.blocks:
+        current = dict(held.into[block.at])
+        # Live at each op, walked backwards once and indexed rather than
+        # recomputed: liveness is a property of the point, and the point
+        # this asks about is just before the op runs.
+        after = set(alive.live_out[block.at])
+        at_point: dict[int, frozenset[Value]] = {}
+        for op in reversed(block.ops):
+            at_point[op.at] = frozenset(after)
+            after = (after - set(op.defines)) | set(op.uses)
+
+        for op in block.ops:
+            if op.at in want and op.loads:
+                who = next((w for cell, w in current.items() if mir.same_bytes(cell, op.loads[0])), None)
+                if who is not None and who in at_point.get(op.at, frozenset()):
+                    found.append(Forward(op.at, who.of))
+            current = _after(op, current, dgroup, calls)
+    return tuple(found)

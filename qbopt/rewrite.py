@@ -19,11 +19,14 @@ from dataclasses import dataclass
 
 from iced_x86 import Register
 
+from qbopt import mir
 from qbopt import omf
+from qbopt import avail
 from qbopt import memory
 from qbopt import module
 from qbopt import forward
 from qbopt.lift import Op
+from qbopt import reencode
 from qbopt.flags import ALL
 from qbopt.lift import lift
 from qbopt.lift import tail
@@ -345,9 +348,72 @@ def plan(
         )
     for one in _dropped(found, mapped, blocks, reached, planned):
         planned.append(Planned(replace(one.region, id=len(planned)), one.edit))
+    for one in _substituted(found, mapped, blocks, reached, planned):
+        planned.append(Planned(replace(one.region, id=len(planned)), one.edit))
 
     planned = drop_restore_repush_round_trips(found, mapped, planned)
     return drop_chained_crossings(planned, found.chunks)
+
+
+def _substituted(
+    found: module.Module,
+    mapped: CodeMap,
+    blocks: list[Block],
+    reached: list[Insn],
+    planned: list[Planned],
+) -> list[Planned]:
+    """Reads served from a register instead of memory, cross-block.
+
+    The one join docs/architecture.md marks as open, and the first thing
+    routed through the MIR tower to the output. memory.py says the cell's
+    content is known; avail.py says which value holds it, across blocks;
+    regalloc.py says that value is still live here. All three, or the read
+    stays -- BC spills across calls, and the reload after one is real work.
+
+    The operand is what changes, never the instruction. `add ax,[y]`
+    becomes `add ax,si`, so the destination is untouched and nothing
+    downstream is rewritten. That is what makes an accumulate safe here:
+    forward.py deleting `and cx,[x]` threw the and away, and substituting
+    its operand keeps it. Measured over the corpus: 73 reads, two bytes
+    each, and every one of them an accumulate.
+    """
+    at_of = {insn.at: insn for insn in reached}
+    reported = memory.redundant_loads(blocks, found.resolve, found.calls, found.dgroup)
+    want = frozenset(at for where in reported.values() for at in where)
+    if not want:
+        return []
+
+    out: list[Planned] = []
+    for _, body in mir.bodies(found, blocks):
+        for one in avail.forwardable(body, found.dgroup, found.calls, want):
+            insn = at_of.get(one.at)
+            if insn is None:
+                continue
+            emitted = reencode.with_operand(insn, one.root)
+            if emitted is None:
+                continue
+            reason = anchored_inside(found, mapped, insn.at, insn.end)
+            if reason is None and any(
+                other.edit and other.edit.lo < insn.end and insn.at < other.edit.hi for other in planned + out
+            ):
+                reason = "it overlaps a region already taken"
+            edit = None if reason else Edit(insn.at, insn.end, emitted.code, ())
+            out.append(
+                Planned(
+                    Region(
+                        id=0,
+                        seg=found.seg,
+                        at=insn.at,
+                        end=insn.end,
+                        before=found.code[insn.at : insn.end].hex(),
+                        after=emitted.code.hex() if edit is not None else None,
+                        taken=edit is not None,
+                        reason=reason,
+                    ),
+                    edit,
+                )
+            )
+    return out
 
 
 def _dropped(

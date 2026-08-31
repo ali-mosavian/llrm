@@ -561,3 +561,27 @@ def overlapping(one: MemRef, other: MemRef, dgroup: frozenset[int]) -> bool:
     if one.base is not None and one.base == other.base and one.addr.space is other.addr.space:
         return one.addr.disp < other.addr.disp + other.width and other.addr.disp < one.addr.disp + one.width
     return module.may_alias(one.addr, other.addr, dgroup, one.width, other.width)
+
+
+def bodies(found: Module, blocks: list[Block]) -> list[tuple[str, MirBody]]:
+    """Every body in the module, raised, labelled, and skipping what will not.
+
+    One place rather than three: dump.py, the measurement scripts and now
+    rewrite.py all need the same walk, and the part worth not rewriting
+    twice is the block-to-body assignment -- a procedure is reached by a
+    call, which is not a CFG edge, so raise_body() has to be handed one
+    body's blocks and no others.
+    """
+    result = ir.decode_module(found)
+    if isinstance(result, str):
+        return []
+    nodes = {ir.span(node)[0]: node for body in result for node in body.nodes}
+    out: list[tuple[str, MirBody]] = []
+    for body in result:
+        mine = [one for one in blocks if any(lo <= one.at < hi for lo, hi in body.body.ranges)]
+        if not mine:
+            continue
+        built = raise_body(mine, nodes, body.body.seed, found.calls)
+        if not isinstance(built, str):
+            out.append((f"{body.body.kind} {body.body.name or '(main)'}", built))
+    return out

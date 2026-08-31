@@ -32,13 +32,17 @@ is the only moment it is free.
 
 from dataclasses import dataclass
 
+from iced_x86 import OpKind
 from iced_x86 import Decoder
 from iced_x86 import Encoder
 from iced_x86 import Register
 from iced_x86 import Register_
+from iced_x86 import MemorySizeExt
 
 from qbopt.ir import ROOT
+from qbopt.declen import INFO
 from qbopt.declen import Insn
+from qbopt.declen import WRITES
 from qbopt.declen import BITNESS
 
 # How many operands iced will report a register for. Nothing BC emits has
@@ -158,3 +162,64 @@ def with_registers(insn: Insn, mapping: dict[Register_, Register_]) -> Emitted |
     offsets = decoder.get_constant_offsets(decoded)
     where = offsets.displacement_offset if offsets.has_displacement else None
     return Emitted(code, where)
+
+
+def with_operand(insn: Insn, root: Register_) -> Emitted | None:
+    """`insn` with its memory operand read from `root` instead, or None.
+
+    The other half of forwarding, and the half that works on a two-address
+    machine. Remapping a *use* to point at the provider's register changes
+    where the result lands too -- `add ax,[y]` is `ax = ax + [y]`, so
+    pointing it at si makes it `si = si + ...`. Replacing the memory
+    operand changes only where the second operand is read from:
+
+        add ax,[bp-18h]  ->  add ax,si
+
+    The destination is untouched, so nothing downstream needs rewriting,
+    and it works for every consumer shape rather than only for loads. An
+    accumulate keeps accumulating -- which is what makes this safe where
+    deleting the instruction was not.
+
+    Refuses when the memory operand is not exactly one of the operands, or
+    when the root has no name at the operand's width, or when the result
+    would not be shorter -- reading a register instead of an address should
+    always save the displacement, and an encoding that does not is one this
+    does not understand.
+    """
+    changed = insn.insn.copy()
+    where = [index for index in range(min(changed.op_count, MAX_OPERANDS)) if changed.op_kind(index) == OpKind.MEMORY]
+    if len(where) != 1:
+        return None
+
+    # The memory operand has to be read and not written. `cmp [x],1` is a
+    # comparison and substituting it is sound; `add [x],1` writes its result
+    # back to [x], and `add ax,1` writes it to ax instead -- the store to
+    # memory silently disappears. Two of the twelve real-compiler
+    # configurations failed on exactly that before this check.
+    if any(one.access in WRITES for one in INFO.info(insn.insn).used_memory()):
+        return None
+
+    width = MemorySizeExt.size(changed.memory_size)
+    if width == 4:
+        found: Register_ | None = root
+    else:
+        found = _FAMILIES.get(width, {}).get(root, Register.NONE)
+        if found is Register.NONE:
+            found = None
+    if found is None:
+        return None
+
+    changed.set_op_kind(where[0], OpKind.REGISTER)
+    changed.set_op_register(where[0], found)
+    changed.ip = insn.at
+
+    encoder = Encoder(BITNESS)
+    try:
+        encoder.encode(changed, insn.at)
+    except ValueError:
+        return None
+
+    code = encoder.take_buffer()
+    if len(code) >= insn.length:
+        return None
+    return Emitted(code, None)
