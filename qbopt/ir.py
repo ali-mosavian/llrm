@@ -214,6 +214,7 @@ class Operation(StrEnum):
     BRANCH = "branch"  # conditional on the flags, to `target`
     CALL = "call"
     RETURN = "ret"
+    NOTHING = "nothing"  # computes nothing, transfers nowhere, touches no flag
     RESTORE = "restore"  # calls.py's own idiom -- see Restore
     DATA = "data"  # not an instruction at all -- see Data
     OPAQUE = "opaque"
@@ -488,6 +489,11 @@ def _call(insn: Insn, _resolve: Resolver, op: Operation, name: str) -> Semantics
     return Semantics(op, name, target=insn.target)
 
 
+def _nothing(insn: Insn, _resolve: Resolver, op: Operation, name: str) -> Semantics | None:
+    """An instruction that does nothing at all -- padding between bodies."""
+    return Semantics(op, name) if insn.insn.op_count == 0 else None
+
+
 def _return(insn: Insn, resolve: Resolver, op: Operation, name: str) -> Semantics | None:
     match insn.insn.op_count:
         case 0:
@@ -514,6 +520,7 @@ BUILD: dict[Operation, Builder] = {
     Operation.BRANCH: _transfer,
     Operation.CALL: _call,
     Operation.RETURN: _return,
+    Operation.NOTHING: _nothing,
 }
 
 # The vocabulary, keyed on the mnemonic rather than on iced's Code so that
@@ -525,9 +532,20 @@ BUILD: dict[Operation, Builder] = {
 #
 # What is deliberately absent, and stays Operation.OPAQUE: the x87 emulator's
 # own int 34h-3Dh sites (declen.py decodes their length; floats are a later
-# phase entirely), `retf n`, `push cs`/`push ss`/`pop es`, `stosw`, `leave`,
-# one-operand `imul`, a byte-wide `idiv`, and a far `jmp`. Refusing is always
+# phase entirely), `push cs`/`push ss`/`pop es`, `stosw`, `leave`, one-operand
+# `imul`, a byte-wide `idiv`, `in`/`out`, and a far `jmp`. Refusing is always
 # safe; a wrong effect is not.
+#
+# A far `jmp` stays out for a reason worth stating: where it goes is not in
+# the instruction, so nothing here can build the edge, and measured it is
+# every one of the 14 event-poll stubs and nothing else -- bodies /V and /W
+# produce, which this pass does not optimise anyway.
+#
+# RETF is its own mnemonic rather than a form of RET, which is why it was
+# absent: _return already handled both its shapes. Measured, that one line
+# is the whole reason no procedure in the corpus could be lifted -- every
+# one of the 31 ends in `retf n`, and one unmodelled epilogue refuses the
+# body it closes.
 SHAPE: dict[int, tuple[Operation, str]] = {
     Mnemonic.MOV: (Operation.MOVE, "mov"),
     Mnemonic.LEA: (Operation.ADDRESS, "lea"),
@@ -538,6 +556,9 @@ SHAPE: dict[int, tuple[Operation, str]] = {
     Mnemonic.AND: (Operation.BINARY, "and"),
     Mnemonic.OR: (Operation.BINARY, "or"),
     Mnemonic.XOR: (Operation.BINARY, "xor"),
+    Mnemonic.SHL: (Operation.BINARY, "shl"),
+    Mnemonic.SHR: (Operation.BINARY, "shr"),
+    Mnemonic.SAR: (Operation.BINARY, "sar"),
     Mnemonic.IMUL: (Operation.MULTIPLY, "imul"),
     Mnemonic.IDIV: (Operation.DIVIDE, "idiv"),
     Mnemonic.CMP: (Operation.COMPARE, "cmp"),
@@ -548,11 +569,13 @@ SHAPE: dict[int, tuple[Operation, str]] = {
     Mnemonic.DEC: (Operation.UNARY, "dec"),
     Mnemonic.CWD: (Operation.EXTEND, "cwd"),
     Mnemonic.CDQ: (Operation.EXTEND, "cdq"),
+    Mnemonic.NOP: (Operation.NOTHING, "nop"),
     Mnemonic.PUSH: (Operation.PUSH, "push"),
     Mnemonic.POP: (Operation.POP, "pop"),
     Mnemonic.JMP: (Operation.JUMP, "jmp"),
     Mnemonic.CALL: (Operation.CALL, "call"),
     Mnemonic.RET: (Operation.RETURN, "ret"),
+    Mnemonic.RETF: (Operation.RETURN, "retf"),
     Mnemonic.JA: (Operation.BRANCH, "ja"),
     Mnemonic.JAE: (Operation.BRANCH, "jae"),
     Mnemonic.JB: (Operation.BRANCH, "jb"),

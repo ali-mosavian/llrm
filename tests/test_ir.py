@@ -17,6 +17,7 @@ from iced_x86 import Register_
 from qbopt import ir
 from qbopt import omf
 from helpers import hx
+from qbopt import extent
 from qbopt import module
 from qbopt.flags import ALL
 from qbopt.flags import Flag
@@ -419,7 +420,6 @@ def test_not_writes_no_flags() -> None:
 @pytest.mark.parametrize(
     ("code", "why"),
     [
-        ("CA 04 00", "retf n"),
         ("0E", "push cs"),
         ("16", "push ss"),
         ("07", "pop es"),
@@ -473,7 +473,6 @@ def test_semantics_never_claims_a_register_or_cell_the_effects_do_not(mapped_obj
 # a coverage floor with slack in it: an encoding leaving this set is a
 # regression, and one joining it is a decision to make deliberately.
 REFUSED = {
-    Code.RETFW_IMM16,
     Code.PUSHW_CS,
     Code.PUSHW_SS,
     Code.POPW_ES,
@@ -507,3 +506,58 @@ def test_a_restore_and_a_table_carry_their_own_operations() -> None:
     assert ir.RESTORE_IDIOM.op is ir.Operation.RESTORE
     assert ir.TABLE_DATA.op is ir.Operation.DATA
     assert ir.modelled(ir.UNMODELLED) is False
+
+
+@pytest.mark.parametrize(
+    ("code", "op", "name"),
+    [
+        ("CB", ir.Operation.RETURN, "retf"),
+        ("CA 04 00", ir.Operation.RETURN, "retf"),
+        ("C1 E6 02", ir.Operation.BINARY, "shl"),
+        ("D1 EE", ir.Operation.BINARY, "shr"),
+        ("C1 FE 02", ir.Operation.BINARY, "sar"),
+        ("90", ir.Operation.NOTHING, "nop"),
+    ],
+)
+def test_the_frame_and_shift_forms_are_modelled(code: str, op: ir.Operation, name: str) -> None:
+    found = _semantics(code)
+    assert found.op is op
+    assert found.name == name
+
+
+def test_a_shift_reads_its_own_destination() -> None:
+    """shl si,2 is dest <- dest shl 2 -- the shape _binary already models, and
+    a value number keyed on it has to see si on both sides."""
+    found = _semantics("C1 E6 02")
+    assert found.dests[0] == found.sources[0]
+    assert isinstance(found.sources[1], ir.Imm)
+
+
+def test_a_far_return_carries_the_bytes_it_pops() -> None:
+    """`retf 4` is callee cleanup, and the count is the calling convention --
+    the one thing a lowering pass must reproduce exactly."""
+    found = _semantics("CA 04 00")
+    assert found.sources == (ir.Imm(value=4, width=2),)
+
+
+def test_every_procedure_but_the_two_known_ones_lifts(fixtures: Path) -> None:
+    """A procedure ends in `retf n`, so leaving RETF unmodelled refused every
+    one of them -- 0 of 30 in these fixtures before it landed. The one that
+    still refuses is procs-p-ot's TWICE, whose /Ot prologue zeroes its frame
+    with push ss / pop es / rep stosw and closes with leave.
+    """
+    liftable = refused = 0
+    for path in sorted(fixtures.glob("*.obj")):
+        found = module.load(path)
+        assert found is not None
+        result = ir.decode_module(found)
+        if isinstance(result, str):
+            continue
+        for body_ir in result:
+            if body_ir.body.kind is not extent.BodyKind.PROCEDURE:
+                continue
+            if all(ir.modelled(node.semantics) for node in body_ir.nodes):
+                liftable += 1
+            else:
+                refused += 1
+    assert (liftable, refused) == (29, 1), "a procedure joining or leaving this is a decision"
