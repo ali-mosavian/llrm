@@ -88,7 +88,16 @@ def test_the_map_reaches_a_fixed_point(obj: Path) -> None:
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
 def test_no_entry_survives_a_store_that_could_reach_it(obj: Path) -> None:
-    """The kill is the only thing keeping this sound."""
+    """The kill is the only thing keeping this sound.
+
+    A call is the one exception, and the reason it is one is runtime.py: a
+    routine established to write no caller memory keeps the map, even though
+    mir.py gives every call a store of MemRef(addr=None) that aliases
+    everything. That is not this rule being bent -- the store is the default
+    for a callee nothing is known about, and knowing something is what
+    replaces it. B$MUI4 has always been such a routine; the fpemu fixtures
+    added six more, and are what first put a surviving entry across one.
+    """
     found = corpus.loaded(obj)
     assert found is not None
     for body in bodies_of(found, corpus.partitioned(obj)):
@@ -96,7 +105,10 @@ def test_no_entry_survives_a_store_that_could_reach_it(obj: Path) -> None:
         for block in body.blocks:
             current = dict(held.into[block.at])
             for op in block.ops:
+                clean = op.at in found.calls and avail._clean(op, found.calls)
                 current = avail._after(op, current, found.dgroup, found.calls)
+                if clean:
+                    continue
                 for ref in op.stores:
                     kept = avail.stored_from(op)
                     for cell in current:
@@ -149,18 +161,22 @@ def test_a_memory_clean_call_does_not_wipe_the_map() -> None:
 def test_the_corpus_split_is_what_was_measured() -> None:
     """73 reads have a live value holding their bytes, 48 a dead one.
 
-    A canary. If it moves, something changed the join and the reason
-    should be nameable before this number is edited. It last moved when the
-    fpemu fixtures arrived: 42 dead became 48 and 366 with no provider
-    became 408, all of it float code, and the live count did not move at all
-    -- a reload whose provider is on the x87 stack is not one a register can
-    serve.
+    A canary. If it moves, something changed the join and the reason should
+    be nameable before this number is edited. It has moved twice, both times
+    for float code and neither time in the live count -- a reload whose
+    provider is on the x87 stack is not one a register can serve.
+
+    The fpemu fixtures took 42 dead to 48 and 366 with no provider to 408.
+    Then 87bhelp.asm's contracts took the total from 529 to 553: knowing
+    that B$FILD and the rest write no caller memory means a cell established
+    before one is still that value after, so memory.py finds 24 reads
+    redundant that it used to give up on at the call.
     """
     total = {"live": 0, "dead": 0, "none": 0}
     for obj in FIXTURES:
         for key, count in split(obj).items():
             total[key] += count
-    assert total == {"live": 73, "dead": 48, "none": 408}
+    assert total == {"live": 73, "dead": 48, "none": 432}
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)

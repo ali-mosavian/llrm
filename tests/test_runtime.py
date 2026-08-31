@@ -163,43 +163,58 @@ def _runtime_targets() -> set[str]:
     return named
 
 
-# The float routines. rtmint.inc declares them and the implementations are in
-# the math library, which is not in the QuickBASIC 4.5 source tree this project
-# reads -- so nothing here can say which registers they preserve, and the
-# honest contract is the worst case. They entered the corpus with the fpemu
-# fixtures; before those, every call the corpus made happened to be one the
-# source does establish, which is why this list did not exist.
-UNESTABLISHED = frozenset({"B$FCMP", "B$FILD", "B$FIST"})
-
-
-@pytest.mark.parametrize("name", sorted(_runtime_targets() - UNESTABLISHED))
+@pytest.mark.parametrize("name", sorted(_runtime_targets()))
 def test_every_runtime_routine_the_corpus_calls_has_an_entry(name: str) -> None:
     assert runtime.contract(name).established
 
 
-@pytest.mark.parametrize("name", sorted(UNESTABLISHED))
-def test_an_unestablished_routine_is_the_worst_case(name: str) -> None:
-    """What makes not knowing safe rather than merely unknown.
+# 87bhelp.asm's six, read out of the shipped libraries by tools/libdump.py
+# because the math library is not in the QuickBASIC 4.5 source drop.
+X87 = ("B$FCMP", "B$FILD", "B$FIL2", "B$FIST", "B$FIS2", "B$FUST")
 
-    A routine with no entry must come back clobbering everything, reading
-    and writing any memory, and as a barrier -- so every consumer treats it
-    the way it treats an indirect call. Asserted rather than assumed,
-    because the failure mode is silent: a contract that quietly preserved
-    si would license holding a value across a routine that does not.
+
+@pytest.mark.parametrize("name", X87)
+def test_the_x87_helpers_keep_the_index_registers(name: str) -> None:
+    """None of the six names si, di, bx or cx anywhere in its body.
+
+    This is what the contracts buy: a value held in one of those survives a
+    float conversion, where the worst case they had before said it did not.
     """
-    found = runtime.contract(name)
-    assert not found.established
-    assert found.clobbers == runtime.EVERY
-    assert runtime.preserves(found) == frozenset()
-    assert runtime.writes_caller_memory(found)
-    assert runtime.barrier(found)
+    kept = runtime.preserves(runtime.CONTRACTS[name])
+    assert {runtime.Reg.SI, runtime.Reg.DI, runtime.Reg.BX, runtime.Reg.CX} <= kept
 
 
-@pytest.mark.parametrize("name", sorted(UNESTABLISHED))
-def test_an_unestablished_routine_is_one_the_corpus_really_calls(name: str) -> None:
-    """So the list above shrinks when a contract is established, rather than
-    outliving the reason it was written."""
-    assert name in _runtime_targets()
+@pytest.mark.parametrize("name", X87)
+def test_the_x87_helpers_touch_no_caller_memory(name: str) -> None:
+    """Each keeps its own frame and writes only scratch below sp. B$FCMP's
+    fnstsw writes one word of DGROUP -- the runtime's own, not anything the
+    caller can name, exactly as B$DSEG does."""
+    assert not runtime.writes_caller_memory(runtime.CONTRACTS[name])
+    assert not runtime.barrier(runtime.CONTRACTS[name])
+
+
+def test_the_two_forms_differ_only_by_the_sign_extension() -> None:
+    """B$FIL2 is one `cwd` in front of B$FILD, and falls through into it.
+
+    So it is the INTEGER form and clobbers dx where the LONG form does not
+    -- the one register difference between them, and the reason both are
+    here rather than one standing for both.
+    """
+    long_form = runtime.CONTRACTS["B$FILD"]
+    int_form = runtime.CONTRACTS["B$FIL2"]
+    assert runtime.Reg.DX not in long_form.clobbers
+    assert runtime.Reg.DX in int_form.clobbers
+    assert int_form.clobbers - {runtime.Reg.DX} == long_form.clobbers
+
+
+def test_the_result_registers_are_the_clobbered_ones() -> None:
+    """A conversion out of the x87 stack returns through dx:ax or ax, and
+    that is exactly what each one is recorded as changing."""
+    assert runtime.Reg.AX in runtime.CONTRACTS["B$FIST"].clobbers
+    assert runtime.Reg.DX in runtime.CONTRACTS["B$FIST"].clobbers
+    for name in ("B$FIS2", "B$FUST"):
+        assert runtime.Reg.AX in runtime.CONTRACTS[name].clobbers
+        assert runtime.Reg.DX not in runtime.CONTRACTS[name].clobbers, f"{name} returns one word"
 
 
 # The one field a wrong answer corrupts memory through, pinned by what these

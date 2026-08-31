@@ -652,10 +652,134 @@ _FRAMES = (
 )
 
 
+# The x87 helpers, all six of them one module -- 87bhelp.asm -- and byte for
+# byte the same object in QuickBASIC 4.5's BCOM45.LIB, PDS 7.1's BCL71ENR.LIB
+# and VBDOS 1.0's VBDCL10E.LIB. They are the one group here established from
+# a disassembly rather than from source: runtime/inc/rtmint.inc declares them
+# and nothing in the 148-file runtime tree defines them, because the math
+# library is not in the source drop. tools/libdump.py is what read them out.
+#
+# Every one of them keeps its own frame (push bp / mov bp,sp ... mov sp,bp /
+# pop bp / retf), takes no argument on the 8086 stack -- the operands are in
+# registers or already on the x87 stack -- and touches no memory but its own
+# scratch below sp. So cleanup is 0 and writes is NONE throughout, and what
+# differs between them is only which registers come back changed.
+_X87 = (
+    Contract(
+        name="B$FCMP",
+        cleanup=0,
+        control=Control.RETURNS,
+        enters_user_code=False,
+        raises_error=False,
+        error_handling=False,
+        writes=Memory.NONE,
+        reads=Memory.NONE,
+        clobbers=frozenset({Reg.AX, Reg.FLAGS}),
+        established=True,
+        evidence=(
+            "87bhelp.asm, disassembled from all three libraries and identical in each: push bp / mov bp,sp / "
+            "wait / fcompp / wait / fnstsw [0] / nop / wait / mov ah,[0] / sahf / mov sp,bp / pop bp / retf. "
+            "It names bx, cx, dx, si and di nowhere; ah is the only register written, and the flags ARE the "
+            "return value. sahf writes SF, ZF, AF, PF and CF and cannot write OF -- it is bit 11, outside the "
+            "byte -- so the comparison arrives in CF and ZF and only the unsigned branches read it, which is "
+            "what wide.COMPARISONS records and what BC emits at every site. Microsoft's own runtime agrees: "
+            "rt/grwindow.asm calls it and branches with JZ and JC. The fnstsw writes one word of DGROUP, the "
+            "runtime's own, which is why writes is NONE the way B$DSEG's is."
+        ),
+    ),
+    Contract(
+        name="B$FILD",
+        cleanup=0,
+        control=Control.RETURNS,
+        enters_user_code=False,
+        raises_error=False,
+        error_handling=False,
+        writes=Memory.NONE,
+        reads=Memory.NONE,
+        clobbers=frozenset({Reg.FLAGS}),
+        established=True,
+        evidence=(
+            "87bhelp.asm: push bp / mov bp,sp / push bx / push dx / push ax / mov bx,sp / wait / fild dword "
+            "[bx] / add sp,4 / pop bx / mov sp,bp / pop bp / retf. It takes a LONG in dx:ax and pushes it to "
+            "the x87 stack through four bytes of its own frame. dx and ax are read and never written, bx is "
+            "saved and restored, and nothing else is named -- so the flags `add sp,4` leaves are the only "
+            "thing that changes."
+        ),
+    ),
+    Contract(
+        name="B$FIL2",
+        cleanup=0,
+        control=Control.RETURNS,
+        enters_user_code=False,
+        raises_error=False,
+        error_handling=False,
+        writes=Memory.NONE,
+        reads=Memory.NONE,
+        clobbers=frozenset({Reg.DX, Reg.FLAGS}),
+        established=True,
+        evidence=(
+            "87bhelp.asm: one instruction before B$FILD's own entry -- `cwd`, then it falls straight through. "
+            "So it is the INTEGER form, taking ax alone and sign-extending it, and the cwd is exactly why dx "
+            "is clobbered here and preserved there."
+        ),
+    ),
+    Contract(
+        name="B$FIST",
+        cleanup=0,
+        control=Control.RETURNS,
+        enters_user_code=False,
+        raises_error=False,
+        error_handling=False,
+        writes=Memory.NONE,
+        reads=Memory.NONE,
+        clobbers=frozenset({Reg.AX, Reg.DX, Reg.FLAGS}),
+        established=True,
+        evidence=(
+            "87bhelp.asm: push bp / mov bp,sp / sub sp,4 / wait / fistp dword [bp-4] / nop / wait / pop ax / "
+            "pop dx / mov sp,bp / pop bp / retf. The LONG it produces comes back in dx:ax, which is what "
+            "clobbers them; bx, cx, si and di are named nowhere."
+        ),
+    ),
+    Contract(
+        name="B$FIS2",
+        cleanup=0,
+        control=Control.RETURNS,
+        enters_user_code=False,
+        raises_error=False,
+        error_handling=False,
+        writes=Memory.NONE,
+        reads=Memory.NONE,
+        clobbers=frozenset({Reg.AX, Reg.FLAGS}),
+        established=True,
+        evidence=(
+            "87bhelp.asm: the INTEGER form of B$FIST -- sub sp,2 / fistp word [bp-2] / pop ax. One word, so "
+            "ax alone comes back changed and dx does not."
+        ),
+    ),
+    Contract(
+        name="B$FUST",
+        cleanup=0,
+        control=Control.RETURNS,
+        enters_user_code=False,
+        raises_error=False,
+        error_handling=False,
+        writes=Memory.NONE,
+        reads=Memory.NONE,
+        clobbers=frozenset({Reg.AX, Reg.FLAGS}),
+        established=True,
+        evidence=(
+            "87bhelp.asm: stores a dword, and where the high word is not zero re-loads it and stores it back "
+            "as a word -- the unsigned INTEGER conversion. It ends `pop ax / add sp,2`, so only the low word "
+            "is taken and dx is untouched."
+        ),
+    ),
+)
+
+
 def _contracts() -> dict[str, Contract]:
     """One entry per runtime name the corpus calls, with B$OGTA's control kind
     taken from blocks.py rather than restated here."""
-    read = _HELPERS + _PRINTING + _STRINGS + _SIMPLE + _CONTROL + _FRAMES
+    read = _HELPERS + _PRINTING + _STRINGS + _SIMPLE + _CONTROL + _FRAMES + _X87
     return {
         routine.name: (replace(routine, control=Control.INLINE_TABLE) if routine.name in INLINE_TABLE else routine)
         for routine in read
