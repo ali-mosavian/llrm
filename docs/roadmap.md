@@ -55,7 +55,7 @@ MIR does, end to end:
 Built, no consumer:
 
 - [ ] `consts.known()` — proves 1,971 corpus values, nothing emits from them
-- [ ] `wide.py` — re-derives 192 carry pairs and 871 comparison branches while `lift.py` emits
+- [x] `wide.py` — `widened()` builds the 32-bit semantics the pair computes, and `transform.py` folds it
 - [ ] `regalloc.colour()` — correct, and cannot pay while identity is optimal at pressure 6/6
 
 ## M1 — instruction selection
@@ -131,9 +131,9 @@ now has every body layable**; it was 42 when this was written.
       in its middle, which is exactly what reachability rules out
 
 **Every object in the corpus rebuilds whole-segment**, 155 of 155, and all
-six programs in `REBUILDS` link and run on all twelve configurations. What
-is left is not reach but the wiring: `rewrite.py` still does not call
-`wholeseg.rebuilt`.
+six programs in `REBUILDS` link and run on all twelve configurations.
+`rewrite.py` calls it now, and it is not a size cost: 201 bytes saved over
+the corpus and 616 over qb-qrender against the patched output.
 
 ## M2 — placement
 
@@ -187,8 +187,11 @@ says 283, which is what measuring the easy way costs.
 
 So the work is deleting a reload, not allocating a class:
 
-- [ ] es as a tracked value, so `avail.py` can see the redundant reload --
-      42 sites, about 170 bytes in 26,290 instructions
+- [x] the redundant reload — `qbopt/segments.py`, without making es a value.
+      42 sites, about 170 bytes in 26,290 instructions. Making it an SSA
+      value would change what every op uses and defines, what regalloc has
+      to colour and what select has to emit, for an optimisation nothing
+      has been found to need
 - [ ] `Space.FAR`'s `segment` as that value, so two pointers through
       different segments stop being one aliasing pair
 - [ ] a second segment register, only if a program is ever found that
@@ -198,7 +201,10 @@ So the work is deleting a reload, not allocating a class:
 
 Done when the old path is deleted, not when MIR also does it.
 
-- [ ] widening — `lift.py`; `wide.py` has the analysis
+- [x] widening — `transform.widened()`. Adjacent halves in one block only:
+      a pair straddling a block boundary means the high half is a branch
+      target, and folding it would leave that jump landing inside an
+      instruction
 - [ ] absorption and strength reduction — `calls.py`. Measured: 831 of the
       corpus's 923 absorbable calls have something other than a push
       immediately before them, so recovering the arguments needs the
@@ -216,8 +222,11 @@ Done when the old path is deleted, not when MIR also does it.
       letting `loaded_into` accept a use that is the destination's own
       previous value under a partial write, which is the `HALF_TO_LOW` and
       `CONCAT_LOW` machinery `mir.py` already has for pairs
-- [ ] dead stores — `memory.py`
-- [ ] native x87 — `fpu.py`
+- [x] dead stores — `avail.dead_stores()`, block-scoped and starting empty
+      at each block's end, which costs a store that spans an edge and can
+      never invent one that does not
+- [x] native x87 — `layout` selects an emulator site from its own semantics
+      under `native_fpu` rather than carrying its bytes
 
 ## M6 — floats
 
@@ -225,7 +234,9 @@ Largest untouched surface, newly testable: `fuzzgen.py` generates SINGLE
 and DOUBLE, and `87bhelp.asm`'s six helpers have contracts.
 
 - [x] the x87 memory and popping forms select — `fld [x]`, `faddp st(i),st(0)`
-- [ ] x87 stack positions as MIR values — a `fld` renames every slot below it
+- [x] x87 stack positions as MIR values — `qbopt/fpstack.py`. Entering slots
+      are minted rather than assumed empty: BC leaves values on the stack
+      across a branch
 - [ ] first shape to look at: 690 `fld` against 351 `fstp` in qb-qrender
 
 ## Gates
