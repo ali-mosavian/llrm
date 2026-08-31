@@ -527,6 +527,14 @@ def _code_block(
             # offset in its displacement, and that moved too.
             into_code = fixup.target == "segment" and fixup.index == seg and fixup.disp_pos is not None
             disp = _mapped(fixup.disp, kept, moved) if into_code else None
+            if into_code and disp is None:
+                # reemit leaves a field alone when it is given None, so
+                # falling through here would keep a displacement naming
+                # wherever that offset used to be -- silent, and wrong the
+                # moment anything ahead of it changed length. A record that
+                # names an unplaceable offset is refused ten lines up; this
+                # is the same refusal for a fixup that does.
+                return f"a fixup names {fixup.disp:#x}, which is not an instruction the layout placed"
             mine.append(omf.reemit(fixup, offset=offset - start, disp=disp))
         if mine:
             out.append(omf.fixupp_record([b"".join(mine)]))

@@ -18,6 +18,8 @@ from qbopt.relocate import apply
 from qbopt.relocate import Branch
 from qbopt.relocate import Inside
 from qbopt.relocate import reaches
+
+FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 from qbopt.relocate import branches
 from qbopt.relocate import relocate
 from qbopt.relocate import retarget
@@ -210,3 +212,105 @@ def test_a_branch_that_would_no_longer_reach_refuses_the_whole_segment() -> None
     # grow what the branch jumps over until the displacement will not fit
     grown = Shift.of([Edit(0x10, 0x20, bytes(0x90))])
     assert isinstance(retarget_branches(code, [branch], grown), str)
+
+
+def test_a_fixup_naming_an_offset_the_layout_did_not_place_is_refused() -> None:
+    """omf.reemit leaves a field alone when it is given None.
+
+    So a same-segment fixup whose displacement names an offset the layout
+    could not place would keep the displacement it arrived with -- pointing
+    at wherever that offset used to be, which is wrong the moment anything
+    ahead of it changed length. Silent, and the kind of silence a relocation
+    bug is: nothing crashes, an address is simply off.
+
+    A *record* naming an unplaceable offset has always been refused. This is
+    the same refusal for a fixup, and it stopped being unreachable when
+    layout.py began carrying gaps reachability never walked into: a fixup
+    could now name the inside of one.
+
+    Forced here, since no object in the corpus produces it: one placement is
+    removed from the map after the records have had theirs, so the fixup
+    loop is the only thing that can see it missing.
+    """
+    from qbopt import relocate
+    from qbopt.wholeseg import REBUILT
+    from qbopt.wholeseg import rebuilt
+
+    real = relocate._mapped
+    seen: list[int] = []
+
+    def watch(offset: int, kept: int, moved: dict[int, int]) -> int | None:
+        seen.append(offset)
+        return real(offset, kept, moved)
+
+    from qbopt import module
+
+    def asks_a_fixup(one: Path) -> bool:
+        records = omf.parse(one.read_bytes())
+        found = module.of(records)
+        return found is not None and any(
+            fixup.seg == found.seg
+            and fixup.target == "segment"
+            and fixup.index == found.seg
+            and fixup.disp_pos is not None
+            for fixup in omf.fixups(records)
+        )
+
+    relocate._mapped = watch
+    try:
+        obj = None
+        for one in FIXTURES:
+            seen.clear()
+            if asks_a_fixup(one) and rebuilt(one.read_bytes())[1] == REBUILT and seen:
+                obj = one
+                break
+        assert obj is not None, "no fixture rebuilds while a fixup names a code offset"
+        # The records ask first, so anything asked for after the last of
+        # them is a fixup's own displacement.
+        # By call, not by value: the records ask about some of the same
+        # offsets, and failing one of those trips their own refusal first,
+        # which would leave this passing whatever the fixup loop did.
+        last = len(seen) - 1
+        calls = 0
+
+        def missing(offset: int, kept: int, moved: dict[int, int]) -> int | None:
+            nonlocal calls
+            calls += 1
+            return None if calls - 1 == last else real(offset, kept, moved)
+
+        relocate._mapped = missing
+        why = rebuilt(obj.read_bytes())[1]
+    finally:
+        relocate._mapped = real
+    assert why != REBUILT, "a fixup naming an unplaceable offset was written anyway"
+    assert "a fixup names" in why, why
+
+
+@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
+def test_every_rebuilt_object_maps_every_code_offset_it_names(obj: Path) -> None:
+    """The invariant behind that refusal, over the whole corpus.
+
+    Every offset a record or a fixup names in the rebuilt segment resolves
+    to an instruction the layout placed. If one did not, the refusal above
+    would fire -- so a rebuild that succeeds is the assertion.
+    """
+    from qbopt import relocate
+    from qbopt.wholeseg import REBUILT
+    from qbopt.wholeseg import rebuilt
+
+    unmapped: list[int] = []
+    real = relocate._mapped
+
+    def watch(offset: int, kept: int, moved: dict[int, int]) -> int | None:
+        out = real(offset, kept, moved)
+        if out is None:
+            unmapped.append(offset)
+        return out
+
+    relocate._mapped = watch
+    try:
+        why = rebuilt(obj.read_bytes())[1]
+    finally:
+        relocate._mapped = real
+    if why == REBUILT:
+        assert not unmapped, f"{obj.stem}: rebuilt while {len(unmapped)} offsets did not map"
