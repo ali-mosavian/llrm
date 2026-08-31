@@ -152,6 +152,21 @@ def fpemu() -> list[str]:
     ]
 
 
+def fpdeep() -> list[str]:
+    """Two-deep float expressions over an indexed array.
+
+    Every value is exact in SINGLE and integral after CLNG, so plain Python
+    arithmetic is the same arithmetic: 12, 28 and 60 against a k of 4 give
+    halves, three-quarters and seven-eighths, and nothing here rounds.
+    """
+    lines = []
+    for i, v in enumerate((12, 28, 60), start=1):
+        lines.append(f"SQ{seq(i)} ={num(v * v)}")
+        lines.append(f"RATIO{seq(i)} ={num(v * v // (v + v))}")
+        lines.append(f"MIX{seq(i)} ={num((v - 4) * 1024 // (v + 4))}")
+    return [*lines, f"DSQ={num(144)}", f"DRATIO={num(6)}", "DONE"]
+
+
 def nbody() -> list[str]:
     """The fixed-point integrator of suite/nbody.bas, in the arithmetic it means.
 
@@ -333,6 +348,7 @@ PROGRAMS = {
     "divmod": divmod_,
     "nots": nots,
     "fpemu": fpemu,
+    "fpdeep": fpdeep,
     "nbody": nbody,
     "fixmul": fixmul,
     "arrays": arrays,

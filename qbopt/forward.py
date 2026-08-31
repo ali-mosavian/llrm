@@ -118,16 +118,27 @@ def _lands_in(insn: Insn) -> Register_ | None:
 
     One register, or nothing: an instruction naming two of them is not a
     plain load and is not what this deletes.
+
+    A register that only says WHERE the bytes are is not one of them.
+    `fld dword ptr [si]` names si and nothing else, and si is no more the
+    destination there than the address on an envelope is its contents --
+    the value goes on the x87 stack, which this does not track. Reading si
+    as the destination made two consecutive `fld [si]` look like a load
+    and a redundant reload, and they are two pushes: deleting the second
+    left one value where the program wanted two and slid every x87 slot
+    after it by one. bench/fpbench.bas printed -2147483648 for every
+    coordinate before this line was here.
     """
     from qbopt.mir import TRACKED
 
     if not _loads_only(insn) or not _whole_register(insn):
         return None
+    addressing = {_root_of(insn.memory_base), _root_of(insn.memory_index)}
     found = {
         ir.ROOT.get(one.register, one.register)
         for one in INFO.info(insn.insn).used_registers()
         if ir.ROOT.get(one.register, one.register) in TRACKED
-    }
+    } - addressing
     return next(iter(found)) if len(found) == 1 else None
 
 

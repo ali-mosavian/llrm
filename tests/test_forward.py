@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import corpus
+from qbopt import ir
 from qbopt import memory
 from qbopt import forward
 
@@ -173,3 +174,38 @@ def test_nothing_removable_writes_more_than_it_reads(obj: Path) -> None:
         for insn in block.insns:
             if insn.at in hits:
                 assert forward._whole_register(insn), f"{obj.stem} {insn.at:#x}: {insn.insn}"
+
+
+def test_the_register_that_addresses_an_operand_is_not_its_destination() -> None:
+    """`fld dword ptr [si]` loads nothing into si.
+
+    si names where the bytes are; the value goes on the x87 stack, which is
+    not a register this tracks. Reading si as the destination makes two
+    consecutive `fld [si]` look like a load and a redundant reload -- and
+    they are two pushes, so deleting the second leaves one value where the
+    program expects two and every x87 slot after it is off by one.
+
+    Found by bench/fpbench.bas printing -2147483648 for every coordinate,
+    which is CLNG on a value that is no longer a number. The suite never
+    caught it: fpemu.bas has no two-deep x87 expression and the fuzz corpus
+    stays inside exactly-representable integers.
+    """
+    from qbopt.declen import decode
+
+    twice = decode(bytes([0xD9, 0x04]), 0)  # fld dword ptr [si]
+    assert twice is not None
+    assert str(twice.insn) == "fld dword ptr [si]"
+    assert forward._lands_in(twice) is None, "si addresses the operand; it is not the destination"
+
+
+@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
+def test_nothing_removable_is_addressed_through_the_register_it_claims(obj: Path) -> None:
+    """The rule, corpus-wide: a load's destination is never its own base."""
+    hits = removable(obj)
+    for block in corpus.partitioned(obj):
+        for insn in block.insns:
+            if insn.at not in hits:
+                continue
+            landed = forward._lands_in(insn)
+            base = ir.ROOT.get(insn.memory_base, insn.memory_base)
+            assert landed is None or landed != base, f"{obj.stem} {insn.at:#x}: {insn.insn}"

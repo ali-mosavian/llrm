@@ -156,7 +156,11 @@ def test_the_covered_share_of_the_corpus_is_what_was_measured() -> None:
                         continue
                     if select.emit(what, at=op.at) is not None:
                         emitted += 1
-    assert (total, emitted) == (20245, 20245)
+    # The 44 that do not come back are the movsw of suite/fpdeep.bas, the one
+    # encoding this deliberately refuses -- see REFUSED in tests/test_ir.py.
+    # Every other operation in the corpus selects.
+    assert (total, emitted) == (21947, 21903)
+    assert total - emitted == 44
 
 
 def test_a_wide_push_is_not_a_narrow_one() -> None:

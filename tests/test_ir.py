@@ -14,6 +14,8 @@ from iced_x86 import Register
 from iced_x86 import Register_
 
 import corpus
+from iced_x86 import Code
+
 from qbopt import ir
 from helpers import hx
 from qbopt import extent
@@ -721,12 +723,22 @@ def test_semantics_never_claims_a_register_or_cell_the_effects_do_not(mapped_obj
 
 
 # Every encoding in the corpus this pass deliberately carries as a barrier
-# rather than modelling. Empty, and measured: `push cs`, `push ss`, `pop es`,
-# `rep stosw`, `leave` and the far `jmp` were the whole of it -- 47 of 17970
-# instructions -- and all six are modelled now. Not a coverage floor with
-# slack in it: an encoding joining this set is a decision to make
+# rather than modelling. It was empty, and measured: `push cs`, `push ss`,
+# `pop es`, `rep stosw`, `leave` and the far `jmp` were the whole of it -- 47
+# of 17970 instructions -- and all six were modelled. Not a coverage floor
+# with slack in it: an encoding joining this set is a decision to make
 # deliberately, and one leaving it is a regression.
-REFUSED: set[int] = set()
+#
+# movsw is the one deliberate refusal. suite/fpdeep.bas brought it in -- BC
+# copies its SINGLE array initialiser with four of them -- and it is 44 of
+# 21978 instructions, all in that one program's setup and none in a loop.
+# Modelling it would mean giving Semantics a shape it does not have: a load
+# and a store through two different segments, plus si and di stepping by a
+# width the opcode implies and the operands never name. And it would buy
+# nothing, because there is no other way to encode a movsw -- select.py's
+# only correct answer is the byte that is already there, which is exactly
+# what layout.py carries for a barrier.
+REFUSED: set[int] = {Code.MOVSW_M16_M16}
 
 
 def test_the_corpus_is_modelled_except_for_exactly_the_refused_encodings(fixtures: Path) -> None:
@@ -746,7 +758,8 @@ def test_the_corpus_is_modelled_except_for_exactly_the_refused_encodings(fixture
                 elif isinstance(node, ir.Opaque | ir.Long | ir.Call):
                     unmodelled.add(node.insn.code)
     assert unmodelled == REFUSED
-    assert modelled == total
+    # and the refusal is 44 instructions, not a share that could drift
+    assert total - modelled == 44
 
 
 def test_a_restore_and_a_table_carry_their_own_operations() -> None:
@@ -807,6 +820,13 @@ def test_every_body_of_every_kind_is_fully_modelled(fixtures: Path) -> None:
     the whole body it sits in either way -- which is the reason barriers
     exist and the reason these five were worth modelling instead.
 
+    The eleven that refuse now are suite/fpdeep.bas's main bodies, on the
+    movsw BC initialises its array with -- the one encoding REFUSED above
+    names, for the reasons recorded there. They are refused as *fully
+    modelled* and nothing more: all fifteen fpdeep objects still rebuild
+    whole and run right on all twelve configurations, because carrying an
+    instruction verbatim is what a barrier is.
+
     A body joining or leaving this is a decision, not a number to relax.
     """
     liftable: dict[extent.BodyKind, int] = {kind: 0 for kind in extent.BodyKind}
@@ -820,8 +840,12 @@ def test_every_body_of_every_kind_is_fully_modelled(fixtures: Path) -> None:
         for body_ir in result:
             counted = liftable if all(ir.modelled(node.semantics) for node in body_ir.nodes) else refused
             counted[body_ir.body.kind] += 1
-    assert liftable == {extent.BodyKind.MAIN: 125, extent.BodyKind.PROCEDURE: 30, extent.BodyKind.EVENT_STUB: 16}
-    assert refused == {kind: 0 for kind in extent.BodyKind}
+    assert liftable == {extent.BodyKind.MAIN: 129, extent.BodyKind.PROCEDURE: 30, extent.BodyKind.EVENT_STUB: 18}
+    assert refused == {
+        extent.BodyKind.MAIN: 11,
+        extent.BodyKind.PROCEDURE: 0,
+        extent.BodyKind.EVENT_STUB: 0,
+    }
 
 
 def test_a_barrier_is_carried_rather_than_refusing_the_body_it_sits_in() -> None:

@@ -37,10 +37,21 @@ works. What a MemRef adds is the SSA values of the registers the address is
 read through, so the dependence on `bx` in `es:[bx]` is an edge rather than
 a name that renaming would have quietly invalidated.
 
-**A barrier reads and writes everything.** ir.py's own contract says its
-operands are pinned and nothing may be reordered across it; here that falls
-out of giving it every tracked register as both a use and a def, so no value
-crosses it and the allocator has no freedom to move one.
+**A barrier's operands are whatever its encoding touches.** ir.py's own
+contract says they are pinned and nothing may be reordered across one. That
+comes from Effects, not from a blanket rule: where iced cannot say what an
+instruction touches -- an interrupt, an indirect call -- Effects is None and
+every tracked register becomes both a use and a def, which pins everything.
+Where iced can say, the answer is precise, and `movsw` is the shape that
+proves the difference: it steps si and di through memory and touches no
+other register, so a value in ax may live across it and the allocator is
+free to keep it there. The pinning that matters is still absolute, because
+it is read off the same Effects by ir.pinned().
+
+Memory is the part that never gets the precise treatment. A barrier's
+addresses are its own -- `movsw` writes through es:di, which nothing here
+can disambiguate -- so avail.py drops every held cell at one, on the flag
+itself rather than on any register set.
 
 Nothing is optimised here and nothing is lowered. Every Op keeps the ir.Node
 it came from, so a lowering that applies no transform is that node's own

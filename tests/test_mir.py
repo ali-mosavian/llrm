@@ -105,18 +105,27 @@ def test_a_value_is_defined_exactly_once(obj: Path) -> None:
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
-def test_a_barrier_reads_and_writes_every_tracked_value(obj: Path) -> None:
-    """ir.py's contract says a barrier's operands are pinned and nothing may
-    move across one. Here that is exactly "it defines and uses everything",
-    so no value's live range spans it and the allocator has no choice to make.
+def test_a_barrier_names_every_register_it_pins(obj: Path) -> None:
+    """ir.py's contract says a barrier's operands are pinned. The SSA has to
+    name each one, or a value would cross an instruction that owns it.
+
+    Not "everything", which is what this asserted while every barrier in the
+    corpus happened to have unknowable effects. suite/fpdeep.bas brought in
+    `movsw`, whose effects iced states exactly: si and di and nothing else.
+    Demanding all of TRACKED there would be demanding a wrong answer -- ax
+    may live across a movsw. What must hold is that mir names whatever
+    ir.pinned() pins, and that is what this checks.
     """
     for built, _ in raised(obj):
         for one in built.blocks:
             for op in one.ops:
                 if not op.barrier:
                     continue
-                assert {built.origin[v] for v in op.defines} >= set(mir.TRACKED)
-                assert {built.origin[v] for v in op.uses} >= set(mir.TRACKED)
+                assert op.node is not None
+                held = ir.pinned(op.node)
+                wanted = set(mir.TRACKED) if held is None else {r for r in held if r in mir.TRACKED}
+                assert {built.origin[v] for v in op.defines} >= wanted
+                assert {built.origin[v] for v in op.uses} >= wanted
 
 
 def test_the_carry_between_a_pair_is_an_edge_not_an_adjacency() -> None:
