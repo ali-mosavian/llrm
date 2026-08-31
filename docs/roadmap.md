@@ -38,7 +38,7 @@ Measured 2026-08-31. Re-measure before trusting it.
 | its x87 sites | 1,766, none optimised |
 | bench/nbody | 2.99× under DOSBox, 21 of 21 calls absorbed, pressure 6/6 |
 | corpus redundant reads | 553 — 73 live provider, 48 dead, 432 none |
-| selector coverage | 12,232 of 20,245 corpus ops, 0 mismatched |
+| selector coverage | 19,646 of 20,245 corpus ops, 0 mismatched |
 
 MIR does, end to end:
 
@@ -65,11 +65,13 @@ Built, no consumer:
 - [x] neg, not, inc, dec
 - [x] push, register and immediate, at both widths
 - [x] refuse what is not in the table rather than approximate it
+- [x] load, store, push, accumulate and store-immediate against `Space.SEGMENT` and `Space.FRAME`
+- [x] cmp, cwd, cdq, wait, nop, pop, ret and retf
+- [x] near call, far call, jump and conditional branch
 - [ ] `imul` — the form exists in iced, it is simply not wired
-- [x] load, store, push and accumulate against `Space.SEGMENT` and `Space.FRAME` — 97.6% of memory operands
-- [ ] the spaces `operand_of` refuses: FAR needs a segment override, GROUP is refused everywhere, and 1,108 moves have no nameable address
-- [ ] call, branch and jump, target resolved after layout — 6,104 ops
-- [ ] layout: an address's fixup and a branch's displacement move with the code
+- [ ] the 409 x87 instructions — M6's
+- [ ] the ~190 whose address is in a space `operand_of` refuses, or whose register this does not name
+- [ ] layout: lay a whole body out, so a branch that changes length moves what follows it
 
 Proof: re-lower every corpus body through the selector with no transform
 applied; `tools/matrix.py` green. Same program, not same bytes — the

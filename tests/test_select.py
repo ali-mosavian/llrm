@@ -112,16 +112,20 @@ def test_everything_selected_decodes_to_what_was_asked_for(obj: Path) -> None:
     for op, made in selected(obj):
         back = next(iter(Decoder(BITNESS, made.code, ip=op.at)), None)
         assert back is not None, f"{obj.stem} {op.at:#x}: emitted bytes do not decode"
-        assert str(back) == str(op.node.insn.insn), f"{obj.stem} {op.at:#x}: {back} != {op.node.insn.insn}"
+        want = op.node.insn.insn
+        # A branch may come back in a different form -- BC writes `e9 0b 00`
+        # where `eb 0c` reaches, and choosing between them is layout's call,
+        # not selection's. Same mnemonic and same target is the claim.
+        same = str(back) == str(want) or (back.mnemonic == want.mnemonic and back.near_branch16 == want.near_branch16)
+        assert same, f"{obj.stem} {op.at:#x}: {back} != {want}"
 
 
 def test_the_covered_share_of_the_corpus_is_what_was_measured() -> None:
     """A canary on progress, not on correctness.
 
-    60.4% of the corpus's operations: the register, immediate and memory
-    forms. What is left is mostly targets -- 4,970 calls, 893 branches and
-    241 jumps -- which need layout, plus the address spaces operand_of()
-    refuses.
+    97.0% of the corpus's operations. What is left is 409 x87 instructions,
+    which are M6's, and a couple of hundred whose address is in a space
+    operand_of() refuses or whose register is not one this names.
     """
     from qbopt import ir
     from qbopt import mir
@@ -145,7 +149,7 @@ def test_the_covered_share_of_the_corpus_is_what_was_measured() -> None:
                         continue
                     if select.emit(what, at=op.at) is not None:
                         emitted += 1
-    assert (total, emitted) == (20245, 12232)
+    assert (total, emitted) == (20245, 19646)
 
 
 def test_a_wide_push_is_not_a_narrow_one() -> None:
@@ -241,3 +245,34 @@ def test_a_cell_of_the_wrong_width_is_refused() -> None:
     cell = ir.Mem(Addr(Space.FRAME, -4), 4)
     assert select.move_from(Register.AX, cell) is None
     assert select.move_from(Register.EAX, cell) is not None
+
+
+def test_a_near_call_and_a_far_call_are_told_apart_by_the_target() -> None:
+    """BC emits a near call for a procedure in the same module and a far one
+    for everything in the runtime. `ir.Semantics.target` is the difference: a
+    near call names an address, a far one does not have it to name -- its
+    four bytes are zero and a fixup fills them.
+
+    Treating every call as far emitted `call far ptr 0:0` where the input
+    said `call 0032h`, at every intra-module call site in the corpus.
+    """
+    near = select.call_near(0x32, at=0x4E)
+    far = select.call_far(at=0x4E)
+    assert near is not None and far is not None
+    assert near.displacement_at is None
+    assert far.displacement_at == 1
+    assert far.code == bytes([0x9A, 0, 0, 0, 0])
+    assert str(next(iter(Decoder(BITNESS, near.code, ip=0x4E)))) == "call 0032h"
+
+
+def test_a_store_of_an_immediate_takes_the_cell_s_width() -> None:
+    """`mov word ptr [x],0` writes two bytes and `mov dword ptr [x],0` four.
+    The immediate says nothing about which was meant."""
+    from qbopt import ir
+    from qbopt.module import Addr
+    from qbopt.module import Space
+
+    for width, text in ((2, "word"), (4, "dword")):
+        made = select.store_imm(ir.Mem(Addr(Space.FRAME, -4), width), 0)
+        assert made is not None
+        assert text in str(next(iter(Decoder(BITNESS, made.code, ip=0))))

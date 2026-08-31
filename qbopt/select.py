@@ -276,6 +276,26 @@ def move_into(cell: ir.Mem, outof: Register_, at: int = 0) -> Emitted | None:
     return _assemble(Instruction.create_mem_reg(code, where, outof), at, relocated)
 
 
+def store_imm(cell: ir.Mem, value: int, at: int = 0) -> Emitted | None:
+    """`mov [cell], imm`, at the cell's own width.
+
+    The width is the cell's and not the value's: `mov word ptr [x],0` and
+    `mov dword ptr [x],0` write two bytes and four, and the immediate says
+    nothing about which was meant.
+    """
+    built = operand_of(cell)
+    if built is None or cell.width not in (2, 4):
+        return None
+    code = _code(f"MOV_RM{cell.width * 8}_IMM{cell.width * 8}")
+    if code is None:
+        return None
+    where, relocated = built
+    try:
+        return _assemble(Instruction.create_mem_i32(code, where, value), at, relocated)
+    except (ValueError, OverflowError):
+        return None
+
+
 def arith_mem(name: str, dest: Register_, cell: ir.Mem, at: int = 0) -> Emitted | None:
     """`<name> dest, [cell]`."""
     width = WIDTHS.get(dest)
@@ -301,6 +321,118 @@ def push_mem(cell: ir.Mem, at: int = 0) -> Emitted | None:
     return _assemble(Instruction.create_mem(code, where), at, relocated)
 
 
+def branch(name: str, target: int, at: int = 0) -> Emitted | None:
+    """`<name> target`, a conditional branch to an absolute address.
+
+    The near form always. The short one is two bytes where it reaches and
+    picking it is a decision about layout, not about selection: a branch
+    that shrinks moves everything after it, and until something lays a body
+    out there is nothing to tell it whether the target has moved too. BC
+    itself emits `e9 0b 00` where `eb 0c` would do, so this is no worse than
+    the input.
+    """
+    code = _code(f"{name.upper()}_REL16")
+    if code is None:
+        return None
+    try:
+        return _assemble(Instruction.create_branch(code, target), at)
+    except (ValueError, OverflowError):
+        return None
+
+
+def jump(target: int, at: int = 0) -> Emitted | None:
+    """`jmp target`, near."""
+    code = _code("JMP_REL16")
+    if code is None:
+        return None
+    try:
+        return _assemble(Instruction.create_branch(code, target), at)
+    except (ValueError, OverflowError):
+        return None
+
+
+def call_near(target: int, at: int = 0) -> Emitted | None:
+    """`call target`, within this segment.
+
+    BC emits one of these for a procedure in the same module and a far call
+    for everything in the runtime, and `ir.Semantics.target` is what tells
+    them apart: a near call names an address, a far one does not have it to
+    name.
+    """
+    code = _code("CALL_REL16")
+    if code is None:
+        return None
+    try:
+        return _assemble(Instruction.create_branch(code, target), at)
+    except (ValueError, OverflowError):
+        return None
+
+
+def call_far(at: int = 0) -> Emitted | None:
+    """`call far ptr 0:0`, the shape BC emits for every runtime call.
+
+    The target is not in the code and never was: the four bytes are zero and
+    a fixup names the routine, exactly as a relocated memory displacement
+    works. So this emits the shape and says where the field is, and the
+    caller moves the fixup that fills it.
+    """
+    made = bytes([0x9A, 0, 0, 0, 0])
+    return Emitted(made, 1)
+
+
+# The no-operand and one-operand forms that carry no address and no target,
+# named here because iced spells each of them differently enough that the
+# width-and-mnemonic rule the rest of this table follows does not reach them.
+BARE = {"wait": "WAIT", "nop": "NOPW", "ret": "RETNW", "retf": "RETFW", "cwd": "CWD", "cdq": "CDQ"}
+
+
+def bare(name: str, at: int = 0) -> Emitted | None:
+    """An instruction with no operands at all."""
+    code = _code(BARE.get(name, ""))
+    if code is None:
+        return None
+    return _assemble(Instruction.create(code), at)
+
+
+def pop(into: Register_, at: int = 0) -> Emitted | None:
+    """`pop into`, at the width it names."""
+    width = WIDTHS.get(into)
+    if width is None:
+        return None
+    code = _code(f"POP_R{width * 8}")
+    return None if code is None else _assemble(Instruction.create_reg(code, into), at)
+
+
+def ret_far(popped: int, at: int = 0) -> Emitted | None:
+    """`retf n`, which is how every BC procedure ends."""
+    code = _code("RETFW_IMM16" if popped else "RETFW")
+    if code is None:
+        return None
+    made = Instruction.create_i32(code, popped) if popped else Instruction.create(code)
+    return _assemble(made, at)
+
+
+def compare(dest: ir.Loc, value: int, at: int = 0) -> Emitted | None:
+    """`cmp <dest>, imm`. Flags are the whole result, so there is no dest."""
+    match dest:
+        case ir.Reg(register=register):
+            return arith_imm("cmp", register, value, at)
+        case ir.Mem() as cell:
+            built = operand_of(cell)
+            if built is None or cell.width not in (2, 4):
+                return None
+            code = _code(f"CMP_RM{cell.width * 8}_IMM{cell.width * 8}")
+            if code is None:
+                return None
+            where, relocated = built
+            try:
+                return _assemble(Instruction.create_mem_i32(code, where, value), at, relocated)
+            except (ValueError, OverflowError):
+                return None
+        case _:
+            return None
+
+
 def emit(what: ir.Semantics, at: int = 0, where: dict[Register_, Register_] | None = None) -> Emitted | None:
     """One MIR operation as machine bytes, or None where this cannot say it.
 
@@ -324,6 +456,8 @@ def emit(what: ir.Semantics, at: int = 0, where: dict[Register_, Register_] | No
                     return move_from(_remapped(into, where), cell, at)
                 case (ir.Mem() as cell, ir.Reg(register=outof)):
                     return move_into(cell, _remapped(outof, where), at)
+                case (ir.Mem() as cell, ir.Imm(value=value)):
+                    return store_imm(cell, value, at)
         case ir.Operation.BINARY if len(dests) == 1 and len(sources) == 2:
             # BINARY's own rule: sources[0] IS dests[0].
             match (dests[0], sources[1]):
@@ -345,4 +479,26 @@ def emit(what: ir.Semantics, at: int = 0, where: dict[Register_, Register_] | No
                     return push_imm(value, width, at)
                 case ir.Mem() as cell:
                     return push_mem(cell, at)
+        case ir.Operation.BRANCH if what.target is not None:
+            return branch(what.name or "", what.target, at)
+        case ir.Operation.JUMP if what.target is not None:
+            return jump(what.target, at)
+        case ir.Operation.CALL:
+            return call_far(at) if what.target is None else call_near(what.target, at)
+        case ir.Operation.COMPARE if len(sources) == 2:
+            match sources[1]:
+                case ir.Imm(value=value):
+                    return compare(sources[0], value, at)
+        case ir.Operation.EXTEND | ir.Operation.NOTHING:
+            return bare(what.name or "", at)
+        case ir.Operation.POP if len(dests) == 1:
+            match dests[0]:
+                case ir.Reg(register=into):
+                    return pop(_remapped(into, where), at)
+        case ir.Operation.RETURN:
+            if not sources:
+                return bare("ret", at) if what.name == "ret" else ret_far(0, at)
+            match sources[0]:
+                case ir.Imm(value=value):
+                    return ret_far(value, at)
     return None
