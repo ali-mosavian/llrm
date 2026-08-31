@@ -38,6 +38,23 @@ class Mutation:
 
 MUTATIONS = (
     Mutation(
+        "written-operand-substituted",
+        "qbopt/reencode.py",
+        "    if any(one.access in WRITES for one in INFO.info(insn.insn).used_memory()):",
+        "    if False:",
+        "`add [x],1` writes its result back to memory and `add ax,1` does not -- "
+        "substituting a written memory operand deletes the store, silently",
+    ),
+    Mutation(
+        "accumulate-read-as-a-load",
+        "qbopt/avail.py",
+        "    if set(_real(op.uses)) - _addressing(op):",
+        "    if False:",
+        "`and cx,[x]` reads cx as data as well as defining it, so the bytes it "
+        "leaves there are not the cell's -- taking it as a provider forwards the "
+        "wrong value",
+    ),
+    Mutation(
         "checksum",
         "qbopt/omf.py",
         "return head + body + bytes([(-sum(head) - sum(body)) & 0xFF])",
