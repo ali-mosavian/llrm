@@ -8,10 +8,8 @@ from pathlib import Path
 import pytest
 from iced_x86 import Register
 
-from qbopt import omf
-from qbopt import blocks
+import corpus
 from qbopt import memory
-from qbopt import module
 from qbopt.declen import run
 from qbopt.module import Addr
 from qbopt.module import Space
@@ -94,11 +92,9 @@ def test_an_unknown_call_is_a_barrier_by_construction() -> None:
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
 def test_every_reported_load_is_really_a_load(obj: Path) -> None:
     """A redundant-load report that named a store would licence deleting one."""
-    found = module.of(omf.parse(obj.read_bytes()))
+    found = corpus.loaded(obj)
     assert found is not None
-    mapped = blocks.code_map(found)
-    assert not isinstance(mapped, str), mapped
-    partitioned = blocks.partition(found, mapped)
+    partitioned = corpus.partitioned(obj)
     if not partitioned:
         return
 
@@ -113,11 +109,9 @@ def test_every_reported_load_is_really_a_load(obj: Path) -> None:
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
 def test_a_dead_store_is_a_store_and_never_a_call_site(obj: Path) -> None:
-    found = module.of(omf.parse(obj.read_bytes()))
+    found = corpus.loaded(obj)
     assert found is not None
-    mapped = blocks.code_map(found)
-    assert not isinstance(mapped, str), mapped
-    partitioned = blocks.partition(found, mapped)
+    partitioned = corpus.partitioned(obj)
     if not partitioned:
         return
 
@@ -135,11 +129,9 @@ def test_a_dead_store_is_a_store_and_never_a_call_site(obj: Path) -> None:
 def test_availability_never_claims_a_cell_nothing_names(obj: Path) -> None:
     """Intersection at a join starts from a universe; a cell outside it would
     mean the top element leaked into an answer."""
-    found = module.of(omf.parse(obj.read_bytes()))
+    found = corpus.loaded(obj)
     assert found is not None
-    mapped = blocks.code_map(found)
-    assert not isinstance(mapped, str), mapped
-    partitioned = blocks.partition(found, mapped)
+    partitioned = corpus.partitioned(obj)
     if not partitioned:
         return
 
