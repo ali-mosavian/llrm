@@ -13,6 +13,12 @@ against the machine code, and each measured there first:
   redundant     avail.redundant() finds the reload; forward.py deletes it
   dead stores   avail.dead_stores() finds it; memory.py deletes it
 
+Two of the three are on and find nothing extra, which is what parity means:
+rewrite.py has already run forward.py and memory.py by the time a body
+reaches here, so there is nothing left for them to take. Their worth is that
+the machine arm can be deleted, not that they save a byte today. Widening is
+off and applied() says why.
+
 **Every byte of the original body has to stay accounted for.** layout.py
 refuses a body it cannot cover, which is how it catches data BC put between
 the instructions, and a transform that deletes an op leaves a hole in that
