@@ -166,14 +166,21 @@ Measured: qb-qrender has 1,294 instructions that touch es and 397 carrying
 an explicit override, against 2 in the whole fixture corpus. So nothing
 here will surface it and only a real program will.
 
-- [ ] a segment register is an allocatable value, with its own class
-- [ ] `Space.FAR`'s `segment` is that value, so two pointers through
-      different segments are two addresses rather than one aliasing pair
-- [ ] pressure and spilling per class -- four segment registers on a 386,
-      of which ds and ss are effectively pinned, so es and fs/gs are what
-      there is to allocate
-- [ ] spill the lowest-priority pointer when the class is full, rather than
-      reloading whichever was touched last
+**And a real program says the allocation is not the win.** Of qb-qrender's
+621 `mov es,<x>`, every block loads es from a single source -- zero
+alternation between two far pointers, which is what a second segment
+register would buy. 42 are provably redundant: the same source, its base
+register untouched, no store and no call in between. A naive textual match
+says 283, which is what measuring the easy way costs.
+
+So the work is deleting a reload, not allocating a class:
+
+- [ ] es as a tracked value, so `avail.py` can see the redundant reload --
+      42 sites, about 170 bytes in 26,290 instructions
+- [ ] `Space.FAR`'s `segment` as that value, so two pointers through
+      different segments stop being one aliasing pair
+- [ ] a second segment register, only if a program is ever found that
+      alternates. None here does
 
 ## M5 — retire the machine arm
 
