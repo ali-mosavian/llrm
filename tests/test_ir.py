@@ -10,7 +10,6 @@ module's own dependencies and are tested there.
 from pathlib import Path
 
 import pytest
-from iced_x86 import Code
 from iced_x86 import Register
 from iced_x86 import Register_
 
@@ -240,11 +239,17 @@ def test_a_call_or_interrupt_gets_the_conservative_answer_not_iceds_own() -> Non
     assert effects.stores == (ir.Mem(None, 0),)
 
 
-def test_opaque_memory_effect_is_unnamed_for_a_segment_override() -> None:
+def test_a_barriers_memory_reach_is_unknown_in_both_directions() -> None:
+    # A segment override is a barrier, and a barrier's memory effect is
+    # widened past what the encoding alone reports -- ir.instruction_effects'
+    # own docstring says why. The load was already unnamed (lift.operand()
+    # refuses an override); the store side is the part that is claimed rather
+    # than decoded, and it is what makes Operation.BARRIER's "write memory
+    # back before it, re-read after" true without a consumer remembering it.
     effects = _effects("26 8B 06 34 12")
     assert effects.touches_memory is True
-    assert effects.loads == (ir.Mem(None, 2),)
-    assert effects.stores == ()
+    assert effects.loads == ir.ANY_MEMORY
+    assert effects.stores == ir.ANY_MEMORY
 
 
 # --- the operation vocabulary ------------------------------------------------
@@ -420,30 +425,92 @@ def test_not_writes_no_flags() -> None:
 @pytest.mark.parametrize(
     ("code", "why"),
     [
-        ("0E", "push cs"),
-        ("16", "push ss"),
-        ("07", "pop es"),
-        ("F3 AB", "rep stosw"),
-        ("C9", "leave"),
-        ("EA 00 00 00 00", "a far jmp, whose target is not in the instruction"),
-        ("F7 E9", "one-operand imul, which writes dx:ax"),
         ("26 8B 06 34 12", "a segment override"),
+        ("8E 06 00 00", "mov es,[x] -- it changes what every later es access means"),
+        ("8C C8", "mov ax,cs -- a segment register anywhere but a push or a pop"),
         ("CD 35 46 C8", "the x87 emulator's own int 35h"),
+        ("CD 21", "an ordinary software interrupt"),
+        ("E4 40", "in -- what it does happens in a device"),
+        ("EE", "out, likewise"),
+        ("AB", "stosw with no rep prefix: a different shape, absent from this corpus"),
+        ("F6 E9", "byte-wide imul, whose whole product lands in ax rather than a pair"),
+        ("FF 2E 34 12", "an indirect far jmp, which reads its target out of memory"),
     ],
 )
-def test_the_deliberately_refused_shapes_stay_opaque(code: str, why: str) -> None:
-    # Refusing is always safe -- a later pass declines the whole region. A
-    # wrong effect is silently catastrophic, which is why none of these is
-    # guessed at. See ir.SHAPE's own comment.
+def test_the_deliberately_refused_shapes_stay_barriers(code: str, why: str) -> None:
+    # A barrier claims nothing, which is always safe; a wrong effect is
+    # silently catastrophic, which is why none of these is guessed at. See
+    # ir.SHAPE's own comment for what each one would have cost.
     assert _semantics(code) is ir.UNMODELLED, why
 
 
-def test_an_opaque_node_still_carries_a_complete_effect() -> None:
-    # The point of the split: a shape with no modelled operation still has an
-    # iced-derived def/use, so liveness across it is exact rather than absent.
-    effects = _effects("C9")
+def test_a_barrier_still_carries_a_complete_effect() -> None:
+    # The point of the split, and the point of a barrier: a shape with no
+    # modelled operation still has an iced-derived def/use, so liveness
+    # across it is exact rather than absent. `in al,40h` -- PITSNAP's own
+    # port read, the shape this pass will never model.
+    assert _defs("E4 40") == frozenset({Register.EAX})
+    assert _effects("E4 40").flags_written is Flag.NONE
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        # BC builds the far pointer it hands B$OEGA as `push cs / push ax`,
+        # and PDS 7.1's /Ot prologue points es at the frame with
+        # `push ss / pop es` before its own `rep stosw`.
+        ("0E", ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Reg(Register.CS, 2),))),
+        ("16", ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Reg(Register.SS, 2),))),
+        ("07", ir.Semantics(ir.Operation.POP, "pop", (ir.Reg(Register.ES, 2),))),
+    ],
+)
+def test_a_segment_register_is_pushed_and_popped_like_any_other(code: str, expected: ir.Semantics) -> None:
+    assert _semantics(code) == expected
+
+
+def test_leave_names_both_registers_it_writes_and_the_one_it_reads() -> None:
+    # `leave` is `mov sp,bp` then `pop bp`. Naming only sp would tell a
+    # value-numbering pass that bp still held the caller's frame pointer.
+    assert _semantics("C9") == ir.Semantics(
+        ir.Operation.LEAVE, "leave", (ir.Reg(Register.SP, 2), ir.Reg(Register.BP, 2)), (ir.Reg(Register.BP, 2),)
+    )
     assert _defs("C9") == frozenset({Register.EBP, Register.ESP})
-    assert effects.loads == (ir.Mem(None, 2),)
+    assert _effects("C9").flags_written is Flag.NONE
+
+
+def test_a_rep_fill_writes_a_cell_it_cannot_name_and_reads_its_count() -> None:
+    # `rep stosw` writes cx words through es:di. The destination is unnamed
+    # and unsized -- iced reports that access at MemorySize.UNKNOWN, because
+    # the extent is cx words rather than one -- and an unnamed cell aliases
+    # everything, which is the answer a fill wants.
+    found = _semantics("F3 AB")
+    assert found == ir.Semantics(
+        ir.Operation.FILL,
+        "stosw",
+        (ir.Mem(None, 0),),
+        (AX, ir.Reg(Register.CX, 2), ir.Reg(Register.DI, 2), ir.Reg(Register.ES, 2)),
+    )
+    assert _effects("F3 AB").stores == (ir.Mem(None, 0),)
+    assert _effects("F3 AB").loads == ()
+
+
+def test_the_widening_multiply_names_both_halves_of_its_product() -> None:
+    # `imul cx` is dx:ax <- ax * cx -- two destinations, the shape
+    # Semantics.dests already carries for the absorbed divide. Naming only ax
+    # would tell a value-numbering pass dx still held what it held before.
+    assert _semantics("F7 E9") == ir.Semantics(ir.Operation.MULTIPLY, "imul", (AX, DX), (AX, ir.Reg(Register.CX, 2)))
+    assert _semantics("66 F7 E9") == ir.Semantics(ir.Operation.MULTIPLY, "imul", (EAX, EDX), (EAX, ECX))
+    assert _defs("F7 E9") == frozenset({Register.EAX, Register.EDX})
+
+
+def test_a_far_jump_is_control_leaving_the_body_with_no_target_invented() -> None:
+    # Where it goes is a segment:offset a fixup writes, not something in the
+    # instruction -- so no edge is built and none is guessed. All 14 in this
+    # corpus are an event-poll stub's own tail.
+    found = _semantics("EA 00 00 00 00")
+    assert found == ir.Semantics(ir.Operation.ESCAPE, "jmp")
+    assert found.target is None
+    assert ir.modelled(found) is True
 
 
 def test_semantics_never_claims_a_register_or_cell_the_effects_do_not(mapped_obj: Path) -> None:
@@ -469,17 +536,13 @@ def test_semantics_never_claims_a_register_or_cell_the_effects_do_not(mapped_obj
                     assert where in effects.loads, semantics
 
 
-# Every encoding in the corpus this pass deliberately declines to model. Not
-# a coverage floor with slack in it: an encoding leaving this set is a
-# regression, and one joining it is a decision to make deliberately.
-REFUSED = {
-    Code.PUSHW_CS,
-    Code.PUSHW_SS,
-    Code.POPW_ES,
-    Code.STOSW_M16_AX,
-    Code.LEAVEW,
-    Code.JMP_PTR1616,
-}
+# Every encoding in the corpus this pass deliberately carries as a barrier
+# rather than modelling. Empty, and measured: `push cs`, `push ss`, `pop es`,
+# `rep stosw`, `leave` and the far `jmp` were the whole of it -- 47 of 17970
+# instructions -- and all six are modelled now. Not a coverage floor with
+# slack in it: an encoding joining this set is a decision to make
+# deliberately, and one leaving it is a regression.
+REFUSED: set[int] = set()
 
 
 def test_the_corpus_is_modelled_except_for_exactly_the_refused_encodings(fixtures: Path) -> None:
@@ -499,12 +562,19 @@ def test_the_corpus_is_modelled_except_for_exactly_the_refused_encodings(fixture
                 elif isinstance(node, ir.Opaque | ir.Long | ir.Call):
                     unmodelled.add(node.insn.code)
     assert unmodelled == REFUSED
-    assert modelled / total > 0.99, f"{modelled}/{total}"
+    assert modelled == total
 
 
 def test_a_restore_and_a_table_carry_their_own_operations() -> None:
     assert ir.RESTORE_IDIOM.op is ir.Operation.RESTORE
     assert ir.TABLE_DATA.op is ir.Operation.DATA
+    # the two predicates are one another's negation, on every operation there
+    # is -- so "may I reason about this" and "must I carry this" can never
+    # both be true, and can never both be false
+    for op in ir.Operation:
+        found = ir.Semantics(op)
+        assert ir.modelled(found) is not ir.barrier(found)
+    assert ir.barrier(ir.UNMODELLED) is True
     assert ir.modelled(ir.UNMODELLED) is False
 
 
@@ -540,13 +610,23 @@ def test_a_far_return_carries_the_bytes_it_pops() -> None:
     assert found.sources == (ir.Imm(value=4, width=2),)
 
 
-def test_every_procedure_but_the_two_known_ones_lifts(fixtures: Path) -> None:
-    """A procedure ends in `retf n`, so leaving RETF unmodelled refused every
-    one of them -- 0 of 30 in these fixtures before it landed. The one that
-    still refuses is procs-p-ot's TWICE, whose /Ot prologue zeroes its frame
-    with push ss / pop es / rep stosw and closes with leave.
+def test_every_body_of_every_kind_is_fully_modelled(fixtures: Path) -> None:
+    """Per-body liftability, split by kind, and exact rather than a floor.
+
+    The history is the point. Every procedure ends in `retf n`, so leaving
+    RETF unmodelled refused all 30 of them; modelling it left one, procs-p-ot's
+    TWICE, whose /Ot prologue zeroes its frame with push ss / pop es /
+    rep stosw and closes with `leave`. The 15 main bodies that refused all
+    refused on the `push cs` under B$OEGA's far pointer, and all 14 event
+    stubs on `push cs` and the far `jmp` in their own trampoline. So five
+    encodings held 30 of 154 bodies, and one unmodelled instruction refuses
+    the whole body it sits in either way -- which is the reason barriers
+    exist and the reason these five were worth modelling instead.
+
+    A body joining or leaving this is a decision, not a number to relax.
     """
-    liftable = refused = 0
+    liftable: dict[extent.BodyKind, int] = {kind: 0 for kind in extent.BodyKind}
+    refused: dict[extent.BodyKind, int] = {kind: 0 for kind in extent.BodyKind}
     for path in sorted(fixtures.glob("*.obj")):
         found = module.load(path)
         assert found is not None
@@ -554,10 +634,57 @@ def test_every_procedure_but_the_two_known_ones_lifts(fixtures: Path) -> None:
         if isinstance(result, str):
             continue
         for body_ir in result:
-            if body_ir.body.kind is not extent.BodyKind.PROCEDURE:
-                continue
-            if all(ir.modelled(node.semantics) for node in body_ir.nodes):
-                liftable += 1
-            else:
-                refused += 1
-    assert (liftable, refused) == (29, 1), "a procedure joining or leaving this is a decision"
+            counted = liftable if all(ir.modelled(node.semantics) for node in body_ir.nodes) else refused
+            counted[body_ir.body.kind] += 1
+    assert liftable == {extent.BodyKind.MAIN: 110, extent.BodyKind.PROCEDURE: 30, extent.BodyKind.EVENT_STUB: 14}
+    assert refused == {kind: 0 for kind in extent.BodyKind}
+
+
+def test_a_barrier_is_carried_rather_than_refusing_the_body_it_sits_in() -> None:
+    """The whole of Part 1, on the one shape this pass will never model.
+
+    `in al,40h` is PITSNAP's own port read: its effect is a device's, so
+    nothing about it is claimed. It still becomes a node with a complete
+    Effects, its bytes still emit verbatim, and everything around it is
+    modelled -- which is what lets a caller lift the body and leave this one
+    instruction where it is.
+    """
+    code = hx("B8 01 00") + hx("E4 40") + hx("C3")  # mov ax,1 / in al,40h / ret
+    insns = []
+    at = 0
+    while at < len(code):
+        insn = decode(code, at)
+        assert insn is not None
+        insns.append(insn)
+        at = insn.end
+
+    block = Block(0, len(code), tuple(insns), Ends.RETURN, ())
+    found = module.Module([], 0, "T", code, 0, len(code))
+    mapped = CodeMap(frozenset(insn.at for insn in insns), frozenset())
+    nodes = ir.decode_body(found, mapped, [block], Body(BodyKind.MAIN, 0, None, ((0, len(code)),)))
+
+    port = nodes[1]
+    assert ir.barrier(port.semantics) is True
+    assert ir.modelled(port.semantics) is False
+    assert [ir.modelled(node.semantics) for node in nodes] == [True, False, True]
+    assert ir.emit(found, nodes) == code
+    # a barrier's registers are the encoding's own, so the allocator may not
+    # rename them; a modelled node pins nothing, which is what modelling buys
+    assert ir.pinned(port) == frozenset({Register.EAX})
+    assert ir.pinned(nodes[0]) == frozenset()
+    # and its memory reach is unknown in both directions, so anything
+    # promoted to a register is written back before it and re-read after
+    assert port.effects.loads == ir.ANY_MEMORY
+    assert port.effects.stores == ir.ANY_MEMORY
+
+
+def test_a_barrier_whose_reach_is_wholly_unknown_pins_every_register() -> None:
+    # `int 21h`: flow puts its registers beyond iced's own per-instruction
+    # answer (Effects' None), and pinned() carries that through as None rather
+    # than as an empty set a caller would read as "rename freely".
+    code = hx("CD 21")
+    insn = decode(code, 0)
+    assert insn is not None
+    node = ir.Opaque(insn, ir.instruction_effects(insn, module.literal_only), ir.UNMODELLED)
+    assert node.effects.defs is None
+    assert ir.pinned(node) is None

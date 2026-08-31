@@ -15,13 +15,14 @@ generically instead of only ever falling off a cliff.
 Two orthogonal things are recorded per node, and confusing them is how an
 optimiser gets silently wrong answers:
 
-  Effects  -- what the instruction disturbs. Always iced's own answer, never
-              this module's opinion, and rooted to the 32-bit parent (see
-              ROOT) so "does this touch the ax pair" is decided once. It is
-              the authority on def/use, and it is complete for every node.
+  Effects  -- what the instruction disturbs. iced's own answer, widened
+              where the encoding is not the whole story (a call, a barrier)
+              and never narrowed, and rooted to the 32-bit parent (see ROOT)
+              so "does this touch the ax pair" is decided once. It is the
+              authority on def/use, and it is complete for every node.
   Semantics -- what the instruction *computes*: an operation, its
               destinations and its sources as typed locations. Complete where
-              `op` is not Operation.OPAQUE. Its registers are the literal
+              `op` is not Operation.BARRIER. Its registers are the literal
               ones iced decoded, unrooted, because a value's identity is
               `ax`, not "somewhere in eax" -- the same distinction
               registers.py's own docstring draws for liveness.
@@ -31,12 +32,21 @@ Effects is what a code-motion or dead-store pass reads. A Semantics that is
 merely absent costs precision; an Effects that is wrong costs correctness,
 which is why nothing here ever narrows an effect below what iced reports.
 
+An instruction this pass cannot model is not a hole in the IR. It is a
+barrier: carried verbatim, with a complete and conservative Effects, and with
+a contract a caller honours instead of refusing the body it sits in -- see
+Operation.BARRIER and pinned(). So there are exactly two states a node's
+operation can be in, modelled and barrier, and no instruction is
+unrepresentable. The only remaining "nothing at all" is a module whose *bytes*
+could not be decoded or partitioned, which decode_module() answers with a
+string before any Node exists.
+
 The node *type* says which idiom claimed the node -- lift.classify()'s six
 single-instruction long-pair forms, a far call a fixup names, calls.py's own
 three-instruction "restore" idiom, an inline table -- and deliberately not
 whether its operation is modelled. Adding an encoding to the vocabulary
 therefore never reshuffles a consumer's own isinstance checks; it only fills
-in a Semantics that used to be Operation.OPAQUE.
+in a Semantics that used to be Operation.BARRIER.
 
 The emitter never reads a node's semantic fields, only its own byte span --
 `module.code[node.at:node.end]` via `span()`, for every node kind, always.
@@ -51,6 +61,7 @@ from enum import StrEnum
 from dataclasses import dataclass
 from collections.abc import Callable
 
+from iced_x86 import Code
 from iced_x86 import OpKind
 from iced_x86 import Mnemonic
 from iced_x86 import Register
@@ -197,34 +208,62 @@ ANY_MEMORY = (Mem(None, 0),)
 
 
 class Operation(StrEnum):
-    """What a node computes. OPAQUE is the refusal, and it is always safe:
-    a pass that cannot read a node's operation refuses the region."""
+    """What a node computes.
+
+    Two states, and only two: modelled, where the fields each member names
+    below mean exactly what they say, and BARRIER, where nothing at all is
+    claimed. There is no third, unrepresentable state -- see BARRIER.
+    """
 
     MOVE = "move"  # dests[0] <- sources[0]
     ADDRESS = "addr"  # dests[0] <- the numeric value of sources[0]
     BINARY = "binary"  # dests[0] <- sources[0] `name` sources[1], and sources[0] IS dests[0]
-    MULTIPLY = "mul"  # dests[0] <- sources[0] * sources[1]; unlike BINARY, no source need be the dest
+    # dests[0] <- sources[0] * sources[1]; unlike BINARY, no source need be the dest. The widening
+    # one-operand form has two destinations instead: dests[0] the low half, dests[1] the high.
+    MULTIPLY = "mul"
     DIVIDE = "div"  # dests[0] <- the quotient and dests[1] <- the remainder of sources[0]:sources[1] / sources[2]
     COMPARE = "cmp"  # flags only, from sources[0] and sources[1]
     UNARY = "unary"  # dests[0] <- `name` sources[0], and sources[0] IS dests[0]
     EXTEND = "extend"  # dests[0] <- the sign of sources[0]: cwd, cdq
     PUSH = "push"  # sources[0] onto the stack; the cell and sp are Effects' business, not this layer's
     POP = "pop"  # dests[0] off the stack, likewise
+    LEAVE = "leave"  # dests[0] <- sources[0], then dests[1] off the stack: `leave` is `mov sp,bp` then `pop bp`
+    FILL = "fill"  # sources[1] copies of sources[0] into dests[0], addressed by sources[3]:sources[2], which steps
     JUMP = "jump"  # unconditional, to `target`
     BRANCH = "branch"  # conditional on the flags, to `target`
+    # Control leaves the body, to somewhere the instruction does not name -- a direct far `jmp`. All a
+    # CFG needs of one, and all that is honest about one. Never named by SHAPE; _jump() returns it.
+    ESCAPE = "escape"
     CALL = "call"
     RETURN = "ret"
     NOTHING = "nothing"  # computes nothing, transfers nowhere, touches no flag
     RESTORE = "restore"  # calls.py's own idiom -- see Restore
     DATA = "data"  # not an instruction at all -- see Data
-    OPAQUE = "opaque"
+
+    # An instruction this pass cannot model, but can still carry. Not a
+    # refusal of the body it sits in: its bytes are emitted verbatim, its
+    # Effects are complete and conservative, and everything around it lifts.
+    # Three rules make that safe, and a caller owes all three:
+    #
+    #   Nothing may be reordered across it, in either direction.
+    #   Its registers are pinned -- see pinned() -- because a barrier's
+    #     behaviour is its encoding's, and the encoding names physical
+    #     registers rather than values.
+    #   Memory promoted to a variable is written back before it and re-read
+    #     after. Its memory reach is unknown, and instruction_effects() says
+    #     so rather than leaving a consumer to remember it.
+    #
+    # modelled() is false here and nowhere else, so a pass that may only
+    # reason about known semantics still declines exactly what it declined
+    # before barriers existed.
+    BARRIER = "barrier"
 
 
 @dataclass(frozen=True, slots=True)
 class Semantics:
     """What one node computes, as typed locations.
 
-    Complete only where `op` is not Operation.OPAQUE. `name` is the operation's
+    Complete only where `op` is not Operation.BARRIER. `name` is the operation's
     own mnemonic, lowercase, and is what distinguishes `add` from `adc` and
     `je` from `jne` -- so it is the operator identity a value number is keyed
     on, stable across every encoding of the same mnemonic.
@@ -243,13 +282,23 @@ class Semantics:
     target: int | None = None
 
 
-UNMODELLED = Semantics(Operation.OPAQUE)
+# Named for what it claims -- nothing -- where Operation.BARRIER is named for
+# what a caller must do about it. The mnemonic is deliberately not carried:
+# a barrier node always wraps a real Insn, so there is nowhere for a second,
+# drifting copy of it to live.
+UNMODELLED = Semantics(Operation.BARRIER)
 RESTORE_IDIOM = Semantics(Operation.RESTORE, "restore")
 TABLE_DATA = Semantics(Operation.DATA)
 
 
 def modelled(semantics: Semantics) -> bool:
-    return semantics.op is not Operation.OPAQUE
+    return semantics.op is not Operation.BARRIER
+
+
+def barrier(semantics: Semantics) -> bool:
+    """Exactly `not modelled()`, named for what a caller must do rather than
+    for what it may not assume: a barrier is carried, not refused."""
+    return semantics.op is Operation.BARRIER
 
 
 def _register_effects(insn: Insn) -> tuple[frozenset[Register_], frozenset[Register_]]:
@@ -308,15 +357,35 @@ def _memory_effects(insn: Insn, resolve: Resolver) -> tuple[tuple[Mem, ...], tup
 
 
 def instruction_effects(insn: Insn, resolve: Resolver) -> Effects:
-    """The conservative, iced-derived effect of one real instruction."""
+    """The conservative effect of one real instruction.
+
+    iced's own answer, widened in the two places where the encoding is not
+    the whole story and never narrowed anywhere.
+
+    A call or interrupt, because the real effect is the callee's.
+
+    A barrier, in its memory reach only. An emulated x87 site is the case
+    that proves it: declen.py hands iced a reconstruction of the ESC opcode,
+    but whether that opcode ever executes is LINK's decision (AGENTS.md --
+    "the emulator patch is driven by a linker symbol"), and where it does not,
+    what runs is a software routine with memory of its own that is nowhere in
+    the encoding. `out` is the second: programming a DMA controller through a
+    port writes memory this layer cannot see. Registers are *not* widened to
+    match, because a barrier already pins them and nothing may be reordered
+    across it -- so exact liveness across one costs no safety and buys the
+    2130 emulator sites in qb-qrender.
+    """
     if insn.flow in CLOBBERS:
         # The callee's flag reads are as unknowable as its writes. Costs
         # nothing in practice -- flags_written is already ALL, so nothing
         # set before the call survives it either way.
         return Effects(None, None, written_by(insn), ALL, ANY_MEMORY, ANY_MEMORY)
     defs, uses = _register_effects(insn)
+    read = Flag(insn.reads & ALL)
+    if barrier(instruction_semantics(insn, resolve)):
+        return Effects(defs, uses, written_by(insn), read, ANY_MEMORY, ANY_MEMORY)
     loads, stores = _memory_effects(insn, resolve)
-    return Effects(defs, uses, written_by(insn), Flag(insn.reads & ALL), loads, stores)
+    return Effects(defs, uses, written_by(insn), read, loads, stores)
 
 
 # What each immediate encoding means once sign extension has been applied.
@@ -337,7 +406,7 @@ def _location(insn: Insn, index: int, resolve: Resolver) -> Loc | None:
     None is the refusal that keeps the vocabulary honest: a segment register,
     a far branch, a string operand's implicit es:di -- anything a builder
     cannot express reaches here, and the whole instruction falls back to
-    Operation.OPAQUE rather than being described half-right.
+    Operation.BARRIER rather than being described half-right.
     """
     match insn.insn.op_kind(index):
         case OpKind.REGISTER:
@@ -383,24 +452,45 @@ def _binary(insn: Insn, resolve: Resolver, op: Operation, name: str) -> Semantic
     return None if dest is None or source is None else Semantics(op, name, (dest,), (dest, source))
 
 
-def _multiply(insn: Insn, resolve: Resolver, op: Operation, name: str) -> Semantics | None:
-    """`imul` in its two- and three-operand forms only.
+# imul's own implicit pair in its one-operand, widening form: the (low, high)
+# destinations and the accumulator half it reads, by the width of its one
+# explicit operand. The 8-bit form puts the whole 16-bit product in ax --
+# one destination, a different shape altogether -- so it is left out rather
+# than bent to fit, exactly as DIVIDE_PAIR leaves out its own byte form.
+WIDE_MULTIPLY = {
+    4: ((Reg(Register.EAX, 4), Reg(Register.EDX, 4)), Reg(Register.EAX, 4)),
+    2: ((Reg(Register.AX, 2), Reg(Register.DX, 2)), Reg(Register.AX, 2)),
+}
 
-    The one-operand form reads and writes the dx:ax (or edx:eax) pair the
-    way `idiv` does, and is not what calls.py absorbs a B$MUI4 into -- that
-    is a plain `imul r32,rm32`, because AGENTS.md's own measurement is that
-    B$MUI4 wraps exactly as `imul` does.
+
+def _multiply(insn: Insn, resolve: Resolver, op: Operation, name: str) -> Semantics | None:
+    """`imul` in all three of its forms.
+
+    The one-operand form writes the dx:ax (or edx:eax) pair the way `idiv`
+    does -- two implicit destinations, the shape Semantics.dests already
+    exists for. It is not what calls.py absorbs a B$MUI4 into: that is a
+    plain `imul r32,rm32`, because AGENTS.md's own measurement is that
+    B$MUI4 wraps exactly as `imul` does. Not in the 110-fixture corpus at
+    all -- reported twice in bench/nbody.bas's own main body, for which
+    there is no object here -- so what pins this shape is the unit case,
+    not a census.
     """
-    dest = _destination(insn, 0, resolve)
-    if dest is None:
-        return None
     match insn.insn.op_count:
+        case 1:
+            factor = _location(insn, 0, resolve)
+            if not isinstance(factor, Reg | Mem):
+                return None
+            found = WIDE_MULTIPLY.get(factor.width)
+            return None if found is None else Semantics(op, name, found[0], (found[1], factor))
         case 2:
-            source = _location(insn, 1, resolve)
-            return None if source is None else Semantics(op, name, (dest,), (dest, source))
+            dest, source = _destination(insn, 0, resolve), _location(insn, 1, resolve)
+            return None if dest is None or source is None else Semantics(op, name, (dest,), (dest, source))
         case 3:
+            dest = _destination(insn, 0, resolve)
             left, right = _location(insn, 1, resolve), _location(insn, 2, resolve)
-            return None if left is None or right is None else Semantics(op, name, (dest,), (left, right))
+            if dest is None or left is None or right is None:
+                return None
+            return Semantics(op, name, (dest,), (left, right))
         case _:
             return None
 
@@ -458,28 +548,108 @@ def _extend(insn: Insn, _resolve: Resolver, op: Operation, name: str) -> Semanti
     return None if found is None else Semantics(op, name, (found[0],), (found[1],))
 
 
+def _stack_slot(insn: Insn, index: int, resolve: Resolver) -> Loc | None:
+    """One operand of a push or a pop, where a segment register is a location too.
+
+    A push or a pop of one moves sixteen bits to or from the stack and changes
+    no addressing on the way. BC emits three shapes of it and nothing else:
+    `push cs` under the offset of the far pointer it hands B$OEGA (15 main
+    bodies) and in the event-poll stub's own far-jump trampoline (14), and
+    `push ss` / `pop es` to point es at the frame for PDS 7.1's /Ot
+    `rep stosw` (1). Reading *through* a segment register is refused whole --
+    lift.operand() declines a segment override outright -- which is why the
+    allowance is here and not in _location(): `mov es,[x]` changes what every
+    later es access means, and this pass has no notion of a segment to record
+    that in.
+    """
+    if insn.insn.op_kind(index) == OpKind.REGISTER:
+        register = insn.insn.op_register(index)
+        if RegisterExt.is_segment_register(register):
+            return Reg(register, RegisterExt.size(register))
+    return _location(insn, index, resolve)
+
+
 def _push(insn: Insn, resolve: Resolver, op: Operation, name: str) -> Semantics | None:
     if insn.insn.op_count != 1:
         return None
-    source = _location(insn, 0, resolve)
+    source = _stack_slot(insn, 0, resolve)
     return None if source is None else Semantics(op, name, sources=(source,))
 
 
 def _pop(insn: Insn, resolve: Resolver, op: Operation, name: str) -> Semantics | None:
     if insn.insn.op_count != 1:
         return None
-    dest = _destination(insn, 0, resolve)
-    return None if dest is None else Semantics(op, name, (dest,))
+    dest = _stack_slot(insn, 0, resolve)
+    return None if not isinstance(dest, Reg | Mem) else Semantics(op, name, (dest,))
+
+
+def _leave(insn: Insn, _resolve: Resolver, op: Operation, name: str) -> Semantics | None:
+    """`leave` is exactly `mov sp,bp` then `pop bp`.
+
+    PDS 7.1 under /Ot closes a procedure with it where every other
+    configuration far-calls B$EXSA (extent.py's own docstring names that
+    difference); one site in this corpus, procs-p-ot's own TWICE. The stack
+    cell the pop reads is Effects' business rather than this layer's, the
+    line Operation.POP already draws. Gated on the 16-bit encoding: `leaved`
+    is one line more and BC emits none, and EXTEND_PAIR's own comment says
+    why guessing it in advance is how a table stops being measured.
+    """
+    if insn.code != Code.LEAVEW:
+        return None
+    stack, frame = Reg(Register.SP, 2), Reg(Register.BP, 2)
+    return Semantics(op, name, (stack, frame), (frame,))
+
+
+def _fill(insn: Insn, _resolve: Resolver, op: Operation, name: str) -> Semantics | None:
+    """`rep stosw`: cx words of ax written through es:di, di stepping by DF.
+
+    PDS 7.1's /Ot prologue zeroes a procedure's whole frame this way, where
+    every other configuration calls B$ENRA instead -- one site, procs-p-ot's
+    own TWICE again. The destination is unnamed and unsized on purpose: es:di
+    is not an address lift.operand() can name, and the extent is cx words
+    rather than one, which is exactly what iced reports by giving that access
+    MemorySize.UNKNOWN. An unnamed cell aliases everything, which is the
+    answer a fill wants. Without the REP prefix the count is implicit and the
+    shape is a different one; there is none in this corpus, so there is none
+    here.
+    """
+    if insn.code != Code.STOSW_M16_AX or not insn.insn.has_rep_prefix:
+        return None
+    value, count = Reg(Register.AX, 2), Reg(Register.CX, 2)
+    through, segment = Reg(Register.DI, 2), Reg(Register.ES, 2)
+    return Semantics(op, name, (Mem(None, 0),), (value, count, through, segment))
 
 
 def _transfer(insn: Insn, _resolve: Resolver, op: Operation, name: str) -> Semantics | None:
-    """A jump or a conditional branch whose target is a computable offset.
-
-    A far jump (`jmp 0:0`, the event stub's own tail) reports no near-branch
-    target at all and stays opaque: where it goes is not in the instruction.
-    """
+    """A jump or a conditional branch whose target is a computable offset."""
     target = insn.target
     return None if target is None else Semantics(op, name, target=target)
+
+
+# A direct far branch's target: a segment:offset immediate, which is where a
+# fixup writes rather than something computable from the instruction.
+FAR_BRANCH = (OpKind.FAR_BRANCH16, OpKind.FAR_BRANCH32)
+
+
+def _jump(insn: Insn, resolve: Resolver, op: Operation, name: str) -> Semantics | None:
+    """A near `jmp` goes where the instruction says. A direct far `jmp` does not.
+
+    `jmp far ptr 0:0` holds a zeroed segment:offset that a fixup names, so
+    there is no edge in the instruction to build and none is invented: it
+    becomes Operation.ESCAPE, which says control leaves the body and does not
+    fall through, and says nothing else. Measured, all 14 in this corpus are
+    the tail of an event-poll stub's own `pop ax / push cs / push ax /
+    jmp far 0:0` trampoline -- the shape /V and /W emit to hand control back
+    to the runtime.
+
+    The indirect far forms stay barriers: they read their target out of
+    memory, and AGENTS.md's own census finds not one `FF /4` or `/5` in any
+    module, so there is nothing to measure a model against.
+    """
+    near = _transfer(insn, resolve, op, name)
+    if near is not None:
+        return near
+    return Semantics(Operation.ESCAPE, name) if insn.insn.op0_kind in FAR_BRANCH else None
 
 
 def _call(insn: Insn, _resolve: Resolver, op: Operation, name: str) -> Semantics | None:
@@ -516,7 +686,9 @@ BUILD: dict[Operation, Builder] = {
     Operation.EXTEND: _extend,
     Operation.PUSH: _push,
     Operation.POP: _pop,
-    Operation.JUMP: _transfer,
+    Operation.LEAVE: _leave,
+    Operation.FILL: _fill,
+    Operation.JUMP: _jump,
     Operation.BRANCH: _transfer,
     Operation.CALL: _call,
     Operation.RETURN: _return,
@@ -530,22 +702,38 @@ BUILD: dict[Operation, Builder] = {
 # 32-bit forms of the same mnemonics on top of that. Operand shapes are read
 # from iced generically, and a builder that cannot express one refuses.
 #
-# What is deliberately absent, and stays Operation.OPAQUE: the x87 emulator's
-# own int 34h-3Dh sites (declen.py decodes their length; floats are a later
-# phase entirely), `push cs`/`push ss`/`pop es`, `stosw`, `leave`, one-operand
-# `imul`, a byte-wide `idiv`, `in`/`out`, and a far `jmp`. Refusing is always
-# safe; a wrong effect is not.
+# What is deliberately absent, and stays Operation.BARRIER -- carried
+# verbatim, never reasoned about:
 #
-# A far `jmp` stays out for a reason worth stating: where it goes is not in
-# the instruction, so nothing here can build the edge, and measured it is
-# every one of the 14 event-poll stubs and nothing else -- bodies /V and /W
-# produce, which this pass does not optimise anyway.
+#   x87, both the real mnemonics and the emulator's own int 34h-3Dh sites.
+#     Modelling them means representing an eight-deep register stack, and
+#     floats are a later phase entirely; declen.py already decodes their
+#     length, which is the whole of what carrying one needs.
+#   `in` and `out`. What they do happens in a device, not in this machine,
+#     and it is not knowledge to claim.
+#   anything carrying a segment override. This pass has no notion of a
+#     segment, so `es:[x]` and `ds:[x]` would read as the same location --
+#     lift.operand()'s own refusal, quoted at instruction_semantics.
+#   `mov es,[x]`, which carries no override and is refused for the other half
+#     of the same reason: it changes what every later es access means, and
+#     there is nowhere here to record that. Only a push or a pop of a segment
+#     register is modelled (_stack_slot).
+#   a byte-wide `imul` or `idiv`, whose product or quotient lands in ax alone
+#     rather than in a pair. A different shape, and absent from this corpus.
+#   the indirect far transfers, `FF /4` and `/5`. Not one appears in any
+#     module (AGENTS.md's own census), so there is nothing to model against.
 #
 # RETF is its own mnemonic rather than a form of RET, which is why it was
 # absent: _return already handled both its shapes. Measured, that one line
 # is the whole reason no procedure in the corpus could be lifted -- every
-# one of the 31 ends in `retf n`, and one unmodelled epilogue refuses the
+# one of the 30 ends in `retf n`, and one unmodelled epilogue refuses the
 # body it closes.
+#
+# LEAVE, STOSW, the segment-register push and pop (_stack_slot), the widening
+# one-operand `imul` (WIDE_MULTIPLY) and the far `jmp` (_jump) came in
+# together, and between them they were every unmodelled instruction in this
+# corpus: 47 of 17970, refusing 30 of its 154 bodies. None of the five needed
+# a guess -- each is either a move, a frame mechanic, or control leaving.
 SHAPE: dict[int, tuple[Operation, str]] = {
     Mnemonic.MOV: (Operation.MOVE, "mov"),
     Mnemonic.LEA: (Operation.ADDRESS, "lea"),
@@ -572,6 +760,8 @@ SHAPE: dict[int, tuple[Operation, str]] = {
     Mnemonic.NOP: (Operation.NOTHING, "nop"),
     Mnemonic.PUSH: (Operation.PUSH, "push"),
     Mnemonic.POP: (Operation.POP, "pop"),
+    Mnemonic.LEAVE: (Operation.LEAVE, "leave"),
+    Mnemonic.STOSW: (Operation.FILL, "stosw"),
     Mnemonic.JMP: (Operation.JUMP, "jmp"),
     Mnemonic.CALL: (Operation.CALL, "call"),
     Mnemonic.RET: (Operation.RETURN, "ret"),
@@ -596,7 +786,7 @@ SHAPE: dict[int, tuple[Operation, str]] = {
 
 
 def instruction_semantics(insn: Insn, resolve: Resolver) -> Semantics:
-    """What one real instruction computes, or Operation.OPAQUE.
+    """What one real instruction computes, or Operation.BARRIER.
 
     A segment-override prefix is refused outright, the way lift.operand()
     refuses one: this pass has no notion of a segment, so `es:[x]` and
@@ -614,7 +804,7 @@ class Opaque:
     """An instruction with no *idiom* this pass recognises by name.
 
     Its own operation may still be modelled -- `semantics.op` says, and
-    Operation.OPAQUE is the one value that means nothing is claimed. The
+    Operation.BARRIER is the one value that means nothing is claimed. The
     two are separate on purpose; see this module's own docstring.
     """
 
@@ -702,6 +892,27 @@ class Data:
 
 
 type Node = Opaque | Long | Call | Restore | Data
+
+
+def pinned(node: Node) -> frozenset[Register_] | None:
+    """Which registers a register allocator may not reassign at this node.
+
+    Empty for anything modelled -- being free to rename its registers is most
+    of what modelling it was for. For a barrier it is every root the
+    instruction touches, because a barrier's behaviour is its encoding's and
+    an encoding names physical registers rather than values: `rep stosw`
+    fills through es:di and counts cx, and the same bytes stepping si would
+    be a different instruction, not this one renamed.
+
+    None, as everywhere else here, is "assume every register" -- the answer
+    for a barrier whose flow already made Effects say so, an `int 21h` among
+    them.
+    """
+    if not barrier(node.semantics):
+        return frozenset()
+    if node.effects.defs is None or node.effects.uses is None:
+        return None
+    return node.effects.defs | node.effects.uses
 
 
 def span(node: Node) -> tuple[int, int]:

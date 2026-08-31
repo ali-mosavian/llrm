@@ -127,7 +127,7 @@ def _loc(where: ir.Loc) -> str:
 
 def _semantics(found: ir.Semantics) -> str:
     if not ir.modelled(found):
-        return "opaque"
+        return "barrier"
     dests = ",".join(map(_loc, found.dests))
     sources = ",".join(map(_loc, found.sources))
     target = f" -> {found.target:#06x}" if found.target is not None else ""
