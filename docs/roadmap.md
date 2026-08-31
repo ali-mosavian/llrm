@@ -206,10 +206,15 @@ So the work is deleting a reload, not allocating a class:
 
 Done when the old path is deleted, not when MIR also does it.
 
-- [x] widening — `transform.widened()`. Adjacent halves in one block only:
-      a pair straddling a block boundary means the high half is a branch
-      target, and folding it would leave that jump landing inside an
-      instruction
+- [ ] widening — `transform.widened()` is written and **off, because it was
+      wrong**. It folded `add ax,[x]` with `adc dx,[x+2]` into
+      `add eax,[x]`, and BC keeps a long in `dx:ax`, which is not `eax`:
+      the carry landed in eax's high half and dx kept what it held.
+      `suite/procs.bas` printed `0x02040C10` where it wants `0x04080C10`
+      on all twelve configurations, with the host suite green. What is
+      missing is the step before the rename -- proving the pair is one
+      value and putting it in one register, which is the analysis
+      `lift.py` already has and `wide.widened()` assumed away
 - [x] recovering the arguments — `mir._stack_slot` keeps the depth across a
       recognised call now, which is what put 831 of the corpus's 923
       absorbable calls out of reach: an argument pushed before some *other*
@@ -222,7 +227,11 @@ Done when the old path is deleted, not when MIR also does it.
       and a scratch register for `B$CPI4` because that routine clobbers
       nothing and absorbing it must not either. A code generator is not
       something to write blind
-- [x] load forwarding — `avail.redundant()`. What blocked it was
+- [x] load forwarding — `avail.redundant()`, 12 of 12. It also needed the
+      register's current value tracked: `holders()` maps a cell to the value
+      put there and says nothing about whether that value is still in its
+      register, so after `mov ax,[x]` then `mov ax,[y]` the entry for `[x]`
+      still names a value whose origin is eax. What blocked it first was
       `loaded_into` refusing a partial write: `mov ax,[x]` writes sixteen
       bits of a thirty-two bit variable, so the high half survives and MIR
       records a read of the old `eax`. A real read, and not the instruction
