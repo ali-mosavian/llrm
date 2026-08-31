@@ -38,8 +38,8 @@ Measured 2026-08-31. Re-measure before trusting it.
 | its x87 sites | 1,766, none optimised |
 | bench/nbody | 2.99× under DOSBox, 21 of 21 calls absorbed, pressure 6/6 |
 | corpus redundant reads | 553 — 73 live provider, 48 dead, 432 none |
-| selector coverage | 20,062 of 20,245 corpus ops, 0 mismatched |
-| segments MIR wrote | 49 of 125 objects; 12 link and run |
+| selector coverage | 20,152 of 20,245 corpus ops, 0 mismatched |
+| segments MIR wrote | 55 of 125 objects; 12 link and run |
 | **optimised and MIR-written** | **half the suite, on PDS /G2 and QuickBASIC /O, running correctly** |
 
 MIR does, end to end:
@@ -114,9 +114,9 @@ already have every body layable**, and that number grows with the selector.
       `nots` on PDS /G2 and QuickBASIC /O, in `tests/test_e2e.py`
 - [x] the ON GOTO tables BC puts between instructions — carried verbatim
       with their fixups, since the entries are relocated words
-- [ ] the 76 objects that refuse, all now on an op `select.py` will not
-      emit: `push cs`, a far `jmp`, `cmp` against an address with no fixup,
-      and VBDOS's `00 00` segment padding decoding as `add [bx+si],al`
+- [ ] the 70 objects that refuse, on two shapes with no nameable address:
+      VBDOS's `00 00` segment padding, which decodes as `add [bx+si],al`,
+      and `mov ax,[si]`, which has no displacement and so no fixup
 
 ## M2 — placement
 

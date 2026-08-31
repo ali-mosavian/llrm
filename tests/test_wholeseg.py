@@ -74,7 +74,8 @@ def test_the_code_block_comes_after_every_extdef(obj: Path) -> None:
 
 
 def test_the_rebuildable_share_is_what_was_measured() -> None:
-    """49 of the corpus's 125 objects. A canary on reach: the 76 refusals
-    are all ops select.py cannot emit, now that inline tables are carried."""
+    """55 of the corpus's 125 objects. A canary on reach: the 70 refusals
+    are all ops select.py cannot emit -- `add [bx+si],al`, which is VBDOS's
+    own segment padding, and `mov ax,[si]`, whose address no fixup names."""
     done = sum(1 for obj in FIXTURES if wholeseg.rebuilt(obj.read_bytes())[1] == wholeseg.REBUILT)
-    assert done == 49
+    assert done == 55

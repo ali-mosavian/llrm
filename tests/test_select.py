@@ -130,7 +130,7 @@ def test_everything_selected_decodes_to_what_was_asked_for(obj: Path) -> None:
 def test_the_covered_share_of_the_corpus_is_what_was_measured() -> None:
     """A canary on progress, not on correctness.
 
-    99.1% of the corpus's operations. What is left is about two hundred
+    99.5% of the corpus's operations. What is left is about two hundred
     whose address is in a space operand_of() refuses, whose register is not
     one this names, or -- 16 of them -- an `escape`, which is a far jump
     this has no target for.
@@ -157,7 +157,7 @@ def test_the_covered_share_of_the_corpus_is_what_was_measured() -> None:
                         continue
                     if select.emit(what, at=op.at) is not None:
                         emitted += 1
-    assert (total, emitted) == (20245, 20062)
+    assert (total, emitted) == (20245, 20152)
 
 
 def test_a_wide_push_is_not_a_narrow_one() -> None:
@@ -242,14 +242,21 @@ def test_a_frame_slot_keeps_its_displacement() -> None:
 def test_the_spaces_that_cannot_be_encoded_are_refused() -> None:
     """A FAR address needs a segment override this does not model, a GROUP
     one is refused everywhere in this project, and a STACK one is mir.py's
-    name for a push slot rather than anything an instruction encodes."""
+    name for a push slot rather than anything an instruction encodes.
+
+    Space.LITERAL is not among them: a displacement no fixup claims is a
+    real address in the code, which encodes like any other and needs
+    nothing moved with it.
+    """
     from qbopt import ir
     from qbopt.module import Addr
     from qbopt.module import Space
 
-    for space in (Space.FAR, Space.GROUP, Space.STACK, Space.LITERAL):
+    for space in (Space.FAR, Space.GROUP, Space.STACK):
         assert select.operand_of(ir.Mem(Addr(space, 4), 2)) is None, space
     assert select.operand_of(ir.Mem(None, 2)) is None
+    literal = select.operand_of(ir.Mem(Addr(Space.LITERAL, 4), 2))
+    assert literal is not None and literal[1] is False, "a literal address relocates nothing"
 
 
 def test_a_cell_of_the_wrong_width_is_refused() -> None:

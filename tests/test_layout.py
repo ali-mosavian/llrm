@@ -19,6 +19,7 @@ from iced_x86 import Instruction
 
 import corpus
 from qbopt import mir
+from qbopt import omf
 from qbopt import layout
 from qbopt.declen import BITNESS
 from qbopt import blocks as split
@@ -105,7 +106,7 @@ def test_every_relocation_points_at_a_field_the_module_really_has(obj: Path) -> 
 def test_a_body_is_refused_whole_or_not_at_all() -> None:
     """Half this pass's code and half BC's is not something anything
     downstream could reason about, so one op it cannot emit refuses the
-    body. Measured: 50 of the corpus's 171 bodies lay out, and the rest name
+    body. Measured: 74 of the corpus's 171 bodies lay out, and the rest name
     the operation that stopped them."""
     total = done = 0
     for obj in FIXTURES:
@@ -122,7 +123,7 @@ def test_a_body_is_refused_whole_or_not_at_all() -> None:
                 assert ":" in got, f"a refusal should say which op: {got}"
             else:
                 done += 1
-    assert (total, done) == (171, 58)
+    assert (total, done) == (171, 74)
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
@@ -176,7 +177,11 @@ def rebuilt(obj: Path) -> tuple:
     bodies = list(mir.bodies(found, split.partition(found, mapped)))
     if not bodies:
         return None, None, None
-    got = layout.rebuild(found, bodies)
+    # The same fixup set wholeseg.py passes: Module.fixup_at holds only the
+    # segment and group OFF16 fixups, and a memory operand naming an
+    # external has one this would otherwise leave behind.
+    fields = frozenset(one.offset for one in omf.fixups(omf.parse(obj.read_bytes())) if one.seg == found.seg)
+    got = layout.rebuild(found, bodies, mapped.tables, fields)
     return found, bodies, (None if isinstance(got, str) else got)
 
 
@@ -204,8 +209,17 @@ def test_a_rebuilt_segment_carries_every_fixup(obj: Path) -> None:
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
 def test_a_rebuilt_segment_is_the_same_instructions(obj: Path) -> None:
-    _found, bodies, got = rebuilt(obj)
-    if got is None:
+    """Only where nothing was carried: an ON GOTO table's bytes decode as
+    instructions too, so counting them against the ops compares different
+    things. What the tables get instead is
+    test_a_rebuilt_segment_carries_every_fixup, since their entries are
+    fixups."""
+    found, bodies, got = rebuilt(obj)
+    if got is None or found is None:
+        return
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
+    if mapped.tables:
         return
     ops = sorted((op for _, body in bodies for op in layout._ordered(body)), key=lambda one: one.at)
     back = list(Decoder(BITNESS, got.code, ip=ops[0].at))
@@ -253,12 +267,12 @@ def test_the_rebuildable_share_is_what_was_measured() -> None:
     """42 of the corpus's 125 objects rebuild whole-segment.
 
     A canary on reach, and it moves for nameable reasons: refusing inline
-    data took it from 42 to 34, and teaching select.py the bare x87 forms --
-    fsqrt names st(0) in both dests and sources and encodes neither -- took
-    it back to 42 by unlocking every fpemu object.
+    data took it from 42 to 34, the bare x87 forms took it back to 42,
+    carrying the tables took it to 49, and asking for every fixup rather
+    than the subset Module.fixup_at holds took it to 55.
     """
     done = 0
     for obj in FIXTURES:
         if rebuilt(obj)[2] is not None:
             done += 1
-    assert done == 42
+    assert done == 55

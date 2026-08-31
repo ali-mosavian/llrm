@@ -118,6 +118,11 @@ def operand_of(what: ir.Mem) -> tuple[MemoryOperand, bool] | None:
             return MemoryOperand(base=addr.base, displ=0, displ_size=2), True
         case Space.FRAME if addr.base == Register.NONE:
             return MemoryOperand(base=Register.BP, displ=addr.disp, displ_size=2), False
+        case Space.LITERAL:
+            # A displacement no fixup claims, so the number in the code is
+            # the address and nothing has to move with it. BC writes these
+            # for the runtime's own fixed locations.
+            return MemoryOperand(base=addr.base, displ=addr.disp, displ_size=2), False
         case _:
             return None
 
@@ -455,6 +460,15 @@ def call_near(target: int, at: int = 0) -> Emitted | None:
         return None
 
 
+def jump_far(at: int = 0) -> Emitted | None:
+    """`jmp far ptr 0:0`, the far end of a body BC jumps out of.
+
+    The same shape as a far call and for the same reason: the target is not
+    in the code, the four bytes are zero and a fixup names where it goes.
+    """
+    return Emitted(bytes([0xEA, 0, 0, 0, 0]), 1)
+
+
 def call_far(at: int = 0) -> Emitted | None:
     """`call far ptr 0:0`, the shape BC emits for every runtime call.
 
@@ -629,6 +643,22 @@ def compare_mem(dest: Register_, cell: ir.Mem, at: int = 0) -> Emitted | None:
     return arith_mem("cmp", dest, cell, at)
 
 
+# The segment registers, which are not values -- mir.PHYSICAL keeps them
+# out -- and which an instruction still names. BC pushes cs to build a far
+# return address.
+SEGMENTS = {Register.CS: "CS", Register.DS: "DS", Register.ES: "ES", Register.SS: "SS"}
+
+
+def push_segment(one: Register_, width: int = 2, at: int = 0) -> Emitted | None:
+    """`push cs` and its kind, at the width the push actually moves."""
+    named = SEGMENTS.get(one)
+    if named is None:
+        return None
+    code = _code(f"PUSH{'D' if width == 4 else 'W'}_{named}")
+    # Named even though the opcode implies it: iced wants the operand.
+    return None if code is None else _assemble(Instruction.create_reg(code, one), at)
+
+
 def emit(
     what: ir.Semantics,
     at: int = 0,
@@ -676,6 +706,8 @@ def emit(
                     return unary(what.name or "", _remapped(into, where), at)
         case ir.Operation.PUSH if len(sources) == 1:
             match sources[0]:
+                case ir.Reg(register=one) if one in SEGMENTS:
+                    return push_segment(one, sources[0].width, at)
                 case ir.Reg(register=one):
                     return push(_remapped(one, where), at)
                 case ir.Imm(value=value, width=width):
@@ -688,6 +720,8 @@ def emit(
             return jump(what.target, at, short)
         case ir.Operation.CALL:
             return call_far(at) if what.target is None else call_near(what.target, at)
+        case ir.Operation.ESCAPE if what.target is None:
+            return jump_far(at)
         case ir.Operation.FLOAT_LOAD | ir.Operation.FLOAT_ARITH if sources:
             match sources[-1]:
                 case ir.Mem() as cell:

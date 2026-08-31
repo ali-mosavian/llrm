@@ -45,7 +45,8 @@ def rebuilt(data: bytes) -> tuple[bytes, str]:
     if not bodies:
         return data, "no bodies were raised"
 
-    laid = layout.rebuild(found, bodies, mapped.tables)
+    fields = frozenset(one.offset for one in omf.fixups(records) if one.seg == found.seg)
+    laid = layout.rebuild(found, bodies, mapped.tables, fields)
     if isinstance(laid, str):
         return data, laid
 

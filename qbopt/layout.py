@@ -99,7 +99,7 @@ def _retargeted(what: ir.Semantics, moved: dict[int, int]) -> ir.Semantics | Non
     return ir.Semantics(what.op, what.name, what.dests, what.sources, landed)
 
 
-def _field_in(found: Module, op: mir.Op) -> int | None:
+def _field_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -> int | None:
     """The address of the one relocated field inside `op`'s own bytes.
 
     Asked of the module rather than taken from the instruction's `disp_at`,
@@ -118,10 +118,14 @@ def _field_in(found: Module, op: mir.Op) -> int | None:
     """
     if op.node is None:
         return None
-    if op.at in found.calls and found.code[op.at : op.at + 1] == b"\x9a":
+    known = fields or frozenset(found.fixup_at)
+    lo, hi = ir.span(op.node)
+    # A far call and a far jmp put their four relocated bytes right after a
+    # one-byte opcode. Neither is a displacement, so neither is where a
+    # general search would look.
+    if found.code[op.at : op.at + 1] in (b"\x9a", b"\xea") and op.at + 1 in known:
         return op.at + 1
-    span = ir.span(op.node)
-    inside = [one for one in found.fixup_at if span[0] <= one < span[1]]
+    inside = [one for one in known if lo <= one < hi]
     return inside[0] if len(inside) == 1 else None
 
 
@@ -140,9 +144,9 @@ def _placed(ops: list[mir.Op], at: int, lengths: dict[int, int]) -> dict[int, in
     return moved
 
 
-def lay_out(body: MirBody, at: int, found: Module) -> Laid | str:
+def lay_out(body: MirBody, at: int, found: Module, fields: frozenset[int] = frozenset()) -> Laid | str:
     """Every op in `body`, emitted in order from `at`, or why it could not be."""
-    return _emitted(_ordered(body), at, found)
+    return _emitted(_ordered(body), at, found, fields)
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +171,7 @@ def rebuild(
     found: Module,
     bodies: list[tuple[str, MirBody]],
     tables: tuple[tuple[int, int], ...] = (),
+    fields: frozenset[int] = frozenset(),
 ) -> Laid | str:
     """Every body in the module, laid out one after another.
 
@@ -206,10 +211,10 @@ def rebuild(
     if covered != highest - lowest:
         return f"{lowest:#06x}: {highest - lowest - covered} bytes between the ops are not instructions"
 
-    return _emitted(sorted([*ops, *inside], key=lambda one: one.at), lowest, found)
+    return _emitted(sorted([*ops, *inside], key=lambda one: one.at), lowest, found, fields)
 
 
-def _emitted(ops: list, at: int, found: Module) -> Laid | str:
+def _emitted(ops: list, at: int, found: Module, fields: frozenset[int] = frozenset()) -> Laid | str:
     """Every item in order from `at`, shrunk to a fixed point and emitted.
 
     An item is an op, which select.py encodes, or a Table, which is copied.
@@ -271,7 +276,7 @@ def _emitted(ops: list, at: int, found: Module) -> Laid | str:
             # and their destinations live in the fixups' own displacements,
             # which as_records remaps.
             out += found.code[op.lo : op.hi]
-            for field in sorted(one for one in found.fixup_at if op.lo <= one < op.hi):
+            for field in sorted(one for one in (fields or frozenset(found.fixup_at)) if op.lo <= one < op.hi):
                 relocations.append((moved[op.at] - at + (field - op.lo), field))
             continue
         if isinstance(op.node, ir.Restore):
@@ -293,7 +298,7 @@ def _emitted(ops: list, at: int, found: Module) -> Laid | str:
         # landed -- the displacement for a memory operand, the immediate for
         # `push offset X` and `mov ax,offset X`, which are 464 of the
         # corpus's fixups on their own.
-        field = _field_in(found, op)
+        field = _field_in(found, op, fields)
         if field is not None:
             landed = made.relocated_at
             if landed is None:
