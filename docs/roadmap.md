@@ -39,7 +39,7 @@ Measured 2026-08-31. Re-measure before trusting it.
 | bench/nbody | 2.99× under DOSBox, 21 of 21 calls absorbed, pressure 6/6 |
 | corpus redundant reads | 751 — 73 live provider, 48 dead, 630 none |
 | selector coverage | 23,794 of 23,838 corpus ops; the 44 are `movsw`, refused deliberately |
-| segments MIR wrote | **all 155 corpus objects**, absorbed or not |
+| segments MIR wrote | **all 155 corpus objects and all 246 of qb-qrender's BC-built ones**, absorbed or not |
 | **optimised and MIR-written** | **six programs on all 12 configurations, 18/18 each** |
 
 MIR does, end to end:

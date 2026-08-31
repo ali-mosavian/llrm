@@ -319,7 +319,15 @@ def read_thread(body: bytes, at: int) -> tuple[bool, int, Thread, int]:
 
 
 def code_segment(records: list[Record]) -> tuple[int, str, int] | None:
-    """The module's code segment as (index, name, length), or None."""
+    """The module's code segment as (index, name, length), or None.
+
+    `<MODULE>_CODE` is BC's own naming, and matching it is what keeps this
+    pass to the compiler it models. A C module in the same link names its
+    code `<MODULE>_TEXT` and comes back None here, so qbopt does nothing to
+    it -- which is the right answer, not a gap. Measured across qb-qrender:
+    246 of its 256 objects have one, and every object without is either
+    empty or has a `.c` in its THEADR.
+    """
     for index, segment in enumerate(segments(records)):
         if segment and segment[0].endswith("_CODE"):
             return index, segment[0], segment[1]
