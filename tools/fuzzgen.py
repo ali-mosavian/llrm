@@ -147,10 +147,32 @@ LINE_LIMIT = 240
 class Width(Enum):
     INT = auto()
     LNG = auto()
+    SNG = auto()
+    DBL = auto()
 
 
-TYPE_NAME = {Width.INT: "INTEGER", Width.LNG: "LONG"}
-SUFFIX = {Width.INT: "%", Width.LNG: "&"}
+TYPE_NAME = {Width.INT: "INTEGER", Width.LNG: "LONG", Width.SNG: "SINGLE", Width.DBL: "DOUBLE"}
+SUFFIX = {Width.INT: "%", Width.LNG: "&", Width.SNG: "!", Width.DBL: "#"}
+
+# The two that live on the x87 stack rather than in a register pair.
+FLOAT = frozenset({Width.SNG, Width.DBL})
+
+# What a float expression may be built from. No division: a quotient leaves
+# the exactly-representable integers this generator stays inside, and no MOD,
+# AND, OR, XOR or NOT, none of which BASIC defines on a float without first
+# rounding it to an integer -- a conversion whose rule is BC's to decide and
+# not something to infer.
+FLOAT_OPS = ("+", "-", "*")
+
+# The largest integer each format holds exactly: every integer up to 2**24 is
+# a SINGLE and every one up to 2**53 is a DOUBLE. Staying inside this is what
+# lets the evaluator below do integer arithmetic and still be right about a
+# float program -- see this module's own docstring.
+EXACT = {Width.SNG: 1 << 24, Width.DBL: 1 << 53}
+
+# CLNG is what every float result is printed through, so a value that will
+# not survive the conversion is not one to generate.
+LONG_LIMIT = 2147483647
 
 
 class ProcKind(StrEnum):
@@ -163,10 +185,30 @@ class Trap(Exception):
 
 
 def bounds(width: Width) -> tuple[int, int]:
-    return (-32768, 32767) if width is Width.INT else (-2147483648, 2147483647)
+    if width is Width.INT:
+        return (-32768, 32767)
+    if width in FLOAT:
+        # Deliberately far short of the format's real range. What is being
+        # generated is exact integers, and the operands have to leave room for
+        # a product to stay one -- see EXACT and this module's own docstring.
+        limit = 2048 if width is Width.SNG else 4096
+        return (-limit, limit)
+    return (-2147483648, 2147483647)
 
 
 def wrap(width: Width, v: int) -> int:
+    """The value BASIC keeps, or a Trap where this generator will not go.
+
+    An integer width wraps, which is the behaviour this exists to exercise.
+    A float does not: it loses precision instead, and a program whose answer
+    depends on which bits were lost is one whose oracle would have to model
+    the x87's own rounding. So leaving the exactly-representable range is a
+    Trap and the sample is regenerated, the way divide-by-zero already is.
+    """
+    if width in FLOAT:
+        if abs(v) > EXACT[width] or abs(v) > LONG_LIMIT:
+            raise Trap(f"{v} is past what {TYPE_NAME[width]} holds exactly, or past CLNG")
+        return v
     return s16(v) if width is Width.INT else s32(v)
 
 
@@ -245,6 +287,11 @@ class Result:
 class Print:
     tag: str
     expr: Expr
+    # The width BASIC itself infers, not the one the generator asked for.
+    # A float result prints through CLNG and an integer one does not, and a
+    # node's own tag is not evidence: an expression generated at DOUBLE
+    # whose every leaf turned out to be an integer really is an integer.
+    width: Width = Width.INT
 
 
 @dataclass(frozen=True, slots=True)
@@ -484,6 +531,11 @@ def golden_lines(program: Program) -> list[str]:
 
 
 def render_lit(width: Width, value: int) -> str:
+    if width in FLOAT:
+        # Typed by its suffix. Without one BC reads `5` as an INTEGER, which
+        # makes an all-literal float expression fold at INTEGER width and
+        # stops the x87 code this exists to generate from being emitted.
+        return f"{value}{SUFFIX[width]}" if value >= 0 else f"(- {abs(value)}{SUFFIX[width]})"
     lo, hi = bounds(width)
     # a bare MIN literal (-32768, -2147483648) does not compile -- BASIC's
     # lexer sees unary minus over a literal one past the positive range.
@@ -545,8 +597,16 @@ def render_stmts(stmts: tuple[Stmt, ...], indent: int) -> list[str]:
                 lines.append(f"{pad}{name}{SUFFIX[width]} = {render_expr(expr)}")
             case SetElem(name, index, expr):
                 lines.append(f"{pad}{name}({render_expr(index)}) = {render_expr(expr)}")
-            case Print(tag, expr):
-                lines.append(f'{pad}PRINT "{tag}="; {render_expr(expr)}')
+            case Print(tag, expr, width):
+                # Through CLNG where the value is a float, exactly as
+                # suite/fpemu.bas does: what is under test is that the x87
+                # site computed the right number, never QuickBASIC's own
+                # floating-point PRINT formatting, which is a far larger
+                # thing to model and none of this pass's business.
+                shown = render_expr(expr)
+                if width in FLOAT:
+                    shown = f"CLNG({shown})"
+                lines.append(f'{pad}PRINT "{tag}="; {shown}')
             case IfPrint(tag, cond):
                 lines.append(f'{pad}IF {render_expr(cond)} THEN PRINT "{tag}=A" ELSE PRINT "{tag}=B"')
             case CallSub(name, args):
@@ -600,7 +660,11 @@ def natural_width(node: Expr, declared: dict[str, Width]) -> Width:
     return type -- neither depends on anything below it.
     """
     match node:
-        case Lit(_, value):
+        case Lit(width, value):
+            # A float literal carries its own suffix (render_lit writes one),
+            # so BASIC types it by that and not by its magnitude.
+            if width in FLOAT:
+                return width
             lo, hi = bounds(Width.INT)
             return Width.INT if lo <= value <= hi else Width.LNG
         case Var(name, _) | Index(_, name, _) | CallFn(_, name, _):
@@ -610,10 +674,19 @@ def natural_width(node: Expr, declared: dict[str, Width]) -> Width:
         case UnaryOp(_, _, operand):
             return natural_width(operand, declared)
         case BinOp(_, _, left, right):
-            lw, rw = natural_width(left, declared), natural_width(right, declared)
-            return Width.LNG if Width.LNG in (lw, rw) else Width.INT
+            return _wider(natural_width(left, declared), natural_width(right, declared))
         case _:
             raise TypeError(f"unhandled expr node: {node!r}")
+
+
+# BASIC promotes an operator to the wider of its two operands, and this is
+# that order. A float always wins over an integer width, which is why an
+# integer subexpression may sit inside a float one and never the reverse.
+_RANK = {Width.INT: 0, Width.LNG: 1, Width.SNG: 2, Width.DBL: 3}
+
+
+def _wider(left: Width, right: Width) -> Width:
+    return left if _RANK[left] >= _RANK[right] else right
 
 
 def _contains_var(node: Expr) -> bool:
@@ -694,7 +767,7 @@ class _Ctx:
 
 
 def _by_width() -> dict[Width, list[str]]:
-    return {Width.INT: [], Width.LNG: []}
+    return {width: [] for width in Width}
 
 
 def _writable(ctx: _Ctx, width: Width) -> list[str]:
@@ -724,8 +797,15 @@ def _gen_leaf(ctx: _Ctx, width: Width, depth: int) -> Expr:
         return _gen_call_expr(ctx, ctx.rng.choice(callable_here), width, depth - 1)
     if ctx.readable[width] and ctx.rng.random() < 0.6:
         return Var(ctx.rng.choice(ctx.readable[width]), width)
-    if width is Width.INT:
-        return Lit(width, ctx.rng.randint(*bounds(Width.INT)))
+    if width is Width.INT or width in FLOAT:
+        # A float literal is typed by the suffix render_lit gives it, so it
+        # needs no magnitude trick and must not get one: bounds() for a float
+        # is the exactly-representable range, and a literal past it is a
+        # value BC rounds and this evaluator does not. `CLNG(1259949101!)`
+        # printed 1259949056 on VBDOS /G3 -- the same number with its low
+        # bits gone -- which is what sent this generator's first float batch
+        # to BASEDIFF.
+        return Lit(width, ctx.rng.randint(*bounds(width)))
     # a LONG leaf literal must itself exceed INTEGER's range, or BASIC types
     # the bare literal INTEGER regardless of what this generator intends --
     # natural_width() is what catches a leaf that doesn't
@@ -751,7 +831,27 @@ def _gen_child_width(ctx: _Ctx, width: Width) -> Width:
     # grammar deliberately does not model
     if width is Width.LNG and ctx.rng.random() < 0.35:
         return Width.INT
+    if width in FLOAT and ctx.rng.random() < 0.30:
+        # An integer subexpression promotes into a float one exactly, the way
+        # an INTEGER one promotes into a LONG. The reverse would be a
+        # narrowing conversion whose rounding rule is BC's, and this grammar
+        # does not model it.
+        return Width.INT if ctx.rng.random() < 0.5 else Width.LNG
     return width
+
+
+def _force_float(ctx: _Ctx, width: Width, node: Expr) -> Expr:
+    """`node`, guaranteed to be a float expression rather than merely tagged one.
+
+    _gen_child_width may recurse a float node into an all-integer subtree, and
+    _gen_leaf may fall back to a literal, either of which leaves an expression
+    that BASIC types as INTEGER or LONG. It would still be correct -- and
+    would emit no x87 instruction at all, which is the whole point of
+    generating it. So a float leaf is added where none survived.
+    """
+    if natural_width(node, ctx.declared) in FLOAT:
+        return node
+    return BinOp(width, "+", _force_var(ctx, width), node)
 
 
 def _force_var(ctx: _Ctx, width: Width) -> Expr:
@@ -854,8 +954,13 @@ def _gen_expr(ctx: _Ctx, width: Width, depth: int) -> Expr:
     if choice < 0.25:
         return _gen_leaf(ctx, width, depth)
     if choice < 0.35:
-        op = ctx.rng.choice(("-", "NOT"))
-        return UnaryOp(width, op, _gen_expr(ctx, width, depth - 1))
+        # NOT is a bitwise operator, which BASIC defines on a float only by
+        # rounding it to an integer first -- a conversion this does not model.
+        op = "-" if width in FLOAT else ctx.rng.choice(("-", "NOT"))
+        operand = _gen_expr(ctx, width, depth - 1)
+        if width in FLOAT:
+            operand = _force_float(ctx, width, operand)
+        return UnaryOp(width, op, operand)
     # a comparison is always an INTEGER -1/0 truth value (a type barrier, see
     # natural_width) -- returning one directly only keeps this call's own
     # `width` contract when that width is INTEGER; at LONG width a comparison
@@ -865,12 +970,20 @@ def _gen_expr(ctx: _Ctx, width: Width, depth: int) -> Expr:
         left = _gen_expr(ctx, cmp_width, depth - 1)
         right = _gen_expr(ctx, cmp_width, depth - 1)
         return Cmp(ctx.rng.choice(CMP_OPS), left, right)
-    op = ctx.rng.choice(ARITH_OPS)
+    op = ctx.rng.choice(FLOAT_OPS if width in FLOAT else ARITH_OPS)
     if op in DIVIDING_OPS:
         return _gen_dividing(ctx, width, op, depth)
     left = _gen_expr(ctx, _gen_child_width(ctx, width), depth - 1)
     right = _gen_expr(ctx, _gen_child_width(ctx, width), depth - 1)
     left, right = _ensure_valid_operand(ctx, width, left, right)
+    if width in FLOAT and _wider(natural_width(left, ctx.declared), natural_width(right, ctx.declared)) not in FLOAT:
+        # Both children came back integer, which _gen_child_width is allowed
+        # to do -- but then BASIC types this node INTEGER or LONG and the
+        # generator's own tag would be a lie, which
+        # test_every_binop_width_matches_its_own_natural_type checks. It
+        # would also emit no x87 instruction, which is the point of asking
+        # for a float node at all.
+        left = _force_var(ctx, width)
     return BinOp(width, op, left, right)
 
 
@@ -879,7 +992,7 @@ def _counters(ctx: _Ctx) -> list[tuple[str, Width]]:
     # reaches those by name), and the frozen set keeps a nested FOR, an
     # assignment and a BYREF argument off the ones already counting
     shared = ctx.shared_names
-    return [(n, w) for w in Width for n in _writable(ctx, w) if n not in shared]
+    return [(n, w) for w in Width if w not in FLOAT for n in _writable(ctx, w) if n not in shared]
 
 
 def _loop_bounds(ctx: _Ctx) -> tuple[int, int, int]:
@@ -943,7 +1056,13 @@ def _gen_stmt(ctx: _Ctx, depth: int) -> Stmt | None:
     if ctx.loops < 2:
         weights[Kind.LOOP] = 3.0
     kind = ctx.rng.choices(list(weights), list(weights.values()))[0]
-    width = ctx.rng.choice((Width.INT, Width.LNG))
+    # Integers stay the common case -- they are what most of BC's output is,
+    # and a float statement costs more of the sample to a Trap because it has
+    # a narrower range to stay inside.
+    width = ctx.rng.choices(
+        (Width.INT, Width.LNG, Width.SNG, Width.DBL),
+        (4.0, 4.0, 1.5, 1.5),
+    )[0]
     match kind:
         case Kind.ASSIGN:
             targets = _writable(ctx, width)
@@ -956,9 +1075,15 @@ def _gen_stmt(ctx: _Ctx, depth: int) -> Stmt | None:
             name = ctx.rng.choice(ctx.writable_arrays[width])
             return SetElem(name, _gen_index(ctx, depth), _gen_expr(ctx, width, depth))
         case Kind.PRINT:
-            return Print(_fresh(ctx.ids, "T"), _gen_expr(ctx, width, depth))
+            shown = _gen_expr(ctx, width, depth)
+            return Print(_fresh(ctx.ids, "T"), shown, natural_width(shown, ctx.declared))
         case Kind.BRANCH:
-            return IfPrint(_fresh(ctx.ids, "T"), _gen_condition(ctx, width, depth))
+            # A condition is an INTEGER truth value and _gen_condition builds
+            # it from comparisons; a float one would be asking a different
+            # question -- what x87 compares -- which suite/fpemu.bas covers
+            # by hand and this grammar does not generate.
+            plain = width if width not in FLOAT else Width.INT
+            return IfPrint(_fresh(ctx.ids, "T"), _gen_condition(ctx, plain, depth))
         case Kind.CALL:
             return _gen_call(ctx, depth)
         case Kind.LOOP:
@@ -1084,6 +1209,8 @@ def generate_program(
     seed: int,
     n_int: int = 4,
     n_lng: int = 4,
+    n_sng: int = 2,
+    n_dbl: int = 2,
     n_arrays: int = 2,
     n_subs: int = 2,
     n_funcs: int = 2,
@@ -1108,7 +1235,7 @@ def generate_program(
     stmts: list[Stmt] = []
     shared: list[tuple[str, Width]] = []
 
-    for width, count in ((Width.INT, n_int), (Width.LNG, n_lng)):
+    for width, count in ((Width.INT, n_int), (Width.LNG, n_lng), (Width.SNG, n_sng), (Width.DBL, n_dbl)):
         for i in range(count):
             name = _fresh(ids, "v")
             # exactly one scalar of each width is what a procedure can reach
@@ -1129,8 +1256,9 @@ def generate_program(
             ctx.env.scalars[name] = value
     ctx.shared = tuple(shared)
 
+    spread = (Width.INT, Width.LNG, Width.SNG, Width.DBL)
     for i in range(n_arrays):
-        width = Width.INT if i % 2 == 0 else Width.LNG
+        width = spread[i % len(spread)]
         name = _fresh(ids, "arr")
         decls.append(Decl(name, width, True, ARRAY_LIMIT))
         declared[name] = width

@@ -410,3 +410,49 @@ def test_the_two_cases_a_bare_idiv_faults_on_are_traps(width: fuzzgen.Width, div
 def test_integer_division_truncates_toward_zero(op: str, x: int, y: int, want: int) -> None:
     node = fuzzgen.BinOp(INT, op, fuzzgen.Lit(INT, x), fuzzgen.Lit(INT, y))
     assert fuzzgen.eval_expr(node, fuzzgen.Env({}, {}, {}, [])) == want
+
+
+def test_float_programs_are_actually_generated() -> None:
+    """A float width that never reaches a statement generates no x87 at all.
+
+    The first version declared SINGLE and DOUBLE variables and then never
+    used one, because _gen_stmt picked its width from a hardcoded
+    (INT, LNG). Nothing failed -- the programs were valid and the oracle
+    agreed -- which is exactly why this is checked rather than assumed.
+    """
+    seen = 0
+    for seed in range(30):
+        text = fuzzgen.render_program(fuzzgen.generate_program(seed, n_arrays=4))
+        seen += text.count("CLNG(")
+    assert seen > 20, f"only {seen} float results across 30 programs"
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_a_float_value_never_leaves_the_exactly_representable_range(seed: int) -> None:
+    """The whole reason the evaluator can do integer arithmetic on floats.
+
+    Every float this generates is an integer the format holds exactly, so
+    IEEE arithmetic on it is integer arithmetic -- and so is the x87's own
+    80-bit evaluation, which is why intermediate precision cannot make BC
+    and the evaluator disagree. A value past that range is a Trap.
+    """
+    program = fuzzgen.generate_program(seed, n_arrays=4)
+    for name, width in program.widths.items():
+        if width in fuzzgen.FLOAT:
+            lo, hi = fuzzgen.bounds(width)
+            assert abs(lo) <= fuzzgen.EXACT[width] and hi <= fuzzgen.EXACT[width], name
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_every_float_result_is_printed_through_clng(seed: int) -> None:
+    """suite/fpemu.bas's own trick, and what keeps BASIC's float PRINT
+    formatting out of the oracle entirely."""
+    program = fuzzgen.generate_program(seed, n_arrays=4)
+    for line in fuzzgen.render_program(program).split("\r\n"):
+        if not line.strip().startswith('PRINT "T'):
+            continue
+        # a float literal or suffix outside a CLNG() would be a value whose
+        # printed form this project does not model
+        shown = line.split(";", 1)[1] if ";" in line else ""
+        if ("!" in shown or "#" in shown) and "CLNG(" not in shown:
+            raise AssertionError(f"seed {seed}: float printed raw: {line}")
