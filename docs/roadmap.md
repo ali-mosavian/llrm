@@ -201,7 +201,18 @@ Done when the old path is deleted, not when MIR also does it.
       immediately before them, so recovering the arguments needs the
       block-scoped depth model `stack.py` already has, restated over
       `Space.STACK`. Parity work: the same optimisation either way
-- [ ] load forwarding — `forward.py`; `avail.py` has the cross-block half
+- [ ] load forwarding — `forward.py`; `avail.py` has the cross-block half.
+      Measured: `avail.loaded_into` models 0 of the 36 sites `forward.py`
+      deletes, and always for the same reason. MIR is right and the gate is
+      too blunt: `mov ax,[x]` writes 16 bits of a 32-bit variable, so the
+      high half survives and MIR records a use of the old `eax`. That is a
+      real read, so "a plain load reads nothing but its address" refuses it.
+      The machine pass is sound anyway, because the site it deletes is one
+      where the register already holds those bytes -- a no-op leaves the
+      high half alone whether it runs or not. Saying that in MIR means
+      letting `loaded_into` accept a use that is the destination's own
+      previous value under a partial write, which is the `HALF_TO_LOW` and
+      `CONCAT_LOW` machinery `mir.py` already has for pairs
 - [ ] dead stores — `memory.py`
 - [ ] native x87 — `fpu.py`
 
