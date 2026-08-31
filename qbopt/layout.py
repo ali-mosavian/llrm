@@ -97,6 +97,32 @@ def _trailing_zeros(found: Module, ops: list[mir.Op]) -> "Table | None":
     return None if lo == found.end else Table(lo, found.end)
 
 
+PADDING = frozenset({0x90, 0x00})
+
+
+def _padding_runs(
+    found: Module, ops: list[mir.Op], carried: list["Table"], lowest: int, highest: int
+) -> list["Table"]:
+    """The gaps between the items that are nothing but padding bytes."""
+    covered = set()
+    for one in ops:
+        covered.update(range(one.at, one.at + (_length_of(one) or 0)))
+    for one in carried:
+        covered.update(range(one.lo, one.hi))
+
+    out: list[Table] = []
+    start: int | None = None
+    for at in range(lowest, highest + 1):
+        empty = at < highest and at not in covered
+        if empty and start is None:
+            start = at
+        elif not empty and start is not None:
+            if all(one in PADDING for one in found.code[start:at]):
+                out.append(Table(start, at))
+            start = None
+    return out
+
+
 def _semantics(op: mir.Op) -> ir.Semantics | None:
     what = getattr(op.node, "semantics", None)
     return None if what is None or what.op is ir.Operation.BARRIER else what
@@ -235,6 +261,14 @@ def rebuild(
         ops = [one for one in ops if one.at < padding.lo]
         if not ops:
             return "the body is nothing but padding"
+        highest = padding.hi
+
+    # BC aligns its procedures, so runs of `90` sit between them, and
+    # nothing reaches those. Carried the same way a table is: the bytes are
+    # what they were and nothing enters them, so where they end up does not
+    # matter. Only runs that are entirely padding -- anything else in a gap
+    # is bytes this cannot account for, and it says so instead.
+    inside += _padding_runs(found, ops, inside, lowest, highest)
 
     # Every byte between the first item and the last has to be one of them.
     # What is left over is data nothing here can name, and emitting only what
@@ -259,7 +293,7 @@ def _emitted(ops: list, at: int, found: Module, fields: frozenset[int] = frozens
         if isinstance(op, Table):
             lengths[op.at] = op.hi - op.lo
             continue
-        if isinstance(op.node, ir.Restore):
+        if isinstance(op.node, ir.Restore) or found.code[op.at : op.at + 1] == bytes([0xCD]):
             lengths[op.at] = _length_of(op) or 0
             continue
         what = _semantics(op)
@@ -310,6 +344,20 @@ def _emitted(ops: list, at: int, found: Module, fields: frozenset[int] = frozens
             out += found.code[op.lo : op.hi]
             for field in sorted(one for one in (fields or frozenset(found.fixup_at)) if op.lo <= one < op.hi):
                 relocations.append((moved[op.at] - at + (field - op.lo), field))
+            continue
+        # An emulated x87 site is emitted as it was found. declen.py decodes
+        # `cd 35 46 c8` as the fld it stands for, so selecting from the
+        # semantics would emit `d9 46 c8` -- a native instruction, on a
+        # machine that may have no coprocessor. That conversion is a
+        # decision fpu.py gates behind --native-fpu, and laying a segment
+        # out is not the place to make it silently.
+        if found.code[op.at : op.at + 1] == bytes([0xCD]) and (length := _length_of(op)):
+            # Copied, so any fixup inside it keeps its place within the
+            # instruction and only the instruction itself has moved.
+            field = _field_in(found, op, fields)
+            if field is not None:
+                relocations.append((len(out) + (field - op.at), field))
+            out += found.code[op.at : op.at + length]
             continue
         if isinstance(op.node, ir.Restore):
             made = select.restore(op.node.pair)

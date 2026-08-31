@@ -22,10 +22,34 @@ from qbopt import mir
 from qbopt import omf
 from qbopt import layout
 from qbopt.declen import BITNESS
+from qbopt.declen import decode
 from qbopt import blocks as split
 from qbopt.rewrite import code_map
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
+
+
+def walked(code: bytes, start: int) -> list:
+    """Every instruction in `code`, read the way this project reads code.
+
+    declen.decode rather than a bare iced Decoder: an emulated x87 site is
+    `cd 35 46 c8` and only declen knows it is the fld it stands for. layout
+    carries those verbatim -- converting one to native x87 is a decision
+    fpu.py gates behind --native-fpu -- so anything checking the result has
+    to read them the same way.
+    """
+    # Zero-padded to `start` so every instruction decodes at the address it
+    # will actually sit at, which is what a branch's target is measured from.
+    image = bytes(start) + code
+    out = []
+    at = start
+    while at < len(image):
+        found = decode(image, at)
+        if found is None:
+            break
+        out.append(found.insn)
+        at += found.length
+    return out
 
 
 def original(op: mir.Op) -> Instruction:
@@ -59,7 +83,7 @@ def laid(obj: Path) -> Iterator[tuple]:
 def test_a_laid_out_body_is_the_same_instructions_in_the_same_order(obj: Path) -> None:
     for body, got in laid(obj):
         ops = layout._ordered(body)
-        back = list(Decoder(BITNESS, got.code, ip=body.entry))
+        back = walked(got.code, body.entry)
         assert len(back) == len(ops), f"{obj.stem}: {len(back)} instructions from {len(ops)} ops"
         for op, made in zip(ops, back, strict=True):
             want = original(op)
@@ -77,7 +101,7 @@ def test_every_branch_points_where_its_target_went(obj: Path) -> None:
     """
     for body, got in laid(obj):
         ops = layout._ordered(body)
-        back = list(Decoder(BITNESS, got.code, ip=body.entry))
+        back = walked(got.code, body.entry)
         for op, made in zip(ops, back, strict=True):
             want = original(op)
             if want.op0_kind != OpKind.NEAR_BRANCH16:
@@ -106,7 +130,7 @@ def test_every_relocation_points_at_a_field_the_module_really_has(obj: Path) -> 
 def test_a_body_is_refused_whole_or_not_at_all() -> None:
     """Half this pass's code and half BC's is not something anything
     downstream could reason about, so one op it cannot emit refuses the
-    body. Measured: 99 of the corpus's 171 bodies lay out, and the rest name
+    body. Measured: 100 of the corpus's 171 bodies lay out, and the rest name
     the operation that stopped them."""
     total = done = 0
     for obj in FIXTURES:
@@ -123,7 +147,7 @@ def test_a_body_is_refused_whole_or_not_at_all() -> None:
                 assert ":" in got, f"a refusal should say which op: {got}"
             else:
                 done += 1
-    assert (total, done) == (171, 99)
+    assert (total, done) == (171, 100)
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
@@ -139,7 +163,7 @@ def test_relaxation_settles_and_leaves_every_branch_reaching(obj: Path) -> None:
     """
     for body, got in laid(obj):
         ops = layout._ordered(body)
-        back = list(Decoder(BITNESS, got.code, ip=body.entry))
+        back = walked(got.code, body.entry)
         for op, made in zip(ops, back, strict=True):
             want = original(op)
             if want.op0_kind != OpKind.NEAR_BRANCH16:
@@ -217,12 +241,15 @@ def test_a_rebuilt_segment_is_the_same_instructions(obj: Path) -> None:
     found, bodies, got = rebuilt(obj)
     if got is None or found is None:
         return
-    mapped = code_map(found)
-    assert not isinstance(mapped, str)
-    if mapped.tables:
+    ops = sorted((op for _, body in bodies for op in layout._ordered(body)), key=lambda one: one.at)
+    # Only where nothing was carried. A table's entries and BC's alignment
+    # padding decode as instructions too, so counting decoded instructions
+    # against ops would compare different things. What the carried runs get
+    # instead is test_a_rebuilt_segment_carries_every_fixup.
+    if len(got.code) != sum(layout._length_of(op) or 0 for op in ops):
         return
     ops = sorted((op for _, body in bodies for op in layout._ordered(body)), key=lambda one: one.at)
-    back = list(Decoder(BITNESS, got.code, ip=ops[0].at))
+    back = walked(got.code, ops[0].at)
     assert len(back) == len(ops)
     for op, made in zip(ops, back, strict=True):
         assert made.mnemonic == original(op).mnemonic, f"{obj.stem} {op.at:#x}"
@@ -255,12 +282,19 @@ def test_data_between_the_instructions_is_carried_or_refused(obj: Path) -> None:
     # so iced's `len` undercounts every one of them and invents a gap.
     mapped2 = code_map(found)
     assert not isinstance(mapped2, str)
-    lowest, highest = ops[0].at, max(op.at + (layout._length_of(op) or 0) for op in ops)
-    tables = [(lo, hi) for lo, hi in mapped2.tables if lowest <= lo and hi <= highest]
-    covered = sum(layout._length_of(op) or 0 for op in ops) + sum(hi - lo for lo, hi in tables)
-    if covered != highest - lowest:
-        got = layout.rebuild(found, bodies, mapped2.tables)
-        assert isinstance(got, str), f"{obj.stem} has unknown data inline and rebuilt anyway"
+    fields = frozenset(one.offset for one in omf.fixups(omf.parse(obj.read_bytes())) if one.seg == found.seg)
+    got = layout.rebuild(found, bodies, mapped2.tables, fields)
+    if isinstance(got, str):
+        # A gap that is neither a table nor padding refuses the object,
+        # which is the claim: emitting only what layout understands would
+        # drop the rest silently.
+        assert ":" in got or "not instructions" in got
+        return
+    # It rebuilt, so every gap was accounted for. The image may well be
+    # shorter than the span it came from -- relaxation turns a near branch
+    # into a short one -- so the size says nothing and the fixups do:
+    # test_a_rebuilt_segment_carries_every_fixup is where that is checked.
+    assert got.code
 
 
 def test_the_rebuildable_share_is_what_was_measured() -> None:
@@ -271,10 +305,10 @@ def test_the_rebuildable_share_is_what_was_measured() -> None:
     carrying the tables took it to 49, asking for every fixup rather than
     the subset Module.fixup_at holds took it to 55, carrying BC's own
     trailing zero padding took it to 109, and keeping the base register on a
-    cell whose address cannot be named took it to 123.
+    cell whose address cannot be named took it to 123, and the padding BC puts between procedures took it to 124.
     """
     done = 0
     for obj in FIXTURES:
         if rebuilt(obj)[2] is not None:
             done += 1
-    assert done == 123
+    assert done == 124

@@ -157,7 +157,7 @@ def test_the_covered_share_of_the_corpus_is_what_was_measured() -> None:
                         continue
                     if select.emit(what, at=op.at) is not None:
                         emitted += 1
-    assert (total, emitted) == (20245, 20182)
+    assert (total, emitted) == (20245, 20185)
 
 
 def test_a_wide_push_is_not_a_narrow_one() -> None:
@@ -236,7 +236,10 @@ def test_a_frame_slot_keeps_its_displacement() -> None:
     # say; Emitted only reports where the field is.
     at = made.displacement_at
     assert at is not None
-    assert made.code[at : at + 2] == (-0x18 & 0xFFFF).to_bytes(2, "little")
+    # One byte, not two: -0x18 fits a signed byte and BC writes it that way
+    # too. A relocated displacement is always two, because a fixup patches
+    # a word -- which is the other half of what this pair of tests says.
+    assert made.code[at:] == (-0x18 & 0xFF).to_bytes(1, "little")
 
 
 def test_the_spaces_that_cannot_be_encoded_are_refused() -> None:

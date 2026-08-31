@@ -29,6 +29,7 @@ from iced_x86 import Register
 from iced_x86 import Register_
 from iced_x86 import Instruction
 from iced_x86 import MemoryOperand
+from iced_x86 import RepPrefixKind
 
 from qbopt import ir
 from qbopt.module import Space
@@ -94,6 +95,20 @@ def _assemble(made: Instruction, at: int) -> Emitted | None:
     )
 
 
+def _displacement_size(base: Register_, value: int) -> int:
+    """How many bytes the displacement needs.
+
+    One where it fits a signed byte, which is every frame slot BC writes and
+    a byte cheaper each time -- `mov [bp-14h],dx` is `89 56 ec` and not
+    `89 96 ec ff`. Zero where there is none, except through bp: mod=00 with
+    r/m=110 is a direct address in 16-bit encoding, so `[bp]` has to be
+    written `[bp+0]`.
+    """
+    if value == 0 and base is not Register.BP:
+        return 0
+    return 1 if -128 <= value <= 127 else 2
+
+
 def operand_of(what: ir.Mem) -> tuple[MemoryOperand, bool] | None:
     """`what` as an encodable memory operand, and whether it is relocated.
 
@@ -120,14 +135,27 @@ def operand_of(what: ir.Mem) -> tuple[MemoryOperand, bool] | None:
             # `push [bx]` is a working program reading the wrong four bytes,
             # and byref2 printed 0 where it wanted 16 on two configurations
             # before this line said `what.offset`.
-            wide = 2 if what.offset else 0
-            return MemoryOperand(base=what.through, displ=what.offset, displ_size=wide), False
+            return (
+                MemoryOperand(
+                    base=what.through,
+                    displ=what.offset,
+                    displ_size=_displacement_size(what.through, what.offset),
+                ),
+                False,
+            )
         return None
     match addr.space:
         case Space.SEGMENT:
             return MemoryOperand(base=addr.base, displ=0, displ_size=2), True
         case Space.FRAME if addr.base == Register.NONE:
-            return MemoryOperand(base=Register.BP, displ=addr.disp, displ_size=2), False
+            return (
+                MemoryOperand(
+                    base=Register.BP,
+                    displ=addr.disp,
+                    displ_size=_displacement_size(Register.BP, addr.disp),
+                ),
+                False,
+            )
         case Space.LITERAL:
             # A displacement no fixup claims, so the number in the code is
             # the address and nothing has to move with it. BC writes these
@@ -501,6 +529,9 @@ BARE = {
     "retf": "RETFW",
     "cwd": "CWD",
     "cdq": "CDQ",
+    # PDS /Ot closes a procedure with it: `mov sp,bp` then `pop bp` in one
+    # byte. extent.py names that difference; this is the encoding of it.
+    "leave": "LEAVEW",
     # the x87 ones that take no operand at all
     "fsqrt": "FSQRT",
     "fchs": "FCHS",
@@ -669,6 +700,33 @@ def push_segment(one: Register_, width: int = 2, at: int = 0) -> Emitted | None:
     return None if code is None else _assemble(Instruction.create_reg(code, one), at)
 
 
+def pop_segment(one: Register_, width: int = 2, at: int = 0) -> Emitted | None:
+    """`pop es` and its kind. BC saves es around a far-pointer access."""
+    named = SEGMENTS.get(one)
+    if named is None or one is Register.CS:
+        return None  # popping cs is not an instruction on anything after the 8086
+    code = _code(f"POP{'D' if width == 4 else 'W'}_{named}")
+    return None if code is None else _assemble(Instruction.create_reg(code, one), at)
+
+
+# The string stores BC emits to clear an array. Nothing about them is
+# encoded in operands -- es:di is the destination, cx the count, and the
+# opcode names it all -- so iced builds them from the width alone.
+STRING = {
+    "stosb": Instruction.create_stosb,
+    "stosw": Instruction.create_stosw,
+    "stosd": Instruction.create_stosd,
+}
+
+
+def fill(name: str, at: int = 0, repeated: bool = True) -> Emitted | None:
+    """`rep stosw` and its kind, at this pass's own 16-bit address size."""
+    make = STRING.get(name)
+    if make is None:
+        return None
+    return _assemble(make(BITNESS, RepPrefixKind.REPE) if repeated else make(BITNESS), at)
+
+
 def emit(
     what: ir.Semantics,
     at: int = 0,
@@ -758,7 +816,9 @@ def emit(
             match (dests[0], sources[0]):
                 case (ir.Reg(register=into), ir.Address() as cell):
                     return address_of(_remapped(into, where), cell, at)
-        case ir.Operation.EXTEND | ir.Operation.NOTHING:
+        case ir.Operation.FILL:
+            return fill(what.name or "", at)
+        case ir.Operation.EXTEND | ir.Operation.NOTHING | ir.Operation.LEAVE:
             return bare(what.name or "", at)
         case ir.Operation.FLOAT_UNARY | ir.Operation.FLOAT_ARITH if not any(
             isinstance(one, ir.Mem) for one in dests + sources
@@ -769,6 +829,8 @@ def emit(
             return bare(what.name or "", at)
         case ir.Operation.POP if len(dests) == 1:
             match dests[0]:
+                case ir.Reg(register=into) if into in SEGMENTS:
+                    return pop_segment(into, dests[0].width, at)
                 case ir.Reg(register=into):
                     return pop(_remapped(into, where), at)
         case ir.Operation.RETURN:
