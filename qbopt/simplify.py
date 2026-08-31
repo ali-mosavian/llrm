@@ -39,6 +39,7 @@ from iced_x86 import Register_
 
 from qbopt import mir
 from qbopt.mir import Op
+from qbopt import regalloc
 from qbopt.mir import Value
 from qbopt.mir import MirBody
 from qbopt.module import Space
@@ -50,11 +51,18 @@ WHOLE = 4
 
 @dataclass(frozen=True, slots=True)
 class RoundTrip:
-    """A split and rejoin whose net effect is nothing."""
+    """A split and rejoin that computes nothing beyond, at most, a move."""
 
     at: tuple[int, ...]  # every op to delete, in address order
     value: Value  # what the pop produced, which is what went in
-    register: Register_  # where it lives, the same at both ends
+    source: Register_  # where the value already is
+    target: Register_  # where the pop puts it
+    pushes: tuple[int, int]  # the two pushes, low half first
+
+    @property
+    def free(self) -> bool:
+        """Whether removing this needs nothing emitted in its place."""
+        return self.source is self.target
 
 
 def _slot(ref: mir.MemRef) -> int | None:
@@ -104,6 +112,30 @@ def _high_half_of(op: Op) -> tuple[Value, Value] | None:
     return None if source is None else (op.defines[0], source)
 
 
+def _target_is_free(body: MirBody, block: mir.MirBlock, lo: int, hi: int, target: Register_, made: Value) -> bool:
+    """Whether `target` holds nothing live anywhere in [lo, hi].
+
+    A rejoin into another register is removed by emitting the move where the
+    PUSHES are, not where the pop is -- by the pop the source may be gone,
+    and in both of nbody's sites a `pop eax` has overwritten it. Moving the
+    write earlier is only sound while the target is dead for the whole span
+    it moves across, which is what this asks.
+
+    `made` is the value the pop itself defines -- the one being replaced. It
+    is live after the pop by construction, since something reads what the
+    rejoin produced, and counting it would refuse every site there is.
+    """
+    alive = regalloc.live(body)
+    after = set(alive.live_out[block.at])
+    for op in reversed(block.ops):
+        if lo <= op.at <= hi:
+            for one in after:
+                if one is not made and body.origin.get(one) is target:
+                    return False
+        after = (after - set(op.defines)) | set(op.uses)
+    return True
+
+
 def round_trips(body: MirBody) -> tuple[RoundTrip, ...]:
     """Every split-and-rejoin in this body that computes nothing.
 
@@ -139,12 +171,25 @@ def round_trips(body: MirBody) -> tuple[RoundTrip, ...]:
                     # deletion leaves that register holding the value, and
                     # nothing downstream is rewritten.
                     was, now = body.origin.get(low[1]), body.origin.get(value)
-                    if was is not None and was is now:
+                    at = tuple(sorted((low[2], high[2], op.at)))
+                    if (
+                        was is not None
+                        and now is not None
+                        and (was is now or _target_is_free(body, block, at[0], at[-1], now, value))
+                    ):
+                        # Where the value already is, and where the pop puts
+                        # it. Equal is a plain deletion. Different needs a
+                        # move -- emitted where the PUSHES are, never where
+                        # the pop is: by then whatever ran in between may
+                        # have overwritten the source, and in nbody's own
+                        # two sites a `pop eax` does exactly that.
                         found.append(
                             RoundTrip(
-                                tuple(sorted((low[2], high[2], op.at))),
+                                at,
                                 low[1],
                                 was,
+                                now,
+                                (low[2], high[2]),
                             )
                         )
                 live.pop(where, None)

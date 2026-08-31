@@ -45,10 +45,11 @@ def test_every_round_trip_names_one_register_at_both_ends(obj: Path) -> None:
     instruction finds what it expected. A rejoin landing somewhere else
     would need a `mov` emitting, and is refused instead.
     """
-    found, raised = bodies(obj)
+    _, raised = bodies(obj)
     for _, body in raised:
         for trip in simplify.round_trips(body):
-            assert body.origin.get(trip.value) is trip.register
+            assert body.origin.get(trip.value) is trip.source
+            assert trip.free == (trip.source is trip.target)
 
 
 def test_a_real_round_trip_is_found_and_proved() -> None:
@@ -71,8 +72,13 @@ def test_a_real_round_trip_is_found_and_proved() -> None:
     assert found is not None
     mapped = code_map(found)
     assert not isinstance(mapped, str), mapped
-    total = sum(len(simplify.round_trips(body)) for _, body in mir.bodies(found, split.partition(found, mapped)))
-    assert total == 0, "the pass ran; what it found should be gone from its own output"
+    left = [
+        trip for _, body in mir.bodies(found, split.partition(found, mapped)) for trip in simplify.round_trips(body)
+    ]
+    # A free one needs nothing emitted, so none may survive the pass that
+    # removes them. One landing in another register needs a move, and is
+    # refused until something emits it.
+    assert not [one for one in left if one.free], "a free round trip survived"
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)

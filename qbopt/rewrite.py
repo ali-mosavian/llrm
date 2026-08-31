@@ -24,6 +24,7 @@ from qbopt import omf
 from qbopt import avail
 from qbopt import memory
 from qbopt import module
+from qbopt import select
 from qbopt import forward
 from qbopt.lift import Op
 from qbopt import reencode
@@ -382,7 +383,45 @@ def _simplified(
     out: list[Planned] = []
     for _, body in mir.bodies(found, blocks):
         for trip in simplify.round_trips(body):
-            for at in trip.at:
+            gone = trip.at
+            if not trip.free:
+                # A rejoin landing elsewhere costs one move, and it goes
+                # where the PUSHES are: by the pop, whatever ran in between
+                # may have overwritten the source, and in both of nbody's
+                # sites a `pop eax` has. simplify.py has already checked the
+                # target is dead across the whole span the write moves over.
+                lo, hi = min(trip.pushes), max(trip.pushes)
+                first, second = at_of.get(lo), at_of.get(hi)
+                made = select.move(trip.target, trip.source)
+                if first is None or second is None or made is None or second.end != hi + second.length:
+                    continue
+                if first.end != second.at:
+                    continue  # not one region; nothing here splices two
+                reason = anchored_inside(found, mapped, lo, second.end)
+                if reason is None and any(
+                    one.edit and one.edit.lo < second.end and lo < one.edit.hi for one in planned + out
+                ):
+                    reason = "it overlaps a region already taken"
+                edit = None if reason else Edit(lo, second.end, made, ())
+                out.append(
+                    Planned(
+                        Region(
+                            id=0,
+                            seg=found.seg,
+                            at=lo,
+                            end=second.end,
+                            before=found.code[lo : second.end].hex(),
+                            after=made.hex() if edit is not None else None,
+                            taken=edit is not None,
+                            reason=reason,
+                        ),
+                        edit,
+                    )
+                )
+                if edit is None:
+                    continue
+                gone = tuple(one for one in trip.at if one not in trip.pushes)
+            for at in gone:
                 insn = at_of.get(at)
                 if insn is None:
                     continue
