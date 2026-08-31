@@ -11,6 +11,9 @@ from pathlib import Path
 import pytest
 
 import corpus
+from iced_x86 import Register
+
+from qbopt import ir
 from qbopt import mir
 from qbopt import simplify
 from qbopt.module import Space
@@ -91,3 +94,61 @@ def test_a_slot_is_only_ever_compared_within_its_block(obj: Path) -> None:
                 for ref in op.loads + op.stores:
                     if ref.addr is not None and ref.addr.space is Space.STACK:
                         assert ref.addr.base == mir.Register.NONE, "a stack slot is named by depth alone"
+
+
+def test_a_round_trip_whose_register_is_overwritten_is_refused() -> None:
+    """The guard, on the shape that made a real program print the wrong number.
+
+    A generated program's `x MOD y MOD z` came out of absorption as
+
+        push bx / push cx      the outer divisor, split into halves
+        ...                    an absorbed MOD, ending in
+        pop ecx                its own divisor
+        idiv ecx
+        pop ecx                the rejoin
+        idiv ecx               which wanted the value from the pushes
+
+    Source and target are both ecx, so the trip looked free and all three
+    ops were deleted -- and the second idiv divided by the first one's
+    divisor. 25375 where the answer was 8734.
+
+    Tested here rather than through a program because a small one will not
+    reproduce it: suite/chain.bas has the nested divide and the round trips,
+    and BC keeps the value somewhere else. It took the register pressure of
+    a forty-statement generated program to bite, which is why the
+    integration evidence is tools/fuzzcheck.py and this is the unit.
+    """
+    ecx = Register.ECX
+    value = mir.Value(1, 0x100)
+    body = mir.MirBody(
+        entry=0x100,
+        blocks=(
+            mir.MirBlock(
+                at=0x100,
+                phis=(),
+                ops=(
+                    mir.Op(at=0x100, op=ir.Operation.PUSH, name="push", defines=(), uses=()),
+                    mir.Op(at=0x107, op=ir.Operation.POP, name="pop", defines=(value,), uses=()),
+                    mir.Op(at=0x111, op=ir.Operation.POP, name="pop", defines=(), uses=()),
+                ),
+                succ=(),
+            ),
+        ),
+        origin={value: ecx},
+    )
+    block = body.blocks[0]
+    assert not simplify._target_survives(body, block, 0x100, 0x111, ecx), "the pop at 0x107 overwrote ecx"
+    # and the same span with nothing writing it is still allowed
+    assert simplify._target_survives(body, block, 0x100, 0x111, Register.EBX)
+
+
+def test_every_suite_program_fits_a_dos_file_name() -> None:
+    """`B_` and `O_` go in front of the name, and DOS keeps eight characters.
+
+    A seven-letter program becomes B_CHAINED, DOS writes B_CHAINE, and the
+    redirect in RUN.BAT lands somewhere the harness never looks: every
+    configuration reports "the baseline produced no output" for a program
+    that compiled without a warning and ran to the end.
+    """
+    for program in sorted(Path("suite").glob("*.bas")):
+        assert len(program.stem) <= 6, f"{program.name}: B_{program.stem.upper()} is more than eight characters"
