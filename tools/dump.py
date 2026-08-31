@@ -1,12 +1,13 @@
 """
 Every real pipeline stage's own output, written to disk per object --
-module, blocks, extent, ir, live -- so a failure can be inspected directly
+every stage -- so a failure can be inspected directly
 instead of re-instrumented or re-run.
 
     uv run python tools/dump.py fixtures/omf/nbody-v-g3.obj
     uv run python tools/dump.py fixtures/omf          # every object in a directory
 
-Written under build/dump/<object stem>/{module,blocks,extent,ir,live}.txt.
+Written under build/dump/<object stem>/, one file per stage:
+module, blocks, extent, ir, live, loops, mir, regalloc, analysis.
 live.txt is qbopt.registers' own ax/dx/cx/bx liveness, one line per
 instruction -- what a disassembly alone can't show, and what a manual audit
 of this pass has had to reconstruct by hand more than once.
@@ -23,10 +24,17 @@ from iced_x86 import FormatterSyntax
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from qbopt import ir
+from qbopt import mir
 from qbopt import omf
+from qbopt import wide
+from qbopt import loops
 from qbopt import blocks
+from qbopt import consts
 from qbopt import extent
+from qbopt import memory
 from qbopt import module
+from qbopt import forward
+from qbopt import regalloc
 from qbopt import registers as regs
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -178,6 +186,124 @@ def dump_ir(result: tuple[ir.BodyIR, ...] | str) -> str:
     return "\n".join(out)
 
 
+def dump_loops(found_blocks: list[blocks.Block] | None) -> str:
+    if not found_blocks:
+        return "code_map failed -- no blocks\n"
+    idom = loops.immediate_dominators(found_blocks)
+    frontier = loops.frontiers(found_blocks)
+    depth = loops.depth(found_blocks)
+    out = [f"irreducible: {sorted(hex(one) for one in loops.irreducible(found_blocks)) or 'none'}", "", "loops:"]
+    for loop in loops.loops(found_blocks):
+        out.append(
+            f"  header {loop.header:#06x}  latches {sorted(hex(x) for x in loop.latches)}  {len(loop.body)} blocks"
+        )
+    out += ["", "blocks:"]
+    for block in found_blocks:
+        parent = idom.get(block.at)
+        out.append(
+            f"  {block.at:#06x}  idom={parent if parent is None else hex(parent)}"
+            f"  depth={depth.get(block.at, 0)}"
+            f"  DF={sorted(hex(x) for x in frontier.get(block.at, ()))}"
+        )
+    return "\n".join(out)
+
+
+def _bodies_in_mir(found: module.Module, found_blocks: list[blocks.Block]) -> list[tuple[str, mir.MirBody]]:
+    result = ir.decode_module(found)
+    if isinstance(result, str):
+        return []
+    nodes = {ir.span(n)[0]: n for body in result for n in body.nodes}
+    out = []
+    for body in result:
+        mine = [b for b in found_blocks if any(lo <= b.at < hi for lo, hi in body.body.ranges)]
+        if not mine:
+            continue
+        built = mir.raise_body(mine, nodes, body.body.seed, found.calls)
+        if not isinstance(built, str):
+            out.append((f"{body.body.kind} {body.body.name or '(main)'}", built))
+    return out
+
+
+def dump_mir(found: module.Module, found_blocks: list[blocks.Block] | None) -> str:
+    if not found_blocks:
+        return "code_map failed -- no blocks\n"
+    out: list[str] = []
+    for label, body in _bodies_in_mir(found, found_blocks):
+        out.append(f"{label}  entry {body.entry:#06x}  {len(body.values)} values")
+        for block in body.blocks:
+            out.append(f"  {block.at:#06x}  succ={[hex(s) for s in block.succ]}")
+            for phi in block.phis:
+                where = {hex(k): str(v) for k, v in phi.incoming.items()}
+                out.append(f"      phi {phi.result} <- {where}")
+            for op in block.ops:
+                mem = ""
+                if op.loads:
+                    mem += "  ld " + ",".join(str(c.addr) for c in op.loads)
+                if op.stores:
+                    mem += "  st " + ",".join(str(c.addr) for c in op.stores)
+                out.append(f"      {op.at:#06x} {op.name:<7} {list(op.defines)} <- {list(op.uses)}{mem}")
+        out.append("")
+    return "\n".join(out)
+
+
+def dump_regalloc(found: module.Module, found_blocks: list[blocks.Block] | None) -> str:
+    if not found_blocks:
+        return "code_map failed -- no blocks\n"
+    out: list[str] = []
+    for label, body in _bodies_in_mir(found, found_blocks):
+        alive = regalloc.live(body)
+        assignment = regalloc.colour(body)
+        peak = regalloc.pressure(body, alive)
+        out.append(f"{label}  peak pressure {peak}/{len(regalloc.AVAILABLE)}")
+        if isinstance(assignment, str):
+            out.append(f"  refused: {assignment}")
+        else:
+            out.append(f"  moved from BC's own register: {regalloc.moved(assignment)}")
+        arriving = regalloc.entry_values(body)
+        out.append(f"  values the caller supplied: {sorted(str(v) for v in arriving)}")
+        for block in body.blocks:
+            out.append(f"  {block.at:#06x}  in={sorted(str(v) for v in alive.live_in[block.at])}")
+            out.append(f"          out={sorted(str(v) for v in alive.live_out[block.at])}")
+        out.append("")
+    return "\n".join(out)
+
+
+def dump_analysis(found: module.Module, found_blocks: list[blocks.Block] | None) -> str:
+    """What the transforms would act on, per body."""
+    if not found_blocks:
+        return "code_map failed -- no blocks\n"
+    out: list[str] = []
+    reloads = memory.redundant_loads(found_blocks, found.resolve, found.calls, found.dgroup)
+    stores = memory.dead_stores(found_blocks, found.resolve, found.calls, found.dgroup)
+    removable = forward.removable(found_blocks, found.resolve, found.calls, found.dgroup)
+    out.append(f"redundant loads: {sum(len(v) for v in reloads.values())}")
+    for at, where in sorted(reloads.items()):
+        if where:
+            out.append(f"  block {at:#06x}: {[hex(x) for x in where]}")
+    out.append(f"dead stores: {sum(len(v) for v in stores.values())}")
+    for at, where in sorted(stores.items()):
+        if where:
+            out.append(f"  block {at:#06x}: {[hex(x) for x in where]}")
+    out.append(f"loads removable with no reallocation: {sorted(hex(x) for x in removable)}")
+
+    for label, body in _bodies_in_mir(found, found_blocks):
+        out += ["", f"{label}:"]
+        facts = consts.known(body)
+        out.append(f"  known constants: {len(facts)}")
+        for value, fact in sorted(facts.items(), key=lambda kv: kv[0].id)[:40]:
+            out.append(f"      {value} = {fact}")
+        pairs = wide.pairs(body)
+        out.append(f"  32-bit pairs BC wrote as two: {len(pairs)}")
+        for pair in pairs:
+            out.append(f"      {pair.low.at:#06x}+{pair.high.at:#06x}  {pair.low.name}+{pair.high.name} -> {pair.op}")
+        tests = wide.tests(body, found.calls)
+        out.append(f"  comparison-and-branch: {len(tests)}")
+        for one in tests[:40]:
+            through = f" through {one.through}" if one.through else ""
+            out.append(f"      {one.compare.at:#06x} -> {one.branch.at:#06x}  {one.test}{through}")
+    return "\n".join(out)
+
+
 def dump_one(path: Path) -> Path:
     found = module.of(omf.parse(path.read_bytes()))
     out = OUT / path.stem
@@ -197,6 +323,10 @@ def dump_one(path: Path) -> Path:
 
     (out / "ir.txt").write_text(dump_ir(ir.decode_module(found)) + "\n")
     (out / "live.txt").write_text(dump_live(found_blocks) + "\n")
+    (out / "loops.txt").write_text(dump_loops(found_blocks) + "\n")
+    (out / "mir.txt").write_text(dump_mir(found, found_blocks) + "\n")
+    (out / "regalloc.txt").write_text(dump_regalloc(found, found_blocks) + "\n")
+    (out / "analysis.txt").write_text(dump_analysis(found, found_blocks) + "\n")
     return out
 
 
