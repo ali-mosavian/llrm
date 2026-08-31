@@ -163,3 +163,92 @@ def test_a_laid_out_body_is_no_bigger_than_bc_s_own() -> None:
             was += sum(original(op).len for op in layout._ordered(body))
             now += len(got.code)
     assert now <= was, f"{now} against BC's {was}"
+
+
+def rebuilt(obj: Path) -> tuple:
+    """The object's whole code segment, laid out, or None where it refuses."""
+    found = corpus.loaded(obj)
+    if found is None:
+        return None, None, None
+    mapped = code_map(found)
+    if isinstance(mapped, str):
+        return None, None, None
+    bodies = list(mir.bodies(found, split.partition(found, mapped)))
+    if not bodies:
+        return None, None, None
+    got = layout.rebuild(found, bodies)
+    return found, bodies, (None if isinstance(got, str) else got)
+
+
+@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
+def test_a_rebuilt_segment_carries_every_fixup(obj: Path) -> None:
+    """The one that decides whether whole-segment emission can be complete.
+
+    A fixup left behind is a field reading a bare zero at run time --
+    silent, and the shape tools/mutate.py calls bridged-fixup-dropped. 464
+    of the corpus's are in a `push offset X` or `mov ax,offset X`, where the
+    relocated field is the immediate rather than the displacement, and
+    reporting only the displacement missed every one.
+    """
+    from qbopt import omf
+
+    found, bodies, got = rebuilt(obj)
+    if got is None:
+        return
+    carried = {old for _, old in got.relocations}
+    lowest = min(op.at for _, body in bodies for op in layout._ordered(body))
+    for one in omf.fixups(omf.parse(obj.read_bytes())):
+        if one.seg == found.seg and one.offset >= lowest:
+            assert one.offset in carried, f"{obj.stem}: the fixup at {one.offset:#x} was left behind"
+
+
+@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
+def test_a_rebuilt_segment_is_the_same_instructions(obj: Path) -> None:
+    _found, bodies, got = rebuilt(obj)
+    if got is None:
+        return
+    ops = sorted((op for _, body in bodies for op in layout._ordered(body)), key=lambda one: one.at)
+    back = list(Decoder(BITNESS, got.code, ip=ops[0].at))
+    assert len(back) == len(ops)
+    for op, made in zip(ops, back, strict=True):
+        assert made.mnemonic == original(op).mnemonic, f"{obj.stem} {op.at:#x}"
+
+
+@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
+def test_data_between_the_instructions_refuses_the_rebuild(obj: Path) -> None:
+    """BC puts an ON GOTO table inline, in the middle of the code.
+
+    Emitting only the instructions would drop it, and every code offset it
+    holds with it. Eight of the corpus's forty-two otherwise-rebuildable
+    objects have one, so this is the difference between 42 and 34 -- and
+    between a silent corruption and a refusal.
+    """
+    found = corpus.loaded(obj)
+    if found is None:
+        return
+    mapped = code_map(found)
+    if isinstance(mapped, str):
+        return
+    bodies = list(mir.bodies(found, split.partition(found, mapped)))
+    if not bodies:
+        return
+    ops = sorted((op for _, body in bodies for op in layout._ordered(body)), key=lambda one: one.at)
+    if not ops:
+        return
+    covered = sum(original(op).len for op in ops)
+    span = max(op.at + original(op).len for op in ops) - ops[0].at
+    if covered != span:
+        assert isinstance(layout.rebuild(found, bodies), str), f"{obj.stem} has data inline and rebuilt anyway"
+
+
+def test_the_rebuildable_share_is_what_was_measured() -> None:
+    """34 of the corpus's 125 objects rebuild whole-segment.
+
+    A canary on reach. It was 42 before inline data was refused, and grows
+    with select.py's table -- the 91 refusals are ops it cannot emit.
+    """
+    done = 0
+    for obj in FIXTURES:
+        if rebuilt(obj)[2] is not None:
+            done += 1
+    assert done == 34

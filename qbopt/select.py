@@ -43,34 +43,50 @@ _NARROW = {Register.AX, Register.CX, Register.DX, Register.BX, Register.SI, Regi
 class Emitted:
     """The bytes, and where a relocated displacement ended up inside them.
 
-    `displacement_at` is None for everything with no memory operand and for
-    a frame slot, whose displacement is a real number in the code. A
-    relocated address is emitted as zero and the caller has to move the
-    fixup that names it -- LINK adds what is in the code to the fixup's
-    target, so a displacement left in would be added to the real address.
+    An instruction relocates at most one field, and it is not always the
+    displacement: `push offset X` and `mov ax,offset X` put the address in
+    the immediate, and 464 of the corpus's fixups are in one of those two.
+    Both offsets are reported and `relocated_at` is what a caller wants.
+
+    Where the field is, not whether it is relocated: a frame slot has a
+    displacement too and it is a real number in the code, `8b 86 e8 ff`
+    meaning [bp-18h]. Which fields a fixup names is the module's to say, so
+    the caller asks that and uses these to know where to put the answer.
     """
 
     code: bytes
     displacement_at: int | None = None
+    immediate_at: int | None = None
+
+    @property
+    def relocated_at(self) -> int | None:
+        """Where this instruction's one relocatable field landed."""
+        return self.displacement_at if self.displacement_at is not None else self.immediate_at
 
 
-def _assemble(made: Instruction, at: int, relocated: bool = False) -> Emitted | None:
+def _assemble(made: Instruction, at: int) -> Emitted | None:
+    """The bytes, with both constant fields located.
+
+    Read back off the encoded bytes rather than predicted, which is what
+    calls.py's own assemble() does and for the same reason: the encoder
+    chooses the form, so only it knows where a field ended up.
+    """
     encoder = Encoder(BITNESS)
     try:
         encoder.encode(made, at)
     except ValueError:
         return None
     code = encoder.take_buffer()
-    if not relocated:
-        return Emitted(code)
-    # Read back off the encoded bytes rather than predicted, which is what
-    # calls.py's own assemble() does and for the same reason.
     decoder = Decoder(BITNESS, code, ip=at)
     decoded = next(iter(decoder), None)
     if decoded is None:
         return None
     offsets = decoder.get_constant_offsets(decoded)
-    return Emitted(code, offsets.displacement_offset if offsets.has_displacement else None)
+    return Emitted(
+        code,
+        offsets.displacement_offset if offsets.has_displacement else None,
+        offsets.immediate_offset if offsets.has_immediate else None,
+    )
 
 
 def operand_of(what: ir.Mem) -> tuple[MemoryOperand, bool] | None:
@@ -309,16 +325,16 @@ def move_from(into: Register_, cell: ir.Mem, at: int = 0) -> Emitted | None:
     built = operand_of(cell)
     if width is None or built is None or cell.width != width:
         return None
-    where, relocated = built
+    where, _relocated = built
     short = _moffs(MOFFS_LOAD, into, cell, width)
     if short is not None:
-        made = _assemble(Instruction.create_reg_mem(short, into, where), at, relocated)
+        made = _assemble(Instruction.create_reg_mem(short, into, where), at)
         if made is not None:
             return made
     code = _code(f"MOV_R{width * 8}_RM{width * 8}")
     if code is None:
         return None
-    return _assemble(Instruction.create_reg_mem(code, into, where), at, relocated)
+    return _assemble(Instruction.create_reg_mem(code, into, where), at)
 
 
 def move_into(cell: ir.Mem, outof: Register_, at: int = 0) -> Emitted | None:
@@ -327,16 +343,16 @@ def move_into(cell: ir.Mem, outof: Register_, at: int = 0) -> Emitted | None:
     built = operand_of(cell)
     if width is None or built is None or cell.width != width:
         return None
-    where, relocated = built
+    where, _relocated = built
     short = _moffs(MOFFS_STORE, outof, cell, width)
     if short is not None:
-        made = _assemble(Instruction.create_mem_reg(short, where, outof), at, relocated)
+        made = _assemble(Instruction.create_mem_reg(short, where, outof), at)
         if made is not None:
             return made
     code = _code(f"MOV_RM{width * 8}_R{width * 8}")
     if code is None:
         return None
-    return _assemble(Instruction.create_mem_reg(code, where, outof), at, relocated)
+    return _assemble(Instruction.create_mem_reg(code, where, outof), at)
 
 
 def store_imm(cell: ir.Mem, value: int, at: int = 0) -> Emitted | None:
@@ -352,9 +368,9 @@ def store_imm(cell: ir.Mem, value: int, at: int = 0) -> Emitted | None:
     code = _code(f"MOV_RM{cell.width * 8}_IMM{cell.width * 8}")
     if code is None:
         return None
-    where, relocated = built
+    where, _relocated = built
     try:
-        return _assemble(Instruction.create_mem_i32(code, where, value), at, relocated)
+        return _assemble(Instruction.create_mem_i32(code, where, value), at)
     except (ValueError, OverflowError):
         return None
 
@@ -368,8 +384,8 @@ def arith_mem(name: str, dest: Register_, cell: ir.Mem, at: int = 0) -> Emitted 
     code = _code(f"{name.upper()}_R{width * 8}_RM{width * 8}")
     if code is None:
         return None
-    where, relocated = built
-    return _assemble(Instruction.create_reg_mem(code, dest, where), at, relocated)
+    where, _relocated = built
+    return _assemble(Instruction.create_reg_mem(code, dest, where), at)
 
 
 def push_mem(cell: ir.Mem, at: int = 0) -> Emitted | None:
@@ -380,8 +396,8 @@ def push_mem(cell: ir.Mem, at: int = 0) -> Emitted | None:
     code = _code(f"PUSH_RM{cell.width * 8}")
     if code is None:
         return None
-    where, relocated = built
-    return _assemble(Instruction.create_mem(code, where), at, relocated)
+    where, _relocated = built
+    return _assemble(Instruction.create_mem(code, where), at)
 
 
 def branch(name: str, target: int, at: int = 0, short: bool = False) -> Emitted | None:
@@ -485,9 +501,9 @@ def compare(dest: ir.Loc, value: int, at: int = 0) -> Emitted | None:
             code = _code(f"CMP_RM{cell.width * 8}_IMM{cell.width * 8}")
             if code is None:
                 return None
-            where, relocated = built
+            where, _relocated = built
             try:
-                return _assemble(Instruction.create_mem_i32(code, where, value), at, relocated)
+                return _assemble(Instruction.create_mem_i32(code, where, value), at)
             except (ValueError, OverflowError):
                 return None
         case _:

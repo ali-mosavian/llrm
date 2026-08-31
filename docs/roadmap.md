@@ -100,10 +100,16 @@ nothing is being spliced: chunk boundaries, line numbers and fixups are all
 being written rather than preserved. **42 of the corpus's 125 objects
 already have every body layable**, and that number grows with the selector.
 
-- [ ] emit a whole code segment from MIR: LEDATA records, fixups, line
-      numbers, publics and the entry point
-- [ ] the 83 objects with a body that refuses, which is what the selector's
-      remaining 599 ops are
+- [x] `layout.rebuild` — every body laid out into one image, cross-body
+      targets resolved, and all 4,846 fixups in the span carried. 34 of 125
+      objects; the rest refuse on an op `select.py` cannot emit, or on data
+      BC put inline
+- [ ] turn that image into records: LEDATA at 1024 bytes or less, since a
+      fixup's offset is ten bits, plus its fixups, the line numbers, publics
+      and the entry point
+- [ ] the ON GOTO tables BC puts between instructions — 8 objects, whose
+      entries are code offsets needing the same remap
+- [ ] the 91 objects with an op `select.py` refuses
 
 ## M2 — placement
 

@@ -222,8 +222,13 @@ def test_a_frame_slot_keeps_its_displacement() -> None:
     cell = ir.Mem(Addr(Space.FRAME, -0x18), 2)
     made = select.move_from(Register.AX, cell)
     assert made is not None
-    assert made.displacement_at is None
     assert str(next(iter(Decoder(BITNESS, made.code, ip=0)))) == "mov ax,[bp-18h]"
+    # It has a displacement and the bytes are the number, where a relocated
+    # one is emitted as zero. Whether a fixup names it is the module's to
+    # say; Emitted only reports where the field is.
+    at = made.displacement_at
+    assert at is not None
+    assert made.code[at : at + 2] == (-0x18 & 0xFFFF).to_bytes(2, "little")
 
 
 def test_the_spaces_that_cannot_be_encoded_are_refused() -> None:

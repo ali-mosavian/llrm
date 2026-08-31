@@ -65,6 +65,12 @@ def _ordered(body: MirBody) -> list[mir.Op]:
     return sorted((op for block in body.blocks for op in block.ops), key=lambda one: one.at)
 
 
+def _length_of(op: mir.Op) -> int | None:
+    """How many bytes the op occupied in BC's own image."""
+    found = getattr(op.node, "insn", None)
+    return None if found is None else found.length
+
+
 def _semantics(op: mir.Op) -> ir.Semantics | None:
     what = getattr(op.node, "semantics", None)
     return None if what is None or what.op is ir.Operation.BARRIER else what
@@ -128,7 +134,55 @@ def _placed(ops: list[mir.Op], at: int, lengths: dict[int, int]) -> dict[int, in
 
 def lay_out(body: MirBody, at: int, found: Module) -> Laid | str:
     """Every op in `body`, emitted in order from `at`, or why it could not be."""
-    ops = _ordered(body)
+    return _emitted(_ordered(body), at, found)
+
+
+def rebuild(found: Module, bodies: list[tuple[str, MirBody]]) -> Laid | str:
+    """Every body in the module, laid out one after another.
+
+    Whole-segment rather than per-body, because per-body does not work:
+    splicing one back into BC's own layout is possible for 1 of the corpus's
+    171 bodies -- the rest cross a LEDATA boundary, are not contiguous, or
+    are branched into from outside. None of that applies to writing the
+    segment, where boundaries and offsets are being produced rather than
+    preserved.
+
+    It also settles the targets that refused per-body: a branch from one
+    body into another has somewhere to land once every body is in the same
+    map.
+
+    What comes back starts at the first body's own address. Whatever sits
+    before it -- BC's module header, 48 bytes of `blARITH` and padding, and
+    the only thing in the corpus's code segments that is not in a body --
+    is the caller's to keep.
+    """
+    ops = sorted(
+        (op for _, body in bodies for op in _ordered(body)),
+        key=lambda one: one.at,
+    )
+    if not ops:
+        return "no bodies to rebuild"
+
+    # Every byte between the first op and the last has to be an op. A gap is
+    # data sitting in the middle of the code -- an ON GOTO table, which BC
+    # puts inline -- and emitting only the instructions would drop it
+    # silently along with every code offset it holds. Eight of the corpus's
+    # forty-two rebuildable objects have one, and remapping its entries
+    # through `moved` is its own piece of work rather than something to
+    # improvise here.
+    sized = [(one.at, _length_of(one)) for one in ops]
+    if any(length is None for _, length in sized):
+        return f"{ops[0].at:#06x}: an op with no instruction behind it"
+    covered = sum(length for _, length in sized if length is not None)
+    span = max(at + (length or 0) for at, length in sized) - ops[0].at
+    if covered != span:
+        return f"{ops[0].at:#06x}: {span - covered} bytes between the ops are not instructions"
+
+    return _emitted(ops, ops[0].at, found)
+
+
+def _emitted(ops: list[mir.Op], at: int, found: Module) -> Laid | str:
+    """`ops` in order from `at`, shrunk to a fixed point and emitted."""
     if not ops:
         return "no ops to lay out"
 
@@ -181,10 +235,15 @@ def lay_out(body: MirBody, at: int, found: Module) -> Laid | str:
         made = select.emit(what, at=moved[op.at], short=op.at in short)
         if made is None or len(made.code) != lengths[op.at]:
             return f"{op.at:#06x}: it changed length between the two passes"
-        if made.displacement_at is not None:
-            field = _field_in(found, op)
-            if field is None:
-                return f"{op.at:#06x}: a relocated displacement with no field to move"
-            relocations.append((len(out) + made.displacement_at, field))
+        # A fixup goes wherever this instruction's one relocatable field
+        # landed -- the displacement for a memory operand, the immediate for
+        # `push offset X` and `mov ax,offset X`, which are 464 of the
+        # corpus's fixups on their own.
+        field = _field_in(found, op)
+        if field is not None:
+            landed = made.relocated_at
+            if landed is None:
+                return f"{op.at:#06x}: {op.name} has a fixup and no field to put it in"
+            relocations.append((len(out) + landed, field))
         out += made.code
     return Laid(bytes(out), moved, tuple(relocations))
