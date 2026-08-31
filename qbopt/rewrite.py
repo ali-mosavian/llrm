@@ -519,7 +519,48 @@ def drop_chained_crossings(planned: list[Planned], chunks: tuple[tuple[int, int]
     ]
 
 
+# How many times rewrite() will look again. Each pass either changes bytes
+# or stops, so this is a backstop against a pair of edits that undo each
+# other rather than an expected count -- measured, nothing in the corpus or
+# in qb-qrender needs more than three.
+PASSES = 8
+
+
 def rewrite(
+    data: bytes,
+    *,
+    dry_run: bool,
+    take: set[int] | None = None,
+    max_regions: int | None = None,
+) -> tuple[bytes, list[Region]]:
+    """Rewrite to a fixed point, or once where the caller is bisecting.
+
+    One pass is not a fixed point and the reason is worth stating: absorbing
+    a call removes a barrier, and a store and reload the call used to sit
+    between only becomes visible afterwards. procs-q-O ends up with
+    `mov [bp-12h],eax` immediately followed by `mov eax,[bp-12h]`, which the
+    first pass could not see because the call was still there when it
+    looked. Every deletion in the corpus after the first pass is of that
+    shape.
+
+    `take` and `max_regions` exist to bisect a failure by region index, and
+    an index only means anything within one pass -- so those run once, as
+    they did before.
+    """
+    if take is not None or max_regions is not None or dry_run:
+        return _once(data, dry_run=dry_run, take=take, max_regions=max_regions)
+
+    regions: list[Region] = []
+    for _ in range(PASSES):
+        out, found = _once(data, dry_run=False)
+        regions += found
+        if out == data or not any(one.taken for one in found):
+            return out, regions
+        data = out
+    return data, regions
+
+
+def _once(
     data: bytes,
     *,
     dry_run: bool,

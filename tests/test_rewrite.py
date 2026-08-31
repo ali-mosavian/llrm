@@ -340,3 +340,38 @@ def test_a_combined_edit_never_restores_only_to_immediately_rewiden(operator_obj
         middle = data[:-4] if trailing in FIXUP.values() else data
         assert FIXUP[0] not in middle
         assert FIXUP[1] not in middle
+
+
+def test_rewriting_reaches_a_fixed_point(obj: Path) -> None:
+    """Rewriting the output changes nothing further.
+
+    One pass is not a fixed point: absorbing a call removes a barrier, and
+    a store and reload the call used to sit between only becomes visible
+    afterwards. Nine of the corpus's objects change bytes on a second pass
+    and none on a third.
+    """
+    out, _ = corpus.rewritten(obj, dry_run=False)
+    again, regions = corpus.rewritten(out, dry_run=False)
+    assert again == out
+    assert [one for one in regions if one.taken] == []
+
+
+def test_a_second_pass_finds_only_what_the_first_one_exposed(obj: Path) -> None:
+    """Bounded, so the loop is a backstop and not a licence.
+
+    Each pass either changes bytes or stops, and the count is measured
+    rather than hoped for: 102 of the corpus's objects settle after one
+    changing pass and 9 after two.
+    """
+    from qbopt.rewrite import _once
+    from qbopt.rewrite import PASSES
+
+    data = obj.read_bytes()
+    passes = 0
+    while passes < PASSES:
+        out, _ = _once(data, dry_run=False)
+        if out == data:
+            break
+        passes += 1
+        data = out
+    assert passes <= 2, f"{obj.stem} needed {passes} changing passes"
