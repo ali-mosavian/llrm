@@ -71,7 +71,13 @@ Built, no consumer:
 - [ ] `imul` — the form exists in iced, it is simply not wired
 - [ ] the 409 x87 instructions — M6's
 - [ ] the ~190 whose address is in a space `operand_of` refuses, or whose register this does not name
-- [ ] layout: lay a whole body out, so a branch that changes length moves what follows it
+- [x] layout: a whole body emitted, with every branch pointing at where its
+      target went — `layout.lay_out`, 50 of 171 corpus bodies, 8,353 ops and
+      583 branches, all landing
+- [ ] pick the shorter encoding where it fits. Selection emits the near form
+      of every branch and IMM32 where IMM8 would do, which costs 6.3% (1,856
+      bytes on 29,273). Shrinking one moves what follows, so this is the
+      iteration `lay_out` currently does not need
 
 Proof: re-lower every corpus body through the selector with no transform
 applied; `tools/matrix.py` green. Same program, not same bytes — the
