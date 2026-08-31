@@ -1,0 +1,181 @@
+"""
+The x87 register stack, as values rather than as positions.
+
+`ir.St(index)` names `st(i)` exactly as the operand does -- relative to
+wherever the top happens to be -- and ir.py deliberately refuses to claim
+that `st(0)` in one node is `st(0)` in the next. It is not: `fld` pushes, so
+every slot below it is renamed, and two mentions of the same index in
+different nodes are usually different physical registers.
+
+That refusal is what makes the model sound and what stops anything reasoning
+across two x87 instructions. This module supplies what it was missing: walk
+a block forward, keep a stack of value identities, and resolve each `St` to
+the value actually in that slot. After it, `fld [x]` twice names two
+different values, and the two `fld dword ptr [si]` that once looked like a
+load and a redundant reload are distinguishable by construction rather than
+by remembering that an fld pushes.
+
+Block-scoped, and the stack at a block's entry is unknown rather than empty:
+BC leaves values on the x87 stack across a branch, so entering slots are
+minted as their own values -- known to be distinct from each other and from
+anything pushed later, and known to be nothing else. Depth is measured from
+the block's entry the same way mir.Space.STACK measures a push slot from the
+top of its own block, and for the same reason.
+
+Nothing here emits. It answers "which value is in st(i) at this op", which
+is what an x87 pass would have to ask first.
+"""
+
+from dataclasses import field
+from dataclasses import dataclass
+
+from qbopt import ir
+from qbopt import mir
+from qbopt.mir import Op
+from qbopt.mir import MirBody
+
+# The x87 stack is eight deep and BC never comes close, but a program that
+# overflowed it would wrap rather than fault, so the depth is checked.
+DEPTH = 8
+
+
+@dataclass(frozen=True, slots=True)
+class Float:
+    """One value living on the x87 stack.
+
+    `at` is where it was pushed, or None for one that was already there when
+    the block was entered. Identity is the id, so two Floats compare equal
+    only when they are the same value in the same place.
+    """
+
+    id: int
+    at: int | None = None
+
+    def __str__(self) -> str:
+        return f"f{self.id}" + ("" if self.at is None else f"@{self.at:#x}")
+
+
+@dataclass(frozen=True, slots=True)
+class Reading:
+    """One op's x87 operands, resolved."""
+
+    at: int
+    uses: dict[int, Float] = field(default_factory=dict)  # st index -> the value there
+    defines: Float | None = None  # what it leaves on top, where it pushes one
+    popped: tuple[Float, ...] = ()  # what it took off
+
+
+# How each modelled float operation moves the stack. The push and the pop are
+# the operation's own, not iced's increment: ir.py has already named which
+# shape this is, and naming it twice is how the two drift apart.
+PUSHES = frozenset({ir.Operation.FLOAT_LOAD})
+POPS = frozenset({ir.Operation.FLOAT_STORE, ir.Operation.FLOAT_ARITH_POP})
+IN_PLACE = frozenset({ir.Operation.FLOAT_ARITH, ir.Operation.FLOAT_UNARY})
+FLOAT = PUSHES | POPS | IN_PLACE
+
+
+def _semantics(op: Op) -> ir.Semantics | None:
+    what = op.made if op.made is not None else getattr(op.node, "semantics", None)
+    return None if what is None or what.op is ir.Operation.BARRIER else what
+
+
+def _indices(what: ir.Semantics) -> list[int]:
+    """Every st(i) this operation names, in the order it names them."""
+    return [one.index for one in (*what.dests, *what.sources) if isinstance(one, ir.St)]
+
+
+def readings(body: MirBody) -> dict[int, Reading]:
+    """Which value is in each st(i) the ops of `body` name.
+
+    Forward through each block from an unknown entry stack. An op this
+    cannot model -- a barrier, a call, anything that is not one of the five
+    float shapes but still touches the stack -- makes the whole stack
+    unknown again rather than shifting it by a guess, which is the same
+    refusal avail.py makes for memory and for the same reason: a wrong
+    answer here is silent.
+    """
+    out: dict[int, Reading] = {}
+    minted = 0
+
+    for block in body.blocks:
+        # Top first. Entering slots are minted lazily, so a block that never
+        # reaches past its own pushes never invents one.
+        stack: list[Float] = []
+        entering = 0
+        known = True
+
+        def at(index: int) -> Float | None:
+            nonlocal minted, entering
+            if not known:
+                return None
+            while len(stack) <= index:
+                if entering >= DEPTH:
+                    return None
+                minted += 1
+                entering += 1
+                stack.append(Float(minted))
+            return stack[index]
+
+        for op in block.ops:
+            what = _semantics(op)
+            if what is None or op.barrier or (what.op not in FLOAT and _indices(what)):
+                # It touches the stack in a way this does not model.
+                known = False
+                stack = []
+                out[op.at] = Reading(op.at)
+                continue
+            if what.op not in FLOAT:
+                continue
+
+            uses = {}
+            for index in _indices(what):
+                got = at(index)
+                if got is None:
+                    known = False
+                    break
+                uses[index] = got
+            if not known:
+                stack = []
+                out[op.at] = Reading(op.at)
+                continue
+
+            made: Float | None = None
+            popped: tuple[Float, ...] = ()
+            if what.op in PUSHES:
+                minted += 1
+                made = Float(minted, op.at)
+                stack.insert(0, made)
+            elif what.op in POPS:
+                popped = (stack[0],) if stack else ()
+                if stack:
+                    stack.pop(0)
+                elif entering < DEPTH:
+                    entering += 1
+            out[op.at] = Reading(op.at, uses, made, popped)
+    return out
+
+
+def pushed_twice(body: MirBody) -> tuple[tuple[int, int], ...]:
+    """Pairs of pushes of the same address that are two values, not one.
+
+    The shape that made forward.py delete the second of two
+    `fld dword ptr [si]`: same address, same bytes, and not redundant at
+    all, because each one puts another value on the stack. Reported so the
+    distinction is a fact this module states rather than one every reader of
+    an x87 sequence has to remember.
+    """
+    found: list[tuple[int, int]] = []
+    reads = readings(body)
+    for block in body.blocks:
+        loads = [op for op in block.ops if (what := _semantics(op)) is not None and what.op in PUSHES]
+        for one, other in zip(loads, loads[1:]):
+            if not one.loads or not other.loads:
+                continue
+            if not mir.same_bytes(one.loads[0], other.loads[0]):
+                continue
+            first, second = reads.get(one.at), reads.get(other.at)
+            if first is None or second is None:
+                continue
+            if first.defines is not None and second.defines is not None and first.defines != second.defines:
+                found.append((one.at, other.at))
+    return tuple(found)
