@@ -107,6 +107,27 @@ Each needs M1; anything that moves code needs M2.
 - [ ] `regalloc.colour()` reaches emission
 - [ ] something that creates or relieves pressure, since identity is optimal until it does
 
+### Segment registers are a register class, not scenery
+
+`mir.PHYSICAL` excludes them and `_memrefs` drops the segment of a
+`Space.FAR` address on the floor -- "a segment register is physical, never
+a value". That is wrong for far pointers and has to change: es holds a
+`$DYNAMIC` array's base, and two live far pointers are two values that
+need two registers, not one register reloaded between every access.
+
+Measured: qb-qrender has 1,294 instructions that touch es and 397 carrying
+an explicit override, against 2 in the whole fixture corpus. So nothing
+here will surface it and only a real program will.
+
+- [ ] a segment register is an allocatable value, with its own class
+- [ ] `Space.FAR`'s `segment` is that value, so two pointers through
+      different segments are two addresses rather than one aliasing pair
+- [ ] pressure and spilling per class -- four segment registers on a 386,
+      of which ds and ss are effectively pinned, so es and fs/gs are what
+      there is to allocate
+- [ ] spill the lowest-priority pointer when the class is full, rather than
+      reloading whichever was touched last
+
 ## M5 — retire the machine arm
 
 Done when the old path is deleted, not when MIR also does it.
