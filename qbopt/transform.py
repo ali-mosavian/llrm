@@ -152,7 +152,7 @@ def applied(
     dgroup: frozenset[int],
     calls: dict[int, str],
     *,
-    widen: bool = True,
+    widen: bool = False,
     drop_loads: bool = True,
     drop_stores: bool = True,
     place: bool = False,
@@ -162,6 +162,19 @@ def applied(
     Widening first, because folding a pair retires the carry between its
     halves and removes an op -- which is what makes a later reload of the
     same cell visible as redundant rather than as the high half's own read.
+
+    **Widening is off, and wrong as written.** `add ax,[x]` with
+    `adc dx,[x+2]` is a 32-bit add of a value BC keeps in `dx:ax`, and
+    `dx:ax` is not `eax` -- so folding it to `add eax,[x]` puts the carry
+    into the high half of eax and leaves dx holding what it held before.
+    suite/procs.bas prints 0x02040C10 where it wants 0x04080C10: the low
+    half doubled, the high half untouched. Every one of the twelve
+    configurations caught it.
+
+    Making it right means what lift.py already does -- proving the pair is
+    one value and putting it in one register first -- which is the pair
+    analysis, not a rename of the low half's operands. wide.widened() builds
+    the operation; what is missing is the step before it.
     """
     if widen:
         body = widened(body)

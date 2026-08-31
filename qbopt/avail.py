@@ -335,13 +335,26 @@ def redundant(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> t
     found: list[int] = []
     for block in body.blocks:
         current = dict(held.into[block.at])
+        # Which value each register actually holds right now. holders() is a
+        # map from a cell to the value that was put there, and it says
+        # nothing about whether that value is still in its register: after
+        # `mov ax,[x]` then `mov ax,[y]`, the entry for [x] still names a
+        # value whose origin is eax, and eax holds [y]. Deleting a later
+        # `mov ax,[x]` on the strength of that entry is how this read the
+        # wrong cell. forwardable() asks regalloc.live() for the same reason.
+        inside: dict[Register_, Value] = {}
         for op in block.ops:
             got = loaded_into(op, body.origin)
             if got is not None:
                 ref, made = got
+                into = body.origin.get(made)
                 who = next((w for cell, w in current.items() if mir.same_bytes(cell, ref)), None)
-                if who is not None and body.origin.get(who) is body.origin.get(made):
+                if who is not None and into is not None and body.origin.get(who) is into and inside.get(into) is who:
                     found.append(op.at)
+            for value in op.defines:
+                where = body.origin.get(value)
+                if where is not None:
+                    inside[where] = value
             current = _after(op, current, dgroup, calls, body.origin)
     return tuple(found)
 
