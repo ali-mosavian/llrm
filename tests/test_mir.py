@@ -294,3 +294,48 @@ def test_the_flags_variable_is_a_kind_not_a_register() -> None:
     for built, _ in raised(Path("fixtures/omf/arith-v-g3.obj")):
         for value in built.values:
             assert value.flags == (built.origin[value] is mir.FLAGS)
+
+
+@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
+def test_a_restore_redefines_only_the_half_it_moves(obj: Path) -> None:
+    """`push eax / pop ax / pop dx` does not redefine eax.
+
+    ir.RESTORE_EFFECTS says both roots, and has to: `pop ax` is a partial
+    write, and a per-register layer cannot say the bits written are the ones
+    already there. Here it can, and saying otherwise ends the live range of
+    the very value being restored -- a false definition in the middle of
+    every absorbed site.
+    """
+    for built, _ in raised(obj):
+        for block in built.blocks:
+            for op in block.ops:
+                if op.op is not mir.Synth.HALF_TO_LOW:
+                    continue
+                assert len(op.defines) == 1, f"{op.at:#x}: a restore defines one register, not {op.defines}"
+                assert len(op.uses) == 2, f"{op.at:#x}: it reads the source and the register it writes into"
+                assert op.defines[0] in op.uses, "the written root is read too -- the write is partial"
+
+
+@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
+def test_the_restored_value_survives_its_own_restore(obj: Path) -> None:
+    """The point of the previous test, stated as the thing it buys.
+
+    The source of a restore is not redefined by it, so whatever reads that
+    value afterwards reads the same one -- which is what makes the round
+    trip an identity rather than a chain through a fresh definition.
+    """
+    for built, _ in raised(obj):
+        for block in built.blocks:
+            for op in block.ops:
+                if op.op is not mir.Synth.HALF_TO_LOW:
+                    continue
+                source = next(one for one in op.uses if one != op.defines[0])
+                assert source not in op.defines, f"{op.at:#x}: the restore redefined its own source"
+
+
+def test_the_restore_pairs_are_the_two_calls_py_emits() -> None:
+    """eax/edx and ecx/ebx, matching ir.FIXUP's own numbering."""
+    assert mir.RESTORE_PAIR == {
+        0: (mir.Register.EAX, mir.Register.EDX),
+        1: (mir.Register.ECX, mir.Register.EBX),
+    }

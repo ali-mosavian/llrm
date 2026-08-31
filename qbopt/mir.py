@@ -48,6 +48,7 @@ bytes -- the same discipline that makes ir.emit() verbatim, and the same
 reason it can be trusted before anything is built on top of it.
 """
 
+from enum import StrEnum
 from dataclasses import field
 from dataclasses import dataclass
 
@@ -105,6 +106,14 @@ FLAGS = Register.NONE
 # runtime.py names a register as its own small enum, iced as an int. One
 # table rather than a string round trip, so a name that stops matching shows
 # up here instead of a contract silently preserving nothing.
+# Which root a restore reads and which it writes the high half into.
+# ir.FIXUP's own pair numbering: 0 is `push eax / pop ax / pop dx`, 1 is
+# `push ecx / pop cx / pop bx`.
+RESTORE_PAIR = {
+    0: (Register.EAX, Register.EDX),
+    1: (Register.ECX, Register.EBX),
+}
+
 FROM_CONTRACT = {
     runtime.Reg.AX: Register.EAX,
     runtime.Reg.BX: Register.EBX,
@@ -141,6 +150,27 @@ class Value:
         return f"{'f' if self.flags else 'v'}{self.id}"
 
 
+class Synth(StrEnum):
+    """Operations no single machine instruction computes.
+
+    ir.Operation is a vocabulary for what one instruction does. These are
+    for what a value IS in terms of other values, which is a different
+    question and the one a simplifier asks. They exist because a variable
+    is 32 bits wide and BC's whole output is 32-bit work written as 16-bit
+    halves -- see docs/variables.md.
+    """
+
+    # dests[0] <- sources[0] with its low 16 bits replaced by the HIGH 16
+    # of sources[1]. calls.py's restore idiom, exactly: `pop dx` after
+    # `push eax` puts eax's high half into dx and leaves edx's own high
+    # half alone.
+    HALF_TO_LOW = "half.tolow"
+
+    # dests[0] <- low16(sources[0]) << 16 | low16(sources[1]). The rejoin:
+    # `push dx / push ax / pop eax` reads the two halves back as one dword.
+    CONCAT_LOW = "concat.low"
+
+
 @dataclass(frozen=True, slots=True)
 class MemRef:
     """A memory operand, with the values its own address depends on.
@@ -162,7 +192,7 @@ class Op:
     """One instruction, as values in and values out."""
 
     at: int
-    op: ir.Operation
+    op: ir.Operation | Synth
     name: str
     defines: tuple[Value, ...]
     uses: tuple[Value, ...]
@@ -228,6 +258,29 @@ def _call_touches(name: str | None) -> tuple[frozenset[Register_], frozenset[Reg
     return disturbed, disturbed
 
 
+def _restore_touches(node: ir.Node) -> tuple[frozenset[Register_], frozenset[Register_]] | None:
+    """What calls.py's restore idiom really disturbs.
+
+    ir.RESTORE_EFFECTS says it defines both roots, and has to: `pop ax` is a
+    partial write, and a layer answering per-register has no way to say that
+    the bits written are the ones already there. Here that is sayable, and
+    the truth is narrower.
+
+        push eax   [sp] = low16(eax), [sp+2] = high16(eax)
+        pop ax     ax = low16(eax)   -- which is what ax already held
+        pop dx     dx = high16(eax)  -- edx's own high half untouched
+
+    So eax is not redefined at all. Only the high-half register changes, and
+    saying otherwise puts a false definition in the middle of every absorbed
+    site -- which ends the live range of the value being restored and is
+    exactly what stopped the round-trip churn from being provable.
+    """
+    if not isinstance(node, ir.Restore):
+        return None
+    source, into = RESTORE_PAIR[node.pair]
+    return frozenset({into}), frozenset({source, into})
+
+
 def _touched(node: ir.Node, calls: dict[int, str] | None = None) -> tuple[frozenset[Register_], frozenset[Register_]]:
     """(defines, uses) as tracked variables, flags included as FLAGS.
 
@@ -239,6 +292,8 @@ def _touched(node: ir.Node, calls: dict[int, str] | None = None) -> tuple[frozen
     """
     if calls is not None and isinstance(node, ir.Call) and (known := _call_touches(calls.get(node.insn.at))):
         return known
+    if (halves := _restore_touches(node)) is not None:
+        return halves
 
     effects = node.effects
     defines = set(TRACKED) if effects.defs is None else {r for r in effects.defs if r in TRACKED}
@@ -429,7 +484,7 @@ def raise_body(
             ops[at].append(
                 Op(
                     insn.at,
-                    node.semantics.op,
+                    Synth.HALF_TO_LOW if isinstance(node, ir.Restore) else node.semantics.op,
                     node.semantics.name or "",
                     tuple(made),
                     used,
