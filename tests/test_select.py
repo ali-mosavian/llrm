@@ -161,8 +161,11 @@ def test_a_wide_push_is_not_a_narrow_one() -> None:
     """
     narrow, wide = select.push_imm(3, 2), select.push_imm(3, 4)
     assert narrow is not None and wide is not None
-    assert len(wide.code) == len(narrow.code) + 3  # the 0x66 prefix and two more bytes
-    assert wide.code[0] == 0x66
+    # Asked of what reaches the stack rather than of the encoding's length:
+    # PUSHD_IMM8 pushes four bytes from a one-byte immediate, so the wide
+    # push is not always the longer instruction.
+    assert next(iter(Decoder(BITNESS, narrow.code, ip=0))).stack_pointer_increment == -2
+    assert next(iter(Decoder(BITNESS, wide.code, ip=0))).stack_pointer_increment == -4
 
 
 def test_a_register_is_not_an_immediate() -> None:

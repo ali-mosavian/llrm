@@ -7,13 +7,16 @@ that changes: an instruction whose encoding differs in length from the one
 BC wrote moves everything after it, and every branch into that region is
 then pointing at the wrong byte.
 
-So this is two passes and no iteration. The first learns each op's length,
-which is knowable without any target because select.py always emits the
-near form of a branch -- BC writes `e9 0b 00` where `eb 0c` reaches, so
-this is no worse, and refusing to choose is what keeps a length from
-depending on a displacement that depends on a length. The second emits at
-the address the first assigned, with every target mapped through where it
-went.
+So this is a fixed point, and the shape of it is what keeps it honest.
+Every branch starts long. Addresses are assigned, each branch that reaches
+its target within a signed byte is marked short, and the addresses are
+assigned again. Shrinking only ever brings a target closer, so a branch
+marked short stays reachable and the loop only ever goes one way -- which
+is why it terminates rather than oscillating between two lengths that each
+justify the other.
+
+Then one final pass emits at the addresses the fixed point settled on, with
+every target mapped through where it went.
 
 What comes back is bytes plus the relocations, because a relocated
 displacement is emitted as zero and the fixup that names it has to be moved
@@ -108,14 +111,27 @@ def _field_in(found: Module, op: mir.Op) -> int | None:
     return inside[0] if len(inside) == 1 else None
 
 
+# A signed byte's worth of displacement, measured from the end of the
+# instruction. The short branch's whole range.
+REACH = range(-128, 128)
+
+
+def _placed(ops: list[mir.Op], at: int, lengths: dict[int, int]) -> dict[int, int]:
+    """Where each op lands, given what each one measures."""
+    moved: dict[int, int] = {}
+    where = at
+    for op in ops:
+        moved[op.at] = where
+        where += lengths[op.at]
+    return moved
+
+
 def lay_out(body: MirBody, at: int, found: Module) -> Laid | str:
     """Every op in `body`, emitted in order from `at`, or why it could not be."""
     ops = _ordered(body)
     if not ops:
         return "no ops to lay out"
 
-    # Pass one: lengths. A near branch is three bytes whatever it targets, so
-    # this needs no addresses and cannot disagree with pass two about them.
     lengths: dict[int, int] = {}
     for op in ops:
         what = _semantics(op)
@@ -126,13 +142,33 @@ def lay_out(body: MirBody, at: int, found: Module) -> Laid | str:
             return f"{op.at:#06x}: {op.name} is not one select.py can emit"
         lengths[op.at] = len(made.code)
 
-    moved: dict[int, int] = {}
-    where = at
-    for op in ops:
-        moved[op.at] = where
-        where += lengths[op.at]
+    # Shrink to a fixed point. Every branch starts long; one that reaches its
+    # target within a signed byte becomes short, which moves everything after
+    # it closer and can only let more of them shrink.
+    short: set[int] = set()
+    moved = _placed(ops, at, lengths)
+    changing = True
+    while changing:
+        changing = False
+        for op in ops:
+            what = _semantics(op)
+            if what is None or what.target is None or op.at in short:
+                continue
+            landed = moved.get(what.target)
+            if landed is None:
+                continue
+            made = select.emit(what, at=moved[op.at], short=True)
+            if made is None:
+                continue  # a call has no short form, and says so by refusing
+            if landed - (moved[op.at] + len(made.code)) not in REACH:
+                continue
+            short.add(op.at)
+            lengths[op.at] = len(made.code)
+            changing = True
+        if changing:
+            moved = _placed(ops, at, lengths)
 
-    # Pass two: the bytes, at the addresses pass one assigned.
+    # The bytes, at the addresses the fixed point settled on.
     out = bytearray()
     relocations: list[tuple[int, int]] = []
     for op in ops:
@@ -142,7 +178,7 @@ def lay_out(body: MirBody, at: int, found: Module) -> Laid | str:
         what = _retargeted(before, moved)
         if what is None:
             return f"{op.at:#06x}: its target is not in this body"
-        made = select.emit(what, at=moved[op.at])
+        made = select.emit(what, at=moved[op.at], short=op.at in short)
         if made is None or len(made.code) != lengths[op.at]:
             return f"{op.at:#06x}: it changed length between the two passes"
         if made.displacement_at is not None:

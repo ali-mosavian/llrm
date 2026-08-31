@@ -123,3 +123,43 @@ def test_a_body_is_refused_whole_or_not_at_all() -> None:
             else:
                 done += 1
     assert (total, done) == (171, 50)
+
+
+@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
+def test_relaxation_settles_and_leaves_every_branch_reaching(obj: Path) -> None:
+    """The fixed point's own claim.
+
+    A branch shrunk to the short form has to still reach: the range is
+    -128..127 from the end of the instruction, and a shrink that put its
+    target out of reach would encode a displacement that means somewhere
+    else entirely. Safe because shrinking only ever brings a target closer,
+    which is also why the loop terminates instead of oscillating between two
+    lengths that each justify the other.
+    """
+    for body, got in laid(obj):
+        ops = layout._ordered(body)
+        back = list(Decoder(BITNESS, got.code, ip=body.entry))
+        for op, made in zip(ops, back, strict=True):
+            want = original(op)
+            if want.op0_kind != OpKind.NEAR_BRANCH16:
+                continue
+            landed = got.moved[want.near_branch16]
+            assert made.near_branch16 == landed
+            if made.len <= 2:  # the short form was taken
+                assert landed - (made.ip + made.len) in layout.REACH
+
+
+def test_a_laid_out_body_is_no_bigger_than_bc_s_own() -> None:
+    """What relaxation buys, and the reason it is worth the loop.
+
+    Emitting every branch long cost 6.3% -- 1,856 bytes across the corpus's
+    fifty layable bodies. With the short forms, the accumulator's own moffs
+    load and store, the one-byte inc and dec and the byte-sized immediates,
+    the same fifty come out four bytes smaller than BC wrote them.
+    """
+    was = now = 0
+    for obj in FIXTURES:
+        for body, got in laid(obj):
+            was += sum(original(op).len for op in layout._ordered(body))
+            now += len(got.code)
+    assert now <= was, f"{now} against BC's {was}"

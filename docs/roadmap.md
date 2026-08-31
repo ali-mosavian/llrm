@@ -74,10 +74,9 @@ Built, no consumer:
 - [x] layout: a whole body emitted, with every branch pointing at where its
       target went — `layout.lay_out`, 50 of 171 corpus bodies, 8,353 ops and
       583 branches, all landing
-- [ ] pick the shorter encoding where it fits. Selection emits the near form
-      of every branch and IMM32 where IMM8 would do, which costs 6.3% (1,856
-      bytes on 29,273). Shrinking one moves what follows, so this is the
-      iteration `lay_out` currently does not need
+- [x] pick the shorter encoding where it fits — short branches to a fixed
+      point, the accumulator's moffs load and store, one-byte inc and dec,
+      byte-sized immediates. 6.3% larger than BC became 4 bytes smaller
 
 Proof: re-lower every corpus body through the selector with no transform
 applied; `tools/matrix.py` green. Same program, not same bytes — the

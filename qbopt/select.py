@@ -191,33 +191,58 @@ def arith(name: str, dest: Register_, source: Register_, at: int = 0) -> Emitted
     return _assemble(Instruction.create_reg_reg(code, dest, source), at)
 
 
+def fits_in_a_byte(value: int) -> bool:
+    """Whether the sign-extended one-byte form says the same number.
+
+    x86 has a short encoding for most immediates where the value fits a
+    signed byte, and it is two bytes narrower at 32 bits. `sub eax,5` is
+    seven bytes as IMM32 and four as IMM8, which is worth taking: nothing
+    about layout depends on it, since the choice is made from the value
+    alone and not from any address.
+    """
+    return -128 <= value <= 127
+
+
 def arith_imm(name: str, dest: Register_, value: int, at: int = 0) -> Emitted | None:
-    """`<name> dest, imm`."""
+    """`<name> dest, imm`, in the shorter form where the value allows."""
     if name not in TWO_OPERAND:
         return None
     width = WIDTHS.get(dest)
     if width is None:
         return None
-    code = _code(f"{name.upper()}_RM{width * 8}_IMM{width * 8}")
-    if code is None:
-        return None
-    try:
-        return _assemble(Instruction.create_reg_i32(code, dest, value), at)
-    except (ValueError, OverflowError):
-        return None
+    for bits in (8, width * 8) if fits_in_a_byte(value) else (width * 8,):
+        code = _code(f"{name.upper()}_RM{width * 8}_IMM{bits}")
+        if code is None:
+            continue
+        try:
+            return _assemble(Instruction.create_reg_i32(code, dest, value), at)
+        except (ValueError, OverflowError):
+            continue
+    return None
 
 
 def unary(name: str, dest: Register_, at: int = 0) -> Emitted | None:
-    """`neg`, `not`, `inc` or `dec` of one register."""
+    """`neg`, `not`, `inc` or `dec` of one register.
+
+    inc and dec of a register have a one-byte encoding -- the whole opcode
+    is `40+r` -- where the general RM form takes two. Preferred, because it
+    is 384 bytes across the corpus's own bodies and costs nothing to take:
+    the choice is made from the operand and not from any address.
+    """
     if name not in ONE_OPERAND:
         return None
     width = WIDTHS.get(dest)
     if width is None:
         return None
-    code = _code(f"{name.upper()}_RM{width * 8}")
-    if code is None:
-        return None
-    return _assemble(Instruction.create_reg(code, dest), at)
+    for shape in (f"{name.upper()}_R{width * 8}", f"{name.upper()}_RM{width * 8}"):
+        code = _code(shape)
+        if code is None:
+            continue
+        try:
+            return _assemble(Instruction.create_reg(code, dest), at)
+        except (ValueError, OverflowError):
+            continue
+    return None
 
 
 # Two functions rather than one taking either, because iced's Register_ IS an
@@ -241,13 +266,41 @@ def push_imm(value: int, width: int = 2, at: int = 0) -> Emitted | None:
     PUSHD_IMM32, breaking the PUSH_* pattern the rest of this table follows,
     which is why it is named here rather than built from the width.
     """
-    code = _code("PUSHD_IMM32" if width == 4 else "PUSH_IMM16")
-    if code is None:
+    # PUSHD_IMM8 pushes four bytes from a one-byte immediate, so it is the
+    # wide push in a narrower encoding rather than a narrow push. There is no
+    # PUSH_IMM8 that pushes two, which is why only the wide one shrinks.
+    names = ["PUSHD_IMM32"] if width == 4 else ["PUSH_IMM16"]
+    if width == 4 and fits_in_a_byte(value):
+        names.insert(0, "PUSHD_IMM8")
+    for one in names:
+        code = _code(one)
+        if code is None:
+            continue
+        try:
+            return _assemble(Instruction.create_i32(code, value), at)
+        except (ValueError, OverflowError):
+            continue
+    return None
+
+
+# The accumulator's own load and store against a bare address -- `a1 xxxx`
+# rather than `8b 06 xxxx`, one byte shorter and available to ax/eax alone.
+# 470 bytes across the corpus's bodies, which is the largest single reason a
+# laid-out body was bigger than BC's.
+ACCUMULATOR = {2: Register.AX, 4: Register.EAX}
+MOFFS_LOAD = {2: "MOV_AX_MOFFS16", 4: "MOV_EAX_MOFFS32"}
+MOFFS_STORE = {2: "MOV_MOFFS16_AX", 4: "MOV_MOFFS32_EAX"}
+
+
+def _moffs(shape: dict[int, str], register: Register_, cell: ir.Mem, width: int) -> Code_ | None:
+    """The accumulator form, where this is one it applies to.
+
+    Only for a bare displacement: the encoding has no modrm byte, so there
+    is nowhere to put a base register even when the address has one.
+    """
+    if register is not ACCUMULATOR.get(width) or cell.addr is None or cell.addr.base != Register.NONE:
         return None
-    try:
-        return _assemble(Instruction.create_i32(code, value), at)
-    except (ValueError, OverflowError):
-        return None
+    return _code(shape.get(width, ""))
 
 
 def move_from(into: Register_, cell: ir.Mem, at: int = 0) -> Emitted | None:
@@ -256,10 +309,15 @@ def move_from(into: Register_, cell: ir.Mem, at: int = 0) -> Emitted | None:
     built = operand_of(cell)
     if width is None or built is None or cell.width != width:
         return None
+    where, relocated = built
+    short = _moffs(MOFFS_LOAD, into, cell, width)
+    if short is not None:
+        made = _assemble(Instruction.create_reg_mem(short, into, where), at, relocated)
+        if made is not None:
+            return made
     code = _code(f"MOV_R{width * 8}_RM{width * 8}")
     if code is None:
         return None
-    where, relocated = built
     return _assemble(Instruction.create_reg_mem(code, into, where), at, relocated)
 
 
@@ -269,10 +327,15 @@ def move_into(cell: ir.Mem, outof: Register_, at: int = 0) -> Emitted | None:
     built = operand_of(cell)
     if width is None or built is None or cell.width != width:
         return None
+    where, relocated = built
+    short = _moffs(MOFFS_STORE, outof, cell, width)
+    if short is not None:
+        made = _assemble(Instruction.create_mem_reg(short, where, outof), at, relocated)
+        if made is not None:
+            return made
     code = _code(f"MOV_RM{width * 8}_R{width * 8}")
     if code is None:
         return None
-    where, relocated = built
     return _assemble(Instruction.create_mem_reg(code, where, outof), at, relocated)
 
 
@@ -321,17 +384,15 @@ def push_mem(cell: ir.Mem, at: int = 0) -> Emitted | None:
     return _assemble(Instruction.create_mem(code, where), at, relocated)
 
 
-def branch(name: str, target: int, at: int = 0) -> Emitted | None:
+def branch(name: str, target: int, at: int = 0, short: bool = False) -> Emitted | None:
     """`<name> target`, a conditional branch to an absolute address.
 
-    The near form always. The short one is two bytes where it reaches and
-    picking it is a decision about layout, not about selection: a branch
-    that shrinks moves everything after it, and until something lays a body
-    out there is nothing to tell it whether the target has moved too. BC
-    itself emits `e9 0b 00` where `eb 0c` would do, so this is no worse than
-    the input.
+    `short` asks for the two-byte form, which reaches -128..127 from the end
+    of the instruction. Whether it reaches is a question about addresses, so
+    only a caller laying a body out can answer it -- layout.py does, by
+    starting every branch long and shrinking to a fixed point.
     """
-    code = _code(f"{name.upper()}_REL16")
+    code = _code(f"{name.upper()}_REL8_16" if short else f"{name.upper()}_REL16")
     if code is None:
         return None
     try:
@@ -340,9 +401,9 @@ def branch(name: str, target: int, at: int = 0) -> Emitted | None:
         return None
 
 
-def jump(target: int, at: int = 0) -> Emitted | None:
-    """`jmp target`, near."""
-    code = _code("JMP_REL16")
+def jump(target: int, at: int = 0, short: bool = False) -> Emitted | None:
+    """`jmp target`, near unless the short form is asked for."""
+    code = _code("JMP_REL8_16" if short else "JMP_REL16")
     if code is None:
         return None
     try:
@@ -433,7 +494,12 @@ def compare(dest: ir.Loc, value: int, at: int = 0) -> Emitted | None:
             return None
 
 
-def emit(what: ir.Semantics, at: int = 0, where: dict[Register_, Register_] | None = None) -> Emitted | None:
+def emit(
+    what: ir.Semantics,
+    at: int = 0,
+    where: dict[Register_, Register_] | None = None,
+    short: bool = False,
+) -> Emitted | None:
     """One MIR operation as machine bytes, or None where this cannot say it.
 
     Driven by ir.Semantics rather than by an instruction, which is what makes
@@ -480,9 +546,9 @@ def emit(what: ir.Semantics, at: int = 0, where: dict[Register_, Register_] | No
                 case ir.Mem() as cell:
                     return push_mem(cell, at)
         case ir.Operation.BRANCH if what.target is not None:
-            return branch(what.name or "", what.target, at)
+            return branch(what.name or "", what.target, at, short)
         case ir.Operation.JUMP if what.target is not None:
-            return jump(what.target, at)
+            return jump(what.target, at, short)
         case ir.Operation.CALL:
             return call_far(at) if what.target is None else call_near(what.target, at)
         case ir.Operation.COMPARE if len(sources) == 2:
