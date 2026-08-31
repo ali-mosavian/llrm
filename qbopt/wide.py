@@ -32,6 +32,7 @@ the register the other half used. lift.py's own PAIRED table is the same
 rule; getting it wrong does not fail loudly, it computes a different number.
 """
 
+from dataclasses import replace
 from dataclasses import dataclass
 
 from qbopt import ir
@@ -245,3 +246,52 @@ def tests(body: mir.MirBody, calls: dict[int, str]) -> tuple[Test, ...]:
                 continue  # this routine's flags cannot answer that half
             found.append(Test(source, op, test, signed, through, carried[0]))
     return tuple(found)
+
+
+def _wider(where: ir.Loc) -> ir.Loc | None:
+    """One half's operand as the whole 32-bit one it is half of.
+
+    A register becomes its own root -- ax is the low half of eax and there
+    is nothing to choose. A memory operand keeps its address and doubles
+    its width, which is sound only because _halves_agree has already
+    established that the high half reads the very next two bytes.
+    """
+    match where:
+        case ir.Reg(register=register):
+            root = ir.ROOT.get(register)
+            return None if root is None else ir.Reg(register=root, width=4)
+        case ir.Mem() as cell:
+            return replace(cell, width=4)
+        case ir.Imm(value=value):
+            return ir.Imm(value=value, width=4)
+        case _:
+            return None
+
+
+def widened(pair: Pair) -> ir.Semantics | None:
+    """The one 32-bit operation `pair` computes, as semantics to select.
+
+    Built from the low half, which is where the operands are: the high half
+    names the same address two bytes on and the same register's other half,
+    both of which the whole operation says once. `pair.op` is the name --
+    an `add`/`adc` pair is an `add`, and the carry it was passing has
+    nowhere left to go, which is the whole point.
+
+    None wherever any operand does not widen. A half naming a byte register
+    or a location this cannot double is not one operand of a 32-bit
+    operation, whatever the carry edge suggests.
+    """
+    what = getattr(pair.low.node, "semantics", None)
+    if what is None or what.op is ir.Operation.BARRIER:
+        return None
+    dests = [_wider(one) for one in what.dests]
+    sources = [_wider(one) for one in what.sources]
+    if any(one is None for one in dests + sources):
+        return None
+    return ir.Semantics(
+        op=what.op,
+        name=pair.op,
+        dests=tuple(one for one in dests if one is not None),
+        sources=tuple(one for one in sources if one is not None),
+        target=what.target,
+    )

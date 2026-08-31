@@ -78,7 +78,7 @@ def _real(values: tuple[Value, ...]) -> list[Value]:
     return [one for one in values if not one.flags]
 
 
-def loaded_into(op: Op) -> tuple[MemRef, Value] | None:
+def loaded_into(op: Op, origin: dict[Value, Register_] | None = None) -> tuple[MemRef, Value] | None:
     """The cell this op purely loads, and the value it lands in.
 
     Purely: one read, no write, one value defined, nothing read as data, and
@@ -95,9 +95,32 @@ def loaded_into(op: Op) -> tuple[MemRef, Value] | None:
     defines = _real(op.defines)
     if len(defines) != 1:
         return None
-    if set(_real(op.uses)) - _addressing(op):
+    reading = set(_real(op.uses)) - _addressing(op) - _preserved(op, defines[0], origin)
+    if reading:
         return None
     return op.loads[0], defines[0]
+
+
+def _preserved(op: Op, made: Value, origin: dict[Value, Register_] | None) -> set[Value]:
+    """The use that is only the destination's own untouched half.
+
+    `mov ax,[x]` writes sixteen bits of a thirty-two bit variable, so the
+    high half survives and MIR records a read of the old eax. That read is
+    real -- refusing to model it would be wrong -- but it is not the
+    instruction consulting memory's contents, which is the question
+    loaded_into asks. Without this, every one of the 36 loads forward.py
+    deletes came back "not a plain load", and none of them was anything
+    else.
+
+    Only the destination's own register qualifies, and only when this can
+    see which register that is. A read of any other value is data.
+    """
+    if origin is None:
+        return set()
+    into = origin.get(made)
+    if into is None:
+        return set()
+    return {one for one in _real(op.uses) if origin.get(one) is into}
 
 
 def stored_from(op: Op) -> tuple[MemRef, Value] | None:
@@ -133,7 +156,13 @@ def _clean(op: Op, calls: dict[int, str]) -> bool:
     return routine.established and not runtime.barrier(routine) and not runtime.writes_caller_memory(routine)
 
 
-def _after(op: Op, holders: Holders, dgroup: frozenset[int], calls: dict[int, str]) -> Holders:
+def _after(
+    op: Op,
+    holders: Holders,
+    dgroup: frozenset[int],
+    calls: dict[int, str],
+    origin: dict[Value, Register_] | None = None,
+) -> Holders:
     """The map across one op."""
     if op.barrier:
         return {}
@@ -146,7 +175,7 @@ def _after(op: Op, holders: Holders, dgroup: frozenset[int], calls: dict[int, st
 
     for ref in op.stores:
         holders = {one: who for one, who in holders.items() if not mir.overlapping(one, ref, dgroup)}
-    found = stored_from(op) or loaded_into(op)
+    found = stored_from(op) or loaded_into(op, origin)
     if found is not None:
         ref, value = found
         holders = dict(holders)
@@ -195,7 +224,7 @@ def holders(body: MirBody, dgroup: frozenset[int], calls: dict[int, str] | None 
             arriving = {} if block.at == body.entry else _meet([outof[one] for one in preds[block.at]])
             leaving = dict(arriving)
             for op in block.ops:
-                leaving = _after(op, leaving, dgroup, calls)
+                leaving = _after(op, leaving, dgroup, calls, body.origin)
             if arriving != into[block.at] or leaving != outof[block.at]:
                 into[block.at], outof[block.at] = arriving, leaving
                 changing = True
@@ -220,7 +249,7 @@ def provider(
         for op in block.ops:
             if op.at == at:
                 return next((who for one, who in current.items() if mir.same_bytes(one, ref)), None)
-            current = _after(op, current, dgroup, calls)
+            current = _after(op, current, dgroup, calls, body.origin)
     return None
 
 
@@ -230,6 +259,91 @@ class Forward:
 
     at: int
     root: Register_  # the 32-bit root holding them; the operand picks the width
+
+
+def dead_stores(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> tuple[int, ...]:
+    """Stores whose bytes are overwritten before anything reads them.
+
+    memory.py's own pass, restated over MIR. Backward through each block:
+    a store to a cell that a later store in the same block overwrites,
+    with nothing in between that could have read it, computed nothing.
+
+    Block-scoped and starting empty at each block's end, which is the
+    conservative direction -- a successor may read the cell, and nothing
+    here has looked at the successors. That costs a store that spans an
+    edge and can never invent one that does not.
+
+    Three things clear what is known, and each is a way the cell could be
+    read without this seeing a load of it: a barrier, whose addresses are
+    its own; a call runtime.py has not proved leaves caller memory alone;
+    and a load that may alias, which is the ordinary case.
+
+    Stack slots are excluded outright rather than reasoned about. A
+    Space.STACK address is a depth from the top of its own block and a
+    store to one is an argument something is about to consume, so "nothing
+    read it" is a claim this has no standing to make.
+    """
+    found: list[int] = []
+    for block in body.blocks:
+        overwritten: dict[MemRef, int] = {}
+        for op in reversed(block.ops):
+            if op.barrier or (op.at in calls and not _clean(op, calls)):
+                overwritten = {}
+                continue
+
+            wrote = stored_from(op)
+            if wrote is not None:
+                ref, _value = wrote
+                if ref.addr is not None and ref.addr.space is not Space.STACK:
+                    if any(mir.same_bytes(one, ref) for one in overwritten):
+                        found.append(op.at)
+                    overwritten[ref] = op.at
+                    continue
+
+            # Anything this op reads, and anything it writes that this
+            # cannot name, puts the cells it may touch back in doubt.
+            for ref in op.loads:
+                overwritten = {one: at for one, at in overwritten.items() if not mir.overlapping(one, ref, dgroup)}
+            if wrote is None:
+                for ref in op.stores:
+                    overwritten = {one: at for one, at in overwritten.items() if not mir.overlapping(one, ref, dgroup)}
+    return tuple(sorted(found))
+
+
+def redundant(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> tuple[int, ...]:
+    """Loads that put back into a register exactly what it already held.
+
+    forward.py's deletion, restated over MIR. `mov ax,[x]` where ax already
+    holds [x] computes nothing, so removing it leaves every later
+    instruction reading what it expected -- the same argument the machine
+    pass makes, over values rather than over a backward scan of registers.
+
+    The two are not the same question as forwardable()'s. That one serves a
+    read from a *different* register and substitutes the operand; this one
+    finds a read whose answer is already in its own destination and drops
+    the instruction. An accumulate can never be one of these: `and cx,[x]`
+    does not leave [x] in cx, and loaded_into refuses it for that reason.
+
+    Whole registers only. `mov ax,[x]` writes half of eax and the other half
+    survives, which is exactly why the deletion is safe -- the instruction
+    is a no-op, so the preserved half is preserved either way -- but the
+    holder has to be the same variable BC would have read, not a wider one
+    that merely contains it. loaded_into's own _preserved() is what lets
+    this see the load at all.
+    """
+    held = holders(body, dgroup, calls)
+    found: list[int] = []
+    for block in body.blocks:
+        current = dict(held.into[block.at])
+        for op in block.ops:
+            got = loaded_into(op, body.origin)
+            if got is not None:
+                ref, made = got
+                who = next((w for cell, w in current.items() if mir.same_bytes(cell, ref)), None)
+                if who is not None and body.origin.get(who) is body.origin.get(made):
+                    found.append(op.at)
+            current = _after(op, current, dgroup, calls, body.origin)
+    return tuple(found)
 
 
 def forwardable(
@@ -272,5 +386,5 @@ def forwardable(
                 who = next((w for cell, w in current.items() if mir.same_bytes(cell, op.loads[0])), None)
                 if who is not None and who in at_point.get(op.at, frozenset()):
                     found.append(Forward(op.at, body.origin[who]))
-            current = _after(op, current, dgroup, calls)
+            current = _after(op, current, dgroup, calls, body.origin)
     return tuple(found)
