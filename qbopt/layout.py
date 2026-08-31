@@ -128,6 +128,15 @@ def _padding_runs(
     proof there is no such branch. If that proof were wrong the rebuild
     would already be unsound for the code around them.
 
+    And where reachability is wrong in the one way that would matter -- a
+    computed jump into a gap, through a form nothing here models -- the
+    entry is a relocated word, so the target is an offset some record or
+    fixup names. A gap's interior is not in the placement map, so
+    relocate.as_records cannot map it and refuses the whole object. That
+    refusal is what makes carrying safe rather than merely usually right,
+    and it has to exist on both paths: the record one always did, the fixup
+    one is newer.
+
     `reached` is what makes the question askable here. Without it only
     padding is carried, which is what this did before.
     """
