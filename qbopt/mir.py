@@ -58,6 +58,7 @@ from qbopt import ir
 from qbopt import loops
 from qbopt.module import Addr
 from qbopt.blocks import Block
+from qbopt.module import Module
 
 # The registers that become values. Rooted, so a write to ax and a write to
 # eax are the same variable -- see this module's own docstring.
@@ -452,3 +453,27 @@ def verify(body: MirBody, blocks: list[Block]) -> list[str]:
                 if where not in doms.get(block.at, frozenset()):
                     problems.append(f"{op.at:#06x} uses {value}, defined in {where:#06x}, which does not dominate it")
     return problems
+
+
+def lower(body: MirBody) -> tuple[ir.Node, ...]:
+    """The nodes this body is made of, in address order.
+
+    With nothing transformed this is exactly what was raised, so emitting it
+    gives back the bytes it came from. That is the whole point of keeping an
+    origin on every Op: the identity case is checkable before any transform
+    exists, which is the only moment the machinery can be trusted for free.
+    Once something does change a body, this is where a real instruction
+    selector goes, and this round trip is what it will be measured against.
+
+    A phi emits nothing. It is not an instruction and never was -- it names
+    where two definitions of a register met, which BC's own code said by
+    writing the same register on both paths. Only a lowering that has
+    actually split those definitions into different registers has to put
+    anything back, and nothing here does yet.
+    """
+    return tuple(op.node for block in body.blocks for op in block.ops if op.node is not None)
+
+
+def relowered(found: Module, body: MirBody) -> bytes:
+    """This body's own bytes, rebuilt from the graph."""
+    return ir.emit(found, lower(body))

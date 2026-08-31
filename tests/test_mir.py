@@ -159,3 +159,40 @@ def test_every_op_keeps_the_node_it_came_from(obj: Path) -> None:
         for one in built.blocks:
             for op in one.ops:
                 assert isinstance(op.node, ir.Opaque | ir.Long | ir.Call | ir.Restore | ir.Data)
+
+
+@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
+def test_a_body_lowers_back_to_the_bytes_it_came_from(obj: Path) -> None:
+    """The identity gate, per block.
+
+    Raising and lowering with nothing transformed has to give back exactly
+    what was read, and it is checkable now precisely because nothing is
+    transformed yet -- which is the only moment the machinery is free to
+    verify. Once a pass changes a body this round trip is what an
+    instruction selector gets measured against.
+
+    Per block, not per body: a body's own ranges also carry alignment
+    padding and code no path reaches, which raise_body deliberately drops
+    (see test_another_bodys_blocks_do_not_come_along). Measured across
+    fixtures/omf and bench/nbody.bas, a raised block covers 97.1% of body
+    bytes; the rest is not instructions this graph ever claimed to hold.
+    """
+    found = corpus.loaded(obj)
+    assert found is not None
+    where = {one.at: one for one in corpus.partitioned(obj)}
+    for built, _ in raised(obj):
+        for one in built.blocks:
+            source = where[one.at]
+            rebuilt = ir.emit(found, tuple(op.node for op in one.ops if op.node is not None))
+            assert rebuilt == found.code[source.at : source.end], f"{obj.stem} {one.at:#06x}"
+
+
+def test_a_phi_lowers_to_nothing() -> None:
+    """It never was an instruction. BC said "these two definitions meet" by
+    writing one register on both paths, so until a pass actually splits them
+    there is nothing to put back."""
+    joined = 0
+    for built, _ in raised(Path("fixtures/omf/jumptable.obj")):
+        joined += sum(len(one.phis) for one in built.blocks)
+        assert len(mir.lower(built)) == sum(1 for one in built.blocks for op in one.ops if op.node is not None)
+    assert joined, "jumptable.obj has joins; some block carries a phi"
