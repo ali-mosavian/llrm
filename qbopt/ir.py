@@ -166,7 +166,24 @@ class Address:
     addr: Addr | None
 
 
-type Loc = Reg | Mem | Imm | Address
+@dataclass(frozen=True, slots=True)
+class St:
+    """One x87 stack register, `st(index)` -- named exactly as the operand
+    names it, relative to whatever the stack's own top currently is.
+
+    Not a fixed physical location the way Reg's registers are: `fld` pushes,
+    so `st(0)` in one node's own dests and `st(0)` in the next node's own
+    sources are two different physical registers if anything in between
+    pushed or popped. Nothing in this module tracks that rotation across
+    nodes -- see the x87 section of SHAPE's own comment -- so two St
+    mentions in different nodes are never claimed to name the same value;
+    only ever compared within the one node that names them both.
+    """
+
+    index: int
+
+
+type Loc = Reg | Mem | Imm | Address | St
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,6 +203,15 @@ class Effects:
     whose `addr` is None is an address this layer cannot name -- a stack
     slot, an unresolved operand, a call's own unknown reach -- and aliases
     everything.
+
+    `fp_stack` is the one further resource worth keeping separate from both
+    memory and the GPR roots: the x87 register stack an `fld`-family
+    instruction pushes, an `fstp`-family one pops, or an in-place one
+    (`fadd m32fp`, `fchs`) reads and writes without moving. It is not a Mem
+    cell, and it is not always visible in `defs`/`uses` either -- iced's own
+    used_registers() names no destination register for a push at all (there
+    is nothing existing to name the new top with), so `fp_stack` is what
+    still says a push touched something. See _touches_fp_stack.
     """
 
     defs: frozenset[Register_] | None
@@ -194,6 +220,7 @@ class Effects:
     flags_read: Flag = Flag.NONE
     loads: tuple[Mem, ...] = ()
     stores: tuple[Mem, ...] = ()
+    fp_stack: bool = False
 
     @property
     def touches_memory(self) -> bool:
@@ -242,6 +269,19 @@ class Operation(StrEnum):
     NOTHING = "nothing"  # computes nothing, transfers nowhere, touches no flag
     RESTORE = "restore"  # calls.py's own idiom -- see Restore
     DATA = "data"  # not an instruction at all -- see Data
+
+    # The x87 vocabulary. A separate stack (St, not Reg or Mem) is why these
+    # need their own shapes rather than reusing BINARY/UNARY/MOVE: "dest IS
+    # sources[0]" (BINARY's own rule) is not true of the popping arithmetic
+    # forms, whose dest is st(i) but whose first source is also st(i) only
+    # in the pre-pop numbering, and "push" and "pop" are effects integer
+    # BINARY/UNARY have nothing analogous to at all. `wait` stays NOTHING --
+    # SHAPE's own comment says why it needs no shape of its own.
+    FLOAT_LOAD = "fload"  # dests[0] (the new st(0)) <- sources[0]; fld/fild push
+    FLOAT_STORE = "fstore"  # dests[0] <- sources[0] (st(0)), then the stack pops; fstp/fistp
+    FLOAT_ARITH = "farith"  # dests[0] (st(0)) <- dests[0] `name` sources[1]; no push, no pop
+    FLOAT_ARITH_POP = "farithp"  # dests[0] (st(i)) <- dests[0] `name` sources[1] (st(0)), then pops
+    FLOAT_UNARY = "funary"  # dests[0] (st(0)) <- `name` sources[0] (st(0)); no push, no pop
 
     # An instruction this pass cannot model, but can still carry. Not a
     # refusal of the body it sits in: its bytes are emitted verbatim, its
@@ -359,36 +399,62 @@ def _memory_effects(insn: Insn, resolve: Resolver) -> tuple[tuple[Mem, ...], tup
     return tuple(loads), tuple(stores)
 
 
+def _touches_fp_stack(insn: Insn) -> bool:
+    """Whether this instruction pushes, pops, or reads/writes any x87 stack
+    register -- the fact Effects.fp_stack carries.
+
+    iced's own fpu_stack_increment_info() reports the push and the pop
+    (`fld`/`fild` are -1, `fstp`/`fistp` and the `p`-suffixed arithmetic are
+    +1); it is 0 for an instruction that touches the stack without moving
+    it, such as `fadd m32fp` (reads and writes st(0) in place) or `fchs`
+    (likewise) -- which is what the used_registers() half catches instead,
+    via RegisterExt.is_st(), true of exactly Register.ST0..ST7, the one
+    register family ROOT has no entry for and _register_effects() therefore
+    already passes through into `defs`/`uses` unchanged wherever iced names
+    one. `wait` sets neither: it reads no st(i), and iced's own info agrees
+    it moves nothing, which is what licenses treating it (in SHAPE, as
+    Operation.NOTHING) as touching no resource this module tracks at all,
+    rather than guessing at a coupling to whatever FP instruction sits next
+    to it.
+    """
+    if insn.insn.fpu_stack_increment_info().increment != 0:
+        return True
+    return any(RegisterExt.is_st(one.register) for one in INFO.info(insn.insn).used_registers())
+
+
 def instruction_effects(insn: Insn, resolve: Resolver) -> Effects:
     """The conservative effect of one real instruction.
 
     iced's own answer, widened in the two places where the encoding is not
     the whole story and never narrowed anywhere.
 
-    A call or interrupt, because the real effect is the callee's.
+    A call or interrupt, because the real effect is the callee's -- including
+    its own reach into the x87 stack, which nothing here can rule out any
+    more than a register or a memory cell, so `fp_stack` is True for exactly
+    the reason `loads`/`stores` are ANY_MEMORY: unknown, not absent.
 
-    A barrier, in its memory reach only. An emulated x87 site is the case
-    that proves it: declen.py hands iced a reconstruction of the ESC opcode,
-    but whether that opcode ever executes is LINK's decision (AGENTS.md --
-    "the emulator patch is driven by a linker symbol"), and where it does not,
-    what runs is a software routine with memory of its own that is nowhere in
-    the encoding. `out` is the second: programming a DMA controller through a
-    port writes memory this layer cannot see. Registers are *not* widened to
-    match, because a barrier already pins them and nothing may be reordered
-    across it -- so exact liveness across one costs no safety and buys the
-    2130 emulator sites in qb-qrender.
+    A barrier, in its memory reach only. `out` is the one that stays one:
+    programming a DMA controller through a port writes memory this layer
+    cannot see. A handful of x87 shapes stay barriers too -- SHAPE's own
+    comment names them -- and get the same ANY_MEMORY treatment; the 18
+    shapes that *are* modelled do not, even on an emulated site, and
+    instruction_semantics' own x87 section says what makes that safe.
+    Registers are *not* widened to match a barrier's memory reach, because a
+    barrier already pins them and nothing may be reordered across it -- so
+    exact liveness across one costs no safety.
     """
     if insn.flow in CLOBBERS:
         # The callee's flag reads are as unknowable as its writes. Costs
         # nothing in practice -- flags_written is already ALL, so nothing
         # set before the call survives it either way.
-        return Effects(None, None, written_by(insn), ALL, ANY_MEMORY, ANY_MEMORY)
+        return Effects(None, None, written_by(insn), ALL, ANY_MEMORY, ANY_MEMORY, True)
     defs, uses = _register_effects(insn)
     read = Flag(insn.reads & ALL)
+    fp_stack = _touches_fp_stack(insn)
     if barrier(instruction_semantics(insn, resolve)):
-        return Effects(defs, uses, written_by(insn), read, ANY_MEMORY, ANY_MEMORY)
+        return Effects(defs, uses, written_by(insn), read, ANY_MEMORY, ANY_MEMORY, fp_stack)
     loads, stores = _memory_effects(insn, resolve)
-    return Effects(defs, uses, written_by(insn), read, loads, stores)
+    return Effects(defs, uses, written_by(insn), read, loads, stores, fp_stack)
 
 
 # What each immediate encoding means once sign extension has been applied.
@@ -437,6 +503,17 @@ def _location(insn: Insn, index: int, resolve: Resolver) -> Loc | None:
 def _destination(insn: Insn, index: int, resolve: Resolver) -> Loc | None:
     found = _location(insn, index, resolve)
     return found if isinstance(found, Reg | Mem) else None
+
+
+def _stack_register(insn: Insn, index: int) -> St | None:
+    """One x87 register operand, `st(i)` -- the one shape `_location`
+    refuses on purpose (RegisterExt.is_gpr() is false of it, same as any
+    other non-GPR register), so the float builders below read it themselves
+    rather than widen the shared GPR helper."""
+    if insn.insn.op_kind(index) != OpKind.REGISTER:
+        return None
+    register = insn.insn.op_register(index)
+    return St(register - Register.ST0) if RegisterExt.is_st(register) else None
 
 
 type Builder = Callable[[Insn, Resolver, Operation, str], Semantics | None]
@@ -687,6 +764,70 @@ def _return(insn: Insn, resolve: Resolver, op: Operation, name: str) -> Semantic
             return None
 
 
+def _float_load(insn: Insn, resolve: Resolver, op: Operation, name: str) -> Semantics | None:
+    """`fld`/`fild`: pushes the one real memory operand onto the stack.
+
+    iced's own used_registers() names no destination for a push at all --
+    there is no existing register to name the new top with, since nothing
+    was there before -- so St(0) here is this module's own convention for
+    "the top, right after this instruction" rather than something iced
+    itself reports. The register form (`fld st(i)`, a stack duplicate) is
+    not in qb-qrender's own object corpus and stays a barrier; SHAPE's own
+    comment says so.
+    """
+    if insn.insn.op_count != 1 or insn.insn.op_kind(0) != OpKind.MEMORY:
+        return None
+    source = _location(insn, 0, resolve)
+    return None if source is None else Semantics(op, name, (St(0),), (source,))
+
+
+def _float_store(insn: Insn, resolve: Resolver, op: Operation, name: str) -> Semantics | None:
+    """`fstp`/`fistp`: the current top, written to the one real memory
+    operand, then popped. `name` alone tells a real store from an
+    int-converting one -- the width comes from the operand itself either
+    way, via MemorySizeExt.size().
+    """
+    if insn.insn.op_count != 1 or insn.insn.op_kind(0) != OpKind.MEMORY:
+        return None
+    dest = _location(insn, 0, resolve)
+    return None if dest is None else Semantics(op, name, (dest,), (St(0),))
+
+
+def _float_arith(insn: Insn, resolve: Resolver, op: Operation, name: str) -> Semantics | None:
+    """`fadd`/`fsub`/`fmul`/`fdiv`/`fidiv`/`fisub`, the memory form only:
+    the top combined with the one real memory operand, in place -- no push,
+    no pop. Refuses the register-register form of the same mnemonic (`fadd
+    st(0),st(1)`, a different shape iced files under the same Mnemonic)
+    rather than guess that it does not pop either -- it does not, but BC
+    never emits it (measured over qb-qrender's own object corpus), so
+    nothing here claims it.
+    """
+    if insn.insn.op_count != 1 or insn.insn.op_kind(0) != OpKind.MEMORY:
+        return None
+    source = _location(insn, 0, resolve)
+    return None if source is None else Semantics(op, name, (St(0),), (St(0), source))
+
+
+def _float_arith_pop(insn: Insn, _resolve: Resolver, op: Operation, name: str) -> Semantics | None:
+    """`faddp`/`fsubp`/`fmulp`/`fdivp st(i),st(0)`: combines the two, writes
+    the result to st(i) -- named pre-pop, the only numbering this operand
+    ever had -- then pops. Refuses any second operand other than st(0),
+    which is the only pairing BC's own object corpus ever contains.
+    """
+    if insn.insn.op_count != 2:
+        return None
+    dest, second = _stack_register(insn, 0), _stack_register(insn, 1)
+    if dest is None or second is None or second.index != 0:
+        return None
+    return Semantics(op, name, (dest,), (dest, second))
+
+
+def _float_unary(insn: Insn, _resolve: Resolver, op: Operation, name: str) -> Semantics | None:
+    """`fchs`/`fabs`/`fsqrt`: the top, transformed in place -- no operand,
+    no push, no pop."""
+    return None if insn.insn.op_count != 0 else Semantics(op, name, (St(0),), (St(0),))
+
+
 BUILD: dict[Operation, Builder] = {
     Operation.MOVE: _move,
     Operation.EXCHANGE: _exchange,
@@ -706,6 +847,11 @@ BUILD: dict[Operation, Builder] = {
     Operation.CALL: _call,
     Operation.RETURN: _return,
     Operation.NOTHING: _nothing,
+    Operation.FLOAT_LOAD: _float_load,
+    Operation.FLOAT_STORE: _float_store,
+    Operation.FLOAT_ARITH: _float_arith,
+    Operation.FLOAT_ARITH_POP: _float_arith_pop,
+    Operation.FLOAT_UNARY: _float_unary,
 }
 
 # The vocabulary, keyed on the mnemonic rather than on iced's Code so that
@@ -718,10 +864,6 @@ BUILD: dict[Operation, Builder] = {
 # What is deliberately absent, and stays Operation.BARRIER -- carried
 # verbatim, never reasoned about:
 #
-#   x87, both the real mnemonics and the emulator's own int 34h-3Dh sites.
-#     Modelling them means representing an eight-deep register stack, and
-#     floats are a later phase entirely; declen.py already decodes their
-#     length, which is the whole of what carrying one needs.
 #   `in` and `out`. What they do happens in a device, not in this machine,
 #     and it is not knowledge to claim.
 #   a segment override this pass cannot name -- lift.operand()'s own refusal,
@@ -803,6 +945,58 @@ SHAPE: dict[int, tuple[Operation, str]] = {
     Mnemonic.JO: (Operation.BRANCH, "jo"),
     Mnemonic.JP: (Operation.BRANCH, "jp"),
     Mnemonic.JS: (Operation.BRANCH, "js"),
+    # The x87 vocabulary: 18 mnemonics, in exactly the one operand shape
+    # qb-qrender's own object corpus uses each in (measured over every
+    # obj/OBJ under it -- 61,609 x87-family instructions, none outside
+    # these 18 shapes). declen.py's own EMULATED/STANDS_IN account already
+    # decodes an emulated int 34h-3Dh site to the same Mnemonic/Code an
+    # unemulated one gets, so nothing here has to tell the two apart.
+    #
+    # Left as barriers, deliberately, because none of them is in that
+    # corpus:
+    #   `fld st(i)`, a stack-duplicate with no memory operand at all --
+    #     _float_load only accepts the memory form.
+    #   the non-popping register-register form of `fadd`/`fsub`/`fmul`/
+    #     `fdiv` (`fadd st(0),st(1)`) -- the same Mnemonic as the memory
+    #     form covers, a different shape, and `_float_arith` only accepts
+    #     the memory one.
+    #   `fiadd`/`fimul` and every `r`-suffixed reversed form (`fsubr`,
+    #     `fdivr`, `fsubrp`, `fdivrp`, `fisubr`, `fidivr`) -- not in SHAPE
+    #     at all, so they fall to instruction_semantics' own `found is
+    #     None` case like any other uncovered mnemonic.
+    #   the non-popping stores `fst`/`fist`, `fbld`/`fbstp`, the compares
+    #     (`fcom` and family), and everything else x87 that is not one of
+    #     the 18 -- likewise absent from SHAPE.
+    # A form joining this corpus is a decision to model, not a gap to
+    # paper over by widening one of the five builders below to guess at it.
+    Mnemonic.FLD: (Operation.FLOAT_LOAD, "fld"),
+    Mnemonic.FILD: (Operation.FLOAT_LOAD, "fild"),
+    Mnemonic.FSTP: (Operation.FLOAT_STORE, "fstp"),
+    Mnemonic.FISTP: (Operation.FLOAT_STORE, "fistp"),
+    Mnemonic.FADD: (Operation.FLOAT_ARITH, "fadd"),
+    Mnemonic.FSUB: (Operation.FLOAT_ARITH, "fsub"),
+    Mnemonic.FMUL: (Operation.FLOAT_ARITH, "fmul"),
+    Mnemonic.FDIV: (Operation.FLOAT_ARITH, "fdiv"),
+    Mnemonic.FIDIV: (Operation.FLOAT_ARITH, "fidiv"),
+    Mnemonic.FISUB: (Operation.FLOAT_ARITH, "fisub"),
+    Mnemonic.FADDP: (Operation.FLOAT_ARITH_POP, "faddp"),
+    Mnemonic.FSUBP: (Operation.FLOAT_ARITH_POP, "fsubp"),
+    Mnemonic.FMULP: (Operation.FLOAT_ARITH_POP, "fmulp"),
+    Mnemonic.FDIVP: (Operation.FLOAT_ARITH_POP, "fdivp"),
+    Mnemonic.FCHS: (Operation.FLOAT_UNARY, "fchs"),
+    Mnemonic.FABS: (Operation.FLOAT_UNARY, "fabs"),
+    Mnemonic.FSQRT: (Operation.FLOAT_UNARY, "fsqrt"),
+    # A synchronisation point, not arithmetic: it neither reads nor writes
+    # any st(i) (_touches_fp_stack's own docstring measures this from
+    # iced), and declen.py's own account of int 3Dh -- "stands in for the
+    # whole of WAIT, and nothing follows" -- is what says it is a complete,
+    # standalone instruction rather than a prefix fused to whatever FP
+    # opcode happens to sit next to it in the byte stream (unlike int
+    # 3Ch's segment-override stand-in, which is exactly that kind of
+    # prefix). So it needs no shape of its own -- Operation.NOTHING and
+    # _nothing() already say "computes nothing, transfers nowhere, touches
+    # no flag", and that is the whole of what WAIT is.
+    Mnemonic.WAIT: (Operation.NOTHING, "wait"),
 }
 
 

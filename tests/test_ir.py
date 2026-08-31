@@ -238,17 +238,17 @@ def test_a_call_or_interrupt_gets_the_conservative_answer_not_iceds_own() -> Non
 
 
 def test_a_barriers_memory_reach_is_unknown_in_both_directions() -> None:
-    # `fld dword [bp-38h]`, decoded from the x87 emulator's own int 35h: a
-    # barrier's memory effect is widened past what the encoding alone
-    # reports -- ir.instruction_effects' own docstring says why, and this is
-    # the case named there. The operand is a nameable bp-relative address
-    # (operand() would resolve it), but whether the ESC opcode ever executes
-    # is LINK's decision, and what runs where it does not is a software
-    # routine with memory of its own that is nowhere in the encoding -- so
-    # both directions are claimed rather than decoded, which is what makes
-    # "write memory back before it, re-read after" true without a consumer
-    # remembering it.
-    effects = _effects("CD 35 46 C8")
+    # `in al,dx` names no memory operand at all, and a barrier's memory is
+    # widened past what the encoding reports anyway -- ir.instruction_effects'
+    # own docstring says why. A port read's real effect is a device's, which
+    # is nowhere in the instruction, so both directions are claimed rather
+    # than decoded. That is what makes "write a promoted variable back before
+    # a barrier, re-read it after" true without a consumer remembering to.
+    #
+    # Deliberately not an x87 site any more: the emulator's own int 34h-3Dh
+    # encodings are modelled now, and carry their real named operand rather
+    # than this widened one.
+    effects = _effects("EC")
     assert effects.touches_memory is True
     assert effects.loads == ir.ANY_MEMORY
     assert effects.stores == ir.ANY_MEMORY
@@ -427,7 +427,12 @@ def test_not_writes_no_flags() -> None:
 @pytest.mark.parametrize(
     ("code", "why"),
     [
-        ("CD 35 46 C8", "the x87 emulator's own int 35h"),
+        ("D9 C1", "fld st(1), a stack duplicate -- no memory operand for _float_load to accept"),
+        (
+            "D8 C1",
+            "fadd st(0),st(1), the non-popping register form -- a different shape under "
+            "the same Mnemonic as the memory form _float_arith accepts",
+        ),
         ("CD 21", "an ordinary software interrupt"),
         ("E4 40", "in -- what it does happens in a device"),
         ("EE", "out, likewise"),
@@ -512,6 +517,124 @@ def test_a_barrier_still_carries_a_complete_effect() -> None:
     # port read, the shape this pass will never model.
     assert _defs("E4 40") == frozenset({Register.EAX})
     assert _effects("E4 40").flags_written is Flag.NONE
+
+
+# --- the x87 vocabulary -------------------------------------------------
+
+FRAME = module.Addr(module.Space.FRAME, -0x38)
+ST0 = ir.St(0)
+ST1 = ir.St(1)
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        # fld/fild: push the one real memory operand; nothing iced itself
+        # names as the destination (there is no existing register to name
+        # the new top with), so St(0) is this module's own convention.
+        ("D9 46 C8", ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ST0,), (ir.Mem(FRAME, 4),))),
+        ("DD 46 C8", ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ST0,), (ir.Mem(FRAME, 8),))),
+        ("DB 46 C8", ir.Semantics(ir.Operation.FLOAT_LOAD, "fild", (ST0,), (ir.Mem(FRAME, 4),))),
+        ("DF 46 C8", ir.Semantics(ir.Operation.FLOAT_LOAD, "fild", (ST0,), (ir.Mem(FRAME, 2),))),
+        # fstp/fistp: the current top, written out, then popped.
+        ("D9 5E C8", ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (ir.Mem(FRAME, 4),), (ST0,))),
+        ("DD 5E C8", ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (ir.Mem(FRAME, 8),), (ST0,))),
+        ("DF 5E C8", ir.Semantics(ir.Operation.FLOAT_STORE, "fistp", (ir.Mem(FRAME, 2),), (ST0,))),
+        ("DB 5E C8", ir.Semantics(ir.Operation.FLOAT_STORE, "fistp", (ir.Mem(FRAME, 4),), (ST0,))),
+        # fadd/fsub/fmul/fdiv/fidiv/fisub, memory form: st0 combined with
+        # the one real operand, in place -- dest IS sources[0], same as
+        # BINARY's own rule.
+        ("D8 46 C8", ir.Semantics(ir.Operation.FLOAT_ARITH, "fadd", (ST0,), (ST0, ir.Mem(FRAME, 4)))),
+        ("D8 66 C8", ir.Semantics(ir.Operation.FLOAT_ARITH, "fsub", (ST0,), (ST0, ir.Mem(FRAME, 4)))),
+        ("D8 4E C8", ir.Semantics(ir.Operation.FLOAT_ARITH, "fmul", (ST0,), (ST0, ir.Mem(FRAME, 4)))),
+        ("D8 76 C8", ir.Semantics(ir.Operation.FLOAT_ARITH, "fdiv", (ST0,), (ST0, ir.Mem(FRAME, 4)))),
+        ("DE 66 C8", ir.Semantics(ir.Operation.FLOAT_ARITH, "fisub", (ST0,), (ST0, ir.Mem(FRAME, 2)))),
+        ("DE 76 C8", ir.Semantics(ir.Operation.FLOAT_ARITH, "fidiv", (ST0,), (ST0, ir.Mem(FRAME, 2)))),
+        # faddp/fsubp/fmulp/fdivp st(1),st(0): combines the two, writes the
+        # result to st(1) -- pre-pop numbering -- then pops.
+        ("DE C1", ir.Semantics(ir.Operation.FLOAT_ARITH_POP, "faddp", (ST1,), (ST1, ST0))),
+        ("DE E9", ir.Semantics(ir.Operation.FLOAT_ARITH_POP, "fsubp", (ST1,), (ST1, ST0))),
+        ("DE C9", ir.Semantics(ir.Operation.FLOAT_ARITH_POP, "fmulp", (ST1,), (ST1, ST0))),
+        ("DE F9", ir.Semantics(ir.Operation.FLOAT_ARITH_POP, "fdivp", (ST1,), (ST1, ST0))),
+        # fchs/fabs/fsqrt: the top, transformed in place.
+        ("D9 E0", ir.Semantics(ir.Operation.FLOAT_UNARY, "fchs", (ST0,), (ST0,))),
+        ("D9 E1", ir.Semantics(ir.Operation.FLOAT_UNARY, "fabs", (ST0,), (ST0,))),
+        ("D9 FA", ir.Semantics(ir.Operation.FLOAT_UNARY, "fsqrt", (ST0,), (ST0,))),
+        # wait: a synchronisation point, not arithmetic -- Operation.NOTHING,
+        # same as a nop. declen.py's own account of int 3Dh is why.
+        ("9B", ir.Semantics(ir.Operation.NOTHING, "wait")),
+    ],
+)
+def test_the_x87_vocabulary_is_modelled_in_its_one_measured_shape(code: str, expected: ir.Semantics) -> None:
+    assert _semantics(code) == expected
+
+
+def test_an_emulated_x87_site_models_identically_to_its_literal_encoding() -> None:
+    # `CD 35 46 C8` is declen.py's own int 34h-3Bh stand-in for exactly
+    # `D9 46 C8` -- the same fld this module already models -- so nothing
+    # here has to special-case the emulated shape: instruction_semantics
+    # and instruction_effects both read insn.insn, which declen.emulated()
+    # already reconstructed to the real opcode.
+    literal = _insn("D9 46 C8")
+    emulated = _insn("CD 35 46 C8")
+    assert emulated.length == 4
+    assert ir.instruction_semantics(emulated, module.literal_only) == ir.instruction_semantics(
+        literal, module.literal_only
+    )
+    real_effects = ir.instruction_effects(literal, module.literal_only)
+    emulated_effects = ir.instruction_effects(emulated, module.literal_only)
+    assert emulated_effects.loads == real_effects.loads == (ir.Mem(FRAME, 4),)
+    assert emulated_effects.stores == real_effects.stores == ()
+
+
+def test_an_x87_loads_memory_reach_is_the_real_operand_not_any_memory() -> None:
+    # The point of the whole change: a load's own Effects name exactly the
+    # cell it reads, not ir.ANY_MEMORY -- so an integer variable elsewhere
+    # in the same body is never poisoned by a float instruction next to it.
+    effects = _effects("D9 46 C8")
+    assert effects.loads == (ir.Mem(FRAME, 4),)
+    assert effects.stores == ()
+    assert effects.fp_stack is True
+    assert effects.flags_written is Flag.NONE
+    assert effects.flags_read is Flag.NONE
+
+
+def test_an_x87_stores_memory_reach_is_the_real_operand_too() -> None:
+    effects = _effects("DD 5E C8")
+    assert effects.loads == ()
+    assert effects.stores == (ir.Mem(FRAME, 8),)
+    assert effects.fp_stack is True
+
+
+def test_x87_arithmetic_touches_the_fp_stack_without_naming_it_as_memory() -> None:
+    # fadd m32fp neither pushes nor pops (fpu_stack_increment_info's own
+    # increment is 0), but it still reads and writes st(0) in place, which
+    # is exactly what fp_stack -- not loads/stores -- is for.
+    effects = _effects("D8 46 C8")
+    assert effects.fp_stack is True
+    assert effects.loads == (ir.Mem(FRAME, 4),)
+    assert effects.stores == ()
+
+
+def test_wait_touches_no_resource_this_module_tracks() -> None:
+    # Confirms _touches_fp_stack's own docstring: wait reads no st(i) and
+    # iced's own fpu_stack_increment_info agrees it moves nothing, so it is
+    # exactly as inert as a nop, not a hidden coupling to neighbouring FP
+    # instructions.
+    effects = _effects("9B")
+    assert effects.fp_stack is False
+    assert effects.defs == frozenset()
+    assert effects.uses == frozenset()
+    assert effects.loads == ()
+    assert effects.stores == ()
+    assert effects.flags_written is Flag.NONE
+
+
+def test_a_call_may_reach_the_fp_stack_too() -> None:
+    # Symmetric with the callee's own unknown memory/register reach: the
+    # callee could push or pop floats internally, so this stays True the
+    # same way loads/stores stay ANY_MEMORY.
+    assert _effects("9A 00 00 00 00").fp_stack is True
 
 
 @pytest.mark.parametrize(

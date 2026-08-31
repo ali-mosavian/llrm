@@ -123,6 +123,8 @@ def _loc(where: ir.Loc) -> str:
             return f"{value:#x}" if value >= 0 else f"-{-value:#x}"
         case ir.Address(addr=addr):
             return f"&{addr if addr is not None else '?'}"
+        case ir.St(index=index):
+            return f"st({index})"
 
 
 def _semantics(found: ir.Semantics) -> str:
