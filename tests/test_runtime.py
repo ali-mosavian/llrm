@@ -163,9 +163,43 @@ def _runtime_targets() -> set[str]:
     return named
 
 
-@pytest.mark.parametrize("name", sorted(_runtime_targets()))
+# The float routines. rtmint.inc declares them and the implementations are in
+# the math library, which is not in the QuickBASIC 4.5 source tree this project
+# reads -- so nothing here can say which registers they preserve, and the
+# honest contract is the worst case. They entered the corpus with the fpemu
+# fixtures; before those, every call the corpus made happened to be one the
+# source does establish, which is why this list did not exist.
+UNESTABLISHED = frozenset({"B$FCMP", "B$FILD", "B$FIST"})
+
+
+@pytest.mark.parametrize("name", sorted(_runtime_targets() - UNESTABLISHED))
 def test_every_runtime_routine_the_corpus_calls_has_an_entry(name: str) -> None:
     assert runtime.contract(name).established
+
+
+@pytest.mark.parametrize("name", sorted(UNESTABLISHED))
+def test_an_unestablished_routine_is_the_worst_case(name: str) -> None:
+    """What makes not knowing safe rather than merely unknown.
+
+    A routine with no entry must come back clobbering everything, reading
+    and writing any memory, and as a barrier -- so every consumer treats it
+    the way it treats an indirect call. Asserted rather than assumed,
+    because the failure mode is silent: a contract that quietly preserved
+    si would license holding a value across a routine that does not.
+    """
+    found = runtime.contract(name)
+    assert not found.established
+    assert found.clobbers == runtime.EVERY
+    assert runtime.preserves(found) == frozenset()
+    assert runtime.writes_caller_memory(found)
+    assert runtime.barrier(found)
+
+
+@pytest.mark.parametrize("name", sorted(UNESTABLISHED))
+def test_an_unestablished_routine_is_one_the_corpus_really_calls(name: str) -> None:
+    """So the list above shrinks when a contract is established, rather than
+    outliving the reason it was written."""
+    assert name in _runtime_targets()
 
 
 # The one field a wrong answer corrupts memory through, pinned by what these

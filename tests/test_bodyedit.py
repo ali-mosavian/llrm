@@ -134,8 +134,8 @@ def test_every_fixture_body_takes_the_insertion_and_relocates_cleanly(fixtures: 
     # Not every fixture body is expected to take an insertion -- a body with
     # only one node, or every candidate landing on an edge, has nothing safe
     # to edit -- but the whole point of this sweep is that refusal is rare:
-    # measured over the real corpus, every one of the 154 decodable bodies
-    # across 110 objects takes it. Every taken edit is checked for real: the
+    # measured over the real corpus, every one of the 171 decodable bodies
+    # across 125 objects takes it -- 154 across 110 before the fpemu fixtures. Every taken edit is checked for real: the
     # rewritten records re-parse, every self-relative branch lands where
     # shift.at() says it should, and the segment grows by exactly one byte.
     taken = refused = 0
@@ -159,5 +159,5 @@ def test_every_fixture_body_takes_the_insertion_and_relocates_cleanly(fixtures: 
             assert before is not None and after is not None
             assert after[2] == before[2] + 1, (path.name, body_ir.body.kind)
             taken += 1
-    assert taken == 154, taken
+    assert taken == 171, taken
     assert refused == 0, refused

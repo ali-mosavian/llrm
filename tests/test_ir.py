@@ -803,7 +803,7 @@ def test_every_body_of_every_kind_is_fully_modelled(fixtures: Path) -> None:
     rep stosw and closes with `leave`. The 15 main bodies that refused all
     refused on the `push cs` under B$OEGA's far pointer, and all 14 event
     stubs on `push cs` and the far `jmp` in their own trampoline. So five
-    encodings held 30 of 154 bodies, and one unmodelled instruction refuses
+    encodings held 30 of 171 bodies, and one unmodelled instruction refuses
     the whole body it sits in either way -- which is the reason barriers
     exist and the reason these five were worth modelling instead.
 
@@ -820,7 +820,7 @@ def test_every_body_of_every_kind_is_fully_modelled(fixtures: Path) -> None:
         for body_ir in result:
             counted = liftable if all(ir.modelled(node.semantics) for node in body_ir.nodes) else refused
             counted[body_ir.body.kind] += 1
-    assert liftable == {extent.BodyKind.MAIN: 110, extent.BodyKind.PROCEDURE: 30, extent.BodyKind.EVENT_STUB: 14}
+    assert liftable == {extent.BodyKind.MAIN: 125, extent.BodyKind.PROCEDURE: 30, extent.BodyKind.EVENT_STUB: 16}
     assert refused == {kind: 0 for kind in extent.BodyKind}
 
 

@@ -147,16 +147,20 @@ def test_a_memory_clean_call_does_not_wipe_the_map() -> None:
 
 
 def test_the_corpus_split_is_what_was_measured() -> None:
-    """73 reads have a live value holding their bytes, 42 a dead one.
+    """73 reads have a live value holding their bytes, 48 a dead one.
 
     A canary. If it moves, something changed the join and the reason
-    should be nameable before this number is edited.
+    should be nameable before this number is edited. It last moved when the
+    fpemu fixtures arrived: 42 dead became 48 and 366 with no provider
+    became 408, all of it float code, and the live count did not move at all
+    -- a reload whose provider is on the x87 stack is not one a register can
+    serve.
     """
     total = {"live": 0, "dead": 0, "none": 0}
     for obj in FIXTURES:
         for key, count in split(obj).items():
             total[key] += count
-    assert total == {"live": 73, "dead": 42, "none": 366}
+    assert total == {"live": 73, "dead": 48, "none": 408}
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)

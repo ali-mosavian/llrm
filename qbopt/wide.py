@@ -173,10 +173,22 @@ TESTS = {
     "jae": ("ge", False),
 }
 
-# The runtime routine whose whole purpose is to leave a comparison in the
-# flags. Every branch in this corpus that reads a call's flags reads this
-# one's -- measured, 803 of 803 -- so a call is not a barrier between a
-# comparison and the jump that reads it; it IS the comparison.
+# The runtime routines whose whole purpose is to leave a comparison in the
+# flags, and which half of the branch vocabulary each one's flags can answer.
+# A call is not a barrier between a comparison and the jump that reads it; it
+# IS the comparison.
+#
+# B$CPI4 synthesises the signed answers only. sahf cannot write OF -- it is
+# bit 11, outside the byte -- so `jl` and `jg` after one read a stale flag,
+# which is the bug docs/numbers.md records against BC itself.
+#
+# B$FCMP is the float compare and answers the *unsigned* ones, because the
+# x87 status word arrives through sahf as CF and ZF. Established from
+# Microsoft's own runtime: runtime/rt/grwindow.asm branches on it with JZ for
+# equal and JC for less-than, twice, and BC emits `jbe` at every fpemu site.
+COMPARISONS = {"B$CPI4": True, "B$FCMP": False}
+
+# Kept as its own name: callers ask about the long compare specifically.
 COMPARE = "B$CPI4"
 
 
@@ -227,9 +239,9 @@ def tests(body: mir.MirBody, calls: dict[int, str]) -> tuple[Test, ...]:
                 continue
             test, signed = asked
             through = calls.get(source.at) if source.op is ir.Operation.CALL else None
-            if through is not None and through != COMPARE:
+            if through is not None and through not in COMPARISONS:
                 continue  # some other call's flags are not a comparison
-            if through is not None and signed is False:
-                continue  # see TESTS: B$CPI4 only synthesised the signed ones
+            if through is not None and signed is not None and signed is not COMPARISONS[through]:
+                continue  # this routine's flags cannot answer that half
             found.append(Test(source, op, test, signed, through, carried[0]))
     return tuple(found)

@@ -123,7 +123,7 @@ def test_it_refuses_an_instruction_with_no_memory_operand() -> None:
 
 
 def test_the_emitted_count_is_what_was_measured() -> None:
-    """15 emitted at this size, 32 refused to the widening pass, which folds the pair.
+    """15 emitted at this size, 34 refused to the widening pass, which folds the pair.
 
     A canary. The refusals are not failures: `and cx,[x]` / `and bx,[x+2]`
     is one 32-bit and, and lift.py claiming it is the better rewrite.
@@ -137,4 +137,4 @@ def test_the_emitted_count_is_what_was_measured() -> None:
                     taken += 1
                 elif one.region.reason == "it overlaps a region already taken":
                     refused += 1
-    assert (taken, refused) == (15, 32)
+    assert (taken, refused) == (15, 34)

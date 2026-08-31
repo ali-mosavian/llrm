@@ -133,15 +133,38 @@ def test_a_long_comparison_is_a_call_and_a_jump() -> None:
     assert seen, "cmpord is a program of long comparisons"
 
 
-def test_an_unsigned_test_is_never_folded_off_the_runtime_compare() -> None:
+def test_an_unsigned_test_is_never_folded_off_the_long_compare() -> None:
     """calls.py refuses a B$CPI4 site whose CF is read afterwards, because
     the routine synthesised CF on its way to SF rather than meaning it.
-    Pairing one with jb/ja would read exactly that flag."""
+    Pairing one with jb/ja would read exactly that flag.
+
+    About B$CPI4 and not about runtime compares in general: B$FCMP is the
+    other one and its flags are the unsigned half, which the next test says.
+    """
     for obj in FIXTURES:
         for body in bodies(obj):
             for one in wide.tests(body, calls_of(obj)):
-                if one.through is not None:
+                if one.through == wide.COMPARE:
                     assert one.signed is not False
+
+
+def test_a_signed_test_is_never_folded_off_the_float_compare() -> None:
+    """The mirror of the rule above, and for the opposite reason.
+
+    B$FCMP leaves the x87 status word in the flags through sahf, so the
+    comparison arrives as CF and ZF -- the unsigned half. Microsoft's own
+    runtime branches on it that way: runtime/rt/grwindow.asm uses JZ for
+    equal and JC for less-than, twice, and BC emits `jbe` at every site in
+    suite/fpemu.bas.
+    """
+    seen = 0
+    for obj in FIXTURES:
+        for body in bodies(obj):
+            for one in wide.tests(body, calls_of(obj)):
+                if one.through == "B$FCMP":
+                    assert one.signed is not True
+                    seen += 1
+    assert seen, "fixtures/omf holds fpemu objects; their float branches should pair"
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)

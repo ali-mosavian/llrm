@@ -101,11 +101,15 @@ def test_what_is_emitted_is_an_esc_opcode_or_a_wait(obj: Path) -> None:
             assert found.code[insn.at + 1] in EMULATED or found.code[insn.at + 1] == Stands.FWAIT
 
 
-# fixtures/omf holds no object built under /FPi -- checked, not assumed:
-# zero of the 110 contain an emulator site -- so every parametrized test
-# above is vacuous today and would stay green if this module returned None
-# for everything. These are what actually exercise it, built by hand from
-# the protocol Open Watcom's fppatche.h names and decoded by declen.py.
+# The fpemu-* fixtures carry 503 emulator sites across fifteen
+# configurations, so the parametrized tests above are real. They were not:
+# before those objects existed, zero of the 110 fixtures held a site and
+# every one of those tests would have stayed green if this module returned
+# None for everything.
+#
+# These stay anyway. They pin the protocol itself -- the one Open Watcom's
+# fppatche.h names -- rather than whatever BC happened to emit, and they are
+# the only cover for int 3Dh, which fpemu does not produce.
 #
 #   cd 35 46 c8   int 35h with the operand inline   ->   d9 46 c8
 #
@@ -145,3 +149,18 @@ def test_an_ordinary_interrupt_is_refused() -> None:
     found = decode(raw, 0)
     assert found is not None
     assert fpu.native(raw, found) is None
+
+
+def test_the_fixtures_really_carry_emulator_sites() -> None:
+    """What makes every parametrized test in this module mean something.
+
+    They were all vacuous until suite/fpemu.bas was built into fixtures/omf:
+    no object in the corpus was compiled under /FPi, so there was nothing for
+    them to walk. A test that would pass against a function returning None is
+    not evidence, and this is what says it no longer is.
+    """
+    total = 0
+    for obj in FIXTURES:
+        found, reached = sites(obj)
+        total += sum(1 for one in reached if fpu.native(found.code, one) is not None)
+    assert total > 400, f"only {total} convertible sites in the whole corpus"
