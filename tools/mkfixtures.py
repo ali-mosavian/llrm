@@ -145,11 +145,34 @@ def collect(
 
 
 def write_manifest(rows: list[str]) -> None:
+    """Merge this run's rows into the manifest, keeping every other one.
+
+    A --prog or --config run builds a slice of the corpus, and writing only
+    that slice erases the provenance of everything it did not build. The
+    objects stay on disk; the record of which compiler made them, on which
+    switches, does not. Adding suite/fpdeep.bas silently dropped all fifteen
+    fpemu rows this way before the merge was here.
+
+    A rebuilt object replaces its old row -- the file name is the key, so the
+    newest build of a name is what the manifest describes.
+    """
     inherited = [
         "\t".join((name, digest(FIXTURES / name), why, "unknown", "unknown", "unknown", "unknown", "unknown"))
         for name, why in sorted(INHERITED.items())
     ]
-    MANIFEST.write_text("\n".join(["\t".join(COLUMNS), *inherited, *sorted(rows)]) + "\n")
+    kept = {row.split("\t")[0]: row for row in _existing()}
+    kept.update({row.split("\t")[0]: row for row in inherited + rows})
+    on_disk = {path.name for path in FIXTURES.glob("*.obj")}
+    MANIFEST.write_text(
+        "\n".join(["\t".join(COLUMNS), *sorted(row for name, row in kept.items() if name in on_disk)]) + "\n"
+    )
+
+
+def _existing() -> list[str]:
+    if not MANIFEST.exists():
+        return []
+    head, *rest = MANIFEST.read_text().splitlines()
+    return [row for row in rest if row.strip()]
 
 
 def main(argv: list[str] | None = None) -> int:
