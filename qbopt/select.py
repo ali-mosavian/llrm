@@ -689,17 +689,33 @@ def divide(name: str, divisor: Register_, at: int = 0) -> Emitted | None:
 
 
 def address_of(into: Register_, cell: ir.Address, at: int = 0) -> Emitted | None:
-    """`lea into,[cell]` -- the address as a value, reading no memory."""
+    """`lea into,[cell]` -- the address as a value, reading no memory.
+
+    Built from the operand's own parts rather than from a named address,
+    because `lea` is where an address becomes arithmetic: calls.py writes
+    `lea eax,[eax+eax*2]` for a multiply by three and there is no address
+    to name.
+    """
     width = WIDTHS.get(into)
-    if width is None or cell.addr is None:
-        return None
-    built = operand_of(ir.Mem(cell.addr, width))
-    if built is None:
+    if width is None:
         return None
     code = _code(f"LEA_R{width * 8}_M")
     if code is None:
         return None
-    where, _relocated = built
+    if cell.addr is not None and cell.index == Register.NONE:
+        built = operand_of(ir.Mem(cell.addr, width))
+        if built is None:
+            return None
+        return _assemble(Instruction.create_reg_mem(code, into, built[0]), at)
+    if cell.through == Register.NONE and cell.index == Register.NONE:
+        return None
+    where = MemoryOperand(
+        base=cell.through,
+        index=cell.index,
+        scale=cell.scale,
+        displ=cell.offset,
+        displ_size=cell.disp_width or _displacement_size(cell.through, cell.offset),
+    )
     return _assemble(Instruction.create_reg_mem(code, into, where), at)
 
 

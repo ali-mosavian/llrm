@@ -181,9 +181,20 @@ class Imm:
 @dataclass(frozen=True, slots=True)
 class Address:
     """An address as a *value* -- `lea`'s own result. Not a memory access: an
-    Address source reads no memory and appears in no Effects.loads."""
+    Address source reads no memory and appears in no Effects.loads.
+
+    The rest is how to encode it, out of the comparison the way ir.Mem's is.
+    `lea` is where an address stops being a name and becomes arithmetic:
+    calls.py writes `lea eax,[eax+eax*2]` for a multiply by three, and there
+    is no `addr` for that at all -- the scale IS the operation.
+    """
 
     addr: Addr | None
+    through: Register_ = field(default=Register.NONE, compare=False)
+    index: Register_ = field(default=Register.NONE, compare=False)
+    scale: int = field(default=1, compare=False)
+    offset: int = field(default=0, compare=False)
+    disp_width: int = field(default=0, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -568,7 +579,17 @@ def _address(insn: Insn, resolve: Resolver, op: Operation, name: str) -> Semanti
     if insn.insn.op_count != 2 or insn.insn.op_kind(1) != OpKind.MEMORY:
         return None
     dest = _destination(insn, 0, resolve)
-    return None if dest is None else Semantics(op, name, (dest,), (Address(long_operand(insn, resolve)),))
+    if dest is None:
+        return None
+    where = Address(
+        long_operand(insn, resolve),
+        insn.insn.memory_base,
+        insn.insn.memory_index,
+        insn.insn.memory_index_scale,
+        insn.displacement,
+        insn.disp_len,
+    )
+    return Semantics(op, name, (dest,), (where,))
 
 
 def _binary(insn: Insn, resolve: Resolver, op: Operation, name: str) -> Semantics | None:
