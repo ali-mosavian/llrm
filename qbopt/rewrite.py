@@ -450,7 +450,8 @@ def _simplified(
                 # target is dead across the whole span the write moves over.
                 lo, hi = min(trip.pushes), max(trip.pushes)
                 first, second = at_of.get(lo), at_of.get(hi)
-                made = select.move(trip.target, trip.source)
+                built = select.move(trip.target, trip.source)
+                made = None if built is None else built.code
                 if first is None or second is None or made is None or second.end != hi + second.length:
                     continue
                 if first.end != second.at:

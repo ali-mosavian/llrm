@@ -38,7 +38,7 @@ Measured 2026-08-31. Re-measure before trusting it.
 | its x87 sites | 1,766, none optimised |
 | bench/nbody | 2.99× under DOSBox, 21 of 21 calls absorbed, pressure 6/6 |
 | corpus redundant reads | 553 — 73 live provider, 48 dead, 432 none |
-| selector coverage | 5,839 of 20,245 corpus ops, 0 mismatched |
+| selector coverage | 12,232 of 20,245 corpus ops, 0 mismatched |
 
 MIR does, end to end:
 
@@ -66,7 +66,8 @@ Built, no consumer:
 - [x] push, register and immediate, at both widths
 - [x] refuse what is not in the table rather than approximate it
 - [ ] `imul` — the form exists in iced, it is simply not wired
-- [ ] load and store against each `Space` — 3,126 moves, 3,709 pushes, 787 binaries
+- [x] load, store, push and accumulate against `Space.SEGMENT` and `Space.FRAME` — 97.6% of memory operands
+- [ ] the spaces `operand_of` refuses: FAR needs a segment override, GROUP is refused everywhere, and 1,108 moves have no nameable address
 - [ ] call, branch and jump, target resolved after layout — 6,104 ops
 - [ ] layout: an address's fixup and a branch's displacement move with the code
 

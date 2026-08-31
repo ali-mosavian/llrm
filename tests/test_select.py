@@ -29,9 +29,9 @@ def test_a_move_decodes_back_to_the_move_that_was_asked_for() -> None:
         for outof in ROOTS:
             if into is outof:
                 continue
-            code = select.move(into, outof)
-            assert code is not None
-            decoded = next(iter(Decoder(BITNESS, code, ip=0)))
+            built = select.move(into, outof)
+            assert built is not None
+            decoded = next(iter(Decoder(BITNESS, built.code, ip=0)))
             assert decoded.code == Code.MOV_R32_RM32
             assert decoded.op0_register == into
             assert decoded.op1_register == outof
@@ -48,12 +48,13 @@ def test_a_sixteen_bit_move_is_shorter_than_a_thirty_two_bit_one() -> None:
     wide = select.move(Register.ECX, Register.EAX)
     narrow = select.move(Register.CX, Register.AX)
     assert wide is not None and narrow is not None
-    assert len(wide) == 3 and len(narrow) == 2
-    assert wide[0] == 0x66
+    assert len(wide.code) == 3 and len(narrow.code) == 2
+    assert wide.code[0] == 0x66
 
 
 def test_a_move_to_itself_is_no_instruction() -> None:
-    assert select.move(Register.EAX, Register.EAX) == b""
+    made = select.move(Register.EAX, Register.EAX)
+    assert made is not None and made.code == b""
 
 
 def test_mixed_widths_are_refused_rather_than_guessed() -> None:
@@ -109,7 +110,7 @@ def test_everything_selected_decodes_to_what_was_asked_for(obj: Path) -> None:
     emitted, none different.
     """
     for op, made in selected(obj):
-        back = next(iter(Decoder(BITNESS, made, ip=op.at)), None)
+        back = next(iter(Decoder(BITNESS, made.code, ip=op.at)), None)
         assert back is not None, f"{obj.stem} {op.at:#x}: emitted bytes do not decode"
         assert str(back) == str(op.node.insn.insn), f"{obj.stem} {op.at:#x}: {back} != {op.node.insn.insn}"
 
@@ -117,9 +118,10 @@ def test_everything_selected_decodes_to_what_was_asked_for(obj: Path) -> None:
 def test_the_covered_share_of_the_corpus_is_what_was_measured() -> None:
     """A canary on progress, not on correctness.
 
-    28.8% of the corpus's operations, which is the register and immediate
-    forms. The rest is memory operands, calls and branches -- an address and
-    a target both have to survive layout, which is the other half of M1.
+    60.4% of the corpus's operations: the register, immediate and memory
+    forms. What is left is mostly targets -- 4,970 calls, 893 branches and
+    241 jumps -- which need layout, plus the address spaces operand_of()
+    refuses.
     """
     from qbopt import ir
     from qbopt import mir
@@ -143,7 +145,7 @@ def test_the_covered_share_of_the_corpus_is_what_was_measured() -> None:
                         continue
                     if select.emit(what, at=op.at) is not None:
                         emitted += 1
-    assert (total, emitted) == (20245, 5839)
+    assert (total, emitted) == (20245, 12232)
 
 
 def test_a_wide_push_is_not_a_narrow_one() -> None:
@@ -155,16 +157,18 @@ def test_a_wide_push_is_not_a_narrow_one() -> None:
     """
     narrow, wide = select.push_imm(3, 2), select.push_imm(3, 4)
     assert narrow is not None and wide is not None
-    assert len(wide) == len(narrow) + 3  # the 0x66 prefix and two more bytes
-    assert wide[0] == 0x66
+    assert len(wide.code) == len(narrow.code) + 3  # the 0x66 prefix and two more bytes
+    assert wide.code[0] == 0x66
 
 
 def test_a_register_is_not_an_immediate() -> None:
     """iced's Register_ IS an int -- Register.EAX is the number 37 -- so a
     single push() taking either emitted `push 25h` where it meant `push eax`.
     Two functions, and this is what keeps them two."""
-    assert select.push(Register.EAX) == bytes([0x66, 0x50])
-    assert select.push_imm(int(Register.EAX)) != select.push(Register.EAX)
+    one = select.push(Register.EAX)
+    assert one is not None and one.code == bytes([0x66, 0x50])
+    other = select.push_imm(int(Register.EAX))
+    assert other is not None and other.code != one.code
 
 
 def test_a_mixed_width_operation_is_refused() -> None:
@@ -179,3 +183,61 @@ def test_an_operation_not_in_the_table_is_refused() -> None:
         assert select.arith(name, Register.AX, Register.CX) is None
     for name in ("bswap", "shr", ""):
         assert select.unary(name, Register.AX) is None
+
+
+def test_a_relocated_address_is_emitted_as_zero_and_says_where() -> None:
+    """LINK adds what is in the code to the fixup's target.
+
+    So a relocated displacement has to go out as zero -- anything else is
+    added to the real address -- and the caller has to be told where it
+    landed so the fixup moves with it. Both halves, or the field reads a
+    bare zero at run time.
+    """
+    from qbopt import ir
+    from qbopt.module import Addr
+    from qbopt.module import Space
+
+    cell = ir.Mem(Addr(Space.SEGMENT, 0x1234, 5), 2)
+    made = select.move_from(Register.AX, cell)
+    assert made is not None
+    assert made.displacement_at is not None
+    at = made.displacement_at
+    assert made.code[at : at + 2] == b"\x00\x00", "a relocated displacement is not a number"
+
+
+def test_a_frame_slot_keeps_its_displacement() -> None:
+    """bp-relative is the other way round: the number really is in the code
+    and no fixup names it, so there is nothing to move."""
+    from qbopt import ir
+    from qbopt.module import Addr
+    from qbopt.module import Space
+
+    cell = ir.Mem(Addr(Space.FRAME, -0x18), 2)
+    made = select.move_from(Register.AX, cell)
+    assert made is not None
+    assert made.displacement_at is None
+    assert str(next(iter(Decoder(BITNESS, made.code, ip=0)))) == "mov ax,[bp-18h]"
+
+
+def test_the_spaces_that_cannot_be_encoded_are_refused() -> None:
+    """A FAR address needs a segment override this does not model, a GROUP
+    one is refused everywhere in this project, and a STACK one is mir.py's
+    name for a push slot rather than anything an instruction encodes."""
+    from qbopt import ir
+    from qbopt.module import Addr
+    from qbopt.module import Space
+
+    for space in (Space.FAR, Space.GROUP, Space.STACK, Space.LITERAL):
+        assert select.operand_of(ir.Mem(Addr(space, 4), 2)) is None, space
+    assert select.operand_of(ir.Mem(None, 2)) is None
+
+
+def test_a_cell_of_the_wrong_width_is_refused() -> None:
+    """`mov ax,[dword x]` is not an instruction."""
+    from qbopt import ir
+    from qbopt.module import Addr
+    from qbopt.module import Space
+
+    cell = ir.Mem(Addr(Space.FRAME, -4), 4)
+    assert select.move_from(Register.AX, cell) is None
+    assert select.move_from(Register.EAX, cell) is not None

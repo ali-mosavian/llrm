@@ -19,14 +19,19 @@ one emitter whose output can be *longer* than what it replaces, and the
 win is instructions and cycles rather than size.
 """
 
+from dataclasses import dataclass
+
 from iced_x86 import Code
 from iced_x86 import Code_
+from iced_x86 import Decoder
 from iced_x86 import Encoder
 from iced_x86 import Register
 from iced_x86 import Register_
 from iced_x86 import Instruction
+from iced_x86 import MemoryOperand
 
 from qbopt import ir
+from qbopt.module import Space
 from qbopt.declen import BITNESS
 
 # The 32-bit roots this can name, and their 16-bit halves.
@@ -34,16 +39,64 @@ _WIDE = {Register.EAX, Register.ECX, Register.EDX, Register.EBX, Register.ESI, R
 _NARROW = {Register.AX, Register.CX, Register.DX, Register.BX, Register.SI, Register.DI}
 
 
-def _assemble(made: Instruction, at: int) -> bytes | None:
+@dataclass(frozen=True, slots=True)
+class Emitted:
+    """The bytes, and where a relocated displacement ended up inside them.
+
+    `displacement_at` is None for everything with no memory operand and for
+    a frame slot, whose displacement is a real number in the code. A
+    relocated address is emitted as zero and the caller has to move the
+    fixup that names it -- LINK adds what is in the code to the fixup's
+    target, so a displacement left in would be added to the real address.
+    """
+
+    code: bytes
+    displacement_at: int | None = None
+
+
+def _assemble(made: Instruction, at: int, relocated: bool = False) -> Emitted | None:
     encoder = Encoder(BITNESS)
     try:
         encoder.encode(made, at)
     except ValueError:
         return None
-    return encoder.take_buffer()
+    code = encoder.take_buffer()
+    if not relocated:
+        return Emitted(code)
+    # Read back off the encoded bytes rather than predicted, which is what
+    # calls.py's own assemble() does and for the same reason.
+    decoder = Decoder(BITNESS, code, ip=at)
+    decoded = next(iter(decoder), None)
+    if decoded is None:
+        return None
+    offsets = decoder.get_constant_offsets(decoded)
+    return Emitted(code, offsets.displacement_offset if offsets.has_displacement else None)
 
 
-def move(into: Register_, outof: Register_, at: int = 0) -> bytes | None:
+def operand_of(what: ir.Mem) -> tuple[MemoryOperand, bool] | None:
+    """`what` as an encodable memory operand, and whether it is relocated.
+
+    Two spaces, which is 97.6% of the corpus's memory operands: a relocated
+    segment address, emitted as zero with its fixup moved, and a frame slot,
+    whose displacement really is in the code. Everything else is refused --
+    a Space.FAR address needs a segment override this does not model, a
+    Space.GROUP one is refused everywhere in this project, and a
+    Space.STACK one is mir.py's own name for a push slot rather than
+    anything an instruction encodes.
+    """
+    addr = what.addr
+    if addr is None or addr.base != Register.NONE:
+        return None
+    match addr.space:
+        case Space.SEGMENT:
+            return MemoryOperand(displ=0, displ_size=2), True
+        case Space.FRAME:
+            return MemoryOperand(base=Register.BP, displ=addr.disp, displ_size=2), False
+        case _:
+            return None
+
+
+def move(into: Register_, outof: Register_, at: int = 0) -> Emitted | None:
     """`mov into, outof`, or None if this cannot name that pair.
 
     Both registers at one width, and a width this knows. A move between
@@ -52,7 +105,7 @@ def move(into: Register_, outof: Register_, at: int = 0) -> bytes | None:
     this refuses to do.
     """
     if into is outof:
-        return b""  # a move to itself is no instruction at all
+        return Emitted(b"")  # a move to itself is no instruction at all
     if into in _WIDE and outof in _WIDE:
         code = Code.MOV_R32_RM32
     elif into in _NARROW and outof in _NARROW:
@@ -111,7 +164,7 @@ def _remapped(register: Register_, where: dict[Register_, Register_] | None) -> 
     return (where or {}).get(register, register)
 
 
-def load(into: Register_, value: int, at: int = 0) -> bytes | None:
+def load(into: Register_, value: int, at: int = 0) -> Emitted | None:
     """`mov into, imm`, at the width `into` names."""
     width = WIDTHS.get(into)
     if width is None:
@@ -125,7 +178,7 @@ def load(into: Register_, value: int, at: int = 0) -> bytes | None:
         return None
 
 
-def arith(name: str, dest: Register_, source: Register_, at: int = 0) -> bytes | None:
+def arith(name: str, dest: Register_, source: Register_, at: int = 0) -> Emitted | None:
     """`<name> dest, source`, both registers, at the width they name."""
     if name not in TWO_OPERAND:
         return None
@@ -138,7 +191,7 @@ def arith(name: str, dest: Register_, source: Register_, at: int = 0) -> bytes |
     return _assemble(Instruction.create_reg_reg(code, dest, source), at)
 
 
-def arith_imm(name: str, dest: Register_, value: int, at: int = 0) -> bytes | None:
+def arith_imm(name: str, dest: Register_, value: int, at: int = 0) -> Emitted | None:
     """`<name> dest, imm`."""
     if name not in TWO_OPERAND:
         return None
@@ -154,7 +207,7 @@ def arith_imm(name: str, dest: Register_, value: int, at: int = 0) -> bytes | No
         return None
 
 
-def unary(name: str, dest: Register_, at: int = 0) -> bytes | None:
+def unary(name: str, dest: Register_, at: int = 0) -> Emitted | None:
     """`neg`, `not`, `inc` or `dec` of one register."""
     if name not in ONE_OPERAND:
         return None
@@ -170,7 +223,7 @@ def unary(name: str, dest: Register_, at: int = 0) -> bytes | None:
 # Two functions rather than one taking either, because iced's Register_ IS an
 # int -- Register.EAX is the number 37 -- so `isinstance(what, int)` is true of
 # a register and a one-function version pushed 0x25 where it meant `push eax`.
-def push(one: Register_, at: int = 0) -> bytes | None:
+def push(one: Register_, at: int = 0) -> Emitted | None:
     """A register onto the stack, at the width it names."""
     width = WIDTHS.get(one)
     if width is None:
@@ -179,7 +232,7 @@ def push(one: Register_, at: int = 0) -> bytes | None:
     return None if code is None else _assemble(Instruction.create_reg(code, one), at)
 
 
-def push_imm(value: int, width: int = 2, at: int = 0) -> bytes | None:
+def push_imm(value: int, width: int = 2, at: int = 0) -> Emitted | None:
     """A literal onto the stack, at the width the operand names.
 
     The width is not decoration: `push 3` puts two bytes on the stack and
@@ -197,7 +250,58 @@ def push_imm(value: int, width: int = 2, at: int = 0) -> bytes | None:
         return None
 
 
-def emit(what: ir.Semantics, at: int = 0, where: dict[Register_, Register_] | None = None) -> bytes | None:
+def move_from(into: Register_, cell: ir.Mem, at: int = 0) -> Emitted | None:
+    """`mov into, [cell]`."""
+    width = WIDTHS.get(into)
+    built = operand_of(cell)
+    if width is None or built is None or cell.width != width:
+        return None
+    code = _code(f"MOV_R{width * 8}_RM{width * 8}")
+    if code is None:
+        return None
+    where, relocated = built
+    return _assemble(Instruction.create_reg_mem(code, into, where), at, relocated)
+
+
+def move_into(cell: ir.Mem, outof: Register_, at: int = 0) -> Emitted | None:
+    """`mov [cell], outof`."""
+    width = WIDTHS.get(outof)
+    built = operand_of(cell)
+    if width is None or built is None or cell.width != width:
+        return None
+    code = _code(f"MOV_RM{width * 8}_R{width * 8}")
+    if code is None:
+        return None
+    where, relocated = built
+    return _assemble(Instruction.create_mem_reg(code, where, outof), at, relocated)
+
+
+def arith_mem(name: str, dest: Register_, cell: ir.Mem, at: int = 0) -> Emitted | None:
+    """`<name> dest, [cell]`."""
+    width = WIDTHS.get(dest)
+    built = operand_of(cell)
+    if name not in TWO_OPERAND or width is None or built is None or cell.width != width:
+        return None
+    code = _code(f"{name.upper()}_R{width * 8}_RM{width * 8}")
+    if code is None:
+        return None
+    where, relocated = built
+    return _assemble(Instruction.create_reg_mem(code, dest, where), at, relocated)
+
+
+def push_mem(cell: ir.Mem, at: int = 0) -> Emitted | None:
+    """`push [cell]`, at the cell's own width."""
+    built = operand_of(cell)
+    if built is None or cell.width not in (2, 4):
+        return None
+    code = _code(f"PUSH_RM{cell.width * 8}")
+    if code is None:
+        return None
+    where, relocated = built
+    return _assemble(Instruction.create_mem(code, where), at, relocated)
+
+
+def emit(what: ir.Semantics, at: int = 0, where: dict[Register_, Register_] | None = None) -> Emitted | None:
     """One MIR operation as machine bytes, or None where this cannot say it.
 
     Driven by ir.Semantics rather than by an instruction, which is what makes
@@ -216,6 +320,10 @@ def emit(what: ir.Semantics, at: int = 0, where: dict[Register_, Register_] | No
                     return move(_remapped(into, where), _remapped(outof, where), at)
                 case (ir.Reg(register=into), ir.Imm(value=value)):
                     return load(_remapped(into, where), value, at)
+                case (ir.Reg(register=into), ir.Mem() as cell):
+                    return move_from(_remapped(into, where), cell, at)
+                case (ir.Mem() as cell, ir.Reg(register=outof)):
+                    return move_into(cell, _remapped(outof, where), at)
         case ir.Operation.BINARY if len(dests) == 1 and len(sources) == 2:
             # BINARY's own rule: sources[0] IS dests[0].
             match (dests[0], sources[1]):
@@ -223,6 +331,8 @@ def emit(what: ir.Semantics, at: int = 0, where: dict[Register_, Register_] | No
                     return arith(what.name or "", _remapped(into, where), _remapped(outof, where), at)
                 case (ir.Reg(register=into), ir.Imm(value=value)):
                     return arith_imm(what.name or "", _remapped(into, where), value, at)
+                case (ir.Reg(register=into), ir.Mem() as cell):
+                    return arith_mem(what.name or "", _remapped(into, where), cell, at)
         case ir.Operation.UNARY if len(dests) == 1 and len(sources) == 1:
             match dests[0]:
                 case ir.Reg(register=into):
@@ -233,4 +343,6 @@ def emit(what: ir.Semantics, at: int = 0, where: dict[Register_, Register_] | No
                     return push(_remapped(one, where), at)
                 case ir.Imm(value=value, width=width):
                     return push_imm(value, width, at)
+                case ir.Mem() as cell:
+                    return push_mem(cell, at)
     return None
