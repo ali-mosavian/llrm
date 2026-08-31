@@ -64,7 +64,7 @@ PUSH_BYTES = {
 _SP = (Register.SP, Register.ESP)
 
 
-def _touches_sp(insn: Insn) -> bool:
+def touches_sp(insn: Insn) -> bool:
     """Whether this instruction could move the stack pointer by any means.
 
     `stack_pointer_increment` is iced's own answer for the instructions that
@@ -122,7 +122,7 @@ def frames(block: Block, calls: dict[int, str], arity: Callable[[str], int | Non
         if insn.code in PUSH_BYTES:
             stack.append(insn)
             continue
-        if not _touches_sp(insn):
+        if not touches_sp(insn):
             continue
         # a pop, arithmetic on sp, a call this cannot account for -- anything
         # that could move the stack pointer without this knowing by how much

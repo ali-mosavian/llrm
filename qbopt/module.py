@@ -54,6 +54,15 @@ class Space(StrEnum):
     # override register) -- so base is BX and segment is a real register on
     # every Addr this space ever holds, not just in principle.
     FAR = "far"
+    # a slot the code itself pushed, addressed by how far sp has moved since
+    # the top of the block that pushed it -- so `disp` is a depth, not an
+    # address, and only two STACK addresses from the same block are ever
+    # compared. Everything else aliases it, deliberately: BC's SS==DS means
+    # a pushed slot and a frame local or a DGROUP static could coincide, and
+    # ruling that out needs sp's relation to bp, which nothing here tracks.
+    # Enough to link a push to the pop that reads it, which is what the
+    # round-trip idiom absorption emits is made of.
+    STACK = "sp"
 
 
 # base is si/di for a SEGMENT array element and bx for a FAR one -- operand()
@@ -209,6 +218,10 @@ def may_alias(
     if a.base != Register.NONE or b.base != Register.NONE:
         return True
     match (a.space, b.space):
+        case (Space.STACK, Space.STACK):
+            return _overlaps(a, a_width, b, b_width)
+        case (Space.STACK, _) | (_, Space.STACK):
+            return True
         case (Space.FRAME, Space.FRAME):
             return _overlaps(a, a_width, b, b_width)
         case (Space.SEGMENT, Space.SEGMENT):

@@ -57,10 +57,12 @@ from iced_x86 import Register_
 
 from qbopt import ir
 from qbopt import loops
+from qbopt import stack
 from qbopt import module
 from qbopt import runtime
 from qbopt.module import Addr
 from qbopt.blocks import Block
+from qbopt.module import Space
 from qbopt.module import Module
 
 # The registers that become values. Rooted, so a write to ax and a write to
@@ -335,11 +337,54 @@ class _Namer:
         return held[-1]
 
 
-def _memrefs(cells: tuple[ir.Mem, ...], namer: _Namer, at: int) -> tuple[MemRef, ...]:
+def _stack_slot(node: ir.Node, offset: int | None) -> tuple[int | None, Addr | None]:
+    """Where a push or pop's own cell sits, and where sp is afterwards.
+
+    `offset` is how far sp has moved since the top of this block, so a slot
+    is named by a depth rather than an address and only ever compared with
+    another slot from the same block. That is enough to link a push to the
+    pop that reads it, which is what the round-trip idiom absorption emits
+    is made of, and it needs nothing about where sp sits relative to bp.
+
+    A push names the slot it lands in, so sp moves first; a pop names the
+    slot it reads, so sp moves after. Anything else that touches sp gives up
+    -- None, which is the address that aliases everything, and the honest
+    answer once the depth is no longer known.
+    """
+    if offset is None:
+        return None, None
+    match node.semantics.op:
+        case ir.Operation.PUSH:
+            width = node.effects.stores[0].width if node.effects.stores else 0
+            if not width:
+                return None, None
+            offset -= width
+            return offset, Addr(Space.STACK, offset)
+        case ir.Operation.POP:
+            width = node.effects.loads[0].width if node.effects.loads else 0
+            if not width:
+                return None, None
+            return offset + width, Addr(Space.STACK, offset)
+        case _:
+            # A restore is push/pop/pop and nets to nothing, so the depth
+            # survives it. A call does not: it pushes a return address and
+            # the callee pops its own arguments, and while runtime.py knows
+            # the arity, tracking that is not needed for anything measured
+            # yet -- unknown is the honest answer and costs only the rest of
+            # this block.
+            if isinstance(node, ir.Restore):
+                return offset, None
+            found = getattr(node, "insn", None)
+            if found is not None and stack.touches_sp(found):
+                return None, None
+            return offset, None
+
+
+def _memrefs(cells: tuple[ir.Mem, ...], namer: _Namer, at: int, slot: Addr | None = None) -> tuple[MemRef, ...]:
     """ir.Mem cells, with the values their own address registers hold now."""
     out = []
     for cell in cells:
-        addr = cell.addr
+        addr = slot if cell.addr is None and slot is not None else cell.addr
         base = segment = None
         if addr is not None:
             root = ir.ROOT.get(addr.base, addr.base)
@@ -467,14 +512,21 @@ def raise_body(
             namer.stack.setdefault(variable, []).append(phi.result)
             pushed.append(variable)
 
+        # How far sp has moved since the top of this block. Reset per block
+        # and never carried across one: a slot is named by its depth, so the
+        # same depth in two blocks is two different addresses, and joining
+        # them would be the one way this could be unsound.
+        offset: int | None = 0
+
         for insn in block.insns:
             node = nodes.get(insn.at)
             if node is None:
                 continue
+            offset, slot = _stack_slot(node, offset)
             defines, uses = _touched(node, calls)
             used = tuple(namer.current(one, start) for one in sorted(uses, key=lambda o: (o is not FLAGS, o)))
-            loads = _memrefs(node.effects.loads, namer, start)
-            stores = _memrefs(node.effects.stores, namer, start)
+            loads = _memrefs(node.effects.loads, namer, start, slot)
+            stores = _memrefs(node.effects.stores, namer, start, slot)
             made = []
             for one in sorted(defines, key=lambda o: (o is not FLAGS, o)):
                 value = namer.fresh(one, insn.at)

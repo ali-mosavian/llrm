@@ -173,3 +173,52 @@ def test_a_live_provider_is_never_the_value_the_read_defines(obj: Path) -> None:
                     who = next((w for c, w in current.items() if mir.same_bytes(c, op.loads[0])), None)
                     assert who is None or who not in op.defines
                 current = avail._after(op, current, found.dgroup, found.calls)
+
+
+@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
+def test_no_stack_slot_crosses_a_block_boundary(obj: Path) -> None:
+    """A Space.STACK address is a depth, not an address.
+
+    `[sp-8]` measured from the top of one block and `[sp-8]` measured from
+    the top of another are different bytes that compare equal, so carrying
+    one across an edge is the single way this analysis could be unsound.
+    """
+    from qbopt.module import Space
+
+    found = corpus.loaded(obj)
+    assert found is not None
+    for body in bodies_of(found, corpus.partitioned(obj)):
+        held = avail.holders(body, found.dgroup, found.calls)
+        for block in body.blocks:
+            if block.at == body.entry:
+                continue
+            for cell in held.into[block.at]:
+                assert cell.addr is None or cell.addr.space is not Space.STACK, (
+                    f"{obj.stem} {block.at:#x}: {cell} arrived from another block"
+                )
+
+
+@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
+def test_a_stack_slot_never_survives_a_call(obj: Path) -> None:
+    """Even one runtime.py proves memory-clean.
+
+    "Writes no caller memory" is a claim about the caller's variables. A
+    call is entered by pushing a return address and the callee pops its own
+    arguments, so the scratch below sp is gone either way.
+    """
+    from qbopt.module import Space
+
+    found = corpus.loaded(obj)
+    assert found is not None
+    for body in bodies_of(found, corpus.partitioned(obj)):
+        held = avail.holders(body, found.dgroup, found.calls)
+        for block in body.blocks:
+            current = dict(held.into[block.at])
+            for op in block.ops:
+                current = avail._after(op, current, found.dgroup, found.calls)
+                if op.at not in found.calls:
+                    continue
+                for cell in current:
+                    assert cell.addr is None or cell.addr.space is not Space.STACK, (
+                        f"{obj.stem} {op.at:#x}: {cell} survived a call"
+                    )

@@ -49,6 +49,7 @@ from qbopt import regalloc
 from qbopt.mir import Value
 from qbopt.mir import MemRef
 from qbopt.mir import MirBody
+from qbopt.module import Space
 
 # What a cell maps to, and the whole lattice element.
 Holders = dict[MemRef, Value]
@@ -137,7 +138,11 @@ def _after(op: Op, holders: Holders, dgroup: frozenset[int], calls: dict[int, st
     if op.barrier:
         return {}
     if op.at in calls:
-        return holders if _clean(op, calls) else {}
+        # Even a call runtime.py proves memory-clean uses the stack: it is
+        # entered by a push of the return address and the callee pops its
+        # own arguments off. "Writes no caller memory" is a claim about the
+        # caller's variables, never about the scratch below sp.
+        return _local(holders) if _clean(op, calls) else {}
 
     for ref in op.stores:
         holders = {one: who for one, who in holders.items() if not mir.overlapping(one, ref, dgroup)}
@@ -149,13 +154,25 @@ def _after(op: Op, holders: Holders, dgroup: frozenset[int], calls: dict[int, st
     return holders
 
 
+def _local(holders: Holders) -> Holders:
+    """Without the stack slots, which do not survive a block boundary.
+
+    A Space.STACK address is a depth measured from the top of the block that
+    pushed it, so `[sp-8]` in one block and `[sp-8]` in another are two
+    different addresses that compare equal. Carrying one across an edge is
+    the one way this analysis could be unsound, so it does not.
+    """
+    return {one: who for one, who in holders.items() if one.addr is None or one.addr.space is not Space.STACK}
+
+
 def _meet(maps: list[Holders]) -> Holders:
     """Only what every predecessor agrees on, value and all."""
     if not maps:
         return {}
-    out = dict(maps[0])
+    out = _local(maps[0])
     for other in maps[1:]:
-        out = {one: who for one, who in out.items() if other.get(one) == who}
+        kept = _local(other)
+        out = {one: who for one, who in out.items() if kept.get(one) == who}
     return out
 
 
