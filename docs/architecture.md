@@ -27,8 +27,8 @@ trusting the host suite.
 ## Two towers
 
 The single most important thing about this codebase's shape: there are two
-representations reaching up from the bytes, and only one of them is
-connected to the output.
+representations reaching up from the bytes. Both can emit now. Only one of
+them emits in a shipped build.
 
 ```
               .OBJ bytes -- omf.py, declen.py
@@ -39,7 +39,7 @@ connected to the output.
         |                                |
         v                                v
   MACHINE-CODE TOWER               MIR / SSA TOWER
-  (emits)                          (analysis only)
+  (what rewrite.py ships)          (emits; e2e only)
         |                                |
   lift.py    pairs, widened        mir.py     raise_body()
   flags.py   which are live          |        every value named once,
@@ -50,8 +50,10 @@ connected to the output.
         |                            +-- regalloc.py  colour() -- SSA, chordal
         v                            +-- avail.py     MemRef -> Value, x-block
   calls.py    absorb, reduce         +-- reencode.py  with_operand()
-  forward.py  drop a load                  |
-  memory.py   dead stores                  |
+  forward.py  drop a load            +-- simplify.py  round trips
+  memory.py   dead stores            +-- select.py    an Op -> bytes
+        |                            +-- layout.py    place, relax branches
+        |                            +-- wholeseg.py  a whole segment
         |                                  |
         +---------------+------------------+
                         |
@@ -59,17 +61,26 @@ connected to the output.
                   rewrite.py --> .OBJ out
 ```
 
-Both towers now reach the output, but by different amounts. The left one
-carries every transform that changes real programs. The right one carries
-exactly one: `avail.py` + `regalloc.py` + `reencode.py`, joined in
-`rewrite._substituted()`, which serves 60 redundant memory reads from a
-register instead.
+Both towers reach the output, but by very different amounts.
 
-The rest of the right-hand tower is still verified work with no consumer.
-`lower()` round-trips SSA back to byte-identical machine code across the
-corpus and nothing routes emission through it; `consts.known()` folds and
-nothing reads the result; `wide.py` re-derives at MIR level the same 192
-carry pairs `lift.py` already widens on the machine side.
+The left one carries every transform that changes a shipped program. So
+does one piece of the right: `avail.py` + `regalloc.py` + `reencode.py`,
+joined in `rewrite._substituted()`, serving 60 redundant memory reads from
+a register instead.
+
+The right-hand tower can now also emit whole segments -- `select.py` turns
+an Op back into bytes, `layout.py` places them and relaxes branches to a
+fixed point, `wholeseg.py` composes the two and hands `relocate.py` a new
+code block. It runs end to end and the programs it builds run correctly on
+all twelve configurations, but `rewrite.py` does not call it: today it is
+reachable only from `tests/test_e2e.py`. That is the milestone the roadmap
+calls retiring the machine arm, and it is not done until `rewrite.py` goes
+through here instead.
+
+The rest of the right-hand tower is verified work with no consumer.
+`consts.known()` folds and nothing reads the result; `wide.py` re-derives
+at MIR level the same 192 carry pairs `lift.py` already widens on the
+machine side.
 
 ## The optimisation passes
 
@@ -92,6 +103,13 @@ What exists, what it runs on, and whether it changes the program.
                                            operand substitution asks
   re-encoding           MIR        yes     with_operand(); with_registers()
                                            has no caller
+  native x87            machine    opt-in  fpu.py: the emulator's int 34h
+                                           back to the ESC it stands for.
+                                           1.88x on bench/fpbench.bas, and
+                                           the only float win there is
+  whole-segment emit    MIR        tests   select + layout + wholeseg; runs
+                                           right on all twelve, not yet
+                                           called by rewrite.py
 
   not built yet:  CSE, LICM, dead code elimination proper
 ```
@@ -153,12 +171,23 @@ Nothing here is trusted because the host suite is green; the host suite
 being green is how the two worst bugs so far got in.
 
 ```
-  uv run pytest -m "not e2e"     8941 host tests, seconds
+  uv run pytest -m "not e2e"     15666 host tests, seconds
   uv run pytest                  adds DOSBox, the real thing running
-  uv run python tools/matrix.py  16 programs x 12 real compiler configs
-  uv run python tools/mutate.py  37 deliberate breakages, each must be caught
+  uv run python tools/matrix.py  17 programs x 12 real compiler configs
+  uv run python tools/mutate.py  40 deliberate breakages, each must be caught
+  uv run python tools/bench.py   a real program, timed on the 8253
 ```
 
 `tools/matrix.py` is the one that catches semantics. It found the inverted
 kill direction in `memory.py`'s backward pass, and it found `forward.py`
 treating `and cx,[x]` as a load -- both with every host test passing.
+
+`tools/bench.py` is a gate too, and not only a number. It found the one
+bug matrix could not: `forward.py` reading the base register of
+`fld dword ptr [si]` as the load's destination, which deleted the second
+of two pushes and slid the x87 stack. No program in the suite had a
+two-deep float expression, so nothing there could have caught it, and
+`fuzzgen.py` could not generate one either -- it made two arrays, handed
+the widths out in the order INT, LNG, SNG, DBL, and so had never once
+produced a float array. `suite/fpdeep.bas` covers the shape now and the
+generator makes one array of each width.
