@@ -82,10 +82,28 @@ Proof: re-lower every corpus body through the selector with no transform
 applied; `tools/matrix.py` green. Same program, not same bytes — the
 selector may choose differently.
 
-Held so far by `test_everything_selected_decodes_to_what_was_asked_for`:
-everything emitted decodes to the instruction it was asked for, over the
-whole corpus. That is the same claim at the size the table currently
-reaches, and it found both bugs in the first version.
+Held so far without running anything: everything emitted decodes to the
+instruction it was asked for (`test_everything_selected_decodes_to_what_was_asked_for`),
+and every laid-out body keeps its instruction order and lands every branch
+(`tests/test_layout.py`).
+
+### Emission is whole-segment, not per-body
+
+Measured when wiring `layout` into `rewrite`, and it changes the shape of
+the rest: splicing a laid-out body back into BC's own layout works for
+**1 of 171 bodies**. 33 cross a LEDATA boundary, 16 are not contiguous, and
+the rest are branched into or carry a line number. BC's chunking is not
+something a body-sized edit can step around.
+
+Regenerating the whole code segment does not have the problem, because
+nothing is being spliced: chunk boundaries, line numbers and fixups are all
+being written rather than preserved. **42 of the corpus's 125 objects
+already have every body layable**, and that number grows with the selector.
+
+- [ ] emit a whole code segment from MIR: LEDATA records, fixups, line
+      numbers, publics and the entry point
+- [ ] the 83 objects with a body that refuses, which is what the selector's
+      remaining 599 ops are
 
 ## M2 — placement
 
