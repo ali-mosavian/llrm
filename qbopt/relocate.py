@@ -399,6 +399,7 @@ def as_records(
     image: bytes,
     moved: dict[int, int],
     relocations: dict[int, int],
+    dropped: frozenset[int] = frozenset(),
 ) -> list[omf.Record] | str:
     """Every record, with the code segment replaced by `image`.
 
@@ -431,6 +432,12 @@ def as_records(
     for one in code_fixups:
         landed = by_offset.get(one.offset) if one.offset >= kept else one.offset
         if landed is None:
+            if one.offset in dropped:
+                # The instruction that carried it is gone: the high half of a
+                # widened pair reads `[x+2]`, and folding the pair takes that
+                # relocation with it. layout.py says which, and only those --
+                # a fixup nothing explained is still the bug this catches.
+                continue
             return f"the fixup at {one.offset:#x} has nowhere to go in the rebuilt segment"
         placed.append((landed, one))
     placed.sort()

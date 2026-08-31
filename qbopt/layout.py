@@ -29,6 +29,7 @@ known: the x87 instructions, and the addresses in a space select.py does
 not encode.
 """
 
+from dataclasses import field
 from dataclasses import dataclass
 
 from qbopt import ir
@@ -51,6 +52,21 @@ class Laid:
     # (offset within `code`, the original field's own address) for every
     # relocated displacement, so the fixup that names it can be moved.
     relocations: tuple[tuple[int, int], ...]
+    # Fixups that belonged to an instruction this body no longer contains --
+    # the high half of a widened pair reads `[x+2]` and folding it away
+    # takes that relocation with it. Reported rather than silently omitted:
+    # relocate.py refuses a fixup it cannot place, which is what catches a
+    # dropped one, and it can only tell the two apart if told which were
+    # meant to go.
+    dropped: frozenset[int] = frozenset()
+    # Every original address a transform folded into a surviving op, mapped
+    # to where that op went. A /Zd build carries LINNUM records naming the
+    # first byte of each statement, and folding two instructions into one
+    # leaves some of those naming nothing -- the line's code now begins
+    # where the survivor begins. Kept apart from `moved` deliberately: a
+    # branch target may never resolve through this, and cannot, since a
+    # target starts a block and nothing here folds a block's first op.
+    covered: dict[int, int] = field(default_factory=dict)
 
     @property
     def grew(self) -> int:
@@ -184,6 +200,26 @@ def _semantics(op: mir.Op) -> ir.Semantics | None:
     """
     what = op.made if op.made is not None else getattr(op.node, "semantics", None)
     return None if what is None or what.op is ir.Operation.BARRIER else what
+
+
+def selectable(op: mir.Op) -> bool:
+    """Whether this op's bytes come from select.py rather than from the image.
+
+    An op emitted verbatim -- a barrier, calls.py's restore idiom, an
+    emulated x87 site -- is exactly as long as the bytes it copies, so its
+    `covers` and its length are the same number and a transform may not make
+    them differ. One that is selected has no such tie: it emits whatever the
+    encoding needs and `covers` only says which of the original bytes it
+    stands for.
+
+    transform.py asks before handing a deleted op's bytes to a survivor. It
+    used to hand them to whoever was nearest, and a restore idiom that took
+    them stopped coming back its own length -- qb-qrender's SCREEN.OBJ, and
+    the only object in either corpus with the shape.
+    """
+    if isinstance(op.node, ir.Restore):
+        return False
+    return _semantics(op) is not None
 
 
 def _retargeted(what: ir.Semantics, moved: dict[int, int]) -> ir.Semantics | None:
@@ -480,4 +516,20 @@ def _emitted(
                 return f"{op.at:#06x}: {op.name} has a fixup and no field to put it in"
             relocations.append((len(out) + landed, field))
         out += made.code
-    return Laid(bytes(out), moved, tuple(relocations))
+    # Every fixup inside a surviving op's `covers` but outside its own
+    # node's span belonged to something a transform folded away. One
+    # outside every op's covers is not explained by anything here, and
+    # relocate.py still refuses it.
+    kept_fields = {one for _where, one in relocations}
+    explained: set[int] = set()
+    known = fields or frozenset(found.fixup_at)
+    folded: dict[int, int] = {}
+    for op in ops:
+        if isinstance(op, Table):
+            continue
+        lo, hi = (op.covers if op.covers is not None else (op.at, op.at + (_length_of(op) or 0)))
+        explained.update(one for one in known if lo <= one < hi)
+        landed = moved.get(op.at)
+        if landed is not None:
+            folded.update({one: landed for one in range(lo, hi) if one not in moved})
+    return Laid(bytes(out), moved, tuple(relocations), frozenset(explained - kept_fields), folded)

@@ -36,8 +36,22 @@ def test_a_rebuilt_object_parses_and_agrees_with_itself(obj: Path) -> None:
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
-def test_a_rebuilt_object_keeps_every_code_fixup(obj: Path) -> None:
-    """A fixup left behind is a field reading a bare zero at run time."""
+def test_a_rebuilt_object_keeps_every_code_fixup_it_still_has_a_home_for(obj: Path) -> None:
+    """A fixup left behind is a field reading a bare zero at run time.
+
+    Not every one survives now, and exactly one kind may not: the high half
+    of a widened pair reads `[x+2]`, and folding the pair takes that
+    relocation with it because there is no longer an instruction with that
+    operand. layout.py reports which, relocate.py drops only those, and one
+    it cannot explain is still refused outright -- so the count is checked
+    against what was deliberately dropped rather than relaxed.
+    """
+    from qbopt import layout
+    from qbopt import mir
+    from qbopt import transform
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
     data = obj.read_bytes()
     out, why = wholeseg.rebuilt(data)
     if why != wholeseg.REBUILT:
@@ -46,7 +60,24 @@ def test_a_rebuilt_object_keeps_every_code_fixup(obj: Path) -> None:
     assert before is not None and after is not None
     was = [x for x in omf.fixups(omf.parse(data)) if x.seg == before.seg]
     now = [x for x in omf.fixups(omf.parse(out)) if x.seg == after.seg]
-    assert len(now) == len(was), f"{obj.stem}: {len(was)} fixups became {len(now)}"
+
+    mapped = code_map(before)
+    assert not isinstance(mapped, str)
+    blocks = split.partition(before, mapped)
+    bodies = [
+        (name, transform.applied(body, before.dgroup, before.calls))
+        for name, body in mir.bodies(before, blocks)
+    ]
+    fields = frozenset(one.offset for one in omf.fixups(omf.parse(data)) if one.seg == before.seg)
+    reached = frozenset(at for b in blocks for i in b.insns for at in range(i.at, i.end))
+    laid = layout.rebuild(before, bodies, mapped.tables, fields, reached)
+    assert not isinstance(laid, str), laid
+    assert len(now) == len(was) - len(laid.dropped), (
+        f"{obj.stem}: {len(was)} fixups became {len(now)}, {len(laid.dropped)} deliberately dropped"
+    )
+    # And each one really did belong to something that is gone.
+    surviving = {op.at for _name, body in bodies for block in body.blocks for op in block.ops}
+    assert not (laid.dropped & surviving), "a dropped fixup sits on an op that is still there"
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)

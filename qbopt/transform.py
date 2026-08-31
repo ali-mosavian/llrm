@@ -32,6 +32,7 @@ from qbopt import ir
 from qbopt import mir
 from qbopt import wide
 from qbopt import avail
+from qbopt import layout
 from qbopt.mir import Op
 from qbopt.mir import MirBody
 
@@ -59,13 +60,20 @@ def _absorb(ops: list[Op], gone: set[int]) -> list[Op]:
     out: list[Op] = []
     for op in ops:
         if op.at in gone:
-            if out:
+            # The bytes go to the op immediately before, and only if that op
+            # is adjacent and gets its length from select.py. Anything
+            # further back would span the survivors in between and count
+            # their bytes twice; anything emitted verbatim is exactly as long
+            # as the bytes it copies, so giving it more to account for makes
+            # it disagree with itself -- qb-qrender's SCREEN.OBJ, whose
+            # restore idiom stopped coming back its own length.
+            #
+            # Where neither holds the op simply stays. A deletion this cannot
+            # account for is not one worth making.
+            if out and layout.selectable(out[-1]) and _end_of(out[-1]) == op.at:
                 lo = out[-1].covers[0] if out[-1].covers is not None else out[-1].at
                 out[-1] = replace(out[-1], covers=(lo, _end_of(op)))
                 continue
-            # Nothing before it: hand the bytes forward instead, by leaving
-            # the op in place. A deletion this cannot account for is not one
-            # worth making.
             out.append(op)
             continue
         out.append(op)

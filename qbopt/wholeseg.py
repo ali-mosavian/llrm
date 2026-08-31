@@ -74,8 +74,9 @@ def rebuilt(data: bytes, optimise: bool = True, native_fpu: bool = False) -> tup
         found.seg,
         kept,
         image,
-        laid.moved,
+        {**laid.covered, **laid.moved},
         {old: kept + new for new, old in laid.relocations},
+        laid.dropped,
     )
     if isinstance(made, str):
         return data, made
