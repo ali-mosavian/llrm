@@ -178,6 +178,24 @@ def _clobbered(insn: Insn) -> frozenset[Register_]:
 SURVIVES_THE_FRAME = (Space.SEGMENT, Space.FAR)
 
 
+def every_cell(blocks: list[Block], resolve: Resolver) -> frozenset[Addr]:
+    """Every cell anything in these blocks names, of any space.
+
+    What a barrier makes live. It may read anything, and a frame slot is
+    something -- restricting it to statics silently drops every live frame
+    cell, which reported a store to [bp-16h] in bench/nbody.bas's PITSNAP
+    dead when the value is read 180 bytes later. Deleting it would have
+    corrupted the timer reading, and nothing about the report said so.
+    """
+    found: set[Addr] = set()
+    for block in blocks:
+        for insn in block.insns:
+            access = access_of(insn, resolve)
+            if isinstance(access, Access):
+                found.update(access.cells)
+    return frozenset(found)
+
+
 def statics_of(blocks: list[Block], resolve: Resolver) -> frozenset[Addr]:
     """Every SEGMENT or FAR cell anything in these blocks names.
 
@@ -278,14 +296,47 @@ def _backward(
     steps: tuple[Step, ...],
     outgoing: frozenset[Addr],
     statics: frozenset[Addr],
+    everything: frozenset[Addr],
     found: list[int] | None = None,
 ) -> frozenset[Addr]:
-    """Liveness before this block; `found` collects dead stores."""
+    """Liveness before this block; `found` collects dead stores.
+
+    `statics` is what survives past this body -- another procedure may read
+    a module-level DIM, where a frame slot dies with the frame. `everything`
+    is what a barrier makes live, which is a wider set: a barrier may read
+    any memory at all, frame slots included, so restricting it to statics
+    drops live frame cells and calls a store to one dead.
+    """
     have = set(outgoing)
     for step in reversed(steps):
         if step.barrier:
-            have = set(statics)  # it may read any of them
+            have = set(everything)  # it may read anything at all
             continue
+        # An instruction that writes a base or segment register separates
+        # two different sets of cells: `es:[bx]` after it is not the address
+        # `es:[bx]` named before it. Six stores through es:[bx] in arrprm are
+        # six elements of one array, bx recomputed between each, and they
+        # share an Addr because an Addr names the register rather than its
+        # value.
+        #
+        # Conservatism runs the other way here than in _forward. There, a
+        # cell whose base changed is dropped, because availability must not
+        # claim a value it might not have. Here, absent from `have` means
+        # "something overwrites it before anything reads it", so dropping a
+        # cell asserts a store is dead -- exactly the wrong direction. Cells
+        # through a clobbered register become live again instead.
+        #
+        # Getting this backwards deleted `arr(0) = 7`: the later store to
+        # es:[bx] looked like an overwrite of the earlier one, and arrprm
+        # printed 0 where it had stored 7 on nine of twelve configurations.
+        if step.clobbers:
+            have |= {
+                one
+                for one in everything
+                if (one.base != Register.NONE and ROOT.get(one.base, one.base) in step.clobbers)
+                or (one.segment != Register.NONE and one.segment in step.clobbers)
+            }
+
         access = step.access
         if access is None:
             continue
@@ -368,6 +419,7 @@ def live(
     if not blocks:
         return {}
     statics = statics_of(blocks, resolve)
+    everything = every_cell(blocks, resolve)
     ready = {block.at: prepare(block, resolve, calls) for block in blocks}
     known = {block.at for block in blocks}
     inside = {block.at: frozenset() for block in blocks}
@@ -380,7 +432,7 @@ def live(
             out = statics if block.leaves else frozenset()
             for successor in block.succ:
                 out |= inside[successor] if successor in known else statics
-            now = _backward(ready[block.at], out, statics)
+            now = _backward(ready[block.at], out, statics, everything)
             if now != inside[block.at] or out != outgoing[block.at]:
                 inside[block.at], outgoing[block.at] = now, out
                 changing = True
@@ -411,10 +463,11 @@ def dead_stores(
 ) -> dict[int, tuple[int, ...]]:
     """Per block, the stores nothing reads before something overwrites them."""
     statics = statics_of(blocks, resolve)
+    everything = every_cell(blocks, resolve)
     outgoing = live(blocks, resolve, calls, dgroup)
     found: dict[int, tuple[int, ...]] = {}
     for block in blocks:
         hits: list[int] = []
-        _backward(prepare(block, resolve, calls), outgoing.get(block.at, statics), statics, hits)
+        _backward(prepare(block, resolve, calls), outgoing.get(block.at, statics), statics, everything, hits)
         found[block.at] = tuple(hits)
     return found

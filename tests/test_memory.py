@@ -9,6 +9,7 @@ import pytest
 from iced_x86 import Register
 
 import corpus
+from qbopt import ir
 from qbopt import memory
 from qbopt.declen import run
 from qbopt.blocks import Ends
@@ -188,3 +189,91 @@ def test_availability_never_claims_a_cell_nothing_names(obj: Path) -> None:
     incoming = memory.available(partitioned, found.resolve, found.calls, found.dgroup)
     for cells in incoming.values():
         assert cells <= named
+
+
+def test_a_barrier_makes_frame_slots_live_not_only_statics() -> None:
+    """A barrier may read any memory, and a frame slot is memory.
+
+    Resetting liveness to the statics alone drops every live frame cell, so
+    a store to one before a barrier reads as dead. bench/nbody.bas's
+    PITSNAP stores the PIT reading to [bp-16h] at 0x438 and reads it back
+    at 0x4ec with in/out barriers between; the store was reported dead, and
+    deleting it would have corrupted the timer with nothing in the report
+    to say so. 92 of 135 reported dead stores were this.
+    """
+    found = corpus.loaded(Path("fixtures/omf/procs-v-g3.obj"))
+    assert found is not None
+    partitioned = corpus.partitioned(Path("fixtures/omf/procs-v-g3.obj"))
+    everything = memory.every_cell(partitioned, found.resolve)
+    statics = memory.statics_of(partitioned, found.resolve)
+    assert statics <= everything
+    frames = {one for one in everything if one.space is Space.FRAME}
+    assert frames, "procs has locals"
+    assert not (frames & statics), "a frame slot is not a static"
+
+
+@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
+def test_a_dead_store_is_overwritten_before_anything_reads_it(obj: Path) -> None:
+    """The property the deletion rests on, checked against the instruction
+    stream rather than against the analysis that produced it."""
+    found = corpus.loaded(obj)
+    assert found is not None
+    partitioned = corpus.partitioned(obj)
+    at = {insn.at: insn for block in partitioned for insn in block.insns}
+    reported = memory.dead_stores(partitioned, found.resolve, found.calls, found.dgroup)
+    for block in partitioned:
+        for one in reported.get(block.at, ()):
+            access = memory.access_of(at[one], found.resolve)
+            assert isinstance(access, memory.Access)
+            assert access.writes and not access.reads
+            # nothing between it and the end of its own block may read those
+            # bytes without something overwriting them first
+            seen = False
+            for insn in block.insns:
+                if insn.at <= one:
+                    continue
+                other = memory.access_of(insn, found.resolve)
+                if not isinstance(other, memory.Access):
+                    continue
+                if other.reads and set(other.cells) & set(access.cells):
+                    assert seen, f"{one:#06x} is read at {insn.at:#06x} before being overwritten"
+                if other.writes and set(access.cells) <= set(other.cells):
+                    seen = True
+
+
+@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
+def test_a_store_through_a_recomputed_index_is_not_an_overwrite(obj: Path) -> None:
+    """Two stores sharing an Addr are not two stores to one address.
+
+    An Addr names the register, not its value, so six writes through
+    `es:[bx]` -- six elements of one array with bx recomputed between --
+    look identical. Absent from the live set means "overwritten before
+    anything read it", so failing to notice makes the first five dead.
+
+    Conservatism runs opposite to availability here, which is the part that
+    is easy to get backwards and was: _forward drops a cell whose base
+    changed, _backward has to make it live again. Dropping it there asserts
+    a store is dead. arrprm printed 0 where it had stored 7 on nine of
+    twelve configurations.
+    """
+    found = corpus.loaded(obj)
+    assert found is not None
+    partitioned = corpus.partitioned(obj)
+    at = {insn.at: insn for block in partitioned for insn in block.insns}
+    reported = memory.dead_stores(partitioned, found.resolve, found.calls, found.dgroup)
+    for block in partitioned:
+        prepared = memory.prepare(block, found.resolve, found.calls)
+        clobbered_after = {}
+        seen: set[int] = set()
+        for step in reversed(prepared):
+            clobbered_after[step.at] = frozenset(seen)
+            seen |= set(step.clobbers)
+        for one in reported.get(block.at, ()):
+            access = memory.access_of(at[one], found.resolve)
+            assert isinstance(access, memory.Access)
+            if access.addr is None or access.addr.base == Register.NONE:
+                continue
+            root = ir.ROOT.get(access.addr.base, access.addr.base)
+            assert root not in clobbered_after[one], (
+                f"{one:#06x} is indexed by a register rewritten before the store that supposedly overwrites it"
+            )
