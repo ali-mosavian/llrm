@@ -46,7 +46,7 @@ force_single_line = true
 length_sort = true
 length_sort_sections = ["FUTURE", "STDLIB", "THIRDPARTY", "FIRSTPARTY", "LOCALFOLDER"]
 force_sort_within_sections = true
-known_first_party = ["qbopt", "helpers"]
+known_first_party = ["qbopt", "helpers", "corpus"]
 
 [tool.ty.environment]
 extra-paths = ["tools", "tests"]
@@ -62,7 +62,14 @@ unresolved-import = "ignore"
 unresolved-import = "error"
 
 [tool.pytest.ini_options]
-addopts = ["-ra", "--showlocals", "--strict-markers", "-n", "auto"]
+# Measured on an 8-core machine with the corpus cache warm, best of several
+# interleaved runs of `-m "not e2e"`: 4 workers 3.3s, no workers 4.8s, `-n auto`
+# (8) 9.0s -- eight workers each pay a second of interpreter and conftest
+# startup and then contend for the same eight cores. worksteal rather than the
+# default `load` because the durations are uneven: one corpus-wide test against
+# five thousand sub-millisecond ones is exactly what an up-front chunking
+# scheduler mis-splits.
+addopts = ["-ra", "--showlocals", "--strict-markers", "-n", "4", "--dist", "worksteal"]
 testpaths = ["tests"]
 pythonpath = ["tools", "tests"]
 markers = [

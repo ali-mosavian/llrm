@@ -14,6 +14,7 @@ effect each make the answer depend on something the reference implementation
 does not model.
 """
 
+from functools import cache
 from collections.abc import Iterator
 
 import pytest
@@ -23,6 +24,18 @@ from qbprint import s16
 from qbprint import s32
 
 SEEDS = range(60)
+
+
+@cache
+def generated(seed: int) -> fuzzgen.Program:
+    """One program per seed, shared by every test that reads one.
+
+    test_generation_is_deterministic below is the one caller that must not
+    come through here: its whole claim is that two independent generations
+    from one seed agree, which a shared object would make vacuous.
+    """
+    return fuzzgen.generate_program(seed=seed)
+
 
 INT = fuzzgen.Width.INT
 LNG = fuzzgen.Width.LNG
@@ -99,7 +112,7 @@ def test_generation_is_deterministic(seed: int) -> None:
 def test_no_generated_program_traps(seed: int) -> None:
     # a program that hits the idiv fault case, or a subscript past the end of
     # its array, is not a golden -- it is a gap in the generator's own filters
-    program = fuzzgen.generate_program(seed=seed)
+    program = generated(seed)
     fuzzgen.golden_lines(program)
 
 
@@ -112,7 +125,7 @@ def test_every_binop_width_matches_its_own_natural_type(seed: int) -> None:
     # arithmetic in the BASIC BC actually compiles, wrapped at 16 bits, not
     # the 32 this generator's AST would otherwise wrap it at. 185 of a first
     # 200-program sample violated this before _ensure_valid_operand existed.
-    program = fuzzgen.generate_program(seed=seed)
+    program = generated(seed)
     for node in every_node(program):
         if isinstance(node, fuzzgen.BinOp | fuzzgen.UnaryOp):
             assert fuzzgen.natural_width(node, program.widths) == node.width
@@ -124,7 +137,7 @@ def test_no_if_condition_contains_not(seed: int) -> None:
     # <expr>'s own truthiness whenever NOT appears anywhere in it, not the
     # arithmetic NOT's -- a real BC finding (see AGENTS.md's "A BC compiler
     # behavior, not a qbopt one"), not something this grammar can fuzz safely
-    program = fuzzgen.generate_program(seed=seed)
+    program = generated(seed)
     for stmt in every_stmt(program):
         if isinstance(stmt, fuzzgen.IfPrint):
             assert not fuzzgen._contains_not(stmt.cond)
@@ -138,7 +151,7 @@ def test_every_binop_has_a_variable_operand(seed: int) -> None:
     # unrelated later line (BC's own recovery attributes it there). Measured:
     # `(-1970530648 * -13199)` alone rejects; the same values via variables
     # (suite/divmod.bas's MULOVF) wrap silently at runtime.
-    program = fuzzgen.generate_program(seed=seed)
+    program = generated(seed)
     for node in every_node(program):
         if isinstance(node, fuzzgen.BinOp):
             assert fuzzgen._contains_var(node.left) or fuzzgen._contains_var(node.right)
@@ -150,7 +163,7 @@ def test_every_subscript_is_masked_to_the_declared_bound(seed: int) -> None:
     # bounds for every value at either width -- the alternative is range
     # reasoning over wraparound, and an out-of-range subscript is a runtime
     # error rather than a divergence worth hunting
-    program = fuzzgen.generate_program(seed=seed)
+    program = generated(seed)
     subscripts = [n.index for n in every_node(program) if isinstance(n, fuzzgen.Index)]
     subscripts += [s.index for s in every_stmt(program) if isinstance(s, fuzzgen.SetElem)]
     assert subscripts
@@ -164,7 +177,7 @@ def test_no_loop_body_writes_its_own_counter(seed: int) -> None:
     # the trip count has to be a property of the three literals alone: a body
     # that assigns the counter, nests a FOR on it, or hands it to a SUB BYREF
     # makes it a property of the body instead
-    program = fuzzgen.generate_program(seed=seed)
+    program = generated(seed)
     for stmt in every_stmt(program):
         if not isinstance(stmt, fuzzgen.ForLoop):
             continue
@@ -179,7 +192,7 @@ def test_every_call_passes_distinct_unshared_variables(seed: int) -> None:
     # copy-in/copy-out is only equal to BASIC's own BYREF when nothing aliases:
     # two parameters bound to one variable, or a parameter bound to a variable
     # the callee also reaches through SHARED, break the equivalence
-    program = fuzzgen.generate_program(seed=seed)
+    program = generated(seed)
     shared = {d.name for d in program.declared if d.shared}
     for stmt in every_stmt(program):
         if not isinstance(stmt, fuzzgen.CallSub):
@@ -195,7 +208,7 @@ def test_functions_write_nothing_the_caller_can_see(seed: int) -> None:
     # a FUNCTION may appear anywhere in an expression, so anything it writes
     # would make the answer depend on BC's operand order. Only its own locals
     # and its own result are writable, and it never prints.
-    program = fuzzgen.generate_program(seed=seed)
+    program = generated(seed)
     functions = [p for p in program.procs if p.kind is fuzzgen.ProcKind.FUNCTION]
     assert functions
     for proc in functions:
@@ -211,7 +224,7 @@ def test_a_procedure_local_is_written_before_it_is_read(seed: int) -> None:
     # zeroed frame would come from -- the generator does not lean on it: every
     # local opens the body with an initialiser that reads no local not already
     # initialised
-    program = fuzzgen.generate_program(seed=seed)
+    program = generated(seed)
     for proc in program.procs:
         ready: set[str] = set()
         for (name, _), stmt in zip(proc.locals, proc.body, strict=False):
@@ -223,7 +236,7 @@ def test_a_procedure_local_is_written_before_it_is_read(seed: int) -> None:
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_golden_ends_with_done(seed: int) -> None:
-    assert fuzzgen.golden_lines(fuzzgen.generate_program(seed=seed))[-1] == "DONE"
+    assert fuzzgen.golden_lines(generated(seed))[-1] == "DONE"
 
 
 def test_render_never_emits_a_bare_min_literal() -> None:
@@ -243,7 +256,7 @@ def test_unary_minus_never_glues_into_a_double_dash() -> None:
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_source_has_dos_line_endings_and_module_code_ends_in_done(seed: int) -> None:
-    text = fuzzgen.render_program(fuzzgen.generate_program(seed=seed))
+    text = fuzzgen.render_program(generated(seed))
     assert text.count("\r\n") == text.count("\n")
     module = text.split("\r\n\r\n")[0]
     assert module.splitlines()[-1] == 'PRINT "DONE"'
@@ -251,7 +264,7 @@ def test_source_has_dos_line_endings_and_module_code_ends_in_done(seed: int) -> 
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_every_for_is_closed_and_every_procedure_ends(seed: int) -> None:
-    program = fuzzgen.generate_program(seed=seed)
+    program = generated(seed)
     lines = [ln.strip() for ln in fuzzgen.render_program(program).splitlines()]
     assert sum(1 for ln in lines if ln.startswith("FOR ")) == sum(1 for ln in lines if ln.startswith("NEXT "))
     for kind in (fuzzgen.ProcKind.SUB, fuzzgen.ProcKind.FUNCTION):

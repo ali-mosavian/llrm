@@ -7,10 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from qbopt import omf
+import corpus
 from qbopt import loops
-from qbopt import blocks
-from qbopt import module
 from qbopt.blocks import Ends
 from qbopt.blocks import Block
 
@@ -89,20 +87,20 @@ def test_every_fixture_is_reducible(obj: Path) -> None:
     here has had to handle -- worth knowing before an optimizer is designed
     around needing to.
     """
-    found = module.of(omf.parse(obj.read_bytes()))
+    found = corpus.loaded(obj)
     assert found is not None
-    mapped = blocks.code_map(found)
+    mapped = corpus.mapped(obj)
     assert not isinstance(mapped, str), mapped
-    assert loops.irreducible(blocks.partition(found, mapped)) == frozenset()
+    assert loops.irreducible(corpus.partitioned(obj)) == frozenset()
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
 def test_a_loop_body_always_contains_its_own_header_and_latch(obj: Path) -> None:
-    found = module.of(omf.parse(obj.read_bytes()))
+    found = corpus.loaded(obj)
     assert found is not None
-    mapped = blocks.code_map(found)
+    mapped = corpus.mapped(obj)
     assert not isinstance(mapped, str), mapped
-    partitioned = blocks.partition(found, mapped)
+    partitioned = corpus.partitioned(obj)
     known = {one.at for one in partitioned}
     for loop in loops.loops(partitioned):
         assert loop.header in loop.body
@@ -120,13 +118,13 @@ def test_resume_dispatch_is_the_only_deep_nesting_in_the_corpus() -> None:
     """
     deepest: dict[str, int] = {}
     for obj in FIXTURES:
-        found = module.of(omf.parse(obj.read_bytes()))
+        found = corpus.loaded(obj)
         if found is None:
             continue
-        mapped = blocks.code_map(found)
+        mapped = corpus.mapped(obj)
         if isinstance(mapped, str):
             continue
-        nesting = loops.depth(blocks.partition(found, mapped))
+        nesting = loops.depth(corpus.partitioned(obj))
         deepest[obj.stem] = max(nesting.values()) if nesting else 0
 
     resumable = [d for stem, d in deepest.items() if stem.startswith("divmod")]

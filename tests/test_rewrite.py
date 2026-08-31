@@ -11,9 +11,9 @@ from dataclasses import replace
 import pytest
 from iced_x86 import Code
 
+import corpus
 from qbopt import omf
 from helpers import hx
-from qbopt import module
 from qbopt.calls import Kind
 from qbopt.lift import FIXUP
 from qbopt.blocks import Ends
@@ -28,15 +28,11 @@ from qbopt.blocks import CodeMap
 from qbopt.calls import CallSite
 from qbopt.calls import MULTIPLY
 from qbopt.rewrite import Region
-from qbopt.blocks import code_map
 from qbopt.rewrite import Planned
-from qbopt.rewrite import rewrite
-from qbopt.blocks import partition
 from qbopt.rewrite import Combined
 from qbopt.rewrite import POP_ROOT
 from qbopt import registers as regs
 from qbopt.rewrite import PUSH_HI_LO
-from qbopt.blocks import instructions
 from qbopt.declen import run as decode_run
 from qbopt.rewrite import dead_pairs_after
 from qbopt.rewrite import tail_widened_calls
@@ -60,13 +56,13 @@ CALL_REPLACEMENT_OPCODES = {
 
 
 def _combined(obj: Path) -> Combined:
-    found = module.of(omf.parse(obj.read_bytes()))
+    found = corpus.loaded(obj)
     assert found is not None
-    mapped = code_map(found)
+    mapped = corpus.mapped(obj)
     assert not isinstance(mapped, str)
-    blocks = partition(found, mapped)
+    blocks = corpus.partitioned(obj)
     live = live_in(blocks)
-    reached = instructions(found)
+    reached = corpus.reached(obj)
     assert not isinstance(reached, str)
     reg_live = regs.analyse(blocks)
     return tail_widened_calls(found, mapped, blocks, live, reg_live, sites(found, reached, blocks), [])
@@ -177,18 +173,18 @@ def test_drop_restore_repush_round_trips_refuses_when_something_targets_the_gap(
 
 def test_a_dry_run_writes_the_input_back_unchanged(obj: Path) -> None:
     data = obj.read_bytes()
-    out, _ = rewrite(data, dry_run=True)
+    out, _ = corpus.rewritten(obj, dry_run=True)
     assert out == data
 
 
 def test_a_dry_run_takes_no_region(obj: Path) -> None:
-    _, found = rewrite(obj.read_bytes(), dry_run=True)
+    _, found = corpus.rewritten(obj, dry_run=True)
     assert [r for r in found if r.taken] == []
 
 
 def test_a_real_pass_rewrites_the_code_and_keeps_the_records_readable(obj: Path) -> None:
     data = obj.read_bytes()
-    out, found = rewrite(data, dry_run=False)
+    out, found = corpus.rewritten(obj, dry_run=False)
     if not any(region.taken for region in found):
         assert out == b"".join(record.emit() for record in omf.parse(data))
         return
@@ -215,13 +211,13 @@ def test_a_real_pass_rewrites_the_code_and_keeps_the_records_readable(obj: Path)
 
 
 def test_rewriting_the_output_finds_nothing_new(obj: Path) -> None:
-    out, _ = rewrite(obj.read_bytes(), dry_run=False)
-    _, again = rewrite(out, dry_run=False)
+    out, _ = corpus.rewritten(obj, dry_run=False)
+    _, again = corpus.rewritten(out, dry_run=False)
     assert [r for r in again if r.taken] == []
 
 
 def test_a_region_is_either_taken_or_says_why_not(obj: Path) -> None:
-    _, found = rewrite(obj.read_bytes(), dry_run=False)
+    _, found = corpus.rewritten(obj, dry_run=False)
     for region in found:
         assert region.taken != bool(region.reason), "taken and refused are exclusive, and one holds"
 
@@ -234,7 +230,7 @@ def test_regions_are_taken_and_come_out_smaller(fixtures: Path) -> None:
     # that swallow a line number.
     taken = total = before = after = 0
     for path in sorted(fixtures.glob("*.obj")):
-        _, found = rewrite(path.read_bytes(), dry_run=False)
+        _, found = corpus.rewritten(path, dry_run=False)
         total += len(found)
         for region in found:
             if region.taken:

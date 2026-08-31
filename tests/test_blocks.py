@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import corpus
 from helpers import hx
 from qbopt import module
 from qbopt.blocks import PAD
@@ -13,11 +14,9 @@ from qbopt.blocks import Ends
 from qbopt.blocks import ENTRY
 from qbopt.blocks import benign
 from qbopt.declen import decode
-from qbopt.blocks import code_map
 from qbopt.blocks import event_stub
 from qbopt.blocks import has_header
 from qbopt.blocks import terminator
-from qbopt.blocks import instructions
 
 
 @pytest.mark.parametrize(
@@ -48,9 +47,9 @@ def test_what_ends_a_block(enc: str, ends: Ends) -> None:
 
 
 def test_every_module_is_mapped(obj: Path) -> None:
-    found = module.load(obj)
+    found = corpus.loaded(obj)
     assert found is not None
-    mapped = code_map(found)
+    mapped = corpus.mapped(obj)
     assert not isinstance(mapped, str), mapped
 
 
@@ -59,10 +58,10 @@ def test_the_code_begins_where_the_runtime_says_it_does(obj: Path) -> None:
     # offset past it is O_ENT; rtinit.asm calls that the beginning of the
     # user's code. The signature word is the first field, so the layout can be
     # checked rather than assumed.
-    found = module.load(obj)
+    found = corpus.loaded(obj)
     assert found is not None
     assert has_header(found), "every object BC wrote carries a module header"
-    mapped = code_map(found)
+    mapped = corpus.mapped(obj)
     assert not isinstance(mapped, str)
     assert min(mapped.starts) == ENTRY
 
@@ -71,10 +70,10 @@ def test_only_an_event_build_has_a_stub_and_it_sits_after_the_jump(obj: Path) ->
     # Under /V or /W, PDS and VBDOS open the module with a jump over a
     # sixteen-byte event-poll routine that only the runtime enters. QuickBASIC
     # 4.5 sets the same U_FLAG bits and emits no stub.
-    found = module.load(obj)
+    found = corpus.loaded(obj)
     assert found is not None
     stub = event_stub(found)
-    mapped = code_map(found)
+    mapped = corpus.mapped(obj)
     assert not isinstance(mapped, str)
     if stub is None:
         assert found.code[ENTRY : ENTRY + 2] != b"\xeb\x10"
@@ -88,9 +87,9 @@ def test_the_instruction_stream_tiles(mapped_obj: Path) -> None:
     # like, and its invented fragments are dangerous: `78 56`, the middle of the
     # constant 0x12345678, decodes as `js`, and retargeting that displacement
     # rewrites the constant.
-    found = module.load(mapped_obj)
+    found = corpus.loaded(mapped_obj)
     assert found is not None
-    reached = instructions(found)
+    reached = corpus.reached(mapped_obj)
     assert not isinstance(reached, str), reached
     for earlier, later in zip(reached, reached[1:], strict=False):
         assert earlier.end <= later.at
@@ -99,9 +98,9 @@ def test_the_instruction_stream_tiles(mapped_obj: Path) -> None:
 def test_an_on_goto_table_is_found_and_is_not_code(fixtures: Path) -> None:
     # BC compiles ON GOTO to a call to B$OGTA followed by inline data: a count
     # byte, then that many offset16 words. Reachability must step over them.
-    found = module.load(fixtures / "jumptable.obj")
+    found = corpus.loaded(fixtures / "jumptable.obj")
     assert found is not None
-    mapped = code_map(found)
+    mapped = corpus.mapped(fixtures / "jumptable.obj")
     assert not isinstance(mapped, str)
     assert mapped.tables == ((0x3F, 0x46),)
     lo, hi = mapped.tables[0]
@@ -112,16 +111,16 @@ def test_an_on_goto_table_is_found_and_is_not_code(fixtures: Path) -> None:
 
 def test_on_goto_comes_back_past_the_table(fixtures: Path) -> None:
     # ON 0 GOTO runs the next statement, so the byte after the table is a leader.
-    found = module.load(fixtures / "jumps-v-g3.obj")
+    found = corpus.loaded(fixtures / "jumps-v-g3.obj")
     assert found is not None
-    mapped = code_map(found)
+    mapped = corpus.mapped(fixtures / "jumps-v-g3.obj")
     assert not isinstance(mapped, str)
     assert mapped.tables
     assert all(hi in mapped.leaders for _lo, hi in mapped.tables)
 
 
 def test_padding_is_inert_but_a_branch_is_not(fixtures: Path) -> None:
-    found = module.load(fixtures / "arith-v-g3.obj")
+    found = corpus.loaded(fixtures / "arith-v-g3.obj")
     assert found is not None
     assert benign(found, (0, 0)) == []
     padded = module.Module(found.records, found.seg, found.name, bytes([PAD, PAD]), 0, 2)

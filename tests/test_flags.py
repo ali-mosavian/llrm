@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
+import corpus
 from helpers import hx
-from qbopt import module
 from qbopt.flags import ALL
 from qbopt.lift import lift
 from qbopt.declen import run
@@ -26,12 +26,9 @@ from qbopt.lift import regions
 from qbopt.declen import decode
 from qbopt.flags import live_in
 from qbopt.lift import computes
-from qbopt.blocks import code_map
 from qbopt.flags import DIVERGENT
-from qbopt.blocks import partition
 from qbopt.flags import live_after
 from qbopt.lift import emit_region
-from qbopt.blocks import instructions
 from qbopt.rewrite import flags_after
 
 LOAD_AND_STORE = "A1 5E 00 8B 16 60 00  23 06 5A 00 23 16 5C 00  A3 62 00 89 16 64 00"
@@ -137,11 +134,11 @@ def test_a_region_followed_by_a_call_is_always_safe() -> None:
 
 
 def test_liveness_across_a_real_module(fixtures: Path) -> None:
-    found = module.load(fixtures / "jumptable.obj")
+    found = corpus.loaded(fixtures / "jumptable.obj")
     assert found is not None
-    mapped = code_map(found)
+    mapped = corpus.mapped(fixtures / "jumptable.obj")
     assert not isinstance(mapped, str)
-    blocks = partition(found, mapped)
+    blocks = corpus.partitioned(fixtures / "jumptable.obj")
     live = live_in(blocks)
 
     for block in blocks:
@@ -199,14 +196,14 @@ def test_no_bc_output_in_the_corpus_reads_a_flag_a_widened_region_leaves(fixture
     """
     fired = considered = 0
     for path in sorted(fixtures.glob("*.obj")):
-        found = module.load(path)
+        found = corpus.loaded(path)
         assert found is not None
-        mapped = code_map(found)
+        mapped = corpus.mapped(path)
         if isinstance(mapped, str):
             continue
-        blocks = partition(found, mapped)
+        blocks = corpus.partitioned(path)
         live = live_in(blocks)
-        reached = instructions(found)
+        reached = corpus.reached(path)
         assert not isinstance(reached, str)
         values, _, _ = lift(found.code, found.start, found.end, found.resolve, reached)
         need = needed(values)

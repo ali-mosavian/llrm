@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
+import corpus
 from qbopt import omf
 from helpers import hx
-from qbopt import module
 from qbopt.declen import run
 from qbopt.declen import decode
 from qbopt.relocate import Edit
@@ -21,7 +21,6 @@ from qbopt.relocate import reaches
 from qbopt.relocate import branches
 from qbopt.relocate import relocate
 from qbopt.relocate import retarget
-from qbopt.blocks import instructions
 from qbopt.relocate import retarget_branches
 
 # 0x20..0x30 shrinks to 8 bytes, 0x40..0x50 to 4
@@ -103,9 +102,9 @@ def test_a_shrinking_shift_can_never_push_a_rel8_out_of_range(mapped_obj: Path) 
     # Every displacement's magnitude can only fall when the code between the
     # branch and its target shrinks, which is what makes shrink-only motion safe
     # without a relaxation pass.
-    found = module.load(mapped_obj)
+    found = corpus.loaded(mapped_obj)
     assert found is not None
-    reached = instructions(found)
+    reached = corpus.reached(mapped_obj)
     assert not isinstance(reached, str), reached
     reachable = branches(found.code, reached)
     shift = Shift.of([Edit(at, at + 8, bytes(4)) for at in range(0x40, found.end - 8, 0x20)])
@@ -120,20 +119,12 @@ def test_a_shrinking_shift_can_never_push_a_rel8_out_of_range(mapped_obj: Path) 
 
 
 def test_the_rel8_opcodes_are_the_ones_that_take_a_byte(mapped_obj: Path) -> None:
-    found = module.load(mapped_obj)
+    found = corpus.loaded(mapped_obj)
     assert found is not None
-    reached = instructions(found)
+    reached = corpus.reached(mapped_obj)
     assert not isinstance(reached, str), reached
     for branch in branches(found.code, reached):
         assert branch.width == (1 if found.code[branch.at] in REL8 else 2)
-
-
-def relocated(obj: Path, shift: Shift) -> list[omf.Record] | str:
-    records = omf.read(obj)
-    found = omf.code_segment(records)
-    assert found is not None
-    seg, _name, size = found
-    return relocate(records, seg, omf.segment_image(records, seg, size), shift)
 
 
 def test_moving_nothing_reproduces_the_object_or_says_why_not(obj: Path) -> None:
@@ -141,7 +132,7 @@ def test_moving_nothing_reproduces_the_object_or_says_why_not(obj: Path) -> None
     # segment length, the publics and the line numbers. Asking it to move nothing
     # and getting the input back is the only guard that says it disturbs nothing.
     # Every object either does that or is refused -- there is no third outcome.
-    out = relocated(obj, Shift.of([]))
+    out = corpus.relocated(obj, Shift.of([]))
     if isinstance(out, str):
         assert "no entry point" in out
     else:
@@ -150,7 +141,7 @@ def test_moving_nothing_reproduces_the_object_or_says_why_not(obj: Path) -> None
 
 def test_most_of_the_corpus_can_be_moved(fixtures: Path) -> None:
     # A writer that refused everything would pass the invariant above.
-    accepted = [p for p in sorted(fixtures.glob("*.obj")) if not isinstance(relocated(p, Shift.of([])), str)]
+    accepted = [p for p in sorted(fixtures.glob("*.obj")) if not isinstance(corpus.relocated(p, Shift.of([])), str)]
     assert len(accepted) > len(list(fixtures.glob("*.obj"))) // 2
 
 
@@ -159,12 +150,12 @@ def test_a_jump_table_in_the_code_segment_is_moved_not_refused(fixtures: Path) -
     # are a table rather than instructions, and each word is a fixup whose
     # target displacement moves with everything else.
     for name in ("jumps-v-g3.obj", "jumptable.obj"):
-        out = relocated(fixtures / name, Shift.of([]))
+        out = corpus.relocated(fixtures / name, Shift.of([]))
         assert not isinstance(out, str), out
 
 
 def test_a_region_that_is_not_whole_instructions_is_refused(fixtures: Path) -> None:
-    out = relocated(fixtures / "arith-v-g3.obj", Shift.of([Edit(0x43, 0x45, b"\x90\x90")]))
+    out = corpus.relocated(fixtures / "arith-v-g3.obj", Shift.of([Edit(0x43, 0x45, b"\x90\x90")]))
     assert isinstance(out, str)
     assert "instruction" in out
 

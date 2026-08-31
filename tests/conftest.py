@@ -2,9 +2,8 @@ from pathlib import Path
 
 import pytest
 
+import corpus
 from qbopt import omf
-from qbopt import blocks
-from qbopt import module
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "omf"
 
@@ -25,12 +24,7 @@ def obj(request: pytest.FixtureRequest) -> Path:
     return FIXTURES / request.param
 
 
-def _mappable(name: str) -> bool:
-    found = module.load(FIXTURES / name)
-    return found is not None and not isinstance(blocks.code_map(found), str)
-
-
-MAPPABLE = [name for name in OBJECTS if _mappable(name)]
+MAPPABLE = [name for name in OBJECTS if corpus.mappable(FIXTURES / name)]
 
 
 @pytest.fixture(params=MAPPABLE)

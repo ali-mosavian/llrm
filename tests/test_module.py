@@ -9,12 +9,11 @@ from pathlib import Path
 
 import pytest
 
+import corpus
 from qbopt import omf
 from qbopt import module
 from qbopt.lift import lift
-from qbopt.blocks import code_map
 from qbopt.lift import literal_only
-from qbopt.blocks import instructions
 
 # The operator fixtures are compare-and-divide programs: both are calls into the
 # runtime, so they contain no instruction pair to lift. jumptable.obj is the one
@@ -28,9 +27,9 @@ def test_a_static_operand_is_invisible_without_the_fixups(obj: Path) -> None:
     # pair look like address zero, so hi == lo + 2 can never hold. bp-relative
     # operands are different: their displacement really is in the code, and they
     # pair with no fixup at all.
-    found = module.load(obj)
+    found = corpus.loaded(obj)
     assert found is not None
-    reached = instructions(found)
+    reached = corpus.reached(obj)
     if isinstance(reached, str):
         return
     blind, _, _ = lift(found.code, found.start, found.end, literal_only, reached)
@@ -38,9 +37,9 @@ def test_a_static_operand_is_invisible_without_the_fixups(obj: Path) -> None:
 
 
 def test_the_fixups_are_what_make_a_static_pair_visible(fixtures: Path) -> None:
-    found = module.load(fixtures / "arith-v-g3.obj")
+    found = corpus.loaded(fixtures / "arith-v-g3.obj")
     assert found is not None
-    reached = instructions(found)
+    reached = corpus.reached(fixtures / "arith-v-g3.obj")
     assert not isinstance(reached, str)
     blind, _, _ = lift(found.code, found.start, found.end, literal_only, reached)
     seeing, _, _ = lift(found.code, found.start, found.end, found.resolve, reached)
@@ -49,9 +48,9 @@ def test_the_fixups_are_what_make_a_static_pair_visible(fixtures: Path) -> None:
 
 
 def test_the_fixups_make_the_pairs_visible(fixtures: Path) -> None:
-    found = module.load(fixtures / WITH_PAIRS)
+    found = corpus.loaded(fixtures / WITH_PAIRS)
     assert found is not None
-    reached = instructions(found)
+    reached = corpus.reached(fixtures / WITH_PAIRS)
     assert not isinstance(reached, str)
     values, _, _ = lift(found.code, found.start, found.end, found.resolve, reached)
     assert values, "with the fixups resolved there are pairs to lift"
@@ -59,7 +58,7 @@ def test_the_fixups_make_the_pairs_visible(fixtures: Path) -> None:
 
 
 def test_a_runtime_call_is_a_lookup_not_a_guess(operator_obj: Path) -> None:
-    found = module.load(operator_obj)
+    found = corpus.loaded(operator_obj)
     assert found is not None
     assert {"B$CPI4", "B$DVI4"} <= set(found.calls.values())
     for at, name in found.calls.items():
@@ -70,7 +69,7 @@ def test_an_indirect_jump_has_findable_targets(fixtures: Path) -> None:
     # ON k GOTO L1, L2, L3 compiles to FF /4, whose target is not computable
     # from the instruction. In an object the labels are three consecutive
     # offset16 fixups into the module's own code segment.
-    found = module.load(fixtures / WITH_PAIRS)
+    found = corpus.loaded(fixtures / WITH_PAIRS)
     assert found is not None
     assert sorted(found.targets) == [0x46, 0x52, 0x5E, 0xEA]
     assert all(target < found.end for target in found.targets)
@@ -82,7 +81,7 @@ def test_the_module_header_is_a_data_structure_not_code(obj: Path) -> None:
     # measurement, on all five fixtures: those fixups stop at 0x20, and the
     # first operand that belongs to an instruction is at 0x31. What sits in the
     # gap is not established, so nothing here depends on where it ends.
-    found = module.load(obj)
+    found = corpus.loaded(obj)
     assert found is not None
     header = [at for at in found.operands if at <= 0x20]
     assert header, "the header carries relocated fields"
@@ -119,7 +118,7 @@ def test_a_record_nothing_here_decodes_is_refused(fixtures: Path, kind: int, why
 
 
 def test_dgroup_is_populated_on_every_object(obj: Path) -> None:
-    found = module.load(obj)
+    found = corpus.loaded(obj)
     assert found is not None
     assert len(found.dgroup) == 11
     assert found.seg not in found.dgroup, "the code segment is never in DGROUP"
@@ -186,7 +185,7 @@ def test_may_alias_is_conservative_about_the_unknown() -> None:
 def test_every_value_starts_where_ndisasm_says_an_instruction_does(mapped_obj: Path) -> None:
     # Stronger than the hand-built case: real BC output, and the boundaries come
     # from a decoder this project did not write.
-    found = module.load(mapped_obj)
+    found = corpus.loaded(mapped_obj)
     assert found is not None
     disassembled = subprocess.run(
         ["ndisasm", "-b16", "-o", str(found.start), "-"],
@@ -201,9 +200,9 @@ def test_every_value_starts_where_ndisasm_says_an_instruction_does(mapped_obj: P
         for line in disassembled.stdout.decode("latin1").splitlines()
         if (seen := re.match(r"^([0-9A-F]{8})  \S", line))
     }
-    mapped = code_map(found)
+    mapped = corpus.mapped(mapped_obj)
     assert not isinstance(mapped, str)
-    reached = instructions(found)
+    reached = corpus.reached(mapped_obj)
     assert not isinstance(reached, str)
     values, _, _ = lift(found.code, found.start, found.end, found.resolve, reached)
 

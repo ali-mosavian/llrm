@@ -13,8 +13,8 @@ import pytest
 from iced_x86 import Register
 from iced_x86 import Register_
 
+import corpus
 from qbopt import ir
-from qbopt import omf
 from helpers import hx
 from qbopt import extent
 from qbopt import module
@@ -26,15 +26,13 @@ from qbopt.extent import Body
 from qbopt.blocks import Block
 from qbopt.declen import decode
 from qbopt.blocks import CodeMap
-from qbopt.blocks import code_map
 from qbopt.extent import BodyKind
-from qbopt.rewrite import rewrite
 
 
-def _decode(path: Path) -> tuple[module.Module, tuple[ir.BodyIR, ...]]:
-    found = module.load(path)
+def _decode(source: Path | bytes) -> tuple[module.Module, tuple[ir.BodyIR, ...]]:
+    found = corpus.loaded(source)
     assert found is not None
-    result = ir.decode_module(found)
+    result = corpus.bodies(source)
     assert not isinstance(result, str), result
     return found, result
 
@@ -133,8 +131,8 @@ def test_resume_map_is_recognised_as_data_not_a_jump_table(fixtures: Path) -> No
 
 
 def test_every_data_node_is_a_table_span(mapped_obj: Path) -> None:
-    found, bodies = _decode(mapped_obj)
-    mapped = code_map(found)
+    _found, bodies = _decode(mapped_obj)
+    mapped = corpus.mapped(mapped_obj)
     assert not isinstance(mapped, str)
     table_spans = set(mapped.tables)
     for body_ir in bodies:
@@ -187,12 +185,12 @@ def test_restore_appears_after_rewriting_the_real_corpus(fixtures: Path) -> None
     total_restores = 0
     for path in sorted(fixtures.glob("*.obj")):
         original = path.read_bytes()
-        out, regions = rewrite(original, dry_run=False)
+        out, regions = corpus.rewritten(path, dry_run=False)
         if out == original or not any(region.taken for region in regions):
             continue
-        rewritten = module.of(omf.parse(out))
+        rewritten = corpus.loaded(out)
         assert rewritten is not None
-        result = ir.decode_module(rewritten)
+        result = corpus.bodies(out)
         assert not isinstance(result, str), (path.name, result)
         for body_ir in result:
             original_slice = b"".join(rewritten.code[lo:hi] for lo, hi in body_ir.body.ranges)
@@ -549,9 +547,9 @@ def test_the_corpus_is_modelled_except_for_exactly_the_refused_encodings(fixture
     unmodelled: set[int] = set()
     modelled = total = 0
     for path in sorted(fixtures.glob("*.obj")):
-        found = module.load(path)
+        found = corpus.loaded(path)
         assert found is not None
-        result = ir.decode_module(found)
+        result = corpus.bodies(path)
         if isinstance(result, str):
             continue
         for body_ir in result:

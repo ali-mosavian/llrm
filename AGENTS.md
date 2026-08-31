@@ -361,6 +361,16 @@ than the runtime pass's blunter option of costing the whole module.
 - **pytest.** No test classes. Fixtures in `conftest.py` for the OMF corpus.
   `parametrize` wherever one assertion runs over the fixtures, the twelve
   configurations, or an opcode table -- which is most of this suite.
+- **A test reads the corpus through `tests/corpus.py`, not through the pass.**
+  Every stage is a pure function of an object's bytes and the suite asked for
+  the same answers over and over -- 3615 `code_map()` calls for 110 distinct
+  answers, 880 `rewrite()`s for a few hundred, counted -- which is most of what
+  a run used to cost. `corpus.loaded/mapped/partitioned/reached/bodies/extents/
+  relocated/rewritten` memoise on SHA-256 over the input bytes, every
+  `qbopt/*.py`, and the iced-x86 version, so an edited fixture and an edited
+  pass both miss. `QBOPT_NO_CORPUS_CACHE=1` bypasses it and the suite passes
+  identically either way; a `Module` built by hand in a test still goes
+  straight to the pass.
 - `pre-commit` runs ruff, ruff-format, the whitespace hooks, `ty`, and the
   whole test suite -- every tier, including the ones that need DOSBox and the
   DOS toolchains. Nothing is committed on a partial run.

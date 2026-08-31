@@ -5,15 +5,14 @@ smallest possible replacement, one inserted nop.
 
 from pathlib import Path
 
+import corpus
 from qbopt import ir
 from qbopt import omf
-from qbopt import module
 from qbopt.extent import Body
 from qbopt.bodyedit import edit
 from qbopt.declen import decode
 from qbopt.relocate import Shift
 from qbopt.extent import BodyKind
-from qbopt.relocate import relocate
 from qbopt.bodyedit import rewritten
 from qbopt.bodyedit import insert_nop
 
@@ -81,9 +80,9 @@ def test_a_backwards_span_is_refused() -> None:
 def test_insert_nop_skips_the_bodys_own_first_node(fixtures: Path) -> None:
     # The entry point never moves: MAIN's is blocks.ENTRY, fixed by the
     # runtime header, and a PROCEDURE's is its own PUBDEF.
-    found = module.load(fixtures / "jumps-q-O.obj")
+    found = corpus.loaded(fixtures / "jumps-q-O.obj")
     assert found is not None
-    decoded = ir.decode_module(found)
+    decoded = corpus.bodies(fixtures / "jumps-q-O.obj")
     assert not isinstance(decoded, str), decoded
     main = next(b for b in decoded if b.body.kind is BodyKind.MAIN)
     made = insert_nop(main)
@@ -96,9 +95,9 @@ def test_insert_nop_lands_inside_the_bodys_own_second_range_under_evt(fixtures: 
     # the event-poll stub, landing exactly on the second range's own first
     # byte. edit()'s leading-edge refusal must not strand insert_nop there --
     # it has to keep looking past the second range's own first node too.
-    found = module.load(fixtures / "jumps-p-evt.obj")
+    found = corpus.loaded(fixtures / "jumps-p-evt.obj")
     assert found is not None
-    decoded = ir.decode_module(found)
+    decoded = corpus.bodies(fixtures / "jumps-p-evt.obj")
     assert not isinstance(decoded, str), decoded
     main = next(b for b in decoded if b.body.kind is BodyKind.MAIN)
     assert main.body.ranges[1][0] == 0x42  # the known layout this test relies on
@@ -141,10 +140,10 @@ def test_every_fixture_body_takes_the_insertion_and_relocates_cleanly(fixtures: 
     # shift.at() says it should, and the segment grows by exactly one byte.
     taken = refused = 0
     for path in sorted(fixtures.glob("*.obj")):
-        found = module.load(path)
+        found = corpus.loaded(path)
         if found is None:
             continue
-        decoded = ir.decode_module(found)
+        decoded = corpus.bodies(path)
         if isinstance(decoded, str):
             continue
         for body_ir in decoded:
@@ -152,7 +151,7 @@ def test_every_fixture_body_takes_the_insertion_and_relocates_cleanly(fixtures: 
             if isinstance(made, str):
                 refused += 1
                 continue
-            moved = relocate(found.records, found.seg, found.code, Shift.of([made]))
+            moved = corpus.relocated(path, Shift.of([made]))
             assert not isinstance(moved, str), (path.name, body_ir.body.kind, moved)
             emitted = b"".join(record.emit() for record in moved)
             after = omf.code_segment(omf.parse(emitted))

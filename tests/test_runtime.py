@@ -3,7 +3,7 @@ from dataclasses import replace
 
 import pytest
 
-from qbopt import module
+import corpus
 from qbopt import runtime
 from qbopt.calls import ARITY
 from qbopt.runtime import Reg
@@ -157,7 +157,7 @@ FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "omf"
 def _runtime_targets() -> set[str]:
     named: set[str] = set()
     for path in sorted(FIXTURES.glob("*.obj")):
-        found = module.load(path)
+        found = corpus.loaded(path)
         if found is not None:
             named |= {name for name in found.calls.values() if name.startswith("B$")}
     return named

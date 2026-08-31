@@ -13,6 +13,7 @@ from iced_x86 import Register
 from iced_x86 import Register_
 from iced_x86 import Instruction
 
+import corpus
 from helpers import hx
 from qbopt import module
 from qbopt.calls import Kind
@@ -20,7 +21,6 @@ from qbopt.flags import Flag
 from qbopt.lift import FIXUP
 from qbopt.calls import match
 from qbopt.calls import sites
-from qbopt.blocks import Block
 from qbopt.calls import DIVIDE
 from qbopt.calls import absorb
 from qbopt.calls import COMPARE
@@ -31,27 +31,18 @@ from qbopt.declen import decode
 from qbopt.calls import CallSite
 from qbopt.calls import MULTIPLY
 from qbopt.declen import BITNESS
-from qbopt.blocks import code_map
-from qbopt.blocks import partition
 from qbopt.calls import LEFT_FIRST
 from qbopt.calls import popped_into
 from qbopt.calls import FIX_MULTIPLY
 from qbopt.calls import fix_multiply
-from qbopt.blocks import instructions
-
-
-def blocks_of(parsed: module.Module) -> list[Block]:
-    mapped = code_map(parsed)
-    assert not isinstance(mapped, str)
-    return partition(parsed, mapped)
 
 
 def found_sites(obj: Path) -> dict[str, tuple]:
-    parsed = module.load(obj)
+    parsed = corpus.loaded(obj)
     assert parsed is not None
-    reached = instructions(parsed)
+    reached = corpus.reached(obj)
     assert not isinstance(reached, str)
-    return {site.name: site.operands for site in sites(parsed, reached, blocks_of(parsed))}
+    return {site.name: site.operands for site in sites(parsed, reached, corpus.partitioned(obj))}
 
 
 def test_compare_and_divide_agree_on_which_operand_is_left(operator_obj: Path) -> None:
@@ -81,9 +72,9 @@ def test_only_comparison_and_fix_multiply_push_their_left_operand_first(name: st
 
 
 def test_a_call_with_anything_between_the_pushes_is_refused(fixtures: Path) -> None:
-    parsed = module.load(fixtures / "vbdos-g3.obj")
+    parsed = corpus.loaded(fixtures / "vbdos-g3.obj")
     assert parsed is not None
-    reached = instructions(parsed)
+    reached = corpus.reached(fixtures / "vbdos-g3.obj")
     assert not isinstance(reached, str)
     index = next(i for i, insn in enumerate(reached) if parsed.calls.get(insn.at) == COMPARE)
     assert match(parsed, reached, index) is not None
@@ -92,7 +83,7 @@ def test_a_call_with_anything_between_the_pushes_is_refused(fixtures: Path) -> N
 
 
 def test_a_pushed_constant_is_not_a_static(fixtures: Path) -> None:
-    parsed = module.load(fixtures / "vbdos-g3.obj")
+    parsed = corpus.loaded(fixtures / "vbdos-g3.obj")
     assert parsed is not None
     from qbopt.declen import decode
     from qbopt.calls import static_at
@@ -147,11 +138,12 @@ def test_an_absorbed_comparison_leaves_no_value_to_restore(fixtures: Path) -> No
     # long's high half back wastes four bytes and clobbers ax and dx, which the
     # code after the call is entitled to still hold. It happened: `site.name is
     # COMPARE` compares identity, and two equal strings need not be one object.
-    parsed = module.load(fixtures / "cmpord-v-g3.obj")
+    parsed = corpus.loaded(fixtures / "cmpord-v-g3.obj")
     assert parsed is not None
-    reached = instructions(parsed)
+    reached = corpus.reached(fixtures / "cmpord-v-g3.obj")
     assert not isinstance(reached, str)
-    site = next(s for s in sites(parsed, reached, blocks_of(parsed)) if s.name == COMPARE)
+    found_blocks = corpus.partitioned(fixtures / "cmpord-v-g3.obj")
+    site = next(s for s in sites(parsed, reached, found_blocks) if s.name == COMPARE)
     emitted = absorb(site, Flag.NONE)
     assert not isinstance(emitted, str)
     # push eax / mov eax,[a] / cmp eax,[b] / pop eax -- see
@@ -167,11 +159,12 @@ def test_absorbed_compare_restores_eax(fixtures: Path) -> None:
     # in eax right across a compare buried inside a larger expression.
     # Absorbing the call still needs a scratch register to hold one side of
     # the comparison, but it has to come back exactly as it was found.
-    parsed = module.load(fixtures / "cmpord-v-g3.obj")
+    parsed = corpus.loaded(fixtures / "cmpord-v-g3.obj")
     assert parsed is not None
-    reached = instructions(parsed)
+    reached = corpus.reached(fixtures / "cmpord-v-g3.obj")
     assert not isinstance(reached, str)
-    site = next(s for s in sites(parsed, reached, blocks_of(parsed)) if s.name == COMPARE)
+    found_blocks = corpus.partitioned(fixtures / "cmpord-v-g3.obj")
+    site = next(s for s in sites(parsed, reached, found_blocks) if s.name == COMPARE)
     emitted = absorb(site, Flag.NONE)
     assert not isinstance(emitted, str)
     decoded = list(Decoder(BITNESS, emitted.code, ip=0))

@@ -5,6 +5,7 @@ neither.
 
 from pathlib import Path
 
+import corpus
 from qbopt import module
 from qbopt.extent import Body
 from qbopt.extent import BodyKind
@@ -17,9 +18,9 @@ def test_every_fixture_partitions_completely(obj: Path) -> None:
     # for its whole code segment as the module's own main body plus its
     # SUB/FUNCTIONs plus, where /V or /W built one, the event-poll stub --
     # nothing left unexplained and no byte owned twice.
-    found = module.load(obj)
+    found = corpus.loaded(obj)
     assert found is not None
-    found_partition = partition(found)
+    found_partition = corpus.extents(obj)
     assert not isinstance(found_partition, str), found_partition
     assert found_partition.complete, (found_partition.unexplained, found_partition.conflicts)
 
@@ -37,9 +38,9 @@ def test_procs_v_g3_bodies_match_the_measured_layout(fixtures: Path) -> None:
     # the two procedures to skip REPORT too, and the implicit END statement's
     # own call, sitting *after* both. Confirmed against CodeView in
     # test_extent_cv.py.
-    found = module.load(fixtures / "procs-v-g3.obj")
+    found = corpus.loaded(fixtures / "procs-v-g3.obj")
     assert found is not None
-    found_partition = partition(found)
+    found_partition = corpus.extents(fixtures / "procs-v-g3.obj")
     assert not isinstance(found_partition, str)
     assert found_partition.complete
 
@@ -54,10 +55,10 @@ def test_procedure_ptot_has_no_runtime_call_but_still_partitions(fixtures: Path)
     # PDS 7.1's /Ot emits a plain push bp/pop bp prologue and epilogue, no
     # B$ENRA/B$EXSA call in either direction -- PUBDEF is the only signal
     # both shapes agree on, and this is the fixture that tests it.
-    found = module.load(fixtures / "procs-p-ot.obj")
+    found = corpus.loaded(fixtures / "procs-p-ot.obj")
     assert found is not None
     assert not set(found.calls.values()) & {"B$ENRA", "B$EXSA"}
-    found_partition = partition(found)
+    found_partition = corpus.extents(fixtures / "procs-p-ot.obj")
     assert not isinstance(found_partition, str)
     assert found_partition.complete
     names = {b.name for b in _body(found_partition, BodyKind.PROCEDURE)}
@@ -68,9 +69,9 @@ def test_event_stub_is_its_own_body_not_a_gap(fixtures: Path) -> None:
     # Nothing in the main body's own control flow falls into the /V-/W stub
     # (that is the whole reason blocks.event_stub() exists), so it needs its
     # own seed or its bytes come back "unexplained".
-    found = module.load(fixtures / "arith-v-evt.obj")
+    found = corpus.loaded(fixtures / "arith-v-evt.obj")
     assert found is not None
-    found_partition = partition(found)
+    found_partition = corpus.extents(fixtures / "arith-v-evt.obj")
     assert not isinstance(found_partition, str)
     assert found_partition.complete
     (stub,) = _body(found_partition, BodyKind.EVENT_STUB)
@@ -79,9 +80,9 @@ def test_event_stub_is_its_own_body_not_a_gap(fixtures: Path) -> None:
 
 def test_qb45_under_evt_has_no_stub_body(fixtures: Path) -> None:
     # QuickBASIC 4.5 sets the same U_FLAG bits under /V /W but emits no stub.
-    found = module.load(fixtures / "arith-q-evt.obj")
+    found = corpus.loaded(fixtures / "arith-q-evt.obj")
     assert found is not None
-    found_partition = partition(found)
+    found_partition = corpus.extents(fixtures / "arith-q-evt.obj")
     assert not isinstance(found_partition, str)
     assert found_partition.complete
     assert not _body(found_partition, BodyKind.EVENT_STUB)
@@ -96,10 +97,10 @@ def test_the_resume_map_fallthrough_does_not_leak_module_targets(fixtures: Path)
     # body "reach" its own procedure seeds in a module that had any; here,
     # with none, the regression this guards is simpler: the two trailing
     # bytes right after the map are still claimed, not left unexplained.
-    found = module.load(fixtures / "divmod-v-g3.obj")
+    found = corpus.loaded(fixtures / "divmod-v-g3.obj")
     assert found is not None
     assert not found.publics  # no SUB/FUNCTION in this module
-    found_partition = partition(found)
+    found_partition = corpus.extents(fixtures / "divmod-v-g3.obj")
     assert not isinstance(found_partition, str)
     assert found_partition.complete
     (main,) = found_partition.bodies
@@ -107,7 +108,7 @@ def test_the_resume_map_fallthrough_does_not_leak_module_targets(fixtures: Path)
 
 
 def test_a_module_with_no_header_is_refused_not_guessed(fixtures: Path) -> None:
-    found = module.load(fixtures / "procs-v-g3.obj")
+    found = corpus.loaded(fixtures / "procs-v-g3.obj")
     assert found is not None
     headerless = module.Module(found.records, found.seg, found.name, found.code[0x30:], 0, len(found.code) - 0x30)
     found_partition = partition(headerless)
