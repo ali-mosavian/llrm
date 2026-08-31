@@ -28,6 +28,22 @@ from qbopt.module import Module
 
 # Runtime routines that do not return to the byte after the call, because their
 # arguments are sitting there.
+# The one routine that reads a table laid inline after its own call site.
+# Established from the shipped libraries rather than inferred -- gosub.asm,
+# byte for byte the same in BCOM45.LIB, BCL71ENR.LIB and VBDCL10E.LIB, read
+# out with tools/libdump.py:
+#
+#   lds  si,[bp+2]     si = the return address, which IS the table
+#   lodsb              al = the count, si now on the entries
+#   mov  dl,al / shl dx,1 / add dx,si    dx = past the table
+#   mov  cx,[bx+si]    cx = entry[index-1]
+#   cmp  al,bl / jbe   out of range falls through to dx
+#   push bx / push dx  and a far return goes to whichever was chosen
+#
+# So an entry is a two-byte offset into this same segment, the count is one
+# byte in front of them, and out of range means the statement after the
+# table. All three are what inline_table() below reads and what the block's
+# own successors are.
 INLINE_TABLE = {"B$OGTA"}
 
 PAD = 0x90

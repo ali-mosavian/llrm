@@ -79,6 +79,24 @@ def _length_of(op: mir.Op) -> int | None:
     return hi - lo
 
 
+def _trailing_zeros(found: Module, ops: list[mir.Op]) -> "Table | None":
+    """The run of zero bytes the ops end on, where it reaches the segment's end.
+
+    Only at the very end, and only all-zero: anything else that happens to
+    decode is code until something proves otherwise.
+    """
+    highest = max(one.at + (_length_of(one) or 0) for one in ops)
+    if highest != found.end:
+        return None
+    lo = found.end
+    for one in sorted(ops, key=lambda x: x.at, reverse=True):
+        length = _length_of(one) or 0
+        if one.at + length != lo or any(found.code[one.at : lo]):
+            break
+        lo = one.at
+    return None if lo == found.end else Table(lo, found.end)
+
+
 def _semantics(op: mir.Op) -> ir.Semantics | None:
     what = getattr(op.node, "semantics", None)
     return None if what is None or what.op is ir.Operation.BARRIER else what
@@ -203,6 +221,20 @@ def rebuild(
     lowest = ops[0].at
     highest = max(one.at + (_length_of(one) or 0) for one in ops)
     inside = [Table(lo, hi) for lo, hi in tables if lowest <= lo and hi <= highest]
+
+    # BC pads the end of its code segment with zeros, and every object in
+    # the corpus ends with four of them. Reachability walks in and the
+    # decoder obliges -- `00 00` is `add [bx+si],al` -- so they arrive here
+    # as ops, on an address no fixup names and select.py rightly will not
+    # encode. They are not instructions and are carried rather than
+    # selected: the same bytes, in the same place, which is the only thing
+    # that can be right about padding.
+    padding = _trailing_zeros(found, ops)
+    if padding is not None:
+        inside.append(padding)
+        ops = [one for one in ops if one.at < padding.lo]
+        if not ops:
+            return "the body is nothing but padding"
 
     # Every byte between the first item and the last has to be one of them.
     # What is left over is data nothing here can name, and emitting only what

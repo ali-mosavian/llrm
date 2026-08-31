@@ -268,11 +268,12 @@ def test_the_rebuildable_share_is_what_was_measured() -> None:
 
     A canary on reach, and it moves for nameable reasons: refusing inline
     data took it from 42 to 34, the bare x87 forms took it back to 42,
-    carrying the tables took it to 49, and asking for every fixup rather
-    than the subset Module.fixup_at holds took it to 55.
+    carrying the tables took it to 49, asking for every fixup rather than
+    the subset Module.fixup_at holds took it to 55, and carrying BC's own
+    trailing zero padding took it to 109.
     """
     done = 0
     for obj in FIXTURES:
         if rebuilt(obj)[2] is not None:
             done += 1
-    assert done == 55
+    assert done == 109
