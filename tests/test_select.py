@@ -130,7 +130,7 @@ def test_everything_selected_decodes_to_what_was_asked_for(obj: Path) -> None:
 def test_the_covered_share_of_the_corpus_is_what_was_measured() -> None:
     """A canary on progress, not on correctness.
 
-    99.5% of the corpus's operations. What is left is about two hundred
+    99.7% of the corpus's operations. What is left is about two hundred
     whose address is in a space operand_of() refuses, whose register is not
     one this names, or -- 16 of them -- an `escape`, which is a far jump
     this has no target for.
@@ -157,7 +157,7 @@ def test_the_covered_share_of_the_corpus_is_what_was_measured() -> None:
                         continue
                     if select.emit(what, at=op.at) is not None:
                         emitted += 1
-    assert (total, emitted) == (20245, 20152)
+    assert (total, emitted) == (20245, 20182)
 
 
 def test_a_wide_push_is_not_a_narrow_one() -> None:

@@ -38,8 +38,8 @@ Measured 2026-08-31. Re-measure before trusting it.
 | its x87 sites | 1,766, none optimised |
 | bench/nbody | 2.99× under DOSBox, 21 of 21 calls absorbed, pressure 6/6 |
 | corpus redundant reads | 553 — 73 live provider, 48 dead, 432 none |
-| selector coverage | 20,152 of 20,245 corpus ops, 0 mismatched |
-| segments MIR wrote | 109 of 125 objects, 94 after absorption |
+| selector coverage | 20,182 of 20,245 corpus ops, 0 mismatched |
+| segments MIR wrote | 123 of 125 objects, 108 after absorption |
 | **optimised and MIR-written** | **half the suite on all 12 configurations, 16/16 each** |
 
 MIR does, end to end:
@@ -117,8 +117,11 @@ already have every body layable**, and that number grows with the selector.
 - [x] BC's trailing zero padding, carried rather than selected — every
       object ends with `00 00 00 00`, which reachability walks into and the
       decoder reads as `add [bx+si],al`
-- [ ] the 16 objects that refuse: `mov ax,[si]`, whose address no fixup
-      names, and the event-poll stub `/V` puts between the ops
+- [x] a cell whose address cannot be named — `ir.Mem` keeps the register it
+      is reached through and the displacement, out of the comparison, so it
+      can be encoded without changing what "the same cell" means
+- [ ] the 2 objects that refuse: the event-poll stub `/V` puts between the
+      ops, which only the runtime enters
 
 ## M2 — placement
 

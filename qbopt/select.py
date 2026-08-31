@@ -112,6 +112,16 @@ def operand_of(what: ir.Mem) -> tuple[MemoryOperand, bool] | None:
     """
     addr = what.addr
     if addr is None:
+        # No nameable address, but the operand is still encodable where it
+        # is reached through a register: `mov ax,[si]` means whatever si
+        # points at, which is exactly what the encoding says.
+        if what.through in (Register.SI, Register.DI, Register.BX, Register.BP):
+            # The displacement comes too. `push dword [bx+4]` emitted as
+            # `push [bx]` is a working program reading the wrong four bytes,
+            # and byref2 printed 0 where it wanted 16 on two configurations
+            # before this line said `what.offset`.
+            wide = 2 if what.offset else 0
+            return MemoryOperand(base=what.through, displ=what.offset, displ_size=wide), False
         return None
     match addr.space:
         case Space.SEGMENT:

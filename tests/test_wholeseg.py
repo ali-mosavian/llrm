@@ -74,8 +74,8 @@ def test_the_code_block_comes_after_every_extdef(obj: Path) -> None:
 
 
 def test_the_rebuildable_share_is_what_was_measured() -> None:
-    """109 of the corpus's 125 objects. A canary on reach: the 16 refusals
-    are `mov ax,[si]`, whose address no fixup names, and the event-poll stub
-    /V puts between the ops."""
+    """123 of the corpus's 125 objects. The two that refuse are the
+    event-poll stub /V puts between the ops, which only the runtime enters
+    and which nothing here can name."""
     done = sum(1 for obj in FIXTURES if wholeseg.rebuilt(obj.read_bytes())[1] == wholeseg.REBUILT)
-    assert done == 109
+    assert done == 123

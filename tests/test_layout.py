@@ -106,7 +106,7 @@ def test_every_relocation_points_at_a_field_the_module_really_has(obj: Path) -> 
 def test_a_body_is_refused_whole_or_not_at_all() -> None:
     """Half this pass's code and half BC's is not something anything
     downstream could reason about, so one op it cannot emit refuses the
-    body. Measured: 74 of the corpus's 171 bodies lay out, and the rest name
+    body. Measured: 99 of the corpus's 171 bodies lay out, and the rest name
     the operation that stopped them."""
     total = done = 0
     for obj in FIXTURES:
@@ -123,7 +123,7 @@ def test_a_body_is_refused_whole_or_not_at_all() -> None:
                 assert ":" in got, f"a refusal should say which op: {got}"
             else:
                 done += 1
-    assert (total, done) == (171, 74)
+    assert (total, done) == (171, 99)
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
@@ -269,11 +269,12 @@ def test_the_rebuildable_share_is_what_was_measured() -> None:
     A canary on reach, and it moves for nameable reasons: refusing inline
     data took it from 42 to 34, the bare x87 forms took it back to 42,
     carrying the tables took it to 49, asking for every fixup rather than
-    the subset Module.fixup_at holds took it to 55, and carrying BC's own
-    trailing zero padding took it to 109.
+    the subset Module.fixup_at holds took it to 55, carrying BC's own
+    trailing zero padding took it to 109, and keeping the base register on a
+    cell whose address cannot be named took it to 123.
     """
     done = 0
     for obj in FIXTURES:
         if rebuilt(obj)[2] is not None:
             done += 1
-    assert done == 109
+    assert done == 123

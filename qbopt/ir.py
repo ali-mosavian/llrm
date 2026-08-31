@@ -58,6 +58,7 @@ commit's own gate to hold, not this one's.
 """
 
 from enum import StrEnum
+from dataclasses import field
 from dataclasses import dataclass
 from collections.abc import Callable
 
@@ -143,10 +144,24 @@ class Reg:
 class Mem:
     """A memory cell. `addr` is None where the address is not known, and a
     None address is never provably disjoint from anything -- module.may_alias
-    is the one place that rule lives."""
+    is the one place that rule lives.
+
+    `through` is the register the operand is reached by, kept even where the
+    address cannot be named: `mov ax,[si]` has no displacement and so no
+    fixup, so nothing can say which bytes it means -- and it is still an
+    instruction something has to be able to emit.
+
+    Out of the comparison on purpose. It is how to encode the operand, not
+    which bytes it is, and two cells with an unknown address were already
+    equal whichever register reached them. Including it would change what
+    every consumer means by "the same cell" to buy nothing: a based address
+    is never provably disjoint from anything either way.
+    """
 
     addr: Addr | None
     width: int
+    through: Register_ = field(default=Register.NONE, compare=False)
+    offset: int = field(default=0, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -492,7 +507,12 @@ def _location(insn: Insn, index: int, resolve: Resolver) -> Loc | None:
                 return Reg(register, RegisterExt.size(register))
             return None
         case OpKind.MEMORY:
-            return Mem(long_operand(insn, resolve), MemorySizeExt.size(insn.insn.memory_size))
+            return Mem(
+                long_operand(insn, resolve),
+                MemorySizeExt.size(insn.insn.memory_size),
+                insn.insn.memory_base,
+                insn.displacement,
+            )
         case kind if kind in IMMEDIATE_WIDTH:
             width = IMMEDIATE_WIDTH[kind]
             return Imm(to_signed(insn.insn.immediate(index) & ((1 << (width * 8)) - 1), width), width)

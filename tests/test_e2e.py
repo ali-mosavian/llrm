@@ -150,3 +150,61 @@ def test_optimised_code_this_pass_wrote_links_and_runs(tag: str) -> None:
     assert REBUILT in seen, f"{tag}: nothing was emitted from MIR"
     bad = [one for one in result.verdicts if not one.ok]
     assert not bad, f"{tag}: {bad[0].status} {bad[0].program}: {bad[0].detail}"
+
+
+@pytest.mark.parametrize("tag", [t for t in REBUILDING_TAGS if t in CONFIGS and CONFIGS[t].available])
+def test_every_compiled_object_round_trips_through_the_selector(tag: str) -> None:
+    """What select.py emits decodes back to what it was asked for.
+
+    tests/test_select.py makes this claim over fixtures/omf, which is seven
+    programs. The suite is sixteen, and the difference is not academic:
+    `push dword ptr [bx+4]` came back as `push [bx]` -- the displacement
+    dropped, four bytes read from the wrong place -- and byref2 printed 0
+    where it wanted 16 on two configurations. Nothing in the fixture corpus
+    has that shape.
+
+    Here rather than by adding a hundred and fifty more fixtures, because
+    the objects already exist by the time this runs.
+    """
+    from iced_x86 import Decoder
+
+    from qbopt import ir
+    from qbopt import mir
+    from qbopt import omf
+    from qbopt import module
+    from qbopt import select
+    from qbopt import blocks as split
+    from qbopt.declen import BITNESS
+    from qbopt.rewrite import code_map
+
+    work = Path("build/e2e") / f"{tag}-roundtrip"
+    e2e.run(tag, None, dry_run=True, work=work)
+
+    checked = 0
+    for obj in sorted(work.glob("*.OBJ")):
+        if obj.stem.endswith("Q"):
+            continue
+        found = module.of(omf.parse(obj.read_bytes()))
+        if found is None:
+            continue
+        mapped = code_map(found)
+        if isinstance(mapped, str):
+            continue
+        for _, body in mir.bodies(found, split.partition(found, mapped)):
+            for block in body.blocks:
+                for op in block.ops:
+                    what = getattr(op.node, "semantics", None)
+                    if what is None or what.op is ir.Operation.BARRIER:
+                        continue
+                    made = select.emit(what, at=op.at)
+                    if made is None:
+                        continue
+                    checked += 1
+                    back = next(iter(Decoder(BITNESS, made.code, ip=op.at)), None)
+                    want = op.node.insn.insn
+                    same = back is not None and (
+                        str(back) == str(want)
+                        or (back.mnemonic == want.mnemonic and back.near_branch16 == want.near_branch16)
+                    )
+                    assert same, f"{tag}/{obj.stem} {op.at:#x}: {back} != {want}"
+    assert checked > 500, f"{tag}: only {checked} instructions checked"
