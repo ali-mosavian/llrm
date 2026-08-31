@@ -137,7 +137,29 @@ def lay_out(body: MirBody, at: int, found: Module) -> Laid | str:
     return _emitted(_ordered(body), at, found)
 
 
-def rebuild(found: Module, bodies: list[tuple[str, MirBody]]) -> Laid | str:
+@dataclass(frozen=True, slots=True)
+class Table:
+    """A run of bytes between the instructions, copied rather than selected.
+
+    BC drops an ON GOTO table inline: a count byte and one relocated word
+    per destination. The words are fixups, so copying the bytes and moving
+    the fixups is enough -- as_records remaps each one's own displacement,
+    which is where the destination actually lives.
+    """
+
+    lo: int
+    hi: int
+
+    @property
+    def at(self) -> int:
+        return self.lo
+
+
+def rebuild(
+    found: Module,
+    bodies: list[tuple[str, MirBody]],
+    tables: tuple[tuple[int, int], ...] = (),
+) -> Laid | str:
     """Every body in the module, laid out one after another.
 
     Whole-segment rather than per-body, because per-body does not work:
@@ -162,32 +184,36 @@ def rebuild(found: Module, bodies: list[tuple[str, MirBody]]) -> Laid | str:
     )
     if not ops:
         return "no bodies to rebuild"
-
-    # Every byte between the first op and the last has to be an op. A gap is
-    # data sitting in the middle of the code -- an ON GOTO table, which BC
-    # puts inline -- and emitting only the instructions would drop it
-    # silently along with every code offset it holds. Eight of the corpus's
-    # forty-two rebuildable objects have one, and remapping its entries
-    # through `moved` is its own piece of work rather than something to
-    # improvise here.
-    sized = [(one.at, _length_of(one)) for one in ops]
-    if any(length is None for _, length in sized):
+    if any(_length_of(one) is None for one in ops):
         return f"{ops[0].at:#06x}: an op with no instruction behind it"
-    covered = sum(length for _, length in sized if length is not None)
-    span = max(at + (length or 0) for at, length in sized) - ops[0].at
-    if covered != span:
-        return f"{ops[0].at:#06x}: {span - covered} bytes between the ops are not instructions"
 
-    return _emitted(ops, ops[0].at, found)
+    lowest = ops[0].at
+    highest = max(one.at + (_length_of(one) or 0) for one in ops)
+    inside = [Table(lo, hi) for lo, hi in tables if lowest <= lo and hi <= highest]
+
+    # Every byte between the first item and the last has to be one of them.
+    # What is left over is data nothing here can name, and emitting only what
+    # it understands would drop it silently along with anything it holds.
+    covered = sum(_length_of(one) or 0 for one in ops) + sum(one.hi - one.lo for one in inside)
+    if covered != highest - lowest:
+        return f"{lowest:#06x}: {highest - lowest - covered} bytes between the ops are not instructions"
+
+    return _emitted(sorted([*ops, *inside], key=lambda one: one.at), lowest, found)
 
 
-def _emitted(ops: list[mir.Op], at: int, found: Module) -> Laid | str:
-    """`ops` in order from `at`, shrunk to a fixed point and emitted."""
+def _emitted(ops: list, at: int, found: Module) -> Laid | str:
+    """Every item in order from `at`, shrunk to a fixed point and emitted.
+
+    An item is an op, which select.py encodes, or a Table, which is copied.
+    """
     if not ops:
         return "no ops to lay out"
 
     lengths: dict[int, int] = {}
     for op in ops:
+        if isinstance(op, Table):
+            lengths[op.at] = op.hi - op.lo
+            continue
         what = _semantics(op)
         if what is None:
             return f"{op.at:#06x}: {op.name} has no semantics to select from"
@@ -205,6 +231,8 @@ def _emitted(ops: list[mir.Op], at: int, found: Module) -> Laid | str:
     while changing:
         changing = False
         for op in ops:
+            if isinstance(op, Table):
+                continue
             what = _semantics(op)
             if what is None or what.target is None or op.at in short:
                 continue
@@ -226,6 +254,15 @@ def _emitted(ops: list[mir.Op], at: int, found: Module) -> Laid | str:
     out = bytearray()
     relocations: list[tuple[int, int]] = []
     for op in ops:
+        if isinstance(op, Table):
+            # Copied verbatim, with every fixup inside it moved by the same
+            # amount the table itself moved. The entries are relocated words
+            # and their destinations live in the fixups' own displacements,
+            # which as_records remaps.
+            out += found.code[op.lo : op.hi]
+            for field in sorted(one for one in found.fixup_at if op.lo <= one < op.hi):
+                relocations.append((moved[op.at] - at + (field - op.lo), field))
+            continue
         before = _semantics(op)
         if before is None:
             return f"{op.at:#06x}: {op.name} has no semantics to select from"

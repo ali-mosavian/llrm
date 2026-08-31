@@ -215,13 +215,14 @@ def test_a_rebuilt_segment_is_the_same_instructions(obj: Path) -> None:
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
-def test_data_between_the_instructions_refuses_the_rebuild(obj: Path) -> None:
+def test_data_between_the_instructions_is_carried_or_refused(obj: Path) -> None:
     """BC puts an ON GOTO table inline, in the middle of the code.
 
-    Emitting only the instructions would drop it, and every code offset it
-    holds with it. Eight of the corpus's forty-two otherwise-rebuildable
-    objects have one, so this is the difference between 42 and 34 -- and
-    between a silent corruption and a refusal.
+    A known table is copied verbatim with its fixups moved -- its entries
+    are relocated words, so the destinations live in the fixups and
+    as_records remaps them. Anything else between the ops refuses the whole
+    object: emitting only what layout understands would drop the rest
+    silently, along with whatever it holds.
     """
     found = corpus.loaded(obj)
     if found is None:
@@ -238,10 +239,14 @@ def test_data_between_the_instructions_refuses_the_rebuild(obj: Path) -> None:
     # declen's own length, not iced's. An emulated x87 site is four bytes --
     # `cd 35 46 c8` -- where the instruction it stands for decodes as three,
     # so iced's `len` undercounts every one of them and invents a gap.
-    covered = sum(layout._length_of(op) or 0 for op in ops)
-    span = max(op.at + (layout._length_of(op) or 0) for op in ops) - ops[0].at
-    if covered != span:
-        assert isinstance(layout.rebuild(found, bodies), str), f"{obj.stem} has data inline and rebuilt anyway"
+    mapped2 = code_map(found)
+    assert not isinstance(mapped2, str)
+    lowest, highest = ops[0].at, max(op.at + (layout._length_of(op) or 0) for op in ops)
+    tables = [(lo, hi) for lo, hi in mapped2.tables if lowest <= lo and hi <= highest]
+    covered = sum(layout._length_of(op) or 0 for op in ops) + sum(hi - lo for lo, hi in tables)
+    if covered != highest - lowest:
+        got = layout.rebuild(found, bodies, mapped2.tables)
+        assert isinstance(got, str), f"{obj.stem} has unknown data inline and rebuilt anyway"
 
 
 def test_the_rebuildable_share_is_what_was_measured() -> None:

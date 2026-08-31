@@ -45,7 +45,7 @@ def rebuilt(data: bytes) -> tuple[bytes, str]:
     if not bodies:
         return data, "no bodies were raised"
 
-    laid = layout.rebuild(found, bodies)
+    laid = layout.rebuild(found, bodies, mapped.tables)
     if isinstance(laid, str):
         return data, laid
 

@@ -74,7 +74,9 @@ def test_every_suite_program_has_dos_line_endings(source: Path) -> None:
 # fpemu is here because its x87 sites are what the bare-operand forms
 # unlocked -- fsqrt names st(0) in both dests and sources and encodes
 # neither, so "no operands" was the wrong test for it.
-REBUILDS = ("arith", "cmpord", "flags", "nots", "fpemu")
+# jumps is here for the ON GOTO tables BC drops between the instructions:
+# carried verbatim, with every entry's fixup moved with them.
+REBUILDS = ("arith", "cmpord", "flags", "nots", "fpemu", "jumps")
 REBUILDING_TAGS = ("p-g2", "q-O")
 
 
