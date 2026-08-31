@@ -261,18 +261,24 @@ links are counted alongside `NBODY.OBJ`'s own code.
 ## Dynamic
 
 `bench/nbody.bas`, `v-g3`, 25000 steps, 7 repetitions, `conf/pinned.conf`,
-re-measured 2026-08-30 after phase 2's IR/G+H/D/I/B rounds. Read via the
+re-measured 2026-08-31 after divide strength reduction landed. Read via the
 8253, not `TIMER` -- see `docs/measurement.md` for why this reads as a
 spread rather than an exact repeat.
 
 | | base | opt |
 |---|---|---|
-| ticks (median) | 14747858 | 4519562 |
-| ms | 12360.1 | 3787.8 |
-| spread | 2 (0.00001%) | 8972 (0.20%) |
+| ticks (median) | 14747860 | 4931572 |
+| ms | 12360.1 | 4133.1 |
+| spread | 2 (0.00001%) | 2 (0.00004%) |
 
-**Base is 3.26 times slower than opt** (`base/opt` = 3.2631), up from 3.17
-before E and F, and from 2.18 at `9c02db9`. Base is unchanged, as it must be
+**Base is 2.99 times slower than opt** (`base/opt` = 2.9905) -- and this is
+the one figure in this document that went *down* on purpose. It was 3.26
+the day before. The cause is divide strength reduction, and the reason to
+keep it anyway is the subject of the next section.
+
+All 21 of `bench/nbody.bas`'s arithmetic call sites -- 11 `B$MUI4`, 6
+`B$DVI4`, 4 `B$CPI4` -- are absorbed; the rewritten object contains none of
+them. Base is unchanged, as it must be
 -- BC's own build does not move. `bench/nbody.bas` avoids `fixMul&` by
 construction (Q23.9, see `suite/nbody.bas`'s own comment) specifically so BC
 alone can build the base half of this comparison.
@@ -291,6 +297,40 @@ above), yet opt itself runs 33% faster than it did at `9c02db9` (6750212 ->
 4519562 ticks). Byte count and cycle count are different axes -- G+H, D, I,
 B and E all remove calls, restores, round trips or extra memory traffic from
 the *hot path*, which is what the timer reads, not what shrinks the object.
+
+### Where DOSBox and the cycle model disagree, and which to believe
+
+The 3.26 -> 2.99 drop is entirely divide strength reduction, established by
+running the benchmark with `_power_of_two()` forced to None and nothing else
+changed:
+
+| | opt ticks | ratio |
+|---|---|---|
+| `idiv` kept | 4518806 | 3.2637 |
+| shift sequence | 4931572 | 2.9905 |
+
+4518806 against the 4519562 measured the day before, so the attribution is
+not an inference.
+
+DOSBox charges one price per instruction and models no latency, so trading
+one `idiv` for a four-instruction shift sequence reads as 9 per cent slower
+there. `qbopt/cycles` holds published latencies, and prices the same two
+objects -- same absorbed call in both, the divide form the only difference:
+
+| | 486 | P5 | P6 | K5 | K6 | K7 | Core |
+|---|---|---|---|---|---|---|---|
+| `idiv` kept | 1068 | 717 | 360 | 297.4 | 306 | 300 | 234.4 |
+| shift sequence | 889 | 513 | 129.1 | 91.9 | 107.1 | 106.1 | 87.9 |
+| speedup | 1.20x | 1.40x | 2.79x | 3.24x | 2.86x | 2.83x | 2.67x |
+
+Faster on every machine modelled, by 1.2x on the 486 this code was written
+for and by nearly 3x on anything later. A 32-bit `idiv` is 43 cycles on a
+486 and DOSBox charges it the same as an `add`.
+
+So the 2.99 figure is kept and quoted as what DOSBox measures, not as what
+the code costs. Where the two disagree the cycle model is the one about
+hardware, and this document quotes both rather than picking the flattering
+one.
 
 One honest gap: `bench/nbody.bas` itself has no golden and prints only
 `TICKS=`, so nothing here checks its own arithmetic. `suite/nbody.bas` --
