@@ -92,21 +92,26 @@ def _assemble(made: Instruction, at: int) -> Emitted | None:
 def operand_of(what: ir.Mem) -> tuple[MemoryOperand, bool] | None:
     """`what` as an encodable memory operand, and whether it is relocated.
 
-    Two spaces, which is 97.6% of the corpus's memory operands: a relocated
-    segment address, emitted as zero with its fixup moved, and a frame slot,
-    whose displacement really is in the code. Everything else is refused --
-    a Space.FAR address needs a segment override this does not model, a
-    Space.GROUP one is refused everywhere in this project, and a
-    Space.STACK one is mir.py's own name for a push slot rather than
-    anything an instruction encodes.
+    Two spaces: a relocated segment address, emitted as zero with its fixup
+    moved, and a frame slot, whose displacement really is in the code.
+    Everything else is refused -- a Space.FAR address needs a segment
+    override this does not model, a Space.GROUP one is refused everywhere in
+    this project, and a Space.STACK one is mir.py's own name for a push slot
+    rather than anything an instruction encodes.
+
+    A segment address may carry a base register, which is how BC writes an
+    array element: `mov ax,[si+arr]`, where the fixup names the array and si
+    holds the offset into it. The base comes along -- dropping it would
+    silently name element zero -- and lift.relocated_memory() builds the
+    same operand for the same reason.
     """
     addr = what.addr
-    if addr is None or addr.base != Register.NONE:
+    if addr is None:
         return None
     match addr.space:
         case Space.SEGMENT:
-            return MemoryOperand(displ=0, displ_size=2), True
-        case Space.FRAME:
+            return MemoryOperand(base=addr.base, displ=0, displ_size=2), True
+        case Space.FRAME if addr.base == Register.NONE:
             return MemoryOperand(base=Register.BP, displ=addr.disp, displ_size=2), False
         case _:
             return None
@@ -460,7 +465,21 @@ def call_far(at: int = 0) -> Emitted | None:
 # The no-operand and one-operand forms that carry no address and no target,
 # named here because iced spells each of them differently enough that the
 # width-and-mnemonic rule the rest of this table follows does not reach them.
-BARE = {"wait": "WAIT", "nop": "NOPW", "ret": "RETNW", "retf": "RETFW", "cwd": "CWD", "cdq": "CDQ"}
+BARE = {
+    "wait": "WAIT",
+    "nop": "NOPW",
+    "ret": "RETNW",
+    "retf": "RETFW",
+    "cwd": "CWD",
+    "cdq": "CDQ",
+    # the x87 ones that take no operand at all
+    "fsqrt": "FSQRT",
+    "fchs": "FCHS",
+    "fabs": "FABS",
+    "fld1": "FLD1",
+    "fldz": "FLDZ",
+    "fcompp": "FCOMPP",
+}
 
 
 def bare(name: str, at: int = 0) -> Emitted | None:
@@ -626,6 +645,13 @@ def emit(
                 case ir.Imm(value=value):
                     return compare(sources[0], value, at)
         case ir.Operation.EXTEND | ir.Operation.NOTHING:
+            return bare(what.name or "", at)
+        case ir.Operation.FLOAT_UNARY | ir.Operation.FLOAT_ARITH if not any(
+            isinstance(one, ir.Mem) for one in dests + sources
+        ):
+            # `fsqrt` and its kind name st(0) in both dests and sources, and
+            # encode neither: the operand is implicit. So what decides is
+            # whether any of it is memory, not whether there are operands.
             return bare(what.name or "", at)
         case ir.Operation.POP if len(dests) == 1:
             match dests[0]:

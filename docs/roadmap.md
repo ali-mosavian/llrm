@@ -38,8 +38,8 @@ Measured 2026-08-31. Re-measure before trusting it.
 | its x87 sites | 1,766, none optimised |
 | bench/nbody | 2.99× under DOSBox, 21 of 21 calls absorbed, pressure 6/6 |
 | corpus redundant reads | 553 — 73 live provider, 48 dead, 432 none |
-| selector coverage | 20,040 of 20,245 corpus ops, 0 mismatched |
-| segments MIR wrote | 34 of 125 objects; 8 link and run under DOSBox |
+| selector coverage | 20,055 of 20,245 corpus ops, 0 mismatched |
+| segments MIR wrote | 42 of 125 objects; 10 link and run under DOSBox |
 
 MIR does, end to end:
 
@@ -113,7 +113,7 @@ already have every body layable**, and that number grows with the selector.
       `nots` on PDS /G2 and QuickBASIC /O, in `tests/test_e2e.py`
 - [ ] the ON GOTO tables BC puts between instructions — 8 objects, whose
       entries are code offsets needing the same remap
-- [ ] the 91 objects that refuse: mostly data BC put between instructions,
+- [ ] the 83 objects that refuse: mostly data BC put between instructions,
       plus VBDOS's own `00 00` segment padding, which decodes as
       `add [bx+si],al` and needs a based address `operand_of` will not encode
 

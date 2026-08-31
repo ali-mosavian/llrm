@@ -122,7 +122,7 @@ def test_a_body_is_refused_whole_or_not_at_all() -> None:
                 assert ":" in got, f"a refusal should say which op: {got}"
             else:
                 done += 1
-    assert (total, done) == (171, 50)
+    assert (total, done) == (171, 58)
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
@@ -160,7 +160,7 @@ def test_a_laid_out_body_is_no_bigger_than_bc_s_own() -> None:
     was = now = 0
     for obj in FIXTURES:
         for body, got in laid(obj):
-            was += sum(original(op).len for op in layout._ordered(body))
+            was += sum(layout._length_of(op) or 0 for op in layout._ordered(body))
             now += len(got.code)
     assert now <= was, f"{now} against BC's {was}"
 
@@ -235,20 +235,25 @@ def test_data_between_the_instructions_refuses_the_rebuild(obj: Path) -> None:
     ops = sorted((op for _, body in bodies for op in layout._ordered(body)), key=lambda one: one.at)
     if not ops:
         return
-    covered = sum(original(op).len for op in ops)
-    span = max(op.at + original(op).len for op in ops) - ops[0].at
+    # declen's own length, not iced's. An emulated x87 site is four bytes --
+    # `cd 35 46 c8` -- where the instruction it stands for decodes as three,
+    # so iced's `len` undercounts every one of them and invents a gap.
+    covered = sum(layout._length_of(op) or 0 for op in ops)
+    span = max(op.at + (layout._length_of(op) or 0) for op in ops) - ops[0].at
     if covered != span:
         assert isinstance(layout.rebuild(found, bodies), str), f"{obj.stem} has data inline and rebuilt anyway"
 
 
 def test_the_rebuildable_share_is_what_was_measured() -> None:
-    """34 of the corpus's 125 objects rebuild whole-segment.
+    """42 of the corpus's 125 objects rebuild whole-segment.
 
-    A canary on reach. It was 42 before inline data was refused, and grows
-    with select.py's table -- the 91 refusals are ops it cannot emit.
+    A canary on reach, and it moves for nameable reasons: refusing inline
+    data took it from 42 to 34, and teaching select.py the bare x87 forms --
+    fsqrt names st(0) in both dests and sources and encodes neither -- took
+    it back to 42 by unlocking every fpemu object.
     """
     done = 0
     for obj in FIXTURES:
         if rebuilt(obj)[2] is not None:
             done += 1
-    assert done == 34
+    assert done == 42

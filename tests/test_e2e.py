@@ -71,7 +71,10 @@ def test_every_suite_program_has_dos_line_endings(source: Path) -> None:
 # The programs whose objects rebuild whole-segment today, and the compilers
 # whose output does. VBDOS pads its segment with a `00 00` that decodes as
 # `add [bx+si],al`, which select.py refuses, so its objects fall back.
-REBUILDS = ("arith", "cmpord", "flags", "nots")
+# fpemu is here because its x87 sites are what the bare-operand forms
+# unlocked -- fsqrt names st(0) in both dests and sources and encodes
+# neither, so "no operands" was the wrong test for it.
+REBUILDS = ("arith", "cmpord", "flags", "nots", "fpemu")
 REBUILDING_TAGS = ("p-g2", "q-O")
 
 

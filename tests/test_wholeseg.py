@@ -74,7 +74,7 @@ def test_the_code_block_comes_after_every_extdef(obj: Path) -> None:
 
 
 def test_the_rebuildable_share_is_what_was_measured() -> None:
-    """34 of the corpus's 125 objects. A canary on reach: the 91 refusals
+    """42 of the corpus's 125 objects. A canary on reach: the 83 refusals
     are ops select.py cannot emit, or data BC put between instructions."""
     done = sum(1 for obj in FIXTURES if wholeseg.rebuilt(obj.read_bytes())[1] == wholeseg.REBUILT)
-    assert done == 34
+    assert done == 42
