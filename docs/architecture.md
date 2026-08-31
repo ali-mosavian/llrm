@@ -24,97 +24,98 @@ a question, and answering wrongly is silent -- which is why the gates
 (`tools/matrix.py`, `tools/mutate.py`) run real compilers rather than
 trusting the host suite.
 
-## The layers
+## Two towers
 
-Read bottom-up. An arrow is an import; a module never imports from a layer
-above it.
-
-```
-  L5  driver        rewrite ................ the only writer of bytes
-                       |    \
-                       |     `--- bodyedit ..... a whole body replaced
-                       |     `--- price ........ what it cost, in cycles
-                       v
-  L4  transforms    calls ....... a runtime call, absorbed or strength-reduced
-                    forward ..... a load that need not happen
-                       |
-      analyses      memory  mir  consts  wide  regalloc  reencode
-                       |     |     |      |       |         |
-                       |     |     `--- known values, folded
-                       |     |     `--- 32-bit ops BC had to write as two
-                       |     |     `--- which register a value lives in
-                       |     |     `--- one instruction, re-encoded
-                       v     v
-  L3  total decode  ir ......... every instruction in a body, as a Node
-                       |
-                       v
-  L2  facts         lift  flags  loops  extent  runtime  stack  registers
-                       |     |      |      |       |       |
-                       |     |      |      |       |       `- where args are
-                       |     |      |      |       `--------- what a call clobbers
-                       |     |      |      `----------------- whose code a byte is
-                       |     |      `------------------------ what nests in what
-                       |     `------------------------------- which flags are live
-                       `------------------------------------- pairs, widened
-                       v
-  L1  structure     blocks ...... which bytes are code, and where control goes
-                    module ...... one BC module, as the analysis sees it
-                       |
-                       v
-  L0  bytes         omf ......... the object format
-                    declen ...... instructions, via iced-x86
-```
-
-`relocate.py` sits beside `rewrite.py` rather than under it: when code
-moves, the fixups move with it, and that is the driver's problem alone.
-
-## Two ways up from the bytes
-
-There are two representations, built for different questions, and neither
-subsumes the other.
+The single most important thing about this codebase's shape: there are two
+representations reaching up from the bytes, and only one of them is
+connected to the output.
 
 ```
-     blocks + ir                          blocks + ir
-          |                                    |
-          v                                    v
-      memory.py                             mir.py
-   "what does this               "what value is this, whatever
-    address hold?"                 register it happens to be in"
-          |                                    |
-          |  cells, aliasing,                  |  SSA: phis, dominance,
-          |  forward + backward                |  one value per definition
-          |  dataflow to a fixed point         |
-          v                                    v
-   redundant_loads()                      regalloc.py
-   dead_stores()                          "and which register
-                                           should it live in"
+              .OBJ bytes -- omf.py, declen.py
+                        |
+              blocks.py, module.py, ir.py
+                        |
+        +---------------+----------------+
+        |                                |
+        v                                v
+  MACHINE-CODE TOWER               MIR / SSA TOWER
+  (emits)                          (analysis only)
+        |                                |
+  lift.py    pairs, widened        mir.py     raise_body()
+  flags.py   which are live          |        every value named once,
+  memory.py  cells and aliasing      |        phis at the joins
+  stack.py   where args are          |
+  runtime.py what a call breaks      +-- consts.py    known() -- propagate + fold
+  registers  backward liveness       +-- wide.py      pairs(), tests()
+        |                            +-- regalloc.py  colour() -- SSA, chordal
+        v                            +-- reencode.py  with_registers()
+  calls.py    absorb, reduce               |
+  forward.py  drop a load                  v
+  memory.py   dead stores            mir.lower() -- proven lossless,
+        |                            2,060,168 bytes byte-identical
+        v                                  |
+  rewrite.py --> .OBJ out                  v
+                                     tools/dump.py
+                                     ...and nothing else.
 ```
 
-`memory.py` reasons about addresses and is cross-block. `mir.py` reasons
-about values and is cross-block. `forward.py` connects them -- a load is
-removable when memory says the cell's content is known *and* a register
-still holds it -- and today it makes that connection block-scoped only.
-That gap is the open work.
+The right-hand tower is real, verified work. `raise_body()` builds proper
+SSA -- iterated dominance frontiers, phi placement, a dominator-tree
+renaming walk -- and `lower()` round-trips it back to byte-identical
+machine code across the whole corpus. `regalloc.colour()` is an optimal
+SSA allocator. None of it reaches `rewrite.py`.
 
-## Wired, and not
+Where the two towers overlap, the left one wins by being wired:
+`lift.py`'s widening is what emits; `wide.py` re-derives the same 192
+carry pairs and 871 comparison-branches at MIR level and feeds a dump.
 
-The distinction that matters most, because a finished analysis with no
-consumer looks exactly like a finished feature.
+## The optimisation passes
+
+What exists, what it runs on, and whether it changes the program.
 
 ```
-   emits bytes today          analysis only, no consumer
-   -----------------          --------------------------
-   calls.py    absorb         mir.py      SSA over a body
-   calls.py    reduce         regalloc.py where values live
-   wide.py     widen          reencode.py one instruction, remapped
-   forward.py  drop a load    consts.py   known values
-   memory.py   dead stores    memory.py   the rest of what it knows
+  pass                  level      emits   what it does
+  --------------------  ---------  ------  ----------------------------
+  absorption            machine    yes     B$MUI4 -> imul, inline
+  strength reduction    machine    yes     x2^n -> shl, x3/5/9 -> lea,
+                                           /2^n -> sar with sign bias
+  widening              machine    yes     add/adc pair -> one 32-bit op
+  dead store removal    machine    yes     a store nothing reads
+  load forwarding       machine    yes     a load whose register has it
+                                           (block-scoped only)
+  const prop + fold     MIR        no      known(): values and arithmetic
+  register allocation   MIR        no      colour(): where values live
+  re-encoding           MIR        no      one instruction, remapped
+
+  not built yet:  CSE, LICM, dead code elimination proper
 ```
 
-`reencode.py` and `regalloc.py` were built for a transform that measured
-out at zero: forwarding a load into a *different* register than it names.
-BC does not emit that shape -- it keeps values in memory and reaches for a
-register only to compute -- so the machinery is sound, gated, and idle.
+The gap between the two halves of that table is the project. The MIR
+passes are correct and idle; the machine passes emit but are limited to
+what one basic block can see.
+
+## Where the join has to happen
+
+A load is removable when memory says the cell's content is known *and* a
+register still holds it. `memory.py` answers the first question
+cross-block. Nothing answers the second cross-block.
+
+```
+   memory.py                            mir.py + regalloc.py
+   "what does this address hold?"       "what value is this, and where
+          |                              does it live?"
+          |  cells, aliasing,                   |  SSA, phis, dominance,
+          |  forward + backward                 |  chordal colouring
+          |  dataflow to a fixed point          |
+          +------------------+------------------+
+                             |
+                             v
+                        forward.py
+                   makes this join today
+                   BLOCK-SCOPED ONLY
+```
+
+That is the open work, and it is one join, not a rewrite of either side.
 
 ## The gates
 
