@@ -37,10 +37,10 @@ Measured 2026-08-31. Re-measure before trusting it.
 | its arithmetic calls | 157 → 1 |
 | its x87 sites | 1,766, none optimised |
 | bench/nbody | 2.99× under DOSBox, 21 of 21 calls absorbed, pressure 6/6 |
-| corpus redundant reads | 553 — 73 live provider, 48 dead, 432 none |
-| selector coverage | **all 20,245 corpus ops**; 65,612 emitted over both and absorbed output, 0 mismatched |
-| segments MIR wrote | 124 of 125 corpus objects and all 17 of qb-qrender's, **absorbed or not** |
-| **optimised and MIR-written** | **half the suite on all 12 configurations, 16/16 each** |
+| corpus redundant reads | 751 — 73 live provider, 48 dead, 630 none |
+| selector coverage | 23,794 of 23,838 corpus ops; the 44 are `movsw`, refused deliberately |
+| segments MIR wrote | **all 155 corpus objects**, absorbed or not |
+| **optimised and MIR-written** | **six programs on all 12 configurations, 18/18 each** |
 
 MIR does, end to end:
 
