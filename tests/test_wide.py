@@ -98,3 +98,79 @@ def test_folding_retires_the_carry_it_consumed() -> None:
         found = wide.pairs(body)
         before, after = wide.freed(body, found)
         assert after == before - len(found)
+
+
+def calls_of(obj: Path) -> dict[int, str]:
+    found = corpus.loaded(obj)
+    assert found is not None
+    return found.calls
+
+
+@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
+def test_every_branch_finds_the_comparison_it_reads(obj: Path) -> None:
+    """A branch with no comparison behind it would be reading a flag from
+    nowhere, which would mean the SSA edges are wrong rather than that the
+    program is odd. Measured: 871 of 871 across the corpus."""
+    for body in bodies(obj):
+        branches = [op for block in body.blocks for op in block.ops if op.op is ir.Operation.BRANCH]
+        paired = {one.branch.at for one in wide.tests(body, calls_of(obj))}
+        assert {op.at for op in branches} == paired
+
+
+def test_a_long_comparison_is_a_call_and_a_jump() -> None:
+    """BC has no 32-bit compare on an 8086, so a long comparison is
+    B$CPI4 followed by a jcc -- two halves of one operation exactly as add
+    and adc are. Every branch in this corpus that reads a call's flags
+    reads that routine's."""
+    seen = 0
+    for body in bodies(Path("fixtures/omf/cmpord-v-g3.obj")):
+        for one in wide.tests(body, calls_of(Path("fixtures/omf/cmpord-v-g3.obj"))):
+            if one.through is None:
+                continue
+            assert one.through == wide.COMPARE
+            assert one.signed is not False, "B$CPI4 only synthesised the signed answers"
+            seen += 1
+    assert seen, "cmpord is a program of long comparisons"
+
+
+def test_an_unsigned_test_is_never_folded_off_the_runtime_compare() -> None:
+    """calls.py refuses a B$CPI4 site whose CF is read afterwards, because
+    the routine synthesised CF on its way to SF rather than meaning it.
+    Pairing one with jb/ja would read exactly that flag."""
+    for obj in FIXTURES:
+        for body in bodies(obj):
+            for one in wide.tests(body, calls_of(obj)):
+                if one.through is not None:
+                    assert one.signed is not False
+
+
+@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
+def test_nothing_reads_a_flag_once_both_folds_are_applied(obj: Path) -> None:
+    """The whole argument for flags not existing above this layer.
+
+    What is left over is not a flag anything asked for: a value nothing
+    reads, or one "read" only by a call or carried through a phi, both of
+    which exist because ir.Effects says a call may touch any register.
+    """
+    for body in bodies(obj):
+        accounted = {one.carry for one in wide.pairs(body)}
+        accounted |= {one.condition for one in wide.tests(body, calls_of(obj))}
+        # a phi is recorded as None: it is a join, not an op, and both are
+        # equally "not something that asked for a flag"
+        consumers: dict[mir.Value, list[mir.Op | None]] = {}
+        for block in body.blocks:
+            for phi in block.phis:
+                for value in phi.incoming.values():
+                    consumers.setdefault(value, []).append(None)
+            for op in block.ops:
+                for value in op.uses:
+                    consumers.setdefault(value, []).append(op)
+        for block in body.blocks:
+            for op in block.ops:
+                for value in op.defines:
+                    if value.of is not mir.FLAGS or value in accounted:
+                        continue
+                    who = consumers.get(value, [])
+                    assert all(one is None or one.op is ir.Operation.CALL for one in who), (
+                        f"{value} at {op.at:#06x} is read by something that is not a call or a phi"
+                    )

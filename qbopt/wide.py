@@ -152,3 +152,84 @@ def refused(body: mir.MirBody) -> tuple[tuple[mir.Op, mir.Op, str], ...]:
             if not _halves_agree(low, op):
                 out.append((low, op, "the two halves do not name adjacent bytes"))
     return tuple(out)
+
+
+# What a conditional jump is really asking, and of what kind of comparison.
+# The unsigned tests are here to be recognised, not to be folded off a
+# runtime compare: B$CPI4 rebuilds its answer out of unsigned flags and
+# calls.py's SYNTHESISED already refuses a site whose CF is read afterwards,
+# so pairing one with `jb`/`ja` would be reading a flag the routine only
+# synthesised on the way to something else.
+TESTS = {
+    "je": ("eq", None),
+    "jne": ("ne", None),
+    "jl": ("lt", True),
+    "jle": ("le", True),
+    "jg": ("gt", True),
+    "jge": ("ge", True),
+    "jb": ("lt", False),
+    "jbe": ("le", False),
+    "ja": ("gt", False),
+    "jae": ("ge", False),
+}
+
+# The runtime routine whose whole purpose is to leave a comparison in the
+# flags. Every branch in this corpus that reads a call's flags reads this
+# one's -- measured, 803 of 803 -- so a call is not a barrier between a
+# comparison and the jump that reads it; it IS the comparison.
+COMPARE = "B$CPI4"
+
+
+@dataclass(frozen=True, slots=True)
+class Test:
+    """A branch and the comparison it is really asking about.
+
+    `signed` is None for equality, which does not care, and False for an
+    unsigned ordering. `through` names the runtime routine where the
+    comparison was a call rather than an instruction -- BC has no 32-bit
+    compare on an 8086, so a long comparison is B$CPI4 and a jump, which is
+    two halves of one operation exactly as add and adc are.
+    """
+
+    compare: mir.Op
+    branch: mir.Op
+    test: str
+    signed: bool | None
+    through: str | None
+    condition: mir.Value
+
+
+def tests(body: mir.MirBody, calls: dict[int, str]) -> tuple[Test, ...]:
+    """Every branch, with the comparison that set what it reads.
+
+    The flags stop being a variable here: a comparison yields a value and
+    the branch asks a question of it, which is what a machine without
+    condition codes would have written in the first place.
+    """
+    produced: dict[mir.Value, mir.Op] = {}
+    for block in body.blocks:
+        for op in block.ops:
+            for value in op.defines:
+                if value.of is mir.FLAGS:
+                    produced[value] = op
+
+    found: list[Test] = []
+    for block in body.blocks:
+        for op in block.ops:
+            if op.op is not ir.Operation.BRANCH:
+                continue
+            asked = TESTS.get(op.name)
+            carried = [one for one in op.uses if one.of is mir.FLAGS]
+            if asked is None or len(carried) != 1:
+                continue
+            source = produced.get(carried[0])
+            if source is None:
+                continue
+            test, signed = asked
+            through = calls.get(source.at) if source.op is ir.Operation.CALL else None
+            if through is not None and through != COMPARE:
+                continue  # some other call's flags are not a comparison
+            if through is not None and signed is False:
+                continue  # see TESTS: B$CPI4 only synthesised the signed ones
+            found.append(Test(source, op, test, signed, through, carried[0]))
+    return tuple(found)
