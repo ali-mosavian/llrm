@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from iced_x86 import Register
 
 from qbopt import omf
+from qbopt import memory
 from qbopt import module
 from qbopt import forward
 from qbopt.lift import Op
@@ -342,27 +343,28 @@ def plan(
                 edit,
             )
         )
-    for one in _dropped_loads(found, mapped, blocks, reached, planned):
+    for one in _dropped(found, mapped, blocks, reached, planned):
         planned.append(Planned(replace(one.region, id=len(planned)), one.edit))
 
     planned = drop_restore_repush_round_trips(found, mapped, planned)
     return drop_chained_crossings(planned, found.chunks)
 
 
-def _dropped_loads(
+def _dropped(
     found: module.Module,
     mapped: CodeMap,
     blocks: list[Block],
     reached: list[Insn],
     planned: list[Planned],
 ) -> list[Planned]:
-    """forward.removable(), as edits that delete the instruction outright.
+    """Instructions that need not happen at all, as edits that delete them.
 
-    The only rewrite here that emits nothing at all in place of something.
-    It is sound exactly where forward.py says it is -- the register already
-    holds those bytes, so the load writes what is already there -- and the
-    instruction can simply go, with no register changing and no byte around
-    it touched.
+    The only rewrites here that emit nothing in place of something, and the
+    only two that need no register to change:
+
+      - a load whose register already holds those bytes (forward.py), so it
+        writes what is already there;
+      - a store nothing reads before something overwrites it (memory.py).
 
     Refused where any other edit already covers it. A deletion composes with
     a replacement of overlapping bytes the way two replacements do not: what
@@ -370,8 +372,12 @@ def _dropped_loads(
     and would silently lose or keep this one depending on which ran first.
     """
     at_of = {insn.at: insn for insn in reached}
+    gone = set(forward.removable(blocks, found.resolve, found.calls, found.dgroup))
+    gone |= {
+        at for where in memory.dead_stores(blocks, found.resolve, found.calls, found.dgroup).values() for at in where
+    }
     out: list[Planned] = []
-    for one in sorted(forward.removable(blocks, found.resolve, found.calls, found.dgroup)):
+    for one in sorted(gone):
         insn = at_of.get(one)
         if insn is None:
             continue
