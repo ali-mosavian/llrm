@@ -92,3 +92,41 @@ def test_a_removable_load_has_a_provider_with_no_call_between(obj: Path) -> None
                 if isinstance(got, memory.Access) and got.addr == mine.addr and got.width == mine.width:
                     provider = insn.at
             assert provider is not None, f"{one:#06x} has no provider of its own bytes with no call between"
+
+
+def test_an_accumulate_is_not_a_load() -> None:
+    """`and cx,[x]` reads memory into cx and is not a load of it.
+
+    iced reports cx as READ_WRITE there and WRITE in `mov cx,[x]`, which is
+    the whole difference: the and combines the loaded bytes with what cx
+    already held, so treating it as the load's provider throws the and
+    away. arith-v-plain 0x123 and 0x127 are exactly this, and a pass that
+    forwarded them emitted a program computing 0f0f0f0f where arith wants
+    1f3f5f7f -- on nine of twelve real-compiler configurations, with the
+    whole host suite green.
+
+    removable() has never deleted one, because it fires only when the
+    register already holds the loaded bytes and `cx = cx and cx` is cx.
+    That is luck, not a rule: `cx = cx - cx` is zero.
+    """
+
+    found = corpus.loaded(Path("fixtures/omf/arith-v-plain.obj"))
+    assert found is not None
+    seen = 0
+    for block in corpus.partitioned(Path("fixtures/omf/arith-v-plain.obj")):
+        for insn in block.insns:
+            if insn.at in (0x123, 0x127):
+                seen += 1
+                assert not forward._loads_only(insn), f"{insn.insn} read as a plain load"
+                assert forward._lands_in(insn) is None
+    assert seen == 2, "the two accumulate sites are gone from the fixture"
+
+
+@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
+def test_every_removal_is_a_load_and_not_an_accumulate(obj: Path) -> None:
+    """The rule, corpus-wide: nothing removable reads its own register."""
+    hits = removable(obj)
+    for block in corpus.partitioned(obj):
+        for insn in block.insns:
+            if insn.at in hits:
+                assert forward._loads_only(insn), f"{obj.stem} {insn.at:#x}: {insn.insn}"

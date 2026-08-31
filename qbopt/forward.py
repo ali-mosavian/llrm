@@ -46,8 +46,36 @@ from qbopt.declen import INFO
 from qbopt.declen import Insn
 from qbopt.module import Addr
 from qbopt.blocks import Block
+from qbopt.declen import READS
 from qbopt.declen import WRITES
 from qbopt.lift import Resolver
+
+
+def _loads_only(insn: Insn) -> bool:
+    """Whether this instruction merely reads memory into its register.
+
+    `mov cx,[x]` does. `and cx,[x]` does not, and iced says so plainly: it
+    reports cx as READ_WRITE there and WRITE in the mov, because the and
+    combines the loaded bytes with what the register already held.
+
+    removable() needs this and did not have it. The hole never fired --
+    all 30 of its hits are movs with or without the check -- because it
+    only deletes a load whose register ALREADY holds the loaded bytes, and
+    `cx = cx and cx` is cx. `cx = cx - cx` is not, so the check is what
+    makes that luck into a rule.
+
+    A sibling pass forwarding a load into a register move rather than
+    deleting it found 24 sites without this check and none with it: every
+    one was `and reg,[x]`, where the forward was right and dropping the
+    and was not. Wired up, it computed 0f0f0f0f where arith wants
+    1f3f5f7f on nine of the twelve real-compiler configurations -- caught
+    by tools/matrix.py with the whole host suite green. There is nothing
+    left for it to do, so it is not here: BC keeps values in memory, and a
+    reload whose bytes sit in a *different* register than the reload names
+    is a shape it does not emit.
+    """
+    reads = {one.register for one in INFO.info(insn.insn).used_registers() if one.access in READS}
+    return not any(one.register in reads for one in INFO.info(insn.insn).used_registers() if one.access in WRITES)
 
 
 def _lands_in(insn: Insn) -> Register_ | None:
@@ -58,12 +86,18 @@ def _lands_in(insn: Insn) -> Register_ | None:
     """
     from qbopt.mir import TRACKED
 
+    if not _loads_only(insn):
+        return None
     found = {
         ir.ROOT.get(one.register, one.register)
         for one in INFO.info(insn.insn).used_registers()
         if ir.ROOT.get(one.register, one.register) in TRACKED
     }
     return next(iter(found)) if len(found) == 1 else None
+
+
+def _root_of(register: Register_ | None) -> Register_ | None:
+    return None if register is None else ir.ROOT.get(register, register)
 
 
 def removable(
