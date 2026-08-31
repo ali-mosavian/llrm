@@ -541,3 +541,55 @@ def test_strength_reduction_only_applies_to_the_multiply() -> None:
     encoder = BlockEncoder(BITNESS)
     encoder.add(calls.apply_to(calls.COMPARE, operand))
     assert "cmp" in str(next(iter(Decoder(BITNESS, encoder.encode(0), ip=0))))
+
+
+@pytest.mark.parametrize("value", [2, 16, 512, 262144, 1 << 31])
+def test_a_power_of_two_divisor_is_recognised(value: int) -> None:
+    assert calls._power_of_two(value) == value.bit_length() - 1
+
+
+@pytest.mark.parametrize("value", [0, 1, -2, -512, 3, 7, 100, (1 << 32)])
+def test_anything_else_is_not(value: int) -> None:
+    """1 is excluded with the rest: dividing by it is a no-op, not a shift by
+    zero, and a sequence for a case nothing asks for is a case nothing checks."""
+    assert calls._power_of_two(value) is None
+
+
+MASK = 0xFFFFFFFF
+
+
+def _signed(v: int) -> int:
+    return v - (1 << 32) if v & 0x80000000 else v
+
+
+def _model(name: str, x: int, n: int) -> int:
+    """The sequence dividing_by_a_power_of_two emits, executed."""
+    eax, scratch = x & MASK, x & MASK
+    scratch = (_signed(scratch) >> 31) & MASK
+    scratch = (scratch & MASK) >> (32 - n)
+    if name == calls.REMAINDER:
+        scratch = (scratch + eax) & MASK
+        scratch &= -(1 << n) & MASK
+        return _signed((eax - scratch) & MASK)
+    eax = (eax + scratch) & MASK
+    return _signed((_signed(eax) >> n) & MASK)
+
+
+def _truncating(a: int, b: int) -> int:
+    q = abs(a) // abs(b)
+    return q if (a < 0) == (b < 0) else -q
+
+
+@pytest.mark.parametrize("n", range(1, 32))
+@pytest.mark.parametrize(
+    "x", [0, 1, -1, 2, -2, 511, 512, 513, -511, -512, -513, 2**31 - 1, -(2**31), 123456789, -123456789]
+)
+def test_the_shift_sequence_truncates_towards_zero_like_idiv(n: int, x: int) -> None:
+    """A signed shift alone rounds towards minus infinity -- -1 >> 1 is -1,
+    not 0 -- and the language and idiv both truncate towards zero. The bias
+    is the whole difference, and getting it wrong is off-by-one on every
+    negative dividend, which no byte comparison would catch.
+    """
+    divisor = 1 << n
+    assert _model(calls.DIVIDE, x, n) == _truncating(x, divisor)
+    assert _model(calls.REMAINDER, x, n) == x - _truncating(x, divisor) * divisor

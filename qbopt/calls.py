@@ -656,8 +656,22 @@ def consume(site: CallSite, live: Flag, restore: bool = True) -> Emitted | str:
     # same way.
     targets = CONSUME_TARGETS[site.name]
     steps: list[Instruction] = [popped_into(target) for target in targets]
+
+    # The pops stay whatever the operands turn out to be: consume()'s own
+    # invariant is that every byte pushed comes back off, and reading a
+    # group's value does not change how much stack it took. What it can
+    # change is the arithmetic that follows -- a divisor that is a constant
+    # power of two needs no idiv, and BC's own hot loops divide by one.
+    # grouped() returns deepest first, and CONSUME_TARGETS pops topmost
+    # first, so the divisor is groups[0] and the dividend groups[-1].
+    divisor = groups[0] if site.name in DIVIDES and len(groups) == 2 else None
+    known = constant_at(divisor[0]) if divisor is not None and len(divisor) == 1 else None
+    shift = _power_of_two(known.value) if known is not None else None
+
     if site.name == MULTIPLY:
         steps.append(Instruction.create_reg_reg(Code.IMUL_R32_RM32, Register.EAX, Register.ECX))
+    elif shift is not None:
+        steps.extend(dividing_by_a_power_of_two(site.name, shift, Register.ECX))
     elif site.name in DIVIDES:
         steps.append(Instruction.create(Code.CDQ))
         steps.append(Instruction.create_reg(Code.IDIV_RM32, Register.ECX))
@@ -669,6 +683,53 @@ def consume(site: CallSite, live: Flag, restore: bool = True) -> Emitted | str:
     if restore:
         steps.extend(restoring())
     return assemble(steps, {})
+
+
+def _power_of_two(value: int) -> int | None:
+    """n where value is 2**n, for 1 <= n <= 31, else None."""
+    if value <= 1 or value & (value - 1):
+        return None
+    n = value.bit_length() - 1
+    return n if 1 <= n <= 31 else None
+
+
+def dividing_by_a_power_of_two(name: str, n: int, scratch: Register_) -> list[Instruction]:
+    """RESULT divided by 2**n, or its remainder, without an idiv.
+
+    A signed shift alone is not a divide: it rounds towards minus infinity
+    where the language and idiv both truncate towards zero, so -1 >> 1 is
+    -1 and not 0. The bias fixes exactly that -- replicate the sign into
+    every bit, keep the low n of it, and add 2**n-1 before shifting only
+    where the value was negative.
+
+        mov  scratch,eax / sar scratch,31 / shr scratch,32-n
+        add  eax,scratch / sar eax,n
+
+    which is what gcc and clang emit for `x / 512` on an i386. Their own
+    output uses cmov for the same job, and cmov is a Pentium Pro
+    instruction -- targeting i386 explicitly is what produces this form,
+    and it is the one that runs on the machine BC compiles for.
+
+    idiv is around 43 cycles on a 386 against five single-cycle operations
+    here, at seven bytes more. The remainder needs one more step: mask the
+    biased value down to a multiple of 2**n and subtract it.
+
+    Verified against truncating division over every n and the boundary
+    values on both signs, including -2**31 -- see tests/test_calls.py.
+    """
+    steps = [
+        Instruction.create_reg_reg(Code.MOV_R32_RM32, scratch, RESULT),
+        Instruction.create_reg_i32(Code.SAR_RM32_IMM8, scratch, 31),
+        Instruction.create_reg_i32(Code.SHR_RM32_IMM8, scratch, 32 - n),
+    ]
+    if name == REMAINDER:
+        steps.append(Instruction.create_reg_reg(Code.ADD_R32_RM32, scratch, RESULT))
+        steps.append(Instruction.create_reg_i32(Code.AND_RM32_IMM32, scratch, -(1 << n)))
+        steps.append(Instruction.create_reg_reg(Code.SUB_R32_RM32, RESULT, scratch))
+        return steps
+    steps.append(Instruction.create_reg_reg(Code.ADD_R32_RM32, RESULT, scratch))
+    steps.append(Instruction.create_reg_i32(Code.SAR_RM32_IMM8, RESULT, n))
+    return steps
 
 
 def dividing(site: CallSite, live: Flag, restore: bool = True) -> Emitted | str:
@@ -696,6 +757,14 @@ def dividing(site: CallSite, live: Flag, restore: bool = True) -> Emitted | str:
     where = add(load_of(left))
     if left.kind is Kind.STATIC and left.at is not None:
         relocated[where] = left.at
+
+    if right.kind is Kind.CONSTANT and (n := _power_of_two(right.value)) is not None:
+        for insn in dividing_by_a_power_of_two(site.name, n, divisor):
+            add(insn)
+        if restore:
+            for insn in restoring():
+                add(insn)
+        return assemble(steps, relocated)
 
     if right.kind is Kind.CONSTANT:
         add(Instruction.create_reg_i32(Code.MOV_R32_IMM32, divisor, right.value))
