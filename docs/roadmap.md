@@ -139,8 +139,13 @@ the corpus and 616 over qb-qrender against the patched output.
 
 An emitted instruction goes where it is needed, not where the old one stood.
 
-- [ ] a definition moves within its block, bounded by its own uses
-- [ ] target liveness decides, as `simplify._target_is_free` already does for one case
+- [x] a definition moves within its block, bounded by its own uses —
+      `transform.placed()`, sinking to just before the first use. Built and
+      switched **off**: it is the only transform here that changes the order
+      instructions run in, and its benefit is indirect
+- [x] what stops a move: nothing between may write what the op reads, and
+      nothing may touch the register it writes. Values are per-definition
+      and registers are shared, which is the part SSA hides
 
 Proof: nbody's two `ecx` rejoins stop being special-cased, and the "the
 source is gone by then" refusals in `simplify.py` and `avail.py` disappear.
@@ -205,23 +210,24 @@ Done when the old path is deleted, not when MIR also does it.
       a pair straddling a block boundary means the high half is a branch
       target, and folding it would leave that jump landing inside an
       instruction
-- [ ] absorption and strength reduction — `calls.py`. Measured: 831 of the
-      corpus's 923 absorbable calls have something other than a push
-      immediately before them, so recovering the arguments needs the
-      block-scoped depth model `stack.py` already has, restated over
-      `Space.STACK`. Parity work: the same optimisation either way
-- [ ] load forwarding — `forward.py`; `avail.py` has the cross-block half.
-      Measured: `avail.loaded_into` models 0 of the 36 sites `forward.py`
-      deletes, and always for the same reason. MIR is right and the gate is
-      too blunt: `mov ax,[x]` writes 16 bits of a 32-bit variable, so the
-      high half survives and MIR records a use of the old `eax`. That is a
-      real read, so "a plain load reads nothing but its address" refuses it.
-      The machine pass is sound anyway, because the site it deletes is one
-      where the register already holds those bytes -- a no-op leaves the
-      high half alone whether it runs or not. Saying that in MIR means
-      letting `loaded_into` accept a use that is the destination's own
-      previous value under a partial write, which is the `HALF_TO_LOW` and
-      `CONCAT_LOW` machinery `mir.py` already has for pairs
+- [x] recovering the arguments — `mir._stack_slot` keeps the depth across a
+      recognised call now, which is what put 831 of the corpus's 923
+      absorbable calls out of reach: an argument pushed before some *other*
+      call runs is stranded under it, and its slot is only nameable if the
+      depth crossed that call. `transform.arguments()` reads them off
+- [ ] **emitting the absorbed call** — the half that is left, and the one
+      piece of M5 that should not be written without running anything.
+      `calls.py` does it in some five hundred lines: which operand goes in
+      which register, the `cdq` before an `idiv`, where the result lands,
+      and a scratch register for `B$CPI4` because that routine clobbers
+      nothing and absorbing it must not either. A code generator is not
+      something to write blind
+- [x] load forwarding — `avail.redundant()`. What blocked it was
+      `loaded_into` refusing a partial write: `mov ax,[x]` writes sixteen
+      bits of a thirty-two bit variable, so the high half survives and MIR
+      records a read of the old `eax`. A real read, and not the instruction
+      consulting memory, which is the question being asked -- so all 36
+      sites came back "not a plain load" and none was anything else
 - [x] dead stores — `avail.dead_stores()`, block-scoped and starting empty
       at each block's end, which costs a store that spans an edge and can
       never invent one that does not

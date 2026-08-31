@@ -147,6 +147,7 @@ def applied(
     widen: bool = True,
     drop_loads: bool = True,
     drop_stores: bool = True,
+    place: bool = False,
 ) -> MirBody:
     """Every transform this module has, in the order they help each other.
 
@@ -160,4 +161,165 @@ def applied(
         body = without_redundant_loads(body, dgroup, calls)
     if drop_stores:
         body = without_dead_stores(body, dgroup, calls)
+    # Off by default. Sinking a definition is the only transform here that
+    # changes the order instructions run in, and its own benefit is
+    # indirect -- shorter live ranges, which other passes then use. It gets
+    # switched on when something asks for that, not before.
+    if place:
+        body = placed(body)
     return body
+
+
+def _may_move(op: Op) -> bool:
+    """Whether moving this op within its block could change the program.
+
+    Refused outright: a barrier, whose behaviour is its encoding's; a call,
+    which is a barrier for everything this does not model; anything that
+    touches memory, because two accesses only commute when they provably do
+    not alias and this asks a cheaper question than that; and anything
+    defining or using the flags, because a comparison and the branch reading
+    it are joined by a value whose live range is one instruction and which
+    nothing may be placed inside.
+    """
+    if op.barrier or op.loads or op.stores:
+        return False
+    if any(one.flags for one in (*op.defines, *op.uses)):
+        return False
+    return op.node is not None or op.made is not None
+
+
+def _placed(ops: list[Op], origin: dict) -> list[Op]:
+    """`ops` with each movable definition as late as its uses allow.
+
+    Sinking, not hoisting: a definition moved down to just before the first
+    op that reads it shortens its live range, which is the whole point --
+    the value stops occupying a register across everything in between.
+
+    One pass, backwards, and only within the block. A definition with no use
+    in this block cannot move, because its use is somewhere this cannot see
+    and "as late as its uses allow" has no answer.
+    """
+    first_use: dict[int, int] = {}
+    for index, op in enumerate(ops):
+        for value in op.uses:
+            first_use.setdefault(value.id, index)
+
+    out = list(ops)
+    for index in range(len(out) - 1, -1, -1):
+        op = out[index]
+        if not _may_move(op):
+            continue
+        made = [one for one in op.defines if not one.flags]
+        if len(made) != 1:
+            continue
+        wanted = first_use.get(made[0].id)
+        if wanted is None or wanted <= index + 1:
+            continue
+        # Two things stop it, and the second is the one SSA hides. Nothing
+        # between here and there may write what this op reads, or the value
+        # it computes is a different one. And nothing between may touch the
+        # *register* this op writes -- values are per-definition and
+        # registers are shared, so sinking a definition of ax past another
+        # definition of ax leaves this one clobbering it, and past a read of
+        # ax leaves that read seeing the wrong value.
+        reads = {one.id for one in op.uses}
+        into = origin.get(made[0])
+        blocked = False
+        for other in out[index + 1 : wanted]:
+            if other.barrier or any(value.id in reads for value in other.defines):
+                blocked = True
+                break
+            if into is not None and any(
+                origin.get(value) is into for value in (*other.defines, *other.uses)
+            ):
+                blocked = True
+                break
+        if blocked:
+            continue
+        moved = out.pop(index)
+        out.insert(wanted - 1, moved)
+    return out
+
+
+def placed(body: MirBody) -> MirBody:
+    """Every movable definition sunk to just before its first use.
+
+    M2, and the reason the roadmap puts it before LICM: nothing can be
+    hoisted out of a loop while an op's position is its address. Here a
+    block's op list is the order they are emitted in -- layout._ordered
+    stopped sorting by address for exactly this -- so a transform may
+    reorder within a block and the bytes follow.
+
+    What it buys directly is shorter live ranges, which is what
+    `simplify._target_is_free` and `avail.py` refuse sites over today.
+    """
+    return replace(
+        body,
+        blocks=tuple(replace(one, ops=tuple(_placed(list(one.ops), body.origin))) for one in body.blocks),
+    )
+
+
+# What each absorbed runtime routine computes, and the machine operation it
+# becomes. Named here rather than imported from calls.py, which is the arm
+# M5 retires; the contracts themselves are runtime.py's, read out of the
+# QuickBASIC 4.5 source.
+ABSORB = {
+    "B$MUI4": ("imul", ir.Operation.MULTIPLY),
+    "B$DVI4": ("idiv", ir.Operation.DIVIDE),
+    "B$RMI4": ("idiv", ir.Operation.DIVIDE),
+    "B$CPI4": ("cmp", ir.Operation.COMPARE),
+}
+
+# Which argument is pushed first. B$CPI4 takes its left operand first and the
+# three arithmetic routines take it last -- the one asymmetry between them,
+# and getting it backwards is a different answer, not a slower one.
+LEFT_FIRST = {"B$CPI4": True, "B$MUI4": False, "B$DVI4": False, "B$RMI4": False}
+
+
+def _slot(ref: mir.MemRef) -> int | None:
+    """The stack depth this reference names, or None if it is not one."""
+    from qbopt.module import Space
+
+    return ref.addr.disp if ref.addr is not None and ref.addr.space is Space.STACK else None
+
+
+def arguments(body: MirBody, calls: dict[int, str]) -> dict[int, tuple[mir.Value, ...]]:
+    """Each absorbable call's arguments, as the values that were pushed.
+
+    Block-scoped, and the whole point of mir._stack_slot keeping the depth
+    across a recognised call: an argument pushed before some *other* call
+    runs is stranded under it, and 831 of the corpus's 923 absorbable calls
+    have something other than a push immediately before them.
+
+    A push whose slot this cannot name gives up on that call rather than
+    guessing, and so does a call whose arguments are not all still on the
+    stack where they were put.
+    """
+    found: dict[int, tuple[mir.Value, ...]] = {}
+    for block in body.blocks:
+        live: dict[int, mir.Value] = {}
+        for op in block.ops:
+            name = calls.get(op.at)
+            if name is not None and name.upper() in ABSORB:
+                wanted = 2
+                # Top of stack first, so the deepest slot is the argument
+                # pushed earliest.
+                deep = sorted(live)
+                if len(deep) >= wanted:
+                    taken = tuple(live[one] for one in deep[:wanted])
+                    if name.upper() not in LEFT_FIRST or not LEFT_FIRST[name.upper()]:
+                        taken = tuple(reversed(taken))
+                    found[op.at] = taken
+                live = {}
+                continue
+            if op.barrier:
+                live = {}
+                continue
+            for ref in op.stores:
+                where = _slot(ref)
+                if where is None:
+                    continue
+                reading = [one for one in op.uses if not one.flags]
+                if len(reading) == 1:
+                    live[where] = reading[0]
+    return found

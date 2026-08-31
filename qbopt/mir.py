@@ -362,7 +362,25 @@ class _Namer:
         return held[-1]
 
 
-def _stack_slot(node: ir.Node, offset: int | None) -> tuple[int | None, Addr | None]:
+# How many bytes each runtime routine pops off before it returns: four per
+# long argument. Named here rather than imported from calls.py, which is the
+# machine arm and is what M5 retires -- and kept to the routines runtime.py
+# has actually read, so an unrecognised call still makes the depth unknown.
+CONSUMES = {
+    "B$MUI4": 8,
+    "B$DVI4": 8,
+    "B$RMI4": 8,
+    "B$CPI4": 8,
+    "FIXMUL": 12,
+}
+
+
+def _consumed(name: str) -> int | None:
+    """The bytes this routine takes off the stack, or None if unknown."""
+    return CONSUMES.get(name.upper())
+
+
+def _stack_slot(node: ir.Node, offset: int | None, name: str | None = None) -> tuple[int | None, Addr | None]:
     """Where a push or pop's own cell sits, and where sp is afterwards.
 
     `offset` is how far sp has moved since the top of this block, so a slot
@@ -392,13 +410,26 @@ def _stack_slot(node: ir.Node, offset: int | None) -> tuple[int | None, Addr | N
             return offset + width, Addr(Space.STACK, offset)
         case _:
             # A restore is push/pop/pop and nets to nothing, so the depth
-            # survives it. A call does not: it pushes a return address and
-            # the callee pops its own arguments, and while runtime.py knows
-            # the arity, tracking that is not needed for anything measured
-            # yet -- unknown is the honest answer and costs only the rest of
-            # this block.
+            # survives it.
             if isinstance(node, ir.Restore):
                 return offset, None
+            # A call pushes a return address and the callee pops both that
+            # and its own arguments, so a routine whose arity is known nets
+            # to exactly the arguments it consumed and the depth survives.
+            # This used to give up at every call, which is what put 831 of
+            # the corpus's 923 absorbable calls out of reach: an argument
+            # pushed before some other call runs is stranded under it, and
+            # its slot is only nameable if the depth crossed that call.
+            #
+            # Trusting it is the same three claims stack.py's own docstring
+            # sets out -- the count, that cleanup is the callee's, and that
+            # the call returns to the next byte -- and they rest on the
+            # QuickBASIC 4.5 runtime source, not on inference from the
+            # bytes. A routine this does not recognise still gives up.
+            if offset is not None and name is not None:
+                consumed = _consumed(name)
+                if consumed is not None:
+                    return offset + consumed, None
             found = getattr(node, "insn", None)
             if found is not None and stack.touches_sp(found):
                 return None, None
@@ -547,7 +578,7 @@ def raise_body(
             node = nodes.get(insn.at)
             if node is None:
                 continue
-            offset, slot = _stack_slot(node, offset)
+            offset, slot = _stack_slot(node, offset, calls.get(insn.at) if calls else None)
             defines, uses = _touched(node, calls)
             used = tuple(namer.current(one, start) for one in sorted(uses, key=lambda o: (o is not FLAGS, o)))
             loads = _memrefs(node.effects.loads, namer, start, slot)
