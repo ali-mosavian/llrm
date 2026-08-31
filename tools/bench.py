@@ -41,33 +41,35 @@ def ticks(text: str) -> int | None:
     return None
 
 
-def build(tag: str) -> tuple[Path, Path]:
+def build(tag: str, prog: str = "nbody", native_fpu: bool = False, transform=None) -> tuple[Path, Path]:
     cfg = CONFIGS[tag]
     if not cfg.available:
         raise SystemExit(f"no toolchain at {cfg.mount}; see docs/testing.md")
 
-    work = BUILD / tag
+    name = prog.upper()
+    work = BUILD / tag / prog
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
-    shutil.copy(BENCH / "nbody.bas", work / "NBODY.BAS")
+    shutil.copy(BENCH / f"{prog}.bas", work / f"{name}.BAS")
 
     launch(
         work,
         cfg.mount,
-        [f"{cfg.bc} {switches_for(cfg, 'nbody')} NBODY.BAS, NBODY.OBJ; >> BC.OUT"],
+        [f"{cfg.bc} {switches_for(cfg, prog)} {name}.BAS, {name}.OBJ; >> BC.OUT"],
         env={"LIB": r"V:\LIB"},
     )
-    obj = work / "NBODY.OBJ"
+    obj = work / f"{name}.OBJ"
     if not obj.is_file():
-        raise SystemExit(f"BC did not produce NBODY.OBJ; see {work / 'BC.OUT'}")
-    (work / "NBODYQ.OBJ").write_bytes(rewrite(obj.read_bytes(), dry_run=False)[0])
+        raise SystemExit(f"BC did not produce {name}.OBJ; see {work / 'BC.OUT'}")
+    change = transform or (lambda data: rewrite(data, dry_run=False, native_fpu=native_fpu)[0])
+    (work / f"{name}Q.OBJ").write_bytes(change(obj.read_bytes()))
 
     launch(
         work,
         cfg.mount,
         [
-            f"{cfg.link} NBODY.OBJ, BASE.EXE,, {cfg.runtime}; >> LINK.OUT",
-            f"{cfg.link} NBODYQ.OBJ, OPT.EXE,, {cfg.runtime}; >> LINK.OUT",
+            f"{cfg.link} {name}.OBJ, BASE.EXE,, {cfg.runtime}; >> LINK.OUT",
+            f"{cfg.link} {name}Q.OBJ, OPT.EXE,, {cfg.runtime}; >> LINK.OUT",
         ],
         env={"LIB": r"V:\LIB"},
     )
@@ -77,9 +79,9 @@ def build(tag: str) -> tuple[Path, Path]:
     return base, opt
 
 
-def run(tag: str, exe: Path, steps: int, reps: int) -> list[int]:
+def run(tag: str, exe: Path, steps: int, reps: int, prog: str = "nbody") -> list[int]:
     cfg = CONFIGS[tag]
-    work = BUILD / tag
+    work = BUILD / tag / prog
     readings = []
     for i in range(reps):
         launch(
@@ -103,14 +105,16 @@ def sha256(path: Path) -> str:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="bench")
     ap.add_argument("--config", default="v-g3", choices=list(CONFIGS))
+    ap.add_argument("--prog", default="nbody")
+    ap.add_argument("--native-fpu", action="store_true")
     ap.add_argument("--steps", type=int, default=2000)
     ap.add_argument("--reps", type=int, default=5)
     args = ap.parse_args(argv)
 
     cfg = CONFIGS[args.config]
-    base_exe, opt_exe = build(args.config)
-    base_ticks = run(args.config, base_exe, args.steps, args.reps)
-    opt_ticks = run(args.config, opt_exe, args.steps, args.reps)
+    base_exe, opt_exe = build(args.config, args.prog, args.native_fpu)
+    base_ticks = run(args.config, base_exe, args.steps, args.reps, args.prog)
+    opt_ticks = run(args.config, opt_exe, args.steps, args.reps, args.prog)
 
     for label, readings in (("base", base_ticks), ("opt", opt_ticks)):
         spread = max(readings) - min(readings)
