@@ -21,6 +21,7 @@ from iced_x86 import Register
 
 from qbopt import omf
 from qbopt import module
+from qbopt import forward
 from qbopt.lift import Op
 from qbopt.flags import ALL
 from qbopt.lift import lift
@@ -29,6 +30,7 @@ from qbopt.flags import Flag
 from qbopt.lift import FIXUP
 from qbopt.lift import Value
 from qbopt.calls import sites
+from qbopt.declen import Insn
 from qbopt.lift import needed
 from qbopt.lift import refuse
 from qbopt.blocks import Block
@@ -340,8 +342,61 @@ def plan(
                 edit,
             )
         )
+    for one in _dropped_loads(found, mapped, blocks, reached, planned):
+        planned.append(Planned(replace(one.region, id=len(planned)), one.edit))
+
     planned = drop_restore_repush_round_trips(found, mapped, planned)
     return drop_chained_crossings(planned, found.chunks)
+
+
+def _dropped_loads(
+    found: module.Module,
+    mapped: CodeMap,
+    blocks: list[Block],
+    reached: list[Insn],
+    planned: list[Planned],
+) -> list[Planned]:
+    """forward.removable(), as edits that delete the instruction outright.
+
+    The only rewrite here that emits nothing at all in place of something.
+    It is sound exactly where forward.py says it is -- the register already
+    holds those bytes, so the load writes what is already there -- and the
+    instruction can simply go, with no register changing and no byte around
+    it touched.
+
+    Refused where any other edit already covers it. A deletion composes with
+    a replacement of overlapping bytes the way two replacements do not: what
+    the other edit emits was decided against the original instruction stream
+    and would silently lose or keep this one depending on which ran first.
+    """
+    at_of = {insn.at: insn for insn in reached}
+    out: list[Planned] = []
+    for one in sorted(forward.removable(blocks, found.resolve, found.calls, found.dgroup)):
+        insn = at_of.get(one)
+        if insn is None:
+            continue
+        reason = anchored_inside(found, mapped, insn.at, insn.end)
+        if reason is None and any(
+            other.edit and other.edit.lo < insn.end and insn.at < other.edit.hi for other in planned
+        ):
+            reason = "it overlaps a region already taken"
+        edit = None if reason else Edit(insn.at, insn.end, b"", ())
+        out.append(
+            Planned(
+                Region(
+                    id=0,
+                    seg=found.seg,
+                    at=insn.at,
+                    end=insn.end,
+                    before=found.code[insn.at : insn.end].hex(),
+                    after="" if edit is not None else None,
+                    taken=edit is not None,
+                    reason=reason,
+                ),
+                edit,
+            )
+        )
+    return out
 
 
 # docs/residue.md's B: the literal 2 bytes BC's own code puts right after a

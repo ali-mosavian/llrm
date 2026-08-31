@@ -216,10 +216,26 @@ def test_a_real_pass_rewrites_the_code_and_keeps_the_records_readable(obj: Path)
         assert after_names[index] in (before_names[index], *(after_names[i] for i in live))
 
 
-def test_rewriting_the_output_finds_nothing_new(obj: Path) -> None:
+def test_rewriting_the_output_widens_or_absorbs_nothing_new(obj: Path) -> None:
+    """A second pass finds no widening and no call left to absorb.
+
+    It may find a load to delete, and that is not a failure of idempotence
+    but the point: absorbing a call removes a barrier, and a store and
+    reload the call used to sit between becomes visible only afterwards.
+    procs-q-O ends up with `mov [bp-12h],eax` immediately followed by
+    `mov eax,[bp-12h]`, which the first pass could not see because the call
+    was still there when it looked.
+
+    So the invariant is narrowed rather than dropped: everything that
+    rewrites bytes in place must still reach a fixed point in one pass, and
+    only deletion -- which is what a later pass creates work for -- may
+    appear on the second. Running the pass to a fixed point would collect
+    those too, and is its own piece of work.
+    """
     out, _ = corpus.rewritten(obj, dry_run=False)
     _, again = corpus.rewritten(out, dry_run=False)
-    assert [r for r in again if r.taken] == []
+    left = [r for r in again if r.taken and r.after != ""]
+    assert left == [], f"a second pass rewrote {len(left)} regions in place"
 
 
 def test_a_region_is_either_taken_or_says_why_not(obj: Path) -> None:
