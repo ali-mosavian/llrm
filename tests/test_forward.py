@@ -130,3 +130,46 @@ def test_every_removal_is_a_load_and_not_an_accumulate(obj: Path) -> None:
         for insn in block.insns:
             if insn.at in hits:
                 assert forward._loads_only(insn), f"{obj.stem} {insn.at:#x}: {insn.insn}"
+
+
+def test_a_widening_load_is_not_interchangeable_with_a_narrow_one() -> None:
+    """`movsx eax,word [x]` reads two bytes and writes four.
+
+    A store of `ax` to [x] puts the same two bytes there, so the map that
+    says "this register holds the bytes at this address" agrees -- and it is
+    wrong, because the store never touched eax's high half and the movsx
+    would have set it to the sign. Deleting the load leaves whatever was in
+    the high half before.
+
+    Found by tools/fuzzcheck.py on VBDOS /G3, seed 4200, program F028:
+
+        0x031c  mov ds:[0],ax              func38%'s INTEGER result
+        0x031f  movsx eax,word ptr ds:[0]  widened for a LONG expression
+
+    which printed 173682056 where it wanted 173747592 -- the function
+    returned 0, so the whole error is one stale high half, 65536.
+
+    Only on the second pass, because the movsx is qbopt's own: BC writes
+    `mov ax,[x]` then `cwd`, and pass one widens that pair.
+    """
+    from qbopt.declen import decode
+
+    store = decode(bytes([0xA3, 0x00, 0x00]), 0)  # mov [0],ax
+    widen = decode(bytes([0x66, 0x0F, 0xBF, 0x06, 0x00, 0x00]), 0)  # movsx eax,word [0]
+    assert store is not None and widen is not None
+    assert str(widen.insn) == "movsx eax,word ptr ds:[0]"
+
+    # The narrow store may serve a narrow load, and never the widening one.
+    assert forward._loads_only(widen)
+    assert not forward._whole_register(widen), "a movsx writes more of its register than it reads"
+    assert forward._whole_register(store)
+
+
+@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
+def test_nothing_removable_writes_more_than_it_reads(obj: Path) -> None:
+    """The rule, corpus-wide."""
+    hits = removable(obj)
+    for block in corpus.partitioned(obj):
+        for insn in block.insns:
+            if insn.at in hits:
+                assert forward._whole_register(insn), f"{obj.stem} {insn.at:#x}: {insn.insn}"

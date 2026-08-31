@@ -38,6 +38,8 @@ The conditions for dropping one, all of them necessary:
 """
 
 from iced_x86 import Register_
+from iced_x86 import RegisterExt
+from iced_x86 import MemorySizeExt
 
 from qbopt import ir
 from qbopt import memory
@@ -49,6 +51,39 @@ from qbopt.blocks import Block
 from qbopt.declen import READS
 from qbopt.declen import WRITES
 from qbopt.lift import Resolver
+
+
+def _whole_register(insn: Insn) -> bool:
+    """Whether this instruction's register write is no wider than its read.
+
+    `mov ax,[x]` writes exactly the two bytes it read. `movsx eax,word [x]`
+    reads the same two and writes four, setting the top half from the sign --
+    so the two are not interchangeable even though the map that says "this
+    register holds the bytes at this address" agrees about both.
+
+    That map is what removable() and the forwarding rules are built on, and
+    without this it deleted a widening load whose narrow provider had never
+    written the high half. tools/fuzzcheck.py found it on VBDOS /G3, seed
+    4200, program F028:
+
+        mov ds:[0],ax              func38%'s INTEGER result, two bytes
+        movsx eax,word ptr ds:[0]  widened for a LONG expression
+
+    Deleting the second printed 173682056 where 173747592 was wanted -- the
+    function returned 0, so the entire error is one stale high half.
+
+    Only reachable on a second pass, because the movsx is this pass's own
+    work: BC writes `mov ax,[x]` followed by `cwd`, and the widening turns
+    that pair into one instruction.
+    """
+    memory = MemorySizeExt.size(insn.insn.memory_size)
+    if not memory:
+        return True  # touches no memory; the width question does not arise
+    return not any(
+        RegisterExt.size(one.register) > memory
+        for one in INFO.info(insn.insn).used_registers()
+        if one.access in WRITES and one.register in ir.ROOT
+    )
 
 
 def _loads_only(insn: Insn) -> bool:
@@ -86,7 +121,7 @@ def _lands_in(insn: Insn) -> Register_ | None:
     """
     from qbopt.mir import TRACKED
 
-    if not _loads_only(insn):
+    if not _loads_only(insn) or not _whole_register(insn):
         return None
     found = {
         ir.ROOT.get(one.register, one.register)

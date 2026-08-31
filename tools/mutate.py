@@ -38,6 +38,14 @@ class Mutation:
 
 MUTATIONS = (
     Mutation(
+        "widening-load-removed",
+        "qbopt/forward.py",
+        "    memory = MemorySizeExt.size(insn.insn.memory_size)",
+        "    memory = 0x7FFFFFFF  # every write looks narrow",
+        "`movsx eax,word [x]` reads two bytes and writes four, so a store of ax to "
+        "[x] is not a provider for it -- deleting the load leaves the high half stale",
+    ),
+    Mutation(
         "written-operand-substituted",
         "qbopt/reencode.py",
         "    if any(one.access in WRITES for one in INFO.info(insn.insn).used_memory()):",
