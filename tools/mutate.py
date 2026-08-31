@@ -56,8 +56,8 @@ MUTATIONS = (
     Mutation(
         "accumulate-read-as-a-load",
         "qbopt/avail.py",
-        "    if set(_real(op.uses)) - _addressing(op):",
-        "    if False:",
+        "    reading = set(_real(op.uses)) - _addressing(op) - _preserved(op, defines[0], origin)",
+        "    reading = set()",
         "`and cx,[x]` reads cx as data as well as defining it, so the bytes it "
         "leaves there are not the cell's -- taking it as a provider forwards the "
         "wrong value",
