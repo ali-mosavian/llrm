@@ -49,6 +49,7 @@ from qbopt.module import Space
 from qbopt.declen import BITNESS
 from qbopt.flags import DIVERGENT
 from qbopt.declen import to_signed
+from qbopt.module import far_pointer
 from qbopt.module import literal_only
 from qbopt.module import frame_relative
 
@@ -209,6 +210,14 @@ HALF_OF = {
 
 type Resolver = Callable[[int, int], Addr]
 
+# A `ds:` prefix on one of these addressing modes names exactly the segment
+# that mode already defaults to -- BC spells it out anyway (`mov es,ds:[0]`,
+# 208 times in qb-qrender) without changing what the address means, so it is
+# not a second segment to track, just a redundant byte. bp is deliberately
+# absent: its default is ss, so a `ds:` there would be a genuine override,
+# and there is none in the measured corpus to say what it should resolve to.
+REDUNDANT_DS = frozenset({Register.NONE, Register.SI, Register.DI})
+
 
 def operand(insn: Insn, resolve: Resolver) -> Addr | None:
     """Where this instruction's memory operand points, or None if it has none.
@@ -220,14 +229,30 @@ def operand(insn: Insn, resolve: Resolver) -> Addr | None:
     base -- but two elements at the same displacement are different addresses
     unless the register indexing them agrees too, so that register comes along.
 
-    Refuses a segment-override prefix outright: this pass has no notion of a
-    segment at all, and would otherwise conflate `es:[x]` with `ds:[x]`.
-    Measured: zero instances in the reachable code of any of the 110 real
-    fixtures, so this is a latent gap closed defensively, not a fix to an
-    observed failure. Also refuses a Space.GROUP address -- see that space's
-    own comment in module.py.
+    A segment override is refused unless it can be named rather than merely
+    ignored. `es:[x]` and `ds:[x]` used to be conflated because this pass had
+    no notion of a segment at all; now Addr carries one (Space.FAR's own
+    `segment` field), so an override is resolved -- as a Space.FAR address,
+    through the register that names it -- everywhere that field can hold a
+    real answer, and refused everywhere it cannot. Measured against
+    qb-qrender: every one of 11,150 segment-override instructions is `bx`
+    with no index, so that is the one shape resolved; a `ds:` prefix on a mode
+    that already defaults to ds (REDUNDANT_DS) is not an override to record at
+    all. Anything else -- an override on bp, or on a base other than bx --
+    stays refused: there is nothing measured to say what it should resolve to,
+    and refusing is always the safe answer. Also refuses a Space.GROUP address
+    -- see that space's own comment in module.py.
     """
-    if insn.disp_at is None or insn.memory_index != Register.NONE or insn.has_segment_override:
+    if insn.memory_index != Register.NONE:
+        return None
+    override = insn.segment_override
+    if override != Register.NONE and override != Register.DS:
+        if insn.memory_base != Register.BX:
+            return None
+        return far_pointer(insn.displacement, Register.BX, override)
+    if override == Register.DS and insn.memory_base not in REDUNDANT_DS:
+        return None
+    if insn.disp_at is None:
         return None
     match insn.memory_base:
         case Register.NONE:

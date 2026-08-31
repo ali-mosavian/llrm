@@ -105,13 +105,13 @@ class Insn:
         return (self.insn.op0_kind if operand == 0 else self.insn.op1_kind) == MEMORY
 
     @property
-    def has_segment_override(self) -> bool:
-        """Whether this instruction carries an explicit segment prefix.
+    def segment_override(self) -> Register_:
+        """The register an explicit segment prefix names, or NONE.
 
-        Nothing in the reachable code of any of the 110 real fixtures has
-        one (measured), so this is a latent gap closed defensively: lift.py's
-        operand() has no notion of a segment at all and would otherwise
-        conflate `es:[x]` with `ds:[x]`.
+        Absent from the reachable code of any of the 110 real fixtures
+        (measured); qb-qrender's own $DYNAMIC array code is where it is
+        common -- 11,150 instructions, always `es:[bx]` or `es:[bx+2]`
+        (module.Space.FAR's own comment has the full breakdown).
 
         Blind to one shape by construction: `emulated()`'s own SEGMENTED
         stand-in (`stood_in_for()`, above) strips a real `es:`/etc. prefix
@@ -122,7 +122,11 @@ class Insn:
         genuinely overridden emulated instruction would silently pass this
         check rather than fail it.
         """
-        return self.insn.segment_prefix != NO_REGISTER
+        return self.insn.segment_prefix
+
+    @property
+    def has_segment_override(self) -> bool:
+        return self.segment_override != NO_REGISTER
 
     def register(self, operand: int) -> Register_:
         return self.insn.op0_register if operand == 0 else self.insn.op1_register

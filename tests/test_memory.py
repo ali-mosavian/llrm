@@ -11,7 +11,9 @@ from iced_x86 import Register
 import corpus
 from qbopt import memory
 from qbopt.declen import run
+from qbopt.blocks import Ends
 from qbopt.module import Addr
+from qbopt.blocks import Block
 from qbopt.module import Space
 from qbopt.module import literal_only
 
@@ -80,6 +82,47 @@ def test_a_different_base_register_is_never_settled_by_arithmetic() -> None:
     cell = Addr(Space.SEGMENT, 0x6, 5, Register.SI)
     write = memory.Access(Addr(Space.SEGMENT, 0x40, 5, Register.DI), 4, False, True)
     assert memory.aliases(cell, write, DGROUP) is True
+
+
+@pytest.mark.parametrize(
+    ("cell_disp", "write_disp", "expected"),
+    [(0x6, 0x6, True), (0x7, 0x6, True), (0xA, 0x6, False), (0x2, 0x6, False)],
+)
+def test_two_far_accesses_through_one_bx_are_plain_arithmetic_too(
+    cell_disp: int, write_disp: int, expected: bool
+) -> None:
+    """es:[bx+6] and es:[bx+10] differ by their displacements exactly as two
+    si-indexed statics do -- the same argument, one register up, sound only
+    while both bx AND es are unchanged between them."""
+    cell = Addr(Space.FAR, cell_disp, base=Register.BX, segment=Register.ES)
+    write = memory.Access(Addr(Space.FAR, write_disp, base=Register.BX, segment=Register.ES), 4, False, True)
+    assert memory.aliases(cell, write, DGROUP) is expected
+
+
+def test_a_different_segment_register_is_never_settled_by_arithmetic() -> None:
+    """es:[bx+6] and ss:[bx+6] can be the same byte; nothing here knows es <> ss,
+    the segment-register counterpart of the si/di case above."""
+    cell = Addr(Space.FAR, 0x6, base=Register.BX, segment=Register.ES)
+    write = memory.Access(Addr(Space.FAR, 0x6, base=Register.BX, segment=Register.SS), 4, False, True)
+    assert memory.aliases(cell, write, DGROUP) is True
+
+
+def test_reloading_the_segment_register_drops_a_tracked_far_cell() -> None:
+    """`mov ax,es:[bx]` / `mov es,[si+2]` / `mov dx,es:[bx]` -- the middle
+    instruction reloads es, so the third load may not be reported redundant
+    even though its own address, read alone, matches the first load's."""
+    reload_es = "26 8B 07" + "8E 44 02" + "26 8B 17"  # mov ax,es:[bx] / mov es,[si+2] / mov dx,es:[bx]
+    no_reload = "26 8B 07" + "26 8B 17"  # mov ax,es:[bx] / mov dx,es:[bx], back to back
+
+    def redundant_at(hex_bytes: str) -> tuple[int, ...]:
+        code = bytes.fromhex(hex_bytes.replace(" ", ""))
+        insns, tail = run(code, 0, len(code))
+        assert tail is None, "every byte in this hand-built sequence decodes"
+        block = Block(0, len(code), tuple(insns), Ends.FALLS_THROUGH, ())
+        return memory.redundant_loads([block], literal_only, {}, frozenset())[0]
+
+    assert redundant_at(no_reload) == (3,), "the second es:[bx] load is redundant when nothing reloads es"
+    assert redundant_at(reload_es) == (), "reloading es must clear that cell's own availability"
 
 
 def test_an_unknown_call_is_a_barrier_by_construction() -> None:

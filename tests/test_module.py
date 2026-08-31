@@ -152,6 +152,27 @@ OTHER = frozenset({9})
         ),
         # a group-target address is never provably disjoint from anything
         (module.Addr(module.Space.FRAME, -4), module.Addr(module.Space.GROUP, 0, 1), True),
+        # two es:[bx] accesses -- never provably disjoint here even when the
+        # displacements do not meet, the same catch-all an si-indexed static
+        # gets: proving them apart needs bx AND es both unchanged, which is
+        # memory.aliases()'s own business, not this arithmetic-only layer's
+        (
+            module.Addr(module.Space.FAR, 0, base=module.Register.BX, segment=module.Register.ES),
+            module.Addr(module.Space.FAR, 64, base=module.Register.BX, segment=module.Register.ES),
+            True,
+        ),
+        # different segment registers, same bx -- still never provably disjoint
+        (
+            module.Addr(module.Space.FAR, 0, base=module.Register.BX, segment=module.Register.ES),
+            module.Addr(module.Space.FAR, 0, base=module.Register.BX, segment=module.Register.SS),
+            True,
+        ),
+        # a far pointer against an ordinary static: nothing here can rule it out
+        (
+            module.Addr(module.Space.FAR, 0, base=module.Register.BX, segment=module.Register.ES),
+            module.Addr(module.Space.SEGMENT, 0, 9),
+            True,
+        ),
     ],
 )
 def test_may_alias(a: module.Addr, b: module.Addr, expected: bool) -> None:

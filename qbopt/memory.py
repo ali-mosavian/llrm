@@ -40,6 +40,16 @@ before that instruction's own access is recorded. Without this, an array
 element can never be forwarded to itself, and BC's array code is nothing
 but indexed accesses.
 
+A $DYNAMIC array element (`es:[bx]`, module.Space.FAR) is this same argument
+with a second register in play: `es:[bx+6]` and `es:[bx+10]` differ by
+arithmetic only while BOTH bx and es still hold what they held, so a cell is
+dropped on a write to either one, not just to bx -- `_forward`'s own
+clobber-drop checks `c.segment` alongside `c.base` for exactly this reason.
+`mov es,[desc+2]` (17,593 of them in qb-qrender) is the load that makes this
+matter: it is a plain register write as far as `_clobbered` is concerned, and
+every tracked es:bx cell has to die there the same way a tracked si-indexed
+cell already dies at a write to si.
+
 **A call is what its contract says.** runtime.py, not a name list -- a
 routine with no entry there comes back worst-case, so an unknown call is a
 barrier by construction. Measured, this buys little on its own (the print
@@ -137,12 +147,20 @@ def aliases(cell: Addr, access: Access, dgroup: frozenset[int]) -> bool:
     register settles -- see this module's own docstring. The precondition is
     the caller's: `cell` must not have survived a write to its base register,
     which `_step` enforces by dropping those cells first.
+
+    A Space.FAR cell's `segment` register is part of that same precondition,
+    one level up: `es:[bx+6]` and `es:[bx+10]` differ by arithmetic only
+    while both bx AND es still hold what they held, so the fast path is
+    sound only when the segment registers agree too -- `cell.space ==
+    access.addr.space` already implies both sides are Space.FAR whenever
+    `segment` is not NONE, so this line is a no-op for every other space.
     """
     same_base = (
         cell.base != Register.NONE
         and cell.base == access.addr.base
         and cell.space == access.addr.space
         and cell.index == access.addr.index
+        and cell.segment == access.addr.segment
     )
     if same_base:
         return cell.disp < access.addr.disp + access.width and access.addr.disp <= cell.disp
@@ -157,18 +175,25 @@ def _clobbered(insn: Insn) -> frozenset[Register_]:
     )
 
 
+SURVIVES_THE_FRAME = (Space.SEGMENT, Space.FAR)
+
+
 def statics_of(blocks: list[Block], resolve: Resolver) -> frozenset[Addr]:
-    """Every SEGMENT cell anything in these blocks names.
+    """Every SEGMENT or FAR cell anything in these blocks names.
 
     Backward liveness needs it as the conservative answer at a body's exit
     and at any barrier: a static may be read by another procedure, where a
-    frame slot dies with the frame.
+    frame slot dies with the frame. A $DYNAMIC array element is the same
+    case one level removed -- the array itself outlives the procedure that
+    happens to be indexing it through es:bx, so a store through one is exactly
+    as live past a return as a store to a named static, not as dead as a
+    spilled temporary.
     """
     found: set[Addr] = set()
     for block in blocks:
         for insn in block.insns:
             access = access_of(insn, resolve)
-            if isinstance(access, Access) and access.addr.space is Space.SEGMENT:
+            if isinstance(access, Access) and access.addr.space in SURVIVES_THE_FRAME:
                 found.update(access.cells)
     return frozenset(found)
 
@@ -230,7 +255,17 @@ def _forward(
         if access is None:
             continue
         if wrote := step.clobbers:
-            have = {c for c in have if c.base == Register.NONE or ROOT.get(c.base, c.base) not in wrote}
+            # a Space.FAR cell's segment register is dropped the same way its
+            # base is -- `mov es,[si+2]` reloading es invalidates an es:bx
+            # cell exactly as `mov bx,...` invalidates it, and es is never a
+            # ROOT key so ROOT.get leaves it as itself, same as any other
+            # register this pass does not root.
+            have = {
+                c
+                for c in have
+                if (c.base == Register.NONE or ROOT.get(c.base, c.base) not in wrote)
+                and (c.segment == Register.NONE or c.segment not in wrote)
+            }
         if access.reads and not access.writes and found is not None and all(c in have for c in access.cells):
             found.append(step.at)
         if access.writes:

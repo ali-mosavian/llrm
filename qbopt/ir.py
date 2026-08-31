@@ -216,6 +216,9 @@ class Operation(StrEnum):
     """
 
     MOVE = "move"  # dests[0] <- sources[0]
+    # a genuine swap: dests[0] <- sources[0] and dests[1] <- sources[1], where sources[0] is the OTHER
+    # operand's old value -- both operands are read and both written, unlike MOVE's one-way copy.
+    EXCHANGE = "xchg"
     ADDRESS = "addr"  # dests[0] <- the numeric value of sources[0]
     BINARY = "binary"  # dests[0] <- sources[0] `name` sources[1], and sources[0] IS dests[0]
     # dests[0] <- sources[0] * sources[1]; unlike BINARY, no source need be the dest. The widening
@@ -403,15 +406,25 @@ IMMEDIATE_WIDTH = {
 def _location(insn: Insn, index: int, resolve: Resolver) -> Loc | None:
     """One operand as a typed location, or None if this layer cannot say.
 
-    None is the refusal that keeps the vocabulary honest: a segment register,
-    a far branch, a string operand's implicit es:di -- anything a builder
-    cannot express reaches here, and the whole instruction falls back to
-    Operation.BARRIER rather than being described half-right.
+    A segment register is a location like any other GPR -- `mov es,[si+2]`
+    reloads it the same way `mov ax,[si+2]` reloads ax, and Reg already
+    carries a register rather than assuming one of the roots ROOT names, so
+    nothing about it needs a GPR. The ISA is what keeps this from over-
+    claiming: es/ds/ss/cs appear only as a mov, push or pop operand, never in
+    an arithmetic one, so BINARY/COMPARE/etc. never actually see one here.
+
+    None is the refusal that keeps the vocabulary honest: a far branch, a
+    string operand's implicit es:di, a segment override this pass cannot
+    name (lift.operand()'s own refusal) -- anything a builder cannot express
+    reaches here, and the whole instruction falls back to Operation.BARRIER
+    rather than being described half-right.
     """
     match insn.insn.op_kind(index):
         case OpKind.REGISTER:
             register = insn.insn.op_register(index)
-            return Reg(register, RegisterExt.size(register)) if RegisterExt.is_gpr(register) else None
+            if RegisterExt.is_gpr(register) or RegisterExt.is_segment_register(register):
+                return Reg(register, RegisterExt.size(register))
+            return None
         case OpKind.MEMORY:
             return Mem(long_operand(insn, resolve), MemorySizeExt.size(insn.insn.memory_size))
         case kind if kind in IMMEDIATE_WIDTH:
@@ -435,6 +448,17 @@ def _move(insn: Insn, resolve: Resolver, op: Operation, name: str) -> Semantics 
     dest = _destination(insn, 0, resolve)
     source = _location(insn, 1, resolve)
     return None if dest is None or source is None else Semantics(op, name, (dest,), (source,))
+
+
+def _exchange(insn: Insn, resolve: Resolver, op: Operation, name: str) -> Semantics | None:
+    """`xchg`: both operands read AND written, each receiving the other's old
+    value. Both must be destinations (a register or a memory cell) -- xchg
+    has no immediate form. Measured, all 74 in qb-qrender are register pairs
+    (`xchg bx,ax` 54, `xchg cx,ax` 20), never through memory."""
+    if insn.insn.op_count != 2:
+        return None
+    first, second = _destination(insn, 0, resolve), _destination(insn, 1, resolve)
+    return None if first is None or second is None else Semantics(op, name, (first, second), (second, first))
 
 
 def _address(insn: Insn, resolve: Resolver, op: Operation, name: str) -> Semantics | None:
@@ -548,39 +572,27 @@ def _extend(insn: Insn, _resolve: Resolver, op: Operation, name: str) -> Semanti
     return None if found is None else Semantics(op, name, (found[0],), (found[1],))
 
 
-def _stack_slot(insn: Insn, index: int, resolve: Resolver) -> Loc | None:
-    """One operand of a push or a pop, where a segment register is a location too.
-
-    A push or a pop of one moves sixteen bits to or from the stack and changes
-    no addressing on the way. BC emits three shapes of it and nothing else:
-    `push cs` under the offset of the far pointer it hands B$OEGA (15 main
-    bodies) and in the event-poll stub's own far-jump trampoline (14), and
-    `push ss` / `pop es` to point es at the frame for PDS 7.1's /Ot
-    `rep stosw` (1). Reading *through* a segment register is refused whole --
-    lift.operand() declines a segment override outright -- which is why the
-    allowance is here and not in _location(): `mov es,[x]` changes what every
-    later es access means, and this pass has no notion of a segment to record
-    that in.
-    """
-    if insn.insn.op_kind(index) == OpKind.REGISTER:
-        register = insn.insn.op_register(index)
-        if RegisterExt.is_segment_register(register):
-            return Reg(register, RegisterExt.size(register))
-    return _location(insn, index, resolve)
+# push/pop of a segment register moves sixteen bits to or from the stack and
+# changes no addressing on the way -- _location() already models one as a
+# Reg like any other, so push and pop need nothing beyond it. BC emits three
+# shapes and nothing else: `push cs` under the offset of the far pointer it
+# hands B$OEGA (15 main bodies) and in the event-poll stub's own far-jump
+# trampoline (14), and `push ss` / `pop es` to point es at the frame for
+# PDS 7.1's /Ot `rep stosw` (1).
 
 
 def _push(insn: Insn, resolve: Resolver, op: Operation, name: str) -> Semantics | None:
     if insn.insn.op_count != 1:
         return None
-    source = _stack_slot(insn, 0, resolve)
+    source = _location(insn, 0, resolve)
     return None if source is None else Semantics(op, name, sources=(source,))
 
 
 def _pop(insn: Insn, resolve: Resolver, op: Operation, name: str) -> Semantics | None:
     if insn.insn.op_count != 1:
         return None
-    dest = _stack_slot(insn, 0, resolve)
-    return None if not isinstance(dest, Reg | Mem) else Semantics(op, name, (dest,))
+    dest = _destination(insn, 0, resolve)
+    return None if dest is None else Semantics(op, name, (dest,))
 
 
 def _leave(insn: Insn, _resolve: Resolver, op: Operation, name: str) -> Semantics | None:
@@ -677,6 +689,7 @@ def _return(insn: Insn, resolve: Resolver, op: Operation, name: str) -> Semantic
 
 BUILD: dict[Operation, Builder] = {
     Operation.MOVE: _move,
+    Operation.EXCHANGE: _exchange,
     Operation.ADDRESS: _address,
     Operation.BINARY: _binary,
     Operation.MULTIPLY: _multiply,
@@ -711,13 +724,16 @@ BUILD: dict[Operation, Builder] = {
 #     length, which is the whole of what carrying one needs.
 #   `in` and `out`. What they do happens in a device, not in this machine,
 #     and it is not knowledge to claim.
-#   anything carrying a segment override. This pass has no notion of a
-#     segment, so `es:[x]` and `ds:[x]` would read as the same location --
-#     lift.operand()'s own refusal, quoted at instruction_semantics.
-#   `mov es,[x]`, which carries no override and is refused for the other half
-#     of the same reason: it changes what every later es access means, and
-#     there is nowhere here to record that. Only a push or a pop of a segment
-#     register is modelled (_stack_slot).
+#   a segment override this pass cannot name -- lift.operand()'s own refusal,
+#     quoted at instruction_semantics: everything but `es:[bx]`/`es:[bx+2]`,
+#     the one shape qb-qrender's own 11,150 segment-override instructions
+#     actually are (module.Space.FAR's own comment has the breakdown).
+#   `mov`, `push` or `pop` reading a segment register's OWN value rather than
+#     writing it -- `mov ax,es`, `mov [x],ds`. Not the $DYNAMIC array pattern
+#     (that always writes es, never reads it) and not measured as its own
+#     shape, so there is nothing to model against yet: 426 of qb-qrender's
+#     own MOV barriers are this, not the 17,593 `mov <segreg>,[x]` this pass
+#     now models.
 #   a byte-wide `imul` or `idiv`, whose product or quotient lands in ax alone
 #     rather than in a pair. A different shape, and absent from this corpus.
 #   the indirect far transfers, `FF /4` and `/5`. Not one appears in any
@@ -729,13 +745,18 @@ BUILD: dict[Operation, Builder] = {
 # one of the 30 ends in `retf n`, and one unmodelled epilogue refuses the
 # body it closes.
 #
-# LEAVE, STOSW, the segment-register push and pop (_stack_slot), the widening
-# one-operand `imul` (WIDE_MULTIPLY) and the far `jmp` (_jump) came in
-# together, and between them they were every unmodelled instruction in this
-# corpus: 47 of 17970, refusing 30 of its 154 bodies. None of the five needed
-# a guess -- each is either a move, a frame mechanic, or control leaving.
+# LEAVE, STOSW, the segment-register push and pop (modelled by _location()
+# like any other register, since push/pop change no addressing), the
+# widening one-operand `imul` (WIDE_MULTIPLY) and the far `jmp` (_jump) came
+# in together, and between them they were every unmodelled instruction in
+# the 110-fixture corpus: 47 of 17970, refusing 30 of its 154 bodies. None of
+# the five needed a guess -- each is either a move, a frame mechanic, or
+# control leaving. `xchg` (_exchange) and a mov to a segment register
+# (_move, via _location()'s own widening) are absent from that corpus
+# entirely -- both are qb-qrender-only, measured there instead.
 SHAPE: dict[int, tuple[Operation, str]] = {
     Mnemonic.MOV: (Operation.MOVE, "mov"),
+    Mnemonic.XCHG: (Operation.EXCHANGE, "xchg"),
     Mnemonic.LEA: (Operation.ADDRESS, "lea"),
     Mnemonic.ADD: (Operation.BINARY, "add"),
     Mnemonic.ADC: (Operation.BINARY, "adc"),
@@ -788,12 +809,20 @@ SHAPE: dict[int, tuple[Operation, str]] = {
 def instruction_semantics(insn: Insn, resolve: Resolver) -> Semantics:
     """What one real instruction computes, or Operation.BARRIER.
 
-    A segment-override prefix is refused outright, the way lift.operand()
-    refuses one: this pass has no notion of a segment, so `es:[x]` and
-    `ds:[x]` would otherwise read as the same location.
+    A segment override is no longer refused here at the mnemonic level: it
+    is lift.operand()'s own business, one memory operand at a time. Where it
+    resolves (Space.FAR, or a redundant `ds:`), the builder sees a real
+    address and models the instruction whole. Where it does not -- an
+    override on a shape nothing measured -- `_location()`'s MEMORY case
+    still returns a `Mem(None, ...)`, an address this layer cannot name, the
+    same answer a `rep stosw` destination already gets: the instruction is
+    still modelled (its registers are real, nameable locations regardless of
+    what its memory operand resolves to), and the unnamed cell is what
+    keeps it from ever being claimed disjoint from anything -- module.
+    may_alias's own "None is never provably disjoint" rule, not a pin.
     """
     found = SHAPE.get(insn.insn.mnemonic)
-    if found is None or insn.has_segment_override:
+    if found is None:
         return UNMODELLED
     op, name = found
     return BUILD[op](insn, resolve, op, name) or UNMODELLED

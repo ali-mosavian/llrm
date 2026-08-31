@@ -238,13 +238,17 @@ def test_a_call_or_interrupt_gets_the_conservative_answer_not_iceds_own() -> Non
 
 
 def test_a_barriers_memory_reach_is_unknown_in_both_directions() -> None:
-    # A segment override is a barrier, and a barrier's memory effect is
-    # widened past what the encoding alone reports -- ir.instruction_effects'
-    # own docstring says why. The load was already unnamed (lift.operand()
-    # refuses an override); the store side is the part that is claimed rather
-    # than decoded, and it is what makes Operation.BARRIER's "write memory
-    # back before it, re-read after" true without a consumer remembering it.
-    effects = _effects("26 8B 06 34 12")
+    # `fld dword [bp-38h]`, decoded from the x87 emulator's own int 35h: a
+    # barrier's memory effect is widened past what the encoding alone
+    # reports -- ir.instruction_effects' own docstring says why, and this is
+    # the case named there. The operand is a nameable bp-relative address
+    # (operand() would resolve it), but whether the ESC opcode ever executes
+    # is LINK's decision, and what runs where it does not is a software
+    # routine with memory of its own that is nowhere in the encoding -- so
+    # both directions are claimed rather than decoded, which is what makes
+    # "write memory back before it, re-read after" true without a consumer
+    # remembering it.
+    effects = _effects("CD 35 46 C8")
     assert effects.touches_memory is True
     assert effects.loads == ir.ANY_MEMORY
     assert effects.stores == ir.ANY_MEMORY
@@ -423,9 +427,6 @@ def test_not_writes_no_flags() -> None:
 @pytest.mark.parametrize(
     ("code", "why"),
     [
-        ("26 8B 06 34 12", "a segment override"),
-        ("8E 06 00 00", "mov es,[x] -- it changes what every later es access means"),
-        ("8C C8", "mov ax,cs -- a segment register anywhere but a push or a pop"),
         ("CD 35 46 C8", "the x87 emulator's own int 35h"),
         ("CD 21", "an ordinary software interrupt"),
         ("E4 40", "in -- what it does happens in a device"),
@@ -440,6 +441,68 @@ def test_the_deliberately_refused_shapes_stay_barriers(code: str, why: str) -> N
     # silently catastrophic, which is why none of these is guessed at. See
     # ir.SHAPE's own comment for what each one would have cost.
     assert _semantics(code) is ir.UNMODELLED, why
+
+
+ES = ir.Reg(Register.ES, 2)
+CS = ir.Reg(Register.CS, 2)
+BX = ir.Reg(Register.BX, 2)
+FAR_BX = module.Addr(module.Space.FAR, 0, base=Register.BX, segment=Register.ES)
+
+
+def test_a_far_pointer_load_is_modelled() -> None:
+    # `mov ax,es:[bx]` -- 4025 of these in qb-qrender, the single biggest
+    # shape in the segment-override barrier population. Addr's own `segment`
+    # field is what makes this different from `mov ax,[bx]` through ds.
+    assert _semantics("26 8B 07") == ir.Semantics(ir.Operation.MOVE, "mov", (AX,), (ir.Mem(FAR_BX, 2),))
+
+
+def test_a_far_pointer_store_is_modelled() -> None:
+    # `mov es:[bx],ax` -- 1783 of these, the write side of the same pattern.
+    assert _semantics("26 89 07") == ir.Semantics(ir.Operation.MOVE, "mov", (ir.Mem(FAR_BX, 2),), (AX,))
+
+
+def test_a_descriptor_load_into_a_segment_register_is_modelled() -> None:
+    # `mov es,[si+2]` -- 17,385 of these, the load that primes every es:bx
+    # access after it. A segment register is a Reg like any other now, so
+    # _move needs nothing special to build this.
+    found = module.Addr(module.Space.LITERAL, 2, base=Register.SI)
+    assert _semantics("8E 44 02") == ir.Semantics(ir.Operation.MOVE, "mov", (ES,), (ir.Mem(found, 2),))
+
+
+def test_a_redundant_ds_prefix_is_not_an_override_to_record() -> None:
+    # `mov es,ds:[0]` -- 208 of these. The `ds:` prefix names exactly the
+    # segment `[0]` already defaults to, so it resolves through the ordinary
+    # LITERAL path rather than becoming a second Space.FAR to track.
+    literal = module.Addr(module.Space.LITERAL, 0)
+    assert _semantics("3E 8E 06 00 00") == ir.Semantics(ir.Operation.MOVE, "mov", (ES,), (ir.Mem(literal, 2),))
+
+
+def test_reading_a_segment_register_is_modelled_too() -> None:
+    # `mov ax,cs` -- a pure register-to-register copy, no memory and no
+    # override involved at all, so there is nothing left this pass cannot
+    # say about it once a segment register is a Reg like any other.
+    assert _semantics("8C C8") == ir.Semantics(ir.Operation.MOVE, "mov", (AX,), (CS,))
+
+
+def test_a_segment_override_this_pass_cannot_express_still_refuses_the_address() -> None:
+    # `mov ax,es:[si+2]` -- measured against qb-qrender, every one of the
+    # 11,150 segment-override instructions is bx with no index; this shape
+    # is not among them, so lift.operand() refuses to resolve it. The
+    # instruction is still modelled (ax is a real, nameable destination),
+    # but its source is Mem(None, ...) -- unnamed, and never provably
+    # disjoint from anything, rather than a whole-node barrier.
+    found = _semantics("26 8B 44 02")
+    assert found == ir.Semantics(ir.Operation.MOVE, "mov", (AX,), (ir.Mem(None, 2),))
+    assert ir.modelled(found) is True
+
+
+def test_xchg_is_a_genuine_two_way_swap() -> None:
+    # `xchg bx,ax` -- both operands read AND written, each landing in the
+    # other's old value. 54 of qb-qrender's 74 xchg sites are this shape.
+    found = _semantics("93")
+    assert found == ir.Semantics(ir.Operation.EXCHANGE, "xchg", (BX, AX), (AX, BX))
+    assert _defs("93") == frozenset({Register.EBX, Register.EAX})
+    assert _uses("93") == frozenset({Register.EBX, Register.EAX})
 
 
 def test_a_barrier_still_carries_a_complete_effect() -> None:

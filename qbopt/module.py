@@ -43,11 +43,24 @@ class Space(StrEnum):
     # provably disjoint), lift.operand() refuses to resolve one at all, and
     # lift.memory() raises if one ever reaches it regardless.
     GROUP = "grp"
+    # a $DYNAMIC array element: `es:[bx]`, `es:[bx+2]`. There is no fixup
+    # behind it -- bx holds a byte offset BC computed at run time and es
+    # holds whatever a prior `mov es,[desc+2]` last loaded, so disp is a
+    # literal in the code exactly as Space.FRAME's is, and `segment` names
+    # which register the offset is read through. Measured against
+    # qb-qrender: 11,150 segment-override instructions, all of them exactly
+    # this shape (`mov`, `cmp`, `push`, `add`, `and`, `idiv`, `sub`, `imul`,
+    # `sbb`, always `es:[bx]` or `es:[bx+2]`, never another base or another
+    # override register) -- so base is BX and segment is a real register on
+    # every Addr this space ever holds, not just in principle.
+    FAR = "far"
 
 
-# base is only ever one of these two -- operand() in lift.py sets nothing
-# else -- so a name outside the pair prints as itself rather than nothing.
-INDEX_NAMES = {Register.SI: "si", Register.DI: "di"}
+# base is si/di for a SEGMENT array element and bx for a FAR one -- operand()
+# in lift.py sets nothing else -- so a name outside this set prints as itself
+# rather than nothing.
+INDEX_NAMES = {Register.SI: "si", Register.DI: "di", Register.BX: "bx"}
+SEGMENT_NAMES = {Register.ES: "es", Register.DS: "ds", Register.SS: "ss", Register.CS: "cs"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,12 +71,22 @@ class Addr:
     # NONE for a bare displacement; an array element also carries the
     # register its offset was indexed by, since two elements at the same
     # displacement are not the same address unless that register agrees too.
+    # A FAR address's own offset register (always bx, measured) lives here.
     base: Register_ = Register.NONE
+    # NONE everywhere except Space.FAR, where it is the segment register the
+    # access actually goes through -- part of the address's own identity,
+    # since `es:[bx]` and `ds:[bx]` are not the same byte merely because bx
+    # agrees. See Space.FAR's own comment.
+    segment: Register_ = Register.NONE
 
     def plus(self, bytes_along: int) -> "Addr":
         return replace(self, disp=self.disp + bytes_along)
 
     def __repr__(self) -> str:
+        if self.space is Space.FAR:
+            seg = SEGMENT_NAMES.get(self.segment, f"r{self.segment}")
+            base = INDEX_NAMES.get(self.base, f"r{self.base}")
+            return f"[{seg}:{base}{self.disp:+#x}]"
         where = f"{self.space}:{self.index}" if self.space is Space.SEGMENT else self.space
         indexed = f"+{INDEX_NAMES.get(self.base, f'r{self.base}')}" if self.base != Register.NONE else ""
         return f"[{where}{indexed}{self.disp:+#x}]"
@@ -107,6 +130,10 @@ def frame_relative(literal: int) -> Addr:
     return Addr(Space.FRAME, literal)
 
 
+def far_pointer(literal: int, base: Register_, segment: Register_) -> Addr:
+    return Addr(Space.FAR, literal, base=base, segment=segment)
+
+
 def literal_only(field_offset: int, literal: int) -> Addr:
     """The resolver for code with no fixups behind it, as every unit test has."""
     return Addr(Space.LITERAL, literal)
@@ -144,6 +171,17 @@ def may_alias(
     needs array extents the object does not carry -- so an indexed operand
     reads or writes its whole segment as far as this is concerned. That is
     76 instructions corpus-wide, which is what makes refusing them cheap.
+    A Space.FAR address is exactly this argument one register up: it always
+    carries a base (bx, measured), so it falls into the same catch-all --
+    unbounded here because *two* registers would have to still hold what
+    they held, es as well as bx, and nothing at this layer can see either.
+    That also makes two Space.FAR addresses through different segment
+    registers, or a Space.FAR address against anything else, alias: neither
+    comparison ever reaches the space-specific cases below, which is the
+    point -- proving them disjoint needs the same-segment, same-base
+    arithmetic memory.py's aliases() does, sound only under the same
+    obligation as the SI/DI case above (every tracked cell whose bx or es an
+    instruction writes is dropped first).
 
     Two bare displacements are disjoint when their own ranges do not meet.
     Within one object a SEGDEF index names one segment, and two distinct
