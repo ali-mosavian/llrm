@@ -131,3 +131,33 @@ def test_resume_dispatch_is_the_only_deep_nesting_in_the_corpus() -> None:
     everything_else = [d for stem, d in deepest.items() if not stem.startswith("divmod")]
     assert max(everything_else) == 1, "nothing but RESUME nests past one loop"
     assert min(resumable) > 1, "divmod is the /X program, and RESUME is why"
+
+
+def test_the_entry_dominates_everything_and_nothing_dominates_it() -> None:
+    chain = [block(0, (1,)), block(1, (2,)), block(2, (), Ends.RETURN)]
+    assert loops.immediate_dominators(chain)[0] is None
+    assert loops.immediate_dominators(chain)[2] == 1
+
+
+def test_a_frontier_is_where_two_definitions_could_meet() -> None:
+    """A diamond: both arms are on the frontier of the join, the head is not.
+
+    The head dominates the join, so a definition there reaches it by every
+    path and needs no phi. Either arm dominates only itself, so control
+    arrives at the join both through it and around it.
+    """
+    diamond = [block(0, (1, 2)), block(1, (3,)), block(2, (3,)), block(3, (), Ends.RETURN)]
+    found = loops.frontiers(diamond)
+    assert found[1] == frozenset({3})
+    assert found[2] == frozenset({3})
+    assert found[0] == frozenset(), "the head dominates the join"
+
+
+def test_a_loop_header_is_on_its_own_frontier() -> None:
+    chain = [block(0, (1,)), block(1, (2, 3)), block(2, (1,)), block(3, (), Ends.RETURN)]
+    assert 1 in loops.frontiers(chain)[2], "the latch reaches the header around the entry path"
+
+
+def test_a_block_with_one_predecessor_is_never_a_frontier() -> None:
+    chain = [block(0, (1,)), block(1, (2,)), block(2, (), Ends.RETURN)]
+    assert all(1 not in where and 2 not in where for where in loops.frontiers(chain).values())

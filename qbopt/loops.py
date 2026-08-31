@@ -245,3 +245,45 @@ def depth(blocks: list[Block], entry: int | None = None) -> dict[int, int]:
             if at in found:
                 found[at] += 1
     return found
+
+
+def immediate_dominators(blocks: list[Block], entry: int | None = None) -> dict[int, int | None]:
+    """Each block's nearest strict dominator, or None for the entry and for
+    anything unreachable.
+
+    Read off the full dominator sets rather than computed by the usual
+    Lengauer-Tarjan walk: dominators() already runs to a fixed point over
+    graphs of a few dozen blocks, and the nearest of a block's strict
+    dominators is simply the one with the most dominators of its own -- it
+    is furthest from the entry, and dominance along a path is a total order.
+    """
+    doms = dominators(blocks, entry)
+    found: dict[int, int | None] = {}
+    for block in blocks:
+        strict = doms.get(block.at, frozenset()) - {block.at}
+        found[block.at] = max(strict, key=lambda one: len(doms[one])) if strict else None
+    return found
+
+
+def frontiers(blocks: list[Block], entry: int | None = None) -> dict[int, frozenset[int]]:
+    """Where a definition stops being the only one that reaches -- the blocks
+    a phi belongs in.
+
+    A block is on n's frontier when n dominates one of its predecessors but
+    not the block itself: control arrives there both through n and around it,
+    so two definitions meet. Cytron's own walk, which only ever climbs from a
+    join's predecessors to its immediate dominator, so a block with one
+    predecessor can never be on anyone's frontier.
+    """
+    idom = immediate_dominators(blocks, entry)
+    preds = predecessors(blocks)
+    found: dict[int, set[int]] = {block.at: set() for block in blocks}
+    for block in blocks:
+        if len(preds[block.at]) < 2:
+            continue
+        for one in preds[block.at]:
+            runner = one
+            while runner is not None and runner != idom[block.at]:
+                found[runner].add(block.at)
+                runner = idom.get(runner)
+    return {at: frozenset(where) for at, where in found.items()}
