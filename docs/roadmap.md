@@ -39,7 +39,7 @@ Measured 2026-08-31. Re-measure before trusting it.
 | bench/nbody | 2.99× under DOSBox, 21 of 21 calls absorbed, pressure 6/6 |
 | corpus redundant reads | 553 — 73 live provider, 48 dead, 432 none |
 | selector coverage | 20,185 of 20,245 corpus ops, 0 mismatched |
-| segments MIR wrote | 124 of 125 objects, 109 after absorption |
+| segments MIR wrote | 124 of 125 corpus objects; 8 of qb-qrender's 17 |
 | **optimised and MIR-written** | **half the suite on all 12 configurations, 16/16 each** |
 
 MIR does, end to end:
@@ -194,6 +194,7 @@ Done when the old path is deleted, not when MIR also does it.
 Largest untouched surface, newly testable: `fuzzgen.py` generates SINGLE
 and DOUBLE, and `87bhelp.asm`'s six helpers have contracts.
 
+- [x] the x87 memory and popping forms select — `fld [x]`, `faddp st(i),st(0)`
 - [ ] x87 stack positions as MIR values — a `fld` renames every slot below it
 - [ ] first shape to look at: 690 `fld` against 351 `fstp` in qb-qrender
 

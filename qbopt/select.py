@@ -156,6 +156,22 @@ def operand_of(what: ir.Mem) -> tuple[MemoryOperand, bool] | None:
                 ),
                 False,
             )
+        case Space.FAR:
+            # A $DYNAMIC array element: `es:[bx]`, where bx holds the byte
+            # offset BC computed and es whatever a prior `mov es,[desc+2]`
+            # loaded. The override is part of the address's identity -- and
+            # of the encoding -- so it comes along.
+            if addr.segment == Register.NONE:
+                return None
+            return (
+                MemoryOperand(
+                    base=addr.base,
+                    displ=addr.disp,
+                    displ_size=_displacement_size(addr.base, addr.disp),
+                    seg=addr.segment,
+                ),
+                False,
+            )
         case Space.LITERAL:
             # A displacement no fixup claims, so the number in the code is
             # the address and nothing has to move with it. BC writes these
@@ -727,6 +743,122 @@ def fill(name: str, at: int = 0, repeated: bool = True) -> Emitted | None:
     return _assemble(make(BITNESS, RepPrefixKind.REPE) if repeated else make(BITNESS), at)
 
 
+# The shifts and rotates, all of which take a count that is 1, an immediate
+# byte, or cl -- never a general register.
+SHIFTS = ("shl", "shr", "sar", "rol", "ror", "rcl", "rcr", "sal")
+
+
+def shift(name: str, dest: Register_, count: int | None, at: int = 0) -> Emitted | None:
+    """`shl reg,imm` and its kind. `count` of None means by cl."""
+    if name not in SHIFTS:
+        return None
+    width = WIDTHS.get(dest)
+    if width is None:
+        return None
+    if count is None:
+        code = _code(f"{name.upper()}_RM{width * 8}_CL")
+        return None if code is None else _assemble(Instruction.create_reg_reg(code, dest, Register.CL), at)
+    # `shl reg,1` has its own opcode, a byte shorter than the immediate form
+    # and what BC writes for a doubling.
+    for shape, build in (
+        (f"{name.upper()}_RM{width * 8}_1", lambda c: Instruction.create_reg(c, dest)),
+        (f"{name.upper()}_RM{width * 8}_IMM8", lambda c: Instruction.create_reg_i32(c, dest, count)),
+    ):
+        if shape.endswith("_1") and count != 1:
+            continue
+        code = _code(shape)
+        if code is None:
+            continue
+        made = _assemble(build(code), at)
+        if made is not None:
+            return made
+    return None
+
+
+# The popping x87 arithmetic: `faddp st(1),st(0)` and its kind. Both
+# operands are stack positions and the first is the only one encoded.
+FLOAT_POP = ("faddp", "fsubp", "fmulp", "fdivp", "fsubrp", "fdivrp")
+STACK_REGISTERS = (
+    Register.ST0,
+    Register.ST1,
+    Register.ST2,
+    Register.ST3,
+    Register.ST4,
+    Register.ST5,
+    Register.ST6,
+    Register.ST7,
+)
+
+
+def float_pop(name: str, index: int, at: int = 0) -> Emitted | None:
+    """`faddp st(i),st(0)` -- the arithmetic that pops its own operand."""
+    if name not in FLOAT_POP or not 0 <= index < len(STACK_REGISTERS):
+        return None
+    code = _code(f"{name.upper()}_STI_ST0")
+    if code is None:
+        return None
+    return _assemble(Instruction.create_reg_reg(code, STACK_REGISTERS[index], Register.ST0), at)
+
+
+def divide_mem(name: str, cell: ir.Mem, at: int = 0) -> Emitted | None:
+    """`idiv [x]` -- the divisor in memory rather than a register."""
+    if name not in ("idiv", "div"):
+        return None
+    built = operand_of(cell)
+    if built is None or cell.width not in (2, 4):
+        return None
+    code = _code(f"{name.upper()}_RM{cell.width * 8}")
+    return None if code is None else _assemble(Instruction.create_mem(code, built[0]), at)
+
+
+def multiply(name: str, source: Register_ | ir.Mem, at: int = 0) -> Emitted | None:
+    """The one-operand `imul`/`mul`, whose result is dx:ax and is not encoded."""
+    if name not in ("imul", "mul"):
+        return None
+    if isinstance(source, ir.Mem):
+        built = operand_of(source)
+        if built is None or source.width not in (2, 4):
+            return None
+        code = _code(f"{name.upper()}_RM{source.width * 8}")
+        return None if code is None else _assemble(Instruction.create_mem(code, built[0]), at)
+    width = WIDTHS.get(source)
+    if width is None:
+        return None
+    code = _code(f"{name.upper()}_RM{width * 8}")
+    return None if code is None else _assemble(Instruction.create_reg(code, source), at)
+
+
+def move_segment(into: Register_, outof: Register_ | ir.Mem, at: int = 0) -> Emitted | None:
+    """`mov es,[si+2]` and `mov [x],es` -- how a far pointer is loaded.
+
+    A segment register is not a value mir.py tracks, and it is still where a
+    $DYNAMIC array's base lives: qb-qrender does this 614 times.
+    """
+    if into in SEGMENTS:
+        code = _code("MOV_SREG_RM16")
+        if code is None:
+            return None
+        if isinstance(outof, ir.Mem):
+            built = operand_of(outof)
+            return None if built is None else _assemble(Instruction.create_reg_mem(code, into, built[0]), at)
+        return _assemble(Instruction.create_reg_reg(code, into, outof), at)
+    code = _code("MOV_RM16_SREG")
+    if code is None or not isinstance(outof, Register_ | int) or outof not in SEGMENTS:
+        return None
+    return _assemble(Instruction.create_reg_reg(code, into, outof), at)
+
+
+def unary_mem(name: str, cell: ir.Mem, at: int = 0) -> Emitted | None:
+    """`neg`, `not`, `inc` or `dec` of a memory cell."""
+    if name not in ONE_OPERAND:
+        return None
+    built = operand_of(cell)
+    if built is None or cell.width not in (2, 4):
+        return None
+    code = _code(f"{name.upper()}_RM{cell.width * 8}")
+    return None if code is None else _assemble(Instruction.create_mem(code, built[0]), at)
+
+
 def emit(
     what: ir.Semantics,
     at: int = 0,
@@ -751,12 +883,27 @@ def emit(
                     return move(_remapped(into, where), _remapped(outof, where), at)
                 case (ir.Reg(register=into), ir.Imm(value=value)):
                     return load(_remapped(into, where), value, at)
+                case (ir.Reg(register=into), _) if into in SEGMENTS:
+                    match sources[0]:
+                        case ir.Mem() as cell:
+                            return move_segment(into, cell, at)
+                        case ir.Reg(register=outof):
+                            return move_segment(into, _remapped(outof, where), at)
+                    return None
+                case (ir.Reg(register=into), ir.Reg(register=outof)) if outof in SEGMENTS:
+                    return move_segment(_remapped(into, where), outof, at)
                 case (ir.Reg(register=into), ir.Mem() as cell):
                     return move_from(_remapped(into, where), cell, at)
                 case (ir.Mem() as cell, ir.Reg(register=outof)):
                     return move_into(cell, _remapped(outof, where), at)
                 case (ir.Mem() as cell, ir.Imm(value=value)):
                     return store_imm(cell, value, at)
+        case ir.Operation.BINARY if (what.name or "") in SHIFTS and len(dests) == 1 and len(sources) == 2:
+            match (dests[0], sources[1]):
+                case (ir.Reg(register=into), ir.Imm(value=count)):
+                    return shift(what.name or "", _remapped(into, where), count, at)
+                case (ir.Reg(register=into), ir.Reg(register=Register.CL)):
+                    return shift(what.name or "", _remapped(into, where), None, at)
         case ir.Operation.BINARY if len(dests) == 1 and len(sources) == 2:
             # BINARY's own rule: sources[0] IS dests[0].
             match (dests[0], sources[1]):
@@ -772,6 +919,8 @@ def emit(
             match dests[0]:
                 case ir.Reg(register=into):
                     return unary(what.name or "", _remapped(into, where), at)
+                case ir.Mem() as cell:
+                    return unary_mem(what.name or "", cell, at)
         case ir.Operation.PUSH if len(sources) == 1:
             match sources[0]:
                 case ir.Reg(register=one) if one in SEGMENTS:
@@ -808,10 +957,24 @@ def emit(
                     return arith("cmp", _remapped(into, where), _remapped(outof, where), at)
                 case (ir.Mem() as cell, ir.Reg(register=outof)):
                     return arith_into("cmp", cell, _remapped(outof, where), at)
+        case ir.Operation.MULTIPLY if len(dests) == 2 and sources:
+            # Two destinations means the widening form: dx:ax, neither
+            # encoded. The three-operand `imul r,rm,imm` has one.
+            match sources[-1]:
+                case ir.Reg(register=one):
+                    return multiply(what.name or "", _remapped(one, where), at)
+                case ir.Mem() as cell:
+                    return multiply(what.name or "", cell, at)
+        case ir.Operation.FLOAT_ARITH_POP if dests:
+            match dests[0]:
+                case ir.St(index=index):
+                    return float_pop(what.name or "", index, at)
         case ir.Operation.DIVIDE if sources:
             match sources[-1]:
                 case ir.Reg(register=one):
                     return divide(what.name or "", _remapped(one, where), at)
+                case ir.Mem() as cell:
+                    return divide_mem(what.name or "", cell, at)
         case ir.Operation.ADDRESS if len(dests) == 1 and len(sources) == 1:
             match (dests[0], sources[0]):
                 case (ir.Reg(register=into), ir.Address() as cell):
