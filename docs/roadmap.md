@@ -38,8 +38,8 @@ Measured 2026-08-31. Re-measure before trusting it.
 | its x87 sites | 1,766, none optimised |
 | bench/nbody | 2.99× under DOSBox, 21 of 21 calls absorbed, pressure 6/6 |
 | corpus redundant reads | 553 — 73 live provider, 48 dead, 432 none |
-| selector coverage | 20,185 of 20,245 corpus ops, 0 mismatched |
-| segments MIR wrote | 124 of 125 corpus objects; 8 of qb-qrender's 17 |
+| selector coverage | **all 20,245 corpus ops**; 46,535 emitted with qb-qrender, 0 mismatched |
+| segments MIR wrote | 124 of 125 corpus objects; **all 17** of qb-qrender's |
 | **optimised and MIR-written** | **half the suite on all 12 configurations, 16/16 each** |
 
 MIR does, end to end:

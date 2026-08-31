@@ -43,6 +43,18 @@ from qbopt.declen import BITNESS
 # prologue.
 _WIDE = {Register.EAX, Register.ECX, Register.EDX, Register.EBX, Register.ESI, Register.EDI, Register.EBP, Register.ESP}
 _NARROW = {Register.AX, Register.CX, Register.DX, Register.BX, Register.SI, Register.DI, Register.BP, Register.SP}
+# The byte halves. BC reaches for them to clear a high byte (`xor bh,bh`)
+# and to read one byte of an array.
+_BYTE = {
+    Register.AL,
+    Register.CL,
+    Register.DL,
+    Register.BL,
+    Register.AH,
+    Register.CH,
+    Register.DH,
+    Register.BH,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,14 +147,10 @@ def operand_of(what: ir.Mem) -> tuple[MemoryOperand, bool] | None:
             # `push [bx]` is a working program reading the wrong four bytes,
             # and byref2 printed 0 where it wanted 16 on two configurations
             # before this line said `what.offset`.
-            return (
-                MemoryOperand(
-                    base=what.through,
-                    displ=what.offset,
-                    displ_size=_displacement_size(what.through, what.offset),
-                ),
-                False,
-            )
+            # The field's own width where it had one, since a fixup fills a
+            # displacement of zero and dropping it reads the wrong address.
+            wide = what.disp_width or _displacement_size(what.through, what.offset)
+            return MemoryOperand(base=what.through, displ=what.offset, displ_size=wide), False
         return None
     match addr.space:
         case Space.SEGMENT:
@@ -215,7 +223,7 @@ ONE_OPERAND = ("neg", "not", "inc", "dec")
 # The width each register names, and the register file at each width. One
 # table rather than three lookups, and the only place widths are written down.
 WIDTHS: dict[Register_, int] = {}
-for _row, _size in ((_WIDE, 4), (_NARROW, 2)):
+for _row, _size in ((_WIDE, 4), (_NARROW, 2), (_BYTE, 1)):
     for _one in _row:
         WIDTHS[_one] = _size
 
@@ -372,9 +380,9 @@ def push_imm(value: int, width: int = 2, at: int = 0) -> Emitted | None:
 # rather than `8b 06 xxxx`, one byte shorter and available to ax/eax alone.
 # 470 bytes across the corpus's bodies, which is the largest single reason a
 # laid-out body was bigger than BC's.
-ACCUMULATOR = {2: Register.AX, 4: Register.EAX}
-MOFFS_LOAD = {2: "MOV_AX_MOFFS16", 4: "MOV_EAX_MOFFS32"}
-MOFFS_STORE = {2: "MOV_MOFFS16_AX", 4: "MOV_MOFFS32_EAX"}
+ACCUMULATOR = {1: Register.AL, 2: Register.AX, 4: Register.EAX}
+MOFFS_LOAD = {1: "MOV_AL_MOFFS8", 2: "MOV_AX_MOFFS16", 4: "MOV_EAX_MOFFS32"}
+MOFFS_STORE = {1: "MOV_MOFFS8_AL", 2: "MOV_MOFFS16_AX", 4: "MOV_MOFFS32_EAX"}
 
 
 def _moffs(shape: dict[int, str], register: Register_, cell: ir.Mem, width: int) -> Code_ | None:
@@ -848,6 +856,48 @@ def move_segment(into: Register_, outof: Register_ | ir.Mem, at: int = 0) -> Emi
     return _assemble(Instruction.create_reg_reg(code, into, outof), at)
 
 
+def store_segment(cell: ir.Mem, outof: Register_, at: int = 0) -> Emitted | None:
+    """`mov [bx+2],ds` -- half a far pointer written out."""
+    if outof not in SEGMENTS:
+        return None
+    built = operand_of(cell)
+    code = _code("MOV_RM16_SREG")
+    if built is None or code is None:
+        return None
+    return _assemble(Instruction.create_mem_reg(code, built[0], outof), at)
+
+
+def arith_into_imm(name: str, cell: ir.Mem, value: int, at: int = 0) -> Emitted | None:
+    """`add word ptr [bp-16h],4` -- accumulate into memory."""
+    built = operand_of(cell)
+    if name not in TWO_OPERAND or built is None or cell.width not in (2, 4):
+        return None
+    for bits in ((8, cell.width * 8) if fits_in_a_byte(value) else (cell.width * 8,)):
+        code = _code(f"{name.upper()}_RM{cell.width * 8}_IMM{bits}")
+        if code is None:
+            continue
+        try:
+            return _assemble(Instruction.create_mem_i32(code, built[0], value), at)
+        except (ValueError, OverflowError):
+            continue
+    return None
+
+
+def exchange(one: Register_, other: Register_, at: int = 0) -> Emitted | None:
+    """`xchg cx,ax`, which has a one-byte form against the accumulator."""
+    width = WIDTHS.get(one)
+    if width is None or WIDTHS.get(other) != width:
+        return None
+    for shape in (f"XCHG_R{width * 8}_{'AX' if width == 2 else 'EAX'}", f"XCHG_RM{width * 8}_R{width * 8}"):
+        code = _code(shape)
+        if code is None:
+            continue
+        made = _assemble(Instruction.create_reg_reg(code, one, other), at)
+        if made is not None:
+            return made
+    return None
+
+
 def unary_mem(name: str, cell: ir.Mem, at: int = 0) -> Emitted | None:
     """`neg`, `not`, `inc` or `dec` of a memory cell."""
     if name not in ONE_OPERAND:
@@ -879,19 +929,18 @@ def emit(
     match what.op:
         case ir.Operation.MOVE if len(dests) == 1 and len(sources) == 1:
             match (dests[0], sources[0]):
+                # Before the plain register move, which cannot say a
+                # segment register and would refuse `mov ax,es`.
+                case (ir.Reg(register=into), ir.Mem() as cell) if into in SEGMENTS:
+                    return move_segment(into, cell, at)
+                case (ir.Mem() as cell, ir.Reg(register=outof)) if outof in SEGMENTS:
+                    return store_segment(cell, outof, at)
+                case (ir.Reg(register=into), ir.Reg(register=outof)) if into in SEGMENTS or outof in SEGMENTS:
+                    return move_segment(into, outof, at)
                 case (ir.Reg(register=into), ir.Reg(register=outof)):
                     return move(_remapped(into, where), _remapped(outof, where), at)
                 case (ir.Reg(register=into), ir.Imm(value=value)):
                     return load(_remapped(into, where), value, at)
-                case (ir.Reg(register=into), _) if into in SEGMENTS:
-                    match sources[0]:
-                        case ir.Mem() as cell:
-                            return move_segment(into, cell, at)
-                        case ir.Reg(register=outof):
-                            return move_segment(into, _remapped(outof, where), at)
-                    return None
-                case (ir.Reg(register=into), ir.Reg(register=outof)) if outof in SEGMENTS:
-                    return move_segment(_remapped(into, where), outof, at)
                 case (ir.Reg(register=into), ir.Mem() as cell):
                     return move_from(_remapped(into, where), cell, at)
                 case (ir.Mem() as cell, ir.Reg(register=outof)):
@@ -915,6 +964,8 @@ def emit(
                     return arith_mem(what.name or "", _remapped(into, where), cell, at)
                 case (ir.Mem() as cell, ir.Reg(register=outof)):
                     return arith_into(what.name or "", cell, _remapped(outof, where), at)
+                case (ir.Mem() as cell, ir.Imm(value=value)):
+                    return arith_into_imm(what.name or "", cell, value, at)
         case ir.Operation.UNARY if len(dests) == 1 and len(sources) == 1:
             match dests[0]:
                 case ir.Reg(register=into):
@@ -947,6 +998,10 @@ def emit(
             match dests[0]:
                 case ir.Mem() as cell:
                     return float_memory(what.name or "", cell, at)
+        case ir.Operation.EXCHANGE if len(dests) == 2:
+            match (dests[0], dests[1]):
+                case (ir.Reg(register=one), ir.Reg(register=other)):
+                    return exchange(_remapped(one, where), _remapped(other, where), at)
         case ir.Operation.COMPARE if len(sources) == 2:
             match (sources[0], sources[1]):
                 case (_, ir.Imm(value=value)):

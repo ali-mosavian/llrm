@@ -162,6 +162,11 @@ class Mem:
     width: int
     through: Register_ = field(default=Register.NONE, compare=False)
     offset: int = field(default=0, compare=False)
+    # How wide the displacement field was, which is not the same as how wide
+    # the number needs: `mov ax,[bx]` in d_poly is `8b 87 00 00`, a two-byte
+    # displacement of zero because a fixup fills it in. Emitted without one
+    # it is `8b 07`, the right instruction reading the wrong address.
+    disp_width: int = field(default=0, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -512,6 +517,7 @@ def _location(insn: Insn, index: int, resolve: Resolver) -> Loc | None:
                 MemorySizeExt.size(insn.insn.memory_size),
                 insn.insn.memory_base,
                 insn.displacement,
+                insn.disp_len,
             )
         case kind if kind in IMMEDIATE_WIDTH:
             width = IMMEDIATE_WIDTH[kind]

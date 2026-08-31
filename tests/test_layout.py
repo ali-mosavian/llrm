@@ -130,7 +130,7 @@ def test_every_relocation_points_at_a_field_the_module_really_has(obj: Path) -> 
 def test_a_body_is_refused_whole_or_not_at_all() -> None:
     """Half this pass's code and half BC's is not something anything
     downstream could reason about, so one op it cannot emit refuses the
-    body. Measured: 100 of the corpus's 171 bodies lay out, and the rest name
+    body. Measured: 151 of the corpus's 171 bodies lay out, and the rest name
     the operation that stopped them."""
     total = done = 0
     for obj in FIXTURES:
@@ -147,7 +147,7 @@ def test_a_body_is_refused_whole_or_not_at_all() -> None:
                 assert ":" in got, f"a refusal should say which op: {got}"
             else:
                 done += 1
-    assert (total, done) == (171, 100)
+    assert (total, done) == (171, 151)
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)

@@ -130,10 +130,9 @@ def test_everything_selected_decodes_to_what_was_asked_for(obj: Path) -> None:
 def test_the_covered_share_of_the_corpus_is_what_was_measured() -> None:
     """A canary on progress, not on correctness.
 
-    99.7% of the corpus's operations. What is left is about two hundred
-    whose address is in a space operand_of() refuses, whose register is not
-    one this names, or -- 16 of them -- an `escape`, which is a far jump
-    this has no target for.
+    Every operation in the corpus, and every one of the 46,535 emitted
+    across the corpus and qb-qrender together decodes to what it was asked
+    for. A canary: if this stops being all of them, something narrowed.
     """
     from qbopt import ir
     from qbopt import mir
@@ -157,7 +156,7 @@ def test_the_covered_share_of_the_corpus_is_what_was_measured() -> None:
                         continue
                     if select.emit(what, at=op.at) is not None:
                         emitted += 1
-    assert (total, emitted) == (20245, 20185)
+    assert (total, emitted) == (20245, 20245)
 
 
 def test_a_wide_push_is_not_a_narrow_one() -> None:
