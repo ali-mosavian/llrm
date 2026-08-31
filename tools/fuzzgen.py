@@ -901,10 +901,18 @@ def _ensure_valid_operand(ctx: _Ctx, width: Width, left: Expr, right: Expr) -> t
       merely gets *assigned* to something LONG-shaped further up, computed at
       16 bits where this generator's own AST would wrap it at 32. A `Var`
       declared LONG is both variable-rooted and naturally LONG in one shape.
+
+    The second rule is about LONG and only LONG. It used to read "INTEGER is
+    fine, everything else needs a LONG among its operands", which quietly
+    caught SINGLE and DOUBLE as well: a SINGLE node with two SINGLE operands
+    has no LONG in sight, so its right operand was replaced -- every time.
+    Float arithmetic here was `<subtree> op <plain var>` and nothing else,
+    for as long as this function has existed. A float node that is genuinely
+    float is checked by its own caller, right after this returns.
     """
     has_var = _contains_var(left) or _contains_var(right)
     natural = (natural_width(left, ctx.declared), natural_width(right, ctx.declared))
-    long_enough = width is Width.INT or Width.LNG in natural
+    long_enough = width is not Width.LNG or Width.LNG in natural
     if has_var and long_enough:
         return left, right
     return left, _force_var(ctx, width)
@@ -947,6 +955,33 @@ def _gen_dividing(ctx: _Ctx, width: Width, op: str, depth: int) -> BinOp:
     return BinOp(width, op, left, _safe_divisor(ctx, width, 0))
 
 
+def _repeated(ctx: _Ctx, left: Expr) -> Expr | None:
+    """Sometimes the same operand twice: `p(i) * p(i)`, not two fresh leaves.
+
+    Two reads of one address, in one expression, is a shape this generator
+    could reach only by picking the same array and the same index twice by
+    chance -- which in practice it never did. It is the shape that broke
+    qbopt: `fld dword ptr [si]` twice running are two pushes, and a pass
+    that read si as the destination deleted the second as a redundant
+    reload. bench/fpbench.bas found that; nothing generated here could
+    have.
+
+    Only a Var or an Index is repeated, so the copy reads memory and
+    evaluates to the same value with nothing observable happening twice.
+    Repeating a call would still be correct -- `f(x) * f(x)` really does
+    call f twice, and eval_expr walks the tree twice too -- but it changes
+    what the program does rather than how the same value is fetched, which
+    is not what this is for.
+
+    Not on a dividing operator: the caller reaches _gen_dividing before
+    here, so a repeated operand can never land in a divisor and turn a
+    zero left-hand side into a division by zero.
+    """
+    if not isinstance(left, Var | Index) or ctx.rng.random() >= 0.15:
+        return None
+    return left
+
+
 def _gen_expr(ctx: _Ctx, width: Width, depth: int) -> Expr:
     if depth <= 0:
         return _gen_leaf(ctx, width, depth)
@@ -974,7 +1009,7 @@ def _gen_expr(ctx: _Ctx, width: Width, depth: int) -> Expr:
     if op in DIVIDING_OPS:
         return _gen_dividing(ctx, width, op, depth)
     left = _gen_expr(ctx, _gen_child_width(ctx, width), depth - 1)
-    right = _gen_expr(ctx, _gen_child_width(ctx, width), depth - 1)
+    right = _repeated(ctx, left) or _gen_expr(ctx, _gen_child_width(ctx, width), depth - 1)
     left, right = _ensure_valid_operand(ctx, width, left, right)
     if width in FLOAT and _wider(natural_width(left, ctx.declared), natural_width(right, ctx.declared)) not in FLOAT:
         # Both children came back integer, which _gen_child_width is allowed
@@ -1211,7 +1246,11 @@ def generate_program(
     n_lng: int = 4,
     n_sng: int = 2,
     n_dbl: int = 2,
-    n_arrays: int = 2,
+    # One of each width. It was 2, and the widths are handed out in the
+    # order INT, LNG, SNG, DBL -- so a float array was never once generated
+    # and float array access went entirely uncovered. That is where the
+    # miscompile bench/fpbench.bas found was living.
+    n_arrays: int = 4,
     n_subs: int = 2,
     n_funcs: int = 2,
     n_stmts: int = 20,
