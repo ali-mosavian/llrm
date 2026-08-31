@@ -26,6 +26,7 @@ from qbopt import avail
 from qbopt import memory
 from qbopt import module
 from qbopt import select
+from qbopt import wholeseg
 from qbopt import forward
 from qbopt.lift import Op
 from qbopt import reencode
@@ -752,6 +753,7 @@ def rewrite(
     take: set[int] | None = None,
     max_regions: int | None = None,
     native_fpu: bool = False,
+    whole_segment: bool = True,
 ) -> tuple[bytes, list[Region]]:
     """Rewrite to a fixed point, or once where the caller is bisecting.
 
@@ -775,9 +777,33 @@ def rewrite(
         out, found = _once(data, dry_run=False, native_fpu=native_fpu)
         regions += found
         if out == data or not any(one.taken for one in found):
-            return out, regions
+            return _written(out, whole_segment), regions
         data = out
-    return data, regions
+    return _written(data, whole_segment), regions
+
+
+def _written(data: bytes, whole_segment: bool) -> bytes:
+    """The object with its code segment emitted from MIR, where that works.
+
+    Every edit above patches BC's own bytes in place and keeps the layout BC
+    chose. This replaces the segment: layout.py places every instruction and
+    relocate.py writes the records, so chunk boundaries, branch
+    displacements and fixup offsets are all produced rather than preserved.
+
+    Silent fallback is the point. wholeseg.rebuilt() returns the input
+    unchanged and says why whenever anything refuses, and a refusal is a
+    module this pass has already improved by absorption -- there is nothing
+    to gain by throwing that away too.
+
+    It is not a size cost: measured over fixtures/omf it saves 201 bytes
+    against the patched output and over qb-qrender 616, because the selector
+    picks the shorter encoding in places BC's own layout could not be
+    changed to use. docs/numbers.md has the table.
+    """
+    if not whole_segment:
+        return data
+    out, _why = wholeseg.rebuilt(data)
+    return out
 
 
 def _once(
@@ -853,6 +879,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="replace the FP emulator's interrupts with real x87 -- REQUIRES A COPROCESSOR",
     )
+    ap.add_argument(
+        "--no-whole-segment",
+        action="store_true",
+        help="patch BC's own bytes rather than writing the code segment from MIR",
+    )
     args = ap.parse_args(argv)
 
     data = args.input.read_bytes()
@@ -863,6 +894,7 @@ def main(argv: list[str] | None = None) -> int:
         take=take,
         max_regions=args.max_regions,
         native_fpu=args.native_fpu,
+        whole_segment=not args.no_whole_segment,
     )
 
     if args.output:

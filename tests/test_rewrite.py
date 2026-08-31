@@ -192,7 +192,17 @@ def test_a_real_pass_rewrites_the_code_and_keeps_the_records_readable(obj: Path)
     data = obj.read_bytes()
     out, found = corpus.rewritten(obj, dry_run=False)
     if not any(region.taken for region in found):
-        assert out == b"".join(record.emit() for record in omf.parse(data))
+        # Byte-identical only with the segment left alone. Writing it from
+        # MIR is a transform in its own right -- it picks shorter encodings
+        # than BC's layout could use, 201 bytes over this corpus -- so it
+        # applies whether or not a region was taken. The invariant that a
+        # pass finding nothing changes nothing still holds for the patching
+        # half, which is what this asks.
+        from qbopt.rewrite import rewrite
+
+        patched, _ = rewrite(data, dry_run=False, whole_segment=False)
+        assert patched == b"".join(record.emit() for record in omf.parse(data))
+        assert omf.parse(out), "and the rewritten segment is still a readable module"
         return
     before, after = omf.code_segment(omf.parse(data)), omf.code_segment(omf.parse(out))
     assert before is not None and after is not None
