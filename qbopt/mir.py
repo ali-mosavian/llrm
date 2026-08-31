@@ -56,6 +56,8 @@ from iced_x86 import Register_
 
 from qbopt import ir
 from qbopt import loops
+from qbopt import module
+from qbopt import runtime
 from qbopt.module import Addr
 from qbopt.blocks import Block
 from qbopt.module import Module
@@ -99,6 +101,19 @@ NAMES = {
 # has ever needed, and flags.py already answers the per-flag question where
 # it matters.
 FLAGS = Register.NONE
+
+# runtime.py names a register as its own small enum, iced as an int. One
+# table rather than a string round trip, so a name that stops matching shows
+# up here instead of a contract silently preserving nothing.
+FROM_CONTRACT = {
+    runtime.Reg.AX: Register.EAX,
+    runtime.Reg.BX: Register.EBX,
+    runtime.Reg.CX: Register.ECX,
+    runtime.Reg.DX: Register.EDX,
+    runtime.Reg.SI: Register.ESI,
+    runtime.Reg.DI: Register.EDI,
+    runtime.Reg.FLAGS: FLAGS,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,7 +196,26 @@ class MirBody:
         )
 
 
-def _touched(node: ir.Node) -> tuple[frozenset[Register_], frozenset[Register_]]:
+def _call_touches(name: str | None) -> tuple[frozenset[Register_], frozenset[Register_]] | None:
+    """What a call really disturbs, where runtime.py has established it.
+
+    ir.Effects answers "any register" for every call, which is the right
+    answer for a module that knows nothing about the callee. Here it costs
+    real precision: it gives si a fresh value across a routine that
+    provably preserves it, so two accesses through the same si stop looking
+    like the same address. runtime.py read the QuickBASIC 4.5 source for
+    exactly this, and a routine with no entry there still comes back
+    worst-case, so nothing is assumed by using it.
+    """
+    routine = runtime.contract(name)
+    if not routine.established or runtime.barrier(routine):
+        return None
+    kept = {FROM_CONTRACT[one] for one in runtime.preserves(routine) if one in FROM_CONTRACT}
+    disturbed = frozenset(one for one in TRACKED if one not in kept) | {FLAGS}
+    return disturbed, disturbed
+
+
+def _touched(node: ir.Node, calls: dict[int, str] | None = None) -> tuple[frozenset[Register_], frozenset[Register_]]:
     """(defines, uses) as tracked variables, flags included as FLAGS.
 
     Reads ir.Effects rather than ir.Semantics, deliberately: Effects is
@@ -190,6 +224,9 @@ def _touched(node: ir.Node) -> tuple[frozenset[Register_], frozenset[Register_]]
     call, an interrupt, a barrier -- and becomes every tracked variable on
     both sides, which is what pins a barrier in place.
     """
+    if calls is not None and isinstance(node, ir.Call) and (known := _call_touches(calls.get(node.insn.at))):
+        return known
+
     effects = node.effects
     defines = set(TRACKED) if effects.defs is None else {r for r in effects.defs if r in TRACKED}
     uses = set(TRACKED) if effects.uses is None else {r for r in effects.uses if r in TRACKED}
@@ -241,7 +278,10 @@ def _memrefs(cells: tuple[ir.Mem, ...], namer: _Namer, at: int) -> tuple[MemRef,
 
 
 def _placed(
-    blocks: list[Block], nodes: dict[int, ir.Node], entry: int | None = None
+    blocks: list[Block],
+    nodes: dict[int, ir.Node],
+    entry: int | None = None,
+    calls: dict[int, str] | None = None,
 ) -> dict[int, frozenset[Register_]]:
     """Which variables need a phi in which block.
 
@@ -257,7 +297,7 @@ def _placed(
             node = nodes.get(insn.at)
             if node is None:
                 continue
-            for one in _touched(node)[0]:
+            for one in _touched(node, calls)[0]:
                 defines.setdefault(one, set()).add(block.at)
 
     needed: dict[int, set[Register_]] = {block.at: set() for block in blocks}
@@ -275,7 +315,12 @@ def _placed(
     return {at: frozenset(what) for at, what in needed.items()}
 
 
-def raise_body(blocks: list[Block], nodes: dict[int, ir.Node], entry: int | None = None) -> MirBody | str:
+def raise_body(
+    blocks: list[Block],
+    nodes: dict[int, ir.Node],
+    entry: int | None = None,
+    calls: dict[int, str] | None = None,
+) -> MirBody | str:
     """One body's blocks, in SSA, or why they could not be.
 
     `nodes` is keyed on each node's own span start, not on an instruction
@@ -326,7 +371,7 @@ def raise_body(blocks: list[Block], nodes: dict[int, ir.Node], entry: int | None
         if parent is not None:
             children[parent].append(block.at)
 
-    needed = _placed(blocks, nodes, start)
+    needed = _placed(blocks, nodes, start, calls)
     namer = _Namer()
     phis: dict[int, dict[Register_, Phi]] = {block.at: {} for block in blocks}
     ops: dict[int, list[Op]] = {block.at: [] for block in blocks}
@@ -352,7 +397,7 @@ def raise_body(blocks: list[Block], nodes: dict[int, ir.Node], entry: int | None
             node = nodes.get(insn.at)
             if node is None:
                 continue
-            defines, uses = _touched(node)
+            defines, uses = _touched(node, calls)
             used = tuple(namer.current(one, start) for one in sorted(uses, key=lambda o: (o is not FLAGS, o)))
             loads = _memrefs(node.effects.loads, namer, start)
             stores = _memrefs(node.effects.stores, namer, start)
@@ -477,3 +522,42 @@ def lower(body: MirBody) -> tuple[ir.Node, ...]:
 def relowered(found: Module, body: MirBody) -> bytes:
     """This body's own bytes, rebuilt from the graph."""
     return ir.emit(found, lower(body))
+
+
+def same_bytes(one: MemRef, other: MemRef) -> bool:
+    """Whether two references certainly name the same bytes.
+
+    Keyed on the base *value*, never on which register holds it. That is
+    the whole difference between this and module.may_alias: an Addr says
+    `[si+6]`, and the moment anything reallocates registers that name is
+    about a register which may now hold something else, while the value it
+    stood for is still the same value. Two references agree here because
+    the same computation produced their offset, which no allocation can
+    change.
+
+    Certainly, not possibly -- this answers the forwarding question ("is
+    this the load I already did"), and its negation is not a disjointness
+    proof. `may_alias` still answers that one.
+    """
+    if one.addr is None or other.addr is None:
+        return False  # nothing this can name is never known to be anything
+    if one.width != other.width or one.base != other.base or one.segment != other.segment:
+        return False
+    return one.addr == other.addr
+
+
+def overlapping(one: MemRef, other: MemRef, dgroup: frozenset[int]) -> bool:
+    """Whether a write through `other` could land on `one`.
+
+    module.may_alias for the symbolic part, and the base value for the rest.
+    Where both name the same base value their displacements settle it by
+    arithmetic, exactly as two bare statics do -- and soundly for the same
+    reason memory.aliases() gives, except that this holds it by value
+    identity rather than by the caller having promised the register was not
+    written in between.
+    """
+    if one.addr is None or other.addr is None:
+        return True
+    if one.base is not None and one.base == other.base and one.addr.space is other.addr.space:
+        return one.addr.disp < other.addr.disp + other.width and other.addr.disp < one.addr.disp + one.width
+    return module.may_alias(one.addr, other.addr, dgroup, one.width, other.width)

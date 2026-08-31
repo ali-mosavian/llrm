@@ -11,7 +11,9 @@ import corpus
 from qbopt import ir
 from qbopt import mir
 from qbopt.blocks import Ends
+from qbopt.module import Addr
 from qbopt.blocks import Block
+from qbopt.module import Space
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
@@ -196,3 +198,51 @@ def test_a_phi_lowers_to_nothing() -> None:
         joined += sum(len(one.phis) for one in built.blocks)
         assert len(mir.lower(built)) == sum(1 for one in built.blocks for op in one.ops if op.node is not None)
     assert joined, "jumptable.obj has joins; some block carries a phi"
+
+
+def test_a_call_that_preserves_si_does_not_give_it_a_new_value() -> None:
+    """ir.Effects answers "any register" for every call, which is right for
+    a layer that knows nothing about the callee and wrong here: it hands si
+    a fresh value across B$DVI4, which the QuickBASIC 4.5 source says
+    preserves it, and two accesses through that si stop looking like one
+    address. Worth 19% of all SSA values across the corpus.
+    """
+    known = mir._call_touches("B$DVI4")
+    assert known is not None
+    disturbed, _ = known
+    assert mir.NAMES[mir.Register.ESI] == "esi"
+    assert mir.Register.ESI not in disturbed
+    assert mir.Register.EDI not in disturbed
+    assert mir.Register.EAX in disturbed
+
+
+def test_a_call_with_no_established_contract_still_disturbs_everything() -> None:
+    """A user SUB, or a routine runtime.py could not read. Falling back to
+    ir.Effects is what keeps using the contracts from being an assumption."""
+    assert mir._call_touches("NOT_A_ROUTINE") is None
+    assert mir._call_touches("B$EVCK") is None, "it can dispatch into user code"
+
+
+def test_the_same_address_through_a_rewritten_register_is_not_the_same_bytes() -> None:
+    """NBODY 0x461 and 0x476 both read es:[bx+0], with `mov bx,6Dh` between
+    them. Keyed on the register name they are one address and forwarding
+    one to the other is corruption; keyed on the value they are two."""
+    here = mir.MemRef(
+        Addr(Space.FAR, 0, base=mir.Register.BX, segment=mir.Register.ES),
+        1,
+        base=mir.Value(41, mir.Register.EBX, 0x461),
+    )
+    there = mir.MemRef(
+        Addr(Space.FAR, 0, base=mir.Register.BX, segment=mir.Register.ES),
+        1,
+        base=mir.Value(47, mir.Register.EBX, 0x476),
+    )
+    assert here.addr == there.addr, "the same Addr, which is the point"
+    assert not mir.same_bytes(here, there)
+    assert mir.same_bytes(here, here)
+
+
+def test_a_reference_nothing_can_name_is_never_known_to_be_anything() -> None:
+    unknown = mir.MemRef(None, 2)
+    assert not mir.same_bytes(unknown, unknown)
+    assert mir.overlapping(unknown, mir.MemRef(Addr(Space.SEGMENT, 0, 5), 2), frozenset())
