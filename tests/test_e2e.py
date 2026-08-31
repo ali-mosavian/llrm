@@ -66,3 +66,43 @@ def test_every_suite_program_has_dos_line_endings(source: Path) -> None:
     text = source.read_bytes()
     assert b"\n" in text
     assert text.count(b"\r\n") == text.count(b"\n")
+
+
+# The programs whose objects rebuild whole-segment today, and the compilers
+# whose output does. VBDOS pads its segment with a `00 00` that decodes as
+# `add [bx+si],al`, which select.py refuses, so its objects fall back.
+REBUILDS = ("arith", "cmpord", "flags", "nots")
+REBUILDING_TAGS = ("p-g2", "q-O")
+
+
+@pytest.mark.parametrize("tag", [t for t in REBUILDING_TAGS if t in CONFIGS and CONFIGS[t].available])
+@pytest.mark.parametrize("prog", REBUILDS)
+def test_a_segment_this_pass_wrote_links_and_runs(tag: str, prog: str) -> None:
+    """The first code MIR produced end to end, rather than edited.
+
+    Everything else in this suite checks a rewrite of BC's own bytes. Here
+    layout.rebuild placed every instruction and relocate.as_records wrote
+    the records, so the chunk boundaries, branch displacements and fixup
+    offsets are all this pass's.
+
+    Only LINK and a real 386 can say whether that worked. The two bugs it
+    had were invisible to every host test: fixups whose EXTDEF had not been
+    read yet, which LINK reports as `invalid object module` without saying
+    which index, and a relocated immediate reported as no relocation at all.
+    """
+    from qbopt.wholeseg import REBUILT
+    from qbopt.wholeseg import rebuilt
+
+    seen = []
+
+    def change(data: bytes) -> bytes:
+        out, why = rebuilt(data)
+        seen.append(why)
+        return out
+
+    # Its own directory: this is parametrised over tag AND program, so four
+    # of these share a tag and would otherwise write the same files at once.
+    result = e2e.run(tag, prog, dry_run=False, transform=change, work=Path("build/e2e") / f"{tag}-{prog}-mir")
+    assert seen and seen[0] == REBUILT, f"{tag}/{prog} did not rebuild: {seen}"
+    bad = [one for one in result.verdicts if not one.ok]
+    assert not bad, f"{tag}/{prog}: {bad[0].status} {bad[0].detail}"

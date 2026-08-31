@@ -510,6 +510,50 @@ def compare(dest: ir.Loc, value: int, at: int = 0) -> Emitted | None:
             return None
 
 
+# The x87 forms that take a memory operand. Named by whether the bytes are a
+# float or an integer, which is the distinction the opcode makes and the one
+# the mnemonic already carries: fld reads a float, fild an integer.
+FLOAT_SIZED = {4: "M32FP", 8: "M64FP", 10: "M80FP"}
+INT_SIZED = {2: "M16INT", 4: "M32INT", 8: "M64INT"}
+FLOAT_MEMORY = ("fld", "fstp", "fst", "fadd", "fsub", "fmul", "fdiv", "fsubr", "fdivr", "fcom", "fcomp")
+INT_MEMORY = ("fild", "fistp", "fist", "fiadd", "fisub", "fimul", "fidiv")
+
+
+def float_memory(name: str, cell: ir.Mem, at: int = 0) -> Emitted | None:
+    """An x87 instruction against memory -- `fld [x]`, `fmul [x]`, `fistp [x]`.
+
+    The stack operand is not encoded: every one of these is implicitly about
+    st(0), which is why ir.St carries an index and this does not need it.
+    What the opcode does carry is whether the bytes are a float or an
+    integer, and the mnemonic already says which.
+    """
+    sized = INT_SIZED if name in INT_MEMORY else FLOAT_SIZED if name in FLOAT_MEMORY else None
+    if sized is None:
+        return None
+    built = operand_of(cell)
+    suffix = sized.get(cell.width)
+    if built is None or suffix is None:
+        return None
+    code = _code(f"{name.upper()}_{suffix}")
+    if code is None:
+        return None
+    where, _relocated = built
+    return _assemble(Instruction.create_mem(code, where), at)
+
+
+def arith_into(name: str, cell: ir.Mem, source: Register_, at: int = 0) -> Emitted | None:
+    """`<name> [cell], source` -- the accumulate whose destination is memory."""
+    width = WIDTHS.get(source)
+    built = operand_of(cell)
+    if name not in TWO_OPERAND or width is None or built is None or cell.width != width:
+        return None
+    code = _code(f"{name.upper()}_RM{width * 8}_R{width * 8}")
+    if code is None:
+        return None
+    where, _relocated = built
+    return _assemble(Instruction.create_mem_reg(code, where, source), at)
+
+
 def emit(
     what: ir.Semantics,
     at: int = 0,
@@ -549,6 +593,8 @@ def emit(
                     return arith_imm(what.name or "", _remapped(into, where), value, at)
                 case (ir.Reg(register=into), ir.Mem() as cell):
                     return arith_mem(what.name or "", _remapped(into, where), cell, at)
+                case (ir.Mem() as cell, ir.Reg(register=outof)):
+                    return arith_into(what.name or "", cell, _remapped(outof, where), at)
         case ir.Operation.UNARY if len(dests) == 1 and len(sources) == 1:
             match dests[0]:
                 case ir.Reg(register=into):
@@ -567,6 +613,14 @@ def emit(
             return jump(what.target, at, short)
         case ir.Operation.CALL:
             return call_far(at) if what.target is None else call_near(what.target, at)
+        case ir.Operation.FLOAT_LOAD | ir.Operation.FLOAT_ARITH if sources:
+            match sources[-1]:
+                case ir.Mem() as cell:
+                    return float_memory(what.name or "", cell, at)
+        case ir.Operation.FLOAT_STORE if len(dests) == 1:
+            match dests[0]:
+                case ir.Mem() as cell:
+                    return float_memory(what.name or "", cell, at)
         case ir.Operation.COMPARE if len(sources) == 2:
             match sources[1]:
                 case ir.Imm(value=value):

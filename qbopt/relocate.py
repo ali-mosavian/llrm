@@ -374,3 +374,125 @@ def _resized(records: list[omf.Record], seg: int, length: int) -> list[omf.Recor
             record if struct.unpack_from("<H", record.body, at)[0] == length else omf.patched(record, {at: length})
         )
     return out
+
+
+# A fixup's offset is ten bits, so one LEDATA can hold no more code than this
+# and still have its fixups addressable inside it.
+LEDATA_LIMIT = 1024
+
+
+def _mapped(offset: int, kept: int, moved: dict[int, int]) -> int | None:
+    """Where an old code offset ends up in a rebuilt segment.
+
+    Anything below `kept` is in the part that was not rebuilt -- BC's module
+    header, which is the only thing in these segments outside a body -- and
+    does not move. Anything above has to be an instruction the layout
+    placed, or nothing here can say where it went.
+    """
+    return offset if offset < kept else moved.get(offset)
+
+
+def as_records(
+    records: list[omf.Record],
+    seg: int,
+    kept: int,
+    image: bytes,
+    moved: dict[int, int],
+    relocations: dict[int, int],
+) -> list[omf.Record] | str:
+    """Every record, with the code segment replaced by `image`.
+
+    The other way of moving code, and the one whole-segment emission needs.
+    relocate() derives what moved from a list of edits and refuses anything
+    naming an offset inside one, which for a rebuilt segment is everything.
+    Here the map is given: `moved` says where each instruction went and
+    `relocations` says where each fixup's field did.
+
+    The code LEDATA records and the FIXUPPs that follow them are dropped and
+    one fresh block is written where the LAST of them stood. Dropping them
+    strands nothing, because no FIXUPP in the corpus mixes segments --
+    measured, 3,672 of them, every one either all code or all not.
+
+    The last rather than the first, and this is not a detail: OMF numbers
+    external symbols by the order their EXTDEF records appear, and BC emits
+    EXTDEFs progressively, interleaved among the code. A block written where
+    the first code LEDATA stood carries fixups naming externals whose EXTDEF
+    has not been read yet, and LINK rejects the whole object -- `fatal error
+    L1101: invalid object module`, with nothing to say which index was
+    wrong. Writing it after the last one puts it after every EXTDEF there
+    is.
+    """
+    by_offset = dict(relocations)
+    fixups = omf.fixups(records)
+    code_fixups = [one for one in fixups if one.seg == seg]
+    drop = {id(one.record) for one in code_fixups}
+
+    placed: list[tuple[int, omf.Fixup]] = []
+    for one in code_fixups:
+        landed = by_offset.get(one.offset) if one.offset >= kept else one.offset
+        if landed is None:
+            return f"the fixup at {one.offset:#x} has nowhere to go in the rebuilt segment"
+        placed.append((landed, one))
+    placed.sort()
+
+    last = None
+    for n, record in enumerate(records):
+        if record.type & 0xFE == omf.LEDATA and omf._index(record.body, 0)[0] == seg:
+            last = n
+
+    out: list[omf.Record] = []
+    written = False
+    for n, record in enumerate(records):
+        kind = record.type & 0xFE
+        if kind == omf.LEDATA:
+            index, at = omf._index(record.body, 0)
+            if index == seg:
+                if n == last:
+                    out += _code_block(seg, image, placed, moved, kept)
+                    written = True
+                continue
+        if kind == omf.FIXUPP and id(record) in drop:
+            continue
+        if kind == omf.MODEND and omf.has_start_address(record):
+            return "MODEND carries a start address, which this does not move yet"
+        try:
+            moves = {
+                at: _mapped(struct.unpack_from("<H", record.body, at)[0], kept, moved)
+                for at in omf.code_offsets(record, seg)
+            }
+        except struct.error:
+            return "a record names a code offset past its own end"
+        if any(value is None for value in moves.values()):
+            missing = next(at for at, value in moves.items() if value is None)
+            return f"a record names {struct.unpack_from('<H', record.body, missing)[0]:#x}, which is not an instruction"
+        out.append(omf.patched(record, {at: value for at, value in moves.items() if value is not None}))
+
+    if not written:
+        return "the module has no code LEDATA to replace"
+    return _resized(out, seg, len(image))
+
+
+def _code_block(
+    seg: int,
+    image: bytes,
+    placed: list[tuple[int, omf.Fixup]],
+    moved: dict[int, int],
+    kept: int,
+) -> list[omf.Record]:
+    """The whole image as LEDATA records, each followed by its own fixups."""
+    out: list[omf.Record] = []
+    for start in range(0, len(image), LEDATA_LIMIT):
+        end = min(start + LEDATA_LIMIT, len(image))
+        out.append(omf.ledata_record(seg, start, image[start:end]))
+        mine = []
+        for offset, fixup in placed:
+            if not start <= offset < end:
+                continue
+            # A fixup naming this same segment carries the target's own
+            # offset in its displacement, and that moved too.
+            into_code = fixup.target == "segment" and fixup.index == seg and fixup.disp_pos is not None
+            disp = _mapped(fixup.disp, kept, moved) if into_code else None
+            mine.append(omf.reemit(fixup, offset=offset - start, disp=disp))
+        if mine:
+            out.append(omf.fixupp_record([b"".join(mine)]))
+    return out
