@@ -99,8 +99,8 @@ something a body-sized edit can step around.
 
 Regenerating the whole code segment does not have the problem, because
 nothing is being spliced: chunk boundaries, line numbers and fixups are all
-being written rather than preserved. **42 of the corpus's 125 objects
-already have every body layable**, and that number grows with the selector.
+being written rather than preserved. **Every one of the corpus's 155 objects
+now has every body layable**; it was 42 when this was written.
 
 - [x] `layout.rebuild` — every body laid out into one image, cross-body
       targets resolved, and all 4,846 fixups in the span carried. 34 of 125
@@ -120,8 +120,17 @@ already have every body layable**, and that number grows with the selector.
 - [x] a cell whose address cannot be named — `ir.Mem` keeps the register it
       is reached through and the displacement, out of the comparison, so it
       can be encoded without changing what "the same cell" means
-- [ ] the 1 object that refuses, on bytes between the ops that reachability
-      never reached — so nothing can say whether they are code
+- [x] the last object that refused, on bytes reachability never reached —
+      `jumps-q-evt`'s two calls to `B$EVCK` sitting after an unconditional
+      jump, real relocated code that nothing can arrive at. Carried the way
+      padding and tables already are: a `Table` remaps every fixup inside it
+      by however far it moved, and what it cannot do is fix a branch landing
+      in its middle, which is exactly what reachability rules out
+
+**Every object in the corpus rebuilds whole-segment**, 155 of 155, and all
+six programs in `REBUILDS` link and run on all twelve configurations. What
+is left is not reach but the wiring: `rewrite.py` still does not call
+`wholeseg.rebuilt`.
 
 ## M2 — placement
 

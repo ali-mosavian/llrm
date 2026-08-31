@@ -103,9 +103,34 @@ PADDING = frozenset({0x90, 0x00})
 
 
 def _padding_runs(
-    found: Module, ops: list[mir.Op], carried: list["Table"], lowest: int, highest: int
+    found: Module,
+    ops: list[mir.Op],
+    carried: list["Table"],
+    lowest: int,
+    highest: int,
+    reached: frozenset[int] | None = None,
 ) -> list["Table"]:
-    """The gaps between the items that are nothing but padding bytes."""
+    """The gaps between the items that may be carried rather than selected.
+
+    Padding is the easy half: BC aligns its procedures, so runs of `90` sit
+    between them and nothing enters those.
+
+    The other half is code the decoder never reached. Under /V, BC emits a
+    call to B$EVCK after every statement, and in jumps-q-evt two of them sit
+    directly after an unconditional `jmp` -- real relocated calls that
+    nothing can arrive at. They were the only thing in the corpus that
+    refused a whole-segment rebuild.
+
+    Carrying them rests on one fact: no block walked in. A Table already
+    copies its bytes and remaps every fixup inside it by however far it
+    moved, so a relocated call travels correctly; what a Table cannot do is
+    fix up a branch that lands in the middle of it, and reachability is the
+    proof there is no such branch. If that proof were wrong the rebuild
+    would already be unsound for the code around them.
+
+    `reached` is what makes the question askable here. Without it only
+    padding is carried, which is what this did before.
+    """
     covered = set()
     for one in ops:
         covered.update(range(one.at, one.at + (_length_of(one) or 0)))
@@ -119,7 +144,10 @@ def _padding_runs(
         if empty and start is None:
             start = at
         elif not empty and start is not None:
-            if all(one in PADDING for one in found.code[start:at]):
+            span = range(start, at)
+            if all(one in PADDING for one in found.code[start:at]) or (
+                reached is not None and not any(one in reached for one in span)
+            ):
                 out.append(Table(start, at))
             start = None
     return out
@@ -218,6 +246,7 @@ def rebuild(
     bodies: list[tuple[str, MirBody]],
     tables: tuple[tuple[int, int], ...] = (),
     fields: frozenset[int] = frozenset(),
+    reached: frozenset[int] | None = None,
 ) -> Laid | str:
     """Every body in the module, laid out one after another.
 
@@ -270,14 +299,23 @@ def rebuild(
     # what they were and nothing enters them, so where they end up does not
     # matter. Only runs that are entirely padding -- anything else in a gap
     # is bytes this cannot account for, and it says so instead.
-    inside += _padding_runs(found, ops, inside, lowest, highest)
+    inside += _padding_runs(found, ops, inside, lowest, highest, reached)
 
     # Every byte between the first item and the last has to be one of them.
     # What is left over is data nothing here can name, and emitting only what
     # it understands would drop it silently along with anything it holds.
     covered = sum(_length_of(one) or 0 for one in ops) + sum(one.hi - one.lo for one in inside)
     if covered != highest - lowest:
-        return f"{lowest:#06x}: {highest - lowest - covered} bytes between the ops are not instructions"
+        # Named where the gap is, not where the layout starts. It used to
+        # report `lowest`, which sent every reading of this straight to the
+        # first instruction in the segment and nowhere near the bytes.
+        held = set()
+        for one in ops:
+            held.update(range(one.at, one.at + (_length_of(one) or 0)))
+        for one in inside:
+            held.update(range(one.lo, one.hi))
+        first = next(one for one in range(lowest, highest) if one not in held)
+        return f"{first:#06x}: {highest - lowest - covered} bytes between the ops are not instructions"
 
     return _emitted(sorted([*ops, *inside], key=lambda one: one.at), lowest, found, fields)
 

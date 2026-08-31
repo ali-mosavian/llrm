@@ -198,14 +198,18 @@ def rebuilt(obj: Path) -> tuple:
     mapped = code_map(found)
     if isinstance(mapped, str):
         return None, None, None
-    bodies = list(mir.bodies(found, split.partition(found, mapped)))
+    blocks = split.partition(found, mapped)
+    bodies = list(mir.bodies(found, blocks))
     if not bodies:
         return None, None, None
     # The same fixup set wholeseg.py passes: Module.fixup_at holds only the
     # segment and group OFF16 fixups, and a memory operand naming an
     # external has one this would otherwise leave behind.
     fields = frozenset(one.offset for one in omf.fixups(omf.parse(obj.read_bytes())) if one.seg == found.seg)
-    got = layout.rebuild(found, bodies, mapped.tables, fields)
+    # And the same reachability, so a gap the decoder never walked into is
+    # carried here exactly as it is in a real rebuild.
+    reached = frozenset(at for block in blocks for insn in block.insns for at in range(insn.at, insn.end))
+    got = layout.rebuild(found, bodies, mapped.tables, fields, reached)
     return found, bodies, (None if isinstance(got, str) else got)
 
 
@@ -298,17 +302,22 @@ def test_data_between_the_instructions_is_carried_or_refused(obj: Path) -> None:
 
 
 def test_the_rebuildable_share_is_what_was_measured() -> None:
-    """42 of the corpus's 125 objects rebuild whole-segment.
+    """Every object in the corpus rebuilds whole-segment.
 
-    A canary on reach, and it moves for nameable reasons: refusing inline
+    A canary on reach, and it moved for nameable reasons: refusing inline
     data took it from 42 to 34, the bare x87 forms took it back to 42,
     carrying the tables took it to 49, asking for every fixup rather than
     the subset Module.fixup_at holds took it to 55, carrying BC's own
-    trailing zero padding took it to 109, and keeping the base register on a
-    cell whose address cannot be named took it to 123, and the padding BC puts between procedures took it to 124.
+    trailing zero padding took it to 109, keeping the base register on a
+    cell whose address cannot be named took it to 123, and the padding BC
+    puts between procedures took it to 124.
+
+    The last one to refuse was jumps-q-evt, on two calls to B$EVCK that sit
+    after an unconditional jump -- code under /V that nothing can reach.
+    Carrying a gap no block walked into took it to all of them.
     """
     done = 0
     for obj in FIXTURES:
         if rebuilt(obj)[2] is not None:
             done += 1
-    assert done == 154
+    assert done == 155

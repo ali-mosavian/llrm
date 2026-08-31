@@ -111,13 +111,14 @@ def test_a_segment_this_pass_wrote_links_and_runs(tag: str, prog: str) -> None:
     result = e2e.run(tag, prog, dry_run=False, transform=change, work=Path("build/e2e") / f"{tag}-{prog}-mir")
     bad = [one for one in result.verdicts if not one.ok]
     assert not bad, f"{tag}/{prog}: {bad[0].status} {bad[0].detail}"
-    # A refusal is a result too, and one pair has a real one: under /V the
-    # module opens with an event-poll stub only the runtime enters, which is
-    # ten bytes between the ops. What must not happen is a rebuild that runs
-    # wrong, and the assertion above is what says it did not.
-    # That rebuilding happens at all is
-    # test_optimised_code_this_pass_wrote_links_and_runs's claim, per config.
+    # Every one of these rebuilds now, so a refusal is a regression rather
+    # than a result. The last was jumps under /V, on two calls to B$EVCK
+    # after an unconditional jump: real relocated code nothing can reach,
+    # carried the way padding and tables already were.
+    from qbopt.wholeseg import REBUILT
+
     assert seen, f"{tag}/{prog}: the transform never ran"
+    assert set(seen) == {REBUILT}, f"{tag}/{prog}: {seen}"
 
 
 @pytest.mark.parametrize("tag", [t for t in REBUILDING_TAGS if t in CONFIGS and CONFIGS[t].available])

@@ -41,12 +41,16 @@ def rebuilt(data: bytes) -> tuple[bytes, str]:
     if isinstance(mapped, str):
         return data, mapped
 
-    bodies = list(mir.bodies(found, split.partition(found, mapped)))
+    blocks = split.partition(found, mapped)
+    bodies = list(mir.bodies(found, blocks))
     if not bodies:
         return data, "no bodies were raised"
 
+    # Every byte the decoder walked into, so layout.py can tell a gap it may
+    # carry from one that is real code it simply did not raise.
+    reached = frozenset(at for block in blocks for insn in block.insns for at in range(insn.at, insn.end))
     fields = frozenset(one.offset for one in omf.fixups(records) if one.seg == found.seg)
-    laid = layout.rebuild(found, bodies, mapped.tables, fields)
+    laid = layout.rebuild(found, bodies, mapped.tables, fields, reached)
     if isinstance(laid, str):
         return data, laid
 
