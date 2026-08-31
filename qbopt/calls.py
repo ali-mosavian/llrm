@@ -350,6 +350,36 @@ def fits_in_a_byte(value: int) -> bool:
     return -128 <= value < 128
 
 
+# A multiply by a constant the 386 can do without multiplying. `shl` is the
+# same four bytes as `imul r32,imm8` and several times faster; `lea` through
+# the SIB scale costs one byte more and is faster still, which is the trade
+# this pass already makes elsewhere and these sites are all inside loops.
+# gcc and clang at -O3 pick exactly these on i386 -- ×3 is one lea, not a
+# shift and an add.
+#
+# Only where nothing reads the flags afterwards, which absorb() has already
+# established for every MULTIPLY site it reaches: imul writes them, shl
+# writes them differently, and lea writes none at all.
+SCALES = {3: 2, 5: 4, 9: 8}
+
+
+def _without_multiplying(value: int) -> Instruction | None:
+    """One instruction that multiplies RESULT by `value`, or None.
+
+    Negative and zero are refused rather than special-cased. A negative
+    power of two is a shift and a negation, which is two instructions and a
+    different shape; nothing in the corpus asks for one, and inventing the
+    sequence unmeasured is how a fold acquires a case nothing checks.
+    """
+    if value <= 0:
+        return None
+    if value & (value - 1) == 0 and value != 1:
+        return Instruction.create_reg_i32(Code.SHL_RM32_IMM8, RESULT, value.bit_length() - 1)
+    if (scale := SCALES.get(value)) is not None:
+        return Instruction.create_reg_mem(Code.LEA_R32_M, RESULT, MemoryOperand(base=RESULT, index=RESULT, scale=scale))
+    return None
+
+
 def apply_to(name: str, operand: Operand) -> Instruction:
     if operand.kind is not Kind.CONSTANT:
         return Instruction.create_reg_mem(ABSORBED[name], RESULT, memory_of(operand))
@@ -359,6 +389,8 @@ def apply_to(name: str, operand: Operand) -> Instruction:
     if name == COMPARE:
         code = Code.CMP_RM32_IMM8 if short else Code.CMP_EAX_IMM32
         return Instruction.create_reg_i32(code, RESULT, operand.value)
+    if name == MULTIPLY and (cheaper := _without_multiplying(operand.value)) is not None:
+        return cheaper
     code = Code.IMUL_R32_RM32_IMM8 if short else Code.IMUL_R32_RM32_IMM32
     return Instruction.create_reg_reg_i32(code, RESULT, RESULT, operand.value)
 

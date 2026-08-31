@@ -12,9 +12,11 @@ from iced_x86 import Mnemonic
 from iced_x86 import Register
 from iced_x86 import Register_
 from iced_x86 import Instruction
+from iced_x86 import BlockEncoder
 
 import corpus
 from helpers import hx
+from qbopt import calls
 from qbopt import module
 from qbopt.calls import Kind
 from qbopt.flags import Flag
@@ -496,3 +498,46 @@ def test_consume_refuses_a_call_whose_arity_does_not_match_what_was_pushed() -> 
     assert dword is not None
     site = CallSite(at=0, end=0, start=0, name=MULTIPLY, consume=(dword,))
     assert isinstance(consume(site, Flag.NONE), str)
+
+
+@pytest.mark.parametrize(
+    ("value", "expect"),
+    [
+        (2, "shl eax,1"),
+        (4, "shl eax,2"),
+        (16, "shl eax,4"),
+        (256, "shl eax,8"),
+        (3, "lea eax,[eax+eax*2]"),
+        (5, "lea eax,[eax+eax*4]"),
+        (9, "lea eax,[eax+eax*8]"),
+    ],
+)
+def test_a_constant_multiply_the_386_can_do_without_multiplying(value: int, expect: str) -> None:
+    """gcc and clang at -O3 pick these on i386, and ×3 is one lea rather
+    than a shift and an add. Safe only because absorb() has already refused
+    any MULTIPLY site whose flags are read afterwards: imul writes them,
+    shl writes them differently, and lea writes none at all.
+    """
+    found = calls._without_multiplying(value)
+    assert found is not None
+    encoder = BlockEncoder(BITNESS)
+    encoder.add(found)
+    assert str(next(iter(Decoder(BITNESS, encoder.encode(0), ip=0)))) == expect
+
+
+@pytest.mark.parametrize("value", [0, 1, -1, -4, 7, 10, 100])
+def test_anything_else_still_multiplies(value: int) -> None:
+    """Refused rather than special-cased. ×7 is a lea and a sub and ×-4 a
+    shift and a negation -- two instructions and a different shape, which
+    nothing in the corpus asks for, and inventing a sequence unmeasured is
+    how a fold acquires a case nothing checks."""
+    assert calls._without_multiplying(value) is None
+
+
+def test_strength_reduction_only_applies_to_the_multiply() -> None:
+    """B$CPI4's own absorbed form is a compare, and a compare by 3 is not a
+    lea by any reading."""
+    operand = calls.Operand(calls.Kind.CONSTANT, value=3)
+    encoder = BlockEncoder(BITNESS)
+    encoder.add(calls.apply_to(calls.COMPARE, operand))
+    assert "cmp" in str(next(iter(Decoder(BITNESS, encoder.encode(0), ip=0))))

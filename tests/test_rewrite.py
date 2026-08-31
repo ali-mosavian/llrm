@@ -40,10 +40,14 @@ from qbopt.rewrite import drop_restore_repush_round_trips
 
 pytestmark = pytest.mark.corpus
 
-# The only opcodes calls.absorb() ever replaces a non-COMPARE call with --
-# tail_widened_calls() only ever folds one of these four names in, so a
-# combined edit's own bytes must decode to at least one of them, or the
+# The only opcodes calls.absorb() ever replaces a non-COMPARE call with, so
+# a combined edit's own bytes must decode to at least one of them or the
 # call's own arithmetic never actually happened.
+#
+# SHL and LEA are here because a multiply by a constant the 386 can do
+# without multiplying does not emit an imul at all -- calls.SCALES and
+# _without_multiplying(). They belong to this set for the same reason the
+# imul forms do: they ARE the arithmetic, not something around it.
 CALL_REPLACEMENT_OPCODES = {
     Code.IMUL_R32_RM32,
     Code.IMUL_R32_RM32_IMM8,
@@ -52,6 +56,8 @@ CALL_REPLACEMENT_OPCODES = {
     Code.IDIV_RM32,
     Code.SHRD_RM32_R32_CL,
     Code.SHRD_RM32_R32_IMM8,
+    Code.SHL_RM32_IMM8,
+    Code.LEA_R32_M,
 }
 
 
