@@ -24,6 +24,7 @@ from collections.abc import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from dosbox import Run
 from configs import Config
 from configs import CONFIGS
 from dosbox import read_dos
@@ -95,7 +96,7 @@ def compile_all(cfg: Config, work: Path, names: list[str], timeout: int, source_
     )
 
 
-def link_and_run(cfg: Config, work: Path, names: list[str], timeout: int) -> None:
+def link_and_run(cfg: Config, work: Path, names: list[str], timeout: int) -> Run:
     steps = []
     for n in names:
         u = n.upper()
@@ -105,7 +106,15 @@ def link_and_run(cfg: Config, work: Path, names: list[str], timeout: int) -> Non
             f"B_{u}.EXE > B_{u}.TXT",
             f"O_{u}.EXE > O_{u}.TXT",
         ]
-    cached_launch(work, cfg.mount, steps, identity=toolchain_identity(cfg), timeout=timeout, env={"LIB": r"V:\LIB"})
+    # Returned rather than discarded. A DOSBox run killed at the timeout and
+    # a program that stopped on its own both leave a short output file, and
+    # judge() called both NODONE -- "the run stopped early" -- which reads
+    # like the rewrite hung the program when it may only mean the machine
+    # was loaded. One matrix run came back 11 of 12 with no way to tell
+    # which, and three since have been clean.
+    return cached_launch(
+        work, cfg.mount, steps, identity=toolchain_identity(cfg), timeout=timeout, env={"LIB": r"V:\LIB"}
+    )
 
 
 LINKER_BANNER = "Microsoft (R) Segmented Executable Linker"
@@ -128,7 +137,13 @@ def link_report(work: Path, names: list[str]) -> dict[str, str]:
     return {name: "".join(chunks[2 * i : 2 * i + 2]) for i, name in enumerate(names)}
 
 
-def judge(work: Path, name: str, golden_dir: Path = SUITE / "golden", link_text: str = "") -> Verdict:
+def judge(
+    work: Path,
+    name: str,
+    golden_dir: Path = SUITE / "golden",
+    link_text: str = "",
+    run: Run | None = None,
+) -> Verdict:
     u = name.upper()
     obj = work / f"{u}.OBJ"
     if not obj.is_file():
@@ -152,6 +167,12 @@ def judge(work: Path, name: str, golden_dir: Path = SUITE / "golden", link_text:
         return Verdict(name, "BASEDIFF", first_difference(golden, base))
     for who, out in (("baseline", base), ("rewritten", opt)):
         if not out or out[-1] != "DONE":
+            if run is not None and run.timed_out:
+                # Not a verdict on the code. The emulator was killed at the
+                # deadline, so this program's output is simply missing its
+                # tail -- reported as its own status so a loaded machine
+                # cannot be read as a miscompile.
+                return Verdict(name, "TIMEOUT", f"dosbox killed after {run.seconds:.0f}s; the {who} run is cut short")
             return Verdict(name, "NODONE", f"the {who} run stopped early")
     # where the rewrite is meant to disagree with BC, the golden is the only
     # thing worth comparing against
@@ -210,11 +231,11 @@ def run(
                 crashed[name] = f"{type(exc).__name__}: {exc}"
 
     survivors = [n for n in names if n not in crashed]
-    link_and_run(cfg, work, survivors, timeout)
+    ran = link_and_run(cfg, work, survivors, timeout)
     per_name_link = link_report(work, survivors)
 
     verdicts = {n: Verdict(n, "REWRITEFAIL", detail) for n, detail in crashed.items()}
-    verdicts |= {n: judge(work, n, golden_dir, per_name_link.get(n, "")) for n in survivors}
+    verdicts |= {n: judge(work, n, golden_dir, per_name_link.get(n, ""), ran) for n in survivors}
     return Result(tag, [verdicts[n] for n in names])
 
 
