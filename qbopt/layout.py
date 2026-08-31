@@ -58,13 +58,19 @@ class Laid:
 
 
 def _ordered(body: MirBody) -> list[mir.Op]:
-    """Every op in address order, which is the order they are emitted in.
+    """Every op, in the order they are emitted.
 
-    Blocks are laid out where they already were rather than reordered: a
-    different order is a different program's control flow, and nothing here
-    is asking for one.
+    Blocks in address order, and within a block the order the block lists
+    them. Identical to sorting every op by address while nothing reorders
+    anything -- which is true of every body raised from BC's code -- and not
+    the same rule: a transform that moves a definition within its block
+    changes the list and must not have layout put it back.
+
+    Blocks themselves are laid out where they already were rather than
+    reordered: a different block order is a different program's control
+    flow, and nothing here is asking for one.
     """
-    return sorted((op for block in body.blocks for op in block.ops), key=lambda one: one.at)
+    return [op for block in sorted(body.blocks, key=lambda one: one.at) for op in block.ops]
 
 
 def _length_of(op: mir.Op) -> int | None:
@@ -74,7 +80,14 @@ def _length_of(op: mir.Op) -> int | None:
     every node has one: calls.py's restore idiom is a single node covering
     four bytes and three instructions, and it is in every object this pass
     has already absorbed a call in.
+
+    `covers` overrides it, and is how a transform accounts for what it
+    replaced: an op standing in for two of BC's says so, and the byte
+    arithmetic below still adds up.
     """
+    if op.covers is not None:
+        lo, hi = op.covers
+        return hi - lo
     if op.node is None:
         return None
     lo, hi = ir.span(op.node)
@@ -163,7 +176,13 @@ def _padding_runs(
 
 
 def _semantics(op: mir.Op) -> ir.Semantics | None:
-    what = getattr(op.node, "semantics", None)
+    """What to select for this op, or None to carry its bytes.
+
+    An op a MIR transform built has no node and no bytes to carry, so its
+    own `made` is the only answer. An op raised from BC's code has a node,
+    and that node's semantics is the authority.
+    """
+    what = op.made if op.made is not None else getattr(op.node, "semantics", None)
     return None if what is None or what.op is ir.Operation.BARRIER else what
 
 
@@ -256,6 +275,7 @@ def rebuild(
     tables: tuple[tuple[int, int], ...] = (),
     fields: frozenset[int] = frozenset(),
     reached: frozenset[int] | None = None,
+    native_fpu: bool = False,
 ) -> Laid | str:
     """Every body in the module, laid out one after another.
 
@@ -326,10 +346,16 @@ def rebuild(
         first = next(one for one in range(lowest, highest) if one not in held)
         return f"{first:#06x}: {highest - lowest - covered} bytes between the ops are not instructions"
 
-    return _emitted(sorted([*ops, *inside], key=lambda one: one.at), lowest, found, fields)
+    return _emitted(sorted([*ops, *inside], key=lambda one: one.at), lowest, found, fields, native_fpu)
 
 
-def _emitted(ops: list, at: int, found: Module, fields: frozenset[int] = frozenset()) -> Laid | str:
+def _emitted(
+    ops: list,
+    at: int,
+    found: Module,
+    fields: frozenset[int] = frozenset(),
+    native_fpu: bool = False,
+) -> Laid | str:
     """Every item in order from `at`, shrunk to a fixed point and emitted.
 
     An item is an op, which select.py encodes, or a Table, which is copied.
@@ -343,7 +369,8 @@ def _emitted(ops: list, at: int, found: Module, fields: frozenset[int] = frozens
             lengths[op.at] = op.hi - op.lo
             continue
         what = _semantics(op)
-        if isinstance(op.node, ir.Restore) or what is None or found.code[op.at : op.at + 1] == bytes([0xCD]):
+        emulated = not native_fpu and found.code[op.at : op.at + 1] == bytes([0xCD])
+        if isinstance(op.node, ir.Restore) or what is None or emulated:
             lengths[op.at] = _length_of(op) or 0
             continue
         made = select.emit(what, at=at, relocated=_field_in(found, op, fields) is not None)
@@ -398,9 +425,12 @@ def _emitted(ops: list, at: int, found: Module, fields: frozenset[int] = frozens
         # `cd 35 46 c8` as the fld it stands for, so selecting from the
         # semantics would emit `d9 46 c8` -- a native instruction, on a
         # machine that may have no coprocessor. That conversion is a
-        # decision fpu.py gates behind --native-fpu, and laying a segment
-        # out is not the place to make it silently.
-        if found.code[op.at : op.at + 1] == bytes([0xCD]) and (length := _length_of(op)):
+        # decision fpu.py gates behind --native-fpu -- so laying a segment
+        # out does not make it silently, and makes it when asked: with
+        # native_fpu the site is selected from its own semantics instead,
+        # which is the same x87 instruction the emulator stands for and is
+        # what M5 means by expressing fpu.py's pass over MIR.
+        if not native_fpu and found.code[op.at : op.at + 1] == bytes([0xCD]) and (length := _length_of(op)):
             # Copied, so any fixup inside it keeps its place within the
             # instruction and only the instruction itself has moved.
             field = _field_in(found, op, fields)

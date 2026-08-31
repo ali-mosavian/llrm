@@ -212,6 +212,20 @@ class Op:
     loads: tuple[MemRef, ...] = ()
     stores: tuple[MemRef, ...] = ()
     node: ir.Node | None = None  # what it came from, so lowering can be verbatim
+    # What a transform decided this op should be, overriding the node's own
+    # semantics. The node stays rather than being replaced: it is what
+    # layout.py asks for the op's original bytes and, more importantly, for
+    # the fixup inside them. A widened `add eax,[x]` reads the same
+    # relocated address the pair's low half did, and an op with no node has
+    # no fixup to find -- that address would come out a bare zero.
+    made: ir.Semantics | None = None
+    # Which of the original bytes this op stands for, when that is not just
+    # its own node's span. A transform that replaces two instructions with
+    # one leaves the second's bytes belonging to nothing, and layout.py
+    # refuses a body it cannot account for every byte of -- rightly, since
+    # that is how it catches data BC put between the instructions. So a
+    # replacement says what it replaced.
+    covers: tuple[int, int] | None = None
 
     @property
     def barrier(self) -> bool:
