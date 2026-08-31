@@ -70,9 +70,12 @@ Built, no consumer:
 - [x] load, store, push, accumulate and store-immediate against `Space.SEGMENT` and `Space.FRAME`
 - [x] cmp, cwd, cdq, wait, nop, pop, ret and retf
 - [x] near call, far call, jump and conditional branch
-- [ ] `imul` — the form exists in iced, it is simply not wired
-- [ ] the 409 x87 instructions — M6's
-- [ ] the ~190 whose address is in a space `operand_of` refuses, or whose register this does not name
+- [x] `imul` — `select.multiply_into`; `imul eax,ecx` is `66 0f af c1`.
+      Absorption is what emits it, so BC's own output has none to count
+- [x] the x87 instructions — 869 of them select across the corpus.
+      Their *stack positions* are still not values, which is M6's
+- [x] the addresses `operand_of` refused — none left: every operation in
+      the corpus selects except `movsw`, which is refused deliberately
 - [x] layout: a whole body emitted, with every branch pointing at where its
       target went — `layout.lay_out`, 50 of 171 corpus bodies, 8,353 ops and
       583 branches, all landing
@@ -276,4 +279,5 @@ had one.
 
 ## Housekeeping
 
-- [ ] `docs/architecture.md` predates `avail.py`, `simplify.py`, `select.py` and `fpu.py`
+- [x] `docs/architecture.md` — brought up to date, including that the MIR
+      tower emits now and that `rewrite.py` does not call it
