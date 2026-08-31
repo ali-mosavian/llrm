@@ -261,13 +261,18 @@ trip whose register was overwritten between the pushes and the pop. That
 one changed a real answer: `x MOD y MOD z` used the first divide's divisor
 for the second.
 
-Known gap, and it predates this: on the three QuickBASIC 4.5 configurations
-one generated program in forty diverges between the evaluator and BC's own
-build, and it is always the same shape -- the program takes a different
-path than the evaluator models, losing every SUB's output. `fuzzcheck.py`
-excludes those from the qbopt comparison, so it costs coverage rather than
-correctness, but the evaluator is modelling VBDOS and PDS and something in
-4.5 disagrees.
+Known gap, and it predates this: on the three QuickBASIC 4.5
+configurations one generated program in forty diverges between the
+evaluator and BC's own build. `fuzzcheck.py` excludes those from the qbopt
+comparison, so it costs coverage rather than correctness.
+
+What it is not, measured on the pre-change generator's F001: an arithmetic
+disagreement. Every label both printed carries the same value. The program
+prints 8 lines where the evaluator expects 41 -- one contiguous run of
+statements produces no output at all, and then execution resumes and runs
+to DONE. Whatever 4.5 does there, the evaluator models VBDOS and PDS, which
+both agree with it. Worth an interactive run under 4.5 to find; it has not
+had one.
 
 ## Housekeeping
 
