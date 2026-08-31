@@ -1,5 +1,9 @@
 # Roadmap
 
+Kept current. Tick a box when it lands, and move a number when it is
+re-measured -- a roadmap that lags the code is worse than none, because it
+is read as if it did not.
+
 ## Goal
 
 Recompile BC's output rather than patch it: integer and long arithmetic,
@@ -34,6 +38,7 @@ Measured 2026-08-31. Re-measure before trusting it.
 | its x87 sites | 1,766, none optimised |
 | bench/nbody | 2.99× under DOSBox, 21 of 21 calls absorbed, pressure 6/6 |
 | corpus redundant reads | 553 — 73 live provider, 48 dead, 432 none |
+| selector coverage | 5,839 of 20,245 corpus ops, 0 mismatched |
 
 MIR does, end to end:
 
@@ -43,7 +48,7 @@ MIR does, end to end:
 - [x] the stack as an address space — stage 3
 - [x] prove an identity and delete what computes nothing — stage 4
 - [x] substitute a memory operand for a register, cross-block
-- [x] emit one instruction the input did not contain — `select.move`
+- [x] emit the register and immediate forms from `ir.Semantics` — `select.emit`
 
 Built, no consumer:
 
@@ -55,15 +60,24 @@ Built, no consumer:
 
 `lower()` emits a body it was not handed. Everything else waits on this.
 
-- [ ] `mov reg,imm`
-- [ ] add, sub, and, or, xor, cmp, imul — reg-reg and reg-imm
-- [ ] load and store against each `Space`
-- [ ] branches, displacement resolved after layout
-- [ ] refuse what is not in the table rather than approximate it
+- [x] `mov reg,reg` and `mov reg,imm`
+- [x] add, adc, sub, sbb, and, or, xor, cmp — reg-reg and reg-imm
+- [x] neg, not, inc, dec
+- [x] push, register and immediate, at both widths
+- [x] refuse what is not in the table rather than approximate it
+- [ ] `imul` — the form exists in iced, it is simply not wired
+- [ ] load and store against each `Space` — 3,126 moves, 3,709 pushes, 787 binaries
+- [ ] call, branch and jump, target resolved after layout — 6,104 ops
+- [ ] layout: an address's fixup and a branch's displacement move with the code
 
 Proof: re-lower every corpus body through the selector with no transform
 applied; `tools/matrix.py` green. Same program, not same bytes — the
 selector may choose differently.
+
+Held so far by `test_everything_selected_decodes_to_what_was_asked_for`:
+everything emitted decodes to the instruction it was asked for, over the
+whole corpus. That is the same claim at the size the table currently
+reaches, and it found both bugs in the first version.
 
 ## M2 — placement
 
