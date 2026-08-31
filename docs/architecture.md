@@ -48,26 +48,28 @@ connected to the output.
   runtime.py what a call breaks      +-- consts.py    known() -- propagate + fold
   registers  backward liveness       +-- wide.py      pairs(), tests()
         |                            +-- regalloc.py  colour() -- SSA, chordal
-        v                            +-- reencode.py  with_registers()
-  calls.py    absorb, reduce               |
-  forward.py  drop a load                  v
-  memory.py   dead stores            mir.lower() -- proven lossless,
-        |                            2,060,168 bytes byte-identical
-        v                                  |
-  rewrite.py --> .OBJ out                  v
-                                     tools/dump.py
-                                     ...and nothing else.
+        v                            +-- avail.py     MemRef -> Value, x-block
+  calls.py    absorb, reduce         +-- reencode.py  with_operand()
+  forward.py  drop a load                  |
+  memory.py   dead stores                  |
+        |                                  |
+        +---------------+------------------+
+                        |
+                        v
+                  rewrite.py --> .OBJ out
 ```
 
-The right-hand tower is real, verified work. `raise_body()` builds proper
-SSA -- iterated dominance frontiers, phi placement, a dominator-tree
-renaming walk -- and `lower()` round-trips it back to byte-identical
-machine code across the whole corpus. `regalloc.colour()` is an optimal
-SSA allocator. None of it reaches `rewrite.py`.
+Both towers now reach the output, but by different amounts. The left one
+carries every transform that changes real programs. The right one carries
+exactly one: `avail.py` + `regalloc.py` + `reencode.py`, joined in
+`rewrite._substituted()`, which serves 60 redundant memory reads from a
+register instead.
 
-Where the two towers overlap, the left one wins by being wired:
-`lift.py`'s widening is what emits; `wide.py` re-derives the same 192
-carry pairs and 871 comparison-branches at MIR level and feeds a dump.
+The rest of the right-hand tower is still verified work with no consumer.
+`lower()` round-trips SSA back to byte-identical machine code across the
+corpus and nothing routes emission through it; `consts.known()` folds and
+nothing reads the result; `wide.py` re-derives at MIR level the same 192
+carry pairs `lift.py` already widens on the machine side.
 
 ## The optimisation passes
 
@@ -83,18 +85,24 @@ What exists, what it runs on, and whether it changes the program.
   dead store removal    machine    yes     a store nothing reads
   load forwarding       machine    yes     a load whose register has it
                                            (block-scoped only)
+  operand substitution  MIR        yes     `add ax,[y]` -> `add ax,si`,
+                                           cross-block; 60 corpus reads
   const prop + fold     MIR        no      known(): values and arithmetic
-  register allocation   MIR        no      colour(): where values live
-  re-encoding           MIR        no      one instruction, remapped
+  register allocation   MIR        part    colour() built; live() is what
+                                           operand substitution asks
+  re-encoding           MIR        yes     with_operand(); with_registers()
+                                           has no caller
 
   not built yet:  CSE, LICM, dead code elimination proper
 ```
 
-The gap between the two halves of that table is the project. The MIR
-passes are correct and idle; the machine passes emit but are limited to
-what one basic block can see.
+Operand substitution is the one pass that crosses. It changes where the
+second operand is *read from* and nothing else -- the destination is
+untouched, so nothing downstream is rewritten, which is what makes it work
+on a two-address machine where forwarding a use does not. It is also why
+an accumulate is safe: `and cx,[x]` keeps its `and`.
 
-## Where the join has to happen
+## Where the join happens
 
 A load is removable when memory says the cell's content is known *and* a
 register still holds it. `memory.py` answers the first question
@@ -110,12 +118,34 @@ cross-block. Nothing answers the second cross-block.
           +------------------+------------------+
                              |
                              v
-                        forward.py
-                   makes this join today
-                   BLOCK-SCOPED ONLY
+                         avail.py
+              MemRef -> Value, forward, cross-block
+                             |
+                  + regalloc.live() -- is it still there?
+                             |
+                             v
+                  rewrite._substituted()
 ```
 
-That is the open work, and it is one join, not a rewrite of either side.
+Both halves are needed and neither is enough. The cell's content being
+known says the read is redundant; the value being live says a register
+still has it. Where they disagree the read stays, and they disagree often:
+of 481 redundant reads in the corpus, 73 have a live value holding their
+bytes, 42 have a dead one, and 366 have none at all.
+
+That gap is BC spilling around calls, and it is the whole reason
+`bench/nbody.bas` gets nothing from this pass. All 27 of its redundant
+reads are spills:
+
+```
+  mov [bp-18h],ax     the spill
+  call B$MUI4         ax is gone -- the call clobbers it
+  add ax,[bp-18h]     the reload, and it is real work
+```
+
+No dataflow removes that. Absorbing the call does, because an absorbed
+`imul eax,ecx` clobbers far less than `B$MUI4` -- which is why absorption,
+not forwarding, is what moves that benchmark.
 
 ## The gates
 
