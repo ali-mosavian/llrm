@@ -108,3 +108,36 @@ def test_a_displacement_is_reported_where_it_actually_landed(obj: Path) -> None:
                 continue
             assert got.displacement_at is not None
             assert insn.at + got.displacement_at == insn.disp_at
+
+
+def test_encoding_somewhere_else_would_retarget_a_branch() -> None:
+    """The bug directly, rather than only its absence.
+
+    A relative branch's displacement is measured from its own ip, so
+    encoding at zero when the instruction lives at 0x9a silently sends it
+    somewhere else. 1,444 of the corpus's instructions came back different
+    for this alone, and every one of them would have been a wrong jump.
+    """
+    from iced_x86 import Encoder
+
+    code = bytes.fromhex("EB10")
+    buffer = bytes(0x30) + code
+    insns, _ = run(buffer, 0x30, len(buffer))
+    here = insns[0].insn.copy()
+
+    wrong = Encoder(BITNESS)
+    wrong.encode(here, 0)
+    assert wrong.take_buffer() != code, "encoding at zero changes the displacement"
+
+    right = reencode.with_registers(insns[0], {})
+    assert right is not None
+    assert right.code == code
+
+
+def test_a_memory_operands_base_moves_with_its_value() -> None:
+    """An address computed from a moved value is computed from wherever it
+    moved. Leaving the base behind reads a different address entirely."""
+    insn, _ = only("66 8B 04")  # mov eax,[si]
+    got = reencode.with_registers(insn, {Register.ESI: Register.EDI})
+    assert got is not None
+    assert "di" in str(next(iter(Decoder(BITNESS, got.code, ip=0))))

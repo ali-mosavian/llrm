@@ -101,3 +101,21 @@ def test_nothing_is_folded_through_a_phi() -> None:
             for block in body.blocks:
                 for phi in block.phis:
                     assert phi.result not in facts
+
+
+def test_division_is_not_folded() -> None:
+    """BC's own divide has semantics this pass already refuses to reproduce
+    -- calls.py on `x/0` and the signed extreme -- so a folder that answered
+    them here would be inventing a result the running program never
+    produces."""
+    assert "idiv" not in consts.ARITH
+    assert "div" not in consts.ARITH
+    assert not (set(consts.ARITH) & set(consts.UNARY)), "one table each, no operation in both"
+
+
+def test_a_fact_is_never_wider_than_the_operation_that_made_it() -> None:
+    """`mov ax,5` makes the low half five and says nothing above it. Taking
+    the number without the width folds a 32-bit use of a half-known value
+    and gives a plausible answer that is not the program's."""
+    assert consts.masked(0x1FFFF, 2) == 0xFFFF
+    assert consts.Known(5, 2).width == 2
