@@ -213,13 +213,22 @@ nothing transformed.
 ```
 uv run pytest -m "not e2e"                     host suite
 uv run pytest                                  adds DOSBox
-uv run python tools/matrix.py                  16 programs x 12 configurations
+uv run python tools/matrix.py                  17 programs x 12 configurations
 uv run python tools/mutate.py                  deliberate breakages, each caught
 uv run python tools/fuzzcheck.py --count 40    generated programs, BC as oracle
 ```
 
 `matrix.py` and `fuzzcheck.py` found every real bug this session. The host
 suite was green for all of them.
+
+A benchmark found the one they missed. `bench/fpbench.bas` printed
+-2147483648 for every coordinate: `forward.py` read the base register of
+`fld dword ptr [si]` as the load's destination, so two pushes of the same
+address looked like a load and a redundant reload, and deleting the second
+slid every x87 slot after it. Nothing in the suite could have caught it --
+every other float program here is one operation deep, and `fuzzgen.py`'s
+floats stay inside the exactly-representable integers. `suite/fpdeep.bas`
+is the two-deep indexed shape, added so the corpus holds it now.
 
 ## Housekeeping
 

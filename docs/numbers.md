@@ -276,6 +276,36 @@ the one figure in this document that went *down* on purpose. It was 3.26
 the day before. The cause is divide strength reduction, and the reason to
 keep it anyway is the subject of the next section.
 
+### Floats
+
+`bench/fpbench.bas` is the same integrator in SINGLE, `v-g3`, 4000 steps, 5
+repetitions, measured 2026-08-31.
+
+| | base | opt | opt `--native-fpu` |
+|---|---|---|---|
+| ticks (median) | 699296 | 699304 | 371660 |
+| ms | 586.1 | 586.1 | 311.5 |
+| ratio to base | -- | 1.0000 | 1.8815 |
+
+**The pass does nothing for float code.** Not a small win rounded away: 8
+ticks out of 699296, well inside the spread. That is what it should be --
+everything measured above absorbs calls into `B$MUI4`, `B$DVI4` and
+`B$CPI4`, and float code makes none of them. It goes through the x87
+emulator instead, which is untouched unless `--native-fpu` is on.
+
+With `--native-fpu`, **base is 1.88 times slower than opt**, and every
+printed coordinate matches BC's own build. Which is the whole benefit
+available on floats today, from replacing the emulator's `int 34h`..`3Dh`
+with the x87 instruction that was always meant to be there.
+
+Both numbers are on code that computes the right answer. An earlier
+measurement of 1.78 was not: `forward.py` was deleting the second of two
+`fld dword ptr [si]`, and the build it timed printed -2147483648 for every
+coordinate. It ran faster because it was doing less, and less was wrong.
+`suite/fpdeep.bas` exists so that shape is in the corpus now.
+
+## Absorption
+
 All 21 of `bench/nbody.bas`'s arithmetic call sites -- 11 `B$MUI4`, 6
 `B$DVI4`, 4 `B$CPI4` -- are absorbed; the rewritten object contains none of
 them. Base is unchanged, as it must be
