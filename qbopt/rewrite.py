@@ -19,6 +19,7 @@ from dataclasses import dataclass
 
 from iced_x86 import Register
 
+from qbopt import fpu
 from qbopt import mir
 from qbopt import omf
 from qbopt import avail
@@ -240,6 +241,7 @@ def plan(
     *,
     take: set[int] | None = None,
     max_regions: int | None = None,
+    native_fpu: bool = False,
 ) -> list[Planned]:
     found = module.of(records)
     if found is None:
@@ -354,9 +356,65 @@ def plan(
         planned.append(Planned(replace(one.region, id=len(planned)), one.edit))
     for one in _simplified(found, mapped, blocks, reached, planned):
         planned.append(Planned(replace(one.region, id=len(planned)), one.edit))
+    if native_fpu:
+        for one in _native_fpu(found, mapped, reached, planned):
+            planned.append(Planned(replace(one.region, id=len(planned)), one.edit))
 
     planned = drop_restore_repush_round_trips(found, mapped, planned)
     return drop_chained_crossings(planned, found.chunks)
+
+
+def _native_fpu(
+    found: module.Module,
+    mapped: CodeMap,
+    reached: list[Insn],
+    planned: list[Planned],
+) -> list[Planned]:
+    """Every emulator site, as the instruction it stands for.
+
+    Off unless asked for, and the only rewrite in this pass that is a
+    decision rather than an optimisation: it changes what the output needs
+    to run, from any 8086 to one with a coprocessor. fpu.py's docstring has
+    the rest, including why the segment-override form is refused.
+    """
+    out: list[Planned] = []
+    for insn in reached:
+        made = fpu.native(found.code, insn)
+        if made is None:
+            continue
+        # The displacement moves one byte earlier, because the two-byte int
+        # became a one-byte ESC opcode -- and its fixup has to move with it.
+        # Emitting the bytes and dropping the relocation leaves the field
+        # reading a bare zero, which is tools/mutate.py's own
+        # bridged-fixup-dropped and is silent in every host test.
+        relocs: tuple[tuple[int, object], ...] = ()
+        if insn.disp_at is not None:
+            found_fixup = found.fixup_at.get(insn.disp_at)
+            if found_fixup is None:
+                continue  # a displacement no fixup claims is not one to move
+            relocs = ((insn.disp_at - insn.at - 1, found_fixup),)
+        reason = anchored_inside(found, mapped, insn.at, insn.end)
+        if reason is None and any(
+            one.edit and one.edit.lo < insn.end and insn.at < one.edit.hi for one in planned + out
+        ):
+            reason = "it overlaps a region already taken"
+        edit = None if reason else Edit(insn.at, insn.end, made, relocs)
+        out.append(
+            Planned(
+                Region(
+                    id=0,
+                    seg=found.seg,
+                    at=insn.at,
+                    end=insn.end,
+                    before=found.code[insn.at : insn.end].hex(),
+                    after=made.hex() if edit is not None else None,
+                    taken=edit is not None,
+                    reason=reason,
+                ),
+                edit,
+            )
+        )
+    return out
 
 
 def _simplified(
@@ -692,6 +750,7 @@ def rewrite(
     dry_run: bool,
     take: set[int] | None = None,
     max_regions: int | None = None,
+    native_fpu: bool = False,
 ) -> tuple[bytes, list[Region]]:
     """Rewrite to a fixed point, or once where the caller is bisecting.
 
@@ -708,11 +767,11 @@ def rewrite(
     they did before.
     """
     if take is not None or max_regions is not None or dry_run:
-        return _once(data, dry_run=dry_run, take=take, max_regions=max_regions)
+        return _once(data, dry_run=dry_run, take=take, max_regions=max_regions, native_fpu=native_fpu)
 
     regions: list[Region] = []
     for _ in range(PASSES):
-        out, found = _once(data, dry_run=False)
+        out, found = _once(data, dry_run=False, native_fpu=native_fpu)
         regions += found
         if out == data or not any(one.taken for one in found):
             return out, regions
@@ -726,9 +785,10 @@ def _once(
     dry_run: bool,
     take: set[int] | None = None,
     max_regions: int | None = None,
+    native_fpu: bool = False,
 ) -> tuple[bytes, list[Region]]:
     records = omf.parse(data)
-    planned = plan(records, take=take, max_regions=max_regions)
+    planned = plan(records, take=take, max_regions=max_regions, native_fpu=native_fpu)
     if dry_run:
         return data, [replace(one.region, taken=False, reason="dry run") for one in planned]
 
@@ -787,11 +847,22 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--take", help="comma-separated region ids; refuse the rest")
     ap.add_argument("--max-regions", type=int)
     ap.add_argument("--report", action="store_true")
+    ap.add_argument(
+        "--native-fpu",
+        action="store_true",
+        help="replace the FP emulator's interrupts with real x87 -- REQUIRES A COPROCESSOR",
+    )
     args = ap.parse_args(argv)
 
     data = args.input.read_bytes()
     take = {int(x) for x in args.take.split(",")} if args.take else None
-    out, found = rewrite(data, dry_run=args.dry_run, take=take, max_regions=args.max_regions)
+    out, found = rewrite(
+        data,
+        dry_run=args.dry_run,
+        take=take,
+        max_regions=args.max_regions,
+        native_fpu=args.native_fpu,
+    )
 
     if args.output:
         args.output.write_bytes(out)
