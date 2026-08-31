@@ -205,8 +205,23 @@ def _meet(maps: list[Holders]) -> Holders:
     return out
 
 
-def holders(body: MirBody, dgroup: frozenset[int], calls: dict[int, str] | None = None) -> Held:
-    """Which value each cell holds, at every block's entry and exit."""
+def holders(
+    body: MirBody,
+    dgroup: frozenset[int],
+    calls: dict[int, str] | None = None,
+    partial: bool = False,
+) -> Held:
+    """Which value each cell holds, at every block's entry and exit.
+
+    `partial` also records a cell loaded by a *partial* write --
+    `mov ax,[x]`, which writes sixteen bits of a thirty-two bit variable
+    and leaves the high half alone. Off by default, and the default is
+    the one that matters: such an entry names a 32-bit value that holds
+    the cell only in its low half, which is exactly right for deciding
+    the load is a no-op and wrong for serving some other read from that
+    register. redundant() asks for it; forwardable() must not, and a
+    generated program caught it doing so.
+    """
     calls = calls or {}
     preds: dict[int, list[int]] = {block.at: [] for block in body.blocks}
     for block in body.blocks:
@@ -224,7 +239,7 @@ def holders(body: MirBody, dgroup: frozenset[int], calls: dict[int, str] | None 
             arriving = {} if block.at == body.entry else _meet([outof[one] for one in preds[block.at]])
             leaving = dict(arriving)
             for op in block.ops:
-                leaving = _after(op, leaving, dgroup, calls, body.origin)
+                leaving = _after(op, leaving, dgroup, calls, body.origin if partial else None)
             if arriving != into[block.at] or leaving != outof[block.at]:
                 into[block.at], outof[block.at] = arriving, leaving
                 changing = True
@@ -249,7 +264,7 @@ def provider(
         for op in block.ops:
             if op.at == at:
                 return next((who for one, who in current.items() if mir.same_bytes(one, ref)), None)
-            current = _after(op, current, dgroup, calls, body.origin)
+            current = _after(op, current, dgroup, calls)
     return None
 
 
@@ -331,7 +346,7 @@ def redundant(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> t
     that merely contains it. loaded_into's own _preserved() is what lets
     this see the load at all.
     """
-    held = holders(body, dgroup, calls)
+    held = holders(body, dgroup, calls, partial=True)
     found: list[int] = []
     for block in body.blocks:
         current = dict(held.into[block.at])
@@ -399,5 +414,5 @@ def forwardable(
                 who = next((w for cell, w in current.items() if mir.same_bytes(cell, op.loads[0])), None)
                 if who is not None and who in at_point.get(op.at, frozenset()):
                     found.append(Forward(op.at, body.origin[who]))
-            current = _after(op, current, dgroup, calls, body.origin)
+            current = _after(op, current, dgroup, calls)
     return tuple(found)

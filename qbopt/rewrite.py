@@ -753,7 +753,7 @@ def rewrite(
     take: set[int] | None = None,
     max_regions: int | None = None,
     native_fpu: bool = False,
-    whole_segment: bool = True,
+    whole_segment: bool = False,
 ) -> tuple[bytes, list[Region]]:
     """Rewrite to a fixed point, or once where the caller is bisecting.
 
@@ -799,6 +799,23 @@ def _written(data: bytes, whole_segment: bool, native_fpu: bool = False) -> byte
     against the patched output and over qb-qrender 616, because the selector
     picks the shorter encoding in places BC's own layout could not be
     changed to use. docs/numbers.md has the table.
+
+    **Off by default, because it is not correct yet.** Every object in the
+    corpus rebuilds and all eighteen suite programs run right on all twelve
+    configurations, and a generated program still comes out wrong:
+    tools/fuzzcheck.py's F004 reads -1 for a variable that should be -9922
+    after a BYREF call. The suite could not have found it -- its programs
+    are about 430 bytes and fit one LEDATA record, where F004 is 3,018 and
+    takes three, so nothing before now exercised emitting a segment in more
+    than one piece.
+
+    What has been ruled out: the MIR transforms (it fails with them off),
+    the four short encodings (it fails with them reverted), the instruction
+    stream (974 instructions, identical but for `jmp near` becoming
+    `jmp short`), where every fixup lands, the non-code segments, and the
+    PUBDEF and SEGDEF remapping. What is left is one fixup at offset 0xa,
+    inside the module header this keeps verbatim, whose target is the code
+    offset one past the last instruction.
     """
     if not whole_segment:
         return data
@@ -880,9 +897,9 @@ def main(argv: list[str] | None = None) -> int:
         help="replace the FP emulator's interrupts with real x87 -- REQUIRES A COPROCESSOR",
     )
     ap.add_argument(
-        "--no-whole-segment",
+        "--whole-segment",
         action="store_true",
-        help="patch BC's own bytes rather than writing the code segment from MIR",
+        help="write the code segment from MIR rather than patching BC's bytes -- NOT YET CORRECT, see _written",
     )
     args = ap.parse_args(argv)
 
@@ -894,7 +911,7 @@ def main(argv: list[str] | None = None) -> int:
         take=take,
         max_regions=args.max_regions,
         native_fpu=args.native_fpu,
-        whole_segment=not args.no_whole_segment,
+        whole_segment=args.whole_segment,
     )
 
     if args.output:

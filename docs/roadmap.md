@@ -130,10 +130,23 @@ now has every body layable**; it was 42 when this was written.
       by however far it moved, and what it cannot do is fix a branch landing
       in its middle, which is exactly what reachability rules out
 
-**Every object in the corpus rebuilds whole-segment**, 155 of 155, and all
-six programs in `REBUILDS` link and run on all twelve configurations.
-`rewrite.py` calls it now, and it is not a size cost: 201 bytes saved over
-the corpus and 616 over qb-qrender against the patched output.
+**Every object in the corpus rebuilds whole-segment**, 155 of 155, all
+eighteen suite programs run right on all twelve configurations, and it is
+not a size cost: 201 bytes saved over the corpus and 616 over qb-qrender
+against the patched output.
+
+- [ ] **and it is still not correct.** `tools/fuzzcheck.py`'s F004 reads -1
+      for a variable that should be -9922 after a BYREF call. The suite
+      could not have found it: its programs are about 430 bytes and fit one
+      LEDATA record, where F004 is 3,018 and takes three, so nothing before
+      now emitted a segment in more than one piece. Ruled out: the MIR
+      transforms, the four short encodings, the instruction stream (974
+      instructions, identical but for `jmp near` becoming `jmp short`),
+      where every fixup lands, the non-code segments, and the PUBDEF and
+      SEGDEF remapping. What is left is one fixup at offset `0xa`, inside
+      the module header `wholeseg` keeps verbatim, whose target is the code
+      offset one past the last instruction. `rewrite.py` has it off until
+      that is understood
 
 ## M2 — placement
 
