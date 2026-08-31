@@ -836,6 +836,37 @@ def multiply(name: str, source: Register_ | ir.Mem, at: int = 0) -> Emitted | No
     return None if code is None else _assemble(Instruction.create_reg(code, source), at)
 
 
+def multiply_into(dest: Register_, source: Register_ | ir.Mem, value: int | None = None, at: int = 0) -> Emitted | None:
+    """`imul eax,ecx` and `imul ax,[x],3` -- the forms that name their result.
+
+    Unlike the one-operand widening multiply, these say where the product
+    goes and produce only the low half. This is what absorption emits for a
+    long multiply, so a selector without it cannot re-emit qbopt's own
+    output.
+    """
+    width = WIDTHS.get(dest)
+    if width is None:
+        return None
+    if isinstance(source, ir.Mem):
+        built = operand_of(source)
+        if built is None or source.width != width:
+            return None
+        if value is None:
+            code = _code(f"IMUL_R{width * 8}_RM{width * 8}")
+            return None if code is None else _assemble(Instruction.create_reg_mem(code, dest, built[0]), at)
+        bits = 8 if fits_in_a_byte(value) else width * 8
+        code = _code(f"IMUL_R{width * 8}_RM{width * 8}_IMM{bits}")
+        return None if code is None else _assemble(Instruction.create_reg_mem_i32(code, dest, built[0], value), at)
+    if WIDTHS.get(source) != width:
+        return None
+    if value is None:
+        code = _code(f"IMUL_R{width * 8}_RM{width * 8}")
+        return None if code is None else _assemble(Instruction.create_reg_reg(code, dest, source), at)
+    bits = 8 if fits_in_a_byte(value) else width * 8
+    code = _code(f"IMUL_R{width * 8}_RM{width * 8}_IMM{bits}")
+    return None if code is None else _assemble(Instruction.create_reg_reg_i32(code, dest, source, value), at)
+
+
 def move_segment(into: Register_, outof: Register_ | ir.Mem, at: int = 0) -> Emitted | None:
     """`mov es,[si+2]` and `mov [x],es` -- how a far pointer is loaded.
 
@@ -1012,6 +1043,17 @@ def emit(
                     return arith("cmp", _remapped(into, where), _remapped(outof, where), at)
                 case (ir.Mem() as cell, ir.Reg(register=outof)):
                     return arith_into("cmp", cell, _remapped(outof, where), at)
+        case ir.Operation.MULTIPLY if len(dests) == 1 and len(sources) >= 2:
+            # One destination is the naming form: `imul eax,ecx`, and with a
+            # third source `imul ax,[x],3`.
+            count = sources[2].value if len(sources) > 2 and isinstance(sources[2], ir.Imm) else None
+            match (dests[0], sources[1]):
+                case (ir.Reg(register=into), ir.Reg(register=one)):
+                    return multiply_into(_remapped(into, where), _remapped(one, where), count, at)
+                case (ir.Reg(register=into), ir.Mem() as cell):
+                    return multiply_into(_remapped(into, where), cell, count, at)
+                case (ir.Reg(register=into), ir.Imm(value=only)):
+                    return multiply_into(_remapped(into, where), _remapped(into, where), only, at)
         case ir.Operation.MULTIPLY if len(dests) == 2 and sources:
             # Two destinations means the widening form: dx:ax, neither
             # encoded. The three-operand `imul r,rm,imm` has one.

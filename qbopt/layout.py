@@ -33,6 +33,8 @@ from dataclasses import dataclass
 
 from qbopt import ir
 from qbopt import mir
+from iced_x86 import OpKind
+
 from qbopt import select
 from qbopt.mir import MirBody
 from qbopt.module import Module
@@ -293,12 +295,10 @@ def _emitted(ops: list, at: int, found: Module, fields: frozenset[int] = frozens
         if isinstance(op, Table):
             lengths[op.at] = op.hi - op.lo
             continue
-        if isinstance(op.node, ir.Restore) or found.code[op.at : op.at + 1] == bytes([0xCD]):
+        what = _semantics(op)
+        if isinstance(op.node, ir.Restore) or what is None or found.code[op.at : op.at + 1] == bytes([0xCD]):
             lengths[op.at] = _length_of(op) or 0
             continue
-        what = _semantics(op)
-        if what is None:
-            return f"{op.at:#06x}: {op.name} has no semantics to select from"
         made = select.emit(what, at=at)
         if made is None:
             return f"{op.at:#06x}: {op.name} is not one select.py can emit"
@@ -354,6 +354,20 @@ def _emitted(ops: list, at: int, found: Module, fields: frozenset[int] = frozens
         if found.code[op.at : op.at + 1] == bytes([0xCD]) and (length := _length_of(op)):
             # Copied, so any fixup inside it keeps its place within the
             # instruction and only the instruction itself has moved.
+            field = _field_in(found, op, fields)
+            if field is not None:
+                relocations.append((len(out) + (field - op.at), field))
+            out += found.code[op.at : op.at + length]
+            continue
+        # A barrier is an instruction ir.py models nothing about --
+        # `movsx eax,bx` is one -- so there is nothing to select from and
+        # its own bytes are the only right answer. Carried, unless it names
+        # a branch target: that would move, and keeping the old number
+        # would point it at whatever now sits there.
+        if _semantics(op) is None and (length := _length_of(op)):
+            found_insn = getattr(op.node, "insn", None)
+            if found_insn is not None and found_insn.insn.op0_kind == OpKind.NEAR_BRANCH16:
+                return f"{op.at:#06x}: a branch this cannot model would keep a stale target"
             field = _field_in(found, op, fields)
             if field is not None:
                 relocations.append((len(out) + (field - op.at), field))
