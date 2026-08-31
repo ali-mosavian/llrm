@@ -230,6 +230,25 @@ every other float program here is one operation deep, and `fuzzgen.py`'s
 floats stay inside the exactly-representable integers. `suite/fpdeep.bas`
 is the two-deep indexed shape, added so the corpus holds it now.
 
+Widening the generator to cover it found a second one immediately. It made
+two arrays and handed the widths out in the order INT, LNG, SNG, DBL, so a
+float array had never once been generated; and `_ensure_valid_operand`
+required a LONG among a node's operands, which quietly caught SINGLE and
+DOUBLE too, so every float BinOp had its right operand replaced by a plain
+variable. With one array of each width, a repeated operand, and that guard
+narrowed to LONG, the first run turned up `simplify.py` deleting a round
+trip whose register was overwritten between the pushes and the pop. That
+one changed a real answer: `x MOD y MOD z` used the first divide's divisor
+for the second.
+
+Known gap, and it predates this: on the three QuickBASIC 4.5 configurations
+one generated program in forty diverges between the evaluator and BC's own
+build, and it is always the same shape -- the program takes a different
+path than the evaluator models, losing every SUB's output. `fuzzcheck.py`
+excludes those from the qbopt comparison, so it costs coverage rather than
+correctness, but the evaluator is modelling VBDOS and PDS and something in
+4.5 disagrees.
+
 ## Housekeeping
 
 - [ ] `docs/architecture.md` predates `avail.py`, `simplify.py`, `select.py` and `fpu.py`

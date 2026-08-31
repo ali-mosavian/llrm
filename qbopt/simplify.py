@@ -136,6 +136,36 @@ def _target_is_free(body: MirBody, block: mir.MirBlock, lo: int, hi: int, target
     return True
 
 
+def _target_survives(body: MirBody, block: mir.MirBlock, lo: int, hi: int, target: Register_) -> bool:
+    """Whether `target` still holds what it held at `lo` when `hi` is reached.
+
+    The deletion's whole argument is that the round trip hands the value
+    back to a register that already has it, so removing it changes nothing.
+    That argument is only true while nothing writes that register in
+    between -- and absorption emits code that does. In one generated
+    program BC's `x MOD y MOD z` became
+
+        push bx / push cx        the halves of ecx, to be rejoined later
+        ...                      a whole absorbed MOD, ending
+        pop ecx                  which is the first divide's own divisor
+        idiv ecx
+        pop ecx                  the rejoin
+        idiv ecx                 and this one wanted the value above
+
+    where source and target are both ecx, so the trip looked free and all
+    three ops were deleted. The second idiv then divided by the first
+    divide's divisor. The answer was 25375 where it should have been 8734.
+
+    Liveness is the wrong question here and _target_is_free asks it: a
+    write whose value is dead still destroys ours, and ours is excluded
+    from that check by construction. So this asks the plain one -- does
+    anything write it.
+    """
+    return not any(
+        lo < op.at < hi and any(body.origin.get(one) is target for one in op.defines) for op in block.ops
+    )
+
+
 def round_trips(body: MirBody) -> tuple[RoundTrip, ...]:
     """Every split-and-rejoin in this body that computes nothing.
 
@@ -175,6 +205,7 @@ def round_trips(body: MirBody) -> tuple[RoundTrip, ...]:
                     if (
                         was is not None
                         and now is not None
+                        and _target_survives(body, block, at[0], at[-1], now)
                         and (was is now or _target_is_free(body, block, at[0], at[-1], now, value))
                     ):
                         # Where the value already is, and where the pop puts

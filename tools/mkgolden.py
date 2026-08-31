@@ -167,6 +167,33 @@ def fpdeep() -> list[str]:
     return [*lines, f"DSQ={num(144)}", f"DRATIO={num(6)}", "DONE"]
 
 
+def chain() -> list[str]:
+    """A divide whose divisor is computed by another divide.
+
+    BASIC truncates toward zero where Python's // floors, and the negative
+    pair here is exactly the difference -- the same helper suite/nbody.bas
+    needs, for the same reason.
+    """
+
+    def divide(top: int, bottom: int) -> int:
+        return -(-top // bottom) if (top < 0) != (bottom < 0) else top // bottom
+
+    def rem(top: int, bottom: int) -> int:
+        return top - divide(top, bottom) * bottom
+
+    a, b, d = 1073741831, 39678839, 100003
+    return [
+        f"ONE={num(rem(rem(a, b), 1))}",
+        f"CONST={num(rem(rem(a, 39678839), 1))}",
+        f"CONST2={num(rem(rem(a, 39678839), d))}",
+        f"MODMOD={num(rem(rem(a, b), d))}",
+        f"DIVDIV={num(divide(divide(a, b), 3))}",
+        f"NEGMOD={num(rem(rem(-a, b), d))}",
+        f"NEGDIV={num(divide(divide(-a, b), 3))}",
+        "DONE",
+    ]
+
+
 def nbody() -> list[str]:
     """The fixed-point integrator of suite/nbody.bas, in the arithmetic it means.
 
@@ -349,6 +376,7 @@ PROGRAMS = {
     "nots": nots,
     "fpemu": fpemu,
     "fpdeep": fpdeep,
+    "chain": chain,
     "nbody": nbody,
     "fixmul": fixmul,
     "arrays": arrays,
