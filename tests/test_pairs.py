@@ -75,6 +75,7 @@ AGREES = {
     "alu-i": pairs.Kind.ALU_IMM,
     "not": pairs.Kind.NOT,
     "move": pairs.Kind.MOVE,
+    "neg": pairs.Kind.NEG,
 }
 
 
@@ -190,7 +191,9 @@ def test_the_slot_is_cleared_by_anything_that_writes_a_half() -> None:
     assert "op.barrier" in source, "and a barrier must clear both"
 
 
-@pytest.mark.parametrize("kind", [pairs.Kind.ALU_IMM, pairs.Kind.NOT, pairs.Kind.MOVE], ids=lambda k: k.value)
+@pytest.mark.parametrize(
+    "kind", [pairs.Kind.ALU_IMM, pairs.Kind.NOT, pairs.Kind.MOVE, pairs.Kind.NEG], ids=lambda k: k.value
+)
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
 def test_the_other_shapes_are_exactly_the_ones_lift_finds(obj: Path, kind: pairs.Kind) -> None:
     """Three more of lift.py's families, over values instead of bytes.
@@ -203,7 +206,12 @@ def test_the_other_shapes_are_exactly_the_ones_lift_finds(obj: Path, kind: pairs
     value rather than nothing, because the source is usually reused straight
     afterwards and the copy is what keeps the long alive.
 
-    121, 51 and 12 across the corpus, object by object, the same numbers
+    The negate is three instructions rather than two halves side by side --
+    `neg ax / adc dx,0 / neg dx` -- and the middle one is what makes it a
+    negate rather than two independent ones: it folds the borrow the low
+    half produced into the high half before that is negated in turn.
+
+    121, 51, 12 and 30 across the corpus, object by object, the same numbers
     lift.py reports.
     """
     theirs, mine = _sites(obj, kind)
@@ -235,3 +243,17 @@ def test_a_pair_doubled_is_recognised_and_not_chained() -> None:
                 assert one.kind is pairs.Kind.ALU_REG
                 assert state[at][one.pair] is None, "a doubling of an unknown pair stays unknown"
                 return
+
+
+def test_a_sign_extension_from_a_segment_register_is_not_a_long() -> None:
+    """`mov ax,es / cwd` is the shape and not the meaning.
+
+    mir.PHYSICAL keeps the segment registers out of the values, so a long
+    seeded from one has a half nothing can account for. lift.py excludes it
+    because es is not one of the registers it tracks; this excludes it for
+    the reason underneath that.
+    """
+    import inspect
+
+    source = inspect.getsource(pairs._sign_extended)
+    assert "mir.PHYSICAL" in source

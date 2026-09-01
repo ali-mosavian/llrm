@@ -55,6 +55,8 @@ class Kind(StrEnum):
     ALU_REG = "alu-v"  # against the other pair
     NOT = "not"
     MOVE = "move"      # pair to pair
+    NEG = "neg"        # BC's three-instruction negate
+    MOVSX = "movsx"    # an INTEGER sign-extended into a pair
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,7 +165,15 @@ def found(body: MirBody) -> tuple[Pair, ...]:
     out: list[Pair] = []
     for block in body.blocks:
         ops = list(block.ops)
-        for first, second in zip(ops, ops[1:]):
+        for index, (first, second) in enumerate(zip(ops, ops[1:])):
+            made = _negate(ops, index, body.origin)
+            if made is not None:
+                out.append(made)
+                continue
+            made = _sign_extended(first, second, body.origin)
+            if made is not None:
+                out.append(made)
+                continue
             made = _alu_adjacent(first, second, body.origin)
             if made is None:
                 made = _paired_alu(first, second, body.origin, ir.Imm, Kind.ALU_IMM)
@@ -333,6 +343,65 @@ def _move_pair(first: Op, second: Op, origin: dict) -> "Pair | None":
     return Pair(Kind.MOVE, number, low_op, high_op)
 
 
+def _negate(ops: list[Op], index: int, origin: dict) -> "Pair | None":
+    """`neg ax / adc dx,0 / neg dx` -- BC's own three-instruction long negate.
+
+    Three instructions rather than two halves side by side, so it does not
+    fit the pair-of-ops shape the rest of this module uses. The middle one
+    is what makes it a negate and not two independent ones: `adc dx,0` folds
+    the borrow the low half's `neg` produced into the high half before it is
+    negated in turn.
+    """
+    if index + 2 >= len(ops):
+        return None
+    first, middle, last = ops[index], ops[index + 1], ops[index + 2]
+    low = _half_of(_written(first, origin), origin)
+    high = _half_of(_written(last, origin), origin)
+    if low is None or high is None or low[0] != high[0] or low[1] != 0 or high[1] != 1:
+        return None
+    shapes = [_shape(one) for one in (first, middle, last)]
+    if any(one is None for one in shapes):
+        return None
+    if shapes[0].op is not ir.Operation.UNARY or (shapes[0].name or "") != "neg":
+        return None
+    if shapes[2].op is not ir.Operation.UNARY or (shapes[2].name or "") != "neg":
+        return None
+    if shapes[1].op is not ir.Operation.BINARY or (shapes[1].name or "") != "adc":
+        return None
+    if _half_of(_written(middle, origin), origin) != (low[0], 1):
+        return None
+    return Pair(Kind.NEG, low[0], first, last)
+
+
+def _sign_extended(first: Op, second: Op, origin: dict) -> "Pair | None":
+    """`mov ax,<source>` then `cwd` -- an INTEGER widened into pair 0.
+
+    `cwd` is not an operation on a pair; it is what turns one half into
+    both. lift.py could not see this at all before it was added there: cwd
+    is not a value it tracks, so the sequence fell through to unrecognised
+    and cleared everything. 90 of qb-qrender's 522 values are this shape,
+    which is what an integer-heavy program looks like.
+    """
+    low = _half_of(_written(first, origin), origin)
+    high = _half_of(_written(second, origin), origin)
+    if low is None or high is None or low != (0, 0) or high != (0, 1):
+        return None
+    made = _shape(first)
+    if made is None or made.op is not ir.Operation.MOVE or len(made.sources) != 1:
+        return None
+    if isinstance(made.sources[0], ir.Imm):
+        return None  # calls.widened_constant_at()'s own, narrower shape
+    if isinstance(made.sources[0], ir.Reg) and made.sources[0].register in mir.PHYSICAL:
+        # `mov ax,es / cwd` is the shape and not the meaning: a segment
+        # register is not a value here (mir.PHYSICAL says so), so the long
+        # this would seed has a half nothing can account for.
+        return None
+    widening = _shape(second)
+    if widening is None or (widening.name or "") != "cwd":
+        return None
+    return Pair(Kind.MOVSX, 0, first, second)
+
+
 def _alu(body: MirBody) -> list[Pair]:
     """The carry-joined pairs, which are `wide.pairs()`'s own question.
 
@@ -427,6 +496,14 @@ def held(body: MirBody) -> dict[int, dict[int, Long | None]]:
                     slots[pair.pair] = Long(low, high)
                 case Kind.ALU | Kind.ALU_IMM | Kind.ALU_REG | Kind.NOT:
                     slots[pair.pair] = None   # chaining from something unknown
+                case Kind.NEG if slots[pair.pair] is not None and low is not None and high is not None:
+                    slots[pair.pair] = Long(low, high)
+                case Kind.NEG:
+                    slots[pair.pair] = None
+                case Kind.MOVSX if low is not None and high is not None:
+                    # a sign extension seeds the pair the way a load does:
+                    # it establishes a long rather than chaining from one
+                    slots[pair.pair] = Long(low, high)
                 case Kind.MOVE if low is not None and high is not None:
                     # the destination takes what the source pair holds, and
                     # a copy from an unknown pair leaves the destination
