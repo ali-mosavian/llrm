@@ -20,27 +20,35 @@ still matter, but they get no new transforms: a peephole over emitted bytes
 has no representation to do CSE, hoisting or reallocation in. Each is
 retired when MIR expresses it (M5). MIR is finished when none are left.
 
-## Blocker
+## Blocker — cleared
 
-`mir.lower()` returns each op's `node` verbatim. MIR can delete, and can
-emit the one instruction `select.py` knows, but cannot rebuild a body. CSE
-must emit a copy, folding an immediate, LICM a move between blocks. That
-dependency orders every milestone below.
+It read: `mir.lower()` returns each op's `node` verbatim, so MIR can delete
+and can emit the one instruction `select.py` knows, but cannot rebuild a
+body -- and CSE must emit a copy, folding an immediate, LICM a move between
+blocks.
+
+That is done. `rewrite.py` writes the code segment from MIR, an `Op` can
+carry semantics no node produced (`Op.made`) and say which of the original
+bytes it stands for (`Op.covers`), and `layout.py` places the result and
+relaxes its branches. What orders the milestones below now is narrower:
+**nothing moves code between blocks yet**, and `transform.placed()` moves it
+within one but is switched off.
 
 ## State
 
-Measured 2026-08-31. Re-measure before trusting it.
+Measured 2026-09-01. Re-measure before trusting it.
 
 | | |
 |---|---|
-| qb-qrender | 80,295 → 82,029 bytes, 26,290 → 27,269 instructions |
+| corpus | 95,189 → 89,490 code bytes, **-5.99%** |
+| qb-qrender | 74,855 → 75,605 code bytes, +1.00% — absorption costs 1,343 and emission gives 593 back |
 | its arithmetic calls | 157 → 1 |
 | its x87 sites | 1,766, none optimised |
 | bench/nbody | 2.99× under DOSBox, 21 of 21 calls absorbed, pressure 6/6 |
 | corpus redundant reads | 751 — 73 live provider, 48 dead, 630 none |
 | selector coverage | 23,794 of 23,838 corpus ops; the 44 are `movsw`, refused deliberately |
-| segments MIR wrote | **all 155 corpus objects and all 246 of qb-qrender's BC-built ones**, absorbed or not |
-| **optimised and MIR-written** | **six programs on all 12 configurations, 18/18 each** |
+| segments MIR wrote | **every one**: 155 corpus objects and all 246 of qb-qrender's BC-built ones, absorbed or not |
+| **optimised and MIR-written** | **the default**, 18 suite programs on all 12 configurations, and the fuzz corpus clean |
 
 MIR does, end to end:
 
@@ -130,12 +138,19 @@ now has every body layable**; it was 42 when this was written.
       by however far it moved, and what it cannot do is fix a branch landing
       in its middle, which is exactly what reachability rules out
 
-**Every object in the corpus rebuilds whole-segment**, 155 of 155, all
-eighteen suite programs run right on all twelve configurations, and it is
-not a size cost: 201 bytes saved over the corpus and 616 over qb-qrender
+**Whole-segment emission is on.** `rewrite.py` writes the code segment from
+MIR: 155 of 155 corpus objects and all 15 of qb-qrender's BC-built modules
+rebuild, all eighteen suite programs run right on all twelve
+configurations, and the fuzz corpus finds no divergence. It is not a size
+cost either -- 175 bytes saved over the corpus and 593 over qb-qrender
 against the patched output.
 
-- [x] **and it is correct now.** `add ax,offset X` arrives at the selector
+Two bugs stood between building it and it being correct, and neither the
+host suite nor the twelve-configuration matrix could see either. Both took
+the fuzz corpus, and then reducing a generated program from 173 lines to 31
+with the machine build as the oracle.
+
+- [x] **the relocated immediate.** `add ax,offset X` arrives at the selector
       as `add ax,0`, the sign-extended byte form fits zero, and the two-byte
       fixup then named a one-byte field -- the linker patched two bytes
       regardless, over the immediate and the byte after it, and a generated
@@ -148,7 +163,16 @@ against the patched output.
       `add ax,0DCh` and the other `add ax,0FFDCh`. No fixture has the
       instruction -- BC writes it only for an array reached by adding its
       own address into ax -- so the regression test checks the wiring
-      instead: `layout` tells the selector, on every call
+      instead: `layout` tells the selector, on every call it makes
+- [x] **the accumulate read as a load.** Letting `loaded_into` allow the
+      high half a narrow write preserves also let `sub ax,[x]` through:
+      both are one use whose origin is the destination's own register, and
+      values alone cannot separate them. `redundant()` deleted
+      `sub ax,ds:[0]` and `adc dx,[si+2]`. The semantics can separate
+      them -- a binary operation names its destination among its sources
+      and a move does not -- which is what `forward._loads_only` exists to
+      stop, arrived at from the other side. No fixture reaches the shape,
+      so a unit test on `_preserved` is what discriminates
 
 ## M2 — placement
 
@@ -277,7 +301,7 @@ nothing transformed.
 ```
 uv run pytest -m "not e2e"                     host suite
 uv run pytest                                  adds DOSBox
-uv run python tools/matrix.py                  17 programs x 12 configurations
+uv run python tools/matrix.py                  18 programs x 12 configurations
 uv run python tools/mutate.py                  deliberate breakages, each caught
 uv run python tools/fuzzcheck.py --count 40    generated programs, BC as oracle
 ```
@@ -304,6 +328,22 @@ narrowed to LONG, the first run turned up `simplify.py` deleting a round
 trip whose register was overwritten between the pushes and the pop. That
 one changed a real answer: `x MOD y MOD z` used the first divide's divisor
 for the second.
+
+**And the fuzz corpus is the only thing that has ever caught a
+whole-segment bug.** Both of the ones that stood in the way of turning
+emission on were invisible to the host suite and to all twelve
+configurations, because the suite's programs do not contain the shapes: BC
+writes `add ax,offset X` only for an array reached by adding its own
+address into ax, and reaching `redundant()` with an accumulate needs the
+memory map to hold that cell, which takes longer code than any suite
+program. Neither has a fixture, so neither has a corpus test -- what guards
+them is a test of the wiring in `layout` and a unit test on
+`avail._preserved`.
+
+Finding them needed one more tool than the gates: reducing a generated
+program with the machine build as the oracle, which needs no authored
+golden and shrank F004 from 173 lines to 31. Worth rebuilding as a script
+if a third one turns up.
 
 Known gap, and it predates this: on the three QuickBASIC 4.5
 configurations one generated program in forty diverges between the
