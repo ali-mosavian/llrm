@@ -50,6 +50,22 @@ def _both(obj: Path) -> tuple[set[int], set[int], set[int], set[int]]:
     )
 
 
+def _alu(obj: Path) -> tuple[set[int], set[int]]:
+    """(lift's alu-m sites, this module's alu sites)."""
+    found = corpus.loaded(obj)
+    assert found is not None
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
+    blocks = split.partition(found, mapped)
+    values, _stores, _bridges = lift(
+        found.code, found.start, found.end, found.resolve, [i for b in blocks for i in b.insns]
+    )
+    mine: set[int] = set()
+    for _name, body in mir.bodies(found, blocks):
+        mine |= {min(one.at) for one in pairs.found(body) if one.kind is pairs.Kind.ALU}
+    return {v.at for v in values if v.op.value == "alu-m"}, mine
+
+
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
 def test_the_load_pairs_are_exactly_the_ones_lift_finds(obj: Path) -> None:
     """Two implementations of one question, agreeing object by object.
@@ -112,3 +128,34 @@ def test_a_pair_needs_adjacent_addresses_and_a_known_pair() -> None:
     assert pairs._half_of(Register.ECX, {}) == (1, 0)
     assert pairs._half_of(Register.EBX, {}) == (1, 1)
     assert pairs._half_of(Register.ESI, {}) is None
+
+
+@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
+def test_the_arithmetic_pairs_are_exactly_the_ones_lift_finds(obj: Path) -> None:
+    """`and ax,[x]` with `and dx,[x+2]` is one 32-bit `and`, and no carry says so.
+
+    Only add and sub carry -- `add`/`adc`, `sub`/`sbb`. The and/or/xor pairs
+    have no flags edge between the halves at all, which is why
+    `wide.pairs()` finds 169 where lift.py finds 363: it is keyed on exactly
+    that edge. Recognised the way a load pair is instead -- a known register
+    pair, addresses two bytes apart, and the mnemonics being partners -- the
+    two agree on all 363, object by object.
+    """
+    theirs, mine = _alu(obj)
+    assert mine == theirs
+
+
+def test_the_slot_is_cleared_by_anything_that_writes_a_half() -> None:
+    """lift.py's rule, and the one a shape recogniser does not have.
+
+    `pairs.found()` says two ops are one 32-bit access. `pairs.held()` says
+    what is in the pair when they run, and the difference is a call: after
+    one returning a long in dx:ax, `mov ds:[0],ax` / `mov ds:[0],dx` is a
+    real 32-bit store whose value cannot be named, because the call wrote
+    both halves. Widening that needs the call's contract, not the shape.
+    """
+    import inspect
+
+    source = inspect.getsource(pairs.held)
+    assert "_touches" in source, "a write to either half must clear its slot"
+    assert "op.barrier" in source, "and a barrier must clear both"
