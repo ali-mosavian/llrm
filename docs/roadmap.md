@@ -356,15 +356,17 @@ version without it would make qb-qrender bigger.
       replaced by span rather than by member. And the restore is a barrier
       defining and using nothing: it used to be built by replacing the op
       before it, which handed it that op's own SSA values
-- [ ] **recovering the arguments** — `mir._stack_slot` keeps the depth
+- [x] recovering the arguments — `mir._stack_slot` keeps the depth
       across a *recognised* call, which is the half that works: an argument
       pushed before some other call runs is stranded under it, and its slot
       is only nameable if the depth crossed that call.
 
-      `transform.arguments()` on top of it does not recover a call's
-      arguments, and this was ticked when it did not. Measured over the
-      corpus's 1,151 absorbable sites, it names 84, and the 84 are wrong.
-      Three separate reasons:
+      `transform.arguments()` on top of it is now `stack.frames()` plus
+      `calls.grouped()`, and names **1,151 of the corpus's 1,151** sites,
+      agreeing push for push with `calls.py` on every site where both keep
+      a push list. It is worth recording what it was, because it had a tick
+      against it: a walk of its own that named 84 and got all 84 wrong, for
+      three separate reasons:
 
       - **an unrecognised call ends the block's depth.** `CONSUMES` knows
         the four arithmetic routines and nothing else, so `B$PSSD`,
@@ -384,11 +386,12 @@ version without it would make qb-qrender bigger.
         high and low halves of one long -- and of the long stranded there
         for the *next* call, not either operand of this one
 
-      What this needs is the block-scoped stack model
-      `docs/handover.md` designs as `qbopt/stack.py`: a virtual stack per
-      block, a closed allowlist of stack deltas, a recognised call popping
-      `4 * arity`, and an unknown one resetting the watermark rather than
-      invalidating what is already tracked. Emission below waits on it
+      **And `qbopt/stack.py` already answered all three**, and did before
+      any of that was written -- a virtual stack per block, a closed
+      allowlist of push widths, a recognised call popping `4 * arity`, and
+      an unknown one resetting rather than guessing. `calls.py` has used it
+      all along. The MIR walk was a second, worse copy of a model already
+      in the tree, which is what made it wrong in three ways at once
 - [ ] **emitting the absorbed call** — the half that is left, and the one
       piece of M5 that should not be written without running anything.
       `calls.py` does it in some five hundred lines: which operand goes in

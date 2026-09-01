@@ -41,6 +41,7 @@ from qbopt import avail
 from qbopt import pairs
 from qbopt import layout
 from qbopt.mir import Op
+from qbopt.declen import Insn
 from qbopt.mir import MirBody
 
 
@@ -286,50 +287,47 @@ ABSORB = {
 LEFT_FIRST = {"B$CPI4": True, "B$MUI4": False, "B$DVI4": False, "B$RMI4": False}
 
 
-def _slot(ref: mir.MemRef) -> int | None:
-    """The stack depth this reference names, or None if it is not one."""
-    from qbopt.module import Space
+def _absorbable(name: str | None) -> int | None:
+    """How many long arguments this routine takes, or None if it is not one
+    absorption knows.
 
-    return ref.addr.disp if ref.addr is not None and ref.addr.space is Space.STACK else None
-
-
-def arguments(body: MirBody, calls: dict[int, str]) -> dict[int, tuple[mir.Value, ...]]:
-    """Each absorbable call's arguments, as the values that were pushed.
-
-    Block-scoped, and the whole point of mir._stack_slot keeping the depth
-    across a recognised call: an argument pushed before some *other* call
-    runs is stranded under it, and 831 of the corpus's 923 absorbable calls
-    have something other than a push immediately before them.
-
-    A push whose slot this cannot name gives up on that call rather than
-    guessing, and so does a call whose arguments are not all still on the
-    stack where they were put.
+    stack.frames() asks this to decide whether a call's own gap can be
+    trusted -- that it consumed exactly this many longs and returned with
+    nothing else disturbed. The claim rests on the QuickBASIC 4.5 runtime
+    source, where these four are callee-cleanup and clobber only ax, cx, dx
+    and bx.
     """
-    found: dict[int, tuple[mir.Value, ...]] = {}
-    for block in body.blocks:
-        live: dict[int, mir.Value] = {}
-        for op in block.ops:
-            name = calls.get(op.at)
-            if name is not None and name.upper() in ABSORB:
-                wanted = 2
-                # Top of stack first, so the deepest slot is the argument
-                # pushed earliest.
-                deep = sorted(live)
-                if len(deep) >= wanted:
-                    taken = tuple(live[one] for one in deep[:wanted])
-                    if name.upper() not in LEFT_FIRST or not LEFT_FIRST[name.upper()]:
-                        taken = tuple(reversed(taken))
-                    found[op.at] = taken
-                live = {}
+    return 2 if name is not None and name.upper() in ABSORB else None
+
+
+def arguments(blocks: list, calls: dict[int, str]) -> dict[int, tuple[tuple[Insn, ...], ...]]:
+    """Each absorbable call's two long operands, as the pushes that put them
+    there, left operand first.
+
+    Built on `stack.frames()` rather than beside it. This used to walk the
+    MIR ops keeping a depth of its own, and named 84 of the corpus's 1,151
+    sites while getting all 84 wrong: an unrecognised call ended the block's
+    depth and 1,017 sites sit after one; a `push word [x]` was invisible,
+    because it only recorded a push with exactly one register use, and 5,492
+    of the corpus's 8,401 pushes are that shape; and it counted stack slots
+    where a long is two of them, so the pair it returned was the two halves
+    of one operand rather than the two operands.
+
+    `stack.py` answers all three already and `calls.grouped()` already
+    splits a frame into arguments. Neither is a machine-code rewrite -- one
+    is a depth model over a block's instructions, the other byte arithmetic
+    over pushes. What M5 retires is the emission, not the analysis under it.
+    """
+    from qbopt import stack
+    from qbopt.calls import grouped
+
+    found: dict[int, tuple[tuple[Insn, ...], ...]] = {}
+    for block in blocks:
+        for frame in stack.frames(block, calls, _absorbable):
+            name = (calls.get(frame.call.at) or "").upper()
+            groups = grouped(frame.pushed)
+            if groups is None or len(groups) != 2:
                 continue
-            if op.barrier:
-                live = {}
-                continue
-            for ref in op.stores:
-                where = _slot(ref)
-                if where is None:
-                    continue
-                reading = [one for one in op.uses if not one.flags]
-                if len(reading) == 1:
-                    live[where] = reading[0]
+            left, right = groups if LEFT_FIRST[name] else (groups[1], groups[0])
+            found[frame.call.at] = (tuple(left), tuple(right))
     return found
