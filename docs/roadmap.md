@@ -270,6 +270,16 @@ So the work is deleting a reload, not allocating a class:
 
 Done when the old path is deleted, not when MIR also does it.
 
+Three of the five are built and on, and **they find nothing**, which is what
+parity means: `rewrite.py` runs `forward.py` and `memory.py` before a body
+ever reaches `transform.py`, so there is nothing left for the MIR versions
+to take. Their worth is that `lift.py`, `forward.py` and `memory.py` can be
+deleted -- and that deletion is the milestone, not the building.
+
+Two are left, and they are the two that matter: absorption is where every
+measured win in this project comes from, and widening is the one that has
+already been written wrong once.
+
 - [ ] widening — `transform.widened()` is written and **off, because it was
       wrong**. It folded `add ax,[x]` with `adc dx,[x+2]` into
       `add eax,[x]`, and BC keeps a long in `dx:ax`, which is not `eax`:
@@ -300,7 +310,14 @@ Done when the old path is deleted, not when MIR also does it.
       bits of a thirty-two bit variable, so the high half survives and MIR
       records a read of the old `eax`. A real read, and not the instruction
       consulting memory, which is the question being asked -- so all 36
-      sites came back "not a plain load" and none was anything else
+      sites came back "not a plain load" and none was anything else.
+
+      Allowing that partial write then let an *accumulate* through, because
+      `sub ax,[x]` reads the old eax the same way: one use whose origin is
+      the destination's own register. `redundant()` deleted
+      `sub ax,ds:[0]` and `adc dx,[si+2]` before the semantics were asked
+      instead of the values -- a binary operation names its destination
+      among its sources and a move does not
 - [x] dead stores — `avail.dead_stores()`, block-scoped and starting empty
       at each block's end, which costs a store that spans an edge and can
       never invent one that does not
