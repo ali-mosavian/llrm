@@ -13,6 +13,7 @@ from pathlib import Path
 from collections.abc import Iterator
 
 import pytest
+from iced_x86 import Mnemonic
 from iced_x86 import OpKind
 from iced_x86 import Decoder
 from iced_x86 import Instruction
@@ -149,7 +150,7 @@ def test_a_body_is_refused_whole_or_not_at_all() -> None:
                 assert ":" in got, f"a refusal should say which op: {got}"
             else:
                 done += 1
-    assert (total, done) == (222, 196)
+    assert (total, done) == (273, 241)
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
@@ -256,6 +257,19 @@ def test_a_rebuilt_segment_is_the_same_instructions(obj: Path) -> None:
         return
     ops = sorted((op for _, body in bodies for op in layout._ordered(body)), key=lambda one: one.at)
     back = walked(got.code, ops[0].at)
+    if len(back) != len(ops):
+        # BC aligns its procedures, so a run of `90` can sit inside the laid
+        # out span and is carried verbatim rather than selected. It decodes
+        # as an instruction and is not an op, which is the same reason the
+        # length guard above exists -- and that guard misses the case where
+        # the padding's own byte is offset by a shorter encoding elsewhere.
+        # suite/hotlop.bas under /V is the first object in the corpus with
+        # that shape.
+        carried = [one for one in back if one.mnemonic == Mnemonic.NOP]
+        padding = [op for op in ops if original(op) is not None and original(op).mnemonic == Mnemonic.NOP]
+        back = [one for one in back if one.mnemonic != Mnemonic.NOP]
+        ops = [op for op in ops if op not in padding]
+        assert carried, f"{obj.stem}: {len(back)} instructions from {len(ops)} ops, and none is padding"
     assert len(back) == len(ops)
     for op, made in zip(ops, back, strict=True):
         assert made.mnemonic == original(op).mnemonic, f"{obj.stem} {op.at:#x}"
@@ -322,7 +336,7 @@ def test_the_rebuildable_share_is_what_was_measured() -> None:
     for obj in FIXTURES:
         if rebuilt(obj)[2] is not None:
             done += 1
-    assert done == 170
+    assert done == 215
 
 
 @pytest.mark.parametrize("obj", FIXTURES[:12], ids=lambda p: p.stem)

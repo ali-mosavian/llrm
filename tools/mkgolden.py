@@ -142,6 +142,19 @@ def negnot() -> list[str]:
     ]
 
 
+def hotlop() -> list[str]:
+    return [f"S={num(sum(7 * 3 + i for i in range(1, 21)))}", "DONE"]
+
+
+def arridx() -> list[str]:
+    return [f"T={num(sum(2 * (3 * i) for i in range(1, 21)))}", "DONE"]
+
+
+def subexp() -> list[str]:
+    x, y = 11, 5
+    return [f"P={num((x + y) * 2)}", f"Q={num((x + y) * 3)}", "DONE"]
+
+
 def fpemu() -> list[str]:
     x, y = 1073741831, 1024
     q = x // y
@@ -386,6 +399,9 @@ PROGRAMS = {
     "divmod": divmod_,
     "nots": nots,
     "negnot": negnot,
+    "hotlop": hotlop,
+    "arridx": arridx,
+    "subexp": subexp,
     "fpemu": fpemu,
     "fpdeep": fpdeep,
     "chain": chain,
