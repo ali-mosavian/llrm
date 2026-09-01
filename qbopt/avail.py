@@ -147,6 +147,22 @@ def stored_from(op: Op) -> tuple[MemRef, Value] | None:
     return op.stores[0], reading[0]
 
 
+def stored_cell(op: Op) -> MemRef | None:
+    """The cell this op purely stores to, whatever it put there.
+
+    stored_from() answers a narrower question -- the cell *and the value* --
+    and needs exactly one value read to name the second. `mov word [x],1`
+    reads none, so it came back None and a store of a constant was invisible
+    to the dead-store walk. Which cell was written is the whole question
+    there; what was written is not.
+    """
+    if len(op.stores) != 1 or op.loads or op.barrier or op.stores[0].addr is None:
+        return None
+    if _real(op.defines):
+        return None
+    return op.stores[0]
+
+
 def _clean(op: Op, calls: dict[int, str]) -> bool:
     """Whether this call provably leaves caller memory alone.
 
@@ -309,9 +325,9 @@ def _dead_in(block, overwritten: dict, dgroup: frozenset[int], calls: dict[int, 
             # this map to begin with.
             continue
 
-        wrote = stored_from(op)
+        wrote = stored_cell(op)
         if wrote is not None:
-            ref, _value = wrote
+            ref = wrote
             if ref.addr is not None and ref.addr.space is not Space.STACK:
                 if any(mir.same_bytes(one, ref) for one in overwritten):
                     found.append(op.at)
@@ -324,6 +340,16 @@ def _dead_in(block, overwritten: dict, dgroup: frozenset[int], calls: dict[int, 
             overwritten = {one: at for one, at in overwritten.items() if not mir.overlapping(one, ref, dgroup)}
         if wrote is None:
             for ref in op.stores:
+                if ref.addr is not None and ref.addr.space is Space.STACK:
+                    # A push. `stored_from()` does not name it, so without
+                    # this it clears through the general case -- and
+                    # may_alias() says a stack cell and a static may be the
+                    # same byte, because BC runs with SS == DS. True only of
+                    # a program whose stack has already grown down into its
+                    # own data, which has crashed. Four pushes ahead of a
+                    # call were wiping everything known, which is where the
+                    # seven stores memory.py finds and this did not all sat.
+                    continue
                 overwritten = {one: at for one, at in overwritten.items() if not mir.overlapping(one, ref, dgroup)}
     return found, overwritten
 

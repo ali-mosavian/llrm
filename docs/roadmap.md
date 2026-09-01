@@ -302,9 +302,17 @@ clearing below ran on it anyway; and the real obstacle, which is that a
 `op.stores` instead -- and its stack cell may alias a static, because BC
 runs with `SS == DS`. Four pushes ahead of a call wipe everything known.
 
-Closing it means telling a push apart from a store that could alias, which
-is the memory disambiguation `docs/handover.md` already names as the thing
-this codebase does not have.
+Two of those three are closed: a push's own stack cell no longer clobbers a
+static (`may_alias` says it may, because BC runs with `SS == DS`, and that
+is only true of a program whose stack has already grown into its data --
+`memory.py`'s own docstring makes the same argument), and a store of a
+constant is tracked at all, which `stored_from()` could not name because it
+answers for the cell *and the value* and `mov word [x],1` reads none.
+
+Dead stores are 42 of `memory.py`'s 43 now, from 36. **And the end-to-end
+cost of the deletion is still 45 bytes**, because the pipeline sees only 29
+of those 42 by the time `transform.applied` runs -- which is its own
+question and not the one this section was about.
 
 **None are left to build.** Widening is on, and absorption emits all four
 routines at parity with `calls.py` -- 1,151 of 1,151 corpus sites, twelve of
