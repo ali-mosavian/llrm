@@ -55,7 +55,7 @@ def rebuilt(
     # which is what a caller bisecting a layout question wants.
     if optimise:
         bodies = [
-            (name, transform.applied(body, found.dgroup, found.calls, blocks=blocks, absorb=absorb))
+            (name, transform.applied(body, found.dgroup, found.calls, blocks=blocks, absorb=absorb, found=found))
             for name, body in bodies
         ]
 

@@ -155,27 +155,37 @@ def test_each_operand_is_four_bytes_of_pushes_and_they_do_not_overlap() -> None:
     assert seen > 1000, "too few sites to prove anything"
 
 
+def _strategy(found, blocks):
+    """{call address: True where calls.py would pop rather than reload}."""
+    from qbopt import calls as machine
+
+    reached = [one for block in blocks for one in block.insns]
+    return {one.at: bool(one.consume) for one in machine.sites(found, reached, blocks)}
+
+
 def _absorbed_ops(obj, found, blocks):
     """Every absorbed site in one object, as (call address, the ops it became).
 
-    The operations one site becomes are exactly the ones sitting inside the
-    call's own bytes: absorption replaces the call and nothing else, so the
-    pushes keep their addresses and everything in [call, call+5) is new.
+    Keyed on the region calls.py's own CallSite names: the call alone where
+    the operands are popped, and push-through-call where they are reloaded
+    and the pushes go too.
     """
     from qbopt import mir
+    from qbopt import calls as machine
 
+    reached = [one for block in blocks for one in block.insns]
     sites = {
         one.at: one
-        for block in blocks
-        for one in block.insns
+        for one in machine.sites(found, reached, blocks)
         if (found.calls.get(one.at) or "").upper() in transform.EMITTED
     }
     for _name, body in mir.bodies(found, blocks):
-        after = transform.absorbed(body, blocks, found.calls)
+        after = transform.absorbed(body, blocks, found.calls, found)
         for block in after.blocks:
-            for at, call in sites.items():
-                ops = [one for one in block.ops if at <= one.at < call.end]
-                if len(ops) > 1:
+            for at, site in sites.items():
+                ops = [one for one in block.ops if site.start <= one.at < site.end]
+                if len(ops) > 1 and all(one.made is not None or one.node is None
+                                        or one.name == "restore" for one in ops):
                     yield at, ops
 
 
@@ -189,16 +199,22 @@ def test_an_absorbed_divide_is_the_instructions_the_runtime_would_have_run() -> 
     """
     seen = {"B$MUI4": 0, "B$DVI4": 0}
     for obj, found, blocks in _corpus():
+        popped = _strategy(found, blocks)
         for at, ops in _absorbed_ops(obj, found, blocks):
             name = (found.calls.get(at) or "").upper()
             if name not in seen:
                 continue
             seen[name] += 1
-            want = ["pop", "pop", "imul", "restore"] if name == "B$MUI4" else [
-                "pop", "pop", "cdq", "idiv", "restore"
-            ]
+            if popped[at]:
+                want = ["pop", "pop", "imul", "restore"] if name == "B$MUI4" else [
+                    "pop", "pop", "cdq", "idiv", "restore"
+                ]
+            else:
+                want = ["mov", "imul", "restore"] if name == "B$MUI4" else [
+                    "mov", "cdq", "idiv", "restore"
+                ]
             assert [one.name for one in ops] == want, f"{obj.stem} at {at:#x}: {[o.name for o in ops]}"
-    assert all(seen.values()), f"nothing absorbed for one of them: {seen}"
+    assert sum(seen.values()) > 100, f"too few absorbed to prove anything: {seen}"
 
 
 def test_the_operands_go_where_the_machine_arm_puts_them() -> None:
@@ -242,21 +258,22 @@ def test_the_operations_one_call_becomes_all_stand_on_its_own_address() -> None:
     edx and moving it to eax makes six operations where a far call has five
     bytes.
     """
+    from qbopt import calls as machine
+
     seen = 0
     for obj, found, blocks in _corpus():
-        calls = {
-            one.at: one
-            for block in blocks
-            for one in block.insns
-            if (found.calls.get(one.at) or "").upper() in transform.EMITTED
-        }
+        reached = [one for block in blocks for one in block.insns]
+        sites = {one.at: one for one in machine.sites(found, reached, blocks)}
         for at, ops in _absorbed_ops(obj, found, blocks):
+            site = sites[at]
             seen += 1
-            assert all(one.at == at for one in ops), f"{obj.stem}: {at:#x} is not one address"
-            assert ops[0].covers == (at, calls[at].end), (
-                f"{obj.stem}: the first of {at:#x} stands for {ops[0].covers}, not the call"
+            assert all(one.at == site.start for one in ops), (
+                f"{obj.stem}: {at:#x} is not one address"
             )
-            assert all(one.covers == (at, at) for one in ops[1:]), (
+            assert ops[0].covers == (site.start, site.end), (
+                f"{obj.stem}: the first of {at:#x} stands for {ops[0].covers}, not the region"
+            )
+            assert all(one.covers == (site.start, site.start) for one in ops[1:]), (
                 f"{obj.stem}: something after the first at {at:#x} claims bytes of its own"
             )
     assert seen > 100, f"only {seen} sites, so this proves nothing"
@@ -283,7 +300,7 @@ def test_a_site_is_left_alone_on_the_flags_that_matter_to_it(monkeypatch) -> Non
         monkeypatch.setattr(transform, "_flags_after", lambda *_a, **_k: reading)
         standing = set()
         for _name, body in mir.bodies(found, blocks):
-            after = transform.absorbed(body, blocks, found.calls)
+            after = transform.absorbed(body, blocks, found.calls, found)
             standing |= {op.at for block in after.blocks for op in block.ops if op.op is ir.Operation.CALL}
         return standing
 
@@ -325,7 +342,7 @@ def test_every_absorbable_site_in_the_corpus_is_taken() -> None:
     for _obj, found, blocks in _corpus():
         where = transform.arguments(blocks, found.calls)
         for _name, body in mir.bodies(found, blocks):
-            after = transform.absorbed(body, blocks, found.calls)
+            after = transform.absorbed(body, blocks, found.calls, found)
             standing = {op.at for block in after.blocks for op in block.ops if op.op is ir.Operation.CALL}
             for block in body.blocks:
                 for op in block.ops:
@@ -356,8 +373,9 @@ def test_the_absorbed_compare_is_byte_identical_to_the_machine_arm() -> None:
     want = machine.compare_consume().code
     seen = 0
     for obj, found, blocks in _corpus():
+        popped = _strategy(found, blocks)
         for at, ops in _absorbed_ops(obj, found, blocks):
-            if (found.calls.get(at) or "").upper() != "B$CPI4":
+            if (found.calls.get(at) or "").upper() != "B$CPI4" or not popped[at]:
                 continue
             seen += 1
             got = b""
@@ -368,4 +386,4 @@ def test_the_absorbed_compare_is_byte_identical_to_the_machine_arm() -> None:
             assert got == want, (
                 f"{obj.stem} at {at:#x}: {got.hex()} against calls.py's {want.hex()}"
             )
-    assert seen > 100, f"only {seen} compares, so this proves nothing"
+    assert seen, f"only {seen} popped compares, so this proves nothing"

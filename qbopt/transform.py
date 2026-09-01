@@ -144,6 +144,7 @@ def applied(
     *,
     blocks: list | None = None,
     absorb: bool = False,
+    found=None,
     widen: bool = True,
     drop_loads: bool = True,
     drop_stores: bool = True,
@@ -180,7 +181,7 @@ def applied(
     # depth off the instructions, and a transform that has already replaced
     # some of them is not what that model was measured against.
     if absorb and blocks is not None:
-        body = absorbed(body, blocks, calls)
+        body = absorbed(body, blocks, calls, found)
     return body
 
 
@@ -425,6 +426,97 @@ def _comparing(at: int) -> list[ir.Semantics]:
     ]
 
 
+def _from(operand) -> ir.Loc:
+    """One classified operand as somewhere an instruction can read it."""
+    from qbopt.calls import Kind, relocated_addr
+
+    if operand.kind is Kind.CONSTANT:
+        return ir.Imm(value=operand.value, width=4)
+    return ir.Mem(relocated_addr(operand), 4)
+
+
+def _deleting(site, ops_at: dict) -> list[ir.Semantics] | None:
+    """A call whose operands have addresses, reloaded rather than popped.
+
+    calls.py's own strategy for 997 of the corpus's 1,151 sites, and the one
+    that makes absorption smaller than what BC wrote rather than larger: the
+    pushes go too, so the region is push-through-call and four bytes of
+    stack traffic per operand disappear with it. Popping keeps them, which
+    is why MIR-only absorption came out 19,435 bytes *above* BC.
+
+    A comparison wraps eax in push/pop. B$CPI4 changes no register at all
+    and BC's own code can be relying on that anywhere around the call, not
+    only in the flags -- and `pop` does not touch the ones the `cmp` set.
+    """
+    def made(op, name, dests, sources, field=None):
+        return ir.Semantics(op, name, dests=tuple(dests), sources=tuple(sources)), field
+
+    name = site.name.upper()
+    left, right = site.operands
+    eax, edx = _wide(Register.EAX), _wide(Register.EDX)
+    steps: list = []
+
+    if name == "B$CPI4":
+        steps.append(made(ir.Operation.PUSH, "push", (), (eax,)))
+    steps.append(made(ir.Operation.MOVE, "mov", (eax,), (_from(left),), left.at))
+
+    other = _from(right)
+    if name == "B$MUI4":
+        steps.append(made(ir.Operation.MULTIPLY, "imul", (eax,), (eax, other), right.at))
+    elif name == "B$CPI4":
+        steps.append(made(ir.Operation.COMPARE, "cmp", (), (eax, other), right.at))
+    else:
+        steps.append(made(ir.Operation.EXTEND, "cdq", (edx,), (eax,)))
+        if isinstance(other, ir.Imm):
+            return None  # idiv has no immediate form and nothing loads one here
+        steps.append(made(ir.Operation.DIVIDE, "idiv", (eax, edx), (eax, edx, other), right.at))
+        if name == "B$RMI4":
+            steps.append(made(ir.Operation.MOVE, "mov", (eax,), (edx,)))
+
+    if name == "B$CPI4":
+        steps.append(made(ir.Operation.POP, "pop", (eax,), ()))
+    return steps
+
+
+def _laid_at(steps: list, here: dict, lo: int, hi: int) -> list[Op] | None:
+    """One site's operations as ops, all on the region's first address.
+
+    A step that reads a relocated address is built from the push that
+    carried it, so its node still spans the fixup and layout.py finds it
+    where it always did. Everything else carries no node at all: its own
+    address is inside a far call whose target is a fixup too, and a search
+    would find that one.
+    """
+    out: list[Op] = []
+    for number, (what, field) in enumerate(steps):
+        carrier = None
+        if field is not None:
+            carrier = next(
+                (one for one in here.values()
+                 if one.node is not None and ir.span(one.node)[0] <= field < ir.span(one.node)[1]),
+                None,
+            )
+            if carrier is None:
+                return None
+        seed = carrier if carrier is not None else next(iter(here.values()))
+        out.append(
+            replace(
+                seed,
+                at=lo,
+                op=what.op,
+                name=what.name or "",
+                defines=(),
+                uses=(),
+                loads=(),
+                stores=(),
+                node=seed.node if carrier is not None else None,
+                made=what,
+                covers=(lo, hi) if number == 0 else (lo, lo),
+            )
+        )
+    return out
+
+
 def _absorbing(name: str, at: int, after: Op) -> list[Op]:
     """The operations one absorbed call becomes, in order.
 
@@ -508,45 +600,70 @@ def _laid(steps: list[ir.Semantics], at: int, after: Op, restore: bool) -> list[
     return out
 
 
-def absorbed(body: MirBody, blocks: list, calls: dict[int, str]) -> MirBody:
+def absorbed(body: MirBody, blocks: list, calls: dict[int, str], found=None) -> MirBody:
     """Every arithmetic runtime call this can compute in place, computed.
 
-    The half of M5 that is emission rather than analysis. `arguments()` says
-    where a call's operands are; this says what the call becomes.
+    Two strategies, chosen per site and never mixed, which is calls.py's own
+    split. **Delete**: every operand has an address or is an immediate, so
+    it is reloaded at codegen time and the pushes go with the call -- 997 of
+    the corpus's 1,151 sites, and the reason absorption is smaller than what
+    BC wrote. **Consume**: something is only on the stack, so every byte is
+    popped wherever it actually sits; reloading one operand and leaving its
+    push standing would leak four bytes of stack per call, forever.
 
     Refused on the flags, and on which flags. The three arithmetic routines
     return a value and leave the flags incidental, so any read of them after
-    the site is a reason to leave it alone: `imul` and `idiv` write their
-    own. A comparison's flags *are* its result, so the question there is
-    narrower -- CF, PF and AF are the runtime's own synthesis and a `cmp`
-    does not reproduce them, and only a read of one of those refuses.
+    the site refuses it: `imul` and `idiv` write their own. A comparison's
+    flags *are* its result, so the question is narrower -- CF, PF and AF are
+    the runtime's own synthesis and a `cmp` does not reproduce them.
 
     That is flags.py's analysis rather than MIR's own values, and
     deliberately: MIR has one FLAGS pseudo-register and cannot say which
     flag, which for the comparison is the whole question.
     """
-    where = arguments(blocks, calls)
-    if not where:
+    from qbopt import calls as machine
+
+    if found is None:
+        return body
+    reached = [one for block in blocks for one in block.insns]
+    sites = {one.at: one for one in machine.sites(found, reached, blocks)}
+    if not sites:
         return body
 
     live = flags.live_in(blocks)
-    ends = {one.at: one.end for block in blocks for one in block.insns}
     out = []
     for block in body.blocks:
         ops: list[Op] = []
+        drop: set[int] = set()
         for op in block.ops:
+            if op.at in drop:
+                continue
+            site = sites.get(op.at)
             name = (calls.get(op.at) or "").upper()
-            if op.at not in where or name not in EMITTED or op.at not in ends:
+            if site is None or name not in EMITTED or getattr(op.node, "insn", None) is None:
                 ops.append(op)
                 continue
-            if getattr(op.node, "insn", None) is None:
-                ops.append(op)
-                continue
-            read = _flags_after(blocks, live, op.at, ends[op.at])
+            read = _flags_after(blocks, live, site.start, site.end)
             wrong = SYNTHESISED if name == "B$CPI4" else flags.ALL
             if read & wrong:
                 ops.append(op)
                 continue
-            ops.extend(_absorbing(name, op.at, op))
+            if site.consume:
+                ops.extend(_absorbing(name, op.at, op))
+                continue
+            steps = _deleting(site, {})
+            here = {one.at: one for one in block.ops if site.start <= one.at < site.end}
+            built = _laid_at(steps, here, site.start, site.end) if steps else None
+            if built is None:
+                ops.append(op)
+                continue
+            # the pushes go with the call, which is what makes this smaller
+            drop.update(here)
+            ops = [one for one in ops if not (site.start <= one.at < site.end)]
+            if name != "B$CPI4":
+                # the arithmetic leaves its answer in eax and BC reads a long
+                # in dx:ax; a comparison's answer is flags and takes none
+                built.append(pairs._restore_op(0, site.start, built[-1], site.start))
+            ops.extend(built)
         out.append(replace(block, ops=tuple(ops)))
     return replace(body, blocks=tuple(out))
