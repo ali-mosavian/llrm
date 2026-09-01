@@ -50,7 +50,11 @@ HALF = 2
 class Kind(StrEnum):
     LOAD = "load"
     STORE = "store"
-    ALU = "alu"
+    ALU = "alu"        # against memory
+    ALU_IMM = "alu-i"  # against an immediate
+    ALU_REG = "alu-v"  # against the other pair
+    NOT = "not"
+    MOVE = "move"      # pair to pair
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +165,14 @@ def found(body: MirBody) -> tuple[Pair, ...]:
         ops = list(block.ops)
         for first, second in zip(ops, ops[1:]):
             made = _alu_adjacent(first, second, body.origin)
+            if made is None:
+                made = _paired_alu(first, second, body.origin, ir.Imm, Kind.ALU_IMM)
+            if made is None:
+                made = _paired_alu(first, second, body.origin, ir.Reg, Kind.ALU_REG)
+            if made is None:
+                made = _unary_pair(first, second, body.origin)
+            if made is None:
+                made = _move_pair(first, second, body.origin)
             if made is not None:
                 out.append(made)
                 continue
@@ -211,6 +223,114 @@ def _alu_adjacent(first: Op, second: Op, origin: dict) -> "Pair | None":
     if PARTNER.get(low_name) != high_name or not _adjacent(cell, next_cell):
         return None
     return Pair(Kind.ALU, low_at[0], first, second)
+
+
+def _halves_named(first: Op, second: Op, origin: dict) -> tuple[int, Op, Op] | None:
+    """(pair number, low op, high op) where these two write one pair's halves.
+
+    Each op must write exactly one tracked register and between them they
+    must be the low and the high of the same pair -- in either order, since
+    BC writes a store's halves either way round.
+    """
+    for one, other, low_op, high_op in ((first, second, first, second), (second, first, second, first)):
+        low = _half_of(_written(one, origin), origin)
+        high = _half_of(_written(other, origin), origin)
+        if low is None or high is None:
+            continue
+        if low[0] == high[0] and low[1] == 0 and high[1] == 1:
+            return low[0], low_op, high_op
+    return None
+
+
+def _written(op: Op, origin: dict) -> Register_:
+    """The one tracked register this op writes, or NONE."""
+    made = [one for one in op.defines if not one.flags]
+    if len(made) != 1:
+        return Register.NONE
+    return origin.get(made[0], Register.NONE)
+
+
+def _shape(op: Op) -> ir.Semantics | None:
+    return op.made if op.made is not None else getattr(op.node, "semantics", None)
+
+
+def _binary_against(op: Op, want: type) -> str | None:
+    """This op's mnemonic if it is `<alu> <half>,<want>` in place, else None."""
+    what = _shape(op)
+    if what is None or what.op is not ir.Operation.BINARY or len(what.dests) != 1:
+        return None
+    dest = what.dests[0]
+    if not isinstance(dest, ir.Reg) or dest.width != HALF or dest not in what.sources:
+        return None
+    if op.loads or op.stores:
+        return None
+    if not any(isinstance(one, want) for one in what.sources):
+        return None
+    return what.name or ""
+
+
+def _paired_alu(first: Op, second: Op, origin: dict, want: type, kind: Kind) -> "Pair | None":
+    """An arithmetic pair whose operand is not memory.
+
+    There is no second address to compare here, so the evidence is the
+    register pair and the mnemonics being partners -- which is what lift.py
+    accepts for the same shapes, and it chains from a known value rather
+    than establishing one.
+    """
+    named = _halves_named(first, second, origin)
+    if named is None:
+        return None
+    number, low_op, high_op = named
+    low_name, high_name = _binary_against(low_op, want), _binary_against(high_op, want)
+    if low_name is None or high_name is None or PARTNER.get(low_name) != high_name:
+        return None
+    return Pair(kind, number, low_op, high_op)
+
+
+def _unary_pair(first: Op, second: Op, origin: dict) -> "Pair | None":
+    """`not ax` with `not dx` -- one 32-bit not, and BC's own shape for it."""
+    named = _halves_named(first, second, origin)
+    if named is None:
+        return None
+    number, low_op, high_op = named
+    names = []
+    for op in (low_op, high_op):
+        what = _shape(op)
+        if what is None or what.op is not ir.Operation.UNARY or op.loads or op.stores:
+            return None
+        names.append(what.name or "")
+    if names[0] != "not" or names[1] != "not":
+        return None
+    return Pair(Kind.NOT, number, low_op, high_op)
+
+
+def _move_pair(first: Op, second: Op, origin: dict) -> "Pair | None":
+    """`mov ax,cx` with `mov dx,bx` -- one pair copied into the other.
+
+    A copy is a value, not nothing: the source pair is usually reused
+    immediately afterwards, so the copy is what keeps the long alive.
+    """
+    named = _halves_named(first, second, origin)
+    if named is None:
+        return None
+    number, low_op, high_op = named
+    sources = []
+    for op in (low_op, high_op):
+        what = _shape(op)
+        if what is None or what.op is not ir.Operation.MOVE or op.loads or op.stores:
+            return None
+        if len(what.sources) != 1 or not isinstance(what.sources[0], ir.Reg):
+            return None
+        if what.sources[0].width != HALF:
+            return None
+        sources.append(_half_of(ir.ROOT.get(what.sources[0].register, what.sources[0].register), origin))
+    if sources[0] is None or sources[1] is None:
+        return None
+    if sources[0][0] != sources[1][0] or sources[0][1] != 0 or sources[1][1] != 1:
+        return None
+    if sources[0][0] == number:
+        return None  # a pair copied onto itself is not a move between pairs
+    return Pair(Kind.MOVE, number, low_op, high_op)
 
 
 def _alu(body: MirBody) -> list[Pair]:
@@ -301,10 +421,17 @@ def held(body: MirBody) -> dict[int, dict[int, Long | None]]:
             match pair.kind:
                 case Kind.LOAD if low is not None and high is not None:
                     slots[pair.pair] = Long(low, high)
-                case Kind.ALU if slots[pair.pair] is not None and low is not None and high is not None:
+                case (
+                    Kind.ALU | Kind.ALU_IMM | Kind.ALU_REG | Kind.NOT
+                ) if slots[pair.pair] is not None and low is not None and high is not None:
                     slots[pair.pair] = Long(low, high)
-                case Kind.ALU:
+                case Kind.ALU | Kind.ALU_IMM | Kind.ALU_REG | Kind.NOT:
                     slots[pair.pair] = None   # chaining from something unknown
+                case Kind.MOVE if low is not None and high is not None:
+                    # the destination takes what the source pair holds, and
+                    # a copy from an unknown pair leaves the destination
+                    # unknown too
+                    slots[pair.pair] = Long(low, high)
                 case Kind.STORE:
                     pass                      # reads the slot, leaves it alone
                 case _:

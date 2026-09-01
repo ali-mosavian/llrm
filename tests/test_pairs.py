@@ -66,6 +66,35 @@ def _alu(obj: Path) -> tuple[set[int], set[int]]:
     return {v.at for v in values if v.op.value == "alu-m"}, mine
 
 
+# lift.py's name for each shape, against this module's. Only the families
+# where both ask exactly the same question: alu-v and store are deliberately
+# broader here -- see the tests below.
+AGREES = {
+    "load": pairs.Kind.LOAD,
+    "alu-m": pairs.Kind.ALU,
+    "alu-i": pairs.Kind.ALU_IMM,
+    "not": pairs.Kind.NOT,
+    "move": pairs.Kind.MOVE,
+}
+
+
+def _sites(obj: Path, kind: pairs.Kind) -> tuple[set[int], set[int]]:
+    """(lift's sites for the matching name, this module's)."""
+    name = next(k for k, v in AGREES.items() if v is kind)
+    found = corpus.loaded(obj)
+    assert found is not None
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
+    blocks = split.partition(found, mapped)
+    values, _stores, _bridges = lift(
+        found.code, found.start, found.end, found.resolve, [i for b in blocks for i in b.insns]
+    )
+    mine: set[int] = set()
+    for _name, body in mir.bodies(found, blocks):
+        mine |= {min(one.at) for one in pairs.found(body) if one.kind is kind}
+    return {v.at for v in values if v.op.value == name}, mine
+
+
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
 def test_the_load_pairs_are_exactly_the_ones_lift_finds(obj: Path) -> None:
     """Two implementations of one question, agreeing object by object.
@@ -159,3 +188,50 @@ def test_the_slot_is_cleared_by_anything_that_writes_a_half() -> None:
     source = inspect.getsource(pairs.held)
     assert "_touches" in source, "a write to either half must clear its slot"
     assert "op.barrier" in source, "and a barrier must clear both"
+
+
+@pytest.mark.parametrize("kind", [pairs.Kind.ALU_IMM, pairs.Kind.NOT, pairs.Kind.MOVE], ids=lambda k: k.value)
+@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
+def test_the_other_shapes_are_exactly_the_ones_lift_finds(obj: Path, kind: pairs.Kind) -> None:
+    """Three more of lift.py's families, over values instead of bytes.
+
+    None of these has an address to compare -- the operand is an immediate,
+    or nothing, or the other pair -- so the evidence is the register pair
+    and the mnemonics. `add ax,imm / adc dx,imm` is one 32-bit add and the
+    immediate is the two halves joined; `not ax / not dx` is one 32-bit not;
+    `mov ax,cx / mov dx,bx` is one pair copied into the other, which is a
+    value rather than nothing, because the source is usually reused straight
+    afterwards and the copy is what keeps the long alive.
+
+    121, 51 and 12 across the corpus, object by object, the same numbers
+    lift.py reports.
+    """
+    theirs, mine = _sites(obj, kind)
+    assert mine == theirs
+
+
+def test_a_pair_doubled_is_recognised_and_not_chained() -> None:
+    """`add ax,ax / adc dx,dx` is a real 32-bit add of a pair with itself.
+
+    lift.py does not report it as alu-v; this does, which is the recogniser
+    being broader rather than wrong. What stops it mattering is that
+    held() will not chain from a slot it does not know, and the one site in
+    the corpus is exactly that case -- so the shape is counted and the
+    provenance is still refused.
+    """
+    from qbopt import declen
+
+    at = 0x12D
+    found = corpus.loaded(Path("fixtures/omf/procs-p-evt.obj"))
+    assert found is not None
+    low = declen.decode(found.code, at)
+    assert low is not None and str(low.insn) == "add ax,ax"
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
+    for _name, body in mir.bodies(found, split.partition(found, mapped)):
+        state = pairs.held(body)
+        for one in pairs.found(body):
+            if min(one.at) == at:
+                assert one.kind is pairs.Kind.ALU_REG
+                assert state[at][one.pair] is None, "a doubling of an unknown pair stays unknown"
+                return
