@@ -333,7 +333,29 @@ and DOUBLE, and `87bhelp.asm`'s six helpers have contracts.
 - [x] x87 stack positions as MIR values — `qbopt/fpstack.py`. Entering slots
       are minted rather than assumed empty: BC leaves values on the stack
       across a branch
-- [ ] first shape to look at: 690 `fld` against 351 `fstp` in qb-qrender
+- [x] that shape, measured. qb-qrender's 191 bodies hold 743 `fld` against
+      333 `fstp`, 426 in-place arithmetic and 76 popping. What the gap is
+      *not* is a store immediately reloaded: **0 sites** of `fstp [x]`
+      followed by `fld [x]`, in qb-qrender and in the corpus, adjacent
+      either way. BC does not write the obvious x87 peephole any more than
+      it writes the obvious integer ones
+
+- [ ] the one shape that is there, and it is thin. Allowing a gap, a cell
+      stored by `fstp` and later read by `fld` with nothing writing it in
+      between happens **36 times in qb-qrender** and 6 in the corpus, at a
+      mean distance of 6.4 operations. 19 sit at loop depth 0, 16 at depth
+      1, 1 at depth 2.
+
+      Not built, and the reason is the ratio rather than the count: keeping
+      a value on the x87 stack across six operations means scheduling the
+      stack, since every `fld` between them rotates it -- the hardest
+      transform in this project for 36 static sites in 26,290 instructions.
+      `fpstack.py` is what it would be built on and exists.
+
+      What would change the answer is a cycle measurement showing those 17
+      in-loop sites are hot. Static depth is not that: `docs/roadmap.md`'s
+      own PITSNAP note is about a busy-wait that scores two loops deep and
+      runs twice
 
 ## Gates
 
