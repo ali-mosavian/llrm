@@ -184,11 +184,26 @@ def test_the_slot_is_cleared_by_anything_that_writes_a_half() -> None:
     real 32-bit store whose value cannot be named, because the call wrote
     both halves. Widening that needs the call's contract, not the shape.
     """
-    import inspect
+    found = corpus.loaded(FIXTURES[0])
+    assert found is not None
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
 
-    source = inspect.getsource(pairs.held)
-    assert "_touches" in source, "a write to either half must clear its slot"
-    assert "op.barrier" in source, "and a barrier must clear both"
+    cleared = False
+    for _name, body in mir.bodies(found, split.partition(found, mapped)):
+        state = pairs.held(body)
+        for block in body.blocks:
+            live = {0: False, 1: False}
+            for op in block.ops:
+                slots = state[op.at]
+                for number in pairs.PAIRS:
+                    if live[number] and slots[number] is None:
+                        cleared = True
+                    live[number] = slots[number] is not None
+    assert cleared, (
+        "no slot was ever cleared, so nothing here proves a write to a half "
+        "stops the pair being known"
+    )
 
 
 @pytest.mark.parametrize(
@@ -253,7 +268,87 @@ def test_a_sign_extension_from_a_segment_register_is_not_a_long() -> None:
     because es is not one of the registers it tracks; this excludes it for
     the reason underneath that.
     """
-    import inspect
+    from iced_x86 import Register
 
-    source = inspect.getsource(pairs._sign_extended)
-    assert "mir.PHYSICAL" in source
+    from qbopt import ir
+
+    def extending(source: ir.Loc) -> tuple[mir.Op, mir.Op]:
+        into = ir.Reg(register=Register.AX, width=2)
+        low = mir.Op(
+            at=0x100,
+            op=ir.Operation.MOVE,
+            name="mov",
+            defines=(mir.Value(1, 0x100),),
+            uses=(),
+            made=ir.Semantics(ir.Operation.MOVE, "mov", dests=(into,), sources=(source,)),
+        )
+        high = mir.Op(
+            at=0x103,
+            op=ir.Operation.NOTHING if hasattr(ir.Operation, "NOTHING") else ir.Operation.MOVE,
+            name="cwd",
+            defines=(mir.Value(2, 0x103),),
+            uses=(mir.Value(1, 0x100),),
+            made=ir.Semantics(ir.Operation.MOVE, "cwd", dests=(ir.Reg(register=Register.DX, width=2),), sources=()),
+        )
+        return low, high
+
+    origin = {mir.Value(1, 0x100): Register.EAX, mir.Value(2, 0x103): Register.EDX}
+
+    from_register = extending(ir.Reg(register=Register.BX, width=2))
+    assert pairs._sign_extended(*from_register, origin) is not None, "an integer register widens"
+
+    from_segment = extending(ir.Reg(register=Register.ES, width=2))
+    assert pairs._sign_extended(*from_segment, origin) is None, "a segment register is not a value"
+
+
+def test_two_negates_without_the_borrow_are_not_one_long_negate() -> None:
+    """`neg ax / adc dx,0 / neg dx` -- the middle instruction is the negate.
+
+    Negating a long is not negating each half: the low half's `neg` sets the
+    borrow, and `adc dx,0` folds it into the high half before that is
+    negated in turn. Two `neg`s on the two halves with anything else between
+    them are two independent negates and mean something different.
+
+    Nothing in the corpus has that near-miss, so removing the check changes
+    no count and the object-by-object agreement with lift.py cannot see it.
+    Built here instead.
+    """
+    from iced_x86 import Register
+
+    from qbopt import ir
+
+    def unary(at: int, name: str, register: Register, value: int) -> mir.Op:
+        where = ir.Reg(register=register, width=2)
+        return mir.Op(
+            at=at,
+            op=ir.Operation.UNARY,
+            name=name,
+            defines=(mir.Value(value, at),),
+            uses=(),
+            made=ir.Semantics(ir.Operation.UNARY, name, dests=(where,), sources=(where,)),
+        )
+
+    low = unary(0x100, "neg", Register.AX, 1)
+    high = unary(0x106, "neg", Register.DX, 3)
+    origin = {mir.Value(1, 0x100): Register.EAX, mir.Value(2, 0x103): Register.EDX,
+              mir.Value(3, 0x106): Register.EDX}
+
+    borrow = mir.Op(
+        at=0x103,
+        op=ir.Operation.BINARY,
+        name="adc",
+        defines=(mir.Value(2, 0x103),),
+        uses=(),
+        made=ir.Semantics(
+            ir.Operation.BINARY,
+            "adc",
+            dests=(ir.Reg(register=Register.DX, width=2),),
+            sources=(ir.Reg(register=Register.DX, width=2), ir.Imm(value=0, width=2)),
+        ),
+    )
+    assert pairs._negate([low, borrow, high], 0, origin) is not None, "the real idiom"
+
+    unrelated = unary(0x103, "not", Register.DX, 2)
+    assert pairs._negate([low, unrelated, high], 0, origin) is None, (
+        "without the borrow folded in, these are two independent negates"
+    )
