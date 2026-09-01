@@ -571,7 +571,15 @@ def test_a_relocated_field_never_changes_width(obj: Path) -> None:
 
 @pytest.mark.parametrize(
     ("hexs", "want"),
-    [("6685c0", "test eax,eax"), ("85c0", "test ax,ax"), ("6683f800", "cmp eax,0"), ("663bc0", "cmp eax,eax")],
+    [
+        ("6685c0", "test eax,eax"),
+        ("85c0", "test ax,ax"),
+        # a compare against zero is deliberately improved into the test form,
+        # which is a byte shorter and asks the same question -- the point here
+        # is that the answer is never a *different* comparison
+        ("6683f800", "test eax,eax"),
+        ("663bc0", "cmp eax,eax"),
+    ],
 )
 def test_a_compare_keeps_the_mnemonic_it_was_given(hexs: str, want: str) -> None:
     """`test` and `cmp` are both Operation.COMPARE and are not the same test.
@@ -600,3 +608,45 @@ def test_a_compare_keeps_the_mnemonic_it_was_given(hexs: str, want: str) -> None
     back = declen.decode(made.code, 0)
     assert back is not None
     assert str(back.insn) == want, f"asked for {want}, emitted {made.code.hex()} = {back.insn}"
+    # the invariant underneath: a `test` never comes back as a `cmp`
+    if str(insn.insn).startswith("test "):
+        assert str(back.insn).startswith("test ")
+
+
+@pytest.mark.parametrize(
+    ("reg", "want"),
+    [(Register.EAX, "6685c0"), (Register.ECX, "6685c9"), (Register.AX, "85c0"), (Register.BX, "85db")],
+)
+def test_a_comparison_against_zero_takes_the_test_form(reg: Register, want: str) -> None:
+    """`cmp reg,0` is a byte longer than `test reg,reg` and asks the same thing.
+
+    Both set SF, ZF and PF from the value and clear CF and OF, so every
+    conditional jump reads the same answer -- and `test` needs no immediate
+    at all. `cmp eax,0` is `66 83 f8 00` against `66 85 c0`.
+
+    BC never writes `cmp reg,0`: every one of these is something absorption
+    emits, so this is a peephole on this pass's own output. 54 bytes over
+    qb-qrender, 8 over the corpus.
+
+    `or reg,reg` would save the same byte and was the other candidate. It
+    writes the register -- the same value, but MIR records a definition --
+    and three consumers here key on which value is in a register:
+    avail.redundant's map, simplify._target_survives, and transform.placed.
+    `test` writes nothing.
+    """
+    made = select.compare(ir.Reg(register=reg, width=4 if reg in (Register.EAX, Register.ECX) else 2), 0)
+    assert made is not None
+    assert made.code.hex() == want
+
+
+def test_a_comparison_against_zero_stays_a_compare_when_relocated() -> None:
+    """A relocated immediate is an address, not the number zero.
+
+    `cmp ax,offset X` arrives as `cmp ax,0` exactly as `add ax,offset X`
+    arrives as `add ax,0`, and turning it into `test ax,ax` would ask about
+    ax rather than about the address -- and leave the fixup naming a field
+    that no longer exists.
+    """
+    made = select.compare(ir.Reg(register=Register.AX, width=2), 0, relocated=True)
+    assert made is not None
+    assert made.code[0] != 0x85, f"a relocated compare became a test: {made.code.hex()}"

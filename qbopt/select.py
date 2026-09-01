@@ -638,6 +638,20 @@ def ret_far(popped: int, at: int = 0) -> Emitted | None:
 def compare(dest: ir.Loc, value: int, at: int = 0, relocated: bool = False) -> Emitted | None:
     """`cmp <dest>, imm`. Flags are the whole result, so there is no dest."""
     match dest:
+        case ir.Reg(register=register) if value == 0 and not relocated:
+            # `test reg,reg` asks the same question a byte shorter: both set
+            # SF, ZF and PF from the value and clear CF and OF, so every
+            # conditional jump reads the same answer, and test carries no
+            # immediate. BC never writes `cmp reg,0` -- these are absorption's
+            # own, so this is a peephole on this pass's output.
+            #
+            # Not when relocated: `cmp ax,offset X` arrives here as
+            # `cmp ax,0` the same way `add ax,offset X` does, and testing ax
+            # would ask about ax rather than about the address.
+            made = compare_registers("test", register, register, at)
+            if made is not None:
+                return made
+            return arith_imm("cmp", register, value, at, relocated)
         case ir.Reg(register=register):
             return arith_imm("cmp", register, value, at, relocated)
         case ir.Mem() as cell:
