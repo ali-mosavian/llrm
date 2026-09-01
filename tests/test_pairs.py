@@ -352,3 +352,85 @@ def test_two_negates_without_the_borrow_are_not_one_long_negate() -> None:
     assert pairs._negate([low, unrelated, high], 0, origin) is None, (
         "without the borrow folded in, these are two independent negates"
     )
+
+
+def test_the_cost_model_agrees_with_what_widening_actually_saves() -> None:
+    """The chains this would take, against the bytes lift.py's widening does save.
+
+    Two independent routes to the same economics: lift.py walks bytes,
+    widens regions and reports "widening it grows N bytes to M" for the ones
+    it refuses; this walks values, builds chains from held() and prices each
+    one by asking select.py how long the 32-bit form is, plus four bytes for
+    the restore that hands the long back to BC's sixteen-bit code.
+
+    They land within a few per cent, which is the check that the pair
+    analysis is not merely self-consistent.
+    """
+    from qbopt import rewrite as pass_under_test
+
+    model = 0
+    for obj in FIXTURES:
+        found = corpus.loaded(obj)
+        assert found is not None
+        mapped = code_map(found)
+        if isinstance(mapped, str):
+            continue
+        for _name, body in mir.bodies(found, split.partition(found, mapped)):
+            model += sum(one.saved for one in pairs.chains(body) if one.saved > 0)
+
+    actual = 0
+    for obj in FIXTURES:
+        data = obj.read_bytes()
+        with_wide, _ = pass_under_test._once(data, dry_run=False)
+        without, _ = pass_under_test._once(data, dry_run=False, max_regions=0)
+        from qbopt import module as loader
+        from qbopt import omf as records
+
+        a, b = loader.of(records.parse(with_wide)), loader.of(records.parse(without))
+        if a is None or b is None:
+            continue
+        actual += len(b.code) - len(a.code)
+
+    assert actual > 1000, f"widening saves {actual} bytes, so this comparison is not measuring it"
+    assert abs(model - actual) / actual < 0.15, f"model says {model}, widening saves {actual}"
+
+
+def test_a_chain_never_spans_something_it_cannot_move() -> None:
+    """lift.regions()' rule: anything unrecognised between two pair operations
+    stays where it is, so the rewrite cannot span it."""
+    for obj in FIXTURES[:20]:
+        found = corpus.loaded(obj)
+        assert found is not None
+        mapped = code_map(found)
+        if isinstance(mapped, str):
+            continue
+        for _name, body in mir.bodies(found, split.partition(found, mapped)):
+            for chain in pairs.chains(body):
+                for previous, one in zip(chain.ops, chain.ops[1:]):
+                    assert pairs._follows(previous, one), (
+                        f"{obj.stem}: a chain spans a gap at {min(one.at):#x}"
+                    )
+
+
+def test_a_single_pair_widened_is_usually_longer() -> None:
+    """The fact the cost model exists for.
+
+    Two instructions become one plus a four-byte restore, and on a lone pair
+    that is a loss. It is why lift.py refuses 156 regions in qb-qrender
+    against the ones it takes, and why a widening built from recognition and
+    a rename alone would make the real program bigger.
+    """
+    lone = grew = 0
+    for obj in FIXTURES:
+        found = corpus.loaded(obj)
+        assert found is not None
+        mapped = code_map(found)
+        if isinstance(mapped, str):
+            continue
+        for _name, body in mir.bodies(found, split.partition(found, mapped)):
+            for chain in pairs.chains(body):
+                if len(chain.ops) == 1:
+                    lone += 1
+                    grew += chain.saved <= 0
+    assert lone, "no single-pair chains at all, so this proves nothing"
+    assert grew / lone > 0.8, f"only {grew} of {lone} lone pairs cost more widened"

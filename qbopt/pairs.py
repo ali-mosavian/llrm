@@ -514,3 +514,150 @@ def held(body: MirBody) -> dict[int, dict[int, Long | None]]:
                 case _:
                     slots[pair.pair] = None
     return out
+
+
+# What each pair becomes when the whole chain is widened. lift.py's own map:
+# a long in ax:dx becomes eax, one in cx:bx becomes ecx.
+WIDE = {0: Register.EAX, 1: Register.ECX}
+
+# `push eax / pop ax / pop dx` and its cx:bx twin -- what hands the long back
+# to BC's sixteen-bit code at the end of a chain. Four bytes, and skippable
+# only where the pair is provably dead afterwards.
+RESTORE = 4
+
+
+@dataclass(frozen=True, slots=True)
+class Chain:
+    """A run of pair operations on one slot, and what widening it would cost."""
+
+    pair: int
+    ops: tuple[Pair, ...]
+    was: int      # bytes BC wrote
+    now: int      # bytes the widened form needs, restore included
+    restored: bool
+
+    @property
+    def saved(self) -> int:
+        return self.was - self.now
+
+    @property
+    def at(self) -> int:
+        return min(min(one.at) for one in self.ops)
+
+
+def _span(one: Pair) -> int:
+    """The bytes BC wrote for both halves of this pair operation."""
+    total = 0
+    for op in (one.low, one.high):
+        if op.node is None:
+            return 0
+        lo, hi = ir.span(op.node)
+        total += hi - lo
+    return total
+
+
+def _widened_length(one: Pair) -> int | None:
+    """How many bytes the one 32-bit instruction takes, or None if unknown."""
+    from qbopt import select
+
+    what = one.low.made if one.low.made is not None else getattr(one.low.node, "semantics", None)
+    if what is None:
+        return None
+    built = select.emit(_as_wide(what), at=0)
+    return None if built is None else len(built.code)
+
+
+def _as_wide(what: ir.Semantics) -> ir.Semantics:
+    """The low half's semantics as the whole 32-bit operation.
+
+    Each register becomes its own root and each memory operand doubles its
+    width -- which is only right for a chain that ends in a restore, and is
+    exactly the assumption that made an isolated rename wrong.
+    """
+    from dataclasses import replace as _replace
+
+    def wider(where: ir.Loc) -> ir.Loc:
+        match where:
+            case ir.Reg(register=register):
+                return ir.Reg(register=ir.ROOT.get(register, register), width=4)
+            case ir.Mem():
+                return _replace(where, width=4)
+            case ir.Imm(value=value):
+                return ir.Imm(value=value, width=4)
+            case _:
+                return where
+
+    return _replace(
+        what,
+        dests=tuple(wider(one) for one in what.dests),
+        sources=tuple(wider(one) for one in what.sources),
+    )
+
+
+
+def _follows(previous: Pair, one: Pair) -> bool:
+    """Whether `one` starts exactly where `previous` ended.
+
+    lift.regions()'s rule: anything unrecognised between two pair operations
+    has to stay where it is, so a rewrite cannot span it.
+    """
+    ends = [ir.span(op.node)[1] for op in (previous.low, previous.high) if op.node is not None]
+    return bool(ends) and max(ends) == min(one.at)
+
+
+def chains(body: MirBody, dead: frozenset[int] = frozenset()) -> tuple[Chain, ...]:
+    """Every widenable run, with what widening it would cost.
+
+    A chain is a maximal run of pair operations on one slot whose halves are
+    contiguous in the code -- anything unrecognised between them has to stay
+    where it is, so the rewrite cannot span it, which is lift.regions()'s
+    own rule.
+
+    `dead` is the pairs provably dead after the body, whose restore can be
+    skipped. Without it every chain pays the four bytes.
+
+    The cost is the whole point. A single pair widened is usually *longer*
+    than the two instructions BC wrote once the restore is counted, which is
+    why lift.py refuses 156 regions in qb-qrender against the ones it takes.
+    """
+    state = held(body)
+    every = {min(one.at): one for one in found(body)}
+    out: list[Chain] = []
+
+    for block in body.blocks:
+        runs: dict[int, list[Pair]] = {0: [], 1: []}
+
+        def close(number: int) -> None:
+            run = runs[number]
+            if not run:
+                return
+            was = sum(_span(one) for one in run)
+            widths = [_widened_length(one) for one in run]
+            runs[number] = []
+            if was == 0 or any(one is None for one in widths):
+                return
+            restored = number not in dead
+            now = sum(one for one in widths if one is not None) + (RESTORE if restored else 0)
+            out.append(Chain(number, tuple(run), was, now, restored))
+
+        for op in block.ops:
+            one = every.get(op.at)
+            if one is None:
+                continue
+            number = one.pair
+            # a run breaks where the slot stops being known, and where the
+            # previous member is not immediately before this one
+            known = state.get(min(one.at), {}).get(number) is not None
+            if runs[number] and not _follows(runs[number][-1], one):
+                close(number)
+            if one.kind in (Kind.LOAD, Kind.MOVSX):
+                close(number)
+                runs[number] = [one]
+                continue
+            if not known:
+                close(number)
+                continue
+            runs[number].append(one)
+        for number in (0, 1):
+            close(number)
+    return tuple(out)
