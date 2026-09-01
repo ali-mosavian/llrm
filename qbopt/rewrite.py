@@ -830,8 +830,29 @@ def _written(
     """
     if not whole_segment:
         return data
-    out, _why = wholeseg.rebuilt(data, native_fpu=native_fpu, absorb=not absorb_calls)
-    return out
+    # To a fixed point, because that is what re-raises the SSA. Every
+    # transform here rewrites the op list, and the values an op defines and
+    # uses are computed when the body is raised -- so after one transform
+    # they describe the body that went in, not the one that came out. The
+    # ordering in transform.applied() is what has been holding that
+    # together, and it is load-bearing: widening ran before avail.py once
+    # and avail forwarded a stale high half across an op that said it read
+    # two bytes where the instruction read four.
+    #
+    # Re-parsing the emitted object is the honest way to get the values
+    # back, and the only one that needs no transform to maintain them. Each
+    # round sees a body raised from what the last round actually wrote.
+    for _round in range(WHOLE_SEGMENT_PASSES):
+        out, _why = wholeseg.rebuilt(data, native_fpu=native_fpu, absorb=not absorb_calls)
+        if out == data:
+            break
+        data = out
+    return data
+
+
+# Measured rather than chosen: the corpus settles in two, and the third
+# round is what proves the second changed nothing.
+WHOLE_SEGMENT_PASSES = 4
 
 
 def _once(
