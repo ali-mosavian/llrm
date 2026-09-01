@@ -182,9 +182,42 @@ work to show through it. A `-bench 60` run reported 59.14 ms against 58.12,
 drew different geometry, so that pair is not a measurement of anything.
 
 (The table above is from the specific build the run used, before the LEDATA
-boundary fix; the region count in this paragraph is the current static census.
-Re-running qb-qrender would take slightly fewer bytes now, not a different
-conclusion.)
+boundary fix; the region count in this paragraph is the current static census.)
+
+### Re-run 2026-09-01, and it had stopped working
+
+Re-measured from BC's own objects (`build/vbd-qbopt-base`), all 15 modules
+through the current pass, linked with the recovered response file and run
+headless against `dm3ish.bsp`.
+
+| | BC only | qbopt |
+|---|---|---|
+| qrender.exe | 285,678 | 285,774 |
+| frames | 271 | **291** |
+| peak fps | 88 | **95** |
+| cp_pts | 216 | 216 |
+
+**Before the fix in this session it did not run at all.** It linked cleanly
+and then corrupted itself -- `String space corrupt`, or a hang. One module
+of the fifteen, `sys.obj`, and one transform: widening dropped the segment
+override off a far pointer, so
+
+    mov ax,es:[bx] ; mov dx,es:[bx+2]     became    mov eax,[bx]
+
+and the program read and wrote `ds` where BC wrote `es`. `lift.memory()`
+named Space.SEGMENT, FRAME and GROUP and let Space.FAR fall into a bare
+operand. `select.py` had handled the same address correctly all along.
+
+Nothing caught it because nothing was looking: `tools/mutate.py` has carried
+a `segment-override-not-refused` mutation since before an override was
+resolved rather than refused, and its pattern stopped matching when that
+line was rewritten. It reported "pattern appears 0 times" -- which counts as
+a caught mutation and checks nothing. Repointing it made the gate 40 of 40
+for the first time.
+
+The same figures at `cycles=max` are worth less than they look: both builds
+race the host, so the frame counts are a comparison of two unpinned runs.
+Fixed cycles is what makes them a measurement.
 
 This is the correctness result, not a speed result. The speed is behind the
 refusals above.
