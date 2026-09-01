@@ -23,6 +23,7 @@ before knowing which register it can become.
 """
 
 from enum import StrEnum
+from dataclasses import replace
 from dataclasses import dataclass
 
 from iced_x86 import Register
@@ -661,3 +662,99 @@ def chains(body: MirBody, dead: frozenset[int] = frozenset()) -> tuple[Chain, ..
         for number in (0, 1):
             close(number)
     return tuple(out)
+
+
+def _restore_op(number: int, at: int, after: Op) -> Op:
+    """`push eax / pop ax / pop dx` -- the long handed back to BC's halves.
+
+    One op carrying an ir.Restore, not three ordinary ones. Three would each
+    need an address of their own, and layout.rebuild() orders every op by
+    address, so they would have to be threaded between the addresses the
+    chain is dropping -- which a two-operation chain does not have enough
+    of. One node needs one address, and the last half this chain drops is
+    always past its last low, so it lands where it belongs.
+
+    layout.py already emits an ir.Restore by asking select.restore(), and
+    `covers` gives it the four bytes it measures.
+    """
+    node = ir.Restore(at=at, end=at + RESTORE, pair=number, effects=after.node.effects if after.node else None)
+    return replace(after, at=at, node=node, made=None, covers=(at, at + RESTORE))
+
+
+# The sixteen-bit name of each root, which is what a restore's pops name.
+_NARROW_OF = {
+    Register.EAX: Register.AX,
+    Register.EDX: Register.DX,
+    Register.ECX: Register.CX,
+    Register.EBX: Register.BX,
+}
+
+
+def widened(body: MirBody, dead: frozenset[int] = frozenset()) -> MirBody:
+    """Every chain worth widening, as 32-bit operations on one register.
+
+    A chain of N pair operations becomes N single instructions plus the
+    restore, and only where that is *shorter* -- the cost model is not a
+    refinement here, it is what stops the transform making qb-qrender
+    bigger. 235 of its 341 chains would grow.
+
+    The first widened operation carries the whole chain's original bytes in
+    `covers`, and everything after it carries none, so layout.py's own
+    accounting still adds up. Addresses for the new operations come from the
+    halves being dropped, so nothing collides.
+    """
+    taken = [one for one in chains(body, dead) if one.saved > 0]
+    if not taken:
+        return body
+
+    starts = {one.at: one for one in taken}
+    inside = {min(pair.at) for one in taken for pair in one.ops}
+    blocks = []
+    for block in body.blocks:
+        ops: list[Op] = []
+        drop: set[int] = set()
+        for op in block.ops:
+            if op.at in drop:
+                continue
+            chain = starts.get(op.at)
+            if chain is None:
+                if op.at in inside:
+                    continue  # a half whose chain already emitted it
+                ops.append(op)
+                continue
+
+            spare: list[int] = []
+            for pair in chain.ops:
+                drop.update({pair.low.at, pair.high.at})
+                spare.append(pair.high.at)
+            lo = min(min(pair.at) for pair in chain.ops)
+            hi = max(
+                ir.span(one.node)[1]
+                for pair in chain.ops
+                for one in (pair.low, pair.high)
+                if one.node is not None
+            )
+            # The restore covers exactly the last four bytes of the chain --
+            # layout.py checks an ir.Restore's emitted length against what
+            # `covers` says, and select.restore() is always four. Putting it
+            # anywhere else leaves the chain's bytes not tiling, and the
+            # coverage arithmetic that catches data between instructions
+            # then over-counts instead of under-counting.
+            _restore_at = hi - RESTORE if chain.restored else hi
+            for number, pair in enumerate(chain.ops):
+                what = pair.low.made if pair.low.made is not None else getattr(pair.low.node, "semantics", None)
+                assert what is not None
+                ops.append(
+                    replace(
+                        pair.low,
+                        made=_as_wide(what),
+                        covers=(lo, _restore_at) if number == 0 else (_restore_at, _restore_at),
+                    )
+                )
+            if chain.restored:
+                # the chain's last high half: always past its last low, so
+                # ordering by address puts the restore after the work
+                ops.append(_restore_op(chain.pair, _restore_at, ops[-1]))
+            drop.discard(op.at)
+        blocks.append(replace(block, ops=tuple(ops)))
+    return replace(body, blocks=tuple(blocks))

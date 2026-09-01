@@ -38,6 +38,7 @@ from qbopt import ir
 from qbopt import mir
 from qbopt import wide
 from qbopt import avail
+from qbopt import pairs
 from qbopt import layout
 from qbopt.mir import Op
 from qbopt.mir import MirBody
@@ -86,49 +87,27 @@ def _absorb(ops: list[Op], gone: set[int]) -> list[Op]:
     return out
 
 
-def widened(body: MirBody) -> MirBody:
-    """Every add/adc pair as the one 32-bit operation it computes.
+def widened(body: MirBody, dead: frozenset[int] = frozenset()) -> MirBody:
+    """Every chain worth widening, as 32-bit operations on one register.
 
-    Only adjacent halves. The pair's low half keeps its node, so the fixup
-    behind its memory operand is still found and still moves with it, and
-    takes over both instructions' bytes. A pair with anything between its
-    halves is left alone: the widened op would have to claim the bytes in
-    between, and whatever is in them is not part of this operation.
+    This was wrong once and is worth saying how, because the fix was not the
+    part that looked wrong. It renamed `add ax,[x]` with `adc dx,[x+2]` to
+    `add eax,[x]`, and BC keeps that long in dx:ax -- so the carry landed in
+    eax's high half and dx kept what it held. The rename itself is right;
+    what was missing either side of it is:
+
+    - the **chain**. One pair widened in isolation says nothing about where
+      the long came from or goes. qbopt/pairs.py answers that -- six of its
+      shapes agree with lift.py exactly, object by object.
+    - the **restore**. `push eax / pop ax / pop dx` hands the long back to
+      BC's sixteen-bit code, and without it every later read of dx is stale.
+    - the **cost**. Two instructions become one plus a four-byte restore, so
+      a lone pair widened is longer than what BC wrote. 235 of qb-qrender's
+      341 chains would grow.
+
+    All three live in pairs.py; this is where they are applied.
     """
-    # Which block each op is in, so a pair straddling two can be refused.
-    # Adjacent addresses in different blocks means the high half is a
-    # branch target: something jumps to it, and folding it into the
-    # instruction before would leave that jump landing inside one.
-    home = {op.at: block.at for block in body.blocks for op in block.ops}
-
-    found: dict[int, tuple[ir.Semantics, int]] = {}
-    gone: set[int] = set()
-    for pair in wide.pairs(body):
-        if _end_of(pair.low) != pair.high.at:
-            continue
-        if home.get(pair.low.at) != home.get(pair.high.at):
-            continue
-        made = wide.widened(pair)
-        if made is None:
-            continue
-        found[pair.low.at] = (made, _end_of(pair.high))
-        gone.add(pair.high.at)
-
-    blocks = []
-    for block in body.blocks:
-        ops = []
-        for op in block.ops:
-            got = found.get(op.at)
-            if got is not None:
-                made, end = got
-                lo = op.covers[0] if op.covers is not None else op.at
-                ops.append(replace(op, made=made, covers=(lo, end)))
-                continue
-            if op.at in gone:
-                continue
-            ops.append(op)
-        blocks.append(replace(block, ops=tuple(ops)))
-    return replace(body, blocks=tuple(blocks))
+    return pairs.widened(body, dead)
 
 
 def without_redundant_loads(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:

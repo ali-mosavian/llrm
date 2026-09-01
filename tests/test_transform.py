@@ -31,19 +31,22 @@ def test_widening_is_off_and_the_reason_is_not_a_preference() -> None:
     import inspect
 
     signature = inspect.signature(transform.applied)
-    assert signature.parameters["widen"].default is False, "widening is not sound yet"
+    assert signature.parameters["widen"].default is False, (
+        "on until the fuzz corpus has seen it -- matrix.py passed 12 of 12, "
+        "and matrix.py passed for both whole-segment bugs too"
+    )
     assert signature.parameters["place"].default is False, "placement moves code and buys nothing yet"
     assert signature.parameters["drop_loads"].default is True
     assert signature.parameters["drop_stores"].default is True
 
 
-def test_the_rename_widening_would_do_is_the_unsound_one() -> None:
-    """The concrete fact behind the switch, so it reads as a fact.
+def test_the_rename_alone_is_what_was_unsound() -> None:
+    """The concrete fact the chain and the restore exist to handle.
 
     Both halves of a dx:ax pair rename to their own roots -- ax to eax and
-    dx to edx -- and a 32-bit operation on the pair is one register, not
-    two. wide.widened() builds the low half's operands widened, which names
-    eax and says nothing about dx.
+    dx to edx -- so a 32-bit operation on the pair is one register and dx is
+    left holding what it held. That is not an argument against the rename;
+    it is why a widened chain has to end in `push eax / pop ax / pop dx`.
     """
     assert ir.ROOT[Register.AX] is Register.EAX
     assert ir.ROOT[Register.DX] is Register.EDX
