@@ -147,6 +147,24 @@ def stored_from(op: Op) -> tuple[MemRef, Value] | None:
     return op.stores[0], reading[0]
 
 
+def _covered_by(ref: MemRef, other: MemRef, dgroup: frozenset[int]) -> bool:
+    """Whether a later store through `other` writes every byte of `ref`.
+
+    Not `same_bytes`, which asks whether the two name the same cell. A long
+    written as one `mov [x],eax` covers both halves BC stored separately,
+    and asking for equality missed the second of them -- which is most of
+    what memory.py was finding and this was not, since absorption emits
+    exactly that shape.
+    """
+    if ref.addr is None or other.addr is None:
+        return False
+    if ref.base != other.base or ref.addr.space is not other.addr.space:
+        return False
+    if ref.addr.space is Space.SEGMENT and ref.addr.base != other.addr.base:
+        return False
+    return other.addr.disp <= ref.addr.disp and ref.addr.disp + ref.width <= other.addr.disp + other.width
+
+
 def stored_cell(op: Op) -> MemRef | None:
     """The cell this op purely stores to, whatever it put there.
 
@@ -313,6 +331,13 @@ def _dead_in(block, overwritten: dict, dgroup: frozenset[int], calls: dict[int, 
     found: list[int] = []
     overwritten = dict(overwritten)
     for op in reversed(block.ops):
+        if isinstance(op.node, ir.Restore):
+            # `push eax / pop ax / pop dx`. A barrier for values, because
+            # nothing here can name in SSA what it writes -- and nothing at
+            # all for memory: ir.RESTORE_EFFECTS reports no load and no
+            # store, since sp comes back where it started and nothing
+            # outside the idiom reads the cells it passed through.
+            continue
         if op.barrier or (op.at in calls and not _clean(op, calls)):
             overwritten = {}
             continue
@@ -329,7 +354,7 @@ def _dead_in(block, overwritten: dict, dgroup: frozenset[int], calls: dict[int, 
         if wrote is not None:
             ref = wrote
             if ref.addr is not None and ref.addr.space is not Space.STACK:
-                if any(mir.same_bytes(one, ref) for one in overwritten):
+                if any(_covered_by(ref, one, dgroup) for one in overwritten):
                     found.append(op.at)
                 overwritten[ref] = op.at
                 continue
@@ -337,6 +362,8 @@ def _dead_in(block, overwritten: dict, dgroup: frozenset[int], calls: dict[int, 
         # Anything this op reads, and anything it writes that this
         # cannot name, puts the cells it may touch back in doubt.
         for ref in op.loads:
+            if ref.addr is not None and ref.addr.space is Space.STACK:
+                continue  # a pop, for the same reason a push is skipped below
             overwritten = {one: at for one, at in overwritten.items() if not mir.overlapping(one, ref, dgroup)}
         if wrote is None:
             for ref in op.stores:

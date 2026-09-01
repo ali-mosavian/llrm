@@ -309,10 +309,18 @@ is only true of a program whose stack has already grown into its data --
 constant is tracked at all, which `stored_from()` could not name because it
 answers for the cell *and the value* and `mov word [x],1` reads none.
 
-Dead stores are 42 of `memory.py`'s 43 now, from 36. **And the end-to-end
-cost of the deletion is still 45 bytes**, because the pipeline sees only 29
-of those 42 by the time `transform.applied` runs -- which is its own
-question and not the one this section was about.
+Two more followed from looking at what the *pipeline* hands the pass rather
+than at BC's untouched bodies. The restore idiom was clearing the map as a
+barrier, and it is a barrier for values only -- `ir.RESTORE_EFFECTS` reports
+no load and no store. And a long written as one `mov [x],eax` covers both
+halves BC stored separately, which `same_bytes` does not match: absorption
+emits exactly that shape, so most of what `memory.py` found and this did not
+was a narrow store inside a wide overwrite.
+
+Dead stores are 42 of `memory.py`'s 43 on BC's own bodies, from 36, and
+**the end-to-end cost of the deletion is 27 bytes, from 45**. All of it is
+in the four inherited fixtures, whose provenance `mkfixtures.py` records as
+lost; nothing else in the corpus loses a byte.
 
 **None are left to build.** Widening is on, and absorption emits all four
 routines at parity with `calls.py` -- 1,151 of 1,151 corpus sites, twelve of
