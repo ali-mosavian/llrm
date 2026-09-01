@@ -356,11 +356,39 @@ version without it would make qb-qrender bigger.
       replaced by span rather than by member. And the restore is a barrier
       defining and using nothing: it used to be built by replacing the op
       before it, which handed it that op's own SSA values
-- [x] recovering the arguments — `mir._stack_slot` keeps the depth across a
-      recognised call now, which is what put 831 of the corpus's 923
-      absorbable calls out of reach: an argument pushed before some *other*
-      call runs is stranded under it, and its slot is only nameable if the
-      depth crossed that call. `transform.arguments()` reads them off
+- [ ] **recovering the arguments** — `mir._stack_slot` keeps the depth
+      across a *recognised* call, which is the half that works: an argument
+      pushed before some other call runs is stranded under it, and its slot
+      is only nameable if the depth crossed that call.
+
+      `transform.arguments()` on top of it does not recover a call's
+      arguments, and this was ticked when it did not. Measured over the
+      corpus's 1,151 absorbable sites, it names 84, and the 84 are wrong.
+      Three separate reasons:
+
+      - **an unrecognised call ends the block's depth.** `CONSUMES` knows
+        the four arithmetic routines and nothing else, so `B$PSSD`,
+        `B$PEI4`, and `/V`'s own event-check stub all give up -- and 1,017
+        of the 1,151 sites sit after one. The stub is the cheapest of these
+        to fix and the most valuable: it is `cmp / jne / ret` on one path
+        and `pop ax / push cs / push ax / jmp far B$EVCK` on the other,
+        both stack-neutral, and it sits between almost every statement a
+        `/V` build emits. All three `/V` configurations recover zero
+      - **a memory push is invisible.** `live[slot]` is only written where
+        the pushing op has exactly one non-flag *use*, which is a register
+        push. `push word [x]` has none, and 5,492 of the corpus's 8,401
+        pushes are that shape -- so the operand BC loads straight from a
+        variable is never seen
+      - **it counts slots, not operands.** `wanted = 2`, and a long is two
+        pushes. At `chain-p-g2.obj:0x90` the two values it returns are the
+        high and low halves of one long -- and of the long stranded there
+        for the *next* call, not either operand of this one
+
+      What this needs is the block-scoped stack model
+      `docs/handover.md` designs as `qbopt/stack.py`: a virtual stack per
+      block, a closed allowlist of stack deltas, a recognised call popping
+      `4 * arity`, and an unknown one resetting the watermark rather than
+      invalidating what is already tracked. Emission below waits on it
 - [ ] **emitting the absorbed call** — the half that is left, and the one
       piece of M5 that should not be written without running anything.
       `calls.py` does it in some five hundred lines: which operand goes in
