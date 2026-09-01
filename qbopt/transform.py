@@ -137,6 +137,20 @@ def without_dead_stores(body: MirBody, dgroup: frozenset[int], calls: dict[int, 
     )
 
 
+# The passes, in the order they run. One per whole-segment round, because
+# each round re-raises the body from what the last one wrote -- an op's
+# defines and uses are computed at raise time, so a pass that has already
+# rewritten the op list is describing the body that went in, not the one
+# that came out.
+#
+# Running them one at a time is what makes that ordering merely an order
+# rather than a correctness argument. It was the latter: widening ran
+# before avail.py once and avail forwarded a stale high half across an op
+# that said it read two bytes where the instruction read four. That is no
+# longer possible to get wrong by rearranging this list.
+PASSES = ("drop_loads", "drop_stores", "widen", "place", "absorb")
+
+
 def applied(
     body: MirBody,
     dgroup: frozenset[int],
@@ -149,39 +163,41 @@ def applied(
     drop_loads: bool = True,
     drop_stores: bool = True,
     place: bool = False,
+    only: str | None = None,
 ) -> MirBody:
-    """Every transform this module has, in the order they help each other.
+    """Every transform this module has, or the one `only` names.
 
     `absorb` is off by default and not because it is unsound: calls.py has
     already taken every arithmetic call before a body reaches here, so with
     it on the MIR emitter finds nothing and no gate exercises it.
     `--no-absorb-calls` is the lever that makes the two comparable.
+
+    `place` is off for its own reason: sinking a definition is the only
+    transform here that changes the order instructions run in, and its
+    benefit is indirect.
     """
-    if drop_loads:
-        body = without_redundant_loads(body, dgroup, calls)
-    if drop_stores:
-        body = without_dead_stores(body, dgroup, calls)
-    # Widening last. A widened op keeps the low half's own `loads` and
-    # `stores` -- two bytes at [x] -- while the instruction reads four, so
-    # avail.py asked whether [x+2] had been written and was told nothing
-    # had touched it. Running it after the passes that reason about memory
-    # means none of them ever sees the mismatch. It cost the reverse
-    # ordering's claimed benefit, which was that folding a pair makes a
-    # later reload of the same cell visible as redundant rather than as the
-    # high half's own read -- worth having, and not at this price.
-    if widen:
-        body = widened(body)
-    # Off by default. Sinking a definition is the only transform here that
-    # changes the order instructions run in, and its own benefit is
-    # indirect -- shorter live ranges, which other passes then use. It gets
-    # switched on when something asks for that, not before.
-    if place:
-        body = placed(body)
-    # Absorption last, and needing the blocks: `arguments()` reads a stack
-    # depth off the instructions, and a transform that has already replaced
-    # some of them is not what that model was measured against.
-    if absorb and blocks is not None:
-        body = absorbed(body, blocks, calls, found)
+    wanted = {
+        "drop_loads": drop_loads,
+        "drop_stores": drop_stores,
+        "widen": widen,
+        "place": place,
+        "absorb": absorb and blocks is not None,
+    }
+    for name in PASSES:
+        if only is not None and name != only:
+            continue
+        if not wanted[name]:
+            continue
+        if name == "drop_loads":
+            body = without_redundant_loads(body, dgroup, calls)
+        elif name == "drop_stores":
+            body = without_dead_stores(body, dgroup, calls)
+        elif name == "widen":
+            body = widened(body)
+        elif name == "place":
+            body = placed(body)
+        elif name == "absorb":
+            body = absorbed(body, blocks, calls, found)
     return body
 
 

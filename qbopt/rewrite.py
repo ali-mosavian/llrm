@@ -27,6 +27,7 @@ from qbopt import memory
 from qbopt import module
 from qbopt import select
 from qbopt import wholeseg
+from qbopt import transform
 from qbopt import forward
 from qbopt.lift import Op
 from qbopt import reencode
@@ -842,17 +843,13 @@ def _written(
     # Re-parsing the emitted object is the honest way to get the values
     # back, and the only one that needs no transform to maintain them. Each
     # round sees a body raised from what the last round actually wrote.
-    for _round in range(WHOLE_SEGMENT_PASSES):
-        out, _why = wholeseg.rebuilt(data, native_fpu=native_fpu, absorb=not absorb_calls)
-        if out == data:
-            break
+    # One transform per round, each seeing a body raised from what the last
+    # round wrote. Not stopped early on "nothing changed": a pass that finds
+    # nothing says nothing about the one after it.
+    for name in transform.PASSES:
+        out, _why = wholeseg.rebuilt(data, native_fpu=native_fpu, absorb=not absorb_calls, only=name)
         data = out
     return data
-
-
-# Measured rather than chosen: the corpus settles in two, and the third
-# round is what proves the second changed nothing.
-WHOLE_SEGMENT_PASSES = 4
 
 
 def _once(

@@ -29,7 +29,11 @@ from qbopt.blocks import code_map
 
 
 def rebuilt(
-    data: bytes, optimise: bool = True, native_fpu: bool = False, absorb: bool = False
+    data: bytes,
+    optimise: bool = True,
+    native_fpu: bool = False,
+    absorb: bool = False,
+    only: str | None = None,
 ) -> tuple[bytes, str]:
     """The object with its code segment rewritten, and what happened.
 
@@ -55,7 +59,7 @@ def rebuilt(
     # which is what a caller bisecting a layout question wants.
     if optimise:
         bodies = [
-            (name, transform.applied(body, found.dgroup, found.calls, blocks=blocks, absorb=absorb, found=found))
+            (name, transform.applied(body, found.dgroup, found.calls, blocks=blocks, absorb=absorb, found=found, only=only))
             for name, body in bodies
         ]
 
