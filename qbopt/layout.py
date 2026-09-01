@@ -406,7 +406,20 @@ def _emitted(
             continue
         what = _semantics(op)
         emulated = not native_fpu and found.code[op.at : op.at + 1] == bytes([0xCD])
-        if isinstance(op.node, ir.Restore) or what is None or emulated:
+        if isinstance(op.node, ir.Restore):
+            # Measured from what it emits, not from `covers`. The two are
+            # different questions -- covers says which of BC's bytes this op
+            # stands for, and a transform sets it to whatever makes the
+            # chain tile -- and reading the emitted length off covers forced
+            # every restore to claim exactly four bytes, which pairs.py could
+            # only arrange by putting it on an address a widened op already
+            # held.
+            made = select.restore(op.node.pair)
+            if made is None:
+                return f"{op.at:#06x}: the restore idiom is not one select.py can emit"
+            lengths[op.at] = len(made.code)
+            continue
+        if what is None or emulated:
             lengths[op.at] = _length_of(op) or 0
             continue
         made = select.emit(what, at=at, relocated=_field_in(found, op, fields) is not None)

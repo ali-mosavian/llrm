@@ -557,42 +557,72 @@ def _span(one: Pair) -> int:
     return total
 
 
+def _semantics_of(one: Op) -> ir.Semantics | None:
+    return one.made if one.made is not None else getattr(one.node, "semantics", None)
+
+
 def _widened_length(one: Pair) -> int | None:
     """How many bytes the one 32-bit instruction takes, or None if unknown."""
     from qbopt import select
 
-    what = one.low.made if one.low.made is not None else getattr(one.low.node, "semantics", None)
-    if what is None:
+    wide = wider(one)
+    if wide is None:
         return None
-    built = select.emit(_as_wide(what), at=0)
+    built = select.emit(wide, at=0)
     return None if built is None else len(built.code)
 
 
-def _as_wide(what: ir.Semantics) -> ir.Semantics:
-    """The low half's semantics as the whole 32-bit operation.
+def wider(pair: Pair) -> ir.Semantics | None:
+    """A pair of 16-bit operations as the one 32-bit operation they are.
 
     Each register becomes its own root and each memory operand doubles its
     width -- which is only right for a chain that ends in a restore, and is
     exactly the assumption that made an isolated rename wrong.
+
+    An immediate is the part that is not a rename. BC splits a long constant
+    across the two instructions, so `and ax,0ffffh / and dx,7fffh` is one
+    `and eax,7fffffffh` and the low half alone says `0ffffh` -- which as a
+    32-bit immediate is a different constant, and one that clears the high
+    half of every value it is applied to. 224 of the corpus's pairs carry a
+    high half that is not zero.
     """
     from dataclasses import replace as _replace
 
-    def wider(where: ir.Loc) -> ir.Loc:
+    what = _semantics_of(pair.low)
+    if what is None:
+        return None
+
+    high = _semantics_of(pair.high)
+    top = next((one.value for one in high.sources if isinstance(one, ir.Imm)), None) if high else None
+
+    def wider_loc(where: ir.Loc) -> ir.Loc | None:
         match where:
             case ir.Reg(register=register):
                 return ir.Reg(register=ir.ROOT.get(register, register), width=4)
             case ir.Mem():
                 return _replace(where, width=4)
             case ir.Imm(value=value):
-                return ir.Imm(value=value, width=4)
+                if top is None:
+                    return None
+                whole = ((top & 0xFFFF) << 16) | (value & 0xFFFF)
+                return ir.Imm(value=whole - (1 << 32) if whole & 0x80000000 else whole, width=4)
             case _:
                 return where
 
-    return _replace(
-        what,
-        dests=tuple(wider(one) for one in what.dests),
-        sources=tuple(wider(one) for one in what.sources),
-    )
+    dests = [wider_loc(one) for one in what.dests]
+    sources = [wider_loc(one) for one in what.sources]
+    if any(one is None for one in (*dests, *sources)):
+        return None  # an immediate whose high half is not an immediate
+    # `xor cx,ax / xor bx,dx` is one `xor ecx,eax`, and that is only the
+    # same operation if eax already holds the whole long -- which is true
+    # only where the *other* pair was widened over the same stretch, and
+    # nothing here knows that. Refused rather than assumed.
+    into = dests[0] if dests and isinstance(dests[0], ir.Reg) else None
+    if into is not None and any(
+        isinstance(one, ir.Reg) and one.register != into.register for one in sources
+    ):
+        return None
+    return _replace(what, dests=tuple(dests), sources=tuple(sources))
 
 
 
@@ -651,11 +681,24 @@ def chains(body: MirBody, dead: frozenset[int] = frozenset()) -> tuple[Chain, ..
             known = state.get(min(one.at), {}).get(number) is not None
             if runs[number] and not _follows(runs[number][-1], one):
                 close(number)
-            if one.kind in (Kind.LOAD, Kind.MOVSX):
+            if one.kind is Kind.LOAD:
                 close(number)
                 runs[number] = [one]
                 continue
-            if not known:
+            if one.kind is Kind.MOVSX:
+                # `mov ax,[x] / cwd` is a sign extension, and widening it as
+                # the low half's own semantics reads four bytes out of a
+                # two-byte cell. The right instruction is `movsx eax,[x]`
+                # and select.py has no form for it, so a chain neither
+                # starts on one nor spans one.
+                close(number)
+                continue
+            if not known or not runs[number]:
+                # Nothing widened put this pair in the 32-bit register, so
+                # its high half holds whatever BC last left in dx -- and a
+                # chain that starts on arithmetic operates on that. The slot
+                # being known says the value is tracked, not that it is in
+                # one register: 13 of the corpus's chains began this way.
                 close(number)
                 continue
             runs[number].append(one)
@@ -664,7 +707,7 @@ def chains(body: MirBody, dead: frozenset[int] = frozenset()) -> tuple[Chain, ..
     return tuple(out)
 
 
-def _restore_op(number: int, at: int, after: Op) -> Op:
+def _restore_op(number: int, at: int, after: Op, end: int) -> Op:
     """`push eax / pop ax / pop dx` -- the long handed back to BC's halves.
 
     One op carrying an ir.Restore, not three ordinary ones. Three would each
@@ -674,11 +717,32 @@ def _restore_op(number: int, at: int, after: Op) -> Op:
     of. One node needs one address, and the last half this chain drops is
     always past its last low, so it lands where it belongs.
 
-    layout.py already emits an ir.Restore by asking select.restore(), and
-    `covers` gives it the four bytes it measures.
+    `covers` runs from there to the end of the chain, which is the rest of
+    BC's bytes once the widened operations have claimed theirs. It is not
+    four, and does not have to be: what this emits is four bytes, and
+    layout.py asks select.restore() rather than covers for that.
     """
-    node = ir.Restore(at=at, end=at + RESTORE, pair=number, effects=after.node.effects if after.node else None)
-    return replace(after, at=at, node=node, made=None, covers=(at, at + RESTORE))
+    node = ir.Restore(at=at, end=at + RESTORE, pair=number, effects=ir.RESTORE_EFFECTS[number])
+    # A barrier, and defining and using nothing. It used to be built by
+    # replacing the op before it, which handed it that op's own values: the
+    # restore claimed to define what the widened operation defined, and
+    # avail.py reasons on exactly that. What it really does -- write both of
+    # BC's sixteen-bit halves out of the wide register -- is not something
+    # this can name in SSA from here, so it says nothing and stops anything
+    # reasoning across it instead.
+    return replace(
+        after,
+        at=at,
+        op=ir.Operation.BARRIER,
+        name="restore",
+        defines=(),
+        uses=(),
+        loads=(),
+        stores=(),
+        node=node,
+        made=None,
+        covers=(at, end),
+    )
 
 
 # The sixteen-bit name of each root, which is what a restore's pops name.
@@ -688,6 +752,27 @@ _NARROW_OF = {
     Register.ECX: Register.CX,
     Register.EBX: Register.BX,
 }
+
+
+def replaced(chain: Chain, block) -> tuple[int, int, set[int]]:
+    """A chain's span, and every instruction inside it the widening replaces.
+
+    Everything in the span, not only the halves each Pair names. A negate is
+    three instructions -- `neg ax / adc dx,0 / neg dx` -- and the middle one
+    belongs to no Pair, so dropping by member left the `adc` standing while
+    the widened `neg eax` claimed its bytes: a stale carry into a high half
+    that no longer had one, and two ops on a single address. The chain is
+    contiguous by construction -- _follows() is what builds it -- so
+    everything inside it is part of it.
+    """
+    lo = min(min(pair.at) for pair in chain.ops)
+    hi = max(
+        ir.span(one.node)[1]
+        for pair in chain.ops
+        for one in (pair.low, pair.high)
+        if one.node is not None
+    )
+    return lo, hi, {one.at for one in block.ops if lo <= one.at < hi}
 
 
 def widened(body: MirBody, dead: frozenset[int] = frozenset()) -> MirBody:
@@ -723,38 +808,38 @@ def widened(body: MirBody, dead: frozenset[int] = frozenset()) -> MirBody:
                 ops.append(op)
                 continue
 
-            spare: list[int] = []
-            for pair in chain.ops:
-                drop.update({pair.low.at, pair.high.at})
-                spare.append(pair.high.at)
-            lo = min(min(pair.at) for pair in chain.ops)
-            hi = max(
-                ir.span(one.node)[1]
-                for pair in chain.ops
-                for one in (pair.low, pair.high)
-                if one.node is not None
-            )
-            # The restore covers exactly the last four bytes of the chain --
-            # layout.py checks an ir.Restore's emitted length against what
-            # `covers` says, and select.restore() is always four. Putting it
-            # anywhere else leaves the chain's bytes not tiling, and the
-            # coverage arithmetic that catches data between instructions
-            # then over-counts instead of under-counting.
-            _restore_at = hi - RESTORE if chain.restored else hi
+            lo, hi, mine = replaced(chain, block)
+            drop.update(mine)
+            # The restore goes on the chain's last high half: the one
+            # address in the span that is past every low and belongs to no
+            # widened operation. It used to go four bytes back from the end,
+            # to make its `covers` exactly the four bytes select.restore()
+            # emits -- but a chain ending in a two-and-two pair has its last
+            # low on that very address, and the two ops collided. What an op
+            # emits and which of BC's bytes it stands for are separate
+            # questions, and layout.py now measures the restore by the first.
+            #
+            # It is not always past every low: BC writes a long store high
+            # half first, so a chain ending in one puts the restore an
+            # instruction before its own widened store. That is safe for the
+            # reason the idiom is `push eax / pop ax / pop dx` -- eax comes
+            # out of it holding what it held -- and only for an op that
+            # reads the wide register rather than writing it. A store is the
+            # only kind that can land there, and
+            # test_only_a_store_may_follow_the_restore is what keeps it so.
+            _restore_at = chain.ops[-1].high.at if chain.restored else hi
             for number, pair in enumerate(chain.ops):
-                what = pair.low.made if pair.low.made is not None else getattr(pair.low.node, "semantics", None)
+                what = wider(pair)
                 assert what is not None
                 ops.append(
                     replace(
                         pair.low,
-                        made=_as_wide(what),
+                        made=what,
                         covers=(lo, _restore_at) if number == 0 else (_restore_at, _restore_at),
                     )
                 )
             if chain.restored:
-                # the chain's last high half: always past its last low, so
-                # ordering by address puts the restore after the work
-                ops.append(_restore_op(chain.pair, _restore_at, ops[-1]))
+                ops.append(_restore_op(chain.pair, _restore_at, ops[-1], hi))
             drop.discard(op.at)
         blocks.append(replace(block, ops=tuple(ops)))
     return replace(body, blocks=tuple(blocks))

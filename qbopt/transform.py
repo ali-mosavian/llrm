@@ -137,16 +137,12 @@ def applied(
     dgroup: frozenset[int],
     calls: dict[int, str],
     *,
-    widen: bool = False,
+    widen: bool = True,
     drop_loads: bool = True,
     drop_stores: bool = True,
     place: bool = False,
 ) -> MirBody:
     """Every transform this module has, in the order they help each other.
-
-    Widening first, because folding a pair retires the carry between its
-    halves and removes an op -- which is what makes a later reload of the
-    same cell visible as redundant rather than as the high half's own read.
 
     **Widening is off, and wrong as written.** `add ax,[x]` with
     `adc dx,[x+2]` is a 32-bit add of a value BC keeps in `dx:ax`, and
@@ -161,12 +157,20 @@ def applied(
     analysis, not a rename of the low half's operands. wide.widened() builds
     the operation; what is missing is the step before it.
     """
-    if widen:
-        body = widened(body)
     if drop_loads:
         body = without_redundant_loads(body, dgroup, calls)
     if drop_stores:
         body = without_dead_stores(body, dgroup, calls)
+    # Widening last. A widened op keeps the low half's own `loads` and
+    # `stores` -- two bytes at [x] -- while the instruction reads four, so
+    # avail.py asked whether [x+2] had been written and was told nothing
+    # had touched it. Running it after the passes that reason about memory
+    # means none of them ever sees the mismatch. It cost the reverse
+    # ordering's claimed benefit, which was that folding a pair makes a
+    # later reload of the same cell visible as redundant rather than as the
+    # high half's own read -- worth having, and not at this price.
+    if widen:
+        body = widened(body)
     # Off by default. Sinking a definition is the only transform here that
     # changes the order instructions run in, and its own benefit is
     # indirect -- shorter live ranges, which other passes then use. It gets

@@ -1,10 +1,9 @@
 """
 qbopt/transform.py's own gate.
 
-What is checked here is mostly what is *not* on, and why: widening is
-written and switched off because it was wrong in a way the host suite could
-not see, and pinning the reason is the only thing that stops it being turned
-back on by someone reading the checkbox.
+What is checked here is mostly the *order* the transforms run in and what
+each one had to be right about, because widening was written wrong twice and
+neither time could the host suite see it.
 """
 
 from iced_x86 import Register
@@ -14,30 +13,32 @@ from qbopt import wide
 from qbopt import transform
 
 
-def test_widening_is_off_and_the_reason_is_not_a_preference() -> None:
-    """`add ax,[x]` with `adc dx,[x+2]` is a long in dx:ax, and dx:ax is not eax.
+def test_widening_is_on_and_runs_after_the_memory_passes() -> None:
+    """Order, not preference. A widened op lies about how much it reads.
 
-    wide.widened() renames each half's operands to their 32-bit roots, which
-    turns the pair into `add eax,[x]`: the carry lands in eax's high half and
-    dx keeps whatever it held. suite/procs.bas printed 0x02040C10 where it
-    wants 0x04080C10, on all twelve configurations, with the host suite
-    green.
+    `mov eax,[x]` keeps the low half's own `loads` -- two bytes at [x] --
+    while the instruction reads four, so avail.py asked whether [x+2] had
+    been written and was told nothing had touched it, and forwarded a stale
+    high half. Running widening after the passes that reason about memory
+    means none of them ever sees the mismatch.
 
-    What is missing is the step before the rename -- proving the pair is one
-    value and choosing the register it becomes, which is lift.py's own pair
-    machinery and what qbopt/pairs.py has started. Until that exists this
-    stays off, and this test is what says so.
+    The reverse order was deliberate and its reason was real: folding a pair
+    retires the carry between its halves, which makes a later reload of the
+    same cell visible as redundant rather than as the high half's own read.
+    Worth having, and not at that price.
     """
     import inspect
 
     signature = inspect.signature(transform.applied)
-    assert signature.parameters["widen"].default is False, (
-        "on until the fuzz corpus has seen it -- matrix.py passed 12 of 12, "
-        "and matrix.py passed for both whole-segment bugs too"
-    )
+    assert signature.parameters["widen"].default is True
     assert signature.parameters["place"].default is False, "placement moves code and buys nothing yet"
     assert signature.parameters["drop_loads"].default is True
     assert signature.parameters["drop_stores"].default is True
+
+    source = inspect.getsource(transform.applied)
+    assert source.index("body = widened(body)") > source.index("without_dead_stores("), (
+        "widening has to run after the passes that read an op's loads and stores"
+    )
 
 
 def test_the_rename_alone_is_what_was_unsound() -> None:

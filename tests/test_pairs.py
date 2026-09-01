@@ -434,3 +434,204 @@ def test_a_single_pair_widened_is_usually_longer() -> None:
                     grew += chain.saved <= 0
     assert lone, "no single-pair chains at all, so this proves nothing"
     assert grew / lone > 0.8, f"only {grew} of {lone} lone pairs cost more widened"
+
+
+def test_a_widened_negate_drops_its_carry_too() -> None:
+    """A negate is three instructions, and a Pair names two of them.
+
+    `neg ax / adc dx,0 / neg dx` -- the middle one belongs to no Pair, so
+    dropping a chain by the halves each Pair names left the `adc` standing
+    while the widened `neg eax` claimed its bytes. The output kept a carry
+    into a high half that no longer had one, and layout.py saw two ops on a
+    single address.
+
+    Asked of every negate the corpus has, chain profitable or not: the
+    fixtures hold thirty and none of them are in a chain widening would
+    take, so gating this on `saved > 0` would prove nothing. What is being
+    checked is the replacement rule, and that does not depend on the price.
+    """
+    seen = 0
+    for obj in FIXTURES:
+        found = corpus.loaded(obj)
+        assert found is not None
+        mapped = code_map(found)
+        if isinstance(mapped, str):
+            continue
+        for _name, body in mir.bodies(found, split.partition(found, mapped)):
+            for block in body.blocks:
+                for chain in pairs.chains(body):
+                    if min(min(p.at) for p in chain.ops) not in {one.at for one in block.ops}:
+                        continue
+                    carries = [
+                        one.at
+                        for pair in chain.ops
+                        if pair.kind is pairs.Kind.NEG
+                        for one in block.ops
+                        if pair.low.at < one.at < pair.high.at
+                    ]
+                    if not carries:
+                        continue
+                    seen += len(carries)
+                    _lo, _hi, gone = pairs.replaced(chain, block)
+                    assert set(carries) <= gone, (
+                        f"{obj.stem}: the carry at {carries[0]:#x} survives its widened negate"
+                    )
+    assert seen, "no negates with a carry between their halves, so this proves nothing"
+
+
+def test_no_two_widened_ops_land_on_one_address() -> None:
+    """layout.py keys every op by its address, so two on one is a silent loss.
+
+    The restore used to go four bytes back from the end of the chain, to
+    make its `covers` the four bytes it emits. A chain ending in a
+    two-and-two pair -- `not ax / not dx` -- has its last low on exactly
+    that address, and the two ops collided: one length overwrote the other
+    and the body either refused or came out wrong.
+    """
+    seen = 0
+    for obj in FIXTURES:
+        found = corpus.loaded(obj)
+        assert found is not None
+        mapped = code_map(found)
+        if isinstance(mapped, str):
+            continue
+        for name, body in mir.bodies(found, split.partition(found, mapped)):
+            after = pairs.widened(body)
+            at = [op.at for block in after.blocks for op in block.ops]
+            assert len(at) == len(set(at)), f"{obj.stem} {name}: two ops on one address"
+            seen += len(at)
+    assert seen, "no ops at all, so this proves nothing"
+
+
+@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
+def test_a_widened_body_still_lays_out(obj: Path) -> None:
+    """The end-to-end shape of both bugs above: layout.py has to accept it.
+
+    Both were found by rebuilding rather than by a unit test -- one as an
+    overlap in the coverage arithmetic, one as a length that changed between
+    the two passes -- so this is the check that would have caught either.
+    """
+    import qbopt.layout as layout
+    from qbopt import omf
+
+    found = corpus.loaded(obj)
+    assert found is not None
+    mapped = code_map(found)
+    if isinstance(mapped, str):
+        pytest.skip(mapped)
+    blocks = split.partition(found, mapped)
+    fields = frozenset(one.offset for one in omf.fixups(omf.parse(obj.read_bytes())) if one.seg == found.seg)
+    reached = frozenset(a for b in blocks for i in b.insns for a in range(i.at, i.end))
+    bodies = [(name, pairs.widened(body)) for name, body in mir.bodies(found, blocks)]
+    got = layout.rebuild(found, bodies, mapped.tables, fields, reached)
+    assert not isinstance(got, str), got
+
+
+def _taken(obj: Path):
+    """Every chain widening would take in one object, with its body."""
+    found = corpus.loaded(obj)
+    assert found is not None
+    mapped = code_map(found)
+    if isinstance(mapped, str):
+        return
+    for _name, body in mir.bodies(found, split.partition(found, mapped)):
+        for chain in pairs.chains(body):
+            if chain.saved > 0:
+                yield body, chain
+
+
+def test_a_long_immediate_is_both_halves_of_it() -> None:
+    """BC splits a long constant across the two instructions.
+
+    `and ax,0ffffh / and dx,7fffh` is one `and eax,7fffffffh`, and the low
+    half read as a 32-bit immediate says `0ffffh` -- a different constant,
+    and one that clears the high half of whatever it is applied to. The
+    widening took the low half's semantics and renamed the register, so
+    every long constant with a high half came out wrong.
+    """
+    from qbopt import ir
+
+    seen = 0
+    for obj in FIXTURES:
+        for _body, chain in _taken(obj):
+            for pair in chain.ops:
+                if pair.kind is not pairs.Kind.ALU_IMM:
+                    continue
+                halves = [
+                    next(
+                        (one.value for one in (pairs._semantics_of(half).sources) if isinstance(one, ir.Imm)),
+                        None,
+                    )
+                    for half in (pair.low, pair.high)
+                ]
+                if any(one is None for one in halves) or not halves[1]:
+                    continue
+                low, high = halves
+                wide = pairs.wider(pair)
+                assert wide is not None
+                got = next(one.value for one in wide.sources if isinstance(one, ir.Imm))
+                want = ((high & 0xFFFF) << 16) | (low & 0xFFFF)
+                seen += 1
+                assert got & 0xFFFFFFFF == want, (
+                    f"{obj.stem} at {pair.low.at:#x}: {low:#x} and {high:#x} widened to {got:#x}"
+                )
+    assert seen, "no long constant with a high half, so this proves nothing"
+
+
+def test_a_chain_starts_where_the_whole_register_is_set() -> None:
+    """Only a load puts all thirty-two bits in one register.
+
+    A chain that starts on arithmetic operates on a high half that BC left
+    in dx and nothing widened put in eax, so `add eax,[x]` reads whatever
+    was there. The slot being *known* is not the same claim -- it says the
+    value is tracked, not that it is in one register -- and chains() used it
+    as if it were, which started 13 of the corpus's chains on an ALU_REG or
+    a MOVE.
+
+    A sign extension is excluded for its own reason: `mov ax,[x] / cwd`
+    widened from the low half alone is `mov eax,dword [x]`, four bytes read
+    out of a two-byte cell. `movsx eax,[x]` is the right instruction and
+    select.py has no form for it.
+    """
+    seen = 0
+    for obj in FIXTURES:
+        for _body, chain in _taken(obj):
+            seen += 1
+            assert chain.ops[0].kind is pairs.Kind.LOAD, (
+                f"{obj.stem}: a chain at {min(chain.ops[0].at):#x} starts on {chain.ops[0].kind.name}"
+            )
+            assert not any(one.kind is pairs.Kind.MOVSX for one in chain.ops), (
+                f"{obj.stem}: a chain at {min(chain.ops[0].at):#x} spans a sign extension"
+            )
+    assert seen, "no chains at all, so this proves nothing"
+
+
+def test_only_a_store_may_follow_the_restore() -> None:
+    """The restore is not always the chain's last operation, and may not be.
+
+    BC writes a long store high half first -- `mov [bp-14h],dx` then
+    `mov [bp-16h],ax` -- so the restore, which goes on the chain's last high
+    half, lands an instruction before the widened store that replaces them.
+    276 of the corpus's chains are that shape.
+
+    Safe, and only for the reason the idiom is `push eax / pop ax / pop dx`:
+    eax comes out of it holding exactly what it held, so an operation after
+    it that *reads* the wide register is unaffected. One that wrote it would
+    leave ax and dx stale, which is the whole thing the restore exists to
+    prevent. A store is the only kind that can land there today; this is
+    what says so.
+    """
+    seen = 0
+    for obj in FIXTURES:
+        for _body, chain in _taken(obj):
+            if not chain.restored:
+                continue
+            at = chain.ops[-1].high.at
+            for one in chain.ops:
+                if one.low.at < at:
+                    continue
+                seen += 1
+                assert one.kind is pairs.Kind.STORE, (
+                    f"{obj.stem}: a {one.kind.name} at {one.low.at:#x} would run after the restore"
+                )
+    assert seen, "no chain puts an operation after its restore, so this proves nothing"
