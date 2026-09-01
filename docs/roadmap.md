@@ -291,7 +291,20 @@ than bugs:
 third consumer and has no MIR equivalent at all.
 
 So the deletion is the milestone and it is further off than this file said.
-What it needs first is cross-block dead stores in `avail.py`.
+
+Cross-block dead stores were the obvious suspect and are **not** the
+blocker: `avail.dead_stores()` carries what its successors have overwritten
+now, intersected over every edge, and the count does not move. Two things
+were found on the way -- a clean call still wiped the map, because mir.py
+gives every call a `MemRef(addr=None)` in loads and stores and the
+clearing below ran on it anyway; and the real obstacle, which is that a
+`push` is not a store `stored_from()` names, so it clears through
+`op.stores` instead -- and its stack cell may alias a static, because BC
+runs with `SS == DS`. Four pushes ahead of a call wipe everything known.
+
+Closing it means telling a push apart from a store that could alias, which
+is the memory disambiguation `docs/handover.md` already names as the thing
+this codebase does not have.
 
 **None are left to build.** Widening is on, and absorption emits all four
 routines at parity with `calls.py` -- 1,151 of 1,151 corpus sites, twelve of

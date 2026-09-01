@@ -288,17 +288,64 @@ class Forward:
     root: Register_  # the 32-bit root holding them; the operand picks the width
 
 
+def _dead_in(block, overwritten: dict, dgroup: frozenset[int], calls: dict[int, str]):
+    """One block, backward, from what its successors have already overwritten.
+
+    Returns the stores it found dead and what is overwritten on entry, so
+    the caller can carry the second to the predecessors.
+    """
+    found: list[int] = []
+    overwritten = dict(overwritten)
+    for op in reversed(block.ops):
+        if op.barrier or (op.at in calls and not _clean(op, calls)):
+            overwritten = {}
+            continue
+        if op.at in calls:
+            # A clean call still carries mir.py's own MemRef(addr=None) in
+            # both loads and stores -- the default that aliases everything
+            # -- so falling through to the clearing below wiped the map for
+            # a routine _clean() had just proved touches no caller memory.
+            # Its arguments are on the stack, and a stack cell is never in
+            # this map to begin with.
+            continue
+
+        wrote = stored_from(op)
+        if wrote is not None:
+            ref, _value = wrote
+            if ref.addr is not None and ref.addr.space is not Space.STACK:
+                if any(mir.same_bytes(one, ref) for one in overwritten):
+                    found.append(op.at)
+                overwritten[ref] = op.at
+                continue
+
+        # Anything this op reads, and anything it writes that this
+        # cannot name, puts the cells it may touch back in doubt.
+        for ref in op.loads:
+            overwritten = {one: at for one, at in overwritten.items() if not mir.overlapping(one, ref, dgroup)}
+        if wrote is None:
+            for ref in op.stores:
+                overwritten = {one: at for one, at in overwritten.items() if not mir.overlapping(one, ref, dgroup)}
+    return found, overwritten
+
+
 def dead_stores(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> tuple[int, ...]:
     """Stores whose bytes are overwritten before anything reads them.
 
     memory.py's own pass, restated over MIR. Backward through each block:
-    a store to a cell that a later store in the same block overwrites,
-    with nothing in between that could have read it, computed nothing.
+    a store to a cell that a later store overwrites, with nothing in
+    between that could have read it, computed nothing.
 
-    Block-scoped and starting empty at each block's end, which is the
-    conservative direction -- a successor may read the cell, and nothing
-    here has looked at the successors. That costs a store that spans an
-    edge and can never invent one that does not.
+    Across edges, not only within a block -- a cell has to be overwritten on
+    *every* successor path, so what a block starts from is the intersection
+    of what its successors have. That is a must-analysis, and the fixed
+    point starts from "nothing is overwritten" and grows: the conservative
+    direction, and it means a cycle cannot justify itself into judging a
+    store dead that is not. Block-scoped was costing seven stores against
+    memory.py, all of them BC's module init, where the overwrite is in a
+    later block.
+
+    A block with no successor, or one this cannot see, starts from nothing:
+    the caller may read the cell.
 
     Three things clear what is known, and each is a way the cell could be
     read without this seeing a load of it: a barrier, whose addresses are
@@ -310,30 +357,32 @@ def dead_stores(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) ->
     store to one is an argument something is about to consume, so "nothing
     read it" is a claim this has no standing to make.
     """
-    found: list[int] = []
-    for block in body.blocks:
-        overwritten: dict[MemRef, int] = {}
-        for op in reversed(block.ops):
-            if op.barrier or (op.at in calls and not _clean(op, calls)):
-                overwritten = {}
-                continue
+    known = {block.at: block for block in body.blocks}
+    entry: dict[int, dict] = {at: {} for at in known}
+    found: set[int] = set()
 
-            wrote = stored_from(op)
-            if wrote is not None:
-                ref, _value = wrote
-                if ref.addr is not None and ref.addr.space is not Space.STACK:
-                    if any(mir.same_bytes(one, ref) for one in overwritten):
-                        found.append(op.at)
-                    overwritten[ref] = op.at
-                    continue
-
-            # Anything this op reads, and anything it writes that this
-            # cannot name, puts the cells it may touch back in doubt.
-            for ref in op.loads:
-                overwritten = {one: at for one, at in overwritten.items() if not mir.overlapping(one, ref, dgroup)}
-            if wrote is None:
-                for ref in op.stores:
-                    overwritten = {one: at for one, at in overwritten.items() if not mir.overlapping(one, ref, dgroup)}
+    for _round in range(len(known) + 1):
+        changing = False
+        for block in sorted(body.blocks, key=lambda one: one.at, reverse=True):
+            out: dict | None = None
+            for successor in block.succ:
+                have = entry.get(successor)
+                if have is None:  # an edge out of this body
+                    out = {}
+                    break
+                if out is None:
+                    out = dict(have)
+                else:
+                    out = {one: at for one, at in out.items() if any(mir.same_bytes(one, other) for other in have)}
+            if out is None:
+                out = {}  # no successor at all: the caller may read it
+            mine, start = _dead_in(block, out, dgroup, calls)
+            found.update(mine)
+            if len(start) != len(entry[block.at]):
+                changing = True
+            entry[block.at] = start
+        if not changing:
+            break
     return tuple(sorted(found))
 
 
