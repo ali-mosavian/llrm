@@ -155,6 +155,18 @@ def subexp() -> list[str]:
     return [f"P={num((x + y) * 2)}", f"Q={num((x + y) * 3)}", "DONE"]
 
 
+def nested() -> list[str]:
+    return [f"T={num(sum(10 * i + j for i in range(5) for j in range(6)))}", "DONE"]
+
+
+def press() -> list[str]:
+    return [f"R={num(10 * (3 * 5 + 7 * 11 + 13 * 17 + 19 * 23))}", "DONE"]
+
+
+def lngmix() -> list[str]:
+    return [f"S={num(10 * (100000 // 7 + 100000 % 7))}", "DONE"]
+
+
 def fpemu() -> list[str]:
     x, y = 1073741831, 1024
     q = x // y
@@ -402,6 +414,9 @@ PROGRAMS = {
     "hotlop": hotlop,
     "arridx": arridx,
     "subexp": subexp,
+    "nested": nested,
+    "press": press,
+    "lngmix": lngmix,
     "fpemu": fpemu,
     "fpdeep": fpdeep,
     "chain": chain,
