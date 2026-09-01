@@ -471,8 +471,18 @@ def _emitted(
             landed = moved.get(what.target)
             if landed is None:
                 continue
+            # Through `moved`, the same as the emission below. Asking for the
+            # short form of a branch that still names its *original* target,
+            # from the address it has *moved* to, measures a displacement
+            # that is neither -- and iced refuses the byte form when that
+            # overflows, so the branch stayed long. Invisible while a body
+            # barely moves, and worth 56 bytes an object once absorption
+            # takes 328 out of one.
+            aimed = _retargeted(what, moved)
+            if aimed is None:
+                continue
             made = select.emit(
-                what, at=placed[index], short=True, relocated=_field_in(found, op, fields) is not None
+                aimed, at=placed[index], short=True, relocated=_field_in(found, op, fields) is not None
             )
             if made is None:
                 continue  # a call has no short form, and says so by refusing
