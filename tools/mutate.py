@@ -56,10 +56,27 @@ MUTATIONS = (
     Mutation(
         "absorbed-over-a-live-flag",
         "qbopt/transform.py",
-        "            if any(one.flags and one in read for one in op.defines):",
+        "            if read & wrong:",
         "            if False:",
         "`imul` and `idiv` leave their own flags where the call left the runtime's, "
         "so a jcc after an absorbed site reads a different answer",
+    ),
+    Mutation(
+        "compare-absorbed-over-a-synthesised-flag",
+        "qbopt/transform.py",
+        '            wrong = SYNTHESISED if name == "B$CPI4" else flags.ALL',
+        '            wrong = flags.Flag.NONE if name == "B$CPI4" else flags.ALL',
+        "B$CPI4 builds CF, PF and AF through lahf/sahf and a `cmp` does not "
+        "reproduce them -- a site reading one of those has to keep the call",
+    ),
+    Mutation(
+        "compared-operands-the-wrong-way-round",
+        "qbopt/transform.py",
+        '        made(ir.Operation.MOVE, "mov", (edx,), (_frame(10, 4),)),',
+        '        made(ir.Operation.MOVE, "mov", (edx,), (_frame(6, 4),)),',
+        "B$CPI4 takes its left operand first, so the left one is the deeper of "
+        "the two -- read the other way round every ordered comparison answers "
+        "backwards, and only the ordered ones",
     ),
     Mutation(
         "an-unknown-call-trusted-for-its-arity",

@@ -276,11 +276,12 @@ ever reaches `transform.py`, so there is nothing left for the MIR versions
 to take. Their worth is that `lift.py`, `forward.py` and `memory.py` can be
 deleted -- and that deletion is the milestone, not the building.
 
-One is left, and it is the one that matters: absorption is where every
-measured win in this project comes from. Widening is done and on, and
-absorption emits multiply and divide -- what is left of it is the compare,
-which is 799 of the corpus's 1,151 sites and the only one whose contract is
-that it changes no register at all.
+**None are left to build.** Widening is on, and absorption emits all four
+routines at parity with `calls.py` -- 1,151 of 1,151 corpus sites, twelve of
+twelve configurations under `--no-absorb-calls`. What remains of M5 is the
+deletion itself, which is the milestone: `lift.py`, `forward.py`,
+`memory.py`, `calls.py` and `fpu.py` all still run by default and all still
+have to be measured with their MIR counterparts carrying the load alone.
 
 ### What the pair analysis is for
 
@@ -393,8 +394,8 @@ version without it would make qb-qrender bigger.
       an unknown one resetting rather than guessing. `calls.py` has used it
       all along. The MIR walk was a second, worse copy of a model already
       in the tree, which is what made it wrong in three ways at once
-- [ ] **emitting the absorbed call** — multiply and divide are done and
-      run; remainder and compare are not.
+- [x] **emitting the absorbed call** — all four routines, 1,151 of the
+      corpus's 1,151 sites, and at parity with `calls.py`.
 
       `transform.absorbed()` turns `call B$DVI4` into
       `pop eax / pop ecx / cdq / idiv ecx` and the restore after it, leaving
@@ -405,35 +406,60 @@ version without it would make qb-qrender bigger.
       stack, and reloading one from its address instead would leave its push
       standing and leak four bytes per call, forever.
 
-      **169 of the corpus's sites, and it needed a lever to be testable at
-      all.** `calls.py` absorbs every arithmetic call before a body reaches
-      the MIR tower, so with the machine arm on the emitter finds nothing
-      and no gate can exercise it -- `rewrite.py --no-absorb-calls` (and the
-      same flag on `matrix.py` and `fuzzcheck.py`) is what compares the two,
-      and eventually how `calls.py` is retired. Under it: **the fuzz corpus
-      is clean on all twelve configurations**, and eighteen of the nineteen
-      suite programs pass on all twelve.
+      **`B$CPI4` comes out byte-identical to `calls.py`'s ten instructions**,
+      and a test says so rather than a reading of them. That routine changes
+      no register at all, so absorbing it must not either: bp stands in as a
+      frame pointer just long enough to name both arguments in place, edx
+      holds one side, and both are put back without writing a flag the `cmp`
+      just set -- the saved bp read before sp moves past its slot, because
+      DOS services interrupts at any instruction boundary onto whatever
+      stack is live.
 
-      The nineteenth is `cmpof`, and it is the flag working rather than a
-      failure: that program exists because an absorbed `cmp` deliberately
-      diverges from the runtime it replaces, and MIR does not absorb the
-      compare, so the divergence its golden encodes does not happen.
+      **It needed a lever to be testable at all.** `calls.py` absorbs every
+      arithmetic call before a body reaches the MIR tower, so with the
+      machine arm on the emitter finds nothing and no gate exercises it.
+      `--no-absorb-calls` on `rewrite.py`, `matrix.py` and `fuzzcheck.py` is
+      that lever, and it is how the machine arm gets retired. Under it,
+      **all twelve configurations pass all nineteen suite programs** and the
+      fuzz corpus finds no divergence.
 
-      Two are left, for two different reasons:
+      `cmpof` is the one worth naming: it exists because an absorbed `cmp`
+      deliberately diverges from the runtime it replaces, and it passes --
+      which is the sharpest statement of parity available, since it is the
+      program that fails if the two arms disagree about the divergence.
 
-      - **`B$RMI4`, on an address budget.** `layout.py` keys every operation
-        by an address and a far call is five bytes, so a site has five to
-        give. Multiply needs four and divide five; the remainder's answer
-        comes back in edx and moving it to eax makes six. Nothing about the
-        arithmetic -- what it wants is for a transform to be able to put
-        more operations somewhere than there were instructions, which is a
-        `layout.py` question and the same one that will come up again
-      - **`B$CPI4`, on the scratch register.** 799 sites, the majority, and
-        the hard one: that routine clobbers *nothing*, so absorbing it must
-        not either. `calls.py` spends bp and edx and puts both back without
-        touching the flags it just set, reading the saved bp before sp moves
-        past it because DOS services interrupts at any instruction boundary.
-        Ten instructions, none of them optional
+      The flag gates are `flags.py`'s analysis, not MIR's own values: MIR
+      has one FLAGS pseudo-register and cannot say *which* flag, which for
+      the comparison is the whole question. The three arithmetic routines
+      refuse on any flag read after the site; the comparison refuses only on
+      CF, PF and AF. **No site in the corpus reads one**, which is why all
+      1,151 are taken -- so the gates are tested by driving the analysis
+      rather than by waiting for a shape the corpus does not have.
+
+### A transform may emit more than it replaces
+
+The thing that had to change first, and it was load-bearing for two
+unrelated routines. `layout.py` keyed `lengths`, the short-branch set and
+the placement map by `op.at`, so no two ops could share an address -- and a
+far call is five bytes however many operations replace it. `B$RMI4` needs
+six and `B$CPI4` ten.
+
+- [x] place by position, not by address — `_placed` returns where each op in
+      the list lands *and* what each address means afterwards, the latter
+      keyed by the **first** of a group, so a branch to a call arrives at
+      the start of what replaced it rather than into the middle. The ops
+      themselves keep the call's own address, one of them standing for its
+      five bytes and the rest for none, and the byte arithmetic still adds
+      up
+- [x] a restore has no field for a fixup — `_field_in` searched the op's
+      span, and the restore idiom is put wherever a transform has an address
+      to spare: on a far call's own byte, whose target is a fixup, or on a
+      chain's last high half, which may be a store through a relocated
+      displacement. Both would have been found and neither belongs to
+      `push eax / pop ax / pop dx`. Latent for widening, where it would have
+      refused the body rather than corrupted it, and reachable for the first
+      time here
+
 - [x] load forwarding — `avail.redundant()`, 12 of 12. It also needed the
       register's current value tracked: `holders()` maps a cell to the value
       put there and says nothing about whether that value is still in its
@@ -517,6 +543,13 @@ uv run python tools/matrix.py                  19 programs x 12 configurations
 uv run python tools/mutate.py                  deliberate breakages, each caught
 uv run python tools/fuzzcheck.py --count 40    generated programs, BC as oracle
 ```
+
+`matrix.py` and `fuzzcheck.py` both take `--no-absorb-calls`, which leaves
+the arithmetic calls to the MIR tower instead of `calls.py`. That is not an
+alternative configuration to keep green as a courtesy: it is the only way
+the MIR emitter is reachable at all, since `calls.py` takes every site
+before a body gets there. Both are green under it, all twelve
+configurations.
 
 `matrix.py` and `fuzzcheck.py` found every real bug this session. The host
 suite was green for all of them.

@@ -218,8 +218,9 @@ def test_the_operands_go_where_the_machine_arm_puts_them() -> None:
     for obj, found, blocks in _corpus():
         where = transform.arguments(blocks, found.calls)
         for at, groups in where.items():
-            if (found.calls.get(at) or "").upper() not in transform.EMITTED:
-                continue
+            name = (found.calls.get(at) or "").upper()
+            if name not in ("B$MUI4", "B$DVI4", "B$RMI4"):
+                continue  # B$CPI4 takes its left operand first, which is the asymmetry
             seen += 1
             left, right = groups
             assert max(one.at for one in left) > max(one.at for one in right), (
@@ -228,56 +229,143 @@ def test_the_operands_go_where_the_machine_arm_puts_them() -> None:
     assert seen, "no sites, so this proves nothing"
 
 
-def test_an_absorbed_call_fits_in_the_bytes_it_replaces() -> None:
-    """layout.py keys every operation by an address, so a site has as many
-    to give as the call has bytes -- five, for the far call BC writes.
+def test_the_operations_one_call_becomes_all_stand_on_its_own_address() -> None:
+    """A transform may put more operations somewhere than there were
+    instructions, and layout.py places by position rather than by address.
 
-    That is the whole reason B$RMI4 is not absorbed here: its answer comes
-    back in edx and moving it to eax makes six operations where there is
-    room for five. An address budget, not anything about the arithmetic.
+    What it still needs is that the bytes tile: exactly one of the group
+    stands for the call's own five, and the rest for none. And the address
+    map takes the first of a group, so a branch to the call arrives at the
+    start of what replaced it rather than in the middle.
+
+    This is what let B$RMI4 be absorbed at all -- its answer comes back in
+    edx and moving it to eax makes six operations where a far call has five
+    bytes.
     """
+    seen = 0
     for obj, found, blocks in _corpus():
+        calls = {
+            one.at: one
+            for block in blocks
+            for one in block.insns
+            if (found.calls.get(one.at) or "").upper() in transform.EMITTED
+        }
         for at, ops in _absorbed_ops(obj, found, blocks):
-            if (found.calls.get(at) or "").upper() not in transform.EMITTED:
-                continue
-            call = next(
-                one for block in blocks for one in block.insns if one.at == at
+            seen += 1
+            assert all(one.at == at for one in ops), f"{obj.stem}: {at:#x} is not one address"
+            assert ops[0].covers == (at, calls[at].end), (
+                f"{obj.stem}: the first of {at:#x} stands for {ops[0].covers}, not the call"
             )
-            where = [one.at for one in ops]
-            assert len(where) == len(set(where)), f"{obj.stem}: two operations on one address at {at:#x}"
-            assert min(where) == at and max(where) < call.end, (
-                f"{obj.stem} at {at:#x}: {len(ops)} operations for {call.end - at} bytes"
+            assert all(one.covers == (at, at) for one in ops[1:]), (
+                f"{obj.stem}: something after the first at {at:#x} claims bytes of its own"
             )
+    assert seen > 100, f"only {seen} sites, so this proves nothing"
 
 
-def test_a_site_whose_flags_are_read_is_left_alone() -> None:
-    """`imul` and `idiv` leave their own flags and the call left the
-    runtime's, so a jcc after the site would read a different answer.
+def test_a_site_is_left_alone_on_the_flags_that_matter_to_it(monkeypatch) -> None:
+    """Two different questions, and the same analysis answers both.
 
-    Checked against what comes out, not against the condition recomputed:
-    the call has to still be there.
+    The three arithmetic routines return a value and leave the flags
+    incidental, so any read of them after the site refuses it: `imul` and
+    `idiv` write their own. A comparison's flags *are* its result, so only
+    CF, PF and AF refuse -- those are the runtime's own synthesis through
+    lahf/sahf, and a `cmp` does not reproduce them.
+
+    Driven rather than observed, because **no site in the corpus has a flag
+    read after it** -- all 1,151 are absorbed, which is why calls.py takes
+    as many as it does. Waiting for the corpus to contain the shape would
+    leave the gate untested and the assertion that it is there vacuous.
     """
+    from qbopt import flags
     from qbopt import mir
 
-    refused = taken = 0
+    def absorbed_with(reading, obj, found, blocks):
+        monkeypatch.setattr(transform, "_flags_after", lambda *_a, **_k: reading)
+        standing = set()
+        for _name, body in mir.bodies(found, blocks):
+            after = transform.absorbed(body, blocks, found.calls)
+            standing |= {op.at for block in after.blocks for op in block.ops if op.op is ir.Operation.CALL}
+        return standing
+
+    checked = 0
     for obj, found, blocks in _corpus():
+        sites = {
+            one.at: (found.calls.get(one.at) or "").upper()
+            for block in blocks
+            for one in block.insns
+            if (found.calls.get(one.at) or "").upper() in transform.EMITTED
+        }
+        if not sites or not any(name == "B$CPI4" for name in sites.values()):
+            continue
+        checked += 1
+
+        # ZF is not one of the flags a cmp fails to reproduce, so a compare
+        # survives it and the arithmetic does not
+        standing = absorbed_with(flags.Flag.ZF, obj, found, blocks)
+        for at, name in sites.items():
+            if name == "B$CPI4":
+                assert at not in standing, f"{obj.stem}: a compare at {at:#x} refused over ZF"
+            else:
+                assert at in standing, f"{obj.stem}: {name} at {at:#x} absorbed over a live ZF"
+
+        # CF is the runtime's own synthesis, and refuses everything
+        standing = absorbed_with(flags.Flag.CF, obj, found, blocks)
+        for at, name in sites.items():
+            assert at in standing, f"{obj.stem}: {name} at {at:#x} absorbed over a live CF"
+        if checked > 6:
+            break
+    assert checked, "no object with both a compare and an arithmetic site"
+
+
+def test_every_absorbable_site_in_the_corpus_is_taken() -> None:
+    """1,151 of 1,151, which is the claim the gate above is measured against."""
+    from qbopt import mir
+
+    taken = total = 0
+    for _obj, found, blocks in _corpus():
         where = transform.arguments(blocks, found.calls)
         for _name, body in mir.bodies(found, blocks):
-            read = transform._read_flags(body)
             after = transform.absorbed(body, blocks, found.calls)
             standing = {op.at for block in after.blocks for op in block.ops if op.op is ir.Operation.CALL}
             for block in body.blocks:
                 for op in block.ops:
                     if (found.calls.get(op.at) or "").upper() not in transform.EMITTED:
                         continue
-                    if op.at not in where:
-                        continue
-                    if any(one.flags and one in read for one in op.defines):
-                        refused += 1
-                        assert op.at in standing, (
-                            f"{obj.stem}: {op.at:#x} absorbed with its flags read afterwards"
-                        )
-                    else:
-                        taken += 1
-                        assert op.at not in standing, f"{obj.stem}: {op.at:#x} not absorbed"
-    assert refused and taken, f"refused {refused}, took {taken} -- one of them proves nothing"
+                    total += 1
+                    taken += op.at not in standing and op.at in where
+    assert total > 1000 and taken == total, f"took {taken} of {total}"
+
+
+def test_the_absorbed_compare_is_byte_identical_to_the_machine_arm() -> None:
+    """Two implementations of the same ten instructions, over one corpus.
+
+    B$CPI4 changes no register at all, so absorbing it must not either: bp
+    stands in as a frame pointer just long enough to name both arguments in
+    place, edx holds one side, and both are put back without writing a flag
+    the `cmp` just set. The saved bp is read before sp moves past its slot,
+    because DOS services interrupts at any instruction boundary onto
+    whatever stack is live.
+
+    None of that is guesswork worth re-deriving, and this says the MIR
+    version did not: it emits the same bytes calls.py does.
+    """
+    from qbopt import calls as machine
+    from qbopt import layout
+    from qbopt import select
+
+    want = machine.compare_consume().code
+    seen = 0
+    for obj, found, blocks in _corpus():
+        for at, ops in _absorbed_ops(obj, found, blocks):
+            if (found.calls.get(at) or "").upper() != "B$CPI4":
+                continue
+            seen += 1
+            got = b""
+            for one in ops:
+                made = select.emit(layout._semantics(one), at=0)
+                assert made is not None, f"{obj.stem}: {one.name} at {at:#x} does not select"
+                got += made.code
+            assert got == want, (
+                f"{obj.stem} at {at:#x}: {got.hex()} against calls.py's {want.hex()}"
+            )
+    assert seen > 100, f"only {seen} compares, so this proves nothing"

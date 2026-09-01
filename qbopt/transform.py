@@ -42,6 +42,9 @@ from qbopt import pairs
 from qbopt import layout
 from qbopt.mir import Op
 from qbopt.declen import Insn
+from qbopt import flags
+from qbopt.module import Addr
+from qbopt.module import Space
 from iced_x86 import Register
 from qbopt.mir import MirBody
 
@@ -342,40 +345,84 @@ INTO = (Register.EAX, Register.ECX)
 # What the result comes back in, which is what BC reads as dx:ax.
 RESULT = Register.EAX
 
-# A far call is five bytes, so a site has five addresses to put operations
-# on -- and layout.py keys every operation by one. Multiply needs four and
-# divide five; the remainder needs six, because its answer comes back in edx
-# and has to be moved. That is why B$RMI4 is not here, and it is an address
-# budget rather than anything about the arithmetic.
-EMITTED = {"B$MUI4": 4, "B$DVI4": 5}
+EMITTED = ("B$MUI4", "B$DVI4", "B$RMI4", "B$CPI4")
+
+# B$CPI4 rebuilds its answer through lahf/sahf because an 8086 cannot
+# compare a long in one go. A 386 can, and the flags a `cmp` leaves are the
+# ones the following jcc wants -- but only the signed and equality ones. CF,
+# PF and AF are the runtime's own synthesis rather than the comparison's, so
+# a site that reads one of them afterwards is left alone. calls.py's own
+# note above its RESULT says the rest, including why this pass's answer is
+# the *right* one on operands where the runtime's is not.
+SYNTHESISED = flags.Flag.CF | flags.Flag.PF | flags.Flag.AF
 
 
 def _wide(register: "Register") -> ir.Reg:
     return ir.Reg(register=register, width=4)
 
 
-def _read_flags(body: MirBody) -> frozenset:
-    """Every flags value something in this body reads.
+def _narrow(register: "Register") -> ir.Reg:
+    return ir.Reg(register=register, width=2)
 
-    A call is not one of them. MIR gives every call a use of FLAGS, which is
-    the conservative answer for a body that could branch on them -- and it
-    makes every absorbable site look like its flags are read, because the
-    next call reads them. Nothing in BC's convention passes a value in
-    flags and no runtime routine branches on the caller's, which is the
-    claim calls.py's own flag liveness has always rested on.
 
-    A flags value reaching a phi still counts: it is live out of the block
-    and what reads it is not visible from here.
+def _frame(disp: int, width: int) -> ir.Mem:
+    """`[bp+disp]`, which is the only base 16-bit addressing has to offer."""
+    return ir.Mem(Addr(Space.FRAME, disp), width)
+
+
+def _flags_after(blocks: list, live: dict, at: int, end: int) -> "flags.Flag":
+    """The flags something reads after this region, or all of them if unknown.
+
+    flags.py's own analysis, not a second one. It is a block-level walk over
+    instructions -- the same kind of thing stack.py is, and no more a
+    machine-code rewrite than that. What M5 retires is the emission.
     """
-    seen = set()
-    for block in body.blocks:
-        for phi in block.phis:
-            seen.update(one for one in phi.incoming.values() if one.flags)
-        for op in block.ops:
-            if op.op is ir.Operation.CALL:
-                continue
-            seen.update(one for one in op.uses if one.flags)
-    return frozenset(seen)
+    block = next((one for one in blocks if one.at <= at < one.end), None)
+    return flags.live_after(block, end, live) if block is not None else flags.ALL
+
+
+def _comparing(at: int) -> list[ir.Semantics]:
+    """A long compare, with both arguments still on the stack.
+
+    B$CPI4 changes no register at all -- calls.py's note above its RESULT
+    reads that out of the runtime source -- so absorbing it must not either,
+    and a `cmp` of two stack cells needs a register for one side. bp is the
+    only base 16-bit addressing can use with a displacement, so it stands in
+    as a frame pointer just long enough to name both arguments in place, and
+    edx holds the left one. Both are put back.
+
+    The saved bp cannot simply be read back from where `push` left it: that
+    slot is below sp the moment sp is raised past it, and DOS services
+    interrupts at any instruction boundary onto whatever stack is live. So
+    it is read before sp moves at all, parked in the call's own dead
+    argument space, and only the last `pop` ever reads below where sp
+    already sits.
+
+    Everything after the `cmp` has to leave the flags alone, which is why
+    the moves are moves and the stack is raised with `lea` rather than
+    `add sp`.
+    """
+    def made(op: ir.Operation, name: str, dests, sources) -> ir.Semantics:
+        return ir.Semantics(op, name, dests=tuple(dests), sources=tuple(sources))
+
+    edx, bp, sp, dx = _wide(Register.EDX), _narrow(Register.BP), _narrow(Register.SP), _narrow(Register.DX)
+    return [
+        made(ir.Operation.PUSH, "push", (), (bp,)),
+        made(ir.Operation.PUSH, "push", (), (edx,)),
+        made(ir.Operation.MOVE, "mov", (bp,), (sp,)),
+        # six bytes pushed ahead of the arguments puts the left one -- the
+        # deeper, since B$CPI4 takes it first -- at +10, and the right at +6
+        made(ir.Operation.MOVE, "mov", (edx,), (_frame(10, 4),)),
+        made(ir.Operation.COMPARE, "cmp", (), (edx, _frame(6, 4))),
+        # from here on the flags are the answer and nothing may write them
+        made(ir.Operation.MOVE, "mov", (dx,), (_frame(4, 2),)),
+        # +12 is the top two bytes of the left argument, already read into
+        # edx above, and still above where sp ends up
+        made(ir.Operation.MOVE, "mov", (_frame(12, 2),), (dx,)),
+        made(ir.Operation.MOVE, "mov", (edx,), (_frame(0, 4),)),
+        made(ir.Operation.ADDRESS, "lea", (sp,), (ir.Address(Addr(Space.FRAME, 12)),)),
+        made(ir.Operation.POP, "pop", (bp,), ()),
+    ]
 
 
 def _absorbing(name: str, at: int, after: Op) -> list[Op]:
@@ -394,6 +441,10 @@ def _absorbing(name: str, at: int, after: Op) -> list[Op]:
     """
     def made(op: ir.Operation, name: str, dests, sources) -> ir.Semantics:
         return ir.Semantics(op, name, dests=tuple(dests), sources=tuple(sources))
+
+    if name == "B$CPI4":
+        steps = _comparing(at)
+        return _laid(steps, at, after, restore=False)
 
     steps: list[ir.Semantics] = [
         made(ir.Operation.POP, "pop", (_wide(INTO[0]),), ()),
@@ -416,13 +467,23 @@ def _absorbing(name: str, at: int, after: Op) -> list[Op]:
                 (_wide(RESULT), _wide(Register.EDX), _wide(INTO[1])),
             )
         )
+        if name == "B$RMI4":
+            # idiv leaves the quotient in eax and the remainder in edx, and
+            # BC reads either one in dx:ax.
+            steps.append(made(ir.Operation.MOVE, "mov", (_wide(RESULT),), (_wide(Register.EDX),)))
 
+    return _laid(steps, at, after, restore=True)
+
+
+def _laid(steps: list[ir.Semantics], at: int, after: Op, restore: bool) -> list[Op]:
+    """One site's operations as ops, all standing on the call's own address."""
+    end = after.node.insn.end if after.node is not None else at
     out: list[Op] = []
     for number, what in enumerate(steps):
         out.append(
             replace(
                 after,
-                at=at + number,
+                at=at,
                 op=what.op,
                 name=what.name or "",
                 defines=(),
@@ -431,15 +492,19 @@ def _absorbing(name: str, at: int, after: Op) -> list[Op]:
                 stores=(),
                 node=None,
                 made=what,
-                # The first stands for the call's own five bytes and the
-                # rest for none, which is layout.py's own arithmetic for a
-                # transform that puts more operations where fewer were.
-                covers=(at, after.node.insn.end if after.node is not None else at) if number == 0 else (at + number, at + number),
+                # All on the call's own address, and only the first standing
+                # for its bytes. layout.py places by position and keys the
+                # address map by the first of a group, so the order these
+                # are listed in is the order they run in, and a branch to
+                # the call arrives at the start of what replaced it.
+                covers=(at, end) if number == 0 else (at, at),
             )
         )
     # `push eax / pop ax / pop dx` -- BC reads a long in dx:ax and the
-    # arithmetic left it in eax. pairs.py's own restore, for the same reason.
-    out.append(pairs._restore_op(0, at + len(steps), out[-1], at + len(steps)))
+    # arithmetic left it in eax. pairs.py's own restore, for the same
+    # reason. A comparison has no result to hand back and takes none.
+    if restore:
+        out.append(pairs._restore_op(0, at, out[-1], at))
     return out
 
 
@@ -449,28 +514,37 @@ def absorbed(body: MirBody, blocks: list, calls: dict[int, str]) -> MirBody:
     The half of M5 that is emission rather than analysis. `arguments()` says
     where a call's operands are; this says what the call becomes.
 
-    Refused where anything reads the flags the call defined: `imul` and
-    `idiv` leave their own, and a `jcc` after the site would read a
-    different answer. Refused too where the operands are not both four bytes
-    on top of the stack, which is `stack.frames()`' own claim.
+    Refused on the flags, and on which flags. The three arithmetic routines
+    return a value and leave the flags incidental, so any read of them after
+    the site is a reason to leave it alone: `imul` and `idiv` write their
+    own. A comparison's flags *are* its result, so the question there is
+    narrower -- CF, PF and AF are the runtime's own synthesis and a `cmp`
+    does not reproduce them, and only a read of one of those refuses.
+
+    That is flags.py's analysis rather than MIR's own values, and
+    deliberately: MIR has one FLAGS pseudo-register and cannot say which
+    flag, which for the comparison is the whole question.
     """
     where = arguments(blocks, calls)
     if not where:
         return body
 
-    read = _read_flags(body)
+    live = flags.live_in(blocks)
+    ends = {one.at: one.end for block in blocks for one in block.insns}
     out = []
     for block in body.blocks:
         ops: list[Op] = []
         for op in block.ops:
             name = (calls.get(op.at) or "").upper()
-            if op.at not in where or name not in EMITTED or op.node is None:
-                ops.append(op)
-                continue
-            if any(one.flags and one in read for one in op.defines):
+            if op.at not in where or name not in EMITTED or op.at not in ends:
                 ops.append(op)
                 continue
             if getattr(op.node, "insn", None) is None:
+                ops.append(op)
+                continue
+            read = _flags_after(blocks, live, op.at, ends[op.at])
+            wrong = SYNTHESISED if name == "B$CPI4" else flags.ALL
+            if read & wrong:
                 ops.append(op)
                 continue
             ops.extend(_absorbing(name, op.at, op))

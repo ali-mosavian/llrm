@@ -256,6 +256,16 @@ def _field_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -
     """
     if op.node is None:
         return None
+    # `push eax / pop ax / pop dx` is three register instructions and has no
+    # field for a relocation to go in. It needs saying because the idiom is
+    # put wherever a transform has an address to spare: on the chain's last
+    # high half, which may be a store through a relocated displacement, or
+    # on the very byte of a far call whose target is a fixup. Both would be
+    # found by the search below and neither belongs to it. The fixup itself
+    # is not lost -- it falls inside the covers of whatever stands for those
+    # bytes, which is what `Laid.dropped` reports and relocate.py skips.
+    if isinstance(op.node, ir.Restore):
+        return None
     known = fields or frozenset(found.fixup_at)
     lo, hi = ir.span(op.node)
     # A far call and a far jmp put their four relocated bytes right after a
@@ -272,14 +282,25 @@ def _field_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -
 REACH = range(-128, 128)
 
 
-def _placed(ops: list[mir.Op], at: int, lengths: dict[int, int]) -> dict[int, int]:
-    """Where each op lands, given what each one measures."""
+def _placed(ops: list, at: int, lengths: list[int]) -> tuple[list[int], dict[int, int]]:
+    """Where each op lands, given what each one measures.
+
+    Two things, because they are two questions. The list is where each op in
+    this list goes, one entry per op. The map is what an *address* means
+    afterwards, and a transform may put several ops on one address -- a
+    replacement needs somewhere to hang each operation it emits and a call
+    is five bytes wide however many it becomes. The first of a group is what
+    that address means to everything outside: a branch to it arrives at the
+    start of what replaced it, never into the middle.
+    """
+    placed: list[int] = []
     moved: dict[int, int] = {}
     where = at
-    for op in ops:
-        moved[op.at] = where
-        where += lengths[op.at]
-    return moved
+    for op, length in zip(ops, lengths):
+        placed.append(where)
+        moved.setdefault(op.at, where)
+        where += length
+    return placed, moved
 
 
 def lay_out(body: MirBody, at: int, found: Module, fields: frozenset[int] = frozenset()) -> Laid | str:
@@ -399,10 +420,16 @@ def _emitted(
     if not ops:
         return "no ops to lay out"
 
-    lengths: dict[int, int] = {}
+    # Kept per op rather than per address. An op's address is where it came
+    # from, and several may share one: a transform that replaces a five-byte
+    # call with six operations has five addresses to give them and needs the
+    # sixth anyway. Keying the measurement by address made that impossible
+    # and silently -- one entry overwrote the other and the body came out
+    # the wrong length.
+    lengths: list[int] = []
     for op in ops:
         if isinstance(op, Table):
-            lengths[op.at] = op.hi - op.lo
+            lengths.append(op.hi - op.lo)
             continue
         what = _semantics(op)
         emulated = not native_fpu and found.code[op.at : op.at + 1] == bytes([0xCD])
@@ -417,50 +444,50 @@ def _emitted(
             made = select.restore(op.node.pair)
             if made is None:
                 return f"{op.at:#06x}: the restore idiom is not one select.py can emit"
-            lengths[op.at] = len(made.code)
+            lengths.append(len(made.code))
             continue
         if what is None or emulated:
-            lengths[op.at] = _length_of(op) or 0
+            lengths.append(_length_of(op) or 0)
             continue
         made = select.emit(what, at=at, relocated=_field_in(found, op, fields) is not None)
         if made is None:
             return f"{op.at:#06x}: {op.name} is not one select.py can emit"
-        lengths[op.at] = len(made.code)
+        lengths.append(len(made.code))
 
     # Shrink to a fixed point. Every branch starts long; one that reaches its
     # target within a signed byte becomes short, which moves everything after
     # it closer and can only let more of them shrink.
-    short: set[int] = set()
-    moved = _placed(ops, at, lengths)
+    short: set[int] = set()  # by position, since an address may hold several
+    placed, moved = _placed(ops, at, lengths)
     changing = True
     while changing:
         changing = False
-        for op in ops:
+        for index, op in enumerate(ops):
             if isinstance(op, Table):
                 continue
             what = _semantics(op)
-            if what is None or what.target is None or op.at in short:
+            if what is None or what.target is None or index in short:
                 continue
             landed = moved.get(what.target)
             if landed is None:
                 continue
             made = select.emit(
-                what, at=moved[op.at], short=True, relocated=_field_in(found, op, fields) is not None
+                what, at=placed[index], short=True, relocated=_field_in(found, op, fields) is not None
             )
             if made is None:
                 continue  # a call has no short form, and says so by refusing
-            if landed - (moved[op.at] + len(made.code)) not in REACH:
+            if landed - (placed[index] + len(made.code)) not in REACH:
                 continue
-            short.add(op.at)
-            lengths[op.at] = len(made.code)
+            short.add(index)
+            lengths[index] = len(made.code)
             changing = True
         if changing:
-            moved = _placed(ops, at, lengths)
+            placed, moved = _placed(ops, at, lengths)
 
     # The bytes, at the addresses the fixed point settled on.
     out = bytearray()
     relocations: list[tuple[int, int]] = []
-    for op in ops:
+    for index, op in enumerate(ops):
         if isinstance(op, Table):
             # Copied verbatim, with every fixup inside it moved by the same
             # amount the table itself moved. The entries are relocated words
@@ -468,7 +495,7 @@ def _emitted(
             # which as_records remaps.
             out += found.code[op.lo : op.hi]
             for field in sorted(one for one in (fields or frozenset(found.fixup_at)) if op.lo <= one < op.hi):
-                relocations.append((moved[op.at] - at + (field - op.lo), field))
+                relocations.append((placed[index] - at + (field - op.lo), field))
             continue
         # An emulated x87 site is emitted as it was found. declen.py decodes
         # `cd 35 46 c8` as the fld it stands for, so selecting from the
@@ -503,7 +530,7 @@ def _emitted(
             continue
         if isinstance(op.node, ir.Restore):
             made = select.restore(op.node.pair)
-            if made is None or len(made.code) != lengths[op.at]:
+            if made is None or len(made.code) != lengths[index]:
                 return f"{op.at:#06x}: the restore idiom did not come back its own length"
             out += made.code
             continue
@@ -514,9 +541,9 @@ def _emitted(
         if what is None:
             return f"{op.at:#06x}: its target is not in this body"
         made = select.emit(
-            what, at=moved[op.at], short=op.at in short, relocated=_field_in(found, op, fields) is not None
+            what, at=placed[index], short=index in short, relocated=_field_in(found, op, fields) is not None
         )
-        if made is None or len(made.code) != lengths[op.at]:
+        if made is None or len(made.code) != lengths[index]:
             return f"{op.at:#06x}: it changed length between the two passes"
         # A fixup goes wherever this instruction's one relocatable field
         # landed -- the displacement for a memory operand, the immediate for
