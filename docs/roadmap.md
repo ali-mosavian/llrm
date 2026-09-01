@@ -40,16 +40,16 @@ Measured 2026-09-01. Re-measure before trusting it.
 
 | | |
 |---|---|
-| corpus | 95,189 → 89,482 code bytes, **-6.00%** |
+| corpus | 98,738 → 92,736 code bytes, **-6.08%**, over 170 objects |
 | qb-qrender | 74,979 → 75,535 code bytes, **+0.74%** — absorption costs the bytes, emission and the peephole give most back |
 | **qb-qrender runs** | 291 frames against BC's 271, same geometry. It did not run at all before this session |
 | its arithmetic calls | 157 → 1 |
 | its x87 sites | 1,766, none optimised |
 | bench/nbody | 2.99× under DOSBox, 21 of 21 calls absorbed, pressure 6/6 |
 | corpus redundant reads | 751 — 73 live provider, 48 dead, 630 none |
-| selector coverage | 23,794 of 23,838 corpus ops; the 44 are `movsw`, refused deliberately |
-| segments MIR wrote | **every one**: 155 corpus objects and all 246 of qb-qrender's BC-built ones, absorbed or not |
-| **optimised and MIR-written** | **the default**, 18 suite programs on all 12 configurations, the fuzz corpus clean, and 40 of 40 mutations |
+| selector coverage | 24,695 of 24,739 corpus ops; the 44 are `movsw`, refused deliberately |
+| segments MIR wrote | **every one**: 170 corpus objects and all 246 of qb-qrender's BC-built ones, absorbed or not |
+| **optimised and MIR-written** | **the default**, 19 suite programs on all 12 configurations, the fuzz corpus clean, and 40 of 40 mutations |
 
 MIR does, end to end:
 
@@ -64,7 +64,7 @@ MIR does, end to end:
 Built, no consumer:
 
 - [ ] `consts.known()` — proves 1,971 corpus values, nothing emits from them
-- [x] `wide.py` — `widened()` builds the 32-bit semantics the pair computes, and `transform.py` folds it
+- [x] `wide.py` — superseded by `qbopt/pairs.py`, which is on. See M5
 - [ ] `regalloc.colour()` — correct, and cannot pay while identity is optimal at pressure 6/6
 
 ## M1 — instruction selection
@@ -128,7 +128,7 @@ something a body-sized edit can step around.
 
 Regenerating the whole code segment does not have the problem, because
 nothing is being spliced: chunk boundaries, line numbers and fixups are all
-being written rather than preserved. **Every one of the corpus's 155 objects
+being written rather than preserved. **Every one of the corpus's 170 objects
 now has every body layable**; it was 42 when this was written.
 
 - [x] `layout.rebuild` — every body laid out into one image, cross-body
@@ -157,8 +157,8 @@ now has every body layable**; it was 42 when this was written.
       in its middle, which is exactly what reachability rules out
 
 **Whole-segment emission is on.** `rewrite.py` writes the code segment from
-MIR: 155 of 155 corpus objects and all 15 of qb-qrender's BC-built modules
-rebuild, all eighteen suite programs run right on all twelve
+MIR: 170 of 170 corpus objects and all 15 of qb-qrender's BC-built modules
+rebuild, all nineteen suite programs run right on all twelve
 configurations, and the fuzz corpus finds no divergence. It is not a size
 cost either -- 175 bytes saved over the corpus and 593 over qb-qrender
 against the patched output.
@@ -276,9 +276,10 @@ ever reaches `transform.py`, so there is nothing left for the MIR versions
 to take. Their worth is that `lift.py`, `forward.py` and `memory.py` can be
 deleted -- and that deletion is the milestone, not the building.
 
-Two are left, and they are the two that matter: absorption is where every
-measured win in this project comes from, and widening is the one that has
-already been written wrong once.
+One is left, and it is the one that matters: absorption is where every
+measured win in this project comes from. Widening is done and on -- and it
+was written wrong twice more before it was, which is the case for not
+writing the absorbed-call generator blind.
 
 ### What the pair analysis is for
 
@@ -304,15 +305,57 @@ model** -- and on the program that matters most the cost model rejects most
 candidates. `lift.py` has one ("widening it grows N bytes to M"). A MIR
 version without it would make qb-qrender bigger.
 
-- [ ] widening — `transform.widened()` is written and **off, because it was
-      wrong**. It folded `add ax,[x]` with `adc dx,[x+2]` into
-      `add eax,[x]`, and BC keeps a long in `dx:ax`, which is not `eax`:
-      the carry landed in eax's high half and dx kept what it held.
-      `suite/procs.bas` printed `0x02040C10` where it wants `0x04080C10`
-      on all twelve configurations, with the host suite green. What is
-      missing is the step before the rename -- proving the pair is one
-      value and putting it in one register, which is the analysis
-      `lift.py` already has and `wide.widened()` assumed away
+- [x] widening — **on**, and clean on the fuzz corpus, all twelve
+      configurations of `matrix.py`, and 20,813 host tests. Recognition, a
+      rename, a restore and a cost model, all in `qbopt/pairs.py`;
+      `transform.widened()` applies it, last, after the passes that reason
+      about memory -- a widened op keeps the low half's own `loads`, two
+      bytes at `[x]`, while the instruction reads four, and `avail.py` was
+      forwarding a stale high half across it.
+
+      **What it saves on top of what is already there is 21 bytes**, over
+      the whole corpus. That is not a disappointment, it is the M5
+      criterion: `lift.py`'s widening runs first and takes 489 of the 493
+      chains BC's own bodies hold, so the MIR version finding almost
+      nothing left is the same parity `forward.py` and `memory.py` already
+      show. What it is worth is that `lift.py` can be deleted. **Measuring
+      it against `lift.py`'s widening switched off has not been done**, and
+      that measurement is the milestone, not this checkbox.
+
+      It was written wrong twice more, and neither the host suite nor the
+      twelve configurations could see any of it. The fuzz corpus caught all
+      four; each has a regression test that fails when its fix is reverted:
+
+      - **the constant.** BC splits a long across the two instructions, so
+        `and ax,0ffffh / and dx,7fffh` is one `and eax,7fffffffh`. Widening
+        the low half's semantics keeps `0ffffh` -- a different constant, and
+        one that clears the high half of everything it touches. 224 of the
+        corpus's pairs carry a high half that is not zero. `lift.py`
+        combines them, and has all along
+      - **the sign extension.** `mov ax,[x] / cwd` widened from the low half
+        alone is `mov eax,dword [x]`: four bytes read out of a two-byte
+        cell. `movsx eax,[x]` is the instruction and `select.py` has no form
+        for it, so a chain neither starts on one nor spans one
+      - **where a chain may start.** Only a load puts all thirty-two bits in
+        one register. The slot being *known* says the value is tracked, not
+        that it is in one register, and reading it as the latter started 13
+        chains on arithmetic over a high half nothing had widened
+      - **the restore's own address.** It went four bytes back from the end
+        of the chain, to make its `covers` the four bytes it emits -- which
+        is the address the last low already holds whenever the chain ends in
+        a two-and-two pair. `layout.py` keys every op by address, so the two
+        collided. What an op emits and which of BC's bytes it stands for are
+        separate questions, and `layout.py` now measures a restore by the
+        first. `suite/negnot.bas` is that shape, added because no fixture
+        had it -- and with it the corpus is 170 objects, which moved every
+        measured count in this file
+
+      Two more had to be right and are worth stating because neither is
+      about widening as such. A negate is three instructions --
+      `neg ax / adc dx,0 / neg dx` -- and a `Pair` names two, so a chain is
+      replaced by span rather than by member. And the restore is a barrier
+      defining and using nothing: it used to be built by replacing the op
+      before it, which handed it that op's own SSA values
 - [x] recovering the arguments — `mir._stack_slot` keeps the depth across a
       recognised call now, which is what put 831 of the corpus's 923
       absorbable calls out of reach: an argument pushed before some *other*
@@ -404,7 +447,7 @@ nothing transformed.
 ```
 uv run pytest -m "not e2e"                     host suite
 uv run pytest                                  adds DOSBox
-uv run python tools/matrix.py                  18 programs x 12 configurations
+uv run python tools/matrix.py                  19 programs x 12 configurations
 uv run python tools/mutate.py                  deliberate breakages, each caught
 uv run python tools/fuzzcheck.py --count 40    generated programs, BC as oracle
 ```
