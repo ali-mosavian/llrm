@@ -270,10 +270,21 @@ spill in between, so `match()` refuses it and it falls through to `consume()`
 -- which is most of why pattern A/B exist at all (16 of this object's 21
 absorbed call sites went through `consume()`, not `match()`).
 
-**Fix**: the large one. Needs either real def/use analysis proving an
-interleaved instruction is safe to move across the region (`si`/`di`/flags),
-or a region shape that tolerates a hole. Everything else in this document is
-local; this one is architectural.
+**Done in MIR (2026-09-02), and it is neither large nor architectural there.**
+`defines` and `uses` say which values an op reads and writes, so the test
+is whether anything in the gap touches the pair's own registers --
+`pairs._follows()` asks exactly that, and what it steps over is carried
+through where it stood. The region shape that tolerates a hole came with
+it: each widened operation stands for its own pair's bytes rather than
+the whole chain's, so layout.py's arithmetic still adds up.
+
+Worth less than the count suggests, and the measurement is the useful
+part: of 500 gaps in the corpus only **28** are safe. The other 472 have
+the pair's own registers touched in the gap, which is not an interleaving
+problem at all. Chains 493 to 481, saving 1,787 bytes to 1,795.
+
+The machine arm still has the rule this describes. Its fix is the large
+one; MIR's was not.
 
 **Design review (2026-08-30), before any code:** E and F were both candidates
 for a shared, general (pattern, replacement) peephole engine in `qbopt/ir.py`,

@@ -626,14 +626,44 @@ def wider(pair: Pair) -> ir.Semantics | None:
 
 
 
-def _follows(previous: Pair, one: Pair) -> bool:
-    """Whether `one` starts exactly where `previous` ended.
+def _ends(one: Pair) -> int | None:
+    ends = [ir.span(op.node)[1] for op in (one.low, one.high) if op.node is not None]
+    return max(ends) if ends else None
 
-    lift.regions()'s rule: anything unrecognised between two pair operations
-    has to stay where it is, so a rewrite cannot span it.
+
+def _follows(previous: Pair, one: Pair, block=None, origin: dict | None = None) -> bool:
+    """Whether `one` continues `previous`, with nothing in between that stops it.
+
+    Contiguity was lift.regions()' rule and this kept it: anything
+    unrecognised between two pair operations has to stay where it is, so a
+    rewrite cannot span it. docs/residue.md's E is that rule costing real
+    chains -- BC drops address arithmetic for some *other* value between the
+    halves of one long expression.
+
+    MIR can ask the question the machine arm could not. What stops a chain
+    is an instruction that touches the pair's own registers, and `defines`
+    and `uses` say exactly which values an op reads and writes; anything
+    else in the gap is unrelated and is carried through where it stood.
+
+    A barrier still stops it: what it touches is its encoding's business.
     """
-    ends = [ir.span(op.node)[1] for op in (previous.low, previous.high) if op.node is not None]
-    return bool(ends) and max(ends) == min(one.at)
+    ends = _ends(previous)
+    if ends is None:
+        return False
+    lo = min(one.at)
+    if ends == lo:
+        return True
+    if block is None or origin is None:
+        return False
+    roots = PAIRS[previous.pair]
+    for op in block.ops:
+        if not (ends <= op.at < lo):
+            continue
+        if op.barrier or op.at in getattr(block, "calls", ()):
+            return False
+        if {origin.get(value) for value in (*op.defines, *op.uses)} & set(roots):
+            return False
+    return True
 
 
 def chains(body: MirBody, dead: frozenset[int] = frozenset()) -> tuple[Chain, ...]:
@@ -679,7 +709,7 @@ def chains(body: MirBody, dead: frozenset[int] = frozenset()) -> tuple[Chain, ..
             # a run breaks where the slot stops being known, and where the
             # previous member is not immediately before this one
             known = state.get(min(one.at), {}).get(number) is not None
-            if runs[number] and not _follows(runs[number][-1], one):
+            if runs[number] and not _follows(runs[number][-1], one, block, body.origin):
                 close(number)
             if one.kind is Kind.LOAD:
                 close(number)
@@ -772,7 +802,17 @@ def replaced(chain: Chain, block) -> tuple[int, int, set[int]]:
         for one in (pair.low, pair.high)
         if one.node is not None
     )
-    return lo, hi, {one.at for one in block.ops if lo <= one.at < hi}
+    # Each pair's own stretch, not the whole span. A chain may now step over
+    # an instruction that touches neither of its registers -- residue.md's E
+    # -- and that instruction stays exactly where BC put it, so it is not
+    # this chain's to remove.
+    mine: set[int] = set()
+    for pair in chain.ops:
+        start, end = min(pair.at), _ends(pair)
+        if end is None:
+            continue
+        mine.update(one.at for one in block.ops if start <= one.at < end)
+    return lo, hi, mine
 
 
 def widened(body: MirBody, dead: frozenset[int] = frozenset()) -> MirBody:
@@ -828,14 +868,19 @@ def widened(body: MirBody, dead: frozenset[int] = frozenset()) -> MirBody:
             # only kind that can land there, and
             # test_only_a_store_may_follow_the_restore is what keeps it so.
             _restore_at = chain.ops[-1].high.at if chain.restored else hi
+            last = len(chain.ops) - 1
             for number, pair in enumerate(chain.ops):
                 what = wider(pair)
                 assert what is not None
+                # Each widened operation stands for its own pair's bytes and
+                # no more, so an instruction carried through a gap still owns
+                # the bytes it sits on and layout.py's arithmetic adds up.
+                start, end = min(pair.at), _ends(pair)
                 ops.append(
                     replace(
                         pair.low,
                         made=what,
-                        covers=(lo, _restore_at) if number == 0 else (_restore_at, _restore_at),
+                        covers=(start, _restore_at if number == last else end),
                     )
                 )
             if chain.restored:

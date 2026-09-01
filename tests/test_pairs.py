@@ -635,3 +635,86 @@ def test_only_a_store_may_follow_the_restore() -> None:
                     f"{obj.stem}: a {one.kind.name} at {one.low.at:#x} would run after the restore"
                 )
     assert seen, "no chain puts an operation after its restore, so this proves nothing"
+
+
+def test_a_chain_may_step_over_what_it_does_not_touch() -> None:
+    """docs/residue.md's E, which contiguity was costing.
+
+    BC drops address arithmetic for some *other* value between the halves of
+    one long expression, and `lift.regions()`' rule -- anything unrecognised
+    between two pair operations stays where it is, so the rewrite cannot
+    span it -- broke the chain there. MIR can ask the question the machine
+    arm could not: `defines` and `uses` say which values an op reads and
+    writes, so an instruction that touches neither of the pair's registers
+    is unrelated and is carried through where it stood.
+
+    Both halves are checked. That some chain spans a gap at all, or this
+    proves nothing; and that none spans an op touching its own registers,
+    which would be a different program.
+    """
+    from iced_x86 import Register
+
+    spanned = 0
+    for obj in FIXTURES:
+        found = corpus.loaded(obj)
+        assert found is not None
+        mapped = code_map(found)
+        if isinstance(mapped, str):
+            continue
+        for _name, body in mir.bodies(found, split.partition(found, mapped)):
+            for block in body.blocks:
+                for chain in pairs.chains(body):
+                    if min(min(one.at) for one in chain.ops) not in {one.at for one in block.ops}:
+                        continue
+                    roots = set(pairs.PAIRS[chain.pair])
+                    for previous, one in zip(chain.ops, chain.ops[1:]):
+                        ends = pairs._ends(previous)
+                        lo = min(one.at)
+                        if ends is None or ends == lo:
+                            continue
+                        spanned += 1
+                        for op in block.ops:
+                            if not (ends <= op.at < lo):
+                                continue
+                            assert not op.barrier, f"{obj.stem}: a chain spans a barrier at {op.at:#x}"
+                            touched = {body.origin.get(v) for v in (*op.defines, *op.uses)}
+                            assert not touched & roots, (
+                                f"{obj.stem}: a chain spans {op.at:#x}, which touches its own pair"
+                            )
+    assert spanned, "no chain steps over anything, so this proves nothing"
+
+
+def test_what_a_chain_steps_over_is_still_there_afterwards() -> None:
+    """A carried instruction is not the chain's to remove.
+
+    `replaced()` used to drop every op in the chain's whole span, which was
+    right while a chain was contiguous and deletes real code now that one
+    can step over a gap.
+    """
+    seen = 0
+    for obj in FIXTURES:
+        found = corpus.loaded(obj)
+        assert found is not None
+        mapped = code_map(found)
+        if isinstance(mapped, str):
+            continue
+        for _name, body in mir.bodies(found, split.partition(found, mapped)):
+            after = pairs.widened(body)
+            kept = {op.at for block in after.blocks for op in block.ops}
+            for block in body.blocks:
+                for chain in pairs.chains(body):
+                    if chain.saved <= 0:
+                        continue
+                    if min(min(one.at) for one in chain.ops) not in {one.at for one in block.ops}:
+                        continue
+                    _lo, _hi, gone = pairs.replaced(chain, block)
+                    for previous, one in zip(chain.ops, chain.ops[1:]):
+                        ends = pairs._ends(previous)
+                        if ends is None or ends == min(one.at):
+                            continue
+                        for op in block.ops:
+                            if ends <= op.at < min(one.at):
+                                seen += 1
+                                assert op.at not in gone, f"{obj.stem}: {op.at:#x} was dropped"
+                                assert op.at in kept, f"{obj.stem}: {op.at:#x} is gone from the body"
+    assert seen, "no chain carries anything, so this proves nothing"
