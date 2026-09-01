@@ -40,15 +40,16 @@ Measured 2026-09-01. Re-measure before trusting it.
 
 | | |
 |---|---|
-| corpus | 95,189 → 89,490 code bytes, **-5.99%** |
-| qb-qrender | 74,855 → 75,605 code bytes, +1.00% — absorption costs 1,343 and emission gives 593 back |
+| corpus | 95,189 → 89,482 code bytes, **-6.00%** |
+| qb-qrender | 74,979 → 75,535 code bytes, **+0.74%** — absorption costs the bytes, emission and the peephole give most back |
+| **qb-qrender runs** | 291 frames against BC's 271, same geometry. It did not run at all before this session |
 | its arithmetic calls | 157 → 1 |
 | its x87 sites | 1,766, none optimised |
 | bench/nbody | 2.99× under DOSBox, 21 of 21 calls absorbed, pressure 6/6 |
 | corpus redundant reads | 751 — 73 live provider, 48 dead, 630 none |
 | selector coverage | 23,794 of 23,838 corpus ops; the 44 are `movsw`, refused deliberately |
 | segments MIR wrote | **every one**: 155 corpus objects and all 246 of qb-qrender's BC-built ones, absorbed or not |
-| **optimised and MIR-written** | **the default**, 18 suite programs on all 12 configurations, and the fuzz corpus clean |
+| **optimised and MIR-written** | **the default**, 18 suite programs on all 12 configurations, the fuzz corpus clean, and 40 of 40 mutations |
 
 MIR does, end to end:
 
@@ -90,6 +91,23 @@ Built, no consumer:
 - [x] pick the shorter encoding where it fits — short branches to a fixed
       point, the accumulator's moffs load and store, one-byte inc and dec,
       byte-sized immediates. 6.3% larger than BC became 4 bytes smaller
+- [x] the five BC writes and this did not — the byte-immediate push, a byte
+      displacement through a base register, the accumulator's own arithmetic
+      opcode, the by-1 shift, and the byte immediate in a memory compare.
+      Whole-segment emission cost qb-qrender +3.6% before these and saves
+      bytes after
+- [x] `cmp reg,0` as `test reg,reg` — a byte shorter and the same question,
+      and the only peephole here on this pass's *own* output: BC writes no
+      `cmp reg,0` at all, so every one is absorption's. Not when the
+      immediate is relocated, where the zero is an address
+- [x] an immediate a fixup names keeps its width — `add ax,offset X` arrives
+      as `add ax,0`, and the byte form fits zero. `select.emit` had the flag
+      and none of its callers passed it, so a two-byte relocation named a
+      one-byte field and the linker wrote over the instruction after it
+- [x] a comparison keeps its mnemonic — `test` and `cmp` are both
+      Operation.COMPARE and `test reg,reg` came back as `cmp reg,reg`, which
+      sets ZF unconditionally. Latent until the peephole above would have
+      been the first thing to emit one
 
 Proof: re-lower every corpus body through the selector with no transform
 applied; `tools/matrix.py` green. Same program, not same bytes — the
@@ -236,8 +254,15 @@ So the work is deleting a reload, not allocating a class:
       value would change what every op uses and defines, what regalloc has
       to colour and what select has to emit, for an optimisation nothing
       has been found to need
-- [ ] `Space.FAR`'s `segment` as that value, so two pointers through
-      different segments stop being one aliasing pair
+- [x] carrying `Space.FAR`'s `segment` through emission — `lift.memory()`
+      named Space.SEGMENT, FRAME and GROUP and let FAR fall into a bare
+      operand, so a widened pair read and wrote `ds` where BC wrote `es`.
+      **qb-qrender linked and then corrupted itself**, on one module of
+      fifteen, and `select.py` had handled the same address correctly all
+      along. The mutation that guarded this had lapsed -- see the Gates
+- [ ] `Space.FAR`'s `segment` as a *value*, so two pointers through
+      different segments stop being one aliasing pair. Carrying it is not
+      the same as tracking it: nothing yet knows two far pointers apart
 - [ ] a second segment register, only if a program is ever found that
       alternates. None here does
 
