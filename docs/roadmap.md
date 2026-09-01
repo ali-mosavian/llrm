@@ -345,6 +345,20 @@ program with the machine build as the oracle, which needs no authored
 golden and shrank F004 from 173 lines to 31. Worth rebuilding as a script
 if a third one turns up.
 
+**A mutation whose pattern stops matching reads as a pass.** `mutate.py`
+prints `pattern appears 0 times` and counts the mutation as caught, so the
+line "39 of 40 mutations caught" was hiding a check that had quietly
+stopped running -- `segment-override-not-refused`, pointed at a line in
+`lift.py` that was rewritten when an override became something resolved
+rather than refused. The bug it existed to catch then shipped: widening
+dropped the override off a far pointer and qb-qrender corrupted itself.
+
+Two mutations were reporting it. Both are repointed and the gate is 40 of
+40. The lesson is cheap to act on and was not acted on three times in one
+session: **a vacuous mutation is a failing gate, not a passing one**, and
+the count should say so rather than leaving it to a reader of the last
+line.
+
 Known gap, and it predates this: on the three QuickBASIC 4.5
 configurations one generated program in forty diverges between the
 evaluator and BC's own build. `fuzzcheck.py` excludes those from the qbopt
