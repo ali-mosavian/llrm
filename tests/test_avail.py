@@ -18,6 +18,8 @@ from qbopt import avail
 from qbopt import memory
 from qbopt import module
 from qbopt import regalloc
+from qbopt.module import Addr
+from qbopt.module import Space
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
@@ -242,3 +244,101 @@ def test_a_stack_slot_never_survives_a_call(obj: Path) -> None:
                     assert cell.addr is None or cell.addr.space is not Space.STACK, (
                         f"{obj.stem} {op.at:#x}: {cell} survived a call"
                     )
+
+
+def test_an_accumulate_is_not_a_load_however_its_values_look() -> None:
+    """`sub ax,[x]` reads the old ax as data; `mov ax,[x]` does not.
+
+    Both are one use whose origin is the destination's own register, so
+    values alone cannot tell them apart -- which is how allowing the
+    preserved high half of a narrow write let an accumulate through.
+    redundant() then deleted `sub ax,ds:[0]` and `adc dx,[si+2]` from a
+    generated program.
+
+    The semantics can tell them apart: a binary operation names its
+    destination among its sources and a move does not. This is the same
+    thing forward._loads_only exists to stop, arrived at from the other
+    side.
+    """
+    from qbopt import declen
+    from qbopt import ir
+    from qbopt.module import Addr
+    from qbopt.module import Space
+
+    def somewhere(*_args: object, **_kwargs: object) -> Addr:
+        return Addr(Space.LITERAL, 0, 0)
+
+    def semantics(hexs: str) -> ir.Semantics:
+        insn = declen.decode(bytes.fromhex(hexs), 0)
+        assert insn is not None
+        return ir.instruction_semantics(insn, somewhere)
+
+    made = semantics("2b060000")   # sub ax,[x]
+    moved = semantics("a1000000")  # mov ax,[x]
+    assert made.dests[0] in made.sources, "a subtract reads its own destination"
+    assert moved.dests[0] not in moved.sources, "a move does not"
+    assert made.op is not ir.Operation.MOVE
+    assert moved.op is ir.Operation.MOVE
+
+
+@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
+def test_nothing_redundant_is_an_accumulate(obj: Path) -> None:
+    """Corpus-wide: every deletion redundant() proposes is a move."""
+    from qbopt import ir
+    from qbopt import mir
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    found = corpus.loaded(obj)
+    assert found is not None
+    mapped = code_map(found)
+    if isinstance(mapped, str):
+        return
+    for _name, body in mir.bodies(found, split.partition(found, mapped)):
+        gone = set(avail.redundant(body, found.dgroup, found.calls))
+        for block in body.blocks:
+            for op in block.ops:
+                if op.at not in gone:
+                    continue
+                what = op.made if op.made is not None else getattr(op.node, "semantics", None)
+                assert what is not None and what.op is ir.Operation.MOVE, (
+                    f"{obj.stem} {op.at:#x}: {op.name} is not a move and was proposed for deletion"
+                )
+
+
+def test_preserved_allows_a_move_and_refuses_a_binary() -> None:
+    """The guard itself, on the two shapes it has to separate.
+
+    Built here rather than found in a fixture, because no fixture has the
+    shape: `sub ax,[x]` reaching redundant() needs the memory map to hold
+    that cell, which only happens in longer code than the suite writes. The
+    corpus test above is the invariant; this is what discriminates.
+    """
+    from iced_x86 import Register
+
+    from qbopt import ir
+
+    old = mir.Value(1, 0x100)
+    new = mir.Value(2, 0x100)
+    origin = {old: Register.EAX, new: Register.EAX}
+    cell = mir.MemRef(addr=Addr(Space.LITERAL, 0, 0), width=2)
+    where = ir.Mem(addr=Addr(Space.LITERAL, 0, 0), width=2)
+    into = ir.Reg(register=Register.AX, width=2)
+
+    def op(what: ir.Semantics) -> mir.Op:
+        return mir.Op(
+            at=0x100,
+            op=what.op,
+            name=what.name or "",
+            defines=(new,),
+            uses=(old,),
+            loads=(cell,),
+            made=what,
+        )
+
+    moved = op(ir.Semantics(ir.Operation.MOVE, "mov", dests=(into,), sources=(where,)))
+    assert avail._preserved(moved, new, origin) == {old}, "a move's read of its own destination is the high half"
+
+    accumulated = op(ir.Semantics(ir.Operation.BINARY, "sub", dests=(into,), sources=(into, where)))
+    assert avail._preserved(accumulated, new, origin) == set(), "a subtract reads its destination as data"
+    assert avail.loaded_into(accumulated, origin) is None, "and so is not a load"

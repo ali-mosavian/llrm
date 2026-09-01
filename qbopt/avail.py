@@ -42,6 +42,7 @@ from dataclasses import dataclass
 
 from iced_x86 import Register_
 
+from qbopt import ir
 from qbopt import mir
 from qbopt.mir import Op
 from qbopt import runtime
@@ -112,10 +113,21 @@ def _preserved(op: Op, made: Value, origin: dict[Value, Register_] | None) -> se
     deletes came back "not a plain load", and none of them was anything
     else.
 
-    Only the destination's own register qualifies, and only when this can
-    see which register that is. A read of any other value is data.
+    **The operation has to be a move.** `sub ax,[x]` reads the old eax the
+    same way `mov ax,[x]` does, and there the read is the whole point: the
+    bytes left in ax are not the cell's. Values cannot tell the two apart --
+    both are one use whose origin is the destination's register -- and the
+    semantics can, because a binary operation names its destination among
+    its sources and a move does not.
+
+    Leaving that out deleted `sub ax,ds:[0]` and `adc dx,[si+2]` from a
+    generated program. It is the same mistake `_loads_only` exists to stop
+    in forward.py, arrived at from the other side.
     """
     if origin is None:
+        return set()
+    what = op.made if op.made is not None else getattr(op.node, "semantics", None)
+    if what is None or what.op is not ir.Operation.MOVE:
         return set()
     into = origin.get(made)
     if into is None:
@@ -359,6 +371,16 @@ def redundant(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> t
         # wrong cell. forwardable() asks regalloc.live() for the same reason.
         inside: dict[Register_, Value] = {}
         for op in block.ops:
+            # A call clobbers ax, cx, dx and bx whatever it does to memory,
+            # so a value that was in one of them is not there afterwards.
+            # _after() keeps the *memory* map across a call runtime.py has
+            # proved clean, which is right and is exactly what makes this
+            # separate bookkeeping necessary: the cell is still that value
+            # and the register is not. forwardable() gets the same answer
+            # from regalloc.live().
+            if op.at in calls or op.barrier:
+                inside = {}
+                continue
             got = loaded_into(op, body.origin)
             if got is not None:
                 ref, made = got
