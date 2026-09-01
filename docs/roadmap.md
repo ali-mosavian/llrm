@@ -270,11 +270,28 @@ So the work is deleting a reload, not allocating a class:
 
 Done when the old path is deleted, not when MIR also does it.
 
-Three of the five are built and on, and **they find nothing**, which is what
-parity means: `rewrite.py` runs `forward.py` and `memory.py` before a body
-ever reaches `transform.py`, so there is nothing left for the MIR versions
-to take. Their worth is that `lift.py`, `forward.py` and `memory.py` can be
-deleted -- and that deletion is the milestone, not the building.
+Three of the five are built and on, and they find nothing -- **which is not
+parity, and was read as parity here for too long.** `rewrite.py` runs
+`forward.py` and `memory.py` first, so of course the MIR versions find
+nothing left. Nobody had measured the other direction.
+
+Measured now, on BC's untouched bodies: redundant loads 36 against MIR's
+30, dead stores 43 against 36. Switching the machine deletions off costs the
+corpus **45 bytes**, and the 13 sites are two known design limits rather
+than bugs:
+
+- MIR's `dead_stores()` is block-scoped and starts empty at each block's
+  end, which its own docstring says costs a store that spans an edge. All
+  seven misses are BC's module init, where the overwrite is in a later block
+- the six load misses are a `mov ax,[x] / mov dx,[x+2]` pair, the partial
+  write `avail.py` already has the hardest time with
+
+`memory.py` cannot go on its own account either: `substituted_reads()` uses
+`redundant_loads()` for the cross-block operand substitution, which is a
+third consumer and has no MIR equivalent at all.
+
+So the deletion is the milestone and it is further off than this file said.
+What it needs first is cross-block dead stores in `avail.py`.
 
 **None are left to build.** Widening is on, and absorption emits all four
 routines at parity with `calls.py` -- 1,151 of 1,151 corpus sites, twelve of
