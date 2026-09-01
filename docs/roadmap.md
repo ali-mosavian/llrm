@@ -345,19 +345,21 @@ program with the machine build as the oracle, which needs no authored
 golden and shrank F004 from 173 lines to 31. Worth rebuilding as a script
 if a third one turns up.
 
-**A mutation whose pattern stops matching reads as a pass.** `mutate.py`
-prints `pattern appears 0 times` and counts the mutation as caught, so the
-line "39 of 40 mutations caught" was hiding a check that had quietly
-stopped running -- `segment-override-not-refused`, pointed at a line in
-`lift.py` that was rewritten when an override became something resolved
-rather than refused. The bug it existed to catch then shipped: widening
-dropped the override off a far pointer and qb-qrender corrupted itself.
+**Read the exit code, not the last line.** `mutate.py` gets this right: a
+mutation whose pattern no longer matches is counted as survived and the run
+returns 1, and its own docstring says so. What hid it was the invocation --
+`uv run python tools/mutate.py | tail -5` reports `tail`'s status, so a
+failing gate came back "exited with code 0" three times in one session while
+printing `pattern appears 0 times` in plain sight.
 
-Two mutations were reporting it. Both are repointed and the gate is 40 of
-40. The lesson is cheap to act on and was not acted on three times in one
-session: **a vacuous mutation is a failing gate, not a passing one**, and
-the count should say so rather than leaving it to a reader of the last
-line.
+The check that had lapsed was `segment-override-not-refused`, pointed at a
+line in `lift.py` that was rewritten when an override became something
+resolved rather than refused. The bug it existed to catch then shipped:
+widening dropped the override off a far pointer and qb-qrender corrupted
+itself.
+
+Both lapsed mutations are repointed and the gate is 40 of 40. Pipe a gate
+through anything and `set -o pipefail` first, or do not pipe it.
 
 Known gap, and it predates this: on the three QuickBASIC 4.5
 configurations one generated program in forty diverges between the
