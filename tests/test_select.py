@@ -567,3 +567,36 @@ def test_a_relocated_field_never_changes_width(obj: Path) -> None:
                     f"{obj.stem} {op.at:#x}: {was.insn} has a {wanted}-byte relocated field, "
                     f"emitted {made.code.hex()} has {got}"
                 )
+
+
+@pytest.mark.parametrize(
+    ("hexs", "want"),
+    [("6685c0", "test eax,eax"), ("85c0", "test ax,ax"), ("6683f800", "cmp eax,0"), ("663bc0", "cmp eax,eax")],
+)
+def test_a_compare_keeps_the_mnemonic_it_was_given(hexs: str, want: str) -> None:
+    """`test` and `cmp` are both Operation.COMPARE and are not the same test.
+
+    `cmp a,b` sets the flags from a-b; `test a,b` sets them from a AND b.
+    For `test eax,eax` that is the value's own sign and zero, and re-emitting
+    it as `cmp eax,eax` sets ZF unconditionally -- a branch on it always
+    goes the same way.
+
+    select's COMPARE arm hardcoded "cmp" in all four of its shapes while
+    ir.Semantics carried name='test' all along. Nothing caught it because BC
+    emits no `test` at all: 0 across the corpus and all of qb-qrender. The
+    first thing to produce one would have been a peephole turning
+    `cmp reg,0` into the shorter `test reg,reg`, which is where this was
+    found.
+    """
+    from qbopt import declen
+    from qbopt.module import Addr
+    from qbopt.module import Space
+
+    insn = declen.decode(bytes.fromhex(hexs), 0)
+    assert insn is not None
+    what = ir.instruction_semantics(insn, lambda *_a, **_k: Addr(Space.LITERAL, 0, 0))
+    made = select.emit(what, at=0)
+    assert made is not None, f"{want} came back unencodable"
+    back = declen.decode(made.code, 0)
+    assert back is not None
+    assert str(back.insn) == want, f"asked for {want}, emitted {made.code.hex()} = {back.insn}"

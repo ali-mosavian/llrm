@@ -757,6 +757,29 @@ def address_of(into: Register_, cell: ir.Address, at: int = 0) -> Emitted | None
     return _assemble(Instruction.create_reg_mem(code, into, where), at)
 
 
+def compare_registers(name: str, one: Register_, other: Register_, at: int = 0) -> Emitted | None:
+    """`cmp a,b` or `test a,b` -- both flags-only, and not the same question.
+
+    `cmp` sets the flags from a-b and `test` from a AND b, so `test ax,ax`
+    asks about the value's own sign and zero where `cmp ax,ax` answers
+    "equal" no matter what is in it. They share ir.Operation.COMPARE and are
+    told apart by the mnemonic, which is what Semantics.name is for.
+
+    TEST has only the `85 /r` shape -- there is no `test r,rm` distinct from
+    `test rm,r` -- so it is named here rather than built from the pattern
+    the rest of this table follows.
+    """
+    if name == "cmp":
+        return arith("cmp", one, other, at)
+    if name != "test":
+        return None
+    width = WIDTHS.get(one)
+    if width is None or WIDTHS.get(other) != width:
+        return None
+    code = _code(f"TEST_RM{width * 8}_R{width * 8}")
+    return None if code is None else _assemble(Instruction.create_reg_reg(code, one, other), at)
+
+
 def compare_mem(dest: Register_, cell: ir.Mem, at: int = 0) -> Emitted | None:
     """`cmp dest,[cell]`. Flags are the whole result, so there is no dest."""
     return arith_mem("cmp", dest, cell, at)
@@ -1100,13 +1123,20 @@ def emit(
                     return exchange(_remapped(one, where), _remapped(other, where), at)
         case ir.Operation.COMPARE if len(sources) == 2:
             match (sources[0], sources[1]):
-                case (_, ir.Imm(value=value)):
+                case (_, ir.Imm(value=value)) if (what.name or "cmp") == "cmp":
                     return compare(sources[0], value, at, relocated)
-                case (ir.Reg(register=into), ir.Mem() as cell):
+                case (ir.Reg(register=into), ir.Mem() as cell) if (what.name or "cmp") == "cmp":
                     return compare_mem(_remapped(into, where), cell, at)
                 case (ir.Reg(register=into), ir.Reg(register=outof)):
-                    return arith("cmp", _remapped(into, where), _remapped(outof, where), at)
+                    return compare_registers(
+                        what.name or "cmp", _remapped(into, where), _remapped(outof, where), at
+                    )
                 case (ir.Mem() as cell, ir.Reg(register=outof)):
+                    # Only `cmp` here: `test` against memory has its own
+                    # shapes and BC writes none of them, so this refuses
+                    # rather than emitting the wrong comparison.
+                    if (what.name or "cmp") != "cmp":
+                        return None
                     return arith_into("cmp", cell, _remapped(outof, where), at)
         case ir.Operation.MULTIPLY if len(dests) == 1 and len(sources) >= 2:
             # One destination is the naming form: `imul eax,ecx`, and with a
