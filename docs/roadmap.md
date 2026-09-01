@@ -213,9 +213,45 @@ source is gone by then" refusals in `simplify.py` and `avail.py` disappear.
 
 ## M3 — the classic passes
 
-Each needs M1; anything that moves code needs M2. **All of them measure
-empty on BC's output**, which reorders the rest of this file: the wins are
-in absorption, not in the textbook passes.
+Each needs M1; anything that moves code needs M2.
+
+**This file said they all measure empty on BC's output. That was the metric,
+not BC.** Every measurement behind it was block-scoped, and BC's redundancy
+is loop-carried -- so the questions were shaped to find nothing on exactly
+the code they were asked about. `a(i) = a(i) + i * 2` inside a `FOR i`, on
+p-g2, eleven instructions and 31 bytes:
+
+```
+003c  shl ax,1          ; i*2, and the byte index too, since INTEGER is two
+003e  mov si,ax
+0040  add [si],ax       ; a(i) = a(i) + i*2
+0044  mov cx,[si]       ; reload a(i), written on the line above
+0048  add [0],cx        ; t = t + a(i)
+004c  mov cx,[0]        ; reload i -- and i is in ax
+0050  inc cx
+0051  mov ax,cx
+0053  mov [0],ax
+0056  cmp ax,64h
+0059  jle short 003c
+```
+
+`NEXT i` is four instructions and nine bytes to do `inc ax`, and the loop
+counter round-trips through memory every iteration. About eight of the
+thirty-one bytes are avoidable, and more of the cycles.
+
+None of it was visible to what this file called a measurement:
+
+- **CSE "0 sites over SSA values"** -- BC never recomputes, it reloads, so
+  there is nothing to CSE by construction. The redundancy is in the loads
+- **redundant loads** -- `avail.redundant()` asks for a load into the
+  register that already holds the cell. BC reloads into a *different* one
+- **every one of them block-scoped** -- the value `mov cx,[0]` reloads
+  arrives over the back-edge, and the block starts at the branch target
+
+What the shape actually asks for is store-to-load forwarding, copy
+propagation, and keeping a local in a register across a loop. Those are M2
+and M4, and they are where the wins are -- not because the textbook passes
+are empty but because nothing here had asked them a loop-carried question.
 
 - [x] constant folding — measured, not built: every result comes out
       *longer*, because `xor ax,ax` is two bytes and `mov ax,0` is three
