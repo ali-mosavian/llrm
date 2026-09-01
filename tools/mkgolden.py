@@ -131,6 +131,17 @@ def nots() -> list[str]:
     ]
 
 
+def negnot() -> list[str]:
+    a, b = 305419896, 252645135
+    return [
+        f"A={num(s32(-(~a)))}",
+        f"B={num(s32(-(~(a & b))))}",
+        f"C={num(s32(~(a | b)))}",
+        f"D={num(s32(-(a & b)))}",
+        "DONE",
+    ]
+
+
 def fpemu() -> list[str]:
     x, y = 1073741831, 1024
     q = x // y
@@ -374,6 +385,7 @@ PROGRAMS = {
     "flags": flags,
     "divmod": divmod_,
     "nots": nots,
+    "negnot": negnot,
     "fpemu": fpemu,
     "fpdeep": fpdeep,
     "chain": chain,
