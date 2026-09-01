@@ -107,7 +107,10 @@ def _defined(op: mir.Op) -> mir.Value | None:
 
 def _result(op: mir.Op, known: dict[mir.Value, Known], origin: dict[mir.Value, Register_]) -> Known | None:
     """What this operation computes, where every input is known."""
-    semantics = op.node.semantics if op.node is not None else None
+    # What a transform decided this op computes, where it decided; the
+    # node's own otherwise. An op rewritten by an earlier pass is raised
+    # again before this looks, so its `made` is the only account of it.
+    semantics = op.made if op.made is not None else (op.node.semantics if op.node is not None else None)
     if semantics is None or not ir.modelled(semantics) or _defined(op) is None:
         return None
 
@@ -146,6 +149,19 @@ def known(body: mir.MirBody) -> dict[mir.Value, Known]:
     while changing:
         changing = False
         for block in body.blocks:
+            # A join is known where every path into it agrees. Nothing else
+            # about a phi is knowable -- and this is what makes the
+            # propagation cross-block rather than merely whole-body: a value
+            # defined in one branch and read after the join was invisible
+            # until the phi carrying it could be a number too.
+            for phi in block.phis:
+                if phi.result in facts or not phi.incoming:
+                    continue
+                seen = [facts.get(one) for one in phi.incoming.values()]
+                if any(one is None for one in seen) or len({(o.n, o.width) for o in seen}) != 1:
+                    continue
+                facts[phi.result] = seen[0]
+                changing = True
             for op in block.ops:
                 target = _defined(op)
                 if target is None or target in facts:

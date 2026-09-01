@@ -63,7 +63,11 @@ MIR does, end to end:
 
 Built, no consumer:
 
-- [ ] `consts.known()` — proves 1,971 corpus values, nothing emits from them
+- [ ] `consts.known()` — proves 2,233 corpus values, nothing emits from
+      them. Cross-block through phis now, and **0 phis in the corpus are
+      known**: no join has every path into it agreeing on a number. The
+      262 it gained came from reading `Op.made`, so a value an earlier
+      pass computed counts too
 - [x] `wide.py` — superseded by `qbopt/pairs.py`, which is on. See M5
 - [ ] `regalloc.colour()` — correct, and cannot pay while identity is optimal at pressure 6/6
 
@@ -213,9 +217,16 @@ Each needs M1; anything that moves code needs M2. **All of them measure
 empty on BC's output**, which reorders the rest of this file: the wins are
 in absorption, not in the textbook passes.
 
-- [x] constant folding — measured, not built: 1,086 results are known
-      constants and every one comes out *longer*, because `xor ax,ax` is
-      two bytes and `mov ax,0` is three
+- [x] constant folding — measured, not built: every result comes out
+      *longer*, because `xor ax,ax` is two bytes and `mov ax,0` is three
+- [x] constant propagation — built, cross-block, and **its consumers are
+      empty**. Three measured: no phi in the corpus is known, so the join
+      case finds nothing; no multiply takes a register holding a known
+      constant, because BC emits no `imul` at all and absorption's own
+      operand is memory or an immediate; and no divisor is a constant, since
+      BC stores a literal in a variable first
+- [x] strength reduction — `imul r,3` as `lea r,[r+r*2]`, a power of two as
+      `shl`, gated on the flags. 15 sites, all of them by three
 - [x] dead code elimination — measured, not built: BC emits none
 - [x] CSE — measured, not built: 0 sites over SSA values, because BC
       reloads from memory rather than recomputing, and the memory
