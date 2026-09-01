@@ -280,6 +280,30 @@ Two are left, and they are the two that matter: absorption is where every
 measured win in this project comes from, and widening is the one that has
 already been written wrong once.
 
+### What the pair analysis is for
+
+`qbopt/pairs.py` reads BC's two long register pairs over values, and five of
+its shapes agree with `lift.py` exactly, object by object -- load 533,
+alu-m 363, alu-i 121, not 51, move 12 across the corpus. It is easy to
+mistake it for widening's prerequisite and judge it on what widening saves.
+That is the wrong measure. **The goal at the top of this file is to
+recompile BC's output, not to widen longs**, and knowing which values a pair
+holds is what any of it needs -- array access, hoisting, reallocation, and
+the integer work as much as the long.
+
+Widening's own numbers, since they were measured and are worth keeping:
+capping it costs the corpus **1,766 bytes** (89,806 against 91,572, about
+1.9 per cent of the code) and qb-qrender only **196**, where **156 regions
+are refused because widening them would grow the code** -- four times as
+many as it takes profitably. That is the same fact as "qb-qrender declares
+no LONG at all", seen from the other side.
+
+The design consequence is worth stating before anything is built: M5's
+widening is three parts, not two. Recognition, the rename, **and a cost
+model** -- and on the program that matters most the cost model rejects most
+candidates. `lift.py` has one ("widening it grows N bytes to M"). A MIR
+version without it would make qb-qrender bigger.
+
 - [ ] widening — `transform.widened()` is written and **off, because it was
       wrong**. It folded `add ax,[x]` with `adc dx,[x+2]` into
       `add eax,[x]`, and BC keeps a long in `dx:ax`, which is not `eax`:
