@@ -852,6 +852,19 @@ def memory(value: Value) -> MemoryOperand:
             return relocated_memory(base)
         case Addr(space=Space.FRAME, disp=disp):
             return MemoryOperand(base=Register.BP, displ=disp, displ_size=value.dlen or 1)
+        case Addr(space=Space.FAR, base=base, disp=disp, segment=segment):
+            # The override is the address's identity, not decoration:
+            # `es:[bx]` and `[bx]` are different memory. Dropping it let a
+            # widened pair read and write ds where BC wrote es -- qb-qrender's
+            # sys.obj corrupted itself and hung, and it linked cleanly first.
+            #
+            # operand() only ever resolves an override on bx with no index
+            # (measured: every one of qb-qrender's 11,150 of them), so that is
+            # the shape here; a segment this cannot name is refused rather
+            # than emitted without it.
+            if segment == Register.NONE:
+                raise ValueError(f"{value.op} has a far operand with no nameable segment")
+            return MemoryOperand(base=base, displ=disp, displ_size=2, seg=segment)
         case Addr(space=Space.GROUP):
             # operand() already refuses this address kind, so no Value should
             # ever carry one here -- raising rather than falling into the

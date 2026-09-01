@@ -754,3 +754,52 @@ def test_movsx_needs_the_cwd_byte_adjacent_not_just_next_in_the_stream() -> None
     assert mov_insn is not None and cwd_insn is not None
     values, _stores, _bridges = lift(code, 0, len(code), stream=[mov_insn, cwd_insn])
     assert values == []
+
+
+class _FarValue:
+    """Only the fields lift.memory() reads, so no real Value is needed."""
+
+    def __init__(self, mem: object) -> None:
+        self.mem = mem
+        self.dlen = 0
+        self.op = "mov"
+
+
+def test_a_widened_far_pointer_keeps_its_segment_override() -> None:
+    """`mov ax,es:[bx]` widened must still say `es:`.
+
+    lift.memory() names Space.SEGMENT, Space.FRAME and Space.GROUP and lets
+    everything else fall into a bare `MemoryOperand(base, disp)`. Space.FAR
+    lands there, and its `segment` -- the whole thing that makes it far --
+    was dropped, so a pair reading through es came back reading through ds.
+
+    In qb-qrender's sys.obj that turned
+
+        mov ax,es:[bx] ; mov dx,es:[bx+2]      into    mov eax,[bx]
+        mov es:[bx],ax ; mov es:[bx+2],dx      into    mov [bx],eax
+
+    reading and writing the wrong segment. The program linked and then
+    corrupted itself: "String space corrupt", or a hang, on the only
+    real program this pass has.
+
+    tools/mutate.py has carried a `segment-override-not-refused` mutation
+    since before an override was resolved rather than refused, and it has
+    been reporting "pattern appears 0 times" -- the guard stopped running
+    when the line it patched was rewritten, and nothing noticed.
+    """
+    from iced_x86 import Code
+    from iced_x86 import Encoder
+    from iced_x86 import Instruction
+
+    from qbopt import lift as lifting
+    from qbopt.module import Space
+    from qbopt.module import far_pointer
+
+    where = far_pointer(0, Register.BX, Register.ES)
+    assert where.space is Space.FAR and where.segment is Register.ES
+
+    operand = lifting.memory(_FarValue(where))
+    encoder = Encoder(16)
+    encoder.encode(Instruction.create_reg_mem(Code.MOV_R32_RM32, Register.EAX, operand), 0)
+    got = encoder.take_buffer()
+    assert got[0] == 0x26, f"the es: prefix is gone: {got.hex(' ')}"

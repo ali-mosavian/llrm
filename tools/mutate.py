@@ -189,11 +189,12 @@ MUTATIONS = (
         "a popped argument only recovers its low 16 bits, garbage in the rest of the register",
     ),
     Mutation(
-        "segment-override-not-refused",
+        "segment-override-dropped",
         "qbopt/lift.py",
-        "if insn.disp_at is None or insn.memory_index != Register.NONE or insn.has_segment_override:",
-        "if insn.disp_at is None or insn.memory_index != Register.NONE:",
-        "`es:[x]` conflated with `ds:[x]` -- a segment override silently ignored",
+        "            return MemoryOperand(base=base, displ=disp, displ_size=2, seg=segment)",
+        "            return MemoryOperand(base=base, displ=disp, displ_size=2)",
+        "`es:[bx]` widened to `ds:[bx]` -- the override dropped, so the pair "
+        "reads and writes the wrong segment",
     ),
     Mutation(
         "group-address-not-refused",
