@@ -91,7 +91,14 @@ def build_corpus(seed: int, count: int, work: Path) -> tuple[Path, Path, list[st
     return source_dir, golden_dir, names
 
 
-def run_tag(tag: str, source_dir: Path, golden_dir: Path, names: list[str], timeout: int) -> TagReport:
+def run_tag(
+    tag: str,
+    source_dir: Path,
+    golden_dir: Path,
+    names: list[str],
+    timeout: int,
+    absorb_calls: bool = True,
+) -> TagReport:
     base = e2e.run(
         tag,
         names=names,
@@ -124,6 +131,11 @@ def run_tag(tag: str, source_dir: Path, golden_dir: Path, names: list[str], time
         golden_dir=golden_dir,
         work=BUILD / tag / "opt",
         timeout=timeout,
+        transform=None
+        if absorb_calls
+        else (lambda data: __import__("qbopt.rewrite", fromlist=["rewrite"]).rewrite(
+            data, dry_run=False, absorb_calls=False
+        )[0]),
     )
     qbopt_diffs = [v for v in opt.verdicts if not v.ok]
     passed = sum(1 for v in opt.verdicts if v.ok)
@@ -136,6 +148,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--timeout", type=int, default=300)
+    ap.add_argument(
+        "--no-absorb-calls",
+        action="store_true",
+        help="leave the arithmetic calls to the MIR tower instead of calls.py",
+    )
     ap.add_argument("--tag", action="append", dest="tags", help="repeatable; default is every available config")
     args = ap.parse_args(argv)
 
@@ -149,7 +166,14 @@ def main(argv: list[str] | None = None) -> int:
     print(f"generated {len(names)} programs, seed {args.seed}, into {corpus_dir}")
 
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        reports = list(pool.map(lambda t: run_tag(t, source_dir, golden_dir, names, args.timeout), tags))
+        reports = list(
+            pool.map(
+                lambda t: run_tag(
+                    t, source_dir, golden_dir, names, args.timeout, not args.no_absorb_calls
+                ),
+                tags,
+            )
+        )
 
     bad = 0
     for r in reports:

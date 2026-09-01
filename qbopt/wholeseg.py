@@ -28,7 +28,9 @@ from qbopt import blocks as split
 from qbopt.blocks import code_map
 
 
-def rebuilt(data: bytes, optimise: bool = True, native_fpu: bool = False) -> tuple[bytes, str]:
+def rebuilt(
+    data: bytes, optimise: bool = True, native_fpu: bool = False, absorb: bool = False
+) -> tuple[bytes, str]:
     """The object with its code segment rewritten, and what happened.
 
     Returns the input unchanged where anything refuses, so a caller can use
@@ -53,7 +55,8 @@ def rebuilt(data: bytes, optimise: bool = True, native_fpu: bool = False) -> tup
     # which is what a caller bisecting a layout question wants.
     if optimise:
         bodies = [
-            (name, transform.applied(body, found.dgroup, found.calls)) for name, body in bodies
+            (name, transform.applied(body, found.dgroup, found.calls, blocks=blocks, absorb=absorb))
+            for name, body in bodies
         ]
 
     # Every byte the decoder walked into, so layout.py can tell a gap it may

@@ -153,3 +153,131 @@ def test_each_operand_is_four_bytes_of_pushes_and_they_do_not_overlap() -> None:
                 )
                 assert list(group) == sorted(group, key=lambda one: one.at), "not in push order"
     assert seen > 1000, "too few sites to prove anything"
+
+
+def _absorbed_ops(obj, found, blocks):
+    """Every absorbed site in one object, as (call address, the ops it became).
+
+    The operations one site becomes are exactly the ones sitting inside the
+    call's own bytes: absorption replaces the call and nothing else, so the
+    pushes keep their addresses and everything in [call, call+5) is new.
+    """
+    from qbopt import mir
+
+    sites = {
+        one.at: one
+        for block in blocks
+        for one in block.insns
+        if (found.calls.get(one.at) or "").upper() in transform.EMITTED
+    }
+    for _name, body in mir.bodies(found, blocks):
+        after = transform.absorbed(body, blocks, found.calls)
+        for block in after.blocks:
+            for at, call in sites.items():
+                ops = [one for one in block.ops if at <= one.at < call.end]
+                if len(ops) > 1:
+                    yield at, ops
+
+
+def test_an_absorbed_divide_is_the_instructions_the_runtime_would_have_run() -> None:
+    """`pop eax / pop ecx / cdq / idiv ecx`, and the restore after it.
+
+    The dividend is the left operand and goes in eax, which `cdq` then
+    widens into edx:eax -- `idiv` reads that pair and names only the
+    divisor. Getting `cdq` wrong is not slower, it is a different answer for
+    every negative dividend.
+    """
+    seen = {"B$MUI4": 0, "B$DVI4": 0}
+    for obj, found, blocks in _corpus():
+        for at, ops in _absorbed_ops(obj, found, blocks):
+            name = (found.calls.get(at) or "").upper()
+            if name not in seen:
+                continue
+            seen[name] += 1
+            want = ["pop", "pop", "imul", "restore"] if name == "B$MUI4" else [
+                "pop", "pop", "cdq", "idiv", "restore"
+            ]
+            assert [one.name for one in ops] == want, f"{obj.stem} at {at:#x}: {[o.name for o in ops]}"
+    assert all(seen.values()), f"nothing absorbed for one of them: {seen}"
+
+
+def test_the_operands_go_where_the_machine_arm_puts_them() -> None:
+    """Left in eax, right in ecx -- and the pops take the topmost first.
+
+    `grouped()` returns deepest first and `arguments()` has already applied
+    LEFT_FIRST, so for the three arithmetic routines the left operand is the
+    one nearest the call. That is what the first `pop` takes.
+    """
+    from qbopt.calls import CONSUME_TARGETS
+
+    assert transform.INTO == CONSUME_TARGETS["B$DVI4"] == CONSUME_TARGETS["B$MUI4"], (
+        "the MIR emitter and calls.py disagree about which register an operand lands in"
+    )
+
+    seen = 0
+    for obj, found, blocks in _corpus():
+        where = transform.arguments(blocks, found.calls)
+        for at, groups in where.items():
+            if (found.calls.get(at) or "").upper() not in transform.EMITTED:
+                continue
+            seen += 1
+            left, right = groups
+            assert max(one.at for one in left) > max(one.at for one in right), (
+                f"{obj.stem} at {at:#x}: the left operand is not the one nearest the call"
+            )
+    assert seen, "no sites, so this proves nothing"
+
+
+def test_an_absorbed_call_fits_in_the_bytes_it_replaces() -> None:
+    """layout.py keys every operation by an address, so a site has as many
+    to give as the call has bytes -- five, for the far call BC writes.
+
+    That is the whole reason B$RMI4 is not absorbed here: its answer comes
+    back in edx and moving it to eax makes six operations where there is
+    room for five. An address budget, not anything about the arithmetic.
+    """
+    for obj, found, blocks in _corpus():
+        for at, ops in _absorbed_ops(obj, found, blocks):
+            if (found.calls.get(at) or "").upper() not in transform.EMITTED:
+                continue
+            call = next(
+                one for block in blocks for one in block.insns if one.at == at
+            )
+            where = [one.at for one in ops]
+            assert len(where) == len(set(where)), f"{obj.stem}: two operations on one address at {at:#x}"
+            assert min(where) == at and max(where) < call.end, (
+                f"{obj.stem} at {at:#x}: {len(ops)} operations for {call.end - at} bytes"
+            )
+
+
+def test_a_site_whose_flags_are_read_is_left_alone() -> None:
+    """`imul` and `idiv` leave their own flags and the call left the
+    runtime's, so a jcc after the site would read a different answer.
+
+    Checked against what comes out, not against the condition recomputed:
+    the call has to still be there.
+    """
+    from qbopt import mir
+
+    refused = taken = 0
+    for obj, found, blocks in _corpus():
+        where = transform.arguments(blocks, found.calls)
+        for _name, body in mir.bodies(found, blocks):
+            read = transform._read_flags(body)
+            after = transform.absorbed(body, blocks, found.calls)
+            standing = {op.at for block in after.blocks for op in block.ops if op.op is ir.Operation.CALL}
+            for block in body.blocks:
+                for op in block.ops:
+                    if (found.calls.get(op.at) or "").upper() not in transform.EMITTED:
+                        continue
+                    if op.at not in where:
+                        continue
+                    if any(one.flags and one in read for one in op.defines):
+                        refused += 1
+                        assert op.at in standing, (
+                            f"{obj.stem}: {op.at:#x} absorbed with its flags read afterwards"
+                        )
+                    else:
+                        taken += 1
+                        assert op.at not in standing, f"{obj.stem}: {op.at:#x} not absorbed"
+    assert refused and taken, f"refused {refused}, took {taken} -- one of them proves nothing"

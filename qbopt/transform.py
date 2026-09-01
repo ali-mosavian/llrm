@@ -42,6 +42,7 @@ from qbopt import pairs
 from qbopt import layout
 from qbopt.mir import Op
 from qbopt.declen import Insn
+from iced_x86 import Register
 from qbopt.mir import MirBody
 
 
@@ -138,6 +139,8 @@ def applied(
     dgroup: frozenset[int],
     calls: dict[int, str],
     *,
+    blocks: list | None = None,
+    absorb: bool = False,
     widen: bool = True,
     drop_loads: bool = True,
     drop_stores: bool = True,
@@ -145,18 +148,10 @@ def applied(
 ) -> MirBody:
     """Every transform this module has, in the order they help each other.
 
-    **Widening is off, and wrong as written.** `add ax,[x]` with
-    `adc dx,[x+2]` is a 32-bit add of a value BC keeps in `dx:ax`, and
-    `dx:ax` is not `eax` -- so folding it to `add eax,[x]` puts the carry
-    into the high half of eax and leaves dx holding what it held before.
-    suite/procs.bas prints 0x02040C10 where it wants 0x04080C10: the low
-    half doubled, the high half untouched. Every one of the twelve
-    configurations caught it.
-
-    Making it right means what lift.py already does -- proving the pair is
-    one value and putting it in one register first -- which is the pair
-    analysis, not a rename of the low half's operands. wide.widened() builds
-    the operation; what is missing is the step before it.
+    `absorb` is off by default and not because it is unsound: calls.py has
+    already taken every arithmetic call before a body reaches here, so with
+    it on the MIR emitter finds nothing and no gate exercises it.
+    `--no-absorb-calls` is the lever that makes the two comparable.
     """
     if drop_loads:
         body = without_redundant_loads(body, dgroup, calls)
@@ -178,6 +173,11 @@ def applied(
     # switched on when something asks for that, not before.
     if place:
         body = placed(body)
+    # Absorption last, and needing the blocks: `arguments()` reads a stack
+    # depth off the instructions, and a transform that has already replaced
+    # some of them is not what that model was measured against.
+    if absorb and blocks is not None:
+        body = absorbed(body, blocks, calls)
     return body
 
 
@@ -331,3 +331,148 @@ def arguments(blocks: list, calls: dict[int, str]) -> dict[int, tuple[tuple[Insn
             left, right = groups if LEFT_FIRST[name] else (groups[1], groups[0])
             found[frame.call.at] = (tuple(left), tuple(right))
     return found
+
+
+# The register each popped operand lands in, left first -- the dividend and
+# the multiplicand in eax, the divisor and multiplier in ecx. `idiv` names
+# only the divisor: its dividend is edx:eax and that is what `cdq` widens
+# eax into.
+INTO = (Register.EAX, Register.ECX)
+
+# What the result comes back in, which is what BC reads as dx:ax.
+RESULT = Register.EAX
+
+# A far call is five bytes, so a site has five addresses to put operations
+# on -- and layout.py keys every operation by one. Multiply needs four and
+# divide five; the remainder needs six, because its answer comes back in edx
+# and has to be moved. That is why B$RMI4 is not here, and it is an address
+# budget rather than anything about the arithmetic.
+EMITTED = {"B$MUI4": 4, "B$DVI4": 5}
+
+
+def _wide(register: "Register") -> ir.Reg:
+    return ir.Reg(register=register, width=4)
+
+
+def _read_flags(body: MirBody) -> frozenset:
+    """Every flags value something in this body reads.
+
+    A call is not one of them. MIR gives every call a use of FLAGS, which is
+    the conservative answer for a body that could branch on them -- and it
+    makes every absorbable site look like its flags are read, because the
+    next call reads them. Nothing in BC's convention passes a value in
+    flags and no runtime routine branches on the caller's, which is the
+    claim calls.py's own flag liveness has always rested on.
+
+    A flags value reaching a phi still counts: it is live out of the block
+    and what reads it is not visible from here.
+    """
+    seen = set()
+    for block in body.blocks:
+        for phi in block.phis:
+            seen.update(one for one in phi.incoming.values() if one.flags)
+        for op in block.ops:
+            if op.op is ir.Operation.CALL:
+                continue
+            seen.update(one for one in op.uses if one.flags)
+    return frozenset(seen)
+
+
+def _absorbing(name: str, at: int, after: Op) -> list[Op]:
+    """The operations one absorbed call becomes, in order.
+
+    The arguments are popped rather than reloaded, which is what makes this
+    sound at a site whose pushes are not contiguous: `stack.frames()` proves
+    the four bytes of each operand are the topmost region of the stack, and
+    popping them takes exactly what a real callee-cleanup call would have.
+    Reloading one operand from its address instead would leave its push
+    standing and leak four bytes of stack per call, forever.
+
+    The pushes are left where they are. Only the call is replaced, so
+    nothing between them has to be accounted for and the region is five
+    bytes wide however far apart they were pushed.
+    """
+    def made(op: ir.Operation, name: str, dests, sources) -> ir.Semantics:
+        return ir.Semantics(op, name, dests=tuple(dests), sources=tuple(sources))
+
+    steps: list[ir.Semantics] = [
+        made(ir.Operation.POP, "pop", (_wide(INTO[0]),), ()),
+        made(ir.Operation.POP, "pop", (_wide(INTO[1]),), ()),
+    ]
+    if name == "B$MUI4":
+        steps.append(
+            made(ir.Operation.MULTIPLY, "imul", (_wide(RESULT),), (_wide(RESULT), _wide(INTO[1])))
+        )
+    else:
+        # cdq, not cwd: the dividend is the whole 32 bits of eax and idiv
+        # reads edx:eax, so the sign has to reach edx or every negative
+        # dividend divides as if it were huge and positive.
+        steps.append(made(ir.Operation.EXTEND, "cdq", (_wide(Register.EDX),), (_wide(RESULT),)))
+        steps.append(
+            made(
+                ir.Operation.DIVIDE,
+                "idiv",
+                (_wide(RESULT), _wide(Register.EDX)),
+                (_wide(RESULT), _wide(Register.EDX), _wide(INTO[1])),
+            )
+        )
+
+    out: list[Op] = []
+    for number, what in enumerate(steps):
+        out.append(
+            replace(
+                after,
+                at=at + number,
+                op=what.op,
+                name=what.name or "",
+                defines=(),
+                uses=(),
+                loads=(),
+                stores=(),
+                node=None,
+                made=what,
+                # The first stands for the call's own five bytes and the
+                # rest for none, which is layout.py's own arithmetic for a
+                # transform that puts more operations where fewer were.
+                covers=(at, after.node.insn.end if after.node is not None else at) if number == 0 else (at + number, at + number),
+            )
+        )
+    # `push eax / pop ax / pop dx` -- BC reads a long in dx:ax and the
+    # arithmetic left it in eax. pairs.py's own restore, for the same reason.
+    out.append(pairs._restore_op(0, at + len(steps), out[-1], at + len(steps)))
+    return out
+
+
+def absorbed(body: MirBody, blocks: list, calls: dict[int, str]) -> MirBody:
+    """Every arithmetic runtime call this can compute in place, computed.
+
+    The half of M5 that is emission rather than analysis. `arguments()` says
+    where a call's operands are; this says what the call becomes.
+
+    Refused where anything reads the flags the call defined: `imul` and
+    `idiv` leave their own, and a `jcc` after the site would read a
+    different answer. Refused too where the operands are not both four bytes
+    on top of the stack, which is `stack.frames()`' own claim.
+    """
+    where = arguments(blocks, calls)
+    if not where:
+        return body
+
+    read = _read_flags(body)
+    out = []
+    for block in body.blocks:
+        ops: list[Op] = []
+        for op in block.ops:
+            name = (calls.get(op.at) or "").upper()
+            if op.at not in where or name not in EMITTED or op.node is None:
+                ops.append(op)
+                continue
+            if any(one.flags and one in read for one in op.defines):
+                ops.append(op)
+                continue
+            if getattr(op.node, "insn", None) is None:
+                ops.append(op)
+                continue
+            ops.extend(_absorbing(name, op.at, op))
+        out.append(replace(block, ops=tuple(ops)))
+    return replace(body, blocks=tuple(out))

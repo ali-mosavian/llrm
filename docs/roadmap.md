@@ -277,9 +277,10 @@ to take. Their worth is that `lift.py`, `forward.py` and `memory.py` can be
 deleted -- and that deletion is the milestone, not the building.
 
 One is left, and it is the one that matters: absorption is where every
-measured win in this project comes from. Widening is done and on -- and it
-was written wrong twice more before it was, which is the case for not
-writing the absorbed-call generator blind.
+measured win in this project comes from. Widening is done and on, and
+absorption emits multiply and divide -- what is left of it is the compare,
+which is 799 of the corpus's 1,151 sites and the only one whose contract is
+that it changes no register at all.
 
 ### What the pair analysis is for
 
@@ -392,13 +393,47 @@ version without it would make qb-qrender bigger.
       an unknown one resetting rather than guessing. `calls.py` has used it
       all along. The MIR walk was a second, worse copy of a model already
       in the tree, which is what made it wrong in three ways at once
-- [ ] **emitting the absorbed call** — the half that is left, and the one
-      piece of M5 that should not be written without running anything.
-      `calls.py` does it in some five hundred lines: which operand goes in
-      which register, the `cdq` before an `idiv`, where the result lands,
-      and a scratch register for `B$CPI4` because that routine clobbers
-      nothing and absorbing it must not either. A code generator is not
-      something to write blind
+- [ ] **emitting the absorbed call** — multiply and divide are done and
+      run; remainder and compare are not.
+
+      `transform.absorbed()` turns `call B$DVI4` into
+      `pop eax / pop ecx / cdq / idiv ecx` and the restore after it, leaving
+      the pushes where they are to feed the pops. That is `calls.py`'s own
+      consume strategy, and popping rather than reloading is what makes it
+      sound at a site whose pushes are not contiguous: `stack.frames()`
+      proves the four bytes of each operand are the topmost region of the
+      stack, and reloading one from its address instead would leave its push
+      standing and leak four bytes per call, forever.
+
+      **169 of the corpus's sites, and it needed a lever to be testable at
+      all.** `calls.py` absorbs every arithmetic call before a body reaches
+      the MIR tower, so with the machine arm on the emitter finds nothing
+      and no gate can exercise it -- `rewrite.py --no-absorb-calls` (and the
+      same flag on `matrix.py` and `fuzzcheck.py`) is what compares the two,
+      and eventually how `calls.py` is retired. Under it: **the fuzz corpus
+      is clean on all twelve configurations**, and eighteen of the nineteen
+      suite programs pass on all twelve.
+
+      The nineteenth is `cmpof`, and it is the flag working rather than a
+      failure: that program exists because an absorbed `cmp` deliberately
+      diverges from the runtime it replaces, and MIR does not absorb the
+      compare, so the divergence its golden encodes does not happen.
+
+      Two are left, for two different reasons:
+
+      - **`B$RMI4`, on an address budget.** `layout.py` keys every operation
+        by an address and a far call is five bytes, so a site has five to
+        give. Multiply needs four and divide five; the remainder's answer
+        comes back in edx and moving it to eax makes six. Nothing about the
+        arithmetic -- what it wants is for a transform to be able to put
+        more operations somewhere than there were instructions, which is a
+        `layout.py` question and the same one that will come up again
+      - **`B$CPI4`, on the scratch register.** 799 sites, the majority, and
+        the hard one: that routine clobbers *nothing*, so absorbing it must
+        not either. `calls.py` spends bp and edx and puts both back without
+        touching the flags it just set, reading the saved bp before sp moves
+        past it because DOS services interrupts at any instruction boundary.
+        Ten instructions, none of them optional
 - [x] load forwarding — `avail.redundant()`, 12 of 12. It also needed the
       register's current value tracked: `holders()` maps a cell to the value
       put there and says nothing about whether that value is still in its

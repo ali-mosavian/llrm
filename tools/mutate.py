@@ -38,6 +38,39 @@ class Mutation:
 
 MUTATIONS = (
     Mutation(
+        "absorbed-divide-without-the-sign",
+        "qbopt/transform.py",
+        '        steps.append(made(ir.Operation.EXTEND, "cdq", (_wide(Register.EDX),), (_wide(RESULT),)))',
+        "        pass  # no cdq",
+        "`idiv` reads edx:eax and `cdq` is what puts the dividend's sign in edx -- "
+        "without it every negative dividend divides as if it were huge and positive",
+    ),
+    Mutation(
+        "absorbed-operands-the-wrong-way-round",
+        "qbopt/transform.py",
+        "INTO = (Register.EAX, Register.ECX)",
+        "INTO = (Register.ECX, Register.EAX)",
+        "the dividend goes in eax and the divisor in ecx -- swapped, every divide "
+        "and every multiply-by-an-asymmetric-pair is a different answer, not a slower one",
+    ),
+    Mutation(
+        "absorbed-over-a-live-flag",
+        "qbopt/transform.py",
+        "            if any(one.flags and one in read for one in op.defines):",
+        "            if False:",
+        "`imul` and `idiv` leave their own flags where the call left the runtime's, "
+        "so a jcc after an absorbed site reads a different answer",
+    ),
+    Mutation(
+        "an-unknown-call-trusted-for-its-arity",
+        "qbopt/transform.py",
+        "    return 2 if name is not None and name.upper() in ABSORB else None",
+        "    return 2 if name is not None else None",
+        "stack.frames() trusts a recognised call to have consumed exactly arity*4 "
+        "bytes and disturbed nothing else -- claimed for a routine whose contract "
+        "nothing here knows, every frame found after it in the block is shifted",
+    ),
+    Mutation(
         "widening-load-removed",
         "qbopt/forward.py",
         "    memory = MemorySizeExt.size(insn.insn.memory_size)",

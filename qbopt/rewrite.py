@@ -243,6 +243,7 @@ def plan(
     take: set[int] | None = None,
     max_regions: int | None = None,
     native_fpu: bool = False,
+    absorb_calls: bool = True,
 ) -> list[Planned]:
     found = module.of(records)
     if found is None:
@@ -301,7 +302,12 @@ def plan(
                 edit,
             )
         )
-    call_sites = sites(found, reached, blocks)
+    # The lever M5 is measured with. calls.py absorbs every arithmetic call
+    # before a body ever reaches the MIR tower, so the MIR emitter finds
+    # nothing left and cannot be exercised by any gate while this is on.
+    # Turning it off is how the two are compared, and eventually how the
+    # machine arm is retired.
+    call_sites = sites(found, reached, blocks) if absorb_calls else []
     # --take exists to make a failure bisectable; folding a call and its tail
     # into one edit here would make that edit un-selectable by the widening
     # loop's own region index, so bisecting skips this step entirely and
@@ -754,6 +760,7 @@ def rewrite(
     max_regions: int | None = None,
     native_fpu: bool = False,
     whole_segment: bool = True,
+    absorb_calls: bool = True,
 ) -> tuple[bytes, list[Region]]:
     """Rewrite to a fixed point, or once where the caller is bisecting.
 
@@ -770,19 +777,28 @@ def rewrite(
     they did before.
     """
     if take is not None or max_regions is not None or dry_run:
-        return _once(data, dry_run=dry_run, take=take, max_regions=max_regions, native_fpu=native_fpu)
+        return _once(
+            data,
+            dry_run=dry_run,
+            take=take,
+            max_regions=max_regions,
+            native_fpu=native_fpu,
+            absorb_calls=absorb_calls,
+        )
 
     regions: list[Region] = []
     for _ in range(PASSES):
-        out, found = _once(data, dry_run=False, native_fpu=native_fpu)
+        out, found = _once(data, dry_run=False, native_fpu=native_fpu, absorb_calls=absorb_calls)
         regions += found
         if out == data or not any(one.taken for one in found):
-            return _written(out, whole_segment, native_fpu), regions
+            return _written(out, whole_segment, native_fpu, absorb_calls), regions
         data = out
-    return _written(data, whole_segment, native_fpu), regions
+    return _written(data, whole_segment, native_fpu, absorb_calls), regions
 
 
-def _written(data: bytes, whole_segment: bool, native_fpu: bool = False) -> bytes:
+def _written(
+    data: bytes, whole_segment: bool, native_fpu: bool = False, absorb_calls: bool = True
+) -> bytes:
     """The object with its code segment emitted from MIR, where that works.
 
     Every edit above patches BC's own bytes in place and keeps the layout BC
@@ -814,7 +830,7 @@ def _written(data: bytes, whole_segment: bool, native_fpu: bool = False) -> byte
     """
     if not whole_segment:
         return data
-    out, _why = wholeseg.rebuilt(data, native_fpu=native_fpu)
+    out, _why = wholeseg.rebuilt(data, native_fpu=native_fpu, absorb=not absorb_calls)
     return out
 
 
@@ -825,9 +841,12 @@ def _once(
     take: set[int] | None = None,
     max_regions: int | None = None,
     native_fpu: bool = False,
+    absorb_calls: bool = True,
 ) -> tuple[bytes, list[Region]]:
     records = omf.parse(data)
-    planned = plan(records, take=take, max_regions=max_regions, native_fpu=native_fpu)
+    planned = plan(
+        records, take=take, max_regions=max_regions, native_fpu=native_fpu, absorb_calls=absorb_calls
+    )
     if dry_run:
         return data, [replace(one.region, taken=False, reason="dry run") for one in planned]
 
@@ -892,6 +911,11 @@ def main(argv: list[str] | None = None) -> int:
         help="replace the FP emulator's interrupts with real x87 -- REQUIRES A COPROCESSOR",
     )
     ap.add_argument(
+        "--no-absorb-calls",
+        action="store_true",
+        help="leave the arithmetic calls to the MIR tower instead of calls.py",
+    )
+    ap.add_argument(
         "--no-whole-segment",
         action="store_true",
         help="patch BC's own bytes rather than writing the code segment from MIR",
@@ -907,6 +931,7 @@ def main(argv: list[str] | None = None) -> int:
         max_regions=args.max_regions,
         native_fpu=args.native_fpu,
         whole_segment=not args.no_whole_segment,
+        absorb_calls=not args.no_absorb_calls,
     )
 
     if args.output:

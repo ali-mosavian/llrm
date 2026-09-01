@@ -30,16 +30,32 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--prog")
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--timeout", type=int, default=300)
+    ap.add_argument(
+        "--no-absorb-calls",
+        action="store_true",
+        help="leave the arithmetic calls to the MIR tower instead of calls.py",
+    )
     args = ap.parse_args(argv)
 
     tags = [t for t, c in CONFIGS.items() if c.available]
     if skipped := [t for t in CONFIGS if t not in tags]:
         print(f"no toolchain for {', '.join(skipped)}; see docs/testing.md")
 
+    # The M5 comparison: calls.py absorbs every arithmetic call before a
+    # body reaches the MIR tower, so the MIR emitter is unreachable while
+    # the machine arm is on and no configuration here exercises it.
+    change = None
+    if args.no_absorb_calls:
+        from qbopt.rewrite import rewrite
+
+        change = lambda data: rewrite(data, dry_run=False, absorb_calls=False)[0]  # noqa: E731
+
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         results = list(
             pool.map(
-                lambda t: e2e.run(t, args.prog, dry_run=args.dry_run, timeout=args.timeout),
+                lambda t: e2e.run(
+                    t, args.prog, dry_run=args.dry_run, timeout=args.timeout, transform=change
+                ),
                 tags,
             )
         )
