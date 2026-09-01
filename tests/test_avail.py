@@ -18,6 +18,8 @@ from qbopt import avail
 from qbopt import memory
 from qbopt import module
 from qbopt import regalloc
+from qbopt import blocks as blockmod
+from qbopt.blocks import code_map
 from qbopt.module import Addr
 from qbopt.module import Space
 
@@ -294,7 +296,7 @@ def test_nothing_redundant_is_an_accumulate(obj: Path) -> None:
     mapped = code_map(found)
     if isinstance(mapped, str):
         return
-    for _name, body in mir.bodies(found, split.partition(found, mapped)):
+    for _name, body in mir.bodies(found, blockmod.partition(found, mapped)):
         gone = set(avail.redundant(body, found.dgroup, found.calls))
         for block in body.blocks:
             for op in block.ops:
@@ -342,3 +344,76 @@ def test_preserved_allows_a_move_and_refuses_a_binary() -> None:
     accumulated = op(ir.Semantics(ir.Operation.BINARY, "sub", dests=(into,), sources=(into, where)))
     assert avail._preserved(accumulated, new, origin) == set(), "a subtract reads its destination as data"
     assert avail.loaded_into(accumulated, origin) is None, "and so is not a load"
+
+
+@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
+def test_a_partial_write_is_recorded_only_where_it_is_asked_for(obj: Path) -> None:
+    """`holders(partial=True)` sees more cells, and only redundant() may.
+
+    `mov ax,[x]` writes sixteen bits of a thirty-two bit variable, so the
+    value holding that cell holds it in its *low half*. That is exactly
+    right for deciding the load is a no-op -- the instruction changes
+    nothing, so the high half is preserved either way -- and wrong for
+    serving some other read from that register, which is what
+    rewrite._substituted does with the same map.
+
+    Letting it leak made a generated program read the wrong cell. The
+    switch is the whole fix, so the two answers have to stay different
+    wherever a partial write exists at all.
+    """
+    found = corpus.loaded(obj)
+    assert found is not None
+    mapped = code_map(found)
+    if isinstance(mapped, str):
+        return
+    for _name, body in mir.bodies(found, blockmod.partition(found, mapped)):
+        strict = avail.holders(body, found.dgroup, found.calls)
+        loose = avail.holders(body, found.dgroup, found.calls, partial=True)
+        for block in body.blocks:
+            a, b = strict.outof[block.at], loose.outof[block.at]
+            assert set(a) <= set(b), "asking for partial writes may only add cells, never remove one"
+
+
+def test_only_redundant_asks_the_map_for_partial_writes() -> None:
+    """Which caller asks for what, recorded rather than grepped for.
+
+    A cell established by `mov ax,[x]` is held in its value's *low half*.
+    Deleting that load is sound -- the instruction changes nothing, so the
+    high half is preserved either way -- and serving some other read from
+    the whole register is not. rewrite._substituted uses forwardable(), so
+    a leak there reads the wrong bytes, and a generated program did.
+
+    The switch is the entire fix, so this pins who turns it on.
+    """
+    from qbopt import avail as under_test
+
+    obj = FIXTURES[0]
+    found = corpus.loaded(obj)
+    assert found is not None
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
+    body = next(b for _n, b in mir.bodies(found, blockmod.partition(found, mapped)))
+
+    asked: list[bool] = []
+    real = under_test.holders
+
+    def watch(one, dgroup, calls=None, partial=False):
+        asked.append(partial)
+        return real(one, dgroup, calls, partial)
+
+    under_test.holders = watch
+    try:
+        asked.clear()
+        under_test.redundant(body, found.dgroup, found.calls)
+        assert asked == [True], f"redundant() asked {asked}"
+
+        asked.clear()
+        under_test.forwardable(body, found.dgroup, found.calls, frozenset())
+        assert asked == [False], f"forwardable() asked {asked} -- it serves reads from the register"
+
+        asked.clear()
+        under_test.provider(body, found.dgroup, 0, next(iter(body.blocks)).ops[0].loads[0] if
+                            next(iter(body.blocks)).ops[0].loads else None, found.calls)
+        assert asked == [False], f"provider() asked {asked}"
+    finally:
+        under_test.holders = real

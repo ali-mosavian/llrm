@@ -456,3 +456,100 @@ def test_every_float_result_is_printed_through_clng(seed: int) -> None:
         shown = line.split(";", 1)[1] if ";" in line else ""
         if ("!" in shown or "#" in shown) and "CLNG(" not in shown:
             raise AssertionError(f"seed {seed}: float printed raw: {line}")
+
+
+def test_the_generator_makes_an_array_of_every_width() -> None:
+    """It made two, and the widths go out in the order INT, LNG, SNG, DBL.
+
+    So a float array was never once generated, and float array access -- the
+    shape a real miscompile was hiding in -- went entirely uncovered.
+    bench/fpbench.bas found that bug; nothing generated here could have.
+    """
+    from fuzzgen import Width
+    from fuzzgen import generate_program
+
+    seen: set[Width] = set()
+    for seed in range(20):
+        program = generate_program(seed=seed)
+        for decl in program.declared:
+            if decl.size is not None:
+                seen.add(decl.width)
+    assert Width.SNG in seen and Width.DBL in seen, f"no float array in twenty programs: {seen}"
+    assert Width.INT in seen and Width.LNG in seen
+
+
+def _walk(node: object):
+    yield node
+    for field in getattr(node, "__slots__", ()):
+        value = getattr(node, field, None)
+        if hasattr(value, "__slots__"):
+            yield from _walk(value)
+        elif isinstance(value, tuple):
+            for one in value:
+                if hasattr(one, "__slots__"):
+                    yield from _walk(one)
+
+
+def test_a_float_node_keeps_the_operand_it_generated() -> None:
+    """_ensure_valid_operand's second rule is about LONG and only LONG.
+
+    It read "INTEGER is fine, everything else needs a LONG among its
+    operands", which caught SINGLE and DOUBLE too: a SINGLE node with two
+    SINGLE operands has no LONG in sight, so its right operand was replaced
+    by a plain variable. Every float expression here was
+    `<subtree> op <var>` for as long as that function had existed, and the
+    two-deep float shape a real miscompile hid in could not be generated.
+
+    Measured over forty programs: 168 float nodes whose right operand is
+    something other than a bare variable, against 32 with the old rule. The
+    floor is well under the first and well over the second.
+    """
+    from fuzzgen import FLOAT
+    from fuzzgen import Var
+    from fuzzgen import BinOp
+    from fuzzgen import generate_program
+
+    kept = 0
+    for seed in range(40):
+        program = generate_program(seed=seed)
+        for statement in list(program.stmts) + [s for p in program.procs for s in p.body]:
+            for node in _walk(statement):
+                if isinstance(node, BinOp) and node.width in FLOAT and not isinstance(node.right, Var):
+                    kept += 1
+    assert kept >= 100, f"only {kept} float nodes kept a computed right operand"
+
+
+def test_a_repeated_operand_is_offered_for_a_leaf_and_never_for_a_subtree() -> None:
+    """`p(i) * p(i)` -- two reads of one address in one expression.
+
+    Reachable before only by generating the same array and the same index
+    twice by chance, which in practice never happened. It is the shape that
+    broke qbopt: two `fld dword ptr [si]` in a row are two pushes, and a
+    pass that read si as the destination deleted the second as a reload.
+
+    Tested on the function rather than on a count of programs, because two
+    identical *variables* turn up by chance often enough to drown the
+    signal -- it is the indexed case that only this produces.
+    """
+    import random
+
+    from fuzzgen import Lit
+    from fuzzgen import Var
+    from fuzzgen import Index
+    from fuzzgen import Width
+    from fuzzgen import BinOp
+    from fuzzgen import _repeated
+
+    class _Ctx:
+        def __init__(self, value: float) -> None:
+            self.rng = random.Random()
+            self.rng.random = lambda: value  # type: ignore[method-assign]
+
+    leaf = Index(Width.SNG, "arr0", Lit(Width.INT, 3))
+    subtree = BinOp(Width.SNG, "+", leaf, leaf)
+
+    assert _repeated(_Ctx(0.0), leaf) is leaf, "a leaf must be offered"
+    assert _repeated(_Ctx(0.0), Var("v1", Width.LNG)) is not None
+    assert _repeated(_Ctx(0.99), leaf) is None, "and only sometimes"
+    assert _repeated(_Ctx(0.0), subtree) is None, "a subtree is not repeated -- it may call something"
+    assert _repeated(_Ctx(0.0), Lit(Width.INT, 7)) is None, "a literal is not a read"
