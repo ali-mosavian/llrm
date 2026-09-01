@@ -324,6 +324,21 @@ already been written wrong once.
 - [x] native x87 — `layout` selects an emulator site from its own semantics
       under `native_fpu` rather than carrying its bytes
 
+- [ ] **and `--native-fpu` does not work on qb-qrender.** It hangs, and both
+      halves of the fifteen modules hang independently, so it is systematic
+      rather than one module. `bench/fpbench.bas` runs correctly under the
+      same flag and the same DOSBox (1.88x), so the flag is not simply
+      broken.
+
+      Unexplained, and left that way deliberately: the flag is opt-in, says
+      REQUIRES A COPROCESSOR, and is not in the default path, so this is a
+      limitation to know about rather than a bug blocking anything. The
+      guess worth testing first is that BC's `/FPi` emulator patches its own
+      `int 34h`..`3Dh` sites at load time when a coprocessor is present, and
+      that pre-patching some of them interacts with whatever qb-qrender's
+      uGL library does with the FP stack -- 1,766 sites there against
+      fpbench's handful
+
 ## M6 — floats
 
 Largest untouched surface, newly testable: `fuzzgen.py` generates SINGLE
