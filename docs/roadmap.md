@@ -135,18 +135,20 @@ eighteen suite programs run right on all twelve configurations, and it is
 not a size cost: 201 bytes saved over the corpus and 616 over qb-qrender
 against the patched output.
 
-- [ ] **and it is still not correct.** `tools/fuzzcheck.py`'s F004 reads -1
-      for a variable that should be -9922 after a BYREF call. The suite
-      could not have found it: its programs are about 430 bytes and fit one
-      LEDATA record, where F004 is 3,018 and takes three, so nothing before
-      now emitted a segment in more than one piece. Ruled out: the MIR
-      transforms, the four short encodings, the instruction stream (974
-      instructions, identical but for `jmp near` becoming `jmp short`),
-      where every fixup lands, the non-code segments, and the PUBDEF and
-      SEGDEF remapping. What is left is one fixup at offset `0xa`, inside
-      the module header `wholeseg` keeps verbatim, whose target is the code
-      offset one past the last instruction. `rewrite.py` has it off until
-      that is understood
+- [x] **and it is correct now.** `add ax,offset X` arrives at the selector
+      as `add ax,0`, the sign-extended byte form fits zero, and the two-byte
+      fixup then named a one-byte field -- the linker patched two bytes
+      regardless, over the immediate and the byte after it, and a generated
+      program read 0 for an array element. `select.emit` had a `relocated`
+      flag for exactly this and none of its callers passed it.
+
+      Nothing that compared the emitted code could see it: before linking,
+      both forms disassemble as `add ax,0`. It took reducing the program to
+      thirty-one lines and diffing the two linked images, where one says
+      `add ax,0DCh` and the other `add ax,0FFDCh`. No fixture has the
+      instruction -- BC writes it only for an array reached by adding its
+      own address into ax -- so the regression test checks the wiring
+      instead: `layout` tells the selector, on every call
 
 ## M2 — placement
 

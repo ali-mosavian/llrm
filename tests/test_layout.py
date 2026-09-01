@@ -18,9 +18,11 @@ from iced_x86 import Decoder
 from iced_x86 import Instruction
 
 import corpus
+from qbopt import ir
 from qbopt import mir
 from qbopt import omf
 from qbopt import layout
+from qbopt import select
 from qbopt.declen import BITNESS
 from qbopt.declen import decode
 from qbopt import blocks as split
@@ -321,3 +323,56 @@ def test_the_rebuildable_share_is_what_was_measured() -> None:
         if rebuilt(obj)[2] is not None:
             done += 1
     assert done == 155
+
+
+@pytest.mark.parametrize("obj", FIXTURES[:12], ids=lambda p: p.stem)
+def test_layout_tells_the_selector_which_instructions_are_relocated(obj: Path) -> None:
+    """The wiring, which is what broke.
+
+    select.emit takes `relocated` and honours it everywhere an immediate can
+    shrink. The miscompile was that emit's own callers did not pass it:
+    `add ax,offset X` arrives as `add ax,0`, the sign-extended byte form
+    fits zero, and the two-byte fixup then names a one-byte field. The
+    linker patches two bytes regardless, over the immediate and the byte
+    after it.
+
+    No fixture contains that instruction -- BC only writes it for an array
+    reached by adding its own address into ax, which is why this shipped and
+    why a corpus test cannot catch it. What every fixture does have is
+    relocated instructions, so this checks the one thing that generalises:
+    layout tells the selector, every time.
+    """
+    # Keyed by the semantics object, not by `at`: layout passes the address
+    # the instruction is moving *to*, which is not the one the op came from.
+    seen: dict[int, bool] = {}
+    real = select.emit
+
+    def watch(what, at=0, where=None, short=False, relocated=False):
+        # every call, not any: layout asks the selector three times -- to
+        # measure, to relax, and to emit -- and a flag missing from one of
+        # them is a wrong encoding at exactly that stage
+        seen[id(what)] = seen.get(id(what), True) and relocated
+        return real(what, at=at, where=where, short=short, relocated=relocated)
+
+    select.emit = watch
+    try:
+        found, bodies, laid = rebuilt(obj)
+    finally:
+        select.emit = real
+    if laid is None:
+        return
+    fields = frozenset(one.offset for one in omf.fixups(omf.parse(obj.read_bytes())) if one.seg == found.seg)
+    asked = 0
+    for _name, body in bodies:
+        for block in body.blocks:
+            for op in block.ops:
+                what = layout._semantics(op)
+                if what is None or layout._field_in(found, op, fields) is None:
+                    continue
+                if id(what) not in seen:
+                    continue
+                asked += 1
+                assert seen[id(what)], (
+                    f"{obj.stem} {op.at:#x}: laid out without telling the selector it is relocated"
+                )
+    assert asked, f"{obj.stem}: no relocated instruction reached the selector"

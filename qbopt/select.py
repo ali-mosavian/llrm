@@ -635,18 +635,18 @@ def ret_far(popped: int, at: int = 0) -> Emitted | None:
     return _assemble(made, at)
 
 
-def compare(dest: ir.Loc, value: int, at: int = 0) -> Emitted | None:
+def compare(dest: ir.Loc, value: int, at: int = 0, relocated: bool = False) -> Emitted | None:
     """`cmp <dest>, imm`. Flags are the whole result, so there is no dest."""
     match dest:
         case ir.Reg(register=register):
-            return arith_imm("cmp", register, value, at)
+            return arith_imm("cmp", register, value, at, relocated)
         case ir.Mem() as cell:
             # The same shape arith_into_imm already emits, byte immediate
             # first. This used to hardcode the word one, so every `cmp`
             # against a frame slot cost a byte -- 209 of them in qb-qrender.
             # A compare writes no destination, which is the only thing that
             # made it look like a different instruction.
-            return arith_into_imm("cmp", cell, value, at)
+            return arith_into_imm("cmp", cell, value, at, relocated)
         case _:
             return None
 
@@ -955,12 +955,19 @@ def store_segment(cell: ir.Mem, outof: Register_, at: int = 0) -> Emitted | None
     return _assemble(Instruction.create_mem_reg(code, built[0], outof), at)
 
 
-def arith_into_imm(name: str, cell: ir.Mem, value: int, at: int = 0) -> Emitted | None:
-    """`add word ptr [bp-16h],4` -- accumulate into memory."""
+def arith_into_imm(name: str, cell: ir.Mem, value: int, at: int = 0, relocated: bool = False) -> Emitted | None:
+    """`add word ptr [bp-16h],4` -- accumulate into memory.
+
+    `relocated` keeps the immediate its full width, for the same reason
+    push_imm and arith_imm have it: a fixup may name the immediate rather
+    than the displacement, and this cannot tell which from a bool. Keeping
+    the wide form costs a byte where the displacement was the relocated one
+    and is the only answer that is right in both cases.
+    """
     built = operand_of(cell)
     if name not in TWO_OPERAND or built is None or cell.width not in (2, 4):
         return None
-    for bits in ((8, cell.width * 8) if fits_in_a_byte(value) else (cell.width * 8,)):
+    for bits in ((8, cell.width * 8) if fits_in_a_byte(value) and not relocated else (cell.width * 8,)):
         code = _code(f"{name.upper()}_RM{cell.width * 8}_IMM{bits}")
         if code is None:
             continue
@@ -1048,13 +1055,13 @@ def emit(
                 case (ir.Reg(register=into), ir.Reg(register=outof)):
                     return arith(what.name or "", _remapped(into, where), _remapped(outof, where), at)
                 case (ir.Reg(register=into), ir.Imm(value=value)):
-                    return arith_imm(what.name or "", _remapped(into, where), value, at)
+                    return arith_imm(what.name or "", _remapped(into, where), value, at, relocated)
                 case (ir.Reg(register=into), ir.Mem() as cell):
                     return arith_mem(what.name or "", _remapped(into, where), cell, at)
                 case (ir.Mem() as cell, ir.Reg(register=outof)):
                     return arith_into(what.name or "", cell, _remapped(outof, where), at)
                 case (ir.Mem() as cell, ir.Imm(value=value)):
-                    return arith_into_imm(what.name or "", cell, value, at)
+                    return arith_into_imm(what.name or "", cell, value, at, relocated)
         case ir.Operation.UNARY if len(dests) == 1 and len(sources) == 1:
             match dests[0]:
                 case ir.Reg(register=into):
@@ -1094,7 +1101,7 @@ def emit(
         case ir.Operation.COMPARE if len(sources) == 2:
             match (sources[0], sources[1]):
                 case (_, ir.Imm(value=value)):
-                    return compare(sources[0], value, at)
+                    return compare(sources[0], value, at, relocated)
                 case (ir.Reg(register=into), ir.Mem() as cell):
                     return compare_mem(_remapped(into, where), cell, at)
                 case (ir.Reg(register=into), ir.Reg(register=outof)):

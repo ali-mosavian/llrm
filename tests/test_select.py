@@ -468,3 +468,102 @@ def test_a_compare_of_memory_against_a_large_literal_stays_wide() -> None:
     made = select.compare(cell, 0x1234)
     assert made is not None
     assert made.code.hex() == "817ee23412"
+
+
+@pytest.mark.parametrize("name", ["add", "sub", "cmp", "and", "or", "xor"])
+def test_a_relocated_arithmetic_immediate_keeps_its_width(name: str) -> None:
+    """`add ax,offset X` arrives as `add ax,0` and must stay four bytes.
+
+    BC writes it `81 c0 00 00` with a fixup on the two-byte immediate, and
+    the linker fills the address in. Shrinking it to the sign-extended byte
+    form leaves that relocation naming a one-byte field: the linker patches
+    two bytes anyway, over the immediate and whatever follows it.
+
+    This is what made a generated program read 0 for an array element. The
+    instruction stream disassembled identically -- both sides show
+    `add ax,0` before linking -- so nothing that compared the emitted code
+    could see it. Only the linked image showed `add ax,0DCh` against
+    `add ax,0FFDCh`.
+
+    push_imm has had the same guard since the corpus caught it there; this
+    is the other place an immediate can shrink.
+    """
+    wide = select.arith_imm(name, Register.AX, 0, relocated=True)
+    assert wide is not None
+    assert len(wide.code) == 3, f"{name} ax,0 relocated came back {wide.code.hex()}"
+    assert wide.immediate_at is not None
+    # the accumulator form is fine: its immediate is still a full word
+    assert wide.code[0] != 0x83
+    narrow = select.arith_imm(name, Register.AX, 0, relocated=False)
+    assert narrow is not None and narrow.code[0] == 0x83
+
+
+def test_a_relocated_immediate_against_memory_keeps_its_width() -> None:
+    """The same for `add word ptr [bp-4],offset X`."""
+    from qbopt.module import Addr
+    from qbopt.module import Space
+
+    cell = ir.Mem(addr=Addr(Space.FRAME, -4, 0), width=2)
+    wide = select.arith_into_imm("add", cell, 0, relocated=True)
+    assert wide is not None
+    assert wide.code[0] == 0x81, f"came back {wide.code.hex()}"
+    narrow = select.arith_into_imm("add", cell, 0, relocated=False)
+    assert narrow is not None and narrow.code[0] == 0x83
+
+
+@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
+def test_a_relocated_field_never_changes_width(obj: Path) -> None:
+    """The invariant the `relocated` flag exists to hold, over the corpus.
+
+    A fixup names a field by its address and patches a fixed number of
+    bytes. If the selector picks an encoding whose field is narrower -- the
+    sign-extended byte immediate for `add ax,offset X`, which arrives as
+    `add ax,0` -- the linker writes two bytes into a one-byte field and over
+    whatever follows it.
+
+    Nothing that compares the emitted code can see this: before linking,
+    both forms disassemble as `add ax,0`. It took reducing a generated
+    program to 31 lines and diffing the two linked images, where one said
+    `add ax,0DCh` and the other `add ax,0FFDCh`.
+    """
+    from qbopt import declen
+    from qbopt import layout
+    from qbopt import mir
+    from qbopt import omf
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    found = corpus.loaded(obj)
+    assert found is not None
+    mapped = code_map(found)
+    if isinstance(mapped, str):
+        return
+    fields = frozenset(one.offset for one in omf.fixups(omf.parse(obj.read_bytes())) if one.seg == found.seg)
+    for _name, body in mir.bodies(found, split.partition(found, mapped)):
+        for block in body.blocks:
+            for op in block.ops:
+                what = layout._semantics(op)
+                field = layout._field_in(found, op, fields)
+                if what is None or field is None:
+                    continue
+                was = declen.decode(found.code, op.at)
+                if was is None:
+                    continue
+                if found.code[op.at : op.at + 1] in (b"\x9a", b"\xea"):
+                    continue  # the far forms relocate a pointer, and have no narrower one
+                if was.disp_at == field:
+                    wanted = was.disp_len
+                elif was.imm_at == field:
+                    wanted = was.imm_len
+                else:
+                    continue  # a far call's target, which has no narrower form
+                made = select.emit(what, at=op.at, relocated=True)
+                if made is None:
+                    continue
+                now = declen.decode(made.code, 0)
+                assert now is not None
+                got = now.disp_len if made.displacement_at is not None else now.imm_len
+                assert got == wanted, (
+                    f"{obj.stem} {op.at:#x}: {was.insn} has a {wanted}-byte relocated field, "
+                    f"emitted {made.code.hex()} has {got}"
+                )
