@@ -200,9 +200,8 @@ Re-measured 2026-08-31, code bytes only, `v-g3`.
 | absorbed, then MIR-written | 89,464 (-6.01%) | 75,582 (+0.97%) |
 
 **Writing the segment from MIR is not a size cost. It pays for about half of
-what absorption costs qb-qrender** -- and it is off by default anyway, because
-it is not correct yet: see the roadmap's own entry, and `rewrite._written`.
-Getting the size there took four encodings:
+what absorption costs qb-qrender**, and it is what `rewrite.py` does by
+default. Getting the size there took four encodings:
 the byte-immediate push, a byte displacement through a base register, the
 accumulator's own arithmetic opcode, the by-1 shift, and the byte immediate
 in a memory compare.
