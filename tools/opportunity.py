@@ -275,6 +275,62 @@ def counted(paths: list[Path]) -> Counter:
     return found
 
 
+# The best case, per program, hard-coded. Every counter's target is zero --
+# a compiler that leaves a redundant load or an invariant read in a loop has
+# left something on the table by definition. The cost target is the cost of
+# the hand-written optimal listing in docs/targets.md, computed with the
+# same formula this file uses, so the two are comparable.
+#
+# Where docs/targets.md carries a full optimal listing the number is derived
+# from it; the four marked `~` are scaled from the same savings applied to a
+# body that has not been written out by hand yet, and are the weakest thing
+# here. They are targets, not measurements: the point is to have a number to
+# close on rather than to be right about it to the cycle.
+TARGETS = {
+    "HOTLOP": 215,
+    "PRESS": 315,
+    "ARRIDX": 400,
+    "SUBEXP": 162,
+    "IVCHAN": 340,
+    "STRIDE": 360,
+    "MATRIX": 2440,
+    "SPILL": 1458,
+    "NESTED": 3500,   # ~
+    "LNGMIX": 400,    # ~
+    "SPLIT": 700,     # ~
+    "ADDRM": 700,     # ~
+    "ROTATE": 650,
+    "BOOLS": 150,
+}
+
+
+def against_targets(paths: list[Path]) -> int:
+    """Every program against its best case, and how far off we are.
+
+    The counters are the easy half: a perfect compiler leaves none of them,
+    so the target is zero and the gap is the count. The cost is the number
+    to close, and the ratio is what says whether a pass earned its place.
+    """
+    worst = 0
+    print(f"  {'program':10s} {'cost':>7s} {'target':>7s} {'ratio':>6s}   redundancy left")
+    for path in sorted(paths):
+        found = counted([path])
+        cost = found.pop("cost", 0)
+        want = TARGETS.get(path.stem.upper())
+        left = sum(
+            count
+            for name, count in found.items()
+            if name.startswith(("load ", "store ", "read "))
+        )
+        if want is None:
+            print(f"  {path.stem:10s} {cost:7d} {'--':>7s} {'--':>6s}   {left}")
+            continue
+        ratio = cost / want if want else 0
+        worst = max(worst, int(ratio * 100))
+        print(f"  {path.stem:10s} {cost:7d} {want:7d} {ratio:5.1f}x   {left}")
+    return 0
+
+
 def spilling(paths: list[Path]) -> None:
     """The per-variable ranking an allocator would spill by."""
     for path in paths:
@@ -297,11 +353,14 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="opportunity")
     ap.add_argument("objects", nargs="*", type=Path)
     ap.add_argument("--spill", action="store_true", help="rank each variable by what it costs to keep in memory")
+    ap.add_argument("--targets", action="store_true", help="every program against its hard-coded best case")
     args = ap.parse_args(argv)
     paths = args.objects or sorted(Path("fixtures/omf").glob("*.obj"))
     if args.spill:
         spilling(paths)
         return 0
+    if args.targets:
+        return against_targets(paths)
     found = counted(paths)
     print(f"  {found.pop('cost', 0):8d}  COST -- weighted cycles, the number to minimise")
     for name, count in sorted(found.items(), key=lambda one: -one[1]):

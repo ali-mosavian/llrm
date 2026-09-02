@@ -192,6 +192,18 @@ def split() -> list[str]:
     return [f"R={num(total)}", "DONE"]
 
 
+def addrm() -> list[str]:
+    return [f"T={num(sum(range(1, 21)))}", f"U={num(sum(range(1, 21)))}", "DONE"]
+
+
+def rotate() -> list[str]:
+    return [f"T={num(55 + 55)}", "DONE"]
+
+
+def bools() -> list[str]:
+    return [f"T={num(-1 + 1 + 2)}", "DONE"]
+
+
 def fpemu() -> list[str]:
     x, y = 1073741831, 1024
     q = x // y
@@ -447,6 +459,9 @@ PROGRAMS = {
     "stride": stride,
     "spill": spill,
     "split": split,
+    "addrm": addrm,
+    "rotate": rotate,
+    "bools": bools,
     "fpemu": fpemu,
     "fpdeep": fpdeep,
     "chain": chain,

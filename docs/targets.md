@@ -275,6 +275,41 @@ ranges that do not overlap can share, which is the half of allocation that
 is not about pressure at all -- and BC, having no live ranges, has neither
 half.
 
+## The scoreboard
+
+`tools/opportunity.py --targets` puts every program against its best case.
+The cost target is the hand-written optimal listing above, costed by the
+same formula; every counter's target is zero, because a compiler that leaves
+a redundant load or an invariant read in a loop has left something on the
+table by definition.
+
+```
+  program       cost  target  ratio   redundancy left
+  press         1788     315   5.7x   11
+  spill         7458    1458   5.1x    8
+  lngmix        1504     400   3.8x    0
+  hotlop         792     215   3.7x    6
+  nested       12826    3500   3.7x   14
+  matrix        8540    2440   3.5x   12
+  stride        1060     360   2.9x    5
+  ivchan         930     340   2.7x    4
+  arridx         850     400   2.1x    5
+  addrm         1296     700   1.9x   12
+  split         1196     700   1.7x    9
+  bools          210     150   1.4x   13
+  subexp         203     162   1.3x    2
+  rotate         826     650   1.3x    9
+```
+
+**BC runs between 1.3 and 5.7 times the cost of code written by hand**, and
+the two worst are the two about registers. Nothing this project does today
+moves any of these numbers: absorption and widening are real and neither
+appears in this table.
+
+Four of the cost targets -- nested, lngmix, split, addrm -- are scaled from
+the same savings rather than derived from a listing written out in full.
+They are the weakest thing in this file and are marked in the source.
+
 ## The number to minimise
 
 `tools/opportunity.py` prints a weighted cycle count: an operation's own
