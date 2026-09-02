@@ -37,6 +37,7 @@ from itertools import product
 from dataclasses import replace
 
 from qbopt import ir
+from qbopt import lir
 from qbopt import mir
 from qbopt import module
 from qbopt import wide
@@ -388,16 +389,16 @@ _IMPLICIT = (
 
 
 def _implicit(op: Op) -> bool:
+    """Whether this operation needs a value in a register it does not name.
+
+    lir says which, and what an instruction requires is the machine's
+    business rather than a pass's: this used to answer it here, in a
+    predicate a transform consulted to decide whether to give up.
+    """
     what = op.made if op.made is not None else getattr(op.node, "semantics", None)
     if what is None:
         return True
-    if what.op in (ir.Operation.MULTIPLY, ir.Operation.DIVIDE) and len(what.dests) != 1:
-        return True  # the widening form, whose dx:ax is not written down
-    if what.op is ir.Operation.EXTEND:
-        return True
-    return (what.name or "") in ("shl", "shr", "sar", "rol", "ror") and any(
-        isinstance(one, ir.Reg) and one.register == Register.CL for one in what.sources
-    )
+    return any(need.fixed is not None for need in lir.reads(what).values())
 
 
 def _semantics_of(op: Op):

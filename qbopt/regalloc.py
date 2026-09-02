@@ -31,10 +31,10 @@ live, only what it is called.
 
 from dataclasses import dataclass
 
-from iced_x86 import Register
 from iced_x86 import Register_
 
 from qbopt import ir
+from qbopt import lir
 from qbopt import mir
 from qbopt.mir import NAMES
 from qbopt.mir import Value
@@ -45,35 +45,32 @@ from qbopt.mir import Value
 # comparison, so they are not competing for anything.
 AVAILABLE: tuple[Register_, ...] = mir.TRACKED
 
-# 16-bit addressing reaches memory through bx, bp, si or di and nothing
-# else: `[dx+0Ah]` has no encoding. bp is the frame pointer and is not on
-# offer, so a value some instruction reaches a cell by can go in three
-# places. Without this the allocator put segld's array base in dx, the
-# selector refused the operand, and the body came back with the definition
-# renamed and every use of it left behind.
-ADDRESSING: frozenset[Register_] = frozenset({Register.BX, Register.SI, Register.DI})
+# What lir says the encoding permits, less what this may hand out: bp is a
+# legal base and is how every frame slot is reached, and it is also the
+# frame pointer. Asking both questions with one set is what made every
+# `[bp-12h]` look like a violated requirement.
+ADDRESSING: frozenset[Register_] = frozenset(
+    one for one in AVAILABLE if one in {ir.ROOT.get(x, x) for x in lir.ADDRESSING}
+)
 
 
 def _addressing(body: mir.MirBody) -> set[Value]:
-    """Every value some instruction reaches a memory operand by."""
+    """Every value some instruction requires in an addressing register.
+
+    lir.reads() says which registers an operation needs and how tightly.
+    This asks it rather than re-deriving the answer from the operands, so
+    there is one statement of what the machine requires and not three.
+    """
     found: set[Value] = set()
     for block in body.blocks:
         for op in block.ops:
             what = op.made if op.made is not None else getattr(op.node, "semantics", None)
             if what is None:
                 continue
-            reached = {
-                where
-                for one in (*what.dests, *what.sources)
-                for where in (
-                    getattr(one, "through", None),
-                    getattr(one, "index", None),
-                    getattr(getattr(one, "addr", None), "base", None),
-                )
-                if where is not None and where is not Register.NONE
+            wanted = {where for where, need in lir.reads(what).items() if need.fixed is None}
+            found |= {
+                value for value in op.uses if ir.ROOT.get(body.origin.get(value, -1), -1) in wanted
             }
-            roots = {ir.ROOT.get(one, one) for one in reached}
-            found |= {value for value in op.uses if ir.ROOT.get(body.origin.get(value, -1), -1) in roots}
     return found
 
 
