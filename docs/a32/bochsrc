@@ -1,0 +1,10 @@
+romimage: file=/opt/homebrew/share/bochs/BIOS-bochs-latest
+vgaromimage: file=/opt/homebrew/share/bochs/VGABIOS-lgpl-latest.bin
+megs: 32
+cpu: model=pentium, ips=10000000
+floppya: 1_44=fd.img, status=inserted
+boot: floppy
+display_library: nogui
+port_e9_hack: enabled=1
+log: bochs.log
+panic: action=fatal
