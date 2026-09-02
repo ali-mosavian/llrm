@@ -94,6 +94,21 @@ NAMED = {
 CYCLES = {"imul": 22, "idiv": 43, "mul": 22, "div": 43, "shl": 3, "shr": 3, "sar": 3}
 TOUCH = 4  # a memory operand, cached
 
+# A call is charged for what the callee does, not for the `call`. Twenty was
+# the flat rate and it undercounts the ones that matter: B$HARY takes a
+# subscript as a long and returns es:bx, which is a 32-bit multiply and a
+# segment normalisation -- and none of it appears in the caller's own
+# instructions, which is exactly why it went unmeasured. The long arithmetic
+# helpers are their own instruction's cost plus the call overhead.
+CALLED = {
+    "B$HARY": 150,
+    "B$MUI4": 70,
+    "B$DVI4": 120,
+    "B$RMI4": 120,
+    "B$CPI4": 40,
+}
+CALL = 20
+
 
 # ds and ss are the frame and the data segment and BC does not reload them.
 # es is the one a dynamic array reaches its elements through.
@@ -189,7 +204,7 @@ def _cost(body, module_, found: Counter) -> None:
         weight = 10 ** min(depth.get(block.at, 0), 3)
         for op in block.ops:
             if op.at in module_.calls:
-                found["cost"] += 20 * weight
+                found["cost"] += CALLED.get((module_.calls[op.at] or "").upper(), CALL) * weight
                 continue
             name = (op.name or "").lower()
             cycles = CYCLES.get(name, 2)

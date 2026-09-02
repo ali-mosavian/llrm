@@ -373,6 +373,55 @@ measured.
 `a multiply or divide inside a loop` counts the first of these directly: an
 address affine in the counter has no business being recomputed.
 
+## huge -- the helper that hides the whole cost
+
+An array over 64K needs `/AH`, and then every element goes through
+`B$HARY`, which takes the subscript as a long and hands back `es:bx`. The
+long multiply and the segment normalisation happen inside it, so **none of
+the cost appears in the caller's instructions at all** -- which is why every
+measure in this file missed it until the helper was priced.
+
+`bench/huge.bas`, on QuickBASIC 4.5 with `/AH`:
+
+```
+003c  mov cx,3E8h         | ; es and bx set once, outside
+003f  imul cx             | loop:
+0041  push ax             |   mov  [es:bx],ax
+0044  mov ax,1            |   add  dx,ax
+0047  push ax             |   add  bx,2000      ; the stride, with a
+004a  mov bx,0            |                     ; segment bump when it wraps
+004d  call B$HARY         |   inc  ax
+0052  mov cx,[i]          |   cmp  ax,10
+0056  mov [es:bx],cx      |   jle  loop
+0059  push dx             |
+005b  mov bx,0            |
+005e  call B$HARY         |
+0063  mov ax,[es:bx]      |
+0066  add [t],ax          |
+...
+```
+
+**Two `B$HARY` calls per iteration, for the same element, in the same
+statement** -- one to store it and one to read it back. 3,944 weighted
+cycles against about 320.
+
+It is not in `suite/` because only QuickBASIC 4.5 accepts the form; PDS
+refuses the REDIM with a math overflow, and the matrix compiles every suite
+program on every configuration.
+
+### What pricing the helpers changed
+
+A call was charged a flat twenty, which is the `call` and not the callee.
+`B$HARY` is a 32-bit multiply and a segment normalisation; `B$DVI4` and
+`B$RMI4` are long division. With them priced, `lngmix` goes from 1,504 to
+3,504 against the same target -- **16.7x, the worst in the whole set** --
+because its loop body is two long divisions over an operand that never
+changes.
+
+That is the general lesson in this file, for the third time: a cost hidden
+behind a call is a cost the measure has to be told about, or it reads as
+free.
+
 ## The scoreboard
 
 Every target below is hand-derived from the full listing, both sides: BC's
@@ -383,7 +432,7 @@ between 1.5 and 2.3 times. Estimating the target flattered BC.
 
 ```
   program       cost  target  ratio   redundancy left
-  lngmix        1504     210   7.2x    0
+  lngmix        3504     210  16.7x    0
   nested       12826    1850   6.9x   14
   spill         7458    1160   6.4x    8
   press         1788     315   5.7x   11
