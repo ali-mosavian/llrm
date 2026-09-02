@@ -21,6 +21,7 @@ anything downstream could reason about.
 from qbopt import mir
 from qbopt import omf
 from qbopt import layout
+from qbopt import regalloc
 from qbopt import module
 from qbopt import relocate
 from qbopt import transform
@@ -67,7 +68,19 @@ def rebuilt(
     # carry from one that is real code it simply did not raise.
     reached = frozenset(at for block in blocks for insn in block.insns for at in range(insn.at, insn.end))
     fields = frozenset(one.offset for one in omf.fixups(records) if one.seg == found.seg)
-    laid = layout.rebuild(found, bodies, mapped.tables, fields, reached, native_fpu)
+    # An allocation, where a pass asked for one. colour() gives back the
+    # identity unless something pinned, so this costs nothing when nothing
+    # did -- and refuses the pin rather than guessing when it cannot be had.
+    assignment: dict = {}
+    for _name, body in bodies:
+        if not body.pins:
+            continue
+        got = regalloc.colour(body, body.pins)
+        if isinstance(got, str):
+            continue  # the pin cannot be had; the body stands as it was
+        assignment.update(got)
+
+    laid = layout.rebuild(found, bodies, mapped.tables, fields, reached, native_fpu, assignment or None)
     if isinstance(laid, str):
         return data, laid
 

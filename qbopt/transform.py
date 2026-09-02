@@ -39,6 +39,7 @@ from qbopt import ir
 from qbopt import mir
 from qbopt import wide
 from qbopt import avail
+from qbopt import regalloc
 from qbopt import pairs
 from qbopt import loops as loopy
 from qbopt import layout
@@ -372,6 +373,10 @@ def segments(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mi
     )
 
 
+def _semantics_of(op: Op):
+    return op.made if op.made is not None else getattr(op.node, "semantics", None)
+
+
 def _preheader(body: MirBody, loop) -> int | None:
     """The block a loop is entered through, where there is exactly one.
 
@@ -417,6 +422,7 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
     at_of = {block.at: block for block in body.blocks}
     moved: dict[int, list[Op]] = {}
     gone: set[int] = set()
+    wanted: dict = {}
 
     for loop in inside:
         into = _preheader(body, loop)
@@ -428,11 +434,19 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
         stores = [ref for one in ops for ref in one.stores]
 
         written: Counter = Counter()
+        touched: set = set()
         for one in ops:
             what = one.made if one.made is not None else getattr(one.node, "semantics", None)
             for where in (what.dests if what else ()):
                 if isinstance(where, ir.Reg):
                     written[ir.ROOT.get(where.register, where.register)] += 1
+            for where in ((*what.dests, *what.sources) if what else ()):
+                if isinstance(where, ir.Reg):
+                    touched.add(ir.ROOT.get(where.register, where.register))
+                elif isinstance(where, (ir.Mem, ir.Address)):
+                    for through in (where.through, getattr(where, "index", Register.NONE)):
+                        if through != Register.NONE:
+                            touched.add(ir.ROOT.get(through, through))
 
         for one in ops:
             if one.at in gone:
@@ -446,12 +460,37 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
             if not isinstance(into_register, ir.Reg) or not isinstance(source, ir.Mem):
                 continue
             root = ir.ROOT.get(into_register.register, into_register.register)
-            if written[root] != 1:
-                continue  # something else in the loop writes it
             cell = one.loads[0]
             if any(ref.addr is None or mir.overlapping(cell, ref, dgroup) for ref in stores):
                 continue
-            moved.setdefault(into, []).append(replace(one, covers=(one.at, one.at)))
+            want = None
+            if written[root] != 1:
+                # Something else in the loop writes the register BC loaded
+                # into -- which is every candidate in the suite, because BC
+                # uses ax for everything. Hoisting needs a register the loop
+                # does not touch at all, and asking for one is what pins are
+                # for: regalloc.colour() grants it or refuses the body.
+                want = next(
+                    (
+                        where
+                        for where in regalloc.AVAILABLE
+                        if where not in touched and where not in wanted.values()
+                    ),
+                    None,
+                )
+                if want is None:
+                    continue
+            target = next((value for value in one.defines if not value.flags), None)
+            if want is not None and target is None:
+                continue
+            if want is not None:
+                wanted[target] = want
+            # Keeping its own `covers`: those are the bytes it stands for
+            # and it still stands for them, wherever it now runs. That is
+            # also what lets the loop simply drop it -- _absorb needs an op
+            # before it to hand the bytes to, and a hoisted load is often
+            # the first in its block.
+            moved.setdefault(into, []).append(one)
             gone.add(one.at)
 
     if not gone:
@@ -459,14 +498,32 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
 
     out = []
     for block in body.blocks:
-        ops = list(block.ops)
-        here = {one.at for one in ops} & gone
-        if here:
-            ops = _absorb(ops, here)
+        ops = [one for one in block.ops if one.at not in gone]
+        # A block's first op is what every branch into it names, so hoisting
+        # one leaves the target pointing at an op that now runs somewhere
+        # else. The block's new first op takes that address over; its own
+        # `covers` is unchanged, so the bytes still add up.
+        if ops and block.ops and block.ops[0].at in gone:
+            ops = [replace(ops[0], at=block.ops[0].at)] + ops[1:]
         if block.at in moved:
-            ops = ops + moved[block.at]
+            # Before the block's own terminator, not after it. A FOR is
+            # emitted as `jmp test / body / test / jle body`, so the
+            # preheader ends in a jump -- appending put the hoisted load
+            # after it, where entry skips it and the loop runs it on every
+            # pass. Exactly backwards, and it cost bytes and cycles both.
+            #
+            # And the op takes that terminator's address, keeping its own
+            # `covers`. layout.py orders by address and two ops may share
+            # one; giving it the address it now runs at is what keeps it
+            # where it was put, without layout having to know a pass moved
+            # anything. Sorting there is global because an event stub's body
+            # sits inside the main body's range.
+            what = _semantics_of(ops[-1]) if ops else None
+            leaves = what is not None and what.op in (ir.Operation.JUMP, ir.Operation.BRANCH)
+            here = [replace(one, at=ops[-1].at) for one in moved[block.at]] if ops else moved[block.at]
+            ops = (ops[:-1] + here + ops[-1:]) if leaves else (ops + here)
         out.append(replace(block, ops=tuple(ops)))
-    return replace(body, blocks=tuple(out))
+    return replace(body, blocks=tuple(out), pins={**body.pins, **wanted})
 
 
 # The passes, in the order they run. One per whole-segment round, because

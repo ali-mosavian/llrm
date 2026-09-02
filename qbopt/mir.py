@@ -253,6 +253,13 @@ class MirBody:
     entry: int
     blocks: tuple[MirBlock, ...]
     origin: dict[Value, Register_] = field(default_factory=dict)  # where BC kept each value
+    # Where a transform has asked for a value to go instead. Empty for a
+    # body as raised, and the reason a pass can move anything at all:
+    # regalloc.colour() returns the identity assignment unless something
+    # pins, and hoisting a load out of a loop is exactly a request for a
+    # register the loop does not already use. wholeseg.py colours with
+    # these and hands the result to layout.
+    pins: dict[Value, Register_] = field(default_factory=dict)
 
     def block(self, at: int) -> MirBlock | None:
         return next((one for one in self.blocks if one.at == at), None)

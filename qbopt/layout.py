@@ -132,6 +132,23 @@ def _where(op: mir.Op, assignment: dict | None, origin: dict | None) -> dict | N
     return out or None
 
 
+def _stands_for(op) -> tuple[int, int] | None:
+    """The original bytes this op accounts for, as a range.
+
+    Placement asks where an op *goes*; coverage asks which of BC's bytes it
+    *stands for*. They are the same for everything BC wrote and differ the
+    moment a pass moves an op -- a hoisted load runs in the preheader and
+    still accounts for the bytes it came from. Anchoring coverage at `at`
+    conflated the two and made moving anything impossible.
+    """
+    if isinstance(op, Table):
+        return op.lo, op.hi
+    if op.covers is not None:
+        return op.covers
+    length = _length_of(op)
+    return None if length is None else (op.at, op.at + length)
+
+
 def _length_of(op: mir.Op) -> int | None:
     """How many bytes the op occupied in the image it came from.
 
@@ -214,7 +231,9 @@ def _padding_runs(
     """
     covered = set()
     for one in ops:
-        covered.update(range(one.at, one.at + (_length_of(one) or 0)))
+        span = _stands_for(one)
+        if span is not None:
+            covered.update(range(*span))
     for one in carried:
         covered.update(range(one.lo, one.hi))
 
@@ -407,19 +426,17 @@ def rebuild(
     the only thing in the corpus's code segments that is not in a body --
     is the caller's to keep.
     """
-    # _ordered's own order, not sorted by address. The two agree while
-    # nothing has moved -- and they are not the same rule: a transform that
-    # moves an op puts it where it belongs in the list, and re-sorting by
-    # address would put it straight back. Hoisting anything out of a loop
-    # needs this, and so does every pass that follows it.
-    ops = [op for _, body in sorted(bodies, key=lambda one: one[1].entry) for op in _ordered(body)]
+    ops = sorted(
+        (op for _, body in bodies for op in _ordered(body)),
+        key=lambda one: one.at,
+    )
     if not ops:
         return "no bodies to rebuild"
     if any(_length_of(one) is None for one in ops):
         return f"{ops[0].at:#06x}: an op with no instruction behind it"
 
     lowest = ops[0].at
-    highest = max(one.at + (_length_of(one) or 0) for one in ops)
+    highest = max((_stands_for(one) or (one.at, one.at))[1] for one in ops)
     inside = [Table(lo, hi) for lo, hi in tables if lowest <= lo and hi <= highest]
 
     # BC pads the end of its code segment with zeros, and every object in
@@ -454,7 +471,9 @@ def rebuild(
         # first instruction in the segment and nowhere near the bytes.
         held = set()
         for one in ops:
-            held.update(range(one.at, one.at + (_length_of(one) or 0)))
+            span = _stands_for(one)
+            if span is not None:
+                held.update(range(*span))
         for one in inside:
             held.update(range(one.lo, one.hi))
         first = next(one for one in range(lowest, highest) if one not in held)
