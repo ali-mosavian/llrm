@@ -313,6 +313,55 @@ base register, so it has no address they can name. That is what
 file was missing -- BC hides the cost inside `B$HARR` and the descriptor,
 and PEEK and POKE reload their segment on every use for the same reason.
 
+## harr -- the offset recomputed for every use
+
+Two dimensions and dynamic. The element's address is affine in the inner
+counter with a stride of two, and affine in the outer with a stride of twice
+the row width -- so one `add` per pass is what it costs once an induction
+variable carries it. BC recomputes the whole thing from the subscripts:
+
+```
+0058  add ax,[c]          | ; outside both loops: es, and di = array base
+005c  mov bx,ax           | ; outer: bx = &m(r,1), ax = r+1, cx = 10
+005e  mov ax,[r]          | inner:
+0061  imul word [w]       |   mov  [es:bx],ax
+0065  add ax,[c]          |   add  dx,ax
+0069  shl ax,1            |   inc  ax
+006b  mov dx,bx           |   add  bx,2
+006d  mov bx,ax           |   dec  cx
+006f  mov si,0            |   jnz  inner
+0072  add bx,[si+0Ah]     |
+0075  mov es,[si+2]       |
+0078  mov [es:bx],dx      |
+007b  mov bx,ax           |
+007d  add bx,[si+0Ah]     |
+0080  mov es,[si+2]       |
+0083  mov ax,[es:bx]      |
+0086  add [t],ax          |
+008a  mov ax,[c]          |
+008d  inc ax              |
+008e  mov [c],ax          |
+0091  cmp ax,0Ah          |
+0094  jle short 0058      |
+```
+
+**22 instructions and 11,700 weighted cycles in the inner loop, against 6
+and 1,600.** Per pass, over a hundred of them:
+
+- one `imul word [w]` to recompute the row offset
+- `mov si,0` to re-materialise the descriptor's own address
+- two `add bx,[si+0Ah]` for the array base, one per subscript in the statement
+- two `mov es,[si+2]`, likewise
+
+That is a multiply, two segment loads and two descriptor reads where an
+induction variable with its strength reduced uses **one add**. PDS inlines
+this; on a compiler that calls `B$HARR` the same arithmetic happens inside
+the helper, which is where it is easiest to miss -- the cost does not appear
+in the caller's own instructions at all.
+
+`a multiply or divide inside a loop` counts the first of these directly: an
+address affine in the counter has no business being recomputed.
+
 ## The scoreboard
 
 Every target below is hand-derived from the full listing, both sides: BC's
@@ -338,6 +387,7 @@ between 1.5 and 2.3 times. Estimating the target flattered BC.
   bools          210     126   1.7x   13
   subexp         203     162   1.3x    2
   segld         7850    1925   4.1x   12
+  harr         12454    1900   6.6x   18
 ```
 
 **BC runs between 1.3 and 7.2 times the cost of code written by hand.** The
@@ -383,6 +433,7 @@ compiled two ways, and it is the one number these targets roll up into.
 | spill inner | 9 insns, 30 B | 4, ~9 | spill by cost: one variable, not eight |
 | split | two loops | one register for both | live-range splitting |
 | segld inner | 17 insns, 7100 | 6, 1600 | hoist es and the array base out of the nest |
+| harr inner | 22 insns, 11700 | 6, 1600 | one add, not a multiply and two segment loads |
 
 Roughly **half to three-quarters of the loop bodies**, and every `imul` and
 `idiv` in all of them. The multiplies are not incidental: BC emits one per

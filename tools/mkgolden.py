@@ -208,6 +208,10 @@ def segld() -> list[str]:
     return [f"T={num(5 * sum(range(1, 21)))}", "DONE"]
 
 
+def harr() -> list[str]:
+    return [f"T={num(sum(r + c for r in range(1, 11) for c in range(1, 11)))}", "DONE"]
+
+
 def fpemu() -> list[str]:
     x, y = 1073741831, 1024
     q = x // y
@@ -467,6 +471,7 @@ PROGRAMS = {
     "rotate": rotate,
     "bools": bools,
     "segld": segld,
+    "harr": harr,
     "fpemu": fpemu,
     "fpdeep": fpdeep,
     "chain": chain,

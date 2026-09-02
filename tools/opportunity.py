@@ -134,6 +134,22 @@ def _reloads(body, module_, found: Counter) -> None:
                     seen.add(op.at)
                     found["segment register reloaded inside a loop"] += 1
 
+    # A multiply inside a loop is the induction-variable question: an
+    # element's address is affine in the counter, so recomputing it with a
+    # multiply on every pass is what strength reduction replaces with one
+    # add. BC emits one per subscript per statement, and a two-dimensional
+    # subscript makes it a multiply by the row width.
+    where: set[int] = set()
+    for loop in loopy.loops(list(body.blocks), body.entry):
+        for at in loop.body:
+            for op in at_of[at].ops:
+                what = op.made if op.made is not None else getattr(op.node, "semantics", None)
+                if what is None or op.at in where:
+                    continue
+                if what.op in (ir.Operation.MULTIPLY, ir.Operation.DIVIDE):
+                    where.add(op.at)
+                    found["a multiply or divide inside a loop"] += 1
+
 
 def _spill_cost(body, module_) -> Counter:
     """What each variable costs to leave in memory, by where it is touched.
@@ -352,6 +368,7 @@ TARGETS = {
     "ROTATE": 345,
     "BOOLS": 126,
     "SEGLD": 1925,
+    "HARR": 1900,
 }
 
 
