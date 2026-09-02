@@ -390,3 +390,45 @@ def test_layout_tells_the_selector_which_instructions_are_relocated(obj: Path) -
                     f"{obj.stem} {op.at:#x}: laid out without telling the selector it is relocated"
                 )
     assert asked, f"{obj.stem}: no relocated instruction reached the selector"
+
+
+def test_an_allocation_reaches_the_bytes() -> None:
+    """`select.emit` has taken a `where` since it was written; nothing passed
+    one, so `regalloc.colour()` could move a value and the output was
+    identical.
+
+    Two things had to be true and only the first was. The map is per *value*
+    and an instruction names registers, so it has to be rebuilt per op out
+    of the values that op touches. And `body.origin` holds the 32-bit root
+    while the instruction names `ax` -- a map keyed on `eax` alone never
+    matches, which is exactly what happened and left the whole thing silent.
+    """
+    from iced_x86 import Register
+
+    from qbopt import mir
+    from qbopt import regalloc
+
+    found, bodies, base = rebuilt(Path("fixtures/omf/hotlop-p-g2.obj"))
+    assert base is not None and found is not None
+    _name, body = bodies[0]
+    victim = next(one for one in body.origin if body.origin[one] is Register.EAX and not one.flags)
+
+    got = regalloc.colour(body, {victim: Register.ESI})
+    assert not isinstance(got, str), got
+    assert regalloc.moved(body, got), "the allocation moved nothing, so this proves nothing"
+
+    changed = 0
+    for block in body.blocks:
+        for op in block.ops:
+            where = layout._where(op, got, body.origin)
+            what = layout._semantics(op)
+            if not where or what is None:
+                continue
+            was = select.emit(what, at=0)
+            now = select.emit(what, at=0, where=where)
+            if was is not None and now is not None and was.code != now.code:
+                changed += 1
+    assert changed, "an allocation that moves a value emitted the same bytes"
+
+    # and with no allocation, byte for byte what it was
+    assert layout.rebuild(found, bodies, {}, frozenset(), None).code == base.code

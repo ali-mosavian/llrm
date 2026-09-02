@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from qbopt import ir
 from qbopt import mir
 from iced_x86 import OpKind
+from iced_x86 import Register
 
 from qbopt import select
 from qbopt.mir import MirBody
@@ -87,6 +88,48 @@ def _ordered(body: MirBody) -> list[mir.Op]:
     flow, and nothing here is asking for one.
     """
     return [op for block in sorted(body.blocks, key=lambda one: one.at) for op in block.ops]
+
+
+# A root at each width an instruction can name it. ir.ROOT goes the other
+# way; an allocation is per value and a value's register is its root.
+_AT_WIDTH = {
+    Register.EAX: {4: Register.EAX, 2: Register.AX, 1: Register.AL},
+    Register.EBX: {4: Register.EBX, 2: Register.BX, 1: Register.BL},
+    Register.ECX: {4: Register.ECX, 2: Register.CX, 1: Register.CL},
+    Register.EDX: {4: Register.EDX, 2: Register.DX, 1: Register.DL},
+    Register.ESI: {4: Register.ESI, 2: Register.SI},
+    Register.EDI: {4: Register.EDI, 2: Register.DI},
+    Register.EBP: {4: Register.EBP, 2: Register.BP},
+}
+
+
+def _where(op: mir.Op, assignment: dict | None, origin: dict | None) -> dict | None:
+    """This op's register remap, out of a whole-body allocation.
+
+    `select.emit` has taken a `where` since it was written and nothing ever
+    passed one: an allocation is per *value*, and an instruction names
+    registers, so the map has to be rebuilt for each op out of the values it
+    touches. Where the allocation put a value back where BC had it -- which
+    is every value unless something asked otherwise -- this is empty and
+    select emits exactly what it did before.
+    """
+    if not assignment or origin is None:
+        return None
+    out = {}
+    for value in (*op.defines, *op.uses):
+        want = assignment.get(value)
+        was = origin.get(value)
+        if want is None or was is None or want is was:
+            continue
+        # At every width, not only the root. An allocation is per value and
+        # origin holds the 32-bit root; the instruction names `ax`, so a map
+        # keyed on `eax` alone never matches and select emits what it always
+        # did -- which is what happened, silently, until this was measured.
+        for width in (4, 2, 1):
+            here, there = _AT_WIDTH.get(was, {}).get(width), _AT_WIDTH.get(want, {}).get(width)
+            if here is not None and there is not None:
+                out[here] = there
+    return out or None
 
 
 def _length_of(op: mir.Op) -> int | None:
@@ -344,6 +387,7 @@ def rebuild(
     fields: frozenset[int] = frozenset(),
     reached: frozenset[int] | None = None,
     native_fpu: bool = False,
+    assignment: dict | None = None,
 ) -> Laid | str:
     """Every body in the module, laid out one after another.
 
@@ -416,7 +460,12 @@ def rebuild(
         first = next(one for one in range(lowest, highest) if one not in held)
         return f"{first:#06x}: {highest - lowest - covered} bytes between the ops are not instructions"
 
-    return _emitted(sorted([*ops, *inside], key=lambda one: one.at), lowest, found, fields, native_fpu)
+    origin = {}
+    for _name, body in bodies:
+        origin.update(body.origin)
+    return _emitted(
+        sorted([*ops, *inside], key=lambda one: one.at), lowest, found, fields, native_fpu, assignment, origin
+    )
 
 
 def _emitted(
@@ -425,6 +474,8 @@ def _emitted(
     found: Module,
     fields: frozenset[int] = frozenset(),
     native_fpu: bool = False,
+    assignment: dict | None = None,
+    origin: dict | None = None,
 ) -> Laid | str:
     """Every item in order from `at`, shrunk to a fixed point and emitted.
 
@@ -462,7 +513,9 @@ def _emitted(
         if what is None or emulated:
             lengths.append(_length_of(op) or 0)
             continue
-        made = select.emit(what, at=at, relocated=_field_in(found, op, fields) is not None)
+        made = select.emit(
+            what, at=at, where=_where(op, assignment, origin), relocated=_field_in(found, op, fields) is not None
+        )
         if made is None:
             return f"{op.at:#06x}: {op.name} is not one select.py can emit"
         lengths.append(len(made.code))
@@ -495,7 +548,11 @@ def _emitted(
             if aimed is None:
                 continue
             made = select.emit(
-                aimed, at=placed[index], short=True, relocated=_field_in(found, op, fields) is not None
+                aimed,
+                at=placed[index],
+                where=_where(op, assignment, origin),
+                short=True,
+                relocated=_field_in(found, op, fields) is not None,
             )
             if made is None:
                 continue  # a call has no short form, and says so by refusing
@@ -564,7 +621,11 @@ def _emitted(
         if what is None:
             return f"{op.at:#06x}: its target is not in this body"
         made = select.emit(
-            what, at=placed[index], short=index in short, relocated=_field_in(found, op, fields) is not None
+            what,
+            at=placed[index],
+            where=_where(op, assignment, origin),
+            short=index in short,
+            relocated=_field_in(found, op, fields) is not None,
         )
         if made is None or len(made.code) != lengths[index]:
             return f"{op.at:#06x}: it changed length between the two passes"
