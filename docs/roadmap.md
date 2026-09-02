@@ -34,6 +34,51 @@ relaxes its branches. What orders the milestones below now is narrower:
 **nothing moves code between blocks yet**, and `transform.placed()` moves it
 within one but is switched off.
 
+## Where the work is
+
+**Rewritten 2026-09-02, because this file was wrong about it.** It said the
+classic passes measure empty on BC's output and the wins are in absorption.
+Both came from measurements shaped so BC's own style could not answer them,
+and `docs/targets.md` now carries the hand-written optimal for sixteen
+programs against BC's own listing.
+
+BC is **three to seven times** the cost of hand-written code on integer
+loops, **four times** on floating point, and **thirteen to seventeen times**
+wherever it calls the runtime -- long division, a huge array's element
+helper. Against what a modern optimiser emits rather than a careful 1990s
+one, it is twenty to fifty.
+
+None of that is what this project works on today. Absorption and widening
+are real and they are correct; neither appears in `docs/targets.md` at all.
+
+The cause is one thing: **BC compiles a statement at a time, so no value
+outlives a statement.** Everything else -- the reloads, the recomputed
+addresses, the invariants inside loops, two of eight x87 slots, two of six
+registers -- follows from that.
+
+### The order the work has to happen in
+
+1. **A value that outlives a statement.** A transform has to be allowed not
+   to emit the store and the reload. Cross-block liveness exists in
+   `regs.py`; what is missing is a pass permitted to use it.
+2. **`regalloc.colour()` reaching emission.** Built, never wired to
+   `select`, and it needs the spill costs `tools/opportunity.py --spill`
+   now produces. `select.emit` has to honour an assignment rather than the
+   register BC chose.
+3. **Code motion between blocks.** Does not exist. `transform.placed()`
+   moves within one and is off. LICM, loop rotation, and hoisting an
+   induction variable's initialisation all need it, and that is most of the
+   remaining gap.
+
+Then, in dependency order: store-to-load forwarding and copy propagation
+(needs 1), allocation (2), LICM and induction-variable strength reduction
+(3), then addressing modes and loop rotation as peepholes on the result.
+
+Before any of it: **make the suite non-foldable.** Every program in it is a
+compile-time constant, so a folding pass would delete most of them and score
+twenty times without proving anything general. A bound or a seed the
+compiler cannot see keeps the targets honest as passes land.
+
 ## State
 
 Measured 2026-09-01. Re-measure before trusting it.
@@ -199,6 +244,9 @@ with the machine build as the oracle.
 ## M2 — placement
 
 An emitted instruction goes where it is needed, not where the old one stood.
+**This is now the critical path**: LICM, loop rotation and induction
+variables all wait on moving code between blocks, and that is most of what
+`docs/targets.md` measures as missing.
 
 - [x] a definition moves within its block, bounded by its own uses —
       `transform.placed()`, sinking to just before the first use. Built and
@@ -267,8 +315,21 @@ are empty but because nothing here had asked them a loop-carried question.
 - [x] CSE — measured, not built: 0 sites over SSA values, because BC
       reloads from memory rather than recomputing, and the memory
       redundancy `avail.py` finds is the same thing by another name
-- [ ] LICM — `loops.py` has the structure and no consumer. Unmeasured
-- [ ] array access — the index computation is the invariant worth hoisting
+- [ ] LICM — `loops.py` has the structure and no consumer. **Measured now**:
+      `hotlop` recomputes a constant product twenty times, `press` four
+      products ten times, `matrix` a multiply four hundred times in an inner
+      loop that writes neither operand
+- [ ] array access — the index computation is the invariant worth hoisting.
+      `harr` recomputes a two-dimensional element's address from the
+      subscripts on every pass, with the segment and the array base read
+      twice per statement, where one `add` would do
+- [ ] induction variables, and reducing their strength — `ivchan` is four
+      affine functions of one counter; `stride` hides a second induction
+      variable inside `i \ 5` and pays an `idiv` for it
+- [ ] store-to-load forwarding — 618 sites in the corpus, the largest single
+      count `tools/opportunity.py` reports, and no pass touches them
+- [ ] copy propagation — `mov bx,ax` then uses of `bx`, in four of the
+      sixteen programs
 
 ## M4 — registers
 
