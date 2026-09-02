@@ -354,10 +354,21 @@ and 1,600.** Per pass, over a hundred of them:
 - two `mov es,[si+2]`, likewise
 
 That is a multiply, two segment loads and two descriptor reads where an
-induction variable with its strength reduced uses **one add**. PDS inlines
-this; on a compiler that calls `B$HARR` the same arithmetic happens inside
-the helper, which is where it is easiest to miss -- the cost does not appear
-in the caller's own instructions at all.
+induction variable with its strength reduced uses **one add**.
+
+**`B$HARR` does not appear here, and could not be made to.** Tried:
+`REM $DYNAMIC` and `REDIM` with variable bounds, one and two dimensions, on
+all four compilers, and the whole 215-object corpus -- zero call sites, and
+the inner loop above is what every one of them emits. The allocator differs
+(`B$DDIM` against `B$RDIM`); the access never becomes a call.
+
+The untested lever is `/AH`, huge arrays over 64K, which no configuration
+here passes and without which PDS refuses a 40,000-element array outright.
+An element past a segment boundary needs arithmetic that cannot be inlined,
+which is the shape a helper would exist for. If it is reached that way the
+cost moves inside the helper and stops appearing in the caller's
+instructions at all -- worth knowing, and not something this file has
+measured.
 
 `a multiply or divide inside a loop` counts the first of these directly: an
 address affine in the counter has no business being recomputed.
