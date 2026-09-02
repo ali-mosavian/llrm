@@ -202,6 +202,8 @@ def test_every_compiled_object_round_trips_through_the_selector(tag: str) -> Non
                         continue
                     checked += 1
                     back = next(iter(Decoder(BITNESS, made.code, ip=op.at)), None)
+                    if not isinstance(op.node, (ir.Opaque, ir.Long, ir.Call)):
+                        continue
                     want = op.node.insn.insn
                     same = back is not None and (
                         str(back) == str(want)

@@ -8,6 +8,9 @@ instruction's address. A program computing the right answer is not evidence
 about the piece that happened not to run.
 """
 
+from typing import Any
+from typing import cast
+
 import pytest
 from iced_x86 import Register
 
@@ -798,7 +801,7 @@ def test_a_widened_far_pointer_keeps_its_segment_override() -> None:
     where = far_pointer(0, Register.BX, Register.ES)
     assert where.space is Space.FAR and where.segment is Register.ES
 
-    operand = lifting.memory(_FarValue(where))
+    operand = lifting.memory(cast(Any, _FarValue(where)))
     encoder = Encoder(16)
     encoder.encode(Instruction.create_reg_mem(Code.MOV_R32_RM32, Register.EAX, operand), 0)
     got = encoder.take_buffer()

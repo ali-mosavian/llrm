@@ -51,14 +51,30 @@ other refusal in this pass works.
 
 from dataclasses import dataclass
 
-from qbopt.blocks import Block
+from typing import Protocol
+from collections.abc import Sequence
+
+
+class Node(Protocol):
+    """All these walks read of a block: where it is and where it goes.
+
+    `blocks.Block` and `mir.MirBlock` both satisfy it, and both are passed
+    here. Naming Block was a lie the callers had to live with -- mir.py
+    imports this module, so it cannot be the other way round."""
+
+    @property
+    def at(self) -> int: ...
+
+    @property
+    def succ(self) -> tuple[int, ...]: ...
+
 
 # The entry every module's own control flow starts from -- blocks.ENTRY, but
 # taken from the block list rather than assumed, since a body that is not the
 # main one starts wherever its own PUBDEF put it.
 
 
-def predecessors(blocks: list[Block]) -> dict[int, frozenset[int]]:
+def predecessors(blocks: Sequence[Node]) -> dict[int, frozenset[int]]:
     """Who can reach each block, inverted from its own successors."""
     known = {block.at for block in blocks}
     found: dict[int, set[int]] = {block.at: set() for block in blocks}
@@ -69,7 +85,7 @@ def predecessors(blocks: list[Block]) -> dict[int, frozenset[int]]:
     return {at: frozenset(who) for at, who in found.items()}
 
 
-def dominators(blocks: list[Block], entry: int | None = None) -> dict[int, frozenset[int]]:
+def dominators(blocks: Sequence[Node], entry: int | None = None) -> dict[int, frozenset[int]]:
     """Every block that must have run before each one, to a fixed point.
 
     A block unreachable from the entry gets the empty set rather than "every
@@ -123,7 +139,7 @@ class Loop:
     body: frozenset[int]  # every block in the loop, the header included
 
 
-def back_edges(blocks: list[Block], doms: dict[int, frozenset[int]]) -> list[tuple[int, int]]:
+def back_edges(blocks: Sequence[Node], doms: dict[int, frozenset[int]]) -> list[tuple[int, int]]:
     """(latch, header) for every edge to a block that dominates its source."""
     known = {block.at for block in blocks}
     return [
@@ -158,7 +174,7 @@ def _body(latch: int, header: int, preds: dict[int, frozenset[int]]) -> frozense
     return frozenset(body)
 
 
-def loops(blocks: list[Block], entry: int | None = None) -> list[Loop]:
+def loops(blocks: Sequence[Node], entry: int | None = None) -> list[Loop]:
     """Every natural loop, innermost first where they nest.
 
     Back edges sharing a header are one loop whose body is the union of
@@ -177,7 +193,7 @@ def loops(blocks: list[Block], entry: int | None = None) -> list[Loop]:
     return sorted(found, key=lambda loop: len(loop.body))
 
 
-def irreducible(blocks: list[Block], entry: int | None = None) -> frozenset[int]:
+def irreducible(blocks: Sequence[Node], entry: int | None = None) -> frozenset[int]:
     """Blocks left in a cycle once every natural loop's back edge is cut.
 
     A control-flow graph is reducible exactly when deleting its back edges --
@@ -229,7 +245,7 @@ def irreducible(blocks: list[Block], entry: int | None = None) -> frozenset[int]
     return frozenset(found)
 
 
-def depth(blocks: list[Block], entry: int | None = None) -> dict[int, int]:
+def depth(blocks: Sequence[Node], entry: int | None = None) -> dict[int, int]:
     """How many loops each block is inside -- 0 for straight-line code.
 
     A count rather than a trip estimate because the object does not carry
@@ -247,7 +263,7 @@ def depth(blocks: list[Block], entry: int | None = None) -> dict[int, int]:
     return found
 
 
-def immediate_dominators(blocks: list[Block], entry: int | None = None) -> dict[int, int | None]:
+def immediate_dominators(blocks: Sequence[Node], entry: int | None = None) -> dict[int, int | None]:
     """Each block's nearest strict dominator, or None for the entry and for
     anything unreachable.
 
@@ -265,7 +281,7 @@ def immediate_dominators(blocks: list[Block], entry: int | None = None) -> dict[
     return found
 
 
-def frontiers(blocks: list[Block], entry: int | None = None) -> dict[int, frozenset[int]]:
+def frontiers(blocks: Sequence[Node], entry: int | None = None) -> dict[int, frozenset[int]]:
     """Where a definition stops being the only one that reaches -- the blocks
     a phi belongs in.
 

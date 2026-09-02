@@ -20,6 +20,7 @@ back-edge, which nothing here sees.
 
 import sys
 import argparse
+import contextlib
 from pathlib import Path
 from collections import Counter
 
@@ -29,11 +30,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from qbopt import ir
 from qbopt import mir
-from qbopt import loops as loopy
 from qbopt import omf
 from qbopt import module
-from qbopt import blocks as split
+from qbopt import rewrite
 from qbopt.module import Space
+from qbopt import loops as loopy
+from qbopt import blocks as split
 from qbopt.blocks import code_map
 
 
@@ -133,21 +135,40 @@ CALL = 20
 # from memory on every pass, and a wholly invariant expression is computed
 # again each time.
 FLOAT = {
-    "fld": 20, "fild": 25, "fst": 25, "fstp": 25, "fist": 30, "fistp": 30,
-    "fadd": 25, "faddp": 25, "fsub": 25, "fsubp": 25, "fsubr": 25, "fsubrp": 25,
-    "fmul": 30, "fmulp": 30, "fdiv": 90, "fdivp": 90, "fdivr": 90, "fdivrp": 90,
-    "fcom": 20, "fcomp": 20, "fcompp": 20, "fchs": 10, "fabs": 10, "fsqrt": 120,
-    "wait": 5, "fxch": 10, "fldz": 15, "fld1": 15,
+    "fld": 20,
+    "fild": 25,
+    "fst": 25,
+    "fstp": 25,
+    "fist": 30,
+    "fistp": 30,
+    "fadd": 25,
+    "faddp": 25,
+    "fsub": 25,
+    "fsubp": 25,
+    "fsubr": 25,
+    "fsubrp": 25,
+    "fmul": 30,
+    "fmulp": 30,
+    "fdiv": 90,
+    "fdivp": 90,
+    "fdivr": 90,
+    "fdivrp": 90,
+    "fcom": 20,
+    "fcomp": 20,
+    "fcompp": 20,
+    "fchs": 10,
+    "fabs": 10,
+    "fsqrt": 120,
+    "wait": 5,
+    "fxch": 10,
+    "fldz": 15,
+    "fld1": 15,
 }
 
 
 # ds and ss are the frame and the data segment and BC does not reload them.
 # es is the one a dynamic array reaches its elements through.
-SEGMENTS = {
-    getattr(iced_x86.Register, one)
-    for one in ("ES", "FS", "GS")
-    if hasattr(iced_x86.Register, one)
-}
+SEGMENTS = {getattr(iced_x86.Register, one) for one in ("ES", "FS", "GS") if hasattr(iced_x86.Register, one)}
 
 
 def _reloads(body, module_, found: Counter) -> None:
@@ -225,11 +246,28 @@ def _spill_cost(body, module_) -> Counter:
 # Ten per level was a stand-in and it undercounts every nest here: matrix's
 # inner loop runs four hundred times, not a hundred.
 TRIPS = {
-    "HOTLOP": 20, "PRESS": 10, "ARRIDX": 20, "IVCHAN": 21, "STRIDE": 21,
-    "MATRIX": 20, "NESTED": 6, "SPILL": 10, "SPLIT": 10, "ADDRM": 20,
-    "ROTATE": 10, "SEGLD": 20, "HARR": 10, "HG": 10, "LNGMIX": 10, "FPCSE": 10, "FX": 10,
+    "HOTLOP": 20,
+    "PRESS": 10,
+    "ARRIDX": 20,
+    "IVCHAN": 21,
+    "STRIDE": 21,
+    "MATRIX": 20,
+    "NESTED": 6,
+    "SPILL": 10,
+    "SPLIT": 10,
+    "ADDRM": 20,
+    "ROTATE": 10,
+    "SEGLD": 20,
+    "HARR": 10,
+    "HG": 10,
+    "LNGMIX": 10,
+    "FPCSE": 10,
+    "FX": 10,
     # the opaque twins run the same loops
-    "HOTLPX": 20, "PRESSX": 10, "FPCSEX": 10, "LNGMXX": 10,
+    "HOTLPX": 20,
+    "PRESSX": 10,
+    "FPCSEX": 10,
+    "LNGMXX": 10,
 }
 
 
@@ -251,7 +289,9 @@ def _cost(body, module_, found: Counter, trips: int = 10) -> None:
                 continue
             name = (op.name or "").lower()
             if name in FLOAT:
-                found["cost"] += (FLOAT[name] + TOUCH * len([one for one in (*op.loads, *op.stores) if named(one)])) * weight
+                found["cost"] += (
+                    FLOAT[name] + TOUCH * len([one for one in (*op.loads, *op.stores) if named(one)])
+                ) * weight
                 found["a floating-point operation"] += 1
                 continue
             cycles = CYCLES.get(name, 2)
@@ -329,7 +369,7 @@ def _invariant(body, module_, found: Counter) -> None:
                         found["read inside a loop of a cell the loop never writes"] += 1
 
 
-def counted(paths: list[Path]) -> Counter:
+def counted(paths: list[Path], raw: bool = False) -> Counter:
     """Cross-block, because BC's redundancy is loop-carried.
 
     Block-scoped was the floor and it is the wrong floor: the loop counter
@@ -343,7 +383,7 @@ def counted(paths: list[Path]) -> Counter:
     """
     found: Counter = Counter()
     for path in paths:
-        module_ = module.of(omf.parse(path.read_bytes()))
+        module_ = _measured(path, raw)
         if module_ is None:
             continue
         mapped = code_map(module_)
@@ -365,7 +405,7 @@ def counted(paths: list[Path]) -> Counter:
                     seen: set[str] | None = None
                     for previous in preds[at]:
                         was, had = exits[previous]
-                        if entering is None:
+                        if entering is None or seen is None:
                             entering, seen = dict(was), set(had)
                         else:
                             entering = {c: v for c, v in entering.items() if c in was}
@@ -386,7 +426,7 @@ def counted(paths: list[Path]) -> Counter:
                 entering, seen = None, None
                 for previous in preds[at]:
                     was, had = exits[previous]
-                    if entering is None:
+                    if entering is None or seen is None:
                         entering, seen = dict(was), set(had)
                     else:
                         entering = {c: v for c, v in entering.items() if c in was}
@@ -448,8 +488,7 @@ TARGETS = {
 }
 
 
-
-def against_targets(paths: list[Path]) -> int:
+def against_targets(paths: list[Path], raw: bool = False) -> int:
     """Every program against its best case, and how far off we are.
 
     The counters are the easy half: a perfect compiler leaves none of them,
@@ -459,14 +498,10 @@ def against_targets(paths: list[Path]) -> int:
     worst = 0
     print(f"  {'program':10s} {'cost':>7s} {'target':>7s} {'ratio':>6s}   redundancy left")
     for path in sorted(paths):
-        found = counted([path])
+        found = counted([path], raw)
         cost = found.pop("cost", 0)
         want = TARGETS.get(_program(path))
-        left = sum(
-            count
-            for name, count in found.items()
-            if name.startswith(("load ", "store ", "read "))
-        )
+        left = sum(count for name, count in found.items() if name.startswith(("load ", "store ", "read ")))
         if want is None:
             print(f"  {path.stem:10s} {cost:7d} {'--':>7s} {'--':>6s}   {left}")
             continue
@@ -476,10 +511,25 @@ def against_targets(paths: list[Path]) -> int:
     return 0
 
 
-def spilling(paths: list[Path]) -> None:
+def _measured(path: Path, raw: bool):
+    """The module to cost: what we ship, or what BC wrote.
+
+    Costing the parsed object was measuring BC and calling it our score --
+    every ratio on this board sat still no matter what a pass did, which is
+    exactly the reading that should never have been believed. The default
+    is now our own output.
+    """
+    data = path.read_bytes()
+    if not raw:
+        with contextlib.suppress(Exception):
+            data, _regions = rewrite.rewrite(data, dry_run=False)
+    return module.of(omf.parse(data))
+
+
+def spilling(paths: list[Path], raw: bool = False) -> None:
     """The per-variable ranking an allocator would spill by."""
     for path in paths:
-        module_ = module.of(omf.parse(path.read_bytes()))
+        module_ = _measured(path, raw)
         if module_ is None:
             continue
         mapped = code_map(module_)
@@ -497,16 +547,17 @@ def spilling(paths: list[Path]) -> None:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="opportunity")
     ap.add_argument("objects", nargs="*", type=Path)
+    ap.add_argument("--raw", action="store_true", help="cost BC's object instead of our output")
     ap.add_argument("--spill", action="store_true", help="rank each variable by what it costs to keep in memory")
     ap.add_argument("--targets", action="store_true", help="every program against its hard-coded best case")
     args = ap.parse_args(argv)
     paths = args.objects or sorted(Path("fixtures/omf").glob("*.obj"))
     if args.spill:
-        spilling(paths)
+        spilling(paths, args.raw)
         return 0
     if args.targets:
-        return against_targets(paths)
-    found = counted(paths)
+        return against_targets(paths, args.raw)
+    found = counted(paths, args.raw)
     print(f"  {found.pop('cost', 0):8d}  COST -- weighted cycles, the number to minimise")
     for name, count in sorted(found.items(), key=lambda one: -one[1]):
         print(f"  {count:8d}  {name}")

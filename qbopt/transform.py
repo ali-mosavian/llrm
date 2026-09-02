@@ -50,6 +50,7 @@ from qbopt import flags
 from qbopt.module import Addr
 from qbopt.module import Space
 from iced_x86 import Register
+from iced_x86 import Register_
 from qbopt.mir import MirBody
 
 
@@ -664,7 +665,7 @@ def applied(
         elif name == "place":
             body = placed(body)
         elif name == "absorb":
-            body = absorbed(body, blocks, calls, found)
+            body = absorbed(body, blocks or [], calls, found)
         elif name == "strength":
             body = strength(body, blocks)
     return body
@@ -843,11 +844,11 @@ EMITTED = ("B$MUI4", "B$DVI4", "B$RMI4", "B$CPI4")
 SYNTHESISED = flags.Flag.CF | flags.Flag.PF | flags.Flag.AF
 
 
-def _wide(register: "Register") -> ir.Reg:
+def _wide(register: Register_) -> ir.Reg:
     return ir.Reg(register=register, width=4)
 
 
-def _narrow(register: "Register") -> ir.Reg:
+def _narrow(register: Register_) -> ir.Reg:
     return ir.Reg(register=register, width=2)
 
 
@@ -1061,7 +1062,7 @@ def _absorbing(name: str, at: int, after: Op) -> list[Op]:
 
 def _laid(steps: list[ir.Semantics], at: int, after: Op, restore: bool) -> list[Op]:
     """One site's operations as ops, all standing on the call's own address."""
-    end = after.node.insn.end if after.node is not None else at
+    end = after.node.insn.end if isinstance(after.node, (ir.Opaque, ir.Long, ir.Call)) else at
     out: list[Op] = []
     for number, what in enumerate(steps):
         out.append(

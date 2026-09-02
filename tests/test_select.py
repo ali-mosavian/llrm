@@ -13,6 +13,7 @@ import pytest
 from iced_x86 import Code
 from iced_x86 import Decoder
 from iced_x86 import Register
+from iced_x86 import Register_
 
 import corpus
 from qbopt import ir
@@ -21,6 +22,13 @@ from qbopt.declen import BITNESS
 
 ROOTS = (Register.EAX, Register.ECX, Register.EDX, Register.EBX, Register.ESI, Register.EDI)
 HALVES = (Register.AX, Register.CX, Register.DX, Register.BX, Register.SI, Register.DI)
+
+
+def _made(what: select.Emitted | None) -> select.Emitted:
+    """The emitter returns None where it cannot encode, so a test that reads
+    `.code` has to say which it expected."""
+    assert what is not None
+    return what
 
 
 def test_a_move_decodes_back_to_the_move_that_was_asked_for() -> None:
@@ -386,18 +394,18 @@ def test_a_relocated_push_keeps_the_wide_immediate() -> None:
     test_every_relocation_points_at_a_field_the_module_really_has caught
     across 100 objects the moment the byte form was wired.
     """
-    assert select.push_imm(0, 2, relocated=True).code.hex() == "680000"
-    assert select.push_imm(0, 2, relocated=False).code.hex() == "6a00"
+    assert _made(select.push_imm(0, 2, relocated=True)).code.hex() == "680000"
+    assert _made(select.push_imm(0, 2, relocated=False)).code.hex() == "6a00"
     # and the wide push shrinks on the same rule
-    assert select.push_imm(3, 4, relocated=True).code.hex() == "666803000000"
-    assert select.push_imm(3, 4, relocated=False).code.hex() == "666a03"
+    assert _made(select.push_imm(3, 4, relocated=True)).code.hex() == "666803000000"
+    assert _made(select.push_imm(3, 4, relocated=False)).code.hex() == "666a03"
 
 
 @pytest.mark.parametrize(
     ("name", "reg", "want"),
     [("shl", Register.AX, "d1e0"), ("shl", Register.BX, "d1e3"), ("sar", Register.AX, "d1f8")],
 )
-def test_a_shift_by_one_takes_its_own_opcode(name: str, reg: Register, want: str) -> None:
+def test_a_shift_by_one_takes_its_own_opcode(name: str, reg: Register_, want: str) -> None:
     """`shl ax,1` is `d1 e0`, a byte shorter than `c1 e0 01`.
 
     The by-1 shape was already in the table and never fired: iced models the
@@ -437,9 +445,9 @@ def test_a_byte_immediate_still_beats_the_accumulator_form() -> None:
     """`83 c0 03` is three bytes and `05 03 00` is three too, but the byte
     form is the one that also works on bx -- so the order stays: byte
     immediate, then accumulator, then the full word."""
-    assert select.arith_imm("add", Register.AX, 3).code.hex() == "83c003"
-    assert select.arith_imm("add", Register.BX, 3).code.hex() == "83c303"
-    assert select.arith_imm("add", Register.BX, 0x1286).code.hex() == "81c38612"
+    assert _made(select.arith_imm("add", Register.AX, 3)).code.hex() == "83c003"
+    assert _made(select.arith_imm("add", Register.BX, 3)).code.hex() == "83c303"
+    assert _made(select.arith_imm("add", Register.BX, 0x1286)).code.hex() == "81c38612"
 
 
 @pytest.mark.parametrize(("value", "want"), [(0x32, "837ee232"), (0, "837ee200"), (-1, "837ee2ff")])
@@ -617,7 +625,7 @@ def test_a_compare_keeps_the_mnemonic_it_was_given(hexs: str, want: str) -> None
     ("reg", "want"),
     [(Register.EAX, "6685c0"), (Register.ECX, "6685c9"), (Register.AX, "85c0"), (Register.BX, "85db")],
 )
-def test_a_comparison_against_zero_takes_the_test_form(reg: Register, want: str) -> None:
+def test_a_comparison_against_zero_takes_the_test_form(reg: Register_, want: str) -> None:
     """`cmp reg,0` is a byte longer than `test reg,reg` and asks the same thing.
 
     Both set SF, ZF and PF from the value and clear CF and OF, so every

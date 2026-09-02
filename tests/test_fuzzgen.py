@@ -17,6 +17,9 @@ does not model.
 from functools import cache
 from collections.abc import Iterator
 
+from typing import Any
+from typing import cast
+
 import pytest
 import fuzzgen
 from qbprint import num
@@ -538,18 +541,34 @@ def test_a_repeated_operand_is_offered_for_a_leaf_and_never_for_a_subtree() -> N
     from fuzzgen import Index
     from fuzzgen import Width
     from fuzzgen import BinOp
+    from fuzzgen import Expr
     from fuzzgen import _repeated
 
-    class _Ctx:
+    class _Rng(random.Random):
+        """Always the same draw, so the threshold is what is being tested."""
+
         def __init__(self, value: float) -> None:
-            self.rng = random.Random()
-            self.rng.random = lambda: value  # type: ignore[method-assign]
+            super().__init__()
+            self.value = value
+
+        def random(self) -> float:
+            return self.value
+
+    class _Ctx:
+        """Only the field `_repeated` reads. Not the generator's own context,
+        which would need a whole program's worth of state to build."""
+
+        def __init__(self, value: float) -> None:
+            self.rng = _Rng(value)
+
+    def repeated(value: float, what: Expr) -> Expr | None:
+        return _repeated(cast(Any, _Ctx(value)), what)
 
     leaf = Index(Width.SNG, "arr0", Lit(Width.INT, 3))
     subtree = BinOp(Width.SNG, "+", leaf, leaf)
 
-    assert _repeated(_Ctx(0.0), leaf) is leaf, "a leaf must be offered"
-    assert _repeated(_Ctx(0.0), Var("v1", Width.LNG)) is not None
-    assert _repeated(_Ctx(0.99), leaf) is None, "and only sometimes"
-    assert _repeated(_Ctx(0.0), subtree) is None, "a subtree is not repeated -- it may call something"
-    assert _repeated(_Ctx(0.0), Lit(Width.INT, 7)) is None, "a literal is not a read"
+    assert repeated(0.0, leaf) is leaf, "a leaf must be offered"
+    assert repeated(0.0, Var("v1", Width.LNG)) is not None
+    assert repeated(0.99, leaf) is None, "and only sometimes"
+    assert repeated(0.0, subtree) is None, "a subtree is not repeated -- it may call something"
+    assert repeated(0.0, Lit(Width.INT, 7)) is None, "a literal is not a read"

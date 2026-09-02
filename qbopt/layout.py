@@ -32,11 +32,11 @@ not encode.
 from dataclasses import field
 from dataclasses import dataclass
 
-from qbopt import ir
-from qbopt import mir
 from iced_x86 import OpKind
 from iced_x86 import Register
 
+from qbopt import ir
+from qbopt import mir
 from qbopt import select
 from qbopt.mir import MirBody
 from qbopt.module import Module
@@ -342,10 +342,18 @@ def _field_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -
     # it, which is what Laid.dropped reports. After the far call above,
     # whose four relocated bytes are a target and not an operand.
     what = _semantics(op)
-    if what is not None and not any(
-        isinstance(one, (ir.Mem, ir.Address, ir.Imm)) for one in (*what.dests, *what.sources)
-    ):
-        return None
+    if what is not None:
+        holds = [one for one in (*what.dests, *what.sources) if isinstance(one, (ir.Mem, ir.Address, ir.Imm))]
+        if not holds:
+            return None
+        # A transform that served a read from a register removed the only
+        # operand a displacement could sit in, and left an immediate behind:
+        # `cmp word [k],1` becomes `cmp ax,1`. The fixup still inside this
+        # span named the operand that went, so relocating this instruction's
+        # immediate writes an address over it and over the branch after it.
+        # suite/jumps.bas took the CASE ELSE arm for k = 1 that way.
+        if op.made is not None and not any(isinstance(one, (ir.Mem, ir.Address)) for one in holds):
+            return None
     inside = [one for one in known if lo <= one < hi]
     return inside[0] if len(inside) == 1 else None
 
@@ -670,7 +678,7 @@ def _emitted(
     for op in ops:
         if isinstance(op, Table):
             continue
-        lo, hi = (op.covers if op.covers is not None else (op.at, op.at + (_length_of(op) or 0)))
+        lo, hi = op.covers if op.covers is not None else (op.at, op.at + (_length_of(op) or 0))
         explained.update(one for one in known if lo <= one < hi)
         landed = moved.get(op.at)
         if landed is not None:

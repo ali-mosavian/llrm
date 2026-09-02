@@ -336,10 +336,11 @@ def test_two_negates_without_the_borrow_are_not_one_long_negate() -> None:
     Built here instead.
     """
     from iced_x86 import Register
+    from iced_x86 import Register_
 
     from qbopt import ir
 
-    def unary(at: int, name: str, register: Register, value: int) -> mir.Op:
+    def unary(at: int, name: str, register: Register_, value: int) -> mir.Op:
         where = ir.Reg(register=register, width=2)
         return mir.Op(
             at=at,
@@ -540,7 +541,7 @@ def test_a_widened_body_still_lays_out(obj: Path) -> None:
     assert found is not None
     mapped = code_map(found)
     if isinstance(mapped, str):
-        pytest.skip(mapped)
+        pytest.skip(reason=str(mapped))  # ty: ignore[unknown-argument]
     blocks = split.partition(found, mapped)
     fields = frozenset(one.offset for one in omf.fixups(omf.parse(obj.read_bytes())) if one.seg == found.seg)
     reached = frozenset(a for b in blocks for i in b.insns for a in range(i.at, i.end))
@@ -579,16 +580,17 @@ def test_a_long_immediate_is_both_halves_of_it() -> None:
             for pair in chain.ops:
                 if pair.kind is not pairs.Kind.ALU_IMM:
                     continue
+                shapes = [pairs._semantics_of(half) for half in (pair.low, pair.high)]
+                if any(one is None for one in shapes):
+                    continue
                 halves = [
-                    next(
-                        (one.value for one in (pairs._semantics_of(half).sources) if isinstance(one, ir.Imm)),
-                        None,
-                    )
-                    for half in (pair.low, pair.high)
+                    next((one.value for one in what.sources if isinstance(one, ir.Imm)), None)
+                    for what in shapes
+                    if what is not None
                 ]
                 if any(one is None for one in halves) or not halves[1]:
                     continue
-                low, high = halves
+                low, high = (one for one in halves if one is not None)
                 wide = pairs.wider(pair)
                 assert wide is not None
                 got = next(one.value for one in wide.sources if isinstance(one, ir.Imm))

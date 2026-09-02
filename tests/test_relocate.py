@@ -214,7 +214,7 @@ def test_a_branch_that_would_no_longer_reach_refuses_the_whole_segment() -> None
     assert isinstance(retarget_branches(code, [branch], grown), str)
 
 
-def test_a_fixup_naming_an_offset_the_layout_did_not_place_is_refused() -> None:
+def test_a_fixup_naming_an_offset_the_layout_did_not_place_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     """omf.reemit leaves a field alone when it is given None.
 
     So a same-segment fixup whose displacement names an offset the layout
@@ -256,38 +256,35 @@ def test_a_fixup_naming_an_offset_the_layout_did_not_place_is_refused() -> None:
             for fixup in omf.fixups(records)
         )
 
-    relocate._mapped = watch
-    try:
-        obj = None
-        for one in FIXTURES:
-            seen.clear()
-            if asks_a_fixup(one) and rebuilt(one.read_bytes())[1] == REBUILT and seen:
-                obj = one
-                break
-        assert obj is not None, "no fixture rebuilds while a fixup names a code offset"
-        # The records ask first, so anything asked for after the last of
-        # them is a fixup's own displacement.
-        # By call, not by value: the records ask about some of the same
-        # offsets, and failing one of those trips their own refusal first,
-        # which would leave this passing whatever the fixup loop did.
-        last = len(seen) - 1
-        calls = 0
+    monkeypatch.setattr(relocate, "_mapped", watch)
+    obj = None
+    for one in FIXTURES:
+        seen.clear()
+        if asks_a_fixup(one) and rebuilt(one.read_bytes())[1] == REBUILT and seen:
+            obj = one
+            break
+    assert obj is not None, "no fixture rebuilds while a fixup names a code offset"
+    # The records ask first, so anything asked for after the last of
+    # them is a fixup's own displacement.
+    # By call, not by value: the records ask about some of the same
+    # offsets, and failing one of those trips their own refusal first,
+    # which would leave this passing whatever the fixup loop did.
+    last = len(seen) - 1
+    calls = 0
 
-        def missing(offset: int, kept: int, moved: dict[int, int]) -> int | None:
-            nonlocal calls
-            calls += 1
-            return None if calls - 1 == last else real(offset, kept, moved)
+    def missing(offset: int, kept: int, moved: dict[int, int]) -> int | None:
+        nonlocal calls
+        calls += 1
+        return None if calls - 1 == last else real(offset, kept, moved)
 
-        relocate._mapped = missing
-        why = rebuilt(obj.read_bytes())[1]
-    finally:
-        relocate._mapped = real
+    monkeypatch.setattr(relocate, "_mapped", missing)
+    why = rebuilt(obj.read_bytes())[1]
     assert why != REBUILT, "a fixup naming an unplaceable offset was written anyway"
     assert "a fixup names" in why, why
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
-def test_every_rebuilt_object_maps_every_code_offset_it_names(obj: Path) -> None:
+def test_every_rebuilt_object_maps_every_code_offset_it_names(obj: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The invariant behind that refusal, over the whole corpus.
 
     Every offset a record or a fixup names in the rebuilt segment resolves
@@ -307,10 +304,7 @@ def test_every_rebuilt_object_maps_every_code_offset_it_names(obj: Path) -> None
             unmapped.append(offset)
         return out
 
-    relocate._mapped = watch
-    try:
-        why = rebuilt(obj.read_bytes())[1]
-    finally:
-        relocate._mapped = real
+    monkeypatch.setattr(relocate, "_mapped", watch)
+    why = rebuilt(obj.read_bytes())[1]
     if why == REBUILT:
         assert not unmapped, f"{obj.stem}: rebuilt while {len(unmapped)} offsets did not map"

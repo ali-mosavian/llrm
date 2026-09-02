@@ -139,6 +139,8 @@ def test_the_operands_are_the_ones_calls_py_absorbs() -> None:
 def test_each_operand_is_four_bytes_of_pushes_and_they_do_not_overlap() -> None:
     """A long is two words, or one dword under VBDOS /G3, and never a mix of
     one argument's half with its neighbour's."""
+    from iced_x86 import Code_
+
     from qbopt.stack import PUSH_BYTES
 
     seen = 0
@@ -148,7 +150,7 @@ def test_each_operand_is_four_bytes_of_pushes_and_they_do_not_overlap() -> None:
             every = [one.at for group in groups for one in group]
             assert len(every) == len(set(every)), f"{obj.stem}: a push in two operands at {at:#x}"
             for group in groups:
-                assert sum(PUSH_BYTES[one.code] for one in group) == 4, (
+                assert sum(PUSH_BYTES[Code_(one.code)] for one in group) == 4, (
                     f"{obj.stem}: an operand at {at:#x} is not four bytes"
                 )
                 assert list(group) == sorted(group, key=lambda one: one.at), "not in push order"
@@ -389,7 +391,9 @@ def test_the_absorbed_compare_is_byte_identical_to_the_machine_arm() -> None:
             seen += 1
             got = b""
             for one in ops:
-                made = select.emit(layout._semantics(one), at=0)
+                what = layout._semantics(one)
+                assert what is not None, f"{obj.stem}: {one.name} at {at:#x} has no semantics"
+                made = select.emit(what, at=0)
                 assert made is not None, f"{obj.stem}: {one.name} at {at:#x} does not select"
                 got += made.code
             assert got == want, (
@@ -420,10 +424,13 @@ def test_a_multiply_by_three_becomes_one_lea() -> None:
     made = transform._reduced(multiply(3))
     assert made is not None and made.op is ir.Operation.ADDRESS and made.name == "lea"
     where = made.sources[0]
+    assert isinstance(where, ir.Address)
     assert where.through == Register.EAX and where.index == Register.EAX and where.scale == 2
 
     made = transform._reduced(multiply(8))
-    assert made is not None and made.name == "shl" and made.sources[1].value == 3
+    assert made is not None and made.name == "shl"
+    by = made.sources[1]
+    assert isinstance(by, ir.Imm) and by.value == 3
 
     assert transform._reduced(multiply(7)) is None, "seven is not a lea and not a shift"
     assert transform._reduced(multiply(1)) is None, "one is not a shift by zero here"

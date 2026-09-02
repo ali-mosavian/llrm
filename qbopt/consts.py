@@ -158,9 +158,10 @@ def known(body: mir.MirBody) -> dict[mir.Value, Known]:
                 if phi.result in facts or not phi.incoming:
                     continue
                 seen = [facts.get(one) for one in phi.incoming.values()]
-                if any(one is None for one in seen) or len({(o.n, o.width) for o in seen}) != 1:
+                known = [one for one in seen if one is not None]
+                if len(known) != len(seen) or len({(o.n, o.width) for o in known}) != 1:
                     continue
-                facts[phi.result] = seen[0]
+                facts[phi.result] = known[0]
                 changing = True
             for op in block.ops:
                 target = _defined(op)

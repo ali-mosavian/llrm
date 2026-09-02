@@ -77,9 +77,7 @@ def _clean(op: Op, calls: dict[int, str]) -> bool:
     the general registers, which is why the base register is checked
     separately.
     """
-    routine = runtime.of(calls.get(op.at, ""))
-    if routine is None:
-        return False
+    routine = runtime.contract(calls.get(op.at))
     return routine.established and not runtime.barrier(routine) and not runtime.writes_caller_memory(routine)
 
 

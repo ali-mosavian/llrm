@@ -23,6 +23,7 @@ before knowing which register it can become.
 """
 
 from enum import StrEnum
+from collections.abc import Callable
 from dataclasses import replace
 from dataclasses import dataclass
 
@@ -92,6 +93,9 @@ def _half_of(register: Register_, origin: dict) -> tuple[int, int] | None:
     return None
 
 
+_Half = Callable[[Op], "tuple[Register_, object] | None"]
+
+
 def _loads_from(op: Op) -> tuple[Register_, object] | None:
     """(destination root, cell) for `mov <half>,[x]`, or None."""
     what = _moved(op)
@@ -128,7 +132,7 @@ def _adjacent(low: object, high: object) -> bool:
     return a.plus(HALF) == b
 
 
-def _matched(first: Op, second: Op, read: object, origin: dict) -> Pair | None:
+def _matched(first: Op, second: Op, read: _Half, origin: dict) -> Pair | None:
     """The two ops as one pair, if they are one, in either order.
 
     BC writes the halves low-first for a load and either way round for a
@@ -363,6 +367,7 @@ def _negate(ops: list[Op], index: int, origin: dict) -> "Pair | None":
     shapes = [_shape(one) for one in (first, middle, last)]
     if any(one is None for one in shapes):
         return None
+    shapes = [one for one in shapes if one is not None]
     if shapes[0].op is not ir.Operation.UNARY or (shapes[0].name or "") != "neg":
         return None
     if shapes[2].op is not ir.Operation.UNARY or (shapes[2].name or "") != "neg":

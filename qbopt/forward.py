@@ -143,7 +143,7 @@ def _lands_in(insn: Insn) -> Register_ | None:
     return next(iter(found)) if len(found) == 1 else None
 
 
-def _root_of(register: Register_ | None) -> Register_ | None:
+def _root_of(register: int | None) -> int | None:
     return None if register is None else ir.ROOT.get(register, register)
 
 

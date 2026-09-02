@@ -20,6 +20,7 @@ from qbopt import module
 from qbopt import regalloc
 from qbopt import blocks as blockmod
 from qbopt.blocks import code_map
+from qbopt.mir import MirBody
 from qbopt.module import Addr
 from qbopt.module import Space
 
@@ -374,7 +375,7 @@ def test_a_partial_write_is_recorded_only_where_it_is_asked_for(obj: Path) -> No
             assert set(a) <= set(b), "asking for partial writes may only add cells, never remove one"
 
 
-def test_only_redundant_asks_the_map_for_partial_writes() -> None:
+def test_only_redundant_asks_the_map_for_partial_writes(monkeypatch: pytest.MonkeyPatch) -> None:
     """Which caller asks for what, recorded rather than grepped for.
 
     A cell established by `mov ax,[x]` is held in its value's *low half*.
@@ -397,23 +398,23 @@ def test_only_redundant_asks_the_map_for_partial_writes() -> None:
     asked: list[bool] = []
     real = under_test.holders
 
-    def watch(one, dgroup, calls=None, partial=False):
+    def watch(
+        body: MirBody, dgroup: frozenset[int], calls: dict[int, str] | None = None, partial: bool = False
+    ) -> avail.Held:
         asked.append(partial)
-        return real(one, dgroup, calls, partial)
+        return real(body, dgroup, calls, partial)
 
-    under_test.holders = watch
-    try:
-        asked.clear()
-        under_test.redundant(body, found.dgroup, found.calls)
-        assert asked == [True], f"redundant() asked {asked}"
+    monkeypatch.setattr(under_test, "holders", watch)
+    asked.clear()
+    under_test.redundant(body, found.dgroup, found.calls)
+    assert asked == [True], f"redundant() asked {asked}"
 
-        asked.clear()
-        under_test.forwardable(body, found.dgroup, found.calls, frozenset())
-        assert asked == [False], f"forwardable() asked {asked} -- it serves reads from the register"
+    asked.clear()
+    under_test.forwardable(body, found.dgroup, found.calls, frozenset())
+    assert asked == [False], f"forwardable() asked {asked} -- it serves reads from the register"
 
-        asked.clear()
-        under_test.provider(body, found.dgroup, 0, next(iter(body.blocks)).ops[0].loads[0] if
-                            next(iter(body.blocks)).ops[0].loads else None, found.calls)
-        assert asked == [False], f"provider() asked {asked}"
-    finally:
-        under_test.holders = real
+    asked.clear()
+    read = next((one for block in body.blocks for one in block.ops if one.loads), None)
+    assert read is not None, "this body reads no memory, so provider() would not be asked"
+    under_test.provider(body, found.dgroup, 0, read.loads[0], found.calls)
+    assert asked == [False], f"provider() asked {asked}"

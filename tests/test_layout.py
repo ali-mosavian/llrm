@@ -13,9 +13,9 @@ from pathlib import Path
 from collections.abc import Iterator
 
 import pytest
-from iced_x86 import Mnemonic
 from iced_x86 import OpKind
-from iced_x86 import Decoder
+from iced_x86 import Register_
+from iced_x86 import Mnemonic
 from iced_x86 import Instruction
 
 import corpus
@@ -24,7 +24,6 @@ from qbopt import mir
 from qbopt import omf
 from qbopt import layout
 from qbopt import select
-from qbopt.declen import BITNESS
 from qbopt.declen import decode
 from qbopt import blocks as split
 from qbopt.rewrite import code_map
@@ -340,7 +339,7 @@ def test_the_rebuildable_share_is_what_was_measured() -> None:
 
 
 @pytest.mark.parametrize("obj", FIXTURES[:12], ids=lambda p: p.stem)
-def test_layout_tells_the_selector_which_instructions_are_relocated(obj: Path) -> None:
+def test_layout_tells_the_selector_which_instructions_are_relocated(obj: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The wiring, which is what broke.
 
     select.emit takes `relocated` and honours it everywhere an immediate can
@@ -361,18 +360,21 @@ def test_layout_tells_the_selector_which_instructions_are_relocated(obj: Path) -
     seen: dict[int, bool] = {}
     real = select.emit
 
-    def watch(what, at=0, where=None, short=False, relocated=False):
+    def watch(
+        what: ir.Semantics,
+        at: int = 0,
+        where: dict[Register_, Register_] | None = None,
+        short: bool = False,
+        relocated: bool = False,
+    ) -> select.Emitted | None:
         # every call, not any: layout asks the selector three times -- to
         # measure, to relax, and to emit -- and a flag missing from one of
         # them is a wrong encoding at exactly that stage
         seen[id(what)] = seen.get(id(what), True) and relocated
         return real(what, at=at, where=where, short=short, relocated=relocated)
 
-    select.emit = watch
-    try:
-        found, bodies, laid = rebuilt(obj)
-    finally:
-        select.emit = real
+    monkeypatch.setattr(select, "emit", watch)
+    found, bodies, laid = rebuilt(obj)
     if laid is None:
         return
     fields = frozenset(one.offset for one in omf.fixups(omf.parse(obj.read_bytes())) if one.seg == found.seg)
@@ -386,9 +388,7 @@ def test_layout_tells_the_selector_which_instructions_are_relocated(obj: Path) -
                 if id(what) not in seen:
                     continue
                 asked += 1
-                assert seen[id(what)], (
-                    f"{obj.stem} {op.at:#x}: laid out without telling the selector it is relocated"
-                )
+                assert seen[id(what)], f"{obj.stem} {op.at:#x}: laid out without telling the selector it is relocated"
     assert asked, f"{obj.stem}: no relocated instruction reached the selector"
 
 
@@ -405,7 +405,6 @@ def test_an_allocation_reaches_the_bytes() -> None:
     """
     from iced_x86 import Register
 
-    from qbopt import mir
     from qbopt import regalloc
 
     found, bodies, base = rebuilt(Path("fixtures/omf/hotlop-p-g2.obj"))
@@ -431,4 +430,48 @@ def test_an_allocation_reaches_the_bytes() -> None:
     assert changed, "an allocation that moves a value emitted the same bytes"
 
     # and with no allocation, byte for byte what it was
-    assert layout.rebuild(found, bodies, {}, frozenset(), None).code == base.code
+    again = layout.rebuild(found, bodies, (), frozenset(), None)
+    assert not isinstance(again, str), again
+    assert again.code == base.code
+
+
+@pytest.mark.parametrize("name", ["jumps-q-O", "jumps-p-ot"])
+def test_a_served_read_does_not_keep_the_fixup_of_the_operand_it_removed(name: str) -> None:
+    """A fixup names an operand, and a transform can remove that operand.
+
+    `cmp word [k],1` served from a register becomes `cmp ax,1`, three bytes
+    with no displacement in them. The fixup that named `[k]` was still found
+    inside the new instruction's span and re-anchored onto its immediate, so
+    LINK wrote an address over the immediate and over the `je` behind it --
+    suite/jumps.bas took the CASE ELSE arm for k = 1, and every host test
+    passed. An immediate is a real relocation site for `push offset X`, so
+    the question is not the operand kind but whether a transform is what
+    took the memory operand away.
+    """
+    from qbopt import mir
+    from qbopt import omf
+    from qbopt import layout
+    from qbopt import module
+    from qbopt import transform
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse((Path("fixtures/omf") / f"{name}.obj").read_bytes()))
+    assert found is not None
+    mapped = code_map(found)
+    assert not isinstance(mapped, str), mapped
+
+    served = 0
+    for _body_name, body in mir.bodies(found, split.partition(found, mapped)):
+        for block in transform.forwarded(body, found.dgroup, found.calls).blocks:
+            for op in block.ops:
+                if op.made is None:
+                    continue
+                where = (*op.made.dests, *op.made.sources)
+                if any(isinstance(one, (ir.Mem, ir.Address)) for one in where):
+                    continue
+                served += 1
+                assert layout._field_in(found, op) is None, (
+                    f"{name}: {op.at:#06x} {op.name} kept a relocation with no memory operand to put it in"
+                )
+    assert served, f"{name}: the pass served no read, so this proves nothing"
