@@ -37,6 +37,7 @@ The conditions for dropping one, all of them necessary:
     memory.py's own answer and not re-derived here.
 """
 
+from iced_x86 import OpAccess
 from iced_x86 import Register_
 from iced_x86 import RegisterExt
 from iced_x86 import MemorySizeExt
@@ -146,6 +147,18 @@ def _root_of(register: Register_ | None) -> Register_ | None:
     return None if register is None else ir.ROOT.get(register, register)
 
 
+def _reads_and_writes(insn: Insn) -> bool:
+    """Whether this instruction's memory operand is read as well as written.
+
+    `mov [x],ax` puts what ax holds into x, and ax still holds it. `add
+    [x],ax` puts something neither of them held anywhere but x.
+    """
+    return any(
+        one.access in (OpAccess.READ_WRITE, OpAccess.READ_COND_WRITE)
+        for one in INFO.info(insn.insn).used_memory()
+    )
+
+
 def removable(
     blocks: list[Block],
     resolve: Resolver,
@@ -210,5 +223,13 @@ def removable(
                     for one, who in held.items()
                     if not module.may_alias(one[0], access.addr, dgroup, one[1], access.width)
                 }
-            held[key] = where
+            # A read-modify-write leaves its result in memory and the old
+            # value in the register: after `add [o1],ax` the cell holds
+            # o1 + i and ax still holds i. Recording ax as holding [o1]
+            # made the next `mov ax,[o1]` look redundant, and deleting it
+            # left the accumulation reading the counter -- suite/spill.bas
+            # printed 55 for 220 on nine of the twelve configurations, and
+            # is the first program here to read a variable it had just
+            # accumulated into.
+            held[key] = None if access.writes and _reads_and_writes(insn) else where
     return frozenset(found)

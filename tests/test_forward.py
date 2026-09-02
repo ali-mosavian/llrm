@@ -209,3 +209,37 @@ def test_nothing_removable_is_addressed_through_the_register_it_claims(obj: Path
             landed = forward._lands_in(insn)
             base = ir.ROOT.get(insn.memory_base, insn.memory_base)
             assert landed is None or landed != base, f"{obj.stem} {insn.at:#x}: {insn.insn}"
+
+
+def test_an_accumulate_into_memory_leaves_nothing_in_a_register() -> None:
+    """`add [x],ax` puts its result in x and leaves ax holding what it held.
+
+    `removable()` recorded the register operand as holding the cell for any
+    instruction that wrote memory, which is true of `mov [x],ax` and false
+    of every read-modify-write. The next `mov ax,[x]` then looked redundant,
+    and deleting it left the accumulation reading whatever was in ax.
+
+    suite/spill.bas is the shape: `o1 = o1 + i` then `o2 = o2 + o1`, so the
+    reload of o1 is one instruction after the accumulate into it. It printed
+    55 for 220 -- the sum of the counter rather than of the accumulator --
+    on nine of the twelve configurations, and the host suite could not see
+    it because nothing here runs the code.
+    """
+    from qbopt import blocks as split
+    from qbopt import forward as under_test
+    from qbopt.blocks import code_map
+
+    found = corpus.loaded(Path("fixtures/omf/spill-p-g2.obj"))
+    assert found is not None
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
+    blocks = split.partition(found, mapped)
+
+    at = {insn.at: insn for block in blocks for insn in block.insns}
+    gone = under_test.removable(blocks, found.resolve, found.calls, found.dgroup)
+    for one in gone:
+        before = [insn for insn in at.values() if insn.end == one]
+        assert before, f"{one:#x} has nothing before it"
+        assert not under_test._reads_and_writes(before[0]), (
+            f"{one:#x} follows a read-modify-write and was called redundant"
+        )
