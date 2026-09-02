@@ -58,17 +58,28 @@ registers -- follows from that.
 
 ### The order the work has to happen in
 
-1. **A value that outlives a statement.** A transform has to be allowed not
-   to emit the store and the reload. Cross-block liveness exists in
-   `regs.py`; what is missing is a pass permitted to use it.
-2. **`regalloc.colour()` reaching emission.** Built, never wired to
+**Measured 2026-09-02, and it is not the order this file first gave.**
+`transform.hoisted()` is written and correct and finds nothing: of 69
+candidate loads in the suite, **69 are refused because the register they
+load into is written again in the loop**. BC uses `ax` for everything, so
+a hoisted value is clobbered before its second read. Hoisting needs a
+register to hoist *into*.
+
+So allocation is the enabler and not the beneficiary. Every pass that keeps
+a value alive across an iteration -- LICM, promotion, induction variables --
+waits on it.
+
+1. **`regalloc.colour()` reaching emission.** Built, never wired to
    `select`, and it needs the spill costs `tools/opportunity.py --spill`
    now produces. `select.emit` has to honour an assignment rather than the
-   register BC chose.
-3. **Code motion between blocks.** Does not exist. `transform.placed()`
-   moves within one and is off. LICM, loop rotation, and hoisting an
-   induction variable's initialisation all need it, and that is most of the
-   remaining gap.
+   register BC chose. Nothing else on this list works without it.
+2. **A value that outlives a statement.** A transform has to be allowed not
+   to emit the store and the reload. Cross-block liveness exists in
+   `regs.py`; what is missing is a register to keep the value in, which is
+   (1).
+3. **Code motion between blocks.** The preheader and the placement are
+   done -- `transform._preheader()` and `layout.rebuild` emitting in list
+   order. What is missing is again (1).
 
 Then, in dependency order: store-to-load forwarding and copy propagation
 (needs 1), allocation (2), LICM and induction-variable strength reduction

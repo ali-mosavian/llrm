@@ -32,6 +32,7 @@ widened pair changes which loads are redundant -- and a wrong answer from
 one is otherwise a bisect through all three.
 """
 
+from collections import Counter
 from dataclasses import replace
 
 from qbopt import ir
@@ -39,6 +40,7 @@ from qbopt import mir
 from qbopt import wide
 from qbopt import avail
 from qbopt import pairs
+from qbopt import loops as loopy
 from qbopt import layout
 from qbopt.mir import Op
 from qbopt.declen import Insn
@@ -370,6 +372,103 @@ def segments(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mi
     )
 
 
+def _preheader(body: MirBody, loop) -> int | None:
+    """The block a loop is entered through, where there is exactly one.
+
+    A hoisted operation has to run once before the loop and on every path
+    into it, so it goes in the block that dominates the header from outside
+    -- and only where there is one of those. Two entries into a loop is a
+    header with two outside predecessors, and synthesising a block for it is
+    a bigger change than any pass here needs; those loops are refused.
+    """
+    outside = [
+        block.at
+        for block in body.blocks
+        if loop.header in block.succ and block.at not in loop.body
+    ]
+    return outside[0] if len(outside) == 1 else None
+
+
+def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
+    """A load the loop never writes, done once before it instead.
+
+    `mov ax,[n]` where nothing in the loop stores to `n` reads the same
+    bytes on every pass. Moving it to the preheader costs nothing and saves
+    a memory access per iteration -- and where it feeds an invariant
+    computation, moving that too is the next step and not this one.
+
+    Each condition is what makes it sound. The loop must contain no call and
+    no barrier, either of which may write anything. No store in the loop may
+    overlap the cell -- `mir.overlapping` answers that, and answers "yes,
+    might" for an address it cannot place, which is the right refusal. The
+    register the load writes must not be written anywhere else in the loop,
+    or the hoisted value is gone before its second read. And the load must
+    be the only writer of that register in the loop, for the same reason.
+
+    A segment register loaded from an array descriptor is the case this
+    cannot take: the descriptor is a LITERAL address reached through a base
+    register and the loop's own counter is a relocated DGROUP static, and
+    whether those collide is a link-time question. `segments()` removes the
+    duplicate; hoisting the survivor waits on real alias analysis.
+    """
+    inside = loopy.loops(list(body.blocks), body.entry)
+    if not inside:
+        return body
+    at_of = {block.at: block for block in body.blocks}
+    moved: dict[int, list[Op]] = {}
+    gone: set[int] = set()
+
+    for loop in inside:
+        into = _preheader(body, loop)
+        if into is None or into in loop.body:
+            continue
+        ops = [one for at in sorted(loop.body) for one in at_of[at].ops]
+        if any(one.at in calls or one.barrier for one in ops):
+            continue
+        stores = [ref for one in ops for ref in one.stores]
+
+        written: Counter = Counter()
+        for one in ops:
+            what = one.made if one.made is not None else getattr(one.node, "semantics", None)
+            for where in (what.dests if what else ()):
+                if isinstance(where, ir.Reg):
+                    written[ir.ROOT.get(where.register, where.register)] += 1
+
+        for one in ops:
+            if one.at in gone:
+                continue
+            what = one.made if one.made is not None else getattr(one.node, "semantics", None)
+            if what is None or what.op is not ir.Operation.MOVE:
+                continue
+            if len(what.dests) != 1 or len(what.sources) != 1 or len(one.loads) != 1:
+                continue
+            into_register, source = what.dests[0], what.sources[0]
+            if not isinstance(into_register, ir.Reg) or not isinstance(source, ir.Mem):
+                continue
+            root = ir.ROOT.get(into_register.register, into_register.register)
+            if written[root] != 1:
+                continue  # something else in the loop writes it
+            cell = one.loads[0]
+            if any(ref.addr is None or mir.overlapping(cell, ref, dgroup) for ref in stores):
+                continue
+            moved.setdefault(into, []).append(replace(one, covers=(one.at, one.at)))
+            gone.add(one.at)
+
+    if not gone:
+        return body
+
+    out = []
+    for block in body.blocks:
+        ops = list(block.ops)
+        here = {one.at for one in ops} & gone
+        if here:
+            ops = _absorb(ops, here)
+        if block.at in moved:
+            ops = ops + moved[block.at]
+        out.append(replace(block, ops=tuple(ops)))
+    return replace(body, blocks=tuple(out))
+
+
 # The passes, in the order they run. One per whole-segment round, because
 # each round re-raises the body from what the last one wrote -- an op's
 # defines and uses are computed at raise time, so a pass that has already
@@ -381,7 +480,7 @@ def segments(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mi
 # before avail.py once and avail forwarded a stale high half across an op
 # that said it read two bytes where the instruction read four. That is no
 # longer possible to get wrong by rearranging this list.
-PASSES = ("segments", "forward", "drop_loads", "drop_stores", "widen", "place", "absorb", "strength")
+PASSES = ("segments", "hoist", "forward", "drop_loads", "drop_stores", "widen", "place", "absorb", "strength")
 
 
 def applied(
@@ -394,6 +493,7 @@ def applied(
     found=None,
     widen: bool = True,
     segments_: bool = True,
+    hoist: bool = True,
     forward: bool = True,
     drop_loads: bool = True,
     drop_stores: bool = True,
@@ -413,6 +513,7 @@ def applied(
     """
     wanted = {
         "segments": segments_,
+        "hoist": hoist,
         "forward": forward,
         "drop_loads": drop_loads,
         "drop_stores": drop_stores,
@@ -426,7 +527,9 @@ def applied(
             continue
         if not wanted[name]:
             continue
-        if name == "segments":
+        if name == "hoist":
+            body = hoisted(body, dgroup, calls)
+        elif name == "segments":
             body = segments(body, dgroup, calls)
         elif name == "forward":
             body = forwarded(body, dgroup, calls)
