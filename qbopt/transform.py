@@ -32,7 +32,6 @@ widened pair changes which loads are redundant -- and a wrong answer from
 one is otherwise a bisect through all three.
 """
 
-from collections import Counter
 from dataclasses import replace
 
 from qbopt import ir
@@ -419,137 +418,135 @@ def _preheader(body: MirBody, loop) -> int | None:
     return outside[0] if len(outside) == 1 else None
 
 
+def _invariant_run(
+    ops: list[Op], carried: set, stores: list, dgroup: frozenset[int], calls: dict[int, str]
+) -> list[Op]:
+    """The ops in this loop whose result never changes, in order.
+
+    Grown rather than filtered: an op is invariant when every cell it reads
+    is one no store in the loop can reach, and every register it reads was
+    defined outside the loop or by an op already in the run. That second
+    clause is why this is a fixed point and not a scan.
+    """
+    if any(one.at in calls or one.barrier for one in ops):
+        return []
+    made: set = set()
+    run: list = []
+    changing = True
+    while changing:
+        changing = False
+        for one in ops:
+            what = _semantics_of(one)
+            if one in run or one.stores or what is None:
+                continue
+            # A branch is where the loop is. hotlop's latch block held
+            # `cmp`, `jle` and `jmp`, all three reading nothing the loop
+            # writes, so all three were invariant by the test above and all
+            # three left -- and the back edge left with them.
+            if what.op in (ir.Operation.JUMP, ir.Operation.BRANCH):
+                continue
+            if any(ref.addr is None or mir.overlapping(ref, other, dgroup) for ref in one.loads for other in stores):
+                continue
+            # A phi result is the loop-carried value itself: `v2` at
+            # hotlop's header is the counter. Collecting only op.defines
+            # left every phi looking like something defined outside, so a
+            # compare against the counter read as invariant.
+            inside = {value for other in ops for value in other.defines} | carried
+            if any(use in inside and use not in made for use in one.uses if not use.flags):
+                continue
+            run.append(one)
+            made.update(one.defines)
+            changing = True
+    return run
+
+
+def _crossing(run: list, rest: list) -> mir.Value | None:
+    """The one value the run computes that the rest of the loop still reads.
+
+    One, because each would need a register of its own and a rule for which
+    gets one; the shapes that pay have exactly one. And no flag among them:
+    a flag cannot be carried to the loop in a register, so a comparison
+    whose answer is read inside it has to stay inside it. Counting only
+    non-flag values here is what let hotlop's compare move out from under
+    the branch that reads it.
+    """
+    crossing = {value for one in run for value in one.defines if any(value in other.uses for other in rest)}
+    if any(value.flags for value in crossing) or len(crossing) != 1:
+        return None
+    return next(iter(crossing))
+
+
 def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
-    """A load the loop never writes, done once before it instead.
+    """A loop-invariant run of operations, done once before the loop.
 
-    `mov ax,[n]` where nothing in the loop stores to `n` reads the same
-    bytes on every pass. Moving it to the preheader costs nothing and saves
-    a memory access per iteration -- and where it feeds an invariant
-    computation, moving that too is the next step and not this one.
+    `mov ax,[n] / imul word [k]` computes the same product on every pass of
+    a loop that writes neither. Moving the whole run rather than the load
+    alone is what makes it possible at all: `imul`'s multiplicand is ax
+    implicitly, so renaming the load's destination leaves the multiply
+    reading a register nothing put anything in -- hotlop printed 0 for 630
+    that way. With the run moved, the implicit registers are used inside it,
+    in the preheader, and only its result has to survive into the loop.
 
-    Each condition is what makes it sound. The loop must contain no call and
-    no barrier, either of which may write anything. No store in the loop may
-    overlap the cell -- `mir.overlapping` answers that, and answers "yes,
-    might" for an address it cannot place, which is the right refusal. The
-    register the load writes must not be written anywhere else in the loop,
-    or the hoisted value is gone before its second read. And the load must
-    be the only writer of that register in the loop, for the same reason.
-
-    A segment register loaded from an array descriptor is the case this
-    cannot take: the descriptor is a LITERAL address reached through a base
-    register and the loop's own counter is a relocated DGROUP static, and
-    whether those collide is a link-time question. `segments()` removes the
-    duplicate; hoisting the survivor waits on real alias analysis.
+    That result needs a register the loop does not touch, which is what
+    `pins` asks regalloc for. Refused, the whole thing is dropped: a value
+    hoisted into a register the loop clobbers is the wrong program.
     """
     inside = loopy.loops(list(body.blocks), body.entry)
     if not inside:
         return body
     at_of = {block.at: block for block in body.blocks}
+    alive = regalloc.live(body)
     moved: dict[int, list[Op]] = {}
     gone: set[int] = set()
     wanted: dict = {}
-
-    # A register is usable for a hoist when nothing is live in it across
-    # the loop. Asked of the body as raised, not of the rewritten one: this
-    # pass moves ops and the SSA around it is the one the body came with, so
-    # colour() and live() would be describing what went in.
-    #
-    # Body-wide was the first try and found nothing: every program here ends
-    # in B$CENP, which clobbers si, and treating that as occupying si
-    # throughout left no register free anywhere. What matters is what is
-    # live *at the loop*, and nothing is live into the end of the program.
-    alive = regalloc.live(body)
 
     for loop in inside:
         into = _preheader(body, loop)
         if into is None or into in loop.body:
             continue
         ops = [one for at in sorted(loop.body) for one in at_of[at].ops]
-        if any(one.at in calls or one.barrier for one in ops):
-            continue
         stores = [ref for one in ops for ref in one.stores]
+        carried = {phi.result for at in loop.body for phi in at_of[at].phis}
+        run = _invariant_run(ops, carried, stores, dgroup, calls)
+        if not run:
+            continue
 
-        # What is live on the way out of the preheader and out of every
-        # block in the loop -- a register holding any of those is spoken for
-        # while the hoisted value would need it.
+        # What the run computes that the rest of the loop still reads. One
+        # value, or this would need a register for each and a rule for
+        # which; the shapes that pay have exactly one.
+        rest = [one for one in ops if one not in run]
+        result = _crossing(run, rest)
+        if result is None:
+            continue
+        if any(_implicit(other) for other in rest if result in other.uses):
+            continue
+
         across = {
             body.origin.get(value)
             for at in (into, *loop.body)
             for value in alive.live_out.get(at, ())
             if not value.flags
         }
-        spare = {where for where in regalloc.AVAILABLE if where not in across}
-
-        written: Counter = Counter()
-        touched: set = set()
+        touched = set()
         for one in ops:
-            what = one.made if one.made is not None else getattr(one.node, "semantics", None)
-            for where in (what.dests if what else ()):
-                if isinstance(where, ir.Reg):
-                    written[ir.ROOT.get(where.register, where.register)] += 1
+            what = _semantics_of(one)
             for where in ((*what.dests, *what.sources) if what else ()):
                 if isinstance(where, ir.Reg):
                     touched.add(ir.ROOT.get(where.register, where.register))
-                elif isinstance(where, (ir.Mem, ir.Address)):
-                    for through in (where.through, getattr(where, "index", Register.NONE)):
-                        if through != Register.NONE:
-                            touched.add(ir.ROOT.get(through, through))
+        want = next(
+            (
+                where
+                for where in regalloc.AVAILABLE
+                if where not in across and where not in touched and where not in wanted.values()
+            ),
+            None,
+        )
+        if want is None:
+            continue
 
-        for one in ops:
-            if one.at in gone:
-                continue
-            what = one.made if one.made is not None else getattr(one.node, "semantics", None)
-            if what is None or what.op is not ir.Operation.MOVE:
-                continue
-            if len(what.dests) != 1 or len(what.sources) != 1 or len(one.loads) != 1:
-                continue
-            into_register, source = what.dests[0], what.sources[0]
-            if not isinstance(into_register, ir.Reg) or not isinstance(source, ir.Mem):
-                continue
-            root = ir.ROOT.get(into_register.register, into_register.register)
-            cell = one.loads[0]
-            if any(ref.addr is None or mir.overlapping(cell, ref, dgroup) for ref in stores):
-                continue
-            want = None
-            if written[root] != 1:
-                # Something else in the loop writes the register BC loaded
-                # into -- which is every candidate in the suite, because BC
-                # uses ax for everything. Hoisting needs a register the loop
-                # does not touch at all, and asking for one is what pins are
-                # for: regalloc.colour() grants it or refuses the body.
-                want = next(
-                    (
-                        where
-                        for where in regalloc.AVAILABLE
-                        if where in spare and where not in touched and where not in wanted.values()
-                    ),
-                    None,
-                )
-                if want is None:
-                    continue
-            target = next((value for value in one.defines if not value.flags), None)
-            if want is not None and target is None:
-                continue
-            # Renaming a value is only sound where every instruction that
-            # reads it names the register in an operand select.py remaps.
-            # `imul word [k]` takes its multiplicand in ax *implicitly* --
-            # there is no operand to rewrite -- so hoisting into si moved
-            # the value and left the multiply reading ax. hotlop printed 0
-            # for 630 on nine of twelve configurations, and the host suite
-            # could not see it because nothing there runs the code.
-            if want is not None and any(
-                _implicit(other) for other in ops if target in other.uses
-            ):
-                continue
-            if want is not None:
-                wanted[target] = want
-            # Keeping its own `covers`: those are the bytes it stands for
-            # and it still stands for them, wherever it now runs. That is
-            # also what lets the loop simply drop it -- _absorb needs an op
-            # before it to hand the bytes to, and a hoisted load is often
-            # the first in its block.
-            moved.setdefault(into, []).append(one)
-            gone.add(one.at)
+        wanted[result] = want
+        moved[into] = moved.get(into, []) + list(run)
+        gone.update(one.at for one in run)
 
     if not gone:
         return body
@@ -557,36 +554,15 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
     out = []
     for block in body.blocks:
         ops = [one for one in block.ops if one.at not in gone]
-        # A block's first op is what every branch into it names, so hoisting
-        # one leaves the target pointing at an op that now runs somewhere
-        # else. The block's new first op takes that address over; its own
-        # `covers` is unchanged, so the bytes still add up.
-        if ops and block.ops and block.ops[0].at in gone:
+        if block.ops and block.ops[0].at in gone and ops:
             ops = [replace(ops[0], at=block.ops[0].at)] + ops[1:]
         if block.at in moved:
-            # Before the block's own terminator, not after it. A FOR is
-            # emitted as `jmp test / body / test / jle body`, so the
-            # preheader ends in a jump -- appending put the hoisted load
-            # after it, where entry skips it and the loop runs it on every
-            # pass. Exactly backwards, and it cost bytes and cycles both.
-            #
-            # And the op takes that terminator's address, keeping its own
-            # `covers`. layout.py orders by address and two ops may share
-            # one; giving it the address it now runs at is what keeps it
-            # where it was put, without layout having to know a pass moved
-            # anything. Sorting there is global because an event stub's body
-            # sits inside the main body's range.
             what = _semantics_of(ops[-1]) if ops else None
             leaves = what is not None and what.op in (ir.Operation.JUMP, ir.Operation.BRANCH)
             here = [replace(one, at=ops[-1].at) for one in moved[block.at]] if ops else moved[block.at]
             ops = (ops[:-1] + here + ops[-1:]) if leaves else (ops + here)
         out.append(replace(block, ops=tuple(ops)))
     got = replace(body, blocks=tuple(out), pins={**body.pins, **wanted})
-
-    # The move and the register are one decision. A hoist whose pin cannot
-    # be had leaves the load outside a loop that still clobbers the register
-    # it loaded into -- the wrong program, not a missed optimisation. So the
-    # colouring is asked for and the whole thing dropped when it is refused.
     if wanted and isinstance(regalloc.colour(got, got.pins), str):
         return body
     return got

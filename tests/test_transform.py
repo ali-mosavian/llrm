@@ -457,3 +457,117 @@ def test_strength_reduction_leaves_a_site_whose_flags_are_read() -> None:
                     assert not (transform._flags_after(blocks, live, op.at, ends[op.at]) & flags.ALL)
     # the corpus's own imuls are BC's, and absorption has not run here
     assert checked >= 0
+
+
+def test_the_invariant_run_never_takes_control_flow_a_flag_or_a_carried_value() -> None:
+    """What the run is allowed to contain, asserted on the run itself.
+
+    Asserting on the finished body instead was worthless: with any one of
+    these three restored the other two refuse the loop anyway, so the test
+    passed against each defect on its own. The three, and what each cost:
+
+    A branch reads nothing the loop writes, so `cmp`, `jle` and `jmp` were
+    all invariant and hotlop's latch left with them -- the MIR still held
+    the loop, the re-parsed object did not. Counting only non-flag values
+    as crossing let a compare move out from under the branch reading it.
+    And `inside` collected only `op.defines`, missing the phi results,
+    which are the loop-carried values themselves.
+    """
+    from qbopt import mir
+    from qbopt import loops as loopy
+
+    seen = 0
+    for obj, found, blocks in _corpus():
+        for name, body in mir.bodies(found, blocks):
+            at_of = {one.at: one for one in body.blocks}
+            for loop in loopy.loops(list(body.blocks), body.entry):
+                ops = [one for at in sorted(loop.body) for one in at_of[at].ops]
+                carried = {phi.result for at in loop.body for phi in at_of[at].phis}
+                run = transform._invariant_run(
+                    ops, carried, [ref for one in ops for ref in one.stores], found.dgroup, found.calls
+                )
+                if not run:
+                    continue
+                seen += 1
+                rest = [one for one in ops if one not in run]
+                where = f"{obj.stem} {name} loop {loop.header:#x}"
+                for one in run:
+                    what = transform._semantics_of(one)
+                    assert what is not None and what.op not in (ir.Operation.JUMP, ir.Operation.BRANCH), (
+                        f"{where}: {one.at:#x} {one.name} is control flow"
+                    )
+                    for value in one.defines:
+                        if value.flags:
+                            assert not any(value in other.uses for other in rest), (
+                                f"{where}: {one.at:#x} sets a flag {rest} still reads"
+                            )
+                    assert not (set(one.uses) & carried), (
+                        f"{where}: {one.at:#x} {one.name} reads a value the loop carries"
+                    )
+    assert seen, "no loop in the corpus offers an invariant run, so this proves nothing"
+
+
+def test_hoisting_leaves_every_loop_and_every_terminator_where_it_was() -> None:
+    """A hoist may move work out of a loop. It may not move the loop.
+
+    All three ways it did. A branch reads nothing the loop writes, so the
+    invariance test called `cmp`, `jle` and `jmp` invariant and hotlop's
+    latch left with them -- the MIR still held the loop and the re-parsed
+    object did not. Counting only non-flag values as crossing let the
+    compare move out from under the branch that reads it. And collecting
+    only `op.defines` as defined-in-the-loop missed the phi results, which
+    are the loop-carried values themselves: hotlop's counter read as
+    something defined outside.
+    """
+    from qbopt import mir
+    from qbopt import loops as loopy
+
+    seen = 0
+    for obj, found, blocks in _corpus():
+        for name, body in mir.bodies(found, blocks):
+            was = loopy.loops(list(body.blocks), body.entry)
+            if not was:
+                continue
+            seen += 1
+            after = transform.hoisted(body, found.dgroup, found.calls)
+            now = loopy.loops(list(after.blocks), after.entry)
+            assert len(now) == len(was), f"{obj.stem} {name}: {len(was)} loops became {len(now)}"
+
+            ends = {one.at: one.ops[-1].at for one in body.blocks if one.ops}
+            for block in after.blocks:
+                if block.at not in ends or not block.ops:
+                    continue
+                assert block.ops[-1].at == ends[block.at], (
+                    f"{obj.stem} {name}: block {block.at:#x} lost the operation it ended on"
+                )
+    assert seen, "no body in the corpus has a loop, so this proves nothing"
+
+
+def test_a_run_whose_flag_the_loop_still_reads_is_not_hoistable() -> None:
+    """A flag cannot travel to the loop in a register.
+
+    `cmp [n],1` reads nothing a loop over i writes, so the invariance test
+    calls it invariant -- correctly. What stops it leaving is that the
+    branch behind it reads the flag it sets, and a flag is not something a
+    pinned register can carry. Counting only non-flag values as crossing
+    let hotlop's compare move out from under its own `jle`, and the object
+    came back with no back edge at all.
+
+    Driven rather than found: with the other two guards in place no loop in
+    the corpus offers a run at all, so this shape cannot be observed there.
+    """
+    from qbopt import ir
+    from qbopt import mir
+
+    def op(at: int, name: str, defines: tuple, uses: tuple) -> mir.Op:
+        return mir.Op(at, ir.Operation.COMPARE, name, defines, uses)
+
+    flag = mir.Value(1, 0x10, flags=True)
+    got = mir.Value(2, 0x10)
+    compare = op(0x10, "cmp", (flag, got), ())
+    branch = op(0x14, "jle", (), (flag,))
+    reader = op(0x18, "add", (), (got,))
+
+    assert transform._crossing([compare], [reader]) is got, "a plain value crosses in a register"
+    assert transform._crossing([compare], [branch, reader]) is None, "a flag the loop reads does not"
+    assert transform._crossing([compare], [branch]) is None
