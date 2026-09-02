@@ -788,13 +788,26 @@ def rewrite(
         )
 
     regions: list[Region] = []
+
+    def machine(bytes_in: bytes) -> bytes:
+        for _ in range(PASSES):
+            out, found = _once(bytes_in, dry_run=False, native_fpu=native_fpu, absorb_calls=absorb_calls)
+            regions.extend(found)
+            if out == bytes_in or not any(one.taken for one in found):
+                return out
+            bytes_in = out
+        return bytes_in
+
+    # The two arms feed each other: emitting the segment from MIR moves
+    # every instruction, and the machine arm's own matchers are written
+    # against addresses and adjacency, so it finds on the second look what
+    # it could not on the first. Neither alone is the fixed point.
     for _ in range(PASSES):
-        out, found = _once(data, dry_run=False, native_fpu=native_fpu, absorb_calls=absorb_calls)
-        regions += found
-        if out == data or not any(one.taken for one in found):
-            return _written(out, whole_segment, native_fpu, absorb_calls), regions
+        out = _written(machine(data), whole_segment, native_fpu, absorb_calls)
+        if out == data:
+            break
         data = out
-    return _written(data, whole_segment, native_fpu, absorb_calls), regions
+    return data, regions
 
 
 def _written(
@@ -846,10 +859,20 @@ def _written(
     # One transform per round, each seeing a body raised from what the last
     # round wrote. Not stopped early on "nothing changed": a pass that finds
     # nothing says nothing about the one after it.
-    for name in transform.PASSES:
-        out, _why = wholeseg.rebuilt(data, native_fpu=native_fpu, absorb=not absorb_calls, only=name)
-        data = out
+    # Each pass once is not a fixed point: a pass can only see what the
+    # round before it wrote, so one that fires on the result of another
+    # needs the sequence run again. Capped, and the corpus settles in two.
+    for _round in range(PASS_ROUNDS):
+        before = data
+        for name in transform.PASSES:
+            out, _why = wholeseg.rebuilt(data, native_fpu=native_fpu, absorb=not absorb_calls, only=name)
+            data = out
+        if data == before:
+            break
     return data
+
+
+PASS_ROUNDS = 4
 
 
 def _once(
