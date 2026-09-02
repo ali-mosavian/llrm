@@ -484,7 +484,7 @@ def test_the_invariant_run_never_takes_control_flow_a_flag_or_a_carried_value() 
                 ops = [one for at in sorted(loop.body) for one in at_of[at].ops]
                 carried = {phi.result for at in loop.body for phi in at_of[at].phis}
                 run = transform._invariant_run(
-                    ops, carried, [ref for one in ops for ref in one.stores], found.dgroup, found.calls
+                    ops, carried, [ref for one in ops for ref in one.stores], found.dgroup, found.calls, body.origin
                 )
                 if not run:
                     continue
@@ -501,7 +501,13 @@ def test_the_invariant_run_never_takes_control_flow_a_flag_or_a_carried_value() 
                             assert not any(value in other.uses for other in rest), (
                                 f"{where}: {one.at:#x} sets a flag {rest} still reads"
                             )
-                    assert not (set(one.uses) & carried), (
+                    read = transform._reads(one)
+                    taken = {
+                        use
+                        for use in one.uses
+                        if ir.ROOT.get(body.origin.get(use, -1), body.origin.get(use, -1)) in read
+                    }
+                    assert not (taken & carried), (
                         f"{where}: {one.at:#x} {one.name} reads a value the loop carries"
                     )
     assert seen, "no loop in the corpus offers an invariant run, so this proves nothing"
@@ -571,3 +577,82 @@ def test_a_run_whose_flag_the_loop_still_reads_is_not_hoistable() -> None:
     assert transform._crossing([compare], [reader]) is got, "a plain value crosses in a register"
     assert transform._crossing([compare], [branch, reader]) is None, "a flag the loop reads does not"
     assert transform._crossing([compare], [branch]) is None
+
+
+def test_an_allocation_the_emitter_cannot_write_is_refused() -> None:
+    """A remap select.emit would apply to half an instruction is no remap.
+
+    `_remapped` reaches register operands; a memory operand is passed
+    through as it stands. So a value moved out of the register a cell is
+    reached by comes out half-renamed -- segld hoisted `mov si,0`, the
+    recolour wrote `mov dx,0`, and the loop went on reading the old base.
+    It printed 0 for 1050, and harr printed 0 for 1100.
+
+    Driven rather than found: the pass refuses these loops for other
+    reasons too, so the corpus cannot show the shape on its own.
+    """
+    from qbopt import ir
+    from qbopt import mir
+    from iced_x86 import Register
+
+    base = mir.Value(1, 0x10)
+    read = mir.Op(
+        0x10,
+        ir.Operation.MOVE,
+        "mov",
+        (mir.Value(2, 0x10),),
+        (base,),
+        made=ir.Semantics(
+            ir.Operation.MOVE,
+            "mov",
+            dests=(ir.Reg(register=Register.AX, width=2),),
+            sources=(ir.Mem(None, 2, through=Register.SI),),
+        ),
+    )
+    body = mir.MirBody(0x10, (mir.MirBlock(0x10, (), (read,), ()),), {base: Register.SI}, {})
+
+    assert transform._honoured(body, {base: Register.SI}), "a value left where it was is writable"
+    assert not transform._honoured(body, {base: Register.DX}), (
+        "moving the register a cell is reached by is not, until select.py remaps through one"
+    )
+
+
+def test_an_operand_nothing_writes_down_keeps_its_operation_in_the_loop() -> None:
+    """`imul word [k]` multiplies by ax without naming it.
+
+    Pinning one value recolours the whole body, and an implicit operand
+    does not move with the rename: hotlop hoisted `mov ax,[n]` with the
+    multiply behind it, the recolour wrote `mov cx,[n]`, and the multiply
+    went on reading ax. It printed 0 for 630.
+
+    Driven rather than found: with this guard in place the corpus offers no
+    run holding one, so nothing there can show the shape.
+    """
+    from iced_x86 import Register
+
+    from qbopt import ir
+    from qbopt import mir
+
+    ax = ir.Reg(register=Register.AX, width=2)
+    dx = ir.Reg(register=Register.DX, width=2)
+    cell = ir.Mem(None, 2)
+
+    def op(at: int, name: str, what: ir.Semantics, defines: tuple, uses: tuple) -> mir.Op:
+        return mir.Op(at, what.op, name, defines, uses, (mir.MemRef(None, 2),), (), made=what)
+
+    moving = ir.Semantics(ir.Operation.MOVE, "mov", dests=(ax,), sources=(cell,))
+    load = op(0x10, "mov", moving, (mir.Value(1, 0x10),), ())
+    # Two destinations and one source: dx:ax = ax * [k], and ax is written
+    # down nowhere.
+    widening = op(
+        0x13,
+        "imul",
+        ir.Semantics(ir.Operation.MULTIPLY, "imul", dests=(ax, dx), sources=(cell,)),
+        (mir.Value(2, 0x13),),
+        (mir.Value(1, 0x10),),
+    )
+
+    assert transform._implicit(widening), "the widening multiply reads a register it does not name"
+    run = transform._invariant_run([load, widening], set(), [], frozenset(), {}, {})
+    assert load in run, "an ordinary load is invariant here"
+    assert widening not in run, "and the multiply behind it may not leave with it"

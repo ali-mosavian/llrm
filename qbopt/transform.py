@@ -418,8 +418,70 @@ def _preheader(body: MirBody, loop) -> int | None:
     return outside[0] if len(outside) == 1 else None
 
 
+def _reads(op: Op) -> frozenset[int]:
+    """The registers this instruction actually reads.
+
+    Not the same question as `op.uses`. In a 16-bit program under a 32-bit
+    register model every narrow write is a read-modify-write: `mov ax,[n]`
+    defines eax and uses the eax before it, because the high half survives.
+    115 of the corpus's 211 loop operations that read a loop-carried value
+    read it only that way, which is why nothing ever looked invariant.
+
+    A register named nowhere in the semantics is preserved, not read. One
+    named in a memory operand -- a base, an index -- is read, and an
+    operation this cannot read the semantics of reads everything.
+    """
+    what = _semantics_of(op)
+    if what is None or op.barrier:
+        return frozenset(ir.ROOT.values()) | {one for one in ir.ROOT}
+    found: set[int] = set()
+    for one in (*what.sources, *what.dests):
+        if isinstance(one, ir.Reg) and one in what.sources:
+            found.add(ir.ROOT.get(one.register, one.register))
+        # A destination's own base and index are read to reach it, however
+        # the cell itself is only written.
+        for where in (getattr(one, "through", None), getattr(one, "index", None)):
+            if where is not None:
+                found.add(ir.ROOT.get(where, where))
+    return frozenset(found)
+
+
+def _effective(body: MirBody, calls: dict[int, str]) -> set:
+    """Every value some instruction reads, rather than merely preserves.
+
+    Transitive through phis, because the chain that matters is: `imul word
+    [k]` preserves edx's high half, the latch's phi carries that, and the
+    next iteration's imul preserves it again. Nothing reads it, and yet
+    every operation in the run appeared to depend on the one before it
+    across the back edge.
+
+    Grown from what is definitely read rather than shrunk from everything,
+    so a cycle cannot talk itself into being effective.
+    """
+    wanted: set = set()
+    carrying: dict = {}
+    for block in body.blocks:
+        for phi in block.phis:
+            for value in phi.incoming.values():
+                carrying.setdefault(phi.result, set()).add(value)
+        for op in block.ops:
+            read = _reads(op)
+            for use in op.uses:
+                where = body.origin.get(use)
+                if use.flags or op.at in calls or where is None or ir.ROOT.get(where, where) in read:
+                    wanted.add(use)
+    changing = True
+    while changing:
+        changing = False
+        for result, incoming in carrying.items():
+            if result in wanted and not incoming <= wanted:
+                wanted |= incoming
+                changing = True
+    return wanted
+
+
 def _invariant_run(
-    ops: list[Op], carried: set, stores: list, dgroup: frozenset[int], calls: dict[int, str]
+    ops: list[Op], carried: set, stores: list, dgroup: frozenset[int], calls: dict[int, str], origin: dict
 ) -> list[Op]:
     """The ops in this loop whose result never changes, in order.
 
@@ -445,6 +507,14 @@ def _invariant_run(
             # three left -- and the back edge left with them.
             if what.op in (ir.Operation.JUMP, ir.Operation.BRANCH):
                 continue
+            # Pinning one value recolours the whole body, and an operand
+            # nothing writes down does not move with it: hotlop hoisted
+            # `mov ax,[n] / imul word [k]`, the recolour renamed the load
+            # to cx, and the multiply went on reading ax. It printed 0 for
+            # 630. Until an assignment can be constrained to leave these
+            # alone, a run holding one is not worth the register.
+            if _implicit(one):
+                continue
             if any(ref.addr is None or mir.overlapping(ref, other, dgroup) for ref in one.loads for other in stores):
                 continue
             # A phi result is the loop-carried value itself: `v2` at
@@ -452,7 +522,16 @@ def _invariant_run(
             # left every phi looking like something defined outside, so a
             # compare against the counter read as invariant.
             inside = {value for other in ops for value in other.defines} | carried
-            if any(use in inside and use not in made for use in one.uses if not use.flags):
+            # Per use, not per value: hotlop's counter is genuinely read by
+            # the compare, and that must not make the load of `n` -- which
+            # only preserves the register it lives in -- loop-carried too.
+            read = _reads(one)
+            blocking = [
+                use
+                for use in one.uses
+                if not use.flags and ir.ROOT.get(origin.get(use, -1), origin.get(use, -1)) in read
+            ]
+            if any(use in inside and use not in made for use in blocking):
                 continue
             run.append(one)
             made.update(one.defines)
@@ -460,7 +539,7 @@ def _invariant_run(
     return run
 
 
-def _crossing(run: list, rest: list) -> mir.Value | None:
+def _crossing(run: list, rest: list, phis: list | None = None, wanted: set | None = None) -> mir.Value | None:
     """The one value the run computes that the rest of the loop still reads.
 
     One, because each would need a register of its own and a rule for which
@@ -470,7 +549,15 @@ def _crossing(run: list, rest: list) -> mir.Value | None:
     non-flag values here is what let hotlop's compare move out from under
     the branch that reads it.
     """
-    crossing = {value for one in run for value in one.defines if any(value in other.uses for other in rest)}
+    # A phi carries a value out of the run as surely as an instruction
+    # reads one, and `rest` holds no phis: hotlop's high half reached the
+    # next iteration that way, seen by nothing here.
+    taken = {value for other in rest for value in other.uses} | {
+        value for phi in (phis or ()) for value in phi.incoming.values()
+    }
+    if wanted is not None:
+        taken &= wanted
+    crossing = {value for one in run for value in one.defines if value in taken}
     if any(value.flags for value in crossing) or len(crossing) != 1:
         return None
     return next(iter(crossing))
@@ -496,6 +583,7 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
         return body
     at_of = {block.at: block for block in body.blocks}
     alive = regalloc.live(body)
+    effective = _effective(body, calls)
     moved: dict[int, list[Op]] = {}
     gone: set[int] = set()
     wanted: dict = {}
@@ -507,7 +595,7 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
         ops = [one for at in sorted(loop.body) for one in at_of[at].ops]
         stores = [ref for one in ops for ref in one.stores]
         carried = {phi.result for at in loop.body for phi in at_of[at].phis}
-        run = _invariant_run(ops, carried, stores, dgroup, calls)
+        run = _invariant_run(ops, carried, stores, dgroup, calls, body.origin)
         if not run:
             continue
 
@@ -515,7 +603,7 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
         # value, or this would need a register for each and a rule for
         # which; the shapes that pay have exactly one.
         rest = [one for one in ops if one not in run]
-        result = _crossing(run, rest)
+        result = _crossing(run, rest, [phi for at in loop.body for phi in at_of[at].phis], effective)
         if result is None:
             continue
         if any(_implicit(other) for other in rest if result in other.uses):
@@ -563,9 +651,45 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
             ops = (ops[:-1] + here + ops[-1:]) if leaves else (ops + here)
         out.append(replace(block, ops=tuple(ops)))
     got = replace(body, blocks=tuple(out), pins={**body.pins, **wanted})
-    if wanted and isinstance(regalloc.colour(got, got.pins), str):
+    if not wanted:
+        return got
+    assignment = regalloc.colour(got, got.pins)
+    if isinstance(assignment, str) or not _honoured(got, assignment):
         return body
     return got
+
+
+def _honoured(body: MirBody, assignment: dict) -> bool:
+    """Whether the emitter can actually write this allocation down.
+
+    select.emit remaps register operands and passes a memory operand
+    through as it stands, so a value moved out of the register a cell is
+    reached by comes out half-renamed: segld hoisted `mov si,0`, the
+    recolour wrote `mov dx,0`, and the loop went on reading the old base.
+    It printed 0 for 1050.
+
+    Refusing here rather than emitting it is the conservative half; the
+    other half is select.py remapping through a memory operand, and this
+    can go when it does.
+    """
+    for block in body.blocks:
+        for op in block.ops:
+            what = _semantics_of(op)
+            if what is None:
+                continue
+            reached = {
+                ir.ROOT.get(where, where)
+                for one in (*what.dests, *what.sources)
+                for where in (getattr(one, "through", None), getattr(one, "index", None))
+                if where is not None
+            }
+            for value in (*op.defines, *op.uses):
+                was, want = body.origin.get(value), assignment.get(value)
+                if was is None or want is None or was is want:
+                    continue
+                if ir.ROOT.get(was, was) in reached:
+                    return False
+    return True
 
 
 # The passes, in the order they run. One per whole-segment round, because
