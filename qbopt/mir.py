@@ -914,7 +914,12 @@ def same_bytes(one: MemRef, other: MemRef) -> bool:
     return one.addr == other.addr
 
 
-def overlapping(one: MemRef, other: MemRef, dgroup: frozenset[int]) -> bool:
+def overlapping(
+    one: MemRef,
+    other: MemRef,
+    dgroup: frozenset[int],
+    bounds: dict | None = None,
+) -> bool:
     """Whether a write through `other` could land on `one`.
 
     module.may_alias for the symbolic part, and the base value for the rest.
@@ -928,7 +933,7 @@ def overlapping(one: MemRef, other: MemRef, dgroup: frozenset[int]) -> bool:
         return True
     if one.base is not None and one.base == other.base and one.addr.space is other.addr.space:
         return one.addr.disp < other.addr.disp + other.width and other.addr.disp < one.addr.disp + one.width
-    return module.may_alias(one.addr, other.addr, dgroup, one.width, other.width)
+    return module.may_alias(one.addr, other.addr, dgroup, one.width, other.width, bounds)
 
 
 def bodies(found: Module, blocks: list[Block]) -> list[tuple[str, MirBody]]:

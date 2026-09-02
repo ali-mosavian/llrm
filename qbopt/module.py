@@ -159,12 +159,50 @@ def _overlaps(a: Addr, a_width: int, b: Addr, b_width: int) -> bool:
     return a.disp < b.disp + b_width and b.disp < a.disp + a_width
 
 
+def landmarks(found: "Module") -> dict[tuple[Space, int], tuple[int, ...]]:
+    """Every displacement in each segment that some operand names exactly.
+
+    An indexed operand reads or writes its whole segment as far as
+    may_alias is concerned, and that is what stops LICM dead on any loop
+    that writes an array -- matrix's inner loop has nothing invariant in it
+    because `m(r * w + c)` is taken to reach `w`, `r` and `c`.
+
+    What bounds it is the object's own layout. BC allocates each variable a
+    displacement and every non-indexed operand names one exactly, so the
+    array beginning at 0x6 cannot run past the next thing named after it,
+    which in matrix is 0x328 -- 802 bytes, and `DIM m(400)` to the byte.
+
+    The assumption is that a subscript is in range. Out of range is not
+    defined in QuickBASIC without bounds checking, and every optimising
+    compiler makes exactly this assumption; it is stated here rather than
+    buried, because it is the one thing in this module that is not
+    arithmetic on the object.
+    """
+    found_at: dict[tuple[Space, int], set[int]] = {}
+    for addr in found.operands.values():
+        if addr.base == Register.NONE and addr.space in (Space.SEGMENT, Space.FRAME):
+            found_at.setdefault((addr.space, addr.index), set()).add(addr.disp)
+    return {where: tuple(sorted(disps)) for where, disps in found_at.items()}
+
+
+def reach(addr: Addr, width: int, bounds: dict[tuple[Space, int], tuple[int, ...]]) -> tuple[int, int] | None:
+    """The bytes an operand can touch, or None where nothing bounds it."""
+    if addr.base == Register.NONE:
+        return addr.disp, addr.disp + width
+    known = bounds.get((addr.space, addr.index))
+    if not known:
+        return None
+    after = [one for one in known if one > addr.disp]
+    return (addr.disp, after[0]) if after else None
+
+
 def may_alias(
     a: Addr | None,
     b: Addr | None,
     dgroup: frozenset[int],
     a_width: int = WIDEST,
     b_width: int = WIDEST,
+    bounds: dict[tuple[Space, int], tuple[int, ...]] | None = None,
 ) -> bool:
     """Whether two addresses could name the same byte, conservatively.
 
@@ -216,7 +254,14 @@ def may_alias(
     if a is None or b is None:
         return True
     if a.base != Register.NONE or b.base != Register.NONE:
-        return True
+        # An indexed operand reaches its whole segment unless a caller has
+        # handed over the layout to bound it with. See landmarks().
+        if bounds is None or a.space is not b.space or a.index != b.index:
+            return True
+        here, there = reach(a, a_width, bounds), reach(b, b_width, bounds)
+        if here is None or there is None:
+            return True
+        return here[0] < there[1] and there[0] < here[1]
     match (a.space, b.space):
         case (Space.STACK, Space.STACK):
             return _overlaps(a, a_width, b, b_width)

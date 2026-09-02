@@ -38,6 +38,7 @@ from dataclasses import replace
 
 from qbopt import ir
 from qbopt import mir
+from qbopt import module
 from qbopt import wide
 from qbopt import avail
 from qbopt import runtime
@@ -504,7 +505,13 @@ def _rewritten(ops: list[Op], origin: dict) -> set:
 
 
 def _invariant_run(
-    ops: list[Op], carried: set, stores: list, dgroup: frozenset[int], calls: dict[int, str], origin: dict
+    ops: list[Op],
+    carried: set,
+    stores: list,
+    dgroup: frozenset[int],
+    calls: dict[int, str],
+    origin: dict,
+    bounds: dict | None = None,
 ) -> list[Op]:
     """The ops in this loop whose result never changes, in order.
 
@@ -543,7 +550,11 @@ def _invariant_run(
             # alone, a run holding one is not worth the register.
             if _implicit(one):
                 continue
-            if any(ref.addr is None or mir.overlapping(ref, other, dgroup) for ref in one.loads for other in stores):
+            if any(
+                ref.addr is None or mir.overlapping(ref, other, dgroup, bounds)
+                for ref in one.loads
+                for other in stores
+            ):
                 continue
             # A phi result is the loop-carried value itself: `v2` at
             # hotlop's header is the counter. Collecting only op.defines
@@ -611,7 +622,7 @@ def _crossing(run: list, rest: list, phis: list | None = None, wanted: set | Non
     return frozenset(crossing)
 
 
-def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
+def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds: dict | None = None) -> MirBody:
     """A loop-invariant run of operations, done once before the loop.
 
     `mov ax,[n] / imul word [k]` computes the same product on every pass of
@@ -645,7 +656,7 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
         ops = [one for at in sorted(loop.body) for one in at_of[at].ops]
         stores = [ref for one in ops for ref in one.stores]
         carried = {phi.result for at in loop.body for phi in at_of[at].phis}
-        run = _invariant_run(ops, carried, stores, dgroup, calls, body.origin)
+        run = _invariant_run(ops, carried, stores, dgroup, calls, body.origin, bounds)
         # Not one already taken out of a loop inside this one. Invariant in
         # the inner loop and in the outer, it was put in both preheaders and
         # its bytes counted twice, which layout reports as a negative gap:
@@ -852,7 +863,7 @@ def applied(
         if not wanted[name]:
             continue
         if name == "hoist":
-            body = hoisted(body, dgroup, calls)
+            body = hoisted(body, dgroup, calls, module.landmarks(found) if found is not None else None)
         elif name == "segments":
             body = segments(body, dgroup, calls)
         elif name == "forward":

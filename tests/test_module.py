@@ -232,3 +232,46 @@ def test_every_value_starts_where_ndisasm_says_an_instruction_does(mapped_obj: P
     # agree, and that is the part worth checking.
     limit = min((lo for lo, _hi in mapped.tables), default=found.end)
     assert all(value.at in boundaries for value in values if value.at < limit)
+
+
+def test_an_indexed_operand_is_bounded_by_the_next_thing_named_after_it() -> None:
+    """`m(r * w + c)` does not reach `w`.
+
+    may_alias takes an indexed operand to read or write its whole segment,
+    which is sound and stops LICM dead: matrix's inner loop has nothing
+    invariant in it because the store to the array is taken to reach every
+    scalar beside it.
+
+    The object's own layout bounds it. BC gives each variable a
+    displacement and every non-indexed operand names one exactly, so an
+    array beginning at 0x6 cannot run past the next thing named after it --
+    0x328 in matrix, which is 802 bytes, and `DIM m(400)` to the byte.
+    """
+    from iced_x86 import Register
+
+    from qbopt import omf
+
+    found = module.of(omf.parse(Path("fixtures/omf/matrix-p-g2.obj").read_bytes()))
+    assert found is not None
+    bounds = module.landmarks(found)
+    seen = bounds[(module.Space.SEGMENT, 5)]
+    assert seen[:2] == (0x0, 0x6) and 0x328 in seen, seen
+
+    array = module.Addr(module.Space.SEGMENT, 0x6, 5, Register.SI)
+    assert module.reach(array, 2, bounds) == (0x6, 0x328), "up to the next name, and no further"
+
+    for disp in (0x328, 0x32A, 0x32C):
+        scalar = module.Addr(module.Space.SEGMENT, disp, 5)
+        assert module.may_alias(array, scalar, frozenset(), 2, 2), "unbounded, it reaches everything"
+        assert not module.may_alias(array, scalar, frozenset(), 2, 2, bounds), (
+            f"bounded, it cannot reach {disp:#x}"
+        )
+
+    # Inside the array it still may, which is what keeps this a bound and
+    # not a licence.
+    inside = module.Addr(module.Space.SEGMENT, 0x100, 5)
+    assert module.may_alias(array, inside, frozenset(), 2, 2, bounds)
+
+    # And a segment with no names to bound it by is unchanged.
+    assert module.reach(array, 2, {}) is None
+    assert module.may_alias(array, module.Addr(module.Space.SEGMENT, 0x328, 5), frozenset(), 2, 2, {})
