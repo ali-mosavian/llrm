@@ -275,6 +275,44 @@ ranges that do not overlap can share, which is the half of allocation that
 is not about pressure at all -- and BC, having no live ranges, has neither
 half.
 
+## segld -- the segment reload BC hides
+
+A dynamic array reaches its elements through a descriptor, and BC reloads
+`es` from it on every subscript. Twice in one statement where the element
+appears twice, and the descriptor is written once by `B$DDIM` before either
+loop runs.
+
+```
+0054  shl ax,1            | ; before both loops:
+0056  mov bx,ax           |   mov  si,0
+0058  mov si,0            |   mov  es,[si+2]      ; once
+005b  add bx,[si+0Ah]     |   mov  di,[si+0Ah]    ; once
+005e  mov es,[si+2]       | inner:
+0061  mov cx,[i]          |   mov  [es:di],cx
+0065  mov [es:bx],cx      |   add  dx,cx
+0068  mov bx,ax           |   add  di,2
+006a  add bx,[si+0Ah]     |   inc  cx
+006d  mov es,[si+2]       |   cmp  cx,20
+0070  mov ax,[es:bx]      |   jle  inner
+0073  add [t],ax          |
+0077  inc cx              |
+0078  mov ax,cx           |
+007a  mov [i],ax          |
+007d  cmp ax,14h          |
+0080  jle short 0054      |
+```
+
+**17 instructions and 7,100 weighted cycles in the inner loop, against 6 and
+1,600.** Two `mov es` per pass over a five-by-twenty nest is **two hundred
+segment loads of a word nothing writes**, and `mov si,0` re-materialises the
+descriptor's own address every time.
+
+None of the cell counters see any of it: the descriptor is reached through a
+base register, so it has no address they can name. That is what
+`segment register reloaded inside a loop` is for, and it is the measure this
+file was missing -- BC hides the cost inside `B$HARR` and the descriptor,
+and PEEK and POKE reload their segment on every use for the same reason.
+
 ## The scoreboard
 
 Every target below is hand-derived from the full listing, both sides: BC's
@@ -299,6 +337,7 @@ between 1.5 and 2.3 times. Estimating the target flattered BC.
   arridx         850     400   2.1x    5
   bools          210     126   1.7x   13
   subexp         203     162   1.3x    2
+  segld         7850    1925   4.1x   12
 ```
 
 **BC runs between 1.3 and 7.2 times the cost of code written by hand.** The
@@ -343,6 +382,7 @@ compiled two ways, and it is the one number these targets roll up into.
 | matrix diagonal | 10 insns | 6 | IVSR with a stride of 2(w+1) |
 | spill inner | 9 insns, 30 B | 4, ~9 | spill by cost: one variable, not eight |
 | split | two loops | one register for both | live-range splitting |
+| segld inner | 17 insns, 7100 | 6, 1600 | hoist es and the array base out of the nest |
 
 Roughly **half to three-quarters of the loop bodies**, and every `imul` and
 `idiv` in all of them. The multiplies are not incidental: BC emits one per

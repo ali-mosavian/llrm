@@ -204,6 +204,10 @@ def bools() -> list[str]:
     return [f"T={num(-1 + 1 + 2)}", "DONE"]
 
 
+def segld() -> list[str]:
+    return [f"T={num(5 * sum(range(1, 21)))}", "DONE"]
+
+
 def fpemu() -> list[str]:
     x, y = 1073741831, 1024
     q = x // y
@@ -462,6 +466,7 @@ PROGRAMS = {
     "addrm": addrm,
     "rotate": rotate,
     "bools": bools,
+    "segld": segld,
     "fpemu": fpemu,
     "fpdeep": fpdeep,
     "chain": chain,

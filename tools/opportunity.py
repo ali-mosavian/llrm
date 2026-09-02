@@ -27,6 +27,7 @@ import iced_x86
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from qbopt import ir
 from qbopt import mir
 from qbopt import loops as loopy
 from qbopt import omf
@@ -92,6 +93,46 @@ NAMED = {
 # BC's per-statement code pays for one on almost every line.
 CYCLES = {"imul": 22, "idiv": 43, "mul": 22, "div": 43, "shl": 3, "shr": 3, "sar": 3}
 TOUCH = 4  # a memory operand, cached
+
+
+# ds and ss are the frame and the data segment and BC does not reload them.
+# es is the one a dynamic array reaches its elements through.
+SEGMENTS = {
+    getattr(iced_x86.Register, one)
+    for one in ("ES", "FS", "GS")
+    if hasattr(iced_x86.Register, one)
+}
+
+
+def _reloads(body, module_, found: Counter) -> None:
+    """Segment loads inside a loop, from something the loop never writes.
+
+    The one BC hides. A dynamic array's elements are reached through its
+    descriptor, so every subscript is `mov es,[desc+2]` -- twice in one
+    statement if the element appears twice -- and the descriptor is written
+    once, by B$DDIM, before the loop. A hundred iterations reload es a
+    hundred times from a word that has not changed.
+
+    Not visible to the cell counters above, and that is the point: the
+    descriptor is reached through a base register, so it has no address they
+    can name. This asks about the instruction instead.
+    """
+    at_of = {block.at: block for block in body.blocks}
+    seen: set[int] = set()
+    for loop in loopy.loops(list(body.blocks), body.entry):
+        if any(one.at in module_.calls for at in loop.body for one in at_of[at].ops):
+            continue  # a call in the loop may leave es anywhere
+        for at in loop.body:
+            for op in at_of[at].ops:
+                what = op.made if op.made is not None else getattr(op.node, "semantics", None)
+                if what is None or what.op is not ir.Operation.MOVE or not what.dests:
+                    continue
+                into = what.dests[0]
+                # Once per site. A nested loop contains the inner one's
+                # blocks, so counting per loop counts an inner reload twice.
+                if isinstance(into, ir.Reg) and into.register in SEGMENTS and op.at not in seen:
+                    seen.add(op.at)
+                    found["segment register reloaded inside a loop"] += 1
 
 
 def _spill_cost(body, module_) -> Counter:
@@ -261,6 +302,7 @@ def counted(paths: list[Path]) -> Counter:
             _invariant(body, module_, found)
             _registers(body, module_, found)
             _cost(body, module_, found)
+            _reloads(body, module_, found)
 
             for at in sorted(blocks):
                 entering, seen = None, None
@@ -309,6 +351,7 @@ TARGETS = {
     "ADDRM": 470,
     "ROTATE": 345,
     "BOOLS": 126,
+    "SEGLD": 1925,
 }
 
 
