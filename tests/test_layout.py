@@ -485,3 +485,41 @@ def test_a_served_read_does_not_keep_the_fixup_of_the_operand_it_removed(name: s
                     f"{name}: {op.at:#06x} {op.name} kept a relocation with no memory operand to put it in"
                 )
     assert served, f"{name}: the pass served no read, so this proves nothing"
+
+
+def test_bytes_claimed_twice_are_reported_rather_than_raising() -> None:
+    """The gap report assumed there was a gap.
+
+    `covered != highest - lowest` has two causes and it only handled one.
+    Where a transform moves an op and leaves its `covers` behind, two ops
+    claim the same bytes and the total is over, not under -- and the search
+    for the first unheld byte found none and raised StopIteration from
+    inside the error path. A refusal has to be able to say what is wrong.
+    """
+    from dataclasses import replace
+
+    from qbopt import ir
+    from qbopt import mir
+    from qbopt import module
+    from qbopt import omf
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(Path("fixtures/omf/hotlop-p-g2.obj").read_bytes()))
+    assert found is not None
+    mapped = code_map(found)
+    assert not isinstance(mapped, str), mapped
+
+    name, body = next(iter(mir.bodies(found, split.partition(found, mapped))))
+    first = next(one for block in body.blocks for one in block.ops if one.node is not None)
+    assert first.node is not None
+    span = ir.span(first.node)
+
+    # A second op standing for bytes another one already claims.
+    twin = replace(first, covers=span)
+    blocks = list(body.blocks)
+    blocks[0] = replace(blocks[0], ops=(*blocks[0].ops, twin))
+    doubled = replace(body, blocks=tuple(blocks))
+
+    got = layout.rebuild(found, [(name, doubled)], mapped.tables)
+    assert isinstance(got, str), "two ops claiming one byte is a refusal"
+    assert "claimed by more than one op" in got, got

@@ -478,13 +478,25 @@ def rebuild(
         # report `lowest`, which sent every reading of this straight to the
         # first instruction in the segment and nowhere near the bytes.
         held = set()
+        claims: dict[int, list[int]] = {}
         for one in ops:
             span = _stands_for(one)
             if span is not None:
                 held.update(range(*span))
+                for byte in range(*span):
+                    claims.setdefault(byte, []).append(one.at)
         for one in inside:
             held.update(range(one.lo, one.hi))
-        first = next(one for one in range(lowest, highest) if one not in held)
+        first = next((one for one in range(lowest, highest) if one not in held), None)
+        if first is None:
+            # Every byte is accounted for and the total still disagrees, so
+            # two ops claim the same ones. A transform that moves an op and
+            # leaves its `covers` behind does exactly that. Reported, rather
+            # than raising StopIteration looking for a gap that is not
+            # there -- which is what it did, from inside the error path.
+            twice = sorted(one for one in range(lowest, highest) if len(claims.get(one, ())) > 1)
+            where = f"{twice[0]:#06x}" if twice else "nowhere"
+            return f"{where}: {covered - (highest - lowest)} bytes are claimed by more than one op"
         return f"{first:#06x}: {highest - lowest - covered} bytes between the ops are not instructions"
 
     origin = {}
