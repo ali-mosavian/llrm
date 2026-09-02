@@ -374,6 +374,29 @@ def segments(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mi
     )
 
 
+# Operations with a register operand the encoding does not name: the
+# one-operand `imul`/`idiv` whose other half is dx:ax, `cwd` and `cdq`, and
+# a shift by cl. select.py cannot remap what is not an operand.
+_IMPLICIT = (
+    ir.Operation.MULTIPLY,
+    ir.Operation.DIVIDE,
+    ir.Operation.EXTEND,
+)
+
+
+def _implicit(op: Op) -> bool:
+    what = op.made if op.made is not None else getattr(op.node, "semantics", None)
+    if what is None:
+        return True
+    if what.op in (ir.Operation.MULTIPLY, ir.Operation.DIVIDE) and len(what.dests) != 1:
+        return True  # the widening form, whose dx:ax is not written down
+    if what.op is ir.Operation.EXTEND:
+        return True
+    return (what.name or "") in ("shl", "shr", "sar", "rol", "ror") and any(
+        isinstance(one, ir.Reg) and one.register == Register.CL for one in what.sources
+    )
+
+
 def _semantics_of(op: Op):
     return op.made if op.made is not None else getattr(op.node, "semantics", None)
 
@@ -505,6 +528,17 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
                     continue
             target = next((value for value in one.defines if not value.flags), None)
             if want is not None and target is None:
+                continue
+            # Renaming a value is only sound where every instruction that
+            # reads it names the register in an operand select.py remaps.
+            # `imul word [k]` takes its multiplicand in ax *implicitly* --
+            # there is no operand to rewrite -- so hoisting into si moved
+            # the value and left the multiply reading ax. hotlop printed 0
+            # for 630 on nine of twelve configurations, and the host suite
+            # could not see it because nothing there runs the code.
+            if want is not None and any(
+                _implicit(other) for other in ops if target in other.uses
+            ):
                 continue
             if want is not None:
                 wanted[target] = want
