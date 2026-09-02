@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 import corpus
-from iced_x86 import Register_
 from qbopt import ir
 from qbopt import mir
 from qbopt import regalloc
@@ -174,44 +173,87 @@ def test_a_flags_phi_does_not_enter_the_interference_graph() -> None:
     assert not any(value.flags for value in graph), "and neither is any other flags value"
 
 
-def test_an_allocation_that_moves_a_value_across_a_phi_is_refused() -> None:
+def test_moving_one_side_of_a_phi_moves_the_whole_class() -> None:
     """A phi is not an instruction: nothing runs on the edge to move a value.
 
-    So a phi's result and every value arriving at it have to already be in
-    one register. colour() assigns them independently, and segld's inner
-    counter was defined into dx and read back out of ax through the phi
-    between them -- it never reached its bound and the program ran forever.
+    So a phi's result and every value arriving at it occupy one register, and
+    the unit an allocation moves is the class rather than the value. Coloured
+    independently, segld's inner counter was defined into dx and read back
+    out of ax through the phi between them -- it never reached its bound and
+    the program ran forever.
 
-    Driven, because the corpus reaches this only through a pass that asks
-    for a pin, and every such pass refuses first for other reasons.
+    Driven, because the corpus reaches this only through a pass that pins,
+    and BC's own code is congruent by construction.
     """
     from iced_x86 import Register
 
-    from qbopt import ir
-    from qbopt import mir
-
     start = mir.Value(1, 0x10)
-    round_again = mir.Value(2, 0x20)
+    again = mir.Value(2, 0x20)
     merged = mir.Value(3, 0x20)
 
-    def move(at: int, into: Register_, defines: tuple, uses: tuple = ()) -> mir.Op:
-        what = ir.Semantics(
-            ir.Operation.MOVE, "mov", dests=(ir.Reg(register=into, width=2),), sources=(ir.Imm(value=1, width=2),)
-        )
-        return mir.Op(at, ir.Operation.MOVE, "mov", defines, uses, made=what)
+    ax = ir.Reg(register=Register.AX, width=2)
+    one = ir.Imm(value=1, width=2)
+    moving = ir.Semantics(ir.Operation.MOVE, "mov", dests=(ax,), sources=(one,))
 
-    head = mir.MirBlock(0x10, (), (move(0x10, Register.AX, (start,)),), (0x20,))
+    def op(at: int, defines: tuple, uses: tuple = ()) -> mir.Op:
+        return mir.Op(at, ir.Operation.MOVE, "mov", defines, uses, made=moving)
+
+    head = mir.MirBlock(0x10, (), (op(0x10, (start,)),), (0x20,))
+    latch = mir.MirBlock(
+        0x20, (mir.Phi(merged, {0x10: start, 0x20: again}),), (op(0x20, (again,), (merged,)),), (0x20,)
+    )
+    body = mir.MirBody(
+        0x10, (head, latch), {start: Register.AX, again: Register.AX, merged: Register.AX}, {}
+    )
+
+    assert regalloc.congruent(body)[start] is regalloc.congruent(body)[merged], "a phi ties them together"
+
+    got = regalloc.colour(body, {start: Register.DX})
+    assert not isinstance(got, str), got
+    assert got[start] is Register.DX
+    assert got[merged] is Register.DX, "the phi result moved with the value arriving at it"
+    assert got[again] is Register.DX, "and so did the value going back round"
+
+
+def test_a_class_wanted_across_its_own_phi_may_stay_but_may_not_move() -> None:
+    """The lost-copy shape: a value arriving at a phi is still wanted after it.
+
+    Both are in the class, both are live at once, and no single register
+    holds them -- bridging that needs a copy on the edge and nothing here
+    emits one. BC's own code contains these and runs, because nothing there
+    has to move, so refusing them on sight would refuse the identity too.
+    What cannot be done is relocating one.
+
+    segld's array base sits in such a class, which is why the hoist still
+    finds nothing there.
+    """
+    from iced_x86 import Register
+
+    start = mir.Value(1, 0x10)
+    again = mir.Value(2, 0x20)
+    merged = mir.Value(3, 0x20)
+
+    ax = ir.Reg(register=Register.AX, width=2)
+    one = ir.Imm(value=1, width=2)
+    moving = ir.Semantics(ir.Operation.MOVE, "mov", dests=(ax,), sources=(one,))
+
+    def op(at: int, defines: tuple, uses: tuple = ()) -> mir.Op:
+        return mir.Op(at, ir.Operation.MOVE, "mov", defines, uses, made=moving)
+
+    head = mir.MirBlock(0x10, (), (op(0x10, (start,)),), (0x20,))
+    # `again` is read after the phi that carries it, so it is live where the
+    # phi's result is: the two cannot share one register.
     latch = mir.MirBlock(
         0x20,
-        (mir.Phi(merged, {0x10: start, 0x20: round_again}),),
-        (move(0x20, Register.AX, (round_again,), (merged,)),),
+        (mir.Phi(merged, {0x10: start, 0x20: again}),),
+        (op(0x20, (again,), (merged,)), op(0x24, (), (again, merged))),
         (0x20,),
     )
     body = mir.MirBody(
-        0x10, (head, latch), {start: Register.AX, round_again: Register.AX, merged: Register.AX}, {}
+        0x10, (head, latch), {start: Register.AX, again: Register.AX, merged: Register.AX}, {}
     )
 
-    assert not isinstance(regalloc.colour(body, {}), str), "leaving everything where it was is always valid"
+    assert not isinstance(regalloc.colour(body, {}), str), "staying put is always allowed"
     moved = regalloc.colour(body, {start: Register.DX})
-    assert isinstance(moved, str), "moving one side of a phi and not the other must be refused"
-    assert "nothing moves it" in moved, moved
+    assert isinstance(moved, str), "and moving is not"
+    assert "across its own phi" in moved, moved

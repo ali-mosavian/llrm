@@ -32,6 +32,8 @@ widened pair changes which loads are redundant -- and a wrong answer from
 one is otherwise a bisect through all three.
 """
 
+from collections.abc import Iterator
+from itertools import product
 from dataclasses import replace
 
 from qbopt import ir
@@ -630,18 +632,12 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
             for where in regalloc.AVAILABLE
             if result not in reached_by or ir.ROOT.get(where, where) in addressable
         ]
-        want = next(
-            (
-                where
-                for where in offer
-                if where not in across and where not in touched and where not in wanted.values()
-            ),
-            None,
-        )
-        if want is None:
+        free = [
+            where for where in offer if where not in across and where not in touched
+        ]
+        if not free:
             continue
-
-        wanted[result] = want
+        wanted[result] = free
         moved[into] = moved.get(into, []) + list(run)
         gone.update(one.at for one in run)
 
@@ -659,12 +655,28 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
             here = [replace(one, at=ops[-1].at) for one in moved[block.at]] if ops else moved[block.at]
             ops = (ops[:-1] + here + ops[-1:]) if leaves else (ops + here)
         out.append(replace(block, ops=tuple(ops)))
-    got = replace(body, blocks=tuple(out), pins={**body.pins, **wanted})
+    laid = replace(body, blocks=tuple(out))
     if not wanted:
-        return got
-    if isinstance(regalloc.colour(got, got.pins), str):
-        return body
-    return got
+        return laid
+
+    # Every candidate, not the first that looks free. A pin displaces
+    # whatever held that register, and the displacement can reach a class a
+    # phi ties together and that nothing can move. Asking the allocator is
+    # the only way to find out, and it is cheap next to a round trip through
+    # emission.
+    for choice in _choices(wanted):
+        pins = {**body.pins, **choice}
+        if not isinstance(regalloc.colour(laid, pins), str):
+            return replace(laid, pins=pins)
+    return body
+
+
+def _choices(offers: dict) -> Iterator[dict]:
+    """Each way of giving every pinned value one of its candidate registers."""
+    values = list(offers)
+    for picked in product(*(offers[one] for one in values)):
+        if len(set(picked)) == len(picked):
+            yield dict(zip(values, picked, strict=True))
 
 
 # The passes, in the order they run. One per whole-segment round, because

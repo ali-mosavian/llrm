@@ -213,6 +213,42 @@ def interference(body: mir.MirBody, found: Liveness | None = None) -> dict[Value
     return {one: frozenset(others) for one, others in graph.items()}
 
 
+def congruent(body: mir.MirBody) -> dict[Value, Value]:
+    """Each value mapped to the class a phi ties it into.
+
+    A phi is not an instruction. Nothing runs on the edge to bring a value
+    across, so a phi's result and every value arriving at it occupy one
+    register or the program is wrong -- segld's inner counter was defined
+    into dx and read back out of ax through the phi between them, and never
+    reached its bound.
+
+    So the unit an allocation moves is not a value, it is the whole class.
+    BC's own code is congruent by construction, which is why the identity
+    assignment has always been valid and why nothing needed this until
+    something pinned.
+    """
+    parent: dict[Value, Value] = {}
+
+    def root(one: Value) -> Value:
+        parent.setdefault(one, one)
+        while parent[one] is not one:
+            parent[one] = parent[parent[one]]
+            one = parent[one]
+        return one
+
+    for block in body.blocks:
+        for phi in block.phis:
+            if phi.result.flags:
+                continue
+            for value in phi.incoming.values():
+                if value.flags:
+                    continue
+                here, there = root(phi.result), root(value)
+                if here is not there:
+                    parent[here] = there
+    return {one: root(one) for one in parent}
+
+
 def colour(body: mir.MirBody, pinned: dict[Value, Register_] | None = None) -> dict[Value, Register_] | str:
     """A register for every value, or why there is not one.
 
@@ -231,18 +267,56 @@ def colour(body: mir.MirBody, pinned: dict[Value, Register_] | None = None) -> d
     body cannot be allocated *the way something asked for*".
     """
     graph = interference(body)
-    assigned: dict[Value, Register_] = dict(pinned or {})
-    reached_by = _addressing(body)
-    wide_addressing = {ir.ROOT.get(one, one) for one in ADDRESSING}
-    for one in reached_by:
-        want = assigned.get(one)
-        if want is not None and ir.ROOT.get(want, want) not in wide_addressing:
-            return f"{one} is how a cell is reached and {NAMES.get(want, want)} cannot reach one"
-    # Where BC had each value. Read from the body rather than off the value
-    # itself: this is the one question in this module that is genuinely
-    # about machine registers, and asking for it explicitly is the point of
-    # the map living there. See docs/variables.md.
     origin = body.origin
+
+    # The unit is the congruence class, not the value: a phi's members share
+    # a register or nothing brings them together. Values no phi touches are
+    # their own class, so this is the old behaviour where there are no phis.
+    klass = congruent(body)
+    of = {one: klass.get(one, one) for one in graph}
+    members: dict[Value, set[Value]] = {}
+    for one, root in of.items():
+        members.setdefault(root, set()).add(one)
+
+    # Class against class. A class two of whose members are live at once is
+    # one no single register can hold -- the lost-copy shape, where a value
+    # arriving at a phi is still wanted after it. BC's own code contains
+    # them and runs, because nothing there has to move; what cannot be done
+    # is *relocating* one, since that is where the copy would be needed.
+    # So they are recorded and checked against the finished assignment
+    # rather than refused on sight, which would refuse the identity too.
+    between: dict[Value, set[Value]] = {root: set() for root in members}
+    tangled: set[Value] = set()
+    for one, others in graph.items():
+        for other in others:
+            here, there = of[one], of[other]
+            if here is there:
+                tangled.add(here)
+                continue
+            between[here].add(there)
+
+    assigned: dict[Value, Register_] = {}
+    for value, want in (pinned or {}).items():
+        root = of.get(value, klass.get(value, value))
+        if assigned.setdefault(root, want) is not want:
+            return f"{value} is tied to a value that wants {NAMES.get(assigned[root], assigned[root])}"
+
+    # A class may only sit where every one of its members can be reached
+    # from, and 16-bit addressing reaches memory through bx, bp, si or di.
+    reached_by = {of.get(one, one) for one in _addressing(body)}
+    wide_addressing = {ir.ROOT.get(one, one) for one in ADDRESSING}
+    for root in reached_by & set(assigned):
+        want = assigned[root]
+        if ir.ROOT.get(want, want) not in wide_addressing:
+            return f"{root} is how a cell is reached and {NAMES.get(want, want)} cannot reach one"
+
+    # Where BC had each class. Congruent by construction, so every member
+    # agrees; disagreement means the body did not come from BC and there is
+    # no identity to fall back on.
+    was: dict[Value, Register_ | None] = {}
+    for root, group in members.items():
+        seen = {origin[one] for one in group if one in origin}
+        was[root] = next(iter(seen)) if len(seen) == 1 else None
 
     # Identity first, and it is not a heuristic: measured over 27,680 values,
     # none ever interferes with another version of its own register, so
@@ -250,58 +324,47 @@ def colour(body: mir.MirBody, pinned: dict[Value, Register_] | None = None) -> d
     # An allocator that moves anything it was not asked to move is emitting
     # copies for nothing, and greedy-by-degree moved 1,274 values doing
     # exactly that. Only a pin, or a clash with one, makes anything move.
-    if not any(assigned[one] is not origin.get(one) for one in assigned):
-        clean = {one: origin[one] for one in graph if one in origin}
+    if not any(assigned[root] is not was.get(root) for root in assigned):
+        clean = {root: where for root, where in was.items() if where is not None}
         clean.update(assigned)
         if all(
-            all(clean[other] is not clean[one] for other in graph[one] if other in clean)
-            for one in clean
-            if one in graph
+            all(clean[other] is not clean[root] for other in between[root] if other in clean)
+            for root in clean
+            if root in between
         ):
-            return clean
+            return {one: clean[of[one]] for one in graph if of[one] in clean}
 
-    for one, others in sorted(graph.items(), key=lambda kv: (-len(kv[1]), kv[0].id)):
-        if one in assigned:
+    for root, others in sorted(between.items(), key=lambda kv: (-len(kv[1]), kv[0].id)):
+        if root in assigned:
             continue
         taken = {assigned[other] for other in others if other in assigned}
         offer = AVAILABLE
-        if one in reached_by:
+        if root in reached_by:
             offer = [where for where in AVAILABLE if ir.ROOT.get(where, where) in wide_addressing]
         free = [where for where in offer if where not in taken]
         if not free:
-            return f"{one} interferes with every register at once"
+            return f"{root} interferes with every register at once"
         # its own register first, so an allocation that need not move
         # anything does not
-        was = origin.get(one)
-        assigned[one] = was if was is not None and was in free else free[0]
+        here = was.get(root)
+        assigned[root] = here if here is not None and here in free else free[0]
 
-    # A phi is not an instruction. Nothing runs on the edge to move a value
-    # into place, so a phi's result and every value arriving at it have to
-    # already be in one register -- and this colours them independently.
-    # segld's inner counter was defined into dx and read back out of ax
-    # through the phi between them, so it never reached its bound and the
-    # program ran forever.
-    for block in body.blocks:
-        for phi in block.phis:
-            if phi.result.flags:
-                continue
-            want = assigned.get(phi.result)
-            for value in phi.incoming.values():
-                if assigned.get(value) is not want:
-                    came, goes = NAMES.get(assigned.get(value)), NAMES.get(want)
-                    return f"{phi.result} arrives from {value} and nothing moves it: {came} into {goes}"
+    # A tangled class may stay where it is and may not go anywhere else.
+    for root in tangled:
+        if assigned.get(root) is not was.get(root):
+            here, there = NAMES.get(was.get(root)), NAMES.get(assigned.get(root))
+            return f"{root} is wanted across its own phi and cannot move from {here} to {there}"
 
     # The pins are not checked on the way in, so they are checked here: two
-    # of them wanting one register for values that are live together is a
+    # of them wanting one register for classes that are live together is a
     # refusal, and without this the loop hands them straight back because a
-    # value already assigned is skipped rather than validated.
-    for one, others in graph.items():
+    # class already assigned is skipped rather than validated.
+    for root, others in between.items():
         for other in others:
-            if one.flags or other.flags:
-                continue
-            if one in assigned and other in assigned and assigned[one] is assigned[other]:
-                return f"{one} and {other} are live together and both want {NAMES.get(assigned[one], assigned[one])}"
-    return assigned
+            if root in assigned and other in assigned and assigned[root] is assigned[other]:
+                where = NAMES.get(assigned[root], assigned[root])
+                return f"{root} and {other} are live together and both want {where}"
+    return {one: assigned[of[one]] for one in graph if of[one] in assigned}
 
 
 def moved(body: mir.MirBody, assignment: dict[Value, Register_]) -> int:
