@@ -79,6 +79,25 @@ def _on_the_stack(what: ir.Semantics) -> bool:
     ).startswith("f")
 
 
+def tied(what: ir.Semantics) -> Register_ | None:
+    """The register a two-address instruction reads and writes as one.
+
+    `add ax,[c]` computes ax + [c] and puts it back in ax. The value it
+    defines and the value it reads are not two places -- they are one
+    register at two moments, and an allocation that moves one without the
+    other emits `add di,[c]`, which adds to whatever di held.
+
+    x86 says this by naming the same operand twice and nothing else does,
+    which is why it belongs here beside the operands nothing names at all.
+    """
+    if _on_the_stack(what) or not what.dests or not what.sources:
+        return None
+    into, outof = what.dests[0], what.sources[0]
+    if isinstance(into, ir.Reg) and isinstance(outof, ir.Reg) and _root(into.register) is _root(outof.register):
+        return _root(into.register)
+    return None
+
+
 def reads(what: ir.Semantics) -> dict[Register_, Need]:
     """Registers this operation reads whether or not it names them.
 
