@@ -33,6 +33,7 @@ from iced_x86 import Register_
 
 from qbopt import ir
 from qbopt import mir
+from qbopt import runtime
 
 # What each operation does to two known numbers, within one width. Division
 # is absent deliberately: BC's own divide has semantics this pass already
@@ -57,6 +58,11 @@ UNARY = {
 }
 
 
+# What a cell holds: keyed on its address and width, because two
+# widths at one address are two different facts.
+Cells = dict
+
+
 @dataclass(frozen=True, slots=True)
 class Known:
     """The low `width` bytes of a value are `n`. Nothing is said above them."""
@@ -72,6 +78,103 @@ def masked(n: int, width: int) -> int:
     return n & ((1 << (width * 8)) - 1)
 
 
+def _put(op: mir.Op, known: dict[mir.Value, Known]) -> Known | None:
+    """What this store puts in the cell, where that is a number.
+
+    Two shapes and both are common: BC writes `mov word [n],7` for an
+    initialiser, so the number is an immediate the instruction carries and
+    not a value at all, and it writes `mov [s],ax` for an assignment, where
+    the number is whatever ax was known to hold.
+    """
+    what = op.made if op.made is not None else (op.node.semantics if op.node is not None else None)
+    if what is None or what.op is not ir.Operation.MOVE:
+        return None
+    for one in what.sources:
+        if isinstance(one, ir.Imm):
+            return Known(masked(one.value, one.width), one.width)
+    from_value = [one for one in op.uses if one in known and not one.flags]
+    return known[from_value[0]] if len(from_value) == 1 else None
+
+
+def _kills(here: Cells, op: mir.Op, known: dict[mir.Value, Known], dgroup: frozenset[int], calls: dict[int, str]) -> Cells:
+    """The cell facts still standing after this operation."""
+    if op.at in calls:
+        contract = runtime.contract(calls[op.at])
+        if runtime.writes_caller_memory(contract) or runtime.barrier(contract):
+            return {}
+    for ref in op.stores:
+        if ref.addr is None:
+            return {}  # a store nothing can name reaches every cell
+        here = {
+            where: fact
+            for where, fact in here.items()
+            if not mir.overlapping(mir.MemRef(where[0], where[1], None, None), ref, dgroup)
+        }
+        put = _put(op, known)
+        if put is not None:
+            here[(ref.addr, ref.width)] = put
+    return here
+
+
+def cells(
+    body: mir.MirBody,
+    dgroup: frozenset[int],
+    calls: dict[int, str],
+    known: dict[mir.Value, Known] | None = None,
+) -> dict[tuple[int, int], Cells]:
+    """What each memory cell holds before each operation, where it is a number.
+
+    Forward to a fixed point, meeting at a join on agreement, which is the
+    same shape as known() and for the same reason. Keyed on the block and
+    the operation's index within it rather than its address, because
+    absorption puts several operations on one address.
+
+    A block none of whose predecessors have been visited yet is *deferred*,
+    not treated as knowing nothing. Saying "nothing is known here" poisons
+    the meet for good -- a loop body's only predecessor is its header, which
+    is unvisited on the first round, so hotlop could never learn that `n` is
+    7 even though the entry block says so three instructions earlier.
+    """
+    known = known if known is not None else {}
+    outof: dict[int, Cells | None] = {block.at: None for block in body.blocks}
+    preds = {
+        block.at: [one.at for one in body.blocks if block.at in one.succ] for block in body.blocks
+    }
+
+    def entering(at: int) -> Cells | None:
+        if not preds[at]:
+            return {}
+        seen = [outof[one] for one in preds[at] if outof[one] is not None]
+        if not seen:
+            return None
+        return {
+            where: fact
+            for where, fact in seen[0].items()
+            if all(one.get(where) == fact for one in seen[1:])
+        }
+
+    changing = True
+    while changing:
+        changing = False
+        for block in body.blocks:
+            here = entering(block.at)
+            if here is None:
+                continue
+            for op in block.ops:
+                here = _kills(here, op, known, dgroup, calls)
+            if outof[block.at] != here:
+                outof[block.at] = here
+                changing = True
+
+    found: dict[tuple[int, int], Cells] = {}
+    for block in body.blocks:
+        here = entering(block.at) or {}
+        for index, op in enumerate(block.ops):
+            found[(block.at, index)] = here
+            here = _kills(here, op, known, dgroup, calls)
+    return found
+
+
 def _source_value(op: mir.Op, register: Register_, origin: dict[mir.Value, Register_]) -> mir.Value | None:
     """The SSA value standing for this semantic register operand."""
     root = ir.ROOT.get(register, register)
@@ -79,7 +182,11 @@ def _source_value(op: mir.Op, register: Register_, origin: dict[mir.Value, Regis
 
 
 def _operand(
-    op: mir.Op, where: ir.Loc, known: dict[mir.Value, Known], origin: dict[mir.Value, Register_]
+    op: mir.Op,
+    where: ir.Loc,
+    known: dict[mir.Value, Known],
+    origin: dict[mir.Value, Register_],
+    here: Cells | None = None,
 ) -> Known | None:
     """One semantic operand as a number, if it is one."""
     match where:
@@ -89,8 +196,15 @@ def _operand(
             value = _source_value(op, register, origin)
             fact = known.get(value) if value is not None else None
             return fact if fact is not None and fact.width >= width else None
+        case ir.Mem(addr=addr, width=width) if here is not None and addr is not None:
+            # A cell whose content is known is as good as an immediate.
+            # Without this the propagation stops at BC's first store: it
+            # keeps every variable in memory, so `n * k` reads two cells and
+            # neither is a value this could ask about.
+            fact = here.get((addr, width))
+            return fact if fact is not None and fact.width >= width else None
         case _:
-            return None  # memory, or an address: not this pass's to know
+            return None  # an address, or a cell nothing has said anything about
 
 
 def _defined(op: mir.Op) -> mir.Value | None:
@@ -105,7 +219,12 @@ def _defined(op: mir.Op) -> mir.Value | None:
     return real[0] if len(real) == 1 else None
 
 
-def _result(op: mir.Op, known: dict[mir.Value, Known], origin: dict[mir.Value, Register_]) -> Known | None:
+def _result(
+    op: mir.Op,
+    known: dict[mir.Value, Known],
+    origin: dict[mir.Value, Register_],
+    here: Cells | None = None,
+) -> Known | None:
     """What this operation computes, where every input is known."""
     # What a transform decided this op computes, where it decided; the
     # node's own otherwise. An op rewritten by an earlier pass is raised
@@ -116,7 +235,7 @@ def _result(op: mir.Op, known: dict[mir.Value, Known], origin: dict[mir.Value, R
 
     parts: list[Known] = []
     for one in semantics.sources:
-        got = _operand(op, one, known, origin)
+        got = _operand(op, one, known, origin, here)
         if got is None:
             return None
         parts.append(got)
@@ -136,7 +255,11 @@ def _result(op: mir.Op, known: dict[mir.Value, Known], origin: dict[mir.Value, R
             return None
 
 
-def known(body: mir.MirBody) -> dict[mir.Value, Known]:
+def known(
+    body: mir.MirBody,
+    dgroup: frozenset[int] | None = None,
+    calls: dict[int, str] | None = None,
+) -> dict[mir.Value, Known]:
     """Every value this body computes that is a number, to a fixed point.
 
     Forward over the blocks until nothing new is learned. A value's fact
@@ -145,9 +268,18 @@ def known(body: mir.MirBody) -> dict[mir.Value, Known]:
     walk terminates on the count of values rather than on any ordering.
     """
     facts: dict[mir.Value, Known] = {}
+    held: dict[tuple[int, int], Cells] = {}
     changing = True
     while changing:
         changing = False
+        # What memory holds, recomputed from what is known so far. The two
+        # feed each other: a cell is known because a value was stored to it,
+        # and a value is known because it was read from a cell. Running them
+        # to one fixed point together is what lets `n = 7 : k = 3` reach the
+        # `n * k` inside the loop, which is three statements and a store
+        # away.
+        if dgroup is not None and calls is not None:
+            held = cells(body, dgroup, calls, facts)
         for block in body.blocks:
             # A join is known where every path into it agrees. Nothing else
             # about a phi is knowable -- and this is what makes the
@@ -163,11 +295,11 @@ def known(body: mir.MirBody) -> dict[mir.Value, Known]:
                     continue
                 facts[phi.result] = known[0]
                 changing = True
-            for op in block.ops:
+            for index, op in enumerate(block.ops):
                 target = _defined(op)
                 if target is None or target in facts:
                     continue
-                found = _result(op, facts, body.origin)
+                found = _result(op, facts, body.origin, held.get((block.at, index)))
                 if found is not None:
                     facts[target] = found
                     changing = True

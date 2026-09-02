@@ -36,6 +36,7 @@ from collections.abc import Iterator
 from itertools import product
 from dataclasses import replace
 
+from qbopt import consts
 from qbopt import ir
 from qbopt import lir
 from qbopt import mir
@@ -747,6 +748,90 @@ def _writes_to(one: Op, now: Register_) -> Op:
     return replace(one, made=replace(what, dests=(ir.Reg(register=_named(now, width), width=width),)))
 
 
+def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
+    """An operation whose result is a number, replaced by that number.
+
+    `n = 7 : k = 3` and then `n * k` inside a loop is three stores and two
+    loads and a multiply, all of it computing 21 on every pass. consts.known
+    says which values are numbers -- reading through memory, because BC
+    keeps every variable there and nothing else would reach past the first
+    store -- and this writes them down.
+
+    SSA in, SSA out: the operation goes on defining the value it defined,
+    and simply computes it from nothing. What it read it no longer reads,
+    so its uses and loads go, which is what lets dead code elimination see
+    the loads afterwards.
+
+    Refused where the flags it also sets are read. `add ax,[c]` computes a
+    number and a carry, and only one of them is expressible as `mov ax,n`.
+    """
+    facts = consts.known(body, dgroup, calls)
+    if not facts:
+        return body
+
+    wanted = {value for block in body.blocks for op in block.ops for value in op.uses}
+    wanted |= {value for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
+
+    out = []
+    changed = False
+    for block in body.blocks:
+        ops = []
+        for op in block.ops:
+            made = _folded_op(op, facts, wanted)
+            changed = changed or made is not op
+            ops.append(made)
+        out.append(replace(block, ops=tuple(ops)))
+    return replace(body, blocks=tuple(out)) if changed else body
+
+
+def _folded_op(op: Op, facts: dict, wanted: set) -> Op:
+    """The operation as a move of its own answer, where that is possible."""
+    what = _semantics_of(op)
+    if what is None or op.stores:
+        return op
+    # Not a register move. Rewriting `mov ax,cx` to `mov ax,3` removes no
+    # work -- the same instruction, the same length, nothing read that was
+    # not already in a register -- and it undoes an allocation: a live range
+    # split is exactly that move, so folding it puts the computation back
+    # inside the loop the hoist took it out of, and the hoist lifts it again
+    # next round. Three bytes a round, for ever.
+    #
+    # What folding is for is removing a computation. A copy is not one.
+    if what.op is ir.Operation.MOVE and all(isinstance(one, ir.Reg) for one in what.sources):
+        return op
+    if what.op in (ir.Operation.JUMP, ir.Operation.BRANCH, ir.Operation.CALL, ir.Operation.RETURN):
+        return op
+    if len(what.dests) != 1 or not isinstance(what.dests[0], ir.Reg):
+        return op
+
+    real = [one for one in op.defines if not one.flags]
+    if len(real) != 1 or real[0] not in facts:
+        return op
+    # The flags are a second result and `mov` sets none of them.
+    if any(one.flags and one in wanted for one in op.defines):
+        return op
+
+    fact = facts[real[0]]
+    into = what.dests[0]
+    if what.op is ir.Operation.MOVE and any(isinstance(one, ir.Imm) for one in what.sources):
+        return op  # already says so
+
+    return replace(
+        op,
+        op=ir.Operation.MOVE,
+        name="mov",
+        defines=(real[0],),
+        uses=(),
+        loads=(),
+        made=ir.Semantics(
+            ir.Operation.MOVE,
+            "mov",
+            dests=(into,),
+            sources=(ir.Imm(value=fact.n, width=into.width),),
+        ),
+    )
+
+
 def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds: dict | None = None) -> MirBody:
     """A loop-invariant run of operations, done once before the loop.
 
@@ -975,7 +1060,7 @@ def _choices(offers: dict) -> Iterator[dict]:
 # before avail.py once and avail forwarded a stale high half across an op
 # that said it read two bytes where the instruction read four. That is no
 # longer possible to get wrong by rearranging this list.
-PASSES = ("segments", "hoist", "forward", "drop_loads", "drop_stores", "widen", "place", "absorb", "strength")
+PASSES = ("fold", "segments", "hoist", "forward", "drop_loads", "drop_stores", "widen", "place", "absorb", "strength")
 
 
 def applied(
@@ -1007,6 +1092,7 @@ def applied(
     benefit is indirect.
     """
     wanted = {
+        "fold": True,
         "segments": segments_,
         "hoist": hoist,
         "forward": forward,
@@ -1022,7 +1108,9 @@ def applied(
             continue
         if not wanted[name]:
             continue
-        if name == "hoist":
+        if name == "fold":
+            body = folded(body, dgroup, calls)
+        elif name == "hoist":
             body = hoisted(body, dgroup, calls, module.landmarks(found) if found is not None else None)
         elif name == "segments":
             body = segments(body, dgroup, calls)

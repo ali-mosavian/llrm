@@ -6,10 +6,15 @@ each one had to be right about, because widening was written wrong twice and
 neither time could the host suite see it.
 """
 
+from pathlib import Path
+
 from iced_x86 import Register
 
 from qbopt import ir
 from qbopt import wide
+from qbopt import omf
+from qbopt import module
+from qbopt import rewrite
 from qbopt import transform
 
 
@@ -743,3 +748,24 @@ def test_a_hoisted_value_and_every_reader_of_it_agree_on_a_register() -> None:
                         assert isinstance(what.dests[0], ir.Reg) and isinstance(what.sources[0], ir.Reg)
     assert moved, "nothing hoisted, so this proves nothing"
     assert seen, "and nothing was split, which is the half that was missing"
+
+
+def test_folding_leaves_a_copy_alone() -> None:
+    """A copy is not a computation, and folding it undoes an allocation.
+
+    `mov ax,cx` where cx is known to be 3 rewrites to `mov ax,3`: the same
+    instruction, the same length, nothing read that was not already in a
+    register. No gain -- and a real loss, because a live range split is
+    exactly that move. Folding it puts the value back inside the loop the
+    hoist took it out of, the hoist lifts it again next round, and the
+    program grows three bytes a round without ever converging.
+
+    Measured on hotlop before the guard: 132, 226, 322, 418 bytes.
+    """
+    for name in ("hotlop-p-g2", "press-p-g2"):
+        data = Path(f"fixtures/omf/{name}.obj").read_bytes()
+        sizes = []
+        for _ in range(4):
+            sizes.append(len(module.of(omf.parse(data)).code))
+            data, _ = rewrite.rewrite(data, dry_run=False)
+        assert sizes[-1] <= sizes[1], f"{name} grows without converging: {sizes}"
