@@ -274,6 +274,102 @@ def _served(what, register) -> "ir.Semantics | None":
     return replace(what, sources=swapped)
 
 
+SEGMENT_REGISTERS = frozenset(
+    getattr(Register, one) for one in ("ES", "FS", "GS") if hasattr(Register, one)
+)
+
+
+def _segment_load(op: Op):
+    """(register, what it is loaded from) where this op loads a segment."""
+    what = op.made if op.made is not None else getattr(op.node, "semantics", None)
+    if what is None or what.op is not ir.Operation.MOVE or len(what.dests) != 1 or len(what.sources) != 1:
+        return None
+    into = what.dests[0]
+    if not isinstance(into, ir.Reg) or into.register not in SEGMENT_REGISTERS:
+        return None
+    return into.register, what.sources[0]
+
+
+def segments(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
+    """A segment register loaded from what it already holds, dropped.
+
+    `mov es,[desc+2]` twice in one statement, because the element appears
+    twice in it -- and again on every pass of the loop, from a word written
+    once before the loop ran. `segments.py` does this against the machine
+    code and finds 42 sites in qb-qrender; nothing in MIR did.
+
+    Cross-block, and it has to be: what a block starts holding is what every
+    path into it agrees on, and the reload that matters most arrives over a
+    back-edge. Starting from "nothing is held" and growing is the
+    conservative direction -- a cycle cannot talk itself into a fact.
+
+    Hoisting the survivor out of the loop is a separate and larger thing,
+    and needs code motion between blocks. This only removes the duplicate.
+    """
+    blocks = {block.at: block for block in body.blocks}
+    preds: dict[int, list[int]] = {at: [] for at in blocks}
+    for block in body.blocks:
+        for successor in block.succ:
+            if successor in preds:
+                preds[successor].append(block.at)
+
+    def through(block, holding: dict, gone: set[int] | None):
+        holding = dict(holding)
+        for op in block.ops:
+            if op.barrier or op.at in calls:
+                holding = {}
+                continue
+            found = _segment_load(op)
+            if found is not None:
+                register, source = found
+                if holding.get(register) == source:
+                    if gone is not None:
+                        gone.add(op.at)
+                elif source is not None:
+                    holding[register] = source
+                continue
+            # A write through the segment itself cannot be the descriptor
+            # it was loaded from. A dynamic array's storage is outside
+            # DGROUP -- that is the whole reason it needs a segment -- and
+            # the descriptor is a LITERAL or SEGMENT cell reached through
+            # ds. Anything else that writes memory, or writes somewhere
+            # this cannot name, puts the descriptor back in doubt.
+            if any(one.addr is None or one.addr.space is not Space.FAR for one in op.stores):
+                holding = {}
+        return holding
+
+    exits = {at: {} for at in blocks}
+    for _round in range(len(blocks) + 1):
+        changing = False
+        for at in sorted(blocks):
+            entering: dict | None = None
+            for previous in preds[at]:
+                was = exits[previous]
+                entering = dict(was) if entering is None else {
+                    k: v for k, v in entering.items() if was.get(k) == v
+                }
+            got = through(blocks[at], entering or {}, None)
+            if got != exits[at]:
+                exits[at] = got
+                changing = True
+        if not changing:
+            break
+
+    gone: set[int] = set()
+    for at in sorted(blocks):
+        entering = None
+        for previous in preds[at]:
+            was = exits[previous]
+            entering = dict(was) if entering is None else {k: v for k, v in entering.items() if was.get(k) == v}
+        through(blocks[at], entering or {}, gone)
+    if not gone:
+        return body
+    return replace(
+        body,
+        blocks=tuple(replace(one, ops=tuple(_absorb(list(one.ops), gone))) for one in body.blocks),
+    )
+
+
 # The passes, in the order they run. One per whole-segment round, because
 # each round re-raises the body from what the last one wrote -- an op's
 # defines and uses are computed at raise time, so a pass that has already
@@ -285,7 +381,7 @@ def _served(what, register) -> "ir.Semantics | None":
 # before avail.py once and avail forwarded a stale high half across an op
 # that said it read two bytes where the instruction read four. That is no
 # longer possible to get wrong by rearranging this list.
-PASSES = ("forward", "drop_loads", "drop_stores", "widen", "place", "absorb", "strength")
+PASSES = ("segments", "forward", "drop_loads", "drop_stores", "widen", "place", "absorb", "strength")
 
 
 def applied(
@@ -297,6 +393,7 @@ def applied(
     absorb: bool = False,
     found=None,
     widen: bool = True,
+    segments_: bool = True,
     forward: bool = True,
     drop_loads: bool = True,
     drop_stores: bool = True,
@@ -315,6 +412,7 @@ def applied(
     benefit is indirect.
     """
     wanted = {
+        "segments": segments_,
         "forward": forward,
         "drop_loads": drop_loads,
         "drop_stores": drop_stores,
@@ -328,7 +426,9 @@ def applied(
             continue
         if not wanted[name]:
             continue
-        if name == "forward":
+        if name == "segments":
+            body = segments(body, dgroup, calls)
+        elif name == "forward":
             body = forwarded(body, dgroup, calls)
         elif name == "drop_loads":
             body = without_redundant_loads(body, dgroup, calls)
