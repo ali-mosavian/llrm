@@ -129,7 +129,12 @@ def test_resume_dispatch_is_the_only_deep_nesting_in_the_corpus() -> None:
 
     resumable = [d for stem, d in deepest.items() if stem.startswith("divmod")]
     everything_else = [d for stem, d in deepest.items() if not stem.startswith("divmod")]
-    assert max(everything_else) == 1, "nothing but RESUME nests past one loop"
+    # Two, not one: matrix, nested, spill and segld are written with a
+    # nested FOR because that is what an optimiser has to see through --
+    # an invariant in an inner loop costs the outer loop's trip count
+    # times over. Before they existed nothing here nested at all, which
+    # is what this asserted.
+    assert max(everything_else) == 2, "nothing but RESUME nests past two loops"
     assert min(resumable) > 1, "divmod is the /X program, and RESUME is why"
 
 

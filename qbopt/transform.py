@@ -726,9 +726,16 @@ def _deleting(site, ops_at: dict) -> list[ir.Semantics] | None:
     elif name == "B$CPI4":
         steps.append(made(ir.Operation.COMPARE, "cmp", (), (eax, other), right.at))
     else:
-        steps.append(made(ir.Operation.EXTEND, "cdq", (edx,), (eax,)))
         if isinstance(other, ir.Imm):
-            return None  # idiv has no immediate form and nothing loads one here
+            # idiv has no immediate form, so the divisor goes through a
+            # register -- before the cdq, which writes edx and would be
+            # undone by nothing here but reads better in this order.
+            # stride and lngmix are the first programs to divide by a
+            # constant, and were refused outright until they existed.
+            ecx = _wide(INTO[1])
+            steps.append(made(ir.Operation.MOVE, "mov", (ecx,), (other,)))
+            other = ecx
+        steps.append(made(ir.Operation.EXTEND, "cdq", (edx,), (eax,)))
         steps.append(made(ir.Operation.DIVIDE, "idiv", (eax, edx), (eax, edx, other), right.at))
         if name == "B$RMI4":
             steps.append(made(ir.Operation.MOVE, "mov", (eax,), (edx,)))

@@ -37,6 +37,17 @@ from qbopt.module import Space
 from qbopt.blocks import code_map
 
 
+def _program(path: Path) -> str:
+    """The program's own name, out of a fixture's `name-config` stem.
+
+    `TARGETS` and `TRIPS` are per program and the corpus names an object
+    after the configuration that built it, so keying on the stem missed
+    every one of them -- silently, reporting no target and weighting a loop
+    at ten per level.
+    """
+    return path.stem.split("-")[0].upper()
+
+
 def named(ref) -> bool:
     """A cell this can name. A stack slot is a depth from the top of its own
     block, and an address of None aliases everything."""
@@ -366,7 +377,7 @@ def counted(paths: list[Path]) -> Counter:
 
             _invariant(body, module_, found)
             _registers(body, module_, found)
-            _cost(body, module_, found, TRIPS.get(path.stem.upper(), 10))
+            _cost(body, module_, found, TRIPS.get(_program(path), 10))
             _reloads(body, module_, found)
 
             for at in sorted(blocks):
@@ -441,7 +452,7 @@ def against_targets(paths: list[Path]) -> int:
     for path in sorted(paths):
         found = counted([path])
         cost = found.pop("cost", 0)
-        want = TARGETS.get(path.stem.upper())
+        want = TARGETS.get(_program(path))
         left = sum(
             count
             for name, count in found.items()

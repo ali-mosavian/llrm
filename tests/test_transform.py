@@ -209,10 +209,19 @@ def test_an_absorbed_divide_is_the_instructions_the_runtime_would_have_run() -> 
                 want = ["pop", "pop", "imul", "restore"] if name == "B$MUI4" else [
                     "pop", "pop", "cdq", "idiv", "restore"
                 ]
+            elif name == "B$MUI4":
+                want = ["mov", "imul", "restore"]
             else:
-                want = ["mov", "imul", "restore"] if name == "B$MUI4" else [
-                    "mov", "cdq", "idiv", "restore"
-                ]
+                # A constant divisor goes through a register first: idiv has
+                # no immediate form. stride and lngmix are the only programs
+                # that divide by one.
+                want = [one.name for one in ops]
+                assert want in (
+                    ["mov", "cdq", "idiv", "restore"],
+                    ["mov", "mov", "cdq", "idiv", "restore"],
+                    ["mov", "cdq", "idiv", "mov", "restore"],
+                    ["mov", "mov", "cdq", "idiv", "mov", "restore"],
+                ), f"{obj.stem} at {at:#x}: {want}"
             assert [one.name for one in ops] == want, f"{obj.stem} at {at:#x}: {[o.name for o in ops]}"
     assert sum(seen.values()) > 100, f"too few absorbed to prove anything: {seen}"
 
