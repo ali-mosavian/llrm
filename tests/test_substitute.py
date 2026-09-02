@@ -137,4 +137,4 @@ def test_the_emitted_count_is_what_was_measured() -> None:
                     taken += 1
                 elif one.region.reason == "it overlaps a region already taken":
                     refused += 1
-    assert (taken, refused) == (48, 34)
+    assert (taken, refused) == (39, 34)

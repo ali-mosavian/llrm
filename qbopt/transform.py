@@ -548,6 +548,12 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
         out.append(replace(block, ops=tuple(ops)))
     got = replace(body, blocks=tuple(out), pins={**body.pins, **wanted})
 
+    # The move and the register are one decision. A hoist whose pin cannot
+    # be had leaves the load outside a loop that still clobbers the register
+    # it loaded into -- the wrong program, not a missed optimisation. So the
+    # colouring is asked for and the whole thing dropped when it is refused.
+    if wanted and isinstance(regalloc.colour(got, got.pins), str):
+        return body
     return got
 
 

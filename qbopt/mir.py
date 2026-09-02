@@ -289,7 +289,18 @@ def _call_touches(name: str | None) -> tuple[frozenset[Register_], frozenset[Reg
         return None
     kept = {FROM_CONTRACT[one] for one in runtime.preserves(routine) if one in FROM_CONTRACT}
     disturbed = frozenset(one for one in TRACKED if one not in kept) | {FLAGS}
-    return disturbed, disturbed
+    # Clobbering is not reading, and this returned the same set for both.
+    # Every routine runtime.py has established takes its arguments on the
+    # stack -- cmacros' cProc with parmW, and the print family's own AX is
+    # set by the stub before it jumps to B$PRINT, so it is not an input from
+    # the caller. Saying a call reads bx made bx's entry value live from the
+    # top of the body to the call, across every loop in between, and no
+    # register was ever free for anything to be hoisted into.
+    #
+    # A routine that does take a register argument -- B$HARY reads bx -- is
+    # not established here and comes back worst-case above, which is where
+    # that stays until a contract can say `inputs`.
+    return disturbed, frozenset({FLAGS})
 
 
 def _restore_touches(node: ir.Node) -> tuple[frozenset[Register_], frozenset[Register_]] | None:
