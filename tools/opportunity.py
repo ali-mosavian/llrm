@@ -287,21 +287,30 @@ def counted(paths: list[Path]) -> Counter:
 # here. They are targets, not measurements: the point is to have a number to
 # close on rather than to be right about it to the cycle.
 TARGETS = {
+    # Every one derived by hand from the full listing, both sides: BC's own
+    # body costed instruction by instruction with the formula below, and the
+    # optimal listing in docs/targets.md costed the same way. Where the hand
+    # total differs from what this file computes -- the header bytes BC puts
+    # before the first instruction decode as instructions, and a block's
+    # depth is not always what reading the listing suggests -- the target is
+    # the hand ratio applied to the measured cost, and both numbers are in
+    # docs/targets.md.
     "HOTLOP": 215,
     "PRESS": 315,
     "ARRIDX": 400,
     "SUBEXP": 162,
     "IVCHAN": 340,
     "STRIDE": 360,
-    "MATRIX": 2440,
-    "SPILL": 1458,
-    "NESTED": 3500,   # ~
-    "LNGMIX": 400,    # ~
-    "SPLIT": 700,     # ~
-    "ADDRM": 700,     # ~
-    "ROTATE": 650,
-    "BOOLS": 150,
+    "MATRIX": 1750,
+    "SPILL": 1160,
+    "NESTED": 1850,
+    "LNGMIX": 210,
+    "SPLIT": 300,
+    "ADDRM": 470,
+    "ROTATE": 345,
+    "BOOLS": 126,
 }
+
 
 
 def against_targets(paths: list[Path]) -> int:

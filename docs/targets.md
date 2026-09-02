@@ -277,40 +277,48 @@ half.
 
 ## The scoreboard
 
-`tools/opportunity.py --targets` puts every program against its best case.
-The cost target is the hand-written optimal listing above, costed by the
-same formula; every counter's target is zero, because a compiler that leaves
-a redundant load or an invariant read in a loop has left something on the
-table by definition.
+Every target below is hand-derived from the full listing, both sides: BC's
+own body costed instruction by instruction, and the optimal listing costed
+the same way. Nothing here is scaled from another program's savings, which
+four of them were -- and every one of those four was too generous, by
+between 1.5 and 2.3 times. Estimating the target flattered BC.
 
 ```
   program       cost  target  ratio   redundancy left
+  lngmix        1504     210   7.2x    0
+  nested       12826    1850   6.9x   14
+  spill         7458    1160   6.4x    8
   press         1788     315   5.7x   11
-  spill         7458    1458   5.1x    8
-  lngmix        1504     400   3.8x    0
+  matrix        8540    1750   4.9x   12
+  split         1196     300   4.0x    9
   hotlop         792     215   3.7x    6
-  nested       12826    3500   3.7x   14
-  matrix        8540    2440   3.5x   12
   stride        1060     360   2.9x    5
+  addrm         1296     470   2.8x   12
   ivchan         930     340   2.7x    4
+  rotate         826     345   2.4x    9
   arridx         850     400   2.1x    5
-  addrm         1296     700   1.9x   12
-  split         1196     700   1.7x    9
-  bools          210     150   1.4x   13
+  bools          210     126   1.7x   13
   subexp         203     162   1.3x    2
-  rotate         826     650   1.3x    9
 ```
 
-**BC runs between 1.3 and 5.7 times the cost of code written by hand**, and
-the two worst are the two about registers. Nothing this project does today
-moves any of these numbers: absorption and widening are real and neither
-appears in this table.
+**BC runs between 1.3 and 7.2 times the cost of code written by hand.** The
+worst four are the two nested loops and the two about registers, which is
+what a compiler that never keeps a value past a statement costs when the
+statement is inside something that repeats.
 
-Four of the cost targets -- nested, lngmix, split, addrm -- are scaled from
-the same savings rather than derived from a listing written out in full.
-They are the weakest thing in this file and are marked in the source.
+`lngmix` at 7.2x is the one worth reading twice: its loop body is two long
+runtime calls over an operand that never changes, so absorption, LICM and
+folding compound -- 1,380 of its 1,504 is a loop body that should not run at
+all. It is also the only program here with *no* redundancy left by the
+counters, which says plainly that the counters and the cost are asking
+different questions and both are needed.
 
-## The number to minimise
+Two of the hand totals came out exactly on the tool's number (`lngmix`,
+1504) and the rest within three per cent, the difference being BC's header
+bytes decoding as instructions before the first real one. Where they differ
+the target is the hand ratio applied to the measured cost.
+
+## The number to minimise## The number to minimise
 
 `tools/opportunity.py` prints a weighted cycle count: an operation's own
 cost, four more for each memory operand, and ten per level of loop nesting
