@@ -273,6 +273,17 @@ def _field_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -
     # general search would look.
     if found.code[op.at : op.at + 1] in (b"\x9a", b"\xea") and op.at + 1 in known:
         return op.at + 1
+    # An operation with nothing but registers has no field to put one in. A
+    # transform that serves a read from a register leaves the instruction
+    # standing where a memory operand was, and the fixup that named that
+    # operand belongs to the read it replaced -- `covers` still accounts for
+    # it, which is what Laid.dropped reports. After the far call above,
+    # whose four relocated bytes are a target and not an operand.
+    what = _semantics(op)
+    if what is not None and not any(
+        isinstance(one, (ir.Mem, ir.Address, ir.Imm)) for one in (*what.dests, *what.sources)
+    ):
+        return None
     inside = [one for one in known if lo <= one < hi]
     return inside[0] if len(inside) == 1 else None
 

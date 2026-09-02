@@ -202,6 +202,78 @@ def _reduced(what) -> "ir.Semantics | None":
     return None
 
 
+# A root register at the width an operand reads it. ir.ROOT maps the narrow
+# name to the wide one; this is the way back, and only for the general
+# registers -- a segment register has no narrower form and is never a
+# provider here.
+_AT_WIDTH = {
+    Register.EAX: {4: Register.EAX, 2: Register.AX, 1: Register.AL},
+    Register.EBX: {4: Register.EBX, 2: Register.BX, 1: Register.BL},
+    Register.ECX: {4: Register.ECX, 2: Register.CX, 1: Register.CL},
+    Register.EDX: {4: Register.EDX, 2: Register.DX, 1: Register.DL},
+    Register.ESI: {4: Register.ESI, 2: Register.SI},
+    Register.EDI: {4: Register.EDI, 2: Register.DI},
+    Register.EBP: {4: Register.EBP, 2: Register.BP},
+}
+
+
+def _at_width(register, width: int):
+    return _AT_WIDTH.get(ir.ROOT.get(register, register), {}).get(width)
+
+
+def forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
+    """Reads a live register can serve, served from it.
+
+    The operand changes and the instruction does not: `add ax,[y]` becomes
+    `add ax,si`, so the destination is untouched and nothing downstream is
+    rewritten. That is what makes an accumulate safe here -- deleting one
+    would throw the arithmetic away, and this keeps it.
+
+    Both halves of the join have to hold and neither is enough: the cell's
+    content has to be known, and the value holding it has to still be live
+    at the read. BC spills across calls, and the reload after one is real
+    work.
+
+    73 of the corpus's reads, where the crude count of "a load of a cell
+    just written" is 618 -- the difference is `add [x],ax` followed by
+    `mov cx,[x]`, where the cell is written and no register holds the
+    result. Serving those means computing in a register and storing once,
+    which is a different transform.
+    """
+    want = frozenset(op.at for block in body.blocks for op in block.ops if op.loads)
+    if not want:
+        return body
+    served = {one.at: one.root for one in avail.forwardable(body, dgroup, calls, want)}
+    if not served:
+        return body
+
+    out = []
+    for block in body.blocks:
+        ops: list[Op] = []
+        for op in block.ops:
+            register = served.get(op.at)
+            what = op.made if op.made is not None else getattr(op.node, "semantics", None)
+            made = _served(what, register) if register is not None else None
+            ops.append(op if made is None else replace(op, made=made, loads=()))
+        out.append(replace(block, ops=tuple(ops)))
+    return replace(body, blocks=tuple(out))
+
+
+def _served(what, register) -> "ir.Semantics | None":
+    """`what` with its one memory source read from `register` instead."""
+    if what is None:
+        return None
+    cells = [one for one in what.sources if isinstance(one, ir.Mem)]
+    if len(cells) != 1:
+        return None
+    cell = cells[0]
+    named = _at_width(register, cell.width)
+    if named is None:
+        return None
+    swapped = tuple(ir.Reg(register=named, width=cell.width) if one is cell else one for one in what.sources)
+    return replace(what, sources=swapped)
+
+
 # The passes, in the order they run. One per whole-segment round, because
 # each round re-raises the body from what the last one wrote -- an op's
 # defines and uses are computed at raise time, so a pass that has already
@@ -213,7 +285,7 @@ def _reduced(what) -> "ir.Semantics | None":
 # before avail.py once and avail forwarded a stale high half across an op
 # that said it read two bytes where the instruction read four. That is no
 # longer possible to get wrong by rearranging this list.
-PASSES = ("drop_loads", "drop_stores", "widen", "place", "absorb", "strength")
+PASSES = ("forward", "drop_loads", "drop_stores", "widen", "place", "absorb", "strength")
 
 
 def applied(
@@ -225,6 +297,7 @@ def applied(
     absorb: bool = False,
     found=None,
     widen: bool = True,
+    forward: bool = True,
     drop_loads: bool = True,
     drop_stores: bool = True,
     place: bool = False,
@@ -242,6 +315,7 @@ def applied(
     benefit is indirect.
     """
     wanted = {
+        "forward": forward,
         "drop_loads": drop_loads,
         "drop_stores": drop_stores,
         "widen": widen,
@@ -254,7 +328,9 @@ def applied(
             continue
         if not wanted[name]:
             continue
-        if name == "drop_loads":
+        if name == "forward":
+            body = forwarded(body, dgroup, calls)
+        elif name == "drop_loads":
             body = without_redundant_loads(body, dgroup, calls)
         elif name == "drop_stores":
             body = without_dead_stores(body, dgroup, calls)
