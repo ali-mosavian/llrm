@@ -1,6 +1,11 @@
 # qbopt
 
-Make a `LONG` in QuickBASIC cost what an `INTEGER` costs.
+Recompile BC's output into what a modern optimising compiler would have
+produced -- integers, longs, floats, array addressing, loops -- measured
+against a hand-derived optimal listing rather than against BC.
+
+The first case of that, and the one furthest along, is making a `LONG` cost
+what an `INTEGER` costs.
 
 BC compiles every 32-bit operation as two 16-bit ones, because it targets an
 8086. On anything from a 386 up that is exactly twice the work, so longs are

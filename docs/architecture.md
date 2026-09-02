@@ -5,24 +5,89 @@ about the bytes or changes them, and the split between those two is the
 thing worth seeing: most of the analysis is finished and correct, and only
 some of it is wired to emission.
 
-## The pipeline
+## The pipeline it is becoming
 
 ```
-  BC.EXE                                                       LINK.EXE
-     |                                                             ^
-     v                                                             |
- +--------+     +-----------+     +----------+     +---------+     |
- | .OBJ   |---->|  decode   |---->| analyse  |---->| rewrite |-----+
- | bytes  |     |           |     |          |     |         |
- +--------+     +-----------+     +----------+     +---------+
-                 omf module        the middle       rewrite
-                 declen blocks     of this file     relocate
+     BC.EXE                                             LINK.EXE
+       |  .OBJ                                       .OBJ  ^
+       v                                                   |
+ +-----------+                                       +-----------+
+ |  decode   |  omf declen blocks module ir          |   emit    |
+ +-----+-----+                                       +-----+-----+
+       |                                                   ^
+       v                                                   |
+ +-----------+                                       +-----------+
+ |   raise   |  mir.raise_body                       | peephole  |
+ +-----+-----+  SSA; values, not registers           +-----+-----+
+       |                                                   ^
+       v                                                   |
+ +------------------------+                          +-----------+
+ |          opt           |                          | regalloc  |
+ |  machine-independent   | <---+                    +-----+-----+
+ |  hoist forward fold    |     | to a fixed point         ^
+ |  CSE DCE strength      | ----+                          |
+ +-----------+------------+                          +-----------+
+             |                                       |    lir    |
+             +-------------------------------------> +-----------+
 ```
 
-`rewrite.py` is the only module that writes bytes. Everything else answers
-a question, and answering wrongly is silent -- which is why the gates
-(`tools/matrix.py`, `tools/mutate.py`) run real compilers rather than
-trusting the host suite.
+The order is the architecture, and each boundary is a rule.
+
+**mir is machine-independent.** A value is `(id, at, kind)` and lives
+nowhere. Where BC kept it is `MirBody.origin` -- a side map that lowering
+and the allocator's identity baseline read, and nothing else may. This is
+`docs/variables.md`'s stage 1 and it is done.
+
+**opt runs to a fixed point.** Many passes, repeated, none choosing
+registers. A pass that names a register is doing the allocator's job with
+none of its information; the history has five attempts at it and every one
+produced a wrong program. What a pass may say is "this value is live here";
+where it goes is not its question.
+
+**lir says what the machine requires.** Three kinds, all in `lir.py`:
+
+```
+  fixed     imul word [k]   multiplies by ax and names it nowhere
+            idiv            reads dx:ax, writes dx:ax
+            cwd / cdq       extends ax into dx
+            shl ax,cl       takes its count in cl
+
+  class     [bx+si]         16-bit addressing reaches memory through
+                            bx, bp, si or di and nothing else
+
+  tied      add ax,[c]      one register at two moments, not two places
+```
+
+Checked against BC's own assignment across the corpus: 431 fixed and 1,290
+class requirements, and any naming a register BC had no value in would be a
+wrong requirement. Two were, and the check found them.
+
+**regalloc assigns, splits and spills.** The only thing that decides where a
+value lives. When an instruction requires a value somewhere it cannot live
+-- `imul` wants ax, the loop clobbers ax -- both facts are true and the
+answer is neither: a live range split, a move putting the value back just
+before the instruction that needs it.
+
+```
+   before                          after
+   ------                          -----
+   loop:                           mov cx,[r]        <- hoisted, once
+     mov ax,[r]   <- every pass    loop:
+     imul word [w]                   mov ax,cx       <- the split
+                                     imul word [w]
+```
+
+**peephole runs after allocation**, because what is worth rewriting depends
+on what ended up where.
+
+## Where the code actually is
+
+`lir` exists and is right. `regalloc` has liveness, interference,
+congruence classes (phi members and tied operands move together or not at
+all) and live range splitting. It cannot spill, and `opt` passes still name
+registers because the migration that stops them is unfinished --
+`tests/test_allocation.py` carries strict xfails naming what is left and
+the program each one broke.
 
 ## Two towers
 

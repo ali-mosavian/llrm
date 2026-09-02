@@ -6,9 +6,18 @@ is read as if it did not.
 
 ## Goal
 
-Recompile BC's output rather than patch it: integer and long arithmetic,
-floats, array access, loop invariants, strength reduction, register
-reallocation, constant folding, CSE, dead code elimination.
+**Produce what a modern optimising compiler would have produced.** Integers,
+longs, floats, array addressing, loops -- judged against a hand-derived
+optimal listing (`docs/targets.md`), not against BC.
+
+Done means **every suite program within 1.5x**, scored by
+`tools/opportunity.py --targets`. Today: 1.3x to 8.8x, median above 4x.
+
+Making a `LONG` cost what an `INTEGER` costs -- the README's number, and
+where this began -- is one case of that goal rather than the goal itself.
+It is also the part that is nearly done, which is why the two must not be
+confused: the ratio is *long against integer within BC's own output*, and
+both halves of it are slow.
 
 ## Rule
 

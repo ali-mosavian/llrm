@@ -24,18 +24,110 @@ same idea that still lives in uGL. What survived the move is below.
 
 ## The goal
 
-Replace long runs of long operations with correct and optimised 386 code.
-"Optimised" means real liveness and register allocation, so the
+**Produce what a modern optimising compiler would have produced.**
 
-    load, load, call, store, store
+Not "make longs cheaper", which is where this started and is now one case
+of the goal rather than the goal itself. Integers, longs, floats, array
+addressing, loops -- all of it, judged against what a good backend would
+emit for the same source, not against what BC emitted.
 
-BC emits for *every single* long operation collapses into
+`docs/targets.md` carries a hand-derived optimal listing for each suite
+program and `tools/opportunity.py --targets` scores against it. Done means
+**every program within 1.5x**. Today the spread is 1.3x to 8.8x with a
+median above 4x, so most of the distance is still ahead.
 
-    32-bit load, 32-bit op, 32-bit op, ..., 32-bit store
+One fact underlies every symptom: **BC compiles a statement at a time, so
+no value outlives a statement.** Every reload, every recomputed address,
+every invariant left inside a loop, two of eight x87 slots and two of six
+registers -- all of it follows from that. A pass that fixes one instance
+fixes a symptom; what closes the gap is keeping values in registers across
+statements, which is why the register allocator is upstream of nearly
+everything else on the list.
 
-The prize is the store/reload/call traffic between operations, not the width
-of any one of them. A pass that only widens pairs in place leaves most of it
-on the table, and in place is all the runtime version could do.
+### What is actually done
+
+Measured over the 32 `-p-g2` fixtures, bytes removed per pass:
+
+    absorb     -269    a call to the runtime becomes inline instructions
+    widen      -121    two 16-bit operations become one 32-bit one
+    forward     -16    a read served from a register
+    drop_loads  -14
+    drop_stores -21
+    segments     -6
+    hoist       +39    removes memory reads, adds a split move
+    place         0    fires on nothing
+    strength     +1
+
+Absorption and widening are BC-specific -- they undo a decision BC made
+because it targets an 8086 -- and they carry the whole result. Of the
+classic passes only LICM fires at all, and there is no CSE, no constant
+folding or propagation, no dead code elimination, no induction variables,
+no addressing-mode folding. Say so plainly rather than describing the
+project as if the list in the roadmap were implemented.
+
+## The architecture
+
+```
+      BC.EXE                                          LINK.EXE
+        |  .OBJ                                    .OBJ  ^
+        v                                                |
+  +-----------+                                    +-----------+
+  |  decode   |  omf declen blocks module ir       |   emit    |
+  +-----+-----+                                    +-----+-----+
+        |                                                ^
+        v                                                |
+  +-----------+                                    +-----------+
+  |   raise   |  mir.raise_body -- SSA             | peephole  |
+  +-----+-----+  values, not registers             +-----+-----+
+        |                                                ^
+        v                                                |
+  +-----------------------+                        +-----------+
+  |         opt           |                        | regalloc  |
+  |  machine-independent  | <--+                   +-----+-----+
+  |  hoist forward fold   |    | to a fixed point        ^
+  |  CSE DCE strength     | ---+                         |
+  +-----------+-----------+                        +-----------+
+              |                                    |    lir    |
+              +----------------------------------> +-----------+
+```
+
+The order is the point, and each boundary is a rule:
+
+- **mir is machine-independent.** A value is `(id, at, kind)` and lives
+  nowhere. Where BC kept it is `MirBody.origin`, a side map that lowering
+  and the allocator's identity baseline read and *nothing else may*. A pass
+  that names a register is doing the allocator's job with none of its
+  information -- five attempts at that are in the history and all of them
+  produced wrong programs.
+- **opt runs to a fixed point.** Many passes, repeated, none of them
+  choosing registers.
+- **lir says what the machine requires.** `lir.py` holds it: an operand a
+  fixed register (`imul` multiplies by ax and names it nowhere), an operand
+  a register class (16-bit addressing reaches memory through bx, bp, si or
+  di), a two-address instruction reading and writing one register. Checked
+  against BC's own assignment over the corpus -- 431 fixed and 1,290 class
+  requirements, and any that named a register BC had no value in would be a
+  wrong requirement.
+- **regalloc assigns, splits and spills.** It is the only thing that
+  decides where a value lives. When an instruction requires a value
+  somewhere it cannot live, the answer is a live range split -- a move
+  putting it back just before the instruction that needs it.
+- **peephole runs after allocation**, because what is worth rewriting
+  depends on what ended up where.
+
+### Where the code actually is
+
+`lir` exists and is right. `regalloc` has liveness, interference,
+congruence classes and splitting. What it does not have is spilling, and
+`opt` passes still name registers because the migration that stops them is
+unfinished -- see `docs/variables.md` and the strict xfails in
+`tests/test_allocation.py`, which name the remaining defects and the
+programs that exposed them.
+
+There is also a second, older representation: a machine-code arm
+(`lift.py`, `calls.py`, `forward.py`, `memory.py`) that still ships and
+still does the absorption. `docs/architecture.md` has both towers. MIR is
+the pass; the machine arm is legacy and is retired last.
 
 ## Rules
 
