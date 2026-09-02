@@ -1,5 +1,23 @@
 # Working on qbopt
 
+## Measurements — the second rule
+
+**Doubt the measurement before the subject.** A result that contradicts what
+is known about the thing being measured is evidence the instrument is wrong,
+not a finding. Never conclude "there is nothing here" from a number that
+common sense says should be large.
+
+- Several measures agreeing on zero is one broken assumption, not several facts.
+- A question shaped so the subject's own style cannot answer it always returns
+  zero. Ask what the subject actually does, not what the textbook name is.
+- Verify against the raw thing -- read the assembly, the bytes, the output --
+  before writing a conclusion down. One look beats any amount of analysis.
+- Derive a target by hand on both sides. An estimated one flatters whatever
+  it measures.
+- Cost hidden behind a call, an interrupt or a helper reads as free unless the
+  measure is told about it.
+- Never explain an implausible result with a story. That is how it survives.
+
 A post-compilation pass over the `.OBJ` BC produces, between BC and LINK.
 Most of what is here was established the hard way by a runtime version of the
 same idea that still lives in uGL. What survived the move is below.
