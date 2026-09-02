@@ -109,13 +109,25 @@ CALLED = {
 }
 CALL = 20
 
-# BC's default is /FPi: every floating-point operation is an `int 34h`..`3Dh`
-# into the emulator, and the emulator does it in software. An add is on the
-# order of a hundred cycles and a multiply or divide several hundred; this
-# takes a deliberately low figure for all of them. The instruction itself
-# decodes as a two-byte interrupt, so a cost model reading mnemonics prices
-# the most expensive thing in the program at two.
-EMULATED = 150
+# Floating point, priced as the x87 instruction it is. BC's default is
+# /FPi, which emits `int 34h`..`3Dh` where the instruction goes -- but the
+# emulator patches those sites to the real opcodes at load when a
+# coprocessor is present, so the cost is a 387's and not a software
+# emulation's. declen.py decodes the interrupt to the instruction it stands
+# in for, so the mnemonic is already the right thing to price.
+#
+# What is bad about BC's floating point is not the instruction selection --
+# it keeps intermediates on the stack rather than spilling them, which is
+# more than it manages with integers. It is that every operand is reloaded
+# from memory on every pass, and a wholly invariant expression is computed
+# again each time.
+FLOAT = {
+    "fld": 20, "fild": 25, "fst": 25, "fstp": 25, "fist": 30, "fistp": 30,
+    "fadd": 25, "faddp": 25, "fsub": 25, "fsubp": 25, "fsubr": 25, "fsubrp": 25,
+    "fmul": 30, "fmulp": 30, "fdiv": 90, "fdivp": 90, "fdivr": 90, "fdivrp": 90,
+    "fcom": 20, "fcomp": 20, "fcompp": 20, "fchs": 10, "fabs": 10, "fsqrt": 120,
+    "wait": 5, "fxch": 10, "fldz": 15, "fld1": 15,
+}
 
 
 # ds and ss are the frame and the data segment and BC does not reload them.
@@ -225,10 +237,9 @@ def _cost(body, module_, found: Counter, trips: int = 10) -> None:
                 found["cost"] += CALLED.get((module_.calls[op.at] or "").upper(), CALL) * weight
                 continue
             name = (op.name or "").lower()
-            at = op.at - module_.start
-            if module_.code[at : at + 1] == b"\xcd":
-                found["cost"] += EMULATED * weight
-                found["a floating-point operation through the emulator"] += 1
+            if name in FLOAT:
+                found["cost"] += (FLOAT[name] + TOUCH * len([one for one in (*op.loads, *op.stores) if named(one)])) * weight
+                found["a floating-point operation"] += 1
                 continue
             cycles = CYCLES.get(name, 2)
             cycles += TOUCH * len([one for one in (*op.loads, *op.stores) if named(one)])

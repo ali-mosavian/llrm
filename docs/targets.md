@@ -422,6 +422,57 @@ That is the general lesson in this file, for the third time: a cost hidden
 behind a call is a cost the measure has to be told about, or it reads as
 free.
 
+## What "optimal" means here, and why the ratio depends on it
+
+Two answers, and this file has been giving the first without saying so.
+
+**Keep the loop and compile it well** -- allocate the registers, hoist the
+invariants, reduce the strength of the induction variables. That is what
+every target above is, and it puts BC at three to seven times for integer
+code and thirteen to seventeen where it calls the runtime.
+
+**Compile it the way a modern optimiser does** -- and most of these loops do
+not survive at all, because their results are compile-time constants.
+`press` computes `r = 7500`. `matrix` computes `t = 380` and never reads the
+array again, so the whole nest is dead. `fx`, a float loop, is
+`r = 20` and its target drops from about 1,038 to about 144: **3.6x becomes
+26x**.
+
+Twenty to fifty times is the second answer, and it is the right one for real
+programs. The first is what these targets measure.
+
+**Every program in this suite is fully constant-foldable**, which makes the
+second answer degenerate here -- deleting a loop is not a general result.
+Measuring the achievable figure honestly needs inputs the compiler cannot
+see: a value read from `DATA`, or a bound that is not a literal. That is the
+next thing this suite needs, and until it has it the ratios below are a
+floor.
+
+## Floating point is not where BC is naive
+
+Worth recording because it went the other way. BC's default is `/FPi`, so
+every float operation is an `int 34h`..`3Dh` -- but the emulator patches
+those sites to the real opcodes at load when a coprocessor is present, so
+the cost is a 387's and not a software emulation's. Pricing them at 150
+cycles was wrong and is fixed.
+
+And the code itself is *better* than its integer code. For
+`r = r + (a * b + c * d) / (a + b)`:
+
+```
+0072  fld  [a]      0086  faddp
+0077  fmul [b]      0089  fld  [a]
+007c  fld  [c]      008e  fadd [b]
+0081  fmul [d]      0093  fdivp
+                    0096  fadd [r]
+                    009b  fstp [r]
+```
+
+Intermediates stay on the x87 stack; nothing is spilled to a temporary.
+That is more than BC manages with integers. What is wrong with it is what is
+wrong everywhere else: the whole expression is loop-invariant and it runs
+ten times, reloading all six operands from memory on every pass.
+
 ## Why these read 3x to 7x and real programs are worse
 
 With the trip counts read off each program's own bounds and applied to both
