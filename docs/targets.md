@@ -113,6 +113,89 @@ reading its output -- the miss here is that all four values are constants.
 **10 instructions and 34 bytes, against 4 and 24.** Wanted: constant
 propagation with a consumer that emits from it.
 
+## ivchan -- a chain of derived induction variables
+
+`p = i*12`, `q = p+5`, `a(q) = i`, `t = t + a(q)`. Four affine functions of
+one counter: i, 12i, 12i+5, and the element's own address at 24i+10.
+
+```
+003c  mov cx,0Ch          | xor  ax,ax        ; i
+003f  imul cx             | mov  bx,10        ; &a(q) = 24i+10
+0041  mov [p],ax          | loop:
+0044  add ax,5            |   mov  [bx],ax    ; a(q) = i
+0047  mov [q],ax          |   add  [t],ax     ; already in ax
+004a  mov si,ax           |   add  bx,24
+004c  shl si,1            |   inc  ax
+004e  mov ax,[i]          |   cmp  ax,20
+0051  mov [si],ax         |   jle  loop
+0055  mov cx,[si]         |
+0059  add [t],cx          |
+005d  inc ax              |
+005e  mov [i],ax          |
+0061  cmp ax,14h          |
+0064  jle short 003c      |
+```
+
+**14 instructions and 41 bytes, against 6 and about 14.** The `imul` becomes
+an `add`; the reload of `i` at 004e is one instruction after `i` was last in
+`ax`; the reload of `a(q)` at 0055 is one after storing it; and the stores to
+`p` and `q` are dead, since nothing reads either after the loop.
+
+Wanted together: induction-variable recognition to see all four are affine,
+strength reduction to increment rather than multiply, store-to-load
+forwarding, and dead-store elimination.
+
+## stride -- a division that is really a counter
+
+`FOR i = 0 TO 100 STEP 5`, and `b(i) = i \ 5`.
+
+```
+003c  mov cx,5            | xor  ax,ax        ; i
+003f  cwd                 | xor  dx,dx        ; k = i\5
+0040  idiv cx             | xor  si,si        ; &b(i)
+0042  mov si,[i]          | loop:
+0046  shl si,1            |   mov  [si],dx
+0048  mov [si],ax         |   add  [t],dx
+004c  mov ax,[si]         |   add  si,10
+0050  add [t],ax          |   inc  dx
+0054  add cx,[i]          |   add  ax,5
+0058  mov ax,cx           |   cmp  ax,100
+005a  mov [i],ax          |   jle  loop
+005d  cmp ax,64h          |
+0060  jle short 003c      |
+```
+
+**12 instructions and 37 bytes, against 7 and about 17** -- and an `idiv`,
+around forty cycles on a 386, becomes an `inc`. This is scalar evolution in
+its plainest form: `i \ 5` where `i` strides by five is the sequence
+0, 1, 2, ..., and nothing about it needs a division.
+
+## matrix -- two dimensions by hand
+
+`m(r * w + c) = r + c` in a nested loop, then a diagonal read `m(r*w + r)`.
+
+The inner loop, ten instructions and 37 bytes:
+
+```
+0048  add ax,[c]          | ; si = r*w*2 and ax = r+c, both set outside
+004c  mov bx,ax           | loop:
+004e  mov ax,[r]          |   mov  [si],ax
+0051  imul word [w]       |   inc  ax
+0055  mov si,ax           |   add  si,2
+0057  add si,[c]          |   dec  cx
+005b  shl si,1            |   jnz  loop
+005d  mov [si],bx         |
+0061  mov ax,[c]          |
+0064  inc ax              |
+0065  mov [c],ax          |
+0068  cmp ax,13h          |
+006b  jle short 0048      |
+```
+
+**10 against 5**, and `imul word [w]` -- invariant in the inner loop -- runs
+four hundred times. The diagonal loop is the same shape with a stride of
+`2 * (w + 1)`: **10 instructions against 6**, one more `imul` gone.
+
 ## What these add up to
 
 | | BC | optimal | wanted |
@@ -121,8 +204,14 @@ propagation with a consumer that emits from it.
 | press loop | 18 insns, 51 B | 4, ~9 | LICM, folding, register promotion |
 | arridx loop | 11 insns, 36 B | 9, ~20 | store-to-load, copy propagation, strength reduction |
 | subexp | 10 insns, 34 B | 4, 24 | constant propagation with a consumer |
+| ivchan loop | 14 insns, 41 B | 6, ~14 | induction variables, IVSR, store-to-load, dead stores |
+| stride loop | 12 insns, 37 B | 7, ~17 | scalar evolution: a divide that is a counter |
+| matrix inner | 10 insns, 37 B | 5, ~11 | LICM out of the inner loop, IVSR on the address |
+| matrix diagonal | 10 insns | 6 | IVSR with a stride of 2(w+1) |
 
-Roughly **half to three-quarters of the loop bodies**, and every `imul` in
-three of the four. Nothing in this project comes close to that today: what
+Roughly **half to three-quarters of the loop bodies**, and every `imul` and
+`idiv` in all of them. The multiplies are not incidental: BC emits one per
+subscript per statement, so a two-dimensional access in a nested loop is a
+multiply four hundred times over an operand the loop never writes. Nothing in this project comes close to that today: what
 it does is absorb runtime calls and widen long pairs, both of which are real
 and neither of which touches any of the above.

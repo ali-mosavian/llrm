@@ -167,6 +167,18 @@ def lngmix() -> list[str]:
     return [f"S={num(10 * (100000 // 7 + 100000 % 7))}", "DONE"]
 
 
+def ivchan() -> list[str]:
+    return [f"T={num(sum(range(21)))}", "DONE"]
+
+
+def matrix() -> list[str]:
+    return [f"T={num(sum(r + r for r in range(20)))}", "DONE"]
+
+
+def stride() -> list[str]:
+    return [f"T={num(sum(i // 5 for i in range(0, 101, 5)))}", "DONE"]
+
+
 def fpemu() -> list[str]:
     x, y = 1073741831, 1024
     q = x // y
@@ -417,6 +429,9 @@ PROGRAMS = {
     "nested": nested,
     "press": press,
     "lngmix": lngmix,
+    "ivchan": ivchan,
+    "matrix": matrix,
+    "stride": stride,
     "fpemu": fpemu,
     "fpdeep": fpdeep,
     "chain": chain,
