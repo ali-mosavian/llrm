@@ -216,7 +216,7 @@ def _spill_cost(body, module_) -> Counter:
 TRIPS = {
     "HOTLOP": 20, "PRESS": 10, "ARRIDX": 20, "IVCHAN": 21, "STRIDE": 21,
     "MATRIX": 20, "NESTED": 6, "SPILL": 10, "SPLIT": 10, "ADDRM": 20,
-    "ROTATE": 10, "SEGLD": 20, "HARR": 10, "HG": 10, "LNGMIX": 10,
+    "ROTATE": 10, "SEGLD": 20, "HARR": 10, "HG": 10, "LNGMIX": 10, "FPCSE": 10, "FX": 10,
 }
 
 
@@ -423,6 +423,8 @@ TARGETS = {
     "SEGLD": 6704,
     "HARR": 1834,
     "HG": 304,
+    "FPCSE": 1340,
+    "FX": 1038,
 }
 
 

@@ -212,6 +212,12 @@ def harr() -> list[str]:
     return [f"T={num(sum(r + c for r in range(1, 11) for c in range(1, 11)))}", "DONE"]
 
 
+def fpcse() -> list[str]:
+    a, b, c = 2.0, 4.0, 8.0
+    total = sum((a + b) * c + (a + b) / c for _ in range(10))
+    return [f"S={qbfloat(total)}", "DONE"]
+
+
 def fpemu() -> list[str]:
     x, y = 1073741831, 1024
     q = x // y
@@ -472,6 +478,7 @@ PROGRAMS = {
     "bools": bools,
     "segld": segld,
     "harr": harr,
+    "fpcse": fpcse,
     "fpemu": fpemu,
     "fpdeep": fpdeep,
     "chain": chain,

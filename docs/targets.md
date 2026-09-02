@@ -448,9 +448,55 @@ see: a value read from `DATA`, or a bound that is not a literal. That is the
 next thing this suite needs, and until it has it the ratios below are a
 floor.
 
-## Floating point is not where BC is naive
+## fpcse -- float is just as bad the moment a value crosses a statement
 
-Worth recording because it went the other way. BC's default is `/FPi`, so
+The previous section said BC's float code keeps its intermediates on the
+x87 stack. That is true *within one statement*, and it is the only place it
+is true. Give a subexpression to two statements and use both results in a
+third:
+
+```
+p = (a + b) * c
+q = (a + b) / c
+s = s + p + q
+```
+
+```
+0054  fld  [a]        | ; the x87 stack is eight deep
+0059  fadd [b]        | fld  [a]
+005e  fmul [c]        | fadd [b]        ; t = a+b, once
+0063  fstp [p]        | fld  st(0)
+0068  wait            | fmul [c]        ; p
+006a  fld  [a]   <--  | fxch st(1)
+006f  fadd [b]   <--  | fdiv [c]        ; q
+0074  fdiv [c]        | fst  [q]
+0079  fstp [q]        | fadd st(1)      ; p + q
+007e  wait            | fadd [s]
+0080  fld  [p]   <--  | fstp [s]
+0085  fadd [q]   <--  | fxch / fstp [p]
+008a  fstp [s]        |
+008f  wait            |
+```
+
+`(a + b)` is computed twice. `p` and `q` are each stored and reloaded one
+statement later. There is a `wait` per statement. **BC uses two of the
+stack's eight slots** and goes through memory at every statement boundary --
+which is the same behaviour as its integer code, for the same reason, and
+costs more here because the values are four bytes and the operations are
+tens of cycles.
+
+In a ten-trip loop that is 4,448 against 1,340: **4.1x**, and the counters
+show three loads of a cell just written and three of a cell already loaded,
+per pass.
+
+So the correction to the section below: BC's float code is not better than
+its integer code. It is better *inside a statement*, and a statement is
+exactly as far as BC ever looks.
+
+## Floating point inside one statement
+
+Worth recording because it went the other way, and see the section above
+for how far it goes. BC's default is `/FPi`, so
 every float operation is an `int 34h`..`3Dh` -- but the emulator patches
 those sites to the real opcodes at load when a coprocessor is present, so
 the cost is a 387's and not a software emulation's. Pricing them at 150
