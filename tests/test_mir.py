@@ -348,3 +348,36 @@ def test_the_restore_pairs_are_the_two_calls_py_emits() -> None:
         0: (mir.Register.EAX, mir.Register.EDX),
         1: (mir.Register.ECX, mir.Register.EBX),
     }
+
+
+@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
+def test_resolving_a_body_that_has_not_moved_changes_nothing(obj: Path) -> None:
+    """The rebuild has to be a no-op on a body nothing has touched.
+
+    Everything a pass does afterwards rests on it, and a rebuild that
+    quietly disagrees with raise_body would be the worst kind of bug here --
+    the values would be plausible and wrong. Three things checked: the same
+    blocks with the same operations, the same number of phis in each, and
+    the same nodes coming back out of lower().
+    """
+    from qbopt import module
+    from qbopt import omf
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(obj.read_bytes()))
+    if found is None:
+        pytest.skip(reason="no code segment")  # ty: ignore[unknown-argument]
+    mapped = code_map(found)
+    if isinstance(mapped, str):
+        pytest.skip(reason=mapped)  # ty: ignore[unknown-argument]
+
+    for name, body in mir.bodies(found, split.partition(found, mapped)):
+        got = mir.resolved(body, found.calls)
+        assert not isinstance(got, str), f"{obj.stem} {name}: {got}"
+
+        shape = [(one.at, tuple((op.at, op.name) for op in one.ops), len(one.phis)) for one in body.blocks]
+        after = [(one.at, tuple((op.at, op.name) for op in one.ops), len(one.phis)) for one in got.blocks]
+        assert after == shape, f"{obj.stem} {name}: the rebuild changed the body's shape"
+        assert mir.lower(got) == mir.lower(body), f"{obj.stem} {name}: the rebuild lowers differently"
+        assert not mir.verify(got, split.partition(found, mapped)), f"{obj.stem} {name}: the rebuild is not SSA"

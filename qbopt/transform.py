@@ -664,11 +664,52 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
     # phi ties together and that nothing can move. Asking the allocator is
     # the only way to find out, and it is cheap next to a round trip through
     # emission.
+    # In SSA again before asking anything about it. The ops have moved, so
+    # the phis raised with the original body no longer describe it: a load
+    # hoisted out of a loop was loop-carried and is now live once ahead of
+    # it, and colour() was being asked about the shape the code had before
+    # this pass touched it. rewrite.py re-raises between passes through
+    # emission; those bytes do not exist yet here.
+    fresh = mir.resolved(laid, calls)
+    if isinstance(fresh, str):
+        return body
+    over = _renamed(laid, fresh, set(wanted))
+    if over is None:
+        return body
     for choice in _choices(wanted):
-        pins = {**body.pins, **choice}
-        if not isinstance(regalloc.colour(laid, pins), str):
-            return replace(laid, pins=pins)
+        pins = {over[value]: where for value, where in choice.items()}
+        if not isinstance(regalloc.colour(fresh, pins), str):
+            return replace(laid, pins=choice)
     return body
+
+
+def _renamed(was: MirBody, now: MirBody, wanted: set) -> dict | None:
+    """Each value of interest, as it is named after the body was resolved.
+
+    By where it is defined and which register it lands in, not by position
+    in the map: `resolved` may give an op more defines than it had, since it
+    unions the node's own effects with the semantics a transform chose. The
+    op is the same op at the same index, and within it a register is defined
+    once.
+    """
+    place = {}
+    for block in was.blocks:
+        for index, op in enumerate(block.ops):
+            for value in op.defines:
+                if value in wanted:
+                    place[value] = (block.at, index, was.origin.get(value))
+
+    at_of = {block.at: block for block in now.blocks}
+    out = {}
+    for value, (at, index, register) in place.items():
+        block = at_of.get(at)
+        if block is None or index >= len(block.ops):
+            return None
+        here = [one for one in block.ops[index].defines if now.origin.get(one) is register]
+        if len(here) != 1:
+            return None
+        out[value] = here[0]
+    return out if len(out) == len(wanted) else None
 
 
 def _choices(offers: dict) -> Iterator[dict]:

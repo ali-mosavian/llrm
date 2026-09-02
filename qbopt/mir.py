@@ -61,6 +61,7 @@ reason it can be trusted before anything is built on top of it.
 
 from enum import StrEnum
 from dataclasses import field
+from dataclasses import replace
 from dataclasses import dataclass
 
 from iced_x86 import Register
@@ -645,6 +646,172 @@ def raise_body(
             for block in blocks
         ),
         dict(namer.origin),
+    )
+
+
+def _touched_op(op: Op, calls: dict[int, str] | None = None) -> tuple[frozenset[Register_], frozenset[Register_]]:
+    """(defines, uses) for an operation, after a transform may have changed it.
+
+    The node's own Effects are iced's conservative answer about the
+    instruction BC wrote. A pass that gave the op new semantics changed what
+    it touches -- serving a read from a register adds a use of that register
+    and `_touched` would never know -- so the two are unioned rather than
+    chosen between. Over-approximating a use costs a phi; missing one is a
+    value read where nothing wrote it.
+    """
+    defines: set[Register_] = set()
+    uses: set[Register_] = set()
+    if op.node is not None:
+        was, read = _touched(op.node, calls)
+        defines, uses = set(was), set(read)
+
+    what = op.made
+    if what is None:
+        return frozenset(defines), frozenset(uses)
+
+    def tracked(one: Register_ | None) -> Register_ | None:
+        if one is None or one == Register.NONE:
+            return None
+        root = ir.ROOT.get(one, one)
+        return root if root in TRACKED else None
+
+    for one in what.dests:
+        if isinstance(one, ir.Reg) and (root := tracked(one.register)) is not None:
+            defines.add(root)
+    for one in what.sources:
+        if isinstance(one, ir.Reg) and (root := tracked(one.register)) is not None:
+            uses.add(root)
+    # A cell is reached by a register, and reaching it is a read.
+    for one in (*what.dests, *what.sources):
+        for where in (
+            getattr(one, "through", None),
+            getattr(one, "index", None),
+            getattr(getattr(one, "addr", None), "base", None),
+        ):
+            if (root := tracked(where)) is not None:
+                uses.add(root)
+    return frozenset(defines), frozenset(uses)
+
+
+def _rebased(refs: tuple[MemRef, ...], namer: "_Namer", at: int) -> tuple[MemRef, ...]:
+    """The same cells, holding whichever value reaches them now."""
+    out = []
+    for ref in refs:
+        base = None
+        if ref.addr is not None:
+            root = ir.ROOT.get(ref.addr.base, ref.addr.base)
+            if root in TRACKED:
+                base = namer.current(root, at)
+        out.append(MemRef(ref.addr, ref.width, base, ref.segment))
+    return tuple(out)
+
+
+def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | str:
+    """The same operations, in SSA again, after a pass has moved them.
+
+    raise_body() answers this from machine code and is where the algorithm
+    is explained. This answers it from a body that already exists, which a
+    pass needs the moment it rewrites one and then asks a question about the
+    result: hoisting a load out of a loop makes it live once ahead of the
+    loop instead of loop-carried, and until this runs the phis still say
+    otherwise. rewrite.py re-raises between passes through emission, so this
+    is for *within* a pass, where those bytes do not exist yet.
+    """
+    blocks = list(body.blocks)
+    if not blocks:
+        return "no blocks to resolve"
+    start = body.entry
+    everything = {block.at: block for block in blocks}
+    if start not in everything:
+        return f"the entry {start:#06x} is not one of these blocks"
+
+    reachable = {start}
+    pending = [start]
+    while pending:
+        for successor in everything[pending.pop()].succ:
+            if successor in everything and successor not in reachable:
+                reachable.add(successor)
+                pending.append(successor)
+    blocks = [block for block in blocks if block.at in reachable]
+
+    if loops.irreducible(blocks, start):
+        return "the body's control flow is irreducible, so it has no dominator tree"
+
+    by_at = {block.at: block for block in blocks}
+    idom = loops.immediate_dominators(blocks, start)
+    children: dict[int, list[int]] = {block.at: [] for block in blocks}
+    for block in blocks:
+        parent = idom.get(block.at)
+        if parent is not None:
+            children[parent].append(block.at)
+
+    frontier = loops.frontiers(blocks, start)
+    where: dict[Register_, set[int]] = {}
+    for block in blocks:
+        for op in block.ops:
+            for one in _touched_op(op, calls)[0]:
+                where.setdefault(one, set()).add(block.at)
+    needed: dict[int, set[Register_]] = {block.at: set() for block in blocks}
+    for variable, defined in where.items():
+        pending = list(defined)
+        seen: set[int] = set()
+        while pending:
+            for join in frontier.get(pending.pop(), frozenset()):
+                if join not in seen:
+                    seen.add(join)
+                    needed[join].add(variable)
+                    pending.append(join)
+
+    namer = _Namer()
+    phis: dict[int, dict[Register_, Phi]] = {block.at: {} for block in blocks}
+    out: dict[int, list[Op]] = {block.at: [] for block in blocks}
+    for block in blocks:
+        for variable in sorted(needed[block.at], key=lambda one: (one is not FLAGS, one)):
+            phis[block.at][variable] = Phi(namer.fresh(variable, block.at), {})
+
+    def rename(at: int) -> None:
+        block = by_at[at]
+        pushed: list[Register_] = []
+        for variable, phi in phis[at].items():
+            namer.stack.setdefault(variable, []).append(phi.result)
+            pushed.append(variable)
+
+        for op in block.ops:
+            defines, uses = _touched_op(op, calls)
+            used = tuple(namer.current(one, start) for one in sorted(uses, key=lambda o: (o is not FLAGS, o)))
+            loads = _rebased(op.loads, namer, start)
+            stores = _rebased(op.stores, namer, start)
+            fresh = []
+            for one in sorted(defines, key=lambda o: (o is not FLAGS, o)):
+                value = namer.fresh(one, op.at)
+                namer.stack.setdefault(one, []).append(value)
+                pushed.append(one)
+                fresh.append(value)
+            out[at].append(replace(op, defines=tuple(fresh), uses=used, loads=loads, stores=stores))
+
+        for successor in block.succ:
+            for variable, phi in phis.get(successor, {}).items():
+                phi.incoming[at] = namer.current(variable, start)
+
+        for child in sorted(children[at]):
+            rename(child)
+        for variable in reversed(pushed):
+            namer.stack[variable].pop()
+
+    rename(start)
+    return MirBody(
+        start,
+        tuple(
+            MirBlock(
+                block.at,
+                tuple(phis[block.at].values()),
+                tuple(out[block.at]),
+                tuple(one for one in block.succ if one in reachable),
+            )
+            for block in blocks
+        ),
+        dict(namer.origin),
+        dict(body.pins),
     )
 
 
