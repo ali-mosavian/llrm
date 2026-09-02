@@ -579,44 +579,6 @@ def test_a_run_whose_flag_the_loop_still_reads_is_not_hoistable() -> None:
     assert transform._crossing([compare], [branch]) is None
 
 
-def test_an_allocation_the_emitter_cannot_write_is_refused() -> None:
-    """A remap select.emit would apply to half an instruction is no remap.
-
-    `_remapped` reaches register operands; a memory operand is passed
-    through as it stands. So a value moved out of the register a cell is
-    reached by comes out half-renamed -- segld hoisted `mov si,0`, the
-    recolour wrote `mov dx,0`, and the loop went on reading the old base.
-    It printed 0 for 1050, and harr printed 0 for 1100.
-
-    Driven rather than found: the pass refuses these loops for other
-    reasons too, so the corpus cannot show the shape on its own.
-    """
-    from qbopt import ir
-    from qbopt import mir
-    from iced_x86 import Register
-
-    base = mir.Value(1, 0x10)
-    read = mir.Op(
-        0x10,
-        ir.Operation.MOVE,
-        "mov",
-        (mir.Value(2, 0x10),),
-        (base,),
-        made=ir.Semantics(
-            ir.Operation.MOVE,
-            "mov",
-            dests=(ir.Reg(register=Register.AX, width=2),),
-            sources=(ir.Mem(None, 2, through=Register.SI),),
-        ),
-    )
-    body = mir.MirBody(0x10, (mir.MirBlock(0x10, (), (read,), ()),), {base: Register.SI}, {})
-
-    assert transform._honoured(body, {base: Register.SI}), "a value left where it was is writable"
-    assert not transform._honoured(body, {base: Register.DX}), (
-        "moving the register a cell is reached by is not, until select.py remaps through one"
-    )
-
-
 def test_an_operand_nothing_writes_down_keeps_its_operation_in_the_loop() -> None:
     """`imul word [k]` multiplies by ax without naming it.
 

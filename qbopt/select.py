@@ -19,6 +19,7 @@ one emitter whose output can be *longer* than what it replaces, and the
 win is instructions and cycles rather than size.
 """
 
+from dataclasses import replace
 from dataclasses import dataclass
 
 from iced_x86 import Code
@@ -265,6 +266,36 @@ def _width_of(what: ir.Loc) -> int | None:
 
 def _remapped(register: Register_, where: dict[Register_, Register_] | None) -> Register_:
     return (where or {}).get(register, register)
+
+
+def _operand(one: ir.Loc, where: dict[Register_, Register_] | None) -> ir.Loc:
+    """One operand with every register in it remapped.
+
+    Every register: a cell is reached by one as much as an accumulator is
+    held in one. Remapping only the register operands is what made an
+    allocation unwritable -- moving a value out of si rewrote `mov si,0`
+    and left `[si+0Ah]` behind it reading a register nothing had set, and
+    segld printed 0 for 1050 with every host test passing.
+    """
+    if not where:
+        return one
+    if isinstance(one, ir.Reg):
+        return replace(one, register=_remapped(one.register, where))
+    if isinstance(one, (ir.Mem, ir.Address)):
+        moved = {
+            name: _remapped(getattr(one, name), where)
+            for name in ("through", "index")
+            if getattr(one, name, None) is not None
+        }
+        # And inside the address itself, which is what the operand is built
+        # from: `through` says which register a cell is reached by, and
+        # Addr.base is the one that gets encoded. Remapping only the first
+        # changed nothing at all and did it silently.
+        addr = getattr(one, "addr", None)
+        if addr is not None and getattr(addr, "base", Register.NONE) is not Register.NONE:
+            moved["addr"] = replace(addr, base=_remapped(addr.base, where))
+        return replace(one, **moved) if moved else one
+    return one
 
 
 def load(into: Register_, value: int, at: int = 0) -> Emitted | None:
@@ -1058,6 +1089,17 @@ def emit(
     an address, and an address carries a fixup that has to move with it --
     that is the layout half of M1 and is not this function's yet.
     """
+    # Once, over every operand, rather than at each register site below:
+    # the cases that take a cell never reached _remapped at all, and the
+    # segment moves reached it for neither of theirs.
+    if where:
+        what = replace(
+            what,
+            dests=tuple(_operand(one, where) for one in what.dests),
+            sources=tuple(_operand(one, where) for one in what.sources),
+        )
+        where = None
+
     dests, sources = what.dests, what.sources
     match what.op:
         case ir.Operation.MOVE if len(dests) == 1 and len(sources) == 1:
@@ -1071,38 +1113,38 @@ def emit(
                 case (ir.Reg(register=into), ir.Reg(register=outof)) if into in SEGMENTS or outof in SEGMENTS:
                     return move_segment(into, outof, at)
                 case (ir.Reg(register=into), ir.Reg(register=outof)):
-                    return move(_remapped(into, where), _remapped(outof, where), at)
+                    return move(into, outof, at)
                 case (ir.Reg(register=into), ir.Imm(value=value)):
-                    return load(_remapped(into, where), value, at)
+                    return load(into, value, at)
                 case (ir.Reg(register=into), ir.Mem() as cell):
-                    return move_from(_remapped(into, where), cell, at)
+                    return move_from(into, cell, at)
                 case (ir.Mem() as cell, ir.Reg(register=outof)):
-                    return move_into(cell, _remapped(outof, where), at)
+                    return move_into(cell, outof, at)
                 case (ir.Mem() as cell, ir.Imm(value=value)):
                     return store_imm(cell, value, at)
         case ir.Operation.BINARY if (what.name or "") in SHIFTS and len(dests) == 1 and len(sources) == 2:
             match (dests[0], sources[1]):
                 case (ir.Reg(register=into), ir.Imm(value=count)):
-                    return shift(what.name or "", _remapped(into, where), count, at)
+                    return shift(what.name or "", into, count, at)
                 case (ir.Reg(register=into), ir.Reg(register=Register.CL)):
-                    return shift(what.name or "", _remapped(into, where), None, at)
+                    return shift(what.name or "", into, None, at)
         case ir.Operation.BINARY if len(dests) == 1 and len(sources) == 2:
             # BINARY's own rule: sources[0] IS dests[0].
             match (dests[0], sources[1]):
                 case (ir.Reg(register=into), ir.Reg(register=outof)):
-                    return arith(what.name or "", _remapped(into, where), _remapped(outof, where), at)
+                    return arith(what.name or "", into, outof, at)
                 case (ir.Reg(register=into), ir.Imm(value=value)):
-                    return arith_imm(what.name or "", _remapped(into, where), value, at, relocated)
+                    return arith_imm(what.name or "", into, value, at, relocated)
                 case (ir.Reg(register=into), ir.Mem() as cell):
-                    return arith_mem(what.name or "", _remapped(into, where), cell, at)
+                    return arith_mem(what.name or "", into, cell, at)
                 case (ir.Mem() as cell, ir.Reg(register=outof)):
-                    return arith_into(what.name or "", cell, _remapped(outof, where), at)
+                    return arith_into(what.name or "", cell, outof, at)
                 case (ir.Mem() as cell, ir.Imm(value=value)):
                     return arith_into_imm(what.name or "", cell, value, at, relocated)
         case ir.Operation.UNARY if len(dests) == 1 and len(sources) == 1:
             match dests[0]:
                 case ir.Reg(register=into):
-                    return unary(what.name or "", _remapped(into, where), at)
+                    return unary(what.name or "", into, at)
                 case ir.Mem() as cell:
                     return unary_mem(what.name or "", cell, at)
         case ir.Operation.PUSH if len(sources) == 1:
@@ -1110,7 +1152,7 @@ def emit(
                 case ir.Reg(register=one) if one in SEGMENTS:
                     return push_segment(one, sources[0].width, at)
                 case ir.Reg(register=one):
-                    return push(_remapped(one, where), at)
+                    return push(one, at)
                 case ir.Imm(value=value, width=width):
                     return push_imm(value, width, at, relocated)
                 case ir.Mem() as cell:
@@ -1134,16 +1176,16 @@ def emit(
         case ir.Operation.EXCHANGE if len(dests) == 2:
             match (dests[0], dests[1]):
                 case (ir.Reg(register=one), ir.Reg(register=other)):
-                    return exchange(_remapped(one, where), _remapped(other, where), at)
+                    return exchange(one, other, at)
         case ir.Operation.COMPARE if len(sources) == 2:
             match (sources[0], sources[1]):
                 case (_, ir.Imm(value=value)) if (what.name or "cmp") == "cmp":
                     return compare(sources[0], value, at, relocated)
                 case (ir.Reg(register=into), ir.Mem() as cell) if (what.name or "cmp") == "cmp":
-                    return compare_mem(_remapped(into, where), cell, at)
+                    return compare_mem(into, cell, at)
                 case (ir.Reg(register=into), ir.Reg(register=outof)):
                     return compare_registers(
-                        what.name or "cmp", _remapped(into, where), _remapped(outof, where), at
+                        what.name or "cmp", into, outof, at
                     )
                 case (ir.Mem() as cell, ir.Reg(register=outof)):
                     # Only `cmp` here: `test` against memory has its own
@@ -1151,24 +1193,24 @@ def emit(
                     # rather than emitting the wrong comparison.
                     if (what.name or "cmp") != "cmp":
                         return None
-                    return arith_into("cmp", cell, _remapped(outof, where), at)
+                    return arith_into("cmp", cell, outof, at)
         case ir.Operation.MULTIPLY if len(dests) == 1 and len(sources) >= 2:
             # One destination is the naming form: `imul eax,ecx`, and with a
             # third source `imul ax,[x],3`.
             count = sources[2].value if len(sources) > 2 and isinstance(sources[2], ir.Imm) else None
             match (dests[0], sources[1]):
                 case (ir.Reg(register=into), ir.Reg(register=one)):
-                    return multiply_into(_remapped(into, where), _remapped(one, where), count, at)
+                    return multiply_into(into, one, count, at)
                 case (ir.Reg(register=into), ir.Mem() as cell):
-                    return multiply_into(_remapped(into, where), cell, count, at)
+                    return multiply_into(into, cell, count, at)
                 case (ir.Reg(register=into), ir.Imm(value=only)):
-                    return multiply_into(_remapped(into, where), _remapped(into, where), only, at)
+                    return multiply_into(into, into, only, at)
         case ir.Operation.MULTIPLY if len(dests) == 2 and sources:
             # Two destinations means the widening form: dx:ax, neither
             # encoded. The three-operand `imul r,rm,imm` has one.
             match sources[-1]:
                 case ir.Reg(register=one):
-                    return multiply(what.name or "", _remapped(one, where), at)
+                    return multiply(what.name or "", one, at)
                 case ir.Mem() as cell:
                     return multiply(what.name or "", cell, at)
         case ir.Operation.FLOAT_ARITH_POP if dests:
@@ -1178,13 +1220,13 @@ def emit(
         case ir.Operation.DIVIDE if sources:
             match sources[-1]:
                 case ir.Reg(register=one):
-                    return divide(what.name or "", _remapped(one, where), at)
+                    return divide(what.name or "", one, at)
                 case ir.Mem() as cell:
                     return divide_mem(what.name or "", cell, at)
         case ir.Operation.ADDRESS if len(dests) == 1 and len(sources) == 1:
             match (dests[0], sources[0]):
                 case (ir.Reg(register=into), ir.Address() as cell):
-                    return address_of(_remapped(into, where), cell, at)
+                    return address_of(into, cell, at)
         case ir.Operation.FILL:
             return fill(what.name or "", at)
         case ir.Operation.EXTEND | ir.Operation.NOTHING | ir.Operation.LEAVE:
@@ -1201,7 +1243,7 @@ def emit(
                 case ir.Reg(register=into) if into in SEGMENTS:
                     return pop_segment(into, dests[0].width, at)
                 case ir.Reg(register=into):
-                    return pop(_remapped(into, where), at)
+                    return pop(into, at)
         case ir.Operation.RETURN:
             if not sources:
                 return bare("ret", at) if what.name == "ret" else ret_far(0, at)

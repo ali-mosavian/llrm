@@ -584,6 +584,8 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
     at_of = {block.at: block for block in body.blocks}
     alive = regalloc.live(body)
     effective = _effective(body, calls)
+    reached_by = regalloc._addressing(body)
+    addressable = {ir.ROOT.get(one, one) for one in regalloc.ADDRESSING}
     moved: dict[int, list[Op]] = {}
     gone: set[int] = set()
     wanted: dict = {}
@@ -621,10 +623,17 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
             for where in ((*what.dests, *what.sources) if what else ()):
                 if isinstance(where, ir.Reg):
                     touched.add(ir.ROOT.get(where.register, where.register))
+        # A value some instruction reaches a cell by can only live where
+        # 16-bit addressing can reach one -- bx, si or di.
+        offer = [
+            where
+            for where in regalloc.AVAILABLE
+            if result not in reached_by or ir.ROOT.get(where, where) in addressable
+        ]
         want = next(
             (
                 where
-                for where in regalloc.AVAILABLE
+                for where in offer
                 if where not in across and where not in touched and where not in wanted.values()
             ),
             None,
@@ -653,43 +662,9 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
     got = replace(body, blocks=tuple(out), pins={**body.pins, **wanted})
     if not wanted:
         return got
-    assignment = regalloc.colour(got, got.pins)
-    if isinstance(assignment, str) or not _honoured(got, assignment):
+    if isinstance(regalloc.colour(got, got.pins), str):
         return body
     return got
-
-
-def _honoured(body: MirBody, assignment: dict) -> bool:
-    """Whether the emitter can actually write this allocation down.
-
-    select.emit remaps register operands and passes a memory operand
-    through as it stands, so a value moved out of the register a cell is
-    reached by comes out half-renamed: segld hoisted `mov si,0`, the
-    recolour wrote `mov dx,0`, and the loop went on reading the old base.
-    It printed 0 for 1050.
-
-    Refusing here rather than emitting it is the conservative half; the
-    other half is select.py remapping through a memory operand, and this
-    can go when it does.
-    """
-    for block in body.blocks:
-        for op in block.ops:
-            what = _semantics_of(op)
-            if what is None:
-                continue
-            reached = {
-                ir.ROOT.get(where, where)
-                for one in (*what.dests, *what.sources)
-                for where in (getattr(one, "through", None), getattr(one, "index", None))
-                if where is not None
-            }
-            for value in (*op.defines, *op.uses):
-                was, want = body.origin.get(value), assignment.get(value)
-                if was is None or want is None or was is want:
-                    continue
-                if ir.ROOT.get(was, was) in reached:
-                    return False
-    return True
 
 
 # The passes, in the order they run. One per whole-segment round, because

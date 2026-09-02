@@ -658,3 +658,41 @@ def test_a_comparison_against_zero_stays_a_compare_when_relocated() -> None:
     made = select.compare(ir.Reg(register=Register.AX, width=2), 0, relocated=True)
     assert made is not None
     assert made.code[0] != 0x85, f"a relocated compare became a test: {made.code.hex()}"
+
+
+def test_a_remap_reaches_inside_a_memory_operand() -> None:
+    """A cell is reached by a register as much as an accumulator is held in one.
+
+    _remapped was applied to register operands and a memory operand was
+    passed through as it stood, so an allocation that moved a value out of
+    the register a cell is reached by came out half-renamed: segld's array
+    base was rewritten `mov di,0` while `[si+0Ah]` behind it kept reading
+    si. Every host test passed and the program printed 0 for 1050.
+
+    Both halves matter -- `through` says which register reaches the cell and
+    Addr.base is the one that gets encoded, so remapping only the first
+    changed nothing at all and did it silently.
+    """
+    from qbopt import ir
+    from qbopt.module import Addr
+    from qbopt.module import Space
+
+    where = {Register.SI: Register.DI, Register.ESI: Register.EDI}
+    cell = ir.Mem(Addr(Space.LITERAL, 0x0a, base=Register.SI), 2, through=Register.SI, offset=0x0a, disp_width=1)
+    what = ir.Semantics(
+        ir.Operation.BINARY,
+        "add",
+        dests=(ir.Reg(register=Register.BX, width=2),),
+        sources=(ir.Reg(register=Register.BX, width=2), cell),
+    )
+
+    plain = _made(select.emit(what, at=0))
+    moved = _made(select.emit(what, at=0, where=where))
+    assert plain.code != moved.code, "the remap never reached the operand"
+
+    from iced_x86 import Decoder
+    from iced_x86 import Formatter
+    from iced_x86 import FormatterSyntax
+
+    shown = Formatter(FormatterSyntax.NASM).format(next(iter(Decoder(16, moved.code, ip=0))))
+    assert "di" in shown and "si" not in shown, shown

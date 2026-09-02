@@ -31,8 +31,10 @@ live, only what it is called.
 
 from dataclasses import dataclass
 
+from iced_x86 import Register
 from iced_x86 import Register_
 
+from qbopt import ir
 from qbopt import mir
 from qbopt.mir import NAMES
 from qbopt.mir import Value
@@ -42,6 +44,37 @@ from qbopt.mir import Value
 # alike -- wide.py's own measurement is that they all fold away or become a
 # comparison, so they are not competing for anything.
 AVAILABLE: tuple[Register_, ...] = mir.TRACKED
+
+# 16-bit addressing reaches memory through bx, bp, si or di and nothing
+# else: `[dx+0Ah]` has no encoding. bp is the frame pointer and is not on
+# offer, so a value some instruction reaches a cell by can go in three
+# places. Without this the allocator put segld's array base in dx, the
+# selector refused the operand, and the body came back with the definition
+# renamed and every use of it left behind.
+ADDRESSING: frozenset[Register_] = frozenset({Register.BX, Register.SI, Register.DI})
+
+
+def _addressing(body: mir.MirBody) -> set[Value]:
+    """Every value some instruction reaches a memory operand by."""
+    found: set[Value] = set()
+    for block in body.blocks:
+        for op in block.ops:
+            what = op.made if op.made is not None else getattr(op.node, "semantics", None)
+            if what is None:
+                continue
+            reached = {
+                where
+                for one in (*what.dests, *what.sources)
+                for where in (
+                    getattr(one, "through", None),
+                    getattr(one, "index", None),
+                    getattr(getattr(one, "addr", None), "base", None),
+                )
+                if where is not None and where is not Register.NONE
+            }
+            roots = {ir.ROOT.get(one, one) for one in reached}
+            found |= {value for value in op.uses if ir.ROOT.get(body.origin.get(value, -1), -1) in roots}
+    return found
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,7 +203,13 @@ def interference(body: mir.MirBody, found: Liveness | None = None) -> dict[Value
             alive |= set(op.uses)
             meet(alive)
         for phi in block.phis:
-            graph.setdefault(phi.result, set())
+            # Not a flags phi. meet() keeps flags out of the graph
+            # everywhere else, and this line put them back: segld's latch
+            # merges one, so f1 entered the graph here, asked for a
+            # register in the greedy pass, found NONE was not one it could
+            # use, and took eax from a value that wanted it.
+            if not phi.result.flags:
+                graph.setdefault(phi.result, set())
     return {one: frozenset(others) for one, others in graph.items()}
 
 
@@ -193,6 +232,12 @@ def colour(body: mir.MirBody, pinned: dict[Value, Register_] | None = None) -> d
     """
     graph = interference(body)
     assigned: dict[Value, Register_] = dict(pinned or {})
+    reached_by = _addressing(body)
+    wide_addressing = {ir.ROOT.get(one, one) for one in ADDRESSING}
+    for one in reached_by:
+        want = assigned.get(one)
+        if want is not None and ir.ROOT.get(want, want) not in wide_addressing:
+            return f"{one} is how a cell is reached and {NAMES.get(want, want)} cannot reach one"
     # Where BC had each value. Read from the body rather than off the value
     # itself: this is the one question in this module that is genuinely
     # about machine registers, and asking for it explicitly is the point of
@@ -219,7 +264,10 @@ def colour(body: mir.MirBody, pinned: dict[Value, Register_] | None = None) -> d
         if one in assigned:
             continue
         taken = {assigned[other] for other in others if other in assigned}
-        free = [where for where in AVAILABLE if where not in taken]
+        offer = AVAILABLE
+        if one in reached_by:
+            offer = [where for where in AVAILABLE if ir.ROOT.get(where, where) in wide_addressing]
+        free = [where for where in offer if where not in taken]
         if not free:
             return f"{one} interferes with every register at once"
         # its own register first, so an allocation that need not move
@@ -227,12 +275,30 @@ def colour(body: mir.MirBody, pinned: dict[Value, Register_] | None = None) -> d
         was = origin.get(one)
         assigned[one] = was if was is not None and was in free else free[0]
 
+    # A phi is not an instruction. Nothing runs on the edge to move a value
+    # into place, so a phi's result and every value arriving at it have to
+    # already be in one register -- and this colours them independently.
+    # segld's inner counter was defined into dx and read back out of ax
+    # through the phi between them, so it never reached its bound and the
+    # program ran forever.
+    for block in body.blocks:
+        for phi in block.phis:
+            if phi.result.flags:
+                continue
+            want = assigned.get(phi.result)
+            for value in phi.incoming.values():
+                if assigned.get(value) is not want:
+                    came, goes = NAMES.get(assigned.get(value)), NAMES.get(want)
+                    return f"{phi.result} arrives from {value} and nothing moves it: {came} into {goes}"
+
     # The pins are not checked on the way in, so they are checked here: two
     # of them wanting one register for values that are live together is a
     # refusal, and without this the loop hands them straight back because a
     # value already assigned is skipped rather than validated.
     for one, others in graph.items():
         for other in others:
+            if one.flags or other.flags:
+                continue
             if one in assigned and other in assigned and assigned[one] is assigned[other]:
                 return f"{one} and {other} are live together and both want {NAMES.get(assigned[one], assigned[one])}"
     return assigned

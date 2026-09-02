@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import corpus
+from iced_x86 import Register_
 from qbopt import ir
 from qbopt import mir
 from qbopt import regalloc
@@ -114,3 +115,103 @@ def test_a_pin_that_cannot_be_honoured_is_refused_not_guessed(obj: Path) -> None
         pinned = {one: regalloc.AVAILABLE[0] for one in clashing}
         assert isinstance(regalloc.colour(body, pinned), str)
         return
+
+
+def test_a_flags_phi_does_not_enter_the_interference_graph() -> None:
+    """meet() keeps flags out of the graph. One line put them back.
+
+    `graph.setdefault(phi.result, set())` ran for every phi, flags included,
+    so a latch that merges a flags value put it in the graph. The greedy
+    pass then asked for a register, found NONE was not one it could use, and
+    handed out the first free general register -- taking eax from values
+    that wanted it and pushing three of them into the register a pin had
+    asked for. segld printed 0 for 1050.
+
+    Driven twice over: the graph is only consulted when something pins, and
+    the shape needs a flags value merged at a header.
+    """
+    from iced_x86 import Register
+
+    start = mir.Value(1, 0x10)
+    again = mir.Value(2, 0x20)
+    merged = mir.Value(3, 0x20)
+    flag_in = mir.Value(4, 0x10, flags=True)
+    flag_back = mir.Value(5, 0x20, flags=True)
+    flag_merged = mir.Value(6, 0x20, flags=True)
+
+    ax = ir.Reg(register=Register.AX, width=2)
+    one = ir.Imm(value=1, width=2)
+
+    def op(at: int, what: ir.Semantics, defines: tuple, uses: tuple = ()) -> mir.Op:
+        return mir.Op(at, what.op, what.name or "", defines, uses, made=what)
+
+    moving = ir.Semantics(ir.Operation.MOVE, "mov", dests=(ax,), sources=(one,))
+    comparing = ir.Semantics(ir.Operation.COMPARE, "cmp", dests=(), sources=(ax, one))
+
+    head = mir.MirBlock(0x10, (), (op(0x10, moving, (start,)), op(0x14, comparing, (flag_in,), (start,))), (0x20,))
+    latch = mir.MirBlock(
+        0x20,
+        (mir.Phi(merged, {0x10: start, 0x20: again}), mir.Phi(flag_merged, {0x10: flag_in, 0x20: flag_back})),
+        (op(0x20, moving, (again,), (merged,)), op(0x24, comparing, (flag_back,), (again, flag_merged))),
+        (0x20,),
+    )
+    body = mir.MirBody(
+        0x10,
+        (head, latch),
+        {
+            start: Register.AX,
+            again: Register.AX,
+            merged: Register.AX,
+            flag_in: Register.NONE,
+            flag_back: Register.NONE,
+            flag_merged: Register.NONE,
+        },
+        {},
+    )
+
+    graph = regalloc.interference(body)
+    assert flag_merged not in graph, "a flags phi is not something a register is placed in"
+    assert not any(value.flags for value in graph), "and neither is any other flags value"
+
+
+def test_an_allocation_that_moves_a_value_across_a_phi_is_refused() -> None:
+    """A phi is not an instruction: nothing runs on the edge to move a value.
+
+    So a phi's result and every value arriving at it have to already be in
+    one register. colour() assigns them independently, and segld's inner
+    counter was defined into dx and read back out of ax through the phi
+    between them -- it never reached its bound and the program ran forever.
+
+    Driven, because the corpus reaches this only through a pass that asks
+    for a pin, and every such pass refuses first for other reasons.
+    """
+    from iced_x86 import Register
+
+    from qbopt import ir
+    from qbopt import mir
+
+    start = mir.Value(1, 0x10)
+    round_again = mir.Value(2, 0x20)
+    merged = mir.Value(3, 0x20)
+
+    def move(at: int, into: Register_, defines: tuple, uses: tuple = ()) -> mir.Op:
+        what = ir.Semantics(
+            ir.Operation.MOVE, "mov", dests=(ir.Reg(register=into, width=2),), sources=(ir.Imm(value=1, width=2),)
+        )
+        return mir.Op(at, ir.Operation.MOVE, "mov", defines, uses, made=what)
+
+    head = mir.MirBlock(0x10, (), (move(0x10, Register.AX, (start,)),), (0x20,))
+    latch = mir.MirBlock(
+        0x20,
+        (mir.Phi(merged, {0x10: start, 0x20: round_again}),),
+        (move(0x20, Register.AX, (round_again,), (merged,)),),
+        (0x20,),
+    )
+    body = mir.MirBody(
+        0x10, (head, latch), {start: Register.AX, round_again: Register.AX, merged: Register.AX}, {}
+    )
+
+    assert not isinstance(regalloc.colour(body, {}), str), "leaving everything where it was is always valid"
+    moved = regalloc.colour(body, {start: Register.DX})
+    assert isinstance(moved, str), "moving one side of a phi and not the other must be refused"
+    assert "nothing moves it" in moved, moved

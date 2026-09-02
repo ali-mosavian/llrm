@@ -410,7 +410,17 @@ def test_an_allocation_reaches_the_bytes() -> None:
     found, bodies, base = rebuilt(Path("fixtures/omf/hotlop-p-g2.obj"))
     assert base is not None and found is not None
     _name, body = bodies[0]
-    victim = next(one for one in body.origin if body.origin[one] is Register.EAX and not one.flags)
+    # Not one a phi touches. colour() refuses to move those now: nothing
+    # runs on an edge to bring the value across, so the result and every
+    # value arriving at it have to share a register.
+    crossing = {phi.result for block in body.blocks for phi in block.phis} | {
+        value for block in body.blocks for phi in block.phis for value in phi.incoming.values()
+    }
+    victim = next(
+        one
+        for one in body.origin
+        if body.origin[one] is Register.EAX and not one.flags and one not in crossing
+    )
 
     got = regalloc.colour(body, {victim: Register.ESI})
     assert not isinstance(got, str), got
