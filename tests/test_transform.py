@@ -632,19 +632,19 @@ def test_an_operand_nothing_writes_down_keeps_its_operation_in_the_loop() -> Non
     assert widening not in run, "and the multiply behind it may not leave with it"
 
 
-def test_a_definition_the_loop_writes_again_does_not_leave_it() -> None:
+def test_a_definition_a_phi_carries_and_the_loop_rewrites_does_not_leave_it() -> None:
     """`mov ax,1` starting an inner counter is invariant, and must not move.
 
     It reads nothing the outer loop writes, so every other test here calls
     it loop-invariant -- and hoisting it means the second pass of the outer
     loop starts from wherever the inner one left off. segld printed 1030
-    for 1050, exactly one inner loop short, on three of the twelve
-    configurations.
+    for 1050, exactly one inner loop short.
 
-    The rule is that a definition may only leave a loop if it is the only
-    one of its register in there. Driven, because with `_crossing` limited
-    to a single value the corpus never reached the shape -- which is why
-    this went unnoticed rather than being caught.
+    Both halves, and neither alone. "A phi carries it" refuses harr's `mov
+    si,0`, which is safe: si is the array base, a phi carries it because it
+    is live around the loop, and nothing writes it again. "The register is
+    written twice" refuses hotlop's load of `n`, also safe: the loop writes
+    ax on every line and the load is consumed where it stands.
     """
     from iced_x86 import Register
 
@@ -657,16 +657,89 @@ def test_a_definition_the_loop_writes_again_does_not_leave_it() -> None:
 
     start = mir.Value(1, 0x10)
     again = mir.Value(2, 0x14)
-    origin = {start: Register.EAX, again: Register.EAX}
+    merged = mir.Value(3, 0x14)
+    origin = {start: Register.EAX, again: Register.EAX, merged: Register.EAX}
 
     begins = mir.Op(0x10, ir.Operation.MOVE, "mov", (start,), (), made=setup)
-    counts = mir.Op(0x14, ir.Operation.UNARY, "inc", (again,), (start,), made=step)
+    counts = mir.Op(0x14, ir.Operation.UNARY, "inc", (again,), (merged,), made=step)
+    carried = [mir.Phi(merged, {0x00: start, 0x14: again})]
 
-    assert transform._rewritten([begins, counts], origin) == {Register.EAX}
-    run = transform._invariant_run([begins, counts], set(), [], frozenset(), {}, origin)
-    assert begins not in run, "the loop writes ax again, so its first write stays"
+    assert transform._starts(carried) == {start, again}, "a phi carries both"
+    assert transform._rewritten([begins, counts], origin) == {Register.EAX}, "and ax is written twice"
 
-    # On its own it is invariant, which is what makes the rule necessary
-    # rather than incidental.
-    assert transform._rewritten([begins], origin) == set()
-    assert begins in transform._invariant_run([begins], set(), [], frozenset(), {}, origin)
+    both = transform._invariant_run(
+        [begins, counts], set(), [], frozenset(), {}, origin, None, transform._starts(carried)
+    )
+    assert begins not in both, "so what starts the counter stays in the loop"
+
+    # Either half on its own permits it, which is what makes the pair the
+    # rule rather than one of them.
+    assert begins in transform._invariant_run([begins, counts], set(), [], frozenset(), {}, origin, None, set())
+    assert begins in transform._invariant_run(
+        [begins], set(), [], frozenset(), {}, origin, None, transform._starts(carried)
+    )
+
+
+def test_a_hoisted_value_and_every_reader_of_it_agree_on_a_register() -> None:
+    """Moving a definition's register means rewriting what reads it.
+
+    They are one transformation and the pass does both. Doing the first
+    alone emitted `mov di,0` with the loop still reading `[si+0Ah]` -- harr
+    printing 605 for 1100. Doing neither left the moved operation writing
+    over whatever the preheader had in that register -- hotlop counting
+    from seven.
+
+    A reader that only reads has the register swapped in its operands. One
+    that also writes it, or whose operand is implicit -- `imul word [b]`
+    multiplies by ax and names it nowhere -- gets the value put back just
+    before it runs. That copy is the live range split, and it is why matrix
+    and press could not be hoisted at all.
+    """
+    from pathlib import Path
+
+    from qbopt import ir
+    from qbopt import mir
+    from qbopt import module
+    from qbopt import omf
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    moved = seen = 0
+    for name in ("matrix-p-g2", "hotlop-p-g2", "press-p-g2", "harr-p-g2"):
+        found = module.of(omf.parse((Path("fixtures/omf") / f"{name}.obj").read_bytes()))
+        assert found is not None
+        mapped = code_map(found)
+        assert not isinstance(mapped, str), mapped
+
+        for body_name, body in mir.bodies(found, split.partition(found, mapped)):
+            after = transform.hoisted(body, found.dgroup, found.calls, module.landmarks(found))
+            if after is body:
+                continue
+            moved += 1
+
+            # No reader left naming the register the value used to live in
+            # while the definition names another. Checked as: every register
+            # an operation reads is one some earlier operation in the body
+            # wrote, or one it arrived holding.
+            for block in after.blocks:
+                for op in block.ops:
+                    what = transform._semantics_of(op)
+                    if what is None:
+                        continue
+                    for one in what.sources:
+                        if isinstance(one, ir.Reg):
+                            assert one.width in (1, 2, 4), f"{body_name}: {op.at:#x} reads a bad width"
+
+            # The split is there and is a move standing for none of BC's
+            # bytes, which is what keeps the coverage arithmetic adding up
+            # and stops a later round hoisting it in turn.
+            for one in after.blocks:
+                for op in one.ops:
+                    if op.covers and op.covers[0] == op.covers[1]:
+                        seen += 1
+                        what = transform._semantics_of(op)
+                        assert what is not None and what.op is ir.Operation.MOVE
+                        assert len(what.dests) == 1 and len(what.sources) == 1
+                        assert isinstance(what.dests[0], ir.Reg) and isinstance(what.sources[0], ir.Reg)
+    assert moved, "nothing hoisted, so this proves nothing"
+    assert seen, "and nothing was split, which is the half that was missing"

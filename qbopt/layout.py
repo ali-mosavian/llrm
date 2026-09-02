@@ -352,7 +352,16 @@ def _field_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -
         # span named the operand that went, so relocating this instruction's
         # immediate writes an address over it and over the branch after it.
         # suite/jumps.bas took the CASE ELSE arm for k = 1 that way.
-        if op.made is not None and not any(isinstance(one, (ir.Mem, ir.Address)) for one in holds):
+        # The question is whether a memory operand *went*, not whether a
+        # transform touched the op: hoisting rewrites `mov ax,offset x` to
+        # name a different register and its relocated immediate is still its
+        # own. Asked the broad way, that fixup had nowhere to go and the
+        # segment was refused.
+        was = getattr(op.node, "semantics", None)
+        had = was is not None and any(
+            isinstance(one, (ir.Mem, ir.Address)) for one in (*was.dests, *was.sources)
+        )
+        if op.made is not None and had and not any(isinstance(one, (ir.Mem, ir.Address)) for one in holds):
             return None
     inside = [one for one in known if lo <= one < hi]
     return inside[0] if len(inside) == 1 else None

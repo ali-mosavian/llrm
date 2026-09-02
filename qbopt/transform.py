@@ -483,6 +483,16 @@ def _effective(body: MirBody, calls: dict[int, str]) -> set:
     return wanted
 
 
+def _starts(phis: list) -> set:
+    """Values a phi in this loop carries in from somewhere.
+
+    A definition whose value reaches one begins something the loop goes on
+    to change, and moving it out means the next pass sees where the last
+    one finished.
+    """
+    return {value for phi in phis for value in phi.incoming.values()}
+
+
 def _rewritten(ops: list[Op], origin: dict) -> set:
     """Registers more than one operation in the loop writes.
 
@@ -512,6 +522,7 @@ def _invariant_run(
     calls: dict[int, str],
     origin: dict,
     bounds: dict | None = None,
+    starts: set | None = None,
 ) -> list[Op]:
     """The ops in this loop whose result never changes, in order.
 
@@ -525,6 +536,7 @@ def _invariant_run(
     made: set = set()
     run: list = []
     twice = _rewritten(ops, origin)
+    begins = starts or set()
     changing = True
     while changing:
         changing = False
@@ -538,9 +550,29 @@ def _invariant_run(
             # three left -- and the back edge left with them.
             if what.op in (ir.Operation.JUMP, ir.Operation.BRANCH):
                 continue
+            # Nor anything that computes nothing. A register-to-register
+            # move is invariant whenever its source is, so hoisting one and
+            # putting a split back in its place is churn -- and the split
+            # comes back through emission as an ordinary move, is hoisted in
+            # turn, and hotlop's loop body became eighteen `mov cx,bx` in
+            # two rounds. What this is for is moving work: a load, or an
+            # operation over one.
+            if not one.loads and all(isinstance(where, ir.Reg) for where in what.sources):
+                continue
             # Only definition of its register in the loop, or the loop's own
-            # later write is what the next pass would see. See _rewritten.
-            if any(origin.get(value) in twice for value in one.defines if not value.flags):
+            # Both, and neither alone. "A phi carries it" refuses harr's
+            # `mov si,0`, which is safe: si is the array base, a phi carries
+            # it because it is live around the loop, and nothing writes it
+            # again. "The register is written twice" refuses hotlop's load
+            # of `n`, also safe: the loop writes ax on every line and the
+            # load is consumed where it stands. What is unsafe is the pair --
+            # a value a phi carries whose register the loop goes on to
+            # change, which is segld's inner counter and 1030 for 1050.
+            if any(
+                value in begins and origin.get(value) in twice
+                for value in one.defines
+                if not value.flags
+            ):
                 continue
             # Pinning one value recolours the whole body, and an operand
             # nothing writes down does not move with it: hotlop hoisted
@@ -622,6 +654,98 @@ def _crossing(run: list, rest: list, phis: list | None = None, wanted: set | Non
     return frozenset(crossing)
 
 
+def _span_of(op: Op) -> tuple[int, int] | None:
+    """The bytes this operation occupied before anything moved it."""
+    return ir.span(op.node) if op.node is not None else None
+
+
+def _named(register: Register_, width: int) -> Register_:
+    """The same register named at the width an operand needs.
+
+    _at_width returns None where there is no such name -- there is no
+    byte-wide si -- and every caller here has already picked a register
+    that has one, so the fallback is the register itself rather than a
+    refusal that cannot happen.
+    """
+    return _at_width(register, width) or register
+
+
+def _mentions(one: ir.Loc, register: Register_) -> bool:
+    """Whether this operand names the register, held in or reached through."""
+    root = ir.ROOT.get(register, register)
+    if isinstance(one, ir.Reg):
+        return ir.ROOT.get(one.register, one.register) is root
+    for where in (
+        getattr(one, "through", None),
+        getattr(one, "index", None),
+        getattr(getattr(one, "addr", None), "base", None),
+    ):
+        if where is not None and ir.ROOT.get(where, where) is root:
+            return True
+    return False
+
+
+def _instead(one: ir.Loc, was: Register_, now: Register_) -> ir.Loc:
+    """This operand with one register put in place of another."""
+    root = ir.ROOT.get(was, was)
+    if isinstance(one, ir.Reg) and ir.ROOT.get(one.register, one.register) is root:
+        return replace(one, register=_named(now, one.width))
+    if not isinstance(one, (ir.Mem, ir.Address)):
+        return one
+    swap = {}
+    for name in ("through", "index"):
+        where = getattr(one, name, None)
+        if where is not None and ir.ROOT.get(where, where) is root:
+            swap[name] = _named(now, 2)
+    addr = getattr(one, "addr", None)
+    if addr is not None and ir.ROOT.get(addr.base, addr.base) is root:
+        swap["addr"] = replace(addr, base=_named(now, 2))
+    return replace(one, **swap) if swap else one
+
+
+def _reads_from(one: Op, was: Register_, now: Register_) -> Op | None:
+    """The operation reading `now` where it read `was`, or None if it cannot.
+
+    It cannot when the same register is also written -- `add ax,[s]` with ax
+    holding the hoisted value would put the sum in the register that value
+    lives in, and the next pass of the loop would read the sum. Nor when an
+    operand is implicit, since there is nothing written down to change.
+    Those readers take a copy instead.
+    """
+    what = _semantics_of(one)
+    if what is None or _implicit(one):
+        return None
+    root = ir.ROOT.get(was, was)
+    if any(_mentions(where, root) for where in what.dests):
+        return None
+    return replace(one, made=replace(what, sources=tuple(_instead(where, root, now) for where in what.sources)))
+
+
+def _move(at: int, into: Register_, outof: Register_, value: mir.Value) -> Op:
+    """`mov into,outof`, both registers spelled out.
+
+    `covers` is empty: it stands for none of BC's bytes, which is what keeps
+    the coverage arithmetic adding up and what stops a later round hoisting
+    it in turn.
+    """
+    what = ir.Semantics(
+        ir.Operation.MOVE,
+        "mov",
+        dests=(ir.Reg(register=_named(into, 2), width=2),),
+        sources=(ir.Reg(register=_named(outof, 2), width=2),),
+    )
+    return Op(at, ir.Operation.MOVE, "mov", (), (value,), made=what, covers=(at, at))
+
+
+def _writes_to(one: Op, now: Register_) -> Op:
+    """The operation with its single destination register put somewhere else."""
+    what = _semantics_of(one)
+    if what is None or len(what.dests) != 1 or not isinstance(what.dests[0], ir.Reg):
+        return one
+    width = what.dests[0].width
+    return replace(one, made=replace(what, dests=(ir.Reg(register=_named(now, width), width=width),)))
+
+
 def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds: dict | None = None) -> MirBody:
     """A loop-invariant run of operations, done once before the loop.
 
@@ -647,7 +771,9 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
     addressable = {ir.ROOT.get(one, one) for one in regalloc.ADDRESSING}
     moved: dict[int, list[Op]] = {}
     gone: set[int] = set()
-    wanted: dict = {}
+    seated: dict[int, Register_] = {}
+    rewrites: dict[int, Op] = {}
+    splits: dict[int, list] = {}
 
     for loop in inside:
         into = _preheader(body, loop)
@@ -656,7 +782,8 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
         ops = [one for at in sorted(loop.body) for one in at_of[at].ops]
         stores = [ref for one in ops for ref in one.stores]
         carried = {phi.result for at in loop.body for phi in at_of[at].phis}
-        run = _invariant_run(ops, carried, stores, dgroup, calls, body.origin, bounds)
+        phis = [phi for at in loop.body for phi in at_of[at].phis]
+        run = _invariant_run(ops, carried, stores, dgroup, calls, body.origin, bounds, _starts(phis))
         # Not one already taken out of a loop inside this one. Invariant in
         # the inner loop and in the outer, it was put in both preheaders and
         # its bytes counted twice, which layout reports as a negative gap:
@@ -669,7 +796,6 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
         # value, or this would need a register for each and a rule for
         # which; the shapes that pay have exactly one.
         rest = [one for one in ops if one not in run]
-        phis = [phi for at in loop.body for phi in at_of[at].phis]
         crossing = _crossing(run, rest, phis, effective)
         if crossing is None:
             continue
@@ -699,29 +825,57 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
             if crossing is None:
                 continue
 
-        # A reader whose operand is implicit does not move with a rename:
-        # `imul word [b]` multiplies by ax and says so nowhere. Putting the
-        # value back before it runs takes a copy, and a copy takes rewriting
-        # the reader with it -- one transformation, and it is the
-        # allocator's. Refused here until it is.
-        if any(_implicit(other) for other in rest for one in crossing if one in other.uses):
-            continue
-
-        # A value some instruction reaches a cell by can only live where
-        # 16-bit addressing can reach one -- bx, si or di.
-        here = {}
+        # One register per value, and the whole rewrite done here rather
+        # than asked of the allocator. Moving a definition's register means
+        # rewriting every consumer that reads it, and those are one
+        # transformation: doing the first alone emits `mov di,0` with the
+        # loop still reading `[si+0Ah]`, and doing neither leaves the moved
+        # operation writing over whatever the preheader had there.
+        here: dict = {}
+        taken = set(seated.values())
         for result in sorted(crossing, key=lambda one: one.id):
             free = [
                 where
                 for where in spare
-                if result not in reached_by or ir.ROOT.get(where, where) in addressable
+                if where not in taken
+                and (result not in reached_by or ir.ROOT.get(where, where) in addressable)
             ]
             if not free:
                 break
-            here[result] = free
+            here[result] = free[0]
+            taken.add(free[0])
         if len(here) != len(crossing):
             continue
-        wanted.update(here)
+
+        # Every reader, and how it is served. One that only reads the value
+        # has the register swapped in its operands. One that also writes it,
+        # or whose operand is implicit -- `imul word [b]` multiplies by ax
+        # and names it nowhere -- gets the value put back just before it
+        # runs, which is what a live range split is.
+        served: dict[int, Op] = {}
+        copies: dict[int, list] = {}
+        beaten = False
+        for other in rest:
+            for result in crossing:
+                if result not in other.uses:
+                    continue
+                was = body.origin.get(result)
+                if was is None:
+                    beaten = True
+                    break
+                again = _reads_from(served.get(other.at, other), was, here[result])
+                if again is not None:
+                    served[other.at] = again
+                else:
+                    copies.setdefault(other.at, []).append((was, here[result]))
+            if beaten:
+                break
+        if beaten:
+            continue
+
+        seated.update({one.at: here[value] for one in run for value in one.defines if value in here})
+        rewrites.update(served)
+        splits.update(copies)
         moved[into] = moved.get(into, []) + list(run)
         gone.update(one.at for one in run)
 
@@ -730,41 +884,46 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
 
     out = []
     for block in body.blocks:
-        ops = [one for one in block.ops if one.at not in gone]
-        if block.ops and block.ops[0].at in gone and ops:
-            ops = [replace(ops[0], at=block.ops[0].at)] + ops[1:]
+        was = [one.at for one in block.ops if one.at not in gone]
+        ops = [rewrites.get(one.at, one) for one in block.ops if one.at not in gone]
+
+        # A copy ahead of every reader served by one, keyed on the address
+        # that reader had before anything was re-stamped onto it.
+        ahead: list[Op] = []
+        for one, before in zip(ops, was, strict=True):
+            for old, now in splits.get(before, ()):
+                ahead.append(_move(one.at, old, now, mir.Value(-1, one.at)))
+            ahead.append(one)
+        ops = ahead
+
+        if ops and block.ops and block.ops[0].at in gone:
+            # Onto the block's own address so branches still land, and told
+            # what it stands for: `covers` otherwise means the bytes at
+            # `at`, which are now the hoisted operation's, and both would
+            # claim them.
+            first = ops[0]
+            ops = [replace(first, at=block.ops[0].at, covers=first.covers or _span_of(first))] + ops[1:]
         if block.at in moved:
             what = _semantics_of(ops[-1]) if ops else None
             leaves = what is not None and what.op in (ir.Operation.JUMP, ir.Operation.BRANCH)
-            here = [replace(one, at=ops[-1].at) for one in moved[block.at]] if ops else moved[block.at]
-            ops = (ops[:-1] + here + ops[-1:]) if leaves else (ops + here)
+            lifted = [_writes_to(one, seated[one.at]) if one.at in seated else one for one in moved[block.at]]
+            # Running in the preheader and still standing for the bytes it
+            # came from, which is what a record or fixup naming those bytes
+            # needs in order to follow it.
+            if ops:
+                lifted = [
+                    replace(one, at=ops[-1].at, covers=one.covers or _span_of(one)) for one in lifted
+                ]
+            ops = (ops[:-1] + lifted + ops[-1:]) if leaves else (ops + lifted)
         out.append(replace(block, ops=tuple(ops)))
-    laid = replace(body, blocks=tuple(out))
-    if not wanted:
-        return laid
 
-    # Every candidate, not the first that looks free. A pin displaces
-    # whatever held that register, and the displacement can reach a class a
-    # phi ties together and that nothing can move. Asking the allocator is
-    # the only way to find out, and it is cheap next to a round trip through
-    # emission.
-    # In SSA again before asking anything about it. The ops have moved, so
-    # the phis raised with the original body no longer describe it: a load
-    # hoisted out of a loop was loop-carried and is now live once ahead of
-    # it, and colour() was being asked about the shape the code had before
-    # this pass touched it. rewrite.py re-raises between passes through
-    # emission; those bytes do not exist yet here.
-    fresh = mir.resolved(laid, calls)
-    if isinstance(fresh, str):
-        return body
-    over = _renamed(laid, fresh, set(wanted))
-    if over is None:
-        return body
-    for choice in _choices(wanted):
-        pins = {over[value]: where for value, where in choice.items()}
-        if not isinstance(regalloc.colour(fresh, pins), str):
-            return replace(laid, pins=choice)
-    return body
+    # In SSA again, because the operations have moved and the phis raised
+    # with the original body no longer describe them: a load hoisted out of
+    # a loop was loop-carried and is now live once, ahead of it. Nothing
+    # after this asks the allocator anything -- every register is written
+    # down -- so a refusal here is the only way the rewrite can fail.
+    laid = mir.resolved(replace(body, blocks=tuple(out)), calls)
+    return body if isinstance(laid, str) else laid
 
 
 def _renamed(was: MirBody, now: MirBody, wanted: set) -> dict | None:
