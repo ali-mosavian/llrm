@@ -74,6 +74,51 @@ Then, in dependency order: store-to-load forwarding and copy propagation
 (needs 1), allocation (2), LICM and induction-variable strength reduction
 (3), then addressing modes and loop rotation as peepholes on the result.
 
+### Every pass this needs, and what measures it
+
+Scored by `tools/opportunity.py --targets` against the hand-written optimal
+in `docs/targets.md`. A pass with no program that exercises it does not go
+on this list.
+
+**Infrastructure -- nothing below works without these**
+
+| | needs | state |
+|---|---|---|
+| a value that outlives a statement | cross-block liveness, `regs.py` | exists, unused by any transform |
+| `regalloc.colour()` at emission | spill costs, `select` honouring an assignment | built, never wired |
+| code motion between blocks | a transform that may move an op across an edge | does not exist |
+
+**Passes, in dependency order**
+
+| pass | what it takes | programs |
+|---|---|---|
+| store-to-load forwarding | 618 corpus sites, the largest single count | arridx, ivchan, fpcse |
+| copy propagation | `mov bx,ax` then uses of bx | subexp, matrix, arridx, fpcse |
+| redundant load elimination, cross-block | `avail.redundant()` finds 30 of ~780 | all |
+| dead store elimination, cross-block | `avail.dead_stores()`, 42 of memory.py's 43 | ivchan's p and q |
+| constant propagation with a consumer | `consts.known()` proves 2,233 and nothing emits | subexp, press, bools |
+| constant folding | every result comes out longer alone; pays after LICM | hotlop, press, lngmix |
+| CSE over *memory reads*, not SSA values | BC reloads rather than recomputes | subexp, fpcse |
+| register allocation, spilling by cost | 7 of 8 loops fit entirely in registers | press, spill |
+| live-range splitting | disjoint ranges share a register | split |
+| LICM | a multiply 400 times in an inner loop that writes neither operand | hotlop, press, matrix, nested, fpcse, lngmix |
+| loop-invariant address hoisting | es and the array base, out of the nest | segld, harr |
+| induction variable recognition | four affine functions of one counter | ivchan, arridx, matrix |
+| induction variable strength reduction | one add, not a multiply per access | ivchan, harr, stride, matrix |
+| scalar evolution | `i \ 5` where i strides by five is a counter | stride |
+| loop rotation and guard elimination | an entry jump into the test, three times | rotate |
+| addressing-mode selection | `shl`/`add`/`mov` into one scaled operand | addrm, arridx, matrix |
+| x87 stack scheduling across statements | two of eight slots used | fpcse |
+| division by a constant | reciprocal multiply | stride, lngmix |
+| boolean materialisation | a branch and a `dec` to make -1, then a compare on it | bools |
+| absorbing the runtime call | done for the four arithmetic routines | lngmix, huge |
+
+**Not on the list, and why.** Loop unrolling: no measured target, and BC's
+loops are short. Inlining: untested, no example yet -- worth one, since a
+tiny `FUNCTION` in a loop is a real BASIC shape. Type narrowing and
+redundant sign extension: need range analysis, which `consts.py` is one step
+from and nothing yet asks for.
+
 Before any of it: **make the suite non-foldable.** Every program in it is a
 compile-time constant, so a folding pass would delete most of them and score
 twenty times without proving anything general. A bound or a seed the
