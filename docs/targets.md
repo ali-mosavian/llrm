@@ -196,6 +196,44 @@ The inner loop, ten instructions and 37 bytes:
 four hundred times. The diagonal loop is the same shape with a stride of
 `2 * (w + 1)`: **10 instructions against 6**, one more `imul` gone.
 
+## Registers, which is the whole of it
+
+BC uses `ax` for everything, `bx` when it needs a second operand alive, and
+`cx` or `dx` only where the instruction forces it -- `imul`'s implicit
+operand, `idiv`'s dividend. `si` is an address scratch. It emits a statement
+at a time, so a value lives in a register for as long as one statement needs
+it and is written back before the next.
+
+Measured over the seven programs here: **eight loops, seven of which touch
+no more variables than there are registers, and BC uses between two and
+four.** 52 memory accesses in them would become none.
+
+| program | variables the loop touches | registers BC uses | an allocation that fits |
+|---|---|---|---|
+| hotlop | 3 (`s`, `i`, and the folded `n*k`) | 4 | `bx`=s, `ax`=i, `dx`=21 |
+| arridx | 4 (`i`, `t`, `a(i)`, the address) | 4 | `ax`=i, `si`=&a(i), `dx`=3i, `bx`=t |
+| press | 10 | 3 | `bx`=the folded sum, `ax`=i, `dx`=r |
+| ivchan | 4 (`i`, `t`, `p`, `q`) | 4 | `ax`=i, `bx`=&a(q), `dx`=t |
+| stride | 4 (`i`, `t`, `b(i)`, the address) | 4 | `ax`=i, `dx`=i\5, `si`=&b(i), `bx`=t |
+| matrix inner | 4 (`r`, `c`, `w`, the address) | 4 | `ax`=r+c, `si`=address, `cx`=count, `dx`=r |
+| matrix outer | 3 | 2 | `dx`=r, `si`=row base |
+
+`press` is the one to keep: ten variables against six registers, so it is
+the only program here that genuinely needs a spill -- and once the invariant
+sum is folded, one register holds it and the loop touches three things.
+Every other loop fits entirely, and none of them is allocated.
+
+## The number to minimise
+
+`tools/opportunity.py` prints a weighted cycle count: an operation's own
+cost, four more for each memory operand, and ten per level of loop nesting
+as a stand-in for a trip count nothing here knows. `imul` is 22 and `idiv`
+43, which is why a division in an inner loop outweighs a hundred
+straight-line moves.
+
+The absolute figure means little. What it is for is ranking the same program
+compiled two ways, and it is the one number these targets roll up into.
+
 ## What these add up to
 
 | | BC | optimal | wanted |

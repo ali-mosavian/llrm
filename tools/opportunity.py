@@ -23,6 +23,8 @@ import argparse
 from pathlib import Path
 from collections import Counter
 
+import iced_x86
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from qbopt import mir
@@ -70,6 +72,86 @@ def _through(block, module_, entering: dict[str, int], seen: set[str], found: Co
             written[cell] = op.at
             read.discard(cell)
     return written, read
+
+
+# What a 16-bit body has to hand: bp is the frame pointer, sp the stack, and
+# the segment registers are not general. Six, and BC uses two.
+GENERAL = ("AX", "BX", "CX", "DX", "SI", "DI")
+
+# iced's Register is a bag of int constants rather than an enum, so the name
+# of one has to be looked back up.
+NAMED = {
+    getattr(iced_x86.Register, one): one
+    for one in dir(iced_x86.Register)
+    if not one.startswith("_") and isinstance(getattr(iced_x86.Register, one), int)
+}
+
+
+# What one operation costs, in 386 cycles, near enough to rank by. A memory
+# operand is counted on top of the instruction, which is the whole point:
+# BC's per-statement code pays for one on almost every line.
+CYCLES = {"imul": 22, "idiv": 43, "mul": 22, "div": 43, "shl": 3, "shr": 3, "sar": 3}
+TOUCH = 4  # a memory operand, cached
+
+
+def _cost(body, module_, found: Counter) -> None:
+    """One number to minimise: cycles, weighted by how often a loop runs.
+
+    Ten per level of nesting, which is a stand-in for a trip count nothing
+    here knows. The point is not the absolute figure -- it is that the same
+    program compiled two ways can be ranked, and that an `idiv` in an inner
+    loop outranks a hundred straight-line moves, which is what BC's output
+    actually costs.
+    """
+    depth = loopy.depth(list(body.blocks), body.entry)
+    for block in body.blocks:
+        weight = 10 ** min(depth.get(block.at, 0), 3)
+        for op in block.ops:
+            if op.at in module_.calls:
+                found["cost"] += 20 * weight
+                continue
+            name = (op.name or "").lower()
+            cycles = CYCLES.get(name, 2)
+            cycles += TOUCH * len([one for one in (*op.loads, *op.stores) if named(one)])
+            found["cost"] += cycles * weight
+
+
+def _registers(body, module_, found: Counter) -> None:
+    """How many variables a loop touches, against how many registers it uses.
+
+    The question the roadmap never asked, and the one that says plainly
+    there is no allocation here: BC emits a statement at a time, so a value
+    lives in a register only for as long as one statement needs it. Every
+    variable is re-read from memory in the next statement even when the loop
+    touches six of them and the machine has six registers free.
+    """
+    inside = loopy.loops(list(body.blocks), body.entry)
+    at_of = {block.at: block for block in body.blocks}
+    for loop in inside:
+        cells: set[str] = set()
+        registers: set[str] = set()
+        traffic = 0
+        for at in loop.body:
+            for op in at_of[at].ops:
+                if op.at in module_.calls:
+                    continue
+                for ref in (one for one in (*op.loads, *op.stores) if named(one)):
+                    cells.add(str(ref.addr))
+                    traffic += 1
+                for value in (*op.defines, *op.uses):
+                    got = body.origin.get(value)
+                    if got is None:
+                        continue
+                    name = NAMED.get(got, "").upper().removeprefix("E")
+                    if name in GENERAL:
+                        registers.add(name)
+        if not cells:
+            continue
+        found["loops seen"] += 1
+        found[f"  a loop touching {len(cells)} variables in {len(registers)} registers"] += 1
+        if len(cells) <= len(GENERAL):
+            found["  every variable in the loop would fit in registers"] += 1
+            found["  memory accesses that would become none"] += traffic
 
 
 def _invariant(body, module_, found: Counter) -> None:
@@ -153,6 +235,8 @@ def counted(paths: list[Path]) -> Counter:
                     break
 
             _invariant(body, module_, found)
+            _registers(body, module_, found)
+            _cost(body, module_, found)
 
             for at in sorted(blocks):
                 entering, seen = None, None
@@ -173,8 +257,9 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     paths = args.objects or sorted(Path("fixtures/omf").glob("*.obj"))
     found = counted(paths)
+    print(f"  {found.pop('cost', 0):8d}  COST -- weighted cycles, the number to minimise")
     for name, count in sorted(found.items(), key=lambda one: -one[1]):
-        print(f"  {count:6d}  {name}")
+        print(f"  {count:8d}  {name}")
     return 0
 
 
