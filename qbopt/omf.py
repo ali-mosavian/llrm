@@ -31,6 +31,7 @@ them precisely and writes objects LINK accepts.
 import sys
 import struct
 from pathlib import Path
+from dataclasses import field
 from dataclasses import dataclass
 
 THEADR, COMENT, MODEND, EXTDEF = 0x80, 0x88, 0x8A, 0x8C
@@ -69,6 +70,13 @@ NAMES = {
 class Record:
     type: int
     body: bytes
+    # Exactly what was read, where this record was read rather than built.
+    # Kept so an untouched record comes back untouched even where the
+    # checksum is not the one this would compute: BC writes a FIXUPP after
+    # a READ statement whose byte is not the sum, and recomputing it changed
+    # twenty objects that nothing had otherwise touched. Self-checking --
+    # the body has to still match, so a modified record recomputes.
+    raw: bytes | None = field(default=None, compare=False)
 
     @property
     def name(self) -> str:
@@ -76,10 +84,11 @@ class Record:
 
     def emit(self) -> bytes:
         # the checksum byte makes the record's bytes sum to zero mod 256;
-        # a zero byte is also accepted and is what many tools write, but
-        # matching what BC wrote keeps a untouched file untouched
+        # a zero byte is also accepted and is what many tools write
         body = self.body
         head = struct.pack("<BH", self.type, len(body) + 1)
+        if self.raw is not None and self.raw[:3] == head and self.raw[3:-1] == body:
+            return self.raw
         return head + body + bytes([(-sum(head) - sum(body)) & 0xFF])
 
 
@@ -94,7 +103,7 @@ def parse(d: bytes) -> list[Record]:
         t, n = struct.unpack_from("<BH", d, i)
         if i + 3 + n > len(d) + 1:
             raise ValueError(f"record at {i} runs past the end")
-        out.append(Record(t, d[i + 3 : i + 2 + n]))  # body, less the checksum
+        out.append(Record(t, d[i + 3 : i + 2 + n], d[i : i + 3 + n]))  # body, less the checksum
         i += 3 + n
     if i != len(d):
         raise ValueError(f"{len(d) - i} trailing bytes")

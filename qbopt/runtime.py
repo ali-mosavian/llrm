@@ -781,6 +781,43 @@ _X87 = (
 )
 
 
+def _read(name: str) -> Contract:
+    """One of READ's per-type entries.
+
+    rt/read.asm: `B$RD<type> only sets the type, [b$VTYP], and then jump to
+    a common routine, CommRead`. Entry is `pDest = far pointer to the
+    destination for the data`, so four bytes come off; `cbDest` is a fifth
+    parameter for SD and FS only, and none of those is here.
+
+    It writes through pDest and reads the DATA area, and CommRead reaches
+    B$ReadVal through the [b$GetOneVal] vector -- so Memory.ANY on both
+    sides rather than the destination alone. `Uses: per convention` names
+    nothing preserved. It raises: out of DATA, syntax error, overflow.
+    """
+    return Contract(
+        name=name,
+        cleanup=4,
+        control=Control.RETURNS,
+        enters_user_code=False,
+        raises_error=True,
+        error_handling=False,
+        writes=Memory.ANY,
+        reads=Memory.ANY,
+        clobbers=EVERY,
+        established=True,
+        evidence=(
+            "rt/read.asm, the header above B$RDI2: `pDest = far pointer to the destination for the "
+            "data`, `cbDest = for SD and FS only`; `B$RD<type> only sets the type, [b$VTYP], and then "
+            "jump to a common routine, CommRead`. CommRead reaches B$ReadVal through the "
+            "[b$GetOneVal] vector, so what it writes is not bounded by pDest. `Uses: per convention` "
+            "names no preserved register. Exceptions: out of DATA, syntax error, overflow."
+        ),
+    )
+
+
+_READ = tuple(_read(one) for one in ("B$RDI2", "B$RDI4", "B$RDR4"))
+
+
 _DDIM = Contract(
     name="B$DDIM",
     cleanup=None,
@@ -807,7 +844,7 @@ _DDIM = Contract(
 def _contracts() -> dict[str, Contract]:
     """One entry per runtime name the corpus calls, with B$OGTA's control kind
     taken from blocks.py rather than restated here."""
-    read = _HELPERS + _PRINTING + _STRINGS + _SIMPLE + _CONTROL + _FRAMES + _X87 + (_DDIM,)
+    read = _HELPERS + _PRINTING + _STRINGS + _SIMPLE + _CONTROL + _FRAMES + _X87 + _READ + (_DDIM,)
     return {
         routine.name: (replace(routine, control=Control.INLINE_TABLE) if routine.name in INLINE_TABLE else routine)
         for routine in read

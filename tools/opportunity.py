@@ -228,6 +228,8 @@ TRIPS = {
     "HOTLOP": 20, "PRESS": 10, "ARRIDX": 20, "IVCHAN": 21, "STRIDE": 21,
     "MATRIX": 20, "NESTED": 6, "SPILL": 10, "SPLIT": 10, "ADDRM": 20,
     "ROTATE": 10, "SEGLD": 20, "HARR": 10, "HG": 10, "LNGMIX": 10, "FPCSE": 10, "FX": 10,
+    # the opaque twins run the same loops
+    "HOTLPX": 20, "PRESSX": 10, "FPCSEX": 10, "LNGMXX": 10,
 }
 
 
@@ -436,6 +438,13 @@ TARGETS = {
     "HG": 304,
     "FPCSE": 1340,
     "FX": 1038,
+    # A twin's target is its own program's: the loop is the same and
+    # only the operands' provenance differs, so hoisting has the same
+    # work to do and folding has none.
+    "HOTLPX": 312,
+    "PRESSX": 308,
+    "FPCSEX": 1340,
+    "LNGMXX": 210,
 }
 
 

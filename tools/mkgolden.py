@@ -218,6 +218,22 @@ def fpcse() -> list[str]:
     return [f"S={qbfloat(total)}", "DONE"]
 
 
+def hotlpx() -> list[str]:
+    return hotlop()
+
+
+def pressx() -> list[str]:
+    return press()
+
+
+def fpcsex() -> list[str]:
+    return fpcse()
+
+
+def lngmxx() -> list[str]:
+    return lngmix()
+
+
 def fpemu() -> list[str]:
     x, y = 1073741831, 1024
     q = x // y
@@ -479,6 +495,10 @@ PROGRAMS = {
     "segld": segld,
     "harr": harr,
     "fpcse": fpcse,
+    "hotlpx": hotlpx,
+    "pressx": pressx,
+    "fpcsex": fpcsex,
+    "lngmxx": lngmxx,
     "fpemu": fpemu,
     "fpdeep": fpdeep,
     "chain": chain,
