@@ -283,6 +283,11 @@ _PRINTING = (
     _print("B$PSI2", 2),
     _print("B$PEI2", 2),
     _print("B$PEI4", 4),
+    # rt/prnvalfp.asm: `cProc B$PER4` sets AX to EOL<<8|VT_R4 and jumps to
+    # B$PRINT, the same shape as B$PEI4. VT_R4 is 04h (inc/rtps.inc), so
+    # PRINTX's `TEST AL,VT_SD` against 03h is zero and both parameter words
+    # come off -- four, as for VT_I4.
+    _print("B$PER4", 4),
     _print("B$PSSD", 2),
     _print("B$PESD", 2),
 )
@@ -776,10 +781,33 @@ _X87 = (
 )
 
 
+_DDIM = Contract(
+    name="B$DDIM",
+    cleanup=None,
+    control=Control.RETURNS,
+    enters_user_code=False,
+    raises_error=True,
+    error_handling=False,
+    writes=Memory.ANY,
+    reads=Memory.ANY,
+    clobbers=EVERY,
+    established=True,
+    evidence=(
+        "rt/dynamic.asm: `B$DDIM - DIM a dynamic array`, "
+        "`void pascal B$DDIM(I2 lo1, I2 hi1, ..., I2 loN, I2 hiN, I2 cbelem, U2 ndims+typ<<8, ad *pAd)`. "
+        "Cleanup is not a constant: the header says `Input parameters are removed from the stack` and the "
+        "count is two words per dimension plus three, so None rather than a number. It falls into "
+        "DIM_COMMON, which erases any present array and allocates -- writing the descriptor at pAd and "
+        "moving the heap, so Memory.ANY on both sides. `Modifies: Per convention` names no preserved "
+        "register, so every one is taken as clobbered."
+    ),
+)
+
+
 def _contracts() -> dict[str, Contract]:
     """One entry per runtime name the corpus calls, with B$OGTA's control kind
     taken from blocks.py rather than restated here."""
-    read = _HELPERS + _PRINTING + _STRINGS + _SIMPLE + _CONTROL + _FRAMES + _X87
+    read = _HELPERS + _PRINTING + _STRINGS + _SIMPLE + _CONTROL + _FRAMES + _X87 + (_DDIM,)
     return {
         routine.name: (replace(routine, control=Control.INLINE_TABLE) if routine.name in INLINE_TABLE else routine)
         for routine in read
