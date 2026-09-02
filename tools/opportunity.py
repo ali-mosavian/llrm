@@ -109,6 +109,14 @@ CALLED = {
 }
 CALL = 20
 
+# BC's default is /FPi: every floating-point operation is an `int 34h`..`3Dh`
+# into the emulator, and the emulator does it in software. An add is on the
+# order of a hundred cycles and a multiply or divide several hundred; this
+# takes a deliberately low figure for all of them. The instruction itself
+# decodes as a two-byte interrupt, so a cost model reading mnemonics prices
+# the most expensive thing in the program at two.
+EMULATED = 150
+
 
 # ds and ss are the frame and the data segment and BC does not reload them.
 # es is the one a dynamic array reaches its elements through.
@@ -190,7 +198,17 @@ def _spill_cost(body, module_) -> Counter:
     return out
 
 
-def _cost(body, module_, found: Counter) -> None:
+# What each loop level actually runs, read off the program's own bounds.
+# Ten per level was a stand-in and it undercounts every nest here: matrix's
+# inner loop runs four hundred times, not a hundred.
+TRIPS = {
+    "HOTLOP": 20, "PRESS": 10, "ARRIDX": 20, "IVCHAN": 21, "STRIDE": 21,
+    "MATRIX": 20, "NESTED": 6, "SPILL": 10, "SPLIT": 10, "ADDRM": 20,
+    "ROTATE": 10, "SEGLD": 20, "HARR": 10, "HG": 10, "LNGMIX": 10,
+}
+
+
+def _cost(body, module_, found: Counter, trips: int = 10) -> None:
     """One number to minimise: cycles, weighted by how often a loop runs.
 
     Ten per level of nesting, which is a stand-in for a trip count nothing
@@ -201,12 +219,17 @@ def _cost(body, module_, found: Counter) -> None:
     """
     depth = loopy.depth(list(body.blocks), body.entry)
     for block in body.blocks:
-        weight = 10 ** min(depth.get(block.at, 0), 3)
+        weight = trips ** min(depth.get(block.at, 0), 3)
         for op in block.ops:
             if op.at in module_.calls:
                 found["cost"] += CALLED.get((module_.calls[op.at] or "").upper(), CALL) * weight
                 continue
             name = (op.name or "").lower()
+            at = op.at - module_.start
+            if module_.code[at : at + 1] == b"\xcd":
+                found["cost"] += EMULATED * weight
+                found["a floating-point operation through the emulator"] += 1
+                continue
             cycles = CYCLES.get(name, 2)
             cycles += TOUCH * len([one for one in (*op.loads, *op.stores) if named(one)])
             found["cost"] += cycles * weight
@@ -332,7 +355,7 @@ def counted(paths: list[Path]) -> Counter:
 
             _invariant(body, module_, found)
             _registers(body, module_, found)
-            _cost(body, module_, found)
+            _cost(body, module_, found, TRIPS.get(path.stem.upper(), 10))
             _reloads(body, module_, found)
 
             for at in sorted(blocks):
@@ -368,22 +391,27 @@ TARGETS = {
     # depth is not always what reading the listing suggests -- the target is
     # the hand ratio applied to the measured cost, and both numbers are in
     # docs/targets.md.
-    "HOTLOP": 215,
-    "PRESS": 315,
-    "ARRIDX": 400,
+    # Optimal loop body x the same trip count the measurement uses, plus
+    # the straight-line part. Weighting one side and not the other was the
+    # last mistake in this file: it made matrix read 18x when the honest
+    # figure is five.
+    "HOTLOP": 312,
+    "PRESS": 308,
+    "ARRIDX": 660,
     "SUBEXP": 162,
-    "IVCHAN": 340,
-    "STRIDE": 360,
-    "MATRIX": 1750,
-    "SPILL": 1160,
-    "NESTED": 1850,
+    "IVCHAN": 560,
+    "STRIDE": 602,
+    "MATRIX": 6210,
+    "SPILL": 1122,
+    "NESTED": 768,
     "LNGMIX": 210,
-    "SPLIT": 300,
-    "ADDRM": 470,
-    "ROTATE": 345,
+    "SPLIT": 276,
+    "ADDRM": 754,
+    "ROTATE": 294,
     "BOOLS": 126,
-    "SEGLD": 1925,
-    "HARR": 1900,
+    "SEGLD": 6704,
+    "HARR": 1834,
+    "HG": 304,
 }
 
 

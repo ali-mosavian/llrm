@@ -422,6 +422,32 @@ That is the general lesson in this file, for the third time: a cost hidden
 behind a call is a cost the measure has to be told about, or it reads as
 free.
 
+## Why these read 3x to 7x and real programs are worse
+
+With the trip counts read off each program's own bounds and applied to both
+sides, the suite measures **1.3x to 16.7x**. The two at the top are the only
+two whose loop body calls the runtime on every pass: `lngmix` at 16.7x is
+two long divisions per iteration, and `huge` at 13x is two `B$HARY` calls
+for one element.
+
+That is the shape of it. BC's integer code is bad by a factor of three to
+seven -- no allocation, no invariants hoisted, every address recomputed.
+Where it hands the work to the runtime it is bad by a factor of fifteen,
+because the helper does in software what the machine does in one
+instruction.
+
+**And the suite is mostly integer, so it understates real programs.** BC's
+default is `/FPi`: every floating-point operation is an `int 34h`..`3Dh`
+into the emulator, done in software. `fpemu` and `fpdeep` together carry 65
+of them. A cost model reading mnemonics prices the most expensive thing in
+the program at two, because the instruction is a two-byte interrupt -- which
+is the same mistake as the flat rate for a call, in a third place.
+
+So the honest reading of "twenty to fifty times" is: it is what a program
+dominated by these calls costs, and every real BASIC program is -- floating
+point, strings, dynamic arrays, long arithmetic. The integer loops here are
+the part BC does *least* badly.
+
 ## The scoreboard
 
 Every target below is hand-derived from the full listing, both sides: BC's
@@ -433,27 +459,27 @@ between 1.5 and 2.3 times. Estimating the target flattered BC.
 ```
   program       cost  target  ratio   redundancy left
   lngmix        3504     210  16.7x    0
-  nested       12826    1850   6.9x   14
-  spill         7458    1160   6.4x    8
-  press         1788     315   5.7x   11
-  matrix        8540    1750   4.9x   12
-  split         1196     300   4.0x    9
-  hotlop         792     215   3.7x    6
-  stride        1060     360   2.9x    5
-  addrm         1296     470   2.8x   12
-  ivchan         930     340   2.7x    4
-  rotate         826     345   2.4x    9
-  arridx         850     400   2.1x    5
+  huge          3944     304  13.0x    0
+  harr         12454    1834   6.8x   18
+  spill         7458    1122   6.6x    8
+  nested        4794     768   6.2x   14
+  press         1788     308   5.8x   11
+  matrix       31970    6210   5.1x   12
+  hotlop        1472     312   4.7x    6
+  segld        30570    6704   4.6x   12
+  split         1196     276   4.3x    9
+  stride        2116     602   3.5x    5
+  addrm         2426     754   3.2x   12
+  ivchan        1843     560   3.3x    4
+  rotate         826     294   2.8x    9
+  arridx        1600     660   2.4x    5
   bools          210     126   1.7x   13
   subexp         203     162   1.3x    2
-  segld         7850    1925   4.1x   12
-  harr         12454    1900   6.6x   18
 ```
 
-**BC runs between 1.3 and 7.2 times the cost of code written by hand.** The
-worst four are the two nested loops and the two about registers, which is
-what a compiler that never keeps a value past a statement costs when the
-statement is inside something that repeats.
+**BC runs between 1.3 and 16.7 times the cost of code written by hand**, and
+the section above says why the top of that range is where the runtime is
+called and why the suite understates real programs.
 
 `lngmix` at 7.2x is the one worth reading twice: its loop body is two long
 runtime calls over an operand that never changes, so absorption, LICM and
