@@ -363,10 +363,12 @@ def rebuild(
     the only thing in the corpus's code segments that is not in a body --
     is the caller's to keep.
     """
-    ops = sorted(
-        (op for _, body in bodies for op in _ordered(body)),
-        key=lambda one: one.at,
-    )
+    # _ordered's own order, not sorted by address. The two agree while
+    # nothing has moved -- and they are not the same rule: a transform that
+    # moves an op puts it where it belongs in the list, and re-sorting by
+    # address would put it straight back. Hoisting anything out of a loop
+    # needs this, and so does every pass that follows it.
+    ops = [op for _, body in sorted(bodies, key=lambda one: one[1].entry) for op in _ordered(body)]
     if not ops:
         return "no bodies to rebuild"
     if any(_length_of(one) is None for one in ops):
