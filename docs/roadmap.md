@@ -56,6 +56,33 @@ outlives a statement.** Everything else -- the reloads, the recomputed
 addresses, the invariants inside loops, two of eight x87 slots, two of six
 registers -- follows from that.
 
+### What hoisting still needs, measured
+
+`transform.hoisted()` moves a loop-invariant load into the preheader and
+asks for a register the loop does not use. The move works -- four separate
+things had to be right and each was wrong first, and `docs/targets.md`'s
+programs dropped from 4.7x to 4.4x when it fired.
+
+**It fires on nothing today, deliberately.** The register has to be granted
+before the move is sound: a load hoisted out of a loop that still clobbers
+the register it loaded into is not a missed optimisation, it is the wrong
+program. And the grant cannot be had from `regalloc.colour()`, because this
+pass rewrites the op list while `origin`, `defines` and `uses` are the ones
+the body was raised with -- asking colour is asking a stale analysis, and it
+refuses every pin with "interferes with every register at once".
+
+Three ways out, in the order they are worth trying:
+
+1. **Re-raise inside the pass.** The machinery exists for whole rounds;
+   what is missing is doing it to one body in memory rather than through
+   bytes.
+2. **Maintain the SSA across the move.** The pass knows exactly what it
+   changed -- one op's block -- so updating `origin` and the liveness it
+   feeds is bounded work.
+3. **Answer the register question without colour.** Body-wide found nothing
+   (every program ends in `B$CENP`, which clobbers si) and live-across-the-
+   loop is the right question but is not yet returning it either.
+
 ### The order the work has to happen in
 
 **Measured 2026-09-02, and it is not the order this file first gave.**

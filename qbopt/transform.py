@@ -39,6 +39,7 @@ from qbopt import ir
 from qbopt import mir
 from qbopt import wide
 from qbopt import avail
+from qbopt import runtime
 from qbopt import regalloc
 from qbopt import pairs
 from qbopt import loops as loopy
@@ -424,6 +425,17 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
     gone: set[int] = set()
     wanted: dict = {}
 
+    # A register is usable for a hoist when nothing is live in it across
+    # the loop. Asked of the body as raised, not of the rewritten one: this
+    # pass moves ops and the SSA around it is the one the body came with, so
+    # colour() and live() would be describing what went in.
+    #
+    # Body-wide was the first try and found nothing: every program here ends
+    # in B$CENP, which clobbers si, and treating that as occupying si
+    # throughout left no register free anywhere. What matters is what is
+    # live *at the loop*, and nothing is live into the end of the program.
+    alive = regalloc.live(body)
+
     for loop in inside:
         into = _preheader(body, loop)
         if into is None or into in loop.body:
@@ -432,6 +444,17 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
         if any(one.at in calls or one.barrier for one in ops):
             continue
         stores = [ref for one in ops for ref in one.stores]
+
+        # What is live on the way out of the preheader and out of every
+        # block in the loop -- a register holding any of those is spoken for
+        # while the hoisted value would need it.
+        across = {
+            body.origin.get(value)
+            for at in (into, *loop.body)
+            for value in alive.live_out.get(at, ())
+            if not value.flags
+        }
+        spare = {where for where in regalloc.AVAILABLE if where not in across}
 
         written: Counter = Counter()
         touched: set = set()
@@ -474,7 +497,7 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
                     (
                         where
                         for where in regalloc.AVAILABLE
-                        if where not in touched and where not in wanted.values()
+                        if where in spare and where not in touched and where not in wanted.values()
                     ),
                     None,
                 )
@@ -523,7 +546,9 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
             here = [replace(one, at=ops[-1].at) for one in moved[block.at]] if ops else moved[block.at]
             ops = (ops[:-1] + here + ops[-1:]) if leaves else (ops + here)
         out.append(replace(block, ops=tuple(ops)))
-    return replace(body, blocks=tuple(out), pins={**body.pins, **wanted})
+    got = replace(body, blocks=tuple(out), pins={**body.pins, **wanted})
+
+    return got
 
 
 # The passes, in the order they run. One per whole-segment round, because
