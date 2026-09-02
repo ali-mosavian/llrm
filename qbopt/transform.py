@@ -482,6 +482,27 @@ def _effective(body: MirBody, calls: dict[int, str]) -> set:
     return wanted
 
 
+def _rewritten(ops: list[Op], origin: dict) -> set:
+    """Registers more than one operation in the loop writes.
+
+    A definition may only leave a loop if it is the only one of its register
+    in there. `mov ax,1` that starts an inner counter reads nothing the
+    outer loop writes, so it is invariant by every other test here -- and
+    hoisting it means the second pass of the outer loop starts from where
+    the inner one left off. segld printed 1030 for 1050, one inner loop
+    short.
+    """
+    seen: dict = {}
+    for one in ops:
+        for value in one.defines:
+            if value.flags:
+                continue
+            where = origin.get(value)
+            if where is not None:
+                seen[where] = seen.get(where, 0) + 1
+    return {where for where, count in seen.items() if count > 1}
+
+
 def _invariant_run(
     ops: list[Op], carried: set, stores: list, dgroup: frozenset[int], calls: dict[int, str], origin: dict
 ) -> list[Op]:
@@ -496,6 +517,7 @@ def _invariant_run(
         return []
     made: set = set()
     run: list = []
+    twice = _rewritten(ops, origin)
     changing = True
     while changing:
         changing = False
@@ -508,6 +530,10 @@ def _invariant_run(
             # writes, so all three were invariant by the test above and all
             # three left -- and the back edge left with them.
             if what.op in (ir.Operation.JUMP, ir.Operation.BRANCH):
+                continue
+            # Only definition of its register in the loop, or the loop's own
+            # later write is what the next pass would see. See _rewritten.
+            if any(origin.get(value) in twice for value in one.defines if not value.flags):
                 continue
             # Pinning one value recolours the whole body, and an operand
             # nothing writes down does not move with it: hotlop hoisted
@@ -541,11 +567,31 @@ def _invariant_run(
     return run
 
 
-def _crossing(run: list, rest: list, phis: list | None = None, wanted: set | None = None) -> mir.Value | None:
-    """The one value the run computes that the rest of the loop still reads.
+def _pruned(run: list, drop: set) -> list:
+    """The run without the values named, and without whatever fed only them.
 
-    One, because each would need a register of its own and a rule for which
-    gets one; the shapes that pay have exactly one. And no flag among them:
+    Dropping the operation that defines a value leaves anything reading it
+    computing from something no longer there, so this runs to a fixed point
+    rather than filtering once.
+    """
+    keep = [one for one in run if not (set(one.defines) & drop)]
+    changing = True
+    while changing:
+        changing = False
+        gone = {value for one in run if one not in keep for value in one.defines}
+        for one in list(keep):
+            if any(use in gone for use in one.uses):
+                keep.remove(one)
+                changing = True
+    return keep
+
+
+def _crossing(run: list, rest: list, phis: list | None = None, wanted: set | None = None) -> frozenset | None:
+    """The values the run computes that the rest of the loop still reads.
+
+    Each needs a register of its own, so this used to insist on exactly one.
+    The count is not the constraint, the registers are, and the caller
+    finds that out by asking the allocator. And no flag among them:
     a flag cannot be carried to the loop in a register, so a comparison
     whose answer is read inside it has to stay inside it. Counting only
     non-flag values here is what let hotlop's compare move out from under
@@ -560,9 +606,9 @@ def _crossing(run: list, rest: list, phis: list | None = None, wanted: set | Non
     if wanted is not None:
         taken &= wanted
     crossing = {value for one in run for value in one.defines if value in taken}
-    if any(value.flags for value in crossing) or len(crossing) != 1:
+    if not crossing or any(value.flags for value in crossing):
         return None
-    return next(iter(crossing))
+    return frozenset(crossing)
 
 
 def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
@@ -600,6 +646,11 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
         stores = [ref for one in ops for ref in one.stores]
         carried = {phi.result for at in loop.body for phi in at_of[at].phis}
         run = _invariant_run(ops, carried, stores, dgroup, calls, body.origin)
+        # Not one already taken out of a loop inside this one. Invariant in
+        # the inner loop and in the outer, it was put in both preheaders and
+        # its bytes counted twice, which layout reports as a negative gap:
+        # harr and segld nest ten by ten.
+        run = [one for one in run if one.at not in gone]
         if not run:
             continue
 
@@ -607,10 +658,9 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
         # value, or this would need a register for each and a rule for
         # which; the shapes that pay have exactly one.
         rest = [one for one in ops if one not in run]
-        result = _crossing(run, rest, [phi for at in loop.body for phi in at_of[at].phis], effective)
-        if result is None:
-            continue
-        if any(_implicit(other) for other in rest if result in other.uses):
+        phis = [phi for at in loop.body for phi in at_of[at].phis]
+        crossing = _crossing(run, rest, phis, effective)
+        if crossing is None:
             continue
 
         across = {
@@ -625,19 +675,42 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
             for where in ((*what.dests, *what.sources) if what else ()):
                 if isinstance(where, ir.Reg):
                     touched.add(ir.ROOT.get(where.register, where.register))
+        # As many as there are registers for, not all or nothing: the rest
+        # go back into the loop, with anything in the run that fed only
+        # them.
+        spare = [where for where in regalloc.AVAILABLE if where not in across and where not in touched]
+        if len(crossing) > len(spare):
+            run = _pruned(run, set(sorted(crossing, key=lambda one: one.id)[len(spare) :]))
+            if not run:
+                continue
+            rest = [one for one in ops if one not in run]
+            crossing = _crossing(run, rest, phis, effective)
+            if crossing is None:
+                continue
+
+        # A reader whose operand is implicit does not move with a rename:
+        # `imul word [b]` multiplies by ax and says so nowhere. Putting the
+        # value back before it runs takes a copy, and a copy takes rewriting
+        # the reader with it -- one transformation, and it is the
+        # allocator's. Refused here until it is.
+        if any(_implicit(other) for other in rest for one in crossing if one in other.uses):
+            continue
+
         # A value some instruction reaches a cell by can only live where
         # 16-bit addressing can reach one -- bx, si or di.
-        offer = [
-            where
-            for where in regalloc.AVAILABLE
-            if result not in reached_by or ir.ROOT.get(where, where) in addressable
-        ]
-        free = [
-            where for where in offer if where not in across and where not in touched
-        ]
-        if not free:
+        here = {}
+        for result in sorted(crossing, key=lambda one: one.id):
+            free = [
+                where
+                for where in spare
+                if result not in reached_by or ir.ROOT.get(where, where) in addressable
+            ]
+            if not free:
+                break
+            here[result] = free
+        if len(here) != len(crossing):
             continue
-        wanted[result] = free
+        wanted.update(here)
         moved[into] = moved.get(into, []) + list(run)
         gone.update(one.at for one in run)
 

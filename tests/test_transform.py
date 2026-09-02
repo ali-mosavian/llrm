@@ -539,12 +539,24 @@ def test_hoisting_leaves_every_loop_and_every_terminator_where_it_was() -> None:
             now = loopy.loops(list(after.blocks), after.entry)
             assert len(now) == len(was), f"{obj.stem} {name}: {len(was)} loops became {len(now)}"
 
-            ends = {one.at: one.ops[-1].at for one in body.blocks if one.ops}
-            for block in after.blocks:
-                if block.at not in ends or not block.ops:
+            # A preheader legitimately gains operations after its last, so
+            # the invariant is the shape and not the address: a block that
+            # ended in control flow still ends on that same branch.
+            for was, now in zip(body.blocks, after.blocks, strict=True):
+                if not was.ops or not now.ops:
                     continue
-                assert block.ops[-1].at == ends[block.at], (
-                    f"{obj.stem} {name}: block {block.at:#x} lost the operation it ended on"
+                before = transform._semantics_of(was.ops[-1])
+                if before is None or before.op not in (ir.Operation.JUMP, ir.Operation.BRANCH):
+                    continue
+                # By where it goes, not by its address: taking the first
+                # operation out of a block moves the branch onto the block's
+                # own address, and it is the same branch.
+                after_it = transform._semantics_of(now.ops[-1])
+                assert after_it is not None and after_it.op is before.op, (
+                    f"{obj.stem} {name}: block {was.at:#x} no longer ends in control flow"
+                )
+                assert after_it.target == before.target, (
+                    f"{obj.stem} {name}: block {was.at:#x} ends on a branch somewhere else"
                 )
     assert seen, "no body in the corpus has a loop, so this proves nothing"
 
@@ -574,7 +586,7 @@ def test_a_run_whose_flag_the_loop_still_reads_is_not_hoistable() -> None:
     branch = op(0x14, "jle", (), (flag,))
     reader = op(0x18, "add", (), (got,))
 
-    assert transform._crossing([compare], [reader]) is got, "a plain value crosses in a register"
+    assert transform._crossing([compare], [reader]) == frozenset({got}), "a plain value crosses in a register"
     assert transform._crossing([compare], [branch, reader]) is None, "a flag the loop reads does not"
     assert transform._crossing([compare], [branch]) is None
 
@@ -618,3 +630,43 @@ def test_an_operand_nothing_writes_down_keeps_its_operation_in_the_loop() -> Non
     run = transform._invariant_run([load, widening], set(), [], frozenset(), {}, {})
     assert load in run, "an ordinary load is invariant here"
     assert widening not in run, "and the multiply behind it may not leave with it"
+
+
+def test_a_definition_the_loop_writes_again_does_not_leave_it() -> None:
+    """`mov ax,1` starting an inner counter is invariant, and must not move.
+
+    It reads nothing the outer loop writes, so every other test here calls
+    it loop-invariant -- and hoisting it means the second pass of the outer
+    loop starts from wherever the inner one left off. segld printed 1030
+    for 1050, exactly one inner loop short, on three of the twelve
+    configurations.
+
+    The rule is that a definition may only leave a loop if it is the only
+    one of its register in there. Driven, because with `_crossing` limited
+    to a single value the corpus never reached the shape -- which is why
+    this went unnoticed rather than being caught.
+    """
+    from iced_x86 import Register
+
+    from qbopt import ir
+    from qbopt import mir
+
+    ax = ir.Reg(register=Register.AX, width=2)
+    setup = ir.Semantics(ir.Operation.MOVE, "mov", dests=(ax,), sources=(ir.Imm(value=1, width=2),))
+    step = ir.Semantics(ir.Operation.UNARY, "inc", dests=(ax,), sources=(ax,))
+
+    start = mir.Value(1, 0x10)
+    again = mir.Value(2, 0x14)
+    origin = {start: Register.EAX, again: Register.EAX}
+
+    begins = mir.Op(0x10, ir.Operation.MOVE, "mov", (start,), (), made=setup)
+    counts = mir.Op(0x14, ir.Operation.UNARY, "inc", (again,), (start,), made=step)
+
+    assert transform._rewritten([begins, counts], origin) == {Register.EAX}
+    run = transform._invariant_run([begins, counts], set(), [], frozenset(), {}, origin)
+    assert begins not in run, "the loop writes ax again, so its first write stays"
+
+    # On its own it is invariant, which is what makes the rule necessary
+    # rather than incidental.
+    assert transform._rewritten([begins], origin) == set()
+    assert begins in transform._invariant_run([begins], set(), [], frozenset(), {}, origin)
