@@ -179,6 +179,19 @@ def stride() -> list[str]:
     return [f"T={num(sum(i // 5 for i in range(0, 101, 5)))}", "DONE"]
 
 
+def spill() -> list[str]:
+    o1 = o2 = 0
+    for i in range(1, 11):
+        o1 += i
+        o2 += o1
+    return [f"T={num(100 * (3 * 5 + 7))}", f"O={num(o2)}", "DONE"]
+
+
+def split() -> list[str]:
+    total = sum(2 * i for i in range(1, 11)) + sum(3 * i for i in range(1, 11))
+    return [f"R={num(total)}", "DONE"]
+
+
 def fpemu() -> list[str]:
     x, y = 1073741831, 1024
     q = x // y
@@ -432,6 +445,8 @@ PROGRAMS = {
     "ivchan": ivchan,
     "matrix": matrix,
     "stride": stride,
+    "spill": spill,
+    "split": split,
     "fpemu": fpemu,
     "fpdeep": fpdeep,
     "chain": chain,

@@ -223,6 +223,58 @@ the only program here that genuinely needs a spill -- and once the invariant
 sum is folded, one register holds it and the loop touches three things.
 Every other loop fits entirely, and none of them is allocated.
 
+## spill -- which variable to spill, and what it costs
+
+Eight variables and six registers, and they are not equally worth keeping.
+`h1`, `h2` and `h3` are read once per inner iteration, a hundred times;
+`o1` and `o2` ten times in the outer loop. `tools/opportunity.py --spill`
+ranks them by accesses weighted ten per level of nesting, which is the
+number an allocator spills by:
+
+```
+   202  t          inner
+   200  j          inner
+   101  h1         inner
+   101  h2         inner
+   101  h3         inner
+    31  o1         outer
+    22  o2         outer
+    20  i          outer
+```
+
+A ten to one separation, and BC uses none of it. Its inner loop:
+
+```
+006c  mov ax,[h1]         | ; before the loop: dx = h1*h2+h3, folded to 22
+006f  imul word [h2]      | ; bx = t, cx = j
+0073  add ax,[h3]         | loop:
+0077  add ax,[t]          |   add  bx,dx
+007b  mov [t],ax          |   inc  cx
+007e  mov ax,[j]          |   cmp  cx,10
+0081  inc ax              |   jle  loop
+0082  mov [j],ax          |
+0085  cmp ax,0Ah          |
+0088  jle short 006c      |
+```
+
+**9 instructions and 30 bytes, against 4 and about 9**, and an `imul` per
+pass over three constants.
+
+The allocation, at each point: `bx` holds `t` and `cx` holds `j` for the
+whole nest; `dx` holds the folded invariant; `ax` is the outer counter `i`;
+`si` holds `o1`. That leaves `o2` in memory -- the right choice, because it
+costs 22 and the cheapest of the others costs 101. **Spilling by cost spills
+`o2`; spilling by BC's rule spills all eight, 778 weighted accesses instead
+of 22.**
+
+## split -- two variables, one register
+
+`a` is dead before `b` is born: `a` is read only in the first loop and `b`
+only in the second, so one register holds both and nothing is spilled. Live
+ranges that do not overlap can share, which is the half of allocation that
+is not about pressure at all -- and BC, having no live ranges, has neither
+half.
+
 ## The number to minimise
 
 `tools/opportunity.py` prints a weighted cycle count: an operation's own
@@ -246,6 +298,8 @@ compiled two ways, and it is the one number these targets roll up into.
 | stride loop | 12 insns, 37 B | 7, ~17 | scalar evolution: a divide that is a counter |
 | matrix inner | 10 insns, 37 B | 5, ~11 | LICM out of the inner loop, IVSR on the address |
 | matrix diagonal | 10 insns | 6 | IVSR with a stride of 2(w+1) |
+| spill inner | 9 insns, 30 B | 4, ~9 | spill by cost: one variable, not eight |
+| split | two loops | one register for both | live-range splitting |
 
 Roughly **half to three-quarters of the loop bodies**, and every `imul` and
 `idiv` in all of them. The multiplies are not incidental: BC emits one per

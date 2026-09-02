@@ -94,6 +94,30 @@ CYCLES = {"imul": 22, "idiv": 43, "mul": 22, "div": 43, "shl": 3, "shr": 3, "sar
 TOUCH = 4  # a memory operand, cached
 
 
+def _spill_cost(body, module_) -> Counter:
+    """What each variable costs to leave in memory, by where it is touched.
+
+    A variable read a hundred times in an inner loop and one read ten times
+    in the outer are not the same claim on a register, and which to spill is
+    decided by exactly this number. BC does not ask: it spills every
+    variable at every statement boundary, so the ranking below is the whole
+    of what an allocator would have to work from and none of it is used.
+
+    Ten per level of nesting, the same stand-in for a trip count the cost
+    model uses.
+    """
+    depth = loopy.depth(list(body.blocks), body.entry)
+    out: Counter = Counter()
+    for block in body.blocks:
+        weight = 10 ** min(depth.get(block.at, 0), 3)
+        for op in block.ops:
+            if op.at in module_.calls:
+                continue
+            for ref in (one for one in (*op.loads, *op.stores) if named(one)):
+                out[str(ref.addr)] += weight
+    return out
+
+
 def _cost(body, module_, found: Counter) -> None:
     """One number to minimise: cycles, weighted by how often a loop runs.
 
@@ -251,11 +275,33 @@ def counted(paths: list[Path]) -> Counter:
     return found
 
 
+def spilling(paths: list[Path]) -> None:
+    """The per-variable ranking an allocator would spill by."""
+    for path in paths:
+        module_ = module.of(omf.parse(path.read_bytes()))
+        if module_ is None:
+            continue
+        mapped = code_map(module_)
+        if isinstance(mapped, str):
+            continue
+        for name, body in mir.bodies(module_, split.partition(module_, mapped)):
+            costs = _spill_cost(body, module_)
+            if not costs:
+                continue
+            print(f"  {path.stem} {name}")
+            for cell, cost in costs.most_common(12):
+                print(f"      {cost:6d}  {cell}")
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="opportunity")
     ap.add_argument("objects", nargs="*", type=Path)
+    ap.add_argument("--spill", action="store_true", help="rank each variable by what it costs to keep in memory")
     args = ap.parse_args(argv)
     paths = args.objects or sorted(Path("fixtures/omf").glob("*.obj"))
+    if args.spill:
+        spilling(paths)
+        return 0
     found = counted(paths)
     print(f"  {found.pop('cost', 0):8d}  COST -- weighted cycles, the number to minimise")
     for name, count in sorted(found.items(), key=lambda one: -one[1]):
