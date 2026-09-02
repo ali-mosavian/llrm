@@ -88,6 +88,12 @@ on this list.
 | `regalloc.colour()` at emission | spill costs, `select` honouring an assignment | built, never wired |
 | code motion between blocks | a transform that may move an op across an edge | does not exist |
 
+**Every pass here is cross-block, without exception.** BC's redundancy is
+loop-carried -- the counter's reload arrives over the back-edge -- so a
+block-scoped pass measures near zero and finds nearly nothing. Every measure
+in this project was block-scoped once and every one of them read empty. A
+pass that cannot cross an edge is not worth writing.
+
 **Passes, in dependency order**
 
 | pass | what it takes | programs |
@@ -364,6 +370,16 @@ are empty but because nothing here had asked them a loop-carried question.
       `hotlop` recomputes a constant product twenty times, `press` four
       products ten times, `matrix` a multiply four hundred times in an inner
       loop that writes neither operand
+- [ ] **array addressing** — `shl`/`add`/`mov si` into one scaled operand,
+      which a 386 addresses in the instruction that uses it. Every array
+      access in every program pays three instructions for it: `addrm`,
+      `arridx`, `matrix`, `ivchan`, `stride`
+- [ ] **the segment reload** — a dynamic array reaches its elements through
+      a descriptor and BC reloads `es` from it on every subscript, twice in
+      a statement where the element appears twice, from a word written once
+      before the loop. `segld` is two hundred identical reloads over a
+      five-by-twenty nest; `harr` adds the array base read twice per
+      statement. Both hoist out of the nest entirely
 - [ ] array access — the index computation is the invariant worth hoisting.
       `harr` recomputes a two-dimensional element's address from the
       subscripts on every pass, with the segment and the array base read
