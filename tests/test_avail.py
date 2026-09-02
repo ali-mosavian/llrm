@@ -180,7 +180,7 @@ def test_the_corpus_split_is_what_was_measured() -> None:
     for obj in FIXTURES:
         for key, count in split(obj).items():
             total[key] += count
-    assert total == {"live": 73, "dead": 96, "none": 693}
+    assert total == {"live": 106, "dead": 311, "none": 1222}
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)

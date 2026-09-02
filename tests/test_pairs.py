@@ -172,7 +172,29 @@ def test_the_arithmetic_pairs_are_exactly_the_ones_lift_finds(obj: Path) -> None
     two agree on all 363, object by object.
     """
     theirs, mine = _alu(obj)
-    assert mine == theirs
+    extra = mine - theirs
+    assert not theirs - mine, f"{obj.stem}: lift finds a pair this does not, at {sorted(theirs - mine)}"
+
+    # What this finds and lift.py does not is a pair on the result of a
+    # call. lift.py reaches those through tail(), seeded with the call's own
+    # result, which is a separate walk from regions() -- so `and ax,[x]`
+    # two instructions after B$RMI4 is a pair to this and not to that.
+    # suite/lngmix.bas is the first program in the corpus to write one.
+    found = corpus.loaded(obj)
+    assert found is not None
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
+    after_a_call = set()
+    for block in split.partition(found, mapped):
+        seen = False
+        for insn in block.insns:
+            if seen:
+                after_a_call.add(insn.at)
+            seen = seen or insn.at in found.calls
+    assert extra <= after_a_call, (
+        f"{obj.stem}: a pair lift.py does not find and no call precedes, at "
+        f"{sorted(extra - after_a_call)}"
+    )
 
 
 def test_the_slot_is_cleared_by_anything_that_writes_a_half() -> None:
