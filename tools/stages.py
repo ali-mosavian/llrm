@@ -9,6 +9,13 @@ placement bug so far -- and the shape nothing in the host suite can see.
     uv run python tools/stages.py fixtures/omf/hotlop-p-g2.obj
     uv run python tools/stages.py fixtures/omf/hotlop-p-g2.obj --only hoist
     uv run python tools/stages.py fixtures/omf/hotlop-p-g2.obj --asm
+
+The MIR absorb pass runs here by default, which is *not* what rewrite.py
+does: it passes `absorb=not absorb_calls`, so with the default settings
+calls.py absorbs in the machine arm and the MIR pass is switched off. That
+default is right for the pipeline and wrong for this tool -- it would list
+an `absorb` stage that cannot fire, and report no change on a program with
+fourteen absorbable calls. `--no-absorb` gives the pipeline's own setting.
 """
 
 import sys
@@ -97,6 +104,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--only", help="one pass by name, instead of each in turn")
     ap.add_argument("--asm", action="store_true", help="disassemble after every stage")
     ap.add_argument("--quiet", action="store_true", help="shape only, no per-op detail")
+    ap.add_argument(
+        "--no-absorb",
+        dest="absorb",
+        action="store_false",
+        help="leave absorption to the machine arm, which is what rewrite.py does by default",
+    )
     args = ap.parse_args(argv)
 
     data = args.object.read_bytes()
@@ -106,13 +119,13 @@ def main(argv: list[str] | None = None) -> int:
 
     # Emission with no pass at all, which is the control: anything that
     # changes here is the emitter and not a transform.
-    plain, why = rebuilt(data, optimise=False)
+    plain, why = rebuilt(data, optimise=False, absorb=args.absorb)
     was = _report(f"emitted, no pass ({why})", plain, was, not args.quiet)
     if args.asm:
         _asm(plain)
 
     for name in [args.only] if args.only else PASSES:
-        out, why = rebuilt(data if args.only else plain, only=name)
+        out, why = rebuilt(data if args.only else plain, only=name, absorb=args.absorb)
         was = _report(f"{name} ({why})", out, was, not args.quiet)
         if args.asm:
             _asm(out)
