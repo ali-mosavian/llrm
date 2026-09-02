@@ -243,6 +243,29 @@ def congruent(body: mir.MirBody) -> dict[Value, Value]:
                 here, there = root(phi.result), root(value)
                 if here is not there:
                     parent[here] = there
+
+        # And a two-address instruction, which reads and writes one
+        # register: `add ax,[c]` is ax at two moments, not two places.
+        # Allocating the halves apart emits `add di,[c]`, adding to
+        # whatever di held -- matrix printed -2076 for 380. lir.tied says
+        # which operations are one; x86 says it by naming the operand twice
+        # and nothing else in the pipeline knew.
+        for op in block.ops:
+            what = op.made if op.made is not None else getattr(op.node, "semantics", None)
+            if what is None:
+                continue
+            where = lir.tied(what)
+            if where is None:
+                continue
+            for one in op.defines:
+                if one.flags or ir.ROOT.get(body.origin.get(one, -1), -1) is not where:
+                    continue
+                for other in op.uses:
+                    if other.flags or ir.ROOT.get(body.origin.get(other, -1), -1) is not where:
+                        continue
+                    here, there = root(one), root(other)
+                    if here is not there:
+                        parent[here] = there
     return {one: root(one) for one in parent}
 
 
@@ -293,10 +316,12 @@ def colour(body: mir.MirBody, pinned: dict[Value, Register_] | None = None) -> d
             between[here].add(there)
 
     assigned: dict[Value, Register_] = {}
+    pinned_roots: set[Value] = set()
     for value, want in (pinned or {}).items():
         root = of.get(value, klass.get(value, value))
         if assigned.setdefault(root, want) is not want:
             return f"{value} is tied to a value that wants {NAMES.get(assigned[root], assigned[root])}"
+        pinned_roots.add(root)
 
     # A class may only sit where every one of its members can be reached
     # from, and 16-bit addressing reaches memory through bx, bp, si or di.
@@ -331,20 +356,60 @@ def colour(body: mir.MirBody, pinned: dict[Value, Register_] | None = None) -> d
         ):
             return {one: clean[of[one]] for one in graph if of[one] in clean}
 
-    for root, others in sorted(between.items(), key=lambda kv: (-len(kv[1]), kv[0].id)):
-        if root in assigned:
+    def offers(root: Value) -> list[Register_]:
+        if root not in reached_by:
+            return list(AVAILABLE)
+        return [where for where in AVAILABLE if ir.ROOT.get(where, where) in wide_addressing]
+
+    # Everything back where BC had it, and then only what conflicts moves.
+    # Assigning in degree order and counting only neighbours already
+    # assigned let a class processed late find its own register taken and
+    # take someone else's, and that one did the same: one forced move
+    # displaced twelve values in lngmix, and somewhere down the cascade a
+    # value and its readers stopped agreeing.
+    wanted: dict[Value, Register_ | None] = dict(assigned)
+    for root in between:
+        if root in wanted:
             continue
-        taken = {assigned[other] for other in others if other in assigned}
-        offer = AVAILABLE
-        if root in reached_by:
-            offer = [where for where in AVAILABLE if ir.ROOT.get(where, where) in wide_addressing]
-        free = [where for where in offer if where not in taken]
+        here = was.get(root)
+        wanted[root] = here if here is not None and here in offers(root) else None
+
+    for _ in range(len(between) + 1):
+        clash = next(
+            (
+                (root, other)
+                for root, others in between.items()
+                for other in others
+                if wanted.get(root) is not None and wanted.get(root) is wanted.get(other)
+            ),
+            None,
+        )
+        homeless = next((root for root, where in wanted.items() if where is None), None)
+        if clash is None and homeless is None:
+            break
+
+        # Never the pinned one: a pin is the whole reason an allocation is
+        # being made, and moving it answers a different question.
+        root = homeless
+        if clash is not None:
+            root = clash[1] if clash[0] in pinned_roots else clash[0]
+            if root in pinned_roots and clash[1] not in pinned_roots:
+                root = clash[1]
+        if root is None:
+            break
+        if root in pinned_roots:
+            where = NAMES.get(wanted[root], wanted[root])
+            return f"{root} and a value it interferes with are both pinned to {where}"
+
+        taken = {wanted.get(other) for other in between[root]}
+        free = [where for where in offers(root) if where not in taken]
         if not free:
             return f"{root} interferes with every register at once"
-        # its own register first, so an allocation that need not move
-        # anything does not
-        here = was.get(root)
-        assigned[root] = here if here is not None and here in free else free[0]
+        wanted[root] = free[0]
+    else:
+        return "the allocation did not settle"
+
+    assigned = {root: where for root, where in wanted.items() if where is not None}
 
     # A tangled class may stay where it is and may not go anywhere else.
     for root in tangled:

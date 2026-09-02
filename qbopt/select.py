@@ -1075,7 +1075,7 @@ def unary_mem(name: str, cell: ir.Mem, at: int = 0) -> Emitted | None:
 def emit(
     what: ir.Semantics,
     at: int = 0,
-    where: dict[Register_, Register_] | None = None,
+    where: dict[Register_, Register_] | tuple[dict, dict] | None = None,
     short: bool = False,
     relocated: bool = False,
 ) -> Emitted | None:
@@ -1093,10 +1093,13 @@ def emit(
     # the cases that take a cell never reached _remapped at all, and the
     # segment moves reached it for neither of theirs.
     if where:
+        # By side. `mov ax,1` defines one value and preserves another in the
+        # same register, and one map cannot say two things about eax.
+        into, outof = where if isinstance(where, tuple) else (where, where)
         what = replace(
             what,
-            dests=tuple(_operand(one, where) for one in what.dests),
-            sources=tuple(_operand(one, where) for one in what.sources),
+            dests=tuple(_operand(one, into) for one in what.dests),
+            sources=tuple(_operand(one, outof) for one in what.sources),
         )
         where = None
 

@@ -40,7 +40,6 @@ def _shown(code: bytes) -> str:
     return "; ".join(formatter.format(one) for one in Decoder(16, code, ip=0))
 
 
-@pytest.mark.xfail(reason="_where builds one register map per instruction; the fix is per side", strict=True)
 def test_moving_a_preserved_value_does_not_rewrite_the_destination() -> None:
     """`mov ax,1` defines one value and preserves another in the same register.
 
@@ -86,7 +85,6 @@ def test_lir_says_a_two_address_operand_is_one_register() -> None:
     assert lir.tied(on_stack) is None, "x87 shares no register with the rest"
 
 
-@pytest.mark.xfail(reason="regalloc.congruent does not tie a two-address operand yet", strict=True)
 def test_a_two_address_operation_keeps_both_halves_in_one_register() -> None:
     """`add ax,[c]` is ax at two moments, not two places.
 
@@ -122,7 +120,6 @@ def test_a_two_address_operation_keeps_both_halves_in_one_register() -> None:
     assert klass[made] is klass[read], "a two-address instruction ties what it reads to what it writes"
 
 
-@pytest.mark.xfail(reason="colour() assigns in degree order and cascades", strict=True)
 def test_an_allocation_keeps_every_value_where_it_was_unless_forced() -> None:
     """Only what conflicts moves, and the invariant says which.
 
@@ -135,42 +132,56 @@ def test_an_allocation_keeps_every_value_where_it_was_unless_forced() -> None:
     its readers stopped agreeing.
     """
     seen = 0
-    for name in ("hotlop-p-g2", "press-p-g2", "matrix-p-g2", "spill-p-g2"):
-        found = module.of(omf.parse((Path("fixtures/omf") / f"{name}.obj").read_bytes()))
-        assert found is not None
+    for obj in FIXTURES[:40]:
+        found = module.of(omf.parse(obj.read_bytes()))
+        if found is None:
+            continue
         mapped = code_map(found)
-        assert not isinstance(mapped, str), mapped
+        if isinstance(mapped, str):
+            continue
 
         for body_name, body in mir.bodies(found, split.partition(found, mapped)):
             graph = regalloc.interference(body)
-            spare = [
-                one
-                for one in regalloc.AVAILABLE
-                if one not in {body.origin.get(v) for v in graph}
-            ]
             victim = next((one for one in graph if not one.flags and one in body.origin), None)
-            if victim is None or not spare:
+            if victim is None:
                 continue
 
-            got = regalloc.colour(body, {victim: spare[0]})
-            if isinstance(got, str):
-                continue
-            seen += 1
-            for value, where in got.items():
-                was = body.origin.get(value)
-                if was is None or where is was or value is victim:
+            # Whichever register it will take. Asking for one no value uses
+            # finds nothing: BC's loops occupy all six, which is why the
+            # first version of this test never pinned anything at all and
+            # reported success by doing nothing.
+            for want in regalloc.AVAILABLE:
+                if want is body.origin[victim]:
                     continue
-                # It moved. Something it interferes with has to be in the
-                # register it left, or nothing forced it.
-                sitting = [
-                    other
-                    for other in graph.get(value, ())
-                    if got.get(other) is was
-                ]
-                assert sitting, (
-                    f"{name} {body_name}: {value} left {regalloc.NAMES.get(was, was)} "
-                    f"with nothing in it"
-                )
+                got = regalloc.colour(body, {victim: want})
+                if isinstance(got, str):
+                    continue
+                seen += 1
+                klass = regalloc.congruent(body)
+                homes: dict = {}
+                for one in got:
+                    homes.setdefault(klass.get(one, one), set()).add(body.origin.get(one))
+                pinned = klass.get(victim, victim)
+                for value, where in got.items():
+                    was = body.origin.get(value)
+                    if was is None or where is was or value is victim:
+                        continue
+                    # A phi ties a class together and it moves as one, so a
+                    # member of the pinned value's own class did not move on
+                    # its own account.
+                    if klass.get(value, value) is pinned:
+                        continue
+                    # And a class whose members disagree about where BC put
+                    # them has no home to keep, so moving it is not unforced.
+                    if len(homes[klass.get(value, value)]) != 1:
+                        continue
+                    # It moved. Something it interferes with has to be in
+                    # the register it left, or nothing forced it.
+                    assert [one for one in graph.get(value, ()) if got.get(one) is was], (
+                        f"{obj.stem} {body_name}: {value} left "
+                        f"{regalloc.NAMES.get(was, was)} with nothing in it"
+                    )
+                break
     assert seen, "no body took a pin, so this proves nothing"
 
 

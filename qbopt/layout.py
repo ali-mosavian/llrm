@@ -103,20 +103,10 @@ _AT_WIDTH = {
 }
 
 
-def _where(op: mir.Op, assignment: dict | None, origin: dict | None) -> dict | None:
-    """This op's register remap, out of a whole-body allocation.
-
-    `select.emit` has taken a `where` since it was written and nothing ever
-    passed one: an allocation is per *value*, and an instruction names
-    registers, so the map has to be rebuilt for each op out of the values it
-    touches. Where the allocation put a value back where BC had it -- which
-    is every value unless something asked otherwise -- this is empty and
-    select emits exactly what it did before.
-    """
-    if not assignment or origin is None:
-        return None
-    out = {}
-    for value in (*op.defines, *op.uses):
+def _remap(values: tuple, assignment: dict, origin: dict) -> dict:
+    """One side's register remap, out of a whole-body allocation."""
+    out: dict = {}
+    for value in values:
         want = assignment.get(value)
         was = origin.get(value)
         if want is None or was is None or want is was:
@@ -129,7 +119,29 @@ def _where(op: mir.Op, assignment: dict | None, origin: dict | None) -> dict | N
             here, there = _AT_WIDTH.get(was, {}).get(width), _AT_WIDTH.get(want, {}).get(width)
             if here is not None and there is not None:
                 out[here] = there
-    return out or None
+    return out
+
+
+def _where(op: mir.Op, assignment: dict | None, origin: dict | None) -> tuple[dict, dict] | None:
+    """This op's register remap, by side, out of a whole-body allocation.
+
+    An allocation is per value and an instruction names registers, so the
+    map is rebuilt per op out of the values it touches. By side, because one
+    map cannot say two things about one register: `mov ax,1` defines a value
+    and *uses* the eax before it -- writing ax preserves the high half --
+    and with a single map, moving that older value rewrites the destination
+    too. hotlop's counter became `mov bx,1` and was clobbered by the very
+    value the move was meant to make room for.
+
+    Where the allocation put every value back where BC had it -- which is
+    every value unless something asked otherwise -- both are empty and
+    select emits exactly what it did before.
+    """
+    if not assignment or origin is None:
+        return None
+    into = _remap(op.defines, assignment, origin)
+    outof = _remap(op.uses, assignment, origin)
+    return (into, outof) if into or outof else None
 
 
 def _stands_for(op) -> tuple[int, int] | None:

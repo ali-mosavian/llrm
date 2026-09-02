@@ -416,15 +416,43 @@ def test_an_allocation_reaches_the_bytes() -> None:
     crossing = {phi.result for block in body.blocks for phi in block.phis} | {
         value for block in body.blocks for phi in block.phis for value in phi.incoming.values()
     }
-    victim = next(
-        one
-        for one in body.origin
-        if body.origin[one] is Register.EAX and not one.flags and one not in crossing
-    )
-
-    got = regalloc.colour(body, {victim: Register.ESI})
-    assert not isinstance(got, str), got
-    assert regalloc.moved(body, got), "the allocation moved nothing, so this proves nothing"
+    # Whichever value and register the allocator will take. Naming one
+    # outright stopped working when two-address operands began tying values
+    # into classes: the classes are larger, the pressure is real, and
+    # "interferes with every register at once" is a refusal rather than a
+    # failure. What this test is about is whether an allocation that *is*
+    # made reaches the bytes.
+    got = None
+    for one in body.origin:
+        if one.flags or one in crossing or body.origin[one] is not Register.EAX:
+            continue
+        for want in regalloc.AVAILABLE:
+            if want is Register.EAX:
+                continue
+            tried = regalloc.colour(body, {one: want})
+            if isinstance(tried, str) or not regalloc.moved(body, tried):
+                continue
+            # And one that some instruction actually names. A value can be
+            # moved and change no byte: `mov ax,1` *uses* the eax before it,
+            # because writing ax preserves the high half, and that use
+            # appears in no operand. Remapping it correctly touches nothing,
+            # which is the whole point of the map being per side -- but it
+            # would leave this test proving that.
+            if any(
+                layout._where(op, tried, body.origin) is not None
+                and (what := layout._semantics(op)) is not None
+                and (first := select.emit(what, at=0)) is not None
+                and (second := select.emit(what, at=0, where=layout._where(op, tried, body.origin)))
+                is not None
+                and first.code != second.code
+                for block in body.blocks
+                for op in block.ops
+            ):
+                got = tried
+                break
+        if got is not None:
+            break
+    assert got is not None, "no pin was accepted, so this proves nothing"
 
     changed = 0
     for block in body.blocks:
