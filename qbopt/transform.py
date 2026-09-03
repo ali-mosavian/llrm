@@ -763,7 +763,7 @@ def halves(body: MirBody) -> set:
                     and not any((one, half) in out for one in op.defines for half in (LOW, HIGH))
                 ):
                     continue
-                carried = _carried(op, body.origin)
+                carried = op.merges
                 read = widths(op)
                 described = op.kind is not mir.Kind.OPAQUE and not op.barrier
                 for one in op.uses:
@@ -803,54 +803,6 @@ def live(body: MirBody) -> set:
     return {one for one, _ in halves(body)}
 
 
-def _carried(op: Op, origin: dict) -> dict:
-    """Uses that are only the previous contents of a register being written.
-
-    A 16-bit write under a 32-bit register model is a read-modify-write, so
-    raising `imul word [n]` -- which reads ax and memory and writes dx:ax --
-    gives the operation a use of dx as well, standing for the half of edx it
-    leaves alone. That read is real, and worth exactly what the write it
-    feeds is worth: hotlop's dx result is dead, so the dx it merges into is
-    dead too. Treating every use of a live operation as live keeps a whole
-    loop-invariant multiply alive on the strength of it.
-
-    A use is carried when it shares a register with something the operation
-    defines and the operation's own semantics never name that register as a
-    source.
-    """
-    semantics = _semantics_of(op)
-    if semantics is None:
-        return {}
-    # Semantics naming no operand describe nothing, so nothing here is a
-    # partial write. A call names none, and every argument it reads shares
-    # a register with something it clobbers -- so all of them would read as
-    # the register's previous value and none as an input. B$OGTA takes the
-    # ON GOTO branch index in bx and the `mov bx` before it read as dead.
-    if not semantics.sources and not semantics.dests:
-        return {}
-
-    def root(one):
-        register = origin.get(one)
-        return None if register is None else ir.ROOT.get(register, register)
-
-    named = {
-        ir.ROOT.get(one.register, one.register) for one in semantics.sources if isinstance(one, ir.Reg)
-    }
-    out: dict = {}
-    for value in op.defines:
-        if value.flags:
-            continue
-        where = root(value)
-        if where is None or where in named:
-            continue
-        for one in op.uses:
-            if root(one) == where:
-                out[one] = value
-    return out
-
-
-# What each conditional jump asks of `cmp a,b`, as a predicate on the two
-# operands. Signed and unsigned are different questions and BC emits both.
 # Whether a comparison holds. Keyed on what the branch tests, which the
 # raise decided; keyed on the branch's mnemonic this was a pass that had to
 # know x86 spells "less than" six different ways.

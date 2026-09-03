@@ -397,6 +397,33 @@ def rewritten(op: "Op") -> bool:
 
 
 
+def _merged(what: "ir.Semantics", holds: dict, written: dict, args: tuple) -> dict:
+    """Which use is only the previous contents of which result.
+
+    A use is carried when it shares a place with something the operation
+    writes and the operation never names that place as an input. An
+    operation naming no operand at all describes nothing, so nothing in it
+    is a partial write: a call names none, and every argument it reads
+    shares a register with something it clobbers -- reading those as
+    previous contents made B$OGTA's branch index look dead.
+    """
+    if not what.sources and not what.dests:
+        return {}
+    named = {ir.ROOT.get(one.register, one.register) for one in what.sources if isinstance(one, ir.Reg)}
+    out: dict = {}
+    for register, value in written.items():
+        if value.flags:
+            continue
+        root = ir.ROOT.get(register, register)
+        if root in named:
+            continue
+        was = holds.get(register)
+        if was is not None:
+            out[was] = value
+    return out
+
+
+
 def _normalised(kind: Kind, name: str, args: tuple, results: tuple) -> tuple:
     """The operands the operation really has, once the machine's are gone.
 
@@ -508,6 +535,14 @@ class Op:
     # branch are how the machine gets one to the other; what the branch
     # means is `a <= b`, and this is where that is said.
     test: Kind | None = None
+    # Uses that are only the previous contents of what this writes, and
+    # which result each survives into. A narrow write under a wider
+    # register model is a read-modify-write: a two-byte store into a
+    # four-byte variable leaves the top half alone, so the operation reads
+    # it. That read is real and is worth exactly what the write it feeds is
+    # worth -- and it is not an input. Decided at the raise, because which
+    # halves share a place is the machine's answer and no pass's.
+    merges: dict = field(default_factory=dict)
     args: tuple[Arg, ...] = ()
     results: tuple[Arg, ...] = ()
     # What those were at the raise, so "did a pass rewrite this" is a
@@ -989,13 +1024,8 @@ def raise_body(
                 namer.stack.setdefault(one, []).append(value)
                 pushed.append(one)
                 made.append(value)
-            where = _operands(
-                node.semantics,
-                holds,
-                dict(zip(sorted(defines, key=lambda o: (o is not FLAGS, o)), made)),
-                loads,
-                stores,
-            )
+            written = dict(zip(sorted(defines, key=lambda o: (o is not FLAGS, o)), made))
+            where = _operands(node.semantics, holds, written, loads, stores)
             kind = _kind_of(node.semantics, where[0], where[1])
             operands = _normalised(kind, node.semantics.name or "", where[0], where[1])
             ops[at].append(
@@ -1009,6 +1039,7 @@ def raise_body(
                     stores,
                     node,
                     kind=kind,
+                    merges=_merged(node.semantics, holds, written, where[0]),
                     covers=ir.span(node),
                     stack=_stack_effect(node.semantics),
                     test=_BY_BRANCH.get(node.semantics.name or "") if kind is Kind.BRANCH else None,
