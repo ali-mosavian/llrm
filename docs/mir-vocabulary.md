@@ -48,8 +48,15 @@ arguments; `cmp` then `jle` leaves as LE then BRANCH.
 ## Order
 
 1. **`mir.Kind`** -- MIR's own operation set, classified at the raise.
-   `add`, `and` and `shl` stop being one operation called BINARY.
-2. **Comparisons are values.** `c := a <= b`, `branch c`. Removes 1,328
+   `add`, `and` and `shl` stop being one operation called BINARY. **Done.**
+   With it: `Op.test` -- which comparison a branch asks -- `Op.stack` for
+   the float unit's depth, `Opaque.name` for a resource MIR has no value
+   for, and `inc`/`dec` writing down the one they add. segments.py and
+   fpstack.py name nothing about the machine at all; consts.py, avail.py
+   and wide.py name it only in prose.
+2. **Comparisons are values.** `Op.test` is half of this; the other half
+   is the compare and the branch becoming one operation, which needs
+   lowering to emit two instructions for one. `c := a <= b`, `branch c`. Removes 1,328
    flags mentions and the FLAGS pseudo-register with them.
 3. **Calls take arguments.** The push run before a call is recognised at
    the raise. Removes 740 PUSH.
@@ -61,5 +68,28 @@ arguments; `cmp` then `jle` leaves as LE then BRANCH.
    MIR. The deletion is what makes the claim true; the conversion only
    makes the deletion possible.
 
-Each step: 485 of 485 rebuild, the corpus byte total through `rewrite.py`,
-and twelve configurations by five programs.
+## What is left, and why each is blocked
+
+```
+  transform.py  the absorb builders (_absorbing, _comparing, _deleting,
+                made) -- 65 references, and phase D moves them into the
+                raise, which is where they belong
+                the hoist's allocator (hoisted, _insertion, _move,
+                _instead, _writes_to) -- S1, and it needs regalloc to
+                split a live range on LIR first: removing it blind
+                miscompiled hotlop on all twelve configurations
+                the register-level liveness the hoist needs (_carried,
+                _leaving, _placed, widths) -- a 16-bit write under a
+                32-bit register model is a read-modify-write, and that
+                artifact goes when a wide value is one value
+  pairs.py      BC's ax:dx pair identity -- step 4, wide arithmetic at
+                the raise
+  mir.Op        node, made, covers. node and raised could move to a side
+                table today; made and covers cannot, because the three
+                blocks above still write them.
+  MirBody       origin -- last, as the plan says
+```
+
+Each step: 485 of 485 rebuild and the corpus byte total through
+`rewrite.py`, which is the shipped optimiser. `wholeseg.rebuilt` is not,
+and measuring through it is what hid a miscompile for five commits.
