@@ -40,11 +40,11 @@ lowering has no way to emit. Conservative here is the honest floor.
 
 from dataclasses import dataclass
 
-from iced_x86 import Register_
 
 from qbopt import ir
-from qbopt import lower
 from qbopt import mir
+from qbopt.mir import Held
+from qbopt.mir import Kind
 from qbopt.mir import Op
 from qbopt import runtime
 from qbopt import regalloc
@@ -80,7 +80,7 @@ def _real(values: tuple[Value, ...]) -> list[Value]:
     return [one for one in values if not one.flags]
 
 
-def loaded_into(op: Op, origin: dict[Value, Register_] | None = None) -> tuple[MemRef, Value] | None:
+def loaded_into(op: Op) -> tuple[MemRef, Value] | None:
     """The cell this op purely loads, and the value it lands in.
 
     Purely: one read, no write, one value defined, nothing read as data, and
@@ -97,43 +97,36 @@ def loaded_into(op: Op, origin: dict[Value, Register_] | None = None) -> tuple[M
     defines = _real(op.defines)
     if len(defines) != 1:
         return None
-    reading = set(_real(op.uses)) - _addressing(op) - _preserved(op, defines[0], origin)
+    reading = set(_real(op.uses)) - _addressing(op) - _preserved(op)
     if reading:
         return None
     return op.loads[0], defines[0]
 
 
-def _preserved(op: Op, made: Value, origin: dict[Value, Register_] | None) -> set[Value]:
-    """The use that is only the destination's own untouched half.
+def _preserved(op: Op) -> set[Value]:
+    """The uses that are only the destination's own untouched halves.
 
-    `mov ax,[x]` writes sixteen bits of a thirty-two bit variable, so the
-    high half survives and MIR records a read of the old eax. That read is
-    real -- refusing to model it would be wrong -- but it is not the
-    instruction consulting memory's contents, which is the question
+    A sixteen-bit load writes half of a thirty-two bit variable, so the
+    high half survives and MIR records a read of the old value. That read
+    is real -- refusing to model it would be wrong -- but it is not the
+    operation consulting memory's contents, which is the question
     loaded_into asks. Without this, every one of the 36 loads forward.py
     deletes came back "not a plain load", and none of them was anything
     else.
 
-    **The operation has to be a move.** `sub ax,[x]` reads the old eax the
-    same way `mov ax,[x]` does, and there the read is the whole point: the
-    bytes left in ax are not the cell's. Values cannot tell the two apart --
-    both are one use whose origin is the destination's register -- and the
-    semantics can, because a binary operation names its destination among
-    its sources and a move does not.
-
-    Leaving that out deleted `sub ax,ds:[0]` and `adc dx,[si+2]` from a
-    generated program. It is the same mistake `_loads_only` exists to stop
-    in forward.py, arrived at from the other side.
+    **The operation has to be a load.** A subtract from a cell reads the
+    old value the same way, and there the read is the whole point: what is
+    left is not the cell's. The two are told apart by the operands -- a
+    load's only argument is the cell, so any other use is a preserved half,
+    while a subtract names its other input among its arguments. This asked
+    the instruction whether it was a MOVE and looked the register up in
+    `origin`; leaving it out deleted `sub ax,ds:[0]` and `adc dx,[si+2]`
+    from a generated program.
     """
-    if origin is None:
+    if op.kind is not Kind.LOAD:
         return set()
-    what = lower.current(op)
-    if what is None or what.op is not ir.Operation.MOVE:
-        return set()
-    into = origin.get(made)
-    if into is None:
-        return set()
-    return {one for one in _real(op.uses) if origin.get(one) is into}
+    named = {one.value for one in op.args if isinstance(one, Held)}
+    return {one for one in _real(op.uses) if one not in named}
 
 
 def stored_from(op: Op) -> tuple[MemRef, Value] | None:
@@ -208,7 +201,6 @@ def _after(
     holders: Holders,
     dgroup: frozenset[int],
     calls: dict[int, str],
-    origin: dict[Value, Register_] | None = None,
 ) -> Holders:
     """The map across one op."""
     if op.barrier:
@@ -222,7 +214,7 @@ def _after(
 
     for ref in op.stores:
         holders = {one: who for one, who in holders.items() if not mir.overlapping(one, ref, dgroup)}
-    found = stored_from(op) or loaded_into(op, origin)
+    found = stored_from(op) or loaded_into(op)
     if found is not None:
         ref, value = found
         holders = dict(holders)
@@ -286,7 +278,7 @@ def holders(
             arriving = {} if block.at == body.entry else _meet([outof[one] for one in preds[block.at]])
             leaving = dict(arriving)
             for op in block.ops:
-                leaving = _after(op, leaving, dgroup, calls, body.origin if partial else None)
+                leaving = _after(op, leaving, dgroup, calls)
             if arriving != into[block.at] or leaving != outof[block.at]:
                 into[block.at], outof[block.at] = arriving, leaving
                 changing = True
@@ -320,7 +312,7 @@ class Forward:
     """A redundant memory read whose bytes are in a live register."""
 
     at: int
-    root: Register_  # the 32-bit root holding them; the operand picks the width
+    root: object  # the 32-bit root holding them; the operand picks the width
     # The value itself. Which register holds it is the allocator's answer,
     # and a pass acting on this says ir.Held rather than naming one --
     # rule 5. `root` stays for the machine arm, which has no values.
@@ -488,7 +480,7 @@ def redundant(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> t
             if op.at in calls or op.barrier:
                 inside = {}
                 continue
-            got = loaded_into(op, body.origin)
+            got = loaded_into(op)
             if got is not None:
                 ref, made = got
                 into = body.origin.get(made)
@@ -499,7 +491,7 @@ def redundant(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> t
                 where = body.origin.get(value)
                 if where is not None:
                     inside[where] = value
-            current = _after(op, current, dgroup, calls, body.origin)
+            current = _after(op, current, dgroup, calls)
     return tuple(found)
 
 
