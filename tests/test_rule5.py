@@ -141,3 +141,26 @@ def test_the_allow_list_names_nothing_that_has_already_gone() -> None:
         actual = set(_named_in(HERE / name))
         stale = allowed - actual
         assert not stale, f"{name}: {sorted(stale)} no longer name a register; take them off the list"
+
+
+def test_a_pass_is_a_transform_and_nothing_else() -> None:
+    """The contract, as a fact rather than a convention.
+
+    Before this, a pass was a function and its signature was where the
+    machine got in: `hoisted(body, dgroup, calls, bounds)` grew the module's
+    layout as arguments and ended up choosing registers with it. A class
+    whose only entry point is `transform(body)` cannot.
+    """
+    from qbopt.passes import MIRTransform
+    from qbopt.passes import Where
+    from qbopt.transform import PASSES
+    from qbopt.transform import pipeline
+
+    every = pipeline(Where())
+    assert [one.name for one in every] == list(PASSES)
+    assert all(isinstance(one, MIRTransform) for one in every)
+
+    # one method, and it is the contract
+    assert [n for n in vars(MIRTransform) if not n.startswith("_")] == ["name", "transform"]
+    for one in every:
+        assert type(one).transform is not MIRTransform.transform, f"{one.name} overrides nothing"

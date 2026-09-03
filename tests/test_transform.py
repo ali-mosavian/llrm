@@ -43,8 +43,8 @@ def test_widening_is_on_and_runs_after_the_memory_passes() -> None:
     assert signature.parameters["drop_loads"].default is True
     assert signature.parameters["drop_stores"].default is True
 
-    source = inspect.getsource(transform.applied)
-    assert source.index("body = widened(body)") > source.index("without_dead_stores("), (
+    order = transform.PASSES
+    assert order.index("widen") > order.index("drop_stores"), (
         "widening has to run after the passes that read an op's loads and stores"
     )
 

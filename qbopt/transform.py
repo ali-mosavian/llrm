@@ -42,6 +42,8 @@ from qbopt import lir
 from qbopt import mir
 from qbopt import module
 from qbopt import wide
+from qbopt.passes import MIRTransform
+from qbopt.passes import Where
 from qbopt import avail
 from qbopt import runtime
 from qbopt import regalloc
@@ -1630,7 +1632,138 @@ def _choices(offers: dict) -> Iterator[dict]:
 # before avail.py once and avail forwarded a stale high half across an op
 # that said it read two bytes where the instruction read four. That is no
 # longer possible to get wrong by rearranging this list.
-PASSES = ("fold", "decide", "dead", "segments", "hoist", "forward", "drop_loads", "drop_stores", "widen", "place", "absorb")
+
+
+
+# Every transform, as the one thing a transform is. The functions above stay
+# because they are what each class does and are what the tests name; what
+# changes is that the pipeline can only reach them through `transform`.
+class Fold(MIRTransform):
+    name = "fold"
+
+    def __init__(self, where: Where) -> None:
+        self.where = where
+
+    def transform(self, body: MirBody) -> MirBody:
+        return folded(body, self.where.dgroup, self.where.named)
+
+
+class Decide(MIRTransform):
+    name = "decide"
+
+    def __init__(self, where: Where) -> None:
+        self.where = where
+
+    def transform(self, body: MirBody) -> MirBody:
+        return decided(body, self.where.dgroup, self.where.named)
+
+
+class Dead(MIRTransform):
+    name = "dead"
+
+    def transform(self, body: MirBody) -> MirBody:
+        return dead(body)
+
+
+class Segments(MIRTransform):
+    name = "segments"
+
+    def __init__(self, where: Where) -> None:
+        self.where = where
+
+    def transform(self, body: MirBody) -> MirBody:
+        return segments(body, self.where.dgroup, self.where.named)
+
+
+class Hoist(MIRTransform):
+    name = "hoist"
+
+    def __init__(self, where: Where) -> None:
+        self.where = where
+
+    def transform(self, body: MirBody) -> MirBody:
+        return hoisted(body, self.where.dgroup, self.where.named, self.where.bounds)
+
+
+class Forward(MIRTransform):
+    name = "forward"
+
+    def __init__(self, where: Where) -> None:
+        self.where = where
+
+    def transform(self, body: MirBody) -> MirBody:
+        return forwarded(body, self.where.dgroup, self.where.named)
+
+
+class DropLoads(MIRTransform):
+    name = "drop_loads"
+
+    def __init__(self, where: Where) -> None:
+        self.where = where
+
+    def transform(self, body: MirBody) -> MirBody:
+        return without_redundant_loads(body, self.where.dgroup, self.where.named)
+
+
+class DropStores(MIRTransform):
+    name = "drop_stores"
+
+    def __init__(self, where: Where) -> None:
+        self.where = where
+
+    def transform(self, body: MirBody) -> MirBody:
+        return without_dead_stores(body, self.where.dgroup, self.where.named)
+
+
+class Widen(MIRTransform):
+    name = "widen"
+
+    def transform(self, body: MirBody) -> MirBody:
+        return widened(body)
+
+
+class Place(MIRTransform):
+    name = "place"
+
+    def transform(self, body: MirBody) -> MirBody:
+        return placed(body)
+
+
+class Absorb(MIRTransform):
+    name = "absorb"
+
+    def __init__(self, where: Where) -> None:
+        self.where = where
+
+    def transform(self, body: MirBody) -> MirBody:
+        return absorbed(body, self.where.blocks or [], self.where.named, self.where.found)
+
+
+def pipeline(where: Where, **wanted) -> list[MIRTransform]:
+    """The passes, in order, that `wanted` leaves on.
+
+    Order is the list's own. A pass that is off is not in it, rather than in
+    it and skipped, so what runs is what this returns.
+    """
+    every: list[MIRTransform] = [
+        Fold(where),
+        Decide(where),
+        Dead(),
+        Segments(where),
+        Hoist(where),
+        Forward(where),
+        DropLoads(where),
+        DropStores(where),
+        Widen(),
+        Place(),
+        Absorb(where),
+    ]
+    return [one for one in every if wanted.get(one.name, True)]
+
+
+# The order, from the pipeline itself rather than beside it: two lists that
+# have to agree are one that will not.
+PASSES = tuple(one.name for one in pipeline(Where()))
 
 
 def applied(
@@ -1674,33 +1807,17 @@ def applied(
         "place": place,
         "absorb": absorb and blocks is not None,
     }
-    for name in PASSES:
-        if only is not None and name != only:
+    where = Where(
+        dgroup=dgroup,
+        calls=calls,
+        bounds=module.landmarks(found) if found is not None else None,
+        blocks=blocks,
+        found=found,
+    )
+    for one in pipeline(where, **wanted):
+        if only is not None and one.name != only:
             continue
-        if not wanted[name]:
-            continue
-        if name == "fold":
-            body = folded(body, dgroup, calls)
-        elif name == "decide":
-            body = decided(body, dgroup, calls)
-        elif name == "dead":
-            body = dead(body)
-        elif name == "hoist":
-            body = hoisted(body, dgroup, calls, module.landmarks(found) if found is not None else None)
-        elif name == "segments":
-            body = segments(body, dgroup, calls)
-        elif name == "forward":
-            body = forwarded(body, dgroup, calls)
-        elif name == "drop_loads":
-            body = without_redundant_loads(body, dgroup, calls)
-        elif name == "drop_stores":
-            body = without_dead_stores(body, dgroup, calls)
-        elif name == "widen":
-            body = widened(body)
-        elif name == "place":
-            body = placed(body)
-        elif name == "absorb":
-            body = absorbed(body, blocks or [], calls, found)
+        body = one.transform(body)
     return body
 
 
