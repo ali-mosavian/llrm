@@ -44,6 +44,28 @@ either unless the fix leaves something behind.
   wrong number and what it printed. That is what makes the test readable in
   a year, and it is cheaper to write while it is still understood.
 
+## Debugging — the fourth rule
+
+**Dump every step and every pass to a file, and diff them.** Do not reason
+about where the thing went wrong. `tools/stages.py` knows; ask it.
+
+Measured against the alternative, repeatedly. pressx's accumulator chain
+took four attempts at reading disassembly and reasoning about which prune
+had cut it -- the answer was that nothing had been cut, and a re-seat had
+rewritten a two-address operation's source along with its destination. One
+MIR dump either side of the hoist showed it immediately.
+
+- **One file per stage, then diff.** A wrong answer at the end says nothing
+  about which stage produced it. Two adjacent dumps say exactly.
+- **Diff the MIR, not the emitted code.** Reading the object means inferring
+  backwards through layout, allocation and emission. The op list either side
+  of a pass is the answer rather than a clue to it.
+- **Project away the noise.** `resolved()` renumbers every value, so a raw
+  diff is unreadable; dump address and name alone and the structural change
+  is one line.
+- **Build the dumper before you need it.** stages.py was written mid-task
+  and found the hoist bug it was written for in one line.
+
 A post-compilation pass over the `.OBJ` BC produces, between BC and LINK.
 Most of what is here was established the hard way by a runtime version of the
 same idea that still lives in uGL. What survived the move is below.

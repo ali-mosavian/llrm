@@ -1,9 +1,9 @@
 # qbopt
 
 See [AGENTS.md](AGENTS.md). It carries the goal, the architecture and the
-three rules, and this file exists only so that either name finds them.
+four rules, and this file exists only so that either name finds them.
 
-The three rules, because they are the ones most easily forgotten mid-task:
+The four rules, because they are the ones most easily forgotten mid-task:
 
 1. **Say it and stop.** The minimum needed to understand, in every word
    written -- comments, commit messages, docs, tests, replies alike.
@@ -14,3 +14,6 @@ The three rules, because they are the ones most easily forgotten mid-task:
 3. **Every issue found and fixed gets a regression test**, in the same
    commit as the fix, and written so that it fails before the fix goes in.
    A test never seen to fail is evidence of nothing.
+4. **Dump every step and pass to a file and diff them.** Do not reason
+   about where it went wrong -- `tools/stages.py` knows. Diff the MIR
+   between passes, not the emitted code at the end.
