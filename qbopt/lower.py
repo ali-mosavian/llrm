@@ -34,7 +34,8 @@ def semantics(op: mir.Op, was: ir.Semantics | None = None) -> ir.Semantics | Non
     lands on a longer form for the same instruction is how a rebuild starts
     growing without anything having been optimised.
     """
-    if op.raised is not None and (op.args, op.results) == op.raised:
+    same_target = was is None or op.target == was.target
+    if op.raised is not None and (op.args, op.results) == op.raised and same_target:
         return None  # nothing rewrote it
     if not op.args and not op.results and op.raised is None:
         return None  # nothing to build one from
@@ -64,6 +65,8 @@ def current(op) -> "ir.Semantics | None":
 
 def _target(op: mir.Op, was: ir.Semantics | None) -> int | None:
     """A branch's destination, which is a block address and not an operand."""
+    if op.target is not None:
+        return op.target
     return was.target if was is not None else None
 
 

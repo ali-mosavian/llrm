@@ -203,35 +203,31 @@ def forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> M
         ops: list[Op] = []
         for op in block.ops:
             holder = served.get(op.at)
-            what = lower.current(op)
-            made = _served(what, holder) if holder is not None else None
+            args = _served(op, holder) if holder is not None else None
             ops.append(
                 op
-                if made is None
-                else replace(op, made=made, loads=(), uses=op.uses + (holder,))
+                if args is None
+                else replace(op, args=args, loads=(), uses=op.uses + (holder,))
             )
         out.append(replace(block, ops=tuple(ops)))
     return replace(body, blocks=tuple(out))
 
 
-def _served(what, holder) -> "ir.Semantics | None":
-    """`what` with its one memory source read from `holder`'s register.
+def _served(op: Op, holder) -> "tuple[mir.Arg, ...] | None":
+    """`op`'s one memory source read from whatever holds `holder` instead.
 
-    ir.Held rather than ir.Reg: which register holds the value is the
-    allocator's answer and naming one here is what rule 5 forbids. This
-    asked `_at_width(root, width)` and wrote the register down, which is
+    A value, not a register: which one holds it is the allocator's answer,
+    and naming one here is what rule 5 forbids. This asked
+    `_at_width(root, width)` and wrote the register down, which was
     forward.py's 22 machine references in one line.
     """
-    if what is None:
-        return None
-    cells = [one for one in what.sources if isinstance(one, ir.Mem)]
+    cells = [one for one in op.args if isinstance(one, mir.Cell)]
     if len(cells) != 1:
         return None
     cell = cells[0]
-    swapped = tuple(
-        ir.Held(value=holder.id, width=cell.width) if one is cell else one for one in what.sources
+    return tuple(
+        mir.Held(holder, cell.ref.width) if one is cell else one for one in op.args
     )
-    return replace(what, sources=swapped)
 
 
 SEGMENT_REGISTERS = frozenset(
@@ -1093,7 +1089,10 @@ def decided(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
                 op=ir.Operation.JUMP,
                 name="jmp",
                 uses=(),
-                made=ir.Semantics(ir.Operation.JUMP, "jmp", dests=(), sources=(), target=target),
+                args=(),
+                results=(),
+                target=target,
+                made=None,
                 covers=last.covers or _span_of(last),
             )
             out.append(replace(block, ops=block.ops[:-1] + (jump,)))

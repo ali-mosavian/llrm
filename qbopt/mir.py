@@ -286,6 +286,9 @@ class Op:
     # instruction is how a rebuild grows without anything being optimised.
     # In MIR's own operands, so it says nothing about the machine.
     raised: tuple[tuple[Arg, ...], tuple[Arg, ...]] | None = None
+    # Where a branch goes, as a block address. Control flow, not machine
+    # form: the blocks are MIR's own and the address is what names one.
+    target: int | None = None
     # What this operation is, apart from where it is. Given at the raise and
     # carried through every `replace()`, so a fact established then can live
     # in a side table instead of on the op -- which is the only way those
@@ -763,6 +766,7 @@ def raise_body(
                     args=where[0],
                     results=where[1],
                     raised=where,
+                    target=node.semantics.target,
                     id=next(_IDS),
                 )
             )
