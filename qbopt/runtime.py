@@ -125,6 +125,15 @@ class Contract:
     established: bool
     evidence: str
     documented: frozenset[Reg] | None = field(default=None)
+    # Registers the caller has to have set before the call. Empty by
+    # default because that is what the runtime source says of nearly every
+    # routine here -- cmacros' cProc with parmW/parmD, arguments on the
+    # stack -- and the two that read a register say so in their own
+    # evidence. It matters because a use list is what tells a pass an
+    # operation is needed: B$FILD takes its long in dx:ax, the moves
+    # setting it up read as dead, and deleting them printed FADD= 918528
+    # for 1049600.
+    inputs: frozenset[Reg] = field(default=frozenset())
 
 
 def worst(name: str) -> Contract:
@@ -694,6 +703,7 @@ _X87 = (
     ),
     Contract(
         name="B$FILD",
+        inputs=frozenset({Reg.AX, Reg.DX}),
         cleanup=0,
         control=Control.RETURNS,
         enters_user_code=False,
@@ -713,6 +723,7 @@ _X87 = (
     ),
     Contract(
         name="B$FIL2",
+        inputs=frozenset({Reg.AX}),
         cleanup=0,
         control=Control.RETURNS,
         enters_user_code=False,

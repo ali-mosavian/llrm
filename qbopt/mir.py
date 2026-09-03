@@ -298,10 +298,18 @@ def _call_touches(name: str | None) -> tuple[frozenset[Register_], frozenset[Reg
     # top of the body to the call, across every loop in between, and no
     # register was ever free for anything to be hoisted into.
     #
-    # A routine that does take a register argument -- B$HARY reads bx -- is
-    # not established here and comes back worst-case above, which is where
-    # that stays until a contract can say `inputs`.
-    return disturbed, frozenset({FLAGS})
+    # A contract says which registers it reads, and for nearly all of them
+    # that is none: cmacros' cProc with parmW/parmD puts arguments on the
+    # stack, and the print family's own ax is set by the stub before it
+    # jumps to B$PRINT rather than by the caller. Saying a call reads bx
+    # made bx's entry value live from the top of the body to the call,
+    # across every loop between, and nothing could be hoisted anywhere.
+    #
+    # The x87 loads are the exception and say so: B$FILD takes a long in
+    # dx:ax, B$FIL2 an integer in ax. Leaving those out of the use list is
+    # what let dead code elimination delete the moves that set them up.
+    reads = {FROM_CONTRACT[one] for one in routine.inputs if one in FROM_CONTRACT}
+    return disturbed, frozenset(reads) | {FLAGS}
 
 
 def _restore_touches(node: ir.Node) -> tuple[frozenset[Register_], frozenset[Register_]] | None:

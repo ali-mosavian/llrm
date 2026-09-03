@@ -231,3 +231,23 @@ def test_the_string_routines_write_caller_memory(name: str) -> None:
 @pytest.mark.parametrize("name", [*ABSORBED, "B$DSEG", "B$FERR"])
 def test_the_routines_that_touch_no_caller_memory(name: str) -> None:
     assert not runtime.writes_caller_memory(runtime.CONTRACTS[name])
+
+
+def test_a_contract_says_which_registers_it_reads() -> None:
+    """B$FILD takes a LONG in dx:ax, and nothing recorded that.
+
+    Its evidence has said so since it was written -- "dx and ax are read
+    and never written" -- but Contract had no field to put it in, so the
+    call's use list named only the flags and the moves setting the argument
+    up read as dead. Removing them printed FADD= 918528 for 1049600.
+
+    Empty everywhere else on purpose: cmacros' cProc puts arguments on the
+    stack, and claiming a call reads bx keeps bx's entry value live from
+    the top of the body to the call and leaves nothing free to hoist into.
+    """
+    assert runtime.contract("B$FILD").inputs == frozenset({runtime.Reg.AX, runtime.Reg.DX})
+    assert runtime.contract("B$FIL2").inputs == frozenset({runtime.Reg.AX})
+    # A store hands its answer back and takes nothing.
+    assert runtime.contract("B$FIST").inputs == frozenset()
+    # And a name with no entry is worst-case, where inputs do not arise.
+    assert not runtime.contract("B$NOSUCH").established
