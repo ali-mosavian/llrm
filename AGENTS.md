@@ -66,6 +66,32 @@ MIR dump either side of the hoist showed it immediately.
 - **Build the dumper before you need it.** stages.py was written mid-task
   and found the hoist bug it was written for in one line.
 
+## The MIR boundary — the fifth rule
+
+**Every pass takes MIR and returns MIR, and names nothing about the
+machine.** Only lower, regalloc and peephole see machine form. There is no
+LIR optimisation tier: if a pass has done its job on MIR there is nothing
+left for one to do.
+
+- **Recognition is the raise's job.** What an idiom *is* -- a long pair, an
+  absorbable runtime call -- is answered where the body is built. Answered
+  later it is answered by a pass that must know about x86, which is how
+  `widen` and `absorb` came to hold 141 machine references between them.
+- **A pass may not name a register.** `MirBody.origin` says where BC kept a
+  value, and lowering plus the allocator's identity baseline are the only
+  readers -- with one sanctioned exception, `widen` asking which pair a
+  long arrived in. Five attempts at doing the allocator's job inside a pass
+  are in the history and every one produced a wrong program.
+- **opt runs on one body, not through emission.** A pass that re-raises
+  from bytes loses the SSA the one before it built and every marker with
+  it. rewrite.py did that for a day: a live range split came back as an
+  ordinary move and was hoisted again, and the fix was read as a fact about
+  the world rather than as the bug it was.
+- **A machine detail that survives into a pass is a defect in the raise**,
+  not a thing to work around there. The partial-write artifact blocked five
+  separate things and was worked around five times before anyone asked why
+  MIR was carrying 16-bit halves at all.
+
 A post-compilation pass over the `.OBJ` BC produces, between BC and LINK.
 Most of what is here was established the hard way by a runtime version of the
 same idea that still lives in uGL. What survived the move is below.
