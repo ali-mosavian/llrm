@@ -840,3 +840,30 @@ def test_an_invariant_multiply_leaves_a_loop_it_cannot_be_folded_out_of() -> Non
     assert [text for _, text in seen[:start] if text.startswith("imul")], (
         "and it did not turn up before the loop either, so nothing was hoisted"
     )
+
+
+def test_a_dead_second_result_does_not_pin_its_operation_in_the_loop() -> None:
+    """A widening `imul` defines dx:ax, and a join raises a phi per register.
+
+    So the dx half is a phi start whose register the loop writes again --
+    the shape this refuses, because a value a phi carries and the loop
+    rewrites cannot leave without its readers. Except nothing reads dx: it
+    is the high half of a product nobody asked for, kept alive only by the
+    phi that exists because the register was written.
+
+    Counting it cost nested a whole level, 4.9x against 3.9x, by stopping
+    each invariant run one operation short of the multiply that ends it.
+    """
+    seen = _rebuilt("nested-p-g2")
+    # The innermost loop: the backward jump spanning the least.
+    back = [
+        (int(text.split()[-1].rstrip("h"), 16), ip)
+        for ip, text in seen
+        if text.startswith(("jle", "jl ")) and int(text.split()[-1].rstrip("h"), 16) < ip
+    ]
+    assert back, "nothing loops here, so this proves nothing"
+    lo, hi = min(back, key=lambda one: one[1] - one[0])
+    inside = [text for ip, text in seen if lo <= ip <= hi]
+    assert not [text for text in inside if text.startswith("imul")], (
+        f"an invariant multiply is still in the inner loop: {inside}"
+    )

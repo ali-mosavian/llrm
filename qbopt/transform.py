@@ -525,6 +525,7 @@ def _invariant_run(
     origin: dict,
     bounds: dict | None = None,
     starts: set | None = None,
+    readable: set | None = None,
 ) -> list[Op]:
     """The ops in this loop whose result never changes, in order.
 
@@ -559,7 +560,26 @@ def _invariant_run(
             # turn, and hotlop's loop body became eighteen `mov cx,bx` in
             # two rounds. What this is for is moving work: a load, or an
             # operation over one.
-            if not one.loads and all(isinstance(where, ir.Reg) for where in what.sources):
+            # Nor anything that computes nothing. A register-to-register
+            # move is invariant whenever its source is, so hoisting one and
+            # putting a split back in its place is churn -- and the split
+            # comes back through emission as an ordinary move, is hoisted in
+            # turn, and hotlop's loop body became eighteen `mov cx,bx` in
+            # two rounds. What this is for is moving work: a load, or an
+            # operation over one.
+            #
+            # This catches `add bx,ax` too, which is not a move and is real
+            # work, and letting it through looks like a plain bug -- press
+            # accumulates four invariant products into bx and with the adds
+            # refused each product crosses into the loop wanting a register
+            # of its own. It is not a bug. A long add is `add` then `adc`,
+            # joined by the carry and by nothing this can see, and with the
+            # pair split across the loop edge lngmix printed 1185033780 for
+            # 142900. Whatever admits the adds has to keep them together.
+            if (
+                not one.loads
+                and all(isinstance(where, ir.Reg) for where in what.sources)
+            ):
                 continue
             # Only definition of its register in the loop, or the loop's own
             # Both, and neither alone. "A phi carries it" refuses harr's
@@ -571,7 +591,9 @@ def _invariant_run(
             # a value a phi carries whose register the loop goes on to
             # change, which is segld's inner counter and 1030 for 1050.
             if any(
-                value in begins and origin.get(value) in twice
+                value in begins
+                and origin.get(value) in twice
+                and (readable is None or value in readable)
                 for value in one.defines
                 if not value.flags
             ):
@@ -1143,7 +1165,7 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
         stores = [ref for one in ops for ref in one.stores]
         carried = {phi.result for at in loop.body for phi in at_of[at].phis}
         phis = [phi for at in loop.body for phi in at_of[at].phis]
-        run = _invariant_run(ops, carried, stores, dgroup, calls, body.origin, bounds, _starts(phis))
+        run = _invariant_run(ops, carried, stores, dgroup, calls, body.origin, bounds, _starts(phis), readable)
         # Not one already taken out of a loop inside this one. Invariant in
         # the inner loop and in the outer, it was put in both preheaders and
         # its bytes counted twice, which layout reports as a negative gap:
