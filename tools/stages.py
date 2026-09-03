@@ -20,6 +20,8 @@ fourteen absorbable calls. `--no-absorb` gives the pipeline's own setting.
 
 import sys
 import argparse
+import contextlib
+import itertools
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -105,6 +107,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--asm", action="store_true", help="disassemble after every stage")
     ap.add_argument("--quiet", action="store_true", help="shape only, no per-op detail")
     ap.add_argument(
+        "--dump",
+        type=Path,
+        metavar="DIR",
+        help="one file per stage, named s<N>-<stage>.txt, so `diff` between "
+        "two adjacent ones is the whole answer -- see rule 4",
+    )
+    ap.add_argument(
         "--no-absorb",
         dest="absorb",
         action="store_false",
@@ -113,22 +122,48 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     data = args.object.read_bytes()
-    was = _report("BC", data, None, not args.quiet)
-    if args.asm:
-        _asm(data)
+    if args.dump is not None:
+        args.dump.mkdir(parents=True, exist_ok=True)
+
+    step = itertools.count()
+
+    @contextlib.contextmanager
+    def stage(name: str):
+        """Each stage's own file where --dump asks for one, stdout otherwise.
+
+        Numbered in the order they run, because the point of having them is
+        `diff s06-hoist.txt s07-forward.txt` -- and sorting by name has to
+        put them in pipeline order for that to be one keystroke. Zero-padded
+        for the same reason: `s10` sorts before `s2`.
+        """
+        number = next(step)
+        if args.dump is None:
+            yield
+            return
+        path = args.dump / f"s{number:02d}-{name}.txt"
+        with path.open("w") as handle, contextlib.redirect_stdout(handle):
+            yield
+        print(f"  {path}")
+
+    with stage("omf"):
+        was = _report("BC", data, None, not args.quiet)
+        if args.asm:
+            _asm(data)
 
     # Emission with no pass at all, which is the control: anything that
     # changes here is the emitter and not a transform.
-    plain, why = rebuilt(data, optimise=False, absorb=args.absorb)
-    was = _report(f"emitted, no pass ({why})", plain, was, not args.quiet)
-    if args.asm:
-        _asm(plain)
+    with stage("emitted"):
+        plain, why = rebuilt(data, optimise=False, absorb=args.absorb)
+        was = _report(f"emitted, no pass ({why})", plain, was, not args.quiet)
+        if args.asm:
+            _asm(plain)
 
     for name in [args.only] if args.only else PASSES:
-        out, why = rebuilt(data if args.only else plain, only=name, absorb=args.absorb)
-        was = _report(f"{name} ({why})", out, was, not args.quiet)
-        if args.asm:
-            _asm(out)
+        with stage(name):
+            out, why = rebuilt(data if args.only else plain, only=name, absorb=args.absorb)
+            was = _report(f"{name} ({why})", out, was, not args.quiet)
+            if args.asm:
+                _asm(out)
         if not args.only:
             plain = out
     return 0
