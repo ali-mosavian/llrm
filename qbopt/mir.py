@@ -384,6 +384,21 @@ def _stack_effect(what: "ir.Semantics") -> int | None:
 
 
 
+def _normalised(kind: Kind, name: str, args: tuple, results: tuple) -> tuple:
+    """The operands the operation really has, once the machine's are gone.
+
+    `inc ax` is `ax := ax + 1` and the 1 is in the opcode; `dec` likewise.
+    Writing them down is the raise translating an instruction into what it
+    computes, which is the only way a pass can fold one without knowing
+    that x86 has an increment.
+    """
+    if kind in (Kind.ADD, Kind.SUB) and name in ("inc", "dec") and len(args) == 1:
+        width = getattr(args[0], "width", 2)
+        return (*args, Const(1, width))
+    return args
+
+
+
 def _kind_of(what: "ir.Semantics", args, results) -> Kind:
     """What one node computes, as MIR says it.
 
@@ -964,6 +979,8 @@ def raise_body(
                 loads,
                 stores,
             )
+            kind = _kind_of(node.semantics, where[0], where[1])
+            operands = _normalised(kind, node.semantics.name or "", where[0], where[1])
             ops[at].append(
                 Op(
                     insn.at,
@@ -974,11 +991,11 @@ def raise_body(
                     loads,
                     stores,
                     node,
-                    kind=_kind_of(node.semantics, where[0], where[1]),
+                    kind=kind,
                     stack=_stack_effect(node.semantics),
-                    args=where[0],
+                    args=operands,
                     results=where[1],
-                    raised=where,
+                    raised=(operands, where[1]),
                     target=node.semantics.target,
                     id=next(_IDS),
                 )

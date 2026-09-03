@@ -29,10 +29,8 @@ of work with its own correctness argument.
 
 from dataclasses import dataclass
 
-from iced_x86 import Register_
 
 from qbopt import ir
-from qbopt import lower
 from qbopt import mir
 from qbopt import runtime
 
@@ -42,20 +40,19 @@ from qbopt import runtime
 # folder that answered them here would be inventing a result the running
 # program never produces.
 ARITH = {
-    "add": lambda a, b: a + b,
-    "sub": lambda a, b: a - b,
-    "and": lambda a, b: a & b,
-    "or": lambda a, b: a | b,
-    "xor": lambda a, b: a ^ b,
-    "shl": lambda a, b: a << (b & 31),
-    "imul": lambda a, b: a * b,
+    mir.Kind.ADD: lambda a, b: a + b,
+    mir.Kind.SUB: lambda a, b: a - b,
+    mir.Kind.AND: lambda a, b: a & b,
+    mir.Kind.OR: lambda a, b: a | b,
+    mir.Kind.XOR: lambda a, b: a ^ b,
+    mir.Kind.SHL: lambda a, b: a << (b & 31),
+    mir.Kind.SHR: lambda a, b: (a & 0xFFFFFFFF) >> (b & 31),
+    mir.Kind.MUL: lambda a, b: a * b,
 }
 
 UNARY = {
-    "neg": lambda a: -a,
-    "not": lambda a: ~a,
-    "inc": lambda a: a + 1,
-    "dec": lambda a: a - 1,
+    mir.Kind.NEG: lambda a: -a,
+    mir.Kind.NOT: lambda a: ~a,
 }
 
 
@@ -82,17 +79,16 @@ def masked(n: int, width: int) -> int:
 def _put(op: mir.Op, known: dict[mir.Value, Known]) -> Known | None:
     """What this store puts in the cell, where that is a number.
 
-    Two shapes and both are common: BC writes `mov word [n],7` for an
-    initialiser, so the number is an immediate the instruction carries and
-    not a value at all, and it writes `mov [s],ax` for an assignment, where
-    the number is whatever ax was known to hold.
+    Two shapes and both are common: BC writes an initialiser as a store of
+    a constant, so the number is in the operation itself and is no value at
+    all, and it writes an assignment as a store of a value, where the
+    number is whatever that value was known to hold.
     """
-    what = lower.current(op)
-    if what is None or what.op is not ir.Operation.MOVE:
+    if op.kind is not mir.Kind.STORE:
         return None
-    for one in what.sources:
-        if isinstance(one, ir.Imm):
-            return Known(masked(one.value, one.width), one.width)
+    for one in op.args:
+        if isinstance(one, mir.Const):
+            return Known(masked(one.n, one.width), one.width)
     from_value = [one for one in op.uses if one in known and not one.flags]
     return known[from_value[0]] if len(from_value) == 1 else None
 
@@ -176,82 +172,66 @@ def cells(
     return found
 
 
-def _source_value(op: mir.Op, register: Register_, origin: dict[mir.Value, Register_]) -> mir.Value | None:
-    """The SSA value standing for this semantic register operand."""
-    root = ir.ROOT.get(register, register)
-    return next((one for one in op.uses if origin.get(one) is root), None)
+def _operand(op: mir.Op, one: mir.Arg, known: dict, here: Cells | None = None) -> Known | None:
+    """One operand as a number, if it is one.
 
-
-def _operand(
-    op: mir.Op,
-    where: ir.Loc,
-    known: dict[mir.Value, Known],
-    origin: dict[mir.Value, Register_],
-    here: Cells | None = None,
-) -> Known | None:
-    """One semantic operand as a number, if it is one."""
-    match where:
-        case ir.Imm(value=value, width=width):
-            return Known(masked(value, width), width)
-        case ir.Reg(register=register, width=width):
-            value = _source_value(op, register, origin)
-            fact = known.get(value) if value is not None else None
-            return fact if fact is not None and fact.width >= width else None
-        case ir.Mem(addr=addr, width=width) if here is not None and addr is not None:
-            # A cell whose content is known is as good as an immediate.
-            # Without this the propagation stops at BC's first store: it
-            # keeps every variable in memory, so `n * k` reads two cells and
-            # neither is a value this could ask about.
-            fact = here.get((addr, width))
-            return fact if fact is not None and fact.width >= width else None
-        case _:
-            return None  # an address, or a cell nothing has said anything about
+    MIR's own operands: a constant is one, a value is one where something
+    has said so, and a cell is one where the memory walk has. This matched
+    ir.Reg and resolved it back to a value through `origin` -- a pass
+    asking which register an operand named.
+    """
+    if isinstance(one, mir.Const):
+        return Known(masked(one.n, one.width), one.width)
+    if isinstance(one, mir.Held):
+        fact = known.get(one.value)
+        return fact if fact is not None and fact.width >= one.width else None
+    if isinstance(one, mir.Cell) and here is not None and one.ref.addr is not None:
+        # A cell whose content is known is as good as a constant. Without
+        # this the propagation stops at BC's first store: it keeps every
+        # variable in memory, so `n * k` reads two cells and neither is a
+        # value this could ask about.
+        fact = here.get((one.ref.addr, one.ref.width))
+        return fact if fact is not None and fact.width >= one.ref.width else None
+    return None
 
 
 def _defined(op: mir.Op, semantics=None, origin: dict | None = None) -> mir.Value | None:
-    """The value this op's first destination gets, flags aside.
+    """The value this operation's first result gets, flags aside.
 
-    Nearly every arithmetic instruction on this machine defines its result
-    and the flags together, so asking for a single definition rejects all of
-    them -- which it did, and the propagation found nothing but its own
-    seeds until the flags were excluded here.
+    Nearly every arithmetic operation defines its result and the flags
+    together, so asking for a single definition rejects all of them --
+    which it did, and the propagation found nothing but its own seeds until
+    the flags were excluded here.
 
     Two results are the other case, and refusing them cost more: a widening
-    `imul` defines dx:ax, and hotlop's `n * k` is exactly that. Both halves
-    are constant and the high one is dead, and nothing here could say so, so
-    the product was recomputed on all twenty passes of the loop. The result
-    the fold is about is the one the *first* destination names; which value
-    that is comes from `origin`, the same way a source operand is resolved.
+    multiply defines a pair, and hotlop's `n * k` is exactly that. Both
+    halves are constant and the high one is dead, and nothing here could
+    say so, so the product was recomputed on all twenty passes of the loop.
+    The result the fold is about is the one the first result names -- which
+    the operation says itself now, where it used to be looked up by which
+    register the destination was.
     """
     real = [one for one in op.defines if not one.flags]
     if len(real) == 1:
         return real[0]
-    if not real or semantics is None or origin is None or not semantics.dests:
+    first = next((one for one in op.results if isinstance(one, mir.Held)), None)
+    if first is None:
         return None
-    first = semantics.dests[0]
-    if not isinstance(first, ir.Reg):
-        return None
-    root = ir.ROOT.get(first.register, first.register)
-    return next((one for one in real if origin.get(one) is root), None)
+    return first.value if first.value in real else None
 
 
 def _result(
     op: mir.Op,
     known: dict[mir.Value, Known],
-    origin: dict[mir.Value, Register_],
+    origin: dict | None = None,
     here: Cells | None = None,
 ) -> Known | None:
     """What this operation computes, where every input is known."""
-    # What a transform decided this op computes, where it decided; the
-    # node's own otherwise. An op rewritten by an earlier pass is raised
-    # again before this looks, so its `made` is the only account of it.
-    semantics = lower.current(op)
-    if semantics is None or not ir.modelled(semantics) or _defined(op, semantics, origin) is None:
+    if _defined(op) is None:
         return None
-
     parts: list[Known] = []
-    for one in semantics.sources:
-        got = _operand(op, one, known, origin, here)
+    for one in op.args:
+        got = _operand(op, one, known, here)
         if got is None:
             return None
         parts.append(got)
@@ -259,16 +239,14 @@ def _result(
         return None
     width = min(one.width for one in parts)
 
-    match semantics.op:
-        case ir.Operation.MOVE if len(parts) == 1:
-            return Known(masked(parts[0].n, width), width)
-        case ir.Operation.BINARY | ir.Operation.MULTIPLY if len(parts) == 2 and semantics.name in ARITH:
-            a, b = parts
-            return Known(masked(ARITH[semantics.name](a.n, b.n), width), width)
-        case ir.Operation.UNARY if len(parts) == 1 and semantics.name in UNARY:
-            return Known(masked(UNARY[semantics.name](parts[0].n), width), width)
-        case _:
-            return None
+    if op.kind in (mir.Kind.COPY, mir.Kind.LOAD) and len(parts) == 1:
+        return Known(masked(parts[0].n, width), width)
+    if op.kind in ARITH and len(parts) == 2:
+        a, b = parts
+        return Known(masked(ARITH[op.kind](a.n, b.n), width), width)
+    if op.kind in UNARY and len(parts) == 1:
+        return Known(masked(UNARY[op.kind](parts[0].n), width), width)
+    return None
 
 
 def known(
@@ -312,11 +290,10 @@ def known(
                 facts[phi.result] = known[0]
                 changing = True
             for index, op in enumerate(block.ops):
-                semantics = lower.current(op)
-                target = _defined(op, semantics, body.origin)
+                target = _defined(op)
                 if target is None or target in facts:
                     continue
-                found = _result(op, facts, body.origin, held.get((block.at, index)))
+                found = _result(op, facts, None, held.get((block.at, index)))
                 if found is not None:
                     facts[target] = found
                     changing = True

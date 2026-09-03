@@ -1039,12 +1039,14 @@ def _outcome(block, op: Op, facts: dict, held: dict, origin: dict) -> bool | Non
     if where is None:
         return None
     index, compare = where
-    made = _semantics_of(compare)
-    if made is None or made.op is not ir.Operation.COMPARE or len(made.sources) != 2:
+    # A comparison in MIR's own terms: it subtracts and keeps only the
+    # flags, so its two operands are its args. Asking the instruction meant
+    # matching ir.Operation.COMPARE and reading ir.Loc operands out of it.
+    if compare.kind is not mir.Kind.SUB or len(compare.args) != 2 or compare.results:
         return None
     parts = [
-        consts._operand(compare, one, facts, origin, held.get((block.at, index)))
-        for one in made.sources
+        consts._operand(compare, one, facts, held.get((block.at, index)))
+        for one in compare.args
     ]
     if any(one is None for one in parts):
         return None
