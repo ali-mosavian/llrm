@@ -39,13 +39,29 @@ def semantics(op: mir.Op, was: ir.Semantics | None = None) -> ir.Semantics | Non
         return None  # nothing rewrote it
     if not op.args and not op.results and op.raised is None:
         return None  # nothing to build one from
+    # A value resolves to the register the original instruction had in the
+    # same position where there is one. Emitting ir.Held instead hands the
+    # choice to the allocation, and the allocation is applied to the ops it
+    # re-encodes and not to the ones emitted from their own bytes -- so the
+    # two disagree, and lngmix printed 110 for 142900 with the dividend
+    # deleted. Where there is no such operand -- an operation a pass
+    # invented -- ir.Held is the only honest answer and select resolves it.
     return ir.Semantics(
         op.op,
         op.name,
-        dests=tuple(operand(one) for one in op.results),
-        sources=tuple(operand(one) for one in op.args),
+        dests=tuple(_place(one, was.dests if was else (), i) for i, one in enumerate(op.results)),
+        sources=tuple(_place(one, was.sources if was else (), i) for i, one in enumerate(op.args)),
         target=_target(op, was),
     )
+
+
+def _place(arg: mir.Arg, had: tuple, index: int) -> ir.Loc:
+    """One operand, keeping the register the instruction already had."""
+    got = operand(arg)
+    if not isinstance(got, ir.Held) or index >= len(had):
+        return got
+    was = had[index]
+    return was if isinstance(was, ir.Reg) and was.width == got.width else got
 
 
 def current(op) -> "ir.Semantics | None":

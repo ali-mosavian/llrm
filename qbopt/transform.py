@@ -870,15 +870,19 @@ def halves(body: MirBody) -> set:
         out.add((value, HIGH))
 
     def widths(op: Op) -> dict:
-        """The widest each register is read at by this operation."""
-        what = _semantics_of(op)
-        if what is None:
-            return {}
+        """The widest each value is read at by this operation.
+
+        By value, not by register root through `origin`. Asked the old way,
+        an operand a pass had rewritten to name a value was not an ir.Reg
+        and so matched no root -- and a folded `mov eax,186A0h` whose only
+        reader was such an operand looked unread. lngmix printed 110 for
+        142900: the dividend was deleted and idiv divided whatever was in
+        eax.
+        """
         found: dict = {}
-        for one in what.sources:
-            if isinstance(one, ir.Reg):
-                root = ir.ROOT.get(one.register, one.register)
-                found[root] = max(found.get(root, 0), one.width)
+        for one in op.args:
+            if isinstance(one, mir.Held):
+                found[one.value] = max(found.get(one.value, 0), one.width)
         return found
 
     changing = True
@@ -902,14 +906,13 @@ def halves(body: MirBody) -> set:
                         if (carried[one], HIGH) in out:
                             out.add((one, HIGH))
                         continue
-                    root = ir.ROOT.get(body.origin.get(one, -1), -1)
-                    if not described or root not in read:
+                    if not described or one not in read:
                         # Nothing written down says how much of it is read.
                         out.add((one, LOW))
                         out.add((one, HIGH))
                         continue
                     out.add((one, LOW))
-                    if read[root] >= 4:
+                    if read[one] >= 4:
                         out.add((one, HIGH))
                 for ref in op.loads + op.stores:
                     for one in (ref.base, ref.segment):

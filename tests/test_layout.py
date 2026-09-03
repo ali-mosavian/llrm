@@ -504,10 +504,12 @@ def test_a_served_read_does_not_keep_the_fixup_of_the_operand_it_removed(name: s
     for _body_name, body in mir.bodies(found, split.partition(found, mapped)):
         for block in transform.forwarded(body, found.dgroup, found.calls).blocks:
             for op in block.ops:
-                if op.made is None:
+                # What the pass made of it, in MIR's own operands. `made`
+                # was the marker; a pass that says what it computes as
+                # values and cells sets none.
+                if op.raised is None or (op.args, op.results) == op.raised:
                     continue
-                where = (*op.made.dests, *op.made.sources)
-                if any(isinstance(one, (ir.Mem, ir.Address)) for one in where):
+                if any(isinstance(one, mir.Cell) for one in (*op.args, *op.results)):
                     continue
                 served += 1
                 assert layout._field_in(found, op) is None, (
@@ -626,8 +628,9 @@ def test_a_relocation_belongs_to_the_operand_and_not_to_a_place(obj: Path) -> No
                 lo, hi = ir.span(op.node)
                 inside = [one for one in fields if lo <= one < hi]
                 want = inside[0] if len(inside) == 1 else None
-            assert op.ref == want, f"{obj.stem} {op.at:#06x}: says {op.ref}, the bytes say {want}"
-            seen += op.ref is not None
+            ref = found.refs.get(op.id)
+            assert ref == want, f"{obj.stem} {op.at:#06x}: says {ref}, the bytes say {want}"
+            seen += ref is not None
     assert seen or not fields, f"{obj.stem}: nothing carries a fixup, so this proves nothing"
 
 

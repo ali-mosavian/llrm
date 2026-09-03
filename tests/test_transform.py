@@ -1080,8 +1080,8 @@ def test_a_served_read_names_the_value_and_not_a_register() -> None:
 
     It asked `_at_width(root, width)` and wrote the answer down -- the
     allocator's answer, given by a pass, which is rule 5's whole subject and
-    forward.py's 22 machine references in one line. It says ir.Held now, and
-    select.emit resolves it through the allocation.
+    forward.py's 22 machine references in one line. It says mir.Held now --
+    the value -- and lower.py is where that becomes a register.
     """
     from qbopt.blocks import code_map
     from qbopt import blocks as split
@@ -1098,12 +1098,11 @@ def test_a_served_read_names_the_value_and_not_a_register() -> None:
                 continue
             for block in after.blocks:
                 for op in block.ops:
-                    if op.made is None or op.loads:
+                    if op.raised is None or (op.args, op.results) == op.raised or op.loads:
                         continue
-                    was = getattr(op.node, "semantics", None)
-                    if was is None or not any(isinstance(one, ir.Mem) for one in was.sources):
+                    if not any(isinstance(one, mir.Cell) for one in op.raised[0]):
                         continue
-                    held = [one for one in op.made.sources if isinstance(one, ir.Held)]
+                    held = [one for one in op.args if isinstance(one, mir.Held)]
                     assert held, f"{obj.stem} {op.at:#06x}: served read names a register"
                     seen += 1
     assert seen, "nothing was served, so this proves nothing"
@@ -1132,39 +1131,49 @@ def test_a_fold_names_the_value_not_the_register() -> None:
         for name, body in bodies
         for block in transform.applied(body, found.dgroup, found.calls, only="fold").blocks
         for op in block.ops
-        if op.made is not None
-        for one in op.made.dests
-        if isinstance(one, ir.Held)
+        for one in op.results
+        if isinstance(one, mir.Held) and op.raised is not None and (op.args, op.results) != op.raised
     ]
     assert held, "fold no longer says which value it writes"
 
 
 def test_an_unplaced_held_keeps_its_fold() -> None:
-    """Cost of getting this wrong: 693 bytes over the corpus.
+    """Cost of getting this wrong: 693 bytes, then a miscompile.
 
-    The allocator refuses about seventy bodies, and a Held in one of them
-    resolves to nothing. Dropping `made` there emits the op from its node,
-    which undoes the fold -- `mov <held>,7` becomes the load it replaced.
-    The operand in the same position of that node is what the pass took
-    away, so it is what goes back.
+    A fold says `this value gets this constant`. Where the allocation has
+    no register for the value -- the allocator refuses about seventy bodies
+    in the corpus -- the operand the original instruction had in the same
+    position is what the pass took away, so that is what it emits as.
+    Dropping the rewrite instead emits the load it replaced, which is not a
+    fold; handing the choice to the allocation instead disagrees with every
+    operation emitted from its own bytes, and lngmix printed 110 for 142900
+    with its dividend deleted.
     """
+    from qbopt import ir
     from qbopt import layout
+    from qbopt import lower
 
     found, bodies = _bodies("hotlop-p-g2.obj")
     for name, body in bodies:
         done = transform.applied(body, found.dgroup, found.calls, only="fold")
-        if not layout._names_a_value(done):
+        folded = [
+            op
+            for block in done.blocks
+            for op in block.ops
+            if op.raised is not None and (op.args, op.results) != op.raised
+        ]
+        if not folded:
             continue
         got = layout._grounded(done, {})  # nothing placed at all
-        before = {op.at for block in done.blocks for op in block.ops if op.made is not None}
-        lost = [op for block in got.blocks for op in block.ops if op.made is None and op.at in before]
-        kept = [
-            op
-            for block in got.blocks
-            for op in block.ops
-            if op.made is not None and any(isinstance(one, ir.Reg) for one in op.made.dests)
-        ]
-        assert kept, f"{name}: every fold dropped rather than grounded"
-        assert not lost, f"{name}: {len(lost)} ops fell back to their node"
+        by_at = {op.at: op for block in got.blocks for op in block.ops}
+        for op in folded:
+            what = lower.current(by_at[op.at])
+            assert what is not None, f"{name}: {op.at:#x} lost its rewrite"
+            assert any(isinstance(one, ir.Imm) for one in what.sources), (
+                f"{name}: {op.at:#x} went back to the read it replaced"
+            )
+            assert all(not isinstance(one, ir.Held) for one in what.dests), (
+                f"{name}: {op.at:#x} names no place at all"
+            )
         return
     raise AssertionError("no body folded anything; the test measures nothing")

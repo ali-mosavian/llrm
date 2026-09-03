@@ -86,9 +86,7 @@ ALLOWED = {
         "_invariant_run",
         "_leaving",
         "_reads",
-        "halves",
         "root",
-        "widths",
     },
     "segments.py": {"_segment_name", "_loads_a_segment"},
 }
