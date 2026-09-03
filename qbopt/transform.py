@@ -385,25 +385,27 @@ def _starts(phis: list) -> set:
     return {value for phi in phis for value in phi.incoming.values()}
 
 
-def _rewritten(ops: list[Op], origin: dict) -> set:
-    """Registers more than one operation in the loop writes.
+def _rewritten(ops: list[Op], phis: list) -> set:
+    """Values a phi carries that the loop goes on to define again.
 
-    A definition may only leave a loop if it is the only one of its register
-    in there. `mov ax,1` that starts an inner counter reads nothing the
-    outer loop writes, so it is invariant by every other test here -- and
-    hoisting it means the second pass of the outer loop starts from where
-    the inner one left off. segld printed 1030 for 1050, one inner loop
-    short.
+    A definition may only leave a loop if it is the only one of its variable
+    in there. A move that starts an inner counter reads nothing the outer
+    loop writes, so it is invariant by every other test here -- and hoisting
+    it means the second pass of the outer loop starts from where the inner
+    one left off. segld printed 1030 for 1050, one inner loop short.
+
+    In SSA a variable written twice in a loop is a phi with an incoming
+    defined inside it, which is the same question asked of values. It used
+    to count definitions per register through `origin`, which is the
+    machine's account of which of them are one variable.
     """
-    seen: dict = {}
-    for one in ops:
-        for value in one.defines:
-            if value.flags:
-                continue
-            where = origin.get(value)
-            if where is not None:
-                seen[where] = seen.get(where, 0) + 1
-    return {where for where, count in seen.items() if count > 1}
+    inside = {value for one in ops for value in one.defines if not value.flags}
+    out: set = set()
+    for phi in phis:
+        coming = set(phi.incoming.values())
+        if coming & inside:
+            out |= coming
+    return out
 
 
 def _invariant_run(
@@ -412,7 +414,7 @@ def _invariant_run(
     stores: list,
     dgroup: frozenset[int],
     calls: dict[int, str],
-    origin: dict,
+    phis: list,
     bounds: dict | None = None,
     starts: set | None = None,
     readable: set | None = None,
@@ -428,7 +430,7 @@ def _invariant_run(
         return []
     made: set = set()
     run: list = []
-    twice = _rewritten(ops, origin)
+    twice = _rewritten(ops, phis)
     begins = starts or set()
     changing = True
     while changing:
@@ -483,7 +485,7 @@ def _invariant_run(
             # change, which is segld's inner counter and 1030 for 1050.
             if any(
                 value in begins
-                and origin.get(value) in twice
+                and value in twice
                 and (readable is None or value in readable)
                 for value in one.defines
                 if not value.flags
@@ -787,7 +789,7 @@ def _signed(fact) -> int:
     return fact.n - (top << 1) if fact.n & top else fact.n
 
 
-def _outcome(block, op: Op, facts: dict, held: dict, origin: dict) -> bool | None:
+def _outcome(block, op: Op, facts: dict, held: dict) -> bool | None:
     """Whether this branch is taken, where both its operands are numbers."""
     if op.kind is not mir.Kind.BRANCH:
         return None
@@ -850,7 +852,7 @@ def decided(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
             out.append(block)
             continue
         last = block.ops[-1]
-        answer = _outcome(block, last, facts, held, body.origin)
+        answer = _outcome(block, last, facts, held)
         if answer is None:
             out.append(block)
             continue
@@ -977,14 +979,14 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
     for block in body.blocks:
         ops = []
         for op in block.ops:
-            made = _folded_op(op, facts, wanted, body.origin)
+            made = _folded_op(op, facts, wanted)
             changed = changed or made is not op
             ops.append(made)
         out.append(replace(block, ops=tuple(ops)))
     return replace(body, blocks=tuple(out)) if changed else body
 
 
-def _folded_op(op: Op, facts: dict, wanted: set, origin: dict) -> Op:
+def _folded_op(op: Op, facts: dict, wanted: set) -> Op:
     """The operation as a move of its own answer, where that is possible."""
     what = _semantics_of(op)
     if what is None or op.stores:
@@ -1001,13 +1003,12 @@ def _folded_op(op: Op, facts: dict, wanted: set, origin: dict) -> Op:
         return op
     if op.kind in (mir.Kind.JUMP, mir.Kind.BRANCH, mir.Kind.CALL, mir.Kind.RETURN):
         return op
-    if not what.dests or not isinstance(what.dests[0], ir.Reg):
+    # It has to write a value. A widening multiply writes two -- and its
+    # answer is the first, which the operation says itself.
+    if not op.results or not isinstance(op.results[0], mir.Held):
         return op
 
-    # Which value the first destination names. A widening `imul` has two --
-    # dx:ax -- and its answer is the low half; hotlop's `n * k` is that
-    # operation, both halves constant and the high one dead.
-    target = consts._defined(op, what, origin)
+    target = consts._defined(op)
     if target is None or target not in facts:
         return op
     # A second result that something reads is not expressible as one move.
@@ -1015,7 +1016,7 @@ def _folded_op(op: Op, facts: dict, wanted: set, origin: dict) -> Op:
         return op
 
     fact = facts[target]
-    into = what.dests[0]
+    into = op.results[0]
     if op.kind is mir.Kind.COPY and any(isinstance(one, mir.Const) for one in op.args):
         return op  # already says so
 
@@ -1099,7 +1100,7 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
         stores = [ref for one in ops for ref in one.stores]
         carried = {phi.result for at in loop.body for phi in at_of[at].phis}
         phis = [phi for at in loop.body for phi in at_of[at].phis]
-        run = _invariant_run(ops, carried, stores, dgroup, calls, body.origin, bounds, _starts(phis), readable)
+        run = _invariant_run(ops, carried, stores, dgroup, calls, phis, bounds, _starts(phis), readable)
         # Not one already taken out of a loop inside this one. Invariant in
         # the inner loop and in the outer, it was put in both preheaders and
         # its bytes counted twice, which layout reports as a negative gap:
@@ -1263,13 +1264,6 @@ class DropStores(MIRTransform):
         return without_dead_stores(body, self.where.dgroup, self.where.named)
 
 
-class Place(MIRTransform):
-    name = "place"
-
-    def transform(self, body: MirBody) -> MirBody:
-        return placed(body)
-
-
 def pipeline(where: Where, **wanted) -> list[MIRTransform]:
     """The passes, in order, that `wanted` leaves on.
 
@@ -1285,7 +1279,6 @@ def pipeline(where: Where, **wanted) -> list[MIRTransform]:
         Forward(where),
         DropLoads(where),
         DropStores(where),
-        Place(),
     ]
     return [one for one in every if wanted.get(one.name, True)]
 
@@ -1307,7 +1300,6 @@ def applied(
     forward: bool = True,
     drop_loads: bool = True,
     drop_stores: bool = True,
-    place: bool = False,
     only: str | None = None,
 ) -> MirBody:
     """Every transform this module has, or the one `only` names.
@@ -1319,9 +1311,11 @@ def applied(
     298 lines and 65 of this file's machine references went with it, and
     the plan's answer -- absorption at the raise -- is what replaces it.
 
-    `place` is off for its own reason: sinking a definition is the only
-    transform here that changes the order instructions run in, and its
-    benefit is indirect.
+    The place pass is gone with absorb and widen. It sank a definition
+    towards its use -- the one transform here that changed the order
+    instructions run in -- was off by default, bought nothing measured, and
+    asked `origin` which other operations touched the same register, which
+    is an interference question and the allocator's.
     """
     wanted = {
         "fold": True,
@@ -1332,7 +1326,6 @@ def applied(
         "forward": forward,
         "drop_loads": drop_loads,
         "drop_stores": drop_stores,
-        "place": place,
     }
     where = Where(
         dgroup=dgroup,
@@ -1346,94 +1339,5 @@ def applied(
             continue
         body = one.transform(body)
     return body
-
-
-def _may_move(op: Op) -> bool:
-    """Whether moving this op within its block could change the program.
-
-    Refused outright: a barrier, whose behaviour is its encoding's; a call,
-    which is a barrier for everything this does not model; anything that
-    touches memory, because two accesses only commute when they provably do
-    not alias and this asks a cheaper question than that; and anything
-    defining or using the flags, because a comparison and the branch reading
-    it are joined by a value whose live range is one instruction and which
-    nothing may be placed inside.
-    """
-    if op.barrier or op.loads or op.stores:
-        return False
-    if any(one.flags for one in (*op.defines, *op.uses)):
-        return False
-    return op.kind is not mir.Kind.OPAQUE
-
-
-def _placed(ops: list[Op], origin: dict) -> list[Op]:
-    """`ops` with each movable definition as late as its uses allow.
-
-    Sinking, not hoisting: a definition moved down to just before the first
-    op that reads it shortens its live range, which is the whole point --
-    the value stops occupying a register across everything in between.
-
-    One pass, backwards, and only within the block. A definition with no use
-    in this block cannot move, because its use is somewhere this cannot see
-    and "as late as its uses allow" has no answer.
-    """
-    first_use: dict[int, int] = {}
-    for index, op in enumerate(ops):
-        for value in op.uses:
-            first_use.setdefault(value.id, index)
-
-    out = list(ops)
-    for index in range(len(out) - 1, -1, -1):
-        op = out[index]
-        if not _may_move(op):
-            continue
-        made = [one for one in op.defines if not one.flags]
-        if len(made) != 1:
-            continue
-        wanted = first_use.get(made[0].id)
-        if wanted is None or wanted <= index + 1:
-            continue
-        # Two things stop it, and the second is the one SSA hides. Nothing
-        # between here and there may write what this op reads, or the value
-        # it computes is a different one. And nothing between may touch the
-        # *register* this op writes -- values are per-definition and
-        # registers are shared, so sinking a definition of ax past another
-        # definition of ax leaves this one clobbering it, and past a read of
-        # ax leaves that read seeing the wrong value.
-        reads = {one.id for one in op.uses}
-        into = origin.get(made[0])
-        blocked = False
-        for other in out[index + 1 : wanted]:
-            if other.barrier or any(value.id in reads for value in other.defines):
-                blocked = True
-                break
-            if into is not None and any(
-                origin.get(value) is into for value in (*other.defines, *other.uses)
-            ):
-                blocked = True
-                break
-        if blocked:
-            continue
-        moved = out.pop(index)
-        out.insert(wanted - 1, moved)
-    return out
-
-
-def placed(body: MirBody) -> MirBody:
-    """Every movable definition sunk to just before its first use.
-
-    M2, and the reason the roadmap puts it before LICM: nothing can be
-    hoisted out of a loop while an op's position is its address. Here a
-    block's op list is the order they are emitted in -- layout._ordered
-    stopped sorting by address for exactly this -- so a transform may
-    reorder within a block and the bytes follow.
-
-    What it buys directly is shorter live ranges, which is what
-    `simplify._target_is_free` and `avail.py` refuse sites over today.
-    """
-    return replace(
-        body,
-        blocks=tuple(replace(one, ops=tuple(_placed(list(one.ops), body.origin))) for one in body.blocks),
-    )
 
 
