@@ -933,6 +933,13 @@ def _carried(op: Op, origin: dict) -> dict:
     semantics = _semantics_of(op)
     if semantics is None:
         return {}
+    # Semantics naming no operand describe nothing, so nothing here is a
+    # partial write. A call names none, and every argument it reads shares
+    # a register with something it clobbers -- so all of them would read as
+    # the register's previous value and none as an input. B$OGTA takes the
+    # ON GOTO branch index in bx and the `mov bx` before it read as dead.
+    if not semantics.sources and not semantics.dests:
+        return {}
 
     def root(one):
         register = origin.get(one)
@@ -952,6 +959,63 @@ def _carried(op: Op, origin: dict) -> dict:
             if root(one) == where:
                 out[one] = value
     return out
+
+
+def dead(body: MirBody) -> MirBody:
+    """Operations whose results nothing reads, removed.
+
+    BC emits no dead code -- 7 operations in the whole corpus before any
+    pass runs -- so this is for what the passes leave behind: folding turns
+    a load into a move of a number and what fed it stops being read, and
+    hoisting takes a computation out and leaves the copy standing in for it.
+
+    live() is the analysis, and what it needs is that every use list is
+    complete. For a call that means its contract naming the registers it
+    reads, which is runtime.Contract.inputs and was written for this.
+    Removing an operation hands its bytes to the one before it -- layout.py
+    requires that and _absorb() already does it, refusing where no survivor
+    is adjacent to take them.
+    """
+    # Not in a body holding something this cannot read. A use list is only
+    # as complete as the semantics behind it, and an opaque or emulated
+    # instruction reads registers none of them mention: byref2 printed 0
+    # for 16 that way.
+    if any(
+        one.barrier or _semantics_of(one) is None
+        for block in body.blocks
+        for one in block.ops
+    ):
+        return body
+
+    alive = live(body)
+    out = []
+    changed = False
+    for block in body.blocks:
+        # Absorption puts several operations on one address and _absorb
+        # keys on it, so an address shared with something live is not one
+        # this may name.
+        seen: dict[int, int] = {}
+        for op in block.ops:
+            seen[op.at] = seen.get(op.at, 0) + 1
+        gone = {op.at for op in block.ops if seen[op.at] == 1 and _removable(op, alive)}
+        if not gone:
+            out.append(block)
+            continue
+        ops = _absorb(list(block.ops), gone)
+        changed = changed or len(ops) != len(block.ops)
+        out.append(replace(block, ops=tuple(ops)))
+    return replace(body, blocks=tuple(out)) if changed else body
+
+
+def _removable(op: Op, alive: set) -> bool:
+    """Whether anything at all would notice this operation going."""
+    if op.op in _OBSERVED or op.stores or op.barrier:
+        return False
+    if _semantics_of(op) is None:
+        return False
+    if not [one for one in op.defines if not one.flags]:
+        return False
+    return not any(one in alive for one in op.defines)
 
 
 def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
@@ -1415,7 +1479,7 @@ def _choices(offers: dict) -> Iterator[dict]:
 # before avail.py once and avail forwarded a stale high half across an op
 # that said it read two bytes where the instruction read four. That is no
 # longer possible to get wrong by rearranging this list.
-PASSES = ("fold", "segments", "hoist", "forward", "drop_loads", "drop_stores", "widen", "place", "absorb", "strength")
+PASSES = ("fold", "dead", "segments", "hoist", "forward", "drop_loads", "drop_stores", "widen", "place", "absorb", "strength")
 
 
 def applied(
@@ -1448,6 +1512,7 @@ def applied(
     """
     wanted = {
         "fold": True,
+        "dead": True,
         "segments": segments_,
         "hoist": hoist,
         "forward": forward,
@@ -1465,6 +1530,8 @@ def applied(
             continue
         if name == "fold":
             body = folded(body, dgroup, calls)
+        elif name == "dead":
+            body = dead(body)
         elif name == "hoist":
             body = hoisted(body, dgroup, calls, module.landmarks(found) if found is not None else None)
         elif name == "segments":

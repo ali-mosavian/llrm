@@ -308,6 +308,12 @@ def _call_touches(name: str | None) -> tuple[frozenset[Register_], frozenset[Reg
     # The x87 loads are the exception and say so: B$FILD takes a long in
     # dx:ax, B$FIL2 an integer in ax. Leaving those out of the use list is
     # what let dead code elimination delete the moves that set them up.
+    if routine.inputs is None:
+        # Established for what it clobbers and not for what it reads. Both
+        # answers are needed and they are not the same question: B$ENRA and
+        # B$EXSA preserve a documented set and their code is not in the
+        # tree, so every register is an input until it is.
+        return disturbed, frozenset(TRACKED) | {FLAGS}
     reads = {FROM_CONTRACT[one] for one in routine.inputs if one in FROM_CONTRACT}
     return disturbed, frozenset(reads) | {FLAGS}
 

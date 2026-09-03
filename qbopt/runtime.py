@@ -125,15 +125,14 @@ class Contract:
     established: bool
     evidence: str
     documented: frozenset[Reg] | None = field(default=None)
-    # Registers the caller has to have set before the call. Empty by
-    # default because that is what the runtime source says of nearly every
-    # routine here -- cmacros' cProc with parmW/parmD, arguments on the
-    # stack -- and the two that read a register say so in their own
-    # evidence. It matters because a use list is what tells a pass an
-    # operation is needed: B$FILD takes its long in dx:ax, the moves
-    # setting it up read as dead, and deleting them printed FADD= 918528
-    # for 1049600.
-    inputs: frozenset[Reg] = field(default=frozenset())
+    # Registers the caller has to have set before the call. None is not
+    # "none" -- it is "not established", and reads as every register, the
+    # same way an unestablished contract clobbers every one. The asymmetry
+    # is the point: over-stating a read only keeps a value alive, while
+    # under-stating one deletes the instruction that produced it. B$FILD
+    # takes its long in dx:ax, nothing recorded that, and removing the
+    # moves that set it up printed FADD= 918528 for 1049600.
+    inputs: frozenset[Reg] | None = field(default=None)
 
 
 def worst(name: str) -> Contract:
@@ -174,6 +173,7 @@ def barrier(routine: Contract) -> bool:
 _HELPERS = (
     Contract(
         name="B$CPI4",
+        inputs=frozenset(),
         cleanup=8,
         control=Control.RETURNS,
         enters_user_code=False,
@@ -194,6 +194,7 @@ _HELPERS = (
     ),
     Contract(
         name="B$MUI4",
+        inputs=frozenset(),
         cleanup=8,
         control=Control.RETURNS,
         enters_user_code=False,
@@ -213,6 +214,7 @@ _HELPERS = (
     ),
     Contract(
         name="B$DVI4",
+        inputs=frozenset(),
         cleanup=8,
         control=Control.RETURNS,
         enters_user_code=False,
@@ -232,6 +234,7 @@ _HELPERS = (
     ),
     Contract(
         name="B$RMI4",
+        inputs=frozenset(),
         cleanup=8,
         control=Control.RETURNS,
         enters_user_code=False,
@@ -275,6 +278,9 @@ _PRINT_EVIDENCE = (
 def _print(name: str, cleanup: int) -> Contract:
     return Contract(
         name=name,
+        # The stub sets ax itself before jumping to B$PRINT, and BC pushes
+        # the value: nothing here is a register the caller has to have set.
+        inputs=frozenset(),
         cleanup=cleanup,
         control=Control.RETURNS,
         enters_user_code=False,
@@ -305,6 +311,7 @@ _PRINTING = (
 _STRINGS = (
     Contract(
         name="B$SASS",
+        inputs=frozenset(),
         cleanup=4,
         control=Control.RETURNS,
         enters_user_code=False,
@@ -324,6 +331,7 @@ _STRINGS = (
     ),
     Contract(
         name="B$SCAT",
+        inputs=frozenset(),
         cleanup=4,
         control=Control.RETURNS,
         enters_user_code=False,
@@ -342,6 +350,7 @@ _STRINGS = (
     ),
     Contract(
         name="B$STDL",
+        inputs=frozenset(),
         cleanup=2,
         control=Control.RETURNS,
         enters_user_code=False,
@@ -360,6 +369,7 @@ _STRINGS = (
     ),
     Contract(
         name="B$STI2",
+        inputs=frozenset(),
         cleanup=2,
         control=Control.RETURNS,
         enters_user_code=False,
@@ -381,6 +391,7 @@ _STRINGS = (
     ),
     Contract(
         name="B$LTRM",
+        inputs=frozenset(),
         cleanup=2,
         control=Control.RETURNS,
         enters_user_code=False,
@@ -400,6 +411,7 @@ _STRINGS = (
     ),
     Contract(
         name="B$FVAL",
+        inputs=frozenset(),
         cleanup=2,
         control=Control.RETURNS,
         enters_user_code=False,
@@ -423,6 +435,7 @@ _STRINGS = (
 _SIMPLE = (
     Contract(
         name="B$DSEG",
+        inputs=frozenset(),
         cleanup=2,
         control=Control.RETURNS,
         enters_user_code=False,
@@ -443,6 +456,7 @@ _SIMPLE = (
     ),
     Contract(
         name="B$FERR",
+        inputs=frozenset(),
         cleanup=0,
         control=Control.RETURNS,
         enters_user_code=False,
@@ -461,6 +475,7 @@ _SIMPLE = (
     ),
     Contract(
         name="B$?EVT",
+        inputs=frozenset(),
         cleanup=0,
         control=Control.RETURNS,
         enters_user_code=False,
@@ -487,6 +502,7 @@ _SIMPLE = (
 _CONTROL = (
     Contract(
         name="B$EVCK",
+        inputs=frozenset(),
         cleanup=0,
         control=Control.UNKNOWN,
         enters_user_code=True,
@@ -506,6 +522,7 @@ _CONTROL = (
     ),
     Contract(
         name="B$OEGA",
+        inputs=frozenset(),
         cleanup=4,
         control=Control.UNKNOWN,
         enters_user_code=True,
@@ -524,6 +541,7 @@ _CONTROL = (
     ),
     Contract(
         name="B$RESN",
+        inputs=frozenset(),
         cleanup=0,
         control=Control.NEVER,
         enters_user_code=True,
@@ -542,6 +560,7 @@ _CONTROL = (
     ),
     Contract(
         name="B$CENP",
+        inputs=frozenset(),
         cleanup=0,
         control=Control.NEVER,
         enters_user_code=True,
@@ -561,6 +580,7 @@ _CONTROL = (
     ),
     Contract(
         name="B$CEND",
+        inputs=frozenset(),
         cleanup=0,
         control=Control.NEVER,
         enters_user_code=False,
@@ -685,6 +705,7 @@ _FRAMES = (
 _X87 = (
     Contract(
         name="B$FCMP",
+        inputs=frozenset(),
         cleanup=0,
         control=Control.RETURNS,
         enters_user_code=False,
@@ -745,6 +766,7 @@ _X87 = (
     ),
     Contract(
         name="B$FIST",
+        inputs=frozenset(),
         cleanup=0,
         control=Control.RETURNS,
         enters_user_code=False,
@@ -762,6 +784,7 @@ _X87 = (
     ),
     Contract(
         name="B$FIS2",
+        inputs=frozenset(),
         cleanup=0,
         control=Control.RETURNS,
         enters_user_code=False,
@@ -778,6 +801,7 @@ _X87 = (
     ),
     Contract(
         name="B$FUST",
+        inputs=frozenset(),
         cleanup=0,
         control=Control.RETURNS,
         enters_user_code=False,
@@ -811,6 +835,8 @@ def _read(name: str) -> Contract:
     """
     return Contract(
         name=name,
+        # pDest is a parameter, so nothing arrives in a register.
+        inputs=frozenset(),
         cleanup=4,
         control=Control.RETURNS,
         enters_user_code=False,
@@ -835,6 +861,7 @@ _READ = tuple(_read(one) for one in ("B$RDI2", "B$RDI4", "B$RDR4"))
 
 _DDIM = Contract(
     name="B$DDIM",
+    inputs=frozenset(),
     cleanup=None,
     control=Control.RETURNS,
     enters_user_code=False,

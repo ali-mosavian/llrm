@@ -954,3 +954,38 @@ def test_a_long_divide_leaves_a_loop_that_never_changes_its_operands() -> None:
     assert len([text for text in inside if text.startswith("idiv")]) < 2, (
         f"both divides are still in the loop: {inside[:10]}"
     )
+
+
+def test_dead_code_goes_and_the_bytes_are_still_accounted_for() -> None:
+    """A move nothing reads, removed, without losing what it stood for.
+
+    layout.py refuses a body it cannot account for every byte of, so a
+    deletion hands its bytes to the operation before it.
+    """
+    into = ir.Reg(register=Register.BX, width=2)
+    from_ax = ir.Semantics(ir.Operation.MOVE, "mov", dests=(into,), sources=(ir.Reg(register=Register.AX, width=2),))
+    imm = ir.Semantics(ir.Operation.MOVE, "mov", dests=(into,), sources=(ir.Imm(value=7, width=2),))
+    live_one = mir.Op(0x10, ir.Operation.MOVE, "mov", (mir.Value(1, 0x10),), (), made=imm, covers=(0x10, 0x13))
+    doomed = mir.Op(0x13, ir.Operation.MOVE, "mov", (mir.Value(2, 0x13),), (), made=from_ax, covers=(0x13, 0x15))
+    body = mir.MirBody(0x10, (mir.MirBlock(0x10, (), (live_one, doomed), ()),), {})
+    assert transform._removable(doomed, set()), "nothing reads it"
+    assert not transform._removable(live_one, {mir.Value(1, 0x10)}), "and this is read"
+
+
+def test_dead_code_leaves_a_body_it_cannot_read_alone() -> None:
+    """An opaque instruction reads registers no semantics mention.
+
+    byref2 printed 0 for 16 when its argument setup was deleted on the
+    strength of a use list that could not have been complete.
+    """
+    what = ir.Semantics(ir.Operation.MOVE, "mov", dests=(ir.Reg(register=Register.BX, width=2),), sources=())
+    # Something before it, so the deletion has a survivor to give its bytes
+    # to -- without one _absorb refuses and the guard is never reached.
+    first = mir.Op(0x10, ir.Operation.MOVE, "mov", (mir.Value(1, 0x10),), (), made=what, covers=(0x10, 0x12))
+    doomed = mir.Op(0x12, ir.Operation.MOVE, "mov", (mir.Value(2, 0x12),), (), made=what, covers=(0x12, 0x14))
+    plain = mir.MirBody(0x10, (mir.MirBlock(0x10, (), (first, doomed), ()),), {})
+    assert transform.dead(plain) is not plain, "a dead move goes when the body is readable"
+
+    opaque = mir.Op(0x14, ir.Operation.BARRIER, "?", (), (), covers=(0x14, 0x16))
+    body = mir.MirBody(0x10, (mir.MirBlock(0x10, (), (first, doomed, opaque), ()),), {})
+    assert transform.dead(body) is body, "and stays when the body holds a barrier"

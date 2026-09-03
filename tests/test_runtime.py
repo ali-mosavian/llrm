@@ -265,3 +265,24 @@ def test_on_goto_takes_its_branch_index_in_bx() -> None:
     inputs empty, the `mov bx` setting up the branch index read as dead.
     """
     assert runtime.contract("B$OGTA").inputs == frozenset({runtime.Reg.BX})
+
+
+def test_every_established_contract_says_what_it_reads() -> None:
+    """A contract established for its clobbers is not established for its
+    inputs, and the two are different questions.
+
+    `inputs=None` means unestablished and reads as every register. Empty
+    means established as taking nothing in one. Defaulting to empty is what
+    let dead code elimination delete a call's argument setup: B$FILD takes
+    a long in dx:ax and printed FADD= 918528 for 1049600, B$OGTA takes the
+    ON GOTO index in bx and the program stopped early.
+
+    B$ENRA and B$EXSA stay unestablished on purpose. Their code is not in
+    the source tree and the corpus does not settle it -- 16 of 28 sites set
+    cx before B$ENRA and 12 set bx, which is correlation and not an ABI.
+    """
+    unknown = sorted(
+        name for name, one in runtime.CONTRACTS.items() if one.established and one.inputs is None
+    )
+    assert unknown == ["B$ENRA", "B$EXSA"], f"unestablished inputs: {unknown}"
+    assert runtime.worst("anything").inputs is None, "a name with no entry reads everything"
