@@ -57,6 +57,7 @@ def rebuilt(
     # docstring has why every original byte still has to be accounted for
     # after a deletion; `optimise=False` emits the body exactly as raised,
     # which is what a caller bisecting a layout question wants.
+    plain = bodies
     if optimise:
         bodies = [
             (name, transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found, only=only))
@@ -70,7 +71,7 @@ def rebuilt(
     # An allocation, where a pass asked for one. colour() gives back the
     # identity unless something pinned, so this costs nothing when nothing
     # did -- and refuses the pin rather than guessing when it cannot be had.
-    laid = layout.rebuild(found, bodies, mapped.tables, fields, reached, native_fpu)
+    laid = layout.rebuild(found, bodies, mapped.tables, fields, reached, native_fpu, plain=plain)
     if isinstance(laid, str):
         return data, laid
 

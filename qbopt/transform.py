@@ -697,65 +697,6 @@ def _instead(one: ir.Loc, was: Register_, now: Register_) -> ir.Loc:
     return replace(one, **swap) if swap else one
 
 
-def _reads_from(one: Op, was: Register_, now: Register_) -> Op | None:
-    """The operation reading `now` where it read `was`, or None if it cannot.
-
-    It cannot when the same register is also written -- `add ax,[s]` with ax
-    holding the hoisted value would put the sum in the register that value
-    lives in, and the next pass of the loop would read the sum. Nor when an
-    operand is implicit, since there is nothing written down to change.
-    Those readers take a copy instead.
-    """
-    what = _semantics_of(one)
-    if what is None or _implicit(one):
-        return None
-    root = ir.ROOT.get(was, was)
-    if any(_mentions(where, root) for where in what.dests):
-        return None
-    return replace(one, made=replace(what, sources=tuple(_instead(where, root, now) for where in what.sources)))
-
-
-def _move(at: int, into: Register_, outof: Register_, value: mir.Value) -> Op:
-    """`mov into,outof`, both registers spelled out.
-
-    `covers` is empty: it stands for none of BC's bytes, which is what keeps
-    the coverage arithmetic adding up and what stops a later round hoisting
-    it in turn.
-    """
-    what = ir.Semantics(
-        ir.Operation.MOVE,
-        "mov",
-        dests=(ir.Reg(register=_named(into, 2), width=2),),
-        sources=(ir.Reg(register=_named(outof, 2), width=2),),
-    )
-    return Op(at, ir.Operation.MOVE, "mov", (), (value,), kind=mir.Kind.COPY, made=what, covers=(at, at))
-
-
-def _can_reseat(one: Op) -> bool:
-    """Whether _writes_to can actually move this operation's destination.
-
-    Not a two-address one. `add bx,ax` reads bx and writes it, and x86 says
-    so by naming the operand once -- so rewriting the destination rewrites
-    the source with it. _writes_to touches only `dests` and produces
-    `add cx,ax`, which accumulates into a register the chain never put
-    anything in: pressx sums four invariant products into bx and printed
-    R= 6580 for 7500. lir.tied is where that is written down.
-    """
-    what = _semantics_of(one)
-    if what is None or len(what.dests) != 1 or not isinstance(what.dests[0], ir.Reg):
-        return False
-    return lir.tied(what) is None
-
-
-def _writes_to(one: Op, now: Register_) -> Op:
-    """The operation with its single destination register put somewhere else."""
-    what = _semantics_of(one)
-    if what is None or len(what.dests) != 1 or not isinstance(what.dests[0], ir.Reg):
-        return one
-    width = what.dests[0].width
-    return replace(one, made=replace(what, dests=(ir.Reg(register=_named(now, width), width=width),)))
-
-
 # Operations the body can be observed through, whatever they define. A
 # store leaves a mark, a call and the control transfers take the program
 # somewhere, and everything touching the stack moves sp. The x87 forms are
@@ -1258,102 +1199,32 @@ def _folded_op(op: Op, facts: dict, wanted: set, origin: dict) -> Op:
     )
 
 
-def _insertion(
-    body: MirBody,
-    alive,
-    block,
-    run: list,
-    crossing,
-    touched: set,
-    reached_by: set,
-    addressable: set,
-    readable: set,
-) -> tuple[int, list] | None:
-    """Where in the preheader a run can go, and what registers are free there.
+def _placement(block, run: list, alive) -> int | None:
+    """The latest place in the preheader every value the run reads is defined.
 
-    Appending is one choice out of many and often the wrong one. A run needs
-    two things that pull in opposite directions: every value it reads has to
-    be defined *before* it, and every register it writes has to be free
-    *at* it. Late satisfies the first, early the second, and for the loops
-    that matter neither end satisfies both.
+    Latest, because that is the shortest the result has to stay live. This
+    is the whole of the question. Where the result then lives is the
+    allocator's, and a body it cannot colour is laid out as it was raised
+    -- which is what makes this enough.
 
-    hotlpx is the shape. Its preheader reads two variables through runtime
-    calls and then starts the counter in ax, and the run needs ax for the
-    multiplicand. After the counter, ax is taken; before the calls, nothing
-    survives them. The only place it goes is between: after the last call,
-    ahead of the counter, where ax is not yet in use and bx is no longer in
-    the way.
-
-    So this walks positions from the end back to the earliest the run's own
-    operands allow, and returns the first that works -- latest, because that
-    is the shortest the result has to stay live.
+    It used to be half the question: `_insertion` also picked a register
+    out of regalloc.AVAILABLE, `_reads_from` rewrote every consumer to name
+    it, `_move` emitted the copies, `_writes_to` re-seated the destination
+    and `_can_reseat` asked lir whether it could. That is register
+    allocation in a MIR pass with none of the allocator's information, and
+    it is where every hoist bug this year came from.
     """
-    ops = list(block.ops)
-    entering = set(alive.live_in.get(block.at, ()))
-    leaving = set(alive.live_out.get(block.at, ()))
-    defined = [{value for value in one.defines if not value.flags} for one in ops]
+    wants = {value for one in run for value in one.uses if not value.flags}
+    ready = set(alive.live_in.get(block.at, ()))
+    index = 0
+    for number, one in enumerate(block.ops):
+        if wants <= ready:
+            index = number
+        ready |= set(one.defines)
+    if wants <= ready:
+        index = len(block.ops)
+    return index if wants <= ready else None
 
-    def root(value):
-        register = body.origin.get(value)
-        return None if register is None else ir.ROOT.get(register, register)
-
-    def roots(values):
-        return {root(one) for one in values} - {None}
-
-    # The earliest position the run's own operands permit: after the last
-    # thing in this block that it reads.
-    wanted = {value for one in run for value in one.uses}
-    earliest = 0
-    for index, made in enumerate(defined):
-        if made & wanted:
-            earliest = index + 1
-
-    # The run keeps the registers its operations were written with -- a
-    # result the machine places is copied out, not re-seated -- so those
-    # have to be free wherever it lands.
-    keeps = roots({value for one in run for value in one.defines if not value.flags})
-
-    for index in range(len(ops), earliest - 1, -1):
-        before = set(entering)
-        for made in defined[:index]:
-            before |= made
-        # Not a use that is only the register's previous value. Every
-        # 16-bit write is a read-modify-write here, so `mov ax,1` reads the
-        # eax before it -- and counting that as a read means no register is
-        # ever free between two writes to it, which is to say nowhere is a
-        # legal place to put anything. BC's code is 8086 and never writes a
-        # high half, so there is nothing in the half being preserved.
-        after = {
-            value
-            for one in ops[index:]
-            for value in one.uses
-            if value not in _carried(one, body.origin)
-        }
-        # Live in the sense that something reads it. A join raises a phi
-        # for every register, so a dead call result in dx looks live out of
-        # this block and makes dx busy everywhere after the call -- which is
-        # exactly where the run needs to go. See live() and _carried.
-        across = before & (after | leaving) & readable
-        busy = roots(across)
-        if keeps & busy:
-            continue
-        # The result has to survive from here to the loop, so it may not sit
-        # anywhere this block writes later on.
-        later = roots({value for made in defined[index:] for value in made})
-        spare = [
-            where
-            for where in regalloc.AVAILABLE
-            if where not in busy and where not in later and where not in touched and where not in keeps
-        ]
-        if len(spare) < len(crossing):
-            continue
-        if any(
-            value in reached_by and not (set(spare) & addressable)
-            for value in crossing
-        ):
-            continue
-        return index, spare
-    return None
 
 
 def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds: dict | None = None) -> MirBody:
@@ -1382,12 +1253,7 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
     addressable = {ir.ROOT.get(one, one) for one in regalloc.ADDRESSING}
     moved: dict[int, list[Op]] = {}
     gone: set[int] = set()
-    seated: dict[int, Register_] = {}
-    copied: dict[int, list] = {}
     placing: dict[int, int] = {}
-    claimed: set = set()
-    rewrites: dict[int, Op] = {}
-    splits: dict[int, list] = {}
 
     for loop in inside:
         into = _preheader(body, loop)
@@ -1414,109 +1280,11 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
         if crossing is None:
             continue
 
-        touched = set()
-        for one in ops:
-            what = _semantics_of(one)
-            for where in ((*what.dests, *what.sources) if what else ()):
-                if isinstance(where, ir.Reg):
-                    touched.add(ir.ROOT.get(where.register, where.register))
-        touched |= {
-            ir.ROOT.get(body.origin.get(value, -1), -1)
-            for at in loop.body
-            for value in alive.live_out.get(at, ())
-            if not value.flags
-        }
-
-        # Where it goes, and what is free there. Both answers at once,
-        # because neither can be had without the other: see _insertion.
-        found = _insertion(
-            body, alive, at_of[into], run, crossing, touched, reached_by, addressable, readable
-        )
-        if found is None:
-            continue
-        index, spare = found
-
-        # One register per value, and the whole rewrite done here rather
-        # than asked of the allocator. Moving a definition's register means
-        # rewriting every consumer that reads it, and those are one
-        # transformation: doing the first alone emits `mov di,0` with the
-        # loop still reading `[si+0Ah]`, and doing neither leaves the moved
-        # operation writing over whatever the preheader had there.
-        here: dict = {}
-        taken = set(seated.values()) | claimed
-        for result in sorted(crossing, key=lambda one: one.id):
-            free = [
-                where
-                for where in spare
-                if where not in taken
-                and (result not in reached_by or ir.ROOT.get(where, where) in addressable)
-            ]
-            if not free:
-                break
-            here[result] = free[0]
-            taken.add(free[0])
-        if len(here) != len(crossing):
+        # Where it goes: the latest point every value it reads is defined.
+        index = _placement(at_of[into], run, alive)
+        if index is None:
             continue
 
-        # Every reader, and how it is served. One that only reads the value
-        # has the register swapped in its operands. One that also writes it,
-        # or whose operand is implicit -- `imul word [b]` multiplies by ax
-        # and names it nowhere -- gets the value put back just before it
-        # runs, which is what a live range split is.
-        served: dict[int, Op] = {}
-        copies: dict[int, list] = {}
-        beaten = False
-        for other in rest:
-            for result in crossing:
-                if result not in other.uses:
-                    continue
-                was = body.origin.get(result)
-                if was is None:
-                    beaten = True
-                    break
-                again = _reads_from(served.get(other.at, other), was, here[result])
-                if again is not None:
-                    served[other.at] = again
-                else:
-                    copies.setdefault(other.at, []).append((was, here[result]))
-            if beaten:
-                break
-        if beaten:
-            continue
-
-        # Re-seating an operation means rewriting its destination, and not
-        # every operation can have one written. A widening `imul` writes
-        # dx:ax and names neither, so _writes_to leaves it alone -- and the
-        # readers, already rewritten to read the new register, then read one
-        # nothing wrote. That is the 0-for-630 this used to refuse rather
-        # than risk.
-        #
-        # So where the machine says where the result lands, the result is
-        # left there and copied out. The copy costs a move in the preheader,
-        # which runs once, against work that ran every pass of the loop.
-        for one in run:
-            what = _semantics_of(one)
-            fixed = lir.writes(what) if what is not None else {}
-            for value in one.defines:
-                if value not in here:
-                    continue
-                was = ir.ROOT.get(body.origin.get(value, -1), -1)
-                # Copy out where the operation cannot be told where to
-                # write: the machine placed the result, or -- as with
-                # calls.py's restore idiom, whose semantics name no operand
-                # at all -- there is no destination written down to change.
-                # _writes_to returns such an operation untouched and says
-                # nothing, while the readers have already been pointed at
-                # the new register: lngmix emitted `mov [bp-14h],di` with
-                # nothing anywhere writing di.
-                placed = fixed.get(was) is not None and fixed[was].fixed is not None
-                if placed or not _can_reseat(one):
-                    copied.setdefault(one.at, []).append((was, here[value], value))
-                    claimed.add(here[value])
-                else:
-                    seated[one.at] = here[value]
-        rewrites.update(served)
-        splits.update(copies)
         placing[into] = min(placing.get(into, index), index)
         moved[into] = moved.get(into, []) + list(run)
         gone.update(one.at for one in run)
@@ -1526,17 +1294,7 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
 
     out = []
     for block in body.blocks:
-        was = [one.at for one in block.ops if one.at not in gone]
-        ops = [rewrites.get(one.at, one) for one in block.ops if one.at not in gone]
-
-        # A copy ahead of every reader served by one, keyed on the address
-        # that reader had before anything was re-stamped onto it.
-        ahead: list[Op] = []
-        for one, before in zip(ops, was, strict=True):
-            for old, now in splits.get(before, ()):
-                ahead.append(_move(one.at, old, now, mir.Value(-1, one.at)))
-            ahead.append(one)
-        ops = ahead
+        ops = [one for one in block.ops if one.at not in gone]
 
         if ops and block.ops and block.ops[0].at in gone:
             # Onto the block's own address so branches still land, and told
@@ -1547,15 +1305,7 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
             ops = [replace(first, at=block.ops[0].at, covers=first.covers or _span_of(first))] + ops[1:]
         if block.at in moved:
             leaves = bool(ops) and ops[-1].kind in (mir.Kind.JUMP, mir.Kind.BRANCH)
-            lifted = []
-            for one in moved[block.at]:
-                if one.at in copied:
-                    lifted.append(one)
-                    lifted += [_move(one.at, now, was, value) for was, now, value in copied[one.at]]
-                elif one.at in seated:
-                    lifted.append(_writes_to(one, seated[one.at]))
-                else:
-                    lifted.append(one)
+            lifted = list(moved[block.at])
             # Running in the preheader and still standing for the bytes it
             # came from, which is what a record or fixup naming those bytes
             # needs in order to follow it.
@@ -1581,43 +1331,6 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
     # down -- so a refusal here is the only way the rewrite can fail.
     laid = mir.resolved(replace(body, blocks=tuple(out)), calls)
     return body if isinstance(laid, str) else laid
-
-
-def _renamed(was: MirBody, now: MirBody, wanted: set) -> dict | None:
-    """Each value of interest, as it is named after the body was resolved.
-
-    By where it is defined and which register it lands in, not by position
-    in the map: `resolved` may give an op more defines than it had, since it
-    unions the node's own effects with the semantics a transform chose. The
-    op is the same op at the same index, and within it a register is defined
-    once.
-    """
-    place = {}
-    for block in was.blocks:
-        for index, op in enumerate(block.ops):
-            for value in op.defines:
-                if value in wanted:
-                    place[value] = (block.at, index, was.origin.get(value))
-
-    at_of = {block.at: block for block in now.blocks}
-    out = {}
-    for value, (at, index, register) in place.items():
-        block = at_of.get(at)
-        if block is None or index >= len(block.ops):
-            return None
-        here = [one for one in block.ops[index].defines if now.origin.get(one) is register]
-        if len(here) != 1:
-            return None
-        out[value] = here[0]
-    return out if len(out) == len(wanted) else None
-
-
-def _choices(offers: dict) -> Iterator[dict]:
-    """Each way of giving every pinned value one of its candidate registers."""
-    values = list(offers)
-    for picked in product(*(offers[one] for one in values)):
-        if len(set(picked)) == len(picked):
-            yield dict(zip(values, picked, strict=True))
 
 
 # The passes, in the order they run. One per whole-segment round, because

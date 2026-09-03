@@ -551,6 +551,7 @@ def rebuild(
     reached: frozenset[int] | None = None,
     native_fpu: bool = False,
     assignment: dict | None = None,
+    plain: list[tuple[str, MirBody]] | None = None,
 ) -> Laid | str:
     """Every body in the module, laid out one after another.
 
@@ -581,6 +582,7 @@ def rebuild(
     # operation whose source outlives it. Per body, and only where it helps:
     # a body the allocator refuses even untangled is laid out as it was.
     if assignment is None:
+        was = dict(plain or ())
         got: dict = {}
         settled = []
         for name, body in bodies:
@@ -590,9 +592,20 @@ def rebuild(
                 fixed, one = body, regalloc.colour(body, body.pins)
             if not isinstance(one, str):
                 got.update(one)
-            else:
-                fixed = body
-            settled.append((name, fixed))
+                settled.append((name, fixed))
+                continue
+            # Nothing can colour it. The body as the passes left it is then
+            # unemittable: every operand is remapped through the allocation
+            # and there is none, so each operation would be written with the
+            # register BC had -- while a pass has moved the operations that
+            # made that true. The body as it was raised still describes
+            # itself, so that is what goes out.
+            #
+            # Without this the hoist had to allocate: it moved a run out of
+            # a loop and had to find the result a register itself, because
+            # nothing downstream would. That is 90 of transform.py's machine
+            # references and where every hoist bug came from.
+            settled.append((name, was.get(name, body)))
         bodies = settled
         assignment = got or None
 
