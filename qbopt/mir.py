@@ -491,6 +491,10 @@ class Op:
     # A number about a stack, not an instruction -- and gone in the step
     # that gives float operands values of their own.
     stack: int | None = None
+    # Which comparison a branch tests. The flags between the compare and the
+    # branch are how the machine gets one to the other; what the branch
+    # means is `a <= b`, and this is where that is said.
+    test: Kind | None = None
     args: tuple[Arg, ...] = ()
     results: tuple[Arg, ...] = ()
     # What those were at the raise, so "did a pass rewrite this" is a
@@ -993,6 +997,7 @@ def raise_body(
                     node,
                     kind=kind,
                     stack=_stack_effect(node.semantics),
+                    test=_BY_BRANCH.get(node.semantics.name or "") if kind is Kind.BRANCH else None,
                     args=operands,
                     results=where[1],
                     raised=(operands, where[1]),

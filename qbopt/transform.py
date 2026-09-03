@@ -230,20 +230,22 @@ def _served(op: Op, holder) -> "tuple[mir.Arg, ...] | None":
     )
 
 
-SEGMENT_REGISTERS = frozenset(
-    getattr(Register, one) for one in ("ES", "FS", "GS") if hasattr(Register, one)
-)
+SEGMENT_NAMES = frozenset({"es", "fs", "gs"})
 
 
 def _segment_load(op: Op):
-    """(register, what it is loaded from) where this op loads a segment."""
-    what = lower.current(op)
-    if what is None or what.op is not ir.Operation.MOVE or len(what.dests) != 1 or len(what.sources) != 1:
+    """(which resource, what it is loaded from) where this op loads one.
+
+    A descriptor lands in a machine resource MIR has no value for, so it
+    arrives as mir.Opaque carrying that resource's own name. This read the
+    register number out of the instruction.
+    """
+    if op.kind is not mir.Kind.LOAD or len(op.results) != 1 or len(op.args) != 1:
         return None
-    into = what.dests[0]
-    if not isinstance(into, ir.Reg) or into.register not in SEGMENT_REGISTERS:
+    into = op.results[0]
+    if not isinstance(into, mir.Opaque) or into.name not in SEGMENT_NAMES:
         return None
-    return into.register, what.sources[0]
+    return into.name, op.args[0]
 
 
 def segments(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
@@ -506,7 +508,7 @@ def _invariant_run(
             # `cmp`, `jle` and `jmp`, all three reading nothing the loop
             # writes, so all three were invariant by the test above and all
             # three left -- and the back edge left with them.
-            if what.op in (ir.Operation.JUMP, ir.Operation.BRANCH):
+            if one.kind in (mir.Kind.JUMP, mir.Kind.BRANCH):
                 continue
             # Nor anything that computes nothing. A register-to-register
             # move is invariant whenever its source is, so hoisting one and
@@ -532,9 +534,8 @@ def _invariant_run(
             # pair split across the loop edge lngmix printed 1185033780 for
             # 142900. Whatever admits the adds has to keep them together.
             if (
-                what.op is ir.Operation.MOVE
+                one.kind is mir.Kind.COPY
                 and not one.loads
-                and all(isinstance(where, ir.Reg) for where in what.sources)
                 and not any(use in made for use in one.uses)
             ):
                 continue
@@ -593,10 +594,7 @@ def _invariant_run(
     while thinning:
         thinning = False
         for one in run:
-            what = _semantics_of(one)
-            if what is None or what.op is not ir.Operation.MOVE or one.loads:
-                continue
-            if not all(isinstance(where, ir.Reg) for where in what.sources):
+            if one.kind is not mir.Kind.COPY or one.loads:
                 continue
             if any(value in other.uses for other in run if other is not one for value in one.defines):
                 continue
@@ -984,27 +982,20 @@ def _carried(op: Op, origin: dict) -> dict:
 
 # What each conditional jump asks of `cmp a,b`, as a predicate on the two
 # operands. Signed and unsigned are different questions and BC emits both.
+# Whether a comparison holds. Keyed on what the branch tests, which the
+# raise decided; keyed on the branch's mnemonic this was a pass that had to
+# know x86 spells "less than" six different ways.
 _TAKEN = {
-    "je": lambda a, b, u: a == b,
-    "jz": lambda a, b, u: a == b,
-    "jne": lambda a, b, u: a != b,
-    "jnz": lambda a, b, u: a != b,
-    "jl": lambda a, b, u: a < b,
-    "jnge": lambda a, b, u: a < b,
-    "jle": lambda a, b, u: a <= b,
-    "jng": lambda a, b, u: a <= b,
-    "jg": lambda a, b, u: a > b,
-    "jnle": lambda a, b, u: a > b,
-    "jge": lambda a, b, u: a >= b,
-    "jnl": lambda a, b, u: a >= b,
-    "jb": lambda a, b, u: u(a) < u(b),
-    "jnae": lambda a, b, u: u(a) < u(b),
-    "jbe": lambda a, b, u: u(a) <= u(b),
-    "jna": lambda a, b, u: u(a) <= u(b),
-    "ja": lambda a, b, u: u(a) > u(b),
-    "jnbe": lambda a, b, u: u(a) > u(b),
-    "jae": lambda a, b, u: u(a) >= u(b),
-    "jnb": lambda a, b, u: u(a) >= u(b),
+    mir.Kind.EQ: lambda a, b, u: a == b,
+    mir.Kind.NE: lambda a, b, u: a != b,
+    mir.Kind.LT: lambda a, b, u: a < b,
+    mir.Kind.LE: lambda a, b, u: a <= b,
+    mir.Kind.GT: lambda a, b, u: a > b,
+    mir.Kind.GE: lambda a, b, u: a >= b,
+    mir.Kind.BELOW: lambda a, b, u: u(a) < u(b),
+    mir.Kind.BELOW_EQ: lambda a, b, u: u(a) <= u(b),
+    mir.Kind.ABOVE: lambda a, b, u: u(a) > u(b),
+    mir.Kind.ABOVE_EQ: lambda a, b, u: u(a) >= u(b),
 }
 
 
@@ -1016,10 +1007,9 @@ def _signed(fact) -> int:
 
 def _outcome(block, op: Op, facts: dict, held: dict, origin: dict) -> bool | None:
     """Whether this branch is taken, where both its operands are numbers."""
-    what = _semantics_of(op)
-    if what is None or what.op is not ir.Operation.BRANCH:
+    if op.kind is not mir.Kind.BRANCH:
         return None
-    decide = _TAKEN.get((op.name or "").lower())
+    decide = _TAKEN.get(op.test)
     if decide is None:
         return None
     reads = [one for one in op.uses if one.flags]
@@ -1225,9 +1215,9 @@ def _folded_op(op: Op, facts: dict, wanted: set, origin: dict) -> Op:
     # next round. Three bytes a round, for ever.
     #
     # What folding is for is removing a computation. A copy is not one.
-    if what.op is ir.Operation.MOVE and all(isinstance(one, ir.Reg) for one in what.sources):
+    if op.kind is mir.Kind.COPY:
         return op
-    if what.op in (ir.Operation.JUMP, ir.Operation.BRANCH, ir.Operation.CALL, ir.Operation.RETURN):
+    if op.kind in (mir.Kind.JUMP, mir.Kind.BRANCH, mir.Kind.CALL, mir.Kind.RETURN):
         return op
     if not what.dests or not isinstance(what.dests[0], ir.Reg):
         return op
@@ -1244,7 +1234,7 @@ def _folded_op(op: Op, facts: dict, wanted: set, origin: dict) -> Op:
 
     fact = facts[target]
     into = what.dests[0]
-    if what.op is ir.Operation.MOVE and any(isinstance(one, ir.Imm) for one in what.sources):
+    if op.kind is mir.Kind.COPY and any(isinstance(one, mir.Const) for one in op.args):
         return op  # already says so
 
     # In MIR's own operands: this value, that constant. What register it
@@ -1551,7 +1541,7 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
             ops = [replace(first, at=block.ops[0].at, covers=first.covers or _span_of(first))] + ops[1:]
         if block.at in moved:
             what = _semantics_of(ops[-1]) if ops else None
-            leaves = what is not None and what.op in (ir.Operation.JUMP, ir.Operation.BRANCH)
+            leaves = bool(ops) and ops[-1].kind in (mir.Kind.JUMP, mir.Kind.BRANCH)
             lifted = []
             for one in moved[block.at]:
                 if one.at in copied:
