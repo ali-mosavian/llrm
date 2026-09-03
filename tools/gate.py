@@ -51,7 +51,10 @@ TESTS = (
     "tests/test_layout.py",
 )
 
-PROGRAMS = ("hotlop", "pressx", "lngmix", "nested")
+# Five shapes. harr is here because a change that only touched harr hung it
+# on four configurations and the gate said clean: whatever is being worked
+# on belongs in this list.
+PROGRAMS = ("hotlop", "pressx", "lngmix", "nested", "harr")
 
 
 def _tests() -> tuple[bool, str]:

@@ -1490,30 +1490,10 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
             if not value.flags
         }
 
-        # A value whose own register the loop only reads does not need a
-        # new one: it stays where it is, and the loop goes on reading it.
-        # harr and segld are both `mov si,0` -- the descriptor's address,
-        # read four times a pass and written nowhere else -- and demanding
-        # a spare for it refused the only invariant operation each has.
-        written = {
-            ir.ROOT.get(body.origin.get(value, -1), -1)
-            for one in ops
-            if one not in run
-            for value in one.defines
-            if not value.flags
-        }
-        staying = {
-            value: ir.ROOT.get(body.origin.get(value, -1), -1)
-            for value in crossing
-            if ir.ROOT.get(body.origin.get(value, -1), -1) not in written
-            and body.origin.get(value) is not None
-        }
-        wanting = frozenset(crossing) - set(staying)
-
         # Where it goes, and what is free there. Both answers at once,
         # because neither can be had without the other: see _insertion.
         found = _insertion(
-            body, alive, at_of[into], run, wanting, touched, reached_by, addressable, readable
+            body, alive, at_of[into], run, crossing, touched, reached_by, addressable, readable
         )
         if found is None:
             continue
@@ -1525,9 +1505,9 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
         # transformation: doing the first alone emits `mov di,0` with the
         # loop still reading `[si+0Ah]`, and doing neither leaves the moved
         # operation writing over whatever the preheader had there.
-        here: dict = dict(staying)
+        here: dict = {}
         taken = set(seated.values()) | claimed
-        for result in sorted(wanting, key=lambda one: one.id):
+        for result in sorted(crossing, key=lambda one: one.id):
             free = [
                 where
                 for where in spare

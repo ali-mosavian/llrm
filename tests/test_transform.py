@@ -1164,27 +1164,3 @@ def test_a_served_read_names_the_value_and_not_a_register() -> None:
                     assert held, f"{obj.stem} {op.at:#06x}: served read names a register"
                     seen += 1
     assert seen, "nothing was served, so this proves nothing"
-
-
-def test_a_value_the_loop_only_reads_keeps_its_own_register() -> None:
-    """harr and segld each have one invariant operation and it was refused.
-
-    `mov si,0` is the array descriptor's address, read four times a pass and
-    written nowhere else in the loop -- so the hoisted value can simply stay
-    in si. Demanding a spare register for it refused the only thing either
-    program had to hoist, because `touched` counts a register the loop reads
-    the same as one it writes.
-    """
-    for name in ("harr-p-g2", "segld-p-g2"):
-        seen = _rebuilt(name)
-        back = [
-            (int(text.split()[-1].rstrip("h"), 16), ip)
-            for ip, text in seen
-            if text.startswith(("jle", "jl ")) and int(text.split()[-1].rstrip("h"), 16) < ip
-        ]
-        assert back, f"{name}: nothing loops here"
-        lo, hi = min(back, key=lambda one: one[1] - one[0])
-        inside = [text for ip, text in seen if lo <= ip <= hi]
-        assert not [text for text in inside if text.replace(" ", "").startswith("movsi,")], (
-            f"{name}: the descriptor's address is still loaded every pass: {inside}"
-        )
