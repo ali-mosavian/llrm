@@ -232,16 +232,20 @@ class Cell:
 
 @dataclass(frozen=True, slots=True)
 class Opaque:
-    """An operand MIR has no form for.
+    """A named machine resource MIR has no value for.
 
-    79 operations of the 2,343 in the corpus, all of them the x87 stack,
-    whose registers rotate under push and pop and so are not a location the
-    way a register is. Everything else -- 96.6% -- is a value, a constant or
-    a cell. An Opaque operand is why fpstack.py exists and is the boundary
-    it works at; nothing else may look inside one.
+    The x87 stack, whose registers rotate under push and pop and so are not
+    a location the way a register is, and the segment registers, which hold
+    a descriptor rather than a number. Everything else -- 96.6% of the
+    corpus -- is a value, a constant or a cell.
+
+    `name` is what the resource is called: "es", "st0". A pass that has to
+    reason about one says the name, so it imports no register number and
+    never looks inside `what`. That is the whole of the permission.
     """
 
     what: object
+    name: str = ""
 
 
 type Arg = Held | Const | Cell | Opaque
@@ -775,6 +779,16 @@ for _one, _root in ir.ROOT.items():
     _AT_WIDTH.setdefault(_root, {}).setdefault(_size, _one)
 
 
+# What a machine resource MIR cannot hold as a value is called. Named here
+# so a pass that has to reason about one -- segments.py about `es`,
+# fpstack.py about the x87 stack -- says the name and imports no register.
+_RESOURCE: dict[Register_, str] = {
+    getattr(Register, _one): _one.lower()
+    for _one in ("ES", "DS", "SS", "CS", "FS", "GS")
+    if hasattr(Register, _one)
+}
+
+
 def _operands(
     what: ir.Semantics,
     holds: dict[Register_, "Value"],
@@ -797,12 +811,14 @@ def _operands(
             # A high byte -- `ah` against `al` -- is not named by a root and
             # a width, so Held cannot say it. One operation in the corpus.
             if value is None or _AT_WIDTH.get(root, {}).get(loc.width) is not loc.register:
-                return Opaque(loc)
+                return Opaque(loc, _RESOURCE.get(loc.register, ""))
             return Held(value, loc.width)
         if isinstance(loc, ir.Imm):
             return Const(loc.value, loc.width)
         if isinstance(loc, ir.Mem):
             return Cell(cells.pop(0)) if cells else Opaque(loc)
+        if isinstance(loc, ir.St):
+            return Opaque(loc, f"st{loc.index}")
         return Opaque(loc)
 
     read, write = list(loads), list(stores)

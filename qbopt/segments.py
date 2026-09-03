@@ -24,11 +24,12 @@ Block-scoped, like everything else here that reasons about a location rather
 than a name.
 """
 
-from qbopt import ir
-from qbopt import lower
 from qbopt import mir
 from qbopt import runtime
+from qbopt.mir import Cell
+from qbopt.mir import Kind
 from qbopt.mir import Op
+from qbopt.mir import Opaque
 from qbopt.mir import MemRef
 from qbopt.mir import MirBody
 
@@ -37,36 +38,26 @@ from qbopt.mir import MirBody
 LOADABLE = frozenset({"es", "ds"})
 
 
-def _semantics(op: Op) -> ir.Semantics | None:
-    what = lower.current(op)
-    return None if what is None or what.op is ir.Operation.BARRIER else what
-
-
 def _loads_a_segment(op: Op) -> tuple[str, MemRef] | None:
-    """`mov es,[x]` as (which register, which cell), or None.
+    """`es := [x]` as (which resource, which cell), or None.
 
-    Only the memory form. `mov es,ax` loads from a register whose value this
-    does not track, so two of them are not comparable and neither is
-    redundant as far as anything here can say.
+    Only the memory form. A load from a register holds a value this does
+    not track, so two of them are not comparable and neither is redundant
+    as far as anything here can say.
+
+    MIR only: the descriptor lands in a machine resource MIR has no value
+    for, and `Opaque.name` is what that resource is called. This read the
+    register number out of the instruction and mapped it to a name, which
+    is a pass importing iced.
     """
-    what = _semantics(op)
-    if what is None or what.op is not ir.Operation.MOVE or len(what.dests) != 1 or len(what.sources) != 1:
+    if op.kind is not Kind.LOAD or len(op.results) != 1 or len(op.args) != 1:
         return None
-    dest = what.dests[0]
-    if not isinstance(dest, ir.Reg):
+    into = op.results[0]
+    if not isinstance(into, Opaque) or into.name not in LOADABLE:
         return None
-    named = _segment_name(dest.register)
-    if named not in LOADABLE:
+    if not isinstance(op.args[0], Cell) or len(op.loads) != 1 or op.loads[0].addr is None:
         return None
-    if not isinstance(what.sources[0], ir.Mem) or len(op.loads) != 1 or op.loads[0].addr is None:
-        return None
-    return named, op.loads[0]
-
-
-def _segment_name(register: int) -> str | None:
-    from iced_x86 import Register
-
-    return {Register.ES: "es", Register.DS: "ds", Register.SS: "ss", Register.CS: "cs"}.get(register)
+    return into.name, op.loads[0]
 
 
 def _clean(op: Op, calls: dict[int, str]) -> bool:
