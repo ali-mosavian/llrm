@@ -384,6 +384,19 @@ def _stack_effect(what: "ir.Semantics") -> int | None:
 
 
 
+def rewritten(op: "Op") -> bool:
+    """Whether a pass has changed what this operation computes.
+
+    The question every caller used to ask as `op.made is not None`, which
+    named the machine form a pass wrote down. What it means is that the
+    operands are not the ones the raise gave it.
+    """
+    if op.made is not None:
+        return True
+    return op.raised is not None and (op.args, op.results) != op.raised
+
+
+
 def _normalised(kind: Kind, name: str, args: tuple, results: tuple) -> tuple:
     """The operands the operation really has, once the machine's are gone.
 
@@ -996,6 +1009,7 @@ def raise_body(
                     stores,
                     node,
                     kind=kind,
+                    covers=ir.span(node),
                     stack=_stack_effect(node.semantics),
                     test=_BY_BRANCH.get(node.semantics.name or "") if kind is Kind.BRANCH else None,
                     args=operands,

@@ -60,12 +60,12 @@ from qbopt.mir import MirBody
 
 
 def _end_of(op: Op) -> int:
-    """One past this op's last original byte."""
-    if op.covers is not None:
-        return op.covers[1]
-    if op.node is None:
-        return op.at
-    return ir.span(op.node)[1]
+    """One past this op's last original byte.
+
+    `covers` is filled at the raise for every operation, so this no longer
+    has to decode the instruction to find out where it ended.
+    """
+    return op.covers[1] if op.covers is not None else op.at
 
 
 def _absorb(ops: list[Op], gone: set[int]) -> list[Op]:
@@ -617,7 +617,7 @@ def _crossing(run: list, rest: list, phis: list | None = None, wanted: set | Non
 
 def _span_of(op: Op) -> tuple[int, int] | None:
     """The bytes this operation occupied before anything moved it."""
-    return ir.span(op.node) if op.node is not None else None
+    return op.covers
 
 
 # Operations the body can be observed through, whatever they define. A
@@ -1460,7 +1460,7 @@ def _may_move(op: Op) -> bool:
         return False
     if any(one.flags for one in (*op.defines, *op.uses)):
         return False
-    return op.node is not None or op.made is not None
+    return op.kind is not mir.Kind.OPAQUE
 
 
 def _placed(ops: list[Op], origin: dict) -> list[Op]:
