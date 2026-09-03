@@ -169,17 +169,20 @@ def refused(body: mir.MirBody) -> tuple[tuple[mir.Op, mir.Op, str], ...]:
 # calls.py's SYNTHESISED already refuses a site whose CF is read afterwards,
 # so pairing one with `jb`/`ja` would be reading a flag the routine only
 # synthesised on the way to something else.
+# What each branch asks, and whether it asks it of signed numbers. Keyed on
+# what the branch tests, which the raise decided; keyed on the mnemonic this
+# was a pass that had to know x86 spells one comparison several ways.
 TESTS = {
-    "je": ("eq", None),
-    "jne": ("ne", None),
-    "jl": ("lt", True),
-    "jle": ("le", True),
-    "jg": ("gt", True),
-    "jge": ("ge", True),
-    "jb": ("lt", False),
-    "jbe": ("le", False),
-    "ja": ("gt", False),
-    "jae": ("ge", False),
+    mir.Kind.EQ: ("eq", None),
+    mir.Kind.NE: ("ne", None),
+    mir.Kind.LT: ("lt", True),
+    mir.Kind.LE: ("le", True),
+    mir.Kind.GT: ("gt", True),
+    mir.Kind.GE: ("ge", True),
+    mir.Kind.BELOW: ("lt", False),
+    mir.Kind.BELOW_EQ: ("le", False),
+    mir.Kind.ABOVE: ("gt", False),
+    mir.Kind.ABOVE_EQ: ("ge", False),
 }
 
 # The runtime routines whose whole purpose is to leave a comparison in the
@@ -237,9 +240,9 @@ def tests(body: mir.MirBody, calls: dict[int, str]) -> tuple[Test, ...]:
     found: list[Test] = []
     for block in body.blocks:
         for op in block.ops:
-            if op.op is not ir.Operation.BRANCH:
+            if op.kind is not mir.Kind.BRANCH:
                 continue
-            asked = TESTS.get(op.name)
+            asked = TESTS.get(op.test)
             carried = [one for one in op.uses if one.flags]
             if asked is None or len(carried) != 1:
                 continue
@@ -247,7 +250,7 @@ def tests(body: mir.MirBody, calls: dict[int, str]) -> tuple[Test, ...]:
             if source is None:
                 continue
             test, signed = asked
-            through = calls.get(source.at) if source.op is ir.Operation.CALL else None
+            through = calls.get(source.at) if source.kind is mir.Kind.CALL else None
             if through is not None and through not in COMPARISONS:
                 continue  # some other call's flags are not a comparison
             if through is not None and signed is not None and signed is not COMPARISONS[through]:
