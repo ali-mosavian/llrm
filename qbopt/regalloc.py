@@ -30,6 +30,7 @@ live, only what it is called.
 """
 
 from dataclasses import dataclass
+from dataclasses import replace
 
 from iced_x86 import Register_
 
@@ -300,6 +301,121 @@ def congruent(body: mir.MirBody) -> dict[Value, Value]:
                     if here is not there:
                         parent[here] = there
     return {one: root(one) for one in parent}
+
+
+def _tangled(body: mir.MirBody) -> set:
+    """Congruence classes two of whose members are live at once.
+
+    The lost-copy shape: a value arriving at a phi is still wanted after
+    it, so the phi's result and its own argument overlap and no single
+    register holds both. BC's own code never has one -- measured, zero
+    across the corpus's 579 raised bodies -- because it is congruent by
+    construction. They appear when a pass moves a definition.
+    """
+    graph = interference(body)
+    klass = congruent(body)
+    of = {one: klass.get(one, one) for one in graph}
+    return {of[one] for one, others in graph.items() for other in others if of[one] is of.get(other)}
+
+
+def untangled(body: mir.MirBody) -> mir.MirBody:
+    """A copy on the phi edge, where a class cannot otherwise be moved.
+
+    colour() records a tangled class and refuses to move it, which is right
+    -- nothing runs on the edge, so a phi's result and its arguments have to
+    already share a register. The way out is to put something on the edge:
+    `v' = v` at the end of the predecessor, with the phi taking v' instead.
+    Then v' shares the phi's register and v is free to live elsewhere.
+
+    This is the live range split, done where the split belongs. Without it a
+    hoisted definition whose class is tangled cannot move at all, and
+    hotlop's product stayed in ax for the counter to overwrite.
+    """
+    tangled = _tangled(body)
+    if not tangled:
+        return body
+    graph = interference(body)
+    klass = congruent(body)
+    of = {one: klass.get(one, one) for one in graph}
+    fresh = max((one.id for one in body.values), default=0) + 1
+
+    added: dict[int, list] = {}
+    swaps: dict[int, dict] = {}
+    origin = dict(body.origin)
+    for block in body.blocks:
+        for phi in block.phis:
+            if of.get(phi.result) not in tangled:
+                continue
+            where = origin.get(phi.result)
+            if where is None:
+                continue
+            for came, value in phi.incoming.items():
+                if not (graph.get(value, frozenset()) & {phi.result}):
+                    continue
+                copy = mir.Value(fresh, came)
+                fresh += 1
+                origin[copy] = where
+                added.setdefault(came, []).append(
+                    mir.Op(
+                        at=came,
+                        op=ir.Operation.MOVE,
+                        name="mov",
+                        defines=(copy,),
+                        uses=(value,),
+                        # By value, not by register. Both sides have the
+                        # same origin -- that is what the tangle is -- so
+                        # naming registers here writes `mov dx,dx`, which
+                        # lir.tied reads as two-address and congruent()
+                        # ties straight back into the class this exists to
+                        # break. ir.Held leaves both to the assignment.
+                        made=ir.Semantics(
+                            ir.Operation.MOVE,
+                            "mov",
+                            dests=(ir.Held(value=copy.id, width=2),),
+                            sources=(ir.Held(value=value.id, width=2),),
+                        ),
+                        covers=(came, came),
+                    )
+                )
+                swaps.setdefault(id(phi), {})[came] = copy
+    if not added:
+        return body
+
+    out = []
+    for block in body.blocks:
+        phis = tuple(
+            replace(one, incoming={**one.incoming, **swaps[id(one)]}) if id(one) in swaps else one
+            for one in block.phis
+        )
+        ops = tuple(block.ops)
+        if block.at in added:
+            # Before the terminator: nothing runs after a branch, and the
+            # copy has to happen on the way out.
+            what = _semantics_of_last(ops)
+            leaves = what is not None and what.op in (ir.Operation.JUMP, ir.Operation.BRANCH)
+            put = tuple(added[block.at])
+            ops = (ops[:-1] + put + ops[-1:]) if leaves and ops else (ops + put)
+        out.append(replace(block, phis=phis, ops=ops))
+    return replace(body, blocks=tuple(out), origin=origin)
+
+
+def _semantics_of_last(ops: tuple):
+    if not ops:
+        return None
+    one = ops[-1]
+    return one.made if one.made is not None else getattr(one.node, "semantics", None)
+
+
+def _named(register: Register_, width: int) -> Register_:
+    """The same register named at the width an operand needs."""
+    return AT_WIDTH.get(ir.ROOT.get(register, register), {}).get(width, register)
+
+
+# A root at each width, for the copies untangled() writes. ir.ROOT maps the
+# narrow name to the wide one; this is the way back.
+AT_WIDTH: dict[Register_, dict[int, Register_]] = {}
+for _narrow, _wide in ir.ROOT.items():
+    AT_WIDTH.setdefault(_wide, {4: _wide})[2 if _narrow != _wide else 4] = _narrow
 
 
 def colour(body: mir.MirBody, pinned: dict[Value, Register_] | None = None) -> dict[Value, Register_] | str:
