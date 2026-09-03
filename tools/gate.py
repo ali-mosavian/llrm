@@ -49,6 +49,7 @@ TESTS = (
     # breaks that before it breaks anything else.
     "tests/test_wholeseg.py",
     "tests/test_layout.py",
+    "tests/test_rule5.py",
 )
 
 # Five shapes. harr is here because a change that only touched harr hung it
