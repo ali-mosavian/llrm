@@ -576,14 +576,14 @@ def _invariant_run(
                 if not value.flags
             ):
                 continue
-            # Pinning one value recolours the whole body, and an operand
-            # nothing writes down does not move with it: hotlop hoisted
-            # `mov ax,[n] / imul word [k]`, the recolour renamed the load
-            # to cx, and the multiply went on reading ax. It printed 0 for
-            # 630. Until an assignment can be constrained to leave these
-            # alone, a run holding one is not worth the register.
-            if _implicit(one):
-                continue
+            # An operand nothing writes down used to end the run here.
+            # hotlop hoisted `mov ax,[n] / imul word [k]`, the recolour
+            # renamed the load to cx, and the multiply went on reading ax:
+            # 0 for 630. Two things had to exist before that could be
+            # allowed. regalloc.required() now refuses an assignment that
+            # puts such an operand anywhere but where its instruction reads
+            # it, and a result the machine places is copied out rather than
+            # re-seated -- see `copied` below.
             if any(
                 ref.addr is None or mir.overlapping(ref, other, dgroup, bounds)
                 for ref in one.loads
@@ -1004,6 +1004,104 @@ def _folded_op(op: Op, facts: dict, wanted: set, origin: dict) -> Op:
     )
 
 
+def _insertion(
+    body: MirBody,
+    alive,
+    block,
+    run: list,
+    crossing,
+    touched: set,
+    reached_by: set,
+    addressable: set,
+    readable: set,
+) -> tuple[int, list] | None:
+    """Where in the preheader a run can go, and what registers are free there.
+
+    Appending is one choice out of many and often the wrong one. A run needs
+    two things that pull in opposite directions: every value it reads has to
+    be defined *before* it, and every register it writes has to be free
+    *at* it. Late satisfies the first, early the second, and for the loops
+    that matter neither end satisfies both.
+
+    hotlpx is the shape. Its preheader reads two variables through runtime
+    calls and then starts the counter in ax, and the run needs ax for the
+    multiplicand. After the counter, ax is taken; before the calls, nothing
+    survives them. The only place it goes is between: after the last call,
+    ahead of the counter, where ax is not yet in use and bx is no longer in
+    the way.
+
+    So this walks positions from the end back to the earliest the run's own
+    operands allow, and returns the first that works -- latest, because that
+    is the shortest the result has to stay live.
+    """
+    ops = list(block.ops)
+    entering = set(alive.live_in.get(block.at, ()))
+    leaving = set(alive.live_out.get(block.at, ()))
+    defined = [{value for value in one.defines if not value.flags} for one in ops]
+
+    def root(value):
+        register = body.origin.get(value)
+        return None if register is None else ir.ROOT.get(register, register)
+
+    def roots(values):
+        return {root(one) for one in values} - {None}
+
+    # The earliest position the run's own operands permit: after the last
+    # thing in this block that it reads.
+    wanted = {value for one in run for value in one.uses}
+    earliest = 0
+    for index, made in enumerate(defined):
+        if made & wanted:
+            earliest = index + 1
+
+    # The run keeps the registers its operations were written with -- a
+    # result the machine places is copied out, not re-seated -- so those
+    # have to be free wherever it lands.
+    keeps = roots({value for one in run for value in one.defines if not value.flags})
+
+    for index in range(len(ops), earliest - 1, -1):
+        before = set(entering)
+        for made in defined[:index]:
+            before |= made
+        # Not a use that is only the register's previous value. Every
+        # 16-bit write is a read-modify-write here, so `mov ax,1` reads the
+        # eax before it -- and counting that as a read means no register is
+        # ever free between two writes to it, which is to say nowhere is a
+        # legal place to put anything. BC's code is 8086 and never writes a
+        # high half, so there is nothing in the half being preserved.
+        after = {
+            value
+            for one in ops[index:]
+            for value in one.uses
+            if value not in _carried(one, body.origin)
+        }
+        # Live in the sense that something reads it. A join raises a phi
+        # for every register, so a dead call result in dx looks live out of
+        # this block and makes dx busy everywhere after the call -- which is
+        # exactly where the run needs to go. See live() and _carried.
+        across = before & (after | leaving) & readable
+        busy = roots(across)
+        if keeps & busy:
+            continue
+        # The result has to survive from here to the loop, so it may not sit
+        # anywhere this block writes later on.
+        later = roots({value for made in defined[index:] for value in made})
+        spare = [
+            where
+            for where in regalloc.AVAILABLE
+            if where not in busy and where not in later and where not in touched and where not in keeps
+        ]
+        if len(spare) < len(crossing):
+            continue
+        if any(
+            value in reached_by and not (set(spare) & addressable)
+            for value in crossing
+        ):
+            continue
+        return index, spare
+    return None
+
+
 def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds: dict | None = None) -> MirBody:
     """A loop-invariant run of operations, done once before the loop.
 
@@ -1024,12 +1122,16 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
         return body
     at_of = {block.at: block for block in body.blocks}
     alive = regalloc.live(body)
+    readable = live(body)
     effective = _effective(body, calls)
     reached_by = regalloc._addressing(body)
     addressable = {ir.ROOT.get(one, one) for one in regalloc.ADDRESSING}
     moved: dict[int, list[Op]] = {}
     gone: set[int] = set()
     seated: dict[int, Register_] = {}
+    copied: dict[int, list] = {}
+    placing: dict[int, int] = {}
+    claimed: set = set()
     rewrites: dict[int, Op] = {}
     splits: dict[int, list] = {}
 
@@ -1058,68 +1160,27 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
         if crossing is None:
             continue
 
-        across = {
-            body.origin.get(value)
-            for at in (into, *loop.body)
-            for value in alive.live_out.get(at, ())
-            if not value.flags
-        }
         touched = set()
         for one in ops:
             what = _semantics_of(one)
             for where in ((*what.dests, *what.sources) if what else ()):
                 if isinstance(where, ir.Reg):
                     touched.add(ir.ROOT.get(where.register, where.register))
-        # As many as there are registers for, not all or nothing: the rest
-        # go back into the loop, with anything in the run that fed only
-        # them.
-        spare = [where for where in regalloc.AVAILABLE if where not in across and where not in touched]
+        touched |= {
+            ir.ROOT.get(body.origin.get(value, -1), -1)
+            for at in loop.body
+            for value in alive.live_out.get(at, ())
+            if not value.flags
+        }
 
-        # An operation in the run whose result nothing outside it reads is
-        # still placed verbatim, writing the register BC gave it. Only the
-        # crossing values are re-seated, so a run of two where the first
-        # result is consumed inside it puts that register into the preheader
-        # untouched -- and if something live is already there, over it.
-        #
-        # hotlop is the case. Its run was one operation until folding turned
-        # `imul` into a constant and made it two, and the first was
-        # `mov ax,3` landing on the `mov ax,1` that starts the counter. The
-        # loop summed from 3 and printed 585 for 630.
-        #
-        # Dropping it from the run is right rather than merely safe: nothing
-        # outside the run reads it, so leaving it in the loop costs the loop
-        # nothing it was not already paying.
-        wide_across = {ir.ROOT.get(one, one) for one in across if one is not None}
-        for _ in range(len(run)):
-            clobbering = {
-                value
-                for one in run
-                for value in one.defines
-                if not value.flags
-                and value not in crossing
-                and body.origin.get(value) is not None
-                and ir.ROOT.get(body.origin[value], body.origin[value]) in wide_across
-            }
-            if not clobbering:
-                break
-            run = _pruned(run, clobbering)
-            if not run:
-                break
-            rest = [one for one in ops if one not in run]
-            crossing = _crossing(run, rest, phis, effective)
-            if crossing is None:
-                break
-        if not run or crossing is None:
+        # Where it goes, and what is free there. Both answers at once,
+        # because neither can be had without the other: see _insertion.
+        found = _insertion(
+            body, alive, at_of[into], run, crossing, touched, reached_by, addressable, readable
+        )
+        if found is None:
             continue
-
-        if len(crossing) > len(spare):
-            run = _pruned(run, set(sorted(crossing, key=lambda one: one.id)[len(spare) :]))
-            if not run:
-                continue
-            rest = [one for one in ops if one not in run]
-            crossing = _crossing(run, rest, phis, effective)
-            if crossing is None:
-                continue
+        index, spare = found
 
         # One register per value, and the whole rewrite done here rather
         # than asked of the allocator. Moving a definition's register means
@@ -1128,7 +1189,7 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
         # loop still reading `[si+0Ah]`, and doing neither leaves the moved
         # operation writing over whatever the preheader had there.
         here: dict = {}
-        taken = set(seated.values())
+        taken = set(seated.values()) | claimed
         for result in sorted(crossing, key=lambda one: one.id):
             free = [
                 where
@@ -1169,9 +1230,31 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
         if beaten:
             continue
 
-        seated.update({one.at: here[value] for one in run for value in one.defines if value in here})
+        # Re-seating an operation means rewriting its destination, and not
+        # every operation can have one written. A widening `imul` writes
+        # dx:ax and names neither, so _writes_to leaves it alone -- and the
+        # readers, already rewritten to read the new register, then read one
+        # nothing wrote. That is the 0-for-630 this used to refuse rather
+        # than risk.
+        #
+        # So where the machine says where the result lands, the result is
+        # left there and copied out. The copy costs a move in the preheader,
+        # which runs once, against work that ran every pass of the loop.
+        for one in run:
+            what = _semantics_of(one)
+            fixed = lir.writes(what) if what is not None else {}
+            for value in one.defines:
+                if value not in here:
+                    continue
+                was = ir.ROOT.get(body.origin.get(value, -1), -1)
+                if fixed.get(was) is not None and fixed[was].fixed is not None:
+                    copied.setdefault(one.at, []).append((was, here[value], value))
+                    claimed.add(here[value])
+                else:
+                    seated[one.at] = here[value]
         rewrites.update(served)
         splits.update(copies)
+        placing[into] = min(placing.get(into, index), index)
         moved[into] = moved.get(into, []) + list(run)
         gone.update(one.at for one in run)
 
@@ -1202,15 +1285,31 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
         if block.at in moved:
             what = _semantics_of(ops[-1]) if ops else None
             leaves = what is not None and what.op in (ir.Operation.JUMP, ir.Operation.BRANCH)
-            lifted = [_writes_to(one, seated[one.at]) if one.at in seated else one for one in moved[block.at]]
+            lifted = []
+            for one in moved[block.at]:
+                if one.at in copied:
+                    lifted.append(one)
+                    lifted += [_move(one.at, now, was, value) for was, now, value in copied[one.at]]
+                elif one.at in seated:
+                    lifted.append(_writes_to(one, seated[one.at]))
+                else:
+                    lifted.append(one)
             # Running in the preheader and still standing for the bytes it
             # came from, which is what a record or fixup naming those bytes
             # needs in order to follow it.
+            # The address is what orders these once the body is emitted, so
+            # a position in the list is not enough -- they have to take the
+            # address of whatever they go in front of. `covers` is what says
+            # which of BC's bytes they stand for, and is untouched.
+            index = placing.get(block.at, len(ops))
+            if leaves and index >= len(ops):
+                index = max(0, len(ops) - 1)
             if ops:
+                anchor = ops[index].at if index < len(ops) else ops[-1].at
                 lifted = [
-                    replace(one, at=ops[-1].at, covers=one.covers or _span_of(one)) for one in lifted
+                    replace(one, at=anchor, covers=one.covers or _span_of(one)) for one in lifted
                 ]
-            ops = (ops[:-1] + lifted + ops[-1:]) if leaves else (ops + lifted)
+            ops = ops[:index] + lifted + ops[index:]
         out.append(replace(block, ops=tuple(ops)))
 
     # In SSA again, because the operations have moved and the phis raised

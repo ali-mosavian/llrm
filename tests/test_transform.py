@@ -596,16 +596,20 @@ def test_a_run_whose_flag_the_loop_still_reads_is_not_hoistable() -> None:
     assert transform._crossing([compare], [branch]) is None
 
 
-def test_an_operand_nothing_writes_down_keeps_its_operation_in_the_loop() -> None:
-    """`imul word [k]` multiplies by ax without naming it.
+def test_an_operand_nothing_writes_down_may_leave_with_its_run() -> None:
+    """`imul word [k]` multiplies by ax without naming it, and may still go.
 
-    Pinning one value recolours the whole body, and an implicit operand
-    does not move with the rename: hotlop hoisted `mov ax,[n]` with the
-    multiply behind it, the recolour wrote `mov cx,[n]`, and the multiply
-    went on reading ax. It printed 0 for 630.
+    This used to be the opposite assertion. Pinning one value recolours the
+    body and an implicit operand does not move with the rename: hotlop
+    hoisted `mov ax,[n]` with the multiply behind it, the recolour wrote
+    `mov cx,[n]`, and the multiply went on reading ax. It printed 0 for 630,
+    and the run was refused rather than risked.
 
-    Driven rather than found: with this guard in place the corpus offers no
-    run holding one, so nothing there can show the shape.
+    Two things now stand in the way of that instead of a refusal.
+    regalloc.required() will not allocate such an operand anywhere but where
+    its instruction reads it, and a result the machine places is copied out
+    of that register rather than re-seated -- because `imul` writes dx:ax
+    and cannot be told to write anywhere else.
     """
     from iced_x86 import Register
 
@@ -634,7 +638,7 @@ def test_an_operand_nothing_writes_down_keeps_its_operation_in_the_loop() -> Non
     assert transform._implicit(widening), "the widening multiply reads a register it does not name"
     run = transform._invariant_run([load, widening], set(), [], frozenset(), {}, {})
     assert load in run, "an ordinary load is invariant here"
-    assert widening not in run, "and the multiply behind it may not leave with it"
+    assert widening in run, "and the multiply behind it leaves with it"
 
 
 def test_a_definition_a_phi_carries_and_the_loop_rewrites_does_not_leave_it() -> None:
@@ -810,4 +814,29 @@ def test_a_constant_product_leaves_the_loop() -> None:
     """
     seen = _rebuilt("hotlop-p-g2")
     assert not [text for _, text in seen if text.startswith("imul")], "the multiply is still there"
-    assert [text for _, text in seen if text.replace(" ", "") == "movax,15h"], "and 7 * 3 was not folded"
+    # 21, as an immediate, in whatever register the allocation chose -- and
+    # outside the loop. Naming the register here would be testing the shape
+    # of the fix rather than the thing that was wrong.
+    start = next(i for i, (_, text) in enumerate(seen) if text.startswith("jmp"))
+    before = [text for _, text in seen[:start]]
+    assert [text for text in before if text.endswith(",15h")], f"7 * 3 was not folded: {before}"
+
+
+def test_an_invariant_multiply_leaves_a_loop_it_cannot_be_folded_out_of() -> None:
+    """hotlpx is hotlop with its constants read at runtime.
+
+    Nothing can fold `n * k` there, so it is the honest measure of whether
+    the loop-invariant code motion works at all -- and it did not. The run
+    could go neither last, where the counter already owns ax, nor first,
+    where the two runtime READ calls clobber every register before the loop
+    sees it. It goes between, which is a position and not a preference.
+    """
+    seen = _rebuilt("hotlpx-p-g2")
+    start = next(i for i, (_, text) in enumerate(seen) if text.startswith("jmp"))
+    inside = [text for _, text in seen[start:]]
+    assert not [text for text in inside if text.startswith("imul")], (
+        f"the invariant multiply is still in the loop: {inside[:6]}"
+    )
+    assert [text for _, text in seen[:start] if text.startswith("imul")], (
+        "and it did not turn up before the loop either, so nothing was hoisted"
+    )
