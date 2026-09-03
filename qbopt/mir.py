@@ -247,6 +247,175 @@ class Opaque:
 type Arg = Held | Const | Cell | Opaque
 
 
+class Kind(StrEnum):
+    """What an operation computes, in MIR's own terms.
+
+    Three-address and nothing else: `c := a op b`. No mnemonic, no flags,
+    no register pair, no stack. What one of BC's instructions *is* -- an
+    `adc` that is the top half of a wider add, a `cmp` and the `jle` that
+    reads its flags, a run of pushes that is a call's arguments -- is the
+    raise's answer, and by the time a pass sees it there is one operation
+    here saying so.
+
+    ir.Operation is the vocabulary of one x86 instruction and says so in
+    its own docstring: BINARY means "sources[0] IS dests[0]". That is the
+    machine's shape, and this exists so no pass has to know it.
+    """
+
+    # c := a op b
+    ADD = "add"
+    SUB = "sub"
+    MUL = "mul"
+    DIV = "div"
+    REM = "rem"
+    AND = "and"
+    OR = "or"
+    XOR = "xor"
+    SHL = "shl"
+    SHR = "shr"
+    SAR = "sar"
+    NEG = "neg"
+    NOT = "not"
+
+    # c := a <op> b -- a value, never a flag
+    LT = "lt"
+    LE = "le"
+    GT = "gt"
+    GE = "ge"
+    EQ = "eq"
+    NE = "ne"
+    BELOW = "below"  # the unsigned pair, kept apart because the width is
+    BELOW_EQ = "beloweq"  # not enough to tell which comparison was meant
+    ABOVE = "above"
+    ABOVE_EQ = "aboveeq"
+
+    # movement and shape
+    COPY = "copy"  # c := a
+    LOAD = "load"  # c := [m]
+    STORE = "store"  # [m] := a
+    CONVERT = "convert"  # c := a, at another width or signedness
+    ADDRESS = "address"  # c := the number an address is
+
+    # control
+    CALL = "call"
+    BRANCH = "branch"  # on a value, to `target` or the next block
+    JUMP = "jump"
+    RETURN = "return"
+    ESCAPE = "escape"  # leaves the body somewhere it does not name
+
+    # floating point, until the x87 stack is resolved at the raise
+    FADD = "fadd"
+    FSUB = "fsub"
+    FMUL = "fmul"
+    FDIV = "fdiv"
+    FNEG = "fneg"
+    FLOAD = "fload"
+    FSTORE = "fstore"
+    FCOMPARE = "fcompare"
+
+    # what has no MIR form yet, each with the step that removes it
+    ARG = "arg"  # a call argument still written as a push -- step 3
+    RESULT = "result"  # and its pop
+    JOIN = "join"  # two halves of a wide value made one -- step 4
+    OPAQUE = "opaque"  # nothing is claimed; see ir.Operation.BARRIER
+    NOTHING = "nothing"
+
+
+# One x86 instruction to what it computes. The mnemonic is consulted only
+# here: BINARY and UNARY do not say which operation they are, so the raise
+# is where that is decided and after it nothing needs to ask.
+_BY_NAME: dict[str, Kind] = {
+    "add": Kind.ADD, "adc": Kind.ADD, "inc": Kind.ADD,
+    "sub": Kind.SUB, "sbb": Kind.SUB, "dec": Kind.SUB, "cmp": Kind.SUB,
+    "and": Kind.AND, "test": Kind.AND,
+    "or": Kind.OR,
+    "xor": Kind.XOR,
+    "not": Kind.NOT,
+    "neg": Kind.NEG,
+    "shl": Kind.SHL, "sal": Kind.SHL,
+    "shr": Kind.SHR,
+    "sar": Kind.SAR,
+    "imul": Kind.MUL, "mul": Kind.MUL,
+    "idiv": Kind.DIV, "div": Kind.DIV,
+    "fadd": Kind.FADD, "faddp": Kind.FADD,
+    "fsub": Kind.FSUB, "fsubp": Kind.FSUB, "fsubr": Kind.FSUB, "fsubrp": Kind.FSUB,
+    "fmul": Kind.FMUL, "fmulp": Kind.FMUL,
+    "fdiv": Kind.FDIV, "fdivp": Kind.FDIV, "fdivr": Kind.FDIV, "fdivrp": Kind.FDIV,
+    "fchs": Kind.FNEG, "fabs": Kind.FNEG,
+    "fcom": Kind.FCOMPARE, "fcomp": Kind.FCOMPARE, "fcompp": Kind.FCOMPARE,
+    "ftst": Kind.FCOMPARE,
+}
+
+# A conditional branch's mnemonic is the comparison it reads. The flags in
+# between are the machine's way of getting one to the other and are not a
+# value: step 2 folds the comparison into the branch and they disappear.
+_BY_BRANCH: dict[str, Kind] = {
+    "jl": Kind.LT, "jnge": Kind.LT,
+    "jle": Kind.LE, "jng": Kind.LE,
+    "jg": Kind.GT, "jnle": Kind.GT,
+    "jge": Kind.GE, "jnl": Kind.GE,
+    "je": Kind.EQ, "jz": Kind.EQ,
+    "jne": Kind.NE, "jnz": Kind.NE,
+    "jb": Kind.BELOW, "jc": Kind.BELOW, "jnae": Kind.BELOW,
+    "jbe": Kind.BELOW_EQ, "jna": Kind.BELOW_EQ,
+    "ja": Kind.ABOVE, "jnbe": Kind.ABOVE,
+    "jae": Kind.ABOVE_EQ, "jnb": Kind.ABOVE_EQ, "jnc": Kind.ABOVE_EQ,
+}
+
+
+def _kind_of(what: "ir.Semantics", args, results) -> Kind:
+    """What one node computes, as MIR says it.
+
+    The mnemonic is read here and nowhere else. `args` and `results` decide
+    move against load against store, because that is a question about the
+    operands and not about the instruction.
+    """
+    op, name = what.op, (what.name or "")
+    if op is ir.Operation.BINARY or op is ir.Operation.UNARY:
+        return _BY_NAME.get(name, Kind.OPAQUE)
+    if op is ir.Operation.MOVE:
+        if any(isinstance(one, Cell) for one in results):
+            return Kind.STORE
+        if any(isinstance(one, Cell) for one in args):
+            return Kind.LOAD
+        return Kind.COPY
+    if op is ir.Operation.MULTIPLY:
+        return Kind.MUL
+    if op is ir.Operation.DIVIDE:
+        return Kind.DIV
+    if op is ir.Operation.COMPARE:
+        return _BY_NAME.get(name, Kind.SUB)
+    if op is ir.Operation.EXTEND:
+        return Kind.CONVERT
+    if op is ir.Operation.ADDRESS:
+        return Kind.ADDRESS
+    if op is ir.Operation.PUSH:
+        return Kind.ARG
+    if op is ir.Operation.POP:
+        return Kind.RESULT
+    if op is ir.Operation.JUMP:
+        return Kind.JUMP
+    if op is ir.Operation.BRANCH:
+        return Kind.BRANCH
+    if op is ir.Operation.CALL:
+        return Kind.CALL
+    if op is ir.Operation.RETURN:
+        return Kind.RETURN
+    if op is ir.Operation.ESCAPE:
+        return Kind.ESCAPE
+    if op is ir.Operation.NOTHING:
+        return Kind.NOTHING
+    if op is ir.Operation.RESTORE:
+        return Kind.JOIN
+    if op is ir.Operation.FLOAT_LOAD:
+        return Kind.FLOAD
+    if op is ir.Operation.FLOAT_STORE:
+        return Kind.FSTORE
+    if op in (ir.Operation.FLOAT_ARITH, ir.Operation.FLOAT_ARITH_POP, ir.Operation.FLOAT_UNARY):
+        return _BY_NAME.get(name, Kind.OPAQUE)
+    return Kind.OPAQUE
+
+
 @dataclass(frozen=True, slots=True)
 class Op:
     """One instruction, as values in and values out."""
@@ -277,6 +446,9 @@ class Op:
     # constants and cells. This is what `made` was for and what a pass
     # rewriting an operation now says instead -- ir.Semantics over ir.Reg
     # is machine form, and MIR holding it is the whole of rule 5's problem.
+    # What this computes, in MIR's own vocabulary. `op` and `name` are the
+    # machine's and are on their way out; nothing new may read them.
+    kind: Kind = Kind.OPAQUE
     args: tuple[Arg, ...] = ()
     results: tuple[Arg, ...] = ()
     # What those were at the raise, so "did a pass rewrite this" is a
@@ -763,6 +935,7 @@ def raise_body(
                     loads,
                     stores,
                     node,
+                    kind=_kind_of(node.semantics, where[0], where[1]),
                     args=where[0],
                     results=where[1],
                     raised=where,
