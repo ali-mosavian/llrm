@@ -629,3 +629,34 @@ def test_a_relocation_belongs_to_the_operand_and_not_to_a_place(obj: Path) -> No
             assert op.ref == want, f"{obj.stem} {op.at:#06x}: says {op.ref}, the bytes say {want}"
             seen += op.ref is not None
     assert seen or not fields, f"{obj.stem}: nothing carries a fixup, so this proves nothing"
+
+
+def test_a_body_the_allocator_refused_is_untangled_before_it_is_laid_out() -> None:
+    """Wired in, not merely available.
+
+    addrm and arridx each hold a class two of whose members are live at
+    once, and colour() refuses to move one. rebuild() puts a copy in first
+    -- on the phi edge for addrm, before a two-address operation for arridx
+    -- and the body colours.
+    """
+    from qbopt import mir
+    from qbopt import regalloc
+    from qbopt import transform
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    seen = 0
+    for name in ("addrm-p-g2", "arridx-p-g2"):
+        found = corpus.loaded(Path("fixtures/omf") / f"{name}.obj")
+        mapped = code_map(found)
+        assert not isinstance(mapped, str)
+        blocks = split.partition(found, mapped)
+        for _who, body in mir.bodies(found, blocks):
+            done = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
+            if not regalloc._tangled(done):
+                continue
+            seen += 1
+            assert isinstance(regalloc.colour(done, done.pins), str), f"{name}: refused while tangled"
+            fixed = regalloc.untangled(done)
+            assert not isinstance(regalloc.colour(fixed, fixed.pins), str), f"{name}: colours after"
+    assert seen == 2, f"expected both shapes, saw {seen}"

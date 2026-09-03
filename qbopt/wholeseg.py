@@ -71,16 +71,7 @@ def rebuilt(
     # An allocation, where a pass asked for one. colour() gives back the
     # identity unless something pinned, so this costs nothing when nothing
     # did -- and refuses the pin rather than guessing when it cannot be had.
-    assignment: dict = {}
-    for _name, body in bodies:
-        if not body.pins:
-            continue
-        got = regalloc.colour(body, body.pins)
-        if isinstance(got, str):
-            continue  # the pin cannot be had; the body stands as it was
-        assignment.update(got)
-
-    laid = layout.rebuild(found, bodies, mapped.tables, fields, reached, native_fpu, assignment or None)
+    laid = layout.rebuild(found, bodies, mapped.tables, fields, reached, native_fpu)
     if isinstance(laid, str):
         return data, laid
 

@@ -378,7 +378,53 @@ def untangled(body: mir.MirBody) -> mir.MirBody:
                     )
                 )
                 swaps.setdefault(id(phi), {})[came] = copy
-    if not added:
+    # And the other way a class tangles, which is not a phi at all. `add
+    # ax,[c]` is `v1 = v0 + [c]` -- lir.tied says one register, congruent()
+    # puts v0 and v1 in one class -- and where v0 is still wanted after the
+    # operation the two are live at once. arridx is exactly {v22, v24} and
+    # neither is a phi result.
+    #
+    # The copy goes before the operation rather than on an edge: `t = v0`,
+    # and the operation reads t. Then t and v1 share a register and v0 is
+    # free to live elsewhere, which is what a two-address machine needs
+    # whenever the source outlives the instruction.
+    ahead: dict[int, list] = {}
+    reads: dict[int, dict] = {}
+    for block in body.blocks:
+        for op in block.ops:
+            what = op.made if op.made is not None else getattr(op.node, "semantics", None)
+            if what is None or lir.tied(what) is None:
+                continue
+            for one in op.defines:
+                if one.flags or of.get(one) not in tangled:
+                    continue
+                for other in op.uses:
+                    if other.flags or of.get(other) is not of.get(one):
+                        continue
+                    if not (graph.get(other, frozenset()) & {one}):
+                        continue
+                    copy = mir.Value(fresh, op.at)
+                    fresh += 1
+                    origin[copy] = origin.get(other, origin.get(one))
+                    ahead.setdefault(op.at, []).append(
+                        mir.Op(
+                            at=op.at,
+                            op=ir.Operation.MOVE,
+                            name="mov",
+                            defines=(copy,),
+                            uses=(other,),
+                            made=ir.Semantics(
+                                ir.Operation.MOVE,
+                                "mov",
+                                dests=(ir.Held(value=copy.id, width=2),),
+                                sources=(ir.Held(value=other.id, width=2),),
+                            ),
+                            covers=(op.at, op.at),
+                        )
+                    )
+                    reads.setdefault(op.at, {})[other] = copy
+
+    if not added and not ahead:
         return body
 
     out = []
@@ -387,7 +433,15 @@ def untangled(body: mir.MirBody) -> mir.MirBody:
             replace(one, incoming={**one.incoming, **swaps[id(one)]}) if id(one) in swaps else one
             for one in block.phis
         )
-        ops = tuple(block.ops)
+        ops = tuple(
+            one
+            for op in block.ops
+            for one in (
+                (*ahead.get(op.at, ()), replace(op, uses=tuple(reads[op.at].get(u, u) for u in op.uses)))
+                if op.at in ahead
+                else (op,)
+            )
+        )
         if block.at in added:
             # Before the terminator: nothing runs after a branch, and the
             # copy has to happen on the way out.

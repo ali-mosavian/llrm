@@ -541,12 +541,24 @@ def rebuild(
     # same body two different ways. One the allocation still cannot cover
     # goes back to what its node says: a refusal for the whole module is
     # the wrong answer to one operand.
-    if assignment is None and any(_names_a_value(body) for _name, body in bodies):
+    # A class two of whose members are live at once cannot be moved, and a
+    # copy is what breaks it -- on the phi edge, or before a two-address
+    # operation whose source outlives it. Per body, and only where it helps:
+    # a body the allocator refuses even untangled is laid out as it was.
+    if assignment is None:
         got: dict = {}
-        for _name, body in bodies:
-            one = regalloc.colour(body, body.pins)
+        settled = []
+        for name, body in bodies:
+            fixed = regalloc.untangled(body)
+            one = regalloc.colour(fixed, fixed.pins)
+            if isinstance(one, str):
+                fixed, one = body, regalloc.colour(body, body.pins)
             if not isinstance(one, str):
                 got.update(one)
+            else:
+                fixed = body
+            settled.append((name, fixed))
+        bodies = settled
         assignment = got or None
 
     held = _held(assignment)
