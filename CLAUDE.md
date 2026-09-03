@@ -3,7 +3,9 @@
 See [AGENTS.md](AGENTS.md). It carries the goal, the architecture and the
 four rules, and this file exists only so that either name finds them.
 
-The four rules, because they are the ones most easily forgotten mid-task:
+The four rules, because they are the ones most easily forgotten mid-task.
+The first three are global; the fourth is this project's own, and all four
+get restated at the end of a reply here:
 
 1. **Say it and stop.** The minimum needed to understand, in every word
    written -- comments, commit messages, docs, tests, replies alike.
