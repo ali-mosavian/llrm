@@ -176,12 +176,16 @@ def test_the_corpus_split_is_what_was_measured() -> None:
     that B$FILD and the rest write no caller memory means a cell established
     before one is still that value after, so memory.py finds 24 reads
     redundant that it used to give up on at the call.
+
+    And a third time, in the live count as well: a frame or stack slot no
+    longer aliases a named variable, so a cell established before a `push`
+    survives it. 1,805 cells to 1,952, live 96 to 108.
     """
     total = {"live": 0, "dead": 0, "none": 0}
     for obj in FIXTURES:
         for key, count in split(obj).items():
             total[key] += count
-    assert total == {"live": 96, "dead": 377, "none": 1332}
+    assert total == {"live": 108, "dead": 402, "none": 1442}
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)

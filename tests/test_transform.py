@@ -11,6 +11,7 @@ from pathlib import Path
 from iced_x86 import Register
 
 from qbopt import ir
+from qbopt import mir
 from qbopt import wide
 from qbopt import omf
 from qbopt import module
@@ -866,4 +867,90 @@ def test_a_dead_second_result_does_not_pin_its_operation_in_the_loop() -> None:
     inside = [text for ip, text in seen if lo <= ip <= hi]
     assert not [text for text in inside if text.startswith("imul")], (
         f"an invariant multiply is still in the inner loop: {inside}"
+    )
+
+
+def test_semantics_naming_nothing_are_not_read_as_reading_nothing() -> None:
+    """calls.py's restore idiom is `push eax / pop ax / pop dx`.
+
+    Its semantics carry no operand at all -- no destination, no source --
+    because there is no single instruction to describe. _reads() took that
+    as "reads no register", which makes it invariant in any loop, and
+    lngmix hoisted the one splitting its running sum out of the loop:
+    1185033780 for 142900.
+
+    Absent semantics already meant "reads everything". Empty ones say
+    exactly as little and now mean the same.
+    """
+    what = ir.Semantics(ir.Operation.RESTORE, "restore", dests=(), sources=())
+    op = mir.Op(0x10, ir.Operation.RESTORE, "restore", (mir.Value(2, 0x10),), (mir.Value(1, 0x0),), made=what)
+    assert transform._reads(op), "an operation naming nothing must not read nothing"
+
+
+def test_nothing_reads_a_register_nothing_wrote() -> None:
+    """_writes_to returns an operation it cannot rewrite, and says nothing.
+
+    Its readers have been pointed at the new register by then, so the loop
+    reads one nothing ever wrote: lngmix emitted `mov [bp-14h],di` with di
+    written nowhere in the program. A widening imul is the same shape and
+    is handled by asking lir whether the register is fixed; an operation
+    whose semantics name no destination is neither fixed nor re-seatable,
+    and fell through the gap.
+
+    Asserted as the thing that is wrong rather than as the guard: a source
+    register that no earlier instruction wrote.
+    """
+    from iced_x86 import Decoder, Formatter, FormatterSyntax, OpKind, RegisterExt
+
+    # These two, because where BC's header stops decoding as junk is a
+    # per-fixture fact and here it is known: the first real instruction
+    # is at 0x30.
+    for name in ("lngmix-p-g2", "lngmxx-p-g2"):
+        data = Path(f"fixtures/omf/{name}.obj").read_bytes()
+        out, _ = rewrite.rewrite(data, dry_run=False)
+        shown = Formatter(FormatterSyntax.NASM)
+        code = module.of(omf.parse(out)).code
+        # bp and sp arrive set up; BC's header bytes decode as junk, so the
+        # scan starts where the first real instruction does.
+        # bp and sp are the frame and are never in question; the segment
+        # registers are set up before any of this runs.
+        given = {
+            RegisterExt.full_register(one)
+            for one in (Register.BP, Register.SP, Register.DS, Register.ES, Register.SS, Register.CS)
+        }
+        written = set(given)
+        for one in Decoder(16, code, ip=0):
+            if one.ip < 0x30:
+                continue
+            def root(where):
+                return RegisterExt.full_register(where) if where != Register.NONE else Register.NONE
+
+            reads = {root(one.memory_base), root(one.memory_index)}
+            # Operand 0 of a two-operand instruction is written; every other
+            # register operand is read.
+            for i in range(one.op_count):
+                if one.op_kind(i) == OpKind.REGISTER and i:
+                    reads.add(root(one.op_register(i)))
+            for where in reads - {Register.NONE}:
+                assert where in written, (
+                    f"{name} at {one.ip:#06x}: {shown.format(one)} reads a register nothing wrote"
+                )
+            for i in range(one.op_count):
+                if one.op_kind(i) == OpKind.REGISTER:
+                    written.add(root(one.op_register(i)))
+
+
+def test_a_long_divide_leaves_a_loop_that_never_changes_its_operands() -> None:
+    """lngmix divides a constant by a constant, ten times.
+
+    Three things refused it, and fixing any one alone did nothing: a push
+    aliased every named variable, the "computes nothing" guard caught `cdq`
+    and `idiv` because their sources are all registers, and the restore
+    idiom read as reading nothing. 8.8x against a 210 target.
+    """
+    seen = _rebuilt("lngmix-p-g2")
+    start = next(i for i, (_, text) in enumerate(seen) if text.startswith("jmp"))
+    inside = [text for _, text in seen[start:]]
+    assert len([text for text in inside if text.startswith("idiv")]) < 2, (
+        f"both divides are still in the loop: {inside[:10]}"
     )

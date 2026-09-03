@@ -134,8 +134,17 @@ OTHER = frozenset({9})
         # a frame slot can never be the same byte as a segment DGROUP never lists
         (module.Addr(module.Space.FRAME, -4), module.Addr(module.Space.SEGMENT, 0, 9), False),
         (module.Addr(module.Space.SEGMENT, 0, 9), module.Addr(module.Space.FRAME, -4), False),
-        # a DGROUP segment is the documented SS==DS assumption -- conservative True
-        (module.Addr(module.Space.FRAME, -4), module.Addr(module.Space.SEGMENT, 0, 1), True),
+        # a DGROUP segment too: the stack is the last thing in DGROUP and
+        # grows down, so it reaches a named variable only by overflowing
+        # into it. Assumed, not proven -- see may_alias's own note.
+        (module.Addr(module.Space.FRAME, -4), module.Addr(module.Space.SEGMENT, 0, 1), False),
+        # and a pushed argument is not a named variable either, which is what
+        # let lngmix's loop hold anything invariant at all
+        (module.Addr(module.Space.STACK, -2), module.Addr(module.Space.SEGMENT, 6, 1), False),
+        (module.Addr(module.Space.SEGMENT, 6, 1), module.Addr(module.Space.STACK, -2), False),
+        # a stack slot against a frame slot stays conservative: same region,
+        # displacements against different registers
+        (module.Addr(module.Space.STACK, -2), module.Addr(module.Space.FRAME, -4), True),
         # two distinct SEGDEFs are two distinct segments
         (module.Addr(module.Space.SEGMENT, 0, 1), module.Addr(module.Space.SEGMENT, 2, 9), False),
         # the same segment, far enough apart that no width could reach

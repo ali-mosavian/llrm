@@ -437,7 +437,15 @@ def _reads(op: Op) -> frozenset[int]:
     operation this cannot read the semantics of reads everything.
     """
     what = _semantics_of(op)
-    if what is None or op.barrier:
+    # Semantics that name no operand say as little as no semantics at all,
+    # and mean it just as literally: calls.py's restore idiom is
+    # `push eax / pop ax / pop dx`, which reads eax and edx and writes them
+    # down nowhere. Reading that as "reads nothing" makes it invariant in
+    # any loop, and lngmix hoisted the one that splits its running sum --
+    # 1185033780 for 142900. It was hidden behind the guard above, which
+    # refuses an operation whose sources are all registers and finds that
+    # vacuously true of an operation with no sources.
+    if what is None or op.barrier or (not what.sources and not what.dests and op.uses):
         return frozenset(ir.ROOT.values()) | {one for one in ir.ROOT}
     found: set[int] = set()
     for one in (*what.sources, *what.dests):
@@ -577,7 +585,8 @@ def _invariant_run(
             # pair split across the loop edge lngmix printed 1185033780 for
             # 142900. Whatever admits the adds has to keep them together.
             if (
-                not one.loads
+                what.op is ir.Operation.MOVE
+                and not one.loads
                 and all(isinstance(where, ir.Reg) for where in what.sources)
             ):
                 continue
@@ -759,6 +768,12 @@ def _move(at: int, into: Register_, outof: Register_, value: mir.Value) -> Op:
         sources=(ir.Reg(register=_named(outof, 2), width=2),),
     )
     return Op(at, ir.Operation.MOVE, "mov", (), (value,), made=what, covers=(at, at))
+
+
+def _can_reseat(one: Op) -> bool:
+    """Whether _writes_to can actually move this operation's destination."""
+    what = _semantics_of(one)
+    return what is not None and len(what.dests) == 1 and isinstance(what.dests[0], ir.Reg)
 
 
 def _writes_to(one: Op, now: Register_) -> Op:
@@ -1269,7 +1284,16 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
                 if value not in here:
                     continue
                 was = ir.ROOT.get(body.origin.get(value, -1), -1)
-                if fixed.get(was) is not None and fixed[was].fixed is not None:
+                # Copy out where the operation cannot be told where to
+                # write: the machine placed the result, or -- as with
+                # calls.py's restore idiom, whose semantics name no operand
+                # at all -- there is no destination written down to change.
+                # _writes_to returns such an operation untouched and says
+                # nothing, while the readers have already been pointed at
+                # the new register: lngmix emitted `mov [bp-14h],di` with
+                # nothing anywhere writing di.
+                placed = fixed.get(was) is not None and fixed[was].fixed is not None
+                if placed or not _can_reseat(one):
                     copied.setdefault(one.at, []).append((was, here[value], value))
                     claimed.add(here[value])
                 else:

@@ -239,13 +239,26 @@ def may_alias(
     (nothing here can see whether something wrote bp), the way registers.py
     already checks a single register's own liveness.
 
-    A frame slot against a segment DGROUP never lists can never be the same
-    byte, because DGROUP is exactly the set SS is assumed to overlap. That
-    assumption -- SS==DS, so a frame slot and a DGROUP segment address might
-    coincide -- cannot be *proven* from the object: SS itself does not exist
-    until the runtime sets it up at link/load time. It is centralised here
-    rather than re-derived in prose at every call site, and it is the one
-    rule here that rests on anything beyond arithmetic.
+    A frame or stack slot is never the same byte as an addressed variable.
+    SS==DS in this model and the stack lives in DGROUP, so the two *could*
+    coincide and the object cannot prove they do not -- SS itself does not
+    exist until the runtime sets it up. What rules it out is that the stack
+    is the last thing in DGROUP and grows down, so it reaches a named
+    variable only by overflowing into it, which is a program that has
+    already lost. Every optimising compiler assumes locals and globals are
+    disjoint on the same argument.
+
+    Refusing to assume it costs the whole of loop-invariant code motion in
+    any loop that pushes an argument: one `push` makes every named load in
+    the loop alias something, so nothing is invariant. lngmix is two long
+    divides over an operand that never changes and it could not move either.
+
+    A stack slot against a frame slot is a different question and stays
+    conservative -- both are in the same region and their displacements are
+    against different registers.
+
+    This is the one rule here that rests on anything beyond arithmetic, and
+    it is centralised rather than re-derived at each call site.
 
     None stands for "address not known" -- an unresolved operand, or a
     Space.GROUP address (see Space.GROUP's own comment) -- and is never
@@ -265,15 +278,15 @@ def may_alias(
     match (a.space, b.space):
         case (Space.STACK, Space.STACK):
             return _overlaps(a, a_width, b, b_width)
-        case (Space.STACK, _) | (_, Space.STACK):
+        case (Space.STACK, Space.FRAME) | (Space.FRAME, Space.STACK):
             return True
+        case (Space.STACK, _) | (_, Space.STACK):
+            return False
         case (Space.FRAME, Space.FRAME):
             return _overlaps(a, a_width, b, b_width)
         case (Space.SEGMENT, Space.SEGMENT):
             return a.index == b.index and _overlaps(a, a_width, b, b_width)
-        case (Space.FRAME, Space.SEGMENT) if b.index not in dgroup:
-            return False
-        case (Space.SEGMENT, Space.FRAME) if a.index not in dgroup:
+        case (Space.FRAME, Space.SEGMENT) | (Space.SEGMENT, Space.FRAME):
             return False
         case _:
             return True
