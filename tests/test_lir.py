@@ -108,3 +108,21 @@ def test_the_addressing_class_is_what_the_encoding_permits() -> None:
     assert Register.BP in lir.ADDRESSING, "a frame slot is reached through bp"
     assert Register.EBP not in regalloc.ADDRESSING, "and the allocator may not hand it out"
     assert Register.DX not in lir.ADDRESSING, "`[dx+0Ah]` has no encoding"
+
+
+def test_a_byte_wide_held_is_the_low_byte() -> None:
+    """al and ah are both one byte and both root to eax.
+
+    AT_WIDTH was built by assignment, so whichever came last in the byte
+    row won -- and that is ah. An ir.Held of width 1 resolved to `ah`,
+    which is a different register holding a different byte, and nothing
+    would have said so.
+    """
+    from iced_x86 import Register
+    from qbopt import ir
+    from qbopt import select
+
+    for root, low in ((Register.EAX, Register.AL), (Register.EBX, Register.BL),
+                      (Register.ECX, Register.CL), (Register.EDX, Register.DL)):
+        assert select.AT_WIDTH[root][1] is low, f"{root} at one byte is not its low half"
+    assert ir.ROOT[Register.AH] is Register.EAX, "the high byte still roots to eax"

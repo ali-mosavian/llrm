@@ -67,6 +67,7 @@ from dataclasses import dataclass
 
 from iced_x86 import Register
 from iced_x86 import Register_
+from iced_x86 import RegisterExt
 
 from qbopt import ir
 from qbopt import loops
@@ -203,6 +204,50 @@ class MemRef:
 
 
 @dataclass(frozen=True, slots=True)
+class Held:
+    """A value, at the width this operation uses it.
+
+    MIR's answer to ir.Reg. Which register holds it is the allocator's, and
+    an operation that named one was a pass doing register allocation.
+    """
+
+    value: "Value"
+    width: int
+
+
+@dataclass(frozen=True, slots=True)
+class Const:
+    """A literal, signed as the operation means it."""
+
+    n: int
+    width: int
+
+
+@dataclass(frozen=True, slots=True)
+class Cell:
+    """A memory cell -- the same MemRef the op's loads and stores name."""
+
+    ref: "MemRef"
+
+
+@dataclass(frozen=True, slots=True)
+class Opaque:
+    """An operand MIR has no form for.
+
+    79 operations of the 2,343 in the corpus, all of them the x87 stack,
+    whose registers rotate under push and pop and so are not a location the
+    way a register is. Everything else -- 96.6% -- is a value, a constant or
+    a cell. An Opaque operand is why fpstack.py exists and is the boundary
+    it works at; nothing else may look inside one.
+    """
+
+    what: object
+
+
+type Arg = Held | Const | Cell | Opaque
+
+
+@dataclass(frozen=True, slots=True)
 class Op:
     """One instruction, as values in and values out."""
 
@@ -228,6 +273,12 @@ class Op:
     # that is how it catches data BC put between the instructions. So a
     # replacement says what it replaced.
     covers: tuple[int, int] | None = None
+    # What this operation reads and writes, in its own order, as values,
+    # constants and cells. This is what `made` was for and what a pass
+    # rewriting an operation now says instead -- ir.Semantics over ir.Reg
+    # is machine form, and MIR holding it is the whole of rule 5's problem.
+    args: tuple[Arg, ...] = ()
+    results: tuple[Arg, ...] = ()
     # What this operation is, apart from where it is. Given at the raise and
     # carried through every `replace()`, so a fact established then can live
     # in a side table instead of on the op -- which is the only way those
@@ -531,6 +582,55 @@ def _placed(
     return {at: frozenset(what) for at, what in needed.items()}
 
 
+# Which register a root is, at a width. ir.Held and mir.Held both name a
+# value and a width, so a register a root cannot reach that way -- the high
+# byte of a 16-bit register -- has no MIR form.
+_AT_WIDTH: dict[Register_, dict[int, Register_]] = {}
+for _one, _root in ir.ROOT.items():
+    _size = RegisterExt.size(_one)
+    # al and ah are both one byte and both root to eax; the first one wins
+    # and the other is the form with no name, which is the point.
+    _AT_WIDTH.setdefault(_root, {}).setdefault(_size, _one)
+
+
+def _operands(
+    what: ir.Semantics,
+    holds: dict[Register_, "Value"],
+    written: dict[Register_, "Value"],
+    loads: tuple["MemRef", ...],
+    stores: tuple["MemRef", ...],
+) -> tuple[tuple[Arg, ...], tuple[Arg, ...]]:
+    """One node's operands as MIR's own, in the operation's own order.
+
+    A register operand becomes the value that register holds here, which is
+    what the renaming just decided; a cell becomes the MemRef already built
+    for the same access, matched in order because that is the order both
+    were read in. What is left is the x87 stack, which stays opaque.
+    """
+
+    def one(loc: ir.Loc, cells: list["MemRef"], where: dict[Register_, "Value"]) -> Arg:
+        if isinstance(loc, ir.Reg):
+            root = ir.ROOT.get(loc.register, loc.register)
+            value = where.get(root)
+            # A high byte -- `ah` against `al` -- is not named by a root and
+            # a width, so Held cannot say it. One operation in the corpus.
+            if value is None or _AT_WIDTH.get(root, {}).get(loc.width) is not loc.register:
+                return Opaque(loc)
+            return Held(value, loc.width)
+        if isinstance(loc, ir.Imm):
+            return Const(loc.value, loc.width)
+        if isinstance(loc, ir.Mem):
+            return Cell(cells.pop(0)) if cells else Opaque(loc)
+        return Opaque(loc)
+
+    read, write = list(loads), list(stores)
+    return (
+        tuple(one(loc, read, holds) for loc in what.sources),
+        tuple(one(loc, write, written) for loc in what.dests),
+    )
+
+
+
 # Operation identity. Opaque and per-process: what it keys is a table
 # built in the same call that hands the bodies out.
 _IDS = itertools.count(1)
@@ -629,12 +729,20 @@ def raise_body(
             used = tuple(namer.current(one, start) for one in sorted(uses, key=lambda o: (o is not FLAGS, o)))
             loads = _memrefs(node.effects.loads, namer, start, slot)
             stores = _memrefs(node.effects.stores, namer, start, slot)
+            holds = dict(zip(sorted(uses, key=lambda o: (o is not FLAGS, o)), used))
             made = []
             for one in sorted(defines, key=lambda o: (o is not FLAGS, o)):
                 value = namer.fresh(one, insn.at)
                 namer.stack.setdefault(one, []).append(value)
                 pushed.append(one)
                 made.append(value)
+            where = _operands(
+                node.semantics,
+                holds,
+                dict(zip(sorted(defines, key=lambda o: (o is not FLAGS, o)), made)),
+                loads,
+                stores,
+            )
             ops[at].append(
                 Op(
                     insn.at,
@@ -645,6 +753,8 @@ def raise_body(
                     loads,
                     stores,
                     node,
+                    args=where[0],
+                    results=where[1],
                     id=next(_IDS),
                 )
             )

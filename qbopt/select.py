@@ -241,7 +241,11 @@ AT_WIDTH: dict[Register_, dict[int, Register_]] = {}
 for _row, _size in ((_WIDE, 4), (_NARROW, 2), (_BYTE, 1)):
     for _one in _row:
         WIDTHS[_one] = _size
-        AT_WIDTH.setdefault(ir.ROOT.get(_one, _one), {})[_size] = _one
+        # setdefault, not assignment: al and ah are both one byte and both
+        # root to eax, and the later one was winning -- an ir.Held of width
+        # 1 resolved to `ah`, which is a different register holding a
+        # different byte.
+        AT_WIDTH.setdefault(ir.ROOT.get(_one, _one), {}).setdefault(_size, _one)
 
 
 def _code(name: str) -> Code_ | None:

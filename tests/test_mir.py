@@ -381,3 +381,57 @@ def test_resolving_a_body_that_has_not_moved_changes_nothing(obj: Path) -> None:
         assert after == shape, f"{obj.stem} {name}: the rebuild changed the body's shape"
         assert mir.lower(got) == mir.lower(body), f"{obj.stem} {name}: the rebuild lowers differently"
         assert not mir.verify(got, split.partition(found, mapped)), f"{obj.stem} {name}: the rebuild is not SSA"
+
+
+def test_mir_operands_say_exactly_what_the_node_said() -> None:
+    """The check that decides whether `made` can go.
+
+    Rebuild ir.Semantics from Op.args and Op.results -- a value through
+    origin, a constant as an Imm, a cell as its MemRef -- and it has to be
+    the node's own, operand for operand. Anything MIR cannot express is an
+    Opaque and reproduces itself; if the model were lossy this is where it
+    would show, and it is 2,343 operations across the suite.
+    """
+    from qbopt import ir
+    from qbopt import mir
+    from qbopt import module
+    from qbopt import omf
+    from qbopt import select
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    def back(arg, origin):
+        if isinstance(arg, mir.Held):
+            was = origin[arg.value]
+            return ir.Reg(register=select.AT_WIDTH.get(was, {}).get(arg.width, was), width=arg.width)
+        if isinstance(arg, mir.Const):
+            return ir.Imm(value=arg.n, width=arg.width)
+        if isinstance(arg, mir.Cell):
+            return arg.ref
+        return arg.what
+
+    seen = 0
+    for one in sorted(Path("fixtures/omf").glob("*-p-g2.obj")):
+        found = module.of(omf.parse(one.read_bytes()))
+        if found is None:
+            continue
+        mapped = code_map(found)
+        if isinstance(mapped, str):
+            continue
+        for _, body in mir.bodies(found, split.partition(found, mapped)):
+            for block in body.blocks:
+                for op in block.ops:
+                    what = getattr(op.node, "semantics", None)
+                    if what is None:
+                        continue
+                    seen += 1
+                    for kind, mine, theirs in (
+                        ("source", op.args, what.sources),
+                        ("dest", op.results, what.dests),
+                    ):
+                        assert len(mine) == len(theirs), f"{op.name}: {kind} count"
+                        for arg, was in zip(mine, theirs):
+                            if isinstance(was, ir.Mem):
+                                continue  # a Cell is the MemRef, not the encoding
+                            assert back(arg, body.origin) == was, f"{op.name}: {kind} {arg} != {was}"
+    assert seen > 2000, f"only {seen} operations checked"
