@@ -339,42 +339,6 @@ def _preheader(body: MirBody, loop) -> int | None:
     return outside[0] if len(outside) == 1 else None
 
 
-def _reads(op: Op) -> frozenset[int]:
-    """The registers this instruction actually reads.
-
-    Not the same question as `op.uses`. In a 16-bit program under a 32-bit
-    register model every narrow write is a read-modify-write: `mov ax,[n]`
-    defines eax and uses the eax before it, because the high half survives.
-    115 of the corpus's 211 loop operations that read a loop-carried value
-    read it only that way, which is why nothing ever looked invariant.
-
-    A register named nowhere in the semantics is preserved, not read. One
-    named in a memory operand -- a base, an index -- is read, and an
-    operation this cannot read the semantics of reads everything.
-    """
-    what = _semantics_of(op)
-    # Semantics that name no operand say as little as no semantics at all,
-    # and mean it just as literally: calls.py's restore idiom is
-    # `push eax / pop ax / pop dx`, which reads eax and edx and writes them
-    # down nowhere. Reading that as "reads nothing" makes it invariant in
-    # any loop, and lngmix hoisted the one that splits its running sum --
-    # 1185033780 for 142900. It was hidden behind the guard above, which
-    # refuses an operation whose sources are all registers and finds that
-    # vacuously true of an operation with no sources.
-    if what is None or op.barrier or (not what.sources and not what.dests and op.uses):
-        return frozenset(ir.ROOT.values()) | {one for one in ir.ROOT}
-    found: set[int] = set()
-    for one in (*what.sources, *what.dests):
-        if isinstance(one, ir.Reg) and one in what.sources:
-            found.add(ir.ROOT.get(one.register, one.register))
-        # A destination's own base and index are read to reach it, however
-        # the cell itself is only written.
-        for where in (getattr(one, "through", None), getattr(one, "index", None)):
-            if where is not None:
-                found.add(ir.ROOT.get(where, where))
-    return frozenset(found)
-
-
 def _effective(body: MirBody, calls: dict[int, str]) -> set:
     """Every value some instruction reads, rather than merely preserves.
 
@@ -394,10 +358,12 @@ def _effective(body: MirBody, calls: dict[int, str]) -> set:
             for value in phi.incoming.values():
                 carrying.setdefault(phi.result, set()).add(value)
         for op in block.ops:
-            read = _reads(op)
             for use in op.uses:
-                where = body.origin.get(use)
-                if use.flags or op.at in calls or where is None or ir.ROOT.get(where, where) in read:
+                # Really read, not merely preserved. `merges` is the raise's
+                # answer to that; asked as "is this use's register among the
+                # ones the instruction names", the index register of a based
+                # operand was missed and the use read as preserved.
+                if use.flags or op.at in calls or use not in op.merges:
                     wanted.add(use)
     changing = True
     while changing:
@@ -545,12 +511,7 @@ def _invariant_run(
             # Per use, not per value: hotlop's counter is genuinely read by
             # the compare, and that must not make the load of `n` -- which
             # only preserves the register it lives in -- loop-carried too.
-            read = _reads(one)
-            blocking = [
-                use
-                for use in one.uses
-                if not use.flags and ir.ROOT.get(origin.get(use, -1), origin.get(use, -1)) in read
-            ]
+            blocking = [use for use in one.uses if not use.flags and use not in one.merges]
             if any(use in inside and use not in made for use in blocking):
                 continue
             run.append(one)
