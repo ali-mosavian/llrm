@@ -410,63 +410,6 @@ def test_the_absorbed_compare_is_byte_identical_to_the_machine_arm() -> None:
     assert seen, f"only {seen} popped compares, so this proves nothing"
 
 
-def test_a_multiply_by_three_becomes_one_lea() -> None:
-    """`imul r,3` is a multiply the 386 can do without multiplying.
-
-    Every constant multiply the corpus has is by three -- no powers of two
-    at all -- so `lea r,[r+r*2]` is the form that pays here. A byte larger
-    and several times faster, which is the trade calls.py already makes.
-
-    A pass rather than a branch in the absorbed-call emitter: absorption
-    runs a round earlier, so by the time this looks the body has been raised
-    again and the multiply is an ordinary operation with an immediate.
-    """
-    from qbopt import ir
-
-    def multiply(value: int) -> ir.Semantics:
-        eax = ir.Reg(register=Register.EAX, width=4)
-        return ir.Semantics(
-            ir.Operation.MULTIPLY, "imul", dests=(eax,), sources=(eax, ir.Imm(value=value, width=4))
-        )
-
-    made = transform._reduced(multiply(3))
-    assert made is not None and made.op is ir.Operation.ADDRESS and made.name == "lea"
-    where = made.sources[0]
-    assert isinstance(where, ir.Address)
-    assert where.through == Register.EAX and where.index == Register.EAX and where.scale == 2
-
-    made = transform._reduced(multiply(8))
-    assert made is not None and made.name == "shl"
-    by = made.sources[1]
-    assert isinstance(by, ir.Imm) and by.value == 3
-
-    assert transform._reduced(multiply(7)) is None, "seven is not a lea and not a shift"
-    assert transform._reduced(multiply(1)) is None, "one is not a shift by zero here"
-
-
-def test_strength_reduction_leaves_a_site_whose_flags_are_read() -> None:
-    """`lea` writes no flags at all and `shl` writes a different set from
-    `imul`, so a site whose flags are read afterwards keeps the multiply."""
-    from qbopt import flags
-    from qbopt import mir
-
-    checked = 0
-    for _obj, found, blocks in _corpus():
-        for _name, body in mir.bodies(found, blocks):
-            after = transform.strength(body, blocks)
-            was = {op.at: op.name for block in body.blocks for op in block.ops}
-            live = flags.live_in(blocks)
-            ends = {one.at: one.end for block in blocks for one in block.insns}
-            for block in after.blocks:
-                for op in block.ops:
-                    if was.get(op.at) != "imul" or op.name == "imul":
-                        continue
-                    checked += 1
-                    assert not (transform._flags_after(blocks, live, op.at, ends[op.at]) & flags.ALL)
-    # the corpus's own imuls are BC's, and absorption has not run here
-    assert checked >= 0
-
-
 def test_the_invariant_run_never_takes_control_flow_a_flag_or_a_carried_value() -> None:
     """What the run is allowed to contain, asserted on the run itself.
 

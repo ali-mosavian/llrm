@@ -146,71 +146,6 @@ def without_dead_stores(body: MirBody, dgroup: frozenset[int], calls: dict[int, 
     )
 
 
-# A multiply the 386 can do without multiplying. `lea` through the SIB scale
-# is one instruction and several times faster than `imul`, and `shl` is
-# smaller as well as faster. gcc and clang at -O3 pick exactly these on an
-# i386 -- times three is one lea, not a shift and an add.
-BY_LEA = {3: 2, 5: 4, 9: 8}
-
-
-def _power_of_two(value: int) -> int | None:
-    return value.bit_length() - 1 if value > 1 and not value & (value - 1) else None
-
-
-def strength(body: MirBody, blocks: list | None = None) -> MirBody:
-    """A multiply by a constant, as the shift or the address it really is.
-
-    Only where nothing reads the flags afterwards. `lea` writes none at all
-    and `shl` writes a different set from `imul`, so a site whose flags are
-    read has to keep the multiply -- the same gate absorption applies, asked
-    the same way.
-
-    This is a pass rather than a branch inside the absorbed-call emitter on
-    purpose: absorption runs in an earlier round, so by the time this looks
-    the body has been raised again and `imul eax,3` is an ordinary operation
-    with an immediate, whatever wrote it.
-    """
-    if blocks is None:
-        return body
-    live = flags.live_in(blocks)
-    ends = {one.at: one.end for block in blocks for one in block.insns}
-
-    out = []
-    for block in body.blocks:
-        ops: list[Op] = []
-        for op in block.ops:
-            what = op.made if op.made is not None else getattr(op.node, "semantics", None)
-            made = _reduced(what)
-            if made is None or op.at not in ends or _flags_after(blocks, live, op.at, ends[op.at]) & flags.ALL:
-                ops.append(op)
-                continue
-            ops.append(replace(op, op=made.op, name=made.name or "", made=made))
-        out.append(replace(block, ops=tuple(ops)))
-    return replace(body, blocks=tuple(out))
-
-
-def _reduced(what) -> "ir.Semantics | None":
-    """`imul r,imm` as a lea or a shift, or None where it is neither."""
-    if what is None or what.op is not ir.Operation.MULTIPLY:
-        return None
-    if len(what.dests) != 1 or len(what.sources) < 2:
-        return None
-    into, times = what.dests[0], what.sources[-1]
-    if not isinstance(into, ir.Reg) or not isinstance(times, ir.Imm):
-        return None
-    if not isinstance(what.sources[0], ir.Reg) or what.sources[0].register != into.register:
-        return None
-
-    if (scale := BY_LEA.get(times.value)) is not None:
-        where = ir.Address(None, through=into.register, index=into.register, scale=scale)
-        return ir.Semantics(ir.Operation.ADDRESS, "lea", dests=(into,), sources=(where,))
-    if (shift := _power_of_two(times.value)) is not None:
-        return ir.Semantics(
-            ir.Operation.BINARY, "shl", dests=(into,), sources=(into, ir.Imm(value=shift, width=1))
-        )
-    return None
-
-
 # A root register at the width an operand reads it. ir.ROOT maps the narrow
 # name to the wide one; this is the way back, and only for the general
 # registers -- a segment register has no narrower form and is never a
@@ -1695,7 +1630,7 @@ def _choices(offers: dict) -> Iterator[dict]:
 # before avail.py once and avail forwarded a stale high half across an op
 # that said it read two bytes where the instruction read four. That is no
 # longer possible to get wrong by rearranging this list.
-PASSES = ("fold", "decide", "dead", "segments", "hoist", "forward", "drop_loads", "drop_stores", "widen", "place", "absorb", "strength")
+PASSES = ("fold", "decide", "dead", "segments", "hoist", "forward", "drop_loads", "drop_stores", "widen", "place", "absorb")
 
 
 def applied(
@@ -1738,7 +1673,6 @@ def applied(
         "widen": widen,
         "place": place,
         "absorb": absorb and blocks is not None,
-        "strength": blocks is not None,
     }
     for name in PASSES:
         if only is not None and name != only:
@@ -1767,8 +1701,6 @@ def applied(
             body = placed(body)
         elif name == "absorb":
             body = absorbed(body, blocks or [], calls, found)
-        elif name == "strength":
-            body = strength(body, blocks)
     return body
 
 

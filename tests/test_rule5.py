@@ -68,8 +68,6 @@ ALLOWED = {
         "_mentions",
         "_named",
         "_at_width",
-        # S2 -- strength, which picks an encoding
-        "_reduced",
         # S3 -- segments
         "_segment_load",
         # phase D -- absorption, which moves into the raise
