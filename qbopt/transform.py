@@ -728,7 +728,7 @@ def _move(at: int, into: Register_, outof: Register_, value: mir.Value) -> Op:
         dests=(ir.Reg(register=_named(into, 2), width=2),),
         sources=(ir.Reg(register=_named(outof, 2), width=2),),
     )
-    return Op(at, ir.Operation.MOVE, "mov", (), (value,), made=what, covers=(at, at))
+    return Op(at, ir.Operation.MOVE, "mov", (), (value,), kind=mir.Kind.COPY, made=what, covers=(at, at))
 
 
 def _can_reseat(one: Op) -> bool:
@@ -760,25 +760,30 @@ def _writes_to(one: Op, now: Register_) -> Op:
 # store leaves a mark, a call and the control transfers take the program
 # somewhere, and everything touching the stack moves sp. The x87 forms are
 # here because their effect is on a stack this layer does not model.
+#
+# JOIN is deliberately not here. The list used to name ir.Operation.RESTORE
+# and that entry never once matched: the raise gives a restore its own
+# Synth op, so the name it was compared against was never the name it had.
+# Adding it for real cost 1,134 bytes over the corpus and 20 deletions --
+# a join whose result nothing reads is as dead as anything else.
 _OBSERVED = frozenset(
     {
-        ir.Operation.CALL,
-        ir.Operation.RETURN,
-        ir.Operation.JUMP,
-        ir.Operation.BRANCH,
-        ir.Operation.ESCAPE,
-        ir.Operation.PUSH,
-        ir.Operation.POP,
-        ir.Operation.LEAVE,
-        ir.Operation.FILL,
-        ir.Operation.DATA,
-        ir.Operation.BARRIER,
-        ir.Operation.RESTORE,
-        ir.Operation.FLOAT_LOAD,
-        ir.Operation.FLOAT_STORE,
-        ir.Operation.FLOAT_ARITH,
-        ir.Operation.FLOAT_ARITH_POP,
-        ir.Operation.FLOAT_UNARY,
+        mir.Kind.CALL,
+        mir.Kind.RETURN,
+        mir.Kind.JUMP,
+        mir.Kind.BRANCH,
+        mir.Kind.ESCAPE,
+        mir.Kind.ARG,
+        mir.Kind.RESULT,
+        mir.Kind.OPAQUE,
+        mir.Kind.FLOAD,
+        mir.Kind.FSTORE,
+        mir.Kind.FADD,
+        mir.Kind.FSUB,
+        mir.Kind.FMUL,
+        mir.Kind.FDIV,
+        mir.Kind.FNEG,
+        mir.Kind.FCOMPARE,
     }
 )
 
@@ -889,7 +894,7 @@ def halves(body: MirBody) -> set:
         for block in body.blocks:
             for op in block.ops:
                 if (
-                    op.op not in _OBSERVED
+                    op.kind not in _OBSERVED
                     and not op.stores
                     and not any((one, half) in out for one in op.defines for half in (LOW, HIGH))
                 ):
@@ -1082,6 +1087,7 @@ def decided(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
             jump = replace(
                 last,
                 op=ir.Operation.JUMP,
+                kind=mir.Kind.JUMP,
                 name="jmp",
                 uses=(),
                 args=(),
@@ -1157,7 +1163,7 @@ def dead(body: MirBody) -> MirBody:
 
 def _removable(op: Op, alive: set) -> bool:
     """Whether anything at all would notice this operation going."""
-    if op.op in _OBSERVED or op.stores or op.barrier:
+    if op.kind in _OBSERVED or op.stores or op.barrier:
         return False
     if _semantics_of(op) is None:
         return False
@@ -1242,6 +1248,7 @@ def _folded_op(op: Op, facts: dict, wanted: set, origin: dict) -> Op:
     return replace(
         op,
         op=ir.Operation.MOVE,
+        kind=mir.Kind.COPY,
         name="mov",
         defines=(target,),
         uses=(),
@@ -2141,6 +2148,7 @@ def _laid_at(steps: list, here: dict, lo: int, hi: int) -> list[Op] | None:
                 seed,
                 at=lo,
                 op=what.op,
+                kind=mir._kind_of(what, (), ()),
                 name=what.name or "",
                 defines=(),
                 uses=(),
@@ -2214,6 +2222,7 @@ def _laid(steps: list[ir.Semantics], at: int, after: Op, restore: bool) -> list[
                 after,
                 at=at,
                 op=what.op,
+                kind=mir._kind_of(what, (), ()),
                 name=what.name or "",
                 defines=(),
                 uses=(),

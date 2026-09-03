@@ -770,6 +770,7 @@ def _restore_op(number: int, at: int, after: Op, end: int) -> Op:
         after,
         at=at,
         op=ir.Operation.BARRIER,
+        kind=mir.Kind.OPAQUE,
         name="restore",
         defines=(),
         uses=(),

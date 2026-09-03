@@ -360,6 +360,7 @@ def untangled(body: mir.MirBody) -> mir.MirBody:
                     mir.Op(
                         at=came,
                         op=ir.Operation.MOVE,
+                        kind=mir.Kind.COPY,
                         name="mov",
                         defines=(copy,),
                         uses=(value,),
@@ -411,6 +412,7 @@ def untangled(body: mir.MirBody) -> mir.MirBody:
                         mir.Op(
                             at=op.at,
                             op=ir.Operation.MOVE,
+                            kind=mir.Kind.COPY,
                             name="mov",
                             defines=(copy,),
                             uses=(other,),
