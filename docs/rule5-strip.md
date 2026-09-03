@@ -35,10 +35,20 @@ on it, and it is the one field `Value`'s docstring sanctions reading.
 
 ## Order
 
-A. `Op.id` and `Provenance` for `ref`.
-B. `node` into `Provenance`.
+A. `Op.id` and the module's `refs` table.               done
+D. `args`/`results`, and `lower.py` as the boundary.    done for fold,
+   forward and decide; widen, absorb and the hoist still write `made`.
+B. `node` into the side table.
 C. `covers` -> `absorbed`.
-D. `args`, then `made` -> `lower()`.
 E. `origin`.
 
-Each step: 485 of 485 rebuild and the corpus byte total, stated.
+## Measuring it
+
+`wholeseg.rebuilt` is not the shipped optimiser. `rewrite.py` is, and it
+runs the machine arm and the whole-segment arm into each other to a fixed
+point -- so a corpus byte total taken through `rebuilt` can be identical
+while the program prints the wrong number. It did: five commits measured
+that way, and lngmix printed 110 for 142900 the whole time.
+
+Each step: 485 of 485 rebuild, the corpus byte total, **and** twelve
+configurations by five programs.
