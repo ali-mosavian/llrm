@@ -62,6 +62,7 @@ reason it can be trusted before anything is built on top of it.
 from enum import StrEnum
 from dataclasses import field
 from dataclasses import replace
+import itertools
 from dataclasses import dataclass
 
 from iced_x86 import Register
@@ -227,12 +228,13 @@ class Op:
     # that is how it catches data BC put between the instructions. So a
     # replacement says what it replaced.
     covers: tuple[int, int] | None = None
-    # The address of the fixup this operation's own operand carries, found
-    # once at the raise while the spans are still BC's. Everything after
-    # that may move the operation anywhere: a relocation belongs to an
-    # operand, not to a place in BC's layout, and searching the bytes for it
-    # is what tied every transform to keeping them.
-    ref: int | None = None
+    # What this operation is, apart from where it is. Given at the raise and
+    # carried through every `replace()`, so a fact established then can live
+    # in a side table instead of on the op -- which is the only way those
+    # facts survive the hoist moving something: a table keyed by `at` does
+    # not. None means an operation a pass invented, which has no past and
+    # must say what it computes in MIR's own terms.
+    id: int | None = None
 
     @property
     def barrier(self) -> bool:
@@ -529,6 +531,11 @@ def _placed(
     return {at: frozenset(what) for at, what in needed.items()}
 
 
+# Operation identity. Opaque and per-process: what it keys is a table
+# built in the same call that hands the bodies out.
+_IDS = itertools.count(1)
+
+
 def raise_body(
     blocks: list[Block],
     nodes: dict[int, ir.Node],
@@ -638,6 +645,7 @@ def raise_body(
                     loads,
                     stores,
                     node,
+                    id=next(_IDS),
                 )
             )
 
@@ -976,12 +984,13 @@ def bodies(found: Module, blocks: list[Block]) -> list[tuple[str, MirBody]]:
             continue
         built = raise_body(mine, nodes, body.body.seed, found.calls)
         if not isinstance(built, str):
-            out.append((f"{body.body.kind} {body.body.name or '(main)'}", _referenced(built, found)))
+            found.refs.update(_referenced(built, found))
+            out.append((f"{body.body.kind} {body.body.name or '(main)'}", built))
     return out
 
 
-def _referenced(body: MirBody, found: Module) -> MirBody:
-    """Each operation told which fixup its own operand carries.
+def _referenced(body: MirBody, found: Module) -> dict[int, int]:
+    """Which fixup each operation's own operand carries, by op id.
 
     Asked once, here, while every operation still stands exactly where BC
     wrote it -- which is the only moment the question can be answered from
@@ -995,7 +1004,7 @@ def _referenced(body: MirBody, found: Module) -> MirBody:
     """
     known = frozenset(found.fixup_at)
     if not known:
-        return body
+        return {}
 
     def owned(op: Op) -> int | None:
         if op.node is None or isinstance(op.node, ir.Restore):
@@ -1006,10 +1015,9 @@ def _referenced(body: MirBody, found: Module) -> MirBody:
         inside = [one for one in known if lo <= one < hi]
         return inside[0] if len(inside) == 1 else None
 
-    return replace(
-        body,
-        blocks=tuple(
-            replace(block, ops=tuple(replace(op, ref=owned(op)) for op in block.ops))
-            for block in body.blocks
-        ),
-    )
+    return {
+        op.id: at
+        for block in body.blocks
+        for op in block.ops
+        if op.id is not None and (at := owned(op)) is not None
+    }

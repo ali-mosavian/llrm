@@ -660,3 +660,40 @@ def test_a_body_the_allocator_refused_is_untangled_before_it_is_laid_out() -> No
             fixed = regalloc.untangled(done)
             assert not isinstance(regalloc.colour(fixed, fixed.pins), str), f"{name}: colours after"
     assert seen == 2, f"expected both shapes, saw {seen}"
+
+
+def test_a_moved_operation_keeps_its_fixup() -> None:
+    """Why the side table is keyed by the operation and not by its address.
+
+    `ref` used to sit on the op, which is what made it survive the hoist
+    re-seating something. Off the op it has to be keyed by an identity that
+    moves with the operation; keyed by `at` the relocation stays behind and
+    the address comes out a bare zero.
+    """
+    from dataclasses import replace
+    from qbopt import mir
+    from qbopt import module
+    from qbopt import omf
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(Path("fixtures/omf/hotlop-p-g2.obj").read_bytes()))
+    assert found is not None
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
+    bodies = mir.bodies(found, split.partition(found, mapped))
+    assert found.refs, "the raise recorded no relocations at all"
+
+    carried = [
+        op
+        for _, body in bodies
+        for block in body.blocks
+        for op in block.ops
+        if op.id in found.refs and layout._field_in(found, op) is not None
+    ]
+    assert carried, "no operation carries a fixup; the test measures nothing"
+
+    one = carried[0]
+    was = layout._field_in(found, one)
+    moved = replace(one, at=one.at + 0x100)
+    assert layout._field_in(found, moved) == was, "the relocation stayed behind"

@@ -385,8 +385,9 @@ def _field_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -
     # What the operation says it carries, established at the raise while the
     # spans were still BC's. Subject to the caller's own set: `fields` is how
     # a caller says which fixups it is accounting for.
-    if op.ref is not None and (not fields or op.ref in fields):
-        return op.ref if _still_has_an_operand_for_it(op) else None
+    ref = found.refs.get(op.id) if op.id is not None else None
+    if ref is not None and (not fields or ref in fields):
+        return ref if _still_has_an_operand_for_it(op) else None
     known = fields or frozenset(found.fixup_at)
     lo, hi = ir.span(op.node)
     # A far call and a far jmp put their four relocated bytes right after a
