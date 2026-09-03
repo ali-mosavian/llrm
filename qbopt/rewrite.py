@@ -862,11 +862,19 @@ def _written(
     # Each pass once is not a fixed point: a pass can only see what the
     # round before it wrote, so one that fires on the result of another
     # needs the sequence run again. Capped, and the corpus settles in two.
+    # Every pass on one MIR body, then lowered once. This ran each pass
+    # through its own rebuilt() -- parse, raise, one pass, lower, allocate,
+    # lay out, emit -- so the program round-tripped through machine code
+    # between every pair of passes and resolved() re-derived SSA by register
+    # each time. transform.applied() already runs them all on one body.
+    #
+    # It is what the architecture says and it is also why a live range split
+    # "comes back through emission as an ordinary move": emission was
+    # happening between the passes. Same output on every program, 2.4x less
+    # work to get it.
     for _round in range(PASS_ROUNDS):
         before = data
-        for name in transform.PASSES:
-            out, _why = wholeseg.rebuilt(data, native_fpu=native_fpu, absorb=not absorb_calls, only=name)
-            data = out
+        data, _why = wholeseg.rebuilt(data, native_fpu=native_fpu, absorb=not absorb_calls)
         if data == before:
             break
     return data

@@ -8,77 +8,91 @@ some of it is wired to emission.
 ## The pipeline it is becoming
 
 ```
-     BC.EXE                                             LINK.EXE
-       |  .OBJ                                       .OBJ  ^
-       v                                                   |
- +-----------+                                       +-----------+
- |  decode   |  omf declen blocks module ir          |   emit    |
- +-----+-----+                                       +-----+-----+
-       |                                                   ^
-       v                                                   |
- +-----------+                                       +-----------+
- |   raise   |  mir.raise_body                       | peephole  |
- +-----+-----+  SSA; values, not registers           +-----+-----+
-       |                                                   ^
-       v                                                   |
- +------------------------+                          +-----------+
- |          opt           |                          | regalloc  |
- |  machine-independent   | <---+                    +-----+-----+
- |  hoist forward fold    |     | to a fixed point         ^
- |  CSE DCE strength      | ----+                          |
- +-----------+------------+                          +-----------+
-             |                                       |    lir    |
-             +-------------------------------------> +-----------+
+      BC.EXE                                       LINK.EXE
+        |  .OBJ                                 .OBJ  ^
+        v                                             |
+  +-----------+                                 +-----------+
+  |  decode   |  omf declen blocks module ir    |   emit    |
+  +-----+-----+                                 +-----+-----+
+        |                                             ^
+        v                                             |
+  +-----------+                                 +-----------+
+  |   raise   |  SSA over values, and every     | peephole  |
+  |           |  idiom recognised here rather   +-----+-----+
+  |           |  than in a pass: long pairs           ^
+  |           |  named, an absorbable runtime         |
+  |           |  call raised as the arithmetic  +-----------+
+  |           |  it is                          | regalloc  |
+  +-----+-----+                                 +-----+-----+
+        |                                             ^
+        v                                             |
+  +-----------+                                 +-----------+
+  |    opt    |  MIR in, MIR out, ten passes,   |   lower   |
+  |           |  no machine anything            |  -> lir   |
+  +-----+-----+ <--+                            +-----+-----+
+        |          | to a fixed point                 ^
+        +----------+                                  |
+        |                                             |
+        +---------------------------------------------+
 ```
 
-The order is the architecture, and each boundary is a rule.
-
-**mir is machine-independent.** A value is `(id, at, kind)` and lives
-nowhere. Where BC kept it is `MirBody.origin` -- a side map that lowering
-and the allocator's identity baseline read, and nothing else may. This is
-`docs/variables.md`'s stage 1 and it is done.
-
-**opt runs to a fixed point.** Many passes, repeated, none choosing
-registers. A pass that names a register is doing the allocator's job with
-none of its information; the history has five attempts at it and every one
-produced a wrong program. What a pass may say is "this value is live here";
-where it goes is not its question.
-
-**lir says what the machine requires.** Three kinds, all in `lir.py`:
+Ten passes, in this order, each taking MIR and returning MIR:
 
 ```
-  fixed     imul word [k]   multiplies by ax and names it nowhere
-            idiv            reads dx:ax, writes dx:ax
-            cwd / cdq       extends ax into dx
-            shl ax,cl       takes its count in cl
-
-  class     [bx+si]         16-bit addressing reaches memory through
-                            bx, bp, si or di and nothing else
-
-  tied      add ax,[c]      one register at two moments, not two places
+  1  widen      two operations writing halves of one long -> one 32-bit
+                operation. First, so everything after it works on whole
+                values and the partial-write artifact stops mattering
+  2  fold       constant propagation and folding
+  3  decide     a branch whose condition is known, resolved
+  4  cse        one value per computation, memory included
+  5  dse        a store nothing reads
+  6  licm       invariant work out of the loop
+  7  scev       induction variables; an address strides, not recomputed
+  8  algebraic  x * 8 -> x << 3, division by a constant -> reciprocal
+  9  dead       last, so it clears what the rest orphaned
+  10 place      sink a definition to its use; last, because it depends
+                on what survived
 ```
 
-Checked against BC's own assignment across the corpus: 431 fixed and 1,290
-class requirements, and any naming a register BC had no value in would be a
-wrong requirement. Two were, and the check found them.
+Nothing between `opt` and `lower` and nothing after `regalloc` but
+`peephole`. There is no LIR optimisation tier: if a pass has done its job
+on MIR there is nothing left for one to do.
 
-**regalloc assigns, splits and spills.** The only thing that decides where a
-value lives. When an instruction requires a value somewhere it cannot live
--- `imul` wants ax, the loop clobbers ax -- both facts are true and the
-answer is neither: a live range split, a move putting the value back just
-before the instruction that needs it.
+The order is the point, and each boundary is a rule:
 
-```
-   before                          after
-   ------                          -----
-   loop:                           mov cx,[r]        <- hoisted, once
-     mov ax,[r]   <- every pass    loop:
-     imul word [w]                   mov ax,cx       <- the split
-                                     imul word [w]
-```
+- **The raise recognises, so no pass has to.** A long is one 32-bit value
+  and `B$MUI4` is a `MULTIPLY` the moment the body is raised. Recognition
+  done later is recognition done in a pass that must know about x86 --
+  which is how `widen` and `absorb` came to hold 141 machine references
+  between them.
+- **mir is machine-independent, and so is every pass over it.** A value is
+  `(id, at, kind)` and lives nowhere. Where BC kept it is `MirBody.origin`,
+  a side map that lowering and the allocator's identity baseline read and
+  *nothing else may* -- with one sanctioned exception, `widen` asking which
+  register pair a long arrived in. A pass that names a register is doing
+  the allocator's job with none of its information; five attempts at that
+  are in the history and all produced wrong programs.
+- **opt runs to a fixed point**, on one body. Not through emission: a pass
+  that re-raises from bytes loses the SSA the one before it built, and
+  every marker with it. That is why a live range split used to come back as
+  an ordinary move and be hoisted again.
+- **lower chooses encodings, not registers.** `lea` against `shl`, which
+  form of `imul`. Its output is machine operations over abstract variables.
+- **lir says what the machine requires** of an operand: a fixed register
+  (`imul` multiplies by ax and names it nowhere), a register class (16-bit
+  addressing reaches memory through bx, bp, si or di), a two-address
+  instruction reading and writing one register. Checked against BC's own
+  assignment over the corpus -- 431 fixed and 1,290 class requirements, and
+  any that named a register BC had no value in would be a wrong
+  requirement.
+- **regalloc assigns, splits and spills.** The only thing that decides
+  where a value lives. When an instruction requires a value somewhere it
+  cannot live, the answer is a live range split -- a move putting it back
+  just before the instruction that needs it.
+- **peephole runs after allocation**, because what is worth rewriting
+  depends on what ended up where. The segment reload, a redundant move, an
+  addressing mode: all of them questions about what ended up in what.
 
-**peephole runs after allocation**, because what is worth rewriting depends
-on what ended up where.
 
 ## Where the code actually is
 
@@ -149,41 +163,37 @@ machine side.
 
 ## The optimisation passes
 
-What exists, what it runs on, and whether it changes the program.
+Where each of today's twelve lands in the architecture above.
 
 ```
-  pass                  level      emits   what it does
-  --------------------  ---------  ------  ----------------------------
-  absorption            machine    yes     B$MUI4 -> imul, inline
-  strength reduction    machine    yes     x2^n -> shl, x3/5/9 -> lea,
-                                           /2^n -> sar with sign bias
-  widening              machine    yes     add/adc pair -> one 32-bit op
-  dead store removal    machine    yes     a store nothing reads
-  load forwarding       machine    yes     a load whose register has it
-                                           (block-scoped only)
-  operand substitution  MIR        yes     `add ax,[y]` -> `add ax,si`,
-                                           cross-block; 60 corpus reads
-  const prop + fold     MIR        no      known(): values and arithmetic
-  register allocation   MIR        part    colour() built; live() is what
-                                           operand substitution asks
-  re-encoding           MIR        yes     with_operand(); with_registers()
-                                           has no caller
-  native x87            machine    opt-in  fpu.py: the emulator's int 34h
-                                           back to the ESC it stands for.
-                                           1.88x on bench/fpbench.bas, and
-                                           the only float win there is
-  whole-segment emit    MIR        tests   select + layout + wholeseg; runs
-                                           right on all twelve, not yet
-                                           called by rewrite.py
-
-  not built yet:  CSE, LICM, dead code elimination proper
+  today                 becomes             why
+  --------------------  ------------------  ------------------------------
+  fold                  fold                already MIR in, MIR out
+  decide                decide              already
+  dead                  dead                already, and runs last
+  hoist                 licm                already; needs cse ahead of it
+  place                 place               already, and runs last
+  widen                 widen               stays a pass: only 169 of the
+                                            corpus's 1,476 long values are
+                                            joined by a carry, so most
+                                            pairs are dataflow rather than
+                                            an instruction pattern
+  absorb                the raise           a B$MUI4 call is a MULTIPLY
+                                            the moment it is raised
+  forward               cse                 a read served from a value
+                                            already held is not a separate
+                                            question
+  segments              cse + licm          the descriptor word is loaded
+                                            once and does not change
+  drop_loads            cse                 redundant load elimination
+  drop_stores           dse
+  strength              algebraic + lower   x * 8 -> x << 3 is a fact about
+                                            values; the lea is an encoding
 ```
 
-Operand substitution is the one pass that crosses. It changes where the
-second operand is *read from* and nothing else -- the destination is
-untouched, so nothing downstream is rewritten, which is what makes it work
-on a two-address machine where forwarding a use does not. It is also why
-an accumulate is safe: `and cx,[x]` keeps its `and`.
+Not built: `cse`, `scev`, `algebraic` as a pass of its own, `peephole`.
+Between them they are most of what stands between the suite and 1.5x, and
+none of them may see a register.
 
 ## Where the join happens
 

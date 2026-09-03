@@ -116,52 +116,107 @@ project as if the list in the roadmap were implemented.
 ## The architecture
 
 ```
-      BC.EXE                                          LINK.EXE
-        |  .OBJ                                    .OBJ  ^
-        v                                                |
-  +-----------+                                    +-----------+
-  |  decode   |  omf declen blocks module ir       |   emit    |
-  +-----+-----+                                    +-----+-----+
-        |                                                ^
-        v                                                |
-  +-----------+                                    +-----------+
-  |   raise   |  mir.raise_body -- SSA             | peephole  |
-  +-----+-----+  values, not registers             +-----+-----+
-        |                                                ^
-        v                                                |
-  +-----------------------+                        +-----------+
-  |         opt           |                        | regalloc  |
-  |  machine-independent  | <--+                   +-----+-----+
-  |  hoist forward fold   |    | to a fixed point        ^
-  |  CSE DCE strength     | ---+                         |
-  +-----------+-----------+                        +-----------+
-              |                                    |    lir    |
-              +----------------------------------> +-----------+
+      BC.EXE                                       LINK.EXE
+        |  .OBJ                                 .OBJ  ^
+        v                                             |
+  +-----------+                                 +-----------+
+  |  decode   |  omf declen blocks module ir    |   emit    |
+  +-----+-----+                                 +-----+-----+
+        |                                             ^
+        v                                             |
+  +-----------+                                 +-----------+
+  |   raise   |  SSA over values, and every     | peephole  |
+  |           |  idiom recognised here rather   +-----+-----+
+  |           |  than in a pass: long pairs           ^
+  |           |  named, an absorbable runtime         |
+  |           |  call raised as the arithmetic  +-----------+
+  |           |  it is                          | regalloc  |
+  +-----+-----+                                 +-----+-----+
+        |                                             ^
+        v                                             |
+  +-----------+                                 +-----------+
+  |    opt    |  MIR in, MIR out, ten passes,   |   lower   |
+  |           |  no machine anything            |  -> lir   |
+  +-----+-----+ <--+                            +-----+-----+
+        |          | to a fixed point                 ^
+        +----------+                                  |
+        |                                             |
+        +---------------------------------------------+
 ```
+
+Ten passes, in this order, each taking MIR and returning MIR:
+
+```
+  1  widen      two operations writing halves of one long -> one 32-bit
+                operation. First, so everything after it works on whole
+                values and the partial-write artifact stops mattering
+  2  fold       constant propagation and folding
+  3  decide     a branch whose condition is known, resolved
+  4  cse        one value per computation, memory included
+  5  dse        a store nothing reads
+  6  licm       invariant work out of the loop
+  7  scev       induction variables; an address strides, not recomputed
+  8  algebraic  x * 8 -> x << 3, division by a constant -> reciprocal
+  9  dead       last, so it clears what the rest orphaned
+  10 place      sink a definition to its use; last, because it depends
+                on what survived
+```
+
+Nothing between `opt` and `lower` and nothing after `regalloc` but
+`peephole`. There is no LIR optimisation tier: if a pass has done its job
+on MIR there is nothing left for one to do.
 
 The order is the point, and each boundary is a rule:
 
-- **mir is machine-independent.** A value is `(id, at, kind)` and lives
-  nowhere. Where BC kept it is `MirBody.origin`, a side map that lowering
-  and the allocator's identity baseline read and *nothing else may*. A pass
-  that names a register is doing the allocator's job with none of its
-  information -- five attempts at that are in the history and all of them
-  produced wrong programs.
-- **opt runs to a fixed point.** Many passes, repeated, none of them
-  choosing registers.
-- **lir says what the machine requires.** `lir.py` holds it: an operand a
-  fixed register (`imul` multiplies by ax and names it nowhere), an operand
-  a register class (16-bit addressing reaches memory through bx, bp, si or
-  di), a two-address instruction reading and writing one register. Checked
-  against BC's own assignment over the corpus -- 431 fixed and 1,290 class
-  requirements, and any that named a register BC had no value in would be a
-  wrong requirement.
-- **regalloc assigns, splits and spills.** It is the only thing that
-  decides where a value lives. When an instruction requires a value
-  somewhere it cannot live, the answer is a live range split -- a move
-  putting it back just before the instruction that needs it.
+- **The raise recognises, so no pass has to.** A long is one 32-bit value
+  and `B$MUI4` is a `MULTIPLY` the moment the body is raised. Recognition
+  done later is recognition done in a pass that must know about x86 --
+  which is how `widen` and `absorb` came to hold 141 machine references
+  between them.
+- **mir is machine-independent, and so is every pass over it.** A value is
+  `(id, at, kind)` and lives nowhere. Where BC kept it is `MirBody.origin`,
+  a side map that lowering and the allocator's identity baseline read and
+  *nothing else may* -- with one sanctioned exception, `widen` asking which
+  register pair a long arrived in. A pass that names a register is doing
+  the allocator's job with none of its information; five attempts at that
+  are in the history and all produced wrong programs.
+- **opt runs to a fixed point**, on one body. Not through emission: a pass
+  that re-raises from bytes loses the SSA the one before it built, and
+  every marker with it. That is why a live range split used to come back as
+  an ordinary move and be hoisted again.
+- **lower chooses encodings, not registers.** `lea` against `shl`, which
+  form of `imul`. Its output is machine operations over abstract variables.
+- **lir says what the machine requires** of an operand: a fixed register
+  (`imul` multiplies by ax and names it nowhere), a register class (16-bit
+  addressing reaches memory through bx, bp, si or di), a two-address
+  instruction reading and writing one register. Checked against BC's own
+  assignment over the corpus -- 431 fixed and 1,290 class requirements, and
+  any that named a register BC had no value in would be a wrong
+  requirement.
+- **regalloc assigns, splits and spills.** The only thing that decides
+  where a value lives. When an instruction requires a value somewhere it
+  cannot live, the answer is a live range split -- a move putting it back
+  just before the instruction that needs it.
 - **peephole runs after allocation**, because what is worth rewriting
-  depends on what ended up where.
+  depends on what ended up where. The segment reload, a redundant move, an
+  addressing mode: all of them questions about what ended up in what.
+
+### Against what is there today
+
+`fold`, `decide`, `dead`, `widen`, `hoist` (which becomes `licm`) and
+`place` stay. The rest are not passes in the architecture above:
+
+```
+  absorb                  moves into the raise
+  forward                 a read served from a value already held: cse
+  segments                a descriptor word loaded once: cse and licm
+  drop_loads              cse
+  drop_stores             dse
+  strength                its value half is algebraic, its lea is lower's
+```
+
+`cse`, `scev` and `peephole` do not exist yet, and no pass may see a
+register once the first of them is written.
 
 ### Where the code actually is
 

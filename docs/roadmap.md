@@ -4,6 +4,28 @@ Kept current. Tick a box when it lands, and move a number when it is
 re-measured -- a roadmap that lags the code is worse than none, because it
 is read as if it did not.
 
+## The architecture this closes on
+
+`AGENTS.md` has the drawing and the ten passes. The part that changes what
+is on this roadmap: **the machine-specific passes are not relocated, they
+are dissolved.**
+
+- `absorb` moves into the raise. A `B$MUI4` call is a `MULTIPLY` the moment
+  the body is raised, and then there is nothing to absorb.
+- `forward`, `segments` and `drop_loads` are one pass, `cse`. A read served
+  from a value already held, a descriptor word loaded once and a redundant
+  load are the same question asked three ways.
+- `drop_stores` is `dse`. `strength` splits: `x * 8 -> x << 3` is algebraic
+  and belongs on values, the `lea` is an encoding and belongs in lower.
+- `widen` stays a pass. Only 169 of the corpus's 1,476 long values are
+  joined by a carry, so most pairs are visible in the dataflow and not in
+  any instruction pattern -- which is why this cannot move into the raise
+  with absorption.
+
+There is no LIR optimisation tier. If a pass has done its job on MIR there
+is nothing left for one to do, and the only things below `opt` are lower,
+regalloc and peephole.
+
 ## Goal
 
 **Produce what a modern optimising compiler would have produced.** Integers,
