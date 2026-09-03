@@ -1263,13 +1263,6 @@ class DropStores(MIRTransform):
         return without_dead_stores(body, self.where.dgroup, self.where.named)
 
 
-class Widen(MIRTransform):
-    name = "widen"
-
-    def transform(self, body: MirBody) -> MirBody:
-        return widened(body)
-
-
 class Place(MIRTransform):
     name = "place"
 
@@ -1292,7 +1285,6 @@ def pipeline(where: Where, **wanted) -> list[MIRTransform]:
         Forward(where),
         DropLoads(where),
         DropStores(where),
-        Widen(),
         Place(),
     ]
     return [one for one in every if wanted.get(one.name, True)]
@@ -1310,7 +1302,6 @@ def applied(
     *,
     blocks: list | None = None,
     found=None,
-    widen: bool = True,
     segments_: bool = True,
     hoist: bool = True,
     forward: bool = True,
@@ -1341,7 +1332,6 @@ def applied(
         "forward": forward,
         "drop_loads": drop_loads,
         "drop_stores": drop_stores,
-        "widen": widen,
         "place": place,
     }
     where = Where(

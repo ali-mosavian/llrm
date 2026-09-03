@@ -59,8 +59,23 @@ def rebuilt(
     # which is what a caller bisecting a layout question wants.
     plain = bodies
     if optimise:
+        # Widening is not a MIR pass and is no longer in the list. It
+        # recognises an idiom -- a long written as two halves joined by a
+        # carry -- and writes the one 32-bit operation that replaces it,
+        # which is machine form: 95 register references, all of them BC's
+        # ax:dx convention. Recognition belongs at the raise and emission
+        # below the boundary; until the two are separated it runs here,
+        # after every pass and before lowering, which is where it ran
+        # anyway and is where rule 5 puts it.
         bodies = [
-            (name, transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found, only=only))
+            (
+                name,
+                transform.widened(
+                    transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found, only=only)
+                )
+                if only is None or only == "widen"
+                else transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found, only=only),
+            )
             for name, body in bodies
         ]
 
