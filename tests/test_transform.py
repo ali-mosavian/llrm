@@ -11,6 +11,7 @@ from pathlib import Path
 from iced_x86 import Register
 
 from qbopt import ir
+from qbopt import lir
 from qbopt import mir
 from qbopt import wide
 from qbopt import omf
@@ -1085,3 +1086,46 @@ def test_deciding_a_branch_leaves_every_byte_accounted_for() -> None:
             continue
         _out, why = wholeseg.rebuilt(path.read_bytes())
         assert why == wholeseg.REBUILT, f"{name}: {why}"
+
+
+def test_a_two_address_operation_is_copied_out_not_reseated() -> None:
+    """`add bx,ax` reads bx and writes it, named once.
+
+    So rewriting the destination rewrites the source with it. _writes_to
+    touches only `dests` and turns it into `add cx,ax`, which accumulates
+    into a register the chain never put anything in: pressx sums four
+    invariant products into bx and printed R= 6580 for 7500.
+    """
+    bx = ir.Reg(register=Register.BX, width=2)
+    ax = ir.Reg(register=Register.AX, width=2)
+    tied = ir.Semantics(ir.Operation.BINARY, "add", dests=(bx,), sources=(bx, ax))
+    plain = ir.Semantics(ir.Operation.MOVE, "mov", dests=(bx,), sources=(ax,))
+    assert lir.tied(tied) is not None, "an add of two registers is two-address"
+    assert lir.tied(plain) is None, "a move is not"
+    accumulate = mir.Op(0x10, ir.Operation.BINARY, "add", (mir.Value(1, 0x10),), (), made=tied)
+    copy = mir.Op(0x12, ir.Operation.MOVE, "mov", (mir.Value(2, 0x12),), (), made=plain)
+    assert not transform._can_reseat(accumulate), "so it takes a copy"
+    assert transform._can_reseat(copy), "and a move can simply be told where to write"
+
+
+def test_an_accumulator_chain_leaves_the_loop_whole() -> None:
+    """pressx is press with its eight values read at runtime.
+
+    Nothing can fold them, so the whole `a*b + c*d + e*f + g*h` is one
+    invariant chain and the loop should hold the accumulate and the counter.
+    What kept it inside was the move that starts the chain: refusing every
+    register move kept `mov bx,ax` out of the run, and without it the three
+    `add bx,ax` behind it read a register nothing in the run wrote.
+    """
+    seen = _rebuilt("pressx-p-g2")
+    back = [
+        (int(text.split()[-1].rstrip("h"), 16), ip)
+        for ip, text in seen
+        if text.startswith(("jle", "jl ")) and int(text.split()[-1].rstrip("h"), 16) < ip
+    ]
+    assert back, "nothing loops here, so this proves nothing"
+    lo, hi = min(back, key=lambda one: one[1] - one[0])
+    inside = [text for ip, text in seen if lo <= ip <= hi]
+    assert not [text for text in inside if text.startswith("imul")], (
+        f"an invariant product is still in the loop: {inside}"
+    )

@@ -588,6 +588,7 @@ def _invariant_run(
                 what.op is ir.Operation.MOVE
                 and not one.loads
                 and all(isinstance(where, ir.Reg) for where in what.sources)
+                and not any(use in made for use in one.uses)
             ):
                 continue
             # Only definition of its register in the loop, or the loop's own
@@ -640,6 +641,21 @@ def _invariant_run(
             run.append(one)
             made.update(one.defines)
             changing = True
+
+    thinning = True
+    while thinning:
+        thinning = False
+        for one in run:
+            what = _semantics_of(one)
+            if what is None or what.op is not ir.Operation.MOVE or one.loads:
+                continue
+            if not all(isinstance(where, ir.Reg) for where in what.sources):
+                continue
+            if any(value in other.uses for other in run if other is not one for value in one.defines):
+                continue
+            run = _pruned(run, set(one.defines))
+            thinning = True
+            break
     return run
 
 
@@ -771,9 +787,19 @@ def _move(at: int, into: Register_, outof: Register_, value: mir.Value) -> Op:
 
 
 def _can_reseat(one: Op) -> bool:
-    """Whether _writes_to can actually move this operation's destination."""
+    """Whether _writes_to can actually move this operation's destination.
+
+    Not a two-address one. `add bx,ax` reads bx and writes it, and x86 says
+    so by naming the operand once -- so rewriting the destination rewrites
+    the source with it. _writes_to touches only `dests` and produces
+    `add cx,ax`, which accumulates into a register the chain never put
+    anything in: pressx sums four invariant products into bx and printed
+    R= 6580 for 7500. lir.tied is where that is written down.
+    """
     what = _semantics_of(one)
-    return what is not None and len(what.dests) == 1 and isinstance(what.dests[0], ir.Reg)
+    if what is None or len(what.dests) != 1 or not isinstance(what.dests[0], ir.Reg):
+        return False
+    return lir.tied(what) is None
 
 
 def _writes_to(one: Op, now: Register_) -> Op:
