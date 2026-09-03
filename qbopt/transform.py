@@ -867,52 +867,97 @@ def _leaving(body: MirBody) -> set:
     return out
 
 
-def live(body: MirBody) -> set:
-    """Values something actually reads, to a fixed point.
+# A value is a 32-bit register and this machine's code is 16-bit, so the
+# two halves of one are read and written independently. LOW is what a
+# narrow operand names; HIGH is what a narrow write leaves alone.
+LOW, HIGH = 0, 1
 
-    Not the same question as "does this value appear in some operation's
-    uses", and hotlop is why. Its `imul` defines dx, a phi carries dx round
-    the back edge, and the imul reads that phi: a cycle that keeps itself
-    alive and that nothing outside ever looks at. Counting appearances says
-    dx is read, so the product -- 7 * 3, both constants -- could not be
-    folded and was recomputed on all twenty passes of the loop.
 
-    So: a value is live when a live operation reads it. An operation is
-    live when the body can be observed through it, or when it defines a
-    value that is live. Circular by construction, which is why it is a
-    fixed point and not a walk.
+def halves(body: MirBody) -> set:
+    """Which half of which value something reads, to a fixed point.
+
+    Whole-value liveness cannot answer the question this machine asks. Every
+    narrow write is a read-modify-write here -- `mov bx,2EEh` writes bx and
+    preserves the top half of ebx, so it reads the ebx before it -- and
+    counting that as reading the value keeps the previous write alive for
+    ever. press's `mov bx,cx`, overwritten two bytes later, was live on the
+    strength of a half nothing wanted.
+
+    So the unit is (value, half). A narrow write takes HIGH from the value
+    it overwrites and nothing else, which is what makes a chain of them
+    collapse: each link is read only for a half, and where no one ever reads
+    that half the whole chain is dead.
+
+    Both halves of everything reaching an exit are live, because what the
+    caller reads is not a fact this body holds.
     """
-    writer: dict = {}
-    for block in body.blocks:
-        for phi in block.phis:
-            writer[phi.result] = ("phi", block.at, phi)
-        for op in block.ops:
-            for value in op.defines:
-                writer[value] = ("op", block.at, op)
+    out: set = set()
+    for value in _leaving(body):
+        out.add((value, LOW))
+        out.add((value, HIGH))
 
-    out: set = set(_leaving(body))
+    def widths(op: Op) -> dict:
+        """The widest each register is read at by this operation."""
+        what = _semantics_of(op)
+        if what is None:
+            return {}
+        found: dict = {}
+        for one in what.sources:
+            if isinstance(one, ir.Reg):
+                root = ir.ROOT.get(one.register, one.register)
+                found[root] = max(found.get(root, 0), one.width)
+        return found
+
     changing = True
     while changing:
         before = len(out)
         for block in body.blocks:
             for op in block.ops:
-                if op.op not in _OBSERVED and not op.stores and not any(one in out for one in op.defines):
+                if (
+                    op.op not in _OBSERVED
+                    and not op.stores
+                    and not any((one, half) in out for one in op.defines for half in (LOW, HIGH))
+                ):
                     continue
                 carried = _carried(op, body.origin)
+                read = widths(op)
+                described = _semantics_of(op) is not None and not op.barrier
                 for one in op.uses:
-                    # A use that is only the register's previous value is
-                    # read exactly as much as the half it is merged into:
-                    # no more. See _carried.
-                    if one in carried and carried[one] not in out:
+                    if one in carried:
+                        # Read for the half it is merged into, and only if
+                        # something reads that half of the result.
+                        if (carried[one], HIGH) in out:
+                            out.add((one, HIGH))
                         continue
-                    out.add(one)
-                out |= {ref.base for ref in op.loads + op.stores if ref.base is not None}
-                out |= {ref.segment for ref in op.loads + op.stores if ref.segment is not None}
+                    root = ir.ROOT.get(body.origin.get(one, -1), -1)
+                    if not described or root not in read:
+                        # Nothing written down says how much of it is read.
+                        out.add((one, LOW))
+                        out.add((one, HIGH))
+                        continue
+                    out.add((one, LOW))
+                    if read[root] >= 4:
+                        out.add((one, HIGH))
+                for ref in op.loads + op.stores:
+                    for one in (ref.base, ref.segment):
+                        if one is not None:
+                            out.add((one, LOW))
+                            out.add((one, HIGH))
             for phi in block.phis:
-                if phi.result in out:
-                    out |= set(phi.incoming.values())
+                for half in (LOW, HIGH):
+                    if (phi.result, half) in out:
+                        out |= {(one, half) for one in phi.incoming.values()}
         changing = len(out) != before
     return out
+
+
+def live(body: MirBody) -> set:
+    """Values some half of which something reads.
+
+    halves() is the analysis; this is the projection every caller that only
+    asks "is this value read at all" wants.
+    """
+    return {one for one, _ in halves(body)}
 
 
 def _carried(op: Op, origin: dict) -> dict:

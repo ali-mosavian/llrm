@@ -989,3 +989,67 @@ def test_dead_code_leaves_a_body_it_cannot_read_alone() -> None:
     opaque = mir.Op(0x14, ir.Operation.BARRIER, "?", (), (), covers=(0x14, 0x16))
     body = mir.MirBody(0x10, (mir.MirBlock(0x10, (), (first, doomed, opaque), ()),), {})
     assert transform.dead(body) is body, "and stays when the body holds a barrier"
+
+
+def test_a_narrow_write_reads_only_the_half_it_preserves() -> None:
+    """`mov bx,2EEh` writes bx and leaves the top half of ebx alone.
+
+    So it reads the ebx before it -- and whole-value liveness has to call
+    that a read, which keeps the previous write alive whatever anyone
+    actually wants. press's `mov bx,cx`, overwritten two bytes later, was
+    live for a half nothing reads, and every pass asking "is this read" got
+    the wrong answer: five separate things were blocked by it.
+
+    The unit is (value, half). Nothing here reads the top half of ebx, so
+    the first move is dead in both of them.
+    """
+    bx = ir.Reg(register=Register.BX, width=2)
+    cx = ir.Reg(register=Register.CX, width=2)
+    first = mir.Op(
+        0x10, ir.Operation.MOVE, "mov", (mir.Value(1, 0x10),), (),
+        made=ir.Semantics(ir.Operation.MOVE, "mov", dests=(bx,), sources=(cx,)), covers=(0x10, 0x12),
+    )
+    # The second writes bx and carries the first's top half, which is what
+    # puts the first in its use list at all.
+    second = mir.Op(
+        0x12, ir.Operation.MOVE, "mov", (mir.Value(2, 0x12),), (mir.Value(1, 0x10),),
+        made=ir.Semantics(ir.Operation.MOVE, "mov", dests=(bx,), sources=(ir.Imm(value=0x2EE, width=2),)),
+        covers=(0x12, 0x15),
+    )
+    body = mir.MirBody(
+        0x10, (mir.MirBlock(0x10, (), (first, second), ()),),
+        {mir.Value(1, 0x10): Register.EBX, mir.Value(2, 0x12): Register.EBX},
+    )
+    read = transform.halves(body)
+    # Both halves of the second are live: it is the last thing in ebx where
+    # control leaves, and what the caller reads is not a fact this holds.
+    assert (mir.Value(2, 0x12), transform.HIGH) in read
+    # The first is read for the half the second preserves, and for nothing
+    # else -- its own low half is overwritten two bytes later. Whole-value
+    # liveness cannot say that, and says "read" for both.
+    assert (mir.Value(1, 0x10), transform.HIGH) in read
+    assert (mir.Value(1, 0x10), transform.LOW) not in read, (
+        "the low half is overwritten before anything could read it"
+    )
+
+
+def test_the_invariant_sum_leaves_press_with_one_instruction_in_its_loop() -> None:
+    """press adds four invariant products into a running total, ten times.
+
+    All of it is constant, so the loop should hold the accumulate and the
+    counter and nothing else. What kept a second instruction there was a
+    move whose result is overwritten two bytes later, alive on the strength
+    of a register half nothing reads.
+    """
+    seen = _rebuilt("press-p-g2")
+    back = [
+        (int(text.split()[-1].rstrip("h"), 16), ip)
+        for ip, text in seen
+        if text.startswith(("jle", "jl ")) and int(text.split()[-1].rstrip("h"), 16) < ip
+    ]
+    assert back, "nothing loops here, so this proves nothing"
+    lo, hi = min(back, key=lambda one: one[1] - one[0])
+    inside = [text for ip, text in seen if lo <= ip <= hi]
+    assert not [text for text in inside if text.replace(" ", "").startswith("movbx")], (
+        f"a dead move is still in the loop: {inside}"
+    )
