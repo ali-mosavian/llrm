@@ -30,12 +30,14 @@ not encode.
 """
 
 from dataclasses import field
+from dataclasses import replace
 from dataclasses import dataclass
 
 from iced_x86 import OpKind
 from iced_x86 import Register
 
 from qbopt import ir
+from qbopt import regalloc
 from qbopt import mir
 from qbopt import select
 from qbopt.mir import MirBody
@@ -439,6 +441,39 @@ class Table:
         return self.lo
 
 
+def _names_a_value(body) -> bool:
+    """Whether any operand in this body is an ir.Held."""
+    return any(
+        op.made is not None
+        and any(isinstance(one, ir.Held) for one in (*op.made.dests, *op.made.sources))
+        for block in body.blocks
+        for op in block.ops
+    )
+
+
+def _grounded(body: MirBody, held: dict | None) -> MirBody:
+    """The body with every unresolvable ir.Held put back as its node has it."""
+    covered = set(held or {})
+
+    def dangling(op) -> bool:
+        if op.made is None or op.node is None:
+            return False
+        return any(
+            isinstance(one, ir.Held) and one.value not in covered
+            for one in (*op.made.dests, *op.made.sources)
+        )
+
+    if not any(dangling(op) for block in body.blocks for op in block.ops):
+        return body
+    return replace(
+        body,
+        blocks=tuple(
+            replace(block, ops=tuple(replace(op, made=None) if dangling(op) else op for op in block.ops))
+            for block in body.blocks
+        ),
+    )
+
+
 def rebuild(
     found: Module,
     bodies: list[tuple[str, MirBody]],
@@ -466,6 +501,23 @@ def rebuild(
     the only thing in the corpus's code segments that is not in a body --
     is the caller's to keep.
     """
+    # An ir.Held names a value and resolves through the assignment. A caller
+    # that supplied none is not saying "no registers", it is saying "you
+    # decide" -- so colour here, or this path and wholeseg's compile the
+    # same body two different ways. One the allocation still cannot cover
+    # goes back to what its node says: a refusal for the whole module is
+    # the wrong answer to one operand.
+    if assignment is None and any(_names_a_value(body) for _name, body in bodies):
+        got: dict = {}
+        for _name, body in bodies:
+            one = regalloc.colour(body, body.pins)
+            if not isinstance(one, str):
+                got.update(one)
+        assignment = got or None
+
+    held = _held(assignment)
+    bodies = [(name, _grounded(body, held)) for name, body in bodies]
+
     ops = sorted(
         (op for _, body in bodies for op in _ordered(body)),
         key=lambda one: one.at,

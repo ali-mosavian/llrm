@@ -12,6 +12,7 @@ from iced_x86 import Register
 
 from qbopt import ir
 from qbopt import lir
+import corpus
 from qbopt import mir
 from qbopt import wide
 from qbopt import omf
@@ -1129,3 +1130,37 @@ def test_an_accumulator_chain_leaves_the_loop_whole() -> None:
     assert not [text for text in inside if text.startswith("imul")], (
         f"an invariant product is still in the loop: {inside}"
     )
+
+
+def test_a_served_read_names_the_value_and_not_a_register() -> None:
+    """`add ax,[y]` served from a register used to say which register.
+
+    It asked `_at_width(root, width)` and wrote the answer down -- the
+    allocator's answer, given by a pass, which is rule 5's whole subject and
+    forward.py's 22 machine references in one line. It says ir.Held now, and
+    select.emit resolves it through the allocation.
+    """
+    from qbopt.blocks import code_map
+    from qbopt import blocks as split
+
+    seen = 0
+    for obj in sorted(Path("fixtures/omf").glob("*-p-g2.obj")):
+        found = corpus.loaded(obj)
+        mapped = code_map(found)
+        if isinstance(mapped, str):
+            continue
+        for _name, body in mir.bodies(found, split.partition(found, mapped)):
+            after = transform.forwarded(body, found.dgroup, found.calls)
+            if after is body:
+                continue
+            for block in after.blocks:
+                for op in block.ops:
+                    if op.made is None or op.loads:
+                        continue
+                    was = getattr(op.node, "semantics", None)
+                    if was is None or not any(isinstance(one, ir.Mem) for one in was.sources):
+                        continue
+                    held = [one for one in op.made.sources if isinstance(one, ir.Held)]
+                    assert held, f"{obj.stem} {op.at:#06x}: served read names a register"
+                    seen += 1
+    assert seen, "nothing was served, so this proves nothing"

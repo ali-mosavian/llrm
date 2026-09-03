@@ -252,7 +252,11 @@ def forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> M
     want = frozenset(op.at for block in body.blocks for op in block.ops if op.loads)
     if not want:
         return body
-    served = {one.at: one.root for one in avail.forwardable(body, dgroup, calls, want)}
+    served = {
+        one.at: one.value
+        for one in avail.forwardable(body, dgroup, calls, want)
+        if one.value is not None
+    }
     if not served:
         return body
 
@@ -260,26 +264,35 @@ def forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> M
     for block in body.blocks:
         ops: list[Op] = []
         for op in block.ops:
-            register = served.get(op.at)
+            holder = served.get(op.at)
             what = op.made if op.made is not None else getattr(op.node, "semantics", None)
-            made = _served(what, register) if register is not None else None
-            ops.append(op if made is None else replace(op, made=made, loads=()))
+            made = _served(what, holder) if holder is not None else None
+            ops.append(
+                op
+                if made is None
+                else replace(op, made=made, loads=(), uses=op.uses + (holder,))
+            )
         out.append(replace(block, ops=tuple(ops)))
     return replace(body, blocks=tuple(out))
 
 
-def _served(what, register) -> "ir.Semantics | None":
-    """`what` with its one memory source read from `register` instead."""
+def _served(what, holder) -> "ir.Semantics | None":
+    """`what` with its one memory source read from `holder`'s register.
+
+    ir.Held rather than ir.Reg: which register holds the value is the
+    allocator's answer and naming one here is what rule 5 forbids. This
+    asked `_at_width(root, width)` and wrote the register down, which is
+    forward.py's 22 machine references in one line.
+    """
     if what is None:
         return None
     cells = [one for one in what.sources if isinstance(one, ir.Mem)]
     if len(cells) != 1:
         return None
     cell = cells[0]
-    named = _at_width(register, cell.width)
-    if named is None:
-        return None
-    swapped = tuple(ir.Reg(register=named, width=cell.width) if one is cell else one for one in what.sources)
+    swapped = tuple(
+        ir.Held(value=holder.id, width=cell.width) if one is cell else one for one in what.sources
+    )
     return replace(what, sources=swapped)
 
 

@@ -257,6 +257,10 @@ def _wider(where: ir.Loc) -> ir.Loc | None:
     established that the high half reads the very next two bytes.
     """
     match where:
+        case ir.Held(value=value):
+            # Names a value, so widening it is only the width: which
+            # register it lands in is the allocator's answer either way.
+            return ir.Held(value=value, width=4)
         case ir.Reg(register=register):
             root = ir.ROOT.get(register)
             return None if root is None else ir.Reg(register=root, width=4)

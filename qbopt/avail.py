@@ -320,6 +320,10 @@ class Forward:
 
     at: int
     root: Register_  # the 32-bit root holding them; the operand picks the width
+    # The value itself. Which register holds it is the allocator's answer,
+    # and a pass acting on this says ir.Held rather than naming one --
+    # rule 5. `root` stays for the machine arm, which has no values.
+    value: "mir.Value | None" = None
 
 
 def _dead_in(block, overwritten: dict, dgroup: frozenset[int], calls: dict[int, str]):
@@ -537,6 +541,6 @@ def forwardable(
             if op.at in want and op.loads:
                 who = next((w for cell, w in current.items() if mir.same_bytes(cell, op.loads[0])), None)
                 if who is not None and who in at_point.get(op.at, frozenset()):
-                    found.append(Forward(op.at, body.origin[who]))
+                    found.append(Forward(op.at, body.origin[who], who))
             current = _after(op, current, dgroup, calls)
     return tuple(found)

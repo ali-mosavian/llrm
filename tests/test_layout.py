@@ -552,3 +552,43 @@ def test_bytes_claimed_twice_are_reported_rather_than_raising() -> None:
     got = layout.rebuild(found, [(name, doubled)], mapped.tables)
     assert isinstance(got, str), "two ops claiming one byte is a refusal"
     assert "claimed by more than one op" in got, got
+
+
+def test_rebuild_colours_when_it_was_not_handed_an_assignment(obj: Path) -> None:
+    """No assignment is not the same as no registers.
+
+    An ir.Held resolves through the allocation, so a caller that supplies
+    none is saying "you decide" -- and if this treated it as "nobody holds
+    anything" the same body compiled two different ways depending on who
+    asked. 33 of test_wholeseg's cases compared a body with its Held
+    resolved against one with it reverted.
+    """
+    from qbopt import mir
+    from qbopt import regalloc
+    from qbopt import transform
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    found = corpus.loaded(obj)
+    mapped = code_map(found)
+    if isinstance(mapped, str):
+        return
+    blocks = split.partition(found, mapped)
+    bodies = [
+        (name, transform.applied(body, found.dgroup, found.calls))
+        for name, body in mir.bodies(found, blocks)
+    ]
+    if not any(layout._names_a_value(body) for _name, body in bodies):
+        return
+
+    mine: dict = {}
+    for _name, body in bodies:
+        got = regalloc.colour(body, body.pins)
+        if not isinstance(got, str):
+            mine.update(got)
+
+    theirs = layout.rebuild(found, bodies, mapped.tables)
+    ours = layout.rebuild(found, bodies, mapped.tables, assignment=mine or None)
+    assert isinstance(theirs, str) == isinstance(ours, str), f"{obj.stem}: one refused and one did not"
+    if not isinstance(theirs, str):
+        assert theirs.code == ours.code, f"{obj.stem}: two answers for one body"
