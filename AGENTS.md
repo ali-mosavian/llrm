@@ -18,6 +18,32 @@ common sense says should be large.
   measure is told about it.
 - Never explain an implausible result with a story. That is how it survives.
 
+## Regression tests — the third rule
+
+**Every issue found and fixed gets a regression test, in the same commit as
+the fix.** Not "should"; the fix is not finished without it.
+
+The reason is measured rather than assumed: every miscompile this project
+has found passed 55,000 host tests and was caught by `tools/matrix.py`
+running actual programs. A bug that reached the gate got there because
+nothing smaller was looking, and nothing smaller will be looking next time
+either unless the fix leaves something behind.
+
+- **Write the test so that it fails first.** Revert the fix, watch it fail,
+  restore the fix. A test written after the fix and never seen to fail is
+  evidence of nothing -- two in this project's history were written so they
+  could not fail, and both hid the defect they were named for.
+- **Test the symptom, not the patch.** hotlop printing 585 for 630 is the
+  fact; which branch of which helper returned early is this week's shape of
+  it. Assert on the emitted code or the program's answer where you can.
+- **Instruments count.** A broken measurement is an issue like any other and
+  gets a test like any other -- see the second rule. The scoreboard costed
+  BC's code instead of ours for a while and every ratio sat still; nothing
+  would have said so. `tests/test_scoreboard.py` exists for that reason.
+- **Say what it cost.** The docstring names the program that printed the
+  wrong number and what it printed. That is what makes the test readable in
+  a year, and it is cheaper to write while it is still understood.
+
 A post-compilation pass over the `.OBJ` BC produces, between BC and LINK.
 Most of what is here was established the hard way by a runtime version of the
 same idea that still lives in uGL. What survived the move is below.
