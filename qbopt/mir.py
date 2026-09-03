@@ -227,6 +227,12 @@ class Op:
     # that is how it catches data BC put between the instructions. So a
     # replacement says what it replaced.
     covers: tuple[int, int] | None = None
+    # The address of the fixup this operation's own operand carries, found
+    # once at the raise while the spans are still BC's. Everything after
+    # that may move the operation anywhere: a relocation belongs to an
+    # operand, not to a place in BC's layout, and searching the bytes for it
+    # is what tied every transform to keeping them.
+    ref: int | None = None
 
     @property
     def barrier(self) -> bool:
@@ -970,5 +976,40 @@ def bodies(found: Module, blocks: list[Block]) -> list[tuple[str, MirBody]]:
             continue
         built = raise_body(mine, nodes, body.body.seed, found.calls)
         if not isinstance(built, str):
-            out.append((f"{body.body.kind} {body.body.name or '(main)'}", built))
+            out.append((f"{body.body.kind} {body.body.name or '(main)'}", _referenced(built, found)))
     return out
+
+
+def _referenced(body: MirBody, found: Module) -> MirBody:
+    """Each operation told which fixup its own operand carries.
+
+    Asked once, here, while every operation still stands exactly where BC
+    wrote it -- which is the only moment the question can be answered from
+    the bytes. After this a pass may move an operation anywhere and the
+    relocation goes with it, because it belongs to the operand and not to a
+    place in the layout.
+
+    A far call is the one whose four relocated bytes are a target rather
+    than a displacement, and `at + 1` is not a guess: `9a` then four bytes
+    is the only encoding it has.
+    """
+    known = frozenset(found.fixup_at)
+    if not known:
+        return body
+
+    def owned(op: Op) -> int | None:
+        if op.node is None or isinstance(op.node, ir.Restore):
+            return None
+        if found.code[op.at : op.at + 1] in (b"\x9a", b"\xea") and op.at + 1 in known:
+            return op.at + 1
+        lo, hi = ir.span(op.node)
+        inside = [one for one in known if lo <= one < hi]
+        return inside[0] if len(inside) == 1 else None
+
+    return replace(
+        body,
+        blocks=tuple(
+            replace(block, ops=tuple(replace(op, ref=owned(op)) for op in block.ops))
+            for block in body.blocks
+        ),
+    )

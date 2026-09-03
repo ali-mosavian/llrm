@@ -592,3 +592,40 @@ def test_rebuild_colours_when_it_was_not_handed_an_assignment(obj: Path) -> None
     assert isinstance(theirs, str) == isinstance(ours, str), f"{obj.stem}: one refused and one did not"
     if not isinstance(theirs, str):
         assert theirs.code == ours.code, f"{obj.stem}: two answers for one body"
+
+
+def test_a_relocation_belongs_to_the_operand_and_not_to_a_place(obj: Path) -> None:
+    """Which fixup an operation carries is settled at the raise.
+
+    It used to be found by searching BC's own byte span for one, every time
+    layout asked -- so an operation could only be relocated correctly while
+    it still stood where BC wrote it, and `covers` had to keep saying which
+    bytes it stood for. A relocation belongs to an operand.
+
+    Checked as: the answer from the operation matches the answer the search
+    gave, on every operation in the corpus that has one.
+    """
+    from qbopt import ir
+    from qbopt import mir
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    found = corpus.loaded(obj)
+    mapped = code_map(found)
+    if isinstance(mapped, str):
+        return
+    fields = frozenset(found.fixup_at)
+    seen = 0
+    for _name, body in mir.bodies(found, split.partition(found, mapped)):
+        for op in layout._ordered(body):
+            if op.node is None or isinstance(op.node, ir.Restore):
+                continue
+            if found.code[op.at : op.at + 1] in (b"\x9a", b"\xea") and op.at + 1 in fields:
+                want = op.at + 1
+            else:
+                lo, hi = ir.span(op.node)
+                inside = [one for one in fields if lo <= one < hi]
+                want = inside[0] if len(inside) == 1 else None
+            assert op.ref == want, f"{obj.stem} {op.at:#06x}: says {op.ref}, the bytes say {want}"
+            seen += op.ref is not None
+    assert seen or not fields, f"{obj.stem}: nothing carries a fixup, so this proves nothing"

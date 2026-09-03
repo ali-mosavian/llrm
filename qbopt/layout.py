@@ -191,6 +191,9 @@ def _length_of(op: mir.Op) -> int | None:
         return hi - lo
     if op.node is None:
         return None
+    # What the operation says it carries, established at the raise. The
+    # search below is the fallback for a caller that built ops itself --
+    # tests do -- and for anything raised before mir._referenced ran.
     lo, hi = ir.span(op.node)
     return hi - lo
 
@@ -324,6 +327,32 @@ def _retargeted(what: ir.Semantics, moved: dict[int, int]) -> ir.Semantics | Non
     return ir.Semantics(what.op, what.name, what.dests, what.sources, landed)
 
 
+def _still_has_an_operand_for_it(op: mir.Op) -> bool:
+    """Whether the operand the fixup named is still in this operation.
+
+    A transform that serves a read from a register removes the only operand
+    a displacement could sit in and leaves an immediate: `cmp word [k],1`
+    becomes `cmp ax,1`, and relocating that immediate writes an address over
+    it and over the branch behind it. suite/jumps.bas took the CASE ELSE arm
+    for k = 1 that way.
+
+    The question is whether a memory operand *went*, not whether a transform
+    touched the operation: hoisting rewrites `mov ax,offset x` to name
+    another register and its relocated immediate is still its own.
+    """
+    what = op.made
+    if what is None:
+        return True
+    holds = [one for one in (*what.dests, *what.sources) if isinstance(one, (ir.Mem, ir.Address, ir.Imm))]
+    if not holds:
+        return False
+    was = getattr(op.node, "semantics", None)
+    had = was is not None and any(
+        isinstance(one, (ir.Mem, ir.Address)) for one in (*was.dests, *was.sources)
+    )
+    return not (had and not any(isinstance(one, (ir.Mem, ir.Address)) for one in holds))
+
+
 def _field_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -> int | None:
     """The address of the one relocated field inside `op`'s own bytes.
 
@@ -353,6 +382,11 @@ def _field_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -
     # bytes, which is what `Laid.dropped` reports and relocate.py skips.
     if isinstance(op.node, ir.Restore):
         return None
+    # What the operation says it carries, established at the raise while the
+    # spans were still BC's. Subject to the caller's own set: `fields` is how
+    # a caller says which fixups it is accounting for.
+    if op.ref is not None and (not fields or op.ref in fields):
+        return op.ref if _still_has_an_operand_for_it(op) else None
     known = fields or frozenset(found.fixup_at)
     lo, hi = ir.span(op.node)
     # A far call and a far jmp put their four relocated bytes right after a
