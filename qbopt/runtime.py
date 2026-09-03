@@ -628,6 +628,7 @@ _FRAMES = (
     ),
     Contract(
         name="B$OGTA",
+        inputs=frozenset({Reg.BX}),
         cleanup=None,
         control=Control.UNKNOWN,
         enters_user_code=False,
@@ -641,7 +642,10 @@ _FRAMES = (
             "Named by inc/ulib.inc and inc/rtmint.inc; the code is not in the tree. What is established is "
             "measured, not read: blocks.py found that ON GOTO compiles to a call to it followed by inline data "
             "-- a count byte and that many offset16 words, each a fixup into this segment -- which it reads via "
-            "its own return address. blocks.INLINE_TABLE is where that lives and where the control kind below "
+            "its own return address, and the branch index arrives in bx -- all 16 sites in the corpus are "
+            "`mov bx` immediately before the call, with nothing else unanimous. Measured rather than "
+            "read, for the same reason the rest of this entry is. blocks.INLINE_TABLE is where that "
+            "lives and where the control kind below "
             "comes from, so the two cannot drift."
         ),
     ),

@@ -251,3 +251,17 @@ def test_a_contract_says_which_registers_it_reads() -> None:
     assert runtime.contract("B$FIST").inputs == frozenset()
     # And a name with no entry is worst-case, where inputs do not arise.
     assert not runtime.contract("B$NOSUCH").established
+
+
+def test_on_goto_takes_its_branch_index_in_bx() -> None:
+    """B$OGTA's code is not in the source tree, so this is measured.
+
+    All 16 call sites in the corpus are `mov bx` immediately before the
+    call, and nothing else is unanimous. The same kind of evidence the rest
+    of its entry rests on -- what the inline table looks like was measured
+    too.
+
+    It matters because a use list is what says an operation is needed: with
+    inputs empty, the `mov bx` setting up the branch index read as dead.
+    """
+    assert runtime.contract("B$OGTA").inputs == frozenset({runtime.Reg.BX})
