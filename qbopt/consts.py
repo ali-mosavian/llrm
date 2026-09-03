@@ -207,16 +207,31 @@ def _operand(
             return None  # an address, or a cell nothing has said anything about
 
 
-def _defined(op: mir.Op) -> mir.Value | None:
-    """The one value this op computes, flags aside.
+def _defined(op: mir.Op, semantics=None, origin: dict | None = None) -> mir.Value | None:
+    """The value this op's first destination gets, flags aside.
 
     Nearly every arithmetic instruction on this machine defines its result
     and the flags together, so asking for a single definition rejects all of
     them -- which it did, and the propagation found nothing but its own
     seeds until the flags were excluded here.
+
+    Two results are the other case, and refusing them cost more: a widening
+    `imul` defines dx:ax, and hotlop's `n * k` is exactly that. Both halves
+    are constant and the high one is dead, and nothing here could say so, so
+    the product was recomputed on all twenty passes of the loop. The result
+    the fold is about is the one the *first* destination names; which value
+    that is comes from `origin`, the same way a source operand is resolved.
     """
     real = [one for one in op.defines if not one.flags]
-    return real[0] if len(real) == 1 else None
+    if len(real) == 1:
+        return real[0]
+    if not real or semantics is None or origin is None or not semantics.dests:
+        return None
+    first = semantics.dests[0]
+    if not isinstance(first, ir.Reg):
+        return None
+    root = ir.ROOT.get(first.register, first.register)
+    return next((one for one in real if origin.get(one) is root), None)
 
 
 def _result(
@@ -230,7 +245,7 @@ def _result(
     # node's own otherwise. An op rewritten by an earlier pass is raised
     # again before this looks, so its `made` is the only account of it.
     semantics = op.made if op.made is not None else (op.node.semantics if op.node is not None else None)
-    if semantics is None or not ir.modelled(semantics) or _defined(op) is None:
+    if semantics is None or not ir.modelled(semantics) or _defined(op, semantics, origin) is None:
         return None
 
     parts: list[Known] = []
@@ -296,7 +311,8 @@ def known(
                 facts[phi.result] = known[0]
                 changing = True
             for index, op in enumerate(block.ops):
-                target = _defined(op)
+                semantics = op.made if op.made is not None else (op.node.semantics if op.node is not None else None)
+                target = _defined(op, semantics, body.origin)
                 if target is None or target in facts:
                     continue
                 found = _result(op, facts, body.origin, held.get((block.at, index)))

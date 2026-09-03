@@ -769,3 +769,45 @@ def test_folding_leaves_a_copy_alone() -> None:
             sizes.append(len(module.of(omf.parse(data)).code))
             data, _ = rewrite.rewrite(data, dry_run=False)
         assert sizes[-1] <= sizes[1], f"{name} grows without converging: {sizes}"
+
+
+def _rebuilt(name: str) -> list[tuple[int, str]]:
+    from iced_x86 import Decoder, Formatter, FormatterSyntax
+
+    data = Path(f"fixtures/omf/{name}.obj").read_bytes()
+    out, _ = rewrite.rewrite(data, dry_run=False)
+    shown = Formatter(FormatterSyntax.NASM)
+    code = module.of(omf.parse(out)).code
+    return [(one.ip, shown.format(one)) for one in Decoder(16, code, ip=0)]
+
+
+def test_a_hoisted_run_does_not_land_on_a_live_register() -> None:
+    """The preheader is not empty, and what is already there is read.
+
+    Only the values a run computes that the loop still reads get a register
+    of their own. An operation whose result is consumed inside the run is
+    placed as it stands, still writing whatever BC gave it -- and hotlop's
+    run became two operations the moment folding turned `imul` into a
+    constant, the first of them `mov ax,3` landing on the `mov ax,1` that
+    starts the counter. The loop summed from 3 and printed 585 for 630,
+    which every one of the 55,000 host tests agreed with.
+    """
+    seen = _rebuilt("hotlop-p-g2")
+    start = next(i for i, (_, text) in enumerate(seen) if text.replace(" ", "") == "movax,1")
+    stop = next(i for i in range(start, len(seen)) if seen[i][1].startswith("jmp"))
+    over = [text for _, text in seen[start + 1 : stop] if text.startswith("mov ax,")]
+    assert not over, f"the counter's start value is overwritten before the loop: {over}"
+
+
+def test_a_constant_product_leaves_the_loop() -> None:
+    """`n * k` from two constants is not computed twenty times.
+
+    A widening `imul` defines dx:ax. consts._defined refused anything with
+    two results, so the product was never a fact and could not be folded,
+    and the liveness had to see that the dx it reads is only the previous
+    contents of the register it writes -- read exactly as much as the half
+    it feeds, which is not at all.
+    """
+    seen = _rebuilt("hotlop-p-g2")
+    assert not [text for _, text in seen if text.startswith("imul")], "the multiply is still there"
+    assert [text for _, text in seen if text.replace(" ", "") == "movax,15h"], "and 7 * 3 was not folded"

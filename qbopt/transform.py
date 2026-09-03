@@ -748,6 +748,175 @@ def _writes_to(one: Op, now: Register_) -> Op:
     return replace(one, made=replace(what, dests=(ir.Reg(register=_named(now, width), width=width),)))
 
 
+# Operations the body can be observed through, whatever they define. A
+# store leaves a mark, a call and the control transfers take the program
+# somewhere, and everything touching the stack moves sp. The x87 forms are
+# here because their effect is on a stack this layer does not model.
+_OBSERVED = frozenset(
+    {
+        ir.Operation.CALL,
+        ir.Operation.RETURN,
+        ir.Operation.JUMP,
+        ir.Operation.BRANCH,
+        ir.Operation.ESCAPE,
+        ir.Operation.PUSH,
+        ir.Operation.POP,
+        ir.Operation.LEAVE,
+        ir.Operation.FILL,
+        ir.Operation.DATA,
+        ir.Operation.BARRIER,
+        ir.Operation.RESTORE,
+        ir.Operation.FLOAT_LOAD,
+        ir.Operation.FLOAT_STORE,
+        ir.Operation.FLOAT_ARITH,
+        ir.Operation.FLOAT_ARITH_POP,
+        ir.Operation.FLOAT_UNARY,
+    }
+)
+
+
+def _leaving(body: MirBody) -> set:
+    """The value each register holds where control leaves the body.
+
+    What the caller reads is not a fact this body holds, so everything that
+    reaches an exit counts as read. Reaching definitions forward, meeting by
+    union: two definitions of one register arriving at a join are both still
+    readable there, and claiming otherwise would kill a live one.
+
+    This is the one place the liveness looks at `origin`. It has to: "what
+    the caller sees" is a statement about registers, and there is nothing
+    else in a MirBody that says which value ends up where.
+    """
+    preds = {block.at: [one.at for one in body.blocks if block.at in one.succ] for block in body.blocks}
+    arriving: dict = {}
+    for value in regalloc.entry_values(body):
+        register = body.origin.get(value)
+        if register is not None:
+            arriving.setdefault(ir.ROOT.get(register, register), set()).add(value)
+
+    outof: dict[int, dict] = {block.at: {} for block in body.blocks}
+    changing = True
+    while changing:
+        changing = False
+        for block in body.blocks:
+            here: dict = {}
+            coming = [outof[one] for one in preds[block.at]]
+            if block.at == body.entry:
+                coming.append(arriving)
+            for one in coming:
+                for register, values in one.items():
+                    here.setdefault(register, set()).update(values)
+            for phi in block.phis:
+                register = body.origin.get(phi.result)
+                if register is not None:
+                    here[ir.ROOT.get(register, register)] = {phi.result}
+            for op in block.ops:
+                for value in op.defines:
+                    if value.flags:
+                        continue
+                    register = body.origin.get(value)
+                    if register is not None:
+                        here[ir.ROOT.get(register, register)] = {value}
+            if here != outof[block.at]:
+                outof[block.at] = here
+                changing = True
+
+    out: set = set()
+    for block in body.blocks:
+        if block.succ:
+            continue
+        for values in outof[block.at].values():
+            out |= values
+    return out
+
+
+def live(body: MirBody) -> set:
+    """Values something actually reads, to a fixed point.
+
+    Not the same question as "does this value appear in some operation's
+    uses", and hotlop is why. Its `imul` defines dx, a phi carries dx round
+    the back edge, and the imul reads that phi: a cycle that keeps itself
+    alive and that nothing outside ever looks at. Counting appearances says
+    dx is read, so the product -- 7 * 3, both constants -- could not be
+    folded and was recomputed on all twenty passes of the loop.
+
+    So: a value is live when a live operation reads it. An operation is
+    live when the body can be observed through it, or when it defines a
+    value that is live. Circular by construction, which is why it is a
+    fixed point and not a walk.
+    """
+    writer: dict = {}
+    for block in body.blocks:
+        for phi in block.phis:
+            writer[phi.result] = ("phi", block.at, phi)
+        for op in block.ops:
+            for value in op.defines:
+                writer[value] = ("op", block.at, op)
+
+    out: set = set(_leaving(body))
+    changing = True
+    while changing:
+        before = len(out)
+        for block in body.blocks:
+            for op in block.ops:
+                if op.op not in _OBSERVED and not op.stores and not any(one in out for one in op.defines):
+                    continue
+                carried = _carried(op, body.origin)
+                for one in op.uses:
+                    # A use that is only the register's previous value is
+                    # read exactly as much as the half it is merged into:
+                    # no more. See _carried.
+                    if one in carried and carried[one] not in out:
+                        continue
+                    out.add(one)
+                out |= {ref.base for ref in op.loads + op.stores if ref.base is not None}
+                out |= {ref.segment for ref in op.loads + op.stores if ref.segment is not None}
+            for phi in block.phis:
+                if phi.result in out:
+                    out |= set(phi.incoming.values())
+        changing = len(out) != before
+    return out
+
+
+def _carried(op: Op, origin: dict) -> dict:
+    """Uses that are only the previous contents of a register being written.
+
+    A 16-bit write under a 32-bit register model is a read-modify-write, so
+    raising `imul word [n]` -- which reads ax and memory and writes dx:ax --
+    gives the operation a use of dx as well, standing for the half of edx it
+    leaves alone. That read is real, and worth exactly what the write it
+    feeds is worth: hotlop's dx result is dead, so the dx it merges into is
+    dead too. Treating every use of a live operation as live keeps a whole
+    loop-invariant multiply alive on the strength of it.
+
+    A use is carried when it shares a register with something the operation
+    defines and the operation's own semantics never name that register as a
+    source.
+    """
+    semantics = _semantics_of(op)
+    if semantics is None:
+        return {}
+
+    def root(one):
+        register = origin.get(one)
+        return None if register is None else ir.ROOT.get(register, register)
+
+    named = {
+        ir.ROOT.get(one.register, one.register) for one in semantics.sources if isinstance(one, ir.Reg)
+    }
+    out: dict = {}
+    for value in op.defines:
+        if value.flags:
+            continue
+        where = root(value)
+        if where is None or where in named:
+            continue
+        for one in op.uses:
+            if root(one) == where:
+                out[one] = value
+    return out
+
+
 def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
     """An operation whose result is a number, replaced by that number.
 
@@ -769,22 +938,22 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
     if not facts:
         return body
 
-    wanted = {value for block in body.blocks for op in block.ops for value in op.uses}
-    wanted |= {value for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
+    # Live, not merely mentioned: see live()'s own note on hotlop's dx.
+    wanted = live(body)
 
     out = []
     changed = False
     for block in body.blocks:
         ops = []
         for op in block.ops:
-            made = _folded_op(op, facts, wanted)
+            made = _folded_op(op, facts, wanted, body.origin)
             changed = changed or made is not op
             ops.append(made)
         out.append(replace(block, ops=tuple(ops)))
     return replace(body, blocks=tuple(out)) if changed else body
 
 
-def _folded_op(op: Op, facts: dict, wanted: set) -> Op:
+def _folded_op(op: Op, facts: dict, wanted: set, origin: dict) -> Op:
     """The operation as a move of its own answer, where that is possible."""
     what = _semantics_of(op)
     if what is None or op.stores:
@@ -801,17 +970,20 @@ def _folded_op(op: Op, facts: dict, wanted: set) -> Op:
         return op
     if what.op in (ir.Operation.JUMP, ir.Operation.BRANCH, ir.Operation.CALL, ir.Operation.RETURN):
         return op
-    if len(what.dests) != 1 or not isinstance(what.dests[0], ir.Reg):
+    if not what.dests or not isinstance(what.dests[0], ir.Reg):
         return op
 
-    real = [one for one in op.defines if not one.flags]
-    if len(real) != 1 or real[0] not in facts:
+    # Which value the first destination names. A widening `imul` has two --
+    # dx:ax -- and its answer is the low half; hotlop's `n * k` is that
+    # operation, both halves constant and the high one dead.
+    target = consts._defined(op, what, origin)
+    if target is None or target not in facts:
         return op
-    # The flags are a second result and `mov` sets none of them.
-    if any(one.flags and one in wanted for one in op.defines):
+    # A second result that something reads is not expressible as one move.
+    if any(one != target and one in wanted for one in op.defines):
         return op
 
-    fact = facts[real[0]]
+    fact = facts[target]
     into = what.dests[0]
     if what.op is ir.Operation.MOVE and any(isinstance(one, ir.Imm) for one in what.sources):
         return op  # already says so
@@ -820,7 +992,7 @@ def _folded_op(op: Op, facts: dict, wanted: set) -> Op:
         op,
         op=ir.Operation.MOVE,
         name="mov",
-        defines=(real[0],),
+        defines=(target,),
         uses=(),
         loads=(),
         made=ir.Semantics(
@@ -902,6 +1074,44 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
         # go back into the loop, with anything in the run that fed only
         # them.
         spare = [where for where in regalloc.AVAILABLE if where not in across and where not in touched]
+
+        # An operation in the run whose result nothing outside it reads is
+        # still placed verbatim, writing the register BC gave it. Only the
+        # crossing values are re-seated, so a run of two where the first
+        # result is consumed inside it puts that register into the preheader
+        # untouched -- and if something live is already there, over it.
+        #
+        # hotlop is the case. Its run was one operation until folding turned
+        # `imul` into a constant and made it two, and the first was
+        # `mov ax,3` landing on the `mov ax,1` that starts the counter. The
+        # loop summed from 3 and printed 585 for 630.
+        #
+        # Dropping it from the run is right rather than merely safe: nothing
+        # outside the run reads it, so leaving it in the loop costs the loop
+        # nothing it was not already paying.
+        wide_across = {ir.ROOT.get(one, one) for one in across if one is not None}
+        for _ in range(len(run)):
+            clobbering = {
+                value
+                for one in run
+                for value in one.defines
+                if not value.flags
+                and value not in crossing
+                and body.origin.get(value) is not None
+                and ir.ROOT.get(body.origin[value], body.origin[value]) in wide_across
+            }
+            if not clobbering:
+                break
+            run = _pruned(run, clobbering)
+            if not run:
+                break
+            rest = [one for one in ops if one not in run]
+            crossing = _crossing(run, rest, phis, effective)
+            if crossing is None:
+                break
+        if not run or crossing is None:
+            continue
+
         if len(crossing) > len(spare):
             run = _pruned(run, set(sorted(crossing, key=lambda one: one.id)[len(spare) :]))
             if not run:
