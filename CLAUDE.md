@@ -5,7 +5,8 @@ three rules, and this file exists only so that either name finds them.
 
 The three rules, because they are the ones most easily forgotten mid-task:
 
-1. **Say it and stop.** The minimum needed to understand.
+1. **Say it and stop.** The minimum needed to understand, in every word
+   written -- comments, commit messages, docs, tests, replies alike.
 2. **Doubt the measurement before the subject.** A result that contradicts
    what is known about the thing measured means the instrument is wrong.
    Never conclude "there is nothing here" from a number common sense says
