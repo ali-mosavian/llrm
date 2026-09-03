@@ -864,9 +864,7 @@ def decided(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
         if answer:
             jump = replace(
                 last,
-                op=ir.Operation.JUMP,
                 kind=mir.Kind.JUMP,
-                name="jmp",
                 uses=(),
                 args=(),
                 results=(),
@@ -1024,9 +1022,7 @@ def _folded_op(op: Op, facts: dict, wanted: set) -> Op:
     # ends up in is the allocator's, and lower.py is where it becomes one.
     return replace(
         op,
-        op=ir.Operation.MOVE,
         kind=mir.Kind.COPY,
-        name="mov",
         defines=(target,),
         uses=(),
         loads=(),
@@ -1086,8 +1082,6 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
     alive = regalloc.live(body)
     readable = live(body)
     effective = _effective(body, calls)
-    reached_by = regalloc._addressing(body)
-    addressable = {ir.ROOT.get(one, one) for one in regalloc.ADDRESSING}
     moved: dict[int, list[Op]] = {}
     gone: set[int] = set()
     placing: dict[int, int] = {}

@@ -26,6 +26,16 @@ def operand(arg: mir.Arg) -> ir.Loc:
     return arg.what  # the x87 stack, which has no MIR form
 
 
+# What the machine calls each operation a pass can invent. Everything else
+# keeps the operation it was raised with, which lowering reads off the node
+# -- so this is only for the shapes MIR creates: a copy and a jump.
+_MACHINE: dict[mir.Kind, tuple[ir.Operation, str]] = {
+    mir.Kind.COPY: (ir.Operation.MOVE, "mov"),
+    mir.Kind.JUMP: (ir.Operation.JUMP, "jmp"),
+}
+
+
+
 def semantics(op: mir.Op, was: ir.Semantics | None = None) -> ir.Semantics | None:
     """What this operation computes, in machine form, or None for verbatim.
 
@@ -46,9 +56,10 @@ def semantics(op: mir.Op, was: ir.Semantics | None = None) -> ir.Semantics | Non
     # two disagree, and lngmix printed 110 for 142900 with the dividend
     # deleted. Where there is no such operand -- an operation a pass
     # invented -- ir.Held is the only honest answer and select resolves it.
+    was_op, name = _MACHINE.get(op.kind, (op.op, op.name))
     return ir.Semantics(
-        op.op,
-        op.name,
+        was_op,
+        name,
         dests=tuple(_place(one, was.dests if was else (), i) for i, one in enumerate(op.results)),
         sources=tuple(_place(one, was.sources if was else (), i) for i, one in enumerate(op.args)),
         target=_target(op, was),

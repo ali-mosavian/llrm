@@ -550,7 +550,7 @@ def _substituted(
             insn = at_of.get(one.at)
             if insn is None:
                 continue
-            emitted = reencode.with_operand(insn, one.root)
+            emitted = reencode.with_operand(insn, body.origin[one.value])
             if emitted is None:
                 continue
             reason = anchored_inside(found, mapped, insn.at, insn.end)

@@ -312,11 +312,10 @@ class Forward:
     """A redundant memory read whose bytes are in a live register."""
 
     at: int
-    root: object  # the 32-bit root holding them; the operand picks the width
-    # The value itself. Which register holds it is the allocator's answer,
-    # and a pass acting on this says ir.Held rather than naming one --
-    # rule 5. `root` stays for the machine arm, which has no values.
-    value: "mir.Value | None" = None
+    # The value holding them. Which register that is, is the allocator's
+    # answer; a caller that has no values -- the machine arm -- looks it up
+    # in the body's own `origin`, which is where that question belongs.
+    value: "mir.Value"
 
 
 def _dead_in(block, overwritten: dict, dgroup: frozenset[int], calls: dict[int, str]):
@@ -534,6 +533,6 @@ def forwardable(
             if op.at in want and op.loads:
                 who = next((w for cell, w in current.items() if mir.same_bytes(cell, op.loads[0])), None)
                 if who is not None and who in at_point.get(op.at, frozenset()):
-                    found.append(Forward(op.at, body.origin[who], who))
+                    found.append(Forward(op.at, who))
             current = _after(op, current, dgroup, calls)
     return tuple(found)
