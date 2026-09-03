@@ -486,25 +486,50 @@ def _names_a_value(body) -> bool:
 
 
 def _grounded(body: MirBody, held: dict | None) -> MirBody:
-    """The body with every unresolvable ir.Held put back as its node has it."""
+    """Every ir.Held the allocation cannot resolve, put back as its node has it.
+
+    The allocator refuses about seventy bodies in the corpus, and for those
+    a Held names a value nothing has placed. Dropping `made` there costs
+    693 bytes -- a fold that says `mov <held>,7` and is then emitted from
+    its node is not a fold -- so take the operand in the same position of
+    the instruction this was raised from, which is the one the pass
+    replaced. Only where that is not a register of the same width does the
+    op go back to its node whole.
+
+    Not `origin`: it holds where a value came from, which for these is not
+    where the operation writes, and grounding through it left 36 objects
+    unable to account for their own bytes.
+    """
     covered = set(held or {})
 
-    def dangling(op) -> bool:
-        if op.made is None or op.node is None:
-            return False
-        return any(
-            isinstance(one, ir.Held) and one.value not in covered
-            for one in (*op.made.dests, *op.made.sources)
-        )
+    def settle(one, was):
+        if not isinstance(one, ir.Held) or one.value in covered:
+            return one
+        if isinstance(was, ir.Reg) and was.width == one.width:
+            return was
+        return None
 
-    if not any(dangling(op) for block in body.blocks for op in block.ops):
-        return body
+    def resolve(op):
+        if op.made is None:
+            return op
+        node = getattr(op.node, "semantics", None)
+        dests = [
+            settle(one, node.dests[i] if node is not None and i < len(node.dests) else None)
+            for i, one in enumerate(op.made.dests)
+        ]
+        sources = [
+            settle(one, node.sources[i] if node is not None and i < len(node.sources) else None)
+            for i, one in enumerate(op.made.sources)
+        ]
+        if any(one is None for one in (*dests, *sources)):
+            return replace(op, made=None) if op.node is not None else op
+        if dests == list(op.made.dests) and sources == list(op.made.sources):
+            return op
+        return replace(op, made=replace(op.made, dests=tuple(dests), sources=tuple(sources)))
+
     return replace(
         body,
-        blocks=tuple(
-            replace(block, ops=tuple(replace(op, made=None) if dangling(op) else op for op in block.ops))
-            for block in body.blocks
-        ),
+        blocks=tuple(replace(block, ops=tuple(resolve(op) for op in block.ops)) for block in body.blocks),
     )
 
 

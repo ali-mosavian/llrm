@@ -1107,3 +1107,64 @@ def test_a_served_read_names_the_value_and_not_a_register() -> None:
                     assert held, f"{obj.stem} {op.at:#06x}: served read names a register"
                     seen += 1
     assert seen, "nothing was served, so this proves nothing"
+
+
+
+def _bodies(name: str):
+    """Every raised body of one fixture, before any pass has run."""
+    from qbopt import module
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(Path(f"fixtures/omf/{name}").read_bytes()))
+    assert found is not None
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
+    return found, list(mir.bodies(found, split.partition(found, mapped)))
+
+
+def test_a_fold_names_the_value_not_the_register() -> None:
+    """Fold reused the destination operand BC had written, which is a
+    register, and MIR carrying it forward is a pass naming one."""
+    found, bodies = _bodies("hotlop-p-g2.obj")
+    held = [
+        one
+        for name, body in bodies
+        for block in transform.applied(body, found.dgroup, found.calls, only="fold").blocks
+        for op in block.ops
+        if op.made is not None
+        for one in op.made.dests
+        if isinstance(one, ir.Held)
+    ]
+    assert held, "fold no longer says which value it writes"
+
+
+def test_an_unplaced_held_keeps_its_fold() -> None:
+    """Cost of getting this wrong: 693 bytes over the corpus.
+
+    The allocator refuses about seventy bodies, and a Held in one of them
+    resolves to nothing. Dropping `made` there emits the op from its node,
+    which undoes the fold -- `mov <held>,7` becomes the load it replaced.
+    The operand in the same position of that node is what the pass took
+    away, so it is what goes back.
+    """
+    from qbopt import layout
+
+    found, bodies = _bodies("hotlop-p-g2.obj")
+    for name, body in bodies:
+        done = transform.applied(body, found.dgroup, found.calls, only="fold")
+        if not layout._names_a_value(done):
+            continue
+        got = layout._grounded(done, {})  # nothing placed at all
+        before = {op.at for block in done.blocks for op in block.ops if op.made is not None}
+        lost = [op for block in got.blocks for op in block.ops if op.made is None and op.at in before]
+        kept = [
+            op
+            for block in got.blocks
+            for op in block.ops
+            if op.made is not None and any(isinstance(one, ir.Reg) for one in op.made.dests)
+        ]
+        assert kept, f"{name}: every fold dropped rather than grounded"
+        assert not lost, f"{name}: {len(lost)} ops fell back to their node"
+        return
+    raise AssertionError("no body folded anything; the test measures nothing")

@@ -1252,7 +1252,10 @@ def _folded_op(op: Op, facts: dict, wanted: set, origin: dict) -> Op:
         made=ir.Semantics(
             ir.Operation.MOVE,
             "mov",
-            dests=(into,),
+            # Held, not the operand `into` came in as: fold reuses the
+            # destination it found, which is a register BC picked, and MIR
+            # carrying it forward is a register named by a pass.
+            dests=(ir.Held(value=target.id, width=into.width) if isinstance(into, ir.Reg) else into,),
             sources=(ir.Imm(value=fact.n, width=into.width),),
         ),
     )
