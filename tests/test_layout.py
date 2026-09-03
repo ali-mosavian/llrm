@@ -697,3 +697,43 @@ def test_a_moved_operation_keeps_its_fixup() -> None:
     was = layout._field_in(found, one)
     moved = replace(one, at=one.at + 0x100)
     assert layout._field_in(found, moved) == was, "the relocation stayed behind"
+
+
+def test_a_fold_does_not_keep_the_fixup_of_the_read_it_replaced() -> None:
+    """`cmp word [k],1` folded to `cmp ax,1` has nowhere to put an address.
+
+    Relocating that immediate writes an address over it and over the branch
+    behind it; suite/jumps.bas took the CASE ELSE arm for k = 1 that way.
+    The check asked `op.made is not None` to mean "a pass rewrote this",
+    and a pass that says what it computes in MIR's own operands sets no
+    `made` at all -- so every fold was answered "nothing touched it".
+    """
+    from qbopt import ir
+    from qbopt import mir
+    from qbopt import module
+    from qbopt import omf
+    from qbopt import transform
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(Path("fixtures/omf/bools-p-g2.obj").read_bytes()))
+    assert found is not None
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
+
+    checked = 0
+    for _, body in mir.bodies(found, split.partition(found, mapped)):
+        for block in transform.applied(body, found.dgroup, found.calls, only="fold").blocks:
+            for op in block.ops:
+                if op.raised is None or (op.args, op.results) == op.raised:
+                    continue
+                was = getattr(op.node, "semantics", None)
+                if was is None or not any(
+                    isinstance(one, (ir.Mem, ir.Address)) for one in (*was.dests, *was.sources)
+                ):
+                    continue
+                checked += 1
+                assert not layout._still_has_an_operand_for_it(op), (
+                    f"{op.at:#x}: the memory operand is gone and the fixup was kept"
+                )
+    assert checked, "no fold replaced a memory read; the test measures nothing"

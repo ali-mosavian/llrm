@@ -43,6 +43,7 @@ from dataclasses import dataclass
 from iced_x86 import Register_
 
 from qbopt import ir
+from qbopt import lower
 from qbopt import mir
 from qbopt.mir import Op
 from qbopt import runtime
@@ -126,7 +127,7 @@ def _preserved(op: Op, made: Value, origin: dict[Value, Register_] | None) -> se
     """
     if origin is None:
         return set()
-    what = op.made if op.made is not None else getattr(op.node, "semantics", None)
+    what = lower.current(op)
     if what is None or what.op is not ir.Operation.MOVE:
         return set()
     into = origin.get(made)

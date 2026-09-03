@@ -35,6 +35,7 @@ from dataclasses import replace
 from iced_x86 import Register_
 
 from qbopt import ir
+from qbopt import lower
 from qbopt import lir
 from qbopt import mir
 from qbopt.mir import NAMES
@@ -65,7 +66,7 @@ def _addressing(body: mir.MirBody) -> set[Value]:
     found: set[Value] = set()
     for block in body.blocks:
         for op in block.ops:
-            what = op.made if op.made is not None else getattr(op.node, "semantics", None)
+            what = lower.current(op)
             if what is None:
                 continue
             wanted = {where for where, need in lir.reads(what).items() if need.fixed is None}
@@ -95,7 +96,7 @@ def required(body: mir.MirBody) -> dict[Value, Register_]:
     out: dict[Value, Register_] = {}
     for block in body.blocks:
         for op in block.ops:
-            what = op.made if op.made is not None else getattr(op.node, "semantics", None)
+            what = lower.current(op)
             if what is None:
                 continue
             for side, needs in ((op.uses, lir.reads(what)), (op.defines, lir.writes(what))):
@@ -285,7 +286,7 @@ def congruent(body: mir.MirBody) -> dict[Value, Value]:
         # which operations are one; x86 says it by naming the operand twice
         # and nothing else in the pipeline knew.
         for op in block.ops:
-            what = op.made if op.made is not None else getattr(op.node, "semantics", None)
+            what = lower.current(op)
             if what is None:
                 continue
             where = lir.tied(what)
@@ -392,7 +393,7 @@ def untangled(body: mir.MirBody) -> mir.MirBody:
     reads: dict[int, dict] = {}
     for block in body.blocks:
         for op in block.ops:
-            what = op.made if op.made is not None else getattr(op.node, "semantics", None)
+            what = lower.current(op)
             if what is None or lir.tied(what) is None:
                 continue
             for one in op.defines:
@@ -457,7 +458,7 @@ def _semantics_of_last(ops: tuple):
     if not ops:
         return None
     one = ops[-1]
-    return one.made if one.made is not None else getattr(one.node, "semantics", None)
+    return lower.current(one)
 
 
 def _named(register: Register_, width: int) -> Register_:

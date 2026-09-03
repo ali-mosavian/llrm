@@ -38,6 +38,7 @@ from dataclasses import replace
 
 from qbopt import consts
 from qbopt import ir
+from qbopt import lower
 from qbopt import lir
 from qbopt import mir
 from qbopt import module
@@ -202,7 +203,7 @@ def forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> M
         ops: list[Op] = []
         for op in block.ops:
             holder = served.get(op.at)
-            what = op.made if op.made is not None else getattr(op.node, "semantics", None)
+            what = lower.current(op)
             made = _served(what, holder) if holder is not None else None
             ops.append(
                 op
@@ -240,7 +241,7 @@ SEGMENT_REGISTERS = frozenset(
 
 def _segment_load(op: Op):
     """(register, what it is loaded from) where this op loads a segment."""
-    what = op.made if op.made is not None else getattr(op.node, "semantics", None)
+    what = lower.current(op)
     if what is None or what.op is not ir.Operation.MOVE or len(what.dests) != 1 or len(what.sources) != 1:
         return None
     into = what.dests[0]
@@ -346,14 +347,14 @@ def _implicit(op: Op) -> bool:
     business rather than a pass's: this used to answer it here, in a
     predicate a transform consulted to decide whether to give up.
     """
-    what = op.made if op.made is not None else getattr(op.node, "semantics", None)
+    what = lower.current(op)
     if what is None:
         return True
     return any(need.fixed is not None for need in lir.reads(what).values())
 
 
 def _semantics_of(op: Op):
-    return op.made if op.made is not None else getattr(op.node, "semantics", None)
+    return lower.current(op)
 
 
 def _preheader(body: MirBody, loop) -> int | None:
@@ -1242,6 +1243,8 @@ def _folded_op(op: Op, facts: dict, wanted: set, origin: dict) -> Op:
     if what.op is ir.Operation.MOVE and any(isinstance(one, ir.Imm) for one in what.sources):
         return op  # already says so
 
+    # In MIR's own operands: this value, that constant. What register it
+    # ends up in is the allocator's, and lower.py is where it becomes one.
     return replace(
         op,
         op=ir.Operation.MOVE,
@@ -1249,15 +1252,9 @@ def _folded_op(op: Op, facts: dict, wanted: set, origin: dict) -> Op:
         defines=(target,),
         uses=(),
         loads=(),
-        made=ir.Semantics(
-            ir.Operation.MOVE,
-            "mov",
-            # Held, not the operand `into` came in as: fold reuses the
-            # destination it found, which is a register BC picked, and MIR
-            # carrying it forward is a register named by a pass.
-            dests=(ir.Held(value=target.id, width=into.width) if isinstance(into, ir.Reg) else into,),
-            sources=(ir.Imm(value=fact.n, width=into.width),),
-        ),
+        args=(mir.Const(fact.n, into.width),),
+        results=(mir.Held(target, into.width),),
+        made=None,
     )
 
 

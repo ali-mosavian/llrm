@@ -37,6 +37,7 @@ from iced_x86 import OpKind
 from iced_x86 import Register
 
 from qbopt import ir
+from qbopt import lower
 from qbopt import regalloc
 from qbopt import mir
 from qbopt import select
@@ -288,7 +289,11 @@ def _semantics(op: mir.Op) -> ir.Semantics | None:
     own `made` is the only answer. An op raised from BC's code has a node,
     and that node's semantics is the authority.
     """
-    what = op.made if op.made is not None else getattr(op.node, "semantics", None)
+    was = getattr(op.node, "semantics", None)
+    # `made` while the passes that still write it are being converted; after
+    # that this is only lower.semantics, which builds machine form from MIR's
+    # own operands and returns None where nothing rewrote the operation.
+    what = lower.current(op)
     return None if what is None or what.op is ir.Operation.BARRIER else what
 
 
@@ -340,7 +345,10 @@ def _still_has_an_operand_for_it(op: mir.Op) -> bool:
     touched the operation: hoisting rewrites `mov ax,offset x` to name
     another register and its relocated immediate is still its own.
     """
-    what = op.made
+    # What rewrote it, or None for an operation nothing did -- the question
+    # this asks. `op.made` used to be that marker; a pass that says what it
+    # computes in MIR's own operands sets nothing, so ask lower.
+    what = lower.semantics(op, getattr(op.node, "semantics", None)) if op.made is None else op.made
     if what is None:
         return True
     holds = [one for one in (*what.dests, *what.sources) if isinstance(one, (ir.Mem, ir.Address, ir.Imm))]
@@ -421,7 +429,8 @@ def _field_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -
         had = was is not None and any(
             isinstance(one, (ir.Mem, ir.Address)) for one in (*was.dests, *was.sources)
         )
-        if op.made is not None and had and not any(isinstance(one, (ir.Mem, ir.Address)) for one in holds):
+        rewrote = op.made is not None or lower.semantics(op, was) is not None
+        if rewrote and had and not any(isinstance(one, (ir.Mem, ir.Address)) for one in holds):
             return None
     inside = [one for one in known if lo <= one < hi]
     return inside[0] if len(inside) == 1 else None
@@ -477,56 +486,56 @@ class Table:
 
 
 def _names_a_value(body) -> bool:
-    """Whether any operand in this body is an ir.Held."""
+    """Whether any operand in this body names a value rather than a place."""
     return any(
-        op.made is not None
-        and any(isinstance(one, ir.Held) for one in (*op.made.dests, *op.made.sources))
+        any(isinstance(one, mir.Held) for one in (*op.args, *op.results))
+        or (
+            op.made is not None
+            and any(isinstance(one, ir.Held) for one in (*op.made.dests, *op.made.sources))
+        )
         for block in body.blocks
         for op in block.ops
     )
 
 
 def _grounded(body: MirBody, held: dict | None) -> MirBody:
-    """Every ir.Held the allocation cannot resolve, put back as its node has it.
+    """Every operand naming a value nothing placed, given a register anyway.
 
-    The allocator refuses about seventy bodies in the corpus, and for those
-    a Held names a value nothing has placed. Dropping `made` there costs
-    693 bytes -- a fold that says `mov <held>,7` and is then emitted from
-    its node is not a fold -- so take the operand in the same position of
-    the instruction this was raised from, which is the one the pass
-    replaced. Only where that is not a register of the same width does the
-    op go back to its node whole.
+    Machine-side on purpose. MIR says `this value`; where the allocation has
+    no answer -- about seventy bodies in the corpus that the allocator
+    refuses outright -- the operand the original instruction had in the same
+    position is the one the pass took away, so that is what goes back. It is
+    written into `made`, which is the emission form and not MIR.
 
-    Not `origin`: it holds where a value came from, which for these is not
-    where the operation writes, and grounding through it left 36 objects
-    unable to account for their own bytes.
+    Reverting the whole operation instead costs 693 bytes: a fold emitted
+    from the load it replaced is not a fold.
     """
     covered = set(held or {})
 
     def settle(one, was):
         if not isinstance(one, ir.Held) or one.value in covered:
             return one
-        if isinstance(was, ir.Reg) and was.width == one.width:
-            return was
-        return None
+        return was if isinstance(was, ir.Reg) and was.width == one.width else None
 
     def resolve(op):
-        if op.made is None:
+        what = lower.current(op)
+        if what is None or not any(
+            isinstance(one, ir.Held) and one.value not in covered
+            for one in (*what.dests, *what.sources)
+        ):
             return op
         node = getattr(op.node, "semantics", None)
         dests = [
             settle(one, node.dests[i] if node is not None and i < len(node.dests) else None)
-            for i, one in enumerate(op.made.dests)
+            for i, one in enumerate(what.dests)
         ]
         sources = [
             settle(one, node.sources[i] if node is not None and i < len(node.sources) else None)
-            for i, one in enumerate(op.made.sources)
+            for i, one in enumerate(what.sources)
         ]
         if any(one is None for one in (*dests, *sources)):
-            return replace(op, made=None) if op.node is not None else op
-        if dests == list(op.made.dests) and sources == list(op.made.sources):
-            return op
-        return replace(op, made=replace(op.made, dests=tuple(dests), sources=tuple(sources)))
+            return replace(op, made=None, args=(), results=(), raised=None) if op.node is not None else op
+        return replace(op, made=replace(what, dests=tuple(dests), sources=tuple(sources)))
 
     return replace(
         body,

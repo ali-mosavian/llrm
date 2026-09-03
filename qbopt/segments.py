@@ -25,6 +25,7 @@ than a name.
 """
 
 from qbopt import ir
+from qbopt import lower
 from qbopt import mir
 from qbopt import runtime
 from qbopt.mir import Op
@@ -37,7 +38,7 @@ LOADABLE = frozenset({"es", "ds"})
 
 
 def _semantics(op: Op) -> ir.Semantics | None:
-    what = op.made if op.made is not None else getattr(op.node, "semantics", None)
+    what = lower.current(op)
     return None if what is None or what.op is ir.Operation.BARRIER else what
 
 

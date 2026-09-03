@@ -279,6 +279,13 @@ class Op:
     # is machine form, and MIR holding it is the whole of rule 5's problem.
     args: tuple[Arg, ...] = ()
     results: tuple[Arg, ...] = ()
+    # What those were at the raise, so "did a pass rewrite this" is a
+    # question MIR can answer about itself. Lowering needs it: an operation
+    # nothing touched is emitted from its original bytes rather than
+    # re-encoded, and re-encoding one onto a longer form for the same
+    # instruction is how a rebuild grows without anything being optimised.
+    # In MIR's own operands, so it says nothing about the machine.
+    raised: tuple[tuple[Arg, ...], tuple[Arg, ...]] | None = None
     # What this operation is, apart from where it is. Given at the raise and
     # carried through every `replace()`, so a fact established then can live
     # in a side table instead of on the op -- which is the only way those
@@ -755,6 +762,7 @@ def raise_body(
                     node,
                     args=where[0],
                     results=where[1],
+                    raised=where,
                     id=next(_IDS),
                 )
             )

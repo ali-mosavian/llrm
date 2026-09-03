@@ -31,6 +31,7 @@ from iced_x86 import Register
 from iced_x86 import Register_
 
 from qbopt import ir
+from qbopt import lower
 from qbopt import mir
 from qbopt import wide
 from qbopt.mir import Op
@@ -77,7 +78,7 @@ class Pair:
 
 def _moved(op: Op) -> ir.Semantics | None:
     """This op's semantics if it is a plain move, or None."""
-    what = op.made if op.made is not None else getattr(op.node, "semantics", None)
+    what = lower.current(op)
     if what is None or what.op is not ir.Operation.MOVE:
         return None
     return what if len(what.dests) == 1 and len(what.sources) == 1 else None
@@ -208,7 +209,7 @@ PARTNER = {"and": "and", "or": "or", "xor": "xor", "add": "adc", "sub": "sbb"}
 
 def _binary_on(op: Op) -> tuple[Register_, str, object] | None:
     """(destination root, mnemonic, cell) for `<alu> <half>,[x]`, or None."""
-    what = op.made if op.made is not None else getattr(op.node, "semantics", None)
+    what = lower.current(op)
     if what is None or what.op is not ir.Operation.BINARY:
         return None
     if len(what.dests) != 1 or len(op.loads) != 1 or op.stores or op.loads[0].addr is None:
@@ -266,7 +267,7 @@ def _written(op: Op, origin: dict) -> Register_:
 
 
 def _shape(op: Op) -> ir.Semantics | None:
-    return op.made if op.made is not None else getattr(op.node, "semantics", None)
+    return lower.current(op)
 
 
 def _binary_against(op: Op, want: type) -> str | None:
@@ -563,7 +564,7 @@ def _span(one: Pair) -> int:
 
 
 def _semantics_of(one: Op) -> ir.Semantics | None:
-    return one.made if one.made is not None else getattr(one.node, "semantics", None)
+    return lower.current(one)
 
 
 def _widened_length(one: Pair) -> int | None:

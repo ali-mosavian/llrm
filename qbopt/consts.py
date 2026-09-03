@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from iced_x86 import Register_
 
 from qbopt import ir
+from qbopt import lower
 from qbopt import mir
 from qbopt import runtime
 
@@ -86,7 +87,7 @@ def _put(op: mir.Op, known: dict[mir.Value, Known]) -> Known | None:
     not a value at all, and it writes `mov [s],ax` for an assignment, where
     the number is whatever ax was known to hold.
     """
-    what = op.made if op.made is not None else (op.node.semantics if op.node is not None else None)
+    what = lower.current(op)
     if what is None or what.op is not ir.Operation.MOVE:
         return None
     for one in what.sources:
@@ -244,7 +245,7 @@ def _result(
     # What a transform decided this op computes, where it decided; the
     # node's own otherwise. An op rewritten by an earlier pass is raised
     # again before this looks, so its `made` is the only account of it.
-    semantics = op.made if op.made is not None else (op.node.semantics if op.node is not None else None)
+    semantics = lower.current(op)
     if semantics is None or not ir.modelled(semantics) or _defined(op, semantics, origin) is None:
         return None
 
@@ -311,7 +312,7 @@ def known(
                 facts[phi.result] = known[0]
                 changing = True
             for index, op in enumerate(block.ops):
-                semantics = op.made if op.made is not None else (op.node.semantics if op.node is not None else None)
+                semantics = lower.current(op)
                 target = _defined(op, semantics, body.origin)
                 if target is None or target in facts:
                     continue
