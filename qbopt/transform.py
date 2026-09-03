@@ -56,8 +56,6 @@ from qbopt.declen import Insn
 from qbopt import flags
 from qbopt.module import Addr
 from qbopt.module import Space
-from iced_x86 import Register
-from iced_x86 import Register_
 from qbopt.mir import MirBody
 
 
@@ -153,19 +151,6 @@ def without_dead_stores(body: MirBody, dgroup: frozenset[int], calls: dict[int, 
 # name to the wide one; this is the way back, and only for the general
 # registers -- a segment register has no narrower form and is never a
 # provider here.
-_AT_WIDTH = {
-    Register.EAX: {4: Register.EAX, 2: Register.AX, 1: Register.AL},
-    Register.EBX: {4: Register.EBX, 2: Register.BX, 1: Register.BL},
-    Register.ECX: {4: Register.ECX, 2: Register.CX, 1: Register.CL},
-    Register.EDX: {4: Register.EDX, 2: Register.DX, 1: Register.DL},
-    Register.ESI: {4: Register.ESI, 2: Register.SI},
-    Register.EDI: {4: Register.EDI, 2: Register.DI},
-    Register.EBP: {4: Register.EBP, 2: Register.BP},
-}
-
-
-def _at_width(register, width: int):
-    return _AT_WIDTH.get(ir.ROOT.get(register, register), {}).get(width)
 
 
 def forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
@@ -331,24 +316,6 @@ def segments(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mi
 # Operations with a register operand the encoding does not name: the
 # one-operand `imul`/`idiv` whose other half is dx:ax, `cwd` and `cdq`, and
 # a shift by cl. select.py cannot remap what is not an operand.
-_IMPLICIT = (
-    ir.Operation.MULTIPLY,
-    ir.Operation.DIVIDE,
-    ir.Operation.EXTEND,
-)
-
-
-def _implicit(op: Op) -> bool:
-    """Whether this operation needs a value in a register it does not name.
-
-    lir says which, and what an instruction requires is the machine's
-    business rather than a pass's: this used to answer it here, in a
-    predicate a transform consulted to decide whether to give up.
-    """
-    what = lower.current(op)
-    if what is None:
-        return True
-    return any(need.fixed is not None for need in lir.reads(what).values())
 
 
 def _semantics_of(op: Op):
@@ -651,50 +618,6 @@ def _crossing(run: list, rest: list, phis: list | None = None, wanted: set | Non
 def _span_of(op: Op) -> tuple[int, int] | None:
     """The bytes this operation occupied before anything moved it."""
     return ir.span(op.node) if op.node is not None else None
-
-
-def _named(register: Register_, width: int) -> Register_:
-    """The same register named at the width an operand needs.
-
-    _at_width returns None where there is no such name -- there is no
-    byte-wide si -- and every caller here has already picked a register
-    that has one, so the fallback is the register itself rather than a
-    refusal that cannot happen.
-    """
-    return _at_width(register, width) or register
-
-
-def _mentions(one: ir.Loc, register: Register_) -> bool:
-    """Whether this operand names the register, held in or reached through."""
-    root = ir.ROOT.get(register, register)
-    if isinstance(one, ir.Reg):
-        return ir.ROOT.get(one.register, one.register) is root
-    for where in (
-        getattr(one, "through", None),
-        getattr(one, "index", None),
-        getattr(getattr(one, "addr", None), "base", None),
-    ):
-        if where is not None and ir.ROOT.get(where, where) is root:
-            return True
-    return False
-
-
-def _instead(one: ir.Loc, was: Register_, now: Register_) -> ir.Loc:
-    """This operand with one register put in place of another."""
-    root = ir.ROOT.get(was, was)
-    if isinstance(one, ir.Reg) and ir.ROOT.get(one.register, one.register) is root:
-        return replace(one, register=_named(now, one.width))
-    if not isinstance(one, (ir.Mem, ir.Address)):
-        return one
-    swap = {}
-    for name in ("through", "index"):
-        where = getattr(one, name, None)
-        if where is not None and ir.ROOT.get(where, where) is root:
-            swap[name] = _named(now, 2)
-    addr = getattr(one, "addr", None)
-    if addr is not None and ir.ROOT.get(addr.base, addr.base) is root:
-        swap["addr"] = replace(addr, base=_named(now, 2))
-    return replace(one, **swap) if swap else one
 
 
 # Operations the body can be observed through, whatever they define. A
