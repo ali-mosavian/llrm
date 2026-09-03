@@ -170,6 +170,26 @@ class Mem:
 
 
 @dataclass(frozen=True, slots=True)
+class Held:
+    """Whatever register holds this SSA value, resolved at emission.
+
+    The operand kind rule 5 needs. A pass rewriting an operand from a cell
+    to a register had no way to say "the register this value is in" and so
+    said `ir.Reg(register=BX)` -- naming a register, which is the
+    allocator's answer and not a transform's. forward.py holds 22 machine
+    references for exactly this reason.
+
+    `value` is a mir.Value's id rather than the value, because ir.py is
+    below mir.py and may not import it. select.emit resolves it through the
+    allocation; an unresolved Held is a bug and emit refuses rather than
+    guessing a register.
+    """
+
+    value: int
+    width: int
+
+
+@dataclass(frozen=True, slots=True)
 class Imm:
     """A literal, signed as the instruction means it and already widened past
     whichever of the short encodings BC chose."""

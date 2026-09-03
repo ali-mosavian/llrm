@@ -234,9 +234,14 @@ ONE_OPERAND = ("neg", "not", "inc", "dec")
 # The width each register names, and the register file at each width. One
 # table rather than three lookups, and the only place widths are written down.
 WIDTHS: dict[Register_, int] = {}
+# And the inverse, which ir.Held needs: a root and a width name one register.
+# There is no byte-wide si, so a missing entry means the width cannot be had
+# and the caller keeps the root.
+AT_WIDTH: dict[Register_, dict[int, Register_]] = {}
 for _row, _size in ((_WIDE, 4), (_NARROW, 2), (_BYTE, 1)):
     for _one in _row:
         WIDTHS[_one] = _size
+        AT_WIDTH.setdefault(ir.ROOT.get(_one, _one), {})[_size] = _one
 
 
 def _code(name: str) -> Code_ | None:
@@ -268,7 +273,7 @@ def _remapped(register: Register_, where: dict[Register_, Register_] | None) -> 
     return (where or {}).get(register, register)
 
 
-def _operand(one: ir.Loc, where: dict[Register_, Register_] | None) -> ir.Loc:
+def _operand(one: ir.Loc, where: dict[Register_, Register_] | None, held: dict | None = None) -> ir.Loc:
     """One operand with every register in it remapped.
 
     Every register: a cell is reached by one as much as an accumulator is
@@ -277,6 +282,15 @@ def _operand(one: ir.Loc, where: dict[Register_, Register_] | None) -> ir.Loc:
     and left `[si+0Ah]` behind it reading a register nothing had set, and
     segld printed 0 for 1050 with every host test passing.
     """
+    # A Held names a value, not a register, and the allocation says which
+    # register that is. Resolved before the remap below, because what comes
+    # out is an ordinary register operand from there on.
+    if isinstance(one, ir.Held):
+        got = (held or {}).get(one.value)
+        if got is None:
+            return one  # emit() refuses it; see its own note
+        wide = AT_WIDTH.get(ir.ROOT.get(got, got), {}).get(one.width, got)
+        one = ir.Reg(register=wide, width=one.width)
     if not where:
         return one
     if isinstance(one, ir.Reg):
@@ -1078,6 +1092,7 @@ def emit(
     where: dict[Register_, Register_] | tuple[dict, dict] | None = None,
     short: bool = False,
     relocated: bool = False,
+    held: dict | None = None,
 ) -> Emitted | None:
     """One MIR operation as machine bytes, or None where this cannot say it.
 
@@ -1092,16 +1107,23 @@ def emit(
     # Once, over every operand, rather than at each register site below:
     # the cases that take a cell never reached _remapped at all, and the
     # segment moves reached it for neither of theirs.
-    if where:
+    if where or held:
         # By side. `mov ax,1` defines one value and preserves another in the
         # same register, and one map cannot say two things about eax.
         into, outof = where if isinstance(where, tuple) else (where, where)
         what = replace(
             what,
-            dests=tuple(_operand(one, into) for one in what.dests),
-            sources=tuple(_operand(one, outof) for one in what.sources),
+            dests=tuple(_operand(one, into, held) for one in what.dests),
+            sources=tuple(_operand(one, outof, held) for one in what.sources),
         )
         where = None
+
+    # A Held that reached here is one the allocation had no register for.
+    # Refusing is the whole point: it is a value a pass asked to be
+    # somewhere and nothing decided where, and guessing a register is how
+    # the five attempts in the history produced wrong programs.
+    if any(isinstance(one, ir.Held) for one in (*what.dests, *what.sources)):
+        return None
 
     dests, sources = what.dests, what.sources
     match what.op:

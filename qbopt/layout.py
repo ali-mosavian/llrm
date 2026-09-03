@@ -122,6 +122,17 @@ def _remap(values: tuple, assignment: dict, origin: dict) -> dict:
     return out
 
 
+def _held(assignment: dict | None) -> dict | None:
+    """The allocation keyed by value id, which is what ir.Held names.
+
+    ir.py sits below mir.py and cannot import Value, so a Held carries the
+    id. This is the other end of that.
+    """
+    if not assignment:
+        return None
+    return {value.id: register for value, register in assignment.items()}
+
+
 def _where(op: mir.Op, assignment: dict | None, origin: dict | None) -> tuple[dict, dict] | None:
     """This op's register remap, by side, out of a whole-body allocation.
 
@@ -574,7 +585,8 @@ def _emitted(
             lengths.append(_length_of(op) or 0)
             continue
         made = select.emit(
-            what, at=at, where=_where(op, assignment, origin), relocated=_field_in(found, op, fields) is not None
+            what, at=at, where=_where(op, assignment, origin),
+            held=_held(assignment), relocated=_field_in(found, op, fields) is not None
         )
         if made is None:
             return f"{op.at:#06x}: {op.name} is not one select.py can emit"
@@ -611,6 +623,7 @@ def _emitted(
                 aimed,
                 at=placed[index],
                 where=_where(op, assignment, origin),
+            held=_held(assignment),
                 short=True,
                 relocated=_field_in(found, op, fields) is not None,
             )
@@ -684,6 +697,7 @@ def _emitted(
             what,
             at=placed[index],
             where=_where(op, assignment, origin),
+            held=_held(assignment),
             short=index in short,
             relocated=_field_in(found, op, fields) is not None,
         )

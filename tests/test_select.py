@@ -696,3 +696,39 @@ def test_a_remap_reaches_inside_a_memory_operand() -> None:
 
     shown = Formatter(FormatterSyntax.NASM).format(next(iter(Decoder(16, moved.code, ip=0))))
     assert "di" in shown and "si" not in shown, shown
+
+
+def test_a_held_operand_names_a_value_and_not_a_register() -> None:
+    """The operand kind rule 5 needs.
+
+    A pass rewriting an operand from a cell to a register had no way to say
+    "the register this value is in", so it said `ir.Reg(register=BX)` --
+    naming a register, which is the allocator's answer. forward.py carries
+    22 machine references for exactly that reason.
+    """
+    from iced_x86 import Register
+
+    got = select._operand(ir.Held(value=7, width=2), None, {7: Register.EBX})
+    assert got == ir.Reg(register=Register.BX, width=2), "resolved at the width asked for"
+    wide = select._operand(ir.Held(value=7, width=4), None, {7: Register.EBX})
+    assert wide == ir.Reg(register=Register.EBX, width=4)
+
+
+def test_an_unresolved_held_is_refused_rather_than_guessed() -> None:
+    """A Held the allocation had no register for is a value a pass asked to
+    be somewhere and nothing decided where.
+
+    Guessing a register there is how the five attempts in this project's
+    history produced wrong programs, so emit() returns None and the caller
+    keeps what BC wrote.
+    """
+    what = ir.Semantics(
+        ir.Operation.MOVE,
+        "mov",
+        dests=(ir.Held(value=9, width=2),),
+        sources=(ir.Imm(value=1, width=2),),
+    )
+    assert select.emit(what, held={}) is None, "no register for value 9"
+    from iced_x86 import Register
+
+    assert select.emit(what, held={9: Register.EBX}) is not None, "and it emits once there is"
