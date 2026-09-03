@@ -1006,6 +1006,138 @@ def _carried(op: Op, origin: dict) -> dict:
     return out
 
 
+# What each conditional jump asks of `cmp a,b`, as a predicate on the two
+# operands. Signed and unsigned are different questions and BC emits both.
+_TAKEN = {
+    "je": lambda a, b, u: a == b,
+    "jz": lambda a, b, u: a == b,
+    "jne": lambda a, b, u: a != b,
+    "jnz": lambda a, b, u: a != b,
+    "jl": lambda a, b, u: a < b,
+    "jnge": lambda a, b, u: a < b,
+    "jle": lambda a, b, u: a <= b,
+    "jng": lambda a, b, u: a <= b,
+    "jg": lambda a, b, u: a > b,
+    "jnle": lambda a, b, u: a > b,
+    "jge": lambda a, b, u: a >= b,
+    "jnl": lambda a, b, u: a >= b,
+    "jb": lambda a, b, u: u(a) < u(b),
+    "jnae": lambda a, b, u: u(a) < u(b),
+    "jbe": lambda a, b, u: u(a) <= u(b),
+    "jna": lambda a, b, u: u(a) <= u(b),
+    "ja": lambda a, b, u: u(a) > u(b),
+    "jnbe": lambda a, b, u: u(a) > u(b),
+    "jae": lambda a, b, u: u(a) >= u(b),
+    "jnb": lambda a, b, u: u(a) >= u(b),
+}
+
+
+def _signed(fact) -> int:
+    """A Known as the number the machine would compare."""
+    top = 1 << (fact.width * 8 - 1)
+    return fact.n - (top << 1) if fact.n & top else fact.n
+
+
+def _outcome(block, op: Op, facts: dict, held: dict, origin: dict) -> bool | None:
+    """Whether this branch is taken, where both its operands are numbers."""
+    what = _semantics_of(op)
+    if what is None or what.op is not ir.Operation.BRANCH:
+        return None
+    decide = _TAKEN.get((op.name or "").lower())
+    if decide is None:
+        return None
+    reads = [one for one in op.uses if one.flags]
+    if len(reads) != 1:
+        return None
+
+    # The comparison this branch reads, which must be the last thing to
+    # write the flags before it -- SSA says so by naming the value.
+    where = next(
+        (
+            (index, one)
+            for index, one in enumerate(block.ops)
+            if reads[0] in one.defines
+        ),
+        None,
+    )
+    if where is None:
+        return None
+    index, compare = where
+    made = _semantics_of(compare)
+    if made is None or made.op is not ir.Operation.COMPARE or len(made.sources) != 2:
+        return None
+    parts = [
+        consts._operand(compare, one, facts, origin, held.get((block.at, index)))
+        for one in made.sources
+    ]
+    if any(one is None for one in parts):
+        return None
+    left, right = parts
+    return decide(_signed(left), _signed(right), lambda n: n & 0xFFFFFFFF)
+
+
+def decided(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
+    """A branch on two numbers, resolved.
+
+    `IF a < b` with both constants is decided where it stands, and leaving
+    it to run costs the comparison, the jump, and everything on the arm
+    that cannot be taken. bools is three of them over four constants and
+    nothing else.
+
+    Taken becomes an unconditional jump and not-taken goes entirely, its
+    bytes handed to the operation before it. What becomes unreachable is
+    dropped by resolving the body afterwards rather than here.
+    """
+    facts = consts.known(body, dgroup, calls)
+    if not facts:
+        return body
+    held = consts.cells(body, dgroup, calls, facts)
+
+    out = []
+    changed = False
+    for block in body.blocks:
+        if not block.ops:
+            out.append(block)
+            continue
+        last = block.ops[-1]
+        answer = _outcome(block, last, facts, held, body.origin)
+        if answer is None:
+            out.append(block)
+            continue
+        what = _semantics_of(last)
+        target = what.target
+        if target is None or target not in {one.at for one in body.blocks}:
+            out.append(block)
+            continue
+        changed = True
+        if answer:
+            jump = replace(
+                last,
+                op=ir.Operation.JUMP,
+                name="jmp",
+                uses=(),
+                made=ir.Semantics(ir.Operation.JUMP, "jmp", dests=(), sources=(), target=target),
+                covers=last.covers or _span_of(last),
+            )
+            out.append(replace(block, ops=block.ops[:-1] + (jump,)))
+        else:
+            kept = _absorb(list(block.ops), {last.at})
+            if len(kept) == len(block.ops):
+                out.append(block)
+                continue
+            out.append(replace(block, ops=tuple(kept)))
+    if not changed:
+        return body
+    # The successors are left as they were, and the body is not resolved.
+    # Both would be tidier and both lose bytes: resolving prunes a block
+    # nothing can reach any more, and layout.py then has a hole it cannot
+    # account for -- `0x006d: 3 bytes between the ops are not instructions`
+    # on three of the bools objects. An edge that can no longer be taken is
+    # an over-approximation of the control flow, which is the safe
+    # direction for everything that reads it.
+    return replace(body, blocks=tuple(out))
+
+
 def dead(body: MirBody) -> MirBody:
     """Operations whose results nothing reads, removed.
 
@@ -1524,7 +1656,7 @@ def _choices(offers: dict) -> Iterator[dict]:
 # before avail.py once and avail forwarded a stale high half across an op
 # that said it read two bytes where the instruction read four. That is no
 # longer possible to get wrong by rearranging this list.
-PASSES = ("fold", "dead", "segments", "hoist", "forward", "drop_loads", "drop_stores", "widen", "place", "absorb", "strength")
+PASSES = ("fold", "decide", "dead", "segments", "hoist", "forward", "drop_loads", "drop_stores", "widen", "place", "absorb", "strength")
 
 
 def applied(
@@ -1557,6 +1689,7 @@ def applied(
     """
     wanted = {
         "fold": True,
+        "decide": True,
         "dead": True,
         "segments": segments_,
         "hoist": hoist,
@@ -1575,6 +1708,8 @@ def applied(
             continue
         if name == "fold":
             body = folded(body, dgroup, calls)
+        elif name == "decide":
+            body = decided(body, dgroup, calls)
         elif name == "dead":
             body = dead(body)
         elif name == "hoist":

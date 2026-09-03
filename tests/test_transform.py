@@ -1053,3 +1053,35 @@ def test_the_invariant_sum_leaves_press_with_one_instruction_in_its_loop() -> No
     assert not [text for text in inside if text.replace(" ", "").startswith("movbx")], (
         f"a dead move is still in the loop: {inside}"
     )
+
+
+def test_a_branch_on_two_numbers_is_decided_where_it_stands() -> None:
+    """bools is three comparisons over four constants and nothing else.
+
+    BC materialises every one into a register through a branch and a dec,
+    then compares that register against zero to branch again. All of it is
+    decidable: 165 bytes to 129, and 1.6x to 1.35x.
+    """
+    seen = _rebuilt("bools-p-g2")
+    left = [text for _, text in seen if text.startswith(("jle", "jg", "jl ", "jge", "je ", "jne"))]
+    assert not left, f"a branch on two constants is still there: {left}"
+
+
+def test_deciding_a_branch_leaves_every_byte_accounted_for() -> None:
+    """Resolving the flow is not the same as pruning it.
+
+    A block nothing can reach any more still occupies bytes, and layout.py
+    refuses a body it cannot account for every one of -- three of the bools
+    objects came back `0x006d: 3 bytes between the ops are not
+    instructions` when the branch fold resolved the body afterwards. The
+    edge stays, over-approximating the control flow, which is the safe
+    direction for everything that reads it.
+    """
+    from qbopt import wholeseg
+
+    for name in ("bools-q-O.obj", "bools-q-noO.obj", "bools-q-O-zd.obj"):
+        path = Path("fixtures/omf") / name
+        if not path.exists():
+            continue
+        _out, why = wholeseg.rebuilt(path.read_bytes())
+        assert why == wholeseg.REBUILT, f"{name}: {why}"
