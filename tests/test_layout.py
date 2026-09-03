@@ -366,12 +366,13 @@ def test_layout_tells_the_selector_which_instructions_are_relocated(obj: Path, m
         where: dict[Register_, Register_] | None = None,
         short: bool = False,
         relocated: bool = False,
+        held: dict | None = None,
     ) -> select.Emitted | None:
         # every call, not any: layout asks the selector three times -- to
         # measure, to relax, and to emit -- and a flag missing from one of
         # them is a wrong encoding at exactly that stage
         seen[id(what)] = seen.get(id(what), True) and relocated
-        return real(what, at=at, where=where, short=short, relocated=relocated)
+        return real(what, at=at, where=where, short=short, relocated=relocated, held=held)
 
     monkeypatch.setattr(select, "emit", watch)
     found, bodies, laid = rebuilt(obj)

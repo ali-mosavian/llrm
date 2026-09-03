@@ -43,6 +43,12 @@ TESTS = (
     "tests/test_lir.py",
     "tests/test_consts.py",
     "tests/test_runtime.py",
+    # These two because leaving them out made the gate say clean while the
+    # full suite had 73 failures: they are what checks that every byte and
+    # every fixup still has a home, and a pass that rewrites an operand
+    # breaks that before it breaks anything else.
+    "tests/test_wholeseg.py",
+    "tests/test_layout.py",
 )
 
 PROGRAMS = ("hotlop", "pressx", "lngmix", "nested")
