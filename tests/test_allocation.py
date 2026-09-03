@@ -32,6 +32,8 @@ from qbopt import select
 from qbopt import blocks as split
 from qbopt.blocks import code_map
 
+import corpus
+
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
 
@@ -270,3 +272,63 @@ def test_the_requirements_table_says_what_the_encoding_permits() -> None:
     assert regalloc.ADDRESSING, "and the assignable set is not empty"
     assert all(one in regalloc.AVAILABLE for one in regalloc.ADDRESSING)
     assert not any(one is Register.EBP for one in regalloc.ADDRESSING), "bp is the frame pointer"
+
+
+def test_the_allocator_honours_a_register_an_operation_demands() -> None:
+    """lir says which register an operand must be in. Something has to ask.
+
+    The table has been right since it was written and nothing read it. That
+    was safe only by accident: the identity assignment puts every value back
+    where BC had it, so all 1,153 of these requirements were already met and
+    none was ever tested. It stops being safe the moment a value moves.
+    """
+    seen = 0
+    for obj in sorted(Path("fixtures/omf").glob("*.obj")):
+        found = corpus.loaded(obj)
+        if found is None:
+            continue
+        mapped = code_map(found)
+        if isinstance(mapped, str):
+            continue
+        for name, body in mir.bodies(found, split.partition(found, mapped)):
+            demanded = regalloc.required(body)
+            seen += len(demanded)
+            for value, where in demanded.items():
+                was = ir.ROOT.get(body.origin.get(value, -1), -1)
+                assert was is where, (
+                    f"{obj.stem}/{name}: {value} is required in "
+                    f"{regalloc.NAMES.get(where, where)} but BC had it in "
+                    f"{regalloc.NAMES.get(was, was)}"
+                )
+    assert seen > 1000, f"only {seen} requirements found, so this proves little"
+
+
+def test_a_pin_against_what_the_machine_demands_is_refused() -> None:
+    """Asking for a value somewhere its own instruction cannot read it.
+
+    A refusal, not a preference. The hoist asks for registers and must be
+    told no rather than quietly given one the multiply will not look in --
+    that is how hotlop printed 0 for 630: the load was renamed to cx and
+    `imul` went on multiplying by ax.
+    """
+    tried = 0
+    for obj in sorted(Path("fixtures/omf").glob("*.obj")):
+        found = corpus.loaded(obj)
+        if found is None:
+            continue
+        mapped = code_map(found)
+        if isinstance(mapped, str):
+            continue
+        for name, body in mir.bodies(found, split.partition(found, mapped)):
+            for value, where in regalloc.required(body).items():
+                other = next(one for one in regalloc.AVAILABLE if one is not where)
+                got = regalloc.colour(body, {value: other})
+                assert isinstance(got, str), (
+                    f"{obj.stem}/{name}: {value} must be in "
+                    f"{regalloc.NAMES.get(where, where)} but was allocated to "
+                    f"{regalloc.NAMES.get(other, other)} on request"
+                )
+                tried += 1
+                if tried >= 5:
+                    return
+    assert tried, "no fixed requirement to contradict, so this proves nothing"

@@ -74,6 +74,39 @@ def _addressing(body: mir.MirBody) -> set[Value]:
     return found
 
 
+def required(body: mir.MirBody) -> dict[Value, Register_]:
+    """Every value an instruction requires in one particular register.
+
+    The companion to _addressing, which asks the same table the other
+    question: not "which registers may this operand live in" but "which one
+    must it". A widening `imul` multiplies by ax and names it nowhere,
+    `idiv` reads dx:ax, `cwd` and `cdq` extend ax, and a shift by a variable
+    amount takes it in cl. lir.py is where all of that is written down.
+
+    Nothing consulted it. That was safe only by accident: the identity
+    assignment puts every value back where BC had it, so every requirement
+    was already satisfied and none was ever tested. It stops being safe the
+    moment a value moves, which is what hoisting a run does -- and the hoist
+    refuses any run holding one of these operations for exactly that reason,
+    having once renamed a multiplicand to cx and left the multiply reading
+    ax. It printed 0 for 630.
+    """
+    out: dict[Value, Register_] = {}
+    for block in body.blocks:
+        for op in block.ops:
+            what = op.made if op.made is not None else getattr(op.node, "semantics", None)
+            if what is None:
+                continue
+            for side, needs in ((op.uses, lir.reads(what)), (op.defines, lir.writes(what))):
+                for where, need in needs.items():
+                    if need.fixed is None:
+                        continue
+                    for value in side:
+                        if ir.ROOT.get(body.origin.get(value, -1), -1) is where:
+                            out[value] = need.fixed
+    return out
+
+
 @dataclass(frozen=True, slots=True)
 class Liveness:
     live_in: dict[int, frozenset[Value]]
@@ -317,7 +350,18 @@ def colour(body: mir.MirBody, pinned: dict[Value, Register_] | None = None) -> d
 
     assigned: dict[Value, Register_] = {}
     pinned_roots: set[Value] = set()
+    # What the machine requires first, then what the caller asked for. A
+    # caller cannot ask for a value to sit anywhere but where its own
+    # instruction reads it, so a disagreement is a refusal rather than a
+    # preference: see required().
+    demanded = required(body)
     for value, want in (pinned or {}).items():
+        if demanded.setdefault(value, want) is not want:
+            return (
+                f"{value} is wanted in {NAMES.get(want, want)} but its operation "
+                f"reads it in {NAMES.get(demanded[value], demanded[value])}"
+            )
+    for value, want in demanded.items():
         root = of.get(value, klass.get(value, value))
         if assigned.setdefault(root, want) is not want:
             return f"{value} is tied to a value that wants {NAMES.get(assigned[root], assigned[root])}"
