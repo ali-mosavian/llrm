@@ -367,6 +367,23 @@ _BY_BRANCH: dict[str, Kind] = {
 }
 
 
+# How each modelled float operation moves the stack. Named once, here: the
+# shape is ir.py's answer and reading it twice is how the two drift apart.
+_FLOAT_DEPTH: dict = {
+    ir.Operation.FLOAT_LOAD: 1,
+    ir.Operation.FLOAT_STORE: -1,
+    ir.Operation.FLOAT_ARITH_POP: -1,
+    ir.Operation.FLOAT_ARITH: 0,
+    ir.Operation.FLOAT_UNARY: 0,
+}
+
+
+def _stack_effect(what: "ir.Semantics") -> int | None:
+    """The net depth change, or None where this is not a modelled shape."""
+    return _FLOAT_DEPTH.get(what.op)
+
+
+
 def _kind_of(what: "ir.Semantics", args, results) -> Kind:
     """What one node computes, as MIR says it.
 
@@ -453,6 +470,12 @@ class Op:
     # What this computes, in MIR's own vocabulary. `op` and `name` are the
     # machine's and are on their way out; nothing new may read them.
     kind: Kind = Kind.OPAQUE
+    # How this changes the depth of the operand stack the float unit keeps:
+    # +1 for a load, -1 for a store or a popping arithmetic form, 0 for one
+    # that works in place. None where it is not one of those shapes at all.
+    # A number about a stack, not an instruction -- and gone in the step
+    # that gives float operands values of their own.
+    stack: int | None = None
     args: tuple[Arg, ...] = ()
     results: tuple[Arg, ...] = ()
     # What those were at the raise, so "did a pass rewrite this" is a
@@ -952,6 +975,7 @@ def raise_body(
                     stores,
                     node,
                     kind=_kind_of(node.semantics, where[0], where[1]),
+                    stack=_stack_effect(node.semantics),
                     args=where[0],
                     results=where[1],
                     raised=where,

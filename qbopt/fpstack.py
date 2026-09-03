@@ -29,10 +29,9 @@ is what an x87 pass would have to ask first.
 from dataclasses import field
 from dataclasses import dataclass
 
-from qbopt import ir
-from qbopt import lower
 from qbopt import mir
 from qbopt.mir import Op
+from qbopt.mir import Opaque
 from qbopt.mir import MirBody
 
 # The x87 stack is eight deep and BC never comes close, but a program that
@@ -66,23 +65,18 @@ class Reading:
     popped: tuple[Float, ...] = ()  # what it took off
 
 
-# How each modelled float operation moves the stack. The push and the pop are
-# the operation's own, not iced's increment: ir.py has already named which
-# shape this is, and naming it twice is how the two drift apart.
-PUSHES = frozenset({ir.Operation.FLOAT_LOAD})
-POPS = frozenset({ir.Operation.FLOAT_STORE, ir.Operation.FLOAT_ARITH_POP})
-IN_PLACE = frozenset({ir.Operation.FLOAT_ARITH, ir.Operation.FLOAT_UNARY})
-FLOAT = PUSHES | POPS | IN_PLACE
+def _slots(op: Op) -> list[int]:
+    """Every stack slot this operation names, in the order it names them.
 
-
-def _semantics(op: Op) -> ir.Semantics | None:
-    what = lower.current(op)
-    return None if what is None or what.op is ir.Operation.BARRIER else what
-
-
-def _indices(what: ir.Semantics) -> list[int]:
-    """Every st(i) this operation names, in the order it names them."""
-    return [one.index for one in (*what.dests, *what.sources) if isinstance(one, ir.St)]
+    A float operand has no MIR value -- that is what makes this pass exist
+    -- so it arrives as mir.Opaque with the resource's own name, "st0" and
+    up. The name, never the operand inside it.
+    """
+    return [
+        int(one.name[2:])
+        for one in (*op.results, *op.args)
+        if isinstance(one, Opaque) and one.name.startswith("st") and one.name[2:].isdigit()
+    ]
 
 
 def readings(body: MirBody) -> dict[int, Reading]:
@@ -118,18 +112,18 @@ def readings(body: MirBody) -> dict[int, Reading]:
             return stack[index]
 
         for op in block.ops:
-            what = _semantics(op)
-            if what is None or op.barrier or (what.op not in FLOAT and _indices(what)):
+            named = _slots(op)
+            if op.barrier or (op.stack is None and named):
                 # It touches the stack in a way this does not model.
                 known = False
                 stack = []
                 out[op.at] = Reading(op.at)
                 continue
-            if what.op not in FLOAT:
+            if op.stack is None:
                 continue
 
             uses = {}
-            for index in _indices(what):
+            for index in named:
                 got = at(index)
                 if got is None:
                     known = False
@@ -142,11 +136,11 @@ def readings(body: MirBody) -> dict[int, Reading]:
 
             made: Float | None = None
             popped: tuple[Float, ...] = ()
-            if what.op in PUSHES:
+            if op.stack > 0:
                 minted += 1
                 made = Float(minted, op.at)
                 stack.insert(0, made)
-            elif what.op in POPS:
+            elif op.stack < 0:
                 popped = (stack[0],) if stack else ()
                 if stack:
                     stack.pop(0)
@@ -168,7 +162,7 @@ def pushed_twice(body: MirBody) -> tuple[tuple[int, int], ...]:
     found: list[tuple[int, int]] = []
     reads = readings(body)
     for block in body.blocks:
-        loads = [op for op in block.ops if (what := _semantics(op)) is not None and what.op in PUSHES]
+        loads = [op for op in block.ops if op.stack is not None and op.stack > 0]
         for one, other in zip(loads, loads[1:]):
             if not one.loads or not other.loads:
                 continue
