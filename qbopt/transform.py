@@ -901,7 +901,7 @@ def halves(body: MirBody) -> set:
                     continue
                 carried = _carried(op, body.origin)
                 read = widths(op)
-                described = _semantics_of(op) is not None and not op.barrier
+                described = op.kind is not mir.Kind.OPAQUE and not op.barrier
                 for one in op.uses:
                     if one in carried:
                         # Read for the half it is merged into, and only if
@@ -1077,8 +1077,7 @@ def decided(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
         if answer is None:
             out.append(block)
             continue
-        what = _semantics_of(last)
-        target = what.target
+        target = last.target
         if target is None or target not in {one.at for one in body.blocks}:
             out.append(block)
             continue
@@ -1135,7 +1134,7 @@ def dead(body: MirBody) -> MirBody:
     # instruction reads registers none of them mention: byref2 printed 0
     # for 16 that way.
     if any(
-        one.barrier or _semantics_of(one) is None
+        one.barrier or one.kind is mir.Kind.OPAQUE
         for block in body.blocks
         for one in block.ops
     ):
@@ -1165,7 +1164,7 @@ def _removable(op: Op, alive: set) -> bool:
     """Whether anything at all would notice this operation going."""
     if op.kind in _OBSERVED or op.stores or op.barrier:
         return False
-    if _semantics_of(op) is None:
+    if op.kind is mir.Kind.OPAQUE:
         return False
     if not [one for one in op.defines if not one.flags]:
         return False
@@ -1547,7 +1546,6 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
             first = ops[0]
             ops = [replace(first, at=block.ops[0].at, covers=first.covers or _span_of(first))] + ops[1:]
         if block.at in moved:
-            what = _semantics_of(ops[-1]) if ops else None
             leaves = bool(ops) and ops[-1].kind in (mir.Kind.JUMP, mir.Kind.BRANCH)
             lifted = []
             for one in moved[block.at]:

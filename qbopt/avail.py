@@ -328,7 +328,7 @@ def _dead_in(block, overwritten: dict, dgroup: frozenset[int], calls: dict[int, 
     found: list[int] = []
     overwritten = dict(overwritten)
     for op in reversed(block.ops):
-        if isinstance(op.node, ir.Restore):
+        if op.kind is Kind.JOIN:
             # `push eax / pop ax / pop dx`. A barrier for values, because
             # nothing here can name in SSA what it writes -- and nothing at
             # all for memory: ir.RESTORE_EFFECTS reports no load and no
