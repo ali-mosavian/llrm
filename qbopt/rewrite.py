@@ -874,7 +874,7 @@ def _written(
     # work to get it.
     for _round in range(PASS_ROUNDS):
         before = data
-        data, _why = wholeseg.rebuilt(data, native_fpu=native_fpu, absorb=not absorb_calls)
+        data, _why = wholeseg.rebuilt(data, native_fpu=native_fpu)
         if data == before:
             break
     return data

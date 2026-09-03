@@ -277,11 +277,11 @@ def main(argv: list[str] | None = None) -> int:
 
     # Emission with no pass at all, which is the control: anything that
     # changes here is the emitter and not a transform.
-    plain, why = rebuilt(data, optimise=False, absorb=args.absorb)
+    plain, why = rebuilt(data, optimise=False)
     was = dump(next(step), "emitted", f"emitted, no pass ({why})", plain, was, not args.quiet)
 
     for name in [args.only] if args.only else PASSES:
-        out, why = rebuilt(data if args.only else plain, only=name, absorb=args.absorb)
+        out, why = rebuilt(data if args.only else plain, only=name)
         was = dump(next(step), name, f"{name} ({why})", out, was, not args.quiet)
         if not args.only:
             plain = out
