@@ -30,7 +30,13 @@ from iced_x86 import Decoder
 from iced_x86 import Formatter
 from iced_x86 import FormatterSyntax
 
+from qbopt import ir
 from qbopt import mir
+from qbopt import lower
+from qbopt import regalloc
+from iced_x86 import Register
+
+_REGISTERS = {v: k for k, v in vars(Register).items() if isinstance(v, int)}
 from qbopt import omf
 from qbopt import module
 from qbopt import loops as loopy
@@ -90,6 +96,109 @@ def _report(tag: str, data: bytes, was: dict | None, verbose: bool) -> dict:
     return now
 
 
+def _short(one) -> str:
+    """One MIR operand, short enough to diff."""
+    if isinstance(one, mir.Held):
+        return f"{one.value}:{one.width}"
+    if isinstance(one, mir.Const):
+        return f"#{one.n}:{one.width}"
+    if isinstance(one, mir.Cell):
+        return _cell(one.ref)
+    return f"opaque({getattr(one, 'what', one)})"
+
+
+def _cell(ref) -> str:
+    through = f"+{ref.base}" if getattr(ref, "base", None) is not None else ""
+    return f"{ref.addr}{through}:{ref.width}"
+
+
+def _mir(bodies) -> None:
+    """What each pass decided, in MIR's own terms and nothing else.
+
+    Rule 4 asks for the MIR between passes, not the code at the end. No
+    register appears here: an operand is a value, a constant or a cell, and
+    that is the whole vocabulary.
+    """
+    print("  --- mir")
+    for name, body in bodies:
+        print(f"  {name}")
+        for block in body.blocks:
+            succ = ",".join(f"{one:#x}" for one in block.succ) or "-"
+            print(f"    block {block.at:#06x} -> {succ}")
+            for phi in block.phis:
+                came = " ".join(f"{at:#x}:{value}" for at, value in sorted(phi.incoming.items()))
+                print(f"      phi {phi.result} <- {came}")
+            for op in block.ops:
+                parts = [f"{op.at:#06x}", f"{op.name or '?':8s}"]
+                if op.defines:
+                    parts.append("=> " + ",".join(str(one) for one in op.defines))
+                if op.uses:
+                    parts.append("<= " + ",".join(str(one) for one in op.uses))
+                if op.args:
+                    parts.append("args " + ",".join(_short(one) for one in op.args))
+                if op.results:
+                    parts.append("into " + ",".join(_short(one) for one in op.results))
+                if op.loads:
+                    parts.append("ld " + ",".join(_cell(one) for one in op.loads))
+                if op.stores:
+                    parts.append("st " + ",".join(_cell(one) for one in op.stores))
+                if op.target is not None:
+                    parts.append(f"-> {op.target:#x}")
+                if op.raised is not None and (op.args, op.results) != op.raised:
+                    parts.append("(rewritten)")
+                print("      " + "  ".join(parts))
+
+
+def _lir(bodies) -> None:
+    """The same operations after lowering, and where the allocator put them.
+
+    This is the first place a register is allowed to appear. An operation
+    nothing rewrote lowers to None and is emitted from its own bytes.
+    """
+    print("  --- lir")
+    for name, body in bodies:
+        fixed = regalloc.untangled(body)
+        got = regalloc.colour(fixed, fixed.pins)
+        if isinstance(got, str):
+            print(f"  {name}: the allocator refuses -- {got}")
+            got, fixed = {}, body
+        else:
+            print(f"  {name}: {len(got)} values seated")
+            seats = [f"{value}={_name_of(where)}" for value, where in sorted(got.items(), key=lambda kv: kv[0].id)]
+            # Eight to a line so a diff points at the values that moved
+            # rather than at one line three hundred entries wide.
+            for at in range(0, len(seats), 8):
+                print("    " + " ".join(seats[at : at + 8]))
+        for block in fixed.blocks:
+            print(f"    block {block.at:#06x}")
+            for op in block.ops:
+                what = lower.current(op)
+                if what is None:
+                    print(f"      {op.at:#06x}  {op.name or '?':8s} verbatim")
+                    continue
+                dests = ",".join(_loc(one) for one in what.dests) or "-"
+                sources = ",".join(_loc(one) for one in what.sources) or "-"
+                target = f"  -> {what.target:#x}" if what.target is not None else ""
+                print(f"      {op.at:#06x}  {what.name or '?':8s} {dests} <- {sources}{target}")
+
+
+def _name_of(where) -> str:
+    return _REGISTERS.get(where, str(where))
+
+
+def _loc(one) -> str:
+    """One machine operand."""
+    if isinstance(one, ir.Reg):
+        return f"{_name_of(one.register)}:{one.width}"
+    if isinstance(one, ir.Held):
+        return f"held({one.value}):{one.width}"
+    if isinstance(one, ir.Imm):
+        return f"#{one.value}:{one.width}"
+    if isinstance(one, ir.Mem):
+        return f"{one.addr}:{one.width}"
+    return type(one).__name__
+
+
 def _asm(data: bytes) -> None:
     found = module.of(omf.parse(data))
     if found is None:
@@ -110,8 +219,9 @@ def main(argv: list[str] | None = None) -> int:
         "--dump",
         type=Path,
         metavar="DIR",
-        help="one file per stage, named s<N>-<stage>.txt, so `diff` between "
-        "two adjacent ones is the whole answer -- see rule 4",
+        help="three files per stage -- s<N>-{mir,lir,asm}-<stage>.txt -- so "
+        "`diff` between two adjacent ones is the whole answer; rule 4 asks "
+        "for the mir pair",
     )
     ap.add_argument(
         "--no-absorb",
@@ -128,42 +238,51 @@ def main(argv: list[str] | None = None) -> int:
     step = itertools.count()
 
     @contextlib.contextmanager
-    def stage(name: str):
-        """Each stage's own file where --dump asks for one, stdout otherwise.
+    def view(number: int, form: str, name: str):
+        """One form of one stage, in its own file where --dump asks for one.
 
-        Numbered in the order they run, because the point of having them is
-        `diff s06-hoist.txt s07-forward.txt` -- and sorting by name has to
-        put them in pipeline order for that to be one keystroke. Zero-padded
-        for the same reason: `s10` sorts before `s2`.
+        `s<N>-<form>-<name>.txt`. Numbered in the order they run and
+        zero-padded, because the point of having them is
+        `diff s06-mir-hoist.txt s07-mir-forward.txt` -- sorting by name has
+        to put them in pipeline order for that to be one keystroke, and
+        `s10` sorts before `s2`. The form comes before the name so the three
+        views of one stage sit together and every mir view of the pipeline
+        reads in order.
         """
-        number = next(step)
         if args.dump is None:
             yield
             return
-        path = args.dump / f"s{number:02d}-{name}.txt"
+        path = args.dump / f"s{number:02d}-{form}-{name}.txt"
         with path.open("w") as handle, contextlib.redirect_stdout(handle):
             yield
         print(f"  {path}")
 
-    with stage("omf"):
-        was = _report("BC", data, None, not args.quiet)
-        if args.asm:
-            _asm(data)
+    def dump(number: int, name: str, tag: str, out: bytes, was, verbose: bool):
+        """Every view of one stage: what it decided, what that lowers to,
+        and what came back after the bytes were written and re-parsed."""
+        _, bodies = _bodies(out)
+        with view(number, "mir", name):
+            now = _report(tag, out, was, verbose)
+            _mir(bodies)
+        with view(number, "lir", name):
+            print(f"=== {tag}")
+            _lir(bodies)
+        if args.dump is not None or args.asm:
+            with view(number, "asm", name):
+                print(f"=== {tag}")
+                _asm(out)
+        return now
+
+    was = dump(next(step), "omf", "BC", data, None, not args.quiet)
 
     # Emission with no pass at all, which is the control: anything that
     # changes here is the emitter and not a transform.
-    with stage("emitted"):
-        plain, why = rebuilt(data, optimise=False, absorb=args.absorb)
-        was = _report(f"emitted, no pass ({why})", plain, was, not args.quiet)
-        if args.asm:
-            _asm(plain)
+    plain, why = rebuilt(data, optimise=False, absorb=args.absorb)
+    was = dump(next(step), "emitted", f"emitted, no pass ({why})", plain, was, not args.quiet)
 
     for name in [args.only] if args.only else PASSES:
-        with stage(name):
-            out, why = rebuilt(data if args.only else plain, only=name, absorb=args.absorb)
-            was = _report(f"{name} ({why})", out, was, not args.quiet)
-            if args.asm:
-                _asm(out)
+        out, why = rebuilt(data if args.only else plain, only=name, absorb=args.absorb)
+        was = dump(next(step), name, f"{name} ({why})", out, was, not args.quiet)
         if not args.only:
             plain = out
     return 0
