@@ -43,18 +43,26 @@ from qbopt.module import Addr
 # its own high half. `neg` is here because BC's own 32-bit negate is
 # `neg ax / adc dx,0 / neg dx` -- the adc carries the borrow, and the
 # second neg is the high half, so the trio is one operation.
+# Which two halves are one wide operation. In MIR's own vocabulary: the
+# carry half of an add is an add, the borrow half of a subtract is a
+# subtract, and BC's 32-bit negate takes its high half through an add.
+# Keyed on the mnemonics -- ("add", "adc") -- this was a pass knowing that
+# x86 spells the second half differently.
 FOLDS = {
-    ("add", "adc"): "add",
-    ("sub", "sbb"): "sub",
-    ("neg", "adc"): "neg",
+    (mir.Kind.ADD, mir.Kind.ADD): mir.Kind.ADD,
+    (mir.Kind.SUB, mir.Kind.SUB): mir.Kind.SUB,
+    (mir.Kind.NEG, mir.Kind.ADD): mir.Kind.NEG,
 }
+
+# What the machine spells each half, which only lowering needs.
+SPELLED = {mir.Kind.ADD: "add", mir.Kind.SUB: "sub", mir.Kind.NEG: "neg"}
 
 
 @dataclass(frozen=True, slots=True)
 class Pair:
     """Two instructions that are one 32-bit operation."""
 
-    op: str  # what it computes, machine-independently
+    op: "mir.Kind"  # what it computes, machine-independently
     low: mir.Op  # the half that produced the carry
     high: mir.Op  # the half that consumed it
     carry: mir.Value  # the flags value joining them
@@ -107,7 +115,7 @@ def pairs(body: mir.MirBody) -> tuple[Pair, ...]:
             low = produced.get(carried[0])
             if low is None:
                 continue
-            whole = FOLDS.get((low.name, op.name))
+            whole = FOLDS.get((low.kind, op.kind))
             if whole is None or not _halves_agree(low, op):
                 continue
             found.append(Pair(whole, low, op, carried[0]))
@@ -294,7 +302,7 @@ def widened(pair: Pair) -> ir.Semantics | None:
         return None
     return ir.Semantics(
         op=what.op,
-        name=pair.op,
+        name=SPELLED[pair.op],
         dests=tuple(one for one in dests if one is not None),
         sources=tuple(one for one in sources if one is not None),
         target=what.target,
