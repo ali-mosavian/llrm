@@ -31,6 +31,7 @@ from iced_x86 import Formatter
 from iced_x86 import FormatterSyntax
 
 from qbopt import ir
+from qbopt import cvinfo
 from qbopt import mir
 from qbopt import lower
 from qbopt import regalloc
@@ -116,7 +117,15 @@ _PREFIX = {mir.Kind.NEG: "-", mir.Kind.NOT: "~", mir.Kind.ADDRESS: "&"}
 
 
 class Cells:
-    """Short names for the cells one body touches, and the legend for them.
+    """What each cell one body touches is called, and the legend for them.
+
+    With /Zi the object says: BC writes every variable's name, type and
+    address into $$SYMBOLS, and every procedure's parameters and locals
+    with their own bp offsets. Then a cell is `POSX&` rather than a letter,
+    and which slot is a parameter is a fact rather than an inference.
+
+    Without it -- an object built before /Zi was required -- the fallback
+    below is the letter and the legend.
 
     `[seg:5+si+0x6]` is a segment index and a displacement, and nbody has
     twenty of them: unreadable in a statement and identical to each other at
@@ -128,9 +137,26 @@ class Cells:
     is, is the useful fact about it, and BC's frame layout says so.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, debug=None) -> None:
         self.named: dict = {}
         self.order: list = []
+        # (segment, offset) -> what BC calls it. Segment indices in a fixup
+        # are 1-based against SEGDEF and cvinfo's are the same, so the two
+        # can be compared directly.
+        # Sorted, and looked up by the nearest one at or below the address:
+        # a LONG at 0x76 is read as two halves at 0x76 and 0x78, and an
+        # array element is a displacement from the array's own base. Naming
+        # only the exact address left every high half and every element
+        # anonymous.
+        self.symbols = sorted(
+            ((one.segment, one.offset), one.name)
+            for one in (debug.variables if debug is not None else ())
+        )
+        self.slots = {
+            one.bp_offset: (one.name, one.type_name or "")
+            for proc in (debug.procedures if debug is not None else ())
+            for one in proc.locals
+        }
 
     def of(self, ref) -> str:
         if ref.addr is None:
@@ -143,9 +169,15 @@ class Cells:
         space = getattr(ref.addr.space, "name", "")
         if space == "FRAME":
             disp = ref.addr.disp
+            said = self.slots.get(disp)
+            if said is not None:
+                return said[0] + index
             return (f"L{-disp:x}" if disp < 0 else f"P{disp:x}") + index
         if space == "STACK":
             return f"push{ref.addr.disp:+d}" + index
+        said = self._inside(ref.addr.index, ref.addr.disp)
+        if said is not None:
+            return said + index
         key = (str(ref.addr), ref.width)
         if key not in self.named:
             number = len(self.order)
@@ -154,6 +186,18 @@ class Cells:
             self.named[key] = name
             self.order.append((name, ref.addr, ref.width))
         return self.named[key] + index
+
+    def _inside(self, segment: int, disp: int) -> str | None:
+        """The variable this address falls in, and how far into it."""
+        import bisect
+
+        at = bisect.bisect_right(self.symbols, ((segment, disp), "\xff")) - 1
+        if at < 0:
+            return None
+        (where, start), name = self.symbols[at]
+        if where != segment or disp < start or disp - start > 0x100:
+            return None
+        return name if disp == start else f"{name}+{disp - start}"
 
     def legend(self) -> list[str]:
         return [f"      {name:4s} {addr} :{width}" for name, addr, width in self.order]
@@ -170,7 +214,7 @@ def _short(one, cells: Cells) -> str:
     return one.name or "?"
 
 
-def _mir(bodies, found=None, verbose: bool = False) -> None:
+def _mir(bodies, found=None, verbose: bool = False, debug=None) -> None:
     """What each pass decided, as `c := a op b` and nothing else.
 
     Rule 4 asks for the MIR between passes, not the code at the end. No
@@ -179,9 +223,15 @@ def _mir(bodies, found=None, verbose: bool = False) -> None:
     """
     print("  --- mir")
     calls = (found.calls if found is not None else {}) or {}
+    # By name, not by address: the object's symbols keep BC's own offsets
+    # and every pass moves the code, so after the first stage the addresses
+    # no longer meet. BASIC's type suffix is not part of the label.
+    procs = {one.name.rstrip("&%!#$"): one for one in (debug.procedures if debug is not None else ())}
     for name, body in bodies:
         print(f"  {name}")
-        cells = Cells()
+        for line in _signature(procs.get(name.split()[-1])):
+            print(line)
+        cells = Cells(debug)
         depth = _depth(body)
         for block in body.blocks:
             pad = "  " * depth.get(block.at, 0)
@@ -198,6 +248,27 @@ def _mir(bodies, found=None, verbose: bool = False) -> None:
             print("\n    where:")
             for line in cells.legend():
                 print(line)
+
+
+def _signature(proc) -> list[str]:
+    """What a procedure takes and keeps, where the object says so.
+
+    Which slot is a parameter and which a local is the sign of its own bp
+    offset -- the caller pushed the one above the frame pointer -- and BC
+    writes both, so nothing here has to read the prologue to find out.
+    """
+    if proc is None:
+        return []
+    params = [one for one in proc.locals if one.bp_offset > 0]
+    keeps = [one for one in proc.locals if one.bp_offset < 0]
+    out = [f"      {proc.name} ({', '.join(_declared(one) for one in params) or '-'})"]
+    if keeps:
+        out.append(f"      locals  {', '.join(_declared(one) for one in keeps)}")
+    return out
+
+
+def _declared(one) -> str:
+    return f"{one.name} {one.type_name or '?'} at bp{one.bp_offset:+d}"
 
 
 def _depth(body) -> dict:
@@ -370,9 +441,10 @@ def main(argv: list[str] | None = None) -> int:
         """Every view of one stage: what it decided, what that lowers to,
         and what came back after the bytes were written and re-parsed."""
         found, bodies = _bodies(out)
+        debug = cvinfo.parse(omf.parse(out))
         with view(number, "mir", name):
             now = _report(tag, out, was, verbose)
-            _mir(bodies, found, args.verbose)
+            _mir(bodies, found, args.verbose, debug)
         with view(number, "lir", name):
             print(f"=== {tag}")
             _lir(bodies)

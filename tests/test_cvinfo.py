@@ -280,3 +280,51 @@ def test_byval_carries_the_primitive_type_index_directly(tag: str) -> None:
     assert by_ref.type_name == "BYREF LONG"
     by_val = param(info, "AddVal", "n")
     assert by_val.type_name == "LONG"  # no wrapper hop at all -- same as a local
+
+
+def test_a_module_variable_is_where_its_fixup_says() -> None:
+    """Every one of them came back at address zero.
+
+    BC writes a module variable's offset and segment as four zero bytes and
+    leaves a ptr16:16 fixup to fill them in, exactly as it does for an
+    operand in the code. Read without the fixups every DIM in the module is
+    at address zero, which is a number no real program has -- and the names
+    are then unusable, because nothing can say which cell each one is.
+    """
+    from pathlib import Path
+
+    from qbopt import cvinfo
+    from qbopt import omf
+
+    got = cvinfo.parse(omf.parse(Path("fixtures/omf/procs-p-g2-zi.obj").read_bytes()))
+    assert got.variables, "the object carries no symbols; it was not built with /Zi"
+    where = {(one.segment, one.offset) for one in got.variables}
+    assert (0, 0) not in where, "a variable at address zero is an unrelocated field"
+    assert len(where) == len(got.variables), "two variables cannot share one address"
+    assert {one.name for one in got.variables} == {"A&", "B&", "R&"}
+
+
+def test_a_parameter_is_above_the_frame_pointer_and_a_local_below() -> None:
+    """Which one a slot is, is the sign of its own offset, and BC says both.
+
+    `Twice&(n AS LONG)` has one parameter at bp+6 -- the caller pushed it --
+    and one local at bp-22, below where the frame pointer landed. Nothing
+    has to infer it from the prologue.
+    """
+    from pathlib import Path
+
+    from qbopt import cvinfo
+    from qbopt import omf
+
+    got = cvinfo.parse(omf.parse(Path("fixtures/omf/procs-p-g2-zi.obj").read_bytes()))
+    named = {one.name: one for one in got.procedures}
+    assert "TWICE&" in named and "REPORT" in named, f"only {sorted(named)}"
+
+    twice = named["TWICE&"]
+    params = {one.name: one.bp_offset for one in twice.locals if one.bp_offset > 0}
+    locals_ = {one.name: one.bp_offset for one in twice.locals if one.bp_offset < 0}
+    assert params == {"N&": 6}, params
+    assert locals_ == {"T&": -22}, locals_
+    # Report takes two and declares no local of its own
+    report = named["REPORT"]
+    assert {one.name for one in report.locals if one.bp_offset > 0} == {"N&", "TAG$"}

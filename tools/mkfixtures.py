@@ -34,9 +34,13 @@ SUITE = ROOT / "suite"
 FIXTURES = ROOT / "fixtures" / "omf"
 MANIFEST = FIXTURES / "MANIFEST.tsv"
 
-# /Zd is the only switch that adds a record type rather than changing code, so
-# it is a variant of a few configurations rather than a column of its own.
-VARIANTS = {"": "", "zd": "/Zd"}
+# /Zd and /Zi add records rather than changing code, so each is a variant of
+# a few configurations rather than a column of its own. /Zi is what makes BC
+# write $$SYMBOLS and $$TYPES -- every variable's name, type and address,
+# every procedure's signature, and each parameter and local with its own bp
+# offset. It is on every configuration now, so what this variant produces is
+# an anchor that carries them where the older committed objects do not.
+VARIANTS = {"": "", "zd": "/Zd", "zi": "/Zi"}
 VARIANT_CONFIGS = ("v-g3", "p-g2", "q-O")
 
 INHERITED = {

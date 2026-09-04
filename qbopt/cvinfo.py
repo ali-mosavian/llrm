@@ -539,16 +539,47 @@ def _pstr(buf: bytes, at: int) -> tuple[str, int]:
     return buf[at + 1 : at + 1 + n].decode("latin1"), at + 1 + n
 
 
-def _records(buf: bytes) -> "Iterator[tuple[int, bytes]]":
-    """(kind, data) for each record; data excludes the length and kind bytes."""
+def _records(buf: bytes) -> "Iterator[tuple[int, bytes, int]]":
+    """(kind, data, where) for each record.
+
+    `data` excludes the length and kind bytes; `where` is that data's own
+    offset in the segment, which is what a fixup against $$SYMBOLS names --
+    a module variable's address is relocated, not written down, so the two
+    bytes in the record are zero and only the fixup says where it is.
+    """
     at = 0
     while at < len(buf):
         length = buf[at]
         if length == 0:  # trailing pad
             at += 1
             continue
-        yield buf[at + 1], buf[at + 2 : at + 1 + length]
+        yield buf[at + 1], buf[at + 2 : at + 1 + length], at + 2
         at += 1 + length
+
+
+def _relocated(records: list[omf.Record]) -> dict[int, tuple[int, int]]:
+    """Where each relocated field in $$SYMBOLS points, by its own offset.
+
+    BC writes a module variable's offset as zero and leaves a fixup to fill
+    it in, the same way it does for an operand in the code. Read without
+    them every DIM in the module comes back at address zero -- fifteen of
+    fifteen in nbody, which is a number no real program has.
+    """
+    index = next(
+        (i for i, segment in enumerate(omf.segments(records)) if segment and segment[0] == "$$SYMBOLS"),
+        None,
+    )
+    if index is None:
+        return {}
+    # A module variable's offset and segment are four bytes written as one
+    # far pointer, so the fixup is ptr16:16 and its own offset is where the
+    # pair starts -- which is the record's data offset, since LDATA puts
+    # them first.
+    return {
+        one.offset: (one.index, one.disp)
+        for one in omf.fixups(records)
+        if one.seg == index
+    }
 
 
 def symbols(records: list[omf.Record]) -> bytes:
@@ -582,7 +613,8 @@ def parse(records: list[omf.Record]) -> DebugInfo:
     labels: list[Label] = []
     current: Procedure | None = None
 
-    for kind, data in _records(buf):
+    where = _relocated(records)
+    for kind, data, at in _records(buf):
         match kind:
             case Kind.BLOCK:
                 pass  # module-open record: shape (and presence of a name) varies by compiler
@@ -613,6 +645,9 @@ def parse(records: list[omf.Record]) -> DebugInfo:
                     int.from_bytes(data[4:6], "little"),
                 )
                 name, _ = _pstr(data, 6)
+                # The record's own two bytes are zero; the fixup on them is
+                # the address. Keep whatever is written where there is none.
+                seg, off = where.get(at, (seg, off))
                 variables.append(Variable(name, off, seg, type_index, types))
             case Kind.LABEL:
                 off = int.from_bytes(data[0:2], "little")

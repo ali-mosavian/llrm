@@ -840,7 +840,7 @@ def test_every_body_of_every_kind_is_fully_modelled(fixtures: Path) -> None:
         for body_ir in result:
             counted = liftable if all(ir.modelled(node.semantics) for node in body_ir.nodes) else refused
             counted[body_ir.body.kind] += 1
-    assert liftable == {extent.BodyKind.MAIN: 474, extent.BodyKind.PROCEDURE: 30, extent.BodyKind.EVENT_STUB: 64}
+    assert liftable == {extent.BodyKind.MAIN: 475, extent.BodyKind.PROCEDURE: 32, extent.BodyKind.EVENT_STUB: 64}
     assert refused == {
         extent.BodyKind.MAIN: 11,
         extent.BodyKind.PROCEDURE: 0,

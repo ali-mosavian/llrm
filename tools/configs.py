@@ -50,24 +50,30 @@ def _qb45(tag: str, switches: str) -> Config:
     return Config(tag, QB45, r"V:\BC.EXE", r"V:\LINK.EXE", r"V:\LIB\BCOM45.LIB", switches)
 
 
+# /Zi on every one of them. It makes BC populate $$SYMBOLS and $$TYPES --
+# the names and types of every variable, every procedure's signature, and
+# each parameter and local with its own bp offset -- which is the only
+# source in the object for what anything is called. Measured on six
+# programs: the generated code is byte-identical, and the object gains the
+# two debug segments and two bytes of padding.
 CONFIGS = {
     c.tag: c
     for c in (
         # VBDOS is the only one that takes /G3, the one dword argument push
-        _vbdos("v-g3", "/O /FPi /R /G3 /E"),
-        _vbdos("v-g2", "/O /FPi /R /G2 /E"),
-        _vbdos("v-noO", "/FPi /R /G3 /E"),
-        _vbdos("v-plain", "/FPi /R /E"),
-        _vbdos("v-evt", "/O /FPi /R /G3 /E /V /W"),
+        _vbdos("v-g3", "/O /FPi /R /G3 /E /Zi"),
+        _vbdos("v-g2", "/O /FPi /R /G2 /E /Zi"),
+        _vbdos("v-noO", "/FPi /R /G3 /E /Zi"),
+        _vbdos("v-plain", "/FPi /R /E /Zi"),
+        _vbdos("v-evt", "/O /FPi /R /G3 /E /V /W /Zi"),
         # PDS rejects /G3
-        _pds("p-g2", "/O /FPi /G2"),
-        _pds("p-ot", "/O /FPi /G2 /Ot"),
-        _pds("p-noO", "/FPi /G2"),
-        _pds("p-evt", "/O /FPi /G2 /V /W"),
+        _pds("p-g2", "/O /FPi /G2 /Zi"),
+        _pds("p-ot", "/O /FPi /G2 /Ot /Zi"),
+        _pds("p-noO", "/FPi /G2 /Zi"),
+        _pds("p-evt", "/O /FPi /G2 /V /W /Zi"),
         # QB 4.5 rejects /G2 as well, and has no codegen switch at all
-        _qb45("q-O", "/O /FPi"),
-        _qb45("q-noO", "/FPi"),
-        _qb45("q-evt", "/O /FPi /V /W"),
+        _qb45("q-O", "/O /FPi /Zi"),
+        _qb45("q-noO", "/FPi /Zi"),
+        _qb45("q-evt", "/O /FPi /V /W /Zi"),
     )
 }
 
