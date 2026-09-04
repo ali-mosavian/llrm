@@ -423,10 +423,11 @@ def test_a_hoisted_run_does_not_land_on_a_live_register() -> None:
 
 @pytest.mark.xfail(
     reason="a copy no longer leaves a loop at all. The guard was \"every source is "
-    "a register\", so a constant load was real work and could go -- and with the "
-    "hoist no longer allocating, letting one go hoists the counter's own "
-    "initialiser and hotlop printed 0 for 630 on nine of twelve configurations. "
-    "Restored when regalloc splits a live range on LIR.",
+    "a register\", so a constant load was real work and could go. Tried again "
+    "after the hoist gave what leaves a loop its own variable, and hotlop still "
+    "printed 0 for 630 on nine of twelve configurations -- so the register was "
+    "never the whole of it, and what refuses the counter's own initialiser has "
+    "to be found before this can be relaxed.",
     strict=True,
 )
 def test_a_constant_product_leaves_the_loop() -> None:
