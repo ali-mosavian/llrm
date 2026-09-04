@@ -73,3 +73,32 @@ one. Two changes, on branch `hoist-variable-rename`:
 **hotlpx, matrix, nested, pressx and nbody are still wrong**, so the branch
 is not shippable and main does not carry it. What is left is to find why
 those five still disagree with a body whose SSA now separates the two.
+
+## Done, and what the four remaining xfails are
+
+The rename landed on main: hotlpx 4.9x -> 3.1x, pressx 6.4x -> 2.6x, two of
+the six xfails back. What is left is not one thing.
+
+**The copy guard.** Tried again after the rename and hotlop still printed 0
+for 630 on nine of twelve configurations, so a copy leaving a loop was never
+only about the register it needs. What refuses the counter's own initialiser
+has to be found before that guard can be relaxed.
+
+**press and lngmix get no run at all.** `_invariant_run` refuses any loop
+holding a runtime call, and on the object as BC wrote it lngmix's loop holds
+two -- `B$DVI4` and `B$RMI4`, the divide and the remainder. After the machine
+arm absorbs them the loop is call-free and holds two `div` operations:
+
+```
+  load copy convert div join arg arg arg arg store store result result
+  convert div copy add add store join load add store sub branch
+```
+
+Both are invariant and both compute the same thing from the same operands,
+and x86's `idiv` yields quotient and remainder from one instruction. So
+lngmix is a **cse** program first and a **licm** program second -- 1,844
+against a target of 210 -- and neither is about registers.
+
+**nested and matrix do hoist** and are still worse than they were: a run is
+found, a crossing value is found, a placement is found. Whatever costs them
+is downstream of the hoist and has not been looked at.
