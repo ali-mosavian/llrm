@@ -168,7 +168,7 @@ def test_the_covered_share_of_the_corpus_is_what_was_measured() -> None:
     # The 44 that do not come back are the movsw of suite/fpdeep.bas, the one
     # encoding this deliberately refuses -- see REFUSED in tests/test_ir.py.
     # Every other operation in the corpus selects.
-    assert (total, emitted) == (37904, 37860)
+    assert (total, emitted) == (37927, 37883)
     assert total - emitted == 44
 
 

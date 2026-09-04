@@ -115,6 +115,7 @@ and run on every configuration.
 from enum import IntEnum
 from pathlib import Path
 from dataclasses import field
+from dataclasses import replace
 from dataclasses import dataclass
 from collections.abc import Iterator
 
@@ -467,13 +468,29 @@ class Local:
 
 @dataclass(frozen=True, slots=True)
 class Variable:
-    """A module-level DIM: an absolute offset into a data segment."""
+    """A module-level DIM: an absolute offset into a data segment.
+
+    For an array that offset is the *descriptor*, which BC files in BC_CN
+    while the elements live in BC_DATA -- so the address the code uses and
+    the address the symbol names are in different segments and never meet.
+    `data` is where the elements are, read out of the descriptor's own
+    relocation, and `stride`/`count` are the element size and how many,
+    which the descriptor writes down at +12 and +14.
+    """
 
     name: str
     offset: int
     segment: int
     type_index: int
     types: dict[int, TypeEntry] = field(default_factory=dict)
+    data: tuple[int, int] | None = None
+    stride: int = 0
+    count: int = 0
+
+    @property
+    def size(self) -> int:
+        """How many bytes the variable occupies where that is known."""
+        return self.stride * self.count
 
     @property
     def type_name(self) -> str | None:
@@ -604,6 +621,36 @@ def module_name(records: list[omf.Record]) -> str | None:
     return None
 
 
+def _elements(records: list[omf.Record], variables: list[Variable]) -> list[Variable]:
+    """Each array told where its own elements are.
+
+    A descriptor's first four bytes are a far pointer to the data and BC
+    leaves them zero with a ptr16:16 fixup, exactly as it does for the
+    symbol record's own address. Without following it an array is named in
+    BC_CN and used in BC_DATA, and nothing can say that `[seg:5+si+0x6]` is
+    POSX& -- which is every array access in the program.
+    """
+    images: dict[int, bytes] = {}
+    for index, segment in enumerate(omf.segments(records)):
+        if segment:
+            images[index] = omf.segment_image(records, index, segment[1])
+    where = {(one.seg, one.offset): (one.index, one.disp) for one in omf.fixups(records)}
+
+    out: list[Variable] = []
+    for one in variables:
+        found = where.get((one.segment, one.offset))
+        image = images.get(one.segment, b"")
+        if found is None or len(image) < one.offset + 16:
+            out.append(one)
+            continue
+        at = one.offset
+        stride = int.from_bytes(image[at + 12 : at + 14], "little")
+        count = int.from_bytes(image[at + 14 : at + 16], "little")
+        out.append(replace(one, data=found, stride=stride, count=count))
+    return out
+
+
+
 def parse(records: list[omf.Record]) -> DebugInfo:
     buf = symbols(records)
     module = module_name(records) if buf else None
@@ -654,6 +701,7 @@ def parse(records: list[omf.Record]) -> DebugInfo:
                 name, _ = _pstr(data, 3)
                 labels.append(Label(name, off))
 
+    variables = _elements(records, variables)
     code_segment = omf.code_segment(records)
     code_length = code_segment[2] if code_segment else 0
     return DebugInfo(module, procedures, variables, labels, types, code_length)

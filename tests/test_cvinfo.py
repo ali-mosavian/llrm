@@ -328,3 +328,34 @@ def test_a_parameter_is_above_the_frame_pointer_and_a_local_below() -> None:
     # Report takes two and declares no local of its own
     report = named["REPORT"]
     assert {one.name for one in report.locals if one.bp_offset > 0} == {"N&", "TAG$"}
+
+
+def test_an_array_is_where_its_descriptor_points() -> None:
+    """BC names an array in BC_CN and the code only ever uses BC_DATA.
+
+    The descriptor's first four bytes are a far pointer to the elements and
+    BC leaves them zero with a ptr16:16 fixup, the same way it leaves the
+    symbol record's own address. Without following it the two addresses are
+    in different segments and never meet, so no array access in the program
+    can be named -- and nbody is nothing but array accesses.
+    """
+    from pathlib import Path
+
+    from qbopt import cvinfo
+    from qbopt import omf
+
+    got = cvinfo.parse(omf.parse(Path("fixtures/omf/arridx-p-g2-zi.obj").read_bytes()))
+    arrays = [one for one in got.variables if "ARRAY" in (one.type_name or "")]
+    assert arrays, "the object declares no array, so this proves nothing"
+    for one in arrays:
+        assert one.data is not None, f"{one.name}: the descriptor was not followed"
+        assert one.data != (one.segment, one.offset), f"{one.name}: named where its descriptor is"
+        assert one.stride and one.count, f"{one.name}: {one.count} x {one.stride}"
+    # a% is 21 INTEGERs -- `DIM a%(20)`, which BASIC bases at zero
+    named = {one.name: one for one in arrays}
+    assert named["A%"].stride == 2 and named["A%"].count == 21
+
+    # A scalar has no descriptor and is not given one: its own address is
+    # where it is, and `data` stays None.
+    scalars = [one for one in got.variables if "ARRAY" not in (one.type_name or "")]
+    assert scalars and all(one.data is None for one in scalars)

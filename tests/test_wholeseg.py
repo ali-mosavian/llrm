@@ -117,4 +117,4 @@ def test_the_rebuildable_share_is_what_was_measured() -> None:
     between the ops that reachability never reached, so nothing here can
     say whether they are code."""
     done = sum(1 for obj in FIXTURES if wholeseg.rebuilt(obj.read_bytes())[1] == wholeseg.REBUILT)
-    assert done == 486
+    assert done == 487

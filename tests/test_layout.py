@@ -149,7 +149,7 @@ def test_a_body_is_refused_whole_or_not_at_all() -> None:
                 assert ":" in got, f"a refusal should say which op: {got}"
             else:
                 done += 1
-    assert (total, done) == (582, 514)
+    assert (total, done) == (583, 515)
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
@@ -335,7 +335,7 @@ def test_the_rebuildable_share_is_what_was_measured() -> None:
     for obj in FIXTURES:
         if rebuilt(obj)[2] is not None:
             done += 1
-    assert done == 486
+    assert done == 487
 
 
 @pytest.mark.parametrize("obj", FIXTURES[:12], ids=lambda p: p.stem)

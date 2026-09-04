@@ -148,8 +148,11 @@ class Cells:
         # array element is a displacement from the array's own base. Naming
         # only the exact address left every high half and every element
         # anonymous.
+        # An array is registered where its elements are, not where its
+        # descriptor is: BC files the descriptor in BC_CN and the elements
+        # in BC_DATA, and the code only ever names the elements.
         self.symbols = sorted(
-            ((one.segment, one.offset), one.name)
+            (one.data or (one.segment, one.offset), one.name)
             for one in (debug.variables if debug is not None else ())
         )
         self.slots = {
@@ -177,7 +180,10 @@ class Cells:
             return f"push{ref.addr.disp:+d}" + index
         said = self._inside(ref.addr.index, ref.addr.disp)
         if said is not None:
-            return said + index
+            # The index comes before the offset into the element: the high
+            # half of `POSX&(i)` is `POSX&[v121]+2`, not `POSX&+2[v121]`.
+            name, _, at = said.partition("+")
+            return f"{name}{index}" + (f"+{at}" if at else "")
         key = (str(ref.addr), ref.width)
         if key not in self.named:
             number = len(self.order)
