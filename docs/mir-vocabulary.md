@@ -68,28 +68,39 @@ arguments; `cmp` then `jle` leaves as LE then BRANCH.
    MIR. The deletion is what makes the claim true; the conversion only
    makes the deletion possible.
 
+## Where it landed
+
+Machine references in the MIR passes, counted by walking the AST for
+ir.Operation, ir.Reg/Mem/Imm/Semantics, `.node`, `.made`, `.origin`,
+Register, ROOT and AVAILABLE:
+
+```
+  segments.py      0     was 6
+  consts.py        0     was 25
+  fpstack.py       0     was 3
+  avail.py         4     was 23 -- redundant()'s register map
+  transform.py     6     was 233 -- _leaving, which Value's docstring
+                                    sanctions: what the caller sees is a
+                                    statement about registers
+```
+
+`widen` and `pairs.py` are no longer passes: widening recognises an idiom
+and writes machine form, so it runs after every pass and before lowering,
+which is where rule 5 puts it. `absorb` and `place` are retired.
+
+## What it cost
+
+The hoist no longer allocates. A result that crosses the loop edge needs a
+register the preheader can spare, and only regalloc can arrange that -- so
+an invariant multiply or divide whose answer the loop still reads stays
+where it is. Six tests are strict xfail naming it. The corpus is 638,724
+bytes against 638,419 at the start of the vocabulary work, +305.
+
+What made the deletion possible: a body the allocator refuses is now laid
+out as it was raised. layout remaps every operand through the allocation,
+and a body with none was emitted with BC's registers while a pass had moved
+the operations -- which is exactly why the hoist had to choose registers
+itself.
+
 ## What is left, and why each is blocked
 
-```
-  transform.py  the absorb builders (_absorbing, _comparing, _deleting,
-                made) -- 65 references, and phase D moves them into the
-                raise, which is where they belong
-                the hoist's allocator (hoisted, _insertion, _move,
-                _instead, _writes_to) -- S1, and it needs regalloc to
-                split a live range on LIR first: removing it blind
-                miscompiled hotlop on all twelve configurations
-                the register-level liveness the hoist needs (_carried,
-                _leaving, _placed, widths) -- a 16-bit write under a
-                32-bit register model is a read-modify-write, and that
-                artifact goes when a wide value is one value
-  pairs.py      BC's ax:dx pair identity -- step 4, wide arithmetic at
-                the raise
-  mir.Op        node, made, covers. node and raised could move to a side
-                table today; made and covers cannot, because the three
-                blocks above still write them.
-  MirBody       origin -- last, as the plan says
-```
-
-Each step: 485 of 485 rebuild and the corpus byte total through
-`rewrite.py`, which is the shipped optimiser. `wholeseg.rebuilt` is not,
-and measuring through it is what hid a miscompile for five commits.
