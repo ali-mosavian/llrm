@@ -69,7 +69,15 @@ def test_a_rebuilt_object_keeps_every_code_fixup_it_still_has_a_home_for(obj: Pa
     # the allocator refuses is laid out as instead.
     raised = list(mir.bodies(before, blocks))
     bodies = [
-        (name, transform.widened(transform.applied(body, before.dgroup, before.calls)))
+        # The same arguments wholeseg passes: without `found` the hoist gets
+        # no bounds and takes a different run, so the coverage arithmetic
+        # this checks is not the one the object was built with.
+        (
+            name,
+            transform.widened(
+                transform.applied(body, before.dgroup, before.calls, blocks=blocks, found=before)
+            ),
+        )
         for name, body in raised
     ]
     # Widened too: a body the allocator refuses falls back to this, and

@@ -1126,7 +1126,12 @@ def _reparented(body: MirBody, crossed: set) -> MirBody:
             )
             for block in body.blocks
         ),
-        origin={value(one): where for one, where in body.origin.items() if one not in instead},
+        # The renamed values keep their origin. "Where BC had it" is still
+        # true of them and is what layout remaps an operand through -- drop
+        # it and the operand keeps the register the instruction was raised
+        # with, whatever the allocator decided. What the rename changes is
+        # which variable a value is a version of, and nothing else.
+        origin={value(one): where for one, where in body.origin.items()},
     )
 
 
@@ -1188,7 +1193,13 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
         if index is None:
             continue
 
-        crossed |= set(crossing)
+        # Everything the run defines, not only what leaves the loop. The
+        # run is a chain and its own intermediate values live in the
+        # preheader too: hotlpx's multiplicand load is a version of the
+        # same variable as the counter, so leaving it alone put its
+        # definition after `mov ax,1` and the phi carried the load into the
+        # loop as though it were the counter.
+        crossed |= {value for one in run for value in one.defines if not value.flags}
         placing[into] = min(placing.get(into, index), index)
         moved[into] = moved.get(into, []) + list(run)
         gone.update(one.at for one in run)
