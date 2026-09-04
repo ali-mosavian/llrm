@@ -280,7 +280,12 @@ def main(argv: list[str] | None = None) -> int:
     plain, why = rebuilt(data, optimise=False)
     was = dump(next(step), "emitted", f"emitted, no pass ({why})", plain, was, not args.quiet)
 
-    for name in [args.only] if args.only else PASSES:
+    # Widening is the one step that is not a pass: it recognises an idiom
+    # and writes machine form, so wholeseg runs it after every pass and
+    # before lowering. Rule 4 asks for every step, and on a program whose
+    # arithmetic is all longs it is the only one that fires -- leaving it
+    # out of the list left the dump saying nothing happened.
+    for name in [args.only] if args.only else (*PASSES, "widen"):
         out, why = rebuilt(data if args.only else plain, only=name)
         was = dump(next(step), name, f"{name} ({why})", out, was, not args.quiet)
         if not args.only:

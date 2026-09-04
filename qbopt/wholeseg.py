@@ -67,17 +67,22 @@ def rebuilt(
         # below the boundary; until the two are separated it runs here,
         # after every pass and before lowering, which is where it ran
         # anyway and is where rule 5 puts it.
-        bodies = [
-            (
-                name,
-                transform.widened(
-                    transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found, only=only)
-                )
-                if only is None or only == "widen"
-                else transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found, only=only),
-            )
-            for name, body in bodies
-        ]
+        def one(body):
+            # `only="widen"` is the step on its own, which tools/stages.py
+            # asks for; every other name selects a pass and leaves widening
+            # out, so the two can be diffed apart.
+            if only == "widen":
+                return transform.widened(body)
+            done = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found, only=only)
+            return done if only is not None else transform.widened(done)
+
+        bodies = [(name, one(body)) for name, body in bodies]
+        # What a body the allocator refuses falls back to. Not the body as
+        # raised: widening writes machine form with the registers BC had,
+        # so it needs no allocation and is right either way -- and nbody is
+        # all long arithmetic, so dropping it there threw away every byte
+        # the object gained.
+        plain = [(name, transform.widened(body)) for name, body in plain]
 
     # Every byte the decoder walked into, so layout.py can tell a gap it may
     # carry from one that is real code it simply did not raise.

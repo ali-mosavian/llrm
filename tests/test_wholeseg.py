@@ -67,11 +67,15 @@ def test_a_rebuilt_object_keeps_every_code_fixup_it_still_has_a_home_for(obj: Pa
     # The same pipeline wholeseg runs: widening is not a pass and goes after
     # every one of them, just before lowering -- and `plain` is what a body
     # the allocator refuses is laid out as instead.
-    plain = list(mir.bodies(before, blocks))
+    raised = list(mir.bodies(before, blocks))
     bodies = [
         (name, transform.widened(transform.applied(body, before.dgroup, before.calls)))
-        for name, body in plain
+        for name, body in raised
     ]
+    # Widened too: a body the allocator refuses falls back to this, and
+    # widening writes machine form with the registers BC had, so it needs
+    # no allocation and is right either way.
+    plain = [(name, transform.widened(body)) for name, body in raised]
     fields = frozenset(one.offset for one in omf.fixups(omf.parse(data)) if one.seg == before.seg)
     reached = frozenset(at for b in blocks for i in b.insns for at in range(i.at, i.end))
     laid = layout.rebuild(before, bodies, mapped.tables, fields, reached, plain=plain)
