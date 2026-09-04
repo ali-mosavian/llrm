@@ -118,3 +118,59 @@ def test_the_rebuildable_share_is_what_was_measured() -> None:
     say whether they are code."""
     done = sum(1 for obj in FIXTURES if wholeseg.rebuilt(obj.read_bytes())[1] == wholeseg.REBUILT)
     assert done == 487
+
+
+def test_a_refused_body_is_laid_out_widened_and_only_that_body_is_widened() -> None:
+    """Two things at once, because they are the same arrangement.
+
+    A body the allocator refuses is laid out as it was raised -- widened,
+    because widening writes machine form with the registers BC had, so it
+    needs no allocation and is right either way. Dropping it cost nbody
+    every byte the object gained, 2,664 for 2,551.
+
+    And the widening happens for the body that needs it. Pre-widening every
+    raised body as well as every optimised one walked each pair chain twice:
+    68 calls over the p-g2 fixtures where 38 do.
+    """
+    from qbopt import mir
+    from qbopt import module
+    from qbopt import omf
+    from qbopt import regalloc
+    from qbopt import transform
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    calls = []
+    real = transform.widened
+
+    def counting(body, dead=frozenset()):
+        calls.append(body)
+        return real(body, dead)
+
+    obj = Path("fixtures/omf/arith-p-g2.obj")
+    found = module.of(omf.parse(obj.read_bytes()))
+    assert found is not None
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
+    blocks = split.partition(found, mapped)
+
+    refused = 0
+    for _who, body in mir.bodies(found, blocks):
+        done = real(transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found))
+        fixed = regalloc.untangled(done)
+        if isinstance(regalloc.colour(fixed, fixed.pins), str) and isinstance(
+            regalloc.colour(done, done.pins), str
+        ):
+            refused += 1
+            assert real(body) is not body, "the raise of the refused body widens"
+    assert refused, "no body is refused here, so this proves nothing"
+
+    transform.widened = counting
+    try:
+        out, why = wholeseg.rebuilt(obj.read_bytes())
+    finally:
+        transform.widened = real
+    assert why == wholeseg.REBUILT, why
+    # One per body, plus one for each the allocator sent back to its raise.
+    bodies = len(list(mir.bodies(found, blocks)))
+    assert bodies < len(calls) <= bodies * 2, f"{len(calls)} for {bodies} bodies"

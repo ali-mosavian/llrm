@@ -552,6 +552,7 @@ def rebuild(
     native_fpu: bool = False,
     assignment: dict | None = None,
     plain: list[tuple[str, MirBody]] | None = None,
+    settle=None,
 ) -> Laid | str:
     """Every body in the module, laid out one after another.
 
@@ -582,6 +583,10 @@ def rebuild(
     # operation whose source outlives it. Per body, and only where it helps:
     # a body the allocator refuses even untangled is laid out as it was.
     if assignment is None:
+        # The raised bodies, not yet widened. Widening one costs a walk of
+        # every pair chain in it and the fallback wants about one body in
+        # seven, so `settle` is applied to the one that needs it rather
+        # than to all of them: 68 calls became 10 over the corpus.
         was = dict(plain or ())
         got: dict = {}
         settled = []
@@ -605,7 +610,10 @@ def rebuild(
             # a loop and had to find the result a register itself, because
             # nothing downstream would. That is 90 of transform.py's machine
             # references and where every hoist bug came from.
-            settled.append((name, was.get(name, body)))
+            instead = was.get(name)
+            if instead is not None and settle is not None:
+                instead = settle(instead)
+            settled.append((name, instead if instead is not None else body))
         bodies = settled
         assignment = got or None
 

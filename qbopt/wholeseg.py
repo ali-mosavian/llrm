@@ -77,12 +77,6 @@ def rebuilt(
             return done if only is not None else transform.widened(done)
 
         bodies = [(name, one(body)) for name, body in bodies]
-        # What a body the allocator refuses falls back to. Not the body as
-        # raised: widening writes machine form with the registers BC had,
-        # so it needs no allocation and is right either way -- and nbody is
-        # all long arithmetic, so dropping it there threw away every byte
-        # the object gained.
-        plain = [(name, transform.widened(body)) for name, body in plain]
 
     # Every byte the decoder walked into, so layout.py can tell a gap it may
     # carry from one that is real code it simply did not raise.
@@ -91,7 +85,16 @@ def rebuilt(
     # An allocation, where a pass asked for one. colour() gives back the
     # identity unless something pinned, so this costs nothing when nothing
     # did -- and refuses the pin rather than guessing when it cannot be had.
-    laid = layout.rebuild(found, bodies, mapped.tables, fields, reached, native_fpu, plain=plain)
+    # A body the allocator refuses is laid out as it was raised -- widened,
+    # because widening writes machine form with the registers BC had, so it
+    # needs no allocation and is right either way; without it nbody lost
+    # every byte the object gained. Handed as the raise plus the step
+    # rather than pre-widened, so the walk happens for the body that needs
+    # it instead of for all of them.
+    laid = layout.rebuild(
+        found, bodies, mapped.tables, fields, reached, native_fpu,
+        plain=plain, settle=transform.widened if optimise else None,
+    )
     if isinstance(laid, str):
         return data, laid
 
