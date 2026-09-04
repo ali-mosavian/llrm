@@ -97,23 +97,27 @@ def _report(tag: str, data: bytes, was: dict | None, verbose: bool) -> dict:
 
 
 def _short(one) -> str:
-    """One MIR operand, short enough to diff."""
+    """One MIR operand, short enough to read."""
     if isinstance(one, mir.Held):
-        return f"{one.value}:{one.width}"
+        return f"{one.value}"
     if isinstance(one, mir.Const):
-        return f"#{one.n}:{one.width}"
+        return f"{one.n}"
     if isinstance(one, mir.Cell):
         return _cell(one.ref)
-    return f"opaque({getattr(one, 'what', one)})"
+    return one.name or f"opaque({getattr(one, 'what', one)})"
 
 
 def _cell(ref) -> str:
+    """One memory operand: where it is, and the value it is reached through."""
+    # Addr prints its own brackets; a None one names nothing and aliases
+    # everything, which is worth seeing rather than reading as an address.
+    where = "[?]" if ref.addr is None else f"{ref.addr}"
     through = f"+{ref.base}" if getattr(ref, "base", None) is not None else ""
-    return f"{ref.addr}{through}:{ref.width}"
+    return f"{where}{through}:{ref.width}"
 
 
 def _mir(bodies) -> None:
-    """What each pass decided, in MIR's own terms and nothing else.
+    """What each pass decided, as `c := a op b` and nothing else.
 
     Rule 4 asks for the MIR between passes, not the code at the end. No
     register appears here: an operand is a value, a constant or a cell, and
@@ -123,36 +127,45 @@ def _mir(bodies) -> None:
     for name, body in bodies:
         print(f"  {name}")
         for block in body.blocks:
-            succ = ",".join(f"{one:#x}" for one in block.succ) or "-"
-            print(f"    block {block.at:#06x} -> {succ}")
+            succ = ", ".join(f"{one:#x}" for one in block.succ) or "-"
+            print(f"\n    {block.at:#06x}  -> {succ}")
             for phi in block.phis:
-                came = " ".join(f"{at:#x}:{value}" for at, value in sorted(phi.incoming.items()))
-                print(f"      phi {phi.result} <- {came}")
+                came = ", ".join(f"{at:#x}:{value}" for at, value in sorted(phi.incoming.items()))
+                print(f"      {'':6s}  {phi.result} := phi {came}")
             for op in block.ops:
-                # What it computes, not what x86 spells it. Printing the
-                # mnemonic here showed `cwd`, `sbb`, `adc` and `jle` in a
-                # view whose whole claim is that MIR does not know them.
-                shown = op.kind.name.lower()
-                if op.test is not None:
-                    shown = f"{shown}.{op.test.name.lower()}"
-                parts = [f"{op.at:#06x}", f"{shown:10s}"]
-                if op.defines:
-                    parts.append("=> " + ",".join(str(one) for one in op.defines))
-                if op.uses:
-                    parts.append("<= " + ",".join(str(one) for one in op.uses))
-                if op.args:
-                    parts.append("args " + ",".join(_short(one) for one in op.args))
-                if op.results:
-                    parts.append("into " + ",".join(_short(one) for one in op.results))
-                if op.loads:
-                    parts.append("ld " + ",".join(_cell(one) for one in op.loads))
-                if op.stores:
-                    parts.append("st " + ",".join(_cell(one) for one in op.stores))
-                if op.target is not None:
-                    parts.append(f"-> {op.target:#x}")
-                if op.raised is not None and (op.args, op.results) != op.raised:
-                    parts.append("(rewritten)")
-                print("      " + "  ".join(parts))
+                print(f"      {op.at:#06x}  {_says(op)}")
+
+
+def _says(op) -> str:
+    """One operation, in three-address form."""
+    kind = op.kind.name.lower()
+    args = [_short(one) for one in op.args]
+    into = ", ".join(_short(one) for one in op.results)
+    # What it reads that is not an operand: a flags value the machine
+    # passed it, and the halves it only preserves.
+    notes = []
+    flags = [one for one in op.uses if one.flags]
+    if flags:
+        notes.append("with " + ", ".join(str(one) for one in flags))
+    if op.merges:
+        notes.append("keeps " + ", ".join(str(one) for one in op.merges))
+    keeps = ("    " + "; ".join(notes)) if notes else ""
+
+    if op.kind is mir.Kind.JUMP:
+        return f"goto {op.target:#x}" if op.target is not None else "goto ?"
+    if op.kind is mir.Kind.BRANCH:
+        asked = op.test.name.lower() if op.test is not None else "?"
+        where = f" -> {op.target:#x}" if op.target is not None else ""
+        reads = ", ".join(str(one) for one in op.uses) or "?"
+        return f"if {reads} {asked}{where}"
+    if op.kind is mir.Kind.CALL:
+        made = ", ".join(str(one) for one in op.defines)
+        return f"{made + ' := ' if made else ''}call" + keeps
+    if op.kind in (mir.Kind.COPY, mir.Kind.LOAD, mir.Kind.STORE) and into and len(args) == 1:
+        return f"{into} := {args[0]}{keeps}"
+    if not into:
+        return f"{kind} {', '.join(args)}".rstrip() + keeps
+    return f"{into} := {kind} {', '.join(args)}".rstrip() + keeps
 
 
 def _lir(bodies) -> None:
