@@ -96,27 +96,81 @@ def _report(tag: str, data: bytes, was: dict | None, verbose: bool) -> dict:
     return now
 
 
-def _short(one) -> str:
-    """One MIR operand, short enough to read."""
+# Operators, so a line reads as arithmetic rather than as a list of
+# opcodes. Only where there is one: a float add stays `fadd` because `+`
+# would say it is the same operation, and it is not.
+_SYMBOL = {
+    mir.Kind.ADD: "+",
+    mir.Kind.SUB: "-",
+    mir.Kind.MUL: "*",
+    mir.Kind.DIV: "/",
+    mir.Kind.REM: "%",
+    mir.Kind.AND: "&",
+    mir.Kind.OR: "|",
+    mir.Kind.XOR: "^",
+    mir.Kind.SHL: "<<",
+    mir.Kind.SHR: ">>",
+    mir.Kind.SAR: ">>>",
+}
+_PREFIX = {mir.Kind.NEG: "-", mir.Kind.NOT: "~", mir.Kind.ADDRESS: "&"}
+
+
+class Cells:
+    """Short names for the cells one body touches, and the legend for them.
+
+    `[seg:5+si+0x6]` is a segment index and a displacement, and nbody has
+    twenty of them: unreadable in a statement and identical to each other at
+    a glance. A letter at first use and a table at the end says the same
+    thing once.
+
+    Frame slots keep their own naming -- `L14` for a local fourteen bytes
+    below bp, `P6` for a parameter six above it -- because which one a slot
+    is, is the useful fact about it, and BC's frame layout says so.
+    """
+
+    def __init__(self) -> None:
+        self.named: dict = {}
+        self.order: list = []
+
+    def of(self, ref) -> str:
+        if ref.addr is None:
+            return "[?]"
+        # The value the address is reached through is the index, and it is
+        # part of the statement rather than of the cell: `E[v121]` and
+        # `E[v128]` are two elements of one array, and keying the name on
+        # the index would have made them two arrays.
+        index = f"[{ref.base}]" if getattr(ref, "base", None) is not None else ""
+        space = getattr(ref.addr.space, "name", "")
+        if space == "FRAME":
+            disp = ref.addr.disp
+            return (f"L{-disp:x}" if disp < 0 else f"P{disp:x}") + index
+        if space == "STACK":
+            return f"push{ref.addr.disp:+d}" + index
+        key = (str(ref.addr), ref.width)
+        if key not in self.named:
+            number = len(self.order)
+            # A, B ... Z, then AA. Twenty-six is more than any body here.
+            name = chr(ord("A") + number % 26) * (1 + number // 26)
+            self.named[key] = name
+            self.order.append((name, ref.addr, ref.width))
+        return self.named[key] + index
+
+    def legend(self) -> list[str]:
+        return [f"      {name:4s} {addr} :{width}" for name, addr, width in self.order]
+
+
+def _short(one, cells: Cells) -> str:
+    """One MIR operand."""
     if isinstance(one, mir.Held):
         return f"{one.value}"
     if isinstance(one, mir.Const):
         return f"{one.n}"
     if isinstance(one, mir.Cell):
-        return _cell(one.ref)
-    return one.name or f"opaque({getattr(one, 'what', one)})"
+        return cells.of(one.ref)
+    return one.name or "?"
 
 
-def _cell(ref) -> str:
-    """One memory operand: where it is, and the value it is reached through."""
-    # Addr prints its own brackets; a None one names nothing and aliases
-    # everything, which is worth seeing rather than reading as an address.
-    where = "[?]" if ref.addr is None else f"{ref.addr}"
-    through = f"+{ref.base}" if getattr(ref, "base", None) is not None else ""
-    return f"{where}{through}:{ref.width}"
-
-
-def _mir(bodies) -> None:
+def _mir(bodies, found=None, verbose: bool = False) -> None:
     """What each pass decided, as `c := a op b` and nothing else.
 
     Rule 4 asks for the MIR between passes, not the code at the end. No
@@ -124,48 +178,76 @@ def _mir(bodies) -> None:
     that is the whole vocabulary.
     """
     print("  --- mir")
+    calls = (found.calls if found is not None else {}) or {}
     for name, body in bodies:
         print(f"  {name}")
+        cells = Cells()
+        depth = _depth(body)
         for block in body.blocks:
+            pad = "  " * depth.get(block.at, 0)
             succ = ", ".join(f"{one:#x}" for one in block.succ) or "-"
-            print(f"\n    {block.at:#06x}  -> {succ}")
+            print(f"\n    {block.at:#06x}  {pad}-> {succ}")
             for phi in block.phis:
                 came = ", ".join(f"{at:#x}:{value}" for at, value in sorted(phi.incoming.items()))
-                print(f"      {'':6s}  {phi.result} := phi {came}")
+                print(f"    {'':6s}  {pad}{phi.result} := phi {came}")
             for op in block.ops:
-                print(f"      {op.at:#06x}  {_says(op)}")
+                # The address stays in a gutter: it is what `diff` between
+                # two stages keys on, and rule 4 is why these files exist.
+                print(f"    {op.at:#06x}  {pad}{_says(op, cells, calls, verbose)}")
+        if cells.order:
+            print("\n    where:")
+            for line in cells.legend():
+                print(line)
 
 
-def _says(op) -> str:
+def _depth(body) -> dict:
+    """How deeply nested each block is, so the structure is visible."""
+    from qbopt import loops as loopy
+
+    out: dict = {}
+    for loop in loopy.loops(list(body.blocks), body.entry):
+        for at in loop.body:
+            out[at] = out.get(at, 0) + 1
+    return out
+
+
+def _says(op, cells: Cells, calls: dict, verbose: bool) -> str:
     """One operation, in three-address form."""
-    kind = op.kind.name.lower()
-    args = [_short(one) for one in op.args]
-    into = ", ".join(_short(one) for one in op.results)
-    # What it reads that is not an operand: a flags value the machine
-    # passed it, and the halves it only preserves.
+    args = [_short(one, cells) for one in op.args]
+    into = ", ".join(_short(one, cells) for one in op.results)
+
     notes = []
-    flags = [one for one in op.uses if one.flags]
-    if flags:
-        notes.append("with " + ", ".join(str(one) for one in flags))
-    if op.merges:
-        notes.append("keeps " + ", ".join(str(one) for one in op.merges))
-    keeps = ("    " + "; ".join(notes)) if notes else ""
+    if verbose:
+        flags = [one for one in op.uses if one.flags]
+        if flags:
+            notes.append("with " + ", ".join(str(one) for one in flags))
+        if op.merges:
+            notes.append("keeps " + ", ".join(str(one) for one in op.merges))
+    said = ("    ; " + "; ".join(notes)) if notes else ""
 
     if op.kind is mir.Kind.JUMP:
         return f"goto {op.target:#x}" if op.target is not None else "goto ?"
     if op.kind is mir.Kind.BRANCH:
         asked = op.test.name.lower() if op.test is not None else "?"
-        where = f" -> {op.target:#x}" if op.target is not None else ""
+        where = f" goto {op.target:#x}" if op.target is not None else ""
         reads = ", ".join(str(one) for one in op.uses) or "?"
-        return f"if {reads} {asked}{where}"
+        return f"if {reads} {asked}{where}{said}"
     if op.kind is mir.Kind.CALL:
-        made = ", ".join(str(one) for one in op.defines)
-        return f"{made + ' := ' if made else ''}call" + keeps
+        made = ", ".join(str(one) for one in op.defines if not one.flags)
+        who = calls.get(op.at, "")
+        return f"{made + ' := ' if made else ''}call {who}".rstrip() + said
+    if op.kind is mir.Kind.ARG:
+        return f"arg {args[0] if args else '?'}{said}"
     if op.kind in (mir.Kind.COPY, mir.Kind.LOAD, mir.Kind.STORE) and into and len(args) == 1:
-        return f"{into} := {args[0]}{keeps}"
+        return f"{into} := {args[0]}{said}"
+    if op.kind in _SYMBOL and len(args) == 2:
+        return f"{into + ' := ' if into else ''}{args[0]} {_SYMBOL[op.kind]} {args[1]}{said}"
+    if op.kind in _PREFIX and len(args) == 1:
+        return f"{into + ' := ' if into else ''}{_PREFIX[op.kind]}{args[0]}{said}"
+    kind = op.kind.name.lower()
     if not into:
-        return f"{kind} {', '.join(args)}".rstrip() + keeps
-    return f"{into} := {kind} {', '.join(args)}".rstrip() + keeps
+        return f"{kind} {', '.join(args)}".rstrip() + said
+    return f"{into} := {kind} {', '.join(args)}".rstrip() + said
 
 
 def _lir(bodies) -> None:
@@ -235,6 +317,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--asm", action="store_true", help="disassemble after every stage")
     ap.add_argument("--quiet", action="store_true", help="shape only, no per-op detail")
     ap.add_argument(
+        "--verbose",
+        action="store_true",
+        help="show what an operation reads that is not an operand -- the flags "
+        "value the machine handed it and the halves it only preserves. Both are "
+        "the machine artifacts MIR still carries, so they are off by default and "
+        "worth turning on when one of them is the question",
+    )
+    ap.add_argument(
         "--dump",
         type=Path,
         metavar="DIR",
@@ -279,10 +369,10 @@ def main(argv: list[str] | None = None) -> int:
     def dump(number: int, name: str, tag: str, out: bytes, was, verbose: bool):
         """Every view of one stage: what it decided, what that lowers to,
         and what came back after the bytes were written and re-parsed."""
-        _, bodies = _bodies(out)
+        found, bodies = _bodies(out)
         with view(number, "mir", name):
             now = _report(tag, out, was, verbose)
-            _mir(bodies)
+            _mir(bodies, found, args.verbose)
         with view(number, "lir", name):
             print(f"=== {tag}")
             _lir(bodies)
