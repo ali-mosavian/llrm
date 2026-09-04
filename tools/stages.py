@@ -11,11 +11,14 @@ s07-mir-forward.txt` is the whole answer.
 
 **The machine views are dumped once, at the end.** A pass between the raise
 and lowering has no machine form -- that is the architecture -- and an lir
-and an asm file beside every stage said the opposite. This tool lowers after
-each pass because that is how it isolates one: the object it writes is
-re-parsed and re-raised to get the SSA back, which is the only way to see
-one pass alone. That round trip is the tool's own device and not a stage of
-the pipeline, where every pass runs on one body and lowering happens once.
+and an asm file beside every stage said the opposite.
+
+It used to lower and re-raise after every pass, and claimed that was the
+only way to get the SSA back. It is not: `mir.resolved()` puts a body in SSA
+again after a pass has moved things, which is what a pass itself uses when it
+asks a question about its own result. So the passes run here the way they run
+in wholeseg -- all of them on one body, lowering once at the end -- and each
+stage costs a pass rather than a pass plus a machine round trip.
 
 Widening is in the list and is not a pass. It recognises an idiom -- a long
 written as two halves joined by a carry -- and writes machine form, so
@@ -39,6 +42,7 @@ from iced_x86 import FormatterSyntax
 from qbopt import ir
 from qbopt import cvinfo
 from qbopt import mir
+from qbopt import transform
 from qbopt import lower
 from qbopt import regalloc
 from iced_x86 import Register
@@ -78,10 +82,9 @@ def _ops(body) -> dict[int, list[tuple[int, str]]]:
     return {one.at: [(op.at, op.name or "?") for op in one.ops] for one in body.blocks}
 
 
-def _report(tag: str, data: bytes, was: dict | None, verbose: bool) -> dict:
-    """One stage: what the object holds now, against what it held before."""
-    found, bodies = _bodies(data)
-    print(f"\n=== {tag}  ({len(data)} bytes, code {len(found.code) if found else 0})")
+def _report(tag: str, bodies, was: dict | None, verbose: bool) -> dict:
+    """One stage: the shape of each body now, against what it was."""
+    print(f"\n=== {tag}")
     now = {}
     for name, body in bodies:
         print(f"  {name}: {_shape(body)}")
@@ -450,56 +453,65 @@ def main(argv: list[str] | None = None) -> int:
             yield
         print(f"  {path}")
 
-    def dump(number: int, name: str, tag: str, out: bytes, was, verbose: bool):
-        """One stage, as MIR.
-
-        Only as MIR. A pass between the raise and lowering has no machine
-        form -- that is the architecture, and printing an lir and an asm
-        view beside every one of them said the opposite. This tool lowers
-        after each pass because that is how it isolates one, which is the
-        tool's own device and not a stage of the pipeline; the machine
-        views are dumped once, at the end, where lowering really happens.
-        """
-        found, bodies = _bodies(out)
-        debug = cvinfo.parse(omf.parse(out))
+    def dump(number: int, name: str, tag: str, bodies, was, debug, found):
+        """One stage, as MIR. There is no other form of one."""
         with view(number, "mir", name):
-            now = _report(tag, out, was, verbose)
+            now = _report(tag, bodies, was, not args.quiet)
             _mir(bodies, found, args.verbose, debug)
         return now
 
-    def lowered(number: int, out: bytes):
+    def lowered(number: int, out: bytes, why: str):
         """The machine views, once: this is where lowering happens."""
         if args.dump is None and not args.asm:
             return
         _, bodies = _bodies(out)
         with view(number, "lir", "lowered"):
-            print("=== lowered")
+            print(f"=== lowered ({why}, {len(out)} bytes)")
             _lir(bodies)
         with view(number, "asm", "emitted"):
-            print("=== emitted")
+            print(f"=== emitted ({why}, {len(out)} bytes)")
             _asm(out)
 
-    was = dump(next(step), "omf", "BC", data, None, not args.quiet)
+    found, raised = _bodies(data)
+    debug = cvinfo.parse(omf.parse(data))
+    if found is None or not raised:
+        print("  nothing to raise")
+        return 1
 
-    # Emission with no pass at all, which is the control: anything that
-    # changes here is the emitter and not a transform.
-    plain, why = rebuilt(data, optimise=False)
-    was = dump(next(step), "emitted", f"emitted, no pass ({why})", plain, was, not args.quiet)
+    was = dump(next(step), "omf", f"BC ({len(data)} bytes)", raised, None, debug, found)
 
-    # Widening is the one step that is not a pass: it recognises an idiom
-    # and writes machine form, so wholeseg runs it after every pass and
-    # before lowering. Rule 4 asks for every step, and on a program whose
-    # arithmetic is all longs it is the only one that fires -- leaving it
-    # out of the list left the dump saying nothing happened.
-    for name in [args.only] if args.only else (*PASSES, "widen"):
-        out, why = rebuilt(data if args.only else plain, only=name)
-        was = dump(next(step), name, f"{name} ({why})", out, was, not args.quiet)
-        if not args.only:
-            plain = out
+    # Every pass on one body, in order, with the MIR after each. No object is
+    # written between them and none needs to be: mir.resolved() puts a body
+    # back in SSA after a pass has moved things, which is what a pass itself
+    # uses when it asks a question about its own result. This tool used to
+    # lower and re-raise after every stage -- which cost a machine round trip
+    # per pass and made the dump look as though each one had a machine form.
+    where = transform.Where(
+        dgroup=found.dgroup,
+        calls=found.calls,
+        bounds=module.landmarks(found),
+        blocks=split.partition(found, code_map(found)),
+        found=found,
+    )
+    steps = [(one.name, one.transform) for one in transform.pipeline(where)]
+    steps.append(("widen", transform.widened))
+
+    bodies = raised
+    for name, apply in steps:
+        if args.only is not None and name != args.only:
+            continue
+        after = []
+        for who, body in bodies:
+            got = apply(body)
+            settled = mir.resolved(got, found.calls)
+            after.append((who, got if isinstance(settled, str) else settled))
+        bodies = after
+        was = dump(next(step), name, name, bodies, was, debug, found)
 
     # And the machine, once. Everything above is MIR; this is what lowering,
     # the allocator and the selector made of the last of it.
-    lowered(next(step), plain if args.only is None else out)
+    out, why = rebuilt(data)
+    lowered(next(step), out, why)
     return 0
 
 
