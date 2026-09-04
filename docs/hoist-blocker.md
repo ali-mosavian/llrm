@@ -37,6 +37,39 @@ so the crossing value's own range is the preheader-to-header edge and
 nothing more -- and whether the phi's congruence class carries the
 interference is the question to answer next.
 
-**Then** ask whether a split is needed. It may not be: if the graph sees
-the range, identity is invalid and the existing allocator moves one of
-them, which is all the old `_insertion` was doing by hand.
+## The graph is right, and the MIR it is built on is not
+
+Measured on hotlpx: the crossing value has one neighbour, which is the
+counter, and they do not clash in the assignment. The graph is correct
+about the body it is given.
+
+The body is wrong. `mir.resolved()` re-derives SSA **per register**, and
+the product and the counter both lived in ax -- so the phi at the loop
+header joins them:
+
+```
+  0x0052  v1_6, v2_4 := v1_5 * C:2      the hoisted product
+  0x0056    v1_7 := v1_6 + A:2          the loop reads it
+  0x006b    v1_10 := v1_9 + 1           the counter
+  0x006c    v1_1 := phi 0x30:v1_6, 0x56:v1_10
+```
+
+The loop reads `v1_6` directly while the phi says that place now holds the
+counter. Nothing downstream can see a conflict, because in MIR there is
+not one.
+
+So the missing capability is **not a split**. It is that a value which
+leaves a loop has to become a variable of its own -- which is exactly what
+`_insertion` was doing when it picked a spare register, said without naming
+one. Two changes, on branch `hoist-variable-rename`:
+
+- `mir.resolved()` renames per MIR variable rather than per register.
+  `Value.variable` exists for this.
+- `hoisted()` gives each crossing value a fresh variable, so the
+  re-derivation cannot join it to whatever else lived in the same place. A
+  fresh variable has no origin, so the allocator places it freely.
+
+487 of 487 rebuild, 640,829 bytes against 641,386, and lngmix comes back.
+**hotlpx, matrix, nested, pressx and nbody are still wrong**, so the branch
+is not shippable and main does not carry it. What is left is to find why
+those five still disagree with a body whose SSA now separates the two.
