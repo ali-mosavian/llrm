@@ -1154,6 +1154,55 @@ def _rebased(refs: tuple[MemRef, ...], namer: "_Namer", at: int) -> tuple[MemRef
     return tuple(out)
 
 
+class _Renamer:
+    """Fresh values per MIR variable, and which one each currently holds."""
+
+    def __init__(self, home: dict[int, Register_]) -> None:
+        self.next = 0
+        self.home = home
+        self.stack: dict[int, list[Value]] = {}
+        self.versions: dict[int, int] = {}
+        self.origin: dict[Value, Register_] = {}
+
+    def fresh(self, variable: int, at: int, flags: bool = False) -> Value:
+        self.next += 1
+        self.versions[variable] = self.versions.get(variable, 0) + 1
+        made = Value(self.next, at, flags, variable, self.versions[variable])
+        where = self.home.get(variable)
+        if where is not None:
+            self.origin[made] = where
+        return made
+
+    def current_of(self, variable: int, at: int) -> Value:
+        held = self.stack.setdefault(variable, [])
+        if not held:
+            held.append(self.fresh(variable, at))
+        return held[-1]
+
+    def current(self, one: Value, at: int) -> Value:
+        held = self.stack.setdefault(one.variable, [])
+        if not held:
+            held.append(self.fresh(one.variable, at, one.flags))
+        return held[-1]
+
+
+def _renamed_arg(one, swap: dict):
+    """One operand with its value replaced by the version in scope."""
+    if isinstance(one, Held) and one.value.variable in swap:
+        return Held(swap[one.value.variable], one.width)
+    return one
+
+
+def _rehomed(ref: "MemRef", namer: "_Renamer", at: int) -> "MemRef":
+    """A cell's own base and segment, at the versions in scope."""
+    base = namer.current(ref.base, at) if ref.base is not None else None
+    segment = namer.current(ref.segment, at) if ref.segment is not None else None
+    if base is ref.base and segment is ref.segment:
+        return ref
+    return replace(ref, base=base, segment=segment)
+
+
+
 def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | str:
     """The same operations, in SSA again, after a pass has moved them.
 
@@ -1193,13 +1242,25 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
         if parent is not None:
             children[parent].append(block.at)
 
+    # Keyed on the MIR variable, not on the register. In MIR a register is
+    # a variable and nothing more -- but two values BC happened to keep in
+    # one register are one variable only while nothing has moved them, and
+    # the moment the hoist lifts a computation out of a loop they are not:
+    # the product and the counter both lived in ax, and re-deriving by
+    # register put a phi over them that said the loop's reads of the
+    # product were reads of the counter. hotlpx printed the wrong sum with
+    # every host test agreeing.
     frontier = loops.frontiers(blocks, start)
-    where: dict[Register_, set[int]] = {}
+    home: dict[int, Register_] = {}
+    for value, register in (body.origin or {}).items():
+        home.setdefault(value.variable, register)
+
+    where: dict[int, set[int]] = {}
     for block in blocks:
         for op in block.ops:
-            for one in _touched_op(op, calls)[0]:
-                where.setdefault(one, set()).add(block.at)
-    needed: dict[int, set[Register_]] = {block.at: set() for block in blocks}
+            for value in op.defines:
+                where.setdefault(value.variable, set()).add(block.at)
+    needed: dict[int, set[int]] = {block.at: set() for block in blocks}
     for variable, defined in where.items():
         pending = list(defined)
         seen: set[int] = set()
@@ -1210,36 +1271,60 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
                     needed[join].add(variable)
                     pending.append(join)
 
-    namer = _Namer()
-    phis: dict[int, dict[Register_, Phi]] = {block.at: {} for block in blocks}
+    namer = _Renamer(home)
+    phis: dict[int, dict[int, Phi]] = {block.at: {} for block in blocks}
     out: dict[int, list[Op]] = {block.at: [] for block in blocks}
+    flagged = {value.variable for block in blocks for op in block.ops for value in op.defines if value.flags}
     for block in blocks:
-        for variable in sorted(needed[block.at], key=lambda one: (one is not FLAGS, one)):
-            phis[block.at][variable] = Phi(namer.fresh(variable, block.at), {})
+        for variable in sorted(needed[block.at], key=lambda one: (one not in flagged, one)):
+            phis[block.at][variable] = Phi(namer.fresh(variable, block.at, variable in flagged), {})
 
     def rename(at: int) -> None:
         block = by_at[at]
-        pushed: list[Register_] = []
+        pushed: list[int] = []
         for variable, phi in phis[at].items():
             namer.stack.setdefault(variable, []).append(phi.result)
             pushed.append(variable)
 
         for op in block.ops:
-            defines, uses = _touched_op(op, calls)
-            used = tuple(namer.current(one, start) for one in sorted(uses, key=lambda o: (o is not FLAGS, o)))
-            loads = _rebased(op.loads, namer, start)
-            stores = _rebased(op.stores, namer, start)
+            used = tuple(namer.current(one, start) for one in op.uses)
+            swap = {one.variable: now for one, now in zip(op.uses, used)}
+            loads = tuple(_rehomed(one, namer, start) for one in op.loads)
+            stores = tuple(_rehomed(one, namer, start) for one in op.stores)
             fresh = []
-            for one in sorted(defines, key=lambda o: (o is not FLAGS, o)):
-                value = namer.fresh(one, op.at)
-                namer.stack.setdefault(one, []).append(value)
-                pushed.append(one)
+            for one in op.defines:
+                value = namer.fresh(one.variable, op.at, one.flags)
+                namer.stack.setdefault(one.variable, []).append(value)
+                pushed.append(one.variable)
                 fresh.append(value)
-            out[at].append(replace(op, defines=tuple(fresh), uses=used, loads=loads, stores=stores))
+            made = {one.variable: now for one, now in zip(op.defines, fresh)}
+            out[at].append(
+                replace(
+                    op,
+                    defines=tuple(fresh),
+                    uses=used,
+                    loads=loads,
+                    stores=stores,
+                    args=tuple(_renamed_arg(one, swap) for one in op.args),
+                    results=tuple(_renamed_arg(one, made) for one in op.results),
+                    # And what it was raised as, at the same versions. It is
+                    # the two compared that say whether a pass rewrote the
+                    # operation, so renaming one and not the other makes
+                    # every operation look rewritten -- and lowering then
+                    # re-encodes what it should have emitted verbatim.
+                    raised=None
+                    if op.raised is None
+                    else (
+                        tuple(_renamed_arg(one, swap) for one in op.raised[0]),
+                        tuple(_renamed_arg(one, made) for one in op.raised[1]),
+                    ),
+                    merges={swap.get(a.variable, a): made.get(b.variable, b) for a, b in op.merges.items()},
+                )
+            )
 
         for successor in block.succ:
             for variable, phi in phis.get(successor, {}).items():
-                phi.incoming[at] = namer.current(variable, start)
+                phi.incoming[at] = namer.current_of(variable, start)
 
         for child in sorted(children[at]):
             rename(child)

@@ -1053,7 +1053,13 @@ def _placement(block, run: list, alive) -> int | None:
     allocation in a MIR pass with none of the allocator's information, and
     it is where every hoist bug this year came from.
     """
-    wants = {value for one in run for value in one.uses if not value.flags}
+    made = {value for one in run for value in one.defines}
+    wants = {
+        value
+        for one in run
+        for value in one.uses
+        if not value.flags and value not in one.merges and value not in made
+    }
     ready = set(alive.live_in.get(block.at, ()))
     index = 0
     for number, one in enumerate(block.ops):
@@ -1063,6 +1069,65 @@ def _placement(block, run: list, alive) -> int | None:
     if wants <= ready:
         index = len(block.ops)
     return index if wants <= ready else None
+
+
+
+def _reparented(body: MirBody, crossed: set) -> MirBody:
+    """Every value in `crossed` made a variable of its own.
+
+    A rename and nothing else: the value keeps its identity, its readers
+    keep reading it, and only which variable it is a version of changes.
+    That is what stops the SSA re-derivation joining it to whatever else
+    lived in the same place, which is the whole of what the hoist needed a
+    spare register for.
+    """
+    taken = max((one.variable for one in body.origin), default=0)
+    instead: dict = {}
+    for number, one in enumerate(sorted(crossed, key=lambda v: (v.variable, v.version)), 1):
+        instead[one] = replace(one, variable=taken + number, version=1)
+
+    def value(one):
+        return instead.get(one, one)
+
+    def arg(one):
+        if isinstance(one, mir.Held) and one.value in instead:
+            return mir.Held(instead[one.value], one.width)
+        return one
+
+    def cell(one):
+        base, segment = value(one.base) if one.base else one.base, value(one.segment) if one.segment else one.segment
+        return one if (base is one.base and segment is one.segment) else replace(one, base=base, segment=segment)
+
+    def op(one):
+        return replace(
+            one,
+            defines=tuple(value(x) for x in one.defines),
+            uses=tuple(value(x) for x in one.uses),
+            args=tuple(arg(x) for x in one.args),
+            results=tuple(arg(x) for x in one.results),
+            loads=tuple(cell(x) for x in one.loads),
+            stores=tuple(cell(x) for x in one.stores),
+            merges={value(a): value(b) for a, b in one.merges.items()},
+            raised=None
+            if one.raised is None
+            else (tuple(arg(x) for x in one.raised[0]), tuple(arg(x) for x in one.raised[1])),
+        )
+
+    return replace(
+        body,
+        blocks=tuple(
+            replace(
+                block,
+                phis=tuple(
+                    replace(phi, result=value(phi.result), incoming={at: value(x) for at, x in phi.incoming.items()})
+                    for phi in block.phis
+                ),
+                ops=tuple(op(one) for one in block.ops),
+            )
+            for block in body.blocks
+        ),
+        origin={value(one): where for one, where in body.origin.items() if one not in instead},
+    )
 
 
 
@@ -1088,6 +1153,7 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
     alive = regalloc.live(body)
     readable = live(body)
     effective = _effective(body, calls)
+    crossed: set = set()
     moved: dict[int, list[Op]] = {}
     gone: set[int] = set()
     placing: dict[int, int] = {}
@@ -1122,6 +1188,7 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
         if index is None:
             continue
 
+        crossed |= set(crossing)
         placing[into] = min(placing.get(into, index), index)
         moved[into] = moved.get(into, []) + list(run)
         gone.update(one.at for one in run)
@@ -1161,12 +1228,31 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
             ops = ops[:index] + lifted + ops[index:]
         out.append(replace(block, ops=tuple(ops)))
 
+    # What crossed the loop edge is its own variable now.
+    #
+    # In MIR a register is a variable, and two values BC kept in one
+    # register are one variable only while nothing has moved them. The
+    # moment a computation leaves a loop they are not: hotlpx's product and
+    # its counter both lived in ax, and re-deriving SSA put a phi over them
+    # that said the loop's reads of the product were reads of the counter.
+    # The allocator then saw no conflict, left both in ax, and the counter
+    # reload destroyed the product on the second pass.
+    #
+    # This is what `_insertion` was doing by hand when it picked a spare
+    # register: making the crossing value a different thing. It is a
+    # statement about variables and says nothing about registers -- a fresh
+    # variable has no origin, so the allocator places it wherever it likes,
+    # which is its job.
+    moved_out = replace(body, blocks=tuple(out))
+    if crossed:
+        moved_out = _reparented(moved_out, crossed)
+
     # In SSA again, because the operations have moved and the phis raised
     # with the original body no longer describe them: a load hoisted out of
     # a loop was loop-carried and is now live once, ahead of it. Nothing
     # after this asks the allocator anything -- every register is written
     # down -- so a refusal here is the only way the rewrite can fail.
-    laid = mir.resolved(replace(body, blocks=tuple(out)), calls)
+    laid = mir.resolved(moved_out, calls)
     return body if isinstance(laid, str) else laid
 
 
