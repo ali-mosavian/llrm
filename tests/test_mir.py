@@ -429,6 +429,13 @@ def test_mir_operands_say_exactly_what_the_node_said() -> None:
                         ("source", op.args, what.sources),
                         ("dest", op.results, what.dests),
                     ):
+                        # `inc` and `dec` write down the one they add, which
+                        # the instruction keeps in its opcode -- so MIR has
+                        # an operand the machine form does not.
+                        if op.name in ("inc", "dec") and kind == "source":
+                            assert len(mine) == len(theirs) + 1, f"{op.name}: source count"
+                            assert isinstance(mine[-1], mir.Const) and mine[-1].n == 1
+                            mine = mine[:-1]
                         assert len(mine) == len(theirs), f"{op.name}: {kind} count"
                         for arg, was in zip(mine, theirs):
                             if isinstance(was, ir.Mem):

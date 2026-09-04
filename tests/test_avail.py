@@ -180,12 +180,18 @@ def test_the_corpus_split_is_what_was_measured() -> None:
     And a third time, in the live count as well: a frame or stack slot no
     longer aliases a named variable, so a cell established before a `push`
     survives it. 1,805 cells to 1,952, live 96 to 108.
+
+    And a fourth: loaded_into stopped asking `origin` whether a use was the
+    destination's own preserved half and started asking whether the
+    operands name it, which recognises loads the register question missed.
+    live 108 to 114, dead 402 to 480, none 1,442 to 1,358 -- the same
+    cells, more of them with a provider.
     """
     total = {"live": 0, "dead": 0, "none": 0}
     for obj in FIXTURES:
         for key, count in split(obj).items():
             total[key] += count
-    assert total == {"live": 108, "dead": 402, "none": 1442}
+    assert total == {"live": 114, "dead": 480, "none": 1358}
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
@@ -332,7 +338,7 @@ def test_preserved_allows_a_move_and_refuses_a_binary() -> None:
     where = ir.Mem(addr=Addr(Space.LITERAL, 0, 0), width=2)
     into = ir.Reg(register=Register.AX, width=2)
 
-    def op(what: ir.Semantics) -> mir.Op:
+    def op(what: ir.Semantics, args, results) -> mir.Op:
         return mir.Op(
             at=0x100,
             op=what.op,
@@ -340,15 +346,30 @@ def test_preserved_allows_a_move_and_refuses_a_binary() -> None:
             defines=(new,),
             uses=(old,),
             loads=(cell,),
+            kind=mir._kind_of(what, args, results),
+            args=args,
+            results=results,
             made=what,
         )
 
-    moved = op(ir.Semantics(ir.Operation.MOVE, "mov", dests=(into,), sources=(where,)))
-    assert avail._preserved(moved, new, origin) == {old}, "a move's read of its own destination is the high half"
+    # In MIR's own operands: a load's only argument is the cell, so the use
+    # of the old value is a preserved half; a subtract names it as an input
+    # and it is not. This asked the instruction whether it was a MOVE and
+    # looked the register up in `origin`.
+    moved = op(
+        ir.Semantics(ir.Operation.MOVE, "mov", dests=(into,), sources=(where,)),
+        (mir.Cell(cell),),
+        (mir.Held(new, 2),),
+    )
+    assert avail._preserved(moved) == {old}, "a move's read of its own destination is the high half"
 
-    accumulated = op(ir.Semantics(ir.Operation.BINARY, "sub", dests=(into,), sources=(into, where)))
-    assert avail._preserved(accumulated, new, origin) == set(), "a subtract reads its destination as data"
-    assert avail.loaded_into(accumulated, origin) is None, "and so is not a load"
+    accumulated = op(
+        ir.Semantics(ir.Operation.BINARY, "sub", dests=(into,), sources=(into, where)),
+        (mir.Held(old, 2), mir.Cell(cell)),
+        (mir.Held(new, 2),),
+    )
+    assert avail._preserved(accumulated) == set(), "a subtract reads its destination as data"
+    assert avail.loaded_into(accumulated) is None, "and so is not a load"
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)

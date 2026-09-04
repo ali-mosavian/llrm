@@ -56,39 +56,12 @@ ALLOWED = {
     # transform.py and segments.py have no blanket permission. This is the
     # baseline the AST reports today, grouped by what empties it. Every
     # entry is a defect with a name attached; the list only shrinks.
-    "transform.py": {
-        # S1 -- the allocator living in the hoist
-        "hoisted",
-        "_insertion",
-        "_move",
-        "_instead",
-        "_reads_from",
-        "_writes_to",
-        "_can_reseat",
-        "_mentions",
-        "_named",
-        "_at_width",
-        # S3 -- segments
-        "_segment_load",
-        # phase D -- absorption, which moves into the raise
-        "_absorbing",
-        "_comparing",
-        "_deleting",
-        "_wide",
-        "_narrow",
-        # origin readers, and each has the reason Value's docstring asks for:
-        # what a value's half is, where a use came from, what an operation
-        # reads. These stay.
-        "<module>",
-        "_carried",
-        "_effective",
-        "_folded_op",
-        "_invariant_run",
-        "_leaving",
-        "_reads",
-        "root",
-    },
-    "segments.py": {"_segment_name", "_loads_a_segment"},
+    # transform.py and segments.py have no blanket permission. What is
+    # left is one function: `_leaving`, which answers "what does the caller
+    # see" -- a statement about registers, and the reading Value's own
+    # docstring sanctions.
+    "transform.py": {"_leaving"},
+    "segments.py": set(),
 }
 
 

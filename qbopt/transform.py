@@ -445,6 +445,12 @@ def _invariant_run(
             # three left -- and the back edge left with them.
             if one.kind in (mir.Kind.JUMP, mir.Kind.BRANCH):
                 continue
+            # Nor a move. The guard was "every source is a register", so a
+            # constant load was real work and could leave; with the hoist
+            # no longer allocating, letting one leave hoists the counter's
+            # own initialiser and hotlop printed 0 for 630 on nine of
+            # twelve configurations. Every copy stays until regalloc can
+            # place what crosses the edge.
             # Nor anything that computes nothing. A register-to-register
             # move is invariant whenever its source is, so hoisting one and
             # putting a split back in its place is churn -- and the split

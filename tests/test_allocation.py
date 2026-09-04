@@ -351,7 +351,11 @@ def test_a_copy_on_the_phi_edge_untangles_a_class() -> None:
     blocks = split.partition(found, mapped)
     seen = 0
     for _who, body in mir.bodies(found, blocks):
-        done = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
+        # The same pipeline wholeseg runs: widening is not a pass and goes
+        # after every one of them, just before lowering.
+        done = transform.widened(
+            transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
+        )
         if not regalloc._tangled(done):
             continue
         seen += 1

@@ -38,9 +38,12 @@ def sites(obj: Path) -> list[tuple]:
     for _, body in mir.bodies(found, found_blocks):
         for one in avail.forwardable(body, found.dgroup, found.calls, want):
             insn = at_of.get(one.at)
-            emitted = reencode.with_operand(insn, one.root) if insn else None
+            # The machine arm's own lookup: Forward names the value, and
+            # which register holds it is the body's account, not the pass's.
+            root = body.origin[one.value]
+            emitted = reencode.with_operand(insn, root) if insn else None
             if insn is not None and emitted is not None:
-                out.append((insn, one.root, emitted))
+                out.append((insn, root, emitted))
     return out
 
 
@@ -123,10 +126,15 @@ def test_it_refuses_an_instruction_with_no_memory_operand() -> None:
 
 
 def test_the_emitted_count_is_what_was_measured() -> None:
-    """15 emitted at this size, 34 refused to the widening pass, which folds the pair.
+    """43 emitted at this size, 36 refused to the widening pass, which folds the pair.
 
     A canary. The refusals are not failures: `and cx,[x]` / `and bx,[x+2]`
     is one 32-bit and, and lift.py claiming it is the better rewrite.
+
+    Was 39 and 34. avail.loaded_into stopped asking `origin` whether a use
+    was the destination's own preserved half and started asking whether the
+    operands name it, which recognises four more plain loads -- and the
+    corpus lost 28 bytes when it landed.
     """
     taken = refused = 0
     for obj in FIXTURES:
@@ -137,4 +145,4 @@ def test_the_emitted_count_is_what_was_measured() -> None:
                     taken += 1
                 elif one.region.reason == "it overlaps a region already taken":
                     refused += 1
-    assert (taken, refused) == (39, 34)
+    assert (taken, refused) == (43, 36)

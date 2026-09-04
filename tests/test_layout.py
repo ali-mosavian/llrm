@@ -577,20 +577,30 @@ def test_rebuild_colours_when_it_was_not_handed_an_assignment(obj: Path) -> None
         return
     blocks = split.partition(found, mapped)
     bodies = [
-        (name, transform.applied(body, found.dgroup, found.calls))
+        # The same pipeline wholeseg runs: widening is not a pass and
+        # goes after every one of them, just before lowering.
+        (name, transform.widened(transform.applied(body, found.dgroup, found.calls)))
         for name, body in mir.bodies(found, blocks)
     ]
     if not any(layout._names_a_value(body) for _name, body in bodies):
         return
 
+    # What rebuild does for itself when handed none: untangle, then colour.
+    # A body nothing can colour is laid out as it was raised, which is a
+    # different question and test_wholeseg's own; this one is about what
+    # "no assignment" means when there is an assignment to be had.
     mine: dict = {}
-    for _name, body in bodies:
-        got = regalloc.colour(body, body.pins)
-        if not isinstance(got, str):
-            mine.update(got)
+    fixed = []
+    for name, body in bodies:
+        one = regalloc.untangled(body)
+        got = regalloc.colour(one, one.pins)
+        if isinstance(got, str):
+            return
+        mine.update(got)
+        fixed.append((name, one))
 
     theirs = layout.rebuild(found, bodies, mapped.tables)
-    ours = layout.rebuild(found, bodies, mapped.tables, assignment=mine or None)
+    ours = layout.rebuild(found, fixed, mapped.tables, assignment=mine or None)
     assert isinstance(theirs, str) == isinstance(ours, str), f"{obj.stem}: one refused and one did not"
     if not isinstance(theirs, str):
         assert theirs.code == ours.code, f"{obj.stem}: two answers for one body"
@@ -641,6 +651,10 @@ def test_a_body_the_allocator_refused_is_untangled_before_it_is_laid_out() -> No
     once, and colour() refuses to move one. rebuild() puts a copy in first
     -- on the phi edge for addrm, before a two-address operation for arridx
     -- and the body colours.
+
+    One of the two shapes now, not both: the second came from the copies
+    the hoist emitted while it was doing its own allocation, and those are
+    gone. What is checked is the wiring, and one body still checks it.
     """
     from qbopt import mir
     from qbopt import regalloc
@@ -662,7 +676,7 @@ def test_a_body_the_allocator_refused_is_untangled_before_it_is_laid_out() -> No
             assert isinstance(regalloc.colour(done, done.pins), str), f"{name}: refused while tangled"
             fixed = regalloc.untangled(done)
             assert not isinstance(regalloc.colour(fixed, fixed.pins), str), f"{name}: colours after"
-    assert seen == 2, f"expected both shapes, saw {seen}"
+    assert seen >= 1, "neither body was tangled, so this proves nothing"
 
 
 def test_a_moved_operation_keeps_its_fixup() -> None:

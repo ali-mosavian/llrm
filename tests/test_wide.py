@@ -79,8 +79,11 @@ def test_the_pair_is_found_through_the_carry_not_the_layout() -> None:
 def test_every_folded_pair_is_a_shape_folds_names(obj: Path) -> None:
     for body in bodies(obj):
         for pair in wide.pairs(body):
-            assert (pair.low.name, pair.high.name) in wide.FOLDS
-            assert pair.op == wide.FOLDS[(pair.low.name, pair.high.name)]
+            # By what the two halves compute, not by what x86 spells them.
+            # The carry half of an add is an add; that it is written "adc"
+            # is lowering's business and was this pass's key.
+            assert (pair.low.kind, pair.high.kind) in wide.FOLDS
+            assert pair.op == wide.FOLDS[(pair.low.kind, pair.high.kind)]
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
