@@ -200,3 +200,47 @@ def test_nothing_reads_a_flag_once_both_folds_are_applied(obj: Path) -> None:
                     assert all(one is None or one.op is ir.Operation.CALL for one in who), (
                         f"{value} at {op.at:#06x} is read by something that is not a call or a phi"
                     )
+
+
+def test_a_widened_operation_says_four_bytes_in_mir_too() -> None:
+    """Widening wrote `made` and left MIR describing the halves.
+
+    The two halves are one four-byte operation, so its operands are four
+    bytes -- and an operand still saying two made the one 32-bit subtract
+    read as a half of something in every dump of it. The emitted code was
+    right the whole time, which is exactly why nothing caught it.
+    """
+    from pathlib import Path
+
+    from qbopt import mir
+    from qbopt import module
+    from qbopt import omf
+    from qbopt import transform
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(Path("fixtures/omf/arith-v-g3.obj").read_bytes()))
+    assert found is not None
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
+    blocks = split.partition(found, mapped)
+
+    seen = 0
+    for _name, body in mir.bodies(found, blocks):
+        done = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
+        before = {op.at: op for block in done.blocks for op in block.ops}
+        after = transform.widened(done)
+        for block in after.blocks:
+            for op in block.ops:
+                was = before.get(op.at)
+                if was is None or (op.args, op.results) == (was.args, was.results):
+                    continue
+                # This operation is one the widening rewrote. Every operand
+                # it kept from the low half has to say four bytes now.
+                seen += 1
+                for one in (*op.args, *op.results):
+                    width = one.width if isinstance(one, mir.Held) else (
+                        one.ref.width if isinstance(one, mir.Cell) else 4
+                    )
+                    assert width != 2, f"{op.at:#x}: {one} is still half of it"
+    assert seen, "nothing widened, so this proves nothing"

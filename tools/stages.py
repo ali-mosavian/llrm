@@ -125,6 +125,27 @@ _SYMBOL = {
 _PREFIX = {mir.Kind.NEG: "-", mir.Kind.NOT: "~", mir.Kind.ADDRESS: "&"}
 
 
+# How wide each of BASIC's own types is, so an access narrower than the
+# variable can be named as the half it is rather than as an offset.
+_SIZE = {"INTEGER": 2, "LONG": 4, "SINGLE": 4, "DOUBLE": 8, "STRING": 4}
+
+
+def _part(into: int, size: int, width: int) -> str:
+    """What is being read out of a variable, where it is not the whole of it.
+
+    A four-byte variable read two bytes at a time is BC's whole output --
+    every long is written as two halves -- and `DELTAX&` against
+    `DELTAX&+2` said two variables where there is one read twice. MIR
+    carries the width on every operand; this is where it is finally shown.
+    """
+    if not size or width >= size:
+        return ""
+    if width * 2 == size:
+        return ".lo" if into == 0 else ".hi" if into == width else f"+{into}"
+    return f"+{into}:{width}" if into else f":{width}"
+
+
+
 class Cells:
     """What each cell one body touches is called, and the legend for them.
 
@@ -161,7 +182,7 @@ class Cells:
         # descriptor is: BC files the descriptor in BC_CN and the elements
         # in BC_DATA, and the code only ever names the elements.
         self.symbols = sorted(
-            (one.data or (one.segment, one.offset), one.name)
+            (one.data or (one.segment, one.offset), one.name, one.stride or _SIZE.get(one.type_name or "", 0))
             for one in (debug.variables if debug is not None else ())
         )
         self.slots = {
@@ -189,10 +210,10 @@ class Cells:
             return f"push{ref.addr.disp:+d}" + index
         said = self._inside(ref.addr.index, ref.addr.disp)
         if said is not None:
-            # The index comes before the offset into the element: the high
-            # half of `POSX&(i)` is `POSX&[v121]+2`, not `POSX&+2[v121]`.
-            name, _, at = said.partition("+")
-            return f"{name}{index}" + (f"+{at}" if at else "")
+            name, into, size = said
+            # The index comes before what is read out of the element: the
+            # high half of `POSX&(i)` is `POSX&[v121].hi`.
+            return f"{name}{index}{_part(into, size, ref.width)}"
         key = (str(ref.addr), ref.width)
         if key not in self.named:
             number = len(self.order)
@@ -200,19 +221,19 @@ class Cells:
             name = chr(ord("A") + number % 26) * (1 + number // 26)
             self.named[key] = name
             self.order.append((name, ref.addr, ref.width))
-        return self.named[key] + index
+        return f"{self.named[key]}{index}:{ref.width}"
 
-    def _inside(self, segment: int, disp: int) -> str | None:
-        """The variable this address falls in, and how far into it."""
+    def _inside(self, segment: int, disp: int):
+        """(name, how far into it, how wide the variable is), or None."""
         import bisect
 
-        at = bisect.bisect_right(self.symbols, ((segment, disp), "\xff")) - 1
+        at = bisect.bisect_right(self.symbols, ((segment, disp), "\xff", 0)) - 1
         if at < 0:
             return None
-        (where, start), name = self.symbols[at]
+        (where, start), name, size = self.symbols[at]
         if where != segment or disp < start or disp - start > 0x100:
             return None
-        return name if disp == start else f"{name}+{disp - start}"
+        return name, disp - start, size
 
     def legend(self) -> list[str]:
         return [f"      {name:4s} {addr} :{width}" for name, addr, width in self.order]

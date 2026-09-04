@@ -743,6 +743,21 @@ def chains(body: MirBody, dead: frozenset[int] = frozenset()) -> tuple[Chain, ..
     return tuple(out)
 
 
+def _widened_arg(one):
+    """One operand of a pair's low half, at the width the whole pair uses.
+
+    The two halves are one four-byte operation, so its operands are four
+    bytes -- and an operand still saying two is what made the widened form
+    read as a half of something.
+    """
+    if isinstance(one, mir.Held) and one.width == HALF:
+        return mir.Held(one.value, HALF * 2)
+    if isinstance(one, mir.Cell) and one.ref.width == HALF:
+        return mir.Cell(replace(one.ref, width=HALF * 2))
+    return one
+
+
+
 def _restore_op(number: int, at: int, after: Op, end: int) -> Op:
     """`push eax / pop ax / pop dx` -- the long handed back to BC's halves.
 
@@ -883,9 +898,16 @@ def widened(body: MirBody, dead: frozenset[int] = frozenset()) -> MirBody:
                 # no more, so an instruction carried through a gap still owns
                 # the bytes it sits on and layout.py's arithmetic adds up.
                 start, end = min(pair.at), _ends(pair)
+                # MIR says it too, not only `made`: the widened operation is
+                # four bytes wide, and operands still saying two made the one
+                # 32-bit subtract read as a half of something. The kind is
+                # the low half's own and is already right -- the low half of
+                # a subtract is a subtract.
                 ops.append(
                     replace(
                         pair.low,
+                        args=tuple(_widened_arg(one) for one in pair.low.args),
+                        results=tuple(_widened_arg(one) for one in pair.low.results),
                         made=what,
                         covers=(start, _restore_at if number == last else end),
                     )
