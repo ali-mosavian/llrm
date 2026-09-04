@@ -1,21 +1,27 @@
-"""Every pass's effect on one object, stage by stage.
+"""
+Every pass's effect on one object, as MIR.
 
-Two views, because the bugs live between them. The MIR view is what a pass
-decided; the object view is what came back after the bytes were written and
-re-parsed. A pass whose MIR still has the loop but whose re-parsed object
-does not has lost a branch in emission, which is the shape of every
-placement bug so far -- and the shape nothing in the host suite can see.
+Rule 4: diff the MIR between passes, not the emitted code at the end. One
+file per stage, `s<N>-mir-<stage>.txt`, so `diff s06-mir-hoist.txt
+s07-mir-forward.txt` is the whole answer.
 
     uv run python tools/stages.py fixtures/omf/hotlop-p-g2.obj
     uv run python tools/stages.py fixtures/omf/hotlop-p-g2.obj --only hoist
-    uv run python tools/stages.py fixtures/omf/hotlop-p-g2.obj --asm
+    uv run python tools/stages.py fixtures/omf/hotlop-p-g2.obj --dump /tmp/st
 
-The MIR absorb pass runs here by default, which is *not* what rewrite.py
-does: it passes `absorb=not absorb_calls`, so with the default settings
-calls.py absorbs in the machine arm and the MIR pass is switched off. That
-default is right for the pipeline and wrong for this tool -- it would list
-an `absorb` stage that cannot fire, and report no change on a program with
-fourteen absorbable calls. `--no-absorb` gives the pipeline's own setting.
+**The machine views are dumped once, at the end.** A pass between the raise
+and lowering has no machine form -- that is the architecture -- and an lir
+and an asm file beside every stage said the opposite. This tool lowers after
+each pass because that is how it isolates one: the object it writes is
+re-parsed and re-raised to get the SSA back, which is the only way to see
+one pass alone. That round trip is the tool's own device and not a stage of
+the pipeline, where every pass runs on one body and lowering happens once.
+
+Widening is in the list and is not a pass. It recognises an idiom -- a long
+written as two halves joined by a carry -- and writes machine form, so
+wholeseg runs it after every pass and before lowering. On a program whose
+arithmetic is all longs it is the only step that fires, and leaving it out
+made the dump say nothing had happened.
 """
 
 import sys
@@ -391,7 +397,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="stages")
     ap.add_argument("object", type=Path)
     ap.add_argument("--only", help="one pass by name, instead of each in turn")
-    ap.add_argument("--asm", action="store_true", help="disassemble after every stage")
+    ap.add_argument("--asm", action="store_true", help="disassemble what came out, after the last stage")
     ap.add_argument("--quiet", action="store_true", help="shape only, no per-op detail")
     ap.add_argument(
         "--verbose",
@@ -405,9 +411,10 @@ def main(argv: list[str] | None = None) -> int:
         "--dump",
         type=Path,
         metavar="DIR",
-        help="three files per stage -- s<N>-{mir,lir,asm}-<stage>.txt -- so "
-        "`diff` between two adjacent ones is the whole answer; rule 4 asks "
-        "for the mir pair",
+        help="one file per stage -- s<N>-mir-<stage>.txt -- so `diff` between "
+        "two adjacent ones is the whole answer, which is what rule 4 asks for. "
+        "The machine views are dumped once at the end, where lowering happens: "
+        "a pass between the raise and lowering has no machine form",
     )
     ap.add_argument(
         "--no-absorb",
@@ -444,21 +451,33 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {path}")
 
     def dump(number: int, name: str, tag: str, out: bytes, was, verbose: bool):
-        """Every view of one stage: what it decided, what that lowers to,
-        and what came back after the bytes were written and re-parsed."""
+        """One stage, as MIR.
+
+        Only as MIR. A pass between the raise and lowering has no machine
+        form -- that is the architecture, and printing an lir and an asm
+        view beside every one of them said the opposite. This tool lowers
+        after each pass because that is how it isolates one, which is the
+        tool's own device and not a stage of the pipeline; the machine
+        views are dumped once, at the end, where lowering really happens.
+        """
         found, bodies = _bodies(out)
         debug = cvinfo.parse(omf.parse(out))
         with view(number, "mir", name):
             now = _report(tag, out, was, verbose)
             _mir(bodies, found, args.verbose, debug)
-        with view(number, "lir", name):
-            print(f"=== {tag}")
-            _lir(bodies)
-        if args.dump is not None or args.asm:
-            with view(number, "asm", name):
-                print(f"=== {tag}")
-                _asm(out)
         return now
+
+    def lowered(number: int, out: bytes):
+        """The machine views, once: this is where lowering happens."""
+        if args.dump is None and not args.asm:
+            return
+        _, bodies = _bodies(out)
+        with view(number, "lir", "lowered"):
+            print("=== lowered")
+            _lir(bodies)
+        with view(number, "asm", "emitted"):
+            print("=== emitted")
+            _asm(out)
 
     was = dump(next(step), "omf", "BC", data, None, not args.quiet)
 
@@ -477,6 +496,10 @@ def main(argv: list[str] | None = None) -> int:
         was = dump(next(step), name, f"{name} ({why})", out, was, not args.quiet)
         if not args.only:
             plain = out
+
+    # And the machine, once. Everything above is MIR; this is what lowering,
+    # the allocator and the selector made of the last of it.
+    lowered(next(step), plain if args.only is None else out)
     return 0
 
 
