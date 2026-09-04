@@ -448,13 +448,6 @@ def test_a_constant_product_leaves_the_loop() -> None:
     assert [text for text in before if text.endswith(",15h")], f"7 * 3 was not folded: {before}"
 
 
-@pytest.mark.xfail(
-    reason="the hoist no longer allocates: a result that crosses the loop edge needs "
-    "a register the preheader can spare, and only regalloc can arrange that. It used "
-    "to pick one out of regalloc.AVAILABLE and rewrite every reader, which is where "
-    "every hoist bug came from. Restored when regalloc splits a live range on LIR.",
-    strict=True,
-)
 def test_an_invariant_multiply_leaves_a_loop_it_cannot_be_folded_out_of() -> None:
     """hotlpx is hotlop with its constants read at runtime.
 
@@ -686,13 +679,6 @@ def test_deciding_a_branch_leaves_every_byte_accounted_for() -> None:
         assert why == wholeseg.REBUILT, f"{name}: {why}"
 
 
-@pytest.mark.xfail(
-    reason="the hoist no longer allocates: a result that crosses the loop edge needs "
-    "a register the preheader can spare, and only regalloc can arrange that. It used "
-    "to pick one out of regalloc.AVAILABLE and rewrite every reader, which is where "
-    "every hoist bug came from. Restored when regalloc splits a live range on LIR.",
-    strict=True,
-)
 def test_an_accumulator_chain_leaves_the_loop_whole() -> None:
     """pressx is press with its eight values read at runtime.
 
@@ -818,3 +804,53 @@ def test_an_unplaced_held_keeps_its_fold() -> None:
             )
         return
     raise AssertionError("no body folded anything; the test measures nothing")
+
+
+def test_what_leaves_a_loop_is_its_own_variable_and_keeps_its_origin() -> None:
+    """Two halves of one fix, and each is useless without the other.
+
+    In MIR a register is a variable, so two values BC kept in one register
+    are one variable -- true only while nothing has moved them. The moment
+    a computation leaves a loop it is not: hotlpx's product and its counter
+    both lived in ax, and re-deriving SSA per register put a phi over them
+    that said the loop's reads of the product were reads of the counter.
+    Nothing downstream could see a conflict because in MIR there was none.
+
+    So the hoist gives everything the run defines a variable of its own --
+    which is what `_insertion` was doing when it picked a spare register,
+    said without naming one. And the values keep their origin: "where BC
+    had it" is still true of them and is what layout remaps an operand
+    through. Drop it and the operand keeps the register the instruction was
+    raised with, whatever the allocator decided, and the hoisted load lands
+    on the counter again.
+    """
+    from qbopt import module
+    from qbopt import omf
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(Path("fixtures/omf/hotlpx-p-g2.obj").read_bytes()))
+    assert found is not None
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
+    blocks = split.partition(found, mapped)
+
+    seen = 0
+    for _name, body in mir.bodies(found, blocks):
+        before = {value.variable for value in body.origin}
+        after = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
+        fresh = {value.variable for value in after.origin} - before
+        if not fresh:
+            continue
+        seen += 1
+        # Every value of a fresh variable still says where BC had it.
+        placed = [value for value in after.origin if value.variable in fresh]
+        assert placed, "a fresh variable with no origin cannot be remapped"
+        # And no phi joins a fresh variable to one that was there before.
+        for block in after.blocks:
+            for phi in block.phis:
+                names = {one.variable for one in phi.incoming.values()} | {phi.result.variable}
+                assert not (names & fresh) or names <= fresh, (
+                    f"{phi.result} joins a hoisted value to something else"
+                )
+    assert seen, "nothing left a loop, so this proves nothing"
