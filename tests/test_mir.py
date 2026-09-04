@@ -273,7 +273,20 @@ def test_a_value_carries_no_register() -> None:
     and would silently undo the whole change.
     """
     assert not hasattr(mir.Value(1, 0), "of")
-    assert {field.name for field in fields(mir.Value)} == {"id", "at", "flags"}
+    # `variable` and `version` are an index and a counter -- which variable
+    # this is a version of, and which version -- so that one register's
+    # values read as one variable written N times. Neither is a register,
+    # and which register a variable was is still origin's alone.
+    assert {field.name for field in fields(mir.Value)} == {
+        "id",
+        "at",
+        "flags",
+        "variable",
+        "version",
+    }
+    made = mir.Value(1, 0, False, 3, 7)
+    assert isinstance(made.variable, int) and isinstance(made.version, int)
+    assert repr(made) == "v3_7", repr(made)
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
@@ -442,3 +455,48 @@ def test_mir_operands_say_exactly_what_the_node_said() -> None:
                                 continue  # a Cell is the MemRef, not the encoding
                             assert back(arg, body.origin) == was, f"{op.name}: {kind} {arg} != {was}"
     assert seen > 2000, f"only {seen} operations checked"
+
+
+def test_a_variable_keeps_one_name_across_every_version_of_it() -> None:
+    """In MIR a register is a variable and nothing more.
+
+    Numbering values `v56`, `v394`, `v400` said three different things where
+    BC wrote one variable three times -- and at a loop header, where the
+    raise puts a phi on every register live around the loop, six registers
+    read as six unrelated variables. 250 of the suite's 454 phis are read by
+    nothing but other phis: that is the register file describing itself, and
+    it is unreadable while every version has its own name.
+    """
+    from collections import Counter
+
+    from qbopt import mir
+    from qbopt import module
+    from qbopt import omf
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(Path("fixtures/omf/hotlop-p-g2.obj").read_bytes()))
+    assert found is not None
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
+
+    seen = 0
+    for _name, body in mir.bodies(found, split.partition(found, mapped)):
+        # One variable per place BC kept something, and every value of it
+        # says which variable it is.
+        by_variable: dict[int, set] = {}
+        for value, register in body.origin.items():
+            by_variable.setdefault(value.variable, set()).add(register)
+            assert value.version, f"{value!r} has no version"
+        assert all(len(one) == 1 for one in by_variable.values()), (
+            "one variable stands for two registers"
+        )
+
+        # And versions of one variable are consecutive from 1, so `v3_7` is
+        # the seventh time that variable was written.
+        counted = Counter(value.variable for value in body.origin)
+        for which, count in counted.items():
+            versions = {value.version for value in body.origin if value.variable is which}
+            assert versions == set(range(1, count + 1)), f"variable {which}: {sorted(versions)}"
+        seen += len(counted)
+    assert seen, "no body named a variable, so this proves nothing"

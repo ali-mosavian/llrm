@@ -161,9 +161,20 @@ class Value:
     id: int
     at: int  # the instruction that defined it, or the block for a phi
     flags: bool = False  # the flags variable, which is not data and holds none
+    # Which variable this is a version of, and which version. In MIR a
+    # register is a variable and nothing more, so every value BC kept in one
+    # place is one variable written several times -- and numbering them
+    # `v56`, `v394`, `v400` said they were three, which is what makes a loop
+    # header's phis read as six variables when they are six registers.
+    #
+    # `variable` is an index, not a register: which register it was is
+    # MirBody.origin's, and it stays there.
+    variable: int = 0
+    version: int = 0
 
     def __repr__(self) -> str:
-        return f"{'f' if self.flags else 'v'}{self.id}"
+        kind = "f" if self.flags else "v"
+        return f"{kind}{self.variable}_{self.version}" if self.version else f"{kind}{self.id}"
 
 
 class Synth(StrEnum):
@@ -706,6 +717,11 @@ class _Namer:
     def __init__(self) -> None:
         self.next = 0
         self.stack: dict[Register_, list[Value]] = {}
+        # One number per variable, in the order they are first written, and
+        # a version counter for each. A register is a variable, so this is
+        # what makes v3_1 and v3_7 legibly the same thing twice.
+        self.named: dict[Register_, int] = {}
+        self.versions: dict[Register_, int] = {}
         # Where BC had each value. Kept beside the values rather than on
         # them, so lowering and regalloc's identity baseline can ask and
         # nothing else picks it up for free.
@@ -713,7 +729,9 @@ class _Namer:
 
     def fresh(self, of: Register_, at: int) -> Value:
         self.next += 1
-        made = Value(self.next, at, of is FLAGS)
+        which = self.named.setdefault(of, len(self.named))
+        self.versions[of] = self.versions.get(of, 0) + 1
+        made = Value(self.next, at, of is FLAGS, which, self.versions[of])
         self.origin[made] = of
         return made
 
