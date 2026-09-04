@@ -129,7 +129,13 @@ def _mir(bodies) -> None:
                 came = " ".join(f"{at:#x}:{value}" for at, value in sorted(phi.incoming.items()))
                 print(f"      phi {phi.result} <- {came}")
             for op in block.ops:
-                parts = [f"{op.at:#06x}", f"{op.name or '?':8s}"]
+                # What it computes, not what x86 spells it. Printing the
+                # mnemonic here showed `cwd`, `sbb`, `adc` and `jle` in a
+                # view whose whole claim is that MIR does not know them.
+                shown = op.kind.name.lower()
+                if op.test is not None:
+                    shown = f"{shown}.{op.test.name.lower()}"
+                parts = [f"{op.at:#06x}", f"{shown:10s}"]
                 if op.defines:
                     parts.append("=> " + ",".join(str(one) for one in op.defines))
                 if op.uses:
