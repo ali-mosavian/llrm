@@ -1572,7 +1572,6 @@ def _sites(found: Module, blocks: list[Block]) -> dict:
     """
     from qbopt import calls as machine
     from qbopt import flags as flagged
-    from qbopt import select
 
     reached = [insn for block in blocks for insn in block.insns]
     try:
@@ -1584,11 +1583,12 @@ def _sites(found: Module, blocks: list[Block]) -> dict:
     for one in found_sites:
         if not one.pushed or one.consume or one.name.upper() not in _ABSORBS:
             continue
-        # Only where lowering will take it. The raise and the emitter have
-        # to agree about which sites are folded: folding one the emitter
-        # then refuses leaves an operation over argument values that nothing
-        # will write instructions for.
-        if isinstance(select.absorbed(one, _flags_after(blocks, live, one.start, one.end)), str):
+        # Only where the sequence exists. The raise and the emitter have to
+        # agree about which sites are folded -- folding one the emitter then
+        # refuses leaves an operation over argument values that nothing will
+        # write instructions for -- so both ask calls.py, which is the one
+        # place that knows what a site becomes.
+        if isinstance(machine.absorb(one, _flags_after(blocks, live, one.start, one.end)), str):
             continue
         out[one.at] = one
     return out
@@ -1603,7 +1603,6 @@ def _folded(body: MirBody, found: Module, blocks: list[Block]) -> None:
     """
     from qbopt import calls as machine
     from qbopt import flags as flagged
-    from qbopt import select
 
     sites = {one.start: one for one in _sites(found, blocks).values()}
     if not sites:
@@ -1614,11 +1613,15 @@ def _folded(body: MirBody, found: Module, blocks: list[Block]) -> None:
             site = sites.get(op.at)
             if site is None or op.id is None or op.kind is Kind.CALL:
                 continue
+            # The flags go with it. Which flags something reads after the
+            # site decides what the sequence may be -- a comparison wraps
+            # eax in push/pop -- so the emitter has to be given the same
+            # answer the raise filtered on, or the two disagree on length.
             read = _flags_after(blocks, live, site.start, site.end)
-            found.absorbed[op.id] = site
-            wanted = select.absorbed_fixups(site, read)
-            if wanted:
-                found.refs[op.id] = wanted
+            found.absorbed[op.id] = (site, read)
+            made = machine.absorb(site, read)
+            if not isinstance(made, str) and made.relocations:
+                found.refs[op.id] = tuple(field for _where, field in made.relocations)
 
 
 def _flags_after(blocks: list[Block], live: dict, lo: int, hi: int):

@@ -168,7 +168,12 @@ def test_the_covered_share_of_the_corpus_is_what_was_measured() -> None:
     # The 44 that do not come back are the movsw of suite/fpdeep.bas, the one
     # encoding this deliberately refuses -- see REFUSED in tests/test_ir.py.
     # Every other operation in the corpus selects.
-    assert (total, emitted) == (37927, 37883)
+    #
+    # 37,927 before the raise folded absorbable calls. An operation is not
+    # an instruction any more: a folded call stands for its whole push run,
+    # so 3,646 operations became 1,037 -- and select.emit is not what
+    # writes them, select.absorbed is.
+    assert (total, emitted) == (34281, 34237)
     assert total - emitted == 44
 
 
@@ -553,6 +558,12 @@ def test_a_relocated_field_never_changes_width(obj: Path) -> None:
                 what = layout._semantics(op)
                 field = layout._field_in(found, op, fields)
                 if what is None or field is None:
+                    continue
+                # Not a folded runtime call. Its address is its first push,
+                # so the bytes there are not the instruction its field
+                # belongs to -- and the fields it does have are the
+                # operands' own, reused rather than re-encoded.
+                if op.id is not None and op.id in found.absorbed:
                     continue
                 was = declen.decode(found.code, op.at)
                 if was is None:

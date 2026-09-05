@@ -819,13 +819,15 @@ def absorbed(site, live, restore: bool = True) -> "Emitted | str":
 
 
 def absorbed_fixups(site, live, restore: bool = True) -> tuple[int, ...]:
-    """Which fixup each of an absorbed site's fields names, in the same order."""
+    """Which fixup each of an absorbed site's fields names, in the same order.
+
+    The same relocations `absorbed` reads the offsets from, so the two
+    cannot disagree about how many there are or which is which.
+    """
     from qbopt import calls as machine
 
     made = machine.absorb(site, live, restore)
-    if isinstance(made, str):
-        return ()
-    return tuple(field for _where, field in made.relocations)
+    return () if isinstance(made, str) else tuple(field for _where, field in made.relocations)
 
 
 

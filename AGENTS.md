@@ -73,6 +73,10 @@ machine.** Only lower, regalloc and peephole see machine form. There is no
 LIR optimisation tier: if a pass has done its job on MIR there is nothing
 left for one to do.
 
+[docs/split.md](docs/split.md) is the whole of this rule: where the line
+is, what each side may say, why it is not negotiable, and which parts of it
+are broken today with a name against each.
+
 - **Recognition is the raise's job.** What an idiom *is* -- a long pair, an
   absorbable runtime call -- is answered where the body is built. Answered
   later it is answered by a pass that must know about x86, which is how

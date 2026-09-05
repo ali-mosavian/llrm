@@ -78,18 +78,49 @@ def laid(obj: Path) -> Iterator[tuple]:
     for _, body in mir.bodies(found, split.partition(found, mapped)):
         got = layout.lay_out(body, body.entry, found)
         if not isinstance(got, str):
-            yield body, got
+            yield body, got, found
+
+
+def paired(ops: list, back: list, found) -> list[tuple]:
+    """(op, the instructions it emitted). One each, except a folded call.
+
+    An operation is not always an instruction: the raise turns an
+    absorbable runtime call and its push run into one operation over the
+    argument values, and lowering writes four instructions for it. So these
+    are paired by how many bytes each op emitted rather than one for one.
+    """
+    from qbopt import layout as laying
+
+    out, at = [], 0
+    for op in ops:
+        folded = found.absorbed.get(getattr(op, "id", None)) if found is not None else None
+        if folded is None:
+            out.append((op, back[at : at + 1]))
+            at += 1
+            continue
+        made = laying._absorbed(*folded)
+        assert made is not None, f"{op.at:#x}: the absorbed call emits nothing"
+        taken, size = 0, 0
+        while at + taken < len(back) and size < len(made.code):
+            size += back[at + taken].len
+            taken += 1
+        assert size == len(made.code), f"{op.at:#x}: {size} bytes read for {len(made.code)}"
+        out.append((op, back[at : at + taken]))
+        at += taken
+    assert at == len(back), f"{len(back) - at} instructions belong to no operation"
+    return out
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
 def test_a_laid_out_body_is_the_same_instructions_in_the_same_order(obj: Path) -> None:
-    for body, got in laid(obj):
+    for body, got, found in laid(obj):
         ops = layout._ordered(body)
         back = walked(got.code, body.entry)
-        assert len(back) == len(ops), f"{obj.stem}: {len(back)} instructions from {len(ops)} ops"
-        for op, made in zip(ops, back, strict=True):
+        for op, made in paired(ops, back, found):
+            if found.absorbed.get(getattr(op, "id", None)) is not None:
+                continue  # a folded call is not the instruction it came from
             want = original(op)
-            assert made.mnemonic == want.mnemonic, f"{obj.stem} {op.at:#x}: {made} != {want}"
+            assert made[0].mnemonic == want.mnemonic, f"{obj.stem} {op.at:#x}: {made[0]} != {want}"
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
@@ -101,16 +132,20 @@ def test_every_branch_points_where_its_target_went(obj: Path) -> None:
     at whatever now sits there -- which is a working program that does
     something else, the worst kind of wrong.
     """
-    for body, got in laid(obj):
+    for body, got, found in laid(obj):
         ops = layout._ordered(body)
         back = walked(got.code, body.entry)
-        for op, made in zip(ops, back, strict=True):
+        for op, made in paired(ops, back, found):
+            if found.absorbed.get(getattr(op, "id", None)) is not None:
+                continue  # a folded call branches nowhere
             want = original(op)
             if want.op0_kind != OpKind.NEAR_BRANCH16:
                 continue
             landed = got.moved.get(want.near_branch16)
             assert landed is not None, f"{obj.stem} {op.at:#x}: target left this body"
-            assert made.near_branch16 == landed, f"{obj.stem} {op.at:#x}: {made} should reach {landed:#x}"
+            assert made[0].near_branch16 == landed, (
+                f"{obj.stem} {op.at:#x}: {made[0]} should reach {landed:#x}"
+            )
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
@@ -121,7 +156,7 @@ def test_every_relocation_points_at_a_field_the_module_really_has(obj: Path) -> 
     calls bridged-fixup-dropped."""
     found = corpus.loaded(obj)
     assert found is not None
-    for _, got in laid(obj):
+    for _body, got, _found in laid(obj):
         for where, field in got.relocations:
             assert 0 <= where < len(got.code), f"{obj.stem}: relocation past the end"
             assert got.code[where : where + 2] == bytes(2), "a relocated field is not a number"
@@ -163,10 +198,13 @@ def test_relaxation_settles_and_leaves_every_branch_reaching(obj: Path) -> None:
     which is also why the loop terminates instead of oscillating between two
     lengths that each justify the other.
     """
-    for body, got in laid(obj):
+    for body, got, found in laid(obj):
         ops = layout._ordered(body)
         back = walked(got.code, body.entry)
-        for op, made in zip(ops, back, strict=True):
+        for op, group in paired(ops, back, found):
+            if found.absorbed.get(getattr(op, "id", None)) is not None:
+                continue  # a folded call branches nowhere
+            made = group[0]
             want = original(op)
             if want.op0_kind != OpKind.NEAR_BRANCH16:
                 continue
@@ -186,7 +224,7 @@ def test_a_laid_out_body_is_no_bigger_than_bc_s_own() -> None:
     """
     was = now = 0
     for obj in FIXTURES:
-        for body, got in laid(obj):
+        for body, got, _found in laid(obj):
             was += sum(layout._length_of(op) or 0 for op in layout._ordered(body))
             now += len(got.code)
     assert now <= was, f"{now} against BC's {was}"
@@ -645,9 +683,20 @@ def test_a_relocation_belongs_to_the_operand_and_not_to_a_place(obj: Path) -> No
                 lo, hi = ir.span(op.node)
                 inside = [one for one in fields if lo <= one < hi]
                 want = inside[0] if len(inside) == 1 else None
-            # One fixup per relocated instruction, and every operation the
-            # raise makes is one instruction.
+            # One fixup per relocated instruction. An operation the raise
+            # made from one instruction has one, and the bytes it came from
+            # are where it is; an operation the raise folded a whole call
+            # into has one per operand, and those are the pushes' own --
+            # which the bytes at the call say nothing about.
             said = found.refs.get(op.id)
+            if op.id is not None and op.id in found.absorbed:
+                site, _read = found.absorbed[op.id]
+                assert said, f"{obj.stem} {op.at:#06x}: a folded call with no fixup"
+                assert all(site.start <= one < site.end for one in said), (
+                    f"{obj.stem} {op.at:#06x}: {said} is outside {site.start:#x}..{site.end:#x}"
+                )
+                seen += 1
+                continue
             ref = said[0] if said else None
             assert said is None or len(said) == 1, f"{obj.stem} {op.at:#06x}: {said}"
             assert ref == want, f"{obj.stem} {op.at:#06x}: says {ref}, the bytes say {want}"
