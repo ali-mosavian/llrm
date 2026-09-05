@@ -270,6 +270,7 @@ class RegAlloc(LIRTransform):
         """
         from qbopt import frame as frames
         from qbopt import spiller
+        from qbopt import splitkit
 
         if self.frame is None:
             self.frame = frames.of(body)
@@ -277,6 +278,16 @@ class RegAlloc(LIRTransform):
             got = allocate(body, self.pinned)
             if not got.spilled:
                 return applied(body, got)
+            # Split before spilling, which is the order RegAllocGreedy
+            # uses: a range cut at a loop it never touches may fit where
+            # the whole of it did not, and a copy is cheaper than a store
+            # and a load. Only the values that failed -- splitting every
+            # crossing range on principle cost 12,329 bytes over the
+            # corpus and freed nothing.
+            cut = splitkit.split(body, got.spilled)
+            if cut is not body and not allocate(cut, self.pinned).spilled:
+                body = cut
+                continue
             body = spiller.spilled(body, got.spilled, self.frame)
         got = allocate(body, self.pinned)
         return applied(body, got)
@@ -296,19 +307,39 @@ def applied(body: lir.LirBody, got: Assignment) -> lir.LirBody:
             f"at a cost of {got.cost:g}; the spiller and the frame that holds the slots are not written"
         )
     held = got.where
+    # An identity copy is dropped here, which is what LLVM's
+    # VirtRegRewriter does: `mov ax,ax` is what a split or a phi's copy
+    # becomes when both halves land in the same register, and select emits
+    # nothing for it -- an instruction of zero length, which the length
+    # accounting then disagrees with itself about.
     return lir.LirBody(
         name=body.name,
         entry=body.entry,
         blocks=tuple(
             lir.LirBlock(
                 at=block.at,
-                insns=tuple(_placed(one, held, body.origin) for one in block.insns),
+                insns=tuple(
+                    one for one in (_placed(x, held, body.origin) for x in block.insns) if not _pointless(one)
+                ),
+                succ=block.succ,
+                phis=block.phis,
             )
             for block in body.blocks
         ),
         origin=body.origin,
         pins=body.pins,
     )
+
+
+def _pointless(one: lir.Insn) -> bool:
+    """Whether this instruction moves a register into itself."""
+    what = one.what
+    if what is None or what.op is not ir.Operation.MOVE:
+        return False
+    if len(what.dests) != 1 or len(what.sources) != 1:
+        return False
+    into, out_of = what.dests[0], what.sources[0]
+    return isinstance(into, ir.Reg) and isinstance(out_of, ir.Reg) and into.register == out_of.register
 
 
 def _placed(one: lir.Insn, held: dict, origin: dict) -> lir.Insn:

@@ -63,7 +63,7 @@ def test_the_whole_flow_writes_what_it_can_and_names_what_it_cannot() -> None:
     # one: a call whose fixup has no field to sit in after the spiller
     # renamed what it read, so select picked a form without a
     # displacement. Bounded rather than allowed -- the number may not grow.
-    assert len(wrong) <= 1, f"{len(wrong)} of {len(CORPUS)}: " + "; ".join(wrong[:4])
+    assert not wrong, f"{len(wrong)} of {len(CORPUS)}: " + "; ".join(wrong[:4])
     assert not missing, "the spiller exists; nothing should be refused for wanting one: " + "; ".join(missing[:2])
 
 
@@ -259,7 +259,11 @@ def test_a_spilled_value_gets_a_slot_and_the_prologue_reserves_it() -> None:
     _found, _blocks, bodies = _raised("nested-p-g2")
     (name, body), = bodies
     low = lower.lowered(name, body)
-    for phase in flow.machine(flow._pinned(body))[:4]:
+    # Everything up to the allocator, which now owns the spill loop -- so
+    # asking it after that phase would see the spilling already done.
+    for phase in flow.machine(flow._pinned(body)):
+        if phase.name == "regalloc":
+            break
         low = phase.transform(low)
 
     got = allocate.allocate(low, {})
@@ -286,3 +290,31 @@ def test_a_register_names_which_bytes_of_its_root_it_is() -> None:
     assert target.overlaps(Register.AL, Register.AX)
     assert target.overlaps(Register.AH, Register.EAX)
     assert not target.overlaps(Register.AL, Register.BL)
+
+
+def test_an_inserted_instruction_carries_no_fixup() -> None:
+    """It stands beside another and carries that one's address.
+
+    A far call's four relocated bytes are found by reading `found.code` at
+    `op.at`, so an inserted instruction sitting at a far call's address
+    read the `9a` and claimed the call's own fixup. Nineteen objects said
+    `call has 1 fixups and 0 fields to put them in`, naming the call --
+    which was not the operation asking.
+
+    The fix is that an inserted instruction has no node: `node` is the
+    instruction an operation was raised from, and every question answered
+    by reading the original bytes goes through it.
+    """
+    from qbopt import objwrite
+
+    _found, _blocks, bodies = _raised("divmod-p-g2-zd")
+    for name, body in bodies:
+        low = lower.lowered(name, body)
+        for phase in flow.machine(flow._pinned(body), None, _found.calls):
+            low = phase.transform(low)
+        as_mir = objwrite._as_mir(low)
+        for block in as_mir.blocks:
+            for op in block.ops:
+                if op.covers is not None and op.covers[0] == op.covers[1]:
+                    assert op.node is None, f"{op.at:#06x} was inserted and still has a node"
+                    assert op.id is None, f"{op.at:#06x} was inserted and still has an id"

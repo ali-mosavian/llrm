@@ -91,9 +91,16 @@ def rebuilt(
     # every byte the object gained. Handed as the raise plus the step
     # rather than pre-widened, so the walk happens for the body that needs
     # it instead of for all of them.
+    # Allocation first, and separately: the assembler emits what it is
+    # handed. It used to colour inside rebuild(), where nothing downstream
+    # could be told it had already happened -- objwrite.py runs after a
+    # real allocator and was allocated over a second time, which produced a
+    # call encoding with no field for its own fixup.
+    settled, assignment = layout.allocated(
+        bodies, plain=plain, settle=transform.widened if optimise else None
+    )
     laid = layout.rebuild(
-        found, bodies, mapped.tables, fields, reached, native_fpu,
-        plain=plain, settle=transform.widened if optimise else None,
+        found, settled, mapped.tables, fields, reached, native_fpu, assignment=assignment
     )
     if isinstance(laid, str):
         return data, laid

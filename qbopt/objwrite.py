@@ -96,9 +96,7 @@ def _as_mir(body: "lir.LirBody") -> mir.MirBody:
             mir.MirBlock(
                 at=block.at,
                 phis=(),
-                ops=tuple(
-                    replace(one.op, made=one.what, at=one.at, covers=one.covers) for one in block.insns
-                ),
+                ops=tuple(_carried(one) for one in block.insns),
                 succ=block.succ,
             )
             for block in body.blocks
@@ -113,3 +111,29 @@ def _as_mir(body: "lir.LirBody") -> mir.MirBody:
 # already put there -- allocate.applied() has done that, and this passes the
 # same answer a second way so the two cannot disagree. It goes when select
 # takes an lir.Insn.
+
+
+def _carried(one: "lir.Insn") -> mir.Op:
+    """One instruction as the operation layout still asks its questions of.
+
+    An inserted one -- a phi's copy, a two-address move, a spill's store --
+    is given no node. That is not a detail: `node` is the instruction the
+    operation was raised from, and every question layout answers by reading
+    the original bytes goes through it. An inserted instruction carries the
+    address of the one it stands beside, so a far call's `9a` was read at
+    its address and it claimed the call's own fixup -- nineteen objects
+    said `call has 1 fixups and 0 fields to put them in`, naming the call,
+    which was not the operation asking.
+
+    No node and no bytes; `made` is its whole definition and `covers` says
+    it stands for none of BC's.
+    """
+    inserted = one.covers is not None and one.covers[0] == one.covers[1]
+    return replace(
+        one.op,
+        made=one.what,
+        at=one.at,
+        covers=one.covers,
+        node=None if inserted else one.op.node,
+        id=None if inserted else one.op.id,
+    )

@@ -40,41 +40,17 @@ from qbopt import ir
 from qbopt import lower
 from qbopt import regalloc
 from qbopt import mir
+from qbopt import asm
 from qbopt import select
 from qbopt.mir import MirBody
 from qbopt.module import Module
 
+# The assembler's, re-exported: this module builds them and hands them over.
+Laid = asm.Laid
+Table = asm.Table
+selectable = mir.rewritable
 
-@dataclass(frozen=True, slots=True)
-class Laid:
-    """A body's new bytes, and what moved."""
 
-    code: bytes
-    # Where each op ended up, old address -> new. The map a caller needs to
-    # move anything that pointed into this body from outside it.
-    moved: dict[int, int]
-    # (offset within `code`, the original field's own address) for every
-    # relocated displacement, so the fixup that names it can be moved.
-    relocations: tuple[tuple[int, int], ...]
-    # Fixups that belonged to an instruction this body no longer contains --
-    # the high half of a widened pair reads `[x+2]` and folding it away
-    # takes that relocation with it. Reported rather than silently omitted:
-    # relocate.py refuses a fixup it cannot place, which is what catches a
-    # dropped one, and it can only tell the two apart if told which were
-    # meant to go.
-    dropped: frozenset[int] = frozenset()
-    # Every original address a transform folded into a surviving op, mapped
-    # to where that op went. A /Zd build carries LINNUM records naming the
-    # first byte of each statement, and folding two instructions into one
-    # leaves some of those naming nothing -- the line's code now begins
-    # where the survivor begins. Kept apart from `moved` deliberately: a
-    # branch target may never resolve through this, and cannot, since a
-    # target starts a block and nothing here folds a block's first op.
-    covered: dict[int, int] = field(default_factory=dict)
-
-    @property
-    def grew(self) -> int:
-        return len(self.code)
 
 
 def _ordered(body: MirBody) -> list[mir.Op]:
@@ -95,108 +71,12 @@ def _ordered(body: MirBody) -> list[mir.Op]:
 
 # A root at each width an instruction can name it. ir.ROOT goes the other
 # way; an allocation is per value and a value's register is its root.
-_AT_WIDTH = {
-    Register.EAX: {4: Register.EAX, 2: Register.AX, 1: Register.AL},
-    Register.EBX: {4: Register.EBX, 2: Register.BX, 1: Register.BL},
-    Register.ECX: {4: Register.ECX, 2: Register.CX, 1: Register.CL},
-    Register.EDX: {4: Register.EDX, 2: Register.DX, 1: Register.DL},
-    Register.ESI: {4: Register.ESI, 2: Register.SI},
-    Register.EDI: {4: Register.EDI, 2: Register.DI},
-    Register.EBP: {4: Register.EBP, 2: Register.BP},
-}
 
 
-def _remap(values: tuple, assignment: dict, origin: dict) -> dict:
-    """One side's register remap, out of a whole-body allocation."""
-    out: dict = {}
-    for value in values:
-        want = assignment.get(value)
-        was = origin.get(value)
-        if want is None or was is None or want is was:
-            continue
-        # At every width, not only the root. An allocation is per value and
-        # origin holds the 32-bit root; the instruction names `ax`, so a map
-        # keyed on `eax` alone never matches and select emits what it always
-        # did -- which is what happened, silently, until this was measured.
-        for width in (4, 2, 1):
-            here, there = _AT_WIDTH.get(was, {}).get(width), _AT_WIDTH.get(want, {}).get(width)
-            if here is not None and there is not None:
-                out[here] = there
-    return out
 
 
-def _held(assignment: dict | None) -> dict | None:
-    """The allocation keyed by value id, which is what ir.Held names.
-
-    ir.py sits below mir.py and cannot import Value, so a Held carries the
-    id. This is the other end of that.
-    """
-    if not assignment:
-        return None
-    return {value.id: register for value, register in assignment.items()}
 
 
-def _where(op: mir.Op, assignment: dict | None, origin: dict | None) -> tuple[dict, dict] | None:
-    """This op's register remap, by side, out of a whole-body allocation.
-
-    An allocation is per value and an instruction names registers, so the
-    map is rebuilt per op out of the values it touches. By side, because one
-    map cannot say two things about one register: `mov ax,1` defines a value
-    and *uses* the eax before it -- writing ax preserves the high half --
-    and with a single map, moving that older value rewrites the destination
-    too. hotlop's counter became `mov bx,1` and was clobbered by the very
-    value the move was meant to make room for.
-
-    Where the allocation put every value back where BC had it -- which is
-    every value unless something asked otherwise -- both are empty and
-    select emits exactly what it did before.
-    """
-    if not assignment or origin is None:
-        return None
-    into = _remap(op.defines, assignment, origin)
-    outof = _remap(op.uses, assignment, origin)
-    return (into, outof) if into or outof else None
-
-
-def _stands_for(op) -> tuple[int, int] | None:
-    """The original bytes this op accounts for, as a range.
-
-    Placement asks where an op *goes*; coverage asks which of BC's bytes it
-    *stands for*. They are the same for everything BC wrote and differ the
-    moment a pass moves an op -- a hoisted load runs in the preheader and
-    still accounts for the bytes it came from. Anchoring coverage at `at`
-    conflated the two and made moving anything impossible.
-    """
-    if isinstance(op, Table):
-        return op.lo, op.hi
-    if op.covers is not None:
-        return op.covers
-    length = _length_of(op)
-    return None if length is None else (op.at, op.at + length)
-
-
-def _length_of(op: mir.Op) -> int | None:
-    """How many bytes the op occupied in the image it came from.
-
-    From the node's own span rather than from an instruction, because not
-    every node has one: calls.py's restore idiom is a single node covering
-    four bytes and three instructions, and it is in every object this pass
-    has already absorbed a call in.
-
-    `covers` overrides it, and is how a transform accounts for what it
-    replaced: an op standing in for two of BC's says so, and the byte
-    arithmetic below still adds up.
-    """
-    if op.covers is not None:
-        lo, hi = op.covers
-        return hi - lo
-    if op.node is None:
-        return None
-    # What the operation says it carries, established at the raise. The
-    # search below is the fallback for a caller that built ops itself --
-    # tests do -- and for anything raised before mir._referenced ran.
-    lo, hi = ir.span(op.node)
-    return hi - lo
 
 
 def _trailing_zeros(found: Module, ops: list[mir.Op]) -> "Table | None":
@@ -205,12 +85,12 @@ def _trailing_zeros(found: Module, ops: list[mir.Op]) -> "Table | None":
     Only at the very end, and only all-zero: anything else that happens to
     decode is code until something proves otherwise.
     """
-    highest = max(one.at + (_length_of(one) or 0) for one in ops)
+    highest = max(one.at + (asm._length_of(one) or 0) for one in ops)
     if highest != found.end:
         return None
     lo = found.end
     for one in sorted(ops, key=lambda x: x.at, reverse=True):
-        length = _length_of(one) or 0
+        length = asm._length_of(one) or 0
         if one.at + length != lo or any(found.code[one.at : lo]):
             break
         lo = one.at
@@ -260,7 +140,7 @@ def _padding_runs(
     """
     covered = set()
     for one in ops:
-        span = _stands_for(one)
+        span = asm._stands_for(one)
         if span is not None:
             covered.update(range(*span))
     for one in carried:
@@ -282,15 +162,6 @@ def _padding_runs(
     return out
 
 
-def _semantics(op: mir.Op) -> ir.Semantics | None:
-    """What to select for this op, or None to carry its bytes.
-
-    An op a MIR transform built has no node and no bytes to carry, so its
-    own `made` is the only answer. An op raised from BC's code has a node,
-    and that node's semantics is the authority.
-    """
-    what = lower.current(op)
-    return None if what is None or what.op is ir.Operation.BARRIER else what
 
 
 def selectable(op: mir.Op) -> bool:
@@ -311,203 +182,23 @@ def selectable(op: mir.Op) -> bool:
     return mir.rewritable(op)
 
 
-def _retargeted(what: ir.Semantics, moved: dict[int, int]) -> ir.Semantics | None:
-    """`what` with its target moved to wherever that instruction went.
-
-    A target this body does not contain is refused rather than left alone:
-    it would be an address into code this layout did not place, and quietly
-    keeping the old number would point it at whatever now sits there.
-    """
-    if what.target is None:
-        return what
-    landed = moved.get(what.target)
-    if landed is None:
-        return None
-    return ir.Semantics(what.op, what.name, what.dests, what.sources, landed)
-
-
-def _still_has_an_operand_for_it(op: mir.Op) -> bool:
-    """Whether the operand the fixup named is still in this operation.
-
-    A transform that serves a read from a register removes the only operand
-    a displacement could sit in and leaves an immediate: `cmp word [k],1`
-    becomes `cmp ax,1`, and relocating that immediate writes an address over
-    it and over the branch behind it. suite/jumps.bas took the CASE ELSE arm
-    for k = 1 that way.
-
-    The question is whether a memory operand *went*, not whether a transform
-    touched the operation: hoisting rewrites `mov ax,offset x` to name
-    another register and its relocated immediate is still its own.
-    """
-    # What rewrote it, or None for an operation nothing did -- the question
-    # this asks. `op.made` used to be that marker; a pass that says what it
-    # computes in MIR's own operands sets nothing, so ask lower.
-    what = lower.semantics(op, getattr(op.node, "semantics", None)) if op.made is None else op.made
-    if what is None:
-        return True
-    holds = [one for one in (*what.dests, *what.sources) if isinstance(one, (ir.Mem, ir.Address, ir.Imm))]
-    if not holds:
-        return False
-    was = getattr(op.node, "semantics", None)
-    had = was is not None and any(
-        isinstance(one, (ir.Mem, ir.Address)) for one in (*was.dests, *was.sources)
-    )
-    return not (had and not any(isinstance(one, (ir.Mem, ir.Address)) for one in holds))
-
-
-def _absorbed(site, read):
-    """The instructions one folded runtime call becomes.
-
-    The raise turned a push run and its call into one operation over the
-    argument values; this is where that operation becomes code again. Four
-    instructions for a long divide, two of them relocated -- which is the
-    case Emitted.places exists for.
-    """
-    made = select.absorbed(site, read)
-    return None if isinstance(made, str) else made
 
 
 
-def _fields_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -> tuple[int, ...]:
-    """Every fixup this operation's own operands carry, in operand order.
-
-    One for one instruction, which is every operation the raise makes. An
-    operation that stands for an idiom has one per relocated instruction in
-    it, and they are placed in the order the instructions were emitted.
-    """
-    said = found.refs.get(op.id) if op.id is not None else None
-    if said is not None and len(said) > 1:
-        wanted = tuple(one for one in said if not fields or one in fields)
-        if wanted and _still_has_an_operand_for_it(op):
-            return wanted
-    one = _field_in(found, op, fields)
-    return () if one is None else (one,)
 
 
 
-def _field_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -> int | None:
-    """The address of the one relocated field inside `op`'s own bytes.
-
-    Asked of the module rather than taken from the instruction's `disp_at`,
-    which is the displacement and not always the field.
-
-    A far call is the case that forced this and is handled apart: its four
-    relocated bytes are a target rather than a displacement, so `disp_at` is
-    None, and `fixup_at` does not carry it either -- that map holds the
-    OFF16 fixups behind memory operands, and a far call's is a PTR32. What
-    does know is `Module.calls`, and `at + 1` is not a guess: `9a` then four
-    bytes is the only encoding a far call has.
-
-    Otherwise exactly one fixup in the instruction's own span, or nothing.
-    Two would mean an instruction with two relocated operands, which nothing
-    here emits and which would have to say which field went where.
-    """
-    if op.node is None:
-        return None
-    # `push eax / pop ax / pop dx` is three register instructions and has no
-    # field for a relocation to go in. It needs saying because the idiom is
-    # put wherever a transform has an address to spare: on the chain's last
-    # high half, which may be a store through a relocated displacement, or
-    # on the very byte of a far call whose target is a fixup. Both would be
-    # found by the search below and neither belongs to it. The fixup itself
-    # is not lost -- it falls inside the covers of whatever stands for those
-    # bytes, which is what `Laid.dropped` reports and relocate.py skips.
-    if isinstance(op.node, ir.Restore):
-        return None
-    # What the operation says it carries, established at the raise while the
-    # spans were still BC's. Subject to the caller's own set: `fields` is how
-    # a caller says which fixups it is accounting for.
-    said = found.refs.get(op.id) if op.id is not None else None
-    ref = said[0] if said else None
-    if ref is not None and (not fields or ref in fields):
-        return ref if _still_has_an_operand_for_it(op) else None
-    known = fields or frozenset(found.fixup_at)
-    lo, hi = ir.span(op.node)
-    # A far call and a far jmp put their four relocated bytes right after a
-    # one-byte opcode. Neither is a displacement, so neither is where a
-    # general search would look.
-    if found.code[op.at : op.at + 1] in (b"\x9a", b"\xea") and op.at + 1 in known:
-        return op.at + 1
-    # An operation with nothing but registers has no field to put one in. A
-    # transform that serves a read from a register leaves the instruction
-    # standing where a memory operand was, and the fixup that named that
-    # operand belongs to the read it replaced -- `covers` still accounts for
-    # it, which is what Laid.dropped reports. After the far call above,
-    # whose four relocated bytes are a target and not an operand.
-    what = _semantics(op)
-    if what is not None:
-        holds = [one for one in (*what.dests, *what.sources) if isinstance(one, (ir.Mem, ir.Address, ir.Imm))]
-        if not holds:
-            return None
-        # A transform that served a read from a register removed the only
-        # operand a displacement could sit in, and left an immediate behind:
-        # `cmp word [k],1` becomes `cmp ax,1`. The fixup still inside this
-        # span named the operand that went, so relocating this instruction's
-        # immediate writes an address over it and over the branch after it.
-        # suite/jumps.bas took the CASE ELSE arm for k = 1 that way.
-        # The question is whether a memory operand *went*, not whether a
-        # transform touched the op: hoisting rewrites `mov ax,offset x` to
-        # name a different register and its relocated immediate is still its
-        # own. Asked the broad way, that fixup had nowhere to go and the
-        # segment was refused.
-        was = getattr(op.node, "semantics", None)
-        had = was is not None and any(
-            isinstance(one, (ir.Mem, ir.Address)) for one in (*was.dests, *was.sources)
-        )
-        rewrote = op.made is not None or lower.semantics(op, was) is not None
-        if rewrote and had and not any(isinstance(one, (ir.Mem, ir.Address)) for one in holds):
-            return None
-    inside = [one for one in known if lo <= one < hi]
-    return inside[0] if len(inside) == 1 else None
 
 
-# A signed byte's worth of displacement, measured from the end of the
-# instruction. The short branch's whole range.
-REACH = range(-128, 128)
 
 
-def _placed(ops: list, at: int, lengths: list[int]) -> tuple[list[int], dict[int, int]]:
-    """Where each op lands, given what each one measures.
-
-    Two things, because they are two questions. The list is where each op in
-    this list goes, one entry per op. The map is what an *address* means
-    afterwards, and a transform may put several ops on one address -- a
-    replacement needs somewhere to hang each operation it emits and a call
-    is five bytes wide however many it becomes. The first of a group is what
-    that address means to everything outside: a branch to it arrives at the
-    start of what replaced it, never into the middle.
-    """
-    placed: list[int] = []
-    moved: dict[int, int] = {}
-    where = at
-    for op, length in zip(ops, lengths):
-        placed.append(where)
-        moved.setdefault(op.at, where)
-        where += length
-    return placed, moved
 
 
 def lay_out(body: MirBody, at: int, found: Module, fields: frozenset[int] = frozenset()) -> Laid | str:
     """Every op in `body`, emitted in order from `at`, or why it could not be."""
-    return _emitted(_ordered(body), at, found, fields)
+    return asm.assemble(_ordered(body), at, found, fields)
 
 
-@dataclass(frozen=True, slots=True)
-class Table:
-    """A run of bytes between the instructions, copied rather than selected.
-
-    BC drops an ON GOTO table inline: a count byte and one relocated word
-    per destination. The words are fixups, so copying the bytes and moving
-    the fixups is enough -- as_records remaps each one's own displacement,
-    which is where the destination actually lives.
-    """
-
-    lo: int
-    hi: int
-
-    @property
-    def at(self) -> int:
-        return self.lo
 
 
 def _names_a_value(body) -> bool:
@@ -568,6 +259,48 @@ def _grounded(body: MirBody, held: dict | None) -> MirBody:
     )
 
 
+def allocated(bodies: list, plain: list | None = None, settle=None) -> tuple[list, dict | None]:
+    """The bodies with a register for every value, and the assignment.
+
+    A body the allocator refuses is handed back as it was *raised*, not as
+    the passes left it: every operand is remapped through the assignment
+    and there is none, so each operation would be written with the register
+    BC had -- while a pass has moved the operations that made that true.
+
+    `plain` is the raised bodies, not yet widened. Widening one costs a
+    walk of every pair chain in it and the fallback wants about one body in
+    seven, so `settle` is applied to the one that needs it rather than to
+    all of them: 68 calls became 10 over the corpus.
+
+    Out of the assembler. Colouring is a phase, and one that runs inside
+    emission is one nothing downstream can be told has already happened --
+    objwrite.py had no way to say so and was allocated over a second time,
+    which produced a call encoding with no field for its own fixup.
+    """
+    was = dict(plain or ())
+    got: dict = {}
+    settled = []
+    for name, body in bodies:
+        fixed = regalloc.untangled(body)
+        one = regalloc.colour(fixed, fixed.pins)
+        if isinstance(one, str):
+            fixed, one = body, regalloc.colour(body, body.pins)
+        if not isinstance(one, str):
+            got.update(one)
+            settled.append((name, fixed))
+            continue
+        # Nothing can colour it. Without this the hoist had to allocate: it
+        # moved a run out of a loop and had to find the result a register
+        # itself, because nothing downstream would. That is 90 of
+        # transform.py's machine references and where every hoist bug came
+        # from.
+        instead = was.get(name)
+        if instead is not None and settle is not None:
+            instead = settle(instead)
+        settled.append((name, instead if instead is not None else body))
+    return settled, got or None
+
+
 def rebuild(
     found: Module,
     bodies: list[tuple[str, MirBody]],
@@ -576,8 +309,6 @@ def rebuild(
     reached: frozenset[int] | None = None,
     native_fpu: bool = False,
     assignment: dict | None = None,
-    plain: list[tuple[str, MirBody]] | None = None,
-    settle=None,
 ) -> Laid | str:
     """Every body in the module, laid out one after another.
 
@@ -607,42 +338,12 @@ def rebuild(
     # copy is what breaks it -- on the phi edge, or before a two-address
     # operation whose source outlives it. Per body, and only where it helps:
     # a body the allocator refuses even untangled is laid out as it was.
-    if assignment is None:
-        # The raised bodies, not yet widened. Widening one costs a walk of
-        # every pair chain in it and the fallback wants about one body in
-        # seven, so `settle` is applied to the one that needs it rather
-        # than to all of them: 68 calls became 10 over the corpus.
-        was = dict(plain or ())
-        got: dict = {}
-        settled = []
-        for name, body in bodies:
-            fixed = regalloc.untangled(body)
-            one = regalloc.colour(fixed, fixed.pins)
-            if isinstance(one, str):
-                fixed, one = body, regalloc.colour(body, body.pins)
-            if not isinstance(one, str):
-                got.update(one)
-                settled.append((name, fixed))
-                continue
-            # Nothing can colour it. The body as the passes left it is then
-            # unemittable: every operand is remapped through the allocation
-            # and there is none, so each operation would be written with the
-            # register BC had -- while a pass has moved the operations that
-            # made that true. The body as it was raised still describes
-            # itself, so that is what goes out.
-            #
-            # Without this the hoist had to allocate: it moved a run out of
-            # a loop and had to find the result a register itself, because
-            # nothing downstream would. That is 90 of transform.py's machine
-            # references and where every hoist bug came from.
-            instead = was.get(name)
-            if instead is not None and settle is not None:
-                instead = settle(instead)
-            settled.append((name, instead if instead is not None else body))
-        bodies = settled
-        assignment = got or None
-
-    held = _held(assignment)
+    # No allocation here. An assembler emits what it is handed; colouring
+    # a body is a phase, and one that runs inside emission is one nothing
+    # downstream can be told has already happened. `allocated()` below is
+    # the same work, and `wholeseg.py` calls it before this -- which is
+    # what let objwrite.py stop being allocated over a second time.
+    held = asm._held(assignment)
     bodies = [(name, _grounded(body, held)) for name, body in bodies]
 
     # Sorted on the address an operation's bytes start at. This tried to
@@ -659,11 +360,11 @@ def rebuild(
     ops = sorted((op for _, body in bodies for op in _ordered(body)), key=lambda one: one.at)
     if not ops:
         return "no bodies to rebuild"
-    if any(_length_of(one) is None for one in ops):
+    if any(asm._length_of(one) is None for one in ops):
         return f"{ops[0].at:#06x}: an op with no instruction behind it"
 
     lowest = min(one.at for one in ops)
-    highest = max((_stands_for(one) or (one.at, one.at))[1] for one in ops)
+    highest = max((asm._stands_for(one) or (one.at, one.at))[1] for one in ops)
     inside = [Table(lo, hi) for lo, hi in tables if lowest <= lo and hi <= highest]
 
     # BC pads the end of its code segment with zeros, and every object in
@@ -691,7 +392,7 @@ def rebuild(
     # Every byte between the first item and the last has to be one of them.
     # What is left over is data nothing here can name, and emitting only what
     # it understands would drop it silently along with anything it holds.
-    covered = sum(_length_of(one) or 0 for one in ops) + sum(one.hi - one.lo for one in inside)
+    covered = sum(asm._length_of(one) or 0 for one in ops) + sum(one.hi - one.lo for one in inside)
     if covered != highest - lowest:
         # Named where the gap is, not where the layout starts. It used to
         # report `lowest`, which sent every reading of this straight to the
@@ -699,7 +400,7 @@ def rebuild(
         held = set()
         claims: dict[int, list[int]] = {}
         for one in ops:
-            span = _stands_for(one)
+            span = asm._stands_for(one)
             if span is not None:
                 held.update(range(*span))
                 for byte in range(*span):
@@ -721,7 +422,7 @@ def rebuild(
     origin = {}
     for _name, body in bodies:
         origin.update(body.origin)
-    return _emitted(_interleaved(ops, inside), lowest, found, fields, native_fpu, assignment, origin)
+    return asm.assemble(_interleaved(ops, inside), lowest, found, fields, native_fpu, assignment, origin)
 
 
 def _starts_at(op: mir.Op) -> int:
@@ -748,219 +449,3 @@ def _interleaved(ops: list, inside: list) -> list:
     return sorted([*ops, *inside], key=lambda one: rank[id(one)])
 
 
-def _emitted(
-    ops: list,
-    at: int,
-    found: Module,
-    fields: frozenset[int] = frozenset(),
-    native_fpu: bool = False,
-    assignment: dict | None = None,
-    origin: dict | None = None,
-) -> Laid | str:
-    """Every item in order from `at`, shrunk to a fixed point and emitted.
-
-    An item is an op, which select.py encodes, or a Table, which is copied.
-    """
-    if not ops:
-        return "no ops to lay out"
-
-    # Kept per op rather than per address. An op's address is where it came
-    # from, and several may share one: a transform that replaces a five-byte
-    # call with six operations has five addresses to give them and needs the
-    # sixth anyway. Keying the measurement by address made that impossible
-    # and silently -- one entry overwrote the other and the body came out
-    # the wrong length.
-    lengths: list[int] = []
-    for op in ops:
-        if isinstance(op, Table):
-            lengths.append(op.hi - op.lo)
-            continue
-        what = _semantics(op)
-        emulated = not native_fpu and found.code[op.at : op.at + 1] == bytes([0xCD])
-        folded = found.absorbed.get(op.id) if op.id is not None else None
-        if folded is not None:
-            made = _absorbed(*folded)
-            if made is None:
-                return f"{op.at:#06x}: the absorbed call is not one select.py can emit"
-            lengths.append(len(made.code))
-            continue
-        if isinstance(op.node, ir.Restore):
-            # Measured from what it emits, not from `covers`. The two are
-            # different questions -- covers says which of BC's bytes this op
-            # stands for, and a transform sets it to whatever makes the
-            # chain tile -- and reading the emitted length off covers forced
-            # every restore to claim exactly four bytes, which pairs.py could
-            # only arrange by putting it on an address a widened op already
-            # held.
-            made = select.restore(op.node.pair)
-            if made is None:
-                return f"{op.at:#06x}: the restore idiom is not one select.py can emit"
-            lengths.append(len(made.code))
-            continue
-        if what is None or emulated:
-            lengths.append(_length_of(op) or 0)
-            continue
-        made = select.emit(
-            what, at=at, where=_where(op, assignment, origin),
-            held=_held(assignment), relocated=_field_in(found, op, fields) is not None
-        )
-        if made is None:
-            return f"{op.at:#06x}: {op.name} is not one select.py can emit"
-        lengths.append(len(made.code))
-
-    # Shrink to a fixed point. Every branch starts long; one that reaches its
-    # target within a signed byte becomes short, which moves everything after
-    # it closer and can only let more of them shrink.
-    short: set[int] = set()  # by position, since an address may hold several
-    placed, moved = _placed(ops, at, lengths)
-    changing = True
-    while changing:
-        changing = False
-        for index, op in enumerate(ops):
-            if isinstance(op, Table):
-                continue
-            what = _semantics(op)
-            if what is None or what.target is None or index in short:
-                continue
-            landed = moved.get(what.target)
-            if landed is None:
-                continue
-            # Through `moved`, the same as the emission below. Asking for the
-            # short form of a branch that still names its *original* target,
-            # from the address it has *moved* to, measures a displacement
-            # that is neither -- and iced refuses the byte form when that
-            # overflows, so the branch stayed long. Invisible while a body
-            # barely moves, and worth 56 bytes an object once absorption
-            # takes 328 out of one.
-            aimed = _retargeted(what, moved)
-            if aimed is None:
-                continue
-            made = select.emit(
-                aimed,
-                at=placed[index],
-                where=_where(op, assignment, origin),
-            held=_held(assignment),
-                short=True,
-                relocated=_field_in(found, op, fields) is not None,
-            )
-            if made is None:
-                continue  # a call has no short form, and says so by refusing
-            if landed - (placed[index] + len(made.code)) not in REACH:
-                continue
-            short.add(index)
-            lengths[index] = len(made.code)
-            changing = True
-        if changing:
-            placed, moved = _placed(ops, at, lengths)
-
-    # The bytes, at the addresses the fixed point settled on.
-    out = bytearray()
-    relocations: list[tuple[int, int]] = []
-    for index, op in enumerate(ops):
-        if isinstance(op, Table):
-            # Copied verbatim, with every fixup inside it moved by the same
-            # amount the table itself moved. The entries are relocated words
-            # and their destinations live in the fixups' own displacements,
-            # which as_records remaps.
-            out += found.code[op.lo : op.hi]
-            for field in sorted(one for one in (fields or frozenset(found.fixup_at)) if op.lo <= one < op.hi):
-                relocations.append((placed[index] - at + (field - op.lo), field))
-            continue
-        # An emulated x87 site is emitted as it was found. declen.py decodes
-        # `cd 35 46 c8` as the fld it stands for, so selecting from the
-        # semantics would emit `d9 46 c8` -- a native instruction, on a
-        # machine that may have no coprocessor. That conversion is a
-        # decision fpu.py gates behind --native-fpu -- so laying a segment
-        # out does not make it silently, and makes it when asked: with
-        # native_fpu the site is selected from its own semantics instead,
-        # which is the same x87 instruction the emulator stands for and is
-        # what M5 means by expressing fpu.py's pass over MIR.
-        if not native_fpu and found.code[op.at : op.at + 1] == bytes([0xCD]) and (length := _length_of(op)):
-            # Copied, so any fixup inside it keeps its place within the
-            # instruction and only the instruction itself has moved.
-            field = _field_in(found, op, fields)
-            if field is not None:
-                relocations.append((len(out) + (field - op.at), field))
-            out += found.code[op.at : op.at + length]
-            continue
-        # A barrier is an instruction ir.py models nothing about --
-        # `movsx eax,bx` is one -- so there is nothing to select from and
-        # its own bytes are the only right answer. Carried, unless it names
-        # a branch target: that would move, and keeping the old number
-        # would point it at whatever now sits there.
-        if _semantics(op) is None and (length := _length_of(op)):
-            found_insn = getattr(op.node, "insn", None)
-            if found_insn is not None and found_insn.insn.op0_kind == OpKind.NEAR_BRANCH16:
-                return f"{op.at:#06x}: a branch this cannot model would keep a stale target"
-            field = _field_in(found, op, fields)
-            if field is not None:
-                relocations.append((len(out) + (field - op.at), field))
-            out += found.code[op.at : op.at + length]
-            continue
-        if isinstance(op.node, ir.Restore):
-            made = select.restore(op.node.pair)
-            if made is None or len(made.code) != lengths[index]:
-                return f"{op.at:#06x}: the restore idiom did not come back its own length"
-            out += made.code
-            continue
-        folded = found.absorbed.get(op.id) if op.id is not None else None
-        if folded is not None:
-            made = _absorbed(*folded)
-            if made is None or len(made.code) != lengths[index]:
-                return f"{op.at:#06x}: the absorbed call changed length between the two passes"
-            for where, field in zip(made.places, _fields_in(found, op, fields), strict=False):
-                relocations.append((len(out) + where, field))
-            out += made.code
-            continue
-        before = _semantics(op)
-        if before is None:
-            return f"{op.at:#06x}: {op.name} has no semantics to select from"
-        what = _retargeted(before, moved)
-        if what is None:
-            return f"{op.at:#06x}: its target is not in this body"
-        made = select.emit(
-            what,
-            at=placed[index],
-            where=_where(op, assignment, origin),
-            held=_held(assignment),
-            short=index in short,
-            relocated=_field_in(found, op, fields) is not None,
-        )
-        if made is None or len(made.code) != lengths[index]:
-            return f"{op.at:#06x}: it changed length between the two passes"
-        # A fixup goes wherever the field it names landed -- the
-        # displacement for a memory operand, the immediate for
-        # `push offset X` and `mov ax,offset X`, which are 464 of the
-        # corpus's fixups on their own.
-        #
-        # Paired in order, because an operation is not always one
-        # instruction: absorbing a long divide is four and two of them are
-        # relocated, and each fixup belongs to the operand it was read off.
-        wanted = _fields_in(found, op, fields)
-        if wanted:
-            landed = made.places
-            if len(landed) < len(wanted):
-                return (
-                    f"{op.at:#06x}: {op.name} has {len(wanted)} fixups and "
-                    f"{len(landed)} fields to put them in"
-                )
-            for where, field in zip(landed, wanted, strict=False):
-                relocations.append((len(out) + where, field))
-        out += made.code
-    # Every fixup inside a surviving op's `covers` but outside its own
-    # node's span belonged to something a transform folded away. One
-    # outside every op's covers is not explained by anything here, and
-    # relocate.py still refuses it.
-    kept_fields = {one for _where, one in relocations}
-    explained: set[int] = set()
-    known = fields or frozenset(found.fixup_at)
-    folded: dict[int, int] = {}
-    for op in ops:
-        if isinstance(op, Table):
-            continue
-        lo, hi = op.covers if op.covers is not None else (op.at, op.at + (_length_of(op) or 0))
-        explained.update(one for one in known if lo <= one < hi)
-        landed = moved.get(op.at)
-        if landed is not None:
-            folded.update({one: landed for one in range(lo, hi) if one not in moved})
-    return Laid(bytes(out), moved, tuple(relocations), frozenset(explained - kept_fields), folded)

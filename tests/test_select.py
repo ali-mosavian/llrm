@@ -540,7 +540,8 @@ def test_a_relocated_field_never_changes_width(obj: Path) -> None:
     `add ax,0DCh` and the other `add ax,0FFDCh`.
     """
     from qbopt import declen
-    from qbopt import layout
+    from qbopt import asm
+from qbopt import layout
     from qbopt import mir
     from qbopt import omf
     from qbopt import blocks as split
@@ -555,8 +556,8 @@ def test_a_relocated_field_never_changes_width(obj: Path) -> None:
     for _name, body in mir.bodies(found, split.partition(found, mapped)):
         for block in body.blocks:
             for op in block.ops:
-                what = layout._semantics(op)
-                field = layout._field_in(found, op, fields)
+                what = asm._semantics(op)
+                field = asm._field_in(found, op, fields)
                 if what is None or field is None:
                     continue
                 # Not a folded runtime call. Its address is its first push,

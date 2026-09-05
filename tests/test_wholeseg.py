@@ -86,7 +86,12 @@ def test_a_rebuilt_object_keeps_every_code_fixup_it_still_has_a_home_for(obj: Pa
     plain = [(name, transform.widened(body)) for name, body in raised]
     fields = frozenset(one.offset for one in omf.fixups(omf.parse(data)) if one.seg == before.seg)
     reached = frozenset(at for b in blocks for i in b.insns for at in range(i.at, i.end))
-    laid = layout.rebuild(before, bodies, mapped.tables, fields, reached, plain=plain)
+    # Allocation is a phase and no longer happens inside the assembler, so
+    # this runs the two the way wholeseg does. Asking rebuild alone gives a
+    # body with nothing resolved through an assignment, and a different set
+    # of fixups falls out of it.
+    settled, assignment = layout.allocated(bodies, plain=plain)
+    laid = layout.rebuild(before, settled, mapped.tables, fields, reached, assignment=assignment)
     assert not isinstance(laid, str), laid
     assert len(now) == len(was) - len(laid.dropped), (
         f"{obj.stem}: {len(was)} fixups became {len(now)}, {len(laid.dropped)} deliberately dropped"

@@ -31,12 +31,22 @@ from qbopt.passes import LIRTransform
 class Splitter(LIRTransform):
     name = "split"
 
+    def __init__(self, only: "frozenset[int] | None" = None) -> None:
+        self.only = only
+
     def transform(self, body: lir.LirBody) -> lir.LirBody:
-        return split(body)
+        return split(body, self.only)
 
 
-def split(body: lir.LirBody) -> lir.LirBody:
-    """`body` with each range that crosses a loop untouched cut at its edges."""
+def split(body: lir.LirBody, only: "frozenset[int] | None" = None) -> lir.LirBody:
+    """`body` with each range that crosses a loop untouched cut at its edges.
+
+    `only` narrows it to the values the allocator could not place, which is
+    how LLVM drives it: `RegAllocGreedy` splits in response to a failure to
+    assign, not on principle. Run on every crossing range instead, this
+    cost 12,329 bytes over the corpus and freed nothing -- the copies it
+    inserts are real and the registers it frees were not wanted.
+    """
     found = loopy.loops(list(body.blocks), body.entry)
     if not found:
         return body
@@ -57,11 +67,13 @@ def split(body: lir.LirBody) -> lir.LirBody:
             for value in (*one.defines, *one.uses)
         } | {value for at in inside for value in at_of[at].arrives}
         crossing = _crossing(body, live, index, inside)
-        for value in sorted(crossing - touched):
+        for value in sorted((crossing - touched) if only is None else (crossing - touched) & only):
             after = [at for at in _exits(body, inside) if at in at_of]
             if not after:
                 continue
             for at in after:
+                if value in renames.get(at, {}):
+                    continue  # two loops share this exit; one cut is enough
                 cuts.setdefault(at, []).append((fresh, value))
                 renames.setdefault(at, {})[value] = fresh
             fresh += 1

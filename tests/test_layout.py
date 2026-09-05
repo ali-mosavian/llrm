@@ -23,6 +23,7 @@ from qbopt import ir
 from qbopt import mir
 from qbopt import target
 from qbopt import omf
+from qbopt import asm
 from qbopt import layout
 from qbopt import select
 from qbopt.declen import decode
@@ -99,7 +100,7 @@ def paired(ops: list, back: list, found) -> list[tuple]:
             out.append((op, back[at : at + 1]))
             at += 1
             continue
-        made = laying._absorbed(*folded)
+        made = asm._absorbed(*folded)
         assert made is not None, f"{op.at:#x}: the absorbed call emits nothing"
         taken, size = 0, 0
         while at + taken < len(back) and size < len(made.code):
@@ -212,7 +213,7 @@ def test_relaxation_settles_and_leaves_every_branch_reaching(obj: Path) -> None:
             landed = got.moved[want.near_branch16]
             assert made.near_branch16 == landed
             if made.len <= 2:  # the short form was taken
-                assert landed - (made.ip + made.len) in layout.REACH
+                assert landed - (made.ip + made.len) in asm.REACH
 
 
 def test_a_laid_out_body_is_no_bigger_than_bc_s_own() -> None:
@@ -226,7 +227,7 @@ def test_a_laid_out_body_is_no_bigger_than_bc_s_own() -> None:
     was = now = 0
     for obj in FIXTURES:
         for body, got, _found in laid(obj):
-            was += sum(layout._length_of(op) or 0 for op in layout._ordered(body))
+            was += sum(asm._length_of(op) or 0 for op in layout._ordered(body))
             now += len(got.code)
     assert now <= was, f"{now} against BC's {was}"
 
@@ -298,7 +299,7 @@ def test_a_rebuilt_segment_is_the_same_instructions(obj: Path) -> None:
     # padding decode as instructions too, so counting decoded instructions
     # against ops would compare different things. What the carried runs get
     # instead is test_a_rebuilt_segment_carries_every_fixup.
-    if len(got.code) != sum(layout._length_of(op) or 0 for op in ops):
+    if len(got.code) != sum(asm._length_of(op) or 0 for op in ops):
         return
     ops = sorted((op for _, body in bodies for op in layout._ordered(body)), key=lambda one: one.at)
     back = walked(got.code, ops[0].at)
@@ -429,8 +430,8 @@ def test_layout_tells_the_selector_which_instructions_are_relocated(obj: Path, m
     for _name, body in bodies:
         for block in body.blocks:
             for op in block.ops:
-                what = layout._semantics(op)
-                if what is None or layout._field_in(found, op, fields) is None:
+                what = asm._semantics(op)
+                if what is None or asm._field_in(found, op, fields) is None:
                     continue
                 if id(what) not in seen:
                     continue
@@ -486,10 +487,10 @@ def test_an_allocation_reaches_the_bytes() -> None:
             # which is the whole point of the map being per side -- but it
             # would leave this test proving that.
             if any(
-                layout._where(op, tried, body.origin) is not None
-                and (what := layout._semantics(op)) is not None
+                asm._where(op, tried, body.origin) is not None
+                and (what := asm._semantics(op)) is not None
                 and (first := select.emit(what, at=0)) is not None
-                and (second := select.emit(what, at=0, where=layout._where(op, tried, body.origin)))
+                and (second := select.emit(what, at=0, where=asm._where(op, tried, body.origin)))
                 is not None
                 and first.code != second.code
                 for block in body.blocks
@@ -504,8 +505,8 @@ def test_an_allocation_reaches_the_bytes() -> None:
     changed = 0
     for block in body.blocks:
         for op in block.ops:
-            where = layout._where(op, got, body.origin)
-            what = layout._semantics(op)
+            where = asm._where(op, got, body.origin)
+            what = asm._semantics(op)
             if not where or what is None:
                 continue
             was = select.emit(what, at=0)
@@ -558,7 +559,7 @@ def test_a_served_read_does_not_keep_the_fixup_of_the_operand_it_removed(name: s
                 if any(isinstance(one, mir.Cell) for one in (*op.args, *op.results)):
                     continue
                 served += 1
-                assert layout._field_in(found, op) is None, (
+                assert asm._field_in(found, op) is None, (
                     f"{name}: {op.at:#06x} {op.name} kept a relocation with no memory operand to put it in"
                 )
     assert served, f"{name}: the pass served no read, so this proves nothing"
@@ -602,14 +603,13 @@ def test_bytes_claimed_twice_are_reported_rather_than_raising() -> None:
     assert "claimed by more than one op" in got, got
 
 
-def test_rebuild_colours_when_it_was_not_handed_an_assignment(obj: Path) -> None:
-    """No assignment is not the same as no registers.
+def test_allocation_is_a_phase_and_the_assembler_emits_what_it_is_handed(obj: Path) -> None:
+    """`rebuild` used to colour when handed no assignment, and does not.
 
-    An ir.Held resolves through the allocation, so a caller that supplies
-    none is saying "you decide" -- and if this treated it as "nobody holds
-    anything" the same body compiled two different ways depending on who
-    asked. 33 of test_wholeseg's cases compared a body with its Held
-    resolved against one with it reverted.
+    An assembler that allocates is one nothing downstream can be told has
+    already allocated: objwrite.py runs after a real allocator and was
+    allocated over a second time. `layout.allocated()` is that work, and
+    the two together give what rebuild alone used to.
     """
     from qbopt import mir
     from qbopt import regalloc
@@ -645,11 +645,17 @@ def test_rebuild_colours_when_it_was_not_handed_an_assignment(obj: Path) -> None
         mine.update(got)
         fixed.append((name, one))
 
-    theirs = layout.rebuild(found, bodies, mapped.tables)
+    coloured, assignment = layout.allocated(bodies)
+    theirs = layout.rebuild(found, coloured, mapped.tables, assignment=assignment)
     ours = layout.rebuild(found, fixed, mapped.tables, assignment=mine or None)
     assert isinstance(theirs, str) == isinstance(ours, str), f"{obj.stem}: one refused and one did not"
     if not isinstance(theirs, str):
         assert theirs.code == ours.code, f"{obj.stem}: two answers for one body"
+
+    # And handed nothing, it remaps nothing rather than deciding for itself.
+    import inspect
+
+    assert "regalloc" not in inspect.getsource(layout.rebuild), "the assembler allocates again"
 
 
 def test_a_relocation_belongs_to_the_operand_and_not_to_a_place(obj: Path) -> None:
@@ -767,14 +773,14 @@ def test_a_moved_operation_keeps_its_fixup() -> None:
         for _, body in bodies
         for block in body.blocks
         for op in block.ops
-        if op.id in found.refs and layout._field_in(found, op) is not None
+        if op.id in found.refs and asm._field_in(found, op) is not None
     ]
     assert carried, "no operation carries a fixup; the test measures nothing"
 
     one = carried[0]
-    was = layout._field_in(found, one)
+    was = asm._field_in(found, one)
     moved = replace(one, at=one.at + 0x100)
-    assert layout._field_in(found, moved) == was, "the relocation stayed behind"
+    assert asm._field_in(found, moved) == was, "the relocation stayed behind"
 
 
 def test_a_fold_does_not_keep_the_fixup_of_the_read_it_replaced() -> None:
@@ -811,7 +817,7 @@ def test_a_fold_does_not_keep_the_fixup_of_the_read_it_replaced() -> None:
                 ):
                     continue
                 checked += 1
-                assert not layout._still_has_an_operand_for_it(op), (
+                assert not asm._still_has_an_operand_for_it(op), (
                     f"{op.at:#x}: the memory operand is gone and the fixup was kept"
                 )
     assert checked, "no fold replaced a memory read; the test measures nothing"

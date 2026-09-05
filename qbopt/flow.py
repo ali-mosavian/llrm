@@ -52,7 +52,6 @@ def machine(pinned: dict, frame=None, calls: dict | None = None) -> list[LIRTran
         phielim.PhiElimination(),
         twoaddr.TwoAddress(),
         coalesce.Coalescer(),
-        splitkit.Splitter(),
         allocate.RegAlloc(pinned, frame),
         prologue.Prologue(frame, calls) if frame is not None else prologue.Prologue(frames.Frame(0), calls),
     ]

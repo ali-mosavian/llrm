@@ -26,6 +26,7 @@ from qbopt import lir
 from qbopt import mir
 from qbopt import target
 from qbopt import omf
+from qbopt import asm
 from qbopt import layout
 from qbopt import module
 from qbopt import regalloc
@@ -66,7 +67,7 @@ def test_moving_a_preserved_value_does_not_rewrite_the_destination() -> None:
 
     origin = {kept: Register.EAX, older: Register.EAX}
     # The older value moves; the one this instruction defines does not.
-    where = layout._where(op, {kept: Register.EAX, older: Register.EBX}, origin)
+    where = asm._where(op, {kept: Register.EAX, older: Register.EBX}, origin)
     made = select.emit(what, at=0, where=where)
     assert made is not None
     assert _shown(made.code) == "mov ax,1", f"the destination moved with a value that is not it: {_shown(made.code)}"

@@ -422,22 +422,44 @@ raises `allocate.Spilled` naming the values and the cost. Quietly putting
 back what the raise saw is how one wrong instruction reaches an object with
 nothing reported.
 
+### The MC layer
+
+`asm.py` is `MCAssembler`: how long each instruction is, where each
+therefore lands, which branches can shrink now that everything is closer,
+and where each fixup ended up. `select.py` is the `MCCodeEmitter` above it
+and `relocate.py` the `MCObjectWriter` below. `layout.py` is what is left:
+ordering the bodies, the tables and padding it carries verbatim, and the
+byte-preservation check -- which is ours, not LLVM's, because ours emits
+into an image BC laid out.
+
+**An assembler does not allocate.** `layout.rebuild` used to colour a body
+when handed no assignment, which made it a phase nothing downstream could
+be told had already run: `objwrite.py` runs after a real allocator and was
+allocated over a second time. `layout.allocated()` is that work, called by
+`wholeseg.py` before the assembler, and `rebuild` now remaps only what it
+is handed.
+
+### An inserted instruction has no node
+
+`node` is the instruction an operation was raised from, and every question
+answered by reading the original bytes goes through it. A phi's copy, a
+two-address move and a spill's store carry the *address* of the
+instruction they stand beside, so a far call's `9a` was read at that
+address and the inserted instruction claimed the call's own fixup.
+Nineteen objects said `call has 1 fixups and 0 fields to put them in`,
+naming the call, which was not the operation asking.
+
 ### Where it stands
 
-**468 of 487 objects write.** The nineteen that do not are one defect, not
-a missing phase: a call whose fixup has no field to sit in, because the
-spiller renamed what it read and select then picked a form without a
-displacement.
+**487 of 487 objects write**, 709,230 -> 640,122 bytes. Nothing has run
+that output, so no correctness is claimed.
 
 **What LLVM has and this still does not:**
 
-- **The MC layer is not split.** `select.py` is `MCCodeEmitter` and
-  `relocate.py` is `MCObjectWriter`, both separate already; `layout.py` is
-  `MCAssembler` *and* the byte-preservation verifier in one module, where
-  LLVM has fragments and relaxation on one side and nothing like the
-  verifier at all -- it is ours, and it belongs beside `verify.py`.
 - `RegAllocGreedy`'s eviction and its split candidates. `splitkit.py`
-  makes one cut; LLVM prices many.
+  makes one cut, in response to a failure to assign; LLVM prices many.
+  Run on every crossing range instead of on the ones that failed, it cost
+  12,329 bytes over the corpus and freed nothing.
 - `BranchFolding`, `MachineCopyPropagation`, `MachineLICM`,
   `DeadMachineInstructionElim`, `MachineCSE`, `PeepholeOptimizer` -- the
   late optimisations, cheap now that the frame exists.
