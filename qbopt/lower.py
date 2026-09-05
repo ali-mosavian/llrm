@@ -11,6 +11,8 @@ move the pass's mistake down a layer.
 
 from dataclasses import replace
 
+from iced_x86 import Register
+
 from qbopt import ir
 from qbopt import mir
 
@@ -98,3 +100,99 @@ def _target(op: mir.Op, was: ir.Semantics | None) -> int | None:
 
 
 __all__ = ["operand", "semantics", "current"]
+
+
+class Unlowered(Exception):
+    """An operand nothing here can turn into a machine location."""
+
+
+def _located(what: "ir.Semantics | None", was: "ir.Semantics | None") -> "ir.Semantics | None":
+    """`what` with every MIR operand in it replaced by a machine one.
+
+    A cell is the one that needs help. mir.MemRef says which bytes and what
+    its address depends on -- the alias question -- and ir.Mem says how to
+    encode it: which register reaches it, and how wide the displacement
+    field was, which is not how wide the number needs to be. Neither is
+    derivable from the other, so the encoding half comes from the operand
+    the same instruction had in the same position before a pass rewrote it.
+
+    A cell in a position the original had none is an error rather than a
+    guess. Encoding a displacement at the wrong width is `mov ax,[bx]`
+    emitted as `8b 07` -- the right instruction reading the wrong address.
+    """
+    if what is None:
+        return None
+    dests = tuple(_machine(one, was.dests if was else (), index) for index, one in enumerate(what.dests))
+    sources = tuple(_machine(one, was.sources if was else (), index) for index, one in enumerate(what.sources))
+    if dests == what.dests and sources == what.sources:
+        return what
+    return ir.Semantics(what.op, what.name, dests, sources, what.target)
+
+
+def _machine(one, had: tuple, index: int):
+    if not isinstance(one, mir.MemRef):
+        return one
+    before = had[index] if index < len(had) else None
+    if not isinstance(before, ir.Mem):
+        before = next((x for x in had if isinstance(x, ir.Mem)), None)
+    if before is not None:
+        return ir.Mem(one.addr, one.width, before.through, before.offset, before.disp_width)
+    return _addressed(one)
+
+
+def _addressed(one: "mir.MemRef") -> "ir.Mem":
+    """A cell the original instruction had no memory operand for.
+
+    A pass put it there -- a fold that turned a register read back into the
+    read of the cell it came from -- so there is no encoding to copy and it
+    has to come from the address itself. Only for the two spaces whose
+    encoding the address fully determines: a frame slot is reached through
+    bp and a segment-relative cell through no register at all, both with a
+    two-byte displacement, which is what BC emits and what a fixup expects.
+
+    Anything else -- a far pointer, an indexed element, the stack -- is
+    refused by name. Guessing which register reaches it would be guessing
+    the instruction.
+    """
+    from qbopt.module import Space
+
+    addr = one.addr
+    if addr is None:
+        raise Unlowered("a cell with no address cannot be encoded: nothing says which register reaches it")
+    if addr.space is Space.FRAME:
+        return ir.Mem(addr, one.width, Register.BP, 0, 2)
+    if addr.space is Space.SEGMENT and addr.base == Register.NONE:
+        return ir.Mem(addr, one.width, Register.NONE, 0, 2)
+    raise Unlowered(f"a cell at {addr} in {addr.space} has no encoding this can derive")
+
+
+def lowered(name: str, body: "mir.MirBody") -> "lir.LirBody":
+    """One MIR body as machine instructions, and nothing else.
+
+    The pass that ends the abstract half. Above this a value is a value and
+    an operation says what it computes; below it every operand is a
+    location and the only questions left are which register, where the
+    bytes go and what a fixup names.
+
+    One instruction per operation, in the order the blocks give. `what` is
+    None where nothing rewrote the operation, which is layout's signal to
+    carry the original bytes rather than re-encode them -- a re-encode that
+    lands on a longer form for the same instruction is how a rebuild grows
+    without anything having been optimised.
+    """
+    from qbopt import lir
+
+    return lir.LirBody(
+        name=name,
+        entry=body.entry,
+        blocks=tuple(
+            lir.LirBlock(
+                at=block.at,
+                insns=tuple(lir.Insn(at=op.at, covers=op.covers, what=_located(current(op), getattr(op.node, 'semantics', None)), op=op) for op in block.ops),
+                succ=block.succ,
+            )
+            for block in body.blocks
+        ),
+        origin=dict(body.origin),
+        pins=dict(getattr(body, "pins", {}) or {}),
+    )

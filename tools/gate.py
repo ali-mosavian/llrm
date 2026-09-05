@@ -49,6 +49,8 @@ TESTS = (
     # breaks that before it breaks anything else.
     "tests/test_wholeseg.py",
     "tests/test_layout.py",
+    # The new flow, which is not shipped and is where the work is.
+    "tests/test_flow.py",
     "tests/test_rule5.py",
 )
 

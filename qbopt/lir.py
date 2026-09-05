@@ -141,3 +141,48 @@ def writes(what: ir.Semantics) -> dict[Register_, Need]:
     if what.op is ir.Operation.EXTEND:
         out[Register.EDX] = Need(frozenset({Register.EDX}))
     return out
+
+
+@dataclass(frozen=True, slots=True)
+class Insn:
+    """One machine instruction, as the thing that emits it needs it.
+
+    `what` is None where the bytes are carried rather than generated -- a
+    barrier, the restore idiom, an emulated x87 site. `covers` says which of
+    the original bytes it stands for, and `at` is where it began, which is
+    what a fixup and a branch target are still keyed on.
+
+    `op` is the MIR operation it came from. It is here because select.py,
+    layout.py and relocate.py all still ask MIR questions of a machine
+    instruction, and taking that away is a change to three modules rather
+    than to this one. Nothing above LIR may read it.
+    """
+
+    at: int
+    covers: "tuple[int, int] | None"
+    what: "ir.Semantics | None"
+    op: object
+
+
+@dataclass(frozen=True, slots=True)
+class LirBlock:
+    at: int
+    insns: tuple[Insn, ...]
+    succ: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class LirBody:
+    """One procedure, lowered. Blocks in the order they are emitted."""
+
+    name: str
+    entry: int
+    blocks: tuple[LirBlock, ...]
+    # What the raise saw each value in. The allocator's input, not its
+    # answer, and the fallback for an operand it could not place.
+    origin: dict
+    pins: dict
+
+    @property
+    def insns(self) -> "tuple[Insn, ...]":
+        return tuple(one for block in self.blocks for one in block.insns)
