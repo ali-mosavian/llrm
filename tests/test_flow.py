@@ -23,7 +23,11 @@ from qbopt import module
 from qbopt import omf
 from qbopt.blocks import code_map
 
-CORPUS = sorted(Path("fixtures/omf").glob("*.obj"))
+# One configuration per program rather than all twelve. The full sweep is
+# `tools/flow.py`, which is where the byte total comes from; running 487
+# objects here put three minutes on a gate that is meant to take fifty
+# seconds, and the twelve configurations of one program fail together.
+CORPUS = sorted(Path("fixtures/omf").glob("*-p-g2.obj"))
 
 
 def _raised(name: str):
@@ -34,7 +38,7 @@ def _raised(name: str):
 
 @pytest.mark.corpus
 def test_the_whole_flow_writes_every_object() -> None:
-    """Six steps, 487 objects, no refusals and no exceptions."""
+    """Six steps, every program, no refusals and no exceptions."""
     refused = []
     for path in CORPUS:
         try:

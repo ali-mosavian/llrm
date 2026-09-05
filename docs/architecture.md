@@ -266,3 +266,55 @@ two-deep float expression, so nothing there could have caught it, and
 the widths out in the order INT, LNG, SNG, DBL, and so had never once
 produced a float array. `suite/fpdeep.bas` covers the shape now and the
 generator makes one array of each width.
+
+## The flow, as passes
+
+`qbopt/flow.py`. Six steps, five forms, each taking one and returning the
+next:
+
+    parse     bytes -> Module          omf.py, module.py
+    raise     Module -> MIR            mir.py
+    passes    MIR -> MIR               transform.py
+    lower     MIR -> LIR               lower.py
+    allocate  LIR -> LIR               allocate.py
+    write     LIR -> bytes             objwrite.py
+
+`lir.LirBody` is the form below MIR: one `Insn` per operation, every
+operand a location, no values. `what` is None where the bytes are carried
+rather than generated.
+
+**Lowering's real work is the cell.** `mir.MemRef` says which bytes an
+operand is and what its address depends on -- the alias question. `ir.Mem`
+says how to encode it: which register reaches it, and how wide the
+displacement field was, which is not how wide the number needs to be.
+Neither derives from the other. Where the original instruction had a memory
+operand in the same position its encoding is taken; where a pass put the
+cell there, the encoding comes from the address, and only for the two
+spaces that determine it -- a frame slot through bp, a segment-relative
+cell through nothing, both with a two-byte displacement.
+
+**Allocation prices spilling and searches for the assignment.**
+
+- The cost of keeping a value in memory is its references, each weighted
+  `10 ** (loop nesting depth)`. One reference in a doubly nested loop
+  outweighs a hundred outside, which is the right answer for this suite:
+  the loop is where every program in it spends its time.
+- Branch and bound over the values, most expensive first, pruning as soon
+  as the spill bill reaches the best answer so far. Greedy colouring is
+  optimal on a chordal graph with nothing pre-coloured, and neither half
+  holds here -- a barrier pins every register it touches and an absorbed
+  divide pins eax and edx.
+- The search has a node budget. Where it runs out, the result says so
+  rather than claiming an optimum it did not prove.
+
+**No fallbacks.** An operand the allocation does not cover raises
+`allocate.Unplaced` naming the value; a cell whose encoding cannot be
+derived raises `lower.Unlowered` naming the address and the space. Quietly
+putting back what the raise saw is how one wrong instruction reaches an
+object with nothing reported.
+
+**Measured, not shipped.** 487 of 487 objects write, 709,230 -> 631,957
+bytes against 641,542 through `wholeseg`. Nothing has run that output, so
+no correctness is claimed. `rewrite.py` still calls `wholeseg.rebuilt`, and
+this exists so the seams are where the architecture says they are and can
+be moved one at a time. `tools/flow.py` runs it.
