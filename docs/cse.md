@@ -47,3 +47,36 @@ Writing a stack-propagation pass instead would work around a round trip
 that phase D deletes. lngmix and lngmxx are 8.8x and 8.9x and both are this
 program; fpcse and fpcsex at 3.3x and 3.4x are cse without the round trip
 and would come first if a smaller step is wanted.
+
+## What phase D runs into
+
+Measured: 1,211 absorbable sites in the corpus, 1,037 of them with operands
+the raise could name outright -- 2,011 at a static address, 63 immediates.
+Only 174 need `consume`, where something is on the stack and nothing names
+it. So the recognition side is easy and mostly already written:
+`calls.sites()` finds them and `calls._deleting()` already builds the
+machine sequence each becomes.
+
+The lowering side is where it stops. One MIR `DIVIDE` over two memory
+operands becomes four instructions --
+
+```
+  mov eax,[a]      relocated
+  mov ecx,[b]      relocated
+  cdq
+  idiv ecx
+```
+
+-- and **two of them carry a fixup**. `select.Emitted` reports one
+relocated field, because until now one operation has been one instruction
+and an instruction relocates at most one. `select.restore` already emits
+three instructions and gets away with it by having no fixup at all.
+
+So phase D needs `Emitted` to carry a fixup per instruction, and
+`layout._field_in` and `relocate.py` to place more than one. That is a
+data-structure change across three modules and it is the real content of
+the phase -- not the recognition, which is done.
+
+The machine arm already does this: its edits carry their own fixup list.
+What phase D moves is that capability from `calls.py` into `select.py`,
+where the rest of emission lives.
