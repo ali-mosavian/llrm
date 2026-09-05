@@ -137,6 +137,11 @@ class Module:
     # it, because that is the only moment the bytes can answer it. Keyed by
     # the operation rather than by its address: a pass may move it.
     refs: dict[int, tuple[int, ...]] = field(default_factory=dict)
+    # Which absorbable call each folded operation stands for, by mir.Op.id.
+    # The raise turns a push run and its call into one operation over the
+    # argument values; lowering asks this what instructions to write for it.
+    # calls.CallSite, but module.py sits below calls.py and cannot say so.
+    absorbed: dict[int, object] = field(default_factory=dict)
 
     def resolve(self, field_offset: int, literal: int) -> Addr:
         """What the operand whose displacement field sits here points at."""

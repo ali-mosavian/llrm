@@ -233,8 +233,15 @@ def test_a_rebuilt_segment_carries_every_fixup(obj: Path) -> None:
     carried = {old for _, old in got.relocations}
     lowest = min(op.at for _, body in bodies for op in layout._ordered(body))
     for one in omf.fixups(omf.parse(obj.read_bytes())):
-        if one.seg == found.seg and one.offset >= lowest:
-            assert one.offset in carried, f"{obj.stem}: the fixup at {one.offset:#x} was left behind"
+        if one.seg != found.seg or one.offset < lowest:
+            continue
+        # Or deliberately dropped, which layout reports rather than does
+        # silently: a folded runtime call reads its whole four-byte operand
+        # from one address, so the second push's own fixup has no field to
+        # go in and the fold says so by covering its bytes.
+        assert one.offset in carried or one.offset in got.dropped, (
+            f"{obj.stem}: the fixup at {one.offset:#x} was left behind"
+        )
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)

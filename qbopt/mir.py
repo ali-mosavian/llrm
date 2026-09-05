@@ -435,6 +435,48 @@ def _merged(what: "ir.Semantics", holds: dict, written: dict, args: tuple) -> di
 
 
 
+# What each absorbable routine computes, in MIR's own vocabulary.
+_ABSORBS = {
+    "B$MUI4": Kind.MUL,
+    "B$DVI4": Kind.DIV,
+    "B$RMI4": Kind.REM,
+    "B$CPI4": Kind.SUB,  # a comparison subtracts and keeps only the flags
+}
+
+
+def _within(sites: dict) -> frozenset[int]:
+    """Every byte a site's pushes occupy, so the raise can pass over them."""
+    return frozenset(
+        at for site in sites.values() for at in range(site.start, site.at)
+    )
+
+
+def _absorbing(site, written: dict) -> "tuple[Kind, tuple, tuple] | None":
+    """One absorbable call as (kind, args, results), or None.
+
+    The operands come from calls.py, which read them off the pushes while
+    the bytes were still BC's -- a static address becomes a four-byte cell
+    and an immediate a constant. What the routine leaves behind is what its
+    contract already said, so the results are the values the call defines.
+    """
+    from qbopt import calls as machine
+
+    kind = _ABSORBS.get(site.name.upper())
+    if kind is None:
+        return None
+    args = []
+    for one in site.operands:
+        if one.kind is machine.Kind.STATIC and one.addr is not None:
+            args.append(Cell(MemRef(one.addr, 4)))
+        elif one.kind is machine.Kind.CONSTANT:
+            args.append(Const(one.value, 4))
+        else:
+            return None
+    made = [Held(value, 4) for register, value in sorted(written.items()) if not value.flags]
+    return kind, tuple(args), tuple(made[:2])
+
+
+
 def _normalised(kind: Kind, name: str, args: tuple, results: tuple) -> tuple:
     """The operands the operation really has, once the machine's are gone.
 
@@ -947,6 +989,7 @@ def raise_body(
     nodes: dict[int, ir.Node],
     entry: int | None = None,
     calls: dict[int, str] | None = None,
+    sites: dict | None = None,
 ) -> MirBody | str:
     """One body's blocks, in SSA, or why they could not be.
 
@@ -1026,9 +1069,17 @@ def raise_body(
         # them would be the one way this could be unsound.
         offset: int | None = 0
 
+        inside = _within(sites or {})
         for insn in block.insns:
             node = nodes.get(insn.at)
             if node is None:
+                continue
+            # A push that belongs to an absorbable call goes with the call.
+            # What the site computes is one operation over its argument
+            # values, and the pushes are how BC handed them to a routine
+            # that no longer runs.
+            if insn.at in inside:
+                offset, _slot = _stack_slot(node, offset, None)
                 continue
             offset, slot = _stack_slot(node, offset, calls.get(insn.at) if calls else None)
             defines, uses = _touched(node, calls)
@@ -1046,9 +1097,25 @@ def raise_body(
             where = _operands(node.semantics, holds, written, loads, stores)
             kind = _kind_of(node.semantics, where[0], where[1])
             operands = _normalised(kind, node.semantics.name or "", where[0], where[1])
+            site = (sites or {}).get(insn.at)
+            covers, where_at = ir.span(node), insn.at
+            if site is not None:
+                folded = _absorbing(site, written)
+                if folded is not None:
+                    kind, operands, where = folded[0], folded[1], (folded[1], folded[2])
+                    # And it stands for the pushes too. layout refuses a body
+                    # it cannot account for every byte of -- rightly, since
+                    # that is how it catches data BC put between the
+                    # instructions -- so a fold says what it replaced.
+                    #
+                    # Its address is where those bytes begin, not where the
+                    # call was: a loop whose back edge lands on the first
+                    # push has to find something there, and lngmix's does.
+                    covers = (site.start, site.end)
+                    where_at = site.start
             ops[at].append(
                 Op(
-                    insn.at,
+                    where_at,
                     Synth.HALF_TO_LOW if isinstance(node, ir.Restore) else node.semantics.op,
                     node.semantics.name or "",
                     tuple(made),
@@ -1058,7 +1125,7 @@ def raise_body(
                     node,
                     kind=kind,
                     merges=_merged(node.semantics, holds, written, where[0]),
-                    covers=ir.span(node),
+                    covers=covers,
                     stack=_stack_effect(node.semantics),
                     test=_BY_BRANCH.get(node.semantics.name or "") if kind is Kind.BRANCH else None,
                     args=operands,
@@ -1487,11 +1554,87 @@ def bodies(found: Module, blocks: list[Block]) -> list[tuple[str, MirBody]]:
         mine = [one for one in blocks if any(lo <= one.at < hi for lo, hi in body.body.ranges)]
         if not mine:
             continue
-        built = raise_body(mine, nodes, body.body.seed, found.calls)
+        built = raise_body(mine, nodes, body.body.seed, found.calls, _sites(found, blocks))
         if not isinstance(built, str):
             found.refs.update(_referenced(built, found))
+            _folded(built, found, blocks)
             out.append((f"{body.body.kind} {body.body.name or '(main)'}", built))
     return out
+
+
+def _sites(found: Module, blocks: list[Block]) -> dict:
+    """Every absorbable runtime call, by the address of its first push.
+
+    calls.py answers this and is the machine arm, which phase D retires --
+    what it knows that MIR does not is where an argument was pushed from,
+    and that is a question about the bytes BC wrote, which is the raise's
+    to ask.
+    """
+    from qbopt import calls as machine
+    from qbopt import flags as flagged
+    from qbopt import select
+
+    reached = [insn for block in blocks for insn in block.insns]
+    try:
+        found_sites = machine.sites(found, reached, blocks)
+    except Exception:
+        return {}
+    live = flagged.live_in(blocks)
+    out = {}
+    for one in found_sites:
+        if not one.pushed or one.consume or one.name.upper() not in _ABSORBS:
+            continue
+        # Only where lowering will take it. The raise and the emitter have
+        # to agree about which sites are folded: folding one the emitter
+        # then refuses leaves an operation over argument values that nothing
+        # will write instructions for.
+        if isinstance(select.absorbed(one, _flags_after(blocks, live, one.start, one.end)), str):
+            continue
+        out[one.at] = one
+    return out
+
+
+def _folded(body: MirBody, found: Module, blocks: list[Block]) -> None:
+    """Each folded operation told which site it stands for, and which fixups.
+
+    Both by op id, beside the refs, because they are the same kind of fact:
+    established at the raise while the bytes are still BC's, and carried by
+    the operation wherever a pass moves it.
+    """
+    from qbopt import calls as machine
+    from qbopt import flags as flagged
+    from qbopt import select
+
+    sites = {one.start: one for one in _sites(found, blocks).values()}
+    if not sites:
+        return
+    live = flagged.live_in(blocks)
+    for block in body.blocks:
+        for op in block.ops:
+            site = sites.get(op.at)
+            if site is None or op.id is None or op.kind is Kind.CALL:
+                continue
+            read = _flags_after(blocks, live, site.start, site.end)
+            found.absorbed[op.id] = site
+            wanted = select.absorbed_fixups(site, read)
+            if wanted:
+                found.refs[op.id] = wanted
+
+
+def _flags_after(blocks: list[Block], live: dict, lo: int, hi: int):
+    """Which flags something reads after this region.
+
+    flags.py's own analysis rather than MIR's values: MIR has one FLAGS
+    pseudo-register and cannot say *which* flag, and for a comparison that
+    is the whole question -- CF, PF and AF are the runtime's own synthesis
+    and a `cmp` does not reproduce them.
+    """
+    from qbopt import flags as flagged
+
+    for block in blocks:
+        if block.at <= lo < block.end:
+            return flagged.live_after(block, hi, live)
+    return flagged.Flag(0)
 
 
 def _referenced(body: MirBody, found: Module) -> dict[int, int]:

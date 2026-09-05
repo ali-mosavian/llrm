@@ -437,6 +437,11 @@ def test_mir_operands_say_exactly_what_the_node_said() -> None:
                     what = getattr(op.node, "semantics", None)
                     if what is None:
                         continue
+                    # Not one the raise folded: an absorbed runtime call is
+                    # one operation over its argument values and the node it
+                    # came from is the `call`, which names none of them.
+                    if op.id is not None and op.id in found.absorbed:
+                        continue
                     seen += 1
                     for kind, mine, theirs in (
                         ("source", op.args, what.sources),

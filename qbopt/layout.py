@@ -361,6 +361,22 @@ def _still_has_an_operand_for_it(op: mir.Op) -> bool:
     return not (had and not any(isinstance(one, (ir.Mem, ir.Address)) for one in holds))
 
 
+def _absorbed(found: Module, op: mir.Op, site):
+    """The instructions one folded runtime call becomes.
+
+    The raise turned a push run and its call into one operation over the
+    argument values; this is where that operation becomes code again. Four
+    instructions for a long divide, two of them relocated -- which is the
+    case Emitted.places exists for.
+    """
+    from qbopt import flags as flagged
+
+    read = found.flags_after.get(op.id, flagged.Flag(0)) if hasattr(found, "flags_after") else flagged.Flag(0)
+    made = select.absorbed(site, read)
+    return None if isinstance(made, str) else made
+
+
+
 def _fields_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -> tuple[int, ...]:
     """Every fixup this operation's own operands carry, in operand order.
 
@@ -740,6 +756,13 @@ def _emitted(
             continue
         what = _semantics(op)
         emulated = not native_fpu and found.code[op.at : op.at + 1] == bytes([0xCD])
+        site = found.absorbed.get(op.id) if op.id is not None else None
+        if site is not None:
+            made = _absorbed(found, op, site)
+            if made is None:
+                return f"{op.at:#06x}: the absorbed call is not one select.py can emit"
+            lengths.append(len(made.code))
+            continue
         if isinstance(op.node, ir.Restore):
             # Measured from what it emits, not from `covers`. The two are
             # different questions -- covers says which of BC's bytes this op
@@ -857,6 +880,15 @@ def _emitted(
             made = select.restore(op.node.pair)
             if made is None or len(made.code) != lengths[index]:
                 return f"{op.at:#06x}: the restore idiom did not come back its own length"
+            out += made.code
+            continue
+        site = found.absorbed.get(op.id) if op.id is not None else None
+        if site is not None:
+            made = _absorbed(found, op, site)
+            if made is None or len(made.code) != lengths[index]:
+                return f"{op.at:#06x}: the absorbed call changed length between the two passes"
+            for where, field in zip(made.places, _fields_in(found, op, fields), strict=False):
+                relocations.append((len(out) + where, field))
             out += made.code
             continue
         before = _semantics(op)
