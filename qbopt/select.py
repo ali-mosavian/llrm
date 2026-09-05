@@ -797,6 +797,38 @@ RESTORE = {
 }
 
 
+def absorbed(site, live, restore: bool = True) -> "Emitted | str":
+    """One absorbable runtime call as the instructions that replace it.
+
+    Four of them for a long divide -- `mov eax,[a] / mov ecx,[b] / cdq /
+    idiv ecx` -- and two carry a fixup, which is why Emitted reports a field
+    per instruction rather than one. `fields` comes back in the order the
+    instructions were emitted, and the fixups the caller pairs them with are
+    in `absorbed_fixups`.
+
+    calls.py builds the sequence and this is the seam: emission belongs
+    here, and the machine arm is what phase D retires. Imported inside the
+    function until it is, so nothing above this layer picks calls.py up.
+    """
+    from qbopt import calls as machine
+
+    made = machine.absorb(site, live, restore)
+    if isinstance(made, str):
+        return made
+    return Emitted(made.code, fields=tuple(where for where, _field in made.relocations))
+
+
+def absorbed_fixups(site, live, restore: bool = True) -> tuple[int, ...]:
+    """Which fixup each of an absorbed site's fields names, in the same order."""
+    from qbopt import calls as machine
+
+    made = machine.absorb(site, live, restore)
+    if isinstance(made, str):
+        return ()
+    return tuple(field for _where, field in made.relocations)
+
+
+
 def restore(pair: int) -> Emitted | None:
     """The idiom that puts a widened value's halves back where BC reads them."""
     made = RESTORE.get(pair)

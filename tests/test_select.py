@@ -732,3 +732,48 @@ def test_an_unresolved_held_is_refused_rather_than_guessed() -> None:
     from iced_x86 import Register
 
     assert select.emit(what, held={9: Register.EBX}) is not None, "and it emits once there is"
+
+
+def test_an_absorbed_site_comes_back_with_a_field_for_every_fixup() -> None:
+    """974 of the corpus's 1,211 absorbable sites carry two.
+
+    `x * y` over two static addresses is `mov eax,[x] / imul eax,[y]` and
+    both are relocated -- which is why Emitted reports a field per
+    instruction rather than one. The sequence itself is calls.py's and this
+    is the seam: emission belongs here, and the machine arm is what phase D
+    retires.
+    """
+    from pathlib import Path
+
+    from qbopt import blocks as split
+    from qbopt import calls
+    from qbopt import flags
+    from qbopt import module
+    from qbopt import omf
+    from qbopt import select
+    from qbopt.blocks import code_map
+
+    seen = both = 0
+    for name in ("chain-p-g2", "lngmix-p-g2", "matrix-p-g2", "press-p-g2"):
+        found = module.of(omf.parse((Path("fixtures/omf") / f"{name}.obj").read_bytes()))
+        assert found is not None
+        mapped = code_map(found)
+        if isinstance(mapped, str):
+            continue
+        blocks = split.partition(found, mapped)
+        reached = [insn for one in blocks for insn in one.insns]
+        for site in calls.sites(found, reached, blocks):
+            theirs = calls.absorb(site, flags.Flag(0))
+            if isinstance(theirs, str):
+                continue
+            seen += 1
+            ours = select.absorbed(site, flags.Flag(0))
+            assert not isinstance(ours, str), ours
+            assert ours.code == theirs.code, f"{site.at:#x} {site.name}: different bytes"
+            wanted = select.absorbed_fixups(site, flags.Flag(0))
+            assert len(ours.places) == len(wanted), (
+                f"{site.at:#x}: {len(ours.places)} fields for {len(wanted)} fixups"
+            )
+            both += len(ours.places) == 2
+    assert seen, "no site absorbed, so this proves nothing"
+    assert both, "none of them carried two, which is the case this exists for"
