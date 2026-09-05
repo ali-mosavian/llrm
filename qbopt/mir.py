@@ -1624,6 +1624,41 @@ def _folded(body: MirBody, found: Module, blocks: list[Block]) -> None:
                 found.refs[op.id] = tuple(field for _where, field in made.relocations)
 
 
+def instruction(op: "Op") -> bool:
+    """Whether this operation stands for one of BC's own instructions.
+
+    A pass has to be able to tell one from a marker the raise put there --
+    a join, a barrier, an argument -- and the answer is what the raise made
+    it from, which is this module's to know and not a pass's. Asking
+    lower.py directly is a MIR pass calling a machine one, which is the
+    thing rule 5 forbids.
+    """
+    from qbopt import lower
+
+    return lower.current(op) is not None
+
+
+def rewritable(op: "Op") -> bool:
+    """Whether this operation's bytes may be generated rather than copied.
+
+    One emitted verbatim -- a barrier, the restore idiom, an emulated x87
+    site -- is exactly as long as the bytes it stands for, so its `covers`
+    and its length are one number and a pass may not make them differ. One
+    that is selected has no such tie.
+
+    Asked before a pass hands a deleted operation's bytes to a survivor. A
+    restore idiom that took them stopped coming back its own length --
+    qb-qrender's SCREEN.OBJ, the only object in either corpus with the
+    shape.
+    """
+    from qbopt import lower
+
+    if isinstance(op.node, ir.Restore):
+        return False
+    what = lower.current(op)
+    return what is not None and what.op is not ir.Operation.BARRIER
+
+
 def _flags_after(blocks: list[Block], live: dict, lo: int, hi: int):
     """Which flags something reads after this region.
 

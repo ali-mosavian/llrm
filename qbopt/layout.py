@@ -289,10 +289,6 @@ def _semantics(op: mir.Op) -> ir.Semantics | None:
     own `made` is the only answer. An op raised from BC's code has a node,
     and that node's semantics is the authority.
     """
-    was = getattr(op.node, "semantics", None)
-    # `made` while the passes that still write it are being converted; after
-    # that this is only lower.semantics, which builds machine form from MIR's
-    # own operands and returns None where nothing rewrote the operation.
     what = lower.current(op)
     return None if what is None or what.op is ir.Operation.BARRIER else what
 
@@ -312,9 +308,7 @@ def selectable(op: mir.Op) -> bool:
     them stopped coming back its own length -- qb-qrender's SCREEN.OBJ, and
     the only object in either corpus with the shape.
     """
-    if isinstance(op.node, ir.Restore):
-        return False
-    return _semantics(op) is not None
+    return mir.rewritable(op)
 
 
 def _retargeted(what: ir.Semantics, moved: dict[int, int]) -> ir.Semantics | None:
@@ -651,21 +645,18 @@ def rebuild(
     held = _held(assignment)
     bodies = [(name, _grounded(body, held)) for name, body in bodies]
 
-    # Bodies interleave by address -- a procedure sits inside the main
-    # body's span -- so this has to sort globally, and an op's address is
-    # the only key that places it among another body's. But sorting on the
-    # address alone silently undid every transform that moves an op:
-    # `place` took two stores out of a call's push run, the list came back
-    # in the new order, and this put them straight back between the last
-    # push and the call. A pass returning MIR whose order the backend
-    # ignores is the split broken from the other side -- docs/split.md.
-    #
-    # So the key is the address an op has to sort *at*, not the address it
-    # came from: the lowest address anything after it in its own list still
-    # holds. An op nothing moved is its own address. One moved earlier
-    # takes the address of what it now stands before, and its list position
-    # breaks the tie -- which is what puts it there and not after.
-    ops = _keyed(bodies)
+    # Sorted on the address an operation's bytes start at. This tried to
+    # honour the order a pass returned instead -- `place` moves a store out
+    # of a call's push run and layout put it straight back -- with a key
+    # that took the lowest address still ahead of an op in its own list.
+    # It miscompiled nots: the right low word of a long and the wrong high
+    # one. Two things were wrong and either alone breaks it -- the raise's
+    # own lists are not always in byte order, so the key read every such op
+    # as one a pass had moved; and `covers[0]` is not a sort key here even
+    # though it is the honest answer to where an operation's bytes are.
+    # Honouring a reorder needs the op to say it was moved; nothing in MIR
+    # does yet, so `place` cannot pay until something does. docs/split.md.
+    ops = sorted((op for _, body in bodies for op in _ordered(body)), key=lambda one: one.at)
     if not ops:
         return "no bodies to rebuild"
     if any(_length_of(one) is None for one in ops):
@@ -733,23 +724,16 @@ def rebuild(
     return _emitted(_interleaved(ops, inside), lowest, found, fields, native_fpu, assignment, origin)
 
 
-def _keyed(bodies: list) -> list:
-    """Every body's ops, in the order the addresses and the lists agree on.
+def _starts_at(op: mir.Op) -> int:
+    """The first original byte this operation stands for.
 
-    Walked backwards so each op learns the lowest address still ahead of
-    it. That is its own address wherever nothing moved, so this is the old
-    address sort on every program no pass reorders.
+    `covers`, not `at`. The raise gives every operation folded out of one
+    runtime call the same `at` -- the site's first push -- so `at` says
+    nothing about where an operation's bytes are, and a key built on it put
+    nots's operations in an order that computed the right low word of a
+    long and the wrong high one.
     """
-    keyed = []
-    for _name, body in bodies:
-        mine = _ordered(body)
-        anchor = mine[-1].at if mine else 0
-        found = []
-        for index in range(len(mine) - 1, -1, -1):
-            anchor = min(anchor, mine[index].at)
-            found.append(((anchor, index), mine[index]))
-        keyed += reversed(found)
-    return [op for _key, op in sorted(keyed, key=lambda one: one[0])]
+    return op.covers[0] if op.covers is not None else op.at
 
 
 def _interleaved(ops: list, inside: list) -> list:

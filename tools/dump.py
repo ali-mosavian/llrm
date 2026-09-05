@@ -24,6 +24,7 @@ from iced_x86 import FormatterSyntax
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from qbopt import ir
+from qbopt import liveness
 from qbopt import mir
 from qbopt import omf
 from qbopt import wide
@@ -251,7 +252,7 @@ def dump_regalloc(found: module.Module, found_blocks: list[blocks.Block] | None)
         return "code_map failed -- no blocks\n"
     out: list[str] = []
     for label, body in _bodies_in_mir(found, found_blocks):
-        alive = regalloc.live(body)
+        alive = liveness.live(body)
         assignment = regalloc.colour(body)
         peak = regalloc.pressure(body, alive)
         out.append(f"{label}  peak pressure {peak}/{len(regalloc.AVAILABLE)}")
@@ -259,7 +260,7 @@ def dump_regalloc(found: module.Module, found_blocks: list[blocks.Block] | None)
             out.append(f"  refused: {assignment}")
         else:
             out.append(f"  moved from BC's own register: {regalloc.moved(body, assignment)}")
-        arriving = regalloc.entry_values(body)
+        arriving = liveness.entry_values(body)
         out.append(f"  values the caller supplied: {sorted(str(v) for v in arriving)}")
         for block in body.blocks:
             out.append(f"  {block.at:#06x}  in={sorted(str(v) for v in alive.live_in[block.at])}")

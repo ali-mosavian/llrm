@@ -28,7 +28,7 @@ the reload it writes afterwards is real work:
     add ax,[bp-18h]     the reload -- necessary
 
 memory.py calls that reload redundant and is right about the cell. The
-value is dead there, so the load stays. Ask regalloc.live() before
+value is dead there, so the load stays. Ask liveness.live() before
 believing an entry means anything.
 
 **It intersects at joins rather than placing a phi.** Where predecessors
@@ -42,6 +42,7 @@ from dataclasses import dataclass
 
 
 from qbopt import ir
+from qbopt import liveness
 from qbopt import mir
 from qbopt.mir import Held
 from qbopt.mir import Kind
@@ -187,7 +188,7 @@ def _clean(op: Op, calls: dict[int, str]) -> bool:
     Registers are a separate question and are not answered here. A call
     clobbers ax, cx, dx and bx whatever it does to memory, so the value an
     entry names is usually dead afterwards -- the entry survives, and
-    regalloc.live() is what says whether it means anything.
+    liveness.live() is what says whether it means anything.
     """
     name = calls.get(op.at)
     if name is None:
@@ -292,7 +293,7 @@ def provider(
     """The value holding `ref`'s bytes just before the op at `at`.
 
     Says nothing about whether that value is still live there -- see the
-    module docstring, and ask regalloc.live().
+    module docstring, and ask liveness.live().
     """
     calls = calls or {}
     found = holders(body, dgroup, calls)
@@ -466,7 +467,7 @@ def redundant(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> t
         # `mov ax,[x]` then `mov ax,[y]`, the entry for [x] still names a
         # value whose origin is eax, and eax holds [y]. Deleting a later
         # `mov ax,[x]` on the strength of that entry is how this read the
-        # wrong cell. forwardable() asks regalloc.live() for the same reason.
+        # wrong cell. forwardable() asks liveness.live() for the same reason.
         inside: dict[Register_, Value] = {}
         for op in block.ops:
             # A call clobbers ax, cx, dx and bx whatever it does to memory,
@@ -475,7 +476,7 @@ def redundant(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> t
             # proved clean, which is right and is exactly what makes this
             # separate bookkeeping necessary: the cell is still that value
             # and the register is not. forwardable() gets the same answer
-            # from regalloc.live().
+            # from liveness.live().
             if op.at in calls or op.barrier:
                 inside = {}
                 continue
@@ -515,7 +516,7 @@ def forwardable(
     why an accumulate is safe here and was not safe to delete.
     """
     held = holders(body, dgroup, calls)
-    alive = regalloc.live(body)
+    alive = liveness.live(body)
     found: list[Forward] = []
 
     for block in body.blocks:

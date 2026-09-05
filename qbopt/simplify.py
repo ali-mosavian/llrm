@@ -37,6 +37,7 @@ from dataclasses import dataclass
 
 from iced_x86 import Register_
 
+from qbopt import liveness
 from qbopt import mir
 from qbopt.mir import Op
 from qbopt import regalloc
@@ -125,7 +126,7 @@ def _target_is_free(body: MirBody, block: mir.MirBlock, lo: int, hi: int, target
     is live after the pop by construction, since something reads what the
     rejoin produced, and counting it would refuse every site there is.
     """
-    alive = regalloc.live(body)
+    alive = liveness.live(body)
     after = set(alive.live_out[block.at])
     for op in reversed(block.ops):
         if lo <= op.at <= hi:

@@ -55,7 +55,11 @@ TESTS = (
 # Five shapes. harr is here because a change that only touched harr hung it
 # on four configurations and the gate said clean: whatever is being worked
 # on belongs in this list.
-PROGRAMS = ("hotlop", "pressx", "lngmix", "nested", "harr")
+# nots is here because the gate missed a miscompile it would have caught.
+# A layout ordering change gave it the right low word of a long and the
+# wrong high one, and the five programs above have no partial write between
+# them, so the gate stayed green through two commits.
+PROGRAMS = ("hotlop", "pressx", "lngmix", "nested", "harr", "nots")
 
 
 def _tests() -> tuple[bool, str]:

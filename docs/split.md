@@ -142,3 +142,47 @@ lowering, in `wholeseg`.
 
 Until then, every one of those is a debt with a name, and none of them is a
 licence to add another.
+
+## The two rules, and where they were broken
+
+**No MIR pass may call a machine pass, and no pass may have a side effect.**
+A pass takes MIR and returns MIR; that is the whole of its contract. The
+same holds at every tier: the raise does not call a pass, and layout does
+not call one either.
+
+Audited 2026-09-05. What was broken, and what it is now:
+
+| was | now |
+| --- | --- |
+| `transform` asked `layout.selectable(op)` | `mir.rewritable(op)` -- what an operation *is* is the raise's answer |
+| `transform` asked `lower.current(op)` | `mir.instruction(op)`, same reason |
+| `transform`, `avail` and `simplify` asked `regalloc.live()` | `qbopt/liveness.py`. Liveness over SSA values names no register; it sat in regalloc because that is what first needed it |
+
+Still open, and each is a change rather than a move:
+
+- **`layout.rebuild` runs a MIR pass.** `wholeseg` hands it
+  `settle=transform.widened`, and layout calls it on a body the allocator
+  refused. The decision is layout's to report and wholeseg's to make.
+- **`mir._folded` writes into the Module it is given** -- `found.absorbed`
+  and `found.refs`. The raise may see machine form; it may not mutate its
+  input. It should return the two maps.
+
+## What honouring a pass's order would take
+
+`layout.rebuild` sorts on `op.at` before emitting, so an operation a pass
+moved goes straight back where it was -- which is why the old `place`
+"bought nothing measured", and why the rebuilt one buys nothing either.
+
+Sorting on the order the lists give does not work. Two attempts failed the
+same way, and `nots` caught both: the right low word of a long and the
+wrong high one.
+
+- The raise's own lists are **not always in byte order**, so a key that
+  reads any out-of-order operation as one a pass moved reorders real
+  instructions.
+- `covers[0]` is the honest answer to where an operation's bytes are and is
+  still not a sort key here.
+
+What is missing is that **an operation does not say whether a pass moved
+it**. Until one does, layout cannot tell a move from the raise's own order,
+and `place` cannot pay.

@@ -9,6 +9,7 @@ import pytest
 
 import corpus
 from qbopt import ir
+from qbopt import liveness
 from qbopt import mir
 from qbopt import regalloc
 
@@ -92,11 +93,11 @@ def test_an_entry_value_is_defined_where_the_body_starts() -> None:
     reach its use -- which around a loop is everywhere."""
     seen = 0
     for body in raised(Path("fixtures/omf/divmod-p-g2-zd.obj")):
-        arriving = regalloc.entry_values(body)
+        arriving = liveness.entry_values(body)
         if not arriving:
             continue
         seen += 1
-        found = regalloc.live(body)
+        found = liveness.live(body)
         assert not (arriving & found.live_in[body.entry]), "defined on entry, so not live into it"
     assert seen, "divmod's own main body reads registers BC passed in"
 

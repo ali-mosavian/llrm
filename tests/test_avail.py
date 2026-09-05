@@ -13,6 +13,7 @@ import pytest
 
 import corpus
 from qbopt import ir
+from qbopt import liveness
 from qbopt import mir
 from qbopt import avail
 from qbopt import memory
@@ -54,7 +55,7 @@ def split(obj: Path) -> dict[str, int]:
     tally = {"live": 0, "dead": 0, "none": 0}
     for body in bodies_of(found, found_blocks):
         held = avail.holders(body, found.dgroup, found.calls)
-        alive = regalloc.live(body)
+        alive = liveness.live(body)
         for block in body.blocks:
             current = dict(held.into[block.at])
             after = set(alive.live_out[block.at])

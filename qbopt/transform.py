@@ -49,6 +49,7 @@ from qbopt import avail
 from qbopt import runtime
 from qbopt import regalloc
 from qbopt import pairs
+from qbopt import liveness as alive_at
 from qbopt import loops as loopy
 from qbopt import layout
 from qbopt.mir import Op
@@ -95,7 +96,7 @@ def _without(ops: list[Op], drop) -> list[Op]:
             #
             # Where neither holds the op simply stays. A deletion this cannot
             # account for is not one worth making.
-            if out and layout.selectable(out[-1]) and _end_of(out[-1]) == op.at:
+            if out and mir.rewritable(out[-1]) and _end_of(out[-1]) == op.at:
                 lo = out[-1].covers[0] if out[-1].covers is not None else out[-1].at
                 out[-1] = replace(out[-1], covers=(lo, _end_of(op)))
                 continue
@@ -271,7 +272,7 @@ def _reclaimed(body: MirBody, gone: set[int]) -> MirBody:
     ends: dict[int, Op] = {}
     for block in body.blocks:
         for op in block.ops:
-            if id(op) not in gone and layout.selectable(op) and op.covers is not None:
+            if id(op) not in gone and mir.rewritable(op) and op.covers is not None:
                 ends[op.covers[1]] = op
     grown: dict[int, tuple[int, int]] = {}
     dropped: set[int] = set()
@@ -712,10 +713,6 @@ def segments(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mi
 # a shift by cl. select.py cannot remap what is not an operand.
 
 
-def _semantics_of(op: Op):
-    return lower.current(op)
-
-
 def _preheader(body: MirBody, loop) -> int | None:
     """The block a loop is entered through, where there is exactly one.
 
@@ -830,8 +827,8 @@ def _invariant_run(
     while changing:
         changing = False
         for one in ops:
-            what = _semantics_of(one)
-            if one in run or one.stores or what is None:
+            real = mir.instruction(one)
+            if one in run or one.stores or not real:
                 continue
             # A branch is where the loop is. hotlop's latch block held
             # `cmp`, `jle` and `jmp`, all three reading nothing the loop
@@ -1029,7 +1026,7 @@ def _leaving(body: MirBody) -> set:
     """
     preds = {block.at: [one.at for one in body.blocks if block.at in one.succ] for block in body.blocks}
     arriving: dict = {}
-    for value in regalloc.entry_values(body):
+    for value in alive_at.entry_values(body):
         register = body.origin.get(value)
         if register is not None:
             arriving.setdefault(ir.ROOT.get(register, register), set()).add(value)
@@ -1386,8 +1383,7 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
 
 def _folded_op(op: Op, facts: dict, wanted: set) -> Op:
     """The operation as a move of its own answer, where that is possible."""
-    what = _semantics_of(op)
-    if what is None or op.stores:
+    if not mir.instruction(op) or op.stores:
         return op
     # Not a register move. Rewriting `mov ax,cx` to `mov ax,3` removes no
     # work -- the same instruction, the same length, nothing read that was
@@ -1549,7 +1545,7 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
     if not inside:
         return body
     at_of = {block.at: block for block in body.blocks}
-    alive = regalloc.live(body)
+    alive = alive_at.live(body)
     readable = live(body)
     effective = _effective(body, calls)
     crossed: set = set()
