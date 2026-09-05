@@ -200,7 +200,14 @@ def lowered(name: str, body: "mir.MirBody") -> "lir.LirBody":
                     for op in block.ops
                 ),
                 succ=block.succ,
-                arrives=tuple(phi.result.id for phi in block.phis if not phi.result.flags),
+                phis=tuple(
+                    lir.Phi(
+                        result=phi.result.id,
+                        incoming=tuple((at, value.id) for at, value in phi.incoming.items()),
+                    )
+                    for phi in block.phis
+                    if not phi.result.flags
+                ),
             )
             for block in body.blocks
         ),

@@ -2,12 +2,11 @@
 
 Two things separate this from `regalloc.colour()`, which it will replace.
 
-**Spilling is priced, not counted.** A value spilled inside a loop pays for
-every iteration, and the loop is where all of this project's programs spend
-their time -- so the cost of keeping a value in memory is the number of
-times it is read or written, each weighted by how deeply nested the block
-holding it is. The usual factor of ten per level: one reference in a doubly
-nested loop outweighs a hundred outside.
+**Spilling is priced, not counted.** `intervals.weights()` has the formula
+and it is LLVM's: references weighted by loop depth, divided by how long
+the value is live. The division is the half a plain count misses -- two
+values referenced equally often are not equally worth keeping if one is
+live for three instructions and the other for the whole body.
 
 **The assignment is searched, not greedy.** Greedy colouring in the order
 values are most constrained is optimal on a chordal graph with nothing
@@ -24,14 +23,10 @@ from dataclasses import replace
 
 from iced_x86 import Register_
 
+from qbopt import intervals
 from qbopt import ir
 from qbopt import lir
-from qbopt import loops as loopy
-
-# One reference costs this much more per level of loop nesting. The classic
-# 10, which is what makes an inner-loop value beat a straight-line one that
-# is referenced nine times as often.
-PER_LEVEL = 10
+from qbopt.passes import LIRTransform
 
 # How many assignments the search will consider before it gives up and says
 # so. Bodies in this corpus colour in a few hundred; the cap is for the one
@@ -41,6 +36,17 @@ BUDGET = 200_000
 
 class Unplaced(Exception):
     """A value reached emission with no register. Always a bug here."""
+
+
+class Spilled(Exception):
+    """A value the allocator chose to spill, and nothing writes the spill.
+
+    Choosing is half of it. LLVM's InlineSpiller then rewrites every
+    definition of the value into a store and every use into a load, and
+    PrologEpilogInserter grows the frame to hold the slot. Neither phase
+    exists here, so a body that needs one is refused by name rather than
+    emitted with an operand pointing nowhere.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,40 +64,6 @@ class Assignment:
     cost: float
     optimal: bool
     why: str = ""
-
-
-def depths(body: lir.LirBody) -> dict[int, int]:
-    """How deeply each block is nested in loops.
-
-    `loops.loops()` gives every natural loop's body, so a block's depth is
-    how many of them contain it. Keyed by header, so a loop with several
-    latches counts once -- counting back edges instead reached a nesting
-    depth of 33 on this corpus.
-    """
-    found = loopy.loops(list(body.blocks), body.entry)
-    out = {block.at: 0 for block in body.blocks}
-    for loop in found:
-        for at in loop.body:
-            if at in out:
-                out[at] += 1
-    return out
-
-
-def costs(body: lir.LirBody) -> dict[int, float]:
-    """What keeping each value in memory would cost, by weighted references.
-
-    A definition and a use both count: spilled, the first becomes a store
-    and the second a load, and BC's own code is already full of both --
-    which is the whole reason this project exists.
-    """
-    deep = depths(body)
-    out: dict[int, float] = {}
-    for block in body.blocks:
-        weight = float(PER_LEVEL ** deep.get(block.at, 0))
-        for one in block.insns:
-            for value in (*one.defines, *one.uses):
-                out[value] = out.get(value, 0.0) + weight
-    return out
 
 
 def live(body: lir.LirBody) -> tuple[dict[int, set[int]], dict[int, set[int]]]:
@@ -132,6 +104,10 @@ def interference(body: lir.LirBody) -> dict[int, frozenset[int]]:
     Walked backwards over each block's own live set rather than by
     comparing ranges: two values interfere exactly when both are in that
     set at some point, which is the definition and needs no approximation.
+
+    `intervals.py` answers the same question precisely enough to split a
+    range; this answers it precisely enough to colour, and is what the
+    search below walks. The two agree on overlap.
     """
     _into, out_of = live(body)
     graph: dict[int, set[int]] = {}
@@ -141,14 +117,20 @@ def interference(body: lir.LirBody) -> dict[int, frozenset[int]]:
             graph.setdefault(one, set()).update(other for other in alive if other != one)
 
     for block in body.blocks:
+        # Every value the block names, so that one defined and immediately
+        # dead still gets a register. Liveness never sees it -- it is in no
+        # live set anywhere -- and the operand naming it is still emitted.
+        for one in block.insns:
+            for value in (*one.defines, *one.uses):
+                graph.setdefault(value, set())
+        for value in block.arrives:
+            graph.setdefault(value, set())
         alive = set(out_of[block.at])
         meet(alive)
         for one in reversed(block.insns):
             alive -= set(one.defines)
             alive |= set(one.uses)
             meet(alive)
-        for value in block.arrives:
-            graph.setdefault(value, set())
     return {one: frozenset(others) for one, others in graph.items()}
 
 
@@ -157,7 +139,7 @@ def allocate(body: lir.LirBody, pinned: dict[int, Register_] | None = None) -> A
     from qbopt import regalloc
 
     graph = interference(body)
-    price = costs(body)
+    price = intervals.weights(body)
     fixed = dict(pinned or {})
     order = sorted(graph, key=lambda one: (-price.get(one, 0.0), -len(graph[one]), one))
     free = list(regalloc.AVAILABLE)
@@ -227,6 +209,26 @@ def _searched(order, graph, fixed, free, price, bound: Assignment) -> tuple[Assi
     return best, seen < BUDGET
 
 
+class RegAlloc(LIRTransform):
+    """Assign, then rewrite. LLVM's two halves, in one phase.
+
+    `RegAllocBase` assigns virtual registers to physical ones and
+    `VirtRegRewriter` walks the function afterwards replacing each operand.
+    They are separate passes there because the assignment is a analysis
+    result other passes read -- stack slot colouring, copy propagation --
+    and nothing here reads it yet. `allocate()` and `applied()` are the two
+    halves and stay separable.
+    """
+
+    name = "regalloc"
+
+    def __init__(self, pinned: dict | None = None) -> None:
+        self.pinned = pinned or {}
+
+    def transform(self, body: lir.LirBody) -> lir.LirBody:
+        return applied(body, allocate(body, self.pinned))
+
+
 def applied(body: lir.LirBody, got: Assignment) -> lir.LirBody:
     """`body` with every operand naming a value replaced by its register.
 
@@ -234,6 +236,12 @@ def applied(body: lir.LirBody, got: Assignment) -> lir.LirBody:
     it in. That is the honest fallback: the operand the original
     instruction had in that position is what a pass took away.
     """
+    if got.spilled:
+        worst = sorted(got.spilled)[:4]
+        raise Spilled(
+            f"{len(got.spilled)} values want a stack slot ({', '.join(f'value#{one}' for one in worst)}) "
+            f"at a cost of {got.cost:g}; the spiller and the frame that holds the slots are not written"
+        )
     held = got.where
     return lir.LirBody(
         name=body.name,

@@ -34,6 +34,7 @@ entry point is `transform(body)` cannot reach anything else by accident.
 
 from dataclasses import dataclass
 
+from qbopt.lir import LirBody
 from qbopt.mir import MirBody
 
 
@@ -47,6 +48,28 @@ class MIRTransform:
     name: str = ""
 
     def transform(self, body: MirBody) -> MirBody:
+        raise NotImplementedError(f"{type(self).__name__} has no transform")
+
+    def __repr__(self) -> str:
+        return f"<{self.name or type(self).__name__}>"
+
+
+class LIRTransform:
+    """One transformation over a lowered body.
+
+    The same contract as MIRTransform, one form down: subclasses override
+    `transform` and nothing else, and a phase is added by writing a class
+    rather than by editing the driver.
+
+    Two bases rather than one generic over the form, because the two halves
+    are what the split is: a MIR pass may name no register and a LIR pass
+    may name nothing else, and a shared base would be a place for a pass to
+    be written that does not know which half it is in.
+    """
+
+    name: str = ""
+
+    def transform(self, body: "LirBody") -> "LirBody":
         raise NotImplementedError(f"{type(self).__name__} has no transform")
 
     def __repr__(self) -> str:

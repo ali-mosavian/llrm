@@ -269,62 +269,104 @@ generator makes one array of each width.
 
 ## The flow, as passes
 
-`qbopt/flow.py`. Six steps, five forms, each taking one and returning the
-next:
+Structured against LLVM's backend, whose source is at
+`~/work/other/llvm-project` and whose `TargetPassConfig::addOptimizedRegAlloc()`
+is the order the machine half mirrors.
 
-    parse     bytes -> Module          omf.py, module.py
-    raise     Module -> MIR            mir.py
-    passes    MIR -> MIR               transform.py
-    lower     MIR -> LIR               lower.py
-    allocate  LIR -> LIR               allocate.py
-    write     LIR -> bytes             objwrite.py
+    parse      bytes  -> Module     omf.py, module.py
+    raise      Module -> MIR        mir.py
+    opt        MIR    -> MIR        transform.pipeline()
+    lower      MIR    -> LIR        lower.py
+    machine    LIR    -> LIR        flow.machine()
+    write      LIR    -> bytes      objwrite.py
 
-`lir.LirBody` is the form below MIR: one `Insn` per operation, every
-operand a location, no values. `what` is None where the bytes are carried
-rather than generated.
+`qbopt/flow.py` is the pass config and holds the order and nothing else.
+The machine phases, against LLVM's own:
 
-**Lowering's real work is the cell.** `mir.MemRef` says which bytes an
-operand is and what its address depends on -- the alias question. `ir.Mem`
-says how to encode it: which register reaches it, and how wide the
-displacement field was, which is not how wide the number needs to be.
-Neither derives from the other. Where the original instruction had a memory
-operand in the same position its encoding is taken; where a pass put the
-cell there, the encoding comes from the address, and only for the two
-spaces that determine it -- a frame slot through bp, a segment-relative
-cell through nothing, both with a two-byte displacement.
+| ours | LLVM |
+| --- | --- |
+| `phielim.PhiElimination` | `PHIElimination` |
+| `twoaddr.TwoAddress` | `TwoAddressInstructionPass` |
+| `coalesce.Coalescer` | `RegisterCoalescer` |
+| `allocate.RegAlloc` | `RegAllocBase` + `VirtRegRewriter` |
 
-**Allocation reads LIR, and only LIR.** It took a `MirBody` at first, for
-one reason: liveness and interference read `op.defines` and `op.uses`, and
-a lowered instruction carried neither -- only `ir.Held(value_id)` inside an
-encoded operand. So the last pass in the machine half reached back up a
-form to ask a question about its own input. `lir.Insn` carries the two
-lists now, by id, and `LirBlock.arrives` carries what a phi defines; LIR
-has its own liveness and its own interference graph over those ids, and
-`liveness.py` answers the same question over MIR values for the passes
-above. Same algorithm, two forms, neither reading the other's.
+Two pass bases rather than one generic over the form: `MIRTransform` and
+`LIRTransform`. A MIR pass may name no register and a LIR pass may name
+nothing else, and a shared base would be a place for a pass to be written
+that does not know which half it is in.
 
-**Allocation prices spilling and searches for the assignment.**
+**Analyses are not phases.** `liveness.py` (over MIR values), `intervals.py`
+(over LIR ids) and `loops.py` answer questions and change nothing, which is
+why the pass config does not list them.
 
-- The cost of keeping a value in memory is its references, each weighted
-  `10 ** (loop nesting depth)`. One reference in a doubly nested loop
-  outweighs a hundred outside, which is the right answer for this suite:
-  the loop is where every program in it spends its time.
-- Branch and bound over the values, most expensive first, pruning as soon
-  as the spill bill reaches the best answer so far. Greedy colouring is
-  optimal on a chordal graph with nothing pre-coloured, and neither half
-  holds here -- a barrier pins every register it touches and an absorbed
-  divide pins eax and edx.
-- The search has a node budget. Where it runs out, the result says so
-  rather than claiming an optimum it did not prove.
+### Live intervals, and what a spill costs
 
-**No fallbacks.** An operand the allocation does not cover raises
-`allocate.Unplaced` naming the value; a cell whose encoding cannot be
-derived raises `lower.Unlowered` naming the address and the space. Quietly
-putting back what the raise saw is how one wrong instruction reaches an
-object with nothing reported.
+`intervals.py` is LLVM's `LiveIntervals` and `CalcSpillWeights` in one
+module. A **slot index** numbers every point a value can start or stop
+being live, a **segment** is a half-open run of them, and an **interval**
+is the segments one value occupies. Two slots per instruction rather than
+LLVM's four -- read and write -- because nothing here needs early-clobber
+yet, and inventing the distinction before a pass asks for it would be four
+times the indices for none of the answers.
 
-**Measured, not shipped.** 487 of 487 objects write, 709,230 -> 631,957
-bytes against 641,542 through `wholeseg`. Nothing has run that output, so
-no correctness is claimed. `rewrite.py` still calls `wholeseg.rebuilt`, and
-this exists so the seams are where the architecture says they are and can
-be moved one at a time. `tools/flow.py` runs it.
+The weight is LLVM's `normalizeSpillWeight`:
+
+    sum(references, each weighted 10 ** loop depth) / (live slots + grace)
+
+The division is the half a plain count misses. Two values referenced
+equally often are not equally worth keeping if one is live for three
+instructions and the other for the whole body: spilling the long one frees
+a register for longer, so it is the cheaper one to spill.
+
+### What lowering has to do about a cell
+
+`mir.MemRef` says which bytes an operand is and what its address depends on
+-- the alias question. `ir.Mem` says how to encode it: which register
+reaches it, and how wide the displacement field was, which is not how wide
+the number needs to be. Neither derives from the other. Where the original
+instruction had a memory operand in the same position its encoding is
+taken; where a pass put the cell there the encoding comes from the address,
+and only for the two spaces that determine it -- a frame slot through bp, a
+segment-relative cell through nothing, both with a two-byte displacement.
+
+### Allocation
+
+Branch and bound over the values, most expensive first, pruning as soon as
+the spill bill reaches the best answer so far. Greedy colouring is optimal
+on a chordal graph with nothing pre-coloured, and neither half holds here:
+a barrier pins every register it touches and an absorbed divide pins eax
+and edx. The search has a node budget; where it runs out the result says so
+rather than claiming an optimum it did not prove.
+
+### No fallbacks
+
+An operand the allocation does not cover raises `allocate.Unplaced` naming
+the value. A cell whose encoding cannot be derived raises `lower.Unlowered`
+naming the address and the space. A value the allocator chose to spill
+raises `allocate.Spilled` naming the values and the cost. Quietly putting
+back what the raise saw is how one wrong instruction reaches an object with
+nothing reported.
+
+### Where it stands
+
+**250 of 487 objects write, and every refusal is `Spilled`.** That is the
+finding rather than a defect: before phi elimination the corpus spilled
+nothing, because two values meeting at a phi hide their interference --
+which is exactly the bug `docs/hoist-blocker.md` spent a week on. Out of
+SSA the pressure is visible, and six registers are not enough for it.
+
+**The phases LLVM has and this does not**, in the order they are now worth
+writing:
+
+- `InlineSpiller` -- rewrite a spilled value's definitions into stores and
+  its uses into loads. Nothing else unblocks as much.
+- `PrologEpilogInserter` -- grow the frame to hold the slots the spiller
+  needs. BC's own frame has no spare room, so this changes the prologue.
+- `SplitKit` and `RegAllocGreedy`'s eviction -- split a live range rather
+  than spilling the whole of it. Three of the four remaining xfails are
+  waiting on exactly this.
+- `BranchFolding`, `MachineCopyPropagation`, `MachineLICM` -- the late
+  optimisations, cheap once the above exist.
+
+Not shipped. `rewrite.py` still calls `wholeseg.rebuilt`, and nothing has
+run this output. `tools/flow.py` runs it.

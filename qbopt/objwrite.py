@@ -79,9 +79,14 @@ def _as_mir(body: "lir.LirBody") -> mir.MirBody:
 
     `made` is the emission form: layout reads it in preference to the
     instruction an operation was raised from, so putting the lowered and
-    allocated semantics there is how LIR reaches the emitter. The MIR is
-    along for its addresses and its block structure, both of which layout
-    needs and LIR keeps unchanged.
+    allocated semantics there is how LIR reaches the emitter.
+
+    `at` and `covers` come from the instruction, not from the operation it
+    was lowered from. An inserted one -- a phi's copy, a two-address move
+    -- carries its neighbour's operation, and taking the span from there
+    made both claim the same byte: layout said "1 bytes are claimed by more
+    than one op" on twelve objects. The instruction is the authority on
+    which bytes it stands for, which for an inserted one is none.
 
     This is the seam. When layout takes LirBody directly it goes.
     """
@@ -91,7 +96,9 @@ def _as_mir(body: "lir.LirBody") -> mir.MirBody:
             mir.MirBlock(
                 at=block.at,
                 phis=(),
-                ops=tuple(replace(one.op, made=one.what) for one in block.insns),
+                ops=tuple(
+                    replace(one.op, made=one.what, at=one.at, covers=one.covers) for one in block.insns
+                ),
                 succ=block.succ,
             )
             for block in body.blocks

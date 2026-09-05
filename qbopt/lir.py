@@ -175,15 +175,33 @@ class Insn:
 
 
 @dataclass(frozen=True, slots=True)
+class Phi:
+    """One value that is two definitions above this block, by id."""
+
+    result: int
+    incoming: "tuple[tuple[int, int], ...]"  # (predecessor block, the value arriving)
+
+
+@dataclass(frozen=True, slots=True)
 class LirBlock:
     at: int
     insns: tuple[Insn, ...]
     succ: tuple[int, ...] = ()
-    # What arrives already defined: a phi's result. It is not an
-    # instruction -- nothing is emitted for it -- and liveness still has to
-    # know the block writes it, or the value stays live around every path
-    # that reaches its use.
-    arrives: tuple[int, ...] = ()
+    # Where two definitions of one value meet: the result, and which value
+    # arrives on each predecessor's edge. Not instructions -- nothing is
+    # emitted for a phi -- and liveness still has to know the block defines
+    # the result, or it stays live around every path reaching its use.
+    #
+    # Carried in full rather than as results alone because eliminating them
+    # is a pass, and it needs the edges: LLVM runs PHIElimination before
+    # allocation for the same reason, replacing each with a copy at the end
+    # of the predecessor it came from.
+    phis: tuple["Phi", ...] = ()
+
+    @property
+    def arrives(self) -> tuple[int, ...]:
+        """What this block defines before its first instruction."""
+        return tuple(one.result for one in self.phis)
 
 
 @dataclass(frozen=True, slots=True)

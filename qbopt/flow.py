@@ -1,30 +1,53 @@
-"""The whole flow, one function, in the order the architecture gives.
+"""The pass config: which phases run, in which order, and nothing else.
 
-    parse -> raise -> passes -> lower -> allocate -> write
+LLVM's `TargetPassConfig`, whose `addOptimizedRegAlloc()` is the list this
+one mirrors. The point of having it separate is that the order is a fact
+about the compiler rather than something spelled out inside whichever
+function happened to need it -- and that adding a phase is adding a class
+and a line here, not editing a driver.
 
-Six steps and five forms: bytes, MIR, MIR, LIR, LIR, bytes. Each step takes
-one form and returns the next, and no step reaches past the one below it.
-This exists so that reading the pipeline does not mean reading wholeseg.py,
-which grew the same sequence inside one function with the last three steps
-tangled together -- layout colouring, layout running a MIR pass, and the
-allocation decided in the middle of emission.
+    parse      bytes  -> Module     omf.py, module.py
+    raise      Module -> MIR        mir.py
+    opt        MIR    -> MIR        transform.py, in transform.pipeline()
+    lower      MIR    -> LIR        lower.py
+    machine    LIR    -> LIR        the list below
+    write      LIR    -> bytes      objwrite.py
 
-Not yet the shipped path. rewrite.py still calls wholeseg.rebuilt(), and
-what this one produces is measured against that rather than trusted over
-it. The point of having it is that the seams are where the architecture
-says they are and can be moved one at a time.
+The machine half, against LLVM's own order:
+
+    PHIElimination      phielim.py    out of SSA, before anything is placed
+    TwoAddressInstr     twoaddr.py    x86 writes one of its own sources
+    RegisterCoalescer   coalesce.py   the copies the two above just made
+    RegAlloc            allocate.py   assign, priced by intervals.py
+    VirtRegRewriter     allocate.py   virtual -> physical
+
+`intervals.py`, `liveness.py` and `loops.py` are analyses, not phases: they
+answer questions and change nothing, which is why nothing here lists them.
 """
 
 from qbopt import allocate
 from qbopt import blocks as split
-from qbopt import layout
+from qbopt import coalesce
 from qbopt import lower
 from qbopt import mir
 from qbopt import module
 from qbopt import objwrite
 from qbopt import omf
+from qbopt import phielim
 from qbopt import transform
+from qbopt import twoaddr
 from qbopt.blocks import code_map
+from qbopt.passes import LIRTransform
+
+
+def machine(pinned: dict) -> list[LIRTransform]:
+    """Every phase between lowering and emission, in order."""
+    return [
+        phielim.PhiElimination(),
+        twoaddr.TwoAddress(),
+        coalesce.Coalescer(),
+        allocate.RegAlloc(pinned),
+    ]
 
 
 def run(data: bytes, native_fpu: bool = False, optimise: bool = True) -> tuple[bytes, str]:
@@ -41,17 +64,18 @@ def run(data: bytes, native_fpu: bool = False, optimise: bool = True) -> tuple[b
         return data, "nothing to raise"
 
     done = []
-    placed: dict = {}
     for name, body in raised:
         if optimise:
             body = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
             body = transform.widened(body)
         low = lower.lowered(name, body)
-        done.append(allocate.applied(low, allocate.allocate(low, _pinned(body))))
+        for phase in machine(_pinned(body)):
+            low = phase.transform(low)
+        done.append(low)
 
     reached = frozenset(at for block in blocks for insn in block.insns for at in range(insn.at, insn.end))
     fields = frozenset(one.offset for one in omf.fixups(records) if one.seg == found.seg)
-    out = objwrite.written(found, done, records, placed, mapped.tables, fields, reached, native_fpu)
+    out = objwrite.written(found, done, records, {}, mapped.tables, fields, reached, native_fpu)
     return (data, out) if isinstance(out, str) else (out, "written")
 
 
@@ -60,6 +84,6 @@ def _pinned(body) -> dict:
 
     MIR pins a value; LIR names an id. The translation is here rather than
     in the allocator because a pin is the raise's statement about the
-    machine and this is the last place that still holds both forms.
+    machine, and this is the last place that holds both forms.
     """
     return {value.id: register for value, register in (getattr(body, "pins", None) or {}).items()}
