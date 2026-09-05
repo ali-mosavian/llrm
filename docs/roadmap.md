@@ -136,8 +136,10 @@ waits on it.
    `regs.py`; what is missing is a register to keep the value in, which is
    (1).
 3. **Code motion between blocks.** The preheader and the placement are
-   done -- `transform._preheader()` and `layout.rebuild` emitting in list
-   order. What is missing is again (1).
+   done -- `transform._preheader()`, and `layout.rebuild` really does emit
+   in list order since 2026-09-05; it sorted on `op.at` before that and
+   threw away every reordering a pass returned. What is missing is again
+   (1).
 
 Then, in dependency order: store-to-load forwarding and copy propagation
 (needs 1), allocation (2), LICM and induction-variable strength reduction

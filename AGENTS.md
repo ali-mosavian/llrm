@@ -133,7 +133,7 @@ Measured over the 32 `-p-g2` fixtures, bytes removed per pass:
     drop_stores -21
     segments     -6
     hoist       +39    removes memory reads, adds a split move
-    place         0    fires on nothing
+    place         0    fires on 4 of 32; it frees a call for absorption
     strength     +1
 
 Absorption and widening are BC-specific -- they undo a decision BC made
