@@ -80,3 +80,27 @@ the phase -- not the recognition, which is done.
 The machine arm already does this: its edits carry their own fixup list.
 What phase D moves is that capability from `calls.py` into `select.py`,
 where the rest of emission lives.
+
+## Where the flip stands
+
+`absorb_calls=False` -- the raise absorbing instead of the machine arm --
+is **correct**: 40 programs on 12 configurations, all pass. It costs 647
+bytes over the corpus (642,201 against 641,554), and it is not the default
+yet, because the byte cost is real and the gain is not collected until cse
+and the hoist use the shape.
+
+lngmix now holds one of its two divides as an operation over values:
+
+```
+  loop 0x8f: 19 ops, calls ['0x71']
+    0x004e  div  [seg:5+0x6]:4, 7
+```
+
+The other is still a call. `calls.sites` classified it `consume` -- four
+pushes it could not name -- because BC put the first divide's result stores
+between the pushes and the call, and `match()`'s backward scan only sees a
+push immediately, contiguously before one.
+
+The information is there: `site.consume` holds those four push
+instructions and `calls.static_at` is what classifies one. Naming them is
+the next step, and it is what makes both divides one key.
