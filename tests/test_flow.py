@@ -185,3 +185,36 @@ def test_lir_says_what_each_instruction_defines_and_uses() -> None:
         assert any(block.arrives for block in low.blocks), "no phi result arrives anywhere"
         graph = allocate.interference(low)
         assert graph, "no interference at all, from a body with a loop in it"
+
+
+def test_the_register_file_is_written_down_once() -> None:
+    """It was in six modules and one table existed twice, at two widths.
+
+    Reading the two as duplicates and keeping the narrower one broke every
+    object in the corpus: an `ir.Held` of width 1 has no entry in a table
+    built from `ir.ROOT`, so it resolved to its root and `mov [k],al`
+    became `mov [k],eax`.
+    """
+    from qbopt import regalloc
+    from qbopt import select
+    from qbopt import target
+
+    assert select.AT_WIDTH is target.AT_WIDTH
+    assert select.WIDTHS is target.WIDTHS
+    assert not hasattr(regalloc, "AVAILABLE"), "regalloc has its own register file again"
+    assert 1 in target.AT_WIDTH[next(iter(target.WIDE))], "the byte halves are missing from the table"
+
+
+def test_a_value_that_addresses_memory_is_confined_to_a_base_register() -> None:
+    """`[dx+0Ah]` has no encoding. An allocator that does not know the class
+    hands out dx eventually, and the instruction cannot be emitted."""
+    from qbopt import target
+
+    for path in CORPUS[:12]:
+        found = module.of(omf.parse(path.read_bytes()))
+        blocks = split.partition(found, code_map(found))
+        for name, body in mir.bodies(found, blocks):
+            low = lower.lowered(name, body)
+            for value, where in allocate.classes(low).items():
+                assert where is target.ADDRESSING, f"value#{value} confined to something unexpected"
+                assert set(target.order(where)) <= set(target.AVAILABLE)

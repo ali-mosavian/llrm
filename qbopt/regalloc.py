@@ -39,28 +39,19 @@ from qbopt import lower
 from qbopt import lir
 from qbopt import liveness
 from qbopt import mir
+from qbopt import target
 from qbopt.mir import NAMES
 from qbopt.mir import Value
 
-# What there is to allocate into. The flags are not a register anything can
-# be put in, and mir.FLAGS values are excluded from pressure and colouring
-# alike -- wide.py's own measurement is that they all fold away or become a
-# comparison, so they are not competing for anything.
-AVAILABLE: tuple[Register_, ...] = mir.TRACKED
-
-# What lir says the encoding permits, less what this may hand out: bp is a
-# legal base and is how every frame slot is reached, and it is also the
-# frame pointer. Asking both questions with one set is what made every
-# `[bp-12h]` look like a violated requirement.
-ADDRESSING: frozenset[Register_] = frozenset(
-    one for one in AVAILABLE if one in {ir.ROOT.get(x, x) for x in lir.ADDRESSING}
-)
+# The register file is target.py's. What is left here is the allocation
+# itself. The flags are not a register anything can be put in, and
+# mir.FLAGS values are excluded from pressure and colouring alike.
 
 
 def _addressing(body: mir.MirBody) -> set[Value]:
     """Every value some instruction requires in an addressing register.
 
-    lir.reads() says which registers an operation needs and how tightly.
+    target.reads() says which registers an operation needs and how tightly.
     This asks it rather than re-deriving the answer from the operands, so
     there is one statement of what the machine requires and not three.
     """
@@ -70,7 +61,7 @@ def _addressing(body: mir.MirBody) -> set[Value]:
             what = lower.current(op)
             if what is None:
                 continue
-            wanted = {where for where, need in lir.reads(what).items() if need.fixed is None}
+            wanted = {where for where, need in target.reads(what).items() if need.fixed is None}
             found |= {
                 value for value in op.uses if ir.ROOT.get(body.origin.get(value, -1), -1) in wanted
             }
@@ -100,7 +91,7 @@ def required(body: mir.MirBody) -> dict[Value, Register_]:
             what = lower.current(op)
             if what is None:
                 continue
-            for side, needs in ((op.uses, lir.reads(what)), (op.defines, lir.writes(what))):
+            for side, needs in ((op.uses, target.reads(what)), (op.defines, target.writes(what))):
                 for where, need in needs.items():
                     if need.fixed is None:
                         continue
@@ -114,7 +105,7 @@ def pressure(body: mir.MirBody, found: liveness.Liveness | None = None) -> int:
     """The most values live at once anywhere in this body, flags aside.
 
     Cannot exceed the number of registers BC itself used, because the
-    program came out of them -- so a number above len(AVAILABLE) is a bug
+    program came out of them -- so a number above len(target.AVAILABLE) is a bug
     in the liveness and not a body that needs spilling.
     """
     found = found or liveness.live(body)
@@ -208,7 +199,7 @@ def congruent(body: mir.MirBody) -> dict[Value, Value]:
             what = lower.current(op)
             if what is None:
                 continue
-            where = lir.tied(what)
+            where = target.tied(what)
             if where is None:
                 continue
             for one in op.defines:
@@ -314,7 +305,7 @@ def untangled(body: mir.MirBody) -> mir.MirBody:
     for block in body.blocks:
         for op in block.ops:
             what = lower.current(op)
-            if what is None or lir.tied(what) is None:
+            if what is None or target.tied(what) is None:
                 continue
             for one in op.defines:
                 if one.flags or of.get(one) not in tangled:
@@ -380,18 +371,6 @@ def _semantics_of_last(ops: tuple):
         return None
     one = ops[-1]
     return lower.current(one)
-
-
-def _named(register: Register_, width: int) -> Register_:
-    """The same register named at the width an operand needs."""
-    return AT_WIDTH.get(ir.ROOT.get(register, register), {}).get(width, register)
-
-
-# A root at each width, for the copies untangled() writes. ir.ROOT maps the
-# narrow name to the wide one; this is the way back.
-AT_WIDTH: dict[Register_, dict[int, Register_]] = {}
-for _narrow, _wide in ir.ROOT.items():
-    AT_WIDTH.setdefault(_wide, {4: _wide})[2 if _narrow != _wide else 4] = _narrow
 
 
 def colour(body: mir.MirBody, pinned: dict[Value, Register_] | None = None) -> dict[Value, Register_] | str:
@@ -462,7 +441,7 @@ def colour(body: mir.MirBody, pinned: dict[Value, Register_] | None = None) -> d
     # A class may only sit where every one of its members can be reached
     # from, and 16-bit addressing reaches memory through bx, bp, si or di.
     reached_by = {of.get(one, one) for one in _addressing(body)}
-    wide_addressing = {ir.ROOT.get(one, one) for one in ADDRESSING}
+    wide_addressing = {ir.ROOT.get(one, one) for one in target.BASES}
     for root in reached_by & set(assigned):
         want = assigned[root]
         if ir.ROOT.get(want, want) not in wide_addressing:
@@ -494,8 +473,8 @@ def colour(body: mir.MirBody, pinned: dict[Value, Register_] | None = None) -> d
 
     def offers(root: Value) -> list[Register_]:
         if root not in reached_by:
-            return list(AVAILABLE)
-        return [where for where in AVAILABLE if ir.ROOT.get(where, where) in wide_addressing]
+            return list(target.AVAILABLE)
+        return [where for where in target.AVAILABLE if ir.ROOT.get(where, where) in wide_addressing]
 
     # Everything back where BC had it, and then only what conflicts moves.
     # Assigning in degree order and counting only neighbours already

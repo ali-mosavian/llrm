@@ -11,6 +11,7 @@ import corpus
 from qbopt import ir
 from qbopt import liveness
 from qbopt import mir
+from qbopt import target
 from qbopt import regalloc
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
@@ -44,7 +45,7 @@ def test_no_body_needs_more_registers_than_bc_used(obj: Path) -> None:
     never killing a value the caller supplied.
     """
     for body in raised(obj):
-        assert regalloc.pressure(body) <= len(regalloc.AVAILABLE)
+        assert regalloc.pressure(body) <= len(target.AVAILABLE)
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
@@ -112,7 +113,7 @@ def test_a_pin_that_cannot_be_honoured_is_refused_not_guessed(obj: Path) -> None
         clashing = [one for one, others in graph.items() if others]
         if len(clashing) < 2:
             continue
-        pinned = {one: regalloc.AVAILABLE[0] for one in clashing}
+        pinned = {one: target.AVAILABLE[0] for one in clashing}
         assert isinstance(regalloc.colour(body, pinned), str)
         return
 

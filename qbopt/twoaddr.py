@@ -19,6 +19,7 @@ this pass and that one just introduced.
 from dataclasses import replace
 
 from qbopt import ir
+from qbopt import target
 from qbopt import lir
 from qbopt.passes import LIRTransform
 
@@ -26,7 +27,7 @@ from qbopt.passes import LIRTransform
 # ir.py's vocabulary is coarser than a mnemonic: BINARY covers add, sub,
 # and, or, xor and adc alike, and every one of them reads its destination.
 # MULTIPLY and DIVIDE are tied to fixed registers rather than to an
-# operand, which is lir.Need's business and not this pass's.
+# operand, which is target.Need's business and not this pass's.
 _TIED = frozenset({ir.Operation.BINARY, ir.Operation.UNARY})
 
 

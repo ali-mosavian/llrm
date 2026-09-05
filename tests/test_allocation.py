@@ -24,6 +24,7 @@ from iced_x86 import Register
 from qbopt import ir
 from qbopt import lir
 from qbopt import mir
+from qbopt import target
 from qbopt import omf
 from qbopt import layout
 from qbopt import module
@@ -77,15 +78,15 @@ def test_lir_says_a_two_address_operand_is_one_register() -> None:
     cell = ir.Mem(None, 2)
 
     what = ir.Semantics(ir.Operation.BINARY, "add", dests=(ax,), sources=(ax, cell))
-    assert lir.tied(what) is Register.EAX, "the destination and the first source are one register"
+    assert target.tied(what) is Register.EAX, "the destination and the first source are one register"
 
     apart = ir.Semantics(
         ir.Operation.BINARY, "add", dests=(ax,), sources=(ir.Reg(register=Register.BX, width=2), cell)
     )
-    assert lir.tied(apart) is None, "and a three-operand form ties nothing"
+    assert target.tied(apart) is None, "and a three-operand form ties nothing"
 
     on_stack = ir.Semantics(ir.Operation.FLOAT_ARITH, "fadd", dests=(ir.St(0),), sources=(ir.St(0),))
-    assert lir.tied(on_stack) is None, "x87 shares no register with the rest"
+    assert target.tied(on_stack) is None, "x87 shares no register with the rest"
 
 
 def test_a_two_address_operation_keeps_both_halves_in_one_register() -> None:
@@ -100,12 +101,12 @@ def test_a_two_address_operation_keeps_both_halves_in_one_register() -> None:
     cell = ir.Mem(None, 2)
 
     what = ir.Semantics(ir.Operation.BINARY, "add", dests=(ax,), sources=(ax, cell))
-    assert lir.tied(what) is Register.EAX, "the destination and the first source are one register"
+    assert target.tied(what) is Register.EAX, "the destination and the first source are one register"
 
     apart = ir.Semantics(
         ir.Operation.BINARY, "add", dests=(ax,), sources=(ir.Reg(register=Register.BX, width=2), cell)
     )
-    assert lir.tied(apart) is None, "and a three-operand form ties nothing"
+    assert target.tied(apart) is None, "and a three-operand form ties nothing"
 
     # Tied operands put the two values in one congruence class, so an
     # allocation moves both or neither.
@@ -153,7 +154,7 @@ def test_an_allocation_keeps_every_value_where_it_was_unless_forced() -> None:
             # finds nothing: BC's loops occupy all six, which is why the
             # first version of this test never pinned anything at all and
             # reported success by doing nothing.
-            for want in regalloc.AVAILABLE:
+            for want in target.AVAILABLE:
                 if want is body.origin[victim]:
                     continue
                 got = regalloc.colour(body, {victim: want})
@@ -268,11 +269,11 @@ def test_the_requirements_table_says_what_the_encoding_permits() -> None:
     roots gave the empty set -- so nothing satisfied the class at all, and
     two programs quietly stopped hoisting.
     """
-    assert Register.BP in lir.ADDRESSING, "a frame slot is reached through bp"
-    assert Register.DX not in lir.ADDRESSING, "`[dx+0Ah]` has no encoding"
-    assert regalloc.ADDRESSING, "and the assignable set is not empty"
-    assert all(one in regalloc.AVAILABLE for one in regalloc.ADDRESSING)
-    assert not any(one is Register.EBP for one in regalloc.ADDRESSING), "bp is the frame pointer"
+    assert Register.BP in target.ADDRESSING, "a frame slot is reached through bp"
+    assert Register.DX not in target.ADDRESSING, "`[dx+0Ah]` has no encoding"
+    assert target.BASES, "and the assignable set is not empty"
+    assert all(one in target.AVAILABLE for one in target.BASES)
+    assert not any(one is Register.EBP for one in target.BASES), "bp is the frame pointer"
 
 
 def test_the_allocator_honours_a_register_an_operation_demands() -> None:
@@ -322,7 +323,7 @@ def test_a_pin_against_what_the_machine_demands_is_refused() -> None:
             continue
         for name, body in mir.bodies(found, split.partition(found, mapped)):
             for value, where in regalloc.required(body).items():
-                other = next(one for one in regalloc.AVAILABLE if one is not where)
+                other = next(one for one in target.AVAILABLE if one is not where)
                 got = regalloc.colour(body, {value: other})
                 assert isinstance(got, str), (
                     f"{obj.stem}/{name}: {value} must be in "

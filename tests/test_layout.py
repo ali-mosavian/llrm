@@ -21,6 +21,7 @@ from iced_x86 import Instruction
 import corpus
 from qbopt import ir
 from qbopt import mir
+from qbopt import target
 from qbopt import omf
 from qbopt import layout
 from qbopt import select
@@ -472,7 +473,7 @@ def test_an_allocation_reaches_the_bytes() -> None:
     for one in body.origin:
         if one.flags or one in crossing or body.origin[one] is not Register.EAX:
             continue
-        for want in regalloc.AVAILABLE:
+        for want in target.AVAILABLE:
             if want is Register.EAX:
                 continue
             tried = regalloc.colour(body, {one: want})

@@ -33,6 +33,7 @@ from iced_x86 import MemoryOperand
 from iced_x86 import RepPrefixKind
 
 from qbopt import ir
+from qbopt import target
 from qbopt.module import Space
 from qbopt.declen import BITNESS
 
@@ -42,20 +43,6 @@ from qbopt.declen import BITNESS
 # names, and every procedure opens `push bp / mov bp,sp` and closes by
 # popping it back. A selector that could not say them could not emit a
 # prologue.
-_WIDE = {Register.EAX, Register.ECX, Register.EDX, Register.EBX, Register.ESI, Register.EDI, Register.EBP, Register.ESP}
-_NARROW = {Register.AX, Register.CX, Register.DX, Register.BX, Register.SI, Register.DI, Register.BP, Register.SP}
-# The byte halves. BC reaches for them to clear a high byte (`xor bh,bh`)
-# and to read one byte of an array.
-_BYTE = {
-    Register.AL,
-    Register.CL,
-    Register.DL,
-    Register.BL,
-    Register.AH,
-    Register.CH,
-    Register.DH,
-    Register.BH,
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,9 +227,9 @@ def move(into: Register_, outof: Register_, at: int = 0) -> Emitted | None:
     """
     if into is outof:
         return Emitted(b"")  # a move to itself is no instruction at all
-    if into in _WIDE and outof in _WIDE:
+    if into in target.WIDE and outof in target.WIDE:
         code = Code.MOV_R32_RM32
-    elif into in _NARROW and outof in _NARROW:
+    elif into in target.NARROW and outof in target.NARROW:
         code = Code.MOV_R16_RM16
     else:
         return None
@@ -261,21 +248,12 @@ def move(into: Register_, outof: Register_, at: int = 0) -> Emitted | None:
 TWO_OPERAND = ("add", "adc", "sub", "sbb", "and", "or", "xor", "cmp")
 ONE_OPERAND = ("neg", "not", "inc", "dec")
 
-# The width each register names, and the register file at each width. One
-# table rather than three lookups, and the only place widths are written down.
-WIDTHS: dict[Register_, int] = {}
-# And the inverse, which ir.Held needs: a root and a width name one register.
-# There is no byte-wide si, so a missing entry means the width cannot be had
-# and the caller keeps the root.
-AT_WIDTH: dict[Register_, dict[int, Register_]] = {}
-for _row, _size in ((_WIDE, 4), (_NARROW, 2), (_BYTE, 1)):
-    for _one in _row:
-        WIDTHS[_one] = _size
-        # setdefault, not assignment: al and ah are both one byte and both
-        # root to eax, and the later one was winning -- an ir.Held of width
-        # 1 resolved to `ah`, which is a different register holding a
-        # different byte.
-        AT_WIDTH.setdefault(ir.ROOT.get(_one, _one), {}).setdefault(_size, _one)
+# The register file's own tables. This module had a second copy of both,
+# and regalloc.py a third of AT_WIDTH covering only two widths -- reading
+# the two as duplicates and keeping the narrower one broke every object in
+# the corpus, because an ir.Held of width 1 then resolved to its root.
+WIDTHS = target.WIDTHS
+AT_WIDTH = target.AT_WIDTH
 
 
 def _code(name: str) -> Code_ | None:

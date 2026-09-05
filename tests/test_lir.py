@@ -8,6 +8,7 @@ from iced_x86 import Register
 from qbopt import ir
 from qbopt import lir
 from qbopt import mir
+from qbopt import target
 from qbopt import omf
 from qbopt import module
 from qbopt import blocks as split
@@ -45,7 +46,7 @@ def test_bcs_own_assignment_satisfies_every_requirement(obj: Path) -> None:
                 if what is None:
                     continue
                 held = {ir.ROOT.get(body.origin.get(one, -1), -1) for one in op.uses}
-                for want, need in lir.reads(what).items():
+                for want, need in target.reads(what).items():
                     if need.fixed is not None:
                         assert want in held, (
                             f"{obj.stem} {name}: {op.at:#x} {op.name} is said to need "
@@ -69,19 +70,19 @@ def test_the_widening_forms_need_what_they_do_not_name() -> None:
     dx = ir.Reg(register=Register.DX, width=2)
 
     named = ir.Semantics(ir.Operation.MULTIPLY, "imul", dests=(ax,), sources=(ax, cell))
-    assert not any(need.fixed for need in lir.reads(named).values()), "this one names its operands"
+    assert not any(need.fixed for need in target.reads(named).values()), "this one names its operands"
 
     wide = ir.Semantics(ir.Operation.MULTIPLY, "imul", dests=(ax, dx), sources=(cell,))
-    assert lir.reads(wide)[Register.EAX].fixed is Register.EAX
-    assert lir.writes(wide)[Register.EDX].fixed is Register.EDX
+    assert target.reads(wide)[Register.EAX].fixed is Register.EAX
+    assert target.writes(wide)[Register.EDX].fixed is Register.EDX
 
     # A divide reads both halves of the dividend.
     divide = ir.Semantics(ir.Operation.DIVIDE, "idiv", dests=(ax, dx), sources=(cell,))
-    assert set(lir.reads(divide)) == {Register.EAX, Register.EDX}
+    assert set(target.reads(divide)) == {Register.EAX, Register.EDX}
 
     # And x87 shares none of it, however `ir` happens to model the op.
     on_stack = ir.Semantics(ir.Operation.DIVIDE, "fdivp", dests=(ir.St(0),), sources=(ir.St(1),))
-    assert lir.reads(on_stack) == {} and lir.writes(on_stack) == {}
+    assert target.reads(on_stack) == {} and target.writes(on_stack) == {}
 
 
 def test_a_shift_by_a_register_takes_its_count_in_cl() -> None:
@@ -90,10 +91,10 @@ def test_a_shift_by_a_register_takes_its_count_in_cl() -> None:
     cl = ir.Reg(register=Register.CL, width=1)
 
     by_one = ir.Semantics(ir.Operation.BINARY, "shl", dests=(ax,), sources=(ax, ir.Imm(value=1, width=1)))
-    assert not any(need.fixed for need in lir.reads(by_one).values())
+    assert not any(need.fixed for need in target.reads(by_one).values())
 
     by_cl = ir.Semantics(ir.Operation.BINARY, "shl", dests=(ax,), sources=(ax, cl))
-    assert lir.reads(by_cl)[Register.ECX].fixed is Register.ECX
+    assert target.reads(by_cl)[Register.ECX].fixed is Register.ECX
 
 
 def test_the_addressing_class_is_what_the_encoding_permits() -> None:
@@ -105,9 +106,9 @@ def test_the_addressing_class_is_what_the_encoding_permits() -> None:
     """
     from qbopt import regalloc
 
-    assert Register.BP in lir.ADDRESSING, "a frame slot is reached through bp"
-    assert Register.EBP not in regalloc.ADDRESSING, "and the allocator may not hand it out"
-    assert Register.DX not in lir.ADDRESSING, "`[dx+0Ah]` has no encoding"
+    assert Register.BP in target.ADDRESSING, "a frame slot is reached through bp"
+    assert Register.EBP not in target.BASES, "and the allocator may not hand it out"
+    assert Register.DX not in target.ADDRESSING, "`[dx+0Ah]` has no encoding"
 
 
 def test_a_byte_wide_held_is_the_low_byte() -> None:

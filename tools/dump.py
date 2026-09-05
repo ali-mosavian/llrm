@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from qbopt import ir
 from qbopt import liveness
 from qbopt import mir
+from qbopt import target
 from qbopt import omf
 from qbopt import wide
 from qbopt import loops
@@ -255,7 +256,7 @@ def dump_regalloc(found: module.Module, found_blocks: list[blocks.Block] | None)
         alive = liveness.live(body)
         assignment = regalloc.colour(body)
         peak = regalloc.pressure(body, alive)
-        out.append(f"{label}  peak pressure {peak}/{len(regalloc.AVAILABLE)}")
+        out.append(f"{label}  peak pressure {peak}/{len(target.AVAILABLE)}")
         if isinstance(assignment, str):
             out.append(f"  refused: {assignment}")
         else:

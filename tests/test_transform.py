@@ -16,6 +16,7 @@ from qbopt import lower
 from qbopt import lir
 import corpus
 from qbopt import mir
+from qbopt import target
 from qbopt import wide
 from qbopt import omf
 from qbopt import module
@@ -476,7 +477,7 @@ def test_an_invariant_multiply_leaves_a_loop_it_cannot_be_folded_out_of() -> Non
 @pytest.mark.xfail(
     reason="the hoist no longer allocates: a result that crosses the loop edge needs "
     "a register the preheader can spare, and only regalloc can arrange that. It used "
-    "to pick one out of regalloc.AVAILABLE and rewrite every reader, which is where "
+    "to pick one out of target.AVAILABLE and rewrite every reader, which is where "
     "every hoist bug came from. Restored when regalloc splits a live range on LIR.",
     strict=True,
 )
@@ -563,7 +564,7 @@ def test_nothing_reads_a_register_nothing_wrote() -> None:
 @pytest.mark.xfail(
     reason="the hoist no longer allocates: a result that crosses the loop edge needs "
     "a register the preheader can spare, and only regalloc can arrange that. It used "
-    "to pick one out of regalloc.AVAILABLE and rewrite every reader, which is where "
+    "to pick one out of target.AVAILABLE and rewrite every reader, which is where "
     "every hoist bug came from. Restored when regalloc splits a live range on LIR.",
     strict=True,
 )

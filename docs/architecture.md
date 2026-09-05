@@ -299,6 +299,34 @@ that does not know which half it is in.
 (over LIR ids) and `loops.py` answer questions and change nothing, which is
 why the pass config does not list them.
 
+### The target
+
+`target.py` is LLVM's `TargetRegisterInfo` and `TargetInstrInfo` in one
+module -- one target, so one module. It holds the register file, the widths
+each register is named at, the register classes, the allocation order, and
+what each instruction requires of a register whether or not it names it.
+
+It is written down once because it was written down six times. `AVAILABLE`
+and a narrow-name table lived in `regalloc.py`, a second copy of that table
+in `select.py`, the addressing class in `lir.py`, the root map in `ir.py`,
+and a pass that wanted any of them reached for whichever module it already
+imported.
+
+The two copies were **not** the same table, which is the part worth
+recording: `select.py` built its from three explicit rows and covered width
+1; `regalloc.py` built its from `ir.ROOT`, which has no byte entries.
+Reading them as duplicates and keeping the narrower one broke every object
+in the corpus -- an `ir.Held` of width 1 then resolved to its root, and
+`mov [k],al` became `mov [k],eax`. `lir.py` now holds only the form.
+
+**A register class is the unit an allocator works in.** LLVM allocates
+within a `TargetRegisterClass` and orders the candidates with an
+`AllocationOrder`. Asking "any of the six" is only right when every operand
+can take any of the six, and 16-bit addressing reaches memory through bx,
+bp, si and di and nothing else. `allocate.classes()` confines a value some
+instruction reaches a cell by; the fixed requirements -- `imul`'s dx:ax,
+`cwd`'s eax, a shift's cl -- arrive as pins from the raise.
+
 ### Live intervals, and what a spill costs
 
 `intervals.py` is LLVM's `LiveIntervals` and `CalcSpillWeights` in one

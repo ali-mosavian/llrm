@@ -25,6 +25,7 @@ from iced_x86 import Register_
 
 from qbopt import intervals
 from qbopt import ir
+from qbopt import target
 from qbopt import lir
 from qbopt.passes import LIRTransform
 
@@ -136,13 +137,12 @@ def interference(body: lir.LirBody) -> dict[int, frozenset[int]]:
 
 def allocate(body: lir.LirBody, pinned: dict[int, Register_] | None = None) -> Assignment:
     """The cheapest register assignment this body admits."""
-    from qbopt import regalloc
-
     graph = interference(body)
     price = intervals.weights(body)
     fixed = dict(pinned or {})
     order = sorted(graph, key=lambda one: (-price.get(one, 0.0), -len(graph[one]), one))
-    free = list(regalloc.AVAILABLE)
+    confined = classes(body)
+    free = {one: list(target.order(confined.get(one))) for one in graph}
 
     greedy = _greedy(order, graph, fixed, free, price)
     best, whole = _searched(order, graph, fixed, free, price, greedy)
@@ -152,10 +152,37 @@ def allocate(body: lir.LirBody, pinned: dict[int, Register_] | None = None) -> A
     return Assignment(best.where, best.spilled, best.cost, whole, "" if whole else "the search ran out")
 
 
+def classes(body: lir.LirBody) -> dict[int, frozenset]:
+    """The register class each value is confined to, where it is confined.
+
+    LLVM allocates within a `TargetRegisterClass` and orders the candidates
+    with an `AllocationOrder`; asking "any of the six" is only right when
+    every operand can take any of the six. 16-bit addressing reaches memory
+    through bx, bp, si and di and nothing else -- `[dx+0Ah]` has no
+    encoding -- so a value some instruction reaches a cell by is confined
+    to that class, and an allocator that does not know it will eventually
+    hand out dx.
+
+    Only the addressing class today. The fixed requirements -- `imul`'s
+    dx:ax, `cwd`'s eax, a shift's cl -- arrive as pins from the raise and
+    are already honoured; `target.reads()` and `target.writes()` are what
+    would answer them here when they do not.
+    """
+    out: dict[int, frozenset] = {}
+    for block in body.blocks:
+        for one in block.insns:
+            if one.what is None:
+                continue
+            for where in (*one.what.dests, *one.what.sources):
+                if isinstance(where, ir.Mem) and isinstance(where.through, ir.Held):
+                    out[where.through.value] = target.ADDRESSING
+    return out
+
+
 def _allowed(one: int, fixed: dict, free: list) -> list:
-    """The registers this value may take."""
+    """The registers this value may take, in the order to try them."""
     want = fixed.get(one)
-    return [want] if want is not None else list(free)
+    return [want] if want is not None else list(free.get(one, ()))
 
 
 def _clashes(one: int, register, graph: dict, where: dict) -> bool:
@@ -281,9 +308,7 @@ def _settled(where, held: dict, origin: dict):
         # emits, one instruction of which is wrong for a reason nothing
         # reported. Named here, where it is still known which value.
         raise Unplaced(f"value#{where.value} at width {where.width} has no register")
-    from qbopt import regalloc
-
-    # regalloc's table, not select's. Both hold the same map and asking the
-    # encoder which register is which is the allocator reaching down a tier
-    # for a fact about the register file.
-    return ir.Reg(regalloc._named(register, where.width), where.width)
+    # The register file's table. Asking the encoder which register is which
+    # would be the allocator reaching down a tier for a fact about the
+    # machine, which target.py exists to hold.
+    return ir.Reg(target.named(register, where.width), where.width)

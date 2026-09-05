@@ -41,6 +41,7 @@ from qbopt import ir
 from qbopt import lower
 from qbopt import lir
 from qbopt import mir
+from qbopt import target
 from qbopt import module
 from qbopt import wide
 from qbopt.passes import MIRTransform
@@ -1437,7 +1438,7 @@ def _placement(block, run: list, alive) -> int | None:
     -- which is what makes this enough.
 
     It used to be half the question: `_insertion` also picked a register
-    out of regalloc.AVAILABLE, `_reads_from` rewrote every consumer to name
+    out of target.AVAILABLE, `_reads_from` rewrote every consumer to name
     it, `_move` emitted the copies, `_writes_to` re-seated the destination
     and `_can_reseat` asked lir whether it could. That is register
     allocation in a MIR pass with none of the allocator's information, and
