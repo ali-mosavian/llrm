@@ -75,19 +75,19 @@ def test_a_value_in_a_loop_costs_ten_times_one_outside() -> None:
     ninety-nine times in straight-line code.
     """
     _found, _blocks, bodies = _raised("lngmix-p-g2")
-    (_name, body), = bodies
-    deep = allocate.depths(body)
+    (name, body), = bodies
+    low = lower.lowered(name, body)
+    deep = allocate.depths(low)
     assert set(deep.values()) >= {0, 1}, "lngmix has a loop; the depths say otherwise"
 
-    price = allocate.costs(body)
-    inside = {value for block in body.blocks if deep[block.at] for op in block.ops for value in op.defines}
-    inside -= {value for block in body.blocks if not deep[block.at] for op in block.ops for value in op.defines}
-    outside = {value for block in body.blocks if not deep[block.at] for op in block.ops for value in op.defines}
+    price = allocate.costs(low)
+    inside = {v for block in low.blocks if deep[block.at] for one in block.insns for v in one.defines}
+    outside = {v for block in low.blocks if not deep[block.at] for one in block.insns for v in one.defines}
+    inside -= outside
     assert inside and outside
-    assert min(price[one] for one in inside if one in price) >= allocate.PER_LEVEL * max(
-        price[one] for one in outside if one in price
-    ) / allocate.PER_LEVEL, "a loop reference is not priced above a straight-line one"
-    assert max(price[one] for one in inside if one in price) >= allocate.PER_LEVEL
+    assert min(price[one] for one in inside) >= allocate.PER_LEVEL, (
+        "a value defined only inside a loop is priced as if it were outside one"
+    )
 
 
 @pytest.mark.parametrize("name", ["lngmix-p-g2", "hotlop-p-g2", "nested-p-g2", "nots-p-g2"])
@@ -95,8 +95,8 @@ def test_the_allocation_is_searched_and_says_whether_it_is_optimal(name: str) ->
     """Branch and bound, with a node budget. A result that ran out of
     budget says so rather than claiming an optimum it did not prove."""
     _found, _blocks, bodies = _raised(name)
-    for _who, body in bodies:
-        got = allocate.allocate(body, body.pins)
+    for who, body in bodies:
+        got = allocate.allocate(lower.lowered(who, body), flow._pinned(body))
         assert got.optimal or got.why, "an unproven assignment has to say why"
         if got.optimal:
             assert got.why == ""
@@ -109,6 +109,34 @@ def test_lowering_gives_back_lir_and_allocation_gives_back_lir() -> None:
     for name, body in bodies:
         low = lower.lowered(name, body)
         assert isinstance(low, lir.LirBody)
-        after = allocate.applied(low, allocate.allocate(body, body.pins))
+        after = allocate.applied(low, allocate.allocate(low, flow._pinned(body)))
         assert isinstance(after, lir.LirBody)
         assert [one.at for one in after.insns] == [one.at for one in low.insns]
+
+
+def test_the_allocator_reads_lir_and_nothing_above_it() -> None:
+    """It used to take a MirBody, for one reason: liveness and interference
+    read `op.defines` and `op.uses`, and a lowered instruction carried
+    neither -- only `ir.Held(value_id)` inside an encoded operand. So the
+    last pass in the machine half reached back up a form to ask a question
+    about its own input. `lir.Insn` carries the two lists now."""
+    import inspect
+
+    source = inspect.getsource(allocate)
+    for name in ("mir.", "liveness.", "transform.", "select."):
+        assert name not in source.replace("liveness.py answers", ""), f"allocate.py still asks {name}"
+    assert allocate.allocate.__annotations__["body"] is lir.LirBody
+
+
+def test_lir_says_what_each_instruction_defines_and_uses() -> None:
+    """Without them the allocator cannot build its own graph, which is the
+    whole reason it used to be handed MIR. Flags are excluded: they are one
+    register nothing is placed in."""
+    _found, _blocks, bodies = _raised("lngmix-p-g2")
+    for name, body in bodies:
+        low = lower.lowered(name, body)
+        assert any(one.defines for one in low.insns), "no instruction defines anything"
+        assert any(one.uses for one in low.insns), "no instruction uses anything"
+        assert any(block.arrives for block in low.blocks), "no phi result arrives anywhere"
+        graph = allocate.interference(low)
+        assert graph, "no interference at all, from a body with a loop in it"

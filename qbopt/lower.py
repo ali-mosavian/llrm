@@ -188,8 +188,19 @@ def lowered(name: str, body: "mir.MirBody") -> "lir.LirBody":
         blocks=tuple(
             lir.LirBlock(
                 at=block.at,
-                insns=tuple(lir.Insn(at=op.at, covers=op.covers, what=_located(current(op), getattr(op.node, 'semantics', None)), op=op) for op in block.ops),
+                insns=tuple(
+                    lir.Insn(
+                        at=op.at,
+                        covers=op.covers,
+                        what=_located(current(op), getattr(op.node, "semantics", None)),
+                        defines=tuple(one.id for one in op.defines if not one.flags),
+                        uses=tuple(one.id for one in op.uses if not one.flags),
+                        op=op,
+                    )
+                    for op in block.ops
+                ),
                 succ=block.succ,
+                arrives=tuple(phi.result.id for phi in block.phis if not phi.result.flags),
             )
             for block in body.blocks
         ),

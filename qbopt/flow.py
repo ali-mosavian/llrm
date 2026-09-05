@@ -46,10 +46,20 @@ def run(data: bytes, native_fpu: bool = False, optimise: bool = True) -> tuple[b
         if optimise:
             body = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
             body = transform.widened(body)
-        got = allocate.allocate(body, body.pins)
-        done.append(allocate.applied(lower.lowered(name, body), got))
+        low = lower.lowered(name, body)
+        done.append(allocate.applied(low, allocate.allocate(low, _pinned(body))))
 
     reached = frozenset(at for block in blocks for insn in block.insns for at in range(insn.at, insn.end))
     fields = frozenset(one.offset for one in omf.fixups(records) if one.seg == found.seg)
     out = objwrite.written(found, done, records, placed, mapped.tables, fields, reached, native_fpu)
     return (data, out) if isinstance(out, str) else (out, "written")
+
+
+def _pinned(body) -> dict:
+    """A body's pins, by value id, which is what the allocator is keyed on.
+
+    MIR pins a value; LIR names an id. The translation is here rather than
+    in the allocator because a pin is the raise's statement about the
+    machine and this is the last place that still holds both forms.
+    """
+    return {value.id: register for value, register in (getattr(body, "pins", None) or {}).items()}

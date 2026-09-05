@@ -20,15 +20,13 @@ greedy answer stands, rather than pretending the result is optimal.
 """
 
 from dataclasses import dataclass
+from dataclasses import replace
 
 from iced_x86 import Register_
 
 from qbopt import ir
 from qbopt import lir
-from qbopt import liveness
 from qbopt import loops as loopy
-from qbopt import mir
-from qbopt.mir import Value
 
 # One reference costs this much more per level of loop nesting. The classic
 # 10, which is what makes an inner-loop value beat a straight-line one that
@@ -47,22 +45,28 @@ class Unplaced(Exception):
 
 @dataclass(frozen=True, slots=True)
 class Assignment:
-    """Where each value lives, what it cost, and whether that is the best."""
+    """Where each value lives, what it cost, and whether that is the best.
 
-    where: dict[Value, Register_]
-    spilled: frozenset[Value]
+    Keyed by value id, which is what a lowered operand names. The allocator
+    used to be handed the MIR body instead, so that it could read
+    `op.defines` for its interference graph -- a LIR pass reaching back up a
+    form to ask a question its own input can now answer.
+    """
+
+    where: dict[int, Register_]
+    spilled: frozenset[int]
     cost: float
     optimal: bool
     why: str = ""
 
 
-def depths(body: mir.MirBody) -> dict[int, int]:
+def depths(body: lir.LirBody) -> dict[int, int]:
     """How deeply each block is nested in loops.
 
     `loops.loops()` gives every natural loop's body, so a block's depth is
-    simply how many of them contain it. Keyed by header, so a loop with
-    several latches counts once -- counting back edges instead reached a
-    nesting depth of 33 on this corpus.
+    how many of them contain it. Keyed by header, so a loop with several
+    latches counts once -- counting back edges instead reached a nesting
+    depth of 33 on this corpus.
     """
     found = loopy.loops(list(body.blocks), body.entry)
     out = {block.at: 0 for block in body.blocks}
@@ -73,7 +77,7 @@ def depths(body: mir.MirBody) -> dict[int, int]:
     return out
 
 
-def costs(body: mir.MirBody) -> dict[Value, float]:
+def costs(body: lir.LirBody) -> dict[int, float]:
     """What keeping each value in memory would cost, by weighted references.
 
     A definition and a use both count: spilled, the first becomes a store
@@ -81,26 +85,82 @@ def costs(body: mir.MirBody) -> dict[Value, float]:
     which is the whole reason this project exists.
     """
     deep = depths(body)
-    out: dict[Value, float] = {}
+    out: dict[int, float] = {}
     for block in body.blocks:
         weight = float(PER_LEVEL ** deep.get(block.at, 0))
-        for op in block.ops:
-            for value in (*op.defines, *op.uses):
-                if value.flags:
-                    continue  # not data, and never in a register of its own
+        for one in block.insns:
+            for value in (*one.defines, *one.uses):
                 out[value] = out.get(value, 0.0) + weight
     return out
 
 
-def allocate(body: mir.MirBody, pinned: dict[Value, Register_] | None = None) -> Assignment:
+def live(body: lir.LirBody) -> tuple[dict[int, set[int]], dict[int, set[int]]]:
+    """What is live at each block's entry and exit, to a fixed point.
+
+    LIR's own, over the ids an operand names. liveness.py answers the same
+    question over MIR values and is what the passes above use; the two are
+    the same algorithm on the two forms, and neither can read the other's.
+    """
+    defines = {block.at: set(block.arrives) | {v for one in block.insns for v in one.defines} for block in body.blocks}
+    exposed = {}
+    for block in body.blocks:
+        alive: set[int] = set()
+        for one in reversed(block.insns):
+            alive -= set(one.defines)
+            alive |= set(one.uses)
+        exposed[block.at] = alive - set(block.arrives)
+
+    live_in = {block.at: set() for block in body.blocks}
+    live_out = {block.at: set() for block in body.blocks}
+    changing = True
+    while changing:
+        changing = False
+        for block in body.blocks:
+            out = set()
+            for at in block.succ:
+                out |= live_in.get(at, set())
+            into = exposed[block.at] | (out - defines[block.at])
+            if out != live_out[block.at] or into != live_in[block.at]:
+                live_out[block.at], live_in[block.at] = out, into
+                changing = True
+    return live_in, live_out
+
+
+def interference(body: lir.LirBody) -> dict[int, frozenset[int]]:
+    """Which values are ever live at the same moment.
+
+    Walked backwards over each block's own live set rather than by
+    comparing ranges: two values interfere exactly when both are in that
+    set at some point, which is the definition and needs no approximation.
+    """
+    _into, out_of = live(body)
+    graph: dict[int, set[int]] = {}
+
+    def meet(alive: set[int]) -> None:
+        for one in alive:
+            graph.setdefault(one, set()).update(other for other in alive if other != one)
+
+    for block in body.blocks:
+        alive = set(out_of[block.at])
+        meet(alive)
+        for one in reversed(block.insns):
+            alive -= set(one.defines)
+            alive |= set(one.uses)
+            meet(alive)
+        for value in block.arrives:
+            graph.setdefault(value, set())
+    return {one: frozenset(others) for one, others in graph.items()}
+
+
+def allocate(body: lir.LirBody, pinned: dict[int, Register_] | None = None) -> Assignment:
     """The cheapest register assignment this body admits."""
     from qbopt import regalloc
 
-    graph = regalloc.interference(body)
+    graph = interference(body)
     price = costs(body)
     fixed = dict(pinned or {})
-    order = sorted(graph, key=lambda one: (-price.get(one, 0.0), -len(graph[one]), one.id))
-    free = [one for one in regalloc.AVAILABLE]
+    order = sorted(graph, key=lambda one: (-price.get(one, 0.0), -len(graph[one]), one))
+    free = list(regalloc.AVAILABLE)
 
     greedy = _greedy(order, graph, fixed, free, price)
     best, whole = _searched(order, graph, fixed, free, price, greedy)
@@ -110,20 +170,20 @@ def allocate(body: mir.MirBody, pinned: dict[Value, Register_] | None = None) ->
     return Assignment(best.where, best.spilled, best.cost, whole, "" if whole else "the search ran out")
 
 
-def _allowed(one: Value, fixed: dict, free: list) -> list:
+def _allowed(one: int, fixed: dict, free: list) -> list:
     """The registers this value may take."""
     want = fixed.get(one)
     return [want] if want is not None else list(free)
 
 
-def _clashes(one: Value, register, graph: dict, where: dict) -> bool:
+def _clashes(one: int, register, graph: dict, where: dict) -> bool:
     return any(where.get(other) == register for other in graph.get(one, ()))
 
 
 def _greedy(order, graph, fixed, free, price) -> Assignment:
     """The first assignment that works, for a bound the search can beat."""
-    where: dict[Value, Register_] = {}
-    spilled: set[Value] = set()
+    where: dict[int, Register_] = {}
+    spilled: set[int] = set()
     cost = 0.0
     for one in order:
         got = next((r for r in _allowed(one, fixed, free) if not _clashes(one, r, graph, where)), None)
@@ -174,7 +234,7 @@ def applied(body: lir.LirBody, got: Assignment) -> lir.LirBody:
     it in. That is the honest fallback: the operand the original
     instruction had in that position is what a pass took away.
     """
-    held = {value.id: register for value, register in got.where.items()}
+    held = got.where
     return lir.LirBody(
         name=body.name,
         entry=body.entry,
@@ -198,7 +258,7 @@ def _placed(one: lir.Insn, held: dict, origin: dict) -> lir.Insn:
     sources = tuple(_settled(x, held, origin) for x in what.sources)
     if dests == what.dests and sources == what.sources:
         return one
-    return lir.Insn(one.at, one.covers, ir.Semantics(what.op, what.name, dests, sources, what.target), one.op)
+    return replace(one, what=ir.Semantics(what.op, what.name, dests, sources, what.target))
 
 
 def _settled(where, held: dict, origin: dict):
@@ -213,6 +273,9 @@ def _settled(where, held: dict, origin: dict):
         # emits, one instruction of which is wrong for a reason nothing
         # reported. Named here, where it is still known which value.
         raise Unplaced(f"value#{where.value} at width {where.width} has no register")
-    from qbopt import select
+    from qbopt import regalloc
 
-    return ir.Reg(select.AT_WIDTH.get(ir.ROOT.get(register, register), {}).get(where.width, register), where.width)
+    # regalloc's table, not select's. Both hold the same map and asking the
+    # encoder which register is which is the allocator reaching down a tier
+    # for a fact about the register file.
+    return ir.Reg(regalloc._named(register, where.width), where.width)

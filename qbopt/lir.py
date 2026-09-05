@@ -161,6 +161,16 @@ class Insn:
     at: int
     covers: "tuple[int, int] | None"
     what: "ir.Semantics | None"
+    # Which values this instruction writes and reads, by id. Carried
+    # because the allocator is a LIR pass and needs the interference graph:
+    # without them it had to be handed the MIR body the instruction came
+    # from, and read `op.defines` off that. Ids rather than values, because
+    # that is what an operand names -- ir.py sits below mir.py.
+    #
+    # Flags are not here. They are one register nothing is placed in, and
+    # every consumer of liveness dropped them again on the way past.
+    defines: tuple[int, ...]
+    uses: tuple[int, ...]
     op: object
 
 
@@ -169,6 +179,11 @@ class LirBlock:
     at: int
     insns: tuple[Insn, ...]
     succ: tuple[int, ...] = ()
+    # What arrives already defined: a phi's result. It is not an
+    # instruction -- nothing is emitted for it -- and liveness still has to
+    # know the block writes it, or the value stays live around every path
+    # that reaches its use.
+    arrives: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

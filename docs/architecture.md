@@ -293,6 +293,16 @@ cell there, the encoding comes from the address, and only for the two
 spaces that determine it -- a frame slot through bp, a segment-relative
 cell through nothing, both with a two-byte displacement.
 
+**Allocation reads LIR, and only LIR.** It took a `MirBody` at first, for
+one reason: liveness and interference read `op.defines` and `op.uses`, and
+a lowered instruction carried neither -- only `ir.Held(value_id)` inside an
+encoded operand. So the last pass in the machine half reached back up a
+form to ask a question about its own input. `lir.Insn` carries the two
+lists now, by id, and `LirBlock.arrives` carries what a phi defines; LIR
+has its own liveness and its own interference graph over those ids, and
+`liveness.py` answers the same question over MIR values for the passes
+above. Same algorithm, two forms, neither reading the other's.
+
 **Allocation prices spilling and searches for the assignment.**
 
 - The cost of keeping a value in memory is its references, each weighted
