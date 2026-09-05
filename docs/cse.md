@@ -165,3 +165,39 @@ inside the main body's span -- so the sort still has to be global.
 
 Both divides are now one operation over the same two operands. That is the
 one key twice cse was waiting for.
+
+## The pass
+
+`transform.subexpressions()`. Value numbering, not a syntactic match: a name
+is replaced by what it stands for as the walk reaches it, so a copy counts
+as its source and an operation already folded counts as the one it folded
+into. lngmix needs both, three links deep -- BC reloads `v`, reconverts it
+and rebuilds the 7, so the second divide names none of the first's values.
+Copy propagation is part of the question rather than a pass before it.
+
+Three guards, each bought with a failure:
+
+- **Nothing narrow.** A half of a long is `Held(value, 2)` and so is the
+  other half, so two operations on opposite halves compare equal on the
+  value they name. nots printed `NOTOR= 26390415` for `-271601777` -- right
+  low word, wrong high one. Nothing in MIR says which half, so an operand
+  narrower than its value is refused rather than told apart.
+- **Only what its readers can find.** A value BC computed into a different
+  place is the same value, and folding it is sound in MIR -- but a
+  surviving reader then wants it where it no longer is, and only the
+  allocator can arrange that. chain refused with `mov is not one select.py
+  can emit`. A fold nothing outside the fold reads costs no register, which
+  is what lets lngmix's convert go.
+- **No flags a survivor reads.** In MIR they are an ordinary value; in the
+  machine they are one register everything in between has written.
+
+Byte accounting is whole-body (`_reclaimed`), not per block. The raise gives
+every operation folded out of one runtime call the same `at` -- the site's
+first push -- so `at` says nothing about which bytes an operation stands
+for, and the operation before it in its own block is routinely elsewhere.
+`covers` is the fact.
+
+**Measured: 40 bytes, on lngmix-q-evt and lngmxx-q-evt.** The three
+operations come out of lngmix-p-g2's MIR and the emitted segment is the
+same 909 bytes, so something between the pass and the bytes puts them back.
+That is the next thing to find, and it is worth more than the pass is.

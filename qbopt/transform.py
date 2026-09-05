@@ -69,7 +69,12 @@ def _end_of(op: Op) -> int:
 
 
 def _absorb(ops: list[Op], gone: set[int]) -> list[Op]:
-    """`ops` without the ones in `gone`, their bytes given to a survivor.
+    """`ops` without the ones whose address is in `gone`."""
+    return _without(ops, lambda one: one.at in gone)
+
+
+def _without(ops: list[Op], drop) -> list[Op]:
+    """`ops` without the ones `drop` picks, their bytes given to a survivor.
 
     Backwards, so a run of deletions collapses onto the one op before them
     rather than each taking the next. The first op in a block has nothing
@@ -77,11 +82,9 @@ def _absorb(ops: list[Op], gone: set[int]) -> list[Op]:
     -- and where there is neither, the body is one op long and there is
     nothing to delete.
     """
-    if not gone:
-        return ops
     out: list[Op] = []
     for op in ops:
-        if op.at in gone:
+        if drop(op):
             # The bytes go to the op immediately before, and only if that op
             # is adjacent and gets its length from select.py. Anything
             # further back would span the survivors in between and count
@@ -133,6 +136,303 @@ def without_redundant_loads(body: MirBody, dgroup: frozenset[int], calls: dict[i
     return replace(
         body,
         blocks=tuple(replace(one, ops=tuple(_absorb(list(one.ops), gone))) for one in body.blocks),
+    )
+
+
+
+# CSE only ever removes an operation whose whole answer is in its operands.
+# Anything that reads memory, writes memory, or is the machine doing
+# something -- a call, a push, a branch -- computes from more than its
+# arguments, and two of them are not the same computation however alike
+# they look.
+_PURE = frozenset(
+    {
+        mir.Kind.ADD,
+        mir.Kind.SUB,
+        mir.Kind.MUL,
+        mir.Kind.DIV,
+        mir.Kind.REM,
+        mir.Kind.AND,
+        mir.Kind.OR,
+        mir.Kind.XOR,
+        mir.Kind.SHL,
+        mir.Kind.SHR,
+        mir.Kind.SAR,
+        mir.Kind.NEG,
+        mir.Kind.NOT,
+        mir.Kind.CONVERT,
+        mir.Kind.COPY,
+        mir.Kind.LT,
+        mir.Kind.LE,
+        mir.Kind.GT,
+        mir.Kind.GE,
+        mir.Kind.EQ,
+        mir.Kind.NE,
+        mir.Kind.BELOW,
+        mir.Kind.ABOVE,
+    }
+)
+
+
+def subexpressions(body: MirBody) -> MirBody:
+    """One operation where two computed the same thing from the same values.
+
+    lngmix is the program this exists for. `s = s + v \\ 7 + v MOD 7`
+    divides twice by the same constant, and x86's `idiv` already yields the
+    quotient and the remainder from one instruction -- so the second divide
+    is not an optimisation BC missed, it is work it did twice.
+
+    The two are not textually equal even so. BC reloads `v`, reconverts it
+    and rebuilds the 7, so the second divide names none of the values the
+    first one named. Value numbering rather than a syntactic match: a name
+    is replaced by what it stands for as the walk reaches it, so a copy
+    counts as its source and an operation this has already folded counts as
+    the one it folded into. lngmix needs both, three links deep.
+
+    That makes copy propagation part of the question instead of a pass
+    before it. What a name stands for is not a rewrite, and materialising
+    it as one would leave dead copies for `dead` to find again.
+
+    Refused unless the two write the same variables. A value BC computed
+    into a different place is the same value and folding it is sound in
+    MIR, but its readers then want it where it no longer is, and only the
+    allocator can arrange that -- chain refused with `mov is not one
+    select.py can emit` for exactly that reason. Same queue as the hoist:
+    a value that changes register needs a register granted to it.
+
+    Refused wherever the second operation's flags are read. In MIR they are
+    an ordinary value and substituting them is sound; in the machine they
+    are one register that everything in between has already written, so the
+    flags of an operation that no longer runs are not there to be read.
+    """
+    doms = loopy.dominators(list(body.blocks), body.entry)
+    order = {block.at: index for index, block in enumerate(body.blocks)}
+    whole = _widths(body)
+
+    seen: dict[tuple, tuple[int, int, Op]] = {}
+    stands: dict[int, mir.Value] = {}  # what a name numbers as -- copies included
+    swap: dict[int, mir.Value] = {}  # what a name is rewritten to -- only what folded
+    gone: set[int] = set()  # by identity: four of lngmix's ops share address 0x4b
+    made: dict[int, set[int]] = {}  # what each of those defined, for _readable
+    for block in body.blocks:
+        for index, op in enumerate(block.ops):
+            source = _copied(op, whole)
+            if source is not None:
+                stands[op.defines[0].id] = stands.get(source.id, source)
+                continue
+            key = _computation(op, stands, whole)
+            if key is None:
+                continue
+            first = seen.get(key)
+            if first is None:
+                seen[key] = (order[block.at], index, op)
+                continue
+            at, where, earlier = first
+            if len(earlier.defines) != len(op.defines):
+                continue
+            if not _reaches(at, where, order[block.at], index, doms, body, block):
+                continue
+            if any(one.flags and _read(body, one) for one in op.defines):
+                continue
+            folded = {mine.id: theirs for mine, theirs in zip(op.defines, earlier.defines)}
+            stands.update(folded)
+            swap.update(folded)
+            made[id(op)] = set(folded)
+            gone.add(id(op))
+
+    gone, swap = _readable(body, gone, swap, made)
+    if not gone:
+        return body
+    body = _reclaimed(body, gone)
+    return replace(
+        body,
+        blocks=tuple(
+            replace(block, ops=tuple(_substituted(op, swap) for op in block.ops)) for block in body.blocks
+        ),
+    )
+
+
+def _reclaimed(body: MirBody, gone: set[int]) -> MirBody:
+    """`body` without those operations, their bytes given to a neighbour.
+
+    Whole-body rather than within a block, which is what `_without` does and
+    why it could not be used here. The raise gives every operation folded
+    out of a runtime call the same `at` -- the site's first push -- so `at`
+    says nothing about which bytes an operation stands for, and the
+    operation before it in its own block is routinely somewhere else
+    entirely. `covers` is the fact; the op that ends where this one starts
+    is its neighbour wherever it lives.
+
+    An operation whose bytes nothing can take simply stays. Its uses are
+    still substituted, so it computes something nothing reads and the next
+    round's `dead` sees it -- a deletion this cannot account for is not one
+    worth making.
+    """
+    ends: dict[int, Op] = {}
+    for block in body.blocks:
+        for op in block.ops:
+            if id(op) not in gone and layout.selectable(op) and op.covers is not None:
+                ends[op.covers[1]] = op
+    grown: dict[int, tuple[int, int]] = {}
+    dropped: set[int] = set()
+    # In byte order, so a run of deletions collapses onto the one operation
+    # standing before all of them. Taken in block order, the second of two
+    # adjacent deletions looks for a neighbour that is itself going.
+    going = sorted(
+        (op for block in body.blocks for op in block.ops if id(op) in gone and op.covers is not None),
+        key=lambda one: one.covers,
+    )
+    for op in going:
+        taker = ends.get(op.covers[0])
+        if taker is None:
+            continue
+        span = grown.get(id(taker), taker.covers)
+        grown[id(taker)] = (span[0], op.covers[1])
+        ends.pop(op.covers[0], None)
+        ends[op.covers[1]] = taker
+        dropped.add(id(op))
+    if not dropped:
+        return body
+    return replace(
+        body,
+        blocks=tuple(
+            replace(
+                block,
+                ops=tuple(
+                    replace(op, covers=grown[id(op)]) if id(op) in grown else op
+                    for op in block.ops
+                    if id(op) not in dropped
+                ),
+            )
+            for block in body.blocks
+        ),
+    )
+
+
+def _readable(body: MirBody, gone: set[int], swap: dict, made: dict[int, set[int]]):
+    """The folds whose result its readers can still find, and only those.
+
+    A value BC computed into a different place is the same value, and in
+    MIR folding it is sound -- but a surviving reader then wants it where it
+    no longer is, and only the allocator can arrange that. chain refused
+    with `mov is not one select.py can emit` for exactly that.
+
+    Not a variables-must-match test on the fold itself, which is what this
+    was first and which refused too much: lngmix's second divide is reached
+    through a `convert` into a variable of its own, whose only reader is
+    that divide. A fold nothing outside the fold reads costs no register.
+
+    Dropping one fold can leave another's reader standing, so this settles.
+    """
+    while True:
+        loose = set()
+        for block in body.blocks:
+            for op in block.ops:
+                if id(op) in gone:
+                    continue
+                for one in (*op.uses, *(x.value for x in op.args if isinstance(x, mir.Held))):
+                    theirs = swap.get(one.id)
+                    if theirs is not None and theirs.variable != one.variable:
+                        loose.add(one.id)
+        if not loose:
+            return gone, swap
+        gone = {one for one in gone if not made[one] & loose}
+        swap = {at: value for at, value in swap.items() if at not in loose}
+
+
+def _widths(body: MirBody) -> dict[int, int]:
+    """The width each value was defined at.
+
+    A half of one is named `Held(value, 2)` and so is the other half, so an
+    operand narrower than its value says which value but not which half.
+    nots proved it: `NOTOR` came back with the right low word and the wrong
+    high one, because two operations reading opposite halves of the same
+    long compared equal. Anything narrow is refused rather than told apart.
+    """
+    out: dict[int, int] = {}
+    for block in body.blocks:
+        for op in block.ops:
+            for one in op.results:
+                if isinstance(one, mir.Held):
+                    out.setdefault(one.value.id, one.width)
+    return out
+
+
+def _full(one, whole: dict[int, int]) -> bool:
+    """Whether this operand names the whole of its value, not one half."""
+    return whole.get(one.value.id) == one.width
+
+
+def _copied(op: Op, whole: dict[int, int]) -> mir.Value | None:
+    """The value this operation is another name for, if it is only that."""
+    if op.kind not in (mir.Kind.COPY, mir.Kind.LOAD) or len(op.defines) != 1:
+        return None
+    if op.loads or op.stores or op.merges:
+        return None
+    held = [one for one in op.args if isinstance(one, mir.Held)]
+    if len(held) != 1 or len(op.args) != 1:
+        return None
+    if held[0].width != _width(op.defines[0], op) or not _full(held[0], whole):
+        return None
+    return held[0].value
+
+
+def _width(_value: mir.Value, op: Op) -> int | None:
+    """The width this operation's result comes out at, or None."""
+    for one in op.results:
+        if isinstance(one, mir.Held):
+            return one.width
+    return None
+
+
+def _computation(op: Op, stands: dict[int, mir.Value], whole: dict[int, int]) -> tuple | None:
+    """What this operation computes, or None where that is not only its operands."""
+    if op.kind not in _PURE or op.loads or op.stores or op.merges or op.node is None:
+        return None
+    if not op.defines or not op.args:
+        return None
+    named = []
+    for one in op.args:
+        if isinstance(one, mir.Held):
+            if not _full(one, whole):
+                return None
+            named.append(("v", stands.get(one.value.id, one.value).id, one.width))
+        elif isinstance(one, mir.Const):
+            named.append(("c", one.n, one.width))
+        else:
+            return None
+    return (op.kind, op.name, tuple(named))
+
+
+def _reaches(at: int, where: int, then: int, index: int, doms, body, block) -> bool:
+    """Whether the earlier operation has certainly run by the later one."""
+    if at == then:
+        return where < index
+    return body.blocks[at].at in doms.get(block.at, frozenset())
+
+
+def _read(body: MirBody, value: mir.Value) -> bool:
+    """Whether anything in the body uses this value."""
+    return any(
+        value in op.uses or any(isinstance(one, mir.Held) and one.value is value for one in op.args)
+        for block in body.blocks
+        for op in block.ops
+    )
+
+
+def _substituted(op: Op, swap: dict[int, mir.Value]) -> Op:
+    """One operation with every use of a removed value naming its survivor."""
+    if not any(one.id in swap for one in op.uses) and not any(
+        isinstance(one, mir.Held) and one.value.id in swap for one in op.args
+    ):
+        return op
+    return replace(
+        op,
+        uses=tuple(swap.get(one.id, one) for one in op.uses),
+        args=tuple(
+            mir.Held(swap[one.value.id], one.width) if isinstance(one, mir.Held) and one.value.id in swap else one
+            for one in op.args
+        ),
     )
 
 
@@ -1455,6 +1755,13 @@ class DropStores(MIRTransform):
         return without_dead_stores(body, self.where.dgroup, self.where.named)
 
 
+class Cse(MIRTransform):
+    name = "cse"
+
+    def transform(self, body: MirBody) -> MirBody:
+        return subexpressions(body)
+
+
 class Place(MIRTransform):
     name = "place"
 
@@ -1480,6 +1787,7 @@ def pipeline(where: Where, **wanted) -> list[MIRTransform]:
         Forward(where),
         DropLoads(where),
         DropStores(where),
+        Cse(),
         Place(where),
     ]
     return [one for one in every if wanted.get(one.name, True)]

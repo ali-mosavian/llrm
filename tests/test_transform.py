@@ -69,7 +69,10 @@ def test_a_transform_accounts_for_every_byte_it_removes() -> None:
     BC put between the instructions. A deletion has to say what it took."""
     import inspect
 
-    source = inspect.getsource(transform._absorb)
+    # _absorb is the address-keyed caller; _without holds the donation, and
+    # cse's _reclaimed does it across the whole body because the raise gives
+    # every operation folded out of one call the same `at`.
+    source = inspect.getsource(transform._without) + inspect.getsource(transform._reclaimed)
     assert "covers=" in source, "a deleted op's bytes must go to a survivor"
     assert "layout.selectable" in source, (
         "and only to one whose length comes from selection -- an op emitted "
@@ -902,3 +905,66 @@ def test_both_lngmix_divides_absorb():
     blocks = split.partition(found, code_map(found))
     reached = [insn for block in blocks for insn in block.insns]
     assert calls.sites(found, reached, blocks) == []
+
+
+def test_cse_folds_lngmix_s_second_divide() -> None:
+    """`s = s + v \\ 7 + v MOD 7` divides twice by the same constant.
+
+    Not textually: BC reloads `v`, reconverts it and rebuilds the 7, so the
+    second divide names none of the first's values. Three operations go --
+    the reload's convert, the second 7 and the divide itself.
+    """
+    from pathlib import Path
+
+    from qbopt import blocks as split, module, omf, transform, wholeseg
+    from qbopt.blocks import code_map
+    from qbopt.passes import Where
+
+    data = Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()
+    for _ in range(3):  # the divides absorb first; cse is what comes after
+        data, _why = wholeseg.rebuilt(data)
+    found = module.of(omf.parse(data))
+    blocks = split.partition(found, code_map(found))
+    where = Where(
+        dgroup=found.dgroup,
+        calls=found.calls,
+        bounds=module.landmarks(found),
+        blocks=blocks,
+        found=found,
+    )
+    (_who, body), = mir.bodies(found, blocks)
+    for one in transform.pipeline(where):
+        if one.name == "cse":
+            was = sum(1 for block in body.blocks for op in block.ops)
+            body = one.transform(body)
+            now = sum(1 for block in body.blocks for op in block.ops)
+            assert was - now == 3, f"cse removed {was - now} operations, not 3"
+            return
+        body = one.transform(body)
+    raise AssertionError("cse is not in the pipeline")
+
+
+def test_cse_refuses_an_operand_that_is_only_half_its_value() -> None:
+    """nots printed NOTOR= 26390415 for -271601777: right word, wrong word.
+
+    A half of a long is `Held(value, 2)` and so is the other half, so two
+    operations reading opposite halves compare equal on the value they name.
+    Nothing in MIR says which half, so nothing narrow is a subexpression.
+    """
+    from qbopt import transform
+
+    low = mir.Held(mir.Value(id=1, at=0, variable=1, version=1), 2)
+    assert transform._full(low, {1: 2})
+    assert not transform._full(low, {1: 4}), "half of a long passed as the whole of it"
+
+    class Fake:
+        kind = mir.Kind.NOT
+        name = "not"
+        loads = stores = ()
+        merges: dict = {}
+        node = object()
+        defines = (mir.Value(id=2, at=0, variable=2, version=1),)
+        args = (low,)
+
+    assert transform._computation(Fake(), {}, {1: 4}) is None
+    assert transform._computation(Fake(), {}, {1: 2}) is not None
