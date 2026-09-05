@@ -361,6 +361,23 @@ def _still_has_an_operand_for_it(op: mir.Op) -> bool:
     return not (had and not any(isinstance(one, (ir.Mem, ir.Address)) for one in holds))
 
 
+def _fields_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -> tuple[int, ...]:
+    """Every fixup this operation's own operands carry, in operand order.
+
+    One for one instruction, which is every operation the raise makes. An
+    operation that stands for an idiom has one per relocated instruction in
+    it, and they are placed in the order the instructions were emitted.
+    """
+    said = found.refs.get(op.id) if op.id is not None else None
+    if said is not None and len(said) > 1:
+        wanted = tuple(one for one in said if not fields or one in fields)
+        if wanted and _still_has_an_operand_for_it(op):
+            return wanted
+    one = _field_in(found, op, fields)
+    return () if one is None else (one,)
+
+
+
 def _field_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -> int | None:
     """The address of the one relocated field inside `op`'s own bytes.
 
@@ -393,7 +410,8 @@ def _field_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -
     # What the operation says it carries, established at the raise while the
     # spans were still BC's. Subject to the caller's own set: `fields` is how
     # a caller says which fixups it is accounting for.
-    ref = found.refs.get(op.id) if op.id is not None else None
+    said = found.refs.get(op.id) if op.id is not None else None
+    ref = said[0] if said else None
     if ref is not None and (not fields or ref in fields):
         return ref if _still_has_an_operand_for_it(op) else None
     known = fields or frozenset(found.fixup_at)
@@ -857,16 +875,24 @@ def _emitted(
         )
         if made is None or len(made.code) != lengths[index]:
             return f"{op.at:#06x}: it changed length between the two passes"
-        # A fixup goes wherever this instruction's one relocatable field
-        # landed -- the displacement for a memory operand, the immediate for
+        # A fixup goes wherever the field it names landed -- the
+        # displacement for a memory operand, the immediate for
         # `push offset X` and `mov ax,offset X`, which are 464 of the
         # corpus's fixups on their own.
-        field = _field_in(found, op, fields)
-        if field is not None:
-            landed = made.relocated_at
-            if landed is None:
-                return f"{op.at:#06x}: {op.name} has a fixup and no field to put it in"
-            relocations.append((len(out) + landed, field))
+        #
+        # Paired in order, because an operation is not always one
+        # instruction: absorbing a long divide is four and two of them are
+        # relocated, and each fixup belongs to the operand it was read off.
+        wanted = _fields_in(found, op, fields)
+        if wanted:
+            landed = made.places
+            if len(landed) < len(wanted):
+                return (
+                    f"{op.at:#06x}: {op.name} has {len(wanted)} fixups and "
+                    f"{len(landed)} fields to put them in"
+                )
+            for where, field in zip(landed, wanted, strict=False):
+                relocations.append((len(out) + where, field))
         out += made.code
     # Every fixup inside a surviving op's `covers` but outside its own
     # node's span belonged to something a transform folded away. One

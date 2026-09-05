@@ -76,11 +76,33 @@ class Emitted:
     code: bytes
     displacement_at: int | None = None
     immediate_at: int | None = None
+    # Where each relocatable field landed, in the order the instructions
+    # were emitted. One entry for one instruction, which is every case but
+    # an idiom: absorbing a long divide is `mov eax,[a] / mov ecx,[b] / cdq
+    # / idiv ecx` and two of those four carry a fixup. `relocated_at` is the
+    # first and is what a caller with one wants.
+    fields: tuple[int, ...] = ()
 
     @property
     def relocated_at(self) -> int | None:
-        """Where this instruction's one relocatable field landed."""
+        """Where this instruction's own relocatable field landed."""
+        if self.fields:
+            return self.fields[0]
         return self.displacement_at if self.displacement_at is not None else self.immediate_at
+
+    @property
+    def places(self) -> tuple[int, ...]:
+        """Every field, however this was built.
+
+        Not every Emitted comes from _assemble -- an idiom is built from
+        its own bytes and says where its fields are, and the plain ones
+        report the two offsets iced read back. This is the one answer a
+        caller wants and works for both.
+        """
+        if self.fields:
+            return self.fields
+        one = self.relocated_at
+        return () if one is None else (one,)
 
 
 def _assemble(made: Instruction, at: int) -> Emitted | None:
@@ -101,10 +123,18 @@ def _assemble(made: Instruction, at: int) -> Emitted | None:
     if decoded is None:
         return None
     offsets = decoder.get_constant_offsets(decoded)
+    where = (
+        offsets.displacement_offset
+        if offsets.has_displacement
+        else offsets.immediate_offset
+        if offsets.has_immediate
+        else None
+    )
     return Emitted(
         code,
         offsets.displacement_offset if offsets.has_displacement else None,
         offsets.immediate_offset if offsets.has_immediate else None,
+        () if where is None else (where,),
     )
 
 

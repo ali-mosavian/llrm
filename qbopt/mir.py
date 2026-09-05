@@ -1521,7 +1521,7 @@ def _referenced(body: MirBody, found: Module) -> dict[int, int]:
         return inside[0] if len(inside) == 1 else None
 
     return {
-        op.id: at
+        op.id: (at,)
         for block in body.blocks
         for op in block.ops
         if op.id is not None and (at := owned(op)) is not None

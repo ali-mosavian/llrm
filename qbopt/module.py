@@ -129,11 +129,14 @@ class Module:
     # can never be the same byte as a segment outside this set, which is what
     # may_alias() rests on.
     dgroup: frozenset[int] = frozenset()
-    # Which fixup each operation's own operand carries, by mir.Op.id. Asked
+    # Which fixups each operation's own operands carry, by mir.Op.id. One
+    # for one instruction, which is every operation the raise makes -- and
+    # several for one it folds an idiom into: absorbing a long divide is
+    # four instructions and two of them are relocated. Asked
     # once at the raise, while every operation still stands where BC wrote
     # it, because that is the only moment the bytes can answer it. Keyed by
     # the operation rather than by its address: a pass may move it.
-    refs: dict[int, int] = field(default_factory=dict)
+    refs: dict[int, tuple[int, ...]] = field(default_factory=dict)
 
     def resolve(self, field_offset: int, literal: int) -> Addr:
         """What the operand whose displacement field sits here points at."""

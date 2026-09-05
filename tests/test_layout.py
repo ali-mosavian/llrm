@@ -638,7 +638,11 @@ def test_a_relocation_belongs_to_the_operand_and_not_to_a_place(obj: Path) -> No
                 lo, hi = ir.span(op.node)
                 inside = [one for one in fields if lo <= one < hi]
                 want = inside[0] if len(inside) == 1 else None
-            ref = found.refs.get(op.id)
+            # One fixup per relocated instruction, and every operation the
+            # raise makes is one instruction.
+            said = found.refs.get(op.id)
+            ref = said[0] if said else None
+            assert said is None or len(said) == 1, f"{obj.stem} {op.at:#06x}: {said}"
             assert ref == want, f"{obj.stem} {op.at:#06x}: says {ref}, the bytes say {want}"
             seen += ref is not None
     assert seen or not fields, f"{obj.stem}: nothing carries a fixup, so this proves nothing"
@@ -754,3 +758,31 @@ def test_a_fold_does_not_keep_the_fixup_of_the_read_it_replaced() -> None:
                     f"{op.at:#x}: the memory operand is gone and the fixup was kept"
                 )
     assert checked, "no fold replaced a memory read; the test measures nothing"
+
+
+def test_an_operation_may_carry_a_fixup_for_each_instruction_it_stands_for() -> None:
+    """One operation is not always one instruction.
+
+    Absorbing a long divide is `mov eax,[a] / mov ecx,[b] / cdq / idiv ecx`
+    and two of those four carry a fixup. select.Emitted reported one field
+    because until now an operation was an instruction and an instruction
+    relocates at most one -- select.restore emits three and gets away with
+    it only by having no fixup at all.
+
+    The plumbing carries as many as an operation has: Emitted.places says
+    where each landed, the module's refs say which fixup each operand
+    carries, and layout pairs them in the order the instructions came out.
+    """
+    from qbopt import select
+
+    # However it was built: _assemble reads the two offsets iced gives back,
+    # an idiom says where its own fields are, and both answer `places`.
+    plain = select.Emitted(b"\x8b\x06\x00\x00", displacement_at=2)
+    assert plain.places == (2,) and plain.relocated_at == 2
+
+    idiom = select.Emitted(b"\x66\xa1\x00\x00\x66\xb9\x00\x00", fields=(2, 6))
+    assert idiom.places == (2, 6), idiom.places
+    assert idiom.relocated_at == 2, "the first is what a caller with one wants"
+
+    silent = select.Emitted(b"\x99")
+    assert silent.places == () and silent.relocated_at is None
