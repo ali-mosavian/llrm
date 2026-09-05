@@ -18,12 +18,14 @@ The search has a node budget; where it runs out this says so and the
 greedy answer stands, rather than pretending the result is optimal.
 """
 
+import heapq
 from dataclasses import dataclass
 from dataclasses import replace
+from enum import IntEnum
 
 from iced_x86 import Register_
 
-from qbopt import intervals
+from qbopt import intervals as ranges
 from qbopt import ir
 from qbopt import target
 from qbopt import lir
@@ -135,21 +137,19 @@ def interference(body: lir.LirBody) -> dict[int, frozenset[int]]:
     return {one: frozenset(others) for one, others in graph.items()}
 
 
-def allocate(body: lir.LirBody, pinned: dict[int, Register_] | None = None) -> Assignment:
-    """The cheapest register assignment this body admits."""
-    graph = interference(body)
-    price = intervals.weights(body)
-    fixed = dict(pinned or {})
-    order = sorted(graph, key=lambda one: (-price.get(one, 0.0), -len(graph[one]), one))
-    confined = classes(body)
-    free = {one: list(target.order(confined.get(one))) for one in graph}
+class Stage(IntEnum):
+    """How far a range has got, and therefore what may still be tried on it.
 
-    greedy = _greedy(order, graph, fixed, free, price)
-    best, whole = _searched(order, graph, fixed, free, price, greedy)
-    # A search that finished proves its answer, and that includes finishing
-    # without beating the bound -- then the greedy assignment *is* the
-    # cheapest, and saying otherwise would understate what is known.
-    return Assignment(best.where, best.spilled, best.cost, whole, "" if whole else "the search ran out")
+    LLVM's `LiveRangeStage`. A range that fails to assign is not simply
+    spilled: it is put back on the queue one stage further along, so the
+    next attempt tries something the last one did not. The stage is what
+    stops the same remedy being tried forever.
+    """
+
+    ASSIGN = 0  # never tried: a free register, or evict something cheaper
+    SPLIT = 1  # eviction did not help: cut the range instead
+    SPILL = 2  # nothing helped
+    DONE = 3
 
 
 def classes(body: lir.LirBody) -> dict[int, frozenset]:
@@ -160,13 +160,12 @@ def classes(body: lir.LirBody) -> dict[int, frozenset]:
     every operand can take any of the six. 16-bit addressing reaches memory
     through bx, bp, si and di and nothing else -- `[dx+0Ah]` has no
     encoding -- so a value some instruction reaches a cell by is confined
-    to that class, and an allocator that does not know it will eventually
-    hand out dx.
+    to that class, and an allocator that does not know it hands out dx.
 
     Only the addressing class today. The fixed requirements -- `imul`'s
-    dx:ax, `cwd`'s eax, a shift's cl -- arrive as pins from the raise and
-    are already honoured; `target.reads()` and `target.writes()` are what
-    would answer them here when they do not.
+    dx:ax, `cwd`'s eax, a shift's cl -- arrive as pins from the raise;
+    `target.reads()` and `target.writes()` are what would answer them here
+    when they do not.
     """
     out: dict[int, frozenset] = {}
     for block in body.blocks:
@@ -179,61 +178,159 @@ def classes(body: lir.LirBody) -> dict[int, frozenset]:
     return out
 
 
-def _allowed(one: int, fixed: dict, free: list) -> list:
-    """The registers this value may take, in the order to try them."""
-    want = fixed.get(one)
-    return [want] if want is not None else list(free.get(one, ()))
+def allocate(
+    body: lir.LirBody,
+    pinned: dict[int, Register_] | None = None,
+    unspillable: "frozenset[int] | None" = None,
+) -> Assignment:
+    """A register for every value, by LLVM's `RegAllocGreedy`.
 
+    Largest range first, out of a priority queue. For each:
 
-def _clashes(one: int, register, graph: dict, where: dict) -> bool:
-    return any(where.get(other) == register for other in graph.get(one, ()))
+        assign   a register nothing live at the same time is using
+        evict    take one from ranges that cost less than this one, and
+                 put them back on the queue to find another
+        split    give up on one register for the whole range
+        spill    give up on a register
 
+    A range that fails one stage comes back at the next, which is what
+    makes the loop terminate: `Stage` only ever moves forward.
 
-def _greedy(order, graph, fixed, free, price) -> Assignment:
-    """The first assignment that works, for a bound the search can beat."""
+    **Eviction is what the branch-and-bound search here before was for.**
+    That search was exactly optimal and exponential, and it went: this is
+    LLVM's answer to the same question and a better one for the reason LLVM
+    reached it. The cost model is what decides, and a cheap range moving
+    aside for an expensive one is the whole of the decision -- a search
+    that finds the same answer by trying everything has only proved the
+    cost model right at a price that grows with the body.
+    """
+    index = ranges.indexed(body)
+    live = ranges.intervals(body, index)
+    # A reload's value is live across one instruction and must have a
+    # register: spilling it again puts a load in front of a load and
+    # nothing settles. LLVM's `markNotSpillable`, as a weight nothing can
+    # outbid rather than as a flag every comparison has to remember.
+    for one in unspillable or ():
+        if one in live:
+            live[one] = replace(live[one], weight=float("inf"))
+    confined = classes(body)
+    fixed = dict(pinned or {})
+
+    # What is assigned to each register, as intervals. LLVM's
+    # LiveIntervalUnion: the question an allocator asks a thousand times is
+    # "does this range overlap anything already in that register", and a
+    # per-register list answers it without rebuilding a graph.
+    union: dict[Register_, list[int]] = {}
     where: dict[int, Register_] = {}
+    stage: dict[int, Stage] = {}
     spilled: set[int] = set()
     cost = 0.0
-    for one in order:
-        got = next((r for r in _allowed(one, fixed, free) if not _clashes(one, r, graph, where)), None)
-        if got is None:
-            spilled.add(one)
-            cost += price.get(one, 0.0)
-            continue
-        where[one] = got
-    return Assignment(where, frozenset(spilled), cost, False, "greedy")
 
-
-def _searched(order, graph, fixed, free, price, bound: Assignment) -> tuple[Assignment, bool]:
-    """Branch and bound over the same order, keeping the cheapest.
-
-    Most expensive value first, so the branch that spills it is cut almost
-    at once -- which is what makes the search finish at all.
-    """
-    best = bound
+    queue = [(-_priority(live.get(one), stage.get(one, Stage.ASSIGN)), one) for one in _values(body)]
+    heapq.heapify(queue)
     seen = 0
-
-    def walk(index: int, where: dict, spilled: frozenset, cost: float):
-        nonlocal best, seen
+    while queue and seen < BUDGET:
         seen += 1
-        if seen >= BUDGET or cost >= best.cost:
-            return
-        if index == len(order):
-            best = Assignment(dict(where), spilled, cost, True, "")
-            return
-        one = order[index]
-        for register in _allowed(one, fixed, free):
-            if _clashes(one, register, graph, where):
-                continue
-            where[one] = register
-            walk(index + 1, where, spilled, cost)
-            del where[one]
-            if seen >= BUDGET:
-                return
-        walk(index + 1, where, spilled | {one}, cost + price.get(one, 0.0))
+        _prio, value = heapq.heappop(queue)
+        if value in where or value in spilled:
+            continue
+        at = stage.setdefault(value, Stage.ASSIGN)
+        mine = live.get(value)
+        if mine is None:
+            continue
+        order = target.order(confined.get(value)) if value not in fixed else (fixed[value],)
 
-    walk(0, {}, frozenset(), 0.0)
-    return best, seen < BUDGET
+        got = _free(mine, order, union, live)
+        if got is not None:
+            where[value] = got
+            union.setdefault(got, []).append(value)
+            stage[value] = Stage.DONE
+            continue
+
+        if at is Stage.ASSIGN:
+            evicted = _evict(mine, order, union, live)
+            if evicted is not None:
+                got, victims = evicted
+                for one in victims:
+                    union[got].remove(one)
+                    del where[one]
+                    stage[one] = Stage.SPLIT  # it failed here once; do not send it back to ASSIGN
+                    heapq.heappush(queue, (-_priority(live.get(one), stage[one]), one))
+                where[value] = got
+                union.setdefault(got, []).append(value)
+                stage[value] = Stage.DONE
+                continue
+            stage[value] = Stage.SPLIT
+            heapq.heappush(queue, (-_priority(mine, Stage.SPLIT), value))
+            continue
+
+        # Splitting is a rewrite of the body, not a decision about this
+        # assignment, so it is the caller's -- RegAlloc.transform runs
+        # splitkit and asks again. Here it means "no register".
+        if mine.weight == float("inf"):
+            # It cannot be spilled and it cannot be placed. Saying so is
+            # the only honest answer: a reload with nowhere to go means the
+            # instruction it feeds needs more registers than exist.
+            raise Unplaced(f"value#{value} cannot be spilled and no register is free for it")
+        spilled.add(value)
+        cost += mine.weight
+        stage[value] = Stage.DONE
+
+    return Assignment(where, frozenset(spilled), cost, False, "greedy with eviction")
+
+
+def _values(body: lir.LirBody) -> list[int]:
+    """Every value that wants a register, dead definitions included."""
+    out: set[int] = set()
+    for block in body.blocks:
+        out.update(block.arrives)
+        for one in block.insns:
+            out.update(one.defines)
+            out.update(one.uses)
+    return sorted(out)
+
+
+def _priority(one: "ranges.Interval | None", at: Stage) -> float:
+    """Where this range sits in the queue. Larger first, as LLVM does.
+
+    "Assigning larger ranges first" is LLVM's own comment on it: a long
+    range has the most ways to conflict, so placing it while the register
+    file is empty is the placement most likely to succeed. A range that has
+    already failed once is boosted so it is retried before the queue moves
+    on to ranges it might evict.
+    """
+    if one is None:
+        return 0.0
+    return one.size + (1e6 if at is not Stage.ASSIGN else 0.0)
+
+
+def _free(one: "ranges.Interval", order: tuple, union: dict, live: dict) -> "Register_ | None":
+    """A register nothing live at the same time is already using."""
+    for register in order:
+        if not any(live[other].overlaps(one) for other in union.get(register, ()) if other in live):
+            return register
+    return None
+
+
+def _evict(one: "ranges.Interval", order: tuple, union: dict, live: dict):
+    """The cheapest register to take, and what has to move out of it.
+
+    Only where everything evicted is cheaper than what wants the register,
+    which is LLVM's rule and the whole of the cost model: a range is worth
+    a register in proportion to how often it is referenced and how briefly
+    it is live, and the expensive one wins.
+    """
+    best = None
+    for register in order:
+        victims = [other for other in union.get(register, ()) if other in live and live[other].overlaps(one)]
+        if not victims:
+            continue
+        bill = sum(live[other].weight for other in victims)
+        if bill >= one.weight:
+            continue
+        if best is None or bill < best[0]:
+            best = (bill, register, victims)
+    return None if best is None else (best[1], best[2])
 
 
 class RegAlloc(LIRTransform):
@@ -250,10 +347,12 @@ class RegAlloc(LIRTransform):
     name = "regalloc"
 
     # How many times a body may be spilled and re-allocated. Each round
-    # frees the registers the round before could not, and the corpus
-    # settles in one; the cap is for a body where a reload's own value
-    # cannot be placed either, which would otherwise loop.
-    ROUNDS = 4
+    # frees the registers the round before could not; the cap is for a body
+    # where a reload's own value cannot be placed either, which would
+    # otherwise loop. Four was enough while the allocator searched
+    # exhaustively; greedy-with-eviction spills more values and in smaller
+    # groups, so it wants more rounds to settle.
+    ROUNDS = 12
 
     def __init__(self, pinned: dict | None = None, frame=None) -> None:
         self.pinned = pinned or {}
@@ -274,8 +373,9 @@ class RegAlloc(LIRTransform):
 
         if self.frame is None:
             self.frame = frames.of(body)
+        reloads: frozenset[int] = frozenset()
         for _round in range(self.ROUNDS):
-            got = allocate(body, self.pinned)
+            got = allocate(body, self.pinned, reloads)
             if not got.spilled:
                 return applied(body, got)
             # Split before spilling, which is the order RegAllocGreedy
@@ -285,12 +385,12 @@ class RegAlloc(LIRTransform):
             # crossing range on principle cost 12,329 bytes over the
             # corpus and freed nothing.
             cut = splitkit.split(body, got.spilled)
-            if cut is not body and not allocate(cut, self.pinned).spilled:
+            if cut is not body and not allocate(cut, self.pinned, reloads).spilled:
                 body = cut
                 continue
-            body = spiller.spilled(body, got.spilled, self.frame)
-        got = allocate(body, self.pinned)
-        return applied(body, got)
+            body, made = spiller.spilled(body, got.spilled, self.frame)
+            reloads |= made
+        return applied(body, allocate(body, self.pinned, reloads))
 
 
 def applied(body: lir.LirBody, got: Assignment) -> lir.LirBody:

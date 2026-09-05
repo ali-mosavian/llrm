@@ -406,12 +406,37 @@ segment-relative cell through nothing, both with a two-byte displacement.
 
 ### Allocation
 
-Branch and bound over the values, most expensive first, pruning as soon as
-the spill bill reaches the best answer so far. Greedy colouring is optimal
-on a chordal graph with nothing pre-coloured, and neither half holds here:
-a barrier pins every register it touches and an absorbed divide pins eax
-and edx. The search has a node budget; where it runs out the result says so
-rather than claiming an optimum it did not prove.
+`RegAllocGreedy`. Largest range first, out of a priority queue -- "assigning
+larger ranges first" is LLVM's own reason, and it is that a long range has
+the most ways to conflict, so it wants placing while the file is empty. For
+each range:
+
+    assign   a register nothing live at the same time is using
+    evict    take one from ranges that cost less, and put those back on
+             the queue to find another
+    split    give up on one register for the whole range
+    spill    give up on a register
+
+A range that fails one stage comes back at the next, and `Stage` only moves
+forward, which is what makes the loop terminate. What is assigned to each
+register is kept as a list of intervals -- LLVM's `LiveIntervalUnion` --
+because the question asked a thousand times is "does this range overlap
+anything already in there".
+
+**Eviction replaced a branch-and-bound search.** That search was exactly
+optimal and exponential. It went for the reason LLVM reached greedy: the
+cost model is what decides, a cheap range moving aside for an expensive one
+is the whole of the decision, and a search that finds the same answer by
+trying everything has only proved the cost model right at a price that
+grows with the body.
+
+**A reload cannot be spilled again.** Its value is live across one
+instruction, so its weight -- references over live range -- is tiny, and
+under a cost model it never wins a register. Spilled again, it puts a load
+in front of a load: three values spilled every round and three
+instructions added every round, for ever, measured on fpcsex-p-g2-zd.
+`LiveInterval::markNotSpillable` is LLVM's name for the answer; here the
+spiller hands its reloads back and they weigh infinity.
 
 ### No fallbacks
 

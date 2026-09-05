@@ -269,9 +269,10 @@ def test_a_spilled_value_gets_a_slot_and_the_prologue_reserves_it() -> None:
     got = allocate.allocate(low, {})
     assert got.spilled, "nested spills; the allocator says otherwise"
     frame = frames.of(low)
-    after = spiller.spilled(low, got.spilled, frame)
+    after, reloads = spiller.spilled(low, got.spilled, frame)
     assert frame.size >= 2 * len(got.spilled), "the frame did not grow by a slot per spilled value"
-    assert not allocate.allocate(after, {}).spilled, "spilling freed no register"
+    assert reloads, "spilling made no reload values"
+    assert not allocate.allocate(after, {}, reloads).spilled, "spilling freed no register"
 
     with_frame = prologue.reserved(after, frame, _found.calls)
     assert not verify.verify(with_frame), verify.verify(with_frame)[:2]
@@ -318,3 +319,77 @@ def test_an_inserted_instruction_carries_no_fixup() -> None:
                 if op.covers is not None and op.covers[0] == op.covers[1]:
                     assert op.node is None, f"{op.at:#06x} was inserted and still has a node"
                     assert op.id is None, f"{op.at:#06x} was inserted and still has an id"
+
+
+def test_a_reload_cannot_be_spilled_again() -> None:
+    """Otherwise nothing settles.
+
+    A reload's value is live across one instruction, so its weight is
+    tiny -- references over live range, and the range is one slot. Under a
+    cost model it therefore never wins a register and is spilled again,
+    which puts a load in front of a load: three values spilled every round
+    and three instructions added every round, for ever. LLVM says it as
+    `LiveInterval::markNotSpillable`; here the reloads are handed back to
+    `allocate` and weigh infinity.
+    """
+    from qbopt import frame as frames
+    from qbopt import spiller
+
+    _found, _blocks, bodies = _raised("fpcsex-p-g2-zd")
+    ran = False
+    for name, body in bodies:
+        low = lower.lowered(name, body)
+        for phase in flow.machine(flow._pinned(body)):
+            if phase.name == "regalloc":
+                break
+            low = phase.transform(low)
+        got = allocate.allocate(low, {})
+        if not got.spilled:
+            continue
+        ran = True
+        after, reloads = spiller.spilled(low, got.spilled, frames.of(low))
+        assert reloads, "spilling made no reload values"
+        again = allocate.allocate(after, {}, reloads)
+        assert not (again.spilled & reloads), f"a reload was spilled: {sorted(again.spilled & reloads)}"
+    assert ran, "fpcsex spills; the allocator says otherwise"
+
+
+def test_the_allocator_settles_on_every_program() -> None:
+    """The phase's own loop: assign, evict, split, spill, and again.
+
+    Spilling frees registers for the values that failed and takes them from
+    nobody, so each round can only reduce the pressure -- but only if the
+    reloads keep theirs, which is the test above.
+    """
+    for path in CORPUS:
+        found = module.of(omf.parse(path.read_bytes()))
+        blocks = split.partition(found, code_map(found))
+        for name, body in mir.bodies(found, blocks):
+            low = lower.lowered(name, body)
+            for phase in flow.machine(flow._pinned(body), None, found.calls):
+                low = phase.transform(low)
+
+
+def test_the_allocator_evicts_rather_than_spilling_a_costlier_range() -> None:
+    """RegAllocGreedy's whole decision: a cheap range moves aside.
+
+    The exhaustive search this replaced found the same answers by trying
+    everything, which only proved the cost model right at a price that
+    grows with the body.
+    """
+    from qbopt import target
+
+    for path in CORPUS[:16]:
+        found = module.of(omf.parse(path.read_bytes()))
+        blocks = split.partition(found, code_map(found))
+        for name, body in mir.bodies(found, blocks):
+            low = lower.lowered(name, body)
+            got = allocate.allocate(low, {})
+            # Nothing is in two places, and nothing is somewhere it may not be.
+            confined = allocate.classes(low)
+            for value, register in got.where.items():
+                assert register in target.AVAILABLE, f"value#{value} is in {register}"
+                if value in confined:
+                    assert register in target.order(confined[value]), (
+                        f"value#{value} addresses memory and is in {register}"
+                    )

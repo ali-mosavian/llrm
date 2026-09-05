@@ -336,7 +336,15 @@ def assemble(
             lengths.append(op.hi - op.lo)
             continue
         what = _semantics(op)
-        emulated = not native_fpu and found.code[op.at : op.at + 1] == bytes([0xCD])
+        # `op.node is not None` because this reads the original bytes at
+        # `op.at`, and an inserted instruction has none: it carries the
+        # address of the one it stands beside. A `sub sp,4` the prologue
+        # put at an emulated x87 site's address was read as that site and
+        # carried verbatim -- zero bytes in the length pass, three in the
+        # emit pass, and layout said it changed length between them.
+        emulated = (
+            not native_fpu and op.node is not None and found.code[op.at : op.at + 1] == bytes([0xCD])
+        )
         folded = found.absorbed.get(op.id) if op.id is not None else None
         if folded is not None:
             made = _absorbed(*folded)
@@ -435,7 +443,12 @@ def assemble(
         # native_fpu the site is selected from its own semantics instead,
         # which is the same x87 instruction the emulator stands for and is
         # what M5 means by expressing fpu.py's pass over MIR.
-        if not native_fpu and found.code[op.at : op.at + 1] == bytes([0xCD]) and (length := _length_of(op)):
+        if (
+            not native_fpu
+            and op.node is not None  # an inserted instruction has no original bytes
+            and found.code[op.at : op.at + 1] == bytes([0xCD])
+            and (length := _length_of(op))
+        ):
             # Copied, so any fixup inside it keeps its place within the
             # instruction and only the instruction itself has moved.
             field = _field_in(found, op, fields)

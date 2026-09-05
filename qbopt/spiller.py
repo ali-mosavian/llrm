@@ -35,12 +35,23 @@ class Spiller(LIRTransform):
         return spilled(body, self.spilled, self.frame)
 
 
-def spilled(body: lir.LirBody, values: "frozenset[int]", frame: "frames.Frame | None" = None) -> lir.LirBody:
-    """`body` with each of `values` living in a frame slot."""
+def spilled(
+    body: lir.LirBody, values: "frozenset[int]", frame: "frames.Frame | None" = None
+) -> "tuple[lir.LirBody, frozenset[int]]":
+    """`body` with each of `values` living in a frame slot, and the reloads.
+
+    The second half matters as much as the first. A reload's value is live
+    across one instruction and *must* have a register: spilling it again
+    puts a load in front of a load and the allocator never settles -- three
+    values spilled every round, three instructions added every round, for
+    ever. LLVM says so as `LiveInterval::markNotSpillable`, and the caller
+    says it here by handing these back to `allocate` as unspillable.
+    """
     if not values:
-        return body
+        return body, frozenset()
     frame = frame if frame is not None else frames.of(body)
     fresh = _next_value(body)
+    made: set[int] = set()
 
     blocks = []
     for block in body.blocks:
@@ -62,8 +73,9 @@ def spilled(body: lir.LirBody, values: "frozenset[int]", frame: "frames.Frame | 
             insns += before
             insns.append(_renamed(one, rename) if rename else one)
             insns += after
+            made.update(rename.values())
         blocks.append(replace(block, insns=tuple(insns)))
-    return replace(body, blocks=tuple(blocks))
+    return replace(body, blocks=tuple(blocks)), frozenset(made)
 
 
 def _width(one: lir.Insn, value: int) -> int:
