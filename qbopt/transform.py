@@ -136,6 +136,100 @@ def without_redundant_loads(body: MirBody, dgroup: frozenset[int], calls: dict[i
     )
 
 
+def placed(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
+    """Anything standing inside a call's argument run, moved ahead of it.
+
+    BC writes a call's arguments as a run of pushes and then the call, and
+    absorbing one deletes that whole region -- push through call, which is
+    what makes absorption smaller than what BC wrote. So an instruction
+    standing in the middle of the run is what stops the call being absorbed
+    at all: taking it out with the region would delete real work.
+
+    lngmix is the shape. `s = s + v \\ 7 + v MOD 7` computes the quotient,
+    stores its two halves, and then pushes the same operands again for the
+    remainder -- and those two stores sit between the second run's first
+    push and its call. The site is refused, the loop keeps a runtime call,
+    and the hoist will not touch a loop that holds one.
+
+    The stores do not depend on the run: they hold the *previous* divide's
+    results, so they can go before it. Then the run is contiguous, the site
+    absorbs on the next round -- rewrite.py iterates to a fixed point -- and
+    both divides become one operation over the same operands, which is one
+    key twice and what cse is waiting for.
+
+    Moved ahead rather than behind. An argument's own value is read where
+    the push stands, so nothing may pass it in the other direction.
+    """
+    out = []
+    changed = False
+    for block in body.blocks:
+        ops = list(block.ops)
+        for index in range(len(ops) - 1, -1, -1):
+            if ops[index].kind is not mir.Kind.CALL:
+                continue
+            run = _argument_run(ops, index, dgroup, calls)
+            if run is None:
+                continue
+            first, standing = run
+            kept = [one for at, one in enumerate(ops) if at not in standing]
+            ahead = [ops[at] for at in sorted(standing)]
+            ops = kept[:first] + ahead + kept[first:]
+            changed = True
+        out.append(replace(block, ops=tuple(ops)))
+    return replace(body, blocks=tuple(out)) if changed else body
+
+
+def _argument_run(ops: list[Op], call: int, dgroup: frozenset[int], calls: dict[int, str]):
+    """(where the run starts, which of its operations do not belong to it).
+
+    Walked back from the call, taking pushes and anything that may pass
+    them, and stopping at the first thing that may not. None where no push
+    was reached, or where nothing stands among them.
+
+    What stands is usually *after* the last push rather than between two of
+    them -- BC computes, pushes for the next call, then stores what it
+    computed -- so this cannot wait for a push before it starts collecting.
+    """
+    first, standing, pushes = call, set(), 0
+    at = call - 1
+    while at >= 0:
+        one = ops[at]
+        if one.kind is mir.Kind.ARG:
+            pushes += 1
+            first, at = at, at - 1
+            continue
+        if not _may_pass(one, [ops[x] for x in range(at + 1, call)], dgroup, calls):
+            break
+        standing.add(at)
+        first, at = at, at - 1
+    if not pushes or not standing:
+        return None
+    # Only what stands among the pushes. Anything collected before the
+    # first one is not in the run and has no reason to move.
+    lowest = min(x for x in range(first, call) if ops[x].kind is mir.Kind.ARG)
+    standing = {x for x in standing if x > lowest}
+    return (lowest, standing) if standing else None
+
+
+def _may_pass(one: Op, run: list[Op], dgroup: frozenset[int], calls: dict[int, str]) -> bool:
+    """Whether this operation can move ahead of the run standing after it."""
+    if one.barrier or one.kind in _OBSERVED or one.at in calls:
+        return False
+    made = {value for other in run for value in other.defines}
+    if any(use in made for use in one.uses):
+        return False
+    wrote = {value for value in one.defines}
+    if any(use in wrote for other in run for use in other.uses):
+        return False
+    for ref in one.loads + one.stores:
+        for other in run:
+            for theirs in other.loads + other.stores:
+                if mir.overlapping(ref, theirs, dgroup):
+                    return False
+    return True
+
+
+
 def without_dead_stores(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
     """Every store overwritten before anything read it, removed."""
     gone = set(avail.dead_stores(body, dgroup, calls))
@@ -1361,6 +1455,16 @@ class DropStores(MIRTransform):
         return without_dead_stores(body, self.where.dgroup, self.where.named)
 
 
+class Place(MIRTransform):
+    name = "place"
+
+    def __init__(self, where: Where) -> None:
+        self.where = where
+
+    def transform(self, body: MirBody) -> MirBody:
+        return placed(body, self.where.dgroup, self.where.named)
+
+
 def pipeline(where: Where, **wanted) -> list[MIRTransform]:
     """The passes, in order, that `wanted` leaves on.
 
@@ -1376,6 +1480,7 @@ def pipeline(where: Where, **wanted) -> list[MIRTransform]:
         Forward(where),
         DropLoads(where),
         DropStores(where),
+        Place(where),
     ]
     return [one for one in every if wanted.get(one.name, True)]
 

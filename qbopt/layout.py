@@ -651,16 +651,27 @@ def rebuild(
     held = _held(assignment)
     bodies = [(name, _grounded(body, held)) for name, body in bodies]
 
-    ops = sorted(
-        (op for _, body in bodies for op in _ordered(body)),
-        key=lambda one: one.at,
-    )
+    # Bodies interleave by address -- a procedure sits inside the main
+    # body's span -- so this has to sort globally, and an op's address is
+    # the only key that places it among another body's. But sorting on the
+    # address alone silently undid every transform that moves an op:
+    # `place` took two stores out of a call's push run, the list came back
+    # in the new order, and this put them straight back between the last
+    # push and the call. A pass returning MIR whose order the backend
+    # ignores is the split broken from the other side -- docs/split.md.
+    #
+    # So the key is the address an op has to sort *at*, not the address it
+    # came from: the lowest address anything after it in its own list still
+    # holds. An op nothing moved is its own address. One moved earlier
+    # takes the address of what it now stands before, and its list position
+    # breaks the tie -- which is what puts it there and not after.
+    ops = _keyed(bodies)
     if not ops:
         return "no bodies to rebuild"
     if any(_length_of(one) is None for one in ops):
         return f"{ops[0].at:#06x}: an op with no instruction behind it"
 
-    lowest = ops[0].at
+    lowest = min(one.at for one in ops)
     highest = max((_stands_for(one) or (one.at, one.at))[1] for one in ops)
     inside = [Table(lo, hi) for lo, hi in tables if lowest <= lo and hi <= highest]
 
@@ -719,9 +730,38 @@ def rebuild(
     origin = {}
     for _name, body in bodies:
         origin.update(body.origin)
-    return _emitted(
-        sorted([*ops, *inside], key=lambda one: one.at), lowest, found, fields, native_fpu, assignment, origin
-    )
+    return _emitted(_interleaved(ops, inside), lowest, found, fields, native_fpu, assignment, origin)
+
+
+def _keyed(bodies: list) -> list:
+    """Every body's ops, in the order the addresses and the lists agree on.
+
+    Walked backwards so each op learns the lowest address still ahead of
+    it. That is its own address wherever nothing moved, so this is the old
+    address sort on every program no pass reorders.
+    """
+    keyed = []
+    for _name, body in bodies:
+        mine = _ordered(body)
+        anchor = mine[-1].at if mine else 0
+        found = []
+        for index in range(len(mine) - 1, -1, -1):
+            anchor = min(anchor, mine[index].at)
+            found.append(((anchor, index), mine[index]))
+        keyed += reversed(found)
+    return [op for _key, op in sorted(keyed, key=lambda one: one[0])]
+
+
+def _interleaved(ops: list, inside: list) -> list:
+    """`ops` in their own order, with each carried run back where it sat.
+
+    A table or a padding run is not in any body and has only an address to
+    place it by, so it goes before the first op that stood after it.
+    """
+    rank = {id(one): (index, 1) for index, one in enumerate(ops)}
+    for one in inside:
+        rank[id(one)] = (sum(1 for op in ops if op.at < one.lo), 0)
+    return sorted([*ops, *inside], key=lambda one: rank[id(one)])
 
 
 def _emitted(

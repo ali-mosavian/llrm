@@ -141,3 +141,27 @@ That is a MIR pass over values: an operation whose operands nothing in the
 run defines may move ahead of the run. It is `place` -- the pass retired
 earlier for buying nothing and asking `origin` which operations touched the
 same register -- rebuilt to answer the question that has a use.
+
+## Done: both divides fold
+
+`place` moves an operation out of a call's push run when nothing in the run
+defines what it reads and neither touches the other's memory. lngmix's
+second run held the previous divide's two result stores; they go ahead of
+it, `match()` finds a contiguous site on the next round, and the raise
+absorbs it.
+
+    round 0  952b   B$DVI4 pushed, B$RMI4 consume
+    round 1  913b   B$RMI4 pushed
+    round 2  909b   none
+
+The pass alone did nothing. `layout.rebuild` sorted its op list on `op.at`
+before emitting, so a reordered list came back in the original order and
+every transform that moves an op was silently undone -- which is why the
+old `place` "bought nothing measured". It now sorts on the lowest address
+still ahead of an op in its own list, breaking ties by list position: the
+old address sort exactly, on every program no pass reorders, and the new
+order where one does. Bodies interleave by address -- a procedure sits
+inside the main body's span -- so the sort still has to be global.
+
+Both divides are now one operation over the same two operands. That is the
+one key twice cse was waiting for.

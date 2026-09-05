@@ -842,3 +842,4 @@ def test_an_operation_may_carry_a_fixup_for_each_instruction_it_stands_for() -> 
 
     silent = select.Emitted(b"\x99")
     assert silent.places == () and silent.relocated_at is None
+

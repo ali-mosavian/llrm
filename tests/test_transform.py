@@ -855,3 +855,50 @@ def test_what_leaves_a_loop_is_its_own_variable_and_keeps_its_origin() -> None:
                     f"{phi.result} joins a hoisted value to something else"
                 )
     assert seen, "nothing left a loop, so this proves nothing"
+
+
+def test_place_takes_a_store_out_of_a_push_run():
+    """lngmix's second divide never folded: two stores stood in its run.
+
+    `match()` only finds a call whose pushes are contiguous, so the site
+    arrived as a consume site, the raise refused it, and the loop kept a
+    runtime call. The stores hold the *previous* divide's results and do
+    not depend on the run, so they belong ahead of it.
+    """
+    from pathlib import Path
+
+    from qbopt import blocks as split, mir, module, omf, transform
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()))
+    blocks = split.partition(found, code_map(found))
+    (_who, body), = mir.bodies(found, blocks)
+    done = transform.placed(body, found.dgroup, found.calls)
+
+    run = next(b for b in done.blocks if any(op.kind is mir.Kind.CALL for op in b.ops))
+    kinds = [op.kind for op in run.ops]
+    call = kinds.index(mir.Kind.CALL)
+    first = min(i for i, k in enumerate(kinds) if k is mir.Kind.ARG)
+    assert all(k is mir.Kind.ARG for k in kinds[first:call]), (
+        f"a call's run still holds {[k.name for k in kinds[first:call] if k is not mir.Kind.ARG]}"
+    )
+
+
+def test_both_lngmix_divides_absorb():
+    """The whole point of the above: 952 -> 909 bytes, no runtime divide.
+
+    Two rounds, because the site the reorder frees is only seen when the
+    next round re-raises what the last one wrote.
+    """
+    from pathlib import Path
+
+    from qbopt import blocks as split, calls, module, omf, wholeseg
+    from qbopt.blocks import code_map
+
+    data = Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()
+    for _round in range(3):
+        data, _why = wholeseg.rebuilt(data)
+    found = module.of(omf.parse(data))
+    blocks = split.partition(found, code_map(found))
+    reached = [insn for block in blocks for insn in block.insns]
+    assert calls.sites(found, reached, blocks) == []
