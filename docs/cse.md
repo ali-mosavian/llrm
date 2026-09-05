@@ -104,3 +104,40 @@ push immediately, contiguously before one.
 The information is there: `site.consume` holds those four push
 instructions and `calls.static_at` is what classifies one. Naming them is
 the next step, and it is what makes both divides one key.
+
+## Naming the pushes is not the blocker
+
+Tried it: classify a `consume` frame's pushes with the same rules
+`one_operand` uses, and check that nothing between the first push and the
+call writes a byte an operand reads. It works -- both of lngmix's sites
+come back named, its loop holds no call at all, and the two operations are
+
+```
+  0x004e  div  [seg:5+0x6]:4, 7
+  0x005f  rem  [seg:5+0x6]:4, 7
+```
+
+which is one key twice, exactly what cse wants.
+
+**And the programs are wrong on eleven of twelve configurations.**
+Absorption *deletes* the region from the first push to the call -- that is
+what makes it smaller than what BC wrote, four bytes of stack traffic per
+operand going with it -- so anything else in that region goes too. What
+sits in lngmix's is the previous divide's result stores.
+
+Adding the region-is-clean test back makes it safe and makes it useless:
+1,037 named and 174 consume, the same two numbers as before, because every
+site whose region holds only its own pushes is one `match()` already finds.
+
+## So the step is to move the stores out
+
+They do not depend on the pushes -- they store the *previous* divide's
+results -- so they can go before them, and then the region is clean and
+`match()` finds the site on the next round. `rewrite` already iterates to a
+fixed point, so one pass that sinks an independent operation out of a push
+run is enough.
+
+That is a MIR pass over values: an operation whose operands nothing in the
+run defines may move ahead of the run. It is `place` -- the pass retired
+earlier for buying nothing and asking `origin` which operations touched the
+same register -- rebuilt to answer the question that has a use.
