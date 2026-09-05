@@ -198,3 +198,58 @@ def order(where: "frozenset[Register_] | None") -> tuple[Register_, ...]:
         return AVAILABLE
     wanted = {ir.ROOT.get(one, one) for one in where}
     return tuple(one for one in AVAILABLE if one in wanted)
+
+
+# The segment registers. Operands, not allocatable: `mov ax,ds` names one
+# and nothing may be placed in one. docs/roadmap.md wants them to become a
+# class the allocator works in, which is a change to the allocator; naming
+# them here is what lets everything else stop treating them as scenery.
+SEGMENTS: frozenset[Register_] = frozenset(
+    {Register.ES, Register.CS, Register.SS, Register.DS, Register.FS, Register.GS}
+)
+
+
+def known(register: Register_) -> bool:
+    """Whether this is a register this target describes at all."""
+    return register in WIDTHS or register in SEGMENTS
+
+
+def width_of(register: Register_) -> int | None:
+    """How wide this register is, or None where the target does not say."""
+    return 2 if register in SEGMENTS else WIDTHS.get(register)
+
+
+# ------------------------------------------------------------ subregisters
+
+# Which bytes of its root each register is, as a mask. LLVM calls these
+# lane masks and composes them through subregister indices; there are four
+# lanes here and they can be written down.
+#
+# `ir.ROOT` folds every name to its 32-bit parent, which answers "same
+# register file entry" and not "same bytes" -- and al and ah are the case
+# where those differ. Two operations on opposite halves of one long
+# compared equal on the value they named, and nots printed the right low
+# word of NOTOR and the wrong high one. LANES is the distinction.
+LANES: dict[Register_, int] = {}
+for _row, _mask in ((WIDE, 0b1111), (NARROW, 0b0011)):
+    for _one in _row:
+        LANES[_one] = _mask
+for _one in BYTE:
+    LANES[_one] = 0b0010 if _one in {Register.AH, Register.CH, Register.DH, Register.BH} else 0b0001
+
+
+def lanes(register: Register_) -> int:
+    """Which bytes of its root this register names."""
+    return LANES.get(register, 0b1111)
+
+
+def overlaps(one: Register_, other: Register_) -> bool:
+    """Whether writing one can be seen by reading the other.
+
+    The same root is not enough: al and ah share eax and share no byte, so
+    a write to one is invisible to the other. LLVM asks this through lane
+    masks; this is the same question with four lanes.
+    """
+    if ir.ROOT.get(one, one) is not ir.ROOT.get(other, other):
+        return False
+    return bool(lanes(one) & lanes(other))

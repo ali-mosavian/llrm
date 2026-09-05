@@ -18,8 +18,11 @@ The machine half, against LLVM's own order:
     PHIElimination      phielim.py    out of SSA, before anything is placed
     TwoAddressInstr     twoaddr.py    x86 writes one of its own sources
     RegisterCoalescer   coalesce.py   the copies the two above just made
-    RegAlloc            allocate.py   assign, priced by intervals.py
+    SplitKit            splitkit.py   cut a range at a loop rather than spill it
+    RegAlloc            allocate.py   assign; spill and assign again
+    InlineSpiller       spiller.py    inside RegAlloc's own loop
     VirtRegRewriter     allocate.py   virtual -> physical
+    PrologEpilogInsert  prologue.py   reserve what the spiller took
 
 `intervals.py`, `liveness.py` and `loops.py` are analyses, not phases: they
 answer questions and change nothing, which is why nothing here lists them.
@@ -28,25 +31,30 @@ answer questions and change nothing, which is why nothing here lists them.
 from qbopt import allocate
 from qbopt import blocks as split
 from qbopt import coalesce
+from qbopt import frame as frames
 from qbopt import lower
 from qbopt import mir
 from qbopt import module
 from qbopt import objwrite
 from qbopt import omf
 from qbopt import phielim
+from qbopt import prologue
+from qbopt import splitkit
 from qbopt import transform
 from qbopt import twoaddr
 from qbopt.blocks import code_map
 from qbopt.passes import LIRTransform
 
 
-def machine(pinned: dict) -> list[LIRTransform]:
+def machine(pinned: dict, frame=None, calls: dict | None = None) -> list[LIRTransform]:
     """Every phase between lowering and emission, in order."""
     return [
         phielim.PhiElimination(),
         twoaddr.TwoAddress(),
         coalesce.Coalescer(),
-        allocate.RegAlloc(pinned),
+        splitkit.Splitter(),
+        allocate.RegAlloc(pinned, frame),
+        prologue.Prologue(frame, calls) if frame is not None else prologue.Prologue(frames.Frame(0), calls),
     ]
 
 
@@ -69,7 +77,8 @@ def run(data: bytes, native_fpu: bool = False, optimise: bool = True) -> tuple[b
             body = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
             body = transform.widened(body)
         low = lower.lowered(name, body)
-        for phase in machine(_pinned(body)):
+        frame = frames.of(low)
+        for phase in machine(_pinned(body), frame, found.calls):
             low = phase.transform(low)
         done.append(low)
 

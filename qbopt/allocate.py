@@ -249,11 +249,37 @@ class RegAlloc(LIRTransform):
 
     name = "regalloc"
 
-    def __init__(self, pinned: dict | None = None) -> None:
+    # How many times a body may be spilled and re-allocated. Each round
+    # frees the registers the round before could not, and the corpus
+    # settles in one; the cap is for a body where a reload's own value
+    # cannot be placed either, which would otherwise loop.
+    ROUNDS = 4
+
+    def __init__(self, pinned: dict | None = None, frame=None) -> None:
         self.pinned = pinned or {}
+        self.frame = frame
 
     def transform(self, body: lir.LirBody) -> lir.LirBody:
-        return applied(body, allocate(body, self.pinned))
+        """Assign; where that spills, make the spill real and assign again.
+
+        LLVM's `RegAllocBase::allocatePhysRegs` is this loop: a value it
+        cannot place is spilled, the spiller puts the new short intervals
+        back, and the queue is worked again. Splitting comes first there --
+        `splitkit.py` here -- and spilling is what is left when no split
+        helps.
+        """
+        from qbopt import frame as frames
+        from qbopt import spiller
+
+        if self.frame is None:
+            self.frame = frames.of(body)
+        for _round in range(self.ROUNDS):
+            got = allocate(body, self.pinned)
+            if not got.spilled:
+                return applied(body, got)
+            body = spiller.spilled(body, got.spilled, self.frame)
+        got = allocate(body, self.pinned)
+        return applied(body, got)
 
 
 def applied(body: lir.LirBody, got: Assignment) -> lir.LirBody:

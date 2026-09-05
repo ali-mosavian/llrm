@@ -288,7 +288,54 @@ The machine phases, against LLVM's own:
 | `phielim.PhiElimination` | `PHIElimination` |
 | `twoaddr.TwoAddress` | `TwoAddressInstructionPass` |
 | `coalesce.Coalescer` | `RegisterCoalescer` |
+| `splitkit.Splitter` | `SplitKit` |
 | `allocate.RegAlloc` | `RegAllocBase` + `VirtRegRewriter` |
+| `spiller.Spiller` | `InlineSpiller` (inside RegAlloc's loop) |
+| `prologue.Prologue` | `PrologEpilogInserter` |
+
+And beside them: `verify.py` is `MachineVerifier`, `frame.py` is
+`MachineFrameInfo`, `target.py` is `TargetRegisterInfo` + `TargetInstrInfo`.
+
+### Spilling, and the frame it needs
+
+`RegAlloc.transform` is LLVM's `RegAllocBase::allocatePhysRegs` loop:
+assign, and where that spills, make the spill real and assign again. The
+corpus settles in one round.
+
+`frame.py` hands out a slot per spilled value, below the deepest
+displacement BC's own code already reaches. `spiller.py` turns every
+definition into a store and every use into a load out of that slot, each
+through a fresh value that lives across one instruction -- which is what
+makes the spilled value's range vanish and frees the register it wanted.
+
+`prologue.py` is the part BC makes awkward. **Its bodies have no prologue
+of their own to grow**: the runtime sets the frame up before the body runs,
+so a spill slot is not in the frame BC declared and taking it means
+lowering sp ourselves. `sub sp,N` at entry, `add sp,N` before every return
+-- and a body with no return is refused, unless it calls `B$CENP`, the
+runtime's exit, which never comes back. Every main body ends there, which
+is the difference between spilling being available in one and not.
+
+Asked of the whole body rather than of its last instruction: BC pads the
+end of a code segment with zeros, `00 00` decodes as `add [bx+si],al`, and
+reachability walks in -- so the last instruction is routinely not a
+terminator at all.
+
+### Splitting
+
+`splitkit.py` makes the one cut that pays on this corpus: a value defined
+before a loop, read after it, and touched nowhere inside. Its range crosses
+the loop and holds a register through every iteration; cut into "before"
+and "after", the loop body sees neither. LLVM prices every candidate cut;
+this makes the one whose shape `docs/hoist-blocker.md`'s programs wanted.
+
+### Subregisters
+
+`target.LANES` says which bytes of its root each register is -- LLVM's lane
+masks, with four lanes, which can simply be written down. `ir.ROOT` folds
+every name to its 32-bit parent, which answers "same register file entry"
+and not "same bytes", and al and ah are where those differ.
+`target.overlaps()` is the exact question.
 
 Two pass bases rather than one generic over the form: `MIRTransform` and
 `LIRTransform`. A MIR pass may name no register and a LIR pass may name
@@ -377,24 +424,25 @@ nothing reported.
 
 ### Where it stands
 
-**250 of 487 objects write, and every refusal is `Spilled`.** That is the
-finding rather than a defect: before phi elimination the corpus spilled
-nothing, because two values meeting at a phi hide their interference --
-which is exactly the bug `docs/hoist-blocker.md` spent a week on. Out of
-SSA the pressure is visible, and six registers are not enough for it.
+**468 of 487 objects write.** The nineteen that do not are one defect, not
+a missing phase: a call whose fixup has no field to sit in, because the
+spiller renamed what it read and select then picked a form without a
+displacement.
 
-**The phases LLVM has and this does not**, in the order they are now worth
-writing:
+**What LLVM has and this still does not:**
 
-- `InlineSpiller` -- rewrite a spilled value's definitions into stores and
-  its uses into loads. Nothing else unblocks as much.
-- `PrologEpilogInserter` -- grow the frame to hold the slots the spiller
-  needs. BC's own frame has no spare room, so this changes the prologue.
-- `SplitKit` and `RegAllocGreedy`'s eviction -- split a live range rather
-  than spilling the whole of it. Three of the four remaining xfails are
-  waiting on exactly this.
-- `BranchFolding`, `MachineCopyPropagation`, `MachineLICM` -- the late
-  optimisations, cheap once the above exist.
+- **The MC layer is not split.** `select.py` is `MCCodeEmitter` and
+  `relocate.py` is `MCObjectWriter`, both separate already; `layout.py` is
+  `MCAssembler` *and* the byte-preservation verifier in one module, where
+  LLVM has fragments and relaxation on one side and nothing like the
+  verifier at all -- it is ours, and it belongs beside `verify.py`.
+- `RegAllocGreedy`'s eviction and its split candidates. `splitkit.py`
+  makes one cut; LLVM prices many.
+- `BranchFolding`, `MachineCopyPropagation`, `MachineLICM`,
+  `DeadMachineInstructionElim`, `MachineCSE`, `PeepholeOptimizer` -- the
+  late optimisations, cheap now that the frame exists.
+- Register classes beyond addressing: the segment registers are named in
+  `target.py` and are still not a class the allocator works in.
 
 Not shipped. `rewrite.py` still calls `wholeseg.rebuilt`, and nothing has
 run this output. `tools/flow.py` runs it.
