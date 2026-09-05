@@ -357,6 +357,85 @@ def _says(op, cells: Cells, calls: dict, verbose: bool) -> str:
     return f"{into} := {kind} {', '.join(args)}".rstrip() + said
 
 
+def _machine(bodies, found, view) -> None:
+    """Each machine phase, one file each, the way the MIR passes get one.
+
+    Rule 4 asks for a file per stage so that `diff` between two adjacent
+    ones is the whole answer, and the machine half has five phases now:
+    phi elimination inserts copies, the two-address fixup inserts more,
+    coalescing removes what it can prove unnecessary, the allocator seats
+    every value and spills what it cannot, and the prologue reserves what
+    the spiller took. Watching only the ends of that is watching none of it.
+    """
+    from qbopt import flow
+    from qbopt import lower as lowering
+
+    low = [(name, lowering.lowered(name, body)) for name, body in bodies]
+    number = 20
+    with view(number, "lir", "lowered"):
+        print("=== lowered")
+        for name, one in low:
+            _lir_body(name, one)
+    # A frame per body, the way flow.run builds one: the allocator hands
+    # its spills to it and the prologue reserves what it took, so a shared
+    # empty one would show the allocator spilling into slots the prologue
+    # never reserved.
+    from qbopt import frame as frames
+
+    frame = frames.of(low[0][1]) if low else frames.Frame(0)
+    for phase in flow.machine({}, frame, found.calls if found is not None else {}):
+        number += 1
+        done = []
+        refused = None
+        for name, one in low:
+            try:
+                done.append((name, phase.transform(one)))
+            except Exception as error:  # noqa: BLE001 -- the dump reports, it does not raise
+                refused = f"{name}: {type(error).__name__}: {error}"
+                done.append((name, one))
+        low = done
+        with view(number, "lir", phase.name):
+            print(f"=== {phase.name}")
+            if refused is not None:
+                print(f"  refused -- {refused}")
+            for name, one in low:
+                _lir_body(name, one)
+
+
+def _lir_body(name: str, body) -> None:
+    """One lowered body: its instructions, and what each operand is now."""
+    print(f"  {name}: {len(body.insns)} instructions")
+    for block in body.blocks:
+        print(f"    block {block.at:#06x}")
+        for phi in block.phis:
+            arms = " ".join(f"{at:#06x}:v{value}" for at, value in phi.incoming)
+            print(f"      v{phi.result} := phi {arms}")
+        for one in block.insns:
+            what = one.what
+            if what is None:
+                print(f"      {one.at:#06x}  (carried, {one.covers})")
+                continue
+            dests = ", ".join(_operand(x) for x in what.dests)
+            sources = ", ".join(_operand(x) for x in what.sources)
+            said = f"{dests} := " if dests else ""
+            print(f"      {one.at:#06x}  {said}{what.name} {sources}".rstrip())
+
+
+def _operand(one) -> str:
+    """One machine operand, short enough to diff."""
+    from qbopt import ir
+
+    if isinstance(one, ir.Reg):
+        return _name_of(one.register)
+    if isinstance(one, ir.Held):
+        return f"v{one.value}"
+    if isinstance(one, ir.Imm):
+        return f"{one.value:#x}" if one.value >= 0 else str(one.value)
+    if isinstance(one, ir.Mem):
+        return f"[{one.addr}]"
+    return str(one)
+
+
 def _lir(bodies) -> None:
     """The same operations after lowering, and where the allocator put them.
 
@@ -485,11 +564,9 @@ def main(argv: list[str] | None = None) -> int:
         """The machine views, once: this is where lowering happens."""
         if args.dump is None and not args.asm:
             return
-        _, bodies = _bodies(out)
-        with view(number, "lir", "lowered"):
-            print(f"=== lowered ({why}, {len(out)} bytes)")
-            _lir(bodies)
-        with view(number, "asm", "emitted"):
+        after, bodies = _bodies(out)
+        _machine(bodies, after, view)
+        with view(26, "asm", "emitted"):
             print(f"=== emitted ({why}, {len(out)} bytes)")
             _asm(out)
 
