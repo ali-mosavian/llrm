@@ -468,3 +468,31 @@ that output, so no correctness is claimed.
 
 Not shipped. `rewrite.py` still calls `wholeseg.rebuilt`, and nothing has
 run this output. `tools/flow.py` runs it.
+
+## The machine arm is gone
+
+It patched BC's own bytes in place: an idiom matched by address and
+adjacency, rewritten where it stood. Measured over `fixtures/omf` before it
+went:
+
+    machine arm alone   682,978    -26,252
+    MIR arm alone       642,807    -66,423
+    both                641,542    -67,688
+
+So it was worth **1,265 bytes on top of the MIR arm** -- 1.9% of the gain --
+for 3,256 lines whose every matcher is an address and an adjacency, which
+is exactly what stops any pass above from moving anything. The suite links
+and runs on the MIR arm alone.
+
+`forward.py`, `memory.py`, `registers.py` and `price.py` went with it, along
+with `rewrite.py`'s region planner. `calls.py` stays: `mir.py` asks it what
+a runtime call *is* at the raise, and `select.py` what an absorbed one
+becomes. `lift.py` stays for `ir.py` and `calls.py`.
+
+`--take`, `--max-regions` and the region report bisected the arm by region
+index. What replaces them is `transform.applied(only=...)`, which runs one
+MIR pass -- a better question anyway: a pass has a name, a region had a
+number.
+
+**A long divide now leaves its loop.** That xfail passed the moment the arm
+was out: it had been holding the loop in place.

@@ -33,11 +33,8 @@ from qbopt import loops
 from qbopt import blocks
 from qbopt import consts
 from qbopt import extent
-from qbopt import memory
 from qbopt import module
-from qbopt import forward
 from qbopt import regalloc
-from qbopt import registers as regs
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "build" / "dump"

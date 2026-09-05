@@ -18,7 +18,7 @@ from qbopt.declen import Stands
 from qbopt.declen import BITNESS
 from qbopt.declen import EMULATED
 from qbopt.declen import INTERRUPT
-from qbopt.rewrite import instructions
+from qbopt.blocks import instructions
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 WAIT = 0x9B

@@ -16,7 +16,6 @@ from qbopt import ir
 from qbopt import liveness
 from qbopt import mir
 from qbopt import avail
-from qbopt import memory
 from qbopt import module
 from qbopt import regalloc
 from qbopt import blocks as blockmod
@@ -162,37 +161,6 @@ def test_a_memory_clean_call_does_not_wipe_the_map() -> None:
                     assert avail._clean(op, found.calls)
                     return
     raise AssertionError("no B$MUI4 call in this fixture -- it is what the test is about")
-
-
-def test_the_corpus_split_is_what_was_measured() -> None:
-    """73 reads have a live value holding their bytes, 48 a dead one.
-
-    A canary. If it moves, something changed the join and the reason should
-    be nameable before this number is edited. It has moved twice, both times
-    for float code and neither time in the live count -- a reload whose
-    provider is on the x87 stack is not one a register can serve.
-
-    The fpemu fixtures took 42 dead to 48 and 366 with no provider to 408.
-    Then 87bhelp.asm's contracts took the total from 529 to 553: knowing
-    that B$FILD and the rest write no caller memory means a cell established
-    before one is still that value after, so memory.py finds 24 reads
-    redundant that it used to give up on at the call.
-
-    And a third time, in the live count as well: a frame or stack slot no
-    longer aliases a named variable, so a cell established before a `push`
-    survives it. 1,805 cells to 1,952, live 96 to 108.
-
-    And a fourth: loaded_into stopped asking `origin` whether a use was the
-    destination's own preserved half and started asking whether the
-    operands name it, which recognises loads the register question missed.
-    live 108 to 114, dead 402 to 480, none 1,442 to 1,358 -- the same
-    cells, more of them with a provider.
-    """
-    total = {"live": 0, "dead": 0, "none": 0}
-    for obj in FIXTURES:
-        for key, count in split(obj).items():
-            total[key] += count
-    assert total == {"live": 114, "dead": 484, "none": 1362}
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)

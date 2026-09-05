@@ -177,30 +177,6 @@ def test_restore_idiom_is_recognised_not_split_into_opaques() -> None:
     assert ir.emit(found, nodes) == code
 
 
-def test_restore_appears_after_rewriting_the_real_corpus(fixtures: Path) -> None:
-    # BC never emits calls.py's own restore idiom -- it exists only in code
-    # this pass has already rewritten once. qbopt.rewrite.rewrite() is a
-    # pure in-memory function already run over this same tracked corpus by
-    # tests/test_rewrite.py; piping its own output back through
-    # decode_module is a real-corpus confirmation with no dependency on the
-    # untracked, mutable build/ tree the hand-built test above cannot reach.
-    total_restores = 0
-    for path in sorted(fixtures.glob("*.obj")):
-        original = path.read_bytes()
-        out, regions = corpus.rewritten(path, dry_run=False)
-        if out == original or not any(region.taken for region in regions):
-            continue
-        rewritten = corpus.loaded(out)
-        assert rewritten is not None
-        result = corpus.bodies(out)
-        assert not isinstance(result, str), (path.name, result)
-        for body_ir in result:
-            original_slice = b"".join(rewritten.code[lo:hi] for lo, hi in body_ir.body.ranges)
-            assert ir.emit(rewritten, body_ir.nodes) == original_slice, path.name
-            total_restores += sum(1 for node in body_ir.nodes if isinstance(node, ir.Restore))
-    assert total_restores > 0, "no rewritten fixture produced calls.py's own restore idiom"
-
-
 def test_root_normalises_every_sub_register_of_the_ax_pair() -> None:
     assert ir.root(Register.AL) is Register.EAX
     assert ir.root(Register.AH) is Register.EAX

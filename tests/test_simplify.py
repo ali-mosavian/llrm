@@ -66,7 +66,7 @@ def test_a_real_round_trip_is_found_and_proved() -> None:
     from qbopt import module
     from qbopt import blocks as split
     from qbopt.rewrite import rewrite
-    from qbopt.rewrite import code_map
+    from qbopt.blocks import code_map
 
     assert REWRITTEN.exists(), "the bench object is what this test is about"
     result = rewrite(REWRITTEN.read_bytes(), dry_run=False)

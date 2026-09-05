@@ -97,7 +97,7 @@ def selected(obj: Path) -> Iterator[tuple]:
     from qbopt import ir
     from qbopt import mir
     from qbopt import blocks as split
-    from qbopt.rewrite import code_map
+    from qbopt.blocks import code_map
 
     found = corpus.loaded(obj)
     if found is None:
@@ -146,7 +146,7 @@ def test_the_covered_share_of_the_corpus_is_what_was_measured() -> None:
     from qbopt import ir
     from qbopt import mir
     from qbopt import blocks as split
-    from qbopt.rewrite import code_map
+    from qbopt.blocks import code_map
 
     total = emitted = 0
     for obj in FIXTURES:
@@ -541,7 +541,7 @@ def test_a_relocated_field_never_changes_width(obj: Path) -> None:
     """
     from qbopt import declen
     from qbopt import asm
-from qbopt import layout
+    from qbopt import layout
     from qbopt import mir
     from qbopt import omf
     from qbopt import blocks as split

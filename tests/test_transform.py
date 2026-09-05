@@ -561,13 +561,6 @@ def test_nothing_reads_a_register_nothing_wrote() -> None:
                     written.add(root(one.op_register(i)))
 
 
-@pytest.mark.xfail(
-    reason="the hoist no longer allocates: a result that crosses the loop edge needs "
-    "a register the preheader can spare, and only regalloc can arrange that. It used "
-    "to pick one out of target.AVAILABLE and rewrite every reader, which is where "
-    "every hoist bug came from. Restored when regalloc splits a live range on LIR.",
-    strict=True,
-)
 def test_a_long_divide_leaves_a_loop_that_never_changes_its_operands() -> None:
     """lngmix divides a constant by a constant, ten times.
 

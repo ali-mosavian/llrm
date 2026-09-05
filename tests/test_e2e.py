@@ -176,7 +176,7 @@ def test_every_compiled_object_round_trips_through_the_selector(tag: str) -> Non
     from qbopt import select
     from qbopt import blocks as split
     from qbopt.declen import BITNESS
-    from qbopt.rewrite import code_map
+    from qbopt.blocks import code_map
 
     work = Path("build/e2e") / f"{tag}-roundtrip"
     e2e.run(tag, None, dry_run=True, work=work)

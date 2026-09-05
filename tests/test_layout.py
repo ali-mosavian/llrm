@@ -28,7 +28,7 @@ from qbopt import layout
 from qbopt import select
 from qbopt.declen import decode
 from qbopt import blocks as split
-from qbopt.rewrite import code_map
+from qbopt.blocks import code_map
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 

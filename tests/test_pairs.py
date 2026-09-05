@@ -377,47 +377,6 @@ def test_two_negates_without_the_borrow_are_not_one_long_negate() -> None:
     )
 
 
-def test_the_cost_model_agrees_with_what_widening_actually_saves() -> None:
-    """The chains this would take, against the bytes lift.py's widening does save.
-
-    Two independent routes to the same economics: lift.py walks bytes,
-    widens regions and reports "widening it grows N bytes to M" for the ones
-    it refuses; this walks values, builds chains from held() and prices each
-    one by asking select.py how long the 32-bit form is, plus four bytes for
-    the restore that hands the long back to BC's sixteen-bit code.
-
-    They land within a few per cent, which is the check that the pair
-    analysis is not merely self-consistent.
-    """
-    from qbopt import rewrite as pass_under_test
-
-    model = 0
-    for obj in FIXTURES:
-        found = corpus.loaded(obj)
-        assert found is not None
-        mapped = code_map(found)
-        if isinstance(mapped, str):
-            continue
-        for _name, body in mir.bodies(found, split.partition(found, mapped)):
-            model += sum(one.saved for one in pairs.chains(body) if one.saved > 0)
-
-    actual = 0
-    for obj in FIXTURES:
-        data = obj.read_bytes()
-        with_wide, _ = pass_under_test._once(data, dry_run=False)
-        without, _ = pass_under_test._once(data, dry_run=False, max_regions=0)
-        from qbopt import module as loader
-        from qbopt import omf as records
-
-        a, b = loader.of(records.parse(with_wide)), loader.of(records.parse(without))
-        if a is None or b is None:
-            continue
-        actual += len(b.code) - len(a.code)
-
-    assert actual > 1000, f"widening saves {actual} bytes, so this comparison is not measuring it"
-    assert abs(model - actual) / actual < 0.15, f"model says {model}, widening saves {actual}"
-
-
 def test_a_chain_never_spans_something_it_cannot_move() -> None:
     """lift.regions()' rule: anything unrecognised between two pair operations
     stays where it is, so the rewrite cannot span it."""
