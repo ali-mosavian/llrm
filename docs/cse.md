@@ -201,3 +201,27 @@ for, and the operation before it in its own block is routinely elsewhere.
 operations come out of lngmix-p-g2's MIR and the emitted segment is the
 same 909 bytes, so something between the pass and the bytes puts them back.
 That is the next thing to find, and it is worth more than the pass is.
+
+## Why the bytes did not move: the body was thrown away
+
+`layout.rebuild` colours every body, and **a body the allocator refuses is
+emitted as it was raised** -- not as the passes left it. The reason is
+sound: every operand resolves through the assignment, so without one each
+operation would be written with the register BC had, while a pass has
+already moved the operations that made that true.
+
+lngmix's main body is one of them:
+
+    v3_3 and a value it interferes with are both pinned to edx
+
+So cse ran, `place` ran, the hoist ran, and none of it reached the bytes.
+**103 of 487 objects have at least one body in this state**, and the
+reasons are two:
+
+    27  two values pinned to the same register interfere (eax, edx)
+    76  a value interferes with every register at once
+
+Measuring a pass on a program in that set measures nothing, which is the
+second rule with a new instrument to distrust. lngmix at 8.8x is not
+waiting on cse or on licm. It is waiting on the allocator, like everything
+else on the roadmap -- and now with a name for what it refuses.
