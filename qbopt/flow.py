@@ -75,7 +75,7 @@ def run(data: bytes, native_fpu: bool = False, optimise: bool = True) -> tuple[b
         if optimise:
             body = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
             body = transform.widened(body)
-        low = lower.lowered(name, body)
+        low = lower.lowered(name, body, found.calls)
         frame = frames.of(low)
         for phase in machine(_pinned(body), frame, found.calls):
             low = phase.transform(low)

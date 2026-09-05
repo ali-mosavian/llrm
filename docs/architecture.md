@@ -430,13 +430,31 @@ is the whole of the decision, and a search that finds the same answer by
 trying everything has only proved the cost model right at a price that
 grows with the body.
 
+**A call carries a register mask, not a value per register.** LLVM's
+`MO_RegisterMask`: the call says which registers survive it, and the
+allocator refuses a destroyed one to any range live across the call --
+`checkRegMaskInterference`. `runtime.py`'s contracts already knew this per
+routine, measured against the runtime's own source; nothing asked.
+
+Before it, a call *defined* a value for every register it clobbered. **114
+of nbody's 162 call defines were read by nothing** and each still got an
+interval, competed for a register and was spilled -- a store for a value
+nobody wanted. Dropping them is only sound because the mask is honoured:
+without `_clobbered` it would be a miscompile, not an optimisation.
+
+Worth **5,615 bytes** over the corpus.
+
 **A reload cannot be spilled again.** Its value is live across one
 instruction, so its weight -- references over live range -- is tiny, and
 under a cost model it never wins a register. Spilled again, it puts a load
 in front of a load: three values spilled every round and three
 instructions added every round, for ever, measured on fpcsex-p-g2-zd.
 `LiveInterval::markNotSpillable` is LLVM's name for the answer; here the
-spiller hands its reloads back and they weigh infinity.
+spiller hands its reloads back and they weigh infinity -- while they are
+still short. LLVM asks `isZeroLength()` for the same reason: a value that
+reached emission with a long range is not a reload any more, whatever made
+it, and refusing to spill one that crosses fourteen calls clobbering every
+register is refusing to compile the program.
 
 ### No fallbacks
 

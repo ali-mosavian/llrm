@@ -60,7 +60,17 @@ class Insn:
     # every consumer of liveness dropped them again on the way past.
     defines: tuple[int, ...]
     uses: tuple[int, ...]
-    op: object
+    # Registers this instruction destroys without naming any of them.
+    # LLVM's register mask operand, which is how a call says what it does
+    # to the register file: it lists what survives, and this lists what
+    # does not, which is the same fact and the one an allocator asks for.
+    #
+    # The alternative is what was here before -- the raise inventing a
+    # value per clobbered register, so a call "defined" six things. 114 of
+    # nbody's 162 call defines were read by nothing, and each one still got
+    # an interval, competed for a register and was spilled.
+    clobbers: "frozenset[Register_]" = frozenset()
+    op: object = None
 
 
 @dataclass(frozen=True, slots=True)

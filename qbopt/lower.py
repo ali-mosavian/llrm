@@ -150,9 +150,12 @@ def _addressed(one: "mir.MemRef") -> "ir.Mem":
     bp and a segment-relative cell through no register at all, both with a
     two-byte displacement, which is what BC emits and what a fixup expects.
 
-    Anything else -- a far pointer, an indexed element, the stack -- is
-    refused by name. Guessing which register reaches it would be guessing
-    the instruction.
+    A segment-relative cell may be indexed, and then `addr.base` is the
+    register that reaches it -- part of the address's own identity, since
+    two elements at the same displacement are not the same address unless
+    that register agrees. So that is written down rather than guessed.
+
+    Anything else -- a far pointer, the stack -- is refused by name.
     """
     from qbopt.module import Space
 
@@ -161,12 +164,16 @@ def _addressed(one: "mir.MemRef") -> "ir.Mem":
         raise Unlowered("a cell with no address cannot be encoded: nothing says which register reaches it")
     if addr.space is Space.FRAME:
         return ir.Mem(addr, one.width, Register.BP, 0, 2)
-    if addr.space is Space.SEGMENT and addr.base == Register.NONE:
-        return ir.Mem(addr, one.width, Register.NONE, 0, 2)
+    if addr.space is Space.SEGMENT:
+        # An indexed element says which register reaches it: `addr.base` is
+        # part of the address's own identity, because two elements at the
+        # same displacement are not the same address unless that register
+        # agrees. So the encoding is not a guess -- it is written down.
+        return ir.Mem(addr, one.width, addr.base, 0, 2)
     raise Unlowered(f"a cell at {addr} in {addr.space} has no encoding this can derive")
 
 
-def lowered(name: str, body: "mir.MirBody") -> "lir.LirBody":
+def lowered(name: str, body: "mir.MirBody", calls: dict[int, str] | None = None) -> "lir.LirBody":
     """One MIR body as machine instructions, and nothing else.
 
     The pass that ends the abstract half. Above this a value is a value and
@@ -182,6 +189,12 @@ def lowered(name: str, body: "mir.MirBody") -> "lir.LirBody":
     """
     from qbopt import lir
 
+    # What anything reads, so a definition nothing reads can become what it
+    # always was: a statement that the register is destroyed, which
+    # `clobbers` makes without inventing a value to carry it.
+    read = {one.id for block in body.blocks for op in block.ops for one in op.uses}
+    read |= {value.id for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
+    calls = calls or {}
     return lir.LirBody(
         name=name,
         entry=body.entry,
@@ -193,8 +206,9 @@ def lowered(name: str, body: "mir.MirBody") -> "lir.LirBody":
                         at=op.at,
                         covers=op.covers,
                         what=_located(current(op), getattr(op.node, "semantics", None)),
-                        defines=tuple(one.id for one in op.defines if not one.flags),
+                        defines=tuple(one.id for one in op.defines if not one.flags and one.id in read),
                         uses=tuple(one.id for one in op.uses if not one.flags),
+                        clobbers=_clobbers(op, calls),
                         op=op,
                     )
                     for op in block.ops
@@ -214,3 +228,42 @@ def lowered(name: str, body: "mir.MirBody") -> "lir.LirBody":
         origin=dict(body.origin),
         pins=dict(getattr(body, "pins", {}) or {}),
     )
+
+
+def _clobbers(op: "mir.Op", calls: dict[int, str]) -> "frozenset[Register_]":
+    """Which registers this instruction destroys without naming them.
+
+    Only a call, and only from `runtime.py`'s own contract for the routine
+    -- which is measured against the runtime's source, not assumed. An
+    unestablished contract clobbers every register, and saying so is the
+    safe direction: over-stating what a call destroys only keeps a value
+    out of a register, while under-stating it puts a live value in one the
+    call overwrites.
+    """
+    from qbopt import mir
+    from qbopt import runtime
+    from qbopt import target
+
+    if op.kind is not mir.Kind.CALL:
+        return frozenset()
+    contract = runtime.contract(calls.get(op.at))
+    if contract is None:
+        return frozenset(target.AVAILABLE)
+    names = _names()
+    return frozenset(
+        register
+        for register in target.AVAILABLE
+        for named in (contract.clobbers or ())
+        if named.value.lower() in names.get(register, ())
+    )
+
+
+# Each allocatable register by the names runtime.py's own Reg enum uses:
+# `ax` for eax, since a contract is written about the 16-bit machine.
+def _names() -> dict:
+    from qbopt import target
+
+    return {
+        register: {target.name_of(target.named(register, 2)), target.name_of(target.named(register, 4))}
+        for register in target.AVAILABLE
+    }

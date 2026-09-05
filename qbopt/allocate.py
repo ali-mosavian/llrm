@@ -36,6 +36,11 @@ from qbopt.passes import LIRTransform
 # that would not.
 BUDGET = 200_000
 
+# How long a range may be and still count as a reload. One instruction is
+# two slots; a little slack for a value the spiller wrote and something
+# immediately after read.
+RELOAD = 4 * ranges.PER_INSN
+
 
 class Unplaced(Exception):
     """A value reached emission with no register. Always a bug here."""
@@ -206,12 +211,20 @@ def allocate(
     """
     index = ranges.indexed(body)
     live = ranges.intervals(body, index)
+    masks = _masks(body, index)
     # A reload's value is live across one instruction and must have a
     # register: spilling it again puts a load in front of a load and
     # nothing settles. LLVM's `markNotSpillable`, as a weight nothing can
     # outbid rather than as a flag every comparison has to remember.
+    #
+    # Only while it is still short. LLVM asks `LI.isZeroLength()` for the
+    # same reason: a value that reached emission with a long range is not a
+    # reload any more, whatever made it, and refusing to spill one that
+    # crosses fourteen calls clobbering every register is refusing to
+    # compile the program -- bools-q-evt, `value#223 cannot be spilled and
+    # no register is free for it`.
     for one in unspillable or ():
-        if one in live:
+        if one in live and live[one].size <= RELOAD:
             live[one] = replace(live[one], weight=float("inf"))
     confined = classes(body)
     fixed = dict(pinned or {})
@@ -240,7 +253,7 @@ def allocate(
             continue
         order = target.order(confined.get(value)) if value not in fixed else (fixed[value],)
 
-        got = _free(mine, order, union, live)
+        got = _free(mine, order, union, live, masks)
         if got is not None:
             where[value] = got
             union.setdefault(got, []).append(value)
@@ -248,7 +261,7 @@ def allocate(
             continue
 
         if at is Stage.ASSIGN:
-            evicted = _evict(mine, order, union, live)
+            evicted = _evict(mine, order, union, live, masks)
             if evicted is not None:
                 got, victims = evicted
                 for one in victims:
@@ -304,15 +317,51 @@ def _priority(one: "ranges.Interval | None", at: Stage) -> float:
     return one.size + (1e6 if at is not Stage.ASSIGN else 0.0)
 
 
-def _free(one: "ranges.Interval", order: tuple, union: dict, live: dict) -> "Register_ | None":
-    """A register nothing live at the same time is already using."""
+def _masks(body: lir.LirBody, index: "ranges.Indexes") -> "list[tuple[int, frozenset[Register_]]]":
+    """Every point a register is destroyed without being named, and which.
+
+    LLVM's `LiveIntervals::getRegMaskSlots()`. A call is the only one here.
+    """
+    out = []
+    for block in body.blocks:
+        for one in block.insns:
+            if one.clobbers:
+                out.append((index.at[id(one)], one.clobbers))
+    return out
+
+
+def _clobbered(one: "ranges.Interval", register: Register_, masks: list) -> bool:
+    """Whether this range is live across a point that destroys the register.
+
+    LLVM's `checkRegMaskInterference`, and it is what lets a call stop
+    inventing a value per register it clobbers: the mask says the register
+    does not survive, so nothing live across the call may be in it. Without
+    this the drop would be a miscompile rather than an optimisation.
+
+    Live *across*, not merely touching: a value the call itself writes
+    starts after the clobber, and one that dies at the call ends before it.
+    """
+    for slot, mask in masks:
+        if register not in mask:
+            continue
+        if any(seg.start < slot and seg.end > slot + ranges.DEF for seg in one.segments):
+            return True
+    return False
+
+
+def _free(
+    one: "ranges.Interval", order: tuple, union: dict, live: dict, masks: list
+) -> "Register_ | None":
+    """A register nothing live at the same time is using, and no call kills."""
     for register in order:
+        if _clobbered(one, register, masks):
+            continue
         if not any(live[other].overlaps(one) for other in union.get(register, ()) if other in live):
             return register
     return None
 
 
-def _evict(one: "ranges.Interval", order: tuple, union: dict, live: dict):
+def _evict(one: "ranges.Interval", order: tuple, union: dict, live: dict, masks: list):
     """The cheapest register to take, and what has to move out of it.
 
     Only where everything evicted is cheaper than what wants the register,
@@ -322,6 +371,8 @@ def _evict(one: "ranges.Interval", order: tuple, union: dict, live: dict):
     """
     best = None
     for register in order:
+        if _clobbered(one, register, masks):
+            continue
         victims = [other for other in union.get(register, ()) if other in live and live[other].overlaps(one)]
         if not victims:
             continue
@@ -404,7 +455,9 @@ def applied(body: lir.LirBody, got: Assignment) -> lir.LirBody:
         worst = sorted(got.spilled)[:4]
         raise Spilled(
             f"{len(got.spilled)} values want a stack slot ({', '.join(f'value#{one}' for one in worst)}) "
-            f"at a cost of {got.cost:g}; the spiller and the frame that holds the slots are not written"
+            f"at a cost of {got.cost:g} and spilling them did not settle. Measured on bools-q-evt: the "
+            f"same twelve every round, thirty-six instructions added each time. Their ranges cross calls "
+            f"that clobber every register, so no register can hold them and the reload cannot either"
         )
     held = got.where
     # An identity copy is dropped here, which is what LLVM's

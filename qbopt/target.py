@@ -253,3 +253,17 @@ def overlaps(one: Register_, other: Register_) -> bool:
     if ir.ROOT.get(one, one) is not ir.ROOT.get(other, other):
         return False
     return bool(lanes(one) & lanes(other))
+
+
+# Each register by the name a human writes, which is what runtime.py's own
+# contracts are keyed on. iced gives an integer; the name is the join.
+NAMES: dict[Register_, str] = {
+    getattr(Register, name): name.lower()
+    for name in dir(Register)
+    if not name.startswith("_") and isinstance(getattr(Register, name), int)
+}
+
+
+def name_of(register: Register_) -> str:
+    """This register's own name, lowercase."""
+    return NAMES.get(register, str(register))
