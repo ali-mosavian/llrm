@@ -34,6 +34,13 @@ def operand(arg: mir.Arg) -> ir.Loc:
 _MACHINE: dict[mir.Kind, tuple[ir.Operation, str]] = {
     mir.Kind.COPY: (ir.Operation.MOVE, "mov"),
     mir.Kind.JUMP: (ir.Operation.JUMP, "jmp"),
+    # Strength reduction writes both: one multiply in a preheader and one
+    # add at a latch, where BC recomputed the product every iteration. The
+    # multiply is the two-operand `imul r,r/m`, which writes its
+    # destination and nothing else -- the widening form writes dx:ax, and
+    # an operation MIR invented defines one value.
+    mir.Kind.MUL: (ir.Operation.MULTIPLY, "imul"),
+    mir.Kind.ADD: (ir.Operation.BINARY, "add"),
 }
 
 

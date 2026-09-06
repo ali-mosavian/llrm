@@ -201,8 +201,21 @@ def derived(
                 continue
             if isinstance(by, mir.Cell) and not settled(by.ref):
                 continue
-            out.append(Derived(op, found[counter[0].value.variable], by))
+            out.append(Derived(op, found[counter[0].value.variable], _multiplier(op, by)))
     return out
+
+
+def _multiplier(op: "mir.Op", by: "mir.Arg") -> "mir.Arg":
+    """What the counter is multiplied by, whatever the operation writes it as.
+
+    A shift names its *amount*, not its multiplier: `i shl 1` multiplies by
+    two. Passing the amount through emitted `imul r,1` -- a multiply by one,
+    which is a copy and which select refuses in the three-operand form
+    anyway.
+    """
+    if op.kind is not mir.Kind.SHL or not isinstance(by, mir.Const):
+        return by
+    return mir.Const(1 << by.n, max(by.width, 2))
 
 
 def _width(value) -> int:

@@ -623,3 +623,61 @@ def test_a_call_carries_a_mask_rather_than_defining_a_value_per_register() -> No
                 assert not allocate._clobbered(live[value], register, masks), (
                     f"value#{value} sits in {target.name_of(register)} across a call that destroys it"
                 )
+
+
+def test_strength_reduction_replaces_a_loop_multiply_with_an_add() -> None:
+    """The transform works; it is off because it costs.
+
+    matrix recomputes a row address from the counter every iteration with
+    `imul word [w]`. Reduced, the multiply moves to the preheader and an
+    add of the same width advances it -- one operation more in the body,
+    one multiply fewer in the loop.
+
+    No phi is written: a fresh variable assigned in the preheader and again
+    at the latch *is* one, and `mir.resolved()` puts it at the header.
+    """
+    from pathlib import Path
+
+    from qbopt import blocks as split
+    from qbopt import module
+    from qbopt import omf
+    from qbopt import strength
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(Path("fixtures/omf/matrix-p-g2.obj").read_bytes()))
+    blocks = split.partition(found, code_map(found))
+    bounds = module.landmarks(found)
+    fired = False
+    for _name, body in mir.bodies(found, blocks):
+        out = strength.reduced(body, found.dgroup, bounds)
+        if out is body:
+            continue
+        fired = True
+        was = [op for block in body.blocks for op in block.ops if op.kind is mir.Kind.MUL]
+        now = [op for block in out.blocks for op in block.ops if op.kind is mir.Kind.MUL]
+        assert len(now) == len(was), "a multiply should move, not multiply"
+        assert any(op.node is None for op in now), "the preheader multiply was not inserted"
+        adds = [op for block in out.blocks for op in block.ops if op.kind is mir.Kind.ADD and op.node is None]
+        assert adds, "no add advances the new counter"
+        # And every inserted operation claims none of BC's own bytes.
+        for block in out.blocks:
+            for op in block.ops:
+                if op.node is None and op.covers is not None:
+                    assert op.covers[0] == op.covers[1], f"{op.at:#06x} claims bytes it did not stand for"
+    assert fired, "matrix multiplies its counter by a width it never changes"
+
+
+def test_strength_reduction_is_off_because_it_measured_worse() -> None:
+    """Not a guess: through the flow path, where two-address is handled,
+
+        harr    8.6x -> 9.8x      segld  6.4x -> 8.0x
+        split   4.3x -> 6.2x      matrix 3.4x -> 3.5x
+
+    The multiply it removes reads memory and the add it inserts reads the
+    same memory, so the body is no cheaper -- and the new counter holds a
+    register for the whole loop. LLVM's LoopStrengthReduce is mostly a cost
+    model for this; ours prices nothing.
+    """
+    from qbopt import transform
+
+    assert "strength" not in transform.PASSES_ON, "strength is on and it measured worse"

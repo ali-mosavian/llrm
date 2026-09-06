@@ -612,3 +612,43 @@ Three things had to be right and each was wrong first:
 - **The multiply loads.** `imul word [w]` reads its own operand, so
   excluding anything that touches memory excluded every site the analysis
   exists for.
+
+## Strength reduction, and why it is off
+
+`strength.py` is LLVM's `LoopStrengthReduce` in its classic form. Where
+`induction.py` says `j = i * m` with `i = {start,+,step}` and `m`
+invariant, `j` is `{start*m,+,step*m}` -- so the multiply need not be in
+the loop at all. One multiply in the preheader, an add of `step*m` at the
+latch, and where BC wrote `imul word [w]` every iteration there is an add.
+
+No phi is written. A fresh variable assigned in the preheader and again at
+the latch *is* one, and `mir.resolved()` puts it at the header, because it
+renames per variable and that is what a variable written on two paths
+means. Writing one by hand would be saying the same thing twice.
+
+**It fires on 7 of the 32 fixtures and it is off, because it costs.**
+Measured through the flow path, where the two-address fixup handles the
+form it invents:
+
+    harr    8.6x -> 9.8x        segld  6.4x -> 8.0x
+    split   4.3x -> 6.2x        matrix 3.4x -> 3.5x
+
+Every program it touches gets worse. The multiply it removes reads memory
+and the add it inserts reads the same memory, so the loop body is no
+cheaper -- and the new counter holds a register for the whole loop, which
+is what the two worst results are.
+
+**LLVM's LSR is mostly the cost model this does not have.** It enumerates
+formulas for every use, prices them against register pressure, and picks;
+that machinery exists because the choice is not obvious, and here it is
+obviously wrong four times out of four. The analysis is sound and tested;
+what is missing is the pricing.
+
+Two other things it needs and has:
+
+- **Only what can be removed.** `_without` refuses a deletion no neighbour
+  can account for and leaves the operation standing -- which here would
+  compute the value twice, once in the loop and once in the counter its
+  readers now name.
+- **Once each.** A multiply inside a nest is derived in every loop that
+  contains it.
