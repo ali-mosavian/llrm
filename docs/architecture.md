@@ -578,3 +578,37 @@ reference may alias.
 
 So the pass that pays is not mem2reg. It is forwarding *between* clobber
 points, and copy propagation, which memory aliasing does not touch at all.
+
+## Induction variables
+
+`induction.py` is LLVM's `ScalarEvolution` in the one shape this needs: a
+value is `start + step * iteration` -- an affine recurrence, `{start,+,step}`
+in LLVM's notation -- or it is not one. Everything a loop does to an array
+index is that.
+
+Split from any transform on purpose, the way LLVM splits it:
+`LoopStrengthReduce` asks and rewrites, `IndVarSimplify` asks and does
+something else, and a measurement asks and does nothing.
+
+**It is the largest item left.** `docs/targets.md` names what closes each
+program's gap, and induction variables come up in six of the thirteen --
+more than any other item, ahead of LICM at four. `stride` is "a division
+that is really a counter", `matrix` wants a stride of 2(w+1) on the
+address, `harr` wants "one add, not a multiply and two segment loads".
+
+Measured over the 32 `-p-g2` fixtures: **29 loops with a counter, 29
+counters, 21 multiplies derived from one** -- 18 `imul word [w]` and 3
+shifts, every one of them per iteration.
+
+Three things had to be right and each was wrong first:
+
+- **A cell can be loop-invariant.** BC reads the multiplier straight out of
+  memory, so 23 of the 28 candidate multiplies had a `Cell` where an
+  invariance test that only tracked values looked for one. None qualified.
+- **Proving it needs the object bounds.** An indexed store into an array
+  may land anywhere in the segment unless something says how big the array
+  is, and then every scalar in DGROUP reads as written by it.
+  `module.landmarks()` knows where each object ends.
+- **The multiply loads.** `imul word [w]` reads its own operand, so
+  excluding anything that touches memory excluded every site the analysis
+  exists for.

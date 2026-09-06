@@ -552,3 +552,70 @@ def test_the_raise_says_which_object_a_push_reaches() -> None:
                     if one.addr is None and one.where is Space.STACK:
                         spaced += 1
     assert spaced, "no push says it is on the stack"
+
+
+def test_induction_finds_a_counter_and_what_it_derives() -> None:
+    """`docs/targets.md` names what closes each program's gap, and
+    induction variables come up in six of the thirteen -- more than
+    anything else. matrix recomputes a row address from the counter every
+    iteration with `imul word [w]`.
+
+    Three things had to be right and each was wrong first: a cell can be
+    loop-invariant (23 of 28 sites multiply by one), proving it needs the
+    object bounds (an indexed store otherwise reads as writing every scalar
+    in DGROUP), and the multiply itself loads (excluding anything that
+    touches memory excluded every site this exists for).
+    """
+    from pathlib import Path
+
+    from qbopt import blocks as split
+    from qbopt import induction
+    from qbopt import module
+    from qbopt import omf
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(Path("fixtures/omf/matrix-p-g2.obj").read_bytes()))
+    blocks = split.partition(found, code_map(found))
+    bounds = module.landmarks(found)
+
+    counters = reduced = 0
+    for _name, body in mir.bodies(found, blocks):
+        for _loop, basics, derived in induction.of(body, found.dgroup, bounds):
+            counters += len(basics)
+            reduced += len(derived)
+            for one in basics.values():
+                assert isinstance(one.step, (mir.Const, mir.Held)), "a step that is neither"
+            for one in derived:
+                assert one.op.kind in (mir.Kind.MUL, mir.Kind.SHL)
+                assert not one.op.stores, "a multiply that stores is not a candidate"
+    assert counters, "matrix counts; the analysis says otherwise"
+    # Two, not one: matrix multiplies in both the inner loop and the outer.
+    # A weaker analysis finds neither -- each of the three fixes above takes
+    # this to zero on its own.
+    assert reduced >= 2, f"matrix reduces {reduced}; it multiplies its counter by a width it never changes"
+
+
+def test_a_multiply_by_something_the_loop_writes_is_not_reducible() -> None:
+    """There is no recurrence to reduce if the multiplier moves."""
+    from pathlib import Path
+
+    from qbopt import blocks as split
+    from qbopt import induction
+    from qbopt import module
+    from qbopt import omf
+    from qbopt.blocks import code_map
+
+    for name in ("matrix-p-g2", "hotlop-p-g2", "stride-p-g2"):
+        found = module.of(omf.parse(Path(f"fixtures/omf/{name}.obj").read_bytes()))
+        blocks = split.partition(found, code_map(found))
+        for _who, body in mir.bodies(found, blocks):
+            at_of = {block.at: block for block in body.blocks}
+            for loop, _basics, derived in induction.of(body, found.dgroup, module.landmarks(found)):
+                inside = {at for at in loop.body if at in at_of}
+                wrote = [one for at in inside for op in at_of[at].ops for one in op.stores]
+                for one in derived:
+                    if isinstance(one.by, mir.Cell):
+                        assert not any(
+                            mir.overlapping(one.by.ref, other, found.dgroup, module.landmarks(found))
+                            for other in wrote
+                        ), f"{one.op.at:#06x} multiplies by a cell the loop writes"
