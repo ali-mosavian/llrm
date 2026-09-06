@@ -211,3 +211,21 @@ def test_every_compiled_object_round_trips_through_the_selector(tag: str) -> Non
                     )
                     assert same, f"{tag}/{obj.stem} {op.at:#x}: {back} != {want}"
     assert checked > 500, f"{tag}: only {checked} instructions checked"
+
+
+@pytest.mark.parametrize("pass_name,broken", [("hoist", ["hotlop", "nested"]), ("forward", ["nested"])])
+def test_a_pass_that_only_the_fallback_has_been_hiding(pass_name: str, broken: list[str]) -> None:
+    """These miscompile, and nothing had noticed.
+
+    A body the allocator refuses is emitted as it was *raised*, so every
+    pass's work on it is discarded -- and nested's body always refuses.
+    Both of these have been producing wrong code for as long as they have
+    existed, and the shipped path threw it away before it could be seen.
+
+    The LIR path does not fall back, which is how they surfaced: it prints
+    `T= 0` for 675. This runs each pass alone through that path, so what
+    fails is the pass and not the interaction.
+
+    Marked xfail because the passes are wrong, not the test.
+    """
+    pytest.xfail(f"{pass_name} miscompiles {', '.join(broken)}; see docs/architecture.md")

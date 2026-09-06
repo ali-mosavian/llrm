@@ -1811,6 +1811,9 @@ def applied(
     *,
     blocks: list | None = None,
     found=None,
+    fold: bool = True,
+    decide: bool = True,
+    dead: bool = True,
     segments_: bool = True,
     hoist: bool = True,
     forward: bool = True,
@@ -1836,9 +1839,12 @@ def applied(
     is an interference question and the allocator's.
     """
     wanted = {
-        "fold": True,
-        "decide": True,
-        "dead": True,
+        # Every pass can be turned off, which is how a miscompile is
+        # bisected: a variant that skips one and still allocates and emits
+        # is the only kind that measures anything.
+        "fold": fold,
+        "decide": decide,
+        "dead": dead,
         "segments": segments_,
         "hoist": hoist,
         "forward": forward,

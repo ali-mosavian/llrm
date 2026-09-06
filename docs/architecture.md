@@ -832,7 +832,33 @@ program read the wrong address.
 with no semantics at all, which is the same signal anything carried
 verbatim gets.
 
-`nested` is still wrong -- `T= 0` for 675 -- and its shape is different:
+### And two passes the fallback has been hiding
+
+`nested` was still wrong after that fix, and the answer is not in the LIR
+path at all.
+
+    no MIR pass at all    clean
+    only hoist            hotlop and nested wrong
+    only forward          nested wrong
+
+**`hoist` and `forward` miscompile.** Each on its own, through a path that
+does not fall back. And nothing had noticed, because a body the allocator
+refuses is emitted as it was *raised* -- nested's always refuses, so the
+hoist's work on it was thrown away before anybody could see it was wrong.
+
+That also settles the hoist's three xfails. Their reason was "waiting for a
+live-range split on LIR", and that was wrong twice: the split exists and
+they still fail. The pass is broken.
+
+So the fallback has cost more than the passes it discards. It hid two
+miscompiles for as long as they have existed, and removing it -- which is
+what the LIR path does -- is what found them.
+
+Bisecting needs every variant to allocate and emit, and every pass to be
+gateable: `transform.applied` now takes `fold`, `decide` and `dead` as
+well, because a variant that cannot be built measures nothing.
+
+The old note, for the record. `nested`'s shape is different:
 it spills, so its code genuinely differs from the shipped path's, and two
 of its 27 fixups are lost somewhere other than `_fields_in`, which reports
 the same fields for every operation both ways.
