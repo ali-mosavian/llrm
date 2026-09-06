@@ -304,18 +304,39 @@ class Lowering:
 
         made = _EXPANDS.get(op.kind)
         parts = made(op, self) if made is not None else None
-        leader = lir.Insn(
-            at=op.at,
-            covers=op.covers,
-            what=None if op.id in self._absorbed else (parts[0] if parts else current(op)),
-            defines=tuple(one.id for one in op.defines if not one.flags and one.id in self._read),
-            uses=tuple(one.id for one in op.uses if not one.flags),
-            clobbers=_clobbers(op, self._calls),
-            op=op,
-        )
         if not parts:
-            return (leader,)
-        return (leader, *(_follows(op, one) for one in parts[1:]))
+            return (
+                lir.Insn(
+                    at=op.at,
+                    covers=op.covers,
+                    what=None if op.id in self._absorbed else current(op),
+                    defines=tuple(
+                        one.id for one in op.defines if not one.flags and one.id in self._read
+                    ),
+                    uses=tuple(one.id for one in op.uses if not one.flags),
+                    clobbers=_clobbers(op, self._calls),
+                    op=op,
+                ),
+            )
+        # The leader keeps the operation's identity -- its address, the
+        # bytes it stands for, the operation itself -- and nothing else.
+        # What it reads and writes is its own first step's, the way every
+        # instruction after it is its own: a leader claiming the whole
+        # operation's operands would say the product is live from the load
+        # that starts the run. The effect the operation had belongs to the
+        # run, not to any one instruction in it.
+        return (
+            lir.Insn(
+                at=op.at,
+                covers=op.covers,
+                what=parts[0],
+                defines=tuple(_named(parts[0].dests)),
+                uses=tuple(_named(parts[0].sources)),
+                clobbers=frozenset(),
+                op=op,
+            ),
+            *(_follows(op, one) for one in parts[1:]),
+        )
 
 
 def _follows(op: "mir.Op", what: "ir.Semantics") -> "lir.Insn":

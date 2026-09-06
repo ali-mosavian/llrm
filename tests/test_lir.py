@@ -153,26 +153,45 @@ def test_lowering_is_one_instruction_per_operation_unless_something_expands() ->
 def test_an_expansion_gives_its_leader_the_operation_and_its_followers_none(monkeypatch) -> None:
     """One operation, several instructions. The leader stands for the bytes
     and the rest stand for none: an inserted instruction claiming the same
-    span made layout say a byte was held by more than one op."""
+    span made layout say a byte was held by more than one op.
+
+    What each instruction reads and writes is its own, the leader included.
+    A leader computing the expansion's first step while claiming the whole
+    operation's operands tells the allocator the multiply's product is live
+    from the load -- and the effect the operation had belongs to the run,
+    not to any one instruction in it.
+    """
     lower, name, body, found = _one_body("hotlop-p-g2")
     kind = next(op.kind for block in body.blocks for op in block.ops if op.kind is mir.Kind.ADD)
 
     def two(op, making):
         temp = ir.Held(making.fresh(), 4)
+        made = next(one for one in op.defines if not one.flags)
         return (
             ir.Semantics(ir.Operation.MOVE, "mov", (temp,), (ir.Imm(1, 4),)),
-            ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(making.fresh(), 4),), (temp,)),
+            ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(made.id, 4),), (temp,)),
         )
 
     monkeypatch.setitem(lower._EXPANDS, kind, two)
     low = lower.lowered(name, body, found.calls)
-    made = [one for block in low.blocks for one in block.insns if one.op is not None and one.op.kind is kind]
-    tail = [one for block in low.blocks for one in block.insns if one.op is None]
-    assert made and len(tail) == len(made), "one follower per expanded operation"
-    for one in tail:
-        assert one.covers == (one.at, one.at), "a follower stands for no bytes"
-        assert one.op is None and not one.clobbers
-        assert one.defines and one.uses, "a follower's values are the ones it names"
+    runs = []
+    for block in low.blocks:
+        for index, one in enumerate(block.insns):
+            if one.op is not None and one.op.kind is kind:
+                runs.append((one, block.insns[index + 1]))
+    assert runs
+
+    for leader, follower in runs:
+        original = {one.id for one in leader.op.defines if not one.flags}
+        assert follower.covers == (follower.at, follower.at), "a follower stands for no bytes"
+        assert follower.op is None and not follower.clobbers
+        # Each instruction's own dataflow, from its own semantics.
+        assert leader.uses == (), "the leader reads what its first step reads, not the operation's"
+        assert set(leader.defines) & original == set(), "the leader makes a temporary, not the result"
+        assert set(leader.defines) == set(follower.uses), "the temporary is what joins them"
+        assert set(follower.defines) == original
+        # And the run as a whole is what the operation was.
+        assert original <= set(leader.defines) | set(follower.defines)
 
 
 def test_an_expansion_invents_values_nothing_else_uses(monkeypatch) -> None:
