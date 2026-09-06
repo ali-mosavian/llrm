@@ -1340,60 +1340,23 @@ def decided(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
                 made=None,
                 covers=last.covers or _span_of(last),
             )
-            out.append(replace(block, ops=block.ops[:-1] + (jump,), succ=(target,)))
+            out.append(replace(block, ops=block.ops[:-1] + (jump,)))
         else:
             kept = _absorb(list(block.ops), {last.at})
             if len(kept) == len(block.ops):
                 out.append(block)
                 continue
-            out.append(
-                replace(block, ops=tuple(kept), succ=tuple(one for one in block.succ if one != target))
-            )
+            out.append(replace(block, ops=tuple(kept)))
     if not changed:
         return body
-    # The edge goes with the branch; the body is still not resolved.
-    #
-    # Leaving `succ` naming both ways was argued as an over-approximation
-    # and so the safe direction. It is not safe for anything that reads the
-    # edge as a fact: phi elimination sees a predecessor with two
-    # successors, calls the edge critical, and joins a value the deleted
-    # branch can no longer deliver -- bools-q-O printed T=1 for 2.
-    #
-    # Resolving is a different thing and stays out: it prunes a block
-    # nothing can reach, and layout then has a hole it cannot account for
-    # -- `0x006d: 3 bytes between the ops are not instructions` on three of
-    # the bools objects. Narrowing an edge removes no block.
-    return replace(body, blocks=tuple(_unjoined(out)))
-
-
-def _unjoined(blocks: list) -> list:
-    """Every phi arm whose edge is gone, gone with it.
-
-    A phi says "whichever value arrived on the edge control came in on",
-    so an arm naming a predecessor that no longer reaches this block is a
-    value that can no longer arrive. Leaving it there makes elimination
-    write a copy in that predecessor for a path it does not take, and the
-    copy then runs on the path it does.
-    """
-    reaches = {block.at: set(block.succ) for block in blocks}
-    out = []
-    for block in blocks:
-        kept = []
-        for phi in block.phis:
-            arms = {at: one for at, one in phi.incoming.items() if block.at in reaches.get(at, {at})}
-            if len(arms) == len(phi.incoming):
-                kept.append(phi)
-            elif len(arms) > 1:
-                kept.append(replace(phi, incoming=arms))
-            # One arm left is not a join at all; the value simply arrives,
-            # and every reader of the phi's result already names it.
-            elif arms:
-                kept.append(replace(phi, incoming=arms))
-        # Compared by content, not by count: a phi that keeps both of its
-        # arms is unchanged, and one that loses an arm is not, however many
-        # phis the block still has.
-        out.append(block if tuple(kept) == block.phis else replace(block, phis=tuple(kept)))
-    return out
+    # The successors are left as they were, and the body is not resolved.
+    # Both would be tidier and both lose bytes: resolving prunes a block
+    # nothing can reach any more, and layout.py then has a hole it cannot
+    # account for -- `0x006d: 3 bytes between the ops are not instructions`
+    # on three of the bools objects. An edge that can no longer be taken is
+    # an over-approximation of the control flow, which is the safe
+    # direction for everything that reads it.
+    return replace(body, blocks=tuple(out))
 
 
 def dead(body: MirBody) -> MirBody:
