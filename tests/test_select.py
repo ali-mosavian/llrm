@@ -789,3 +789,45 @@ def test_an_absorbed_site_comes_back_with_a_field_for_every_fixup() -> None:
             both += len(ours.places) == 2
     assert seen, "no site absorbed, so this proves nothing"
     assert both, "none of them carried two, which is the case this exists for"
+
+
+def _funnel(count) -> ir.Semantics:
+    """`shrd eax,edx,count` as this layer says it."""
+    low = ir.Reg(Register.EAX, 4)
+    return ir.Semantics(
+        ir.Operation.FUNNEL,
+        "shrd",
+        dests=(low,),
+        sources=(low, ir.Reg(Register.EDX, 4), count),
+    )
+
+
+def test_a_funnel_shift_is_two_address_in_its_low_half() -> None:
+    """`shrd r,r,n` shifts the destination and reads it, like every other
+    two-address form: an allocation that moves the destination without the
+    operand it also reads shifts whatever that register happened to hold."""
+    from qbopt import target
+
+    assert target.tied(_funnel(ir.Imm(16, 1))) is Register.EAX
+
+
+def test_a_funnel_shift_by_a_register_takes_its_count_in_cl() -> None:
+    """The only register `shrd` can count from. Nothing else about it is
+    fixed -- the two sources are whichever registers the allocation picked."""
+    from qbopt import target
+
+    dynamic = target.reads(_funnel(ir.Reg(Register.CL, 1)))
+    assert dynamic.get(Register.ECX) is not None and dynamic[Register.ECX].fixed is Register.ECX
+    assert Register.EAX not in target.reads(_funnel(ir.Imm(16, 1)))
+    assert not target.writes(_funnel(ir.Imm(16, 1))), "shrd writes only what it names"
+
+
+@pytest.mark.parametrize(
+    ("count", "want"),
+    [(ir.Imm(16, 1), "660fac d0 10"), (ir.Reg(Register.CL, 1), "660fad d0")],
+)
+def test_a_funnel_shift_emits_the_form_its_count_asks_for(count, want: str) -> None:
+    """Immediate and cl are different opcodes, 0F AC and 0F AD."""
+    made = select.emit(_funnel(count))
+    assert made is not None
+    assert made.code.hex() == want.replace(" ", "")

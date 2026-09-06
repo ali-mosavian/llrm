@@ -305,6 +305,11 @@ class Operation(StrEnum):
     DIVIDE = "div"  # dests[0] <- the quotient and dests[1] <- the remainder of sources[0]:sources[1] / sources[2]
     COMPARE = "cmp"  # flags only, from sources[0] and sources[1]
     UNARY = "unary"  # dests[0] <- `name` sources[0], and sources[0] IS dests[0]
+    # dests[0] <- (sources[1]:dests[0]) shifted right by sources[2], and
+    # sources[0] IS dests[0]. Two registers shifted as one number, which is
+    # how a 64-bit product is brought back down to 32: `shrd`. The count is
+    # an immediate or cl, and nothing else about it is fixed.
+    FUNNEL = "funnel"
     EXTEND = "extend"  # dests[0] <- the sign of sources[0]: cwd, cdq
     PUSH = "push"  # sources[0] onto the stack; the cell and sp are Effects' business, not this layer's
     POP = "pop"  # dests[0] off the stack, likewise

@@ -50,7 +50,14 @@ def _root(register: Register_) -> Register_:
 
 
 def _shifted(what: ir.Semantics) -> bool:
-    """A shift whose count is a register takes it in cl and says so."""
+    """A shift whose count is a register takes it in cl and says so.
+
+    A funnel shift is one of them: `shrd` counts from cl and from nowhere
+    else, and its own two register sources are wherever the allocation put
+    them.
+    """
+    if what.op is ir.Operation.FUNNEL:
+        return len(what.sources) == 3 and isinstance(what.sources[2], ir.Reg)
     return (what.name or "") in ("shl", "shr", "sar", "rol", "ror", "rcl", "rcr") and any(
         isinstance(one, ir.Reg) and _root(one.register) is Register.ECX for one in what.sources
     )
