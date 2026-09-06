@@ -202,3 +202,46 @@ def test_a_rewritten_operation_still_has_machine_operands(stem: str) -> None:
     """
     raw = (Path("fixtures/omf") / f"{stem}.obj").read_bytes()
     assert wholeseg.rebuilt(raw)[1] == wholeseg.REBUILT
+
+
+def _unrelocated(data: bytes) -> list[str]:
+    """Every emitted displacement of zero that no fixup names.
+
+    BC encodes a data reference as a displacement of zero and lets the
+    linker write the address in. One the rebuild emits without its fixup
+    reads offset zero of the segment instead -- the right instruction on
+    the wrong address, which no structural check on the object notices.
+    """
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(data))
+    fields = {one.offset for one in omf.fixups(omf.parse(data)) if one.seg == found.seg}
+    # Through the block split, not a linear decode: the first 48 bytes are
+    # BC's module header and decoding them as code desynchronises the rest.
+    insns = [one for block in split.partition(found, code_map(found)) for one in block.insns]
+    return [
+        f"{one.at:#06x} {one.insn}"
+        for one in insns
+        if one.disp_at is not None
+        and one.disp_len == 2
+        and int.from_bytes(found.code[one.disp_at : one.disp_at + 2], "little") == 0
+        and one.disp_at not in fields
+    ]
+
+
+@pytest.mark.parametrize("stem", ["stride-q-O", "ivchan-q-O"])
+def test_an_operation_a_pass_rewrote_keeps_its_relocation(stem: str) -> None:
+    """stride printed T= 0 for 210: `t = t + b(i)` accumulated into offset 0.
+
+    drop_loads serves the read of b(i) from the register the store just
+    wrote, which rewrites the `add [t],ax` beside it -- and asm asked
+    whether a rewritten operation still has a memory operand by way of
+    lower.semantics, which answers in MIR's own operands. A mir.MemRef is
+    not an ir.Mem, so the answer was no, and the fixup naming `t` went.
+    """
+    raw = (Path("fixtures/omf") / f"{stem}.obj").read_bytes()
+    out, why = wholeseg.rebuilt(raw, only="drop_loads")
+    assert why == wholeseg.REBUILT
+    assert not _unrelocated(raw), "the fixture itself has one"
+    assert not _unrelocated(out)

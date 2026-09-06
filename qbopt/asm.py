@@ -165,7 +165,7 @@ def _still_has_an_operand_for_it(op: mir.Op) -> bool:
     # What rewrote it, or None for an operation nothing did -- the question
     # this asks. `op.made` used to be that marker; a pass that says what it
     # computes in MIR's own operands sets nothing, so ask lower.
-    what = lower.semantics(op, getattr(op.node, "semantics", None)) if op.made is None else op.made
+    what = lower.rewritten(op)
     if what is None:
         return True
     holds = [one for one in (*what.dests, *what.sources) if isinstance(one, (ir.Mem, ir.Address, ir.Imm))]

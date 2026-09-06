@@ -84,6 +84,26 @@ def _place(arg: mir.Arg, had: tuple, index: int) -> ir.Loc:
     return was if isinstance(was, ir.Reg) and was.width == got.width else got
 
 
+def rewritten(op) -> "ir.Semantics | None":
+    """What a pass made of this operation, in machine form, or None.
+
+    None means nothing rewrote it, which is a different answer from what
+    it computes -- `current` collapses the two and a caller asking whether
+    an operand *went* cannot.
+
+    _located here and not in the callers. `semantics` builds from MIR's
+    own operands, so a cell comes back as mir.MemRef, and nothing below
+    this line has an encoding for one: two callers converted and two did
+    not, which cost fifteen objects their rebuild (`add is not one
+    select.py can emit`) and stride its `t` (`add [t],ax` emitted with no
+    fixup, accumulating into offset zero, T= 0 for 210).
+    """
+    if op.made is not None:
+        return op.made
+    was = getattr(op.node, "semantics", None)
+    return _located(semantics(op, was), was)
+
+
 def current(op) -> "ir.Semantics | None":
     """What this operation computes now, in machine form.
 
@@ -93,15 +113,7 @@ def current(op) -> "ir.Semantics | None":
     MIR's own operands, and so told twenty callers the fold had not
     happened.
     """
-    was = getattr(op.node, "semantics", None)
-    if op.made is not None:
-        return op.made
-    # _located here and not in the callers. `semantics` builds from MIR's
-    # own operands, so a cell comes back as mir.MemRef, and select has no
-    # encoding for one: lowered() knew to convert and the whole-segment
-    # path did not, so fifteen objects stopped rebuilding with `add is not
-    # one select.py can emit` the moment a pass rewrote an operand.
-    return _located(semantics(op, was), was) or was
+    return rewritten(op) or getattr(op.node, "semantics", None)
 
 
 def _target(op: mir.Op, was: ir.Semantics | None) -> int | None:
@@ -111,7 +123,7 @@ def _target(op: mir.Op, was: ir.Semantics | None) -> int | None:
     return was.target if was is not None else None
 
 
-__all__ = ["operand", "semantics", "current"]
+__all__ = ["operand", "semantics", "rewritten", "current"]
 
 
 class Unlowered(Exception):
