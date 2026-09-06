@@ -18,6 +18,9 @@ the whole object: half this pass's code and half BC's is not something
 anything downstream could reason about.
 """
 
+from dataclasses import dataclass
+from enum import StrEnum
+
 from qbopt import mir
 from qbopt import omf
 from qbopt import layout
@@ -29,7 +32,53 @@ from qbopt import blocks as split
 from qbopt.blocks import code_map
 
 
+class Emission(StrEnum):
+    """Which emitter produced an object, or that none did.
+
+    `rebuilt` says only whether it worked, and two emitters are coming:
+    the one below, from MIR, and objwrite.py's, from LIR. A caller that
+    has to tell them apart -- one whose output is a program rather than a
+    body, and must not be raised again -- cannot ask a boolean, and "it
+    worked" would treat a fallback as the other's own output.
+    """
+
+    LIR = "lir"
+    MIR = "mir"
+    REFUSED = "refused"
+
+
+@dataclass(frozen=True)
+class Emitted:
+    """An object, what made it, and what it said about doing so."""
+
+    data: bytes
+    outcome: Emission
+    reason: str
+
+
+def emitted(
+    data: bytes,
+    optimise: bool = True,
+    native_fpu: bool = False,
+    only: str | None = None,
+) -> Emitted:
+    """The object rewritten, and which emitter did it."""
+    out, why = _rebuilt(data, optimise, native_fpu, only)
+    return Emitted(out, Emission.MIR if why == REBUILT else Emission.REFUSED, why)
+
+
 def rebuilt(
+    data: bytes,
+    optimise: bool = True,
+    native_fpu: bool = False,
+    only: str | None = None,
+) -> tuple[bytes, str]:
+    """`emitted`, as every caller already reads it."""
+    got = emitted(data, optimise, native_fpu, only)
+    return got.data, got.reason
+
+
+def _rebuilt(
     data: bytes,
     optimise: bool = True,
     native_fpu: bool = False,

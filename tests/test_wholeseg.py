@@ -245,3 +245,38 @@ def test_an_operation_a_pass_rewrote_keeps_its_relocation(stem: str) -> None:
     assert why == wholeseg.REBUILT
     assert not _unrelocated(raw), "the fixture itself has one"
     assert not _unrelocated(out)
+
+
+def test_an_emission_says_which_emitter_produced_it() -> None:
+    """`rebuilt` says only whether it worked, and two emitters are coming:
+    one from MIR and one from LIR. A caller that has to know which cannot
+    ask, and "it worked" would finalise a fallback as if it were the LIR
+    path's own output."""
+    got = wholeseg.emitted((Path("fixtures/omf") / "hotlop-p-g2.obj").read_bytes())
+    assert got.outcome is wholeseg.Emission.MIR
+    assert got.reason == wholeseg.REBUILT
+    assert got.data != b""
+
+
+def test_a_refusal_says_so_rather_than_looking_like_a_rebuild() -> None:
+    from qbopt import module
+
+    was = module.of
+    try:
+        module.of = lambda *a, **k: None
+        got = wholeseg.emitted((Path("fixtures/omf") / "hotlop-p-g2.obj").read_bytes())
+    finally:
+        module.of = was
+    assert got.outcome is wholeseg.Emission.REFUSED
+    assert got.reason != wholeseg.REBUILT and got.reason
+
+
+@pytest.mark.parametrize("stem", ["hotlop-p-g2", "nots-q-O"])
+def test_rebuilt_still_answers_exactly_what_it_used_to(stem: str) -> None:
+    """Every caller reads (bytes, why); the outcome is beside that, not
+    instead of it."""
+    raw = (Path("fixtures/omf") / f"{stem}.obj").read_bytes()
+    out, why = wholeseg.rebuilt(raw)
+    got = wholeseg.emitted(raw)
+    assert (out, why) == (got.data, got.reason)
+    assert isinstance(out, bytes) and isinstance(why, str)
