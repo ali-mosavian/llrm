@@ -208,10 +208,29 @@ class MemRef:
     just recomputed is a different reference, and the edge says so.
     """
 
-    addr: Addr | None  # None where nothing can name it -- aliases everything
+    addr: Addr | None  # None where nothing can name the exact byte
     width: int
     base: Value | None = None
     segment: Value | None = None
+    # Which object this reference is in, known even where the byte is not.
+    #
+    # LLVM's `PseudoSourceValue`: a machine memory operand whose exact
+    # address it cannot name still says whether it is a stack slot, a
+    # constant pool, the GOT -- and two different kinds never alias. Ours
+    # is the same idea over `Space`.
+    #
+    # It is what a push needs. The raise names the slot a push lands in
+    # while it knows the stack depth, and gives up on the address when it
+    # does not -- but the push is still a push, and a push cannot land on a
+    # global whatever the depth. Without this, two thirds of the corpus's
+    # pushes aliased every named cell in their body, and nothing was
+    # promotable anywhere.
+    space: "Space | None" = None
+
+    @property
+    def where(self) -> "Space | None":
+        """The object this names, from the address where there is one."""
+        return self.addr.space if self.addr is not None else self.space
 
 
 @dataclass(frozen=True, slots=True)
@@ -864,8 +883,20 @@ def _stack_slot(node: ir.Node, offset: int | None, name: str | None = None) -> t
             return offset, None
 
 
-def _memrefs(cells: tuple[ir.Mem, ...], namer: _Namer, at: int, slot: Addr | None = None) -> tuple[MemRef, ...]:
-    """ir.Mem cells, with the values their own address registers hold now."""
+def _memrefs(
+    cells: tuple[ir.Mem, ...],
+    namer: _Namer,
+    at: int,
+    slot: Addr | None = None,
+    space: "Space | None" = None,
+) -> tuple[MemRef, ...]:
+    """ir.Mem cells, with the values their own address registers hold now.
+
+    `space` is what the reference is in when nothing can name where: a push
+    whose stack depth is unknown is still a push, and a push cannot land on
+    a global. LLVM's PseudoSourceValue, and without it two thirds of the
+    corpus's pushes aliased every named cell in their own body.
+    """
     out = []
     for cell in cells:
         addr = slot if cell.addr is None and slot is not None else cell.addr
@@ -876,8 +907,23 @@ def _memrefs(cells: tuple[ir.Mem, ...], namer: _Namer, at: int, slot: Addr | Non
                 base = namer.current(root, at)
             if addr.segment != Register.NONE:
                 segment = None  # a segment register is physical, never a value
-        out.append(MemRef(addr, cell.width, base, segment))
+        out.append(MemRef(addr, cell.width, base, segment, space))
     return tuple(out)
+
+
+# What each operation's unnamed memory is in, where the operation says so.
+# A push and a pop reach the stack and nothing else, whatever the depth.
+_IN: dict = {}
+
+
+def _object_of(node) -> "Space | None":
+    """Which object this instruction's memory is in, or None for anything."""
+    what = getattr(node, "semantics", None)
+    if what is None:
+        return None
+    if what.op in (ir.Operation.PUSH, ir.Operation.POP):
+        return Space.STACK
+    return None
 
 
 def _placed(
@@ -1084,8 +1130,9 @@ def raise_body(
             offset, slot = _stack_slot(node, offset, calls.get(insn.at) if calls else None)
             defines, uses = _touched(node, calls)
             used = tuple(namer.current(one, start) for one in sorted(uses, key=lambda o: (o is not FLAGS, o)))
-            loads = _memrefs(node.effects.loads, namer, start, slot)
-            stores = _memrefs(node.effects.stores, namer, start, slot)
+            where = _object_of(node)
+            loads = _memrefs(node.effects.loads, namer, start, slot, where)
+            stores = _memrefs(node.effects.stores, namer, start, slot, where)
             holds = dict(zip(sorted(uses, key=lambda o: (o is not FLAGS, o)), used))
             made = []
             for one in sorted(defines, key=lambda o: (o is not FLAGS, o)):
@@ -1530,10 +1577,30 @@ def overlapping(
     written in between.
     """
     if one.addr is None or other.addr is None:
-        return True
+        # Neither names the byte, but each may name the object. LLVM's
+        # PseudoSourceValue rule: two different kinds never alias, and one
+        # whose kind is unknown aliases anything.
+        return _may_reach(one.where, other.where)
     if one.base is not None and one.base == other.base and one.addr.space is other.addr.space:
         return one.addr.disp < other.addr.disp + other.width and other.addr.disp < one.addr.disp + one.width
     return module.may_alias(one.addr, other.addr, dgroup, one.width, other.width, bounds)
+
+
+def _may_reach(one: "Space | None", other: "Space | None") -> bool:
+    """Whether a reference in one object could land in the other.
+
+    The kinds alone, for a pair where at least one cannot name its byte.
+    `module.may_alias` is the same question with the displacements known;
+    this is what is left when they are not.
+    """
+    if one is None or other is None:
+        return True
+    if one is other:
+        return True  # same object, unknown offsets
+    # The stack and the frame are one region reached two ways, so they
+    # alias each other and nothing else. Everything else is a different
+    # object entirely.
+    return {one, other} == {Space.STACK, Space.FRAME}
 
 
 def bodies(found: Module, blocks: list[Block]) -> list[tuple[str, MirBody]]:

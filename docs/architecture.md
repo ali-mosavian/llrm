@@ -539,3 +539,42 @@ number.
 
 **A long divide now leaves its loop.** That xfail passed the moment the arm
 was out: it had been holding the loop in place.
+
+## Aliasing, after LLVM
+
+`MemRef` names the *object* a reference is in even where it cannot name the
+byte. LLVM's `PseudoSourceValue`: a machine memory operand whose exact
+address is unknown still says whether it is a stack slot, a constant pool
+or the GOT, and two different kinds never alias.
+
+It is what a push needs. The raise names the slot a push lands in while it
+knows the stack depth and gives up on the address when it does not -- but a
+push is still a push, and a push cannot land on a global whatever the
+depth. Measured before: **two thirds of the corpus's pushes (354 of 520)
+had no nameable slot**, and each one aliased every named cell in its body.
+
+    963 references name the byte
+    413 name only the object
+    793 name neither
+
+### Why promotion is not the pass to write
+
+Measured, and it changes the answer given a day earlier. Of 312 candidate
+cells the corpus offers, **none is promotable**, and after the push fix the
+reason is a single honest fact rather than a modelling gap:
+
+    704 of 778 blind references are calls whose contract says writes=ANY
+
+Twenty of the twenty-one routines with that contract are `established`,
+measured against `rt/prnval.asm`: `B$PRINT` and everything falling into it
+write through the runtime's own buffers, which live in DGROUP beside the
+program's variables. A global genuinely cannot be promoted across a PRINT,
+and every program in the suite prints.
+
+Frame slots escape that -- a callee cannot see an un-escaped one, LLVM's
+alloca rule -- but BC puts QuickBASIC's variables in DGROUP, not on the
+frame: the whole corpus has **24 frame cells**, 15 of which a named
+reference may alias.
+
+So the pass that pays is not mem2reg. It is forwarding *between* clobber
+points, and copy propagation, which memory aliasing does not touch at all.

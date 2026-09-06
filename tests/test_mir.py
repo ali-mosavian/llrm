@@ -505,3 +505,50 @@ def test_a_variable_keeps_one_name_across_every_version_of_it() -> None:
             assert versions == set(range(1, count + 1)), f"variable {which}: {sorted(versions)}"
         seen += len(counted)
     assert seen, "no body named a variable, so this proves nothing"
+
+
+def test_a_push_does_not_alias_a_global() -> None:
+    """LLVM's PseudoSourceValue: an unnamed address still names its object.
+
+    The raise names the slot a push lands in while it knows the stack
+    depth, and gives up on the address when it does not -- but the push is
+    still a push, and a push cannot land on a global whatever the depth.
+    Two thirds of the corpus's pushes had no nameable slot and so aliased
+    every named cell in their own body.
+    """
+    from qbopt.module import Space
+
+    stack = mir.MemRef(addr=None, width=2, space=Space.STACK)
+    glob = mir.MemRef(addr=Addr(Space.SEGMENT, 8), width=2)
+    frame = mir.MemRef(addr=Addr(Space.FRAME, -4), width=2)
+    blind = mir.MemRef(addr=None, width=2)
+
+    assert not mir.overlapping(glob, stack, frozenset())
+    assert not mir.overlapping(stack, glob, frozenset())
+    # The stack and the frame are one region reached two ways.
+    assert mir.overlapping(frame, stack, frozenset())
+    # And an address in no known object still aliases everything.
+    assert mir.overlapping(glob, blind, frozenset())
+    assert mir.overlapping(stack, blind, frozenset())
+
+
+def test_the_raise_says_which_object_a_push_reaches() -> None:
+    """Measured: 413 of the corpus's references name an object and no byte."""
+    from pathlib import Path
+
+    from qbopt import blocks as split
+    from qbopt import module
+    from qbopt import omf
+    from qbopt.blocks import code_map
+    from qbopt.module import Space
+
+    found = module.of(omf.parse(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()))
+    blocks = split.partition(found, code_map(found))
+    spaced = 0
+    for _name, body in mir.bodies(found, blocks):
+        for block in body.blocks:
+            for op in block.ops:
+                for one in (*op.loads, *op.stores):
+                    if one.addr is None and one.where is Space.STACK:
+                        spaced += 1
+    assert spaced, "no push says it is on the stack"
