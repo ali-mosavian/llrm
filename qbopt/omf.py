@@ -302,6 +302,11 @@ class Fixup:
     lo: int
     hi: int
     disp_pos: int | None
+    # Which of the frame methods this fixup used, where it named one
+    # explicitly. `frame` alone is an index and cannot say whether it
+    # counts segments, groups or externals, and pruning an EXTDEF has to
+    # know which of the three it is looking at.
+    frame_method: int | None = None
 
     @property
     def raw(self) -> bytes:
@@ -441,9 +446,11 @@ def fixups(records: list[Record]) -> list[Fixup]:
             at += 1
 
             frame: Thread | int | None = None
+            frame_method: int | None = None
             if fixdata & 0x80:
                 frame = frame_threads[(fixdata >> 4) & 3]
             elif ((fixdata >> 4) & 7) < 3:
+                frame_method = (fixdata >> 4) & 7
                 frame, at = _index(body, at)
 
             if fixdata & 0x08:
@@ -472,9 +479,53 @@ def fixups(records: list[Record]) -> list[Fixup]:
                     lo=start,
                     hi=at,
                     disp_pos=disp_pos,
+                    frame_method=frame_method,
                 )
             )
     return found
+
+
+def names_externals(one: Fixup) -> "set[int]":
+    """Every external index this fixup depends on, threads resolved.
+
+    Not the THREAD declarations: one may name an external no fixup ever
+    uses, and dropping the EXTDEF it names is exactly what pruning is for.
+    What matters is what a fixup resolves to.
+    """
+    out: set[int] = set()
+    if one.target == "external":
+        out.add(one.index)
+    frame = one.frame
+    if isinstance(frame, Thread):
+        if frame.method == 2:
+            out.add(frame.index)
+    elif frame is not None and one.frame_method == 2:
+        out.add(frame)
+    return out
+
+
+def extdef_entries(record: Record) -> "list[tuple[bytes, bytes]]":
+    """One EXTDEF record's (name, type index) pairs, in order."""
+    out, at = [], 0
+    body = record.body
+    while at < len(body):
+        n = body[at]
+        name = body[at + 1 : at + 1 + n]
+        at += 1 + n
+        start = at
+        _, at = _index(body, at)
+        out.append((name, body[start:at]))
+    return out
+
+
+def extdef_record(entries: "list[tuple[bytes, bytes]]") -> Record:
+    """An EXTDEF record holding exactly these names."""
+    body = bytearray()
+    for name, kind in entries:
+        body.append(len(name))
+        body += name
+        body += kind
+    return Record(EXTDEF, bytes(body))
 
 
 def as_index(value: int) -> bytes:

@@ -244,3 +244,17 @@ def test_renumbering_the_corpus_moves_the_indices_and_nothing_else(obj: Path) ->
         )
         want = mapping.get(one.index, one.index) if one.target == "external" else one.index
         assert other.index == want
+
+
+def test_a_thread_outlives_the_record_it_was_declared_in() -> None:
+    """A thread is set in one FIXUPP record and used by fixups in the next.
+    Remapping has to move the declaration and leave the references alone,
+    or the second record's fixups resolve to the old external."""
+    ledata = omf.ledata_record(1, 0, bytes(64))
+    first = omf.Record(omf.FIXUPP, _thread(False, 0, 2, 9) + _threaded(0x10, 0))
+    second = omf.Record(omf.FIXUPP, _threaded(0x20, 0) + _threaded(0x24, 0))
+    made = [ledata, first, second]
+    assert [one.index for one in omf.fixups(made)] == [9, 9, 9]
+    got = [omf.renumbered(one, {9: 5}) for one in made]
+    assert [one.index for one in omf.fixups(got)] == [5, 5, 5]
+    assert got[2].body == second.body, "a record that only refers to a thread is untouched"
