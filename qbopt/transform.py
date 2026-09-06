@@ -133,14 +133,82 @@ def widened(body: MirBody, dead: frozenset[int] = frozenset()) -> MirBody:
 
 
 def without_redundant_loads(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
-    """Every load whose destination already held what it loads, removed."""
-    gone = set(avail.redundant(body, dgroup, calls))
-    if not gone:
+    """Every load whose destination already held what it loads, removed.
+
+    The removal is the easy half. The load *defined* a value, and deleting
+    it takes away that value's only definition -- so every later reader has
+    to be told to read the provider instead, and told through every route a
+    value reaches a reader by: an ordinary use, a `Held` operand, the base
+    or segment of a memory operand, and a phi's incoming edge.
+
+    Substituting by value, not by register. The two agree here -- the load
+    is redundant precisely because the provider is already in the
+    destination -- but saying it that way would make the deletion depend on
+    an allocation that has not happened, and `origin` is what a body was
+    raised with rather than what it will be emitted as.
+
+    Without the substitution arridx miscompiled in all nine ordinary
+    configurations: the add after the deleted load went on naming a value
+    nobody wrote, allocation had no constraint to honour and put that
+    phantom in bx, and `mov ax,bx` overwrote the product `imul` had just
+    left in ax. VBDOS answered -26096, PDS 0 and QuickBASIC 4.5 11008,
+    where the program prints 1260.
+    """
+    found = avail.redundant(body, dgroup, calls)
+    if not found:
         return body
+    gone = {at for at, _made, _who in found}
+    swap = {made.id: who for _at, made, who in found}
     return replace(
         body,
-        blocks=tuple(replace(one, ops=tuple(_absorb(list(one.ops), gone))) for one in body.blocks),
+        blocks=tuple(
+            replace(
+                one,
+                phis=tuple(_phi_reading(phi, swap) for phi in one.phis),
+                ops=tuple(_reading(op, swap) for op in _absorb(list(one.ops), gone)),
+            )
+            for one in body.blocks
+        ),
     )
+
+
+def _reading(op: Op, swap: dict) -> Op:
+    """One operation reading the provider wherever it read the deleted load."""
+
+    def value(one):
+        return swap.get(one.id, one)
+
+    def arg(one):
+        if isinstance(one, mir.Held) and one.value.id in swap:
+            return mir.Held(swap[one.value.id], one.width)
+        return one
+
+    def cell(ref):
+        base, segment = ref.base, ref.segment
+        if base is not None and base.id in swap:
+            base = swap[base.id]
+        if segment is not None and segment.id in swap:
+            segment = swap[segment.id]
+        if base is ref.base and segment is ref.segment:
+            return ref
+        return replace(ref, base=base, segment=segment)
+
+    return replace(
+        op,
+        uses=tuple(value(one) for one in op.uses),
+        args=tuple(arg(one) for one in op.args),
+        results=tuple(arg(one) for one in op.results),
+        loads=tuple(cell(one) for one in op.loads),
+        stores=tuple(cell(one) for one in op.stores),
+        merges={value(a): value(b) for a, b in op.merges.items()},
+    )
+
+
+def _phi_reading(phi, swap: dict):
+    """One phi taking the provider along any edge that named the load."""
+    if not any(one.id in swap for one in phi.incoming.values()):
+        return phi
+    return replace(phi, incoming={at: swap.get(one.id, one) for at, one in phi.incoming.items()})
 
 
 

@@ -436,8 +436,18 @@ def dead_stores(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) ->
     return tuple(sorted(found))
 
 
-def redundant(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> tuple[int, ...]:
+def redundant(
+    body: MirBody, dgroup: frozenset[int], calls: dict[int, str]
+) -> tuple[tuple[int, Value, Value], ...]:
     """Loads that put back into a register exactly what it already held.
+
+    `(where, what the load defined, the value that already held it)`. The
+    third is the point: deleting the load removes the only definition of
+    the second, and every later reader has to be told to read the provider
+    instead. This used to return the address alone, so the caller deleted
+    the instruction and substituted nothing -- arridx's add went on naming
+    a value nobody wrote, allocation gave that phantom a register of its
+    own, and the program answered 0 where it should answer 1260.
 
     forward.py's deletion, restated over MIR. `mov ax,[x]` where ax already
     holds [x] computes nothing, so removing it leaves every later
@@ -458,7 +468,7 @@ def redundant(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> t
     this see the load at all.
     """
     held = holders(body, dgroup, calls, partial=True)
-    found: list[int] = []
+    found: list[tuple[int, Value, Value]] = []
     for block in body.blocks:
         current = dict(held.into[block.at])
         # Which value each register actually holds right now. holders() is a
@@ -486,7 +496,7 @@ def redundant(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> t
                 into = body.origin.get(made)
                 who = next((w for cell, w in current.items() if mir.same_bytes(cell, ref)), None)
                 if who is not None and into is not None and body.origin.get(who) is into and inside.get(into) is who:
-                    found.append(op.at)
+                    found.append((op.at, made, who))
             for value in op.defines:
                 where = body.origin.get(value)
                 if where is not None:

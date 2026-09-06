@@ -412,3 +412,96 @@ def test_only_redundant_asks_the_map_for_partial_writes(monkeypatch: pytest.Monk
     assert read is not None, "this body reads no memory, so provider() would not be asked"
     under_test.provider(body, found.dgroup, 0, read.loads[0], found.calls)
     assert asked == [False], f"provider() asked {asked}"
+
+
+def _defined(body) -> set[int]:
+    """Every value some operation or phi in this body writes."""
+    out = set()
+    for block in body.blocks:
+        out.update(phi.result.id for phi in block.phis)
+        for op in block.ops:
+            out.update(one.id for one in op.defines)
+    return out
+
+
+def _read(body) -> dict[int, str]:
+    """Every value something reads, and where, by all four routes in.
+
+    A value reaches a reader as a `use`, as a `Held` operand, as the base
+    or segment of a memory operand, or along a phi's incoming edge. A
+    deletion that forgets any of them leaves a use with no definition.
+    """
+    from qbopt import mir as form
+
+    out: dict[int, str] = {}
+    for block in body.blocks:
+        for phi in block.phis:
+            for at, one in phi.incoming.items():
+                out.setdefault(one.id, f"the phi at {block.at:#06x}, along the edge from {at:#06x}")
+        for op in block.ops:
+            for one in op.uses:
+                out.setdefault(one.id, f"{op.at:#06x}")
+            for one in op.args:
+                if isinstance(one, form.Held):
+                    out.setdefault(one.value.id, f"{op.at:#06x}, as an operand")
+            for ref in (*op.loads, *op.stores):
+                for one in (ref.base, ref.segment):
+                    if one is not None:
+                        out.setdefault(one.id, f"{op.at:#06x}, reaching memory")
+    return out
+
+
+def _orphaned(before, after) -> list[str]:
+    """Values that had a definition before the pass and have none after.
+
+    Asked as a difference on purpose. "Used and defined nowhere" is also
+    the description of a value the caller supplied -- `liveness.entry_values`
+    is exactly that set -- so the absolute question cannot tell a genuine
+    entry value from one whose definition a pass deleted. The change can.
+    """
+    had, has = _defined(before), _defined(after)
+    reads = _read(after)
+    return [
+        f"v{one} is read by {reads[one]} and its definition was deleted"
+        for one in sorted(had - has)
+        if one in reads
+    ]
+
+
+@pytest.mark.parametrize("obj", ["arridx-p-g2", "arridx-q-O", "arridx-v-g2"])
+def test_dropping_a_redundant_load_leaves_no_use_without_a_definition(obj: str) -> None:
+    """arridx: `mov [x],ax` then `mov ax,[x]`, and the reload deleted.
+
+    The load's own result was the value every later instruction read. The
+    deletion removed the only definition of it and substituted nothing, so
+    the add after it still named a value nobody wrote -- and allocation,
+    having no constraint to honour, put it in bx and emitted `mov ax,bx`
+    where the product was already in ax.
+
+    Measured through tools/matrix.py: arridx miscompiles in all nine
+    ordinary configurations. VBDOS answers -26096, PDS 0, QuickBASIC 4.5
+    11008, where the program prints 1260.
+    """
+    from pathlib import Path
+
+    from qbopt import blocks as split
+    from qbopt import mir
+    from qbopt import module
+    from qbopt import omf
+    from qbopt import transform
+    from qbopt.blocks import code_map
+
+    path = Path(f"fixtures/omf/{obj}.obj")
+    if not path.exists():
+        pytest.skip(f"no {obj} fixture")
+    found = module.of(omf.parse(path.read_bytes()))
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
+    blocks = split.partition(found, mapped)
+
+    for name, body in mir.bodies(found, blocks):
+        after = transform.applied(
+            body, found.dgroup, found.calls, blocks=blocks, found=found, only="drop_loads"
+        )
+        broken = _orphaned(body, after)
+        assert not broken, f"{obj} {name}: " + "; ".join(broken[:3])
