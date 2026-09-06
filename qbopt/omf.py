@@ -477,6 +477,80 @@ def fixups(records: list[Record]) -> list[Fixup]:
     return found
 
 
+def as_index(value: int) -> bytes:
+    """An OMF index, in the shorter of its two encodings."""
+    if value < 0 or value > 0x7FFF:
+        raise ValueError(f"{value} is not an OMF index")
+    return bytes([value]) if value < 128 else bytes([0x80 | (value >> 8), value & 0xFF])
+
+
+def renumbered(record: Record, mapping: dict[int, int]) -> Record:
+    """A FIXUPP record with every external index put through `mapping`.
+
+    Removing an EXTDEF renumbers every one after it, and an index is named
+    in four places: a fixup's own target, a fixup's own frame, and either
+    of those when a THREAD stands for it instead. BC leans on threads --
+    34 of 40 fixups in one module -- so patching only the explicit fields
+    would move the names nothing refers to and leave the rest behind.
+
+    The body is rebuilt rather than patched: an index is one byte under
+    128 and two above it, so a remap across that line changes the length
+    of the subrecord it sits in. Every other byte is copied exactly, and a
+    record nothing moves is returned as it was rather than re-encoded.
+    """
+    if record.type & 0xFE != FIXUPP or not mapping:
+        return record
+    body, at, out = record.body, 0, bytearray()
+    changed = False
+
+    def index(where: int) -> tuple[int, int]:
+        return _index(body, where)
+
+    while at < len(body):
+        if not body[at] & 0x80:
+            lead = body[at]
+            method = (lead >> 2) & 7
+            after = at + 1
+            if method >= 3:  # carries no index
+                out += body[at:after]
+                at = after
+                continue
+            was, after = index(after)
+            # A frame thread names an external only by method 2; a target
+            # thread's method is the same three, and 2 is the external one.
+            now = mapping.get(was, was) if method == 2 else was
+            changed = changed or now != was
+            out += body[at : at + 1] + as_index(now)
+            at = after
+            continue
+
+        start = at
+        out += body[at : at + 2]
+        at += 2
+        fixdata = body[at]
+        out.append(fixdata)
+        at += 1
+
+        if not fixdata & 0x80 and ((fixdata >> 4) & 7) < 3:
+            was, at = index(at)
+            now = mapping.get(was, was) if ((fixdata >> 4) & 7) == 2 else was
+            changed = changed or now != was
+            out += as_index(now)
+
+        if not fixdata & 0x08:
+            was, at = index(at)
+            now = mapping.get(was, was) if (fixdata & 3) == 2 else was
+            changed = changed or now != was
+            out += as_index(now)
+
+        if not fixdata & 0x04:
+            out += body[at : at + 2]
+            at += 2
+        del start
+
+    return record if not changed else Record(record.type, bytes(out))
+
+
 def reemit(fixup: Fixup, offset: int | None = None, disp: int | None = None) -> bytes:
     """This fixup's own bytes, with the fields given replaced. None leaves one alone.
 

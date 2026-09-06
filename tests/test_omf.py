@@ -13,6 +13,8 @@ anything until that holds.
 
 from pathlib import Path
 
+import struct
+
 from qbopt import omf
 
 
@@ -133,3 +135,112 @@ def test_every_byte_of_a_fixupp_is_accounted_for(obj: Path) -> None:
             assert earlier.hi <= later.lo, "subrecords must not overlap"
         for fixup in found:
             assert fixup.raw == body[fixup.lo : fixup.hi]
+
+
+def _thread(is_frame: bool, number: int, method: int, index: int | None) -> bytes:
+    lead = (0x40 if is_frame else 0) | (method << 2) | number
+    return bytes([lead]) if index is None else bytes([lead]) + _as_index(index)
+
+
+def _as_index(value: int) -> bytes:
+    return bytes([value]) if value < 128 else bytes([0x80 | (value >> 8), value & 0xFF])
+
+
+def _explicit(offset: int, method: int, index: int, disp: int | None = None) -> bytes:
+    out = bytearray([0x80 | ((offset >> 8) & 3), offset & 0xFF])
+    out.append((1 << 7) | (0 << 4) | (0x04 if disp is None else 0) | method)
+    out += _as_index(index)
+    if disp is not None:
+        out += struct.pack("<H", disp)
+    return bytes(out)
+
+
+def _threaded(offset: int, number: int, disp: int | None = None) -> bytes:
+    out = bytearray([0x80 | ((offset >> 8) & 3), offset & 0xFF])
+    out.append((1 << 7) | (0 << 4) | 0x08 | (0x04 if disp is None else 0) | number)
+    if disp is not None:
+        out += struct.pack("<H", disp)
+    return bytes(out)
+
+
+def _walked(records: list[omf.Record]) -> list[tuple]:
+    """Every fixup's decoded meaning, which a remap must leave alone but for
+    the indices it was asked to change."""
+    return [
+        (one.seg, one.offset, one.loc, one.selfrel, one.target, one.index, one.disp)
+        for one in omf.fixups(records)
+    ]
+
+
+def _with_fixups(*bodies: bytes) -> list[omf.Record]:
+    ledata = omf.ledata_record(1, 0, bytes(64))
+    return [ledata, omf.Record(omf.FIXUPP, b"".join(bodies))]
+
+
+def test_renumbering_externals_leaves_an_identity_mapping_byte_identical() -> None:
+    """Nothing to move, nothing rewritten: the encoding a record already has
+    is the one it keeps, threads and all."""
+    made = _with_fixups(_thread(False, 0, 2, 7), _threaded(0x10, 0), _explicit(0x20, 2, 9, 0))
+    got = [omf.renumbered(one, {}) for one in made]
+    assert [one.body for one in got] == [one.body for one in made]
+    assert got[1] is made[1], "an untouched record is not copied"
+
+
+def test_renumbering_moves_a_target_thread_and_the_fixups_that_use_it() -> None:
+    """A thread names the external once and many fixups refer to it by
+    number, so the index to move is in the thread and nowhere else."""
+    made = _with_fixups(_thread(False, 0, 2, 9), _threaded(0x10, 0), _threaded(0x14, 0))
+    before = _walked(made)
+    got = [omf.renumbered(one, {9: 8}) for one in made]
+    after = _walked(got)
+    assert [one[5] for one in before] == [9, 9]
+    assert [one[5] for one in after] == [8, 8]
+    assert [one[:5] + one[6:] for one in before] == [one[:5] + one[6:] for one in after]
+
+
+def test_renumbering_moves_externals_on_both_sides_of_a_removal() -> None:
+    """One removed in the middle: everything after it steps down and
+    everything before it stays where it was."""
+    made = _with_fixups(_explicit(0x10, 2, 3, 0), _explicit(0x20, 2, 9, 0), _explicit(0x30, 2, 11, 0))
+    got = [omf.renumbered(one, {9: 8, 11: 10}) for one in made]
+    assert [one[5] for one in _walked(got)] == [3, 8, 10]
+
+
+def test_renumbering_crosses_the_index_length_boundary() -> None:
+    """An OMF index is one byte under 128 and two above it, so a remap
+    across that line changes how many bytes the subrecord takes."""
+    made = _with_fixups(_explicit(0x10, 2, 128, 0), _explicit(0x20, 2, 127, 0))
+    got = [omf.renumbered(one, {128: 127, 127: 128}) for one in made]
+    assert [one[5] for one in _walked(got)] == [127, 128]
+    assert len(got[1].body) == len(made[1].body), "one grew and one shrank"
+
+
+def test_renumbering_a_frame_that_names_an_external_moves_it_too() -> None:
+    """A frame may be an external index just as a target may."""
+    body = bytearray([0x80, 0x10])
+    body.append((0 << 7) | (2 << 4) | 0x04 | 2)  # explicit frame method 2, target external
+    body += _as_index(9) + _as_index(9)
+    made = _with_fixups(bytes(body))
+    got = [omf.renumbered(one, {9: 4}) for one in made]
+    assert [one[5] for one in _walked(got)] == [4]
+    assert omf.fixups(got)[0].frame == 4
+
+
+def test_renumbering_the_corpus_moves_the_indices_and_nothing_else(obj: Path) -> None:
+    """Real threaded data. Every external index shifted by one is a mapping
+    that touches every naming there is, and nothing else about a fixup may
+    move with it."""
+    records = omf.parse(obj.read_bytes())
+    every = {one.index for one in omf.fixups(records) if one.target == "external"}
+    if not every:
+        pytest.skip("no external fixups")
+    mapping = {one: one + 1 for one in sorted(every, reverse=True)}
+    moved = [omf.renumbered(one, mapping) for one in records]
+    before, after = omf.fixups(records), omf.fixups(moved)
+    assert len(before) == len(after)
+    for one, other in zip(before, after, strict=True):
+        assert (one.seg, one.offset, one.loc, one.selfrel, one.target, one.disp) == (
+            other.seg, other.offset, other.loc, other.selfrel, other.target, other.disp
+        )
+        want = mapping.get(one.index, one.index) if one.target == "external" else one.index
+        assert other.index == want
