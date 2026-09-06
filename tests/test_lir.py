@@ -127,3 +127,64 @@ def test_a_byte_wide_held_is_the_low_byte() -> None:
                       (Register.ECX, Register.CL), (Register.EDX, Register.DL)):
         assert select.AT_WIDTH[root][1] is low, f"{root} at one byte is not its low half"
     assert ir.ROOT[Register.AH] is Register.EAX, "the high byte still roots to eax"
+
+
+def _one_body(stem: str):
+    from qbopt import lower
+
+    found = module.of(omf.parse((Path("fixtures/omf") / f"{stem}.obj").read_bytes()))
+    blocks = split.partition(found, code_map(found))
+    name, body = next(iter(mir.bodies(found, blocks)))
+    return lower, name, body, found
+
+
+def test_lowering_is_one_instruction_per_operation_unless_something_expands() -> None:
+    """The default, and it has to stay exactly what it was: every operation
+    is one instruction, carrying its own address, span and operation."""
+    lower, name, body, found = _one_body("hotlop-p-g2")
+    low = lower.lowered(name, body, found.calls)
+    ops = [op for block in body.blocks for op in block.ops]
+    insns = [one for block in low.blocks for one in block.insns]
+    assert len(insns) == len(ops)
+    for one, op in zip(insns, ops, strict=True):
+        assert (one.at, one.covers, one.op) == (op.at, op.covers, op)
+
+
+def test_an_expansion_gives_its_leader_the_operation_and_its_followers_none(monkeypatch) -> None:
+    """One operation, several instructions. The leader stands for the bytes
+    and the rest stand for none: an inserted instruction claiming the same
+    span made layout say a byte was held by more than one op."""
+    lower, name, body, found = _one_body("hotlop-p-g2")
+    kind = next(op.kind for block in body.blocks for op in block.ops if op.kind is mir.Kind.ADD)
+
+    def two(op, making):
+        temp = ir.Held(making.fresh(), 4)
+        return (
+            ir.Semantics(ir.Operation.MOVE, "mov", (temp,), (ir.Imm(1, 4),)),
+            ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(making.fresh(), 4),), (temp,)),
+        )
+
+    monkeypatch.setitem(lower._EXPANDS, kind, two)
+    low = lower.lowered(name, body, found.calls)
+    made = [one for block in low.blocks for one in block.insns if one.op is not None and one.op.kind is kind]
+    tail = [one for block in low.blocks for one in block.insns if one.op is None]
+    assert made and len(tail) == len(made), "one follower per expanded operation"
+    for one in tail:
+        assert one.covers == (one.at, one.at), "a follower stands for no bytes"
+        assert one.op is None and not one.clobbers
+        assert one.defines and one.uses, "a follower's values are the ones it names"
+
+
+def test_an_expansion_invents_values_nothing_else_uses(monkeypatch) -> None:
+    """A fresh id per call, and none of them one the body already had."""
+    lower, name, body, found = _one_body("hotlop-p-g2")
+    had = {
+        one.id
+        for block in body.blocks
+        for op in block.ops
+        for one in (*op.defines, *op.uses)
+    }
+    made = lower.Lowering(body, set(), {}, ())
+    got = [made.fresh() for _ in range(8)]
+    assert len(set(got)) == len(got)
+    assert not (set(got) & had)

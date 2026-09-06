@@ -232,26 +232,14 @@ def lowered(
     read = {one.id for block in body.blocks for op in block.ops for one in op.uses}
     read |= {value.id for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
     calls = calls or {}
+    making = Lowering(body, read, calls, absorbed or ())
     return lir.LirBody(
         name=name,
         entry=body.entry,
         blocks=tuple(
             lir.LirBlock(
                 at=block.at,
-                insns=tuple(
-                    lir.Insn(
-                        at=op.at,
-                        covers=op.covers,
-                        what=None
-                        if op.id in (absorbed or ())
-                        else current(op),
-                        defines=tuple(one.id for one in op.defines if not one.flags and one.id in read),
-                        uses=tuple(one.id for one in op.uses if not one.flags),
-                        clobbers=_clobbers(op, calls),
-                        op=op,
-                    )
-                    for op in block.ops
-                ),
+                insns=tuple(one for op in block.ops for one in making.expand(op)),
                 succ=block.succ,
                 phis=tuple(
                     lir.Phi(
@@ -267,6 +255,94 @@ def lowered(
         origin=dict(body.origin),
         pins=dict(getattr(body, "pins", {}) or {}),
     )
+
+
+# A kind whose one operation is more than one instruction, and what it
+# becomes. Empty: every operation today is one instruction, and the entry
+# an intrinsic needs goes here rather than into `expand` itself.
+_EXPANDS: dict = {}
+
+
+class Lowering:
+    """One body being lowered, and the values the expansion invents.
+
+    A MIR operation is usually one machine instruction. Where it is not --
+    an intrinsic that becomes a load, a multiply and a shift -- the extra
+    instructions need values nothing raised and ids no raised value has,
+    and something has to own both. That is per body, because an id is only
+    unique within one.
+
+    The first instruction an operation becomes is its leader and carries
+    the operation: its address, the bytes it stands for, and the operation
+    itself, which is where its id lives. Every one after it is an insertion and says so the way
+    phielim's and twoaddr's do -- no bytes of its own, no id, no op -- so
+    layout's accounting still adds up.
+    """
+
+    def __init__(self, body: "mir.MirBody", read: set, calls: dict, absorbed) -> None:
+        self._read = read
+        self._calls = calls
+        self._absorbed = absorbed
+        every = [
+            one.id
+            for block in body.blocks
+            for op in block.ops
+            for one in (*op.defines, *op.uses)
+            if one.id is not None
+        ]
+        every += [phi.result.id for block in body.blocks for phi in block.phis]
+        self._next = max(every, default=0) + 1
+
+    def fresh(self) -> int:
+        """A value id nothing in this body already uses."""
+        self._next += 1
+        return self._next - 1
+
+    def expand(self, op: "mir.Op") -> "tuple[lir.Insn, ...]":
+        """Every instruction this operation becomes, the leader first."""
+        from qbopt import lir
+
+        made = _EXPANDS.get(op.kind)
+        parts = made(op, self) if made is not None else None
+        leader = lir.Insn(
+            at=op.at,
+            covers=op.covers,
+            what=None if op.id in self._absorbed else (parts[0] if parts else current(op)),
+            defines=tuple(one.id for one in op.defines if not one.flags and one.id in self._read),
+            uses=tuple(one.id for one in op.uses if not one.flags),
+            clobbers=_clobbers(op, self._calls),
+            op=op,
+        )
+        if not parts:
+            return (leader,)
+        return (leader, *(_follows(op, one) for one in parts[1:]))
+
+
+def _follows(op: "mir.Op", what: "ir.Semantics") -> "lir.Insn":
+    """One instruction an expansion inserted, beside the operation it came from.
+
+    No bytes: `covers=(at, at)` is what an inserted instruction claims, and
+    claiming the operation's own span twice is how layout came to say one
+    byte was held by more than one op. Its values are the ones its own
+    semantics name, because nothing raised it and `op.defines` describes
+    the operation rather than this piece of it.
+    """
+    from qbopt import lir
+
+    return lir.Insn(
+        at=op.at,
+        covers=(op.at, op.at),
+        what=what,
+        defines=tuple(_named(what.dests)),
+        uses=tuple(_named(what.sources)),
+        clobbers=frozenset(),
+        op=None,
+    )
+
+
+def _named(where: tuple) -> "list[int]":
+    """The abstract values an operand list names, in order."""
+    return [one.value for one in where if isinstance(one, ir.Held)]
 
 
 def _clobbers(op: "mir.Op", calls: dict[int, str]) -> "frozenset[Register_]":
