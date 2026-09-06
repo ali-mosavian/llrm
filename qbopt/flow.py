@@ -74,7 +74,7 @@ def run(data: bytes, native_fpu: bool = False, optimise: bool = True) -> tuple[b
     for name, body in raised:
         if optimise:
             body = transform.applied(
-                body, found.dgroup, found.calls, blocks=blocks, found=found, strength_=False
+                body, found.dgroup, found.calls, blocks=blocks, found=found, promote_=False, strength_=False
             )
             body = transform.widened(body)
         low = lower.lowered(name, body, found.calls)

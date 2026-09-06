@@ -681,3 +681,60 @@ def test_strength_reduction_is_off_because_it_measured_worse() -> None:
     from qbopt import transform
 
     assert "strength" not in transform.PASSES_ON, "strength is on and it measured worse"
+
+
+def test_promotion_takes_a_variable_out_of_memory() -> None:
+    """LLVM's mem2reg. A cell nothing else can name becomes a value.
+
+    It is off, and the reason is not the pass: `layout.allocated` hands
+    back the *raised* body for one the allocator refuses, throwing away
+    every pass's work. Promotion makes press's body unallocatable, so all
+    of it is discarded and press costs 468 -> 1788 -- a four-fold
+    regression from a pass that removed 207 memory operations.
+    """
+    from pathlib import Path
+
+    from qbopt import blocks as split
+    from qbopt import module
+    from qbopt import omf
+    from qbopt import promote
+    from qbopt.blocks import code_map
+
+    was = now = cells = 0
+    for name in ("arith-p-g2", "bools-p-g2", "flags-p-g2"):
+        found = module.of(omf.parse(Path(f"fixtures/omf/{name}.obj").read_bytes()))
+        blocks = split.partition(found, code_map(found))
+        bounds = module.landmarks(found)
+        for _who, body in mir.bodies(found, blocks):
+            cells += len(promote.promotable(body, found.dgroup, bounds))
+            out = promote.promoted(body, found.dgroup, bounds)
+            was += sum(len(op.loads) + len(op.stores) for b in body.blocks for op in b.ops)
+            now += sum(len(op.loads) + len(op.stores) for b in out.blocks for op in b.ops)
+            # And it stays SSA: no phi is written here, `resolved` places them.
+            assert not isinstance(mir.resolved(out, found.calls), str), f"{name} will not resolve"
+    assert cells, "no cell is promotable in three programs that keep variables in memory"
+    assert now < was, f"promotion removed no memory traffic ({was} -> {now})"
+
+
+def test_promotion_is_only_sound_because_the_runtime_was_measured() -> None:
+    """Every candidate is a cell in the program's own data, and a runtime
+    call could write one -- until `runtime.toml` said which cells it can
+    reach. With every call conceding `ANY`, nothing is promotable."""
+    from pathlib import Path
+
+    from qbopt import blocks as split
+    from qbopt import module
+    from qbopt import omf
+    from qbopt import promote
+    from qbopt import runtime
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(Path("fixtures/omf/arith-p-g2.obj").read_bytes()))
+    blocks = split.partition(found, code_map(found))
+    calls = {at: name for at, name in found.calls.items()}
+    assert calls, "arith calls the runtime"
+    assert any(runtime.contract(one).writes is runtime.Memory.OWN for one in calls.values()), (
+        "no call in arith carries the measurement, so this proves nothing"
+    )
+    for _who, body in mir.bodies(found, blocks):
+        assert promote.promotable(body, found.dgroup, module.landmarks(found))

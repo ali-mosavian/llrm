@@ -47,6 +47,7 @@ from qbopt import wide
 from qbopt.passes import MIRTransform
 from qbopt.passes import Where
 from qbopt import avail
+from qbopt import promote
 from qbopt import runtime
 from qbopt import strength
 from qbopt import regalloc
@@ -1786,6 +1787,7 @@ def pipeline(where: Where, **wanted) -> list[MIRTransform]:
         DropLoads(where),
         DropStores(where),
         Cse(),
+        promote.Promote(where),
         strength.Strength(where),
         Place(where),
     ]
@@ -1814,6 +1816,7 @@ def applied(
     forward: bool = True,
     drop_loads: bool = True,
     drop_stores: bool = True,
+    promote_: bool = False,
     strength_: bool = False,
     only: str | None = None,
 ) -> MirBody:
@@ -1861,6 +1864,7 @@ def applied(
         # two worst results are. LLVM's LoopStrengthReduce is mostly a cost
         # model for exactly this: it enumerates formulas and prices them
         # against register pressure. This prices nothing.
+        "promote": promote_,
         "strength": strength_,
     }
     where = Where(

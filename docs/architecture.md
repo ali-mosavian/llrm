@@ -731,3 +731,36 @@ writes at a fixed address, and writes through parameter N.
   means.
 
 **26 cells promotable, 64 accesses**, against zero this morning.
+
+## Promotion, and the fallback that costs more than it
+
+`promote.py` is LLVM's `mem2reg`. A cell nothing else in the body can
+name -- a fixed address in the program's own data, at one width, that no
+other reference may alias -- becomes an SSA value. A store is a definition
+of it and a load a use; no phi is written, because `mir.resolved()` renames
+per variable and puts one wherever two definitions meet.
+
+**It is only possible because the runtime was measured.** Every candidate
+is a cell in BC_DATA, and with every call conceding `writes=ANY` nothing is
+promotable anywhere. `runtime.toml` now says what a call can reach.
+
+**26 bodies, 207 memory operations removed**, and every one still resolves
+to SSA. It is off, and the reason is not the pass:
+
+    press   468 -> 1788     spill  4858 -> 4658
+
+`spill` improves. `press` regresses fourfold -- and measured, the whole of
+it is `layout.allocated`'s fallback. A body the allocator refuses is handed
+back **as it was raised**, so every pass's work on it is discarded. press
+keeps eight variables live; promoting them makes its one body
+unallocatable, and the fallback throws away hoisting, folding, absorption
+and promotion together.
+
+    promote=False   0 of 1 bodies fell back
+    promote=True    1 of 1 bodies fell back
+
+So the follow-up is specific: **the fallback is the defect**, not the
+pressure. Either the allocator spills instead of refusing -- which the flow
+path's does -- or the fallback keeps the passes and reverts only the
+allocation. Until then a pass that adds a live value is a pass that risks
+discarding every other pass.
