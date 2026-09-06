@@ -259,3 +259,42 @@ def test_a_class_wanted_across_its_own_phi_may_stay_but_may_not_move() -> None:
     moved = regalloc.colour(body, {start: Register.DX})
     assert isinstance(moved, str), "and moving is not"
     assert "across its own phi" in moved, moved
+
+
+@pytest.mark.parametrize("stem", ["pressx-p-g2", "pressx-v-noO"])
+def test_a_call_hands_its_result_back_where_bc_reads_it(stem: str) -> None:
+    """chain printed CONST= 39649280 for 0: the long MOD returned in dx:ax.
+
+    A runtime routine writes its result into the registers its own code
+    names, and the operation standing for the call says nothing about it.
+    The allocator moved the high half to bx and re-encoded every reader --
+    which then agreed with each other and not with the callee, so the push
+    run handing the result on pushed whatever bx held.
+    """
+    from qbopt import blocks as split
+    from qbopt import layout
+    from qbopt import module
+    from qbopt import omf
+    from qbopt import transform
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse((Path("fixtures/omf") / f"{stem}.obj").read_bytes()))
+    blocks = split.partition(found, code_map(found))
+    plain = list(mir.bodies(found, blocks))
+    bodies = [
+        (name, transform.widened(transform.applied(one, found.dgroup, found.calls, blocks=blocks, found=found)))
+        for name, one in plain
+    ]
+    settled, assignment = layout.allocated(bodies, plain=plain, settle=transform.widened)
+    assert assignment, "nothing was coloured, so this proves nothing"
+    moved = [
+        f"{op.at:#06x} {one} {target.name_of(body.origin[one])} -> {target.name_of(assignment[one])}"
+        for _name, body in settled
+        for block in body.blocks
+        for op in block.ops
+        if op.kind is mir.Kind.CALL
+        for one in op.defines
+        if not one.flags and one in body.origin and one in assignment
+        and assignment[one] != body.origin[one]
+    ]
+    assert not moved, "; ".join(moved[:3])

@@ -761,3 +761,35 @@ def test_a_restore_hands_the_pair_back_into_the_registers_bc_reads() -> None:
     assert why == wholeseg.REBUILT
     assert _pushed(out) == _pushed(raw)
 
+
+def test_widening_does_not_rename_what_an_absorbed_site_hands_back() -> None:
+    """chain printed CONST= 23068672 for 0: `push dx` came out `push bx`.
+
+    An absorbed long divide is emitted by select.absorbed, seventeen fixed
+    bytes ending in `pop ax / pop dx`. Nothing in the operation's semantics
+    says so, so the allocator -- which widening gives room to run -- moved
+    the result's high half to bx and re-encoded every reader of it. The
+    readers agreed with each other and not with the idiom that produced it.
+    """
+    from qbopt import module
+    from qbopt import omf
+    from qbopt import transform
+    from qbopt import wholeseg
+
+    raw = Path("fixtures/omf/chain-q-O.obj").read_bytes()
+    was_a, was_w = transform.applied, transform.widened
+
+    def build(widen: bool) -> bytes:
+        transform.applied = lambda body, *a, **k: was_a(body, *a, **{**k, "fold": True, "decide": False,
+            "dead": False, "segments_": False, "hoist": False, "forward": False,
+            "drop_loads": False, "drop_stores": False})
+        transform.widened = was_w if widen else (lambda one: one)
+        try:
+            out, why = wholeseg.rebuilt(raw)
+            assert why == wholeseg.REBUILT
+            return out
+        finally:
+            transform.applied, transform.widened = was_a, was_w
+
+    assert module.of(omf.parse(build(True))).code != module.of(omf.parse(build(False))).code
+    assert _pushed(build(True)) == _pushed(build(False))

@@ -1118,6 +1118,8 @@ def raise_body(
         for variable in sorted(needed[block.at], key=lambda one: (one is not FLAGS, one)):
             phis[block.at][variable] = Phi(namer.fresh(variable, block.at), {})
 
+    again: dict[Value, Value] = {}
+
     def rename(at: int) -> None:
         block = by_at[at]
         pushed: list[Register_] = []
@@ -1411,6 +1413,8 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
         for variable in sorted(needed[block.at], key=lambda one: (one not in flagged, one)):
             phis[block.at][variable] = Phi(namer.fresh(variable, block.at, variable in flagged), {})
 
+    again: dict[Value, Value] = {}
+
     def rename(at: int) -> None:
         block = by_at[at]
         pushed: list[int] = []
@@ -1429,6 +1433,12 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
                 namer.stack.setdefault(one.variable, []).append(value)
                 pushed.append(one.variable)
                 fresh.append(value)
+                # In SSA a value is defined once, so this is a whole map
+                # from the old name to the new one -- which is what a pin
+                # needs to survive. Carried unremapped, every pin naming a
+                # value some pass had caused to be re-versioned addressed
+                # nothing, and the allocator moved what a call hands back.
+                again[one] = value
             made = {one.variable: now for one, now in zip(op.defines, fresh)}
             out[at].append(
                 replace(
@@ -1476,7 +1486,7 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
             for block in blocks
         ),
         dict(namer.origin),
-        dict(body.pins),
+        {again.get(one, one): where for one, where in body.pins.items()},
     )
 
 
@@ -1696,7 +1706,9 @@ def bodies(found: Module, blocks: list[Block]) -> list[tuple[str, MirBody]]:
         )
         if not isinstance(built, str):
             found.refs.update(_referenced(built, found))
-            _folded(built, found, blocks)
+            held = {**_returned(built), **_folded(built, found, blocks)}
+            if held:
+                built = replace(built, pins={**built.pins, **held})
             out.append((f"{body.body.kind} {body.body.name or '(main)'}", built))
     return out
 
@@ -1733,19 +1745,61 @@ def _sites(found: Module, blocks: list[Block]) -> dict:
     return out
 
 
-def _folded(body: MirBody, found: Module, blocks: list[Block]) -> None:
+def _returned(body: MirBody) -> dict:
+    """What a call hands back, held to the registers BC reads it from.
+
+    A runtime routine writes its result into the registers its own code
+    names -- a long comes back in dx:ax -- and the operation standing for
+    the call says nothing about it. The allocator moved the high half to
+    bx and re-encoded every reader, which then agreed with each other and
+    not with the callee: chain printed CONST= 39649280 for 0.
+    """
+    # Only what something reads. A call defines a value for every register
+    # it destroys, and holding a marker nothing reads to its old register
+    # is a constraint with no fact behind it -- four of the flow's programs
+    # stopped allocating for want of a register held by one.
+    read = {
+        one
+        for block in body.blocks
+        for op in block.ops
+        for one in op.uses
+    } | {
+        one
+        for block in body.blocks
+        for phi in block.phis
+        for one in phi.incoming.values()
+    }
+    return {
+        one: body.origin[one]
+        for block in body.blocks
+        for op in block.ops
+        if op.kind is Kind.CALL
+        for one in op.defines
+        if not one.flags and one in read and one in body.origin
+    }
+
+
+def _folded(body: MirBody, found: Module, blocks: list[Block]) -> dict:
     """Each folded operation told which site it stands for, and which fixups.
 
     Both by op id, beside the refs, because they are the same kind of fact:
     established at the raise while the bytes are still BC's, and carried by
     the operation wherever a pass moves it.
+
+    Returns what the sites hand back, held to the registers they name. A
+    site is emitted by select.absorbed as seventeen fixed bytes ending in
+    `pop ax / pop dx`, and its operation's semantics say none of that, so
+    the allocator moved the result's high half to bx and re-encoded every
+    reader of it. The readers agreed with each other and not with the
+    idiom that produced them: chain printed CONST= 23068672 for 0.
     """
     from qbopt import calls as machine
     from qbopt import flags as flagged
 
     sites = {one.start: one for one in _sites(found, blocks).values()}
     if not sites:
-        return
+        return {}
+    held: dict = {}
     live = flagged.live_in(blocks)
     for block in body.blocks:
         for op in block.ops:
@@ -1758,9 +1812,13 @@ def _folded(body: MirBody, found: Module, blocks: list[Block]) -> None:
             # answer the raise filtered on, or the two disagree on length.
             read = _flags_after(blocks, live, site.start, site.end)
             found.absorbed[op.id] = (site, read)
+            held.update(
+                {one: body.origin[one] for one in op.defines if not one.flags and one in body.origin}
+            )
             made = machine.absorb(site, read)
             if not isinstance(made, str) and made.relocations:
                 found.refs[op.id] = tuple(field for _where, field in made.relocations)
+    return held
 
 
 def instruction(op: "Op") -> bool:
