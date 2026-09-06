@@ -77,7 +77,7 @@ def run(data: bytes, native_fpu: bool = False, optimise: bool = True) -> tuple[b
                 body, found.dgroup, found.calls, blocks=blocks, found=found, promote_=False, strength_=False
             )
             body = transform.widened(body)
-        low = lower.lowered(name, body, found.calls)
+        low = lower.lowered(name, body, found.calls, set(found.absorbed))
         frame = frames.of(low)
         for phase in machine(_pinned(body), frame, found.calls):
             low = phase.transform(low)

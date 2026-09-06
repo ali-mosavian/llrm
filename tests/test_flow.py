@@ -762,3 +762,49 @@ def test_the_coalescer_joins_the_intervals_it_merges() -> None:
     third = ranges.Interval(3, (ranges.Segment(4, 9),))
     assert not one.overlaps(third), "the original said nothing about this range"
     assert both.overlaps(third), "the merged interval must cover what it swallowed"
+
+
+def test_an_absorbed_site_keeps_its_own_emission() -> None:
+    """It is not the call it replaced, and lowering it to one loses its fixup.
+
+    An absorbed site is seventeen bytes of `mov` and `idiv` that
+    `select.absorbed` produces from `found.absorbed`. Lowering it gave it
+    the semantics of the `call` it stands for, so `made` was set -- and
+    layout then asked whether *that* still had an operand a fixup could sit
+    in. A `call` with no operands does not, so the site's own relocation
+    was dropped, the displacement stayed zero, and lngmix read the wrong
+    address for `v`: `S= 50` where the answer is 142900.
+
+    The whole LIR path miscompiled on this and nothing had ever run one of
+    its objects.
+    """
+    from pathlib import Path
+
+    from qbopt import blocks as split
+    from qbopt import lower
+    from qbopt import module
+    from qbopt import omf
+    from qbopt import transform
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()))
+    blocks = split.partition(found, code_map(found))
+    # After mir.bodies, not before: the raise is what folds a site, and
+    # `found.absorbed` is empty until it has run.
+    raised = list(mir.bodies(found, blocks))
+    absorbed = set(found.absorbed)
+    assert absorbed, "lngmix absorbs its divides; nothing was folded"
+    seen = False
+    for name, body in raised:
+        body = transform.widened(
+            transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
+        )
+        low = lower.lowered(name, body, found.calls, absorbed)
+        for block in low.blocks:
+            for one in block.insns:
+                if one.op is not None and getattr(one.op, "id", None) in absorbed:
+                    seen = True
+                    assert one.what is None, (
+                        f"{one.at:#06x} is an absorbed site and was lowered to something"
+                    )
+    assert seen, "no instruction in lngmix stands for an absorbed site"

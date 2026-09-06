@@ -180,7 +180,12 @@ def _addressed(one: "mir.MemRef") -> "ir.Mem":
     raise Unlowered(f"a cell at {addr} in {addr.space} has no encoding this can derive")
 
 
-def lowered(name: str, body: "mir.MirBody", calls: dict[int, str] | None = None) -> "lir.LirBody":
+def lowered(
+    name: str,
+    body: "mir.MirBody",
+    calls: dict[int, str] | None = None,
+    absorbed: "set[int] | None" = None,
+) -> "lir.LirBody":
     """One MIR body as machine instructions, and nothing else.
 
     The pass that ends the abstract half. Above this a value is a value and
@@ -196,6 +201,14 @@ def lowered(name: str, body: "mir.MirBody", calls: dict[int, str] | None = None)
     """
     from qbopt import lir
 
+    # An absorbed call site is emitted by select.absorbed, seventeen bytes
+    # of mov and idiv, and not from any semantics this could give it.
+    # Lowering it to the call it replaced put `made` on it, and layout then
+    # asked whether *that* still had an operand a fixup could sit in -- a
+    # `call` with no operands does not -- so the site's own relocation was
+    # dropped. lngmix read the wrong address for `v` and printed 50 for
+    # 142900.
+    #
     # What anything reads, so a definition nothing reads can become what it
     # always was: a statement that the register is destroyed, which
     # `clobbers` makes without inventing a value to carry it.
@@ -212,7 +225,9 @@ def lowered(name: str, body: "mir.MirBody", calls: dict[int, str] | None = None)
                     lir.Insn(
                         at=op.at,
                         covers=op.covers,
-                        what=_located(current(op), getattr(op.node, "semantics", None)),
+                        what=None
+                        if op.id in (absorbed or ())
+                        else _located(current(op), getattr(op.node, "semantics", None)),
                         defines=tuple(one.id for one in op.defines if not one.flags and one.id in read),
                         uses=tuple(one.id for one in op.uses if not one.flags),
                         clobbers=_clobbers(op, calls),

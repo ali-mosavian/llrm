@@ -802,3 +802,37 @@ destination of several copies could be joined twice and end up live across
 everything between. `RegisterCoalescer` joins the intervals as it goes;
 this now does too. It is not the miscompile -- disabling the coalescer
 leaves lngmix wrong and makes nested wrong as well.
+
+## The LIR path's miscompile
+
+lngmix printed `S= 50` for 142900 through the flow, and nothing had ever
+run one of that path's objects.
+
+**Bisecting it took three attempts and the first two measured nothing.**
+Stopping after each phase reported "clean through twoaddr" -- but a body
+that stops before `regalloc` has no registers at all, so layout fell back
+and the run measured the fallback. Disabling one phase at a time, with
+every variant still allocating and emitting, put it somewhere else
+entirely: **every** variant failed, including one with no machine phase at
+all. So it was not a phase; it was lowering or emission.
+
+Then the code came out **identical** -- 65 instructions each, no diff
+against the shipped path. One fixup was missing: offset 0x4F, naming
+`[seg:5+6]`, which is `v`.
+
+**An absorbed call site is not the call it replaced.** It is seventeen
+bytes of `mov` and `idiv` that `select.absorbed` produces from
+`found.absorbed`. Lowering gave it the semantics of the `call` it stands
+for, so `made` was set -- and layout then asked whether *that* still had an
+operand a fixup could sit in. A `call` with no operands does not, so the
+site's own relocation was dropped, the displacement stayed zero, and the
+program read the wrong address.
+
+`lower.lowered` now takes the absorbed set and leaves those instructions
+with no semantics at all, which is the same signal anything carried
+verbatim gets.
+
+`nested` is still wrong -- `T= 0` for 675 -- and its shape is different:
+it spills, so its code genuinely differs from the shipped path's, and two
+of its 27 fixups are lost somewhere other than `_fields_in`, which reports
+the same fields for every operation both ways.
