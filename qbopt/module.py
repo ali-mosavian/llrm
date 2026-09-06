@@ -181,6 +181,58 @@ def _overlaps(a: Addr, a_width: int, b: Addr, b_width: int) -> bool:
     return a.disp < b.disp + b_width and b.disp < a.disp + a_width
 
 
+def escaped(found: "Module") -> frozenset[tuple[int, int]]:
+    """Every (segment, displacement) this object hands out the address of.
+
+    A runtime routine writes its own data at fixed addresses and never a
+    cell in BC_DATA -- tools/runtime_writes.py measures it on the linked
+    image. So the only way it reaches a program's variable is a pointer the
+    program gave it, and this is where those are given.
+
+    A relocated immediate inside a `push` or a `lea` is what handing one
+    over looks like. `Operation.ADDRESS` is not: BC pushes `offset X`,
+    which is an immediate the linker fills in, and testing for `lea` found
+    none of the corpus's -- so a whole-body test read every program as
+    handing out nothing and granted a guarantee none of them had earned.
+
+    The object it names, not the byte: an escaped address poisons the whole
+    landmark object, because a routine handed a descriptor's address writes
+    at offsets from it.
+    """
+    from qbopt import omf
+
+    fields = [one for one in omf.fixups(found.records) if one.seg == found.seg]
+    if not fields:
+        return frozenset()
+    out = set()
+    for at, end, text in _pushes(found):
+        for one in fields:
+            if at <= one.offset < end:
+                out.add((one.index, one.disp))
+    return frozenset(out)
+
+
+def _pushes(found: "Module"):
+    """Every instruction that could hand an address over, as (at, end, text)."""
+    from qbopt import declen
+
+    at = found.start
+    while at < found.end:
+        insn = declen.decode(found.code, at)
+        if insn is None:
+            at += 1
+            continue
+        text = str(insn.insn).lower()
+        # `push` and `lea` only. A `mov [x],ax` also carries a relocated
+        # field, but that is the store's own displacement -- the address of
+        # the cell being written, not an address being handed to anybody.
+        # Including it marked every written cell as escaped, which is every
+        # cell, and the guarantee came to nothing.
+        if text.startswith(("push", "lea")):
+            yield at, insn.end, text
+        at = insn.end
+
+
 def landmarks(found: "Module") -> dict[tuple[Space, int], tuple[int, ...]]:
     """Every displacement in each segment that some operand names exactly.
 

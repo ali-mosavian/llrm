@@ -286,3 +286,34 @@ def test_every_established_contract_says_what_it_reads() -> None:
     )
     assert unknown == ["B$ENRA", "B$EXSA"], f"unestablished inputs: {unknown}"
     assert runtime.worst("anything").inputs is None, "a name with no entry reads everything"
+
+
+def test_a_routine_that_enters_user_code_still_writes_anything() -> None:
+    """Narrowing `writes=ANY` to `OWN` is measured, and does not apply here.
+
+    `tools/runtime_writes.py` reads a linked image and finds no runtime
+    write naming a cell in BC_DATA -- so a routine writes its own data and
+    whatever it was handed a pointer to. That holds for a routine that
+    returns. One that hands control back to the program writes whatever
+    that code writes, and GCC's modref gives up on an indirect call for
+    exactly the same reason.
+    """
+    for name in ("B$CENP", "B$EVCK", "B$OEGA", "B$RESN", "B$FCMD"):
+        contract = runtime.contract(name)
+        assert contract.enters_user_code, f"{name} is listed here but does not enter user code"
+        assert contract.writes is runtime.Memory.ANY, f"{name} was narrowed and must not be"
+    assert runtime.contract("B$NOTAROUTINE").writes is runtime.Memory.ANY, (
+        "an unestablished contract must concede everything"
+    )
+
+
+def test_the_measured_routines_are_narrowed() -> None:
+    """And the ones that do return say what they actually write."""
+    narrowed = [
+        name
+        for name, one in runtime.CONTRACTS.items()
+        if one.writes is runtime.Memory.OWN
+    ]
+    assert len(narrowed) >= 15, f"only {len(narrowed)} routines carry the measurement"
+    for name in narrowed:
+        assert not runtime.CONTRACTS[name].enters_user_code, f"{name} enters user code and is narrowed"

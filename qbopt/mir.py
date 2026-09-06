@@ -226,6 +226,21 @@ class MemRef:
     # pushes aliased every named cell in their body, and nothing was
     # promotable anywhere.
     space: "Space | None" = None
+    # What this reference can reach inside the program's own data, as
+    # (that segment's index, the cells whose address was handed out).
+    # None means "anything", which is what every reference but a runtime
+    # call's says.
+    #
+    # A call writes its own data at fixed addresses and never a program's
+    # variable -- tools/runtime_writes.py measures that on the linked
+    # image -- so what it reaches in BC_DATA is what the program handed it
+    # a pointer to, and nothing else. Carried as what it *can* reach
+    # rather than what it cannot, because the second is not enumerable.
+    #
+    # Per cell, not per body. Asked per body -- does this body hand out an
+    # address at all -- all 32 of the corpus's programs do, and the
+    # guarantee is worth nothing.
+    beyond: "tuple[int, frozenset] | None" = None
 
     @property
     def where(self) -> "Space | None":
@@ -889,6 +904,7 @@ def _memrefs(
     at: int,
     slot: Addr | None = None,
     space: "Space | None" = None,
+    beyond: "tuple[int, frozenset] | None" = None,
 ) -> tuple[MemRef, ...]:
     """ir.Mem cells, with the values their own address registers hold now.
 
@@ -907,7 +923,7 @@ def _memrefs(
                 base = namer.current(root, at)
             if addr.segment != Register.NONE:
                 segment = None  # a segment register is physical, never a value
-        out.append(MemRef(addr, cell.width, base, segment, space))
+        out.append(MemRef(addr, cell.width, base, segment, space, beyond))
     return tuple(out)
 
 
@@ -1036,7 +1052,7 @@ def raise_body(
     entry: int | None = None,
     calls: dict[int, str] | None = None,
     sites: dict | None = None,
-    program_data: int | None = None,
+    unreached: "tuple[int, frozenset] | None" = None,
 ) -> MirBody | str:
     """One body's blocks, in SSA, or why they could not be.
 
@@ -1132,8 +1148,9 @@ def raise_body(
             defines, uses = _touched(node, calls)
             used = tuple(namer.current(one, start) for one in sorted(uses, key=lambda o: (o is not FLAGS, o)))
             where = _object_of(node)
-            loads = _memrefs(node.effects.loads, namer, start, slot, where)
-            stores = _memrefs(node.effects.stores, namer, start, slot, where)
+            keeps = unreached if _narrowed(calls, insn.at) else None
+            loads = _memrefs(node.effects.loads, namer, start, slot, where, keeps)
+            stores = _memrefs(node.effects.stores, namer, start, slot, where, keeps)
             holds = dict(zip(sorted(uses, key=lambda o: (o is not FLAGS, o)), used))
             made = []
             for one in sorted(defines, key=lambda o: (o is not FLAGS, o)):
@@ -1581,10 +1598,22 @@ def overlapping(
         # Neither names the byte, but each may name the object. LLVM's
         # PseudoSourceValue rule: two different kinds never alias, and one
         # whose kind is unknown aliases anything.
+        if _out_of_reach(one, other) or _out_of_reach(other, one):
+            return False
         return _may_reach(one.where, other.where)
     if one.base is not None and one.base == other.base and one.addr.space is other.addr.space:
         return one.addr.disp < other.addr.disp + other.width and other.addr.disp < one.addr.disp + one.width
     return module.may_alias(one.addr, other.addr, dgroup, one.width, other.width, bounds)
+
+
+def _out_of_reach(blind: MemRef, named: MemRef) -> bool:
+    """Whether `blind` says it cannot reach the cell `named` is in."""
+    if blind.beyond is None or named.addr is None:
+        return False
+    owner, reaches = blind.beyond
+    if named.addr.space is not Space.SEGMENT or named.addr.index != owner:
+        return False  # not the program's own data; this says nothing about it
+    return (named.addr.index, named.addr.disp) not in reaches
 
 
 def _may_reach(one: "Space | None", other: "Space | None") -> bool:
@@ -1604,6 +1633,45 @@ def _may_reach(one: "Space | None", other: "Space | None") -> bool:
     return {one, other} == {Space.STACK, Space.FRAME}
 
 
+def _narrowed(calls: dict | None, at: int) -> bool:
+    """Whether this call's contract lets it be told what it cannot reach.
+
+    Only a call, and only one whose writes are its own. A routine that
+    hands control back to the program -- B$EVCK polls for an event and may
+    run an event GOSUB -- writes whatever that code writes, and GCC's
+    modref gives up on an indirect call for the same reason.
+    """
+    from qbopt import runtime
+
+    if calls is None or at not in calls:
+        return False
+    contract = runtime.contract(calls[at])
+    # One that never comes back writes nothing anybody can observe. LLVM
+    # and GCC both say this with `noreturn`, and it matters here because
+    # B$CENP ends every program: its own contract is ANY, it stands in
+    # every body, and taken at face value it aliases every variable in
+    # every one of them.
+    if contract.control is runtime.Control.NEVER:
+        return True
+    return contract.writes is not runtime.Memory.ANY and contract.reads is not runtime.Memory.ANY
+
+
+def _unreached(found: Module) -> "tuple[int, frozenset] | None":
+    """What a runtime call can reach inside this program's own data.
+
+    The runtime writes its own data at fixed addresses and never a cell in
+    BC_DATA -- `tools/runtime_writes.py` measures that on three linked
+    images. So a call reaches what the program handed it a pointer to, and
+    nothing else in that segment.
+
+    None where there is no such segment, which says nothing and is what
+    every object without debug information gets.
+    """
+    if found.program_data is None:
+        return None
+    return (found.program_data, module.escaped(found))
+
+
 def bodies(found: Module, blocks: list[Block]) -> list[tuple[str, MirBody]]:
     """Every body in the module, raised, labelled, and skipping what will not.
 
@@ -1613,6 +1681,7 @@ def bodies(found: Module, blocks: list[Block]) -> list[tuple[str, MirBody]]:
     call, which is not a CFG edge, so raise_body() has to be handed one
     body's blocks and no others.
     """
+    unreached = _unreached(found)
     result = ir.decode_module(found)
     if isinstance(result, str):
         return []
@@ -1623,7 +1692,7 @@ def bodies(found: Module, blocks: list[Block]) -> list[tuple[str, MirBody]]:
         if not mine:
             continue
         built = raise_body(
-            mine, nodes, body.body.seed, found.calls, _sites(found, blocks), found.program_data
+            mine, nodes, body.body.seed, found.calls, _sites(found, blocks), unreached
         )
         if not isinstance(built, str):
             found.refs.update(_referenced(built, found))

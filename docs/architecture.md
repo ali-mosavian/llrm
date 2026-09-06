@@ -683,3 +683,51 @@ Two other things it needs and has:
   readers now name.
 - **Once each.** A multiply inside a nest is derived in every loop that
   contains it.
+
+## What the runtime actually writes
+
+`runtime.py` said `writes=ANY` for twenty-one routines, `established` and
+cited to the runtime source. True, and useless: it says "writes memory",
+which every one of them does, and a caller needs to know *whose*.
+
+`tools/runtime_writes.py` answers it from the linked image, which is on
+disk. Over `B_NBODY`, `B_ARRIDX` and `B_MATRIX`:
+
+    writes to a fixed address    150 _DATA  105 _BSS  31 BR_DATA  1 BR_SKYS
+                                   0 BC_DATA
+    not to a fixed address       191 through a pointer  28 its own frame
+
+**No runtime write names a cell in BC_DATA**, the segment BC puts a
+program's variables in -- it cannot, since that segment's position is
+per-program and the runtime is pre-compiled. Nor does any data-segment
+fixup in the corpus hand it a pointer into one: 151 are `BC_CN -> BC_CN`
+and one per program is `BC_SA -> its own code`.
+
+So a runtime call reaches a program's variable only through a pointer the
+program pushed. `Memory.OWN` says that, and it is GCC's `ipa-modref` split:
+writes at a fixed address, and writes through parameter N.
+
+**Three instrument bugs on the way to it**, each the same mistake:
+
+- Six apparent BC_DATA writes were `mov word [es:7Ch],5D6h` and
+  `mov [es:7Eh],ds` -- the runtime installing an INT 1Fh vector at 0:7C.
+  The classifier assumed `ds` for every displacement.
+- Fifteen more were in EMULATOR_TEXT, whose `ds` is EMULATOR_DATA, class
+  FAR_DATA.
+- Every far call counted as a write, because a call writes the stack.
+
+**And three on the consumer side:**
+
+- `module.escaped` scanned `mov` as well as `push`/`lea`, so every store
+  through a relocated displacement marked its own cell as escaped -- which
+  is every cell.
+- Five routines *do* write anything: `B$CENP`, `B$EVCK`, `B$OEGA`,
+  `B$RESN` and `B$FCMD` hand control back to the program, and what they
+  write is what that code writes. GCC's modref gives up on an indirect
+  call for the same reason.
+- `B$CENP` ends every program, so its `ANY` aliased every variable in
+  every body -- until `Control.NEVER` was consulted. A call that does not
+  come back writes nothing anybody can observe, which is what `noreturn`
+  means.
+
+**26 cells promotable, 64 accesses**, against zero this morning.

@@ -101,7 +101,21 @@ class Memory(IntEnum):
     NONE = 0
     ARGUMENTS = 1  # only the values pushed for this call, popped before it returns
     STRINGS = 2  # + any string descriptor or string data, anywhere
-    ANY = 3
+    # Its own data, and anything the caller handed it a pointer to. GCC's
+    # ipa-modref splits a callee's effects the same way: writes at a fixed
+    # address, and writes through parameter N. `ANY` says only "writes
+    # memory", which is true of every routine here and tells a caller
+    # nothing -- a global cannot be kept in a register across a PRINT, and
+    # every program in the suite prints.
+    #
+    # Measured, not assumed. tools/runtime_writes.py reads a linked image:
+    # over B_NBODY, B_ARRIDX and B_MATRIX, the runtime makes 287 writes to
+    # a fixed address in DGROUP and not one of them names a cell in
+    # BC_DATA, the segment BC puts a program's variables in. Nor does any
+    # data-segment fixup in the corpus hand the runtime a pointer into it:
+    # 151 are BC_CN -> BC_CN and one per program is BC_SA -> its code.
+    OWN = 3
+    ANY = 4
 
 
 class Control(StrEnum):
@@ -286,8 +300,8 @@ def _print(name: str, cleanup: int) -> Contract:
         enters_user_code=False,
         raises_error=True,
         error_handling=False,
-        writes=Memory.ANY,
-        reads=Memory.ANY,
+        writes=Memory.OWN,
+        reads=Memory.OWN,
         clobbers=_PRINT_CLOBBERS,
         established=True,
         evidence=_PRINT_EVIDENCE,
@@ -417,7 +431,7 @@ _STRINGS = (
         enters_user_code=False,
         raises_error=True,
         error_handling=False,
-        writes=Memory.ANY,
+        writes=Memory.OWN,
         reads=Memory.STRINGS,
         clobbers=EVERY - {Reg.BP, Reg.SP, Reg.SI},
         established=True,
@@ -481,7 +495,7 @@ _SIMPLE = (
         enters_user_code=False,
         raises_error=False,
         error_handling=False,
-        writes=Memory.ANY,
+        writes=Memory.OWN,
         reads=Memory.NONE,
         clobbers=EVERY - {Reg.BP, Reg.SP, Reg.SI, Reg.DI, Reg.ES},
         established=True,
@@ -586,8 +600,8 @@ _CONTROL = (
         enters_user_code=False,
         raises_error=False,
         error_handling=False,
-        writes=Memory.ANY,
-        reads=Memory.ANY,
+        writes=Memory.OWN,
+        reads=Memory.OWN,
         clobbers=EVERY,
         established=True,
         evidence=(
@@ -613,8 +627,8 @@ _FRAMES = (
         enters_user_code=False,
         raises_error=True,
         error_handling=False,
-        writes=Memory.ANY,
-        reads=Memory.ANY,
+        writes=Memory.OWN,
+        reads=Memory.OWN,
         clobbers=EVERY,
         established=True,
         evidence=(
@@ -634,8 +648,8 @@ _FRAMES = (
         enters_user_code=False,
         raises_error=False,
         error_handling=False,
-        writes=Memory.ANY,
-        reads=Memory.ANY,
+        writes=Memory.OWN,
+        reads=Memory.OWN,
         clobbers=EVERY,
         established=True,
         evidence=(
@@ -654,8 +668,8 @@ _FRAMES = (
         enters_user_code=False,
         raises_error=True,
         error_handling=False,
-        writes=Memory.ANY,
-        reads=Memory.ANY,
+        writes=Memory.OWN,
+        reads=Memory.OWN,
         clobbers=EVERY,
         established=True,
         evidence=(
@@ -842,8 +856,8 @@ def _read(name: str) -> Contract:
         enters_user_code=False,
         raises_error=True,
         error_handling=False,
-        writes=Memory.ANY,
-        reads=Memory.ANY,
+        writes=Memory.OWN,
+        reads=Memory.OWN,
         clobbers=EVERY,
         established=True,
         evidence=(
@@ -867,8 +881,8 @@ _DDIM = Contract(
     enters_user_code=False,
     raises_error=True,
     error_handling=False,
-    writes=Memory.ANY,
-    reads=Memory.ANY,
+    writes=Memory.OWN,
+    reads=Memory.OWN,
     clobbers=EVERY,
     established=True,
     evidence=(
@@ -894,6 +908,14 @@ def _contracts() -> dict[str, Contract]:
 
 
 CONTRACTS = _contracts()
+
+
+# Routines that hand control back to the program. What they write is what
+# the code they call writes, which is anything -- GCC's modref gives up on
+# an indirect call for the same reason. B$CENP ends the program, B$EVCK
+# polls for an event and may run an event GOSUB, B$OEGA and B$RESN are the
+# ON ERROR machinery, and B$FCMD is not established at all.
+ENTERS_USER_CODE = frozenset({"B$CENP", "B$EVCK", "B$FCMD", "B$OEGA", "B$RESN"})
 
 
 def contract(name: str | None) -> Contract:
