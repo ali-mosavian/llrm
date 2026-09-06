@@ -46,6 +46,13 @@ def eliminated(body: lir.LirBody) -> lir.LirBody:
     successors = {block.at: len(block.succ) for block in body.blocks}
 
     once = _read_once(body)
+    # One per predecessor->successor edge. Every move a phi becomes on
+    # that edge is simultaneous with the others and with none outside it.
+    groups: dict[tuple[int, int], int] = {}
+
+    def edge_group(where: int, into: int) -> int:
+        return groups.setdefault((where, into), len(groups) + 1)
+
     split: dict[tuple[int, int], list[tuple[int, int]]] = {}
     copies: dict[int, list[lir.Insn]] = {}
     rename: dict[int, int] = {}
@@ -81,10 +88,14 @@ def eliminated(body: lir.LirBody) -> lir.LirBody:
                     if successors.get(where, 0) > 1:
                         split.setdefault((where, block.at), []).append((phi.result, value))
                     else:
-                        copies.setdefault(where, []).append(_copy(at_of[where], phi.result, value))
+                        copies.setdefault(where, []).append(
+                            _copy(at_of[where], phi.result, value, edge_group(where, block.at))
+                        )
                 continue
             for where, value in edges:
-                copies.setdefault(where, []).append(_copy(at_of[where], phi.result, value))
+                copies.setdefault(where, []).append(
+                    _copy(at_of[where], phi.result, value, edge_group(where, block.at))
+                )
         kept[block.at] = tuple(stays)
 
     if not copies and not rename and not split:
@@ -156,7 +167,7 @@ def _settled(where, rename: dict[int, int]):
     return where
 
 
-def _copy(where: lir.LirBlock, into: int, out_of: int) -> lir.Insn:
+def _copy(where: lir.LirBlock, into: int, out_of: int, group: int | None = None) -> lir.Insn:
     """The move a phi becomes, at the end of the block it arrives from.
 
     Placed on the predecessor's last instruction's address and claiming
@@ -168,6 +179,7 @@ def _copy(where: lir.LirBlock, into: int, out_of: int) -> lir.Insn:
     at = last.at if last is not None else where.at
     edge = _nothing(last, at)
     return lir.Insn(
+        group=group,
         at=at,
         covers=edge,
         what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(into, 2),), (ir.Held(out_of, 2),)),
@@ -233,7 +245,10 @@ def _split_edges(body, split: dict, copies: dict, rename: dict, kept: dict) -> l
         landing[(where, into)] = at
         beside = at_of[where].insns[-1]
         insns = [
-            _made(beside, at, ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(a, 2),), (ir.Held(b, 2),)), (a,), (b,))
+            replace(
+                _made(beside, at, ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(a, 2),), (ir.Held(b, 2),)), (a,), (b,)),
+                group=number,
+            )
             for a, b in pairs
         ]
         insns.append(

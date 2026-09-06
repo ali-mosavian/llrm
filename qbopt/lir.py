@@ -71,6 +71,16 @@ class Insn:
     # an interval, competed for a register and was spilled.
     clobbers: "frozenset[Register_]" = frozenset()
     op: object = None
+    # Which parallel copy this move belongs to, or None for an ordinary
+    # one. A phi says several values arrive together on one edge, and the
+    # moves it becomes are simultaneous: emitting them in the order they
+    # were written is right only while none reads what an earlier one
+    # overwrote. pressx-v-evt produced `r24 <- [bp-8]` and then
+    # `r27 <- r24`, so one arm carried the wrong value.
+    #
+    # Owned here rather than inferred: every move in a group shares an
+    # address with the others, and so does an ordinary move beside them.
+    group: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

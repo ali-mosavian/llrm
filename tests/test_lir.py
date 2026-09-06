@@ -207,3 +207,64 @@ def test_an_expansion_invents_values_nothing_else_uses(monkeypatch) -> None:
     got = [made.fresh() for _ in range(8)]
     assert len(set(got)) == len(got)
     assert not (set(got) & had)
+
+
+def _eliminated(stem: str):
+    from qbopt import coalesce
+    from qbopt import lower
+    from qbopt import phielim
+    from qbopt import transform
+    from qbopt import twoaddr
+
+    found = module.of(omf.parse((Path("fixtures/omf") / f"{stem}.obj").read_bytes()))
+    blocks = split.partition(found, code_map(found))
+    name, body = next(iter(mir.bodies(found, blocks)))
+    body = transform.widened(
+        transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
+    )
+    low = lower.lowered(name, body, found.calls, set(found.absorbed))
+    low = phielim.PhiElimination().transform(low)
+    return low, twoaddr.TwoAddress().transform(low), coalesce.Coalescer()
+
+
+def test_the_moves_one_phi_edge_becomes_are_one_group() -> None:
+    """A phi says several values arrive together, so the moves it becomes
+    are simultaneous. pressx-v-evt emitted six of them in the order they
+    were written and one read a register an earlier one had overwritten --
+    `r24 <- [bp-8]` and then `r27 <- r24`, so an arm carried the wrong
+    value and R came out 6460 for 7500.
+
+    Which moves belong together cannot be read off their address: every
+    one of them sits on the predecessor's last instruction, and so does
+    any ordinary move already there.
+    """
+    low, _after, _c = _eliminated("pressx-v-evt")
+    grouped: dict[int, list] = {}
+    for block in low.blocks:
+        for one in block.insns:
+            if one.group is not None:
+                grouped.setdefault(one.group, []).append(one)
+    assert grouped, "no phi edge was lowered here"
+    assert max(len(one) for one in grouped.values()) >= 2, "a group of one proves nothing"
+    for number, moves in grouped.items():
+        assert len({one.at for one in moves}) == 1, f"group {number} spans addresses"
+
+
+def test_two_edges_are_two_groups_and_a_plain_move_is_none() -> None:
+    """Different edges are different simultaneous sets, and a move that
+    was already there belongs to neither."""
+    low, _after, _c = _eliminated("pressx-v-evt")
+    every = [one for block in low.blocks for one in block.insns]
+    groups = {one.group for one in every if one.group is not None}
+    assert len(groups) >= 2, f"only {groups} -- this fixture has one edge, so it proves nothing"
+    plain = [one for one in every if one.group is None and one.op is not None]
+    assert plain, "every instruction was grouped"
+    beside = {one.at for one in every if one.group is not None}
+    assert any(one.at in beside for one in plain), "no ordinary move shares an address with a group"
+
+
+def test_the_group_survives_the_phases_after_it() -> None:
+    low, after, _c = _eliminated("pressx-v-evt")
+    was = {(one.at, one.group) for block in low.blocks for one in block.insns if one.group is not None}
+    now = {(one.at, one.group) for block in after.blocks for one in block.insns if one.group is not None}
+    assert was and was <= now, "two-address rewriting lost which moves are simultaneous"
