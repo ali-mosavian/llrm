@@ -11,9 +11,18 @@ merged values rather than pairs it has to hope land in the same register.
 
 Conservative on purpose. LLVM's coalescer proves a great deal more -- it
 joins across subregisters, rematerialises, and undoes a join that turns out
-to have made the interval uncolourable. This joins a copy only where the
-two intervals do not overlap at all and neither is pinned, which is the
-half that is always safe.
+to have made the interval uncolourable. This has no undo, so it asks
+Briggs before the join instead: a class whose merged form has fewer than K
+neighbours of significant degree is still colourable, and one that does not
+is refused rather than joined and regretted. divmod-p-g2's 244th legal
+join merged a class spanning the whole body -- 33 segments, 16 neighbours
+against K = 6 -- and the allocator could place nothing afterwards.
+
+A class, not a chain. Renaming a step at a time is consistent only while
+no value is both a key and a value of the map, and a phi's result is
+written by one copy per predecessor: bools-p-evt joined v2 with v63 and
+then v63 with v61, so a read of v2 became v63 while the only definition of
+v63 became v61.
 """
 
 from dataclasses import replace
@@ -21,6 +30,7 @@ from dataclasses import replace
 from qbopt import intervals as ranges
 from qbopt import ir
 from qbopt import lir
+from qbopt import target
 from qbopt.passes import LIRTransform
 
 
@@ -38,43 +48,86 @@ def joined(body: lir.LirBody, pinned: dict | None = None) -> lir.LirBody:
     """`body` with every copy this can prove unnecessary removed."""
     pinned = pinned or {}
     live = ranges.intervals(body)
-    swap: dict[int, int] = {}
-    gone: set[int] = set()
+    from qbopt import allocate
+
+    where_of = allocate.classes(body)
+    everything = frozenset(target.AVAILABLE)
+    may: dict[int, frozenset] = {one: where_of.get(one, everything) for one in live}
+    held: dict[int, int] = dict(pinned)
+    near = _adjacent(live)
+    parent: dict[int, int] = {}
+
+    def find(one: int) -> int:
+        root = one
+        while parent.get(root, root) != root:
+            root = parent[root]
+        while parent.get(one, one) != one:
+            one, parent[one] = parent[one], root
+        return root
 
     for block in body.blocks:
         for one in block.insns:
             pair = _copy(one)
             if pair is None:
                 continue
-            into, out_of = (swap.get(x, x) for x in pair)
-            if into == out_of:
-                gone.add(id(one))
+            here, there = find(pair[0]), find(pair[1])
+            if here == there:
                 continue
-            if into in pinned or out_of in pinned:
+            # Two pinned to different registers are two registers.
+            mine_pin, theirs_pin = held.get(here), held.get(there)
+            if mine_pin is not None and theirs_pin is not None and mine_pin != theirs_pin:
                 continue
-            mine, theirs = live.get(into), live.get(out_of)
+            mine, theirs = live.get(here), live.get(there)
             if mine is None or theirs is None or mine.overlaps(theirs):
                 continue
-            # The merged range, not the two that went into it. A value can
-            # be the destination of several copies -- lngmix joins v3 with
-            # v9 and then, through the rename, v9 with v20 -- and checking
-            # each against the interval it started with says both are safe
-            # while their union is live across everything between. LLVM's
-            # RegisterCoalescer joins the live intervals as it goes so the
-            # next join sees what the last one made.
-            live[out_of] = _merged(mine, theirs)
-            live[into] = live[out_of]
-            swap[into] = out_of
-            gone.add(id(one))
+            # The registers the merged class could take, which is what K
+            # counts: a value some instruction reaches a cell through is
+            # confined to the addressing class, and a class holding one of
+            # those is confined with it.
+            allowed = may.get(here, everything) & may.get(there, everything)
+            if not allowed:
+                continue
+            neighbours = (near.get(here, set()) | near.get(there, set())) - {here, there}
+            k = len(allowed)
+            if len([o for o in neighbours if len(near.get(o, ())) >= k]) >= k:
+                continue  # Briggs: the merged class would not be colourable
+            parent[here] = there
+            live[there] = _merged(mine, theirs)
+            live.pop(here, None)
+            may[there] = allowed
+            may.pop(here, None)
+            if mine_pin is not None or theirs_pin is not None:
+                held[there] = mine_pin if mine_pin is not None else theirs_pin
+            held.pop(here, None)
+            for other in near.pop(here, set()):
+                near.get(other, set()).discard(here)
+                if other != there:
+                    near.setdefault(other, set()).add(there)
+                    neighbours.add(other)
+            near[there] = neighbours
 
-    if not gone:
+    if not parent:
         return body
+    swap = {
+        one: find(one)
+        for block in body.blocks
+        for insn in block.insns
+        for one in (*insn.defines, *insn.uses)
+    }
+    swap.update({one: find(one) for one in parent})
     return replace(
         body,
         blocks=tuple(
             replace(
                 block,
-                insns=tuple(_renamed(one, swap) for one in block.insns if id(one) not in gone),
+                # Only a copy whose two ends are now one value: everything
+                # is named by its class first, and what is left of a joined
+                # copy reads a register into itself.
+                insns=tuple(
+                    made
+                    for made in (_renamed(one, swap) for one in block.insns)
+                    if _copy(made) is None or _copy(made)[0] != _copy(made)[1]
+                ),
                 phis=tuple(
                     lir.Phi(swap.get(phi.result, phi.result), tuple((at, swap.get(v, v)) for at, v in phi.incoming))
                     for phi in block.phis
@@ -83,6 +136,29 @@ def joined(body: lir.LirBody, pinned: dict | None = None) -> lir.LirBody:
             for block in body.blocks
         ),
     )
+
+
+def _adjacent(live: dict) -> dict[int, set]:
+    """Which values are ever live at the same moment, by value.
+
+    The interference graph Briggs counts degrees in. Bounded first: two
+    whose whole spans do not touch cannot have segments that do, and that
+    is most pairs.
+    """
+    bounds = {
+        one: (iv.segments[0].start, iv.segments[-1].end) for one, iv in live.items() if iv.segments
+    }
+    out: dict[int, set] = {one: set() for one in live}
+    order = sorted(bounds, key=lambda one: bounds[one])
+    for index, one in enumerate(order):
+        _lo, hi = bounds[one]
+        for other in order[index + 1 :]:
+            if bounds[other][0] >= hi:
+                break
+            if live[one].overlaps(live[other]):
+                out[one].add(other)
+                out[other].add(one)
+    return out
 
 
 def _merged(one: "ranges.Interval", other: "ranges.Interval") -> "ranges.Interval":
