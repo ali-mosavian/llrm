@@ -983,3 +983,56 @@ def test_cse_refuses_an_operand_that_is_only_half_its_value() -> None:
 
     assert transform._computation(Fake(), {}, {1: 4}) is None
     assert transform._computation(Fake(), {}, {1: 2}) is not None
+
+
+def test_deciding_a_branch_drops_the_edge_it_made_unreachable() -> None:
+    """bools-q-O prints T=1 for 2.
+
+    `decided()` resolves `IF a < b` on two constants: taken becomes an
+    unconditional jump, not-taken deletes the branch and falls through. It
+    left `succ` naming both ways either time, on the argument that an edge
+    that can no longer be taken is an over-approximation and so the safe
+    direction.
+
+    It is not safe for anything that reads the edge as a fact. Phi
+    elimination sees a predecessor with two successors and calls the edge
+    critical; liveness keeps the arm's value alive; and the join is made
+    from a value the deleted branch can no longer deliver.
+
+    Asserted on the edge and the branch, not on a count.
+    """
+    from pathlib import Path
+
+    from qbopt import blocks as split
+    from qbopt import module
+    from qbopt import omf
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(Path("fixtures/omf/bools-q-O.obj").read_bytes()))
+    blocks = split.partition(found, code_map(found))
+    decided = 0
+    for _name, body in mir.bodies(found, blocks):
+        after = transform.decided(body, found.dgroup, found.calls)
+        if after is body:
+            continue
+        was = {block.at: block for block in body.blocks}
+        for block in after.blocks:
+            before = was[block.at]
+            gone = [
+                one
+                for one in before.ops
+                if one.kind is mir.Kind.BRANCH and one.at not in {x.at for x in block.ops}
+            ]
+            for one in gone:
+                decided += 1
+                assert one.target not in block.succ, (
+                    f"{block.at:#06x} still names {one.target:#06x} after its branch was decided away"
+                )
+            for one in block.ops:
+                if one.kind is mir.Kind.JUMP and one.at in {x.at for x in before.ops if x.kind is mir.Kind.BRANCH}:
+                    decided += 1
+                    assert block.succ == (one.target,), (
+                        f"{block.at:#06x} became an unconditional jump to {one.target:#06x} "
+                        f"and still names {[hex(x) for x in block.succ]}"
+                    )
+    assert decided >= 3, f"bools decides three branches over four constants; saw {decided}"
