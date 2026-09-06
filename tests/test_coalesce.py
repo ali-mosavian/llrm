@@ -3,9 +3,9 @@ qbopt/coalesce.py's own gate: a join is a claim that two values are one,
 and the claim has to hold for every reader of either of them.
 """
 
-from qbopt import coalesce
 from qbopt import ir
 from qbopt import lir
+from qbopt import coalesce
 
 
 def _move(at: int, into: int, out_of: int) -> lir.Insn:
@@ -25,8 +25,12 @@ def _define(at: int, makes: int) -> lir.Insn:
 
 def _jump(at: int, to: int) -> lir.Insn:
     return lir.Insn(
-        at=at, covers=(at, at + 2), what=ir.Semantics(ir.Operation.JUMP, "jmp", (), (), to),
-        defines=(), uses=(), op=None,
+        at=at,
+        covers=(at, at + 2),
+        what=ir.Semantics(ir.Operation.JUMP, "jmp", (), (), to),
+        defines=(),
+        uses=(),
+        op=None,
     )
 
 
@@ -74,20 +78,19 @@ def test_a_join_that_would_make_a_class_uncolourable_is_refused() -> None:
     """
     from pathlib import Path
 
-    from qbopt import allocate
-    from qbopt import blocks as split
-    from qbopt import flow
-    from qbopt import frame as frames
-    from qbopt import lower
     from qbopt import mir
-    from qbopt import module
     from qbopt import omf
+    from qbopt import flow
+    from qbopt import lower
+    from qbopt import module
+    from qbopt import runtime
+    from qbopt import blocks as split
     from qbopt.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/divmod-p-g2.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
-    (name, body), = list(mir.bodies(found, blocks))
-    low = lower.lowered(name, body, found.calls)
+    ((name, body),) = list(mir.bodies(found, blocks))
+    low = lower.lowered(name, body, found.calls, set(found.absorbed), runtime.for_module(found))
     pinned = flow._pinned(body)
     for phase in flow.machine(pinned, None, found.calls):
         low = phase.transform(low)

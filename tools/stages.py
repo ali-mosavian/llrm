@@ -29,32 +29,31 @@ made the dump say nothing had happened.
 
 import sys
 import argparse
-import contextlib
 import itertools
+import contextlib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from iced_x86 import Decoder
+from iced_x86 import Register
 from iced_x86 import Formatter
 from iced_x86 import FormatterSyntax
 
 from qbopt import ir
-from qbopt import cvinfo
 from qbopt import mir
-from qbopt import transform
 from qbopt import lower
+from qbopt import cvinfo
 from qbopt import regalloc
-from iced_x86 import Register
+from qbopt import transform
 
 _REGISTERS = {v: k for k, v in vars(Register).items() if isinstance(v, int)}
 from qbopt import omf
 from qbopt import module
 from qbopt import loops as loopy
+from qbopt.declen import BITNESS
 from qbopt import blocks as split
 from qbopt.blocks import code_map
-from qbopt.declen import BITNESS
-from qbopt.transform import PASSES
 from qbopt.wholeseg import rebuilt
 
 
@@ -94,11 +93,7 @@ def _report(tag: str, bodies, was: dict | None, verbose: bool) -> dict:
         before = was.get(name, {})
         gone = {at for ops in before.values() for at, _n in ops} - {at for ops in now[name].values() for at, _n in ops}
         for at, ops in now[name].items():
-            came = [
-                f"{op:#x} {n}"
-                for op, n in ops
-                if not any(op == b for b, _x in before.get(at, ()))
-            ]
+            came = [f"{op:#x} {n}" for op, n in ops if not any(op == b for b, _x in before.get(at, ()))]
             if came:
                 print(f"      into {at:#x}: " + ", ".join(came))
         if gone:
@@ -143,7 +138,6 @@ def _part(into: int, size: int, width: int) -> str:
     if width * 2 == size:
         return ".lo" if into == 0 else ".hi" if into == width else f"+{into}"
     return f"+{into}:{width}" if into else f":{width}"
-
 
 
 class Cells:
@@ -432,7 +426,14 @@ def _operand(one) -> str:
     if isinstance(one, ir.Imm):
         return f"{one.value:#x}" if one.value >= 0 else str(one.value)
     if isinstance(one, ir.Mem):
-        return f"[{one.addr}]"
+        if one.base is None:
+            return f"[{one.addr}]"
+        # A cell that names the value which computed its address, and the
+        # register that value was placed in. Both, because the dump is what
+        # rule 4 diffs: printing the address alone made a cell whose base
+        # was never placed look exactly like one BC addressed itself.
+        placed = _name_of(one.through) if one.through != Register.NONE else "unplaced"
+        return f"[{one.addr} v{one.base.value}@{placed}]"
     return str(one)
 
 

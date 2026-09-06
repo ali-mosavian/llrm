@@ -59,6 +59,7 @@ commit's own gate to hold, not this one's.
 
 from enum import StrEnum
 from dataclasses import field
+from dataclasses import replace
 from dataclasses import dataclass
 from collections.abc import Callable
 
@@ -167,6 +168,12 @@ class Mem:
     # displacement of zero because a fixup fills it in. Emitted without one
     # it is `8b 07`, the right instruction reading the wrong address.
     disp_width: int = field(default=0, compare=False)
+    # The value that computed the address, where one did. In the
+    # comparison, unlike `through`: two cells reached by different values
+    # are different cells, and conflating them is how arrprm stored both
+    # array elements through one stale register. `through` stays what it
+    # was -- how to encode the operand once something has placed it.
+    base: "Held | None" = field(default=None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -385,6 +392,30 @@ class Semantics:
 # what a caller must do about it. The mnemonic is deliberately not carried:
 # a barrier node always wraps a real Insn, so there is nowhere for a second,
 # drifting copy of it to live.
+def values(where) -> "list[Held]":
+    """Every abstract value an operand names, nested ones included.
+
+    One place, because "which values does this read" is one question and
+    an operand may hold another: a memory cell names the value that
+    computed its address, and an instruction that does not record reading
+    it tells the allocator the range ended.
+    """
+    if isinstance(where, Held):
+        return [where]
+    if isinstance(where, Mem) and where.base is not None:
+        return [where.base]
+    return []
+
+
+def mapped(where, made):
+    """`where` with every abstract value it names put through `made`."""
+    if isinstance(where, Held):
+        return made(where)
+    if isinstance(where, Mem) and where.base is not None:
+        return replace(where, base=made(where.base))
+    return where
+
+
 UNMODELLED = Semantics(Operation.BARRIER)
 RESTORE_IDIOM = Semantics(Operation.RESTORE, "restore")
 
@@ -400,6 +431,8 @@ def restoring(wide: "Loc", low: "Loc", high: "Loc") -> Semantics:
     rather than the only ones.
     """
     return Semantics(Operation.RESTORE, "restore", dests=(low, high), sources=(wide,))
+
+
 TABLE_DATA = Semantics(Operation.DATA)
 
 

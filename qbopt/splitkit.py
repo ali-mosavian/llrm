@@ -21,10 +21,10 @@ again if the two halves land in the same register anyway.
 
 from dataclasses import replace
 
-from qbopt import intervals as ranges
 from qbopt import ir
 from qbopt import lir
 from qbopt import loops as loopy
+from qbopt import intervals as ranges
 from qbopt.passes import LIRTransform
 
 
@@ -60,12 +60,9 @@ def split(body: lir.LirBody, only: "frozenset[int] | None" = None) -> lir.LirBod
 
     for loop in found:
         inside = {at for at in loop.body if at in at_of}
-        touched = {
-            value
-            for at in inside
-            for one in at_of[at].insns
-            for value in (*one.defines, *one.uses)
-        } | {value for at in inside for value in at_of[at].arrives}
+        touched = {value for at in inside for one in at_of[at].insns for value in (*one.defines, *one.uses)} | {
+            value for at in inside for value in at_of[at].arrives
+        }
         crossing = _crossing(body, live, index, inside)
         for value in sorted((crossing - touched) if only is None else (crossing - touched) & only):
             after = [at for at in _exits(body, inside) if at in at_of]
@@ -100,7 +97,9 @@ def _crossing(body: lir.LirBody, live: dict, index: ranges.Indexes, inside: set[
     lo, hi = min(one[0] for one in spans), max(one[1] for one in spans)
     whole = ranges.Segment(lo, hi)
     return {value for value, one in live.items() if any(seg.start <= lo and seg.end >= hi for seg in one.segments)} | {
-        value for value, one in live.items() if any(seg.overlaps(whole) and seg.start < lo and seg.end > hi for seg in one.segments)
+        value
+        for value, one in live.items()
+        if any(seg.overlaps(whole) and seg.start < lo and seg.end > hi for seg in one.segments)
     }
 
 
@@ -163,11 +162,14 @@ def _renamed(one: lir.Insn, rename: dict[int, int]) -> lir.Insn:
 
 
 def _settled(where, rename: dict[int, int]):
-    if isinstance(where, ir.Held) and where.value in rename:
-        return ir.Held(rename[where.value], where.width)
-    if isinstance(where, ir.Mem) and isinstance(where.through, ir.Held) and where.through.value in rename:
-        return replace(where, through=ir.Held(rename[where.through.value], where.through.width))
-    return where
+    """One operand with every value it names put through the rename.
+
+    Through `ir.mapped`, so a cell's base is renamed with the rest: this
+    looked in `Mem.through`, which holds a register, and a cut past a load
+    through a pointer renamed `uses` and left the cell on the value the
+    cut had just ended.
+    """
+    return ir.mapped(where, lambda one: ir.Held(rename.get(one.value, one.value), one.width))
 
 
 def _next_value(body: lir.LirBody) -> int:

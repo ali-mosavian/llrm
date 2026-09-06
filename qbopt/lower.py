@@ -15,6 +15,8 @@ from iced_x86 import Register
 
 from qbopt import ir
 from qbopt import mir
+from qbopt import target
+from qbopt import runtime
 
 
 def operand(arg: mir.Arg) -> ir.Loc:
@@ -32,6 +34,16 @@ def operand(arg: mir.Arg) -> ir.Loc:
 # keeps the operation it was raised with, which lowering reads off the node
 # -- so this is only for the shapes MIR creates: a copy and a jump.
 _MACHINE: dict[mir.Kind, tuple[ir.Operation, str]] = {
+    # The two the machine spells differently and MIR does not: an addition
+    # that takes the carry in is `adc`, and a subtraction that takes the
+    # borrow is `sbb`. Named here and nowhere above -- MIR says only that
+    # the operation reads the flags the one before it left.
+    mir.Kind.ADD_CARRY: (ir.Operation.BINARY, "adc"),
+    mir.Kind.SUB_BORROW: (ir.Operation.BINARY, "sbb"),
+    # One operand, in the opcode. MIR says what they compute; that they
+    # are written `inc` and `dec` is only true here.
+    mir.Kind.INCREMENT: (ir.Operation.UNARY, "inc"),
+    mir.Kind.DECREMENT: (ir.Operation.UNARY, "dec"),
     mir.Kind.COPY: (ir.Operation.MOVE, "mov"),
     mir.Kind.JUMP: (ir.Operation.JUMP, "jmp"),
     # Strength reduction writes both: one multiply in a preheader and one
@@ -44,8 +56,7 @@ _MACHINE: dict[mir.Kind, tuple[ir.Operation, str]] = {
 }
 
 
-
-def semantics(op: mir.Op, was: ir.Semantics | None = None) -> ir.Semantics | None:
+def semantics(op: mir.Op, was: ir.Semantics | None = None, place=None) -> ir.Semantics | None:
     """What this operation computes, in machine form, or None for verbatim.
 
     None means nothing rewrote it: `was` is still what it says, and layout
@@ -54,8 +65,14 @@ def semantics(op: mir.Op, was: ir.Semantics | None = None) -> ir.Semantics | Non
     growing without anything having been optimised.
     """
     same_target = was is None or op.target == was.target
-    if op.raised is not None and (op.args, op.results) == op.raised and same_target:
-        return None  # nothing rewrote it
+    if place is None and op.raised is not None and (op.args, op.results) == op.raised and same_target:
+        # Nothing rewrote it, so the MIR emitter carries its own bytes.
+        # A caller naming a resolver is lowering for a path where the
+        # allocation reaches every instruction, and there "unchanged"
+        # still means "an operation over values": answering with the
+        # original instruction hands back BC's registers, which is the
+        # machine leaking into what a value is allowed to live in.
+        return None
     if not op.args and not op.results and op.raised is None:
         return None  # nothing to build one from
     # A value resolves to the register the original instruction had in the
@@ -66,12 +83,54 @@ def semantics(op: mir.Op, was: ir.Semantics | None = None) -> ir.Semantics | Non
     # deleted. Where there is no such operand -- an operation a pass
     # invented -- ir.Held is the only honest answer and select resolves it.
     was_op, name = _MACHINE.get(op.kind, (op.op, op.name))
+    place = place or _place
     return ir.Semantics(
         was_op,
         name,
-        dests=tuple(_place(one, was.dests if was else (), i) for i, one in enumerate(op.results)),
-        sources=tuple(_place(one, was.sources if was else (), i) for i, one in enumerate(op.args)),
+        dests=tuple(place(one, was.dests if was else (), i) for i, one in enumerate(op.results)),
+        sources=tuple(place(one, was.sources if was else (), i) for i, one in enumerate(op.args)),
         target=_target(op, was),
+    )
+
+
+def as_a_value(arg: mir.Arg, had: tuple, index: int) -> ir.Loc:
+    """One operand, left as the value it is.
+
+    For a path where the allocation reaches every instruction. `_place`
+    below resolves a value to the register BC had, which leaves nothing
+    for the allocator to rewrite: it assigned cx to pressx's constant and
+    the bytes still said ax, so the load after it killed the constant and
+    the program printed R= 0 for 7500.
+    """
+    return operand(arg)
+
+
+def _valueized(what: "ir.Semantics", op: "mir.Op") -> "ir.Semantics":
+    """`what` with every register the operation names as a value replaced by it.
+
+    Operand for operand and by position: `made`'s destinations line up
+    with the operation's results and its sources with its arguments,
+    which is how the pass that wrote it built the two. An idiom with no
+    operands has nothing to line up and comes back exactly as it is --
+    the restore's pair is the node's, not an operand's.
+    """
+
+    def named(side: tuple, mine: tuple) -> tuple:
+        out = []
+        for index, one in enumerate(side):
+            was = mine[index] if index < len(mine) else None
+            if isinstance(one, ir.Reg) and isinstance(was, mir.Held) and not was.value.flags:
+                out.append(ir.Held(was.value.id, one.width))
+            else:
+                out.append(one)
+        return tuple(out)
+
+    return ir.Semantics(
+        what.op,
+        what.name,
+        named(what.dests, op.results),
+        named(what.sources, op.args),
+        what.target,
     )
 
 
@@ -84,7 +143,7 @@ def _place(arg: mir.Arg, had: tuple, index: int) -> ir.Loc:
     return was if isinstance(was, ir.Reg) and was.width == got.width else got
 
 
-def rewritten(op) -> "ir.Semantics | None":
+def rewritten(op, place=None) -> "ir.Semantics | None":
     """What a pass made of this operation, in machine form, or None.
 
     None means nothing rewrote it, which is a different answer from what
@@ -98,13 +157,25 @@ def rewritten(op) -> "ir.Semantics | None":
     select.py can emit`) and stride its `t` (`add [t],ax` emitted with no
     fixup, accumulating into offset zero, T= 0 for 210).
     """
-    if op.made is not None:
-        return op.made
     was = getattr(op.node, "semantics", None)
-    return _located(semantics(op, was), was)
+    if op.made is not None:
+        if place is None:
+            return op.made
+        # Valueized in place. `pairs.widened` writes machine form -- one
+        # 32-bit `and eax,...` for two 16-bit halves and a carry -- and
+        # returning it untouched made a widened operation the only one
+        # still naming BC's own registers while its neighbours had become
+        # values, with nothing for the allocator to rewrite.
+        #
+        # Its own operands, not rebuilt from the operation: passing it
+        # back through `semantics` gave the restore idiom -- which has
+        # none, and whose pair the node names -- three operands it never
+        # had, and select emitted nothing for it.
+        return _valueized(op.made, op)
+    return _located(semantics(op, was, place), was)
 
 
-def current(op) -> "ir.Semantics | None":
+def current(op, place=None) -> "ir.Semantics | None":
     """What this operation computes now, in machine form.
 
     The one answer to the question every consumer used to ask as
@@ -113,7 +184,7 @@ def current(op) -> "ir.Semantics | None":
     MIR's own operands, and so told twenty callers the fold had not
     happened.
     """
-    return rewritten(op) or getattr(op.node, "semantics", None)
+    return rewritten(op, place) or getattr(op.node, "semantics", None)
 
 
 def _target(op: mir.Op, was: ir.Semantics | None) -> int | None:
@@ -159,6 +230,17 @@ def _machine(one, had: tuple, index: int):
     before = had[index] if index < len(had) else None
     if not isinstance(before, ir.Mem):
         before = next((x for x in had if isinstance(x, ir.Mem)), None)
+    base = ir.Held(one.base.id, 2) if one.base is not None else None
+    if base is not None:
+        # NONE until something places it. Keeping BC's register here makes
+        # an unallocated operand indistinguishable from a placed one, and
+        # arrprm's first store passed by luck exactly that way.
+        made = (
+            ir.Mem(one.addr, one.width, Register.NONE, before.offset, before.disp_width)
+            if before is not None
+            else replace(_addressed(one), through=Register.NONE)
+        )
+        return replace(made, base=base)
     if before is not None:
         return ir.Mem(one.addr, one.width, before.through, before.offset, before.disp_width)
     return _addressed(one)
@@ -200,8 +282,9 @@ def _addressed(one: "mir.MemRef") -> "ir.Mem":
 def lowered(
     name: str,
     body: "mir.MirBody",
-    calls: dict[int, str] | None = None,
-    absorbed: "set[int] | None" = None,
+    calls: dict[int, str] | None,
+    absorbed: "set[int] | None",
+    contracts: "dict[int, object]",
 ) -> "lir.LirBody":
     """One MIR body as machine instructions, and nothing else.
 
@@ -232,7 +315,7 @@ def lowered(
     read = {one.id for block in body.blocks for op in block.ops for one in op.uses}
     read |= {value.id for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
     calls = calls or {}
-    making = Lowering(body, read, calls, absorbed or ())
+    making = Lowering(body, read, calls, absorbed or (), contracts)
     return lir.LirBody(
         name=name,
         entry=body.entry,
@@ -279,16 +362,71 @@ class Lowering:
     layout's accounting still adds up.
     """
 
-    def __init__(self, body: "mir.MirBody", read: set, calls: dict, absorbed) -> None:
+    def _abi(self, op: "mir.Op") -> tuple:
+        """Which registers a call reads its arguments in.
+
+        `op.args` are the arguments the routine's contract declares, in the
+        order `runtime.slots` puts them, and this pairs each with its
+        slot's register. The value is whichever one reaches the call -- a
+        pass may have computed it anywhere -- and the register is the
+        routine's, not wherever BC happened to keep it.
+
+        Empty where nothing is established: the read set a call carries is
+        every tracked register until a contract narrows it, and that is a
+        liveness dependency rather than an argument list.
+        """
+        if op.kind is not mir.Kind.CALL:
+            return ()
+        # The raise's own answer first: `args_known` is false for a call
+        # whose contract declares nothing and for one to the program's own
+        # code, which has no runtime contract at all -- not for a routine
+        # established to read no register, which is a fact and says so.
+        # Where nothing says what the callee reads, nothing may be moved
+        # out from under it.
+        if not op.args_known:
+            raise Unlowered(f"{op.at:#06x}: {self._calls.get(op.at) or 'this call'}'s interface is not established")
+        routine = self._contracts.get(op.at)
+        if routine is None:
+            raise Unlowered(f"{op.at:#06x}: no contract for {self._calls.get(op.at)}")
+        if not runtime.established_inputs(routine):
+            # Nothing is known about what it reads, and the raise reads
+            # every tracked register for it. Emitting it unconstrained lets
+            # the allocation move whatever it was handed; refusing keeps
+            # BC's own layout, which is the answer that still works.
+            raise Unlowered(f"{op.at:#06x}: {self._calls.get(op.at)} has no established inputs")
+        where = runtime.slots(routine)
+        if not where:
+            return ()
+        # A declared contract whose arguments do not answer it: emitting the
+        # call unconstrained would say the routine reads nothing, which is
+        # the one thing known to be false about it.
+        if len(where) != len(op.args):
+            raise Unlowered(f"{op.at:#06x}: {len(op.args)} arguments for {len(where)} declared inputs")
+        made = []
+        for one, slot in zip(op.args, where):
+            if not isinstance(one, mir.Held) or one.value.id is None or one.value.flags:
+                raise Unlowered(f"{op.at:#06x}: {one!r} is not a value a register can hold")
+            made.append((ir.Held(one.value.id, one.width), mir.AS_NAMED[slot]))
+        return tuple(made)
+
+    def __init__(self, body: "mir.MirBody", read: set, calls: dict, absorbed, contracts=None) -> None:
         self._read = read
         self._calls = calls
+        # The same answer the raise used, per call site. Looked up here
+        # only where the caller had none to give.
+        # The map the caller chose, or one built here for a caller with
+        # none to give -- a tool, a test. `raise_body` does the same, from
+        # the same function, so the two boundaries cannot differ; the
+        # emission path passes one object to both and never reaches this.
+        # An explicitly empty map is a map: it says this call site was
+        # decided about and the answer was nothing.
+        # The caller's, always. Built here from `calls` alone it would
+        # lack the family and the module's own PUBDEF names, and the raise
+        # -- which has both -- would establish a contract this did not.
+        self._contracts = contracts
         self._absorbed = absorbed
         every = [
-            one.id
-            for block in body.blocks
-            for op in block.ops
-            for one in (*op.defines, *op.uses)
-            if one.id is not None
+            one.id for block in body.blocks for op in block.ops for one in (*op.defines, *op.uses) if one.id is not None
         ]
         every += [phi.result.id for block in body.blocks for phi in block.phis]
         self._next = max(every, default=0) + 1
@@ -305,15 +443,30 @@ class Lowering:
         made = _EXPANDS.get(op.kind)
         parts = made(op, self) if made is not None else None
         if not parts:
+            what = None if op.id in self._absorbed else current(op, as_a_value)
+            # An instruction's dataflow is what its own operands name. The
+            # two used to be separate -- `defines` from the operation and
+            # the operands from BC's registers -- and once the operands
+            # became values a destination nothing reads was a Held the
+            # allocator had never heard of: `value#91 at width 2 has no
+            # register`.
+            # Roles decide wherever there are operands. An operation that
+            # names none -- a call, whose results the runtime hands back in
+            # registers it mentions nowhere -- keeps what it always said,
+            # or a spilled call result gets reloads and no store.
+            speaks = what is not None and (what.dests or what.sources)
+            made = tuple(_written(what.dests)) if speaks else ()
+            read = tuple(_read(what)) if speaks else ()
             return (
                 lir.Insn(
                     at=op.at,
                     covers=op.covers,
-                    what=None if op.id in self._absorbed else current(op),
-                    defines=tuple(
-                        one.id for one in op.defines if not one.flags and one.id in self._read
-                    ),
-                    uses=tuple(one.id for one in op.uses if not one.flags),
+                    what=what,
+                    defines=made
+                    if speaks
+                    else tuple(one.id for one in op.defines if not one.flags and one.id in self._read),
+                    uses=read if speaks else tuple(one.id for one in op.uses if not one.flags),
+                    requires=self._abi(op),
                     clobbers=_clobbers(op, self._calls),
                     op=op,
                 ),
@@ -330,8 +483,8 @@ class Lowering:
                 at=op.at,
                 covers=op.covers,
                 what=parts[0],
-                defines=tuple(_named(parts[0].dests)),
-                uses=tuple(_named(parts[0].sources)),
+                defines=tuple(_written(parts[0].dests)),
+                uses=tuple(_read(parts[0])),
                 clobbers=frozenset(),
                 op=op,
             ),
@@ -354,16 +507,36 @@ def _follows(op: "mir.Op", what: "ir.Semantics") -> "lir.Insn":
         at=op.at,
         covers=(op.at, op.at),
         what=what,
-        defines=tuple(_named(what.dests)),
-        uses=tuple(_named(what.sources)),
+        defines=tuple(_written(what.dests)),
+        uses=tuple(_read(what)),
         clobbers=frozenset(),
         op=None,
     )
 
 
 def _named(where: tuple) -> "list[int]":
-    """The abstract values an operand list names, in order."""
-    return [one.value for one in where if isinstance(one, ir.Held)]
+    """The abstract values an operand list names, `ir.values` deciding."""
+    return [one.value for operand in where for one in ir.values(operand)]
+
+
+def _written(dests: tuple) -> "list[int]":
+    """The values an instruction writes: a destination that *is* a value.
+
+    Not every value a destination names. A cell names the value that
+    computed its address, and `mov [es:bx],7` writes memory and no value
+    at all -- taking every name here made the store define the pointer it
+    stores through, so the address was born at the store and dead before
+    it, and the allocator was free to put something else there.
+    """
+    return [one.value for one in dests if isinstance(one, ir.Held)]
+
+
+def _read(what: "ir.Semantics") -> "list[int]":
+    """The values an instruction reads: its sources, and the addresses its
+    destinations are reached by -- a cell is written *through* a value."""
+    return _named(what.sources) + [
+        one.value for where in what.dests if not isinstance(where, ir.Held) for one in ir.values(where)
+    ]
 
 
 def _clobbers(op: "mir.Op", calls: dict[int, str]) -> "frozenset[Register_]":
@@ -378,7 +551,6 @@ def _clobbers(op: "mir.Op", calls: dict[int, str]) -> "frozenset[Register_]":
     """
     from qbopt import mir
     from qbopt import runtime
-    from qbopt import target
 
     if op.kind is not mir.Kind.CALL:
         return frozenset()
@@ -397,8 +569,6 @@ def _clobbers(op: "mir.Op", calls: dict[int, str]) -> "frozenset[Register_]":
 # Each allocatable register by the names runtime.py's own Reg enum uses:
 # `ax` for eax, since a contract is written about the 16-bit machine.
 def _names() -> dict:
-    from qbopt import target
-
     return {
         register: {target.name_of(target.named(register, 2)), target.name_of(target.named(register, 4))}
         for register in target.AVAILABLE

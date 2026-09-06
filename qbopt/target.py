@@ -27,7 +27,6 @@ from iced_x86 import Register_
 from qbopt import ir
 from qbopt import mir
 
-
 # ---------------------------------------------------------------- registers
 
 ADDRESSING: frozenset[Register_] = frozenset({Register.BX, Register.BP, Register.SI, Register.DI})
@@ -43,6 +42,56 @@ class Need:
     def fixed(self) -> Register_ | None:
         """The register, where there is only one it can be."""
         return next(iter(self.where)) if len(self.where) == 1 else None
+
+
+@dataclass(frozen=True, slots=True)
+class Occurrence:
+    """One operand of one instruction, by side and position.
+
+    A requirement is about an operand, not about the register it happens
+    to name -- which is only an answer while it names one. Lowering hands
+    the allocator values, and `imul`'s dx:ax is then a fact about the
+    first and second destination.
+    """
+
+    side: str  # "dest" or "source"
+    index: int
+
+
+def requirements(what: "ir.Semantics") -> dict[Occurrence, Register_]:
+    """Every operand this instruction requires in one particular register.
+
+    The one place those are written down. `reads` and `writes` below read
+    it too, so a machine fact cannot drift between the two questions --
+    "which register does this need" and "which operand does".
+    """
+    out: dict[Occurrence, Register_] = {}
+    if _on_the_stack(what):
+        return out
+    # The widening forms name neither half: the product and the dividend
+    # are both dx:ax, low first.
+    if what.op in (ir.Operation.MULTIPLY, ir.Operation.DIVIDE) and len(what.dests) != 1:
+        out[Occurrence("dest", 0)] = Register.EAX
+        out[Occurrence("dest", 1)] = Register.EDX
+        out[Occurrence("source", 0)] = Register.EAX
+        if what.op is ir.Operation.DIVIDE:
+            out[Occurrence("source", 1)] = Register.EDX
+    if what.op is ir.Operation.EXTEND:
+        out[Occurrence("source", 0)] = Register.EAX
+        out[Occurrence("dest", 0)] = Register.EDX
+    # A shift or rotate by anything but a literal counts from cl. Asked of
+    # the operand's shape rather than of the register it names: a value the
+    # allocator has not placed yet names none, and keying on cl said such a
+    # shift had no requirement at all.
+    counted = (what.name or "") in _COUNTED or what.op is ir.Operation.FUNNEL
+    if counted and len(what.sources) > 1:
+        count = what.sources[-1]
+        if not isinstance(count, ir.Imm):
+            out[Occurrence("source", len(what.sources) - 1)] = Register.ECX
+    return out
+
+
+_COUNTED = ("shl", "sal", "shr", "sar", "rol", "ror", "rcl", "rcr")
 
 
 def _root(register: Register_) -> Register_:
@@ -71,9 +120,7 @@ def _on_the_stack(what: ir.Semantics) -> bool:
     own code does not satisfy, because there is nothing in ax to satisfy it
     with.
     """
-    return any(isinstance(one, ir.St) for one in (*what.dests, *what.sources)) or (
-        what.name or ""
-    ).startswith("f")
+    return any(isinstance(one, ir.St) for one in (*what.dests, *what.sources)) or (what.name or "").startswith("f")
 
 
 def tied(what: ir.Semantics) -> Register_ | None:
@@ -105,17 +152,9 @@ def reads(what: ir.Semantics) -> dict[Register_, Need]:
     out: dict[Register_, Need] = {}
     if _on_the_stack(what):
         return out
-    # The widening forms: one destination written down means `imul r,r/m`,
-    # which names everything. More than one means dx:ax, which names
-    # neither and reads ax.
-    if what.op in (ir.Operation.MULTIPLY, ir.Operation.DIVIDE) and len(what.dests) != 1:
-        out[Register.EAX] = Need(frozenset({Register.EAX}))
-        if what.op is ir.Operation.DIVIDE:
-            out[Register.EDX] = Need(frozenset({Register.EDX}))
-    if what.op is ir.Operation.EXTEND:
-        out[Register.EAX] = Need(frozenset({Register.EAX}))
-    if _shifted(what):
-        out[Register.ECX] = Need(frozenset({Register.ECX}))
+    for where, register in requirements(what).items():
+        if where.side == "source":
+            out[register] = Need(frozenset({register}))
     for one in (*what.dests, *what.sources):
         for where in (
             getattr(one, "through", None),
@@ -132,13 +171,10 @@ def writes(what: ir.Semantics) -> dict[Register_, Need]:
     out: dict[Register_, Need] = {}
     if _on_the_stack(what):
         return out
-    if what.op in (ir.Operation.MULTIPLY, ir.Operation.DIVIDE) and len(what.dests) != 1:
-        out[Register.EAX] = Need(frozenset({Register.EAX}))
-        out[Register.EDX] = Need(frozenset({Register.EDX}))
-    if what.op is ir.Operation.EXTEND:
-        out[Register.EDX] = Need(frozenset({Register.EDX}))
+    for where, register in requirements(what).items():
+        if where.side == "dest":
+            out[register] = Need(frozenset({register}))
     return out
-
 
 
 # Every register a value may be placed in. `mir.TRACKED` is what the raise
@@ -150,9 +186,7 @@ AVAILABLE: tuple[Register_, ...] = mir.TRACKED
 # is reached, and it is also the frame pointer. Asking both questions with
 # one set made every `[bp-12h]` in the corpus look like a violated
 # requirement -- 183 of them.
-BASES: tuple[Register_, ...] = tuple(
-    one for one in AVAILABLE if one in {ir.ROOT.get(x, x) for x in ADDRESSING}
-)
+BASES: tuple[Register_, ...] = tuple(one for one in AVAILABLE if one in {ir.ROOT.get(x, x) for x in ADDRESSING})
 
 
 WIDE = {Register.EAX, Register.ECX, Register.EDX, Register.EBX, Register.ESI, Register.EDI, Register.EBP, Register.ESP}

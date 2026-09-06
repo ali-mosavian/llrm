@@ -26,11 +26,10 @@ so a value some instruction reaches a cell by lives in one of those.
 
 from dataclasses import dataclass
 
-from iced_x86 import Register
 from iced_x86 import Register_
 
 from qbopt import ir
-from qbopt import target
+
 
 @dataclass(frozen=True, slots=True)
 class Insn:
@@ -81,6 +80,13 @@ class Insn:
     # Owned here rather than inferred: every move in a group shares an
     # address with the others, and so does an ordinary move beside them.
     group: int | None = None
+    # Values this instruction reads in a register it does not name. A
+    # runtime routine takes its arguments in particular registers and
+    # mentions none of them, so an occurrence cannot say it: without this
+    # the allocation put B$ENRA's two arguments in si and di where the
+    # routine reads cx and bx, and arrprm printed an array it was never
+    # told about. By value id, like `uses`.
+    requires: "tuple[tuple[ir.Held, Register_], ...]" = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,3 +134,45 @@ class LirBody:
     @property
     def insns(self) -> "tuple[Insn, ...]":
         return tuple(one for block in self.blocks for one in block.insns)
+
+
+def without(insns, drop, made=None) -> "list[Insn]":
+    """`insns` without the ones `drop` picks, their bytes given to a survivor.
+
+    An identity copy emits nothing, but it may still stand for bytes BC
+    wrote -- `mov bx,ax` is two of them -- and layout refuses a body it
+    cannot account for every byte of. Two phases remove such copies: the
+    coalescer, once both ends are one value, and the rewriter, once both
+    land in one register. Which copies are identities is each phase's own
+    question; what happens to the bytes is this.
+
+    Backward and inside the block, past the instructions that stand for no
+    bytes at all: forward would hand a block's first bytes to something a
+    branch may enter after them. Where there is no such predecessor, or
+    the spans do not meet, the copy stays rather than the bytes going to
+    an instruction that does not stand for them.
+    """
+    from dataclasses import replace
+
+    out: list[Insn] = []
+    for one in insns:
+        kept = made(one) if made is not None else one
+        if not drop(kept):
+            out.append(kept)
+            continue
+        if not one.covers or one.covers[0] == one.covers[1]:
+            continue  # inserted: it stands for nothing
+        where = next(
+            (
+                index
+                for index in range(len(out) - 1, -1, -1)
+                if out[index].covers and out[index].covers[0] != out[index].covers[1]
+            ),
+            None,
+        )
+        last = out[where] if where is not None else None
+        if last is None or last.covers[1] != one.covers[0]:
+            out.append(kept)  # nothing to give them to
+            continue
+        out[where] = replace(last, covers=(last.covers[0], one.covers[1]))
+    return out

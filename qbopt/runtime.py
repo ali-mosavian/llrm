@@ -64,11 +64,11 @@ body has, in both directions, and both are recorded in `documented`:
     true; the conservative one wins for every routine that reaches B$FOUTBX.
 """
 
+import tomllib
 from enum import IntEnum
 from enum import StrEnum
-from dataclasses import field
-import tomllib
 from pathlib import Path
+from dataclasses import field
 from dataclasses import replace
 from dataclasses import dataclass
 
@@ -169,6 +169,157 @@ def worst(name: str) -> Contract:
 
 def preserves(routine: Contract) -> frozenset[Reg]:
     return EVERY - routine.clobbers
+
+
+# The order a routine's declared inputs are listed in. `Contract.inputs` is
+# a set -- which register, not which position -- and the raise and the
+# lowering both have to agree on a slot per input or they would pair an
+# argument with somebody else's register. Any total order does; this is
+# `Reg`'s own declaration order, so a register added there cannot be left
+# out of a list written somewhere else.
+SLOTS: tuple[Reg, ...] = tuple(Reg)
+
+
+# What a routine's contract is under one toolchain, where the routines
+# differ. Keyed by the compiler's own name for itself, which module.py
+# reads off COMENT 0x00 -- the family is a fact about the object, and it
+# reaches this map and nothing else.
+#
+# B$ENRA takes the frame size in cx. Disassembled from the linked image:
+# PDS 7.1's is at 0x1d35 and QuickBASIC 4.5's at 0x211d, both reading cx
+# through `push cx` and `sub sp,cx` before writing it, with no unresolved
+# edge on any path from entry to the `jmp far` that returns. VBDOS's, at
+# 0x397, also reads bx -- `or bx,bx` gates `call 02f7:0002` -- and that
+# helper reaches `call far [di+24h]`, which no disassembly can follow, so
+# VBDOS stays at the worst case.
+VARIANTS: "dict[tuple[str, str], Contract]" = {}
+
+
+def own(name: str) -> Contract:
+    """A call into the program's own code, by name.
+
+    BC compiles a SUB as a PUBDEF of the same object and calls it through
+    an EXTDEF fixup, so `Module.calls` names it like a runtime routine and
+    only the PUBDEF set tells the two apart. A BASIC argument arrives as a
+    far pointer on the stack, so nothing arrives in a register -- and that
+    is the only thing established here. Everything else stays at the worst
+    case: what such a procedure clobbers is as unknown as any other.
+    """
+    return replace(
+        worst(name),
+        inputs=frozenset(),
+        evidence="a PUBDEF of this same module; BC pushes a far pointer per BASIC argument",
+    )
+
+
+def _entry(family: str) -> None:
+    VARIANTS[("B$ENRA", family)] = replace(
+        worst("B$ENRA"),
+        inputs=frozenset({Reg.CX}),
+        cleanup=0,
+        evidence=(
+            "disassembled from the linked image: `push cx` then `sub sp,cx` before any write, "
+            "no unresolved edge from entry to the far jump that returns"
+        ),
+    )
+
+
+for _one in ("pds71", "qb45"):
+    _entry(_one)
+
+# B$EXSA under PDS 7.1, bounded from the linked image at 0x1d6c. Its
+# returning path -- `pop word [422h]`/`[424h]`, `lea sp,[bp-6]`, four pops,
+# `jmp far [422h]` -- reads no register and removes no caller argument, so
+# cleanup is 0. Its other path is error dispatch, and there the survivors
+# are what is declared here rather than what is read: bx is fully written
+# (`mov bl,13h` at 0x19da, `xor bh,bh` at 0x1a63) and ax by the entry
+# table, but cx survives the arm that skips `mov cx,[41Ch]`, and dx, si and
+# di are never written on any path before `jmp cx` at 0x1a79 or the `retf`
+# at 0x1b10. A superset, which costs a copy where it is wrong and cannot
+# be unsound; the control semantics past that indirect jump stay unknown,
+# which is what the conservative fields still say.
+VARIANTS[("B$EXSA", "pds71")] = replace(
+    worst("B$EXSA"),
+    inputs=frozenset({Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
+    cleanup=0,
+    evidence=(
+        "disassembled from the linked image at 0x1d6c: the returning path reads no register "
+        "and removes no argument; on the error path ax and bx are written before every "
+        "terminal, and cx, dx, si and di are not"
+    ),
+)
+
+# QuickBASIC 4.5's, at 0x20f2: no register read on any reachable path, one
+# exit, no unresolved edge.
+VARIANTS[("B$EXSA", "qb45")] = replace(
+    worst("B$EXSA"),
+    inputs=frozenset(),
+    cleanup=0,
+    evidence="disassembled from the linked image at 0x20f2: no register read, one exit",
+)
+
+
+def for_module(found) -> "dict[int, Contract]":
+    """The per-site map for a whole module, from the object itself.
+
+    One place, because the raise and the lowering must be handed the same
+    answer: built twice from different arguments they can differ, and
+    `test_the_allocator_settles_on_every_program` did exactly that -- the
+    raise establishing PDS's B$ENRA while the lowering saw the
+    conservative contract, leaving a pin naming a value the body no longer
+    held.
+    """
+    from qbopt import module
+
+    return per_call(found.calls, module.family(found.records), module.defines(found.records, found.seg))
+
+
+def per_call(
+    calls: "dict[int, str]", family: str = "", defined: "frozenset[str]" = frozenset()
+) -> "dict[int, Contract]":
+    """One contract per call site, chosen once for the whole module.
+
+    A side map rather than a field on the body: a contract is a fact about
+    the machine, and the raise and the lowering both need the same answer
+    for the same call. Passing it keeps them from looking one up
+    separately and disagreeing -- which is what a per-family contract
+    makes possible, since B$ENRA reads bx under one runtime and not
+    another.
+
+    `family` is `module.Family`'s value, as a string so this stays below
+    module.py. It selects a variant where one is established and changes
+    nothing otherwise -- a caller with no family in hand gets the
+    conservative contract, which is the honest answer for an object whose
+    toolchain nobody read.
+    """
+    return {
+        at: (own(name) if name in defined else VARIANTS.get((name, family)) or contract(name))
+        for at, name in calls.items()
+    }
+
+
+def established_inputs(routine: Contract) -> bool:
+    """Whether this routine's inputs are established at all.
+
+    `inputs` is None where nothing is known and an empty set where the
+    routine is known to read no register. The two are not the same fact
+    and reading them as one is how a call to a routine whose code is not
+    in the tree came out with no requirements at all -- which says it
+    reads nothing, the one thing known to be false about it.
+    """
+    return routine.inputs is not None
+
+
+def slots(routine: Contract) -> tuple[Reg, ...]:
+    """Which registers this routine reads its arguments in, in slot order.
+
+    Empty where nothing is established: a routine whose code is not in the
+    tree declares no inputs, and the conservative read set the raise builds
+    for it is a liveness dependency rather than an argument list.
+    """
+    if not routine.inputs:
+        return ()
+    return tuple(one for one in SLOTS if one in routine.inputs)
 
 
 def writes_caller_memory(routine: Contract) -> bool:

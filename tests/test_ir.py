@@ -10,12 +10,11 @@ module's own dependencies and are tested there.
 from pathlib import Path
 
 import pytest
+from iced_x86 import Code
 from iced_x86 import Register
 from iced_x86 import Register_
 
 import corpus
-from iced_x86 import Code
-
 from qbopt import ir
 from helpers import hx
 from qbopt import extent
@@ -872,3 +871,41 @@ def test_a_barrier_whose_reach_is_wholly_unknown_pins_every_register() -> None:
     node = ir.Opaque(insn, ir.instruction_effects(insn, module.literal_only), ir.UNMODELLED)
     assert node.effects.defs is None
     assert ir.pinned(node) is None
+
+
+def test_two_cells_reached_by_different_values_are_different_cells() -> None:
+    """`through` is out of the comparison because it is how to encode an
+    operand, not which bytes it is. The value that computed the address is
+    the other question: conflating two of them is how arrprm stored both
+    array elements through one register and printed ' 0  0' for ' 7  8'.
+    """
+    from iced_x86 import Register
+
+    one = ir.Mem("[es:bx]", 4, Register.BX, 0, 0, base=ir.Held(1, 2))
+    other = ir.Mem("[es:bx]", 4, Register.BX, 0, 0, base=ir.Held(2, 2))
+    assert one != other
+    assert one == ir.Mem("[es:bx]", 4, Register.BX, 0, 0, base=ir.Held(1, 2))
+    # and `through` still is not part of it
+    assert one == ir.Mem("[es:bx]", 4, Register.SI, 0, 0, base=ir.Held(1, 2))
+
+
+def test_values_finds_a_held_wherever_it_is() -> None:
+    from iced_x86 import Register
+
+    plain = ir.Held(7, 2)
+    cell = ir.Mem("[bx]", 2, Register.BX, 0, 0, base=ir.Held(9, 2))
+    assert [one.value for one in ir.values(plain)] == [7]
+    assert [one.value for one in ir.values(cell)] == [9]
+    assert ir.values(ir.Imm(3, 2)) == []
+    assert ir.values(ir.Mem("[0]", 2, Register.NONE, 0, 2)) == []
+
+
+def test_mapped_replaces_a_nested_base_and_leaves_the_rest() -> None:
+    from iced_x86 import Register
+
+    cell = ir.Mem("[es:bx+2]", 4, Register.BX, 5, 2, base=ir.Held(9, 2))
+    got = ir.mapped(cell, lambda one: ir.Held(one.value + 100, one.width))
+    assert got.base == ir.Held(109, 2)
+    for field in ("addr", "width", "through", "offset", "disp_width"):
+        assert getattr(got, field) == getattr(cell, field), field
+    assert ir.mapped(ir.Held(4, 2), lambda one: ir.Held(5, one.width)) == ir.Held(5, 2)

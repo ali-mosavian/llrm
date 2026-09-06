@@ -27,10 +27,10 @@ v63 became v61.
 
 from dataclasses import replace
 
-from qbopt import intervals as ranges
 from qbopt import ir
 from qbopt import lir
 from qbopt import target
+from qbopt import intervals as ranges
 from qbopt.passes import LIRTransform
 
 
@@ -106,14 +106,13 @@ def joined(body: lir.LirBody, pinned: dict | None = None) -> lir.LirBody:
                     neighbours.add(other)
             near[there] = neighbours
 
-    if not parent:
-        return body
-    swap = {
-        one: find(one)
-        for block in body.blocks
-        for insn in block.insns
-        for one in (*insn.defines, *insn.uses)
-    }
+    # No early return where nothing joined. A copy whose two ends were
+    # already one value is an identity however it got that way, and
+    # cleaning it up must not depend on some unrelated pair elsewhere in
+    # the body having coalesced -- nor may the bytes it stood for go with
+    # it. `_kept` answers both, and with an empty map it only removes what
+    # was already an identity.
+    swap = {one: find(one) for block in body.blocks for insn in block.insns for one in (*insn.defines, *insn.uses)}
     swap.update({one: find(one) for one in parent})
     return replace(
         body,
@@ -122,12 +121,9 @@ def joined(body: lir.LirBody, pinned: dict | None = None) -> lir.LirBody:
                 block,
                 # Only a copy whose two ends are now one value: everything
                 # is named by its class first, and what is left of a joined
-                # copy reads a register into itself.
-                insns=tuple(
-                    made
-                    for made in (_renamed(one, swap) for one in block.insns)
-                    if _copy(made) is None or _copy(made)[0] != _copy(made)[1]
-                ),
+                # copy reads a register into itself. `_kept` also hands on
+                # the bytes such a copy stood for.
+                insns=tuple(_kept(block, swap)),
                 phis=tuple(
                     lir.Phi(swap.get(phi.result, phi.result), tuple((at, swap.get(v, v)) for at, v in phi.incoming))
                     for phi in block.phis
@@ -145,9 +141,7 @@ def _adjacent(live: dict) -> dict[int, set]:
     whose whole spans do not touch cannot have segments that do, and that
     is most pairs.
     """
-    bounds = {
-        one: (iv.segments[0].start, iv.segments[-1].end) for one, iv in live.items() if iv.segments
-    }
+    bounds = {one: (iv.segments[0].start, iv.segments[-1].end) for one, iv in live.items() if iv.segments}
     out: dict[int, set] = {one: set() for one in live}
     order = sorted(bounds, key=lambda one: bounds[one])
     for index, one in enumerate(order):
@@ -159,6 +153,21 @@ def _adjacent(live: dict) -> dict[int, set]:
                 out[one].add(other)
                 out[other].add(one)
     return out
+
+
+def _kept(block: "lir.LirBlock", swap: dict) -> "list[lir.Insn]":
+    """One block's instructions, with a joined copy's bytes given away.
+
+    Which copies are identities is this phase's question -- both ends
+    resolving to one value -- and `lir.without` is what happens to the
+    bytes.
+    """
+
+    def identity(one: "lir.Insn") -> bool:
+        pair = _copy(one)
+        return pair is not None and pair[0] == pair[1]
+
+    return lir.without(block.insns, identity, lambda one: _renamed(one, swap))
 
 
 def _merged(one: "ranges.Interval", other: "ranges.Interval") -> "ranges.Interval":

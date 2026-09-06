@@ -9,12 +9,11 @@ emitted `r24 <- [bp-8]` and then `r27 <- r24`, and R came out 6460 for 7500.
 """
 
 import pytest
-from iced_x86 import Register
 
-from qbopt import frame as frames
 from qbopt import ir
 from qbopt import lir
 from qbopt import spiller
+from qbopt import frame as frames
 
 
 def _move(into, out_of, group=None, at=0x100) -> lir.Insn:
@@ -71,3 +70,148 @@ def test_an_ordinary_instruction_still_spills_the_way_it_did() -> None:
 def test_the_group_comes_out_one_contiguous_run() -> None:
     got = _out(_body(_move(1, 2, group=1), _move(3, 4, group=1), _move(5, 6, group=1)), {4})
     assert [one.group for one in got] == [1, 1, 1], [one.what for one in got]
+
+
+def _binary(name: str, into: int, other: int, at: int = 0x200) -> lir.Insn:
+    what = ir.Semantics(ir.Operation.BINARY, name, (ir.Held(into, 2),), (ir.Held(into, 2), ir.Held(other, 2)))
+    return lir.Insn(at=at, covers=(at, at + 2), what=what, defines=(into,), uses=(into, other), op=None)
+
+
+def test_a_tied_value_is_spilled_into_the_operand_itself() -> None:
+    """pressx spilled 207, then 212, then 215, at one `add`, two
+    instructions added every round. Spilling a value an instruction both
+    reads and writes buys nothing -- the reload is tied at the same place
+    -- and x86 reads and writes memory in one instruction anyway."""
+    got = _out(_body(_binary("add", 1, 2)), {1})
+    assert len(got) == 1, [one.what.name for one in got]
+    what = got[0].what
+    assert isinstance(what.dests[0], ir.Mem) and what.dests[0] == what.sources[0]
+    assert what.sources[1] == ir.Held(2, 2)
+    assert got[0].defines == () and got[0].uses == (2,)
+
+
+def test_a_tied_value_an_instruction_requires_in_a_register_keeps_the_reload() -> None:
+    """`imul`'s low half is tied and must be ax; a slot is not a register."""
+    what = ir.Semantics(
+        ir.Operation.MULTIPLY,
+        "imul",
+        (ir.Held(1, 2), ir.Held(2, 2)),
+        (ir.Held(1, 2), ir.Held(3, 2)),
+    )
+    imul = lir.Insn(at=0x200, covers=(0x200, 0x202), what=what, defines=(1, 2), uses=(1, 3), op=None)
+    got = _out(_body(imul), {1})
+    assert len(got) > 1, "the fixed tie took the in-place path"
+    assert any(isinstance(one.what.sources[0], ir.Mem) for one in got if one.what.name == "mov")
+
+
+def test_a_second_memory_operand_keeps_the_reload() -> None:
+    """One memory operand is all an instruction has."""
+    what = ir.Semantics(ir.Operation.BINARY, "add", (ir.Held(1, 2),), (ir.Held(1, 2), ir.Held(2, 2)))
+    both = lir.Insn(at=0x200, covers=(0x200, 0x202), what=what, defines=(1,), uses=(1, 2), op=None)
+    got = _out(_body(both), {1, 2})
+    assert len(got) > 1, "two spilled operands took the in-place path"
+
+
+def test_spilling_a_pointer_renames_the_cell_it_is_the_base_of() -> None:
+    """A spilled pointer's reload renamed `uses` and not the cell.
+
+    `_settled` looked for a Held in `Mem.through`, which holds a register
+    since lowering, so the reload defined v6, the load said it read v6, and
+    the byte it encoded still addressed through v3 -- which after the spill
+    lives in a frame slot and no register.
+    """
+    from iced_x86 import Register
+
+    from qbopt import ir
+    from qbopt import lir
+    from qbopt import spiller
+    from qbopt.module import Addr
+    from qbopt.module import Space
+
+    where = Addr(Space.SEGMENT, 0x10, base=Register.SI)
+    cell = ir.Mem(where, 2, Register.NONE, 0, 2, base=ir.Held(3, 2))
+    load = lir.Insn(
+        at=0x20,
+        covers=(0x20, 0x22),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(5, 2),), (cell,)),
+        defines=(5,),
+        uses=(3,),
+        op=None,
+    )
+    body = lir.LirBody(
+        name="one",
+        entry=0,
+        blocks=(lir.LirBlock(at=0, insns=(load,), succ=()),),
+        origin={},
+        pins={},
+    )
+    out, made = spiller.spilled(body, frozenset({3}))
+    got = next(
+        one
+        for one in out.blocks[0].insns
+        if any(isinstance(x, ir.Mem) and x.base is not None for x in one.what.sources)
+    )
+    read = got.what.sources[0]
+    assert got.uses == (read.base.value,), f"uses {got.uses}, cell on {read.base}"
+    assert got.uses != (3,), "nothing was spilled; the fixture does not reach the rename"
+    assert read.base.value in made, f"{read.base} is not one of the reloads {sorted(made)}"
+    assert read.through == Register.NONE, "the rename placed it"
+    assert (read.addr, read.width, read.offset, read.disp_width) == (where, 2, 0, 2)
+
+
+def _one_block(*insns) -> "lir.LirBody":
+    from qbopt import lir
+
+    return lir.LirBody("one", 0, (lir.LirBlock(at=0, insns=insns, succ=()),), origin={}, pins={})
+
+
+def _frame():
+    from qbopt import frame as frames
+
+    return frames.Frame(floor=0)
+
+
+def _through_regalloc(body):
+    from qbopt import allocate
+    from qbopt import frame as frames
+
+    return allocate.RegAlloc({}, frames.of(body)).transform(body)
+
+
+def test_the_body_that_never_settled_allocates() -> None:
+    """nested-p-g2's `main`, which the allocator gave up on.
+
+    `0x0061 add v, [cell]` ties v to its own destination while the other
+    source is already memory, so the tied value cannot go in a slot -- one
+    memory operand is all an instruction has. The generic path minted a
+    reload tied at the same place, and the next round spilled that: 84,
+    then 87, 90, 93 ... 111, three instructions added every round, until
+    the twelve rounds ran out.
+    """
+    from pathlib import Path
+
+    from qbopt import omf
+    from qbopt import flow
+    from qbopt import lower
+    from qbopt import module
+    from qbopt import phielim
+    from qbopt import runtime
+    from qbopt import twoaddr
+    from qbopt import allocate
+    from qbopt import coalesce
+    from qbopt import mir as raise_
+    from qbopt import blocks as split
+    from qbopt import frame as frames
+    from qbopt.blocks import code_map
+
+    records = omf.parse(Path("fixtures/omf/nested-p-g2.obj").read_bytes())
+    found = module.of(records)
+    blocks = split.partition(found, code_map(found))
+    contracts = runtime.for_module(found)
+    name, body = next((one, other) for one, other in raise_.bodies(found, blocks, contracts) if one == "main (main)")
+    low = lower.lowered(name, body, found.calls, set(found.absorbed), contracts)
+    frame = frames.of(low)
+    for phase in (phielim.PhiElimination(), twoaddr.TwoAddress(), coalesce.Coalescer()):
+        low = phase.transform(low)
+    got = allocate.RegAlloc(flow._pinned(body), frame).transform(low)
+    assert got is not None

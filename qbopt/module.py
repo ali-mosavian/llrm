@@ -101,6 +101,47 @@ class Addr:
         return f"[{where}{indexed}{self.disp:+#x}]"
 
 
+class Family(StrEnum):
+    """Which compiler made an object.
+
+    Not a preference: B$ENRA reads bx under VBDOS's runtime and does not
+    touch it under PDS's, so a routine's contract is not one fact for
+    every toolchain. Read from COMENT class 0x00, which every object
+    carries and which names the compiler outright.
+    """
+
+    QUICKBASIC = "qb45"
+    PDS = "pds71"
+    VBDOS = "vbdos"
+    UNKNOWN = "unknown"
+
+
+_MADE_BY = (
+    (b"QuickBASIC Compiler 4.5", Family.QUICKBASIC),
+    (b"BASIC Compiler 7.1", Family.PDS),
+    (b"VBDOS", Family.VBDOS),
+)
+
+
+def defines(records: "list[omf.Record]", seg: int) -> "frozenset[str]":
+    """Every name this module declares itself: BC compiles a SUB as a
+    PUBDEF and calls it through an EXTDEF fixup of the same object, so the
+    call target alone cannot say whether it is the runtime's or its own."""
+    return frozenset(omf.pubdef_names(records, seg).values())
+
+
+def family(records: "list[omf.Record]") -> Family:
+    """Which compiler wrote these records, from its own comment."""
+    for one in records:
+        if one.type != 0x88 or len(one.body) < 2 or one.body[1] != 0x00:
+            continue
+        said = one.body[2:]
+        for mark, which in _MADE_BY:
+            if mark in said:
+                return which
+    return Family.UNKNOWN
+
+
 @dataclass(frozen=True, slots=True)
 class Module:
     records: list[omf.Record]

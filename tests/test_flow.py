@@ -12,17 +12,17 @@ from pathlib import Path
 
 import pytest
 
-from qbopt import allocate
-from qbopt import blocks as split
-from qbopt import flow
-from qbopt import intervals
-from qbopt import ir
 from qbopt import lir
-from qbopt import lower
 from qbopt import mir
-from qbopt import module
 from qbopt import omf
+from qbopt import flow
+from qbopt import lower
+from qbopt import module
 from qbopt import phielim
+from qbopt import runtime
+from qbopt import allocate
+from qbopt import intervals
+from qbopt import blocks as split
 from qbopt.blocks import code_map
 from qbopt.passes import LIRTransform
 
@@ -76,7 +76,7 @@ def test_every_machine_phase_takes_lir_and_gives_lir_back() -> None:
     """
     _found, _blocks, bodies = _raised("nested-p-g2")
     for name, body in bodies:
-        low = lower.lowered(name, body, _found.calls)
+        low = lower.lowered(name, body, _found.calls, set(_found.absorbed), runtime.for_module(_found))
         for phase in flow.machine(flow._pinned(body)):
             assert isinstance(phase, LIRTransform), f"{phase} is not a LIR phase"
             try:
@@ -92,7 +92,7 @@ def test_phi_elimination_takes_the_body_out_of_ssa() -> None:
     docs/hoist-blocker.md spent a week on."""
     _found, _blocks, bodies = _raised("nested-p-g2")
     for name, body in bodies:
-        low = lower.lowered(name, body, _found.calls)
+        low = lower.lowered(name, body, _found.calls, set(_found.absorbed), runtime.for_module(_found))
         assert sum(len(block.phis) for block in low.blocks), "nested has phis; the lowering lost them"
         out = phielim.eliminated(low)
         assert not sum(len(block.phis) for block in out.blocks), "a phi survived elimination"
@@ -106,7 +106,7 @@ def test_lowering_leaves_no_mir_operand_behind() -> None:
     """
     _found, _blocks, bodies = _raised("flags-p-g2-zd")
     for name, body in bodies:
-        for one in lower.lowered(name, body, _found.calls).insns:
+        for one in lower.lowered(name, body, _found.calls, set(_found.absorbed), runtime.for_module(_found)).insns:
             if one.what is None:
                 continue
             for where in (*one.what.dests, *one.what.sources):
@@ -124,8 +124,8 @@ def test_a_value_in_a_loop_costs_more_than_one_outside() -> None:
     as often outside it.
     """
     _found, _blocks, bodies = _raised("lngmix-p-g2")
-    (name, body), = bodies
-    low = lower.lowered(name, body, _found.calls)
+    ((name, body),) = bodies
+    low = lower.lowered(name, body, _found.calls, set(_found.absorbed), runtime.for_module(_found))
     deep = intervals.depths(low)
     assert set(deep.values()) >= {0, 1}, "lngmix has a loop; the depths say otherwise"
 
@@ -145,7 +145,9 @@ def test_the_allocation_is_searched_and_says_whether_it_is_optimal(name: str) ->
     budget says so rather than claiming an optimum it did not prove."""
     _found, _blocks, bodies = _raised(name)
     for who, body in bodies:
-        got = allocate.allocate(lower.lowered(who, body, _found.calls), flow._pinned(body))
+        got = allocate.allocate(
+            lower.lowered(who, body, _found.calls, set(_found.absorbed), runtime.for_module(_found)), flow._pinned(body)
+        )
         assert got.optimal or got.why, "an unproven assignment has to say why"
         if got.optimal:
             assert got.why == ""
@@ -156,7 +158,7 @@ def test_lowering_gives_back_lir_and_allocation_gives_back_lir() -> None:
     """Each step's output is the next step's input, and nothing else."""
     _found, _blocks, bodies = _raised("hotlop-p-g2")
     for name, body in bodies:
-        low = lower.lowered(name, body, _found.calls)
+        low = lower.lowered(name, body, _found.calls, set(_found.absorbed), runtime.for_module(_found))
         assert isinstance(low, lir.LirBody)
         after = allocate.applied(low, allocate.allocate(low, flow._pinned(body)))
         assert isinstance(after, lir.LirBody)
@@ -183,7 +185,7 @@ def test_lir_says_what_each_instruction_defines_and_uses() -> None:
     register nothing is placed in."""
     _found, _blocks, bodies = _raised("lngmix-p-g2")
     for name, body in bodies:
-        low = lower.lowered(name, body, _found.calls)
+        low = lower.lowered(name, body, _found.calls, set(_found.absorbed), runtime.for_module(_found))
         assert any(one.defines for one in low.insns), "no instruction defines anything"
         assert any(one.uses for one in low.insns), "no instruction uses anything"
         assert any(block.arrives for block in low.blocks), "no phi result arrives anywhere"
@@ -199,9 +201,9 @@ def test_the_register_file_is_written_down_once() -> None:
     built from `ir.ROOT`, so it resolved to its root and `mov [k],al`
     became `mov [k],eax`.
     """
-    from qbopt import regalloc
     from qbopt import select
     from qbopt import target
+    from qbopt import regalloc
 
     assert select.AT_WIDTH is target.AT_WIDTH
     assert select.WIDTHS is target.WIDTHS
@@ -218,7 +220,7 @@ def test_a_value_that_addresses_memory_is_confined_to_a_base_register() -> None:
         found = module.of(omf.parse(path.read_bytes()))
         blocks = split.partition(found, code_map(found))
         for name, body in mir.bodies(found, blocks):
-            low = lower.lowered(name, body, found.calls)
+            low = lower.lowered(name, body, found.calls, set(found.absorbed), runtime.for_module(found))
             for value, where in allocate.classes(low).items():
                 assert where is target.ADDRESSING, f"value#{value} confined to something unexpected"
                 assert set(target.order(where)) <= set(target.AVAILABLE)
@@ -238,8 +240,8 @@ def test_the_verifier_objects_to_a_body_that_claims_a_byte_twice() -> None:
     from qbopt import verify
 
     _found, _blocks, bodies = _raised("hotlop-p-g2")
-    (name, body), = bodies
-    low = lower.lowered(name, body, _found.calls)
+    ((name, body),) = bodies
+    low = lower.lowered(name, body, _found.calls, set(_found.absorbed), runtime.for_module(_found))
     assert not verify.verify(low, in_ssa=True), "a freshly lowered body is not well formed"
 
     first = low.blocks[0]
@@ -251,17 +253,17 @@ def test_a_spilled_value_gets_a_slot_and_the_prologue_reserves_it() -> None:
     """Choosing to spill is half of it. Until the spiller existed the
     choice was made and 237 of 487 objects were refused because an operand
     still named a value with no register."""
-    from qbopt import frame as frames
-    from qbopt import prologue
-    from qbopt import spiller
     from qbopt import verify
+    from qbopt import spiller
+    from qbopt import prologue
+    from qbopt import frame as frames
 
     # divmod, because nested stopped spilling: the coalescer now asks
     # Briggs before a join and leaves the allocator a body it can place.
     # The claim here is the spiller's, so it needs a body that spills.
     _found, _blocks, bodies = _raised("divmod-p-g2")
-    (name, body), = bodies
-    low = lower.lowered(name, body, _found.calls)
+    ((name, body),) = bodies
+    low = lower.lowered(name, body, _found.calls, set(_found.absorbed), runtime.for_module(_found))
     # Everything up to the allocator, which now owns the spill loop -- so
     # asking it after that phase would see the spilling already done.
     for phase in flow.machine(flow._pinned(body)):
@@ -313,7 +315,7 @@ def test_an_inserted_instruction_carries_no_fixup() -> None:
 
     _found, _blocks, bodies = _raised("divmod-p-g2-zd")
     for name, body in bodies:
-        low = lower.lowered(name, body, _found.calls)
+        low = lower.lowered(name, body, _found.calls, set(_found.absorbed), runtime.for_module(_found))
         for phase in flow.machine(flow._pinned(body), None, _found.calls):
             low = phase.transform(low)
         as_mir = objwrite._as_mir(low)
@@ -335,15 +337,15 @@ def test_a_reload_cannot_be_spilled_again() -> None:
     `LiveInterval::markNotSpillable`; here the reloads are handed back to
     `allocate` and weigh infinity.
     """
-    from qbopt import frame as frames
     from qbopt import spiller
+    from qbopt import frame as frames
 
     # divmod, because fpcsex stopped spilling once the coalescer began
     # refusing a join that would leave a class uncolourable.
     _found, _blocks, bodies = _raised("divmod-p-g2")
     ran = False
     for name, body in bodies:
-        low = lower.lowered(name, body, _found.calls)
+        low = lower.lowered(name, body, _found.calls, set(_found.absorbed), runtime.for_module(_found))
         for phase in flow.machine(flow._pinned(body)):
             if phase.name == "regalloc":
                 break
@@ -372,7 +374,7 @@ def test_the_allocator_settles_on_every_program() -> None:
         found = module.of(omf.parse(path.read_bytes()))
         blocks = split.partition(found, code_map(found))
         for name, body in mir.bodies(found, blocks):
-            low = lower.lowered(name, body, found.calls)
+            low = lower.lowered(name, body, found.calls, set(found.absorbed), runtime.for_module(found))
             try:
                 for phase in flow.machine(flow._pinned(body), None, found.calls):
                     low = phase.transform(low)
@@ -389,9 +391,9 @@ def test_the_register_file_is_written_down_once() -> None:
     built from `ir.ROOT`, so it resolved to its root and `mov [k],al`
     became `mov [k],eax`.
     """
-    from qbopt import regalloc
     from qbopt import select
     from qbopt import target
+    from qbopt import regalloc
 
     assert select.AT_WIDTH is target.AT_WIDTH
     assert select.WIDTHS is target.WIDTHS
@@ -408,7 +410,7 @@ def test_a_value_that_addresses_memory_is_confined_to_a_base_register() -> None:
         found = module.of(omf.parse(path.read_bytes()))
         blocks = split.partition(found, code_map(found))
         for name, body in mir.bodies(found, blocks):
-            low = lower.lowered(name, body, found.calls)
+            low = lower.lowered(name, body, found.calls, set(found.absorbed), runtime.for_module(found))
             for value, where in allocate.classes(low).items():
                 assert where is target.ADDRESSING, f"value#{value} confined to something unexpected"
                 assert set(target.order(where)) <= set(target.AVAILABLE)
@@ -428,8 +430,8 @@ def test_the_verifier_objects_to_a_body_that_claims_a_byte_twice() -> None:
     from qbopt import verify
 
     _found, _blocks, bodies = _raised("hotlop-p-g2")
-    (name, body), = bodies
-    low = lower.lowered(name, body, _found.calls)
+    ((name, body),) = bodies
+    low = lower.lowered(name, body, _found.calls, set(_found.absorbed), runtime.for_module(_found))
     assert not verify.verify(low, in_ssa=True), "a freshly lowered body is not well formed"
 
     first = low.blocks[0]
@@ -441,17 +443,17 @@ def test_a_spilled_value_gets_a_slot_and_the_prologue_reserves_it() -> None:
     """Choosing to spill is half of it. Until the spiller existed the
     choice was made and 237 of 487 objects were refused because an operand
     still named a value with no register."""
-    from qbopt import frame as frames
-    from qbopt import prologue
-    from qbopt import spiller
     from qbopt import verify
+    from qbopt import spiller
+    from qbopt import prologue
+    from qbopt import frame as frames
 
     # divmod, because nested stopped spilling: the coalescer now asks
     # Briggs before a join and leaves the allocator a body it can place.
     # The claim here is the spiller's, so it needs a body that spills.
     _found, _blocks, bodies = _raised("divmod-p-g2")
-    (name, body), = bodies
-    low = lower.lowered(name, body, _found.calls)
+    ((name, body),) = bodies
+    low = lower.lowered(name, body, _found.calls, set(_found.absorbed), runtime.for_module(_found))
     # Everything up to the allocator, which now owns the spill loop -- so
     # asking it after that phase would see the spilling already done.
     for phase in flow.machine(flow._pinned(body)):
@@ -503,7 +505,7 @@ def test_an_inserted_instruction_carries_no_fixup() -> None:
 
     _found, _blocks, bodies = _raised("divmod-p-g2-zd")
     for name, body in bodies:
-        low = lower.lowered(name, body, _found.calls)
+        low = lower.lowered(name, body, _found.calls, set(_found.absorbed), runtime.for_module(_found))
         for phase in flow.machine(flow._pinned(body), None, _found.calls):
             low = phase.transform(low)
         as_mir = objwrite._as_mir(low)
@@ -525,15 +527,15 @@ def test_a_reload_cannot_be_spilled_again() -> None:
     `LiveInterval::markNotSpillable`; here the reloads are handed back to
     `allocate` and weigh infinity.
     """
-    from qbopt import frame as frames
     from qbopt import spiller
+    from qbopt import frame as frames
 
     # divmod, because fpcsex stopped spilling once the coalescer began
     # refusing a join that would leave a class uncolourable.
     _found, _blocks, bodies = _raised("divmod-p-g2")
     ran = False
     for name, body in bodies:
-        low = lower.lowered(name, body, _found.calls)
+        low = lower.lowered(name, body, _found.calls, set(_found.absorbed), runtime.for_module(_found))
         for phase in flow.machine(flow._pinned(body)):
             if phase.name == "regalloc":
                 break
@@ -559,8 +561,13 @@ def test_the_allocator_settles_on_every_program() -> None:
     for path in CORPUS:
         found = module.of(omf.parse(path.read_bytes()))
         blocks = split.partition(found, code_map(found))
-        for name, body in mir.bodies(found, blocks):
-            low = lower.lowered(name, body, found.calls)
+        # One map, built once and handed to both: built twice they can
+        # differ, and the raise then establishes a contract the lowering
+        # does not -- which left a pin naming a value the body no longer
+        # held, reported as `value#19 at width 4 has no register`.
+        contracts = runtime.for_module(found)
+        for name, body in mir.bodies(found, blocks, contracts):
+            low = lower.lowered(name, body, found.calls, set(found.absorbed), contracts)
             for phase in flow.machine(flow._pinned(body), None, found.calls):
                 low = phase.transform(low)
 
@@ -578,7 +585,7 @@ def test_the_allocator_evicts_rather_than_spilling_a_costlier_range() -> None:
         found = module.of(omf.parse(path.read_bytes()))
         blocks = split.partition(found, code_map(found))
         for name, body in mir.bodies(found, blocks):
-            low = lower.lowered(name, body, found.calls)
+            low = lower.lowered(name, body, found.calls, set(found.absorbed), runtime.for_module(found))
             got = allocate.allocate(low, {})
             # Nothing is in two places, and nothing is somewhere it may not be.
             confined = allocate.classes(low)
@@ -601,13 +608,13 @@ def test_a_call_carries_a_mask_rather_than_defining_a_value_per_register() -> No
     The mask has to be honoured or the drop is a miscompile: nothing live
     across the call may sit in a register the call destroys.
     """
-    from qbopt import intervals as ranges
     from qbopt import target
+    from qbopt import intervals as ranges
 
     _found, _blocks, bodies = _raised("lngmix-p-g2")
     masked = 0
     for name, body in bodies:
-        low = lower.lowered(name, body, _found.calls)
+        low = lower.lowered(name, body, _found.calls, set(_found.absorbed), runtime.for_module(_found))
         for block in low.blocks:
             for one in block.insns:
                 if not one.clobbers:
@@ -620,7 +627,7 @@ def test_a_call_carries_a_mask_rather_than_defining_a_value_per_register() -> No
     # And nothing the allocator seats sits in a register a call it crosses
     # destroys.
     for name, body in bodies:
-        low = lower.lowered(name, body, _found.calls)
+        low = lower.lowered(name, body, _found.calls, set(_found.absorbed), runtime.for_module(_found))
         for phase in flow.machine(flow._pinned(body), None, _found.calls):
             if phase.name == "regalloc":
                 break
@@ -648,10 +655,10 @@ def test_strength_reduction_replaces_a_loop_multiply_with_an_add() -> None:
     """
     from pathlib import Path
 
-    from qbopt import blocks as split
-    from qbopt import module
     from qbopt import omf
+    from qbopt import module
     from qbopt import strength
+    from qbopt import blocks as split
     from qbopt.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/matrix-p-g2.obj").read_bytes()))
@@ -704,10 +711,10 @@ def test_promotion_takes_a_variable_out_of_memory() -> None:
     """
     from pathlib import Path
 
-    from qbopt import blocks as split
-    from qbopt import module
     from qbopt import omf
+    from qbopt import module
     from qbopt import promote
+    from qbopt import blocks as split
     from qbopt.blocks import code_map
 
     was = now = cells = 0
@@ -732,11 +739,11 @@ def test_promotion_is_only_sound_because_the_runtime_was_measured() -> None:
     reach. With every call conceding `ANY`, nothing is promotable."""
     from pathlib import Path
 
-    from qbopt import blocks as split
-    from qbopt import module
     from qbopt import omf
+    from qbopt import module
     from qbopt import promote
     from qbopt import runtime
+    from qbopt import blocks as split
     from qbopt.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/arith-p-g2.obj").read_bytes()))
@@ -790,11 +797,11 @@ def test_an_absorbed_site_keeps_its_own_emission() -> None:
     """
     from pathlib import Path
 
-    from qbopt import blocks as split
+    from qbopt import omf
     from qbopt import lower
     from qbopt import module
-    from qbopt import omf
     from qbopt import transform
+    from qbopt import blocks as split
     from qbopt.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()))
@@ -806,17 +813,13 @@ def test_an_absorbed_site_keeps_its_own_emission() -> None:
     assert absorbed, "lngmix absorbs its divides; nothing was folded"
     seen = False
     for name, body in raised:
-        body = transform.widened(
-            transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
-        )
-        low = lower.lowered(name, body, found.calls, absorbed)
+        body = transform.widened(transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found))
+        low = lower.lowered(name, body, found.calls, absorbed, runtime.for_module(found))
         for block in low.blocks:
             for one in block.insns:
                 if one.op is not None and getattr(one.op, "id", None) in absorbed:
                     seen = True
-                    assert one.what is None, (
-                        f"{one.at:#06x} is an absorbed site and was lowered to something"
-                    )
+                    assert one.what is None, f"{one.at:#06x} is an absorbed site and was lowered to something"
     assert seen, "no instruction in lngmix stands for an absorbed site"
 
 
@@ -824,12 +827,12 @@ def test_no_phi_survives_elimination_on_a_critical_edge() -> None:
     """bools-q-O has three, and every one was silently discarded."""
     from pathlib import Path
 
-    from qbopt import blocks as split
+    from qbopt import omf
     from qbopt import lower
     from qbopt import module
-    from qbopt import omf
     from qbopt import phielim
     from qbopt import transform
+    from qbopt import blocks as split
     from qbopt.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/bools-q-O.obj").read_bytes()))
@@ -838,10 +841,8 @@ def test_no_phi_survives_elimination_on_a_critical_edge() -> None:
     absorbed = set(found.absorbed)
     critical = 0
     for name, body in raised:
-        body = transform.widened(
-            transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
-        )
-        low = lower.lowered(name, body, found.calls, absorbed)
+        body = transform.widened(transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found))
+        low = lower.lowered(name, body, found.calls, absorbed, runtime.for_module(found))
         at_of = {block.at: block for block in low.blocks}
         for block in low.blocks:
             for phi in block.phis:
@@ -867,3 +868,44 @@ def test_emission_refuses_a_body_that_still_has_a_phi() -> None:
     )
     with pytest.raises(objwrite.Survived):
         objwrite._as_mir(stuck)
+
+
+def test_verification_catches_a_cell_left_on_a_value_the_rename_ended() -> None:
+    """The checker looked for a value in `Mem.through`, which holds a
+    register, so a cell left on the old value was invisible to it: the
+    three renames that got this wrong could not have been caught here."""
+    from iced_x86 import Register
+
+    from qbopt import lir
+    from qbopt import verify
+    from qbopt.module import Addr
+    from qbopt.module import Space
+    from qbopt import ir as machine
+
+    where = Addr(Space.SEGMENT, 0x10, base=Register.SI)
+    stale = machine.Mem(where, 2, Register.NONE, 0, 2, base=machine.Held(3, 2))
+    reload_ = lir.Insn(
+        at=0x20,
+        covers=(0x20, 0x20),
+        what=machine.Semantics(machine.Operation.MOVE, "mov", (machine.Held(6, 2),), (machine.Imm(0x40, 2),)),
+        defines=(6,),
+        uses=(),
+        op=None,
+    )
+    load = lir.Insn(
+        at=0x20,
+        covers=(0x20, 0x22),
+        what=machine.Semantics(machine.Operation.MOVE, "mov", (machine.Held(5, 2),), (stale,)),
+        defines=(5,),
+        uses=(6,),
+        op=None,
+    )
+    body = lir.LirBody(
+        name="one",
+        entry=0,
+        blocks=(lir.LirBlock(at=0, insns=(reload_, load), succ=()),),
+        origin={},
+        pins={},
+    )
+    said = verify.verify(body)
+    assert any("value#3" in one for one in said), f"the stale cell passed: {said}"

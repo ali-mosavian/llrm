@@ -23,17 +23,17 @@ before knowing which register it can become.
 """
 
 from enum import StrEnum
-from collections.abc import Callable
 from dataclasses import replace
 from dataclasses import dataclass
+from collections.abc import Callable
 
 from iced_x86 import Register
 from iced_x86 import Register_
 
 from qbopt import ir
-from qbopt import lower
 from qbopt import mir
 from qbopt import wide
+from qbopt import lower
 from qbopt.mir import Op
 from qbopt.mir import Value
 from qbopt.mir import MirBody
@@ -53,13 +53,13 @@ HALF = 2
 class Kind(StrEnum):
     LOAD = "load"
     STORE = "store"
-    ALU = "alu"        # against memory
+    ALU = "alu"  # against memory
     ALU_IMM = "alu-i"  # against an immediate
     ALU_REG = "alu-v"  # against the other pair
     NOT = "not"
-    MOVE = "move"      # pair to pair
-    NEG = "neg"        # BC's three-instruction negate
-    MOVSX = "movsx"    # an INTEGER sign-extended into a pair
+    MOVE = "move"  # pair to pair
+    NEG = "neg"  # BC's three-instruction negate
+    MOVSX = "movsx"  # an INTEGER sign-extended into a pair
 
 
 @dataclass(frozen=True, slots=True)
@@ -497,12 +497,12 @@ def held(body: MirBody) -> dict[int, dict[int, Long | None]]:
             match pair.kind:
                 case Kind.LOAD if low is not None and high is not None:
                     slots[pair.pair] = Long(low, high)
-                case (
-                    Kind.ALU | Kind.ALU_IMM | Kind.ALU_REG | Kind.NOT
-                ) if slots[pair.pair] is not None and low is not None and high is not None:
+                case Kind.ALU | Kind.ALU_IMM | Kind.ALU_REG | Kind.NOT if (
+                    slots[pair.pair] is not None and low is not None and high is not None
+                ):
                     slots[pair.pair] = Long(low, high)
                 case Kind.ALU | Kind.ALU_IMM | Kind.ALU_REG | Kind.NOT:
-                    slots[pair.pair] = None   # chaining from something unknown
+                    slots[pair.pair] = None  # chaining from something unknown
                 case Kind.NEG if slots[pair.pair] is not None and low is not None and high is not None:
                     slots[pair.pair] = Long(low, high)
                 case Kind.NEG:
@@ -517,7 +517,7 @@ def held(body: MirBody) -> dict[int, dict[int, Long | None]]:
                     # unknown too
                     slots[pair.pair] = Long(low, high)
                 case Kind.STORE:
-                    pass                      # reads the slot, leaves it alone
+                    pass  # reads the slot, leaves it alone
                 case _:
                     slots[pair.pair] = None
     return out
@@ -539,8 +539,8 @@ class Chain:
 
     pair: int
     ops: tuple[Pair, ...]
-    was: int      # bytes BC wrote
-    now: int      # bytes the widened form needs, restore included
+    was: int  # bytes BC wrote
+    now: int  # bytes the widened form needs, restore included
     restored: bool
 
     @property
@@ -624,12 +624,9 @@ def wider(pair: Pair) -> ir.Semantics | None:
     # only where the *other* pair was widened over the same stretch, and
     # nothing here knows that. Refused rather than assumed.
     into = dests[0] if dests and isinstance(dests[0], ir.Reg) else None
-    if into is not None and any(
-        isinstance(one, ir.Reg) and one.register != into.register for one in sources
-    ):
+    if into is not None and any(isinstance(one, ir.Reg) and one.register != into.register for one in sources):
         return None
     return _replace(what, dests=tuple(dests), sources=tuple(sources))
-
 
 
 def _ends(one: Pair) -> int | None:
@@ -757,8 +754,19 @@ def _widened_arg(one):
     return one
 
 
+def _handed(chain: Chain) -> tuple:
+    """The values the restore hands back, from the chain's last pair.
 
-def _restore_op(number: int, at: int, after: Op, end: int) -> Op:
+    Only the halves something after the chain still reads: the whole value
+    the widened operation defines is the low half's own id, so defining it
+    again would say one value is written twice.
+    """
+    last = chain.ops[-1]
+    whole = {one for one in last.low.defines if not one.flags}
+    return tuple(one for one in last.high.defines if not one.flags and one not in whole)
+
+
+def _restore_op(number: int, at: int, after: Op, end: int, hands: tuple = ()) -> Op:
     """`push eax / pop ax / pop dx` -- the long handed back to BC's halves.
 
     One op carrying an ir.Restore, not three ordinary ones. Three would each
@@ -787,10 +795,23 @@ def _restore_op(number: int, at: int, after: Op, end: int) -> Op:
         op=ir.Operation.BARRIER,
         kind=mir.Kind.OPAQUE,
         name="restore",
-        defines=(),
+        # What it hands back. It used to define nothing so that avail.py
+        # could not reason across it -- the barrier below still stops that
+        # -- but a half nothing defines is a half the allocator never
+        # places: negnot pushed whatever dx held and printed A=-7317895
+        # for 305419897.
+        defines=hands,
         uses=(),
         loads=(),
         stores=(),
+        # And no operands. Built by replacing the operation before it, so
+        # without these it inherited that one's -- and a lowering that
+        # builds semantics for an operation nothing rewrote then gave the
+        # idiom three operands it never had. select emitted nothing for
+        # it, the widened pair was never split back, and arith pushed a
+        # stale high word: AND= 1544 for 33818120.
+        args=(),
+        results=(),
         node=node,
         made=None,
         covers=(at, end),
@@ -818,12 +839,7 @@ def replaced(chain: Chain, block) -> tuple[int, int, set[int]]:
     everything inside it is part of it.
     """
     lo = min(min(pair.at) for pair in chain.ops)
-    hi = max(
-        ir.span(one.node)[1]
-        for pair in chain.ops
-        for one in (pair.low, pair.high)
-        if one.node is not None
-    )
+    hi = max(ir.span(one.node)[1] for pair in chain.ops for one in (pair.low, pair.high) if one.node is not None)
     # Each pair's own stretch, not the whole span. A chain may now step over
     # an instruction that touches neither of its registers -- residue.md's E
     # -- and that instruction stays exactly where BC put it, so it is not
@@ -914,7 +930,7 @@ def widened(body: MirBody, dead: frozenset[int] = frozenset()) -> MirBody:
                     )
                 )
             if chain.restored:
-                ops.append(_restore_op(chain.pair, _restore_at, ops[-1], hi))
+                ops.append(_restore_op(chain.pair, _restore_at, ops[-1], hi, _handed(chain)))
                 pins.update(_handed_back(chain, body.origin))
             drop.discard(op.at)
         blocks.append(replace(block, ops=tuple(ops)))
@@ -932,8 +948,5 @@ def _handed_back(chain: Chain, origin: dict) -> dict:
     """
     last = chain.ops[-1]
     return {
-        one: origin[one]
-        for half in (last.low, last.high)
-        for one in half.defines
-        if not one.flags and one in origin
+        one: origin[one] for half in (last.low, last.high) for one in half.defines if not one.flags and one in origin
     }

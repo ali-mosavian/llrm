@@ -8,28 +8,16 @@ bisectable: without it a differential says "something in 54 regions", which is
 barely better than "different output".
 """
 
-from dataclasses import dataclass
-
 import sys
 import json
 import hashlib
 import argparse
 from pathlib import Path
 from dataclasses import asdict
-from dataclasses import replace
+from dataclasses import dataclass
 
-
-from qbopt import fpu
 from qbopt import omf
-from qbopt import avail
-from qbopt import module
-from qbopt import select
 from qbopt import wholeseg
-from qbopt import transform
-from qbopt.lift import refuse
-from qbopt.calls import absorb
-from qbopt.lift import regions
-from qbopt.relocate import relocate
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,17 +78,52 @@ def rewrite(
     # for 2,764 lines whose every matcher is an address and an adjacency --
     # which is what stops any pass above from moving anything. The suite
     # links and runs on the MIR arm alone.
+    made_by = _configuration(whole_segment, native_fpu, absorb_calls)
+    was = omf.finalised_at(omf.parse(data))
+    if was is not None:
+        # Already emitted by this pass. What came out is a program -- a
+        # prologue, the copies a phi became, the slots a spill took -- and
+        # raising it again reads all of that as code BC wrote: 35 ops in
+        # and 50 out on hotlop-q-evt, a second frame on top of the first,
+        # and S= 0 for 630. Given back untouched, before anything decodes
+        # it.
+        if was != made_by:
+            raise Finalised(f"this object was written by {was!r}, and this run is {made_by!r}")
+        return data, regions
+
     for _ in range(PASS_ROUNDS):
-        out = _written(data, whole_segment, native_fpu, absorb_calls)
+        out, terminal = _written(data, whole_segment, native_fpu, absorb_calls)
+        if terminal:
+            # Only the LIR emitter's own output is final. A fallback is
+            # BC's layout with this pass's choices in it, and raising that
+            # again is what the loop is for.
+            return b"".join(one.emit() for one in omf.finalised(omf.parse(out), made_by)), regions
         if out == data:
             break
         data = out
     return data, regions
 
 
+class Finalised(Exception):
+    """An object this pass already wrote, asked for with other options."""
+
+
+def _configuration(whole_segment: bool, native_fpu: bool, absorb_calls: bool) -> str:
+    """Every option that can change what the emitter writes, as one string.
+
+    The marker holds it so a second run can tell "already done" from
+    "done, but not the way you are asking for now". Its own schema is
+    first: a later version of this pass reading an older marker has to
+    refuse rather than assume the bytes mean what they would today.
+    """
+    return "1;" + ",".join(
+        name for name, on in (("whole", whole_segment), ("fpu", native_fpu), ("absorb", absorb_calls)) if on
+    )
+
+
 def _written(
     data: bytes, whole_segment: bool, native_fpu: bool = False, absorb_calls: bool = True
-) -> bytes:
+) -> tuple[bytes, bool]:
     """The object with its code segment emitted from MIR, where that works.
 
     Every edit above patches BC's own bytes in place and keeps the layout BC
@@ -131,7 +154,9 @@ def _written(
     `add ax,0DCh` and the other `add ax,0FFDCh`.
     """
     if not whole_segment:
-        return data
+        # The legacy arm patches BC's own bytes and leaves a program this
+        # can raise again. It is the only one the loop above is for.
+        return data, False
     # To a fixed point, because that is what re-raises the SSA. Every
     # transform here rewrites the op list, and the values an op defines and
     # uses are computed when the body is raised -- so after one transform
@@ -160,12 +185,10 @@ def _written(
     # "comes back through emission as an ordinary move": emission was
     # happening between the passes. Same output on every program, 2.4x less
     # work to get it.
-    for _round in range(PASS_ROUNDS):
-        before = data
-        data, _why = wholeseg.rebuilt(data, native_fpu=native_fpu)
-        if data == before:
-            break
-    return data
+    # Once. Only the LIR emitter's output is terminal, and it says so
+    # rather than being inferred from bytes that stopped changing.
+    got = wholeseg.emitted(data, native_fpu=native_fpu)
+    return got.data, got.outcome is wholeseg.Emission.LIR
 
 
 PASS_ROUNDS = 4

@@ -21,8 +21,8 @@ time round, because it compiles a statement at a time.
 
 from dataclasses import dataclass
 
-from qbopt import loops as loopy
 from qbopt import mir
+from qbopt import loops as loopy
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,16 +58,8 @@ class Derived:
 
 def invariant(body: mir.MirBody, inside: set[int]) -> set[int]:
     """Every value no operation inside the loop defines."""
-    written = {
-        value.id
-        for block in body.blocks
-        if block.at in inside
-        for op in block.ops
-        for value in op.defines
-    }
-    written |= {
-        phi.result.id for block in body.blocks if block.at in inside for phi in block.phis
-    }
+    written = {value.id for block in body.blocks if block.at in inside for op in block.ops for value in op.defines}
+    written |= {phi.result.id for block in body.blocks if block.at in inside for phi in block.phis}
     return {
         value.id
         for block in body.blocks
@@ -94,9 +86,7 @@ def basics(body: mir.MirBody, loop) -> dict[int, Affine]:
 
     out: dict[int, Affine] = {}
     for phi in header.phis:
-        start = next(
-            (value for where, value in phi.incoming.items() if where not in inside), None
-        )
+        start = next((value for where, value in phi.incoming.items() if where not in inside), None)
         if start is None:
             continue
         for where, value in phi.incoming.items():
@@ -112,25 +102,30 @@ def basics(body: mir.MirBody, loop) -> dict[int, Affine]:
 
 def _stepped(op: "mir.Op | None", variable: int, still: set[int]) -> "mir.Arg | None":
     """What this operation adds to `variable` each time round, or None."""
-    if op is None or op.kind not in (mir.Kind.ADD, mir.Kind.SUB) or op.loads or op.stores:
+    if op is None:
         return None
-    itself = [
-        one for one in op.args if isinstance(one, mir.Held) and one.value.variable == variable
-    ]
-    other = [one for one in op.args if one not in itself]
-    if len(itself) != 1 or len(other) != 1:
+    # `mir.stepping` is the one place that says what an operation adds to
+    # what: `add`, `sub`, and the two that carry their operand in the
+    # opcode all answer it, and nothing here lists kinds.
+    got = mir.stepping(op)
+    if got is None:
         return None
-    step = other[0]
+    stepped, step = got
+    if not isinstance(stepped, mir.Held) or stepped.value.variable != variable:
+        # An `add` may name the counter second; the two that step by one
+        # never do.
+        if isinstance(step, mir.Held) and step.value.variable == variable:
+            stepped, step = step, stepped
+        else:
+            return None
     if isinstance(step, mir.Const):
-        return step if op.kind is mir.Kind.ADD else mir.Const(-step.n, step.width)
-    if isinstance(step, mir.Held) and step.value.id in still and op.kind is mir.Kind.ADD:
+        return step
+    if isinstance(step, mir.Held) and step.value.id in still:
         return step
     return None
 
 
-def unwritten(
-    body: mir.MirBody, inside: set[int], dgroup: frozenset[int], bounds: dict | None = None
-) -> "callable":
+def unwritten(body: mir.MirBody, inside: set[int], dgroup: frozenset[int], bounds: dict | None = None) -> "callable":
     """Whether a cell is one no store inside the loop can reach.
 
     A value's invariance is a question about definitions; a cell's is a
@@ -145,13 +140,7 @@ def unwritten(
     scalar in DGROUP reads as written by it. `module.landmarks()` knows
     where each object ends.
     """
-    wrote = [
-        one
-        for block in body.blocks
-        if block.at in inside
-        for op in block.ops
-        for one in op.stores
-    ]
+    wrote = [one for block in body.blocks if block.at in inside for op in block.ops for one in op.stores]
 
     def settled(cell: "mir.MemRef") -> bool:
         return not any(mir.overlapping(cell, one, dgroup, bounds) for one in wrote)
@@ -188,11 +177,7 @@ def derived(
             # every one of the 23 sites this pass exists for.
             if op.kind not in (mir.Kind.MUL, mir.Kind.SHL) or op.stores:
                 continue
-            counter = [
-                one
-                for one in op.args
-                if isinstance(one, mir.Held) and one.value.variable in found
-            ]
+            counter = [one for one in op.args if isinstance(one, mir.Held) and one.value.variable in found]
             other = [one for one in op.args if one not in counter]
             if len(counter) != 1 or len(other) != 1:
                 continue

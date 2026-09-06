@@ -36,6 +36,28 @@ def test_a_rebuilt_object_parses_and_agrees_with_itself(obj: Path) -> None:
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
+def _resolved(one, seg: int | None = None, moved: dict | None = None) -> tuple:
+    """Everything a relocation means, so a retarget cannot hide in it.
+
+    `loc`, `target` and `index` alone let a fixup keep its name and change
+    what it does: self-relative decides whether the linker writes an
+    address or a distance, the displacement is the target's own offset,
+    and the frame is which segment that offset is measured from -- a
+    thread and an explicit frame resolve to the same pair here.
+    """
+    frame = one.frame
+    method = getattr(frame, "method", one.frame_method)
+    index = getattr(frame, "index", frame if not hasattr(frame, "method") else None)
+    # A fixup naming this same segment carries the target's own offset,
+    # and that offset moved with the code. Compared through the map, so
+    # the check is that it still names the same instruction rather than
+    # the same number.
+    disp = one.disp
+    if seg is not None and one.target == "segment" and one.index == seg:
+        disp = (moved or {}).get(disp, disp)
+    return (one.loc, one.selfrel, one.target, one.index, disp, method, index)
+
+
 def test_a_rebuilt_object_keeps_every_code_fixup_it_still_has_a_home_for(obj: Path) -> None:
     """A fixup left behind is a field reading a bare zero at run time.
 
@@ -47,58 +69,114 @@ def test_a_rebuilt_object_keeps_every_code_fixup_it_still_has_a_home_for(obj: Pa
     against what was deliberately dropped rather than relaxed.
     """
     from qbopt import layout
-    from qbopt import mir
-    from qbopt import transform
     from qbopt import blocks as split
     from qbopt.blocks import code_map
 
     data = obj.read_bytes()
-    out, why = wholeseg.rebuilt(data)
+    # Through whichever emitter ran. Both converge on layout.rebuild, and
+    # its `Laid` is the only per-occurrence account of where each fixup
+    # went -- re-deriving the pipeline here measured one path and compared
+    # it against the other's output, which is how a routing change made
+    # 311 of these fail on arithmetic rather than on a lost relocation.
+    grabbed: dict = {}
+    was = layout.rebuild
+
+    def spy(*a, **k):
+        got = was(*a, **k)
+        if not isinstance(got, str):
+            grabbed["laid"] = got
+        return got
+
+    layout.rebuild = spy
+    try:
+        out, why = wholeseg.rebuilt(data)
+    finally:
+        layout.rebuild = was
     if why != wholeseg.REBUILT:
         return
+    laid = grabbed["laid"]
     before, after = module.of(omf.parse(data)), module.of(omf.parse(out))
-    assert before is not None and after is not None
-    was = [x for x in omf.fixups(omf.parse(data)) if x.seg == before.seg]
-    now = [x for x in omf.fixups(omf.parse(out)) if x.seg == after.seg]
+    # Above the module header only. Whatever sits before the first
+    # instruction is BC's own 48 bytes of name and padding; its fixups keep
+    # their offsets and never enter the layout's account.
+    header = min(one.at for block in split.partition(before, code_map(before)) for one in block.insns)
+    original = [x for x in omf.fixups(omf.parse(data)) if x.seg == before.seg and x.offset >= header]
+    emitted = [x for x in omf.fixups(omf.parse(out)) if x.seg == after.seg and x.offset >= header]
 
-    mapped = code_map(before)
-    assert not isinstance(mapped, str)
-    blocks = split.partition(before, mapped)
-    # The same pipeline wholeseg runs: widening is not a pass and goes after
-    # every one of them, just before lowering -- and `plain` is what a body
-    # the allocator refuses is laid out as instead.
-    raised = list(mir.bodies(before, blocks))
-    bodies = [
-        # The same arguments wholeseg passes: without `found` the hoist gets
-        # no bounds and takes a different run, so the coverage arithmetic
-        # this checks is not the one the object was built with.
-        (
-            name,
-            transform.widened(
-                transform.applied(body, before.dgroup, before.calls, blocks=blocks, found=before)
-            ),
-        )
-        for name, body in raised
-    ]
-    # Widened too: a body the allocator refuses falls back to this, and
-    # widening writes machine form with the registers BC had, so it needs
-    # no allocation and is right either way.
-    plain = [(name, transform.widened(body)) for name, body in raised]
-    fields = frozenset(one.offset for one in omf.fixups(omf.parse(data)) if one.seg == before.seg)
-    reached = frozenset(at for b in blocks for i in b.insns for at in range(i.at, i.end))
-    # Allocation is a phase and no longer happens inside the assembler, so
-    # this runs the two the way wholeseg does. Asking rebuild alone gives a
-    # body with nothing resolved through an assignment, and a different set
-    # of fixups falls out of it.
-    settled, assignment = layout.allocated(bodies, plain=plain)
-    laid = layout.rebuild(before, settled, mapped.tables, fields, reached, assignment=assignment)
-    assert not isinstance(laid, str), laid
-    assert len(now) == len(was) - len(laid.dropped), (
-        f"{obj.stem}: {len(was)} fixups became {len(now)}, {len(laid.dropped)} deliberately dropped"
+    # Per occurrence, not per distinct target: nine references to one cell
+    # are nine relocations, and a set of (target, index, disp) says nothing
+    # about losing eight of them.
+    # `laid.relocations` is (offset within the image, the original field);
+    # the header sits in front of the image in the object, which is the
+    # same `kept + new` the record writer applies.
+    moved = {old: header + new for new, old in laid.relocations}
+    kept = [one for one in original if one.offset in moved]
+    gone = [one for one in original if one.offset not in moved]
+    assert not (set(moved) & set(laid.dropped)), f"{obj.stem}: a fixup is both relocated and dropped"
+    assert {one.offset for one in gone} == set(laid.dropped), (
+        f"{obj.stem}: "
+        f"{sorted(hex(x) for x in {one.offset for one in gone} ^ set(laid.dropped))[:4]} "
+        "is neither relocated nor accounted as dropped"
     )
-    # And each one really did belong to something that is gone.
-    surviving = {op.at for _name, body in bodies for block in body.blocks for op in block.ops}
-    assert not (laid.dropped & surviving), "a dropped fixup sits on an op that is still there"
+    assert len(emitted) == len(kept), f"{obj.stem}: {len(kept)} relocations survived and {len(emitted)} were emitted"
+
+    # Each survivor still names what it named. `inside` maps an offset in
+    # the old code to where the layout put it, which is what a fixup into
+    # this same segment carries as its displacement.
+    from qbopt import relocate
+
+    both = {**laid.covered, **laid.moved}
+    inside = {one: relocate._mapped(one, header, both) for one in both}
+    landed = {one.offset: one for one in emitted}
+    for one in kept:
+        other = landed.get(moved[one.offset])
+        assert other is not None, f"{obj.stem}: {one.offset:#x} moved to nothing"
+        want, got = _resolved(one, before.seg, inside), _resolved(other, after.seg)
+        assert want == got, f"{obj.stem}: {one.offset:#x} changed what it names: {want} became {got}"
+
+    # And each one that went belonged to something that is gone.
+    assert not (set(laid.dropped) & set(laid.moved)), f"{obj.stem}: a dropped fixup sits on an op that is still there"
+
+
+def test_the_partition_notices_an_occurrence_that_went_missing() -> None:
+    """The invariant above counts occurrences, so losing one has to break
+    it. A set of what each fixup names would not notice: flags-p-g2-zd
+    references one cell nine times, and eight of them could go with the
+    set unchanged."""
+    from qbopt import layout
+
+    grabbed: dict = {}
+    was = layout.rebuild
+
+    def spy(*a, **k):
+        got = was(*a, **k)
+        if not isinstance(got, str):
+            grabbed["laid"] = got
+        return got
+
+    layout.rebuild = spy
+    try:
+        out, why = wholeseg.rebuilt((Path("fixtures/omf") / "flags-p-g2-zd.obj").read_bytes())
+    finally:
+        layout.rebuild = was
+    assert why == wholeseg.REBUILT
+    laid = grabbed["laid"]
+    after = module.of(omf.parse(out))
+    header = min(one for _new, one in laid.relocations)
+    emitted = [x for x in omf.fixups(omf.parse(out)) if x.seg == after.seg and x.offset >= 48]
+    kept = {old for _new, old in laid.relocations}
+    assert len(emitted) == len(kept) > 1, (len(emitted), len(kept))
+    del header
+
+    # One occurrence removed, and the count no longer reconciles.
+    short = set(sorted(kept)[1:])
+    assert len(emitted) != len(short), "the count must not survive losing an occurrence"
+
+    # And by what each fixup names, it would: the same cell is referenced
+    # more than once, so dropping one leaves the set of names unchanged.
+    names = {(one.target, one.index, one.disp) for one in emitted}
+    fewer = {(one.target, one.index, one.disp) for one in emitted[1:]}
+    assert names == fewer, "this fixture does not repeat a target, so it proves nothing"
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
@@ -146,8 +224,8 @@ def test_a_refused_body_is_laid_out_widened_and_only_that_body_is_widened() -> N
     68 calls over the p-g2 fixtures where 38 do.
     """
     from qbopt import mir
-    from qbopt import module
     from qbopt import omf
+    from qbopt import module
     from qbopt import regalloc
     from qbopt import transform
     from qbopt import blocks as split
@@ -160,7 +238,10 @@ def test_a_refused_body_is_laid_out_widened_and_only_that_body_is_widened() -> N
         calls.append(body)
         return real(body, dead)
 
-    obj = Path("fixtures/omf/arith-p-g2.obj")
+    # addrm-p-evt rather than arith-p-g2: raising a declared call's
+    # arguments changed what the allocator sees, and arith no longer has a
+    # body it refuses. This one still does.
+    obj = Path("fixtures/omf/addrm-p-evt.obj")
     found = module.of(omf.parse(obj.read_bytes()))
     assert found is not None
     mapped = code_map(found)
@@ -171,9 +252,7 @@ def test_a_refused_body_is_laid_out_widened_and_only_that_body_is_widened() -> N
     for _who, body in mir.bodies(found, blocks):
         done = real(transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found))
         fixed = regalloc.untangled(done)
-        if isinstance(regalloc.colour(fixed, fixed.pins), str) and isinstance(
-            regalloc.colour(done, done.pins), str
-        ):
+        if isinstance(regalloc.colour(fixed, fixed.pins), str) and isinstance(regalloc.colour(done, done.pins), str):
             refused += 1
             assert real(body) is not body, "the raise of the refused body widens"
     assert refused, "no body is refused here, so this proves nothing"
@@ -248,14 +327,72 @@ def test_an_operation_a_pass_rewrote_keeps_its_relocation(stem: str) -> None:
 
 
 def test_an_emission_says_which_emitter_produced_it() -> None:
-    """`rebuilt` says only whether it worked, and two emitters are coming:
+    """`rebuilt` says only whether it worked, and there are two emitters:
     one from MIR and one from LIR. A caller that has to know which cannot
-    ask, and "it worked" would finalise a fallback as if it were the LIR
+    ask a boolean, and "it worked" would treat a fallback as the LIR
     path's own output."""
     got = wholeseg.emitted((Path("fixtures/omf") / "hotlop-p-g2.obj").read_bytes())
+    assert got.outcome is wholeseg.Emission.LIR
+    assert got.reason == wholeseg.REBUILT and got.fallback_reason is None
+
+
+def test_a_fallback_keeps_its_reason_where_a_caller_can_read_it() -> None:
+    """A body nothing can place is laid out the way it always was. The
+    public reason stays REBUILT -- every caller reads that -- and what the
+    allocator actually said is beside it."""
+    from qbopt import allocate
+
+    was = allocate.RegAlloc.transform
+
+    def refuses(self, body):
+        raise allocate.Spilled("nothing can hold it")
+
+    allocate.RegAlloc.transform = refuses
+    try:
+        got = wholeseg.emitted((Path("fixtures/omf") / "hotlop-p-g2.obj").read_bytes())
+    finally:
+        allocate.RegAlloc.transform = was
     assert got.outcome is wholeseg.Emission.MIR
     assert got.reason == wholeseg.REBUILT
-    assert got.data != b""
+    assert got.fallback_reason and "nothing can hold it" in got.fallback_reason
+
+
+def test_a_tangled_copy_falls_back_and_says_which() -> None:
+    """A phi's copies that all read each other's destinations need a
+    temporary this does not have. Named, not emitted in the wrong order."""
+    from qbopt import parcopy
+
+    was = parcopy.ParallelCopy.transform
+
+    def tangles(self, body):
+        raise parcopy.Tangled("injected: they all read each other")
+
+    parcopy.ParallelCopy.transform = tangles
+    try:
+        got = wholeseg.emitted((Path("fixtures/omf") / "hotlop-p-g2.obj").read_bytes())
+    finally:
+        parcopy.ParallelCopy.transform = was
+    assert got.outcome is wholeseg.Emission.MIR
+    assert got.reason == wholeseg.REBUILT
+    assert got.fallback_reason and "Tangled" in got.fallback_reason
+
+
+def test_a_malformed_copy_group_is_a_bug_and_escapes() -> None:
+    """Something that is not a move in a copy group is this pass being
+    wrong about its own data, not a body it cannot place."""
+    from qbopt import parcopy
+
+    was = parcopy.ParallelCopy.transform
+
+    def broken(self, body):
+        raise parcopy.Malformed("injected")
+
+    parcopy.ParallelCopy.transform = broken
+    try:
+        with pytest.raises(parcopy.Malformed):
+            wholeseg.emitted((Path("fixtures/omf") / "hotlop-p-g2.obj").read_bytes())
+    finally:
+        parcopy.ParallelCopy.transform = was
 
 
 def test_a_refusal_says_so_rather_than_looking_like_a_rebuild() -> None:
@@ -280,3 +417,99 @@ def test_rebuilt_still_answers_exactly_what_it_used_to(stem: str) -> None:
     got = wholeseg.emitted(raw)
     assert (out, why) == (got.data, got.reason)
     assert isinstance(out, bytes) and isinstance(why, str)
+
+
+def test_a_copy_with_both_ends_spilled_falls_back_and_says_so() -> None:
+    """`mov [bp-2],[bp-4]` is not an instruction, and a phi's copies happen
+    at once, so breaking it into a load and a store puts an ungrouped one
+    inside the group. The spiller refuses by name -- and that refusal
+    escaped `wholeseg` as an exception, so five of the corpus's objects
+    crashed the rewrite instead of falling back to BC's own layout.
+    Constructed since jumps-v-g3 stopped needing it: raising a declared
+    call's arguments changed what the allocator sees, and that object now
+    emits through LIR and prints the right answer. The invariant is the
+    refusal and its name, not which object happens to provoke it.
+    """
+
+    from qbopt import ir
+    from qbopt import lir
+    from qbopt import spiller
+    from qbopt import frame as frames
+
+    # One parallel copy, `v3 <- v4`, with both ends spilled.
+    move = lir.Insn(
+        at=0x10,
+        covers=(0x10, 0x10),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(3, 2),), (ir.Held(4, 2),)),
+        defines=(3,),
+        uses=(4,),
+        op=None,
+        group=1,
+    )
+    body = lir.LirBody(
+        name="one",
+        entry=0,
+        blocks=(lir.LirBlock(at=0, insns=(move,), succ=()),),
+        origin={},
+        pins={},
+    )
+    with pytest.raises(spiller.Simultaneous):
+        spiller.spilled(body, frozenset({3, 4}), frames.Frame(floor=0))
+
+    # And the emitter catches it rather than letting it escape: five
+    # objects crashed the rewrite before it was caught by name. Provoked
+    # on an object that does reach the spiller, so the path is the real one.
+    real = spiller.spilled
+
+    def refusing(*args, **kwargs):
+        raise spiller.Simultaneous("both ends in slots")
+
+    spiller.spilled = refusing
+    try:
+        got = wholeseg.emitted((Path("fixtures/omf") / "jumps-v-g3.obj").read_bytes())
+    finally:
+        spiller.spilled = real
+    assert got.outcome is wholeseg.Emission.MIR, f"it emitted through {got.outcome}"
+    assert got.reason == wholeseg.REBUILT
+    assert got.fallback_reason and "Simultaneous" in got.fallback_reason, got.fallback_reason
+
+
+def test_a_body_that_falls_back_is_not_reported_as_lir() -> None:
+    """A refusal is not an emission.
+
+    `emitted` says which emitter wrote the object, and a gate that reads
+    a fallback as LIR success would have counted arrprm green while the
+    LIR path refused it. The reason has to survive to the caller.
+    """
+    from pathlib import Path
+
+    from qbopt import wholeseg
+
+    seen = 0
+    for one in sorted(Path("fixtures/omf").glob("*.obj"))[:40]:
+        got = wholeseg.emitted(one.read_bytes())
+        if got.outcome is wholeseg.Emission.LIR:
+            assert got.fallback_reason is None, f"{one.name}: reported LIR while falling back -- {got.fallback_reason}"
+            seen += 1
+        elif got.outcome is wholeseg.Emission.MIR:
+            assert got.fallback_reason, f"{one.name}: fell back to MIR and said nothing"
+    assert seen, "nothing emitted through LIR; the gate proves nothing"
+
+
+def test_a_call_with_an_unestablished_interface_falls_back_and_is_not_lir() -> None:
+    """A refusal is not an emission, and forced LIR must say so.
+
+    procs-p-evt calls B$ENRA, whose contract declares no inputs, so the
+    lowering refuses it rather than emitting a call whose arguments the
+    allocation is free to move. The object still comes back -- rewritten
+    by the MIR emitter -- and the outcome says which wrote it.
+    """
+    from pathlib import Path
+
+    from qbopt import wholeseg
+
+    got = wholeseg.emitted(Path("fixtures/omf/procs-p-evt.obj").read_bytes())
+    assert got.outcome is not wholeseg.Emission.LIR, "an unestablished call emitted through LIR"
+    assert got.fallback_reason and "not established" in got.fallback_reason, (
+        f"it fell back for another reason: {got.fallback_reason}"
+    )

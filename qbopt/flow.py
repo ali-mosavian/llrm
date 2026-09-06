@@ -29,21 +29,21 @@ The machine half, against LLVM's own order:
 answer questions and change nothing, which is why nothing here lists them.
 """
 
-from qbopt import allocate
-from qbopt import blocks as split
-from qbopt import coalesce
-from qbopt import frame as frames
-from qbopt import lower
 from qbopt import mir
-from qbopt import module
-from qbopt import objwrite
 from qbopt import omf
+from qbopt import lower
+from qbopt import module
 from qbopt import parcopy
 from qbopt import phielim
-from qbopt import prologue
-from qbopt import splitkit
-from qbopt import transform
+from qbopt import runtime
 from qbopt import twoaddr
+from qbopt import allocate
+from qbopt import coalesce
+from qbopt import objwrite
+from qbopt import prologue
+from qbopt import transform
+from qbopt import blocks as split
+from qbopt import frame as frames
 from qbopt.blocks import code_map
 from qbopt.passes import LIRTransform
 
@@ -73,7 +73,10 @@ def run(data: bytes, native_fpu: bool = False, optimise: bool = True) -> tuple[b
         return data, mapped
     blocks = split.partition(found, mapped)
 
-    raised = list(mir.bodies(found, blocks))
+    # One map for the module, and the same object reaches the raise and
+    # the lowering: a contract chosen twice can be chosen differently.
+    contracts = runtime.for_module(found)
+    raised = list(mir.bodies(found, blocks, contracts))
     if not raised:
         return data, "nothing to raise"
 
@@ -84,7 +87,7 @@ def run(data: bytes, native_fpu: bool = False, optimise: bool = True) -> tuple[b
                 body, found.dgroup, found.calls, blocks=blocks, found=found, promote_=False, strength_=False
             )
             body = transform.widened(body)
-        low = lower.lowered(name, body, found.calls, set(found.absorbed))
+        low = lower.lowered(name, body, found.calls, set(found.absorbed), contracts)
         frame = frames.of(low)
         for phase in machine(_pinned(body), frame, found.calls):
             low = phase.transform(low)

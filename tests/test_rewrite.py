@@ -14,9 +14,6 @@ from iced_x86 import Code
 
 import corpus
 from qbopt import omf
-from qbopt.calls import sites
-from qbopt.declen import decode
-from qbopt.flags import live_in
 
 pytestmark = pytest.mark.corpus
 
@@ -39,8 +36,6 @@ CALL_REPLACEMENT_OPCODES = {
     Code.SHL_RM32_IMM8,
     Code.LEA_R32_M,
 }
-
-
 
 
 def test_a_real_pass_rewrites_the_code_and_keeps_the_records_readable(obj: Path) -> None:
@@ -116,3 +111,117 @@ def test_rewriting_reaches_a_fixed_point(obj: Path) -> None:
     assert again == out
     assert [one for one in regions if one.taken] == []
 
+
+def test_a_finalised_object_is_given_back_before_anything_decodes_it() -> None:
+    """What the LIR emitter writes is a program, not a body. Raising it
+    again read `sub sp,4` as an ordinary subtract -- 35 ops in, 50 out on
+    hotlop-q-evt -- and reserved a second frame on top of the first: S= 0
+    for 630."""
+    from qbopt import wholeseg
+    from qbopt.rewrite import rewrite
+
+    raw = Path("fixtures/omf/hotlop-q-evt.obj").read_bytes()
+    once, _ = rewrite(raw, dry_run=False, absorb_calls=False)
+    seen = []
+    was = wholeseg.emitted
+    try:
+        wholeseg.emitted = lambda *a, **k: (seen.append(1), was(*a, **k))[1]
+        again, _ = rewrite(once, dry_run=False, absorb_calls=False)
+    finally:
+        wholeseg.emitted = was
+    assert again == once, "a finalised object came back changed"
+    assert not seen, "it was decoded and rebuilt anyway"
+
+
+def test_the_same_object_asked_for_other_options_is_refused() -> None:
+    """Bytes produced for one set of options do not mean the same thing
+    under another, and reinterpreting them silently is how a second run
+    would quietly emit something else."""
+    from qbopt.rewrite import rewrite
+    from qbopt.rewrite import Finalised
+
+    raw = Path("fixtures/omf/hotlop-q-evt.obj").read_bytes()
+    once, _ = rewrite(raw, dry_run=False, absorb_calls=False)
+    with pytest.raises(Finalised, match="absorb"):
+        rewrite(once, dry_run=False, absorb_calls=True)
+
+
+def test_exactly_one_marker_and_one_frame() -> None:
+    from iced_x86 import Decoder
+    from iced_x86 import Formatter
+    from iced_x86 import FormatterSyntax
+
+    from qbopt import omf
+    from qbopt import module
+    from qbopt.rewrite import rewrite
+
+    raw = Path("fixtures/omf/hotlop-q-evt.obj").read_bytes()
+    out, _ = rewrite(raw, dry_run=False, absorb_calls=False)
+    records = omf.parse(out)
+    assert omf.finalised_at(records) is not None  # raises if there are two
+    code = bytes(module.of(records).code)
+    formatter = Formatter(FormatterSyntax.NASM)
+    reserved = [one for one in Decoder(16, code[0x30:], ip=0x30) if formatter.format(one).startswith("sub sp")]
+    assert len(reserved) <= 1, f"a frame reserved {len(reserved)} times"
+
+
+def test_a_fallback_is_not_finalised_and_keeps_being_looked_at() -> None:
+    """Only the LIR emitter's own output is terminal. A fallback is BC's
+    layout with this pass's choices in it, which is what the loop exists
+    to look at again -- so absence of a marker is not enough to prove: the
+    driver has to come back for it until the bytes settle.
+    """
+    from qbopt import omf
+    from qbopt import allocate
+    from qbopt import wholeseg
+    from qbopt.rewrite import rewrite
+
+    raw = Path("fixtures/omf/hotlop-q-evt.obj").read_bytes()
+    was_alloc, was_emit = allocate.RegAlloc.transform, wholeseg.emitted
+    seen: list[str] = []
+
+    def refuses(self, body):
+        raise allocate.Spilled("injected")
+
+    def spy(*a, **k):
+        got = was_emit(*a, **k)
+        seen.append(got.outcome.value)
+        return got
+
+    allocate.RegAlloc.transform, wholeseg.emitted = refuses, spy
+    try:
+        out, _ = rewrite(raw, dry_run=False, absorb_calls=False)
+    finally:
+        allocate.RegAlloc.transform, wholeseg.emitted = was_alloc, was_emit
+
+    assert seen and set(seen) == {"mir"}, seen
+    assert len(seen) > 1, "a fallback was treated as terminal after one pass"
+    assert omf.finalised_at(omf.parse(out)) is None, "a fallback was marked as final"
+
+
+def test_a_refusal_is_unmarked_non_terminal_and_does_not_loop_for_nothing() -> None:
+    """A refusal leaves BC's own bytes. Nothing is marked, and once they
+    stop changing the driver stops asking."""
+    from qbopt import omf
+    from qbopt import wholeseg
+    from qbopt.rewrite import rewrite
+
+    raw = Path("fixtures/omf/hotlop-q-evt.obj").read_bytes()
+    was = wholeseg.emitted
+    seen: list[str] = []
+
+    def refuses(data, *a, **k):
+        got = wholeseg.Emitted(data, wholeseg.Emission.REFUSED, "injected refusal")
+        seen.append(got.outcome.value)
+        return got
+
+    wholeseg.emitted = refuses
+    try:
+        out, _ = rewrite(raw, dry_run=False, absorb_calls=False)
+    finally:
+        wholeseg.emitted = was
+
+    assert set(seen) == {"refused"}, seen
+    assert len(seen) == 1, f"it kept asking after the bytes were stable: {len(seen)}"
+    assert out == raw, "a refusal changed the object"
+    assert omf.finalised_at(omf.parse(out)) is None

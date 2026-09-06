@@ -373,8 +373,8 @@ def test_resolving_a_body_that_has_not_moved_changes_nothing(obj: Path) -> None:
     blocks with the same operations, the same number of phis in each, and
     the same nodes coming back out of lower().
     """
-    from qbopt import module
     from qbopt import omf
+    from qbopt import module
     from qbopt import blocks as split
     from qbopt.blocks import code_map
 
@@ -407,8 +407,8 @@ def test_mir_operands_say_exactly_what_the_node_said() -> None:
     """
     from qbopt import ir
     from qbopt import mir
-    from qbopt import module
     from qbopt import omf
+    from qbopt import module
     from qbopt import select
     from qbopt import blocks as split
     from qbopt.blocks import code_map
@@ -443,17 +443,31 @@ def test_mir_operands_say_exactly_what_the_node_said() -> None:
                     if op.id is not None and op.id in found.absorbed:
                         continue
                     seen += 1
+                    if op.kind is mir.Kind.CALL:
+                        # A call still says exactly what its node said --
+                        # `call` names no operand, and the node names none.
+                        # What MIR adds is the contract's implicit inputs,
+                        # which are values and not encodings, so they are
+                        # checked against the read set rather than against
+                        # the node.
+                        assert not what.sources and not what.dests, f"{op.name}: a call names operands"
+                        assert op.results == (), f"{op.name}: results {op.results}"
+                        read = {one.id for one in op.uses}
+                        for arg in op.args:
+                            assert arg.value.id in read, f"{op.name}: {arg} is not among the values it reads"
+                        assert op.args_known or op.args == (), f"{op.name}: unknown interface with arguments"
+                        continue
                     for kind, mine, theirs in (
                         ("source", op.args, what.sources),
                         ("dest", op.results, what.dests),
                     ):
-                        # `inc` and `dec` write down the one they add, which
-                        # the instruction keeps in its opcode -- so MIR has
-                        # an operand the machine form does not.
-                        if op.name in ("inc", "dec") and kind == "source":
-                            assert len(mine) == len(theirs) + 1, f"{op.name}: source count"
-                            assert isinstance(mine[-1], mir.Const) and mine[-1].n == 1
-                            mine = mine[:-1]
+                        # `inc` and `dec` are their own operations, and
+                        # each takes the one value it steps: MIR does not
+                        # write out the 1 the opcode carries, because the
+                        # two differ from `add`/`sub` in what they leave in
+                        # the carry.
+                        if op.kind in (mir.Kind.INCREMENT, mir.Kind.DECREMENT) and kind == "source":
+                            assert len(mine) == len(theirs), f"{op.name}: source count"
                         assert len(mine) == len(theirs), f"{op.name}: {kind} count"
                         for arg, was in zip(mine, theirs):
                             if isinstance(was, ir.Mem):
@@ -475,8 +489,8 @@ def test_a_variable_keeps_one_name_across_every_version_of_it() -> None:
     from collections import Counter
 
     from qbopt import mir
-    from qbopt import module
     from qbopt import omf
+    from qbopt import module
     from qbopt import blocks as split
     from qbopt.blocks import code_map
 
@@ -493,9 +507,7 @@ def test_a_variable_keeps_one_name_across_every_version_of_it() -> None:
         for value, register in body.origin.items():
             by_variable.setdefault(value.variable, set()).add(register)
             assert value.version, f"{value!r} has no version"
-        assert all(len(one) == 1 for one in by_variable.values()), (
-            "one variable stands for two registers"
-        )
+        assert all(len(one) == 1 for one in by_variable.values()), "one variable stands for two registers"
 
         # And versions of one variable are consecutive from 1, so `v3_7` is
         # the seventh time that variable was written.
@@ -536,11 +548,11 @@ def test_the_raise_says_which_object_a_push_reaches() -> None:
     """Measured: 413 of the corpus's references name an object and no byte."""
     from pathlib import Path
 
-    from qbopt import blocks as split
-    from qbopt import module
     from qbopt import omf
-    from qbopt.blocks import code_map
+    from qbopt import module
     from qbopt.module import Space
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
@@ -568,10 +580,10 @@ def test_induction_finds_a_counter_and_what_it_derives() -> None:
     """
     from pathlib import Path
 
-    from qbopt import blocks as split
-    from qbopt import induction
-    from qbopt import module
     from qbopt import omf
+    from qbopt import module
+    from qbopt import induction
+    from qbopt import blocks as split
     from qbopt.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/matrix-p-g2.obj").read_bytes()))
@@ -599,10 +611,10 @@ def test_a_multiply_by_something_the_loop_writes_is_not_reducible() -> None:
     """There is no recurrence to reduce if the multiplier moves."""
     from pathlib import Path
 
-    from qbopt import blocks as split
-    from qbopt import induction
-    from qbopt import module
     from qbopt import omf
+    from qbopt import module
+    from qbopt import induction
+    from qbopt import blocks as split
     from qbopt.blocks import code_map
 
     for name in ("matrix-p-g2", "hotlop-p-g2", "stride-p-g2"):
@@ -616,8 +628,7 @@ def test_a_multiply_by_something_the_loop_writes_is_not_reducible() -> None:
                 for one in derived:
                     if isinstance(one.by, mir.Cell):
                         assert not any(
-                            mir.overlapping(one.by.ref, other, found.dgroup, module.landmarks(found))
-                            for other in wrote
+                            mir.overlapping(one.by.ref, other, found.dgroup, module.landmarks(found)) for other in wrote
                         ), f"{one.op.at:#06x} multiplies by a cell the loop writes"
 
 
@@ -639,9 +650,9 @@ def test_every_program_hands_the_runtime_an_address() -> None:
     """
     from pathlib import Path
 
-    from qbopt import blocks as split
-    from qbopt import module
     from qbopt import omf
+    from qbopt import module
+    from qbopt import blocks as split
     from qbopt.blocks import code_map
 
     clean = []
@@ -654,8 +665,7 @@ def test_every_program_hands_the_runtime_an_address() -> None:
         blocks = split.partition(found, mapped)
         fields = {one.offset for one in omf.fixups(records) if one.seg == found.seg}
         if not any(
-            str(insn.insn).lower().startswith(("push", "lea"))
-            and any(insn.at <= one < insn.end for one in fields)
+            str(insn.insn).lower().startswith(("push", "lea")) and any(insn.at <= one < insn.end for one in fields)
             for block in blocks
             for insn in block.insns
         ):
@@ -667,9 +677,299 @@ def test_the_object_says_which_segment_holds_the_program_s_variables() -> None:
     """BC_DATA is the program's; BR_DATA and BR_SKYS are the runtime's."""
     from pathlib import Path
 
-    from qbopt import module
     from qbopt import omf
+    from qbopt import module
 
     found = module.of(omf.parse(Path("fixtures/omf/matrix-p-g2.obj").read_bytes()))
     assert found.program_data is not None, "no segment is named BC_DATA"
     assert found.program_data in found.dgroup, "the program's data is not in DGROUP"
+
+
+def _op_at(stem: str, at: int):
+    from pathlib import Path
+
+    from qbopt import omf
+    from qbopt import module
+    from qbopt import mir as raised
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse((Path("fixtures/omf") / f"{stem}.obj").read_bytes()))
+    blocks = split.partition(found, code_map(found))
+    for _name, body in raised.bodies(found, blocks):
+        for block in body.blocks:
+            for op in block.ops:
+                if op.at == at:
+                    return op, body
+    return None, None
+
+
+def test_an_add_that_carries_is_not_an_ordinary_add() -> None:
+    """negnot printed D=-33752584 for -33818120, short by exactly 0x10000.
+
+    `adc dx,0` propagates the borrow `neg ax` left into the high word.
+    The raise folded `add` and `adc` to one kind, so nothing below could
+    tell them apart -- and a lowering that re-encodes from MIR wrote a
+    plain `add`, dropping the carry.
+    """
+    from qbopt import mir as raised
+
+    op, _body = _op_at("negnot-q-O", 0xCE)
+    assert op is not None, "the adc is not where this test thinks"
+    assert op.kind is raised.Kind.ADD_CARRY, f"raised as {op.kind}"
+    assert op.kind is not raised.Kind.ADD
+
+
+def test_a_carrying_add_reads_the_flags_that_carry() -> None:
+    """The carry is a value, not an adjacency: nothing may schedule
+    between the operation that set it and the one that reads it without
+    the dataflow saying so."""
+    op, body = _op_at("negnot-q-O", 0xCE)
+    assert op is not None
+    flags = [one for one in op.uses if one.flags]
+    assert flags, f"the carrying add reads no flags: {op.uses}"
+    made = [other.at for block in body.blocks for other in block.ops for one in other.defines if one in flags]
+    assert made, "nothing defines the flags it reads"
+
+
+def test_what_an_operation_steps_by_is_asked_in_one_place() -> None:
+    """`mir.stepping` is what a pass asks instead of listing kinds: the
+    machine spells an affine step four ways and MIR should say one thing.
+    """
+    from qbopt import mir as raised
+
+    def made(kind, args):
+        return raised.Op(0, None, kind.value, (), (), (), (), None, kind=kind, args=args, results=())
+
+    one = raised.Held(raised.Value(1, 0, 0, 1, 1), 2)
+    other = raised.Held(raised.Value(2, 0, 0, 2, 1), 2)
+    assert raised.stepping(made(raised.Kind.INCREMENT, (one,)))[1] == raised.Const(1, 2)
+    assert raised.stepping(made(raised.Kind.DECREMENT, (one,)))[1] == raised.Const(-1, 2)
+    assert raised.stepping(made(raised.Kind.SUB, (one, raised.Const(4, 2))))[1] == raised.Const(-4, 2)
+    assert raised.stepping(made(raised.Kind.ADD, (one, other)))[1] == other
+    # `x - y` for an invariant y is not `x + y`: a counter told otherwise
+    # would run the wrong way.
+    assert raised.stepping(made(raised.Kind.SUB, (one, other))) is None
+
+
+def test_a_declared_call_raises_its_arguments_as_operands() -> None:
+    """B$FILD takes a long in dx:ax, and said so nowhere an operand could
+    be read from.
+
+    Its `Contract.inputs` names ax and dx; the raise put them only in the
+    conservative use set, alongside every register a call is assumed to
+    read. An argument that is not an operand cannot carry a width, and the
+    lowering had nothing to pair with the register the routine reads it in.
+    """
+    from pathlib import Path
+
+    from qbopt import omf
+    from qbopt import module
+    from qbopt import runtime
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(Path("fixtures/omf/fpemu-p-evt.obj").read_bytes()))
+    blocks = split.partition(found, code_map(found))
+    seen = []
+    for _name, body in mir.bodies(found, blocks):
+        for block in body.blocks:
+            for op in block.ops:
+                if op.kind is not mir.Kind.CALL:
+                    continue
+                if found.calls.get(op.at) == "B$FILD":
+                    seen.append(op)
+    assert seen, "no B$FILD call; the fixture cannot show this"
+    assert runtime.slots(runtime.contract("B$FILD")) == (runtime.Reg.AX, runtime.Reg.DX)
+    one = seen[0]
+    assert len(one.args) == 2, f"the call raises {one.args} for two declared inputs"
+    assert [x.width for x in one.args] == [2, 2], f"widths are {[x.width for x in one.args]}"
+
+
+def _raised_calls(name: str):
+    """Every CALL a checked-in object raises, by the routine it names.
+
+    Through `mir.bodies`, not the helper: the question is whether the raise
+    encodes the state, and a helper called directly cannot answer it.
+    """
+    from pathlib import Path
+
+    from qbopt import omf
+    from qbopt import module
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    at = Path("fixtures/omf") / name
+    assert at.exists(), f"{name} is checked in and this test needs it"
+    found = module.of(omf.parse(at.read_bytes()))
+    blocks = split.partition(found, code_map(found))
+    out: dict[str, list] = {}
+    for _who, body in mir.bodies(found, blocks):
+        for block in body.blocks:
+            for op in block.ops:
+                if op.kind is mir.Kind.CALL:
+                    out.setdefault(found.calls.get(op.at) or "(program)", []).append(op)
+    return out
+
+
+def test_a_call_whose_interface_is_unestablished_says_so_rather_than_empty() -> None:
+    """`()` alone would say the routine reads nothing.
+
+    B$ENRA's code is not in the runtime tree, so its contract declares no
+    inputs -- which is not the same fact as an established empty set, and
+    the difference is why constraining nothing let arrprm's `mov cx,0`
+    move to another register.
+    """
+    from qbopt import runtime
+
+    assert runtime.contract("B$ENRA").inputs is None
+    # VBDOS's, where the `bx` path reaches a call no disassembly follows.
+    made = _raised_calls("procs-v-evt.obj")
+    assert "B$ENRA" in made, f"no B$ENRA raised; found {sorted(made)}"
+    for op in made["B$ENRA"]:
+        assert op.args == () and op.args_known is False, f"args={op.args} known={op.args_known}"
+
+
+def test_a_call_established_to_read_nothing_says_that_instead() -> None:
+    """B$PEI2 takes its argument on the stack, and that is established.
+
+    The distinction this holds: an empty argument list with the flag set
+    means "reads no register", which is a fact, and the unknown case above
+    means nothing is known. Both are `args == ()`.
+    """
+    from qbopt import runtime
+
+    assert runtime.contract("B$PEI2").inputs == frozenset()
+    made = _raised_calls("addrm-p-evt.obj")
+    assert "B$PEI2" in made, f"no B$PEI2 raised; found {sorted(made)}"
+    for op in made["B$PEI2"]:
+        assert op.args == () and op.args_known is True, f"args={op.args} known={op.args_known}"
+
+
+def test_a_call_established_to_read_its_arguments_raises_them() -> None:
+    """B$FILD takes a long in dx:ax, and its contract says so."""
+    from qbopt import runtime
+
+    assert runtime.slots(runtime.contract("B$FILD")) == (runtime.Reg.AX, runtime.Reg.DX)
+    made = _raised_calls("fpemu-p-evt.obj")
+    assert "B$FILD" in made, f"no B$FILD raised; found {sorted(made)}"
+    for op in made["B$FILD"]:
+        assert op.args_known is True, f"{op.at:#06x}: known={op.args_known}"
+        assert [one.width for one in op.args] == [2, 2], f"{op.at:#06x}: {op.args}"
+        read = {one.id for one in op.uses}
+        assert all(one.value.id in read for one in op.args), f"{op.at:#06x}: {op.args} vs {op.uses}"
+
+
+def test_an_unknown_calls_read_set_and_its_flag_survive_a_pass() -> None:
+    """The conservative uses keep a live value from being discarded, and
+    `args_known` has to reach the lowering."""
+    from qbopt import transform
+
+    made = _raised_calls("procs-v-evt.obj")
+    op = made["B$ENRA"][0]
+    assert op.uses, "the call reads nothing, so preservation proves nothing"
+    body = mir.MirBody(op.at, (mir.MirBlock(op.at, (), (op,), ()),), {}, {})
+    after = transform.widened(body)
+    out = next(one for block in after.blocks for one in block.ops)
+    assert out.args_known is False, "the flag did not survive the pass"
+    assert {one.id for one in out.uses} == {one.id for one in op.uses}, f"the read set became {out.uses}"
+
+
+def test_the_entry_routine_declares_its_frame_size_where_that_is_established() -> None:
+    """B$ENRA takes the frame size in cx, and its own code says so.
+
+    Disassembled from the linked image for each toolchain: PDS 7.1 at
+    0x1d35 and QuickBASIC 4.5 at 0x211d read cx before writing it, through
+    `push cx` and `sub sp,cx`, with no unresolved edge on any path. VBDOS
+    also reads bx -- `or bx,bx` gates a further far call -- but that call
+    reaches `call far [di+24h]`, which no disassembly can follow, so
+    nothing is established for it.
+    """
+    from qbopt import module
+    from qbopt import runtime
+
+    made = _raised_calls("procs-p-g2.obj")
+    assert "B$ENRA" in made, f"no B$ENRA raised; found {sorted(made)}"
+    for op in made["B$ENRA"]:
+        assert op.args_known is True, f"{op.at:#06x}: known={op.args_known}"
+        assert [one.width for one in op.args] == [2], f"{op.at:#06x}: {op.args}"
+
+    # QuickBASIC 4.5 is established the same way, on the selector rather
+    # than on a fixture: no checked-in q object calls B$ENRA.
+    assert runtime.per_call({0: "B$ENRA"}, module.Family.QUICKBASIC)[0].inputs == frozenset({runtime.Reg.CX})
+    assert runtime.per_call({0: "B$ENRA"}, module.Family.PDS)[0].inputs == frozenset({runtime.Reg.CX})
+    assert runtime.per_call({0: "B$ENRA"}, module.Family.VBDOS)[0].inputs is None
+    assert runtime.per_call({0: "B$ENRA"}, module.Family.UNKNOWN)[0].inputs is None
+
+    # And where nothing is established, nothing is claimed.
+    from pathlib import Path
+
+    from qbopt import omf
+
+    assert module.family(omf.parse(Path("fixtures/omf/procs-v-evt.obj").read_bytes())) is module.Family.VBDOS
+    theirs = _raised_calls("procs-v-evt.obj")
+    assert "B$ENRA" in theirs
+    for op in theirs["B$ENRA"]:
+        assert op.args_known is False, f"{op.at:#06x}: VBDOS claimed an interface"
+    assert runtime.contract("B$ENRA").inputs is None, "the nameless contract still declares nothing"
+
+
+def test_a_procedure_this_module_defines_is_not_a_runtime_routine() -> None:
+    """`REPORT` and `TWICE` reach `Module.calls` like B$ENRA does.
+
+    BC compiles a SUB as a PUBDEF of the same object and calls it through
+    an EXTDEF fixup, so the call target alone cannot say which it is. The
+    PUBDEF set can, and nothing else may: a name is not evidence.
+    """
+    from pathlib import Path
+
+    from qbopt import omf
+    from qbopt import module
+    from qbopt import runtime
+
+    records = omf.parse(Path("fixtures/omf/procs-p-evt.obj").read_bytes())
+    found = module.of(records)
+    mine = module.defines(records, found.seg)
+    assert {"REPORT", "TWICE"} <= mine, f"this module defines {sorted(mine)[:6]}"
+
+    where = {at: name for at, name in found.calls.items() if name in ("REPORT", "B$ENRA")}
+    assert len(set(where.values())) == 2, f"the fixture needs both kinds: {where}"
+    got = runtime.per_call(found.calls, module.family(records), mine)
+    for at, name in where.items():
+        one = got[at]
+        if name == "REPORT":
+            assert one.inputs == frozenset(), f"{name} claims register inputs {one.inputs}"
+            assert one.clobbers == runtime.EVERY, f"{name} narrowed its clobbers"
+            assert one.established is False, f"{name} claims to be established"
+        else:
+            # The runtime's own, and under PDS its frame size is established.
+            assert one.inputs == frozenset({runtime.Reg.CX}), f"{name} reads {one.inputs}"
+            assert one.name == "B$ENRA", f"it was selected as {one.name}"
+            assert "PUBDEF of this same module" not in one.evidence, one.evidence
+
+    # And the same name without a PUBDEF behind it is not selected.
+    assert runtime.per_call({0: "REPORT"}, module.Family.PDS, frozenset())[0].inputs is None
+
+
+def test_the_exit_routine_declares_what_it_reads_where_that_is_established() -> None:
+    """B$EXSA's returning path reads no register at all.
+
+    Its other path is error dispatch, and what is declared there is the
+    survivor set rather than a read set: ax and bx are written before
+    every terminal, cx, dx, si and di are not. A superset costs a copy
+    where it is wrong and cannot be unsound. QuickBASIC 4.5's reads
+    nothing on any path.
+    """
+    from qbopt import module
+    from qbopt import runtime
+
+    every = frozenset({runtime.Reg.CX, runtime.Reg.DX, runtime.Reg.SI, runtime.Reg.DI})
+    assert runtime.per_call({0: "B$EXSA"}, module.Family.PDS)[0].inputs == every
+    assert runtime.per_call({0: "B$EXSA"}, module.Family.QUICKBASIC)[0].inputs == frozenset()
+    assert runtime.per_call({0: "B$EXSA"}, module.Family.VBDOS)[0].inputs is None
+
+    made = _raised_calls("procs-p-g2.obj")
+    assert "B$EXSA" in made, f"no B$EXSA raised; found {sorted(made)}"
+    for op in made["B$EXSA"]:
+        assert op.args_known is True, f"{op.at:#06x}: known={op.args_known}"
+        assert [one.width for one in op.args] == [2, 2, 2, 2], f"{op.at:#06x}: {op.args}"

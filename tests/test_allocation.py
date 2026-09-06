@@ -17,25 +17,24 @@ from pathlib import Path
 
 import pytest
 from iced_x86 import Decoder
+from iced_x86 import Register
 from iced_x86 import Formatter
 from iced_x86 import FormatterSyntax
-from iced_x86 import Register
-
-from qbopt import ir
-from qbopt import lir
-from qbopt import mir
-from qbopt import target
-from qbopt import omf
-from qbopt import asm
-from qbopt import layout
-from qbopt import module
-from qbopt import regalloc
-from qbopt import transform
-from qbopt import select
-from qbopt import blocks as split
-from qbopt.blocks import code_map
 
 import corpus
+from qbopt import ir
+from qbopt import asm
+from qbopt import lir
+from qbopt import mir
+from qbopt import omf
+from qbopt import module
+from qbopt import select
+from qbopt import target
+from qbopt import runtime
+from qbopt import regalloc
+from qbopt import transform
+from qbopt import blocks as split
+from qbopt.blocks import code_map
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
@@ -81,9 +80,7 @@ def test_lir_says_a_two_address_operand_is_one_register() -> None:
     what = ir.Semantics(ir.Operation.BINARY, "add", dests=(ax,), sources=(ax, cell))
     assert target.tied(what) is Register.EAX, "the destination and the first source are one register"
 
-    apart = ir.Semantics(
-        ir.Operation.BINARY, "add", dests=(ax,), sources=(ir.Reg(register=Register.BX, width=2), cell)
-    )
+    apart = ir.Semantics(ir.Operation.BINARY, "add", dests=(ax,), sources=(ir.Reg(register=Register.BX, width=2), cell))
     assert target.tied(apart) is None, "and a three-operand form ties nothing"
 
     on_stack = ir.Semantics(ir.Operation.FLOAT_ARITH, "fadd", dests=(ir.St(0),), sources=(ir.St(0),))
@@ -104,9 +101,7 @@ def test_a_two_address_operation_keeps_both_halves_in_one_register() -> None:
     what = ir.Semantics(ir.Operation.BINARY, "add", dests=(ax,), sources=(ax, cell))
     assert target.tied(what) is Register.EAX, "the destination and the first source are one register"
 
-    apart = ir.Semantics(
-        ir.Operation.BINARY, "add", dests=(ax,), sources=(ir.Reg(register=Register.BX, width=2), cell)
-    )
+    apart = ir.Semantics(ir.Operation.BINARY, "add", dests=(ax,), sources=(ir.Reg(register=Register.BX, width=2), cell))
     assert target.tied(apart) is None, "and a three-operand form ties nothing"
 
     # Tied operands put the two values in one congruence class, so an
@@ -114,9 +109,7 @@ def test_a_two_address_operation_keeps_both_halves_in_one_register() -> None:
     made = mir.Value(1, 0x10)
     read = mir.Value(2, 0x08)
     op = mir.Op(0x10, ir.Operation.BINARY, "add", (made,), (read,), made=what)
-    body = mir.MirBody(
-        0x10, (mir.MirBlock(0x10, (), (op,), ()),), {made: Register.EAX, read: Register.EAX}, {}
-    )
+    body = mir.MirBody(0x10, (mir.MirBlock(0x10, (), (op,), ()),), {made: Register.EAX, read: Register.EAX}, {})
     klass = regalloc.congruent(body)
     # Both present, not both absent: `.get` on two values neither of which
     # is in the map returns None twice, which compares equal and says
@@ -183,8 +176,7 @@ def test_an_allocation_keeps_every_value_where_it_was_unless_forced() -> None:
                     # It moved. Something it interferes with has to be in
                     # the register it left, or nothing forced it.
                     assert [one for one in graph.get(value, ()) if got.get(one) is was], (
-                        f"{obj.stem} {body_name}: {value} left "
-                        f"{regalloc.NAMES.get(was, was)} with nothing in it"
+                        f"{obj.stem} {body_name}: {value} left {regalloc.NAMES.get(was, was)} with nothing in it"
                     )
                 break
     assert seen, "no body took a pin, so this proves nothing"
@@ -222,9 +214,7 @@ def test_resolving_after_a_move_relinks_by_register() -> None:
         ),
         (),
     )
-    body = mir.MirBody(
-        0x10, (head,), {first: Register.EAX, second: Register.EAX, third: Register.EAX}, {}
-    )
+    body = mir.MirBody(0x10, (head,), {first: Register.EAX, second: Register.EAX, third: Register.EAX}, {})
 
     got = mir.resolved(body, {})
     assert not isinstance(got, str), got
@@ -355,9 +345,7 @@ def test_a_copy_on_the_phi_edge_untangles_a_class() -> None:
     for _who, body in mir.bodies(found, blocks):
         # The same pipeline wholeseg runs: widening is not a pass and goes
         # after every one of them, just before lowering.
-        done = transform.widened(
-            transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
-        )
+        done = transform.widened(transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found))
         if not regalloc._tangled(done):
             continue
         seen += 1
@@ -366,3 +354,335 @@ def test_a_copy_on_the_phi_edge_untangles_a_class() -> None:
         assert not regalloc._tangled(fixed), "and the copy breaks the class"
         assert not isinstance(regalloc.colour(fixed, fixed.pins), str), "so it can be coloured"
     assert seen, "addrm no longer tangles, so this proves nothing"
+
+
+def _through_regalloc(body, pinned=None):
+    """The whole phase, which is where the constraint splitter runs."""
+    from qbopt import allocate
+    from qbopt import frame as frames
+
+    return allocate.RegAlloc(pinned or {}, frames.of(body)).transform(body)
+
+
+def _one_block(*insns):
+    return lir.LirBody("one", 0, (lir.LirBlock(at=0, insns=insns, succ=()),), origin={}, pins={})
+
+
+def _mov(into: int, value: int, at: int):
+    from qbopt import ir
+
+    return lir.Insn(
+        at=at,
+        covers=(at, at + 2),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(into, 2),), (ir.Imm(value, 2),)),
+        defines=(into,),
+        uses=(),
+        op=None,
+    )
+
+
+def _shl(result: int, count: int, at: int):
+    from qbopt import ir
+
+    what = ir.Semantics(ir.Operation.BINARY, "shl", (ir.Held(result, 2),), (ir.Held(result, 2), ir.Held(count, 2)))
+    return lir.Insn(at=at, covers=(at, at + 2), what=what, defines=(result,), uses=(result, count), op=None)
+
+
+def _named(body, name: str):
+    from qbopt import ir
+
+    return [
+        one.what
+        for block in body.blocks
+        for one in block.insns
+        if one.what and one.what.name == name and not isinstance(one.what.sources[0], ir.Imm)
+    ]
+
+
+def test_a_widening_multiply_puts_its_halves_in_ax_and_dx() -> None:
+    """pressx printed R= 6460 for 7500: the halves went to cx and ax and
+    the `add` after the multiply read a register it never wrote."""
+    from iced_x86 import Register
+
+    from qbopt import ir
+
+    what = ir.Semantics(
+        ir.Operation.MULTIPLY,
+        "imul",
+        (ir.Held(1, 2), ir.Held(2, 2)),
+        (ir.Held(1, 2), ir.Held(3, 2)),
+    )
+    imul = lir.Insn(at=0x100, covers=(0x100, 0x102), what=what, defines=(1, 2), uses=(1, 3), op=None)
+    got = _through_regalloc(_one_block(_mov(1, 3, 0xFC), _mov(3, 5, 0xFE), imul))
+    (made,) = _named(got, "imul")
+    assert ir.ROOT[made.dests[0].register] is Register.EAX, made.dests
+    assert ir.ROOT[made.dests[1].register] is Register.EDX, made.dests
+    assert made.sources[0] == made.dests[0], "the tie was broken"
+
+
+def test_a_fixed_source_that_is_not_the_multiply_pair_is_honoured() -> None:
+    """A variable shift counts from cl and names it nowhere."""
+    from iced_x86 import Register
+
+    from qbopt import ir
+
+    got = _through_regalloc(_one_block(_mov(9, 1, 0x100), _mov(7, 2, 0x102), _shl(9, 7, 0x104)))
+    (made,) = _named(got, "shl")
+    assert ir.ROOT[made.sources[1].register] is Register.ECX, made.sources
+
+
+def test_a_value_required_in_two_registers_gets_one_fresh_value_per_site() -> None:
+    """One value cannot be in two registers at once, so each site gets its
+    own short-lived value and the original keeps one place."""
+    from iced_x86 import Register
+
+    from qbopt import ir
+
+    cwd = lir.Insn(
+        at=0x106,
+        covers=(0x106, 0x107),
+        what=ir.Semantics(ir.Operation.EXTEND, "cwd", (ir.Held(8, 2),), (ir.Held(7, 2),)),
+        defines=(8,),
+        uses=(7,),
+        op=None,
+    )
+    got = _through_regalloc(_one_block(_mov(9, 1, 0x100), _mov(7, 2, 0x102), _shl(9, 7, 0x104), cwd))
+    (shift,) = _named(got, "shl")
+    (extend,) = _named(got, "cwd")
+    assert ir.ROOT[shift.sources[1].register] is Register.ECX, shift.sources
+    assert ir.ROOT[extend.sources[0].register] is Register.EAX, extend.sources
+
+
+def test_an_origin_pin_does_not_override_what_the_instruction_requires() -> None:
+    """A pin says where a value already was; a shift count in anything but
+    cl is not an instruction. They are different values, so neither can
+    override the other."""
+    from iced_x86 import Register
+
+    from qbopt import ir
+
+    body = _one_block(_mov(9, 1, 0x100), _mov(7, 2, 0x102), _shl(9, 7, 0x104))
+    got = _through_regalloc(body, {7: Register.EBX})
+    (made,) = _named(got, "shl")
+    assert ir.ROOT[made.sources[1].register] is Register.ECX, made.sources
+
+
+@pytest.mark.parametrize("stem", ["matrix-p-g2", "nested-p-g2"])
+def test_the_rewriter_hands_on_the_bytes_a_dropped_copy_stood_for(stem: str) -> None:
+    """matrix and nested refused with `2 bytes between the ops are not
+    instructions` at a `mov bx,ax`. The rewriter drops such a copy once
+    both ends land in one register -- and the bytes it stood for went with
+    it, so layout could not account for them."""
+    from pathlib import Path
+
+    from qbopt import mir
+    from qbopt import omf
+    from qbopt import flow
+    from qbopt import lower
+    from qbopt import module
+    from qbopt import transform
+    from qbopt import blocks as split
+    from qbopt import frame as frames
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(Path(f"fixtures/omf/{stem}.obj").read_bytes()))
+    blocks = split.partition(found, code_map(found))
+    name, body = next(iter(mir.bodies(found, blocks)))
+    body = transform.widened(transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found))
+    low = lower.lowered(name, body, found.calls, set(found.absorbed), runtime.for_module(found))
+    owned = lambda one: {  # noqa: E731
+        at for block in one.blocks for i in block.insns if i.covers for at in range(*i.covers)
+    }
+    was = owned(low)
+    for phase in flow.machine(flow._pinned(body), frames.of(low), found.calls):
+        low = phase.transform(low)
+    lost = sorted(was - owned(low))
+    assert not lost, f"bytes owned by nothing: {[hex(x) for x in lost[:4]]}"
+
+
+def _based_cell(through=None):
+    from iced_x86 import Register
+
+    from qbopt import ir
+    from qbopt import lir
+    from qbopt.module import Addr
+    from qbopt.module import Space
+
+    where = Addr(Space.SEGMENT, 0x10, base=Register.SI)
+    cell = ir.Mem(where, 2, through if through is not None else Register.NONE, 0, 2, base=ir.Held(21, 2))
+    what = ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(30, 2),), (cell,))
+    return lir.Insn(at=0x100, covers=(0x100, 0x104), what=what, defines=(30,), uses=(21,), op=None)
+
+
+def test_a_placed_cell_reaches_memory_by_the_register_its_value_got() -> None:
+    """`through` follows the assignment and `base` stays: arrprm stored one
+    element through the other's address because the cell kept BC's own
+    register whatever the allocator chose."""
+    from iced_x86 import Register
+
+    from qbopt import ir
+    from qbopt import allocate
+
+    for register in (Register.EBX, Register.ESI):
+        got = allocate._settled(_based_cell().what.sources[0], {21: register}, {})
+        assert isinstance(got, ir.Mem)
+        assert got.through == target.named(register, 2), f"{register}: {got.through}"
+        assert got.base == ir.Held(21, 2), "the cell stopped naming its value"
+        for field in ("addr", "width", "offset", "disp_width"):
+            assert getattr(got, field) == getattr(_based_cell().what.sources[0], field), field
+
+
+def test_a_cell_whose_address_nothing_placed_is_refused() -> None:
+    """Guessing a base register is how arrprm printed ' 0  0' for ' 7  8'."""
+    from qbopt import select
+
+    assert select.emit(_based_cell().what) is None
+
+
+def test_a_placed_cell_emits_the_register_it_was_given() -> None:
+    from iced_x86 import Register
+
+    from qbopt import ir
+    from qbopt import select
+
+    cell = _based_cell(Register.SI).what.sources[0]
+    what = ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.AX, 2),), (cell,))
+    made = select.emit(what)
+    assert made is not None, "a placed cell was refused"
+    assert made.code.hex().startswith("8b84"), made.code.hex()  # mov ax,[si+disp]
+
+
+def test_a_based_cell_keeps_the_register_the_allocation_gave_its_base() -> None:
+    """`_placed` threw its own answer away.
+
+    `Mem.through` is `compare=False`, so a cell resolved from `through=NONE`
+    to a register compares equal to the one it came from, and the equality
+    early-return in `_placed` returned the untouched instruction. The
+    allocator resolved arrprm's cell twice and both results were dropped,
+    so select saw an unplaced base and the whole body fell back to MIR.
+    """
+    from iced_x86 import Register
+
+    from qbopt import ir
+    from qbopt import lir
+    from qbopt import allocate
+    from qbopt.module import Addr
+    from qbopt.module import Space
+
+    where = Addr(Space.LITERAL, 0x2, base=Register.SI)
+    cell = ir.Mem(where, 2, Register.NONE, 2, 1, base=ir.Held(17, 2))
+    load = lir.Insn(
+        at=0xA2,
+        covers=(0xA2, 0xA4),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.AX, 2),), (cell,)),
+        defines=(),
+        uses=(17,),
+        op=None,
+    )
+    body = lir.LirBody(
+        name="one",
+        entry=0,
+        blocks=(lir.LirBlock(at=0, insns=(load,), succ=()),),
+        origin={},
+        pins={},
+    )
+    got = allocate.applied(
+        body, allocate.Assignment(where={17: Register.BX}, spilled=frozenset(), cost=0.0, optimal=True)
+    )
+    read = got.blocks[0].insns[0].what.sources[0]
+    assert read.through == Register.BX, f"the cell is still reached through {read.through}"
+    assert read.base == ir.Held(17, 2), "the cell stopped saying which value reached it"
+    assert (read.addr, read.width, read.offset, read.disp_width) == (where, 2, 2, 1)
+
+
+def test_a_fixed_call_argument_reaches_its_register_through_the_whole_phase() -> None:
+    """The pin `constrained` hands back is the only record of where an
+    operand-free requirement went.
+
+    `constrain.required` re-derives a requirement from the operand holding
+    the fresh value, which works for `imul`'s tie and cannot work for a
+    call: it names no operand, `constrained` consumes the requirement, and
+    the fresh value's register lived only in the map RegAlloc dropped. So
+    B$ENRA's arguments were coloured like any other value -- arrprm put
+    them in dx and di where the runtime reads cx and bx.
+    """
+    from iced_x86 import Register
+
+    from qbopt import ir
+    from qbopt import lir
+
+    made = lir.Insn(
+        at=0,
+        covers=(0, 3),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(2, 2),), (ir.Imm(0, 2),)),
+        defines=(2,),
+        uses=(),
+        op=None,
+    )
+    call = lir.Insn(
+        at=3,
+        covers=(3, 8),
+        what=ir.Semantics(ir.Operation.CALL, "call", (), ()),
+        defines=(),
+        uses=(2,),
+        op=None,
+        requires=((ir.Held(2, 2), Register.CX),),
+    )
+    body = _one_block(made, call)
+    # The argument itself lives in si, which is not where the call reads it.
+    got = _through_regalloc(body, {2: Register.SI})
+    insns = got.blocks[0].insns
+    assert len(insns) == 3, f"the pre-call copy is missing: {len(insns)} instructions"
+    copy = insns[1]
+    assert copy.what.dests[0] == ir.Reg(Register.CX, 2), (
+        f"the fresh value went to {copy.what.dests[0]}, not the register the call reads"
+    )
+    assert copy.what.sources[0] == ir.Reg(Register.SI, 2), f"the argument moved off si: {copy.what.sources[0]}"
+    assert made_dest(insns[0]) == ir.Reg(Register.SI, 2), "the original was pinned away from si"
+
+
+def made_dest(one):
+    return one.what.dests[0]
+
+
+def test_a_call_result_nothing_reads_becomes_a_clobber() -> None:
+    """A call defines every register the raise cannot prove it preserves,
+    and three of B$EVCK's six in bools-q-evt are read by nothing.
+
+    Kept as values they carry a singleton pin each, so eax, ecx and edx
+    are reserved for results that do not exist; the spiller then chose one
+    of them every round -- 118, then 119, then 120 -- storing a dead value
+    and freeing nothing. As clobbers they still keep a live range out of
+    those registers, which is the fact worth keeping.
+    """
+    from iced_x86 import Register
+
+    from qbopt import ir
+    from qbopt import lir
+    from qbopt import allocate
+
+    call = lir.Insn(
+        at=0x10,
+        covers=(0x10, 0x15),
+        what=ir.Semantics(ir.Operation.CALL, "call", (), ()),
+        defines=(11, 12),
+        uses=(),
+        op=None,
+        clobbers=frozenset({Register.ESI}),
+    )
+    read = lir.Insn(
+        at=0x15,
+        covers=(0x15, 0x17),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(20, 2),), (ir.Held(12, 2),)),
+        defines=(20,),
+        uses=(12,),
+        op=None,
+    )
+    body = _one_block(call, read)
+    got, pins = allocate.narrowed(body, {11: Register.EAX, 12: Register.ECX})
+    after = got.blocks[0].insns[0]
+    assert after.defines == (12,), f"the dead result survived: {after.defines}"
+    assert 11 not in pins, f"its pin survived: {pins}"
+    assert pins.get(12) is Register.ECX, "the read result lost its pin"
+    assert Register.EAX in after.clobbers, f"the register it destroyed was forgotten: {after.clobbers}"
+    assert Register.ESI in after.clobbers, "an existing clobber was dropped"

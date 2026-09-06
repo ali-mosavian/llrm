@@ -272,9 +272,7 @@ def test_an_indexed_operand_is_bounded_by_the_next_thing_named_after_it() -> Non
     for disp in (0x328, 0x32A, 0x32C):
         scalar = module.Addr(module.Space.SEGMENT, disp, 5)
         assert module.may_alias(array, scalar, frozenset(), 2, 2), "unbounded, it reaches everything"
-        assert not module.may_alias(array, scalar, frozenset(), 2, 2, bounds), (
-            f"bounded, it cannot reach {disp:#x}"
-        )
+        assert not module.may_alias(array, scalar, frozenset(), 2, 2, bounds), f"bounded, it cannot reach {disp:#x}"
 
     # Inside the array it still may, which is what keeps this a bound and
     # not a licence.
@@ -284,3 +282,27 @@ def test_an_indexed_operand_is_bounded_by_the_next_thing_named_after_it() -> Non
     # And a segment with no names to bound it by is unchanged.
     assert module.reach(array, 2, {}) is None
     assert module.may_alias(array, module.Addr(module.Space.SEGMENT, 0x328, 5), frozenset(), 2, 2, {})
+
+
+def test_the_compiler_that_made_an_object_is_read_off_it() -> None:
+    """B$ENRA reads bx under VBDOS and does not under PDS, so a contract
+    keyed by name alone cannot be right for both.
+
+    COMENT class 0x00 names the compiler in every object, and the library
+    comment beside it names the runtime the routine actually came from --
+    two fields agreeing, so the identity does not rest on one string.
+    """
+    from pathlib import Path
+
+    from qbopt import omf
+    from qbopt import module
+
+    for name, want in (
+        ("bools-q-O.obj", module.Family.QUICKBASIC),
+        ("fpemu-p-evt.obj", module.Family.PDS),
+        ("cmpord-v-g3.obj", module.Family.VBDOS),
+    ):
+        at = Path("fixtures/omf") / name
+        assert at.exists(), f"{name} is checked in and this test needs it"
+        got = module.family(omf.parse(at.read_bytes()))
+        assert got is want, f"{name} reads as {got}"

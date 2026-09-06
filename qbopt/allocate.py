@@ -19,16 +19,16 @@ greedy answer stands, rather than pretending the result is optimal.
 """
 
 import heapq
-from dataclasses import dataclass
-from dataclasses import replace
 from enum import IntEnum
+from dataclasses import replace
+from dataclasses import dataclass
 
 from iced_x86 import Register_
 
-from qbopt import intervals as ranges
 from qbopt import ir
-from qbopt import target
 from qbopt import lir
+from qbopt import target
+from qbopt import intervals as ranges
 from qbopt.passes import LIRTransform
 
 # How many assignments the search will consider before it gives up and says
@@ -106,6 +106,48 @@ def live(body: lir.LirBody) -> tuple[dict[int, set[int]], dict[int, set[int]]]:
     return live_in, live_out
 
 
+def narrowed(body: lir.LirBody, pinned: "dict[int, Register_]") -> "tuple[lir.LirBody, dict[int, Register_]]":
+    """A call's results that nothing reads, said as clobbers instead.
+
+    The raise gives a call a result per register it cannot prove the
+    routine preserves, and pins each to the register it comes back in.
+    Where nothing reads one, that pin reserves a register for a value that
+    does not exist -- and the spiller cannot help, since storing a dead
+    value frees nothing: bools-q-evt spilled 118, then 119, then 120,
+    one per round, and never settled.
+
+    The register is still destroyed, so it moves to `clobbers`, which is
+    what keeps a live range out of it. Only a call, only a result nothing
+    reads, and only after the phases that rewrite reads have run.
+    """
+    read = {value for block in body.blocks for one in block.insns for value in one.uses}
+    read |= {value for block in body.blocks for value in block.arrives}
+    dropped: "dict[int, Register_]" = {}
+    blocks = []
+    for block in body.blocks:
+        insns = []
+        for one in block.insns:
+            dead = [value for value in one.defines if value not in read and pinned.get(value) is not None]
+            if one.what is None or one.what.op is not ir.Operation.CALL or not dead:
+                insns.append(one)
+                continue
+            gone: "dict[int, Register_]" = {value: pinned[value] for value in dead}
+            dropped.update(gone)
+            insns.append(
+                replace(
+                    one,
+                    defines=tuple(value for value in one.defines if value not in gone),
+                    clobbers=one.clobbers | frozenset(gone.values()),
+                )
+            )
+        blocks.append(replace(block, insns=tuple(insns)))
+    if not dropped:
+        return body, pinned
+    return replace(body, blocks=tuple(blocks)), {
+        value: where for value, where in pinned.items() if value not in dropped
+    }
+
+
 def interference(body: lir.LirBody) -> dict[int, frozenset[int]]:
     """Which values are ever live at the same moment.
 
@@ -178,8 +220,13 @@ def classes(body: lir.LirBody) -> dict[int, frozenset]:
             if one.what is None:
                 continue
             for where in (*one.what.dests, *one.what.sources):
-                if isinstance(where, ir.Mem) and isinstance(where.through, ir.Held):
-                    out[where.through.value] = target.ADDRESSING
+                # `base` and not `through`: the first is the value that
+                # computed the address, the second only how to encode the
+                # operand once something has placed it. 16-bit addressing
+                # reaches memory through bx, bp, si and di and nothing
+                # else, so the value is confined to those.
+                if isinstance(where, ir.Mem) and where.base is not None:
+                    out[where.base.value] = target.ADDRESSING
     return out
 
 
@@ -226,6 +273,10 @@ def allocate(
     for one in unspillable or ():
         if one in live and live[one].size <= RELOAD:
             live[one] = replace(live[one], weight=float("inf"))
+    # Values no slot can hold, which is a different fact from a reload
+    # being too short to spill again: spiller.py owns which spills are
+    # possible, and choosing one of these as a victim buys nothing --
+    # the reload lands tied at the same instruction and the round repeats.
     confined = classes(body)
     fixed = dict(pinned or {})
 
@@ -349,9 +400,7 @@ def _clobbered(one: "ranges.Interval", register: Register_, masks: list) -> bool
     return False
 
 
-def _free(
-    one: "ranges.Interval", order: tuple, union: dict, live: dict, masks: list
-) -> "Register_ | None":
+def _free(one: "ranges.Interval", order: tuple, union: dict, live: dict, masks: list) -> "Register_ | None":
     """A register nothing live at the same time is using, and no call kills."""
     for register in order:
         if _clobbered(one, register, masks):
@@ -405,8 +454,8 @@ class RegAlloc(LIRTransform):
     # groups, so it wants more rounds to settle.
     ROUNDS = 12
 
-    def __init__(self, pinned: dict | None = None, frame=None) -> None:
-        self.pinned = pinned or {}
+    def __init__(self, pinned: "dict[int, Register_] | None" = None, frame=None) -> None:
+        self.pinned: "dict[int, Register_]" = dict(pinned or {})
         self.frame = frame
 
     def transform(self, body: lir.LirBody) -> lir.LirBody:
@@ -418,14 +467,44 @@ class RegAlloc(LIRTransform):
         `splitkit.py` here -- and spilling is what is left when no split
         helps.
         """
-        from qbopt import frame as frames
         from qbopt import spiller
         from qbopt import splitkit
+        from qbopt import constrain
+        from qbopt import frame as frames
 
         if self.frame is None:
             self.frame = frames.of(body)
+        # Once, before anything is placed. A required register is a claim
+        # about one instruction -- `imul`'s product is dx:ax and it names
+        # neither -- so the operand becomes a value of its own, live across
+        # that instruction and nothing else. The originals keep whatever
+        # the raise saw them in; the fresh ones are held to the hardware,
+        # and because they are different values neither can override the
+        # other.
+        # The splitter's own answer, kept. A requirement an operand can
+        # hold is re-derived below from the operand now holding it; one no
+        # operand can hold -- a call reads its arguments in registers it
+        # names nowhere -- exists only here, and dropping it left B$ENRA's
+        # arguments coloured like any other value.
+        # Before anything is required of a value: a result nothing reads
+        # is not a value at all, and its register is a clobber.
+        body, narrower = narrowed(body, self.pinned)
+        self.pinned = narrower
+        body, fixed = constrain.constrained(body, self.pinned)
+        # Disjoint by construction -- the splitter mints ids above every one
+        # the body holds -- and said rather than assumed, because a silent
+        # overwrite here is a requirement quietly replaced by a preference.
+        clash = {one for one in fixed if one in self.pinned and self.pinned[one] != fixed[one]}
+        if clash:
+            raise Unplaced(f"value#{sorted(clash)[0]} is pinned and required in different registers")
+        prefer = {**self.pinned, **fixed}
         reloads: frozenset[int] = frozenset()
         for _round in range(self.ROUNDS):
+            # Recomputed every attempt, and merged last. The spiller puts a
+            # fresh value at an instruction between rounds, and a
+            # requirement is about the instruction rather than about the
+            # value that happened to be there when the splitter ran.
+            self.pinned = {**prefer, **constrain.required(body)}
             got = allocate(body, self.pinned, reloads)
             if not got.spilled:
                 return applied(body, got)
@@ -441,6 +520,7 @@ class RegAlloc(LIRTransform):
                 continue
             body, made = spiller.spilled(body, got.spilled, self.frame)
             reloads |= made
+        self.pinned = {**prefer, **constrain.required(body)}
         return applied(body, allocate(body, self.pinned, reloads))
 
 
@@ -471,9 +551,12 @@ def applied(body: lir.LirBody, got: Assignment) -> lir.LirBody:
         blocks=tuple(
             lir.LirBlock(
                 at=block.at,
-                insns=tuple(
-                    one for one in (_placed(x, held, body.origin) for x in block.insns) if not _pointless(one)
-                ),
+                # `lir.without` rather than a filter: a copy this drops may
+                # stand for bytes BC wrote, and layout refuses a body it
+                # cannot account for every one of -- matrix and nested
+                # refused with `2 bytes between the ops are not
+                # instructions` at a `mov bx,ax`.
+                insns=tuple(lir.without(block.insns, _pointless, lambda one: _placed(one, held, body.origin))),
                 succ=block.succ,
                 phis=block.phis,
             )
@@ -501,13 +584,22 @@ def _placed(one: lir.Insn, held: dict, origin: dict) -> lir.Insn:
     what = one.what
     dests = tuple(_settled(x, held, origin) for x in what.dests)
     sources = tuple(_settled(x, held, origin) for x in what.sources)
-    if dests == what.dests and sources == what.sources:
-        return one
+    # Unconditionally, with no "nothing changed" shortcut: `Mem.through` is
+    # `compare=False`, so a cell that just gained the register its base was
+    # given compares equal to the one without it, and the shortcut returned
+    # the unresolved instruction it had already replaced.
     return replace(one, what=ir.Semantics(what.op, what.name, dests, sources, what.target))
 
 
 def _settled(where, held: dict, origin: dict):
     """One operand with its value resolved to the register holding it."""
+    if isinstance(where, ir.Mem) and where.base is not None:
+        # The cell keeps saying which value reached it; `through` becomes
+        # the register that value was given. Everything else is untouched.
+        register = held.get(where.base.value)
+        if register is None:
+            return where
+        return replace(where, through=target.named(register, 2))
     if not isinstance(where, ir.Held):
         return where
     register = held.get(where.value)

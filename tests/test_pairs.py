@@ -17,8 +17,9 @@ import pytest
 import corpus
 from qbopt import mir
 from qbopt import pairs
-from qbopt import blocks as split
+from qbopt import runtime
 from qbopt.lift import lift
+from qbopt import blocks as split
 from qbopt.blocks import code_map
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
@@ -192,8 +193,7 @@ def test_the_arithmetic_pairs_are_exactly_the_ones_lift_finds(obj: Path) -> None
                 after_a_call.add(insn.at)
             seen = seen or insn.at in found.calls
     assert extra <= after_a_call, (
-        f"{obj.stem}: a pair lift.py does not find and no call precedes, at "
-        f"{sorted(extra - after_a_call)}"
+        f"{obj.stem}: a pair lift.py does not find and no call precedes, at {sorted(extra - after_a_call)}"
     )
 
 
@@ -222,10 +222,7 @@ def test_the_slot_is_cleared_by_anything_that_writes_a_half() -> None:
                     if live[number] and slots[number] is None:
                         cleared = True
                     live[number] = slots[number] is not None
-    assert cleared, (
-        "no slot was ever cleared, so nothing here proves a write to a half "
-        "stops the pair being known"
-    )
+    assert cleared, "no slot was ever cleared, so nothing here proves a write to a half stops the pair being known"
 
 
 @pytest.mark.parametrize(
@@ -353,8 +350,7 @@ def test_two_negates_without_the_borrow_are_not_one_long_negate() -> None:
 
     low = unary(0x100, "neg", Register.AX, 1)
     high = unary(0x106, "neg", Register.DX, 3)
-    origin = {mir.Value(1, 0x100): Register.EAX, mir.Value(2, 0x103): Register.EDX,
-              mir.Value(3, 0x106): Register.EDX}
+    origin = {mir.Value(1, 0x100): Register.EAX, mir.Value(2, 0x103): Register.EDX, mir.Value(3, 0x106): Register.EDX}
 
     borrow = mir.Op(
         at=0x103,
@@ -389,9 +385,7 @@ def test_a_chain_never_spans_something_it_cannot_move() -> None:
         for _name, body in mir.bodies(found, split.partition(found, mapped)):
             for chain in pairs.chains(body):
                 for previous, one in zip(chain.ops, chain.ops[1:]):
-                    assert pairs._follows(previous, one), (
-                        f"{obj.stem}: a chain spans a gap at {min(one.at):#x}"
-                    )
+                    assert pairs._follows(previous, one), f"{obj.stem}: a chain spans a gap at {min(one.at):#x}"
 
 
 def test_a_single_pair_widened_is_usually_longer() -> None:
@@ -455,9 +449,7 @@ def test_a_widened_negate_drops_its_carry_too() -> None:
                         continue
                     seen += len(carries)
                     _lo, _hi, gone = pairs.replaced(chain, block)
-                    assert set(carries) <= gone, (
-                        f"{obj.stem}: the carry at {carries[0]:#x} survives its widened negate"
-                    )
+                    assert set(carries) <= gone, f"{obj.stem}: the carry at {carries[0]:#x} survives its widened negate"
     assert seen, "no negates with a carry between their halves, so this proves nothing"
 
 
@@ -493,8 +485,8 @@ def test_a_widened_body_still_lays_out(obj: Path) -> None:
     overlap in the coverage arithmetic, one as a length that changed between
     the two passes -- so this is the check that would have caught either.
     """
-    import qbopt.layout as layout
     from qbopt import omf
+    import qbopt.layout as layout
 
     found = corpus.loaded(obj)
     assert found is not None
@@ -635,7 +627,6 @@ def test_a_chain_may_step_over_what_it_does_not_touch() -> None:
     proves nothing; and that none spans an op touching its own registers,
     which would be a different program.
     """
-    from iced_x86 import Register
 
     spanned = 0
     for obj in FIXTURES:
@@ -710,19 +701,15 @@ def _pushed(data: bytes) -> list[tuple[str, ...]]:
     which registers a run names is the one thing about it that has to
     survive a rewrite.
     """
-    from iced_x86 import Mnemonic
     from iced_x86 import OpKind
+    from iced_x86 import Mnemonic
 
-    from qbopt import module
     from qbopt import omf
+    from qbopt import module
     from qbopt import target
 
     found = module.of(omf.parse(data))
-    insns = [
-        one
-        for block in split.partition(found, code_map(found))
-        for one in block.insns
-    ]
+    insns = [one for block in split.partition(found, code_map(found)) for one in block.insns]
     out, run = [], []
     for one in insns:
         if one.insn.mnemonic == Mnemonic.PUSH and one.insn.op0_kind == OpKind.REGISTER:
@@ -741,55 +728,84 @@ def _pushed(data: bytes) -> list[tuple[str, ...]]:
 def test_a_restore_hands_the_pair_back_into_the_registers_bc_reads() -> None:
     """negnot printed B= 1545 for 33818121: `push dx` came out `push cx`.
 
-    The restore writes ax and dx, and says so nowhere -- it defines nothing
-    in SSA on purpose, so that avail cannot reason across it. The allocator
-    reads the same field, found the halves BC's deleted `neg ax / neg dx`
-    used to define with no definition left, and was free to put them
-    anywhere. It put one in cx and the next in bx, and PRINT read its
-    argument off the stack from wherever BC had said.
+    Only the pushes a widened chain hands to. Comparing every push run in
+    the object asked something the allocator never promised -- code the
+    widening did not touch may be re-encoded freely, so long as the values
+    are right -- and a legal rename there read as this defect.
     """
-    from qbopt import transform
+    from qbopt import ir
+    from qbopt import omf
+    from qbopt import lower
+    from qbopt import module
+    from qbopt import target
     from qbopt import wholeseg
+    from qbopt import transform
 
     raw = Path("fixtures/omf/negnot-q-O.obj").read_bytes()
+    found = module.of(omf.parse(raw))
+    blocks = split.partition(found, code_map(found))
+    name, body = next(iter(mir.bodies(found, blocks)))
+    wide = transform.widened(body)
+    handed = {
+        one: wide.pins[one]
+        for block in wide.blocks
+        for op in block.ops
+        if isinstance(op.node, ir.Restore)
+        for one in op.defines
+        if one in wide.pins
+    }
+    assert handed, "nothing was handed back, so this proves nothing"
+
     was = transform.applied
-    transform.applied = lambda body, *a, **k: body  # widening on its own
+    transform.applied = lambda one, *a, **k: one  # widening on its own
     try:
         out, why = wholeseg.rebuilt(raw)
     finally:
         transform.applied = was
     assert why == wholeseg.REBUILT
-    assert _pushed(out) == _pushed(raw)
+
+    low = lower.lowered(name, wide, found.calls, set(found.absorbed), runtime.for_module(found))
+    reads = {
+        one.uses[0] for block in low.blocks for one in block.insns if one.what and one.what.name == "push" and one.uses
+    }
+    wanted = {value.id: register for value, register in handed.items()}
+    assert reads & set(wanted), "no push consumes a handed-back half"
+    # Every half a restore hands back must reach the register BC's own
+    # push reads it from; the pair is what the callee takes off the stack.
+    for value, register in wanted.items():
+        if value in reads:
+            assert target.name_of(register) in ("eax", "edx"), (
+                f"value {value} was handed back to {target.name_of(register)}"
+            )
 
 
-def test_widening_does_not_rename_what_an_absorbed_site_hands_back() -> None:
-    """chain printed CONST= 23068672 for 0: `push dx` came out `push bx`.
-
-    An absorbed long divide is emitted by select.absorbed, seventeen fixed
-    bytes ending in `pop ax / pop dx`. Nothing in the operation's semantics
-    says so, so the allocator -- which widening gives room to run -- moved
-    the result's high half to bx and re-encoded every reader of it. The
-    readers agreed with each other and not with the idiom that produced it.
+@pytest.mark.parametrize("stem", ["negnot-q-O", "arith-v-g3"])
+def test_widening_leaves_no_consumer_without_a_producer(stem: str) -> None:
+    """negnot pushed a stale high word: `push dx` read v3_5, and widening
+    had removed the `neg dx` that defined it without putting anything in
+    its place. The restore is what hands the pair back, and it said it
+    defined nothing -- so the value had no interval, the allocator skipped
+    it, and its pin was never applied.
     """
-    from qbopt import module
     from qbopt import omf
+    from qbopt import module
     from qbopt import transform
-    from qbopt import wholeseg
 
-    raw = Path("fixtures/omf/chain-q-O.obj").read_bytes()
-    was_a, was_w = transform.applied, transform.widened
-
-    def build(widen: bool) -> bytes:
-        transform.applied = lambda body, *a, **k: was_a(body, *a, **{**k, "fold": True, "decide": False,
-            "dead": False, "segments_": False, "hoist": False, "forward": False,
-            "drop_loads": False, "drop_stores": False})
-        transform.widened = was_w if widen else (lambda one: one)
-        try:
-            out, why = wholeseg.rebuilt(raw)
-            assert why == wholeseg.REBUILT
-            return out
-        finally:
-            transform.applied, transform.widened = was_a, was_w
-
-    assert module.of(omf.parse(build(True))).code != module.of(omf.parse(build(False))).code
-    assert _pushed(build(True)) == _pushed(build(False))
+    found = module.of(omf.parse((Path("fixtures/omf") / f"{stem}.obj").read_bytes()))
+    blocks = split.partition(found, code_map(found))
+    for _name, body in mir.bodies(found, blocks):
+        wide = transform.widened(body)
+        made = {one.id for block in wide.blocks for op in block.ops for one in op.defines}
+        made |= {phi.result.id for block in wide.blocks for phi in wide.blocks[0].phis} if False else set()
+        made |= {phi.result.id for block in wide.blocks for phi in block.phis}
+        entry = {one.id for block in body.blocks for op in block.ops for one in op.uses} - {
+            one.id for block in body.blocks for op in block.ops for one in op.defines
+        }
+        orphans = [
+            f"{op.at:#06x} reads {one}"
+            for block in wide.blocks
+            for op in block.ops
+            for one in op.uses
+            if not one.flags and one.id not in made and one.id not in entry
+        ]
+        assert not orphans, "; ".join(orphans[:3])

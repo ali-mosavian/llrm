@@ -172,7 +172,13 @@ def operand_of(what: ir.Mem) -> tuple[MemoryOperand, bool] | None:
         return None
     match addr.space:
         case Space.SEGMENT:
-            return MemoryOperand(base=addr.base, displ=0, displ_size=2), True
+            # `addr.base` is the register BC wrote the element through, and
+            # it is the answer only while nothing has recomputed the offset.
+            # Once a pass makes a value of it the allocation places it, and
+            # `through` is where it went -- encoding BC's own register then
+            # reads element zero through whatever si happens to hold.
+            base = what.through if what.base is not None else addr.base
+            return MemoryOperand(base=base, displ=0, displ_size=2), True
         case Space.FRAME if addr.base == Register.NONE:
             return (
                 MemoryOperand(
@@ -189,11 +195,16 @@ def operand_of(what: ir.Mem) -> tuple[MemoryOperand, bool] | None:
             # of the encoding -- so it comes along.
             if addr.segment == Register.NONE:
                 return None
+            # `addr.base` is the register BC computed the offset into, and
+            # holds only while nothing has recomputed it; once a pass makes
+            # a value of it the allocation answers with `through`. The
+            # width follows the register actually encoded.
+            base = what.through if what.base is not None else addr.base
             return (
                 MemoryOperand(
-                    base=addr.base,
+                    base=base,
                     displ=addr.disp,
-                    displ_size=_displacement_size(addr.base, addr.disp),
+                    displ_size=_displacement_size(base, addr.disp),
                     seg=addr.segment,
                 ),
                 False,
@@ -211,8 +222,14 @@ def operand_of(what: ir.Mem) -> tuple[MemoryOperand, bool] | None:
             # reaches a field of a record: `add bx,[si+0Ah]` is `03 5c 0a`.
             # Hardcoding two cost a byte at 1,247 add sites and 785 mov
             # sites in qb-qrender, and none at all in fixtures/omf.
-            wide = 2 if addr.base == Register.NONE else _displacement_size(addr.base, addr.disp)
-            return MemoryOperand(base=addr.base, displ=addr.disp, displ_size=wide), False
+            # `addr.base` is BC's own register and holds only while nothing
+            # has recomputed the offset; once a pass makes a value of it,
+            # `through` is where the allocation put it. The width follows
+            # the register actually encoded -- asking the other one gives
+            # the collision above for a base that is not there.
+            base = what.through if what.base is not None else addr.base
+            wide = 2 if base == Register.NONE else _displacement_size(base, addr.disp)
+            return MemoryOperand(base=base, displ=addr.disp, displ_size=wide), False
         case _:
             return None
 
@@ -836,7 +853,6 @@ def absorbed_fixups(site, live, restore: bool = True) -> tuple[int, ...]:
     return () if isinstance(made, str) else tuple(field for _where, field in made.relocations)
 
 
-
 def restore(pair: int) -> Emitted | None:
     """The idiom that puts a widened value's halves back where BC reads them."""
     made = RESTORE.get(pair)
@@ -1143,7 +1159,7 @@ def arith_into_imm(name: str, cell: ir.Mem, value: int, at: int = 0, relocated: 
     built = operand_of(cell)
     if name not in TWO_OPERAND or built is None or cell.width not in (2, 4):
         return None
-    for bits in ((8, cell.width * 8) if fits_in_a_byte(value) and not relocated else (cell.width * 8,)):
+    for bits in (8, cell.width * 8) if fits_in_a_byte(value) and not relocated else (cell.width * 8,):
         code = _code(f"{name.upper()}_RM{cell.width * 8}_IMM{bits}")
         if code is None:
             continue
@@ -1217,6 +1233,14 @@ def emit(
     # somewhere and nothing decided where, and guessing a register is how
     # the five attempts in the history produced wrong programs.
     if any(isinstance(one, ir.Held) for one in (*what.dests, *what.sources)):
+        return None
+    # A cell whose address value nothing placed. Refusing is the same rule
+    # one line up: guessing a base register is how arrprm stored one array
+    # element through another's address.
+    if any(
+        isinstance(one, ir.Mem) and one.base is not None and one.through == Register.NONE
+        for one in (*what.dests, *what.sources)
+    ):
         return None
 
     dests, sources = what.dests, what.sources
@@ -1313,9 +1337,7 @@ def emit(
                 case (ir.Reg(register=into), ir.Mem() as cell) if (what.name or "cmp") == "cmp":
                     return compare_mem(into, cell, at)
                 case (ir.Reg(register=into), ir.Reg(register=outof)):
-                    return compare_registers(
-                        what.name or "cmp", into, outof, at
-                    )
+                    return compare_registers(what.name or "cmp", into, outof, at)
                 case (ir.Mem() as cell, ir.Reg(register=outof)):
                     # Only `cmp` here: `test` against memory has its own
                     # shapes and BC writes none of them, so this refuses

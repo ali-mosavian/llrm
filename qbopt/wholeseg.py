@@ -18,14 +18,14 @@ the whole object: half this pass's code and half BC's is not something
 anything downstream could reason about.
 """
 
-from dataclasses import dataclass
 from enum import StrEnum
+from dataclasses import dataclass
 
 from qbopt import mir
 from qbopt import omf
 from qbopt import layout
-from qbopt import regalloc
 from qbopt import module
+from qbopt import runtime
 from qbopt import relocate
 from qbopt import transform
 from qbopt import blocks as split
@@ -54,6 +54,10 @@ class Emitted:
     data: bytes
     outcome: Emission
     reason: str
+    # Why the LIR pipeline would not take it, where the MIR emitter
+    # stepped in. `reason` stays REBUILT so every caller reads what it
+    # always did; this is the part that says a fallback happened at all.
+    fallback_reason: str | None = None
 
 
 def emitted(
@@ -63,8 +67,10 @@ def emitted(
     only: str | None = None,
 ) -> Emitted:
     """The object rewritten, and which emitter did it."""
-    out, why = _rebuilt(data, optimise, native_fpu, only)
-    return Emitted(out, Emission.MIR if why == REBUILT else Emission.REFUSED, why)
+    out, why, short = _rebuilt(data, optimise, native_fpu, only)
+    if why != REBUILT:
+        return Emitted(out, Emission.REFUSED, why)
+    return Emitted(out, Emission.MIR if short else Emission.LIR, why, short)
 
 
 def rebuilt(
@@ -83,7 +89,7 @@ def _rebuilt(
     optimise: bool = True,
     native_fpu: bool = False,
     only: str | None = None,
-) -> tuple[bytes, str]:
+) -> tuple[bytes, str, str | None]:
     """The object with its code segment rewritten, and what happened.
 
     Returns the input unchanged where anything refuses, so a caller can use
@@ -92,15 +98,18 @@ def _rebuilt(
     records = omf.parse(data)
     found = module.of(records)
     if found is None:
-        return data, "the module has no code segment"
+        return data, "the module has no code segment", None
     mapped = code_map(found)
     if isinstance(mapped, str):
-        return data, mapped
+        return data, mapped, None
 
     blocks = split.partition(found, mapped)
-    bodies = list(mir.bodies(found, blocks))
+    # One map for the whole module, and the same object reaches the raise
+    # and the lowering: a contract chosen twice can be chosen differently.
+    contracts = runtime.for_module(found)
+    bodies = list(mir.bodies(found, blocks, contracts))
     if not bodies:
-        return data, "no bodies were raised"
+        return data, "no bodies were raised", None
 
     # Optimised as values before being written as bytes. transform.py's own
     # docstring has why every original byte still has to be accounted for
@@ -145,14 +154,18 @@ def _rebuilt(
     # could be told it had already happened -- objwrite.py runs after a
     # real allocator and was allocated over a second time, which produced a
     # call encoding with no field for its own fixup.
-    settled, assignment = layout.allocated(
-        bodies, plain=plain, settle=transform.widened if optimise else None
-    )
-    laid = layout.rebuild(
-        found, settled, mapped.tables, fields, reached, native_fpu, assignment=assignment
-    )
+    # Through the machine phases first, and once. Two emitters exist: this
+    # one, from MIR, and objwrite.py's, from LIR -- and everything below
+    # lowering reached only the second. A refusal the LIR side names is
+    # what sends the body to the layout below, and nothing else does.
+    short = _through_lir(found, records, blocks, bodies, mapped, fields, reached, native_fpu, contracts)
+    if not isinstance(short, str):
+        return short, REBUILT, None
+
+    settled, assignment = layout.allocated(bodies, plain=plain, settle=transform.widened if optimise else None)
+    laid = layout.rebuild(found, settled, mapped.tables, fields, reached, native_fpu, assignment=assignment)
     if isinstance(laid, str):
-        return data, laid
+        return data, laid, None
 
     # Whatever sits before the first instruction is BC's own module header --
     # 48 bytes of name and padding, and the only thing in these code segments
@@ -169,8 +182,66 @@ def _rebuilt(
         laid.dropped,
     )
     if isinstance(made, str):
-        return data, made
-    return b"".join(record.emit() for record in made), REBUILT
+        return data, made, None
+    return b"".join(record.emit() for record in made), REBUILT, short
+
+
+def _through_lir(found, records, blocks, bodies, mapped, fields, reached, native_fpu, contracts):
+    """Every body lowered, placed and written, or why one could not be.
+
+    `qbopt/flow.py` names the phases and their order; this runs them and
+    hands the result to objwrite.py, which converges on the same layout
+    and relocation the MIR path uses. A refusal comes back as its own
+    words rather than as a fallback taken quietly -- what refuses and why
+    is the measurement the phase order is judged by.
+    """
+    from qbopt import flow
+    from qbopt import lower
+    from qbopt import parcopy
+    from qbopt import spiller
+    from qbopt import allocate
+    from qbopt import objwrite
+    from qbopt import frame as frames
+
+    done = []
+    for name, body in bodies:
+        try:
+            low = lower.lowered(
+                name,
+                body,
+                found.calls,
+                set(found.absorbed),
+                contracts,
+            )
+            frame = frames.of(low)
+            for phase in flow.machine(flow._pinned(body), frame, found.calls):
+                low = phase.transform(low)
+        except (lower.Unlowered, mir.Unraisable) as short:
+            # A contract this cannot honour, or an operand no encoding
+            # covers. Named here for the same reason as the four below:
+            # this body falls back to BC's own layout instead of taking
+            # the whole module down.
+            return f"{name}: {type(short).__name__}: {short}"
+        except allocate.Spilled as short:
+            return f"{name}: Spilled: {short}"
+        except allocate.Unplaced as short:
+            return f"{name}: Unplaced: {short}"
+        except spiller.Simultaneous as short:
+            # A phi's copy with both ends in slots: `mov [bp-2],[bp-4]` is
+            # not an instruction, and splitting it puts an ungrouped one
+            # inside a group whose moves happen at once. Named, so this
+            # falls back to BC's own layout rather than escaping as a
+            # crash -- five objects did.
+            return f"{name}: Simultaneous: {short}"
+        except parcopy.Tangled as short:
+            # A phi's copies that all read each other's destinations need a
+            # temporary this does not have yet. Malformed is deliberately
+            # not caught: it says something that is not a move was put in a
+            # copy group, which is a bug here rather than a body this
+            # cannot place.
+            return f"{name}: Tangled: {short}"
+        done.append(low)
+    return objwrite.written(found, done, records, {}, mapped.tables, fields, reached, native_fpu)
 
 
 REBUILT = "rebuilt"

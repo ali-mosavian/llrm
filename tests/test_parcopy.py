@@ -40,7 +40,8 @@ def _body(*insns) -> lir.LirBody:
 
 def _order(body) -> list[str]:
     return [
-        f"{parcopy._into(one)}<-{parcopy._outof(one)}" if one.group is None and one.what.op is ir.Operation.MOVE
+        f"{parcopy._into(one)}<-{parcopy._outof(one)}"
+        if one.group is None and one.what.op is ir.Operation.MOVE
         else one.what.name
         for block in parcopy.scheduled(body).blocks
         for one in block.insns
@@ -114,8 +115,8 @@ def test_the_scheduler_runs_after_the_allocation_and_before_the_prologue() -> No
     """Which moves in a copy conflict is a question about locations, so it
     cannot be asked before the allocator has chosen them -- and it has to
     be answered before anything reads the code as a sequence."""
-    from qbopt import allocate
     from qbopt import flow
+    from qbopt import allocate
     from qbopt import prologue
 
     order = [type(one) for one in flow.machine({}, None, {})]
@@ -126,23 +127,25 @@ def test_the_scheduler_runs_after_the_allocation_and_before_the_prologue() -> No
 def test_nothing_leaves_the_machine_pipeline_still_grouped() -> None:
     from pathlib import Path
 
-    from qbopt import blocks as split
-    from qbopt import flow
-    from qbopt import frame as frames
-    from qbopt import lower
     from qbopt import mir
-    from qbopt import module
     from qbopt import omf
+    from qbopt import flow
+    from qbopt import lower
+    from qbopt import module
+    from qbopt import runtime
     from qbopt import transform
+    from qbopt import blocks as split
+    from qbopt import frame as frames
     from qbopt.blocks import code_map
 
-    found = module.of(omf.parse(Path("fixtures/omf/pressx-v-evt.obj").read_bytes()))
+    # pressx-p-g2 rather than pressx-v-evt: the event build calls a
+    # routine nothing is established about, so the lowering refuses it and
+    # the pipeline this checks is never reached.
+    found = module.of(omf.parse(Path("fixtures/omf/pressx-p-g2.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
     name, body = next(iter(mir.bodies(found, blocks)))
-    body = transform.widened(
-        transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
-    )
-    low = lower.lowered(name, body, found.calls, set(found.absorbed))
+    body = transform.widened(transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found))
+    low = lower.lowered(name, body, found.calls, set(found.absorbed), runtime.for_module(found))
     for phase in flow.machine(flow._pinned(body), frames.of(low), found.calls):
         low = phase.transform(low)
     left = [one.at for block in low.blocks for one in block.insns if one.group is not None]
@@ -165,10 +168,29 @@ def test_a_tangled_copy_falls_back_and_says_so() -> None:
 
     parcopy.ParallelCopy.transform = tangles
     try:
-        got = wholeseg.emitted(Path("fixtures/omf/pressx-v-evt.obj").read_bytes())
+        got = wholeseg.emitted(Path("fixtures/omf/pressx-p-g2.obj").read_bytes())
     finally:
         parcopy.ParallelCopy.transform = was
     assert got.outcome is wholeseg.Emission.MIR
     assert got.reason == wholeseg.REBUILT
     assert got.fallback_reason and "Tangled" in got.fallback_reason
     assert omf.finalised_at(omf.parse(got.data)) is None
+
+
+def test_an_unestablished_interface_is_refused_rather_than_invented() -> None:
+    """The event builds call a routine nothing is established about.
+
+    pressx-p-evt and pressx-v-evt both refuse at `0x0043` rather than
+    guessing an ABI for it -- which is why neither can be the fixture for
+    a test about a later phase.
+    """
+    from pathlib import Path
+
+    from qbopt import wholeseg
+
+    for name in ("pressx-p-evt.obj", "pressx-v-evt.obj"):
+        got = wholeseg.emitted((Path("fixtures/omf") / name).read_bytes())
+        assert got.outcome is wholeseg.Emission.MIR, f"{name} emitted through {got.outcome}"
+        assert got.fallback_reason and "interface is not established" in got.fallback_reason, (
+            f"{name}: {got.fallback_reason}"
+        )

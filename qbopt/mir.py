@@ -59,10 +59,10 @@ bytes -- the same discipline that makes ir.emit() verbatim, and the same
 reason it can be trusted before anything is built on top of it.
 """
 
+import itertools
 from enum import StrEnum
 from dataclasses import field
 from dataclasses import replace
-import itertools
 from dataclasses import dataclass
 
 from iced_x86 import Register
@@ -130,15 +130,21 @@ RESTORE_PAIR = {
     1: (Register.ECX, Register.EBX),
 }
 
-FROM_CONTRACT = {
-    runtime.Reg.AX: Register.EAX,
-    runtime.Reg.BX: Register.EBX,
-    runtime.Reg.CX: Register.ECX,
-    runtime.Reg.DX: Register.EDX,
-    runtime.Reg.SI: Register.ESI,
-    runtime.Reg.DI: Register.EDI,
+# Each contract register at its own name, which is also what says how wide
+# it is: a routine that reads ax reads two bytes of it. One table, because
+# two would be two places to add a register to. The root -- which variable
+# it is, which is the other question -- comes from `ir.ROOT`.
+AS_NAMED = {
+    runtime.Reg.AX: Register.AX,
+    runtime.Reg.BX: Register.BX,
+    runtime.Reg.CX: Register.CX,
+    runtime.Reg.DX: Register.DX,
+    runtime.Reg.SI: Register.SI,
+    runtime.Reg.DI: Register.DI,
     runtime.Reg.FLAGS: FLAGS,
 }
+
+FROM_CONTRACT = {one: ir.ROOT.get(where, where) for one, where in AS_NAMED.items()}
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,6 +320,23 @@ class Kind(StrEnum):
     # c := a op b
     ADD = "add"
     SUB = "sub"
+    # c := a op b, plus the carry the operation before it left. The carry
+    # is a value here, not an adjacency: the operation reads the flags the
+    # one before it defined, so nothing can be scheduled between them
+    # without the dataflow saying so. Folded into ADD and SUB, nothing
+    # below could tell a carrying add from a plain one -- and a lowering
+    # that re-encodes from MIR wrote `add` for `adc`, dropping the borrow
+    # `neg ax` had left: negnot printed D=-33752584 for -33818120.
+    ADD_CARRY = "addcarry"
+    SUB_BORROW = "subborrow"
+    # c := a + 1 and c := a - 1, which the machine spells with the operand
+    # in the opcode. Their own kinds rather than an addition of a written
+    # 1: the two differ in what they leave in the carry, so folding them
+    # into ADD/SUB made a lowering that re-encodes from MIR choose between
+    # a shape with one operand and operands numbering two -- and select
+    # had no form for the result.
+    INCREMENT = "increment"
+    DECREMENT = "decrement"
     MUL = "mul"
     DIV = "div"
     REM = "rem"
@@ -374,24 +397,44 @@ class Kind(StrEnum):
 # here: BINARY and UNARY do not say which operation they are, so the raise
 # is where that is decided and after it nothing needs to ask.
 _BY_NAME: dict[str, Kind] = {
-    "add": Kind.ADD, "adc": Kind.ADD, "inc": Kind.ADD,
-    "sub": Kind.SUB, "sbb": Kind.SUB, "dec": Kind.SUB, "cmp": Kind.SUB,
-    "and": Kind.AND, "test": Kind.AND,
+    "add": Kind.ADD,
+    "adc": Kind.ADD_CARRY,
+    "inc": Kind.INCREMENT,
+    "sub": Kind.SUB,
+    "sbb": Kind.SUB_BORROW,
+    "dec": Kind.DECREMENT,
+    "cmp": Kind.SUB,
+    "and": Kind.AND,
+    "test": Kind.AND,
     "or": Kind.OR,
     "xor": Kind.XOR,
     "not": Kind.NOT,
     "neg": Kind.NEG,
-    "shl": Kind.SHL, "sal": Kind.SHL,
+    "shl": Kind.SHL,
+    "sal": Kind.SHL,
     "shr": Kind.SHR,
     "sar": Kind.SAR,
-    "imul": Kind.MUL, "mul": Kind.MUL,
-    "idiv": Kind.DIV, "div": Kind.DIV,
-    "fadd": Kind.FADD, "faddp": Kind.FADD,
-    "fsub": Kind.FSUB, "fsubp": Kind.FSUB, "fsubr": Kind.FSUB, "fsubrp": Kind.FSUB,
-    "fmul": Kind.FMUL, "fmulp": Kind.FMUL,
-    "fdiv": Kind.FDIV, "fdivp": Kind.FDIV, "fdivr": Kind.FDIV, "fdivrp": Kind.FDIV,
-    "fchs": Kind.FNEG, "fabs": Kind.FNEG,
-    "fcom": Kind.FCOMPARE, "fcomp": Kind.FCOMPARE, "fcompp": Kind.FCOMPARE,
+    "imul": Kind.MUL,
+    "mul": Kind.MUL,
+    "idiv": Kind.DIV,
+    "div": Kind.DIV,
+    "fadd": Kind.FADD,
+    "faddp": Kind.FADD,
+    "fsub": Kind.FSUB,
+    "fsubp": Kind.FSUB,
+    "fsubr": Kind.FSUB,
+    "fsubrp": Kind.FSUB,
+    "fmul": Kind.FMUL,
+    "fmulp": Kind.FMUL,
+    "fdiv": Kind.FDIV,
+    "fdivp": Kind.FDIV,
+    "fdivr": Kind.FDIV,
+    "fdivrp": Kind.FDIV,
+    "fchs": Kind.FNEG,
+    "fabs": Kind.FNEG,
+    "fcom": Kind.FCOMPARE,
+    "fcomp": Kind.FCOMPARE,
+    "fcompp": Kind.FCOMPARE,
     "ftst": Kind.FCOMPARE,
 }
 
@@ -399,16 +442,28 @@ _BY_NAME: dict[str, Kind] = {
 # between are the machine's way of getting one to the other and are not a
 # value: step 2 folds the comparison into the branch and they disappear.
 _BY_BRANCH: dict[str, Kind] = {
-    "jl": Kind.LT, "jnge": Kind.LT,
-    "jle": Kind.LE, "jng": Kind.LE,
-    "jg": Kind.GT, "jnle": Kind.GT,
-    "jge": Kind.GE, "jnl": Kind.GE,
-    "je": Kind.EQ, "jz": Kind.EQ,
-    "jne": Kind.NE, "jnz": Kind.NE,
-    "jb": Kind.BELOW, "jc": Kind.BELOW, "jnae": Kind.BELOW,
-    "jbe": Kind.BELOW_EQ, "jna": Kind.BELOW_EQ,
-    "ja": Kind.ABOVE, "jnbe": Kind.ABOVE,
-    "jae": Kind.ABOVE_EQ, "jnb": Kind.ABOVE_EQ, "jnc": Kind.ABOVE_EQ,
+    "jl": Kind.LT,
+    "jnge": Kind.LT,
+    "jle": Kind.LE,
+    "jng": Kind.LE,
+    "jg": Kind.GT,
+    "jnle": Kind.GT,
+    "jge": Kind.GE,
+    "jnl": Kind.GE,
+    "je": Kind.EQ,
+    "jz": Kind.EQ,
+    "jne": Kind.NE,
+    "jnz": Kind.NE,
+    "jb": Kind.BELOW,
+    "jc": Kind.BELOW,
+    "jnae": Kind.BELOW,
+    "jbe": Kind.BELOW_EQ,
+    "jna": Kind.BELOW_EQ,
+    "ja": Kind.ABOVE,
+    "jnbe": Kind.ABOVE,
+    "jae": Kind.ABOVE_EQ,
+    "jnb": Kind.ABOVE_EQ,
+    "jnc": Kind.ABOVE_EQ,
 }
 
 
@@ -428,7 +483,6 @@ def _stack_effect(what: "ir.Semantics") -> int | None:
     return _FLOAT_DEPTH.get(what.op)
 
 
-
 def rewritten(op: "Op") -> bool:
     """Whether a pass has changed what this operation computes.
 
@@ -439,7 +493,6 @@ def rewritten(op: "Op") -> bool:
     if op.made is not None:
         return True
     return op.raised is not None and (op.args, op.results) != op.raised
-
 
 
 def _merged(what: "ir.Semantics", holds: dict, written: dict, args: tuple) -> dict:
@@ -468,7 +521,6 @@ def _merged(what: "ir.Semantics", holds: dict, written: dict, args: tuple) -> di
     return out
 
 
-
 # What each absorbable routine computes, in MIR's own vocabulary.
 _ABSORBS = {
     "B$MUI4": Kind.MUL,
@@ -480,9 +532,7 @@ _ABSORBS = {
 
 def _within(sites: dict) -> frozenset[int]:
     """Every byte a site's pushes occupy, so the raise can pass over them."""
-    return frozenset(
-        at for site in sites.values() for at in range(site.start, site.at)
-    )
+    return frozenset(at for site in sites.values() for at in range(site.start, site.at))
 
 
 def _absorbing(site, written: dict) -> "tuple[Kind, tuple, tuple] | None":
@@ -510,6 +560,31 @@ def _absorbing(site, written: dict) -> "tuple[Kind, tuple, tuple] | None":
     return kind, tuple(args), tuple(made[:2])
 
 
+def stepping(op: "Op") -> "tuple[Arg, Arg] | None":
+    """(what it steps, by how much), or None where it steps nothing.
+
+    An increment steps by one and says so here rather than by carrying a
+    written 1 in its operands: `inc` and `dec` differ from `add`/`sub` in
+    what they leave in the carry, so they are their own operations -- and
+    every pass that only wants "an affine step" asks this instead of
+    listing kinds.
+    """
+    if op.loads or op.stores:
+        return None
+    if op.kind is Kind.INCREMENT and len(op.args) == 1:
+        return op.args[0], Const(1, getattr(op.args[0], "width", 2))
+    if op.kind is Kind.DECREMENT and len(op.args) == 1:
+        return op.args[0], Const(-1, getattr(op.args[0], "width", 2))
+    if op.kind in (Kind.ADD, Kind.SUB) and len(op.args) == 2:
+        one, other = op.args
+        if op.kind is Kind.SUB:
+            # Only a constant can be negated into a step. `x - y` for an
+            # invariant y is not `x + y`, and reporting it as a step would
+            # give a counter the wrong direction.
+            return (one, Const(-other.n, other.width)) if isinstance(other, Const) else None
+        return one, other
+    return None
+
 
 def _normalised(kind: Kind, name: str, args: tuple, results: tuple) -> tuple:
     """The operands the operation really has, once the machine's are gone.
@@ -523,7 +598,6 @@ def _normalised(kind: Kind, name: str, args: tuple, results: tuple) -> tuple:
         width = getattr(args[0], "width", 2)
         return (*args, Const(1, width))
     return args
-
 
 
 def _kind_of(what: "ir.Semantics", args, results) -> Kind:
@@ -649,6 +723,13 @@ class Op:
     # not. None means an operation a pass invented, which has no past and
     # must say what it computes in MIR's own terms.
     id: int | None = None
+    # Whether `args` is the operation's real argument list. Only a CALL can
+    # say no: a runtime routine whose code is not in the tree declares no
+    # inputs, and `()` would then mean "reads nothing" -- the one thing
+    # known to be false about it. `uses` stays the conservative read set
+    # either way, so no live value is discarded. At the end of the field
+    # list because every construction here is positional.
+    args_known: bool = True
 
     @property
     def barrier(self) -> bool:
@@ -694,6 +775,44 @@ class MirBody:
             for block in self.blocks
             for value in ([phi.result for phi in block.phis] + [v for op in block.ops for v in op.defines])
         )
+
+
+class Unraisable(Exception):
+    """A contract this cannot honour: a declared input with no value."""
+
+
+def _call_args(routine: "runtime.Contract | None", holds: dict, at: int = 0) -> "tuple[tuple, bool]":
+    """A call's declared arguments, as operands, in contract slot order.
+
+    Only what the routine's own contract establishes. The read set a call
+    carries is every tracked register wherever nothing is established --
+    "every register is an input until it is" -- and that is a liveness
+    dependency rather than an argument list. An operand here says which
+    value and how wide; which register belongs to which slot is
+    `runtime.slots`, and both sides ask it.
+    """
+    from qbopt import target  # target reads mir; only needed when a call is raised
+
+    if routine is None:
+        # No runtime contract for this site, which is what a call to
+        # another of the program's own procedures looks like: `found.calls`
+        # names runtime routines and nothing else. Its interface is
+        # unestablished for the same reason an unknown routine's is.
+        return (), False
+    if not runtime.established_inputs(routine):
+        return (), False
+    made = []
+    for one in runtime.slots(routine):
+        value = holds.get(FROM_CONTRACT.get(one))
+        width = target.width_of(AS_NAMED[one]) if one in AS_NAMED else None
+        if value is None or width is None:
+            # A declared slot with no value reaching it is a contract this
+            # cannot honour, and returning nothing would say the routine
+            # declares nothing -- which is a different fact and the one
+            # that leaves the argument unconstrained.
+            raise Unraisable(f"{routine.name} reads {one} and nothing reaches it")
+        made.append(Held(value, width))
+    return tuple(made), True
 
 
 def _call_touches(name: str | None) -> tuple[frozenset[Register_], frozenset[Register_]] | None:
@@ -995,9 +1114,7 @@ for _one, _root in ir.ROOT.items():
 # so a pass that has to reason about one -- segments.py about `es`,
 # fpstack.py about the x87 stack -- says the name and imports no register.
 _RESOURCE: dict[Register_, str] = {
-    getattr(Register, _one): _one.lower()
-    for _one in ("ES", "DS", "SS", "CS", "FS", "GS")
-    if hasattr(Register, _one)
+    getattr(Register, _one): _one.lower() for _one in ("ES", "DS", "SS", "CS", "FS", "GS") if hasattr(Register, _one)
 }
 
 
@@ -1040,7 +1157,6 @@ def _operands(
     )
 
 
-
 # Operation identity. Opaque and per-process: what it keys is a table
 # built in the same call that hands the bodies out.
 _IDS = itertools.count(1)
@@ -1053,6 +1169,7 @@ def raise_body(
     calls: dict[int, str] | None = None,
     sites: dict | None = None,
     unreached: "tuple[int, frozenset] | None" = None,
+    contracts: "dict[int, runtime.Contract] | None" = None,
 ) -> MirBody | str:
     """One body's blocks, in SSA, or why they could not be.
 
@@ -1069,6 +1186,9 @@ def raise_body(
     stack per variable. The only thing here that is not textbook is what
     counts as a variable, and that is this module's own docstring.
     """
+    # One contract per call site, and the same one the lowering reads.
+    # Built here only for a caller with none to give -- a tool, a test.
+    chosen = contracts if contracts is not None else runtime.per_call(calls or {})
     if not blocks:
         return "no blocks to raise"
     start = entry if entry is not None else blocks[0].at
@@ -1180,6 +1300,7 @@ def raise_body(
                     # push has to find something there, and lngmix's does.
                     covers = (site.start, site.end)
                     where_at = site.start
+            _called = _call_args(chosen.get(insn.at), holds, insn.at) if kind is Kind.CALL else ((), True)
             ops[at].append(
                 Op(
                     where_at,
@@ -1195,11 +1316,12 @@ def raise_body(
                     covers=covers,
                     stack=_stack_effect(node.semantics),
                     test=_BY_BRANCH.get(node.semantics.name or "") if kind is Kind.BRANCH else None,
-                    args=operands,
+                    args=_called[0] if kind is Kind.CALL else operands,
                     results=where[1],
                     raised=(operands, where[1]),
                     target=node.semantics.target,
                     id=next(_IDS),
+                    args_known=_called[1],
                 )
             )
 
@@ -1334,7 +1456,6 @@ def _rehomed(ref: "MemRef", namer: "_Renamer", at: int) -> "MemRef":
     if base is ref.base and segment is ref.segment:
         return ref
     return replace(ref, base=base, segment=segment)
-
 
 
 def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | str:
@@ -1682,7 +1803,9 @@ def _unreached(found: Module) -> "tuple[int, frozenset] | None":
     return (found.program_data, module.escaped(found))
 
 
-def bodies(found: Module, blocks: list[Block]) -> list[tuple[str, MirBody]]:
+def bodies(
+    found: Module, blocks: list[Block], contracts: "dict[int, runtime.Contract] | None" = None
+) -> list[tuple[str, MirBody]]:
     """Every body in the module, raised, labelled, and skipping what will not.
 
     One place rather than three: dump.py, the measurement scripts and now
@@ -1696,13 +1819,23 @@ def bodies(found: Module, blocks: list[Block]) -> list[tuple[str, MirBody]]:
     if isinstance(result, str):
         return []
     nodes = {ir.span(node)[0]: node for body in result for node in body.nodes}
+    if contracts is None:
+        # The module's own toolchain, which is where a per-family contract
+        # is chosen and the only place a family is read at all.
+        contracts = runtime.for_module(found)
     out: list[tuple[str, MirBody]] = []
     for body in result:
         mine = [one for one in blocks if any(lo <= one.at < hi for lo, hi in body.body.ranges)]
         if not mine:
             continue
         built = raise_body(
-            mine, nodes, body.body.seed, found.calls, _sites(found, blocks), unreached
+            mine,
+            nodes,
+            body.body.seed,
+            found.calls,
+            _sites(found, blocks),
+            unreached,
+            contracts,
         )
         if not isinstance(built, str):
             found.refs.update(_referenced(built, found))
@@ -1758,16 +1891,8 @@ def _returned(body: MirBody) -> dict:
     # it destroys, and holding a marker nothing reads to its old register
     # is a constraint with no fact behind it -- four of the flow's programs
     # stopped allocating for want of a register held by one.
-    read = {
-        one
-        for block in body.blocks
-        for op in block.ops
-        for one in op.uses
-    } | {
-        one
-        for block in body.blocks
-        for phi in block.phis
-        for one in phi.incoming.values()
+    read = {one for block in body.blocks for op in block.ops for one in op.uses} | {
+        one for block in body.blocks for phi in block.phis for one in phi.incoming.values()
     }
     return {
         one: body.origin[one]
@@ -1812,9 +1937,7 @@ def _folded(body: MirBody, found: Module, blocks: list[Block]) -> dict:
             # answer the raise filtered on, or the two disagree on length.
             read = _flags_after(blocks, live, site.start, site.end)
             found.absorbed[op.id] = (site, read)
-            held.update(
-                {one: body.origin[one] for one in op.defines if not one.flags and one in body.origin}
-            )
+            held.update({one: body.origin[one] for one in op.defines if not one.flags and one in body.origin})
             made = machine.absorb(site, read)
             if not isinstance(made, str) and made.relocations:
                 found.refs[op.id] = tuple(field for _where, field in made.relocations)
@@ -1899,8 +2022,5 @@ def _referenced(body: MirBody, found: Module) -> dict[int, int]:
         return inside[0] if len(inside) == 1 else None
 
     return {
-        op.id: (at,)
-        for block in body.blocks
-        for op in block.ops
-        if op.id is not None and (at := owned(op)) is not None
+        op.id: (at,) for block in body.blocks for op in block.ops if op.id is not None and (at := owned(op)) is not None
     }

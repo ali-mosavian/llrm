@@ -93,9 +93,7 @@ def eliminated(body: lir.LirBody) -> lir.LirBody:
                         )
                 continue
             for where, value in edges:
-                copies.setdefault(where, []).append(
-                    _copy(at_of[where], phi.result, value, edge_group(where, block.at))
-                )
+                copies.setdefault(where, []).append(_copy(at_of[where], phi.result, value, edge_group(where, block.at)))
         kept[block.at] = tuple(stays)
 
     if not copies and not rename and not split:
@@ -107,10 +105,7 @@ def eliminated(body: lir.LirBody) -> lir.LirBody:
         blocks=tuple(
             replace(
                 block,
-                insns=tuple(
-                    _renamed(one, rename)
-                    for one in _before_the_terminator(block, copies.get(block.at, []))
-                ),
+                insns=tuple(_renamed(one, rename) for one in _before_the_terminator(block, copies.get(block.at, []))),
                 phis=kept[block.at],
             )
             for block in body.blocks
@@ -160,11 +155,14 @@ def _renamed(one: lir.Insn, rename: dict[int, int]) -> lir.Insn:
 
 
 def _settled(where, rename: dict[int, int]):
-    if isinstance(where, ir.Held) and where.value in rename:
-        return ir.Held(rename[where.value], where.width)
-    if isinstance(where, ir.Mem) and isinstance(where.through, ir.Held) and where.through.value in rename:
-        return replace(where, through=ir.Held(rename[where.through.value], where.through.width))
-    return where
+    """One operand with every value it names put through the rename.
+
+    Through `ir.mapped` rather than a case per operand shape: a cell names
+    the value that computed its address, and a second branch here is a
+    second place to forget it. This one looked in `Mem.through`, which has
+    been a register since lowering stopped putting values there.
+    """
+    return ir.mapped(where, lambda one: ir.Held(rename.get(one.value, one.value), one.width))
 
 
 def _copy(where: lir.LirBlock, into: int, out_of: int, group: int | None = None) -> lir.Insn:
@@ -235,9 +233,7 @@ def _split_edges(body, split: dict, copies: dict, rename: dict, kept: dict) -> l
     the successor. The predecessor's branch is retargeted to it.
     """
     at_of = {block.at: block for block in body.blocks}
-    highest = max(
-        (one.covers[1] if one.covers else one.at) for block in body.blocks for one in block.insns
-    )
+    highest = max((one.covers[1] if one.covers else one.at) for block in body.blocks for one in block.insns)
     made: dict[tuple[int, int], lir.LirBlock] = {}
     landing: dict[tuple[int, int], int] = {}
     for number, ((where, into), pairs) in enumerate(sorted(split.items()), 1):
@@ -246,23 +242,20 @@ def _split_edges(body, split: dict, copies: dict, rename: dict, kept: dict) -> l
         beside = at_of[where].insns[-1]
         insns = [
             replace(
-                _made(beside, at, ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(a, 2),), (ir.Held(b, 2),)), (a,), (b,)),
+                _made(
+                    beside, at, ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(a, 2),), (ir.Held(b, 2),)), (a,), (b,)
+                ),
                 group=number,
             )
             for a, b in pairs
         ]
-        insns.append(
-            _made(beside, at, ir.Semantics(ir.Operation.JUMP, "jmp", (), (), into), (), ())
-        )
+        insns.append(_made(beside, at, ir.Semantics(ir.Operation.JUMP, "jmp", (), (), into), (), ()))
         made[(where, into)] = lir.LirBlock(at=at, insns=tuple(insns), succ=(into,), phis=())
 
     blocks = []
     for block in body.blocks:
         succ = tuple(landing.get((block.at, one), one) for one in block.succ)
-        insns = [
-            _retargeted(one, landing, block.at)
-            for one in _before_the_terminator(block, copies.get(block.at, []))
-        ]
+        insns = [_retargeted(one, landing, block.at) for one in _before_the_terminator(block, copies.get(block.at, []))]
         blocks.append(
             replace(block, insns=tuple(_renamed(one, rename) for one in insns), succ=succ, phis=kept[block.at])
         )

@@ -145,10 +145,12 @@ def _values(body: lir.LirBody, in_ssa: bool) -> list[str]:
             if one.what is None:
                 continue
             for where in (*one.what.dests, *one.what.sources):
-                if isinstance(where, ir.Held):
-                    named.add(where.value)
-                elif isinstance(where, ir.Mem) and isinstance(where.through, ir.Held):
-                    named.add(where.through.value)
+                # Through `ir.values`, which is the one answer to "which
+                # values does this operand name": a cell names the value
+                # that computed its address, and asking here separately is
+                # how three renames left a cell on a value they had ended
+                # without this saying so.
+                named.update(one.value for one in ir.values(where))
     for value in sorted(named - read - set(written)):
         out.append(f"value#{value} is named by an operand and neither defined nor used anywhere")
     return out

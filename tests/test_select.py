@@ -539,11 +539,10 @@ def test_a_relocated_field_never_changes_width(obj: Path) -> None:
     program to 31 lines and diffing the two linked images, where one said
     `add ax,0DCh` and the other `add ax,0FFDCh`.
     """
-    from qbopt import declen
     from qbopt import asm
-    from qbopt import layout
     from qbopt import mir
     from qbopt import omf
+    from qbopt import declen
     from qbopt import blocks as split
     from qbopt.blocks import code_map
 
@@ -690,7 +689,7 @@ def test_a_remap_reaches_inside_a_memory_operand() -> None:
     from qbopt.module import Space
 
     where = {Register.SI: Register.DI, Register.ESI: Register.EDI}
-    cell = ir.Mem(Addr(Space.LITERAL, 0x0a, base=Register.SI), 2, through=Register.SI, offset=0x0a, disp_width=1)
+    cell = ir.Mem(Addr(Space.LITERAL, 0x0A, base=Register.SI), 2, through=Register.SI, offset=0x0A, disp_width=1)
     what = ir.Semantics(
         ir.Operation.BINARY,
         "add",
@@ -757,12 +756,12 @@ def test_an_absorbed_site_comes_back_with_a_field_for_every_fixup() -> None:
     """
     from pathlib import Path
 
-    from qbopt import blocks as split
+    from qbopt import omf
     from qbopt import calls
     from qbopt import flags
     from qbopt import module
-    from qbopt import omf
     from qbopt import select
+    from qbopt import blocks as split
     from qbopt.blocks import code_map
 
     seen = both = 0
@@ -783,9 +782,7 @@ def test_an_absorbed_site_comes_back_with_a_field_for_every_fixup() -> None:
             assert not isinstance(ours, str), ours
             assert ours.code == theirs.code, f"{site.at:#x} {site.name}: different bytes"
             wanted = select.absorbed_fixups(site, flags.Flag(0))
-            assert len(ours.places) == len(wanted), (
-                f"{site.at:#x}: {len(ours.places)} fields for {len(wanted)} fixups"
-            )
+            assert len(ours.places) == len(wanted), f"{site.at:#x}: {len(ours.places)} fields for {len(wanted)} fixups"
             both += len(ours.places) == 2
     assert seen, "no site absorbed, so this proves nothing"
     assert both, "none of them carried two, which is the case this exists for"
@@ -860,3 +857,89 @@ def test_a_restore_encodes_the_registers_the_allocation_chose(wide, low, high, w
     two are what the pair table already held, so the old encoding stands."""
     made = select.emit(_restoring(wide, low, high))
     assert made is not None and made.code.hex() == want
+
+
+def test_a_relocated_cell_is_reached_through_the_register_it_was_placed_in() -> None:
+    """The base BC wrote is not the base the allocation chose.
+
+    `mov ax,[si+arr]` is how BC writes an array element, and the raise keeps
+    si in `addr.base`. Once a pass recomputes that offset into a value of
+    its own, the allocation answers with whatever register it placed it in
+    and `through` says so -- but this branch went on encoding `addr.base`,
+    which names element zero through whatever si happens to hold.
+    """
+    from qbopt import ir
+    from qbopt.module import Addr
+    from qbopt.module import Space
+
+    where = Addr(Space.SEGMENT, 0x2, base=Register.SI)
+    placed = ir.Mem(where, 2, Register.BX, 2, 1, base=ir.Held(17, 2))
+    # Against the encoded bytes: iced's MemoryOperand does not read back.
+    made = select.move_from(Register.AX, placed)
+    assert made is not None, "a placed cell is encodable"
+    got = next(iter(Decoder(BITNESS, made.code, ip=0)))
+    assert got.memory_base == Register.BX, f"encoded through {got.memory_base}, not the register it was placed in"
+    assert select.operand_of(placed)[1] is True, "a segment address still needs its fixup moved"
+
+    # A cell nothing based keeps BC's own base: that si is the whole address.
+    plain = select.move_from(Register.AX, ir.Mem(where, 2))
+    assert plain is not None
+    assert next(iter(Decoder(BITNESS, plain.code, ip=0))).memory_base == Register.SI
+    assert select.operand_of(ir.Mem(where, 2))[1] is True
+
+
+def test_a_literal_cell_is_reached_through_the_register_it_was_placed_in() -> None:
+    """The same defect one space over, and this is the one arrprm hits.
+
+    Its element address is `[abs+si+0x2]` -- a displacement no fixup claims,
+    reached through si. Encoding `addr.base` there read element zero and the
+    program printed ' 0  0' where it wanted ' 7  8'. The displacement size
+    follows the register actually encoded, not the one BC wrote.
+    """
+    from qbopt import ir
+    from qbopt.module import Addr
+    from qbopt.module import Space
+
+    where = Addr(Space.LITERAL, 0x2, base=Register.SI)
+    placed = ir.Mem(where, 2, Register.BX, 2, 1, base=ir.Held(17, 2))
+    made = select.move_from(Register.AX, placed)
+    assert made is not None, "a placed cell is encodable"
+    got = next(iter(Decoder(BITNESS, made.code, ip=0)))
+    assert got.memory_base == Register.BX, f"encoded through {got.memory_base}, not the register it was placed in"
+    assert got.memory_displacement == 2, f"the displacement moved to {got.memory_displacement}"
+
+    # A cell nothing based keeps BC's own base, and both forms still encode.
+    plain = select.move_from(Register.AX, ir.Mem(where, 2))
+    assert plain is not None
+    back = next(iter(Decoder(BITNESS, plain.code, ip=0)))
+    assert back.memory_base == Register.SI
+    assert back.memory_displacement == 2
+
+
+def test_a_far_cell_is_reached_through_the_register_it_was_placed_in() -> None:
+    """The third space with the same defect, and arrprm's own.
+
+    A $DYNAMIC element is `es:[bx]`, where bx held the byte offset BC
+    computed. Once a pass recomputes that offset the allocation places it
+    somewhere of its choosing, and encoding `addr.base` writes through
+    whatever bx still holds -- which is how ' 7  8' reached the wrong
+    four bytes and the program printed ' 0  0'.
+    """
+    from qbopt import ir
+    from qbopt.module import Addr
+    from qbopt.module import Space
+
+    where = Addr(Space.FAR, 0, base=Register.BX, segment=Register.ES)
+    placed = ir.Mem(where, 2, Register.DI, 0, 0, base=ir.Held(21, 2))
+    made = select.move_from(Register.AX, placed)
+    assert made is not None, "a placed cell is encodable"
+    got = next(iter(Decoder(BITNESS, made.code, ip=0)))
+    assert got.memory_base == Register.DI, f"encoded through {got.memory_base}, not the register it was placed in"
+    assert got.memory_segment == Register.ES, "the override is part of the address"
+
+    # A cell nothing based keeps the register BC wrote it through.
+    plain = select.move_from(Register.AX, ir.Mem(where, 2))
+    assert plain is not None
+    back = next(iter(Decoder(BITNESS, plain.code, ip=0)))
+    assert back.memory_base == Register.BX
+    assert back.memory_segment == Register.ES
