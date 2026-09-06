@@ -701,3 +701,63 @@ def test_what_a_chain_steps_over_is_still_there_afterwards() -> None:
                                 assert op.at not in gone, f"{obj.stem}: {op.at:#x} was dropped"
                                 assert op.at in kept, f"{obj.stem}: {op.at:#x} is gone from the body"
     assert seen, "no chain carries anything, so this proves nothing"
+
+
+def _pushed(data: bytes) -> list[tuple[str, ...]]:
+    """Every run of consecutive register pushes, in order.
+
+    A runtime routine reads its arguments off the stack positionally, so
+    which registers a run names is the one thing about it that has to
+    survive a rewrite.
+    """
+    from iced_x86 import Mnemonic
+    from iced_x86 import OpKind
+
+    from qbopt import module
+    from qbopt import omf
+    from qbopt import target
+
+    found = module.of(omf.parse(data))
+    insns = [
+        one
+        for block in split.partition(found, code_map(found))
+        for one in block.insns
+    ]
+    out, run = [], []
+    for one in insns:
+        if one.insn.mnemonic == Mnemonic.PUSH and one.insn.op0_kind == OpKind.REGISTER:
+            name = target.name_of(one.insn.op0_register)
+            # The restore's own `push eax` is not an argument -- it is half
+            # of the idiom that splits the wide register back into BC's two.
+            if not name.startswith("e"):
+                run.append(name)
+                continue
+        if run:
+            out.append(tuple(run))
+        run = []
+    return out + ([tuple(run)] if run else [])
+
+
+def test_a_restore_hands_the_pair_back_into_the_registers_bc_reads() -> None:
+    """negnot printed B= 1545 for 33818121: `push dx` came out `push cx`.
+
+    The restore writes ax and dx, and says so nowhere -- it defines nothing
+    in SSA on purpose, so that avail cannot reason across it. The allocator
+    reads the same field, found the halves BC's deleted `neg ax / neg dx`
+    used to define with no definition left, and was free to put them
+    anywhere. It put one in cx and the next in bx, and PRINT read its
+    argument off the stack from wherever BC had said.
+    """
+    from qbopt import transform
+    from qbopt import wholeseg
+
+    raw = Path("fixtures/omf/negnot-q-O.obj").read_bytes()
+    was = transform.applied
+    transform.applied = lambda body, *a, **k: body  # widening on its own
+    try:
+        out, why = wholeseg.rebuilt(raw)
+    finally:
+        transform.applied = was
+    assert why == wholeseg.REBUILT
+    assert _pushed(out) == _pushed(raw)
+

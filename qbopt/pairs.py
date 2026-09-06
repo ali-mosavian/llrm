@@ -857,6 +857,7 @@ def widened(body: MirBody, dead: frozenset[int] = frozenset()) -> MirBody:
     starts = {one.at: one for one in taken}
     inside = {min(pair.at) for one in taken for pair in one.ops}
     blocks = []
+    pins: dict = {}
     for block in body.blocks:
         ops: list[Op] = []
         drop: set[int] = set()
@@ -914,6 +915,25 @@ def widened(body: MirBody, dead: frozenset[int] = frozenset()) -> MirBody:
                 )
             if chain.restored:
                 ops.append(_restore_op(chain.pair, _restore_at, ops[-1], hi))
+                pins.update(_handed_back(chain, body.origin))
             drop.discard(op.at)
         blocks.append(replace(block, ops=tuple(ops)))
-    return replace(body, blocks=tuple(blocks))
+    return replace(body, blocks=tuple(blocks), pins={**body.pins, **pins})
+
+
+def _handed_back(chain: Chain, origin: dict) -> dict:
+    """The two halves the restore writes, each held to the register BC read.
+
+    `pop ax / pop dx` names its registers in its own encoding, and the
+    restore defines nothing in SSA so that avail cannot reason across it.
+    The allocator reads the same field: it found the values BC's last pair
+    defined with no definition left and moved them, and `push dx` came out
+    `push cx`. negnot printed B= 1545 for 33818121.
+    """
+    last = chain.ops[-1]
+    return {
+        one: origin[one]
+        for half in (last.low, last.high)
+        for one in half.defines
+        if not one.flags and one in origin
+    }
