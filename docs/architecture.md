@@ -764,3 +764,41 @@ pressure. Either the allocator spills instead of refusing -- which the flow
 path's does -- or the fallback keeps the passes and reverts only the
 allocation. Until then a pass that adds a live value is a pass that risks
 discarding every other pass.
+
+## The fallback, and what it is really waiting on
+
+`layout.allocated` hands back the *raised* body for one the allocator
+refuses, discarding every pass's work. Neither reference compiler has such
+a path -- allocation always completes because it spills, and the only way
+out is a hard error: `RegAllocBase.cpp`'s "ran out of registers during
+register allocation", `lra-assigns.cc`'s "unable to find a register to
+spill".
+
+**Keeping the passes without an assignment does not work.** Tried: 478 of
+487 objects rebuild instead of 487, and 643,562 bytes instead of 642,807.
+A value a pass moved has a variable of its own with no origin, so
+`_grounded` cannot place it and select refuses. The fallback is not there
+by accident.
+
+**The right fix is the allocator that spills, which is on the LIR path --
+and that path miscompiles.** Measured through e2e:
+
+    lngmix   want S= 142900, got S= 50
+    nested   want T= 675,    got T= 0     (with the coalescer disabled)
+
+So the shipped path cannot move onto it yet, and the fallback cannot go
+until it does. That is the blocker, and it is new information: the flow
+path emits 486 of 487 objects and 640,286 bytes, and until today nothing
+had run one of them.
+
+Bisecting it needs care. A first attempt stopped after each phase in turn
+and reported "clean through twoaddr" -- but a body that stops before
+`regalloc` has no registers at all, so layout fell back and the run
+measured the fallback rather than the phase.
+
+One real defect found on the way: the coalescer checked each copy against
+the interval its destination started with, so a value that is the
+destination of several copies could be joined twice and end up live across
+everything between. `RegisterCoalescer` joins the intervals as it goes;
+this now does too. It is not the miscompile -- disabling the coalescer
+leaves lngmix wrong and makes nested wrong as well.

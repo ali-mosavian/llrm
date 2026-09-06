@@ -738,3 +738,27 @@ def test_promotion_is_only_sound_because_the_runtime_was_measured() -> None:
     )
     for _who, body in mir.bodies(found, blocks):
         assert promote.promotable(body, found.dgroup, module.landmarks(found))
+
+
+def test_the_coalescer_joins_the_intervals_it_merges() -> None:
+    """A value can be the destination of several copies.
+
+    lngmix joins v3 with v9 and then, through the rename, v9 with v20.
+    Checking each against the interval it started with says both are safe
+    while their union is live across everything in between. LLVM's
+    `RegisterCoalescer` joins the live intervals as it goes so the next
+    join sees what the last one made.
+    """
+    from qbopt import coalesce
+    from qbopt import intervals as ranges
+
+    one = ranges.Interval(1, (ranges.Segment(15, 16), ranges.Segment(59, 60)))
+    other = ranges.Interval(2, (ranges.Segment(0, 15),))
+    assert not one.overlaps(other), "these abut and must not read as overlapping"
+
+    both = coalesce._merged(one, other)
+    assert both.segments == (ranges.Segment(0, 16), ranges.Segment(59, 60))
+    # And a third value inside the union is now correctly refused.
+    third = ranges.Interval(3, (ranges.Segment(4, 9),))
+    assert not one.overlaps(third), "the original said nothing about this range"
+    assert both.overlaps(third), "the merged interval must cover what it swallowed"

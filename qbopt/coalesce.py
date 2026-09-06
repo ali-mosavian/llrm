@@ -55,6 +55,15 @@ def joined(body: lir.LirBody, pinned: dict | None = None) -> lir.LirBody:
             mine, theirs = live.get(into), live.get(out_of)
             if mine is None or theirs is None or mine.overlaps(theirs):
                 continue
+            # The merged range, not the two that went into it. A value can
+            # be the destination of several copies -- lngmix joins v3 with
+            # v9 and then, through the rename, v9 with v20 -- and checking
+            # each against the interval it started with says both are safe
+            # while their union is live across everything between. LLVM's
+            # RegisterCoalescer joins the live intervals as it goes so the
+            # next join sees what the last one made.
+            live[out_of] = _merged(mine, theirs)
+            live[into] = live[out_of]
             swap[into] = out_of
             gone.add(id(one))
 
@@ -74,6 +83,18 @@ def joined(body: lir.LirBody, pinned: dict | None = None) -> lir.LirBody:
             for block in body.blocks
         ),
     )
+
+
+def _merged(one: "ranges.Interval", other: "ranges.Interval") -> "ranges.Interval":
+    """One interval covering both, which is what the joined value occupies."""
+    runs = sorted((*one.segments, *other.segments), key=lambda x: (x.start, x.end))
+    out = [runs[0]]
+    for seg in runs[1:]:
+        if seg.start <= out[-1].end:
+            out[-1] = ranges.Segment(out[-1].start, max(out[-1].end, seg.end))
+            continue
+        out.append(seg)
+    return replace(one, segments=tuple(out), weight=max(one.weight, other.weight))
 
 
 def _copy(one: lir.Insn) -> "tuple[int, int] | None":
