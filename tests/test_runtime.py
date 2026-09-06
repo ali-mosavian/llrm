@@ -317,3 +317,28 @@ def test_the_measured_routines_are_narrowed() -> None:
     assert len(narrowed) >= 15, f"only {len(narrowed)} routines carry the measurement"
     for name in narrowed:
         assert not runtime.CONTRACTS[name].enters_user_code, f"{name} enters user code and is narrowed"
+
+
+def test_every_row_in_the_table_is_loaded() -> None:
+    """The contracts are data now. Nothing is transcribed on the way in."""
+    import tomllib
+
+    rows = tomllib.loads(runtime.TABLE.read_text())
+    assert set(rows) == set(runtime.CONTRACTS), "the table and what loaded disagree"
+    for name, row in rows.items():
+        one = runtime.CONTRACTS[name]
+        assert one.writes.name == row["writes"]
+        assert one.reads.name == row["reads"]
+        assert {r.value for r in one.clobbers} == set(row["clobbers"])
+        assert one.established == row["established"]
+        assert one.evidence.strip() == row["evidence"].strip()
+
+
+def test_an_unestablished_row_concedes_everything() -> None:
+    """`established = false` is the only safe answer to a routine nobody
+    has read, and it has to concede every register and every byte."""
+    for name, one in runtime.CONTRACTS.items():
+        if one.established:
+            continue
+        assert one.writes is runtime.Memory.ANY, f"{name} is not established and narrows its writes"
+        assert one.reads is runtime.Memory.ANY, f"{name} is not established and narrows its reads"

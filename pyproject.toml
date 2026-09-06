@@ -55,7 +55,7 @@ known_first_party = ["qbopt", "helpers", "corpus"]
 extra-paths = ["tools", "tests"]
 
 [[tool.ty.overrides]]
-include = ["qbopt/cycles/*"]
+include = ["qbopt/cycles/*", "qbopt/runtime.toml"]
 
 [tool.ty.overrides.rules]
 unresolved-attribute = "ignore"

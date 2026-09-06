@@ -67,6 +67,8 @@ body has, in both directions, and both are recorded in `documented`:
 from enum import IntEnum
 from enum import StrEnum
 from dataclasses import field
+import tomllib
+from pathlib import Path
 from dataclasses import replace
 from dataclasses import dataclass
 
@@ -184,87 +186,6 @@ def barrier(routine: Contract) -> bool:
 # give the cleanup directly: cEnd emits `ret <parameter bytes>` under the PL/M
 # convention (inc/cmacros.inc), and parmD is 4 bytes, parmW and parmSD 2
 # (inc/string.inc makes parmSD an alias for parmW).
-_HELPERS = (
-    Contract(
-        name="B$CPI4",
-        inputs=frozenset(),
-        cleanup=8,
-        control=Control.RETURNS,
-        enters_user_code=False,
-        raises_error=False,
-        error_handling=False,
-        writes=Memory.NONE,
-        reads=Memory.ARGUMENTS,
-        clobbers=frozenset({Reg.FLAGS}),
-        documented=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX}),
-        established=True,
-        evidence=(
-            "rt/helpi4.asm: `cProc B$CPI4,<FAR,PUBLIC>,<AX>` with parmD op1, parmD op2. The body reads both "
-            "arguments off the frame and ends with lahf/and/shr/shl/or/sahf -- it names cx, dx and bx nowhere, "
-            "and the <AX> save list restores ax, where B$MUI4/B$DVI4/B$RMI4 declare an empty one. Its own "
-            '"Uses: ax,cx,dx,bx" overstates that, and its "Exceptions: hardware divide overflow" is copied from '
-            "the divide above it: there is no division in the routine. Flags are the return value."
-        ),
-    ),
-    Contract(
-        name="B$MUI4",
-        inputs=frozenset(),
-        cleanup=8,
-        control=Control.RETURNS,
-        enters_user_code=False,
-        raises_error=False,
-        error_handling=False,
-        writes=Memory.NONE,
-        reads=Memory.ARGUMENTS,
-        clobbers=PER_CONVENTION,
-        established=True,
-        evidence=(
-            "rt/helpi4.asm: `B$MUI4(I4 op1,I4 op2)`, `Uses: ax,cx,dx,bx`, `Exceptions: none`, and a body that is "
-            "`jmp __aFlmul` with no frame. __aFlmul is the C library's own long multiply and is NOT in the local "
-            "tree, so the register set is the header's word rather than read code; the cleanup is the C helper's, "
-            "and BC's measured call sites (calls.py, stack.py) say it happens. AGENTS.md measured the overflow: "
-            "305419896 * 252645135 wraps and raises nothing."
-        ),
-    ),
-    Contract(
-        name="B$DVI4",
-        inputs=frozenset(),
-        cleanup=8,
-        control=Control.RETURNS,
-        enters_user_code=False,
-        raises_error=True,
-        error_handling=False,
-        writes=Memory.NONE,
-        reads=Memory.ARGUMENTS,
-        clobbers=PER_CONVENTION,
-        established=True,
-        evidence=(
-            "rt/helpi4.asm: `jmp __aFldiv`, `Uses: ax,cx,dx,bx`, `Exceptions: hardware divide overflow`. __aFldiv "
-            "is not in the local tree. AGENTS.md measured what the header calls a hardware trap: `x \\ 0` raises "
-            "BASIC error 11, and -2147483648 \\ -1 raises nothing at all and returns. calls.py absorbs this call "
-            "as a bare idiv and drops error 11 deliberately, which is the one place a rewritten program behaves "
-            "worse than BC's."
-        ),
-    ),
-    Contract(
-        name="B$RMI4",
-        inputs=frozenset(),
-        cleanup=8,
-        control=Control.RETURNS,
-        enters_user_code=False,
-        raises_error=True,
-        error_handling=False,
-        writes=Memory.NONE,
-        reads=Memory.ARGUMENTS,
-        clobbers=PER_CONVENTION,
-        established=True,
-        evidence=(
-            "rt/helpi4.asm: `jmp __aFlrem`, otherwise identical to B$DVI4, and __aFlrem is not in the tree either."
-        ),
-    ),
-)
-
-
 # All five print entry points in the corpus set ax to a [terminator|value type]
 # pair and fall into B$PRINT, which pops its own arguments in a hand-written
 # epilogue keyed on that type byte (rt/prnval.asm PRINTX): one word for I2 and
@@ -308,402 +229,15 @@ def _print(name: str, cleanup: int) -> Contract:
     )
 
 
-_PRINTING = (
-    _print("B$PSI2", 2),
-    _print("B$PEI2", 2),
-    _print("B$PEI4", 4),
-    # rt/prnvalfp.asm: `cProc B$PER4` sets AX to EOL<<8|VT_R4 and jumps to
-    # B$PRINT, the same shape as B$PEI4. VT_R4 is 04h (inc/rtps.inc), so
-    # PRINTX's `TEST AL,VT_SD` against 03h is zero and both parameter words
-    # come off -- four, as for VT_I4.
-    _print("B$PER4", 4),
-    _print("B$PSSD", 2),
-    _print("B$PESD", 2),
-)
-
-
-_STRINGS = (
-    Contract(
-        name="B$SASS",
-        inputs=frozenset(),
-        cleanup=4,
-        control=Control.RETURNS,
-        enters_user_code=False,
-        raises_error=True,
-        error_handling=False,
-        writes=Memory.STRINGS,
-        reads=Memory.STRINGS,
-        clobbers=PER_CONVENTION,
-        established=True,
-        evidence=(
-            "rt/stcore.asm: `cProc B$SASS,<FAR,PUBLIC>` with parmW psdSource, parmW psdDst, `Registers: per "
-            "convention`. It writes the caller's destination descriptor outright -- `MOV [BX],CX` and "
-            "`MOV [BX+2],AX` with BX=psdDst -- plus the backpointer at [BX-2] in string space, and the NOTEMP "
-            "path calls B$STALCTMPSUB, which reaches B$STALC and so B$STCPCT (rt/nhstutil.asm), moving every "
-            "other live string and rewriting its descriptor. B$STALC's failure path is `JMP B$ERR_OS`."
-        ),
-    ),
-    Contract(
-        name="B$SCAT",
-        inputs=frozenset(),
-        cleanup=4,
-        control=Control.RETURNS,
-        enters_user_code=False,
-        raises_error=True,
-        error_handling=False,
-        writes=Memory.STRINGS,
-        reads=Memory.STRINGS,
-        clobbers=PER_CONVENTION,
-        established=True,
-        evidence=(
-            "rt/stcore.asm: `cProc B$SCAT,<FAR,PUBLIC>,<ES,DI,SI>` with parmW psd1, parmW psd2, so es, di and si "
-            "come back despite the routine setting ES=DS internally. It calls B$STALCTMP for the result, which "
-            "reaches B$STCPCT and rewrites live descriptors (rt/nhstutil.asm), and MOVSTR ends `JMP B$STDALCTMP` "
-            "on each source, freeing it if it was a temp. Length overflow is `JO ERRFC` -> `JMP B$ERR_FC`."
-        ),
-    ),
-    Contract(
-        name="B$STDL",
-        inputs=frozenset(),
-        cleanup=2,
-        control=Control.RETURNS,
-        enters_user_code=False,
-        raises_error=False,
-        error_handling=False,
-        writes=Memory.STRINGS,
-        reads=Memory.STRINGS,
-        clobbers=PER_CONVENTION,
-        established=True,
-        evidence=(
-            "rt/string.asm: `cProc B$STDL,<PUBLIC,FAR>` with parmW pSd, `Uses: Per convention`, "
-            "`Exceptions: none`. Its last instruction is `MOV WORD PTR [BX],0` on the descriptor it was handed -- "
-            "a write straight into a caller variable. It reaches only B$STDALC, which goes to B$STADJ and never "
-            "calls B$STCPCT (rt/nhstutil.asm), so unlike an allocation it moves no other string."
-        ),
-    ),
-    Contract(
-        name="B$STI2",
-        inputs=frozenset(),
-        cleanup=2,
-        control=Control.RETURNS,
-        enters_user_code=False,
-        raises_error=True,
-        error_handling=False,
-        writes=Memory.STRINGS,
-        reads=Memory.ARGUMENTS,
-        clobbers=EVERY - {Reg.BP, Reg.SP},
-        documented=PER_CONVENTION,
-        established=True,
-        evidence=(
-            "rt/string.asm: `cProc B$STI2,<PUBLIC,FAR>` with ParmW I2Arg, `Uses: Per convention`, "
-            "`Exceptions: Out of memory`. It falls into B$STR_COMMON, which sets b$VTYP, calls B$FOUTBX and then "
-            "B$STALCTMPCPY -> B$STALCTMP -> B$STALC -> B$STCPCT, so it can move every live string and rewrite "
-            "its descriptor. The header understates the clobber set in the direction B$CPI4's overstates it: "
-            "rt/prnval.asm says B$FOUTBX `changes all registers except BP`, so si, di, ds and es are not the "
-            '"per convention" survivors ifout.asm claims.'
-        ),
-    ),
-    Contract(
-        name="B$LTRM",
-        inputs=frozenset(),
-        cleanup=2,
-        control=Control.RETURNS,
-        enters_user_code=False,
-        raises_error=True,
-        error_handling=False,
-        writes=Memory.STRINGS,
-        reads=Memory.STRINGS,
-        clobbers=PER_CONVENTION,
-        established=True,
-        evidence=(
-            "rt/strfcn.asm: B$LTRM is `MOV AH,TR_LEFT` then a two-byte skip into `cProc TRIM,FAR,<DI,ES>` with "
-            "parmW psd, `Uses: Per convention`, so di and es come back and the cleanup is TRIM's 2 bytes. It "
-            "scans the caller's string data and calls B$STALCTMPSUB for the result, reaching B$STCPCT. The "
-            "right-trim path sets the direction flag but every exit passes the following CLD, matching "
-            "ifout.asm's `PSW.D clear`."
-        ),
-    ),
-    Contract(
-        name="B$FVAL",
-        inputs=frozenset(),
-        cleanup=2,
-        control=Control.RETURNS,
-        enters_user_code=False,
-        raises_error=True,
-        error_handling=False,
-        writes=Memory.OWN,
-        reads=Memory.STRINGS,
-        clobbers=EVERY - {Reg.BP, Reg.SP, Reg.SI},
-        established=True,
-        evidence=(
-            "rt/fin.asm: `cProc B$FVAL,<FAR,PUBLIC>,<SI>` with parmSD sdNum (parmW, per inc/string.inc), so si "
-            "survives whatever the scanner does. It calls B$STPUTZ to zero-terminate the caller's string data in "
-            "place, sets b$VTYP, runs B$FIN and returns the address of B$DAC; B$FIN is the mathpack's input "
-            "scanner and floating point, not modelled here, and its errors are B$ERR_OV and B$ERR_TM. Memory is "
-            "the worst case because B$FIN was not read."
-        ),
-    ),
-)
-
-
-_SIMPLE = (
-    Contract(
-        name="B$DSEG",
-        inputs=frozenset(),
-        cleanup=2,
-        control=Control.RETURNS,
-        enters_user_code=False,
-        raises_error=False,
-        error_handling=False,
-        writes=Memory.NONE,
-        reads=Memory.ARGUMENTS,
-        clobbers=frozenset({Reg.AX}),
-        documented=frozenset(),
-        established=True,
-        evidence=(
-            "rt/rtinit.asm: `cProc B$DSEG,<PUBLIC,FAR>` with parmW newseg, whole body `MOV AX,newseg` / "
-            "`MOV [b$seg],AX`, header `Modifies: NONE` -- which is wrong by one register. With the cmacros "
-            "prologue and epilogue that is push bp / mov bp,sp / two movs / mov sp,bp / pop bp / ret 2, and not "
-            "one of them writes a flag. b$seg is the runtime's own DGROUP word that PEEK and POKE read later, "
-            "not anything the caller can name."
-        ),
-    ),
-    Contract(
-        name="B$FERR",
-        inputs=frozenset(),
-        cleanup=0,
-        control=Control.RETURNS,
-        enters_user_code=False,
-        raises_error=False,
-        error_handling=True,
-        writes=Memory.NONE,
-        reads=Memory.NONE,
-        clobbers=frozenset({Reg.AX}),
-        established=True,
-        evidence=(
-            "rt/error.asm: `cProc B$FERR,<FAR,PUBLIC>` with no parameters and the single instruction "
-            "`MOV AX,[b$errnum]` -- the ERR function, and nothing more. It cannot itself reach a handler, "
-            "contrary to the rest of its file; what it does prove is that the module has ON ERROR, which is what "
-            "error_handling records and why barrier() still refuses a body containing it."
-        ),
-    ),
-    Contract(
-        name="B$?EVT",
-        inputs=frozenset(),
-        cleanup=0,
-        control=Control.RETURNS,
-        enters_user_code=False,
-        raises_error=False,
-        error_handling=False,
-        writes=Memory.OWN,
-        reads=Memory.NONE,
-        clobbers=EVERY - {Reg.BP, Reg.SP, Reg.SI, Reg.DI, Reg.ES},
-        established=True,
-        evidence=(
-            "rt/gwaevt.asm: `cProc B$?EVT,<FAR,PUBLIC>,<ES,SI,DI>`, no parameters. It clears b$TRPTBL to "
-            "flag-zero/address--1 entries, zeroes b$TRAP_SEM, inits the b$TRAP_QUE descriptor through B$INITQ "
-            "and calls [b$pInitKeys1] and [b$pInitKeys2] -- all runtime state, no user variable in sight, and it "
-            "installs handlers rather than running one. Memory stays the worst case because those three callees "
-            "were not followed. Emitted only under /V or /W, which the optimiser refuses anyway."
-        ),
-    ),
-)
-
-
 # Everything here reaches user BASIC, or leaves without coming back, or both.
 # Their details are recorded for the record; barrier() is the field that
 # matters, and it is true for every one of them.
-_CONTROL = (
-    Contract(
-        name="B$EVCK",
-        inputs=frozenset(),
-        cleanup=0,
-        control=Control.UNKNOWN,
-        enters_user_code=True,
-        raises_error=False,
-        error_handling=False,
-        writes=Memory.ANY,
-        reads=Memory.ANY,
-        clobbers=EVERY,
-        established=True,
-        evidence=(
-            "rt/gwaevt.asm: `cProc B$EVCK,<PUBLIC,FAR>`, no parameters, `Exit: GOSUBs to event handler, if so "
-            "indicated`. On a pending trap it dequeues the request, calls B$FRAMESETUP, bumps FR_GOSUB and ends "
-            "`jmp dword ptr[BX+1]` into the user's ON TIMER/ON KEY handler (or B$IEvHandler, which `DOESN'T "
-            "RETURN`). So it can assign any module-level variable the handler names, and control leaves through "
-            "the event-GOSUB machinery rather than off its own RET."
-        ),
-    ),
-    Contract(
-        name="B$OEGA",
-        inputs=frozenset(),
-        cleanup=4,
-        control=Control.UNKNOWN,
-        enters_user_code=True,
-        raises_error=False,
-        error_handling=True,
-        writes=Memory.ANY,
-        reads=Memory.ANY,
-        clobbers=EVERY,
-        established=True,
-        evidence=(
-            "rt/error.asm: `cProc B$OEGA,<FAR,PUBLIC>` with parmD erradr -- the ON ERROR GOTO statement handler. "
-            "It sets OFD_ONERROR in the module's own data, and its header says `erradr == 0 and an error is in "
-            "progress, will jump to B$SERR instead of returning`: OEGA_10 does `MOV BP,[BP]` / `ADD SP,8` and "
-            "`JMP B$SERR ;Process error (Never Returns)`, which is the path into the user's handler."
-        ),
-    ),
-    Contract(
-        name="B$RESN",
-        inputs=frozenset(),
-        cleanup=0,
-        control=Control.NEVER,
-        enters_user_code=True,
-        raises_error=False,
-        error_handling=True,
-        writes=Memory.ANY,
-        reads=Memory.ANY,
-        clobbers=EVERY,
-        established=True,
-        evidence=(
-            "rt/error.asm: `cProc B$RESN,<FAR,PUBLIC,FORCEFRAME>,SI`, no parameters -- RESUME NEXT. It searches "
-            "the module's statement-address table for the entry after b$erradr and leaves through RESRET to "
-            "resume there, or `JMP B$CEND` when it runs off the bottom. It never comes back to the byte after "
-            "the call. A /X construct, which the optimiser does not support."
-        ),
-    ),
-    Contract(
-        name="B$CENP",
-        inputs=frozenset(),
-        cleanup=0,
-        control=Control.NEVER,
-        enters_user_code=True,
-        raises_error=False,
-        error_handling=False,
-        writes=Memory.ANY,
-        reads=Memory.ANY,
-        clobbers=EVERY,
-        established=True,
-        evidence=(
-            "rt/rtterm.asm: `cProc B$CENP,<PUBLIC,FAR,FORCEFRAME>`, no parameters, `Exceptions: Does not "
-            "return.` -- the default end procedure, and the last call in any BASIC module. With an ON ERROR in "
-            "progress it is `JMP FAR PTR B$ERR_NR`, handing a No RESUME error to the user's handler; otherwise "
-            "it falls into termination. extent.py measured what follows one: in divmod-v-g3.obj the /X RESUME "
-            "map begins exactly where its `call far B$CENP` ends, so the bytes after the call are data."
-        ),
-    ),
-    Contract(
-        name="B$CEND",
-        inputs=frozenset(),
-        cleanup=0,
-        control=Control.NEVER,
-        enters_user_code=False,
-        raises_error=False,
-        error_handling=False,
-        writes=Memory.OWN,
-        reads=Memory.OWN,
-        clobbers=EVERY,
-        established=True,
-        evidence=(
-            "rt/rtterm.asm: `cProc B$CEND,<PUBLIC,FAR,FORCEFRAME>`, no parameters, `Exceptions: Does not "
-            "return.` -- END and SYSTEM. It zeroes b$errnum and branches to the END executor, closing files and "
-            "terminating the runtime."
-        ),
-    ),
-)
-
-
 # The three whose own implementation is not in the local tree. B$ENRA and
 # B$EXSA are named only by the include files, and B$OGTA only by ulib.inc and
 # rtmint.inc -- extent.py's docstring already says so and this does not repeat
 # the reasoning. What is established about them is established from the frame
 # layout and from measurements of BC's output, not from read code, so
 # everything except the fields named in each citation stays at the worst case.
-_FRAMES = (
-    Contract(
-        name="B$ENRA",
-        cleanup=0,
-        control=Control.RETURNS,
-        enters_user_code=False,
-        raises_error=True,
-        error_handling=False,
-        writes=Memory.OWN,
-        reads=Memory.OWN,
-        clobbers=EVERY,
-        established=True,
-        evidence=(
-            "inc/stack.inc: `The basic frame is set up on entry to the main program, by B$ENSA/B$ENRA SUB and "
-            "FUNCTION entry routines`, and it names what lands there -- the previous BASIC frame at FR_BFRAME, "
-            "si and di at FR_SI/FR_DI `Preserved for C compatability`, the local byte count at FR_CLOCALS and a "
-            "zeroed GOSUB count at FR_GOSUB. inc/rtmint.inc and inc/ulib.inc list it as an entry family with "
-            "B$ENSA/B$ENRD/B$ENSD/B$ENFA; the code is in none of them. AGENTS.md measured the call site: the "
-            "frame size arrives in cx, so nothing is on the stack to clean up. It moves both sp and bp, which is "
-            "why it is in clobbers and why nothing may track stack depth across it."
-        ),
-    ),
-    Contract(
-        name="B$EXSA",
-        cleanup=0,
-        control=Control.RETURNS,
-        enters_user_code=False,
-        raises_error=False,
-        error_handling=False,
-        writes=Memory.OWN,
-        reads=Memory.OWN,
-        clobbers=EVERY,
-        established=True,
-        evidence=(
-            "inc/stack.inc: si and di are `restored by B$EXSA`, and [b$curframe] is saved at FR_BFRAME `such "
-            "that B$EXSA can restore it on exit`. inc/ulib.inc pairs it with B$EXFA as the exit family and "
-            "rt/error.asm calls it to `clear frame state info`. The code is not in the tree. AGENTS.md measured "
-            "the call site: a far call with no arguments, immediately before the procedure's own `retf n`. Like "
-            "B$ENRA it moves sp and bp."
-        ),
-    ),
-    Contract(
-        name="B$OGTA",
-        inputs=frozenset({Reg.BX}),
-        cleanup=None,
-        control=Control.UNKNOWN,
-        enters_user_code=False,
-        raises_error=True,
-        error_handling=False,
-        writes=Memory.OWN,
-        reads=Memory.OWN,
-        clobbers=EVERY,
-        established=True,
-        evidence=(
-            "Named by inc/ulib.inc and inc/rtmint.inc; the code is not in the tree. What is established is "
-            "measured, not read: blocks.py found that ON GOTO compiles to a call to it followed by inline data "
-            "-- a count byte and that many offset16 words, each a fixup into this segment -- which it reads via "
-            "its own return address, and the branch index arrives in bx -- all 16 sites in the corpus are "
-            "`mov bx` immediately before the call, with nothing else unanimous. Measured rather than "
-            "read, for the same reason the rest of this entry is. blocks.INLINE_TABLE is where that "
-            "lives and where the control kind below "
-            "comes from, so the two cannot drift."
-        ),
-    ),
-    Contract(
-        name="B$FCMD",
-        cleanup=None,
-        control=Control.UNKNOWN,
-        enters_user_code=True,
-        raises_error=True,
-        error_handling=False,
-        writes=Memory.ANY,
-        reads=Memory.ANY,
-        clobbers=EVERY,
-        established=False,
-        evidence=(
-            "rt/oscmd.asm has `cProc B$FCMD,<PUBLIC,FAR>` / `cBegin <nogen>` / `jmp B$FrameAFE`, and B$FrameAFE "
-            "is nowhere in the tree. Its header claims `Modifies: NONE` and `AX = ptr to string desc for temp "
-            "with command line`, which means it allocates and so can reach B$STCPCT, but a header over an "
-            "unreadable body establishes nothing. Worst case, and marked as such."
-        ),
-    ),
-)
-
-
 # The x87 helpers, all six of them one module -- 87bhelp.asm -- and byte for
 # byte the same object in QuickBASIC 4.5's BCOM45.LIB, PDS 7.1's BCL71ENR.LIB
 # and VBDOS 1.0's VBDCL10E.LIB. They are the one group here established from
@@ -716,124 +250,6 @@ _FRAMES = (
 # registers or already on the x87 stack -- and touches no memory but its own
 # scratch below sp. So cleanup is 0 and writes is NONE throughout, and what
 # differs between them is only which registers come back changed.
-_X87 = (
-    Contract(
-        name="B$FCMP",
-        inputs=frozenset(),
-        cleanup=0,
-        control=Control.RETURNS,
-        enters_user_code=False,
-        raises_error=False,
-        error_handling=False,
-        writes=Memory.NONE,
-        reads=Memory.NONE,
-        clobbers=frozenset({Reg.AX, Reg.FLAGS}),
-        established=True,
-        evidence=(
-            "87bhelp.asm, disassembled from all three libraries and identical in each: push bp / mov bp,sp / "
-            "wait / fcompp / wait / fnstsw [0] / nop / wait / mov ah,[0] / sahf / mov sp,bp / pop bp / retf. "
-            "It names bx, cx, dx, si and di nowhere; ah is the only register written, and the flags ARE the "
-            "return value. sahf writes SF, ZF, AF, PF and CF and cannot write OF -- it is bit 11, outside the "
-            "byte -- so the comparison arrives in CF and ZF and only the unsigned branches read it, which is "
-            "what wide.COMPARISONS records and what BC emits at every site. Microsoft's own runtime agrees: "
-            "rt/grwindow.asm calls it and branches with JZ and JC. The fnstsw writes one word of DGROUP, the "
-            "runtime's own, which is why writes is NONE the way B$DSEG's is."
-        ),
-    ),
-    Contract(
-        name="B$FILD",
-        inputs=frozenset({Reg.AX, Reg.DX}),
-        cleanup=0,
-        control=Control.RETURNS,
-        enters_user_code=False,
-        raises_error=False,
-        error_handling=False,
-        writes=Memory.NONE,
-        reads=Memory.NONE,
-        clobbers=frozenset({Reg.FLAGS}),
-        established=True,
-        evidence=(
-            "87bhelp.asm: push bp / mov bp,sp / push bx / push dx / push ax / mov bx,sp / wait / fild dword "
-            "[bx] / add sp,4 / pop bx / mov sp,bp / pop bp / retf. It takes a LONG in dx:ax and pushes it to "
-            "the x87 stack through four bytes of its own frame. dx and ax are read and never written, bx is "
-            "saved and restored, and nothing else is named -- so the flags `add sp,4` leaves are the only "
-            "thing that changes."
-        ),
-    ),
-    Contract(
-        name="B$FIL2",
-        inputs=frozenset({Reg.AX}),
-        cleanup=0,
-        control=Control.RETURNS,
-        enters_user_code=False,
-        raises_error=False,
-        error_handling=False,
-        writes=Memory.NONE,
-        reads=Memory.NONE,
-        clobbers=frozenset({Reg.DX, Reg.FLAGS}),
-        established=True,
-        evidence=(
-            "87bhelp.asm: one instruction before B$FILD's own entry -- `cwd`, then it falls straight through. "
-            "So it is the INTEGER form, taking ax alone and sign-extending it, and the cwd is exactly why dx "
-            "is clobbered here and preserved there."
-        ),
-    ),
-    Contract(
-        name="B$FIST",
-        inputs=frozenset(),
-        cleanup=0,
-        control=Control.RETURNS,
-        enters_user_code=False,
-        raises_error=False,
-        error_handling=False,
-        writes=Memory.NONE,
-        reads=Memory.NONE,
-        clobbers=frozenset({Reg.AX, Reg.DX, Reg.FLAGS}),
-        established=True,
-        evidence=(
-            "87bhelp.asm: push bp / mov bp,sp / sub sp,4 / wait / fistp dword [bp-4] / nop / wait / pop ax / "
-            "pop dx / mov sp,bp / pop bp / retf. The LONG it produces comes back in dx:ax, which is what "
-            "clobbers them; bx, cx, si and di are named nowhere."
-        ),
-    ),
-    Contract(
-        name="B$FIS2",
-        inputs=frozenset(),
-        cleanup=0,
-        control=Control.RETURNS,
-        enters_user_code=False,
-        raises_error=False,
-        error_handling=False,
-        writes=Memory.NONE,
-        reads=Memory.NONE,
-        clobbers=frozenset({Reg.AX, Reg.FLAGS}),
-        established=True,
-        evidence=(
-            "87bhelp.asm: the INTEGER form of B$FIST -- sub sp,2 / fistp word [bp-2] / pop ax. One word, so "
-            "ax alone comes back changed and dx does not."
-        ),
-    ),
-    Contract(
-        name="B$FUST",
-        inputs=frozenset(),
-        cleanup=0,
-        control=Control.RETURNS,
-        enters_user_code=False,
-        raises_error=False,
-        error_handling=False,
-        writes=Memory.NONE,
-        reads=Memory.NONE,
-        clobbers=frozenset({Reg.AX, Reg.FLAGS}),
-        established=True,
-        evidence=(
-            "87bhelp.asm: stores a dword, and where the high word is not zero re-loads it and stores it back "
-            "as a word -- the unsigned INTEGER conversion. It ends `pop ax / add sp,2`, so only the low word "
-            "is taken and dx is untouched."
-        ),
-    ),
-)
-
-
 def _read(name: str) -> Contract:
     """One of READ's per-type entries.
 
@@ -870,41 +286,40 @@ def _read(name: str) -> Contract:
     )
 
 
-_READ = tuple(_read(one) for one in ("B$RDI2", "B$RDI4", "B$RDR4"))
+# Where the rows live. Data, not code: every field is a claim about the
+# runtime, and a claim wants an audit trail more than it wants a Python
+# literal. `tools/runtime_writes.py` regenerates the measured columns from
+# a linked image, so re-measuring is a diff against this file rather than a
+# rewrite of one.
+TABLE = Path(__file__).with_name("runtime.toml")
 
 
-_DDIM = Contract(
-    name="B$DDIM",
-    inputs=frozenset(),
-    cleanup=None,
-    control=Control.RETURNS,
-    enters_user_code=False,
-    raises_error=True,
-    error_handling=False,
-    writes=Memory.OWN,
-    reads=Memory.OWN,
-    clobbers=EVERY,
-    established=True,
-    evidence=(
-        "rt/dynamic.asm: `B$DDIM - DIM a dynamic array`, "
-        "`void pascal B$DDIM(I2 lo1, I2 hi1, ..., I2 loN, I2 hiN, I2 cbelem, U2 ndims+typ<<8, ad *pAd)`. "
-        "Cleanup is not a constant: the header says `Input parameters are removed from the stack` and the "
-        "count is two words per dimension plus three, so None rather than a number. It falls into "
-        "DIM_COMMON, which erases any present array and allocates -- writing the descriptor at pAd and "
-        "moving the heap, so Memory.ANY on both sides. `Modifies: Per convention` names no preserved "
-        "register, so every one is taken as clobbered."
-    ),
-)
+def _contracts(path: Path | None = None) -> dict[str, Contract]:
+    """One entry per runtime name the corpus calls, read from the table.
 
-
-def _contracts() -> dict[str, Contract]:
-    """One entry per runtime name the corpus calls, with B$OGTA's control kind
-    taken from blocks.py rather than restated here."""
-    read = _HELPERS + _PRINTING + _STRINGS + _SIMPLE + _CONTROL + _FRAMES + _X87 + _READ + (_DDIM,)
-    return {
-        routine.name: (replace(routine, control=Control.INLINE_TABLE) if routine.name in INLINE_TABLE else routine)
-        for routine in read
-    }
+    B$OGTA's control kind comes from blocks.py rather than being restated
+    in the table, which is why this is not simply the rows handed back.
+    """
+    rows = tomllib.loads((path or TABLE).read_text())
+    out = {}
+    for name, row in rows.items():
+        one = Contract(
+            name=name,
+            cleanup=None if row["cleanup"] < 0 else row["cleanup"],
+            control=Control(row["control"]),
+            enters_user_code=row["enters_user_code"],
+            raises_error=row["raises_error"],
+            error_handling=row["error_handling"],
+            writes=Memory[row["writes"]],
+            reads=Memory[row["reads"]],
+            clobbers=frozenset(Reg(one) for one in row["clobbers"]),
+            established=row["established"],
+            evidence=row["evidence"].strip(),
+            documented=frozenset(Reg(x) for x in row["documented"]) if "documented" in row else None,
+            inputs=frozenset(Reg(x) for x in row["inputs"]) if "inputs" in row else None,
+        )
+        out[name] = replace(one, control=Control.INLINE_TABLE) if name in INLINE_TABLE else one
+    return out
 
 
 CONTRACTS = _contracts()
