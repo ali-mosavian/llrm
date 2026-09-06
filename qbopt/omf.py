@@ -528,6 +528,53 @@ def extdef_record(entries: "list[tuple[bytes, bytes]]") -> Record:
     return Record(EXTDEF, bytes(body))
 
 
+# A comment class no tool in this toolchain writes: BC's own are 0x00, 0x9f
+# and 0xa1. The attribute byte sets NOPURGE and NOLIST, so LINK drops the
+# record from what it produces and never prints it.
+FINALISED = 0xC0, 0x9C
+
+
+def finalised(records: list[Record], made_by: str) -> list[Record]:
+    """`records` with a marker saying this pass already emitted them.
+
+    What comes out of a whole-segment rebuild is a program -- a prologue,
+    the copies a phi became, the slots a spill took -- and raising it
+    again reads all of that as code BC wrote. So a second run gives the
+    object back untouched, and the way it knows is written down here
+    rather than guessed from the bytes.
+
+    Only after a rebuild that worked. A refusal leaves BC's own code,
+    which is still worth another look.
+    """
+    if finalised_at(records) is not None:
+        raise ValueError("these records are already marked; one object has one account of itself")
+    attribute, kind = FINALISED
+    text = made_by.encode("ascii")
+    if len(text) > 240:
+        raise ValueError("the marker does not hold that much")
+    mark = Record(COMENT, bytes([attribute, kind]) + b"qbopt\x00" + text)
+    return [*records[:1], mark, *records[1:]] if records else [mark]
+
+
+def finalised_at(records: list[Record]) -> str | None:
+    """What made these records, or None.
+
+    The string names the marker's own schema, the pipeline that wrote it
+    and every option that can change what it emits -- a second run asked
+    for something else has to refuse rather than reinterpret bytes that
+    were produced for different settings.
+    """
+    _attribute, kind = FINALISED
+    found = None
+    for one in records:
+        if one.type & 0xFE == COMENT and len(one.body) >= 8 and one.body[1] == kind:
+            if one.body[2:8] == b"qbopt\x00":
+                if found is not None:
+                    raise ValueError("two markers disagree about what made this object")
+                found = one.body[8:].decode("ascii", "replace")
+    return found
+
+
 def as_index(value: int) -> bytes:
     """An OMF index, in the shorter of its two encodings."""
     if value < 0 or value > 0x7FFF:

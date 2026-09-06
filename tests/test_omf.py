@@ -15,6 +15,8 @@ from pathlib import Path
 
 import struct
 
+import pytest
+
 from qbopt import omf
 
 
@@ -258,3 +260,41 @@ def test_a_thread_outlives_the_record_it_was_declared_in() -> None:
     got = [omf.renumbered(one, {9: 5}) for one in made]
     assert [one.index for one in omf.fixups(got)] == [5, 5, 5]
     assert got[2].body == second.body, "a record that only refers to a thread is untouched"
+
+
+MARK = 0x9C  # a comment class no tool in this toolchain writes
+
+
+def test_a_private_comment_survives_a_parse_and_emit() -> None:
+    """The marker an emitted object carries, so a second run gives it back
+    rather than raising generated code as if BC had written it.
+
+    A COMENT with the purge and list bits set is one the linker discards
+    from its output and never prints; an unknown class is data it does not
+    read. BC's own are class 0x00, 0x9f and 0xa1, so 0x9c is free.
+    """
+    raw = (Path("fixtures/omf") / "hotlop-p-g2.obj").read_bytes()
+    records = omf.parse(raw)
+    marked = omf.finalised(records, "1:whole+absorb")
+    assert omf.finalised_at(marked) == "1:whole+absorb"
+    assert omf.finalised_at(records) is None
+    out = b"".join(one.emit() for one in marked)
+    assert omf.finalised_at(omf.parse(out)) == "1:whole+absorb"
+    # And nothing else about the object moved.
+    assert [one.type for one in omf.parse(out) if one.type & 0xFE != omf.COMENT] == [
+        one.type for one in records if one.type & 0xFE != omf.COMENT
+    ]
+
+
+def test_a_second_marker_is_refused_rather_than_added(obj: Path) -> None:
+    """One object, one account of what produced it. Two markers would say
+    two different sets of options made the same bytes."""
+    records = omf.finalised(omf.parse(obj.read_bytes()), "1:whole")
+    with pytest.raises(ValueError, match="already"):
+        omf.finalised(records, "1:whole")
+
+
+def test_no_fixture_already_carries_the_marker_signature(obj: Path) -> None:
+    """The class and signature have to be ones BC never writes, or an
+    untouched object would be read back as one this pass already emitted."""
+    assert omf.finalised_at(omf.parse(obj.read_bytes())) is None
