@@ -831,3 +831,32 @@ def test_a_funnel_shift_emits_the_form_its_count_asks_for(count, want: str) -> N
     made = select.emit(_funnel(count))
     assert made is not None
     assert made.code.hex() == want.replace(" ", "")
+
+
+def _restoring(wide: Register_, low: Register_, high: Register_) -> ir.Semantics:
+    """A wide value split back into the two halves BC reads it as."""
+    return ir.restoring(ir.Reg(wide, 4), ir.Reg(low, 2), ir.Reg(high, 2))
+
+
+def test_a_restore_says_which_value_it_splits_and_into_which_halves() -> None:
+    """The idiom had no operands at all: a `pair` number chose the registers,
+    so whoever built the node picked ax and dx rather than the allocation."""
+    what = _restoring(Register.EAX, Register.AX, Register.DX)
+    assert what.op is ir.Operation.RESTORE
+    assert what.sources == (ir.Reg(Register.EAX, 4),)
+    assert what.dests == (ir.Reg(Register.AX, 2), ir.Reg(Register.DX, 2))
+
+
+@pytest.mark.parametrize(
+    ("wide", "low", "high", "want"),
+    [
+        (Register.EAX, Register.AX, Register.DX, "6650585a"),
+        (Register.ECX, Register.CX, Register.BX, "6651595b"),
+        (Register.ESI, Register.SI, Register.DI, "66565e5f"),
+    ],
+)
+def test_a_restore_encodes_the_registers_the_allocation_chose(wide, low, high, want: str) -> None:
+    """`push wide / pop low / pop high`, whichever three they are. The first
+    two are what the pair table already held, so the old encoding stands."""
+    made = select.emit(_restoring(wide, low, high))
+    assert made is not None and made.code.hex() == want

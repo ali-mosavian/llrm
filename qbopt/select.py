@@ -769,9 +769,37 @@ def arith_into(name: str, cell: ir.Mem, source: Register_, at: int = 0) -> Emitt
 # calls.py's own restore idiom, byte for byte: push the root, pop the two
 # halves back. It is one node with no single instruction behind it, so it is
 # named here rather than selected -- there is nothing to choose.
+def restore_of(wide: Register_, low: Register_, high: Register_, at: int = 0) -> Emitted | None:
+    """`push wide / pop low / pop high` -- whichever three registers those are.
+
+    One encoder. The pair table below is two of its answers rather than
+    the only ones: which registers a restore names is the allocation's to
+    decide, and a number standing for them said otherwise.
+    """
+    if WIDTHS.get(wide) != 4 or WIDTHS.get(low) != 2 or WIDTHS.get(high) != 2:
+        return None
+    push, pop = _code("PUSH_R32"), _code("POP_R16")
+    if push is None or pop is None:
+        return None
+    out = bytearray()
+    for code, register in ((push, wide), (pop, low), (pop, high)):
+        made = _assemble(Instruction.create_reg(code, register), at + len(out))
+        if made is None:
+            return None
+        out += made.code
+    return Emitted(bytes(out))
+
+
+# calls.py's own restore idiom: push the root, pop the two halves back.
+# Built from the encoder above rather than written out again, so the pair
+# a node names and the registers an allocation chose cannot disagree.
 RESTORE = {
-    0: bytes([0x66, 0x50, 0x58, 0x5A]),  # push eax / pop ax / pop dx
-    1: bytes([0x66, 0x51, 0x59, 0x5B]),  # push ecx / pop cx / pop bx
+    pair: made.code
+    for pair, made in (
+        (0, restore_of(Register.EAX, Register.AX, Register.DX)),
+        (1, restore_of(Register.ECX, Register.CX, Register.BX)),
+    )
+    if made is not None
 }
 
 
@@ -1213,6 +1241,10 @@ def emit(
                     return move_into(cell, outof, at)
                 case (ir.Mem() as cell, ir.Imm(value=value)):
                     return store_imm(cell, value, at)
+        case ir.Operation.RESTORE if len(dests) == 2 and len(sources) == 1:
+            match (sources[0], dests[0], dests[1]):
+                case (ir.Reg(register=wide), ir.Reg(register=low), ir.Reg(register=high)):
+                    return restore_of(wide, low, high, at)
         case ir.Operation.FUNNEL if len(dests) == 1 and len(sources) == 3:
             match (dests[0], sources[1], sources[2]):
                 case (ir.Reg(register=into), ir.Reg(register=high), ir.Imm(value=count)):

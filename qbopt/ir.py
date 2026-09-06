@@ -387,6 +387,19 @@ class Semantics:
 # drifting copy of it to live.
 UNMODELLED = Semantics(Operation.BARRIER)
 RESTORE_IDIOM = Semantics(Operation.RESTORE, "restore")
+
+
+def restoring(wide: "Loc", low: "Loc", high: "Loc") -> Semantics:
+    """A wide value split back into the two halves BC's own code reads.
+
+    The one place a restore is built with operands. It used to have none:
+    a `pair` number stood for the registers, so whoever made the node
+    chose them and the allocation was told rather than asked. Saying which
+    value and which halves lets select encode whatever the allocation
+    picked, and `RESTORE_EFFECTS`' two pairs become two of the answers
+    rather than the only ones.
+    """
+    return Semantics(Operation.RESTORE, "restore", dests=(low, high), sources=(wide,))
 TABLE_DATA = Semantics(Operation.DATA)
 
 
