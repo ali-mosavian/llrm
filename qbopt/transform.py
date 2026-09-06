@@ -1188,10 +1188,8 @@ def halves(body: MirBody) -> set:
         before = len(out)
         for block in body.blocks:
             for op in block.ops:
-                if (
-                    op.kind not in _OBSERVED
-                    and not op.stores
-                    and not any((one, half) in out for one in op.defines for half in (LOW, HIGH))
+                if not _kept(op) and not any(
+                    (one, half) in out for one in op.defines for half in (LOW, HIGH)
                 ):
                     continue
                 carried = op.merges
@@ -1405,13 +1403,24 @@ def dead(body: MirBody) -> MirBody:
     return replace(body, blocks=tuple(out)) if changed else body
 
 
+def _kept(op: Op) -> bool:
+    """Whether this operation stays whatever the liveness says.
+
+    `halves` and `_removable` have to agree on this, or `dead` deletes what
+    a kept operation reads: a `cmp` whose flags nothing reads any more is
+    still emitted -- it defines nothing else -- and would go on comparing a
+    value whose definition went.
+    """
+    if op.kind in _OBSERVED or op.stores or op.barrier:
+        return True
+    if op.kind is mir.Kind.OPAQUE:
+        return True
+    return not [one for one in op.defines if not one.flags]
+
+
 def _removable(op: Op, alive: set) -> bool:
     """Whether anything at all would notice this operation going."""
-    if op.kind in _OBSERVED or op.stores or op.barrier:
-        return False
-    if op.kind is mir.Kind.OPAQUE:
-        return False
-    if not [one for one in op.defines if not one.flags]:
+    if _kept(op):
         return False
     return not any(one in alive for one in op.defines)
 

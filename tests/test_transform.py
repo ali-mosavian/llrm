@@ -983,3 +983,46 @@ def test_cse_refuses_an_operand_that_is_only_half_its_value() -> None:
 
     assert transform._computation(Fake(), {}, {1: 4}) is None
     assert transform._computation(Fake(), {}, {1: 2}) is not None
+
+
+def test_an_operation_dead_keeps_has_its_operands_kept_too() -> None:
+    """bools-q-O prints T=1 for 2: `IF a < b THEN t = t + 1` never runs.
+
+    `decided()` resolves the second comparison and rewrites its branch into
+    an unconditional jump with no uses. Nothing then reads the flags that
+    `cmp` at 0x67 defines, so `halves()` never propagates through it and
+    the value it compares looks unread -- and `dead` deletes the load at
+    0x64 that defined it.
+
+    But `dead` does not delete the `cmp`. `_removable` refuses an operation
+    whose only definitions are flags, so it survives and goes on reading a
+    value nothing defines. The compare then uses whatever is in the
+    register -- x, which is -1 -- instead of `a`, the jump falls the wrong
+    way, and the `+ 1` is lost.
+
+    The two have to agree: an operation `dead` keeps is an operation whose
+    operands are read.
+    """
+    from pathlib import Path
+
+    from qbopt import blocks as split
+    from qbopt import module
+    from qbopt import omf
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(Path("fixtures/omf/bools-q-O.obj").read_bytes()))
+    blocks = split.partition(found, code_map(found))
+    for name, body in mir.bodies(found, blocks):
+        after = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
+        made = {one.id for block in after.blocks for op in block.ops for one in op.defines}
+        made |= {phi.result.id for block in after.blocks for phi in block.phis}
+        had = {one.id for block in body.blocks for op in block.ops for one in op.defines}
+        had |= {phi.result.id for block in body.blocks for phi in block.phis}
+        broken = [
+            f"{op.at:#06x} reads v{one.id}, whose definition the passes deleted"
+            for block in after.blocks
+            for op in block.ops
+            for one in op.uses
+            if one.id in had and one.id not in made
+        ]
+        assert not broken, f"{name}: " + "; ".join(broken[:3])
