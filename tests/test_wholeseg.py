@@ -187,3 +187,18 @@ def test_a_refused_body_is_laid_out_widened_and_only_that_body_is_widened() -> N
     # One per body, plus one for each the allocator sent back to its raise.
     bodies = len(list(mir.bodies(found, blocks)))
     assert bodies < len(calls) <= bodies * 2, f"{len(calls)} for {bodies} bodies"
+
+
+@pytest.mark.parametrize("stem", ["ivchan-q-O", "stride-p-g2"])
+def test_a_rewritten_operation_still_has_machine_operands(stem: str) -> None:
+    """15 objects stopped rebuilding: `add is not one select.py can emit`.
+
+    lower.current says it answers in machine form, and for a cell it did
+    not -- it left mir.MemRef, which select has no encoding for. Nothing
+    noticed because it only builds fresh semantics for an operation a pass
+    rewrote, and the one caller that did rewrite operands, lowered(), put
+    the missing _located step in itself. The whole-segment path calls
+    current directly and got MIR operands.
+    """
+    raw = (Path("fixtures/omf") / f"{stem}.obj").read_bytes()
+    assert wholeseg.rebuilt(raw)[1] == wholeseg.REBUILT

@@ -96,7 +96,12 @@ def current(op) -> "ir.Semantics | None":
     was = getattr(op.node, "semantics", None)
     if op.made is not None:
         return op.made
-    return semantics(op, was) or was
+    # _located here and not in the callers. `semantics` builds from MIR's
+    # own operands, so a cell comes back as mir.MemRef, and select has no
+    # encoding for one: lowered() knew to convert and the whole-segment
+    # path did not, so fifteen objects stopped rebuilding with `add is not
+    # one select.py can emit` the moment a pass rewrote an operand.
+    return _located(semantics(op, was), was) or was
 
 
 def _target(op: mir.Op, was: ir.Semantics | None) -> int | None:
@@ -227,7 +232,7 @@ def lowered(
                         covers=op.covers,
                         what=None
                         if op.id in (absorbed or ())
-                        else _located(current(op), getattr(op.node, "semantics", None)),
+                        else current(op),
                         defines=tuple(one.id for one in op.defines if not one.flags and one.id in read),
                         uses=tuple(one.id for one in op.uses if not one.flags),
                         clobbers=_clobbers(op, calls),
