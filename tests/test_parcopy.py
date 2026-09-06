@@ -108,3 +108,67 @@ def test_something_that_is_not_a_move_in_a_group_is_refused() -> None:
 
     with pytest.raises(parcopy.Malformed):
         parcopy.scheduled(_body(replace(_other(0x100), group=1)))
+
+
+def test_the_scheduler_runs_after_the_allocation_and_before_the_prologue() -> None:
+    """Which moves in a copy conflict is a question about locations, so it
+    cannot be asked before the allocator has chosen them -- and it has to
+    be answered before anything reads the code as a sequence."""
+    from qbopt import allocate
+    from qbopt import flow
+    from qbopt import prologue
+
+    order = [type(one) for one in flow.machine({}, None, {})]
+    assert order.index(parcopy.ParallelCopy) == order.index(allocate.RegAlloc) + 1
+    assert order.index(parcopy.ParallelCopy) < order.index(prologue.Prologue)
+
+
+def test_nothing_leaves_the_machine_pipeline_still_grouped() -> None:
+    from pathlib import Path
+
+    from qbopt import blocks as split
+    from qbopt import flow
+    from qbopt import frame as frames
+    from qbopt import lower
+    from qbopt import mir
+    from qbopt import module
+    from qbopt import omf
+    from qbopt import transform
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(Path("fixtures/omf/pressx-v-evt.obj").read_bytes()))
+    blocks = split.partition(found, code_map(found))
+    name, body = next(iter(mir.bodies(found, blocks)))
+    body = transform.widened(
+        transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
+    )
+    low = lower.lowered(name, body, found.calls, set(found.absorbed))
+    for phase in flow.machine(flow._pinned(body), frames.of(low), found.calls):
+        low = phase.transform(low)
+    left = [one.at for block in low.blocks for one in block.insns if one.group is not None]
+    assert not left, f"copies still marked simultaneous at {[hex(x) for x in left]}"
+
+
+def test_a_tangled_copy_falls_back_and_says_so() -> None:
+    """A refusal the emitter names, not a program written in the wrong
+    order. The fallback is BC's layout and is not marked as this pass's
+    own final output."""
+    from pathlib import Path
+
+    from qbopt import omf
+    from qbopt import wholeseg
+
+    was = parcopy.ParallelCopy.transform
+
+    def tangles(self, body):
+        raise parcopy.Tangled("injected: they all read each other")
+
+    parcopy.ParallelCopy.transform = tangles
+    try:
+        got = wholeseg.emitted(Path("fixtures/omf/pressx-v-evt.obj").read_bytes())
+    finally:
+        parcopy.ParallelCopy.transform = was
+    assert got.outcome is wholeseg.Emission.MIR
+    assert got.reason == wholeseg.REBUILT
+    assert got.fallback_reason and "Tangled" in got.fallback_reason
+    assert omf.finalised_at(omf.parse(got.data)) is None

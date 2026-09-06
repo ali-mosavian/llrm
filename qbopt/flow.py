@@ -20,6 +20,7 @@ The machine half, against LLVM's own order:
     RegisterCoalescer   coalesce.py   the copies the two above just made
     SplitKit            splitkit.py   cut a range at a loop rather than spill it
     RegAlloc            allocate.py   assign; spill and assign again
+    (parallel copies)   parcopy.py    a phi's moves, in an order that works
     InlineSpiller       spiller.py    inside RegAlloc's own loop
     VirtRegRewriter     allocate.py   virtual -> physical
     PrologEpilogInsert  prologue.py   reserve what the spiller took
@@ -37,6 +38,7 @@ from qbopt import mir
 from qbopt import module
 from qbopt import objwrite
 from qbopt import omf
+from qbopt import parcopy
 from qbopt import phielim
 from qbopt import prologue
 from qbopt import splitkit
@@ -53,6 +55,11 @@ def machine(pinned: dict, frame=None, calls: dict | None = None) -> list[LIRTran
         twoaddr.TwoAddress(),
         coalesce.Coalescer(),
         allocate.RegAlloc(pinned, frame),
+        # After the allocation and before anything reads the code as a
+        # sequence: which moves in a phi's copy conflict is a question
+        # about locations, and until the allocator has chosen them there
+        # is nothing to ask.
+        parcopy.ParallelCopy(),
         prologue.Prologue(frame, calls) if frame is not None else prologue.Prologue(frames.Frame(0), calls),
     ]
 
