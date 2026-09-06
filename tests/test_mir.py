@@ -619,3 +619,57 @@ def test_a_multiply_by_something_the_loop_writes_is_not_reducible() -> None:
                             mir.overlapping(one.by.ref, other, found.dgroup, module.landmarks(found))
                             for other in wrote
                         ), f"{one.op.at:#06x} multiplies by a cell the loop writes"
+
+
+def test_every_program_hands_the_runtime_an_address() -> None:
+    """Which is why a whole-body escape test grants nothing.
+
+    BC puts a program's variables in BC_DATA and the runtime keeps its
+    buffers in BR_DATA -- different segments of one group -- so a runtime
+    call writes the second and not the first *unless the program handed it
+    a pointer*. That reads like a guarantee worth 47 cells.
+
+    It is not: all 32 of the -p-g2 fixtures push a relocated immediate,
+    which is what handing over an address looks like here. `lea` is not,
+    and testing for `Operation.ADDRESS` found none of them.
+
+    Asked per cell instead of per body, 59 cells have an address nothing
+    takes. That analysis is sound and is not written; this test is here so
+    that the whole-body version is not written again.
+    """
+    from pathlib import Path
+
+    from qbopt import blocks as split
+    from qbopt import module
+    from qbopt import omf
+    from qbopt.blocks import code_map
+
+    clean = []
+    for path in sorted(Path("fixtures/omf").glob("*-p-g2.obj"))[:8]:
+        records = omf.parse(path.read_bytes())
+        found = module.of(records)
+        mapped = code_map(found)
+        if isinstance(mapped, str):
+            continue
+        blocks = split.partition(found, mapped)
+        fields = {one.offset for one in omf.fixups(records) if one.seg == found.seg}
+        if not any(
+            str(insn.insn).lower().startswith(("push", "lea"))
+            and any(insn.at <= one < insn.end for one in fields)
+            for block in blocks
+            for insn in block.insns
+        ):
+            clean.append(path.stem)
+    assert not clean, f"these hand out no address, so the whole-body test would grant something: {clean}"
+
+
+def test_the_object_says_which_segment_holds_the_program_s_variables() -> None:
+    """BC_DATA is the program's; BR_DATA and BR_SKYS are the runtime's."""
+    from pathlib import Path
+
+    from qbopt import module
+    from qbopt import omf
+
+    found = module.of(omf.parse(Path("fixtures/omf/matrix-p-g2.obj").read_bytes()))
+    assert found.program_data is not None, "no segment is named BC_DATA"
+    assert found.program_data in found.dgroup, "the program's data is not in DGROUP"

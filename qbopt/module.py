@@ -129,6 +129,15 @@ class Module:
     # can never be the same byte as a segment outside this set, which is what
     # may_alias() rests on.
     dgroup: frozenset[int] = frozenset()
+    # The segment BC put this program's own variables in -- the one whose
+    # SEGDEF class is BC_DATA. DGROUP holds it beside the runtime's own
+    # data (BR_DATA, BR_SKYS), and they are different segments: a runtime
+    # routine writes through its own buffers, not through the program's
+    # variables, unless the program handed it a pointer.
+    #
+    # Without the distinction every call reads as writing every variable,
+    # and nothing in the corpus is promotable. With it, 47 cells are.
+    program_data: int | None = None
     # Which fixups each operation's own operands carry, by mir.Op.id. One
     # for one instruction, which is every operation the raise makes -- and
     # several for one it folds an idiom into: absorbing a long divide is
@@ -305,6 +314,20 @@ def may_alias(
             return True
 
 
+# The SEGDEF name BC gives the segment holding a program's own variables.
+# The runtime's data is BR_DATA and BR_SKYS, contributed at link time; BC
+# emits this one, and everything a compiled program declares lives in it.
+PROGRAM_DATA = "BC_DATA"
+
+
+def _program_data(records: list) -> int | None:
+    """Which segment index holds this program's own variables."""
+    for index, one in enumerate(omf.segments(records)):
+        if one is not None and one[0] == PROGRAM_DATA:
+            return index
+    return None
+
+
 def of(records: list[omf.Record]) -> Module | None:
     found = omf.code_segment(records)
     if found is None:
@@ -342,6 +365,7 @@ def of(records: list[omf.Record]) -> Module | None:
     sites = frozenset(fixup.offset for fixup in fixups)
     fixup_at = {fixup.offset: fixup for fixup in fixups if fixup.offset in operands}
     dgroup = frozenset(omf.groups(records).get(DGROUP, ()))
+    program_data = _program_data(records)
 
     return Module(
         records,
@@ -359,6 +383,7 @@ def of(records: list[omf.Record]) -> Module | None:
         sites,
         fixup_at,
         dgroup,
+        program_data=program_data,
     )
 
 

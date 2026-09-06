@@ -1036,6 +1036,7 @@ def raise_body(
     entry: int | None = None,
     calls: dict[int, str] | None = None,
     sites: dict | None = None,
+    program_data: int | None = None,
 ) -> MirBody | str:
     """One body's blocks, in SSA, or why they could not be.
 
@@ -1621,7 +1622,9 @@ def bodies(found: Module, blocks: list[Block]) -> list[tuple[str, MirBody]]:
         mine = [one for one in blocks if any(lo <= one.at < hi for lo, hi in body.body.ranges)]
         if not mine:
             continue
-        built = raise_body(mine, nodes, body.body.seed, found.calls, _sites(found, blocks))
+        built = raise_body(
+            mine, nodes, body.body.seed, found.calls, _sites(found, blocks), found.program_data
+        )
         if not isinstance(built, str):
             found.refs.update(_referenced(built, found))
             _folded(built, found, blocks)

@@ -557,6 +557,37 @@ had no nameable slot**, and each one aliased every named cell in its body.
     413 name only the object
     793 name neither
 
+### Sequential execution buys nothing; the segment layout might
+
+Everything here already assumes one path at a time. `may_alias`, `avail`
+and `induction` walk in program order and nothing anywhere assumes
+concurrency. The blocker is not a parallel writer -- it is a callee running
+*sequentially* between a store and a load.
+
+What is adjacent and real: **DGROUP holds more than one segment**, and the
+object says which is which.
+
+    seg 1   MATRIX_CODE  class BC_CODE
+    seg 2   BR_DATA      class BLANK      the runtime's data
+    seg 5   BC_DATA      class BC_DATA    this program's variables
+    seg 9   BC_CN, BC_DS, BC_SA           BC's own tables
+
+`B$PRINT` writes through its own buffers, which are in BR_DATA. It cannot
+touch BC_DATA unless the program hands it a pointer. `module.program_data`
+names the segment.
+
+**And the guarantee is not earned.** Asked per body -- "does this body hand
+out an address at all" -- it grants 47 cells and is wrong: all 32 `-p-g2`
+fixtures push a relocated immediate, which is what handing over an address
+looks like here. `lea` is not how BC does it, and testing for
+`Operation.ADDRESS` found none of them. That version was written, measured
+at 47 cells, and reverted.
+
+Asked **per cell** -- "is *this* variable's address ever taken" -- 59 cells
+have one nothing takes, 42 do, and the analysis is sound for a scalar. It
+is not written. What it still owes is transitive escape: a descriptor whose
+address is passed may point at another cell.
+
 ### Why promotion is not the pass to write
 
 Measured, and it changes the answer given a day earlier. Of 312 candidate
