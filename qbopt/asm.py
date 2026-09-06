@@ -456,6 +456,17 @@ def assemble(
                 relocations.append((len(out) + (field - op.at), field))
             out += found.code[op.at : op.at + length]
             continue
+        # Before the carry below, which is the order the length pass asks
+        # in. A restore has no semantics -- it stands for three
+        # instructions, not one -- so asking the other way round took the
+        # carry and wrote the two bytes it sits on where four were
+        # measured. negnot printed A=-7317895 for 305419897.
+        if isinstance(op.node, ir.Restore):
+            made = select.restore(op.node.pair)
+            if made is None or len(made.code) != lengths[index]:
+                return f"{op.at:#06x}: the restore idiom did not come back its own length"
+            out += made.code
+            continue
         # A barrier is an instruction ir.py models nothing about --
         # `movsx eax,bx` is one -- so there is nothing to select from and
         # its own bytes are the only right answer. Carried, unless it names
@@ -469,12 +480,6 @@ def assemble(
             if field is not None:
                 relocations.append((len(out) + (field - op.at), field))
             out += found.code[op.at : op.at + length]
-            continue
-        if isinstance(op.node, ir.Restore):
-            made = select.restore(op.node.pair)
-            if made is None or len(made.code) != lengths[index]:
-                return f"{op.at:#06x}: the restore idiom did not come back its own length"
-            out += made.code
             continue
         folded = found.absorbed.get(op.id) if op.id is not None else None
         if folded is not None:
