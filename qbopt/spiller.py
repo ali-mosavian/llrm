@@ -57,6 +57,10 @@ def spilled(
     for block in body.blocks:
         insns: list[lir.Insn] = []
         for one in block.insns:
+            direct = _in_place(one, values, frame)
+            if direct is not None:
+                insns.append(direct)
+                continue
             before, after, rename = [], [], {}
             for value in one.uses:
                 if value not in values:
@@ -133,6 +137,54 @@ def _settled(where, rename: dict[int, int]):
     if isinstance(where, ir.Mem) and isinstance(where.through, ir.Held) and where.through.value in rename:
         return replace(where, through=ir.Held(rename[where.through.value], where.through.width))
     return where
+
+
+class Simultaneous(Exception):
+    """A move in a parallel copy with both ends spilled.
+
+    `mov [bp-2],[bp-4]` is not an instruction, and breaking it into a load
+    and a store puts an ungrouped one inside a copy whose moves happen at
+    once -- which is what parcopy.py then cannot schedule as one group.
+    Refused by name until a scratch register can be reserved for it.
+    """
+
+
+def _in_place(one: lir.Insn, values: "frozenset[int]", frame) -> "lir.Insn | None":
+    """One move of a parallel copy, with its spilled end read or written where it lives.
+
+    A phi's moves happen at once. Spilling one of them the ordinary way --
+    a reload before it and a store after it -- puts an instruction inside
+    the group that is not part of it, and the group stops being one run.
+    x86 reads and writes memory in a move, so the slot goes in the operand
+    and the copy stays one instruction.
+    """
+    what = one.what
+    if one.group is None or what is None or what.op is not ir.Operation.MOVE:
+        return None
+    if len(what.dests) != 1 or len(what.sources) != 1:
+        return None
+    into = [v for v in one.defines if v in values]
+    outof = [v for v in one.uses if v in values]
+    if not into and not outof:
+        return None
+    if into and outof:
+        raise Simultaneous(
+            f"{one.at:#06x}: a move in a parallel copy has both ends spilled and "
+            "needs a scratch register this does not reserve yet"
+        )
+    value = (into or outof)[0]
+    cell = frame.cell(value, _width(one, value))
+    if into:
+        return replace(
+            one,
+            what=ir.Semantics(what.op, what.name, (cell,), what.sources),
+            defines=tuple(v for v in one.defines if v != value),
+        )
+    return replace(
+        one,
+        what=ir.Semantics(what.op, what.name, what.dests, (cell,)),
+        uses=tuple(v for v in one.uses if v != value),
+    )
 
 
 def _next_value(body: lir.LirBody) -> int:
