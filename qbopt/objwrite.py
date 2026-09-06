@@ -74,6 +74,16 @@ def written(
     return b"".join(record.emit() for record in made)
 
 
+class Survived(Exception):
+    """A phi reached emission. Always a bug in phi elimination.
+
+    A phi is not an instruction, so emitting one emits nothing at all --
+    which is how three of bools-q-O's went missing without a word, and why
+    it printed T=1 for 2. This is the hard invariant: nothing below
+    elimination may guess what a phi meant.
+    """
+
+
 def _as_mir(body: "lir.LirBody") -> mir.MirBody:
     """The operations layout still asks its questions of, carrying LIR.
 
@@ -90,12 +100,17 @@ def _as_mir(body: "lir.LirBody") -> mir.MirBody:
 
     This is the seam. When layout takes LirBody directly it goes.
     """
+    stuck = [block.at for block in body.blocks if block.phis]
+    if stuck:
+        raise Survived(
+            "a phi survives at " + ", ".join(f"{one:#06x}" for one in stuck) + "; nothing below can emit one"
+        )
     return mir.MirBody(
         entry=body.entry,
         blocks=tuple(
             mir.MirBlock(
                 at=block.at,
-                phis=(),
+                phis=(),  # checked above: a surviving one is refused, not dropped
                 ops=tuple(_carried(one) for one in block.insns),
                 succ=block.succ,
             )

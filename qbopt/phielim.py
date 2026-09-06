@@ -45,32 +45,115 @@ def eliminated(body: lir.LirBody) -> lir.LirBody:
     at_of = {block.at: block for block in body.blocks}
     successors = {block.at: len(block.succ) for block in body.blocks}
 
+    once = _read_once(body)
+    split: dict[tuple[int, int], list[tuple[int, int]]] = {}
     copies: dict[int, list[lir.Insn]] = {}
+    rename: dict[int, int] = {}
     kept: dict[int, tuple[lir.Phi, ...]] = {}
     for block in body.blocks:
         stays = []
         for phi in block.phis:
             edges = [(where, value) for where, value in phi.incoming if where in at_of]
-            if len(edges) != len(phi.incoming) or any(successors.get(where, 0) > 1 for where, _ in edges):
-                stays.append(phi)  # critical edge, or an edge out of this body
+            if len(edges) != len(phi.incoming):
+                stays.append(phi)  # an edge from outside this body
+                continue
+            if any(successors.get(where, 0) > 1 for where, _ in edges):
+                # A critical edge. A copy at the end of that predecessor
+                # would run on both its paths and not only the one the phi
+                # describes, so the copy cannot go there -- and splitting
+                # the edge means a block with no address, which layout
+                # orders by.
+                #
+                # Where every incoming value is defined in its own
+                # predecessor and read by nothing but this phi, none is
+                # needed: the definition already sits on the edge, so
+                # having it define the phi's result outright says what the
+                # phi said. That is the same join, stated as one variable
+                # instead of two and a copy.
+                if all(_defined_in(at_of[w], v) and once.get(v) == 1 for w, v in edges):
+                    for _where, value in edges:
+                        rename[value] = phi.result
+                    continue
+                # Split the edge. The copy goes in a block of its own that
+                # only the branch reaches, and which jumps back to the
+                # successor -- so it runs on that path and no other.
+                for where, value in edges:
+                    if successors.get(where, 0) > 1:
+                        split.setdefault((where, block.at), []).append((phi.result, value))
+                    else:
+                        copies.setdefault(where, []).append(_copy(at_of[where], phi.result, value))
                 continue
             for where, value in edges:
                 copies.setdefault(where, []).append(_copy(at_of[where], phi.result, value))
         kept[block.at] = tuple(stays)
 
-    if not copies:
+    if not copies and not rename and not split:
         return body
+    if split:
+        return _split_edges(body, split, copies, rename, kept)
     return replace(
         body,
         blocks=tuple(
             replace(
                 block,
-                insns=_before_the_terminator(block, copies.get(block.at, [])),
+                insns=tuple(
+                    _renamed(one, rename)
+                    for one in _before_the_terminator(block, copies.get(block.at, []))
+                ),
                 phis=kept[block.at],
             )
             for block in body.blocks
         ),
     )
+
+
+def _read_once(body: lir.LirBody) -> dict[int, int]:
+    """How many times each value is read, phi edges included."""
+    out: dict[int, int] = {}
+    for block in body.blocks:
+        for one in block.insns:
+            for value in one.uses:
+                out[value] = out.get(value, 0) + 1
+        for phi in block.phis:
+            for _where, value in phi.incoming:
+                out[value] = out.get(value, 0) + 1
+    return out
+
+
+def _defined_in(block: lir.LirBlock, value: int) -> bool:
+    """Whether exactly one instruction in this block defines the value."""
+    return sum(1 for one in block.insns if value in one.defines) == 1
+
+
+def _renamed(one: lir.Insn, rename: dict[int, int]) -> lir.Insn:
+    """One instruction defining the phi's result where it defined its own."""
+    if not rename:
+        return one
+    if not any(v in rename for v in (*one.defines, *one.uses)):
+        return one
+    what = one.what
+    if what is not None:
+        what = ir.Semantics(
+            what.op,
+            what.name,
+            tuple(_settled(x, rename) for x in what.dests),
+            tuple(_settled(x, rename) for x in what.sources),
+            what.target,
+        )
+    return replace(
+        one,
+        what=what,
+        defines=tuple(rename.get(v, v) for v in one.defines),
+        uses=tuple(rename.get(v, v) for v in one.uses),
+    )
+
+
+def _settled(where, rename: dict[int, int]):
+    if isinstance(where, ir.Held) and where.value in rename:
+        return ir.Held(rename[where.value], where.width)
+    if isinstance(where, ir.Mem) and isinstance(where.through, ir.Held) and where.through.value in rename:
+        return replace(where, through=ir.Held(rename[where.through.value], where.through.width))
+    return where
 
 
 def _copy(where: lir.LirBlock, into: int, out_of: int) -> lir.Insn:
@@ -124,3 +207,64 @@ def _before_the_terminator(block: lir.LirBlock, added: list[lir.Insn]) -> tuple[
 def _leaves(one: lir.Insn) -> bool:
     """Whether this instruction ends the block."""
     return one.what is not None and one.what.op in (ir.Operation.JUMP, ir.Operation.BRANCH, ir.Operation.RETURN)
+
+
+def _split_edges(body, split: dict, copies: dict, rename: dict, kept: dict) -> lir.LirBody:
+    """A block of its own on each critical edge, holding that edge's copies.
+
+    The copies cannot go at the end of the predecessor -- it has another
+    successor and they would run on that path too -- and they cannot go at
+    the top of the successor, which has another predecessor. The block
+    between the two is the only place they belong, which is what splitting
+    an edge means.
+
+    The new block is given an address past everything the body already
+    holds, so layout emits it out of line, and it ends in a jump back to
+    the successor. The predecessor's branch is retargeted to it.
+    """
+    at_of = {block.at: block for block in body.blocks}
+    highest = max(
+        (one.covers[1] if one.covers else one.at) for block in body.blocks for one in block.insns
+    )
+    made: dict[tuple[int, int], lir.LirBlock] = {}
+    landing: dict[tuple[int, int], int] = {}
+    for number, ((where, into), pairs) in enumerate(sorted(split.items()), 1):
+        at = highest + number * 2
+        landing[(where, into)] = at
+        beside = at_of[where].insns[-1]
+        insns = [
+            _made(beside, at, ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(a, 2),), (ir.Held(b, 2),)), (a,), (b,))
+            for a, b in pairs
+        ]
+        insns.append(
+            _made(beside, at, ir.Semantics(ir.Operation.JUMP, "jmp", (), (), into), (), ())
+        )
+        made[(where, into)] = lir.LirBlock(at=at, insns=tuple(insns), succ=(into,), phis=())
+
+    blocks = []
+    for block in body.blocks:
+        succ = tuple(landing.get((block.at, one), one) for one in block.succ)
+        insns = [
+            _retargeted(one, landing, block.at)
+            for one in _before_the_terminator(block, copies.get(block.at, []))
+        ]
+        blocks.append(
+            replace(block, insns=tuple(_renamed(one, rename) for one in insns), succ=succ, phis=kept[block.at])
+        )
+    return replace(body, blocks=tuple([*blocks, *made.values()]))
+
+
+def _made(beside: lir.Insn, at: int, what: ir.Semantics, defines: tuple, uses: tuple) -> lir.Insn:
+    """One instruction in a split block, claiming none of BC's own bytes."""
+    return lir.Insn(at=at, covers=(at, at), what=what, defines=defines, uses=uses, op=beside.op)
+
+
+def _retargeted(one: lir.Insn, landing: dict, here: int) -> lir.Insn:
+    """A branch or jump pointing at the split block instead of the successor."""
+    what = one.what
+    if what is None or what.target is None:
+        return one
+    at = landing.get((here, what.target))
+    if at is None:
+        return one
+    return replace(one, what=ir.Semantics(what.op, what.name, what.dests, what.sources, at))

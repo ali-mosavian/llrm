@@ -256,7 +256,10 @@ def test_a_spilled_value_gets_a_slot_and_the_prologue_reserves_it() -> None:
     from qbopt import spiller
     from qbopt import verify
 
-    _found, _blocks, bodies = _raised("nested-p-g2")
+    # divmod, because nested stopped spilling: the coalescer now asks
+    # Briggs before a join and leaves the allocator a body it can place.
+    # The claim here is the spiller's, so it needs a body that spills.
+    _found, _blocks, bodies = _raised("divmod-p-g2")
     (name, body), = bodies
     low = lower.lowered(name, body, _found.calls)
     # Everything up to the allocator, which now owns the spill loop -- so
@@ -267,7 +270,7 @@ def test_a_spilled_value_gets_a_slot_and_the_prologue_reserves_it() -> None:
         low = phase.transform(low)
 
     got = allocate.allocate(low, {})
-    assert got.spilled, "nested spills; the allocator says otherwise"
+    assert got.spilled, "divmod spills; the allocator says otherwise"
     frame = frames.of(low)
     after, reloads = spiller.spilled(low, got.spilled, frame)
     assert frame.size >= 2 * len(got.spilled), "the frame did not grow by a slot per spilled value"
@@ -335,7 +338,9 @@ def test_a_reload_cannot_be_spilled_again() -> None:
     from qbopt import frame as frames
     from qbopt import spiller
 
-    _found, _blocks, bodies = _raised("fpcsex-p-g2-zd")
+    # divmod, because fpcsex stopped spilling once the coalescer began
+    # refusing a join that would leave a class uncolourable.
+    _found, _blocks, bodies = _raised("divmod-p-g2")
     ran = False
     for name, body in bodies:
         low = lower.lowered(name, body, _found.calls)
@@ -351,7 +356,7 @@ def test_a_reload_cannot_be_spilled_again() -> None:
         assert reloads, "spilling made no reload values"
         again = allocate.allocate(after, {}, reloads)
         assert not (again.spilled & reloads), f"a reload was spilled: {sorted(again.spilled & reloads)}"
-    assert ran, "fpcsex spills; the allocator says otherwise"
+    assert ran, "divmod spills; the allocator says otherwise"
 
 
 def test_the_allocator_settles_on_every_program() -> None:
@@ -441,7 +446,10 @@ def test_a_spilled_value_gets_a_slot_and_the_prologue_reserves_it() -> None:
     from qbopt import spiller
     from qbopt import verify
 
-    _found, _blocks, bodies = _raised("nested-p-g2")
+    # divmod, because nested stopped spilling: the coalescer now asks
+    # Briggs before a join and leaves the allocator a body it can place.
+    # The claim here is the spiller's, so it needs a body that spills.
+    _found, _blocks, bodies = _raised("divmod-p-g2")
     (name, body), = bodies
     low = lower.lowered(name, body, _found.calls)
     # Everything up to the allocator, which now owns the spill loop -- so
@@ -452,7 +460,7 @@ def test_a_spilled_value_gets_a_slot_and_the_prologue_reserves_it() -> None:
         low = phase.transform(low)
 
     got = allocate.allocate(low, {})
-    assert got.spilled, "nested spills; the allocator says otherwise"
+    assert got.spilled, "divmod spills; the allocator says otherwise"
     frame = frames.of(low)
     after, reloads = spiller.spilled(low, got.spilled, frame)
     assert frame.size >= 2 * len(got.spilled), "the frame did not grow by a slot per spilled value"
@@ -520,7 +528,9 @@ def test_a_reload_cannot_be_spilled_again() -> None:
     from qbopt import frame as frames
     from qbopt import spiller
 
-    _found, _blocks, bodies = _raised("fpcsex-p-g2-zd")
+    # divmod, because fpcsex stopped spilling once the coalescer began
+    # refusing a join that would leave a class uncolourable.
+    _found, _blocks, bodies = _raised("divmod-p-g2")
     ran = False
     for name, body in bodies:
         low = lower.lowered(name, body, _found.calls)
@@ -536,7 +546,7 @@ def test_a_reload_cannot_be_spilled_again() -> None:
         assert reloads, "spilling made no reload values"
         again = allocate.allocate(after, {}, reloads)
         assert not (again.spilled & reloads), f"a reload was spilled: {sorted(again.spilled & reloads)}"
-    assert ran, "fpcsex spills; the allocator says otherwise"
+    assert ran, "divmod spills; the allocator says otherwise"
 
 
 def test_the_allocator_settles_on_every_program() -> None:
@@ -808,3 +818,52 @@ def test_an_absorbed_site_keeps_its_own_emission() -> None:
                         f"{one.at:#06x} is an absorbed site and was lowered to something"
                     )
     assert seen, "no instruction in lngmix stands for an absorbed site"
+
+
+def test_no_phi_survives_elimination_on_a_critical_edge() -> None:
+    """bools-q-O has three, and every one was silently discarded."""
+    from pathlib import Path
+
+    from qbopt import blocks as split
+    from qbopt import lower
+    from qbopt import module
+    from qbopt import omf
+    from qbopt import phielim
+    from qbopt import transform
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(Path("fixtures/omf/bools-q-O.obj").read_bytes()))
+    blocks = split.partition(found, code_map(found))
+    raised = list(mir.bodies(found, blocks))
+    absorbed = set(found.absorbed)
+    critical = 0
+    for name, body in raised:
+        body = transform.widened(
+            transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
+        )
+        low = lower.lowered(name, body, found.calls, absorbed)
+        at_of = {block.at: block for block in low.blocks}
+        for block in low.blocks:
+            for phi in block.phis:
+                if any(len(at_of[w].succ) > 1 for w, _v in phi.incoming if w in at_of):
+                    critical += 1
+        out = phielim.eliminated(low)
+        left = [f"{block.at:#06x}" for block in out.blocks if block.phis]
+        assert not left, f"{name}: a phi survives at {', '.join(left)}"
+    assert critical >= 3, f"bools-q-O has three phis on critical edges; found {critical}"
+
+
+def test_emission_refuses_a_body_that_still_has_a_phi() -> None:
+    """A phi is not an instruction, so emitting one emits nothing."""
+    from qbopt import lir
+    from qbopt import objwrite
+
+    stuck = lir.LirBody(
+        name="one",
+        entry=0,
+        blocks=(lir.LirBlock(at=0, insns=(), phis=(lir.Phi(result=1, incoming=((0, 2),)),)),),
+        origin={},
+        pins={},
+    )
+    with pytest.raises(objwrite.Survived):
+        objwrite._as_mir(stuck)
