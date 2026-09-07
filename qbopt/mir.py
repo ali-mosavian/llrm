@@ -1301,6 +1301,13 @@ def raise_body(
                     covers = (site.start, site.end)
                     where_at = site.start
             _called = _call_args(chosen.get(insn.at), holds, insn.at) if kind is Kind.CALL else ((), True)
+            # The snapshot the raise took, arguments included. `semantics`
+            # carries an operation's own bytes only while its operands are
+            # the ones it was raised with, and naming what a call reads is
+            # bookkeeping rather than a rewrite -- recorded in one and not
+            # the other, every residual call read as rewritten and select
+            # cannot encode a call.
+            _args = _called[0] if kind is Kind.CALL else operands
             ops[at].append(
                 Op(
                     where_at,
@@ -1316,9 +1323,9 @@ def raise_body(
                     covers=covers,
                     stack=_stack_effect(node.semantics),
                     test=_BY_BRANCH.get(node.semantics.name or "") if kind is Kind.BRANCH else None,
-                    args=_called[0] if kind is Kind.CALL else operands,
+                    args=_args,
                     results=where[1],
-                    raised=(operands, where[1]),
+                    raised=(_args, where[1]),
                     target=node.semantics.target,
                     id=next(_IDS),
                     args_known=_called[1],

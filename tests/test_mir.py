@@ -973,3 +973,44 @@ def test_the_exit_routine_declares_what_it_reads_where_that_is_established() -> 
     for op in made["B$EXSA"]:
         assert op.args_known is True, f"{op.at:#06x}: known={op.args_known}"
         assert [one.width for one in op.args] == [2, 2, 2, 2], f"{op.at:#06x}: {op.args}"
+
+
+def test_a_residual_call_is_not_rewritten_by_its_own_arguments() -> None:
+    """Naming what a call reads is bookkeeping, not a rewrite.
+
+    `lower.semantics` carries an operation's own bytes only while its
+    operands are the ones the raise produced -- `(args, results) ==
+    raised`. Recording a contract's declared inputs in `args` without
+    recording them in `raised` made every residual call look rewritten,
+    and `select` cannot encode a call: 43 bodies stopped laying out with
+    `call is not one select.py can emit`.
+    """
+    from pathlib import Path
+    from dataclasses import replace
+
+    from qbopt import omf
+    from qbopt import lower
+    from qbopt import module
+    from qbopt import runtime
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(Path("fixtures/omf/fpemu-p-g2.obj").read_bytes()))
+    blocks = split.partition(found, code_map(found))
+    calls = [
+        op
+        for _who, body in mir.bodies(found, blocks, runtime.for_module(found))
+        for block in body.blocks
+        for op in block.ops
+        if op.kind is mir.Kind.CALL and op.args
+    ]
+    assert calls, "no call raised its declared arguments"
+    for one in calls:
+        assert one.args_known, f"{one.at:#06x} says its interface is unknown"
+        assert lower.rewritten(one) is None, f"{one.at:#06x} reads as rewritten by its own arguments"
+        assert one.raised is not None and one.raised[0] == one.args, (
+            f"{one.at:#06x}: raised {one.raised[0]} against args {one.args}"
+        )
+    # And a real change still is one.
+    moved = replace(calls[0], args=calls[0].args[1:])
+    assert lower.rewritten(moved) is not None, "changing an argument no longer counts as a rewrite"
