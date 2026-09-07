@@ -73,9 +73,14 @@ def requirements(what: "ir.Semantics") -> dict[Occurrence, Register_]:
     if what.op in (ir.Operation.MULTIPLY, ir.Operation.DIVIDE) and len(what.dests) != 1:
         out[Occurrence("dest", 0)] = Register.EAX
         out[Occurrence("dest", 1)] = Register.EDX
-        out[Occurrence("source", 0)] = Register.EAX
+        # A multiply reads one source, the accumulator. A divide reads the
+        # pair, and `ir.DIVIDE_PAIR` has it high first -- `idiv` reads
+        # edx:eax -- so its two sources are the other way round.
         if what.op is ir.Operation.DIVIDE:
-            out[Occurrence("source", 1)] = Register.EDX
+            out[Occurrence("source", 0)] = Register.EDX
+            out[Occurrence("source", 1)] = Register.EAX
+        else:
+            out[Occurrence("source", 0)] = Register.EAX
     if what.op is ir.Operation.EXTEND:
         out[Occurrence("source", 0)] = Register.EAX
         out[Occurrence("dest", 0)] = Register.EDX

@@ -909,3 +909,31 @@ def test_verification_catches_a_cell_left_on_a_value_the_rename_ended() -> None:
     )
     said = verify.verify(body)
     assert any("value#3" in one for one in said), f"the stale cell passed: {said}"
+
+
+def test_a_wide_divide_requires_its_dividend_halves_where_idiv_reads_them() -> None:
+    """`idiv` reads edx:eax and writes eax:edx, low first in the pair.
+
+    `ir.DIVIDE_PAIR` is where that is written down -- dests `(eax, edx)`,
+    sources `(edx, eax)` and then the divisor -- and the requirement
+    table named source 0 as eax and source 1 as edx, the two the wrong way
+    round. Nothing consulted them while the fold placed the registers
+    itself; once the operands became values, the table is what pins them.
+    """
+    from iced_x86 import Register
+
+    from qbopt import target
+    from qbopt import ir as machine
+
+    dests, halves = machine.DIVIDE_PAIR[4]
+    what = machine.Semantics(machine.Operation.DIVIDE, "idiv", dests, (*halves, machine.Reg(Register.ECX, 4)))
+    want = target.requirements(what)
+    said = {(one.side, one.index): where for one, where in want.items()}
+    assert said[("dest", 0)] is Register.EAX, "the quotient is not eax"
+    assert said[("dest", 1)] is Register.EDX, "the remainder is not edx"
+    assert said[("source", 0)] is Register.EDX, f"the high half wants {said[('source', 0)]}"
+    assert said[("source", 1)] is Register.EAX, f"the low half wants {said[('source', 1)]}"
+    assert ("source", 2) not in said, "the divisor is not a fixed register"
+    # And the table agrees with the operands it is asked about.
+    assert what.sources[0] == machine.Reg(Register.EDX, 4)
+    assert what.sources[1] == machine.Reg(Register.EAX, 4)
