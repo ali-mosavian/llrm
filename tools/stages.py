@@ -61,11 +61,17 @@ def _bodies(data: bytes):
     """Every MIR body in this object, or nothing if it does not map."""
     found = module.of(omf.parse(data))
     if found is None:
-        return None, []
+        return None, [], {}
     mapped = code_map(found)
     if isinstance(mapped, str):
-        return found, []
-    return found, list(mir.bodies(found, split.partition(found, mapped)))
+        return found, [], {}
+    from qbopt import runtime
+
+    # One map for the whole run, kept on the module the tool passes on, so
+    # the raise and the lowering are given the same object -- built twice
+    # they can differ, which is what wholeseg.py takes care not to do.
+    contracts = runtime.for_module(found)
+    return found, list(mir.bodies(found, split.partition(found, mapped), contracts)), contracts
 
 
 def _shape(body) -> str:
@@ -351,7 +357,7 @@ def _says(op, cells: Cells, calls: dict, verbose: bool) -> str:
     return f"{into} := {kind} {', '.join(args)}".rstrip() + said
 
 
-def _machine(bodies, found, view) -> None:
+def _machine(bodies, found, view, contracts) -> None:
     """Each machine phase, one file each, the way the MIR passes get one.
 
     Rule 4 asks for a file per stage so that `diff` between two adjacent
@@ -362,9 +368,11 @@ def _machine(bodies, found, view) -> None:
     the spiller took. Watching only the ends of that is watching none of it.
     """
     from qbopt import flow
+    from qbopt import runtime
     from qbopt import lower as lowering
 
-    low = [(name, lowering.lowered(name, body)) for name, body in bodies]
+    # The map the emitter builds, so the tool sees what it would see.
+    low = [(name, lowering.lowered(name, body, found.calls, set(found.absorbed), contracts)) for name, body in bodies]
     number = 20
     with view(number, "lir", "lowered"):
         print("=== lowered")
@@ -565,13 +573,15 @@ def main(argv: list[str] | None = None) -> int:
         """The machine views, once: this is where lowering happens."""
         if args.dump is None and not args.asm:
             return
-        after, bodies = _bodies(out)
-        _machine(bodies, after, view)
+        after, bodies, theirs = _bodies(out)
+        # `after`'s own map, not the input's: a contract is keyed by call
+        # site, and the rewritten module's sites are its own.
+        _machine(bodies, after, view, theirs)
         with view(26, "asm", "emitted"):
             print(f"=== emitted ({why}, {len(out)} bytes)")
             _asm(out)
 
-    found, raised = _bodies(data)
+    found, raised, contracts = _bodies(data)
     debug = cvinfo.parse(omf.parse(data))
     if found is None or not raised:
         print("  nothing to raise")
