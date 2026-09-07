@@ -281,9 +281,7 @@ def test_every_established_contract_says_what_it_reads() -> None:
     the source tree and the corpus does not settle it -- 16 of 28 sites set
     cx before B$ENRA and 12 set bx, which is correlation and not an ABI.
     """
-    unknown = sorted(
-        name for name, one in runtime.CONTRACTS.items() if one.established and one.inputs is None
-    )
+    unknown = sorted(name for name, one in runtime.CONTRACTS.items() if one.established and one.inputs is None)
     assert unknown == ["B$ENRA", "B$EXSA"], f"unestablished inputs: {unknown}"
     assert runtime.worst("anything").inputs is None, "a name with no entry reads everything"
 
@@ -309,11 +307,7 @@ def test_a_routine_that_enters_user_code_still_writes_anything() -> None:
 
 def test_the_measured_routines_are_narrowed() -> None:
     """And the ones that do return say what they actually write."""
-    narrowed = [
-        name
-        for name, one in runtime.CONTRACTS.items()
-        if one.writes is runtime.Memory.OWN
-    ]
+    narrowed = [name for name, one in runtime.CONTRACTS.items() if one.writes is runtime.Memory.OWN]
     assert len(narrowed) >= 15, f"only {len(narrowed)} routines carry the measurement"
     for name in narrowed:
         assert not runtime.CONTRACTS[name].enters_user_code, f"{name} enters user code and is narrowed"
@@ -342,3 +336,28 @@ def test_an_unestablished_row_concedes_everything() -> None:
             continue
         assert one.writes is runtime.Memory.ANY, f"{name} is not established and narrows its writes"
         assert one.reads is runtime.Memory.ANY, f"{name} is not established and narrows its reads"
+
+
+def test_the_semicolon_long_print_reads_no_register() -> None:
+    """`PRINT x;` on a long is B$PSI4, and it was missing from the table.
+
+    Absent, it read as unestablished, and the lowering refused every body
+    that calls it. rt/prnval.asm:266 is `cProc B$PSI4,<PUBLIC,FAR>` /
+    `MOV AX,SEMI SHL 8 + VT_I4` / `JMP SHORT B$PRINT` -- ax written
+    first, no register read. The linked images agree under all three
+    compilers: `mov ax,114h` at 0x189 under VBDOS, 0x5db under PDS 7.1
+    and 0x1ef6 under QuickBASIC 4.5, so there is no variant.
+    """
+    from qbopt import runtime
+
+    one = runtime.contract("B$PSI4")
+    assert one.established, "B$PSI4 is not in the table"
+    assert one.inputs == frozenset(), f"it reads {one.inputs}"
+    # Two words, because PRINTX pops the second unless `TEST AL,VT_SD` is
+    # non-zero -- true for VT_I2 and VT_SD, false for VT_I4. B$PEI4 is
+    # the same type through the same path and carries the same number.
+    assert one.cleanup == 4, f"it pops {one.cleanup}"
+    assert one.cleanup == runtime.contract("B$PEI4").cleanup
+    assert one.clobbers == runtime.contract("B$PSI2").clobbers
+    assert one.writes == runtime.contract("B$PSI2").writes
+    assert one.reads == runtime.contract("B$PSI2").reads

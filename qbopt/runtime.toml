@@ -416,6 +416,21 @@ evidence = '''
 rt/prnval.asm: the entry point is `MOV AX,<term> SHL 8 + <type>` then `JMP SHORT B$PRINT` (B$PESD falls straight in). `cProc B$PRINT,<PUBLIC,FAR>,<SI>` saves si and the epilogue restores si and bp before returning, so those two survive; the rest does not, because the numeric path calls B$FOUTBX and the file comment there says it `changes all registers except BP` -- flatly contradicting ifout.asm's "Per convention. (DS, ES, SI, DI, BP preserved.)" for the same routine, and the conservative reading wins. PRINTX pops one parameter word, then a second unless `TEST AL,VT_SD` is non-zero, which it is for VT_I2=2 and VT_SD=3 and is not for VT_I4=14h (inc/rtps.inc). Memory is the worst case and read as such: print using goes through the [b$PUSG] vector into prtu.asm, which calls B$SASS, and output goes through the [VTYP], [VWCH] and [b$pFLUSH] vectors whose targets depend on the open device. Any string allocation on those paths reaches B$STALC, whose step 4 calls B$STCPCT -- and rt/nhstutil.asm says of it `The string descriptors referenced by the string header are adjusted to reflect their movement`, writing [BX+2] of every live descriptor including a module-level string variable's. Header: `Exceptions: bad file mode; I/O error or Disk full error when flush the buffer if a EOL encountered`.
 '''
 
+["B$PSI4"]
+cleanup = 4
+control = "returns"
+enters_user_code = false
+raises_error = true
+error_handling = false
+writes = "OWN"
+reads = "OWN"
+clobbers = ["ax", "bx", "cx", "di", "ds", "dx", "es", "flags"]
+established = true
+inputs = []
+evidence = '''
+rt/prnval.asm: the entry point is `MOV AX,<term> SHL 8 + <type>` then `JMP SHORT B$PRINT` (B$PESD falls straight in). `cProc B$PRINT,<PUBLIC,FAR>,<SI>` saves si and the epilogue restores si and bp before returning, so those two survive; the rest does not, because the numeric path calls B$FOUTBX and the file comment there says it `changes all registers except BP` -- flatly contradicting ifout.asm's "Per convention. (DS, ES, SI, DI, BP preserved.)" for the same routine, and the conservative reading wins. PRINTX pops one parameter word, then a second unless `TEST AL,VT_SD` is non-zero, which it is for VT_I2=2 and VT_SD=3 and is not for VT_I4=14h (inc/rtps.inc), so this one pops both. Its own entry is `MOV AX,SEMI SHL 8 + VT_I4` -- `mov ax,114h` in the linked image under all three compilers, at 0x189 under VBDOS, 0x5db under PDS 7.1 and 0x1ef6 under QuickBASIC 4.5 -- and reads no register. Memory is the worst case and read as such: print using goes through the [b$PUSG] vector into prtu.asm, which calls B$SASS, and output goes through the [VTYP], [VWCH] and [b$pFLUSH] vectors whose targets depend on the open device. Any string allocation on those paths reaches B$STALC, whose step 4 calls B$STCPCT -- and rt/nhstutil.asm says of it `The string descriptors referenced by the string header are adjusted to reflect their movement`, writing [BX+2] of every live descriptor including a module-level string variable's. Header: `Exceptions: bad file mode; I/O error or Disk full error when flush the buffer if a EOL encountered`.
+'''
+
 ["B$PSI2"]
 cleanup = 2
 control = "returns"
