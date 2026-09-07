@@ -401,14 +401,17 @@ def test_a_stores_address_is_the_value_that_computed_it() -> None:
     wrote, and valueizing rewrote only top-level operands. The second
     store's address was allocated to ax and the store still encoded [bx].
     The first passed by luck: its value happened to land in bx.
+
+    Witnessed on addrm-p-g2, a checked-in object with three such stores
+    and every contract it calls established. arrprm's own object is a
+    VBDOS build, and VBDOS's B$ENRA is deliberately unestablished -- its
+    `bx` path reaches a `call far [di+24h]` no disassembly can follow --
+    so the lowering refuses that body before reaching this at all.
     """
     from qbopt import lower
     from qbopt import transform
 
-    raw = Path("build/e2e/v-g3/ARRPRM.OBJ")
-    if not raw.is_file():
-        pytest.skip("the compiled object is not present")
-    found = module.of(omf.parse(raw.read_bytes()))
+    found = module.of(omf.parse(Path("fixtures/omf/addrm-p-g2.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
     seen = 0
     for name, body in mir.bodies(found, blocks):
@@ -439,7 +442,7 @@ def test_a_stores_address_is_the_value_that_computed_it() -> None:
                             f"{op.at:#06x} lowered its base as {cell.through if cell else None}"
                         )
                         assert cell.base.value == ref.base.id
-    assert seen >= 4, f"only {seen} based cells; this fixture should have four stores"
+    assert seen >= 4, f"only {seen} based cells; addrm-p-g2 has four"
 
 
 def test_a_lowered_cell_names_the_value_that_computed_its_address() -> None:
