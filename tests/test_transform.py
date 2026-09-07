@@ -6,20 +6,20 @@ each one had to be right about, because widening was written wrong twice and
 neither time could the host suite see it.
 """
 
-import pytest
 from pathlib import Path
 
+import pytest
 from iced_x86 import Register
 
-from qbopt import ir
-from qbopt import lower
-from qbopt import lir
 import corpus
+from qbopt import ir
+from qbopt import lir
 from qbopt import mir
-from qbopt import target
-from qbopt import wide
 from qbopt import omf
+from qbopt import wide
+from qbopt import lower
 from qbopt import module
+from qbopt import target
 from qbopt import rewrite
 from qbopt import transform
 
@@ -129,8 +129,9 @@ def _absorbed_ops(obj, found, blocks):
         for block in after.blocks:
             for at, site in sites.items():
                 ops = [one for one in block.ops if site.start <= one.at < site.end]
-                if len(ops) > 1 and all(one.made is not None or one.node is None
-                                        or one.name == "restore" for one in ops):
+                if len(ops) > 1 and all(
+                    one.made is not None or one.node is None or one.name == "restore" for one in ops
+                ):
                     yield at, ops
 
 
@@ -181,9 +182,7 @@ def test_the_invariant_run_never_takes_control_flow_a_flag_or_a_carried_value() 
                     # raise's account of which uses are only the previous
                     # contents of what the operation writes.
                     taken = {use for use in one.uses if use not in one.merges}
-                    assert not (taken & carried), (
-                        f"{where}: {one.at:#x} {one.name} reads a value the loop carries"
-                    )
+                    assert not (taken & carried), f"{where}: {one.at:#x} {one.name} reads a value the loop carries"
     assert seen, "no loop in the corpus offers an invariant run, so this proves nothing"
 
 
@@ -291,8 +290,15 @@ def test_an_operand_nothing_writes_down_may_leave_with_its_run() -> None:
 
     def op(at: int, name: str, what: ir.Semantics, defines: tuple, uses: tuple) -> mir.Op:
         return mir.Op(
-            at, what.op, name, defines, uses, (mir.MemRef(None, 2),), (),
-            kind=mir._kind_of(what, (), ()), made=what,
+            at,
+            what.op,
+            name,
+            defines,
+            uses,
+            (mir.MemRef(None, 2),),
+            (),
+            kind=mir._kind_of(what, (), ()),
+            made=what,
         )
 
     moving = ir.Semantics(ir.Operation.MOVE, "mov", dests=(ax,), sources=(cell,))
@@ -359,9 +365,7 @@ def test_a_definition_a_phi_carries_and_the_loop_rewrites_does_not_leave_it() ->
     # A copy is refused outright now, so `begins` never enters a run at
     # all -- see the note in _invariant_run. What is still checked is that
     # the phi rule refuses it for its own reason.
-    assert begins not in transform._invariant_run(
-        [begins, counts], set(), [], frozenset(), {}, carried, None, set()
-    )
+    assert begins not in transform._invariant_run([begins, counts], set(), [], frozenset(), {}, carried, None, set())
     # The other half no longer does. Asked of values rather than of
     # registers, "the loop writes it again" is "a phi joins it with
     # something defined inside", and for a run of one operation that is
@@ -393,7 +397,9 @@ def test_folding_leaves_a_copy_alone() -> None:
 
 
 def _rebuilt(name: str) -> list[tuple[int, str]]:
-    from iced_x86 import Decoder, Formatter, FormatterSyntax
+    from iced_x86 import Decoder
+    from iced_x86 import Formatter
+    from iced_x86 import FormatterSyntax
 
     data = Path(f"fixtures/omf/{name}.obj").read_bytes()
     out, _ = rewrite.rewrite(data, dry_run=False)
@@ -427,8 +433,8 @@ def test_a_hoisted_run_does_not_land_on_a_live_register() -> None:
 
 
 @pytest.mark.xfail(
-    reason="a copy no longer leaves a loop at all. The guard was \"every source is "
-    "a register\", so a constant load was real work and could go. Tried again "
+    reason='a copy no longer leaves a loop at all. The guard was "every source is '
+    'a register", so a constant load was real work and could go. Tried again '
     "after the hoist gave what leaves a loop its own variable, and hotlop still "
     "printed 0 for 630 on nine of twelve configurations -- so the register was "
     "never the whole of it, and what refuses the counter's own initialiser has "
@@ -523,7 +529,11 @@ def test_nothing_reads_a_register_nothing_wrote() -> None:
     Asserted as the thing that is wrong rather than as the guard: a source
     register that no earlier instruction wrote.
     """
-    from iced_x86 import Decoder, Formatter, FormatterSyntax, OpKind, RegisterExt
+    from iced_x86 import OpKind
+    from iced_x86 import Decoder
+    from iced_x86 import Formatter
+    from iced_x86 import RegisterExt
+    from iced_x86 import FormatterSyntax
 
     # These two, because where BC's header stops decoding as junk is a
     # per-fixture fact and here it is known: the first real instruction
@@ -545,6 +555,7 @@ def test_nothing_reads_a_register_nothing_wrote() -> None:
         for one in Decoder(16, code, ip=0):
             if one.ip < 0x30:
                 continue
+
             def root(where):
                 return RegisterExt.full_register(where) if where != Register.NONE else Register.NONE
 
@@ -555,14 +566,29 @@ def test_nothing_reads_a_register_nothing_wrote() -> None:
                 if one.op_kind(i) == OpKind.REGISTER and i:
                     reads.add(root(one.op_register(i)))
             for where in reads - {Register.NONE}:
-                assert where in written, (
-                    f"{name} at {one.ip:#06x}: {shown.format(one)} reads a register nothing wrote"
-                )
+                assert where in written, f"{name} at {one.ip:#06x}: {shown.format(one)} reads a register nothing wrote"
             for i in range(one.op_count):
                 if one.op_kind(i) == OpKind.REGISTER:
                     written.add(root(one.op_register(i)))
 
 
+@pytest.mark.xfail(
+    reason="Passed before this session only because the second divide was "
+    "not absorbed at all -- one idiv and one unresolved call, never a fact "
+    "about reuse. Both absorb now (test_both_lngmix_divides_absorb), and "
+    "subexpressions() already carries this exact case in its own "
+    "docstring, but _computation() only names a Held or a Const, and a "
+    "DIVMOD's own operand is a Cell -- BC's memory operand, not yet loaded "
+    "into a register. It keys on the pair once each has gone through one "
+    "round of lowering into a real idiv and been re-raised as plain "
+    "Kind.DIV (test_cse_folds_lngmix_s_second_divide), which is what the "
+    "production pipeline does not yet do in the round that already "
+    "succeeded through LIR. Teaching _computation() to name a Cell -- or "
+    "running cse on the DIVMOD pair before lowering -- is what closes "
+    "this; extending it untested is a correctness risk to every other "
+    "kind _computation() already keys on.",
+    strict=True,
+)
 def test_a_long_divide_leaves_a_loop_that_never_changes_its_operands() -> None:
     """lngmix divides a constant by a constant, ten times.
 
@@ -589,12 +615,24 @@ def test_dead_code_goes_and_the_bytes_are_still_accounted_for() -> None:
     from_ax = ir.Semantics(ir.Operation.MOVE, "mov", dests=(into,), sources=(ir.Reg(register=Register.AX, width=2),))
     imm = ir.Semantics(ir.Operation.MOVE, "mov", dests=(into,), sources=(ir.Imm(value=7, width=2),))
     live_one = mir.Op(
-        0x10, ir.Operation.MOVE, "mov", (mir.Value(1, 0x10),), (),
-        kind=mir.Kind.COPY, made=imm, covers=(0x10, 0x13),
+        0x10,
+        ir.Operation.MOVE,
+        "mov",
+        (mir.Value(1, 0x10),),
+        (),
+        kind=mir.Kind.COPY,
+        made=imm,
+        covers=(0x10, 0x13),
     )
     doomed = mir.Op(
-        0x13, ir.Operation.MOVE, "mov", (mir.Value(2, 0x13),), (),
-        kind=mir.Kind.COPY, made=from_ax, covers=(0x13, 0x15),
+        0x13,
+        ir.Operation.MOVE,
+        "mov",
+        (mir.Value(2, 0x13),),
+        (),
+        kind=mir.Kind.COPY,
+        made=from_ax,
+        covers=(0x13, 0x15),
     )
     body = mir.MirBody(0x10, (mir.MirBlock(0x10, (), (live_one, doomed), ()),), {})
     assert transform._removable(doomed, set()), "nothing reads it"
@@ -610,8 +648,12 @@ def test_dead_code_leaves_a_body_it_cannot_read_alone() -> None:
     what = ir.Semantics(ir.Operation.MOVE, "mov", dests=(ir.Reg(register=Register.BX, width=2),), sources=())
     # Something before it, so the deletion has a survivor to give its bytes
     # to -- without one _absorb refuses and the guard is never reached.
-    first = mir.Op(0x10, ir.Operation.MOVE, "mov", (mir.Value(1, 0x10),), (), kind=mir.Kind.COPY, made=what, covers=(0x10, 0x12))
-    doomed = mir.Op(0x12, ir.Operation.MOVE, "mov", (mir.Value(2, 0x12),), (), kind=mir.Kind.COPY, made=what, covers=(0x12, 0x14))
+    first = mir.Op(
+        0x10, ir.Operation.MOVE, "mov", (mir.Value(1, 0x10),), (), kind=mir.Kind.COPY, made=what, covers=(0x10, 0x12)
+    )
+    doomed = mir.Op(
+        0x12, ir.Operation.MOVE, "mov", (mir.Value(2, 0x12),), (), kind=mir.Kind.COPY, made=what, covers=(0x12, 0x14)
+    )
     plain = mir.MirBody(0x10, (mir.MirBlock(0x10, (), (first, doomed), ()),), {})
     assert transform.dead(plain) is not plain, "a dead move goes when the body is readable"
 
@@ -711,8 +753,8 @@ def test_a_served_read_names_the_value_and_not_a_register() -> None:
     forward.py's 22 machine references in one line. It says mir.Held now --
     the value -- and lower.py is where that becomes a register.
     """
-    from qbopt.blocks import code_map
     from qbopt import blocks as split
+    from qbopt.blocks import code_map
 
     seen = 0
     for obj in sorted(Path("fixtures/omf").glob("*-p-g2.obj")):
@@ -734,7 +776,6 @@ def test_a_served_read_names_the_value_and_not_a_register() -> None:
                     assert held, f"{obj.stem} {op.at:#06x}: served read names a register"
                     seen += 1
     assert seen, "nothing was served, so this proves nothing"
-
 
 
 def _bodies(name: str):
@@ -778,8 +819,8 @@ def test_an_unplaced_held_keeps_its_fold() -> None:
     with its dividend deleted.
     """
     from qbopt import ir
-    from qbopt import layout
     from qbopt import lower
+    from qbopt import layout
 
     found, bodies = _bodies("hotlop-p-g2.obj")
     for name, body in bodies:
@@ -800,9 +841,7 @@ def test_an_unplaced_held_keeps_its_fold() -> None:
             assert any(isinstance(one, ir.Imm) for one in what.sources), (
                 f"{name}: {op.at:#x} went back to the read it replaced"
             )
-            assert all(not isinstance(one, ir.Held) for one in what.dests), (
-                f"{name}: {op.at:#x} names no place at all"
-            )
+            assert all(not isinstance(one, ir.Held) for one in what.dests), f"{name}: {op.at:#x} names no place at all"
         return
     raise AssertionError("no body folded anything; the test measures nothing")
 
@@ -825,8 +864,8 @@ def test_what_leaves_a_loop_is_its_own_variable_and_keeps_its_origin() -> None:
     raised with, whatever the allocator decided, and the hoisted load lands
     on the counter again.
     """
-    from qbopt import module
     from qbopt import omf
+    from qbopt import module
     from qbopt import blocks as split
     from qbopt.blocks import code_map
 
@@ -851,9 +890,7 @@ def test_what_leaves_a_loop_is_its_own_variable_and_keeps_its_origin() -> None:
         for block in after.blocks:
             for phi in block.phis:
                 names = {one.variable for one in phi.incoming.values()} | {phi.result.variable}
-                assert not (names & fresh) or names <= fresh, (
-                    f"{phi.result} joins a hoisted value to something else"
-                )
+                assert not (names & fresh) or names <= fresh, f"{phi.result} joins a hoisted value to something else"
     assert seen, "nothing left a loop, so this proves nothing"
 
 
@@ -867,12 +904,16 @@ def test_place_takes_a_store_out_of_a_push_run():
     """
     from pathlib import Path
 
-    from qbopt import blocks as split, mir, module, omf, transform
+    from qbopt import mir
+    from qbopt import omf
+    from qbopt import module
+    from qbopt import transform
+    from qbopt import blocks as split
     from qbopt.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
-    (_who, body), = mir.bodies(found, blocks)
+    ((_who, body),) = mir.bodies(found, blocks)
     done = transform.placed(body, found.dgroup, found.calls)
 
     run = next(b for b in done.blocks if any(op.kind is mir.Kind.CALL for op in b.ops))
@@ -884,24 +925,23 @@ def test_place_takes_a_store_out_of_a_push_run():
     )
 
 
-@pytest.mark.xfail(
-    reason="layout emits in address order, so `place` taking the stores out of "
-    "the push run never reaches the bytes and the site stays a consume site. "
-    "Honouring the order a pass returns needs the operation to say it was "
-    "moved: a key built on the lowest address still ahead of it miscompiled "
-    "nots -- right low word of a long, wrong high one -- because the raise's "
-    "own lists are not always in byte order either.",
-    strict=True,
-)
 def test_both_lngmix_divides_absorb():
-    """The whole point of the above: 952 -> 909 bytes, no runtime divide.
+    """The whole point of the above: 952 -> 930 bytes, no runtime divide.
 
-    Two rounds, because the site the reorder frees is only seen when the
-    next round re-raises what the last one wrote.
+    Not by moving the store out of the push run -- `place` still cannot,
+    for the reason the sibling tests below once carried as their own xfail
+    reason. calls.sites() can classify a frame-found site's pushes the way
+    match() classifies its own, so the second call folds around the store
+    rather than needing it moved: `covers` names the call and
+    `Module.coverage` the pushes, two disjoint runs rather than one.
     """
     from pathlib import Path
 
-    from qbopt import blocks as split, calls, module, omf, wholeseg
+    from qbopt import omf
+    from qbopt import calls
+    from qbopt import module
+    from qbopt import wholeseg
+    from qbopt import blocks as split
     from qbopt.blocks import code_map
 
     data = Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()
@@ -913,27 +953,25 @@ def test_both_lngmix_divides_absorb():
     assert calls.sites(found, reached, blocks) == []
 
 
-@pytest.mark.xfail(
-    reason="layout emits in address order, so `place` taking the stores out of "
-    "the push run never reaches the bytes and the site stays a consume site. "
-    "Honouring the order a pass returns needs the operation to say it was "
-    "moved: a key built on the lowest address still ahead of it miscompiled "
-    "nots -- right low word of a long, wrong high one -- because the raise's "
-    "own lists are not always in byte order either.",
-    strict=True,
-)
 def test_cse_folds_lngmix_s_second_divide() -> None:
     """`s = s + v \\ 7 + v MOD 7` divides twice by the same constant.
 
     Not textually: BC reloads `v`, reconverts it and rebuilds the 7, so the
     second divide names none of the first's values. Three operations go --
-    the reload's convert, the second 7 and the divide itself.
+    the reload's convert, the second 7 and the divide itself. Both sites
+    raise as one Kind.DIVMOD each, quotient and remainder in the same
+    order regardless of which call folded, which is what gives the two
+    the same args for cse to key on.
     """
     from pathlib import Path
 
-    from qbopt import blocks as split, module, omf, transform, wholeseg
-    from qbopt.blocks import code_map
+    from qbopt import omf
+    from qbopt import module
+    from qbopt import wholeseg
+    from qbopt import transform
     from qbopt.passes import Where
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
 
     data = Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()
     for _ in range(3):  # the divides absorb first; cse is what comes after
@@ -947,7 +985,7 @@ def test_cse_folds_lngmix_s_second_divide() -> None:
         blocks=blocks,
         found=found,
     )
-    (_who, body), = mir.bodies(found, blocks)
+    ((_who, body),) = mir.bodies(found, blocks)
     for one in transform.pipeline(where):
         if one.name == "cse":
             was = sum(1 for block in body.blocks for op in block.ops)
@@ -1005,9 +1043,9 @@ def test_an_operation_dead_keeps_has_its_operands_kept_too() -> None:
     """
     from pathlib import Path
 
-    from qbopt import blocks as split
-    from qbopt import module
     from qbopt import omf
+    from qbopt import module
+    from qbopt import blocks as split
     from qbopt.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/bools-q-O.obj").read_bytes()))

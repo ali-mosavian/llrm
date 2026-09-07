@@ -192,6 +192,18 @@ class Module:
     # argument values; lowering asks this what instructions to write for it.
     # calls.CallSite, but module.py sits below calls.py and cannot say so.
     absorbed: dict[int, object] = field(default_factory=dict)
+    # The full, ordered set of disjoint byte ranges a folded operation
+    # stands for, by mir.Op.id -- present only for the rare op whose bytes
+    # are not one run. A site frames() found may push its arguments, let
+    # BC put a real instruction between the pushes and the call, and only
+    # then call: one interval cannot name both the pushes and the call
+    # without also claiming the instruction between them, so this is the
+    # one record of every range instead. Absent, `covers` alone is still
+    # the whole answer -- the ordinary case, and every op has it.
+    # Established at the raise, beside `absorbed` and `refs`, and asked
+    # only where a caller is accounting for every byte: lower.py and every
+    # machine phase read `covers` alone and never know this exists.
+    coverage: dict[int, tuple[tuple[int, int], ...]] = field(default_factory=dict)
 
     def resolve(self, field_offset: int, literal: int) -> Addr:
         """What the operand whose displacement field sits here points at."""

@@ -224,8 +224,8 @@ def test_a_laid_out_body_is_no_bigger_than_bc_s_own() -> None:
     """
     was = now = 0
     for obj in FIXTURES:
-        for body, got, _found in laid(obj):
-            was += sum(asm._length_of(op) or 0 for op in layout._ordered(body))
+        for body, got, found in laid(obj):
+            was += sum(asm._length_of(op, found) or 0 for op in layout._ordered(body))
             now += len(got.code)
     assert now <= was, f"{now} against BC's {was}"
 
@@ -297,7 +297,7 @@ def test_a_rebuilt_segment_is_the_same_instructions(obj: Path) -> None:
     # padding decode as instructions too, so counting decoded instructions
     # against ops would compare different things. What the carried runs get
     # instead is test_a_rebuilt_segment_carries_every_fixup.
-    if len(got.code) != sum(asm._length_of(op) or 0 for op in ops):
+    if len(got.code) != sum(asm._length_of(op, found) or 0 for op in ops):
         return
     ops = sorted((op for _, body in bodies for op in layout._ordered(body)), key=lambda one: one.at)
     back = walked(got.code, ops[0].at)
@@ -696,8 +696,16 @@ def test_a_relocation_belongs_to_the_operand_and_not_to_a_place(obj: Path) -> No
             if op.id is not None and op.id in found.absorbed:
                 site, _read = found.absorbed[op.id]
                 assert said, f"{obj.stem} {op.at:#06x}: a folded call with no fixup"
-                assert all(site.start <= one < site.end for one in said), (
-                    f"{obj.stem} {op.at:#06x}: {said} is outside {site.start:#x}..{site.end:#x}"
+                # Ordinarily the site's own start..end, one interval that
+                # already covers every push. A site frames() found may
+                # have pushed its arguments apart from its call -- lngmix
+                # re-pushes v and 7 for its second divide, with a real
+                # store between the pushes and the call -- and there
+                # found.coverage carries every range the fold actually
+                # stands for, pushes included.
+                ranges = found.coverage.get(op.id, ((site.start, site.end),))
+                assert all(any(lo <= one < hi for lo, hi in ranges) for one in said), (
+                    f"{obj.stem} {op.at:#06x}: {said} is outside {ranges}"
                 )
                 seen += 1
                 continue

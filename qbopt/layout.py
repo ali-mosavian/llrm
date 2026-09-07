@@ -37,11 +37,11 @@ from iced_x86 import OpKind
 from iced_x86 import Register
 
 from qbopt import ir
-from qbopt import lower
-from qbopt import regalloc
-from qbopt import mir
 from qbopt import asm
+from qbopt import mir
+from qbopt import lower
 from qbopt import select
+from qbopt import regalloc
 from qbopt.mir import MirBody
 from qbopt.module import Module
 
@@ -49,8 +49,6 @@ from qbopt.module import Module
 Laid = asm.Laid
 Table = asm.Table
 selectable = mir.rewritable
-
-
 
 
 def _ordered(body: MirBody) -> list[mir.Op]:
@@ -73,24 +71,18 @@ def _ordered(body: MirBody) -> list[mir.Op]:
 # way; an allocation is per value and a value's register is its root.
 
 
-
-
-
-
-
-
 def _trailing_zeros(found: Module, ops: list[mir.Op]) -> "Table | None":
     """The run of zero bytes the ops end on, where it reaches the segment's end.
 
     Only at the very end, and only all-zero: anything else that happens to
     decode is code until something proves otherwise.
     """
-    highest = max(one.at + (asm._length_of(one) or 0) for one in ops)
+    highest = max(one.at + (asm._length_of(one, found) or 0) for one in ops)
     if highest != found.end:
         return None
     lo = found.end
     for one in sorted(ops, key=lambda x: x.at, reverse=True):
-        length = asm._length_of(one) or 0
+        length = asm._length_of(one, found) or 0
         if one.at + length != lo or any(found.code[one.at : lo]):
             break
         lo = one.at
@@ -140,8 +132,7 @@ def _padding_runs(
     """
     covered = set()
     for one in ops:
-        span = asm._stands_for(one)
-        if span is not None:
+        for span in asm._ranges_of(one, found):
             covered.update(range(*span))
     for one in carried:
         covered.update(range(one.lo, one.hi))
@@ -162,8 +153,6 @@ def _padding_runs(
     return out
 
 
-
-
 def selectable(op: mir.Op) -> bool:
     """Whether this op's bytes come from select.py rather than from the image.
 
@@ -182,33 +171,16 @@ def selectable(op: mir.Op) -> bool:
     return mir.rewritable(op)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 def lay_out(body: MirBody, at: int, found: Module, fields: frozenset[int] = frozenset()) -> Laid | str:
     """Every op in `body`, emitted in order from `at`, or why it could not be."""
     return asm.assemble(_ordered(body), at, found, fields)
-
-
 
 
 def _names_a_value(body) -> bool:
     """Whether any operand in this body names a value rather than a place."""
     return any(
         any(isinstance(one, mir.Held) for one in (*op.args, *op.results))
-        or (
-            op.made is not None
-            and any(isinstance(one, ir.Held) for one in (*op.made.dests, *op.made.sources))
-        )
+        or (op.made is not None and any(isinstance(one, ir.Held) for one in (*op.made.dests, *op.made.sources)))
         for block in body.blocks
         for op in block.ops
     )
@@ -236,8 +208,7 @@ def _grounded(body: MirBody, held: dict | None) -> MirBody:
     def resolve(op):
         what = lower.current(op)
         if what is None or not any(
-            isinstance(one, ir.Held) and one.value not in covered
-            for one in (*what.dests, *what.sources)
+            isinstance(one, ir.Held) and one.value not in covered for one in (*what.dests, *what.sources)
         ):
             return op
         node = getattr(op.node, "semantics", None)
@@ -360,11 +331,11 @@ def rebuild(
     ops = sorted((op for _, body in bodies for op in _ordered(body)), key=lambda one: one.at)
     if not ops:
         return "no bodies to rebuild"
-    if any(asm._length_of(one) is None for one in ops):
+    if any(asm._length_of(one, found) is None for one in ops):
         return f"{ops[0].at:#06x}: an op with no instruction behind it"
 
     lowest = min(one.at for one in ops)
-    highest = max((asm._stands_for(one) or (one.at, one.at))[1] for one in ops)
+    highest = max((asm._stands_for(one, found) or (one.at, one.at))[1] for one in ops)
     inside = [Table(lo, hi) for lo, hi in tables if lowest <= lo and hi <= highest]
 
     # BC pads the end of its code segment with zeros, and every object in
@@ -392,7 +363,7 @@ def rebuild(
     # Every byte between the first item and the last has to be one of them.
     # What is left over is data nothing here can name, and emitting only what
     # it understands would drop it silently along with anything it holds.
-    covered = sum(asm._length_of(one) or 0 for one in ops) + sum(one.hi - one.lo for one in inside)
+    covered = sum(asm._length_of(one, found) or 0 for one in ops) + sum(one.hi - one.lo for one in inside)
     if covered != highest - lowest:
         # Named where the gap is, not where the layout starts. It used to
         # report `lowest`, which sent every reading of this straight to the
@@ -400,7 +371,7 @@ def rebuild(
         held = set()
         claims: dict[int, list[int]] = {}
         for one in ops:
-            span = asm._stands_for(one)
+            span = asm._stands_for(one, found)
             if span is not None:
                 held.update(range(*span))
                 for byte in range(*span):
@@ -447,5 +418,3 @@ def _interleaved(ops: list, inside: list) -> list:
     for one in inside:
         rank[id(one)] = (sum(1 for op in ops if op.at < one.lo), 0)
     return sorted([*ops, *inside], key=lambda one: rank[id(one)])
-
-

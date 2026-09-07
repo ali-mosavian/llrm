@@ -340,6 +340,11 @@ class Kind(StrEnum):
     MUL = "mul"
     DIV = "div"
     REM = "rem"
+    # One computation with two results, quotient then remainder. BC calls
+    # B$DVI4 for one and B$RMI4 for the other over the same operands, and
+    # a kind each gives CSE two keys for one divide -- which is why
+    # lngmix's loop divides ten times and takes the modulus again.
+    DIVMOD = "divmod"
     AND = "and"
     OR = "or"
     XOR = "xor"
@@ -524,15 +529,37 @@ def _merged(what: "ir.Semantics", holds: dict, written: dict, args: tuple) -> di
 # What each absorbable routine computes, in MIR's own vocabulary.
 _ABSORBS = {
     "B$MUI4": Kind.MUL,
-    "B$DVI4": Kind.DIV,
-    "B$RMI4": Kind.REM,
+    "B$DVI4": Kind.DIVMOD,
+    "B$RMI4": Kind.DIVMOD,
     "B$CPI4": Kind.SUB,  # a comparison subtracts and keeps only the flags
 }
 
 
 def _within(sites: dict) -> frozenset[int]:
     """Every byte a site's pushes occupy, so the raise can pass over them."""
-    return frozenset(at for site in sites.values() for at in range(site.start, site.at))
+    out = set(at for site in sites.values() for at in range(site.start, site.at))
+    out.update(at for site in sites.values() for one in site.consume for at in range(one.at, one.end))
+    return frozenset(out)
+
+
+def _disjoint(site) -> tuple[tuple[int, int], ...]:
+    """A site's pushes as contiguous runs, where they sit apart from `covers`.
+
+    match() only finds a site whose pushes run straight into the call, and
+    there `covers` already accounts for them as one interval. A site
+    frames() found instead may have a real instruction between its last
+    push and its call -- lngmix spills the first divide's result there --
+    so what it stands for is two runs, not one, and `also` says so.
+    """
+    if not site.consume:
+        return ()
+    runs: list[list[int]] = []
+    for insn in site.consume:
+        if runs and runs[-1][1] == insn.at:
+            runs[-1][1] = insn.end
+        else:
+            runs.append([insn.at, insn.end])
+    return tuple((lo, hi) for lo, hi in runs)
 
 
 def _absorbing(site, written: dict) -> "tuple[Kind, tuple, tuple] | None":
@@ -556,6 +583,23 @@ def _absorbing(site, written: dict) -> "tuple[Kind, tuple, tuple] | None":
             args.append(Const(one.value, 4))
         else:
             return None
+    if kind is Kind.DIVMOD:
+        # By role, not by register number. The runtime hands back
+        # whichever of quotient and remainder its own name promises, in
+        # eax either way -- so B$DVI4's visible long is the quotient and
+        # B$RMI4's is the remainder, and the other role keeps the value
+        # the raise already made for the register the call also clobbers.
+        # Ordering the pair the same way regardless of which call it came
+        # from is what lets the two sites read as one computation.
+        visible = written.get(machine.RESULT)
+        other = next(
+            (value for register, value in sorted(written.items()) if register != machine.RESULT and not value.flags),
+            None,
+        )
+        if visible is None or other is None or visible.flags:
+            return None
+        pair = (other, visible) if site.name.upper() == machine.REMAINDER else (visible, other)
+        return kind, tuple(args), tuple(Held(one, 4) for one in pair)
     made = [Held(value, 4) for register, value in sorted(written.items()) if not value.flags]
     return kind, tuple(args), tuple(made[:2])
 
@@ -1872,7 +1916,7 @@ def _sites(found: Module, blocks: list[Block]) -> dict:
     live = flagged.live_in(blocks)
     out = {}
     for one in found_sites:
-        if not one.pushed or one.consume or one.name.upper() not in _ABSORBS:
+        if not one.pushed or one.name.upper() not in _ABSORBS:
             continue
         # Only where the sequence exists. The raise and the emitter have to
         # agree about which sites are folded -- folding one the emitter then
@@ -1948,6 +1992,9 @@ def _folded(body: MirBody, found: Module, blocks: list[Block]) -> dict:
             made = machine.absorb(site, read)
             if not isinstance(made, str) and made.relocations:
                 found.refs[op.id] = tuple(field for _where, field in made.relocations)
+            pushes = _disjoint(site)
+            if pushes and op.covers is not None:
+                found.coverage[op.id] = (op.covers, *pushes)
     return held
 
 

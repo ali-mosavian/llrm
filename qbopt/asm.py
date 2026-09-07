@@ -27,17 +27,17 @@ shrink every branch that reaches within a byte, repeat until nothing
 changes, then emit.
 """
 
-from dataclasses import dataclass
 from dataclasses import field
 from dataclasses import replace
+from dataclasses import dataclass
 
 from iced_x86 import OpKind
 from iced_x86 import Register
 from iced_x86 import Register_
 
 from qbopt import ir
-from qbopt import lower
 from qbopt import mir
+from qbopt import lower
 from qbopt import select
 from qbopt import target
 from qbopt.module import Module
@@ -93,24 +93,48 @@ class Table:
         return self.lo
 
 
-def _stands_for(op) -> tuple[int, int] | None:
-    """The original bytes this op accounts for, as a range.
+def _ranges_of(op, found: Module) -> tuple[tuple[int, int], ...]:
+    """Every disjoint range of original bytes this op stands for.
+
+    `found.coverage` is the one authoritative record for an op whose bytes
+    are not a single run -- a site frames() found may push its arguments,
+    let BC put a real instruction between the pushes and the call, and only
+    then call, so no one interval names both without also claiming the
+    instruction sitting between them. Every other op has no entry there and
+    `covers` alone is still the whole answer -- a legacy adapter, since
+    only this one idiom needs more than it.
+    """
+    if isinstance(op, Table):
+        return ((op.lo, op.hi),)
+    full = found.coverage.get(op.id) if op.id is not None else None
+    if full is not None:
+        return full
+    if op.covers is not None:
+        return (op.covers,)
+    length = _length_of(op, found)
+    return () if length is None else ((op.at, op.at + length),)
+
+
+def _stands_for(op, found: Module) -> tuple[int, int] | None:
+    """The overall span of original bytes this op accounts for.
 
     Placement asks where an op *goes*; coverage asks which of BC's bytes it
     *stands for*. They are the same for everything BC wrote and differ the
     moment a pass moves an op -- a hoisted load runs in the preheader and
     still accounts for the bytes it came from. Anchoring coverage at `at`
     conflated the two and made moving anything impossible.
+
+    The outer envelope of every disjoint range `_ranges_of` returns --
+    right for a caller that only wants an extent, such as the highest byte
+    in the body. A caller doing per-byte accounting wants the disjoint
+    ranges themselves, not this: the gap between two of them may be a real
+    instruction that owns those bytes on its own account.
     """
-    if isinstance(op, Table):
-        return op.lo, op.hi
-    if op.covers is not None:
-        return op.covers
-    length = _length_of(op)
-    return None if length is None else (op.at, op.at + length)
+    ranges = _ranges_of(op, found)
+    return (min(lo for lo, _ in ranges), max(hi for _, hi in ranges)) if ranges else None
 
 
-def _length_of(op: mir.Op) -> int | None:
+def _length_of(op: mir.Op, found: Module) -> int | None:
     """How many bytes the op occupied in the image it came from.
 
     From the node's own span rather than from an instruction, because not
@@ -120,8 +144,14 @@ def _length_of(op: mir.Op) -> int | None:
 
     `covers` overrides it, and is how a transform accounts for what it
     replaced: an op standing in for two of BC's says so, and the byte
-    arithmetic below still adds up.
+    arithmetic below still adds up. `found.coverage` is asked first and,
+    where it has an answer, is the whole of it: a site whose pushes sit
+    apart from its call stands for both runs, and `covers` alone would
+    only ever name one of them.
     """
+    full = found.coverage.get(op.id) if op.id is not None else None
+    if full is not None:
+        return sum(hi - lo for lo, hi in full)
     if op.covers is not None:
         lo, hi = op.covers
         return hi - lo
@@ -172,9 +202,7 @@ def _still_has_an_operand_for_it(op: mir.Op) -> bool:
     if not holds:
         return False
     was = getattr(op.node, "semantics", None)
-    had = was is not None and any(
-        isinstance(one, (ir.Mem, ir.Address)) for one in (*was.dests, *was.sources)
-    )
+    had = was is not None and any(isinstance(one, (ir.Mem, ir.Address)) for one in (*was.dests, *was.sources))
     return not (had and not any(isinstance(one, (ir.Mem, ir.Address)) for one in holds))
 
 
@@ -272,9 +300,7 @@ def _field_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -
         # own. Asked the broad way, that fixup had nowhere to go and the
         # segment was refused.
         was = getattr(op.node, "semantics", None)
-        had = was is not None and any(
-            isinstance(one, (ir.Mem, ir.Address)) for one in (*was.dests, *was.sources)
-        )
+        had = was is not None and any(isinstance(one, (ir.Mem, ir.Address)) for one in (*was.dests, *was.sources))
         rewrote = op.made is not None or lower.semantics(op, was) is not None
         if rewrote and had and not any(isinstance(one, (ir.Mem, ir.Address)) for one in holds):
             return None
@@ -342,9 +368,7 @@ def assemble(
         # put at an emulated x87 site's address was read as that site and
         # carried verbatim -- zero bytes in the length pass, three in the
         # emit pass, and layout said it changed length between them.
-        emulated = (
-            not native_fpu and op.node is not None and found.code[op.at : op.at + 1] == bytes([0xCD])
-        )
+        emulated = not native_fpu and op.node is not None and found.code[op.at : op.at + 1] == bytes([0xCD])
         folded = found.absorbed.get(op.id) if op.id is not None else None
         if folded is not None:
             made = _absorbed(*folded)
@@ -366,11 +390,14 @@ def assemble(
             lengths.append(len(made.code))
             continue
         if what is None or emulated:
-            lengths.append(_length_of(op) or 0)
+            lengths.append(_length_of(op, found) or 0)
             continue
         made = select.emit(
-            what, at=at, where=_where(op, assignment, origin),
-            held=_held(assignment), relocated=_field_in(found, op, fields) is not None
+            what,
+            at=at,
+            where=_where(op, assignment, origin),
+            held=_held(assignment),
+            relocated=_field_in(found, op, fields) is not None,
         )
         if made is None:
             return f"{op.at:#06x}: {op.name} is not one select.py can emit"
@@ -407,7 +434,7 @@ def assemble(
                 aimed,
                 at=placed[index],
                 where=_where(op, assignment, origin),
-            held=_held(assignment),
+                held=_held(assignment),
                 short=True,
                 relocated=_field_in(found, op, fields) is not None,
             )
@@ -447,7 +474,7 @@ def assemble(
             not native_fpu
             and op.node is not None  # an inserted instruction has no original bytes
             and found.code[op.at : op.at + 1] == bytes([0xCD])
-            and (length := _length_of(op))
+            and (length := _length_of(op, found))
         ):
             # Copied, so any fixup inside it keeps its place within the
             # instruction and only the instruction itself has moved.
@@ -472,7 +499,7 @@ def assemble(
         # its own bytes are the only right answer. Carried, unless it names
         # a branch target: that would move, and keeping the old number
         # would point it at whatever now sits there.
-        if _semantics(op) is None and (length := _length_of(op)):
+        if _semantics(op) is None and (length := _length_of(op, found)):
             found_insn = getattr(op.node, "insn", None)
             if found_insn is not None and found_insn.insn.op0_kind == OpKind.NEAR_BRANCH16:
                 return f"{op.at:#06x}: a branch this cannot model would keep a stale target"
@@ -518,10 +545,7 @@ def assemble(
         if wanted:
             landed = made.places
             if len(landed) < len(wanted):
-                return (
-                    f"{op.at:#06x}: {op.name} has {len(wanted)} fixups and "
-                    f"{len(landed)} fields to put them in"
-                )
+                return f"{op.at:#06x}: {op.name} has {len(wanted)} fixups and {len(landed)} fields to put them in"
             for where, field in zip(landed, wanted, strict=False):
                 relocations.append((len(out) + where, field))
         out += made.code
@@ -536,11 +560,11 @@ def assemble(
     for op in ops:
         if isinstance(op, Table):
             continue
-        lo, hi = op.covers if op.covers is not None else (op.at, op.at + (_length_of(op) or 0))
-        explained.update(one for one in known if lo <= one < hi)
         landed = moved.get(op.at)
-        if landed is not None:
-            folded.update({one: landed for one in range(lo, hi) if one not in moved})
+        for lo, hi in _ranges_of(op, found):
+            explained.update(one for one in known if lo <= one < hi)
+            if landed is not None:
+                folded.update({one: landed for one in range(lo, hi) if one not in moved})
     return Laid(bytes(out), moved, tuple(relocations), frozenset(explained - kept_fields), folded)
 
 
@@ -561,9 +585,7 @@ def _semantics(op: mir.Op) -> ir.Semantics | None:
 # allocatable either -- an operand reached through it is still an operand a
 # remap has to be able to follow. The file says what a register *is*; this
 # says which of them one value can be moved between.
-_RENAMEABLE = {
-    where: widths for where, widths in target.AT_WIDTH.items() if where is not Register.ESP
-}
+_RENAMEABLE = {where: widths for where, widths in target.AT_WIDTH.items() if where is not Register.ESP}
 
 
 def _remap(values: tuple, assignment: dict, origin: dict) -> dict:

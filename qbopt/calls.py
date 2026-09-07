@@ -253,6 +253,36 @@ def match(module: Module, reached: list[Insn], index: int) -> CallSite | None:
     return CallSite(call.at, call.end, reached[last + 1].at, name, tuple(reversed(found)))
 
 
+def _classified(module: Module, pushed: "tuple[Insn, ...]", name: str) -> "tuple[Operand, ...]":
+    """A frame's raw pushes, classified the way match() classifies its own.
+
+    frames() sees a push the call is not adjacent to -- BC re-pushes v and 7
+    for lngmix's second divide, then spills the first divide's result
+    between that run and the call. The pushes are still contiguous with
+    *each other*, so the same backward scan applies; it is only the call
+    at the end that this does not require.
+
+    Empty where anything does not fit, which leaves the site exactly as it
+    was: unclassified, and match()'s own sites the only ones folded.
+    """
+    if name not in LEFT_FIRST:
+        return ()
+    arity = ARITY.get(name, 2)
+    found: list[Operand] = []
+    last = len(pushed) - 1
+    while len(found) < arity and last >= 0:
+        if last + 1 < len(pushed) and pushed[last].end != pushed[last + 1].at:
+            return ()
+        operand = one_operand(module, list(pushed), last)
+        if operand is None:
+            return ()
+        found.append(operand)
+        last -= operand.length
+    if len(found) != arity or last != -1:
+        return ()
+    return tuple(reversed(found))
+
+
 def sites(module: Module, reached: list[Insn], blocks: list[Block]) -> list[CallSite]:
     """Every call whose arguments are known -- classified from an address or
     an immediate where match() can see one, popped from the stack where it
@@ -275,7 +305,16 @@ def sites(module: Module, reached: list[Insn], blocks: list[Block]) -> list[Call
             if frame.call.at in handled:
                 continue
             name = module.calls[frame.call.at]
-            found.append(CallSite(frame.call.at, frame.call.end, frame.call.at, name, consume=frame.pushed))
+            found.append(
+                CallSite(
+                    frame.call.at,
+                    frame.call.end,
+                    frame.call.at,
+                    name,
+                    _classified(module, frame.pushed, name),
+                    consume=frame.pushed,
+                )
+            )
     return found
 
 
@@ -412,7 +451,12 @@ def absorb(site: CallSite, live: Flag, restore: bool = True) -> Emitted | str:
     from eax would be the round trip docs/residue.md calls G and H. COMPARE
     has no restore to drop: its own result is flags, not a register value.
     """
-    if site.consume:
+    if site.consume and not site.pushed:
+        # Popped rather than reloaded, and only where nothing classified
+        # the pushes: a site frames() found may still be an address and a
+        # constant like any other -- lngmix re-pushes v and 7 for its
+        # second divide -- and reloading those two from where they already
+        # are is `dividing()`'s own case, not this one's.
         return consume(site, live, restore)
     if site.name == FIX_MULTIPLY:
         return fix_multiply(site, live, restore)

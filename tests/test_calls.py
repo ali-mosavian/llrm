@@ -33,6 +33,7 @@ from qbopt.declen import decode
 from qbopt.calls import CallSite
 from qbopt.calls import MULTIPLY
 from qbopt.declen import BITNESS
+from qbopt.calls import REMAINDER
 from qbopt.calls import LEFT_FIRST
 from qbopt.calls import popped_into
 from qbopt.calls import FIX_MULTIPLY
@@ -462,6 +463,34 @@ def test_consume_divide_puts_the_dividend_in_eax_not_the_divisor() -> None:
     assert not isinstance(emitted, str)
     # pop eax (dividend) / pop ecx (divisor) / cdq / idiv ecx / restore
     assert emitted.code == hx("66 58  66 59  66 99  66 F7 F9  66 50 58 5A")
+
+
+def test_absorb_reloads_a_classified_frame_site_rather_than_popping_it(fixtures: Path) -> None:
+    # lngmix re-pushes v and 7 for its second divide (B$RMI4), and BC puts a
+    # store between that push run and the call -- match() cannot reach it, so
+    # frames() finds it and leaves it with `consume` set. Its pushes are
+    # still classifiable, address and constant like any other, and `absorb`
+    # dispatching on `site.consume` alone sent it to `consume()` regardless:
+    # the real pushes are never re-emitted (the raise skips them, the same
+    # as any folded site), so `consume()`'s pop read garbage off the stack
+    # instead of the value BC pushed there: lngmix-p-g2 stopped early under
+    # DOSBox (e2e reported NODONE) before this was found.
+    parsed = corpus.loaded(fixtures / "lngmix-p-g2.obj")
+    assert parsed is not None
+    reached = corpus.reached(fixtures / "lngmix-p-g2.obj")
+    assert not isinstance(reached, str)
+    found = [
+        one for one in sites(parsed, reached, corpus.partitioned(fixtures / "lngmix-p-g2.obj")) if one.name == REMAINDER
+    ]
+    assert len(found) == 1, f"expected one B$RMI4 site, found {len(found)}"
+    site = found[0]
+    assert site.consume and site.pushed, "the shape this bug needs: both a frame and a classification"
+    emitted = absorb(site, Flag.NONE)
+    assert not isinstance(emitted, str), emitted
+    first = next(iter(Decoder(16, emitted.code, ip=0)))
+    assert first.mnemonic == Mnemonic.MOV, (
+        f"first instruction was {first.mnemonic!r}, not a load -- the operand was popped, not reloaded"
+    )
 
 
 def test_fix_multiply_consume_uses_edx_and_the_variable_shift_form() -> None:

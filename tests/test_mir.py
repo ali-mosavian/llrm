@@ -473,7 +473,14 @@ def test_mir_operands_say_exactly_what_the_node_said() -> None:
                             if isinstance(was, ir.Mem):
                                 continue  # a Cell is the MemRef, not the encoding
                             assert back(arg, body.origin) == was, f"{op.name}: {kind} {arg} != {was}"
-    assert seen > 2000, f"only {seen} operations checked"
+    # 2,008 on this corpus before a site frames() found -- not only
+    # match()'s own -- could also be classified and folded: chain,
+    # lngmix and lngmxx each re-push a divide's operands where match()
+    # cannot reach them, past a store the raise now folds around too.
+    # Three sites, five raw pushes and a call each -- their own
+    # operations before, excluded above as one folded operation now --
+    # and 2,008 minus fifteen is exactly the 1,993 this corpus checks.
+    assert seen > 1980, f"only {seen} operations checked"
 
 
 def test_a_variable_keeps_one_name_across_every_version_of_it() -> None:
