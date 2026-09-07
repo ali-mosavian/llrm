@@ -569,14 +569,17 @@ def main(argv: list[str] | None = None) -> int:
             _mir(bodies, found, args.verbose, debug)
         return now
 
-    def lowered(number: int, out: bytes, why: str):
-        """The machine views, once: this is where lowering happens."""
+    def lowered(number: int, bodies, out: bytes, why: str):
+        """The machine views, once: this is where lowering happens.
+
+        The bodies the passes above produced, not a second raise of the
+        emitted bytes. Raising the output again lowers a different
+        program -- s20 beside s13 then compares two -- and a first-pass
+        miscompile reads there as an extra phi in the second pass.
+        """
         if args.dump is None and not args.asm:
             return
-        after, bodies, theirs = _bodies(out)
-        # `after`'s own map, not the input's: a contract is keyed by call
-        # site, and the rewritten module's sites are its own.
-        _machine(bodies, after, view, theirs)
+        _machine(bodies, found, view, contracts)
         with view(26, "asm", "emitted"):
             print(f"=== emitted ({why}, {len(out)} bytes)")
             _asm(out)
@@ -620,7 +623,7 @@ def main(argv: list[str] | None = None) -> int:
     # And the machine, once. Everything above is MIR; this is what lowering,
     # the allocator and the selector made of the last of it.
     out, why = rebuilt(data)
-    lowered(next(step), out, why)
+    lowered(next(step), bodies, out, why)
     return 0
 
 

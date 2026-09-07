@@ -90,3 +90,47 @@ def test_the_stage_dump_lowers_through_the_same_contracts_the_emitter_uses() -> 
     assert made, "the machine view produced no stage"
     assert seen, "the machine view lowered nothing"
     assert all(one is contracts for one in seen), "the lowering was given a different map"
+
+
+def test_the_machine_view_is_the_pass_series_own_bodies() -> None:
+    """s20 sits next to s13 and must be the same program.
+
+    The machine views were built by rewriting the object and raising the
+    result, so the body lowered at s20 was not the body the passes above
+    produced -- a second raise of already-emitted bytes. Diffing s13
+    against s20 then compares two programs, which is how a miscompile in
+    the first pass reads as an extra phi in the second.
+    """
+    from pathlib import Path
+
+    import stages as tool
+
+    reads, given = [], []
+    was_bodies, was_machine = tool._bodies, tool._machine
+
+    def watching(data):
+        got = was_bodies(data)
+        reads.append(got)
+        return got
+
+    def receiving(bodies, found, view, contracts):
+        given.append((found, contracts, bodies))
+        return was_machine(bodies, found, view, contracts)
+
+    tool._bodies, tool._machine = watching, receiving
+    try:
+        tool.main([str(Path("fixtures/omf/lngmix-p-g2.obj")), "--quiet", "--asm"])
+    finally:
+        tool._bodies, tool._machine = was_bodies, was_machine
+
+    assert len(reads) == 1, f"the object was raised {len(reads)} times, not once"
+    assert len(given) == 1, f"the machine view ran {len(given)} times"
+    found, bodies, contracts = reads[0]
+    theirs, mine, ours = given[0]
+    assert theirs is found, "the machine view was given another module"
+    assert mine is contracts, "the machine view was given another contract map"
+    # The bodies are the pass series' own, which are not the raise's: every
+    # pass returns new ones. What must hold is that they came from `main`'s
+    # own loop over `found`, not from a second read.
+    assert len(ours) == len(bodies), f"{len(ours)} bodies lowered, {len(bodies)} raised"
+    assert [name for name, _one in ours] == [name for name, _one in bodies]
