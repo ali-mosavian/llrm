@@ -14,18 +14,18 @@ from collections.abc import Iterator
 
 import pytest
 from iced_x86 import OpKind
-from iced_x86 import Register_
 from iced_x86 import Mnemonic
+from iced_x86 import Register_
 from iced_x86 import Instruction
 
 import corpus
 from qbopt import ir
-from qbopt import mir
-from qbopt import target
-from qbopt import omf
 from qbopt import asm
+from qbopt import mir
+from qbopt import omf
 from qbopt import layout
 from qbopt import select
+from qbopt import target
 from qbopt.declen import decode
 from qbopt import blocks as split
 from qbopt.blocks import code_map
@@ -145,9 +145,7 @@ def test_every_branch_points_where_its_target_went(obj: Path) -> None:
                 continue
             landed = got.moved.get(want.near_branch16)
             assert landed is not None, f"{obj.stem} {op.at:#x}: target left this body"
-            assert made[0].near_branch16 == landed, (
-                f"{obj.stem} {op.at:#x}: {made[0]} should reach {landed:#x}"
-            )
+            assert made[0].near_branch16 == landed, f"{obj.stem} {op.at:#x}: {made[0]} should reach {landed:#x}"
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
@@ -490,8 +488,7 @@ def test_an_allocation_reaches_the_bytes() -> None:
                 asm._where(op, tried, body.origin) is not None
                 and (what := asm._semantics(op)) is not None
                 and (first := select.emit(what, at=0)) is not None
-                and (second := select.emit(what, at=0, where=asm._where(op, tried, body.origin)))
-                is not None
+                and (second := select.emit(what, at=0, where=asm._where(op, tried, body.origin))) is not None
                 and first.code != second.code
                 for block in body.blocks
                 for op in block.ops
@@ -578,8 +575,8 @@ def test_bytes_claimed_twice_are_reported_rather_than_raising() -> None:
 
     from qbopt import ir
     from qbopt import mir
-    from qbopt import module
     from qbopt import omf
+    from qbopt import module
     from qbopt.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/hotlop-p-g2.obj").read_bytes()))
@@ -711,39 +708,119 @@ def test_a_relocation_belongs_to_the_operand_and_not_to_a_place(obj: Path) -> No
     assert seen or not fields, f"{obj.stem}: nothing carries a fixup, so this proves nothing"
 
 
-def test_a_body_the_allocator_refused_is_untangled_before_it_is_laid_out() -> None:
-    """Wired in, not merely available.
+def test_a_tangled_class_is_split_on_the_phi_edge() -> None:
+    """A value arriving at a phi and still wanted after it is the lost-copy
+    shape: the phi's result and its own argument are one congruence class
+    and are live at the same moment, so no single register holds both and
+    `colour` refuses to move the class. `untangled` puts `v' = v` at the
+    end of the predecessor and the phi takes `v'`, which is the live-range
+    split done where the split belongs.
 
-    addrm and arridx each hold a class two of whose members are live at
-    once, and colour() refuses to move one. rebuild() puts a copy in first
-    -- on the phi edge for addrm, before a two-address operation for arridx
-    -- and the body colours.
-
-    One of the two shapes now, not both: the second came from the copies
-    the hoist emitted while it was doing its own allocation, and those are
-    gone. What is checked is the wiring, and one body still checks it.
+    Constructed, because BC's own code never has one -- measured, zero
+    across the corpus -- and a tangle only appears once a pass has moved a
+    definition. This checks the three functions directly; that
+    `layout.rebuild` calls them is not asserted here.
     """
+    from dataclasses import replace
+
+    from iced_x86 import Register
+
+    from qbopt import ir
     from qbopt import mir
     from qbopt import regalloc
-    from qbopt import transform
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
 
-    seen = 0
-    for name in ("addrm-p-g2", "arridx-p-g2"):
-        found = corpus.loaded(Path("fixtures/omf") / f"{name}.obj")
-        mapped = code_map(found)
-        assert not isinstance(mapped, str)
-        blocks = split.partition(found, mapped)
-        for _who, body in mir.bodies(found, blocks):
-            done = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
-            if not regalloc._tangled(done):
-                continue
-            seen += 1
-            assert isinstance(regalloc.colour(done, done.pins), str), f"{name}: refused while tangled"
-            fixed = regalloc.untangled(done)
-            assert not isinstance(regalloc.colour(fixed, fixed.pins), str), f"{name}: colours after"
-    assert seen >= 1, "neither body was tangled, so this proves nothing"
+    made, carried = mir.Value(1, 0x10, 0, 1, 1), mir.Value(2, 0x20, 0, 1, 2)
+    other = mir.Value(5, 0x11, 0, 4, 1)
+
+    def op(at, kind, defines, uses, args, results):
+        return mir.Op(
+            at,
+            ir.Operation.MOVE,
+            "mov",
+            defines=defines,
+            uses=uses,
+            loads=(),
+            stores=(),
+            node=None,
+            kind=kind,
+            args=args,
+            results=results,
+            covers=(at, at + 3),
+        )
+
+    # `made` is defined before the join, arrives at the phi, and is read
+    # again after it -- so it overlaps the phi's own result.
+    body = mir.MirBody(
+        0x10,
+        (
+            mir.MirBlock(
+                0x10,
+                (),
+                (
+                    op(0x10, mir.Kind.COPY, (made,), (), (mir.Const(1, 2),), (mir.Held(made, 2),)),
+                    op(0x13, mir.Kind.COPY, (other,), (), (mir.Const(2, 2),), (mir.Held(other, 2),)),
+                ),
+                (0x20,),
+            ),
+            mir.MirBlock(
+                0x20,
+                (mir.Phi(carried, {0x10: made}),),
+                (
+                    op(
+                        0x20,
+                        mir.Kind.COPY,
+                        (mir.Value(3, 0x20, 0, 2, 1),),
+                        (carried,),
+                        (mir.Held(carried, 2),),
+                        (mir.Held(mir.Value(3, 0x20, 0, 2, 1), 2),),
+                    ),
+                    op(
+                        0x23,
+                        mir.Kind.COPY,
+                        (mir.Value(4, 0x23, 0, 3, 1),),
+                        (made,),
+                        (mir.Held(made, 2),),
+                        (mir.Held(mir.Value(4, 0x23, 0, 3, 1), 2),),
+                    ),
+                    op(
+                        0x26,
+                        mir.Kind.COPY,
+                        (mir.Value(6, 0x26, 0, 5, 1),),
+                        (other,),
+                        (mir.Held(other, 2),),
+                        (mir.Held(mir.Value(6, 0x26, 0, 5, 1), 2),),
+                    ),
+                ),
+                (),
+            ),
+        ),
+        # The class starts in ax, and `other` is held there too -- so the
+        # class has to move, and while it is tangled nothing can move it.
+        {made: Register.EAX, carried: Register.EAX, other: Register.EAX},
+        {},
+    )
+
+    body = replace(body, pins={other: Register.EAX})
+    tangled = regalloc._tangled(body)
+    assert tangled, "the constructed body has no overlapping class; it witnesses nothing"
+    assert isinstance(regalloc.colour(body, body.pins), str), "it coloured while tangled"
+
+    fixed = regalloc.untangled(body)
+    assert not isinstance(regalloc.colour(fixed, fixed.pins), str), "it does not colour after"
+    # The copy goes on the edge, in the predecessor -- not anywhere that
+    # would make this pass through an unrelated rewrite.
+    before = next(block for block in fixed.blocks if block.at == 0x10)
+    assert len(before.ops) == len(body.blocks[0].ops) + 1, "no copy was put on the edge"
+    added = before.ops[-1]
+    assert added.kind is mir.Kind.COPY and made.id in {one.id for one in added.uses}, (
+        f"the copy on the edge reads {added.uses}"
+    )
+    was = {one.id for block in body.blocks for op in block.ops for one in (*op.defines, *op.uses)}
+    assert {one.id for one in added.defines}.isdisjoint(was), "the edge copy reuses an existing value"
+    join = next(block for block in fixed.blocks if block.at == 0x20)
+    assert {one.id for phi in join.phis for one in phi.incoming.values()} == {one.id for one in added.defines}, (
+        "the phi does not take the copy"
+    )
 
 
 def test_a_moved_operation_keeps_its_fixup() -> None:
@@ -755,9 +832,10 @@ def test_a_moved_operation_keeps_its_fixup() -> None:
     the address comes out a bare zero.
     """
     from dataclasses import replace
+
     from qbopt import mir
-    from qbopt import module
     from qbopt import omf
+    from qbopt import module
     from qbopt import blocks as split
     from qbopt.blocks import code_map
 
@@ -794,8 +872,8 @@ def test_a_fold_does_not_keep_the_fixup_of_the_read_it_replaced() -> None:
     """
     from qbopt import ir
     from qbopt import mir
-    from qbopt import module
     from qbopt import omf
+    from qbopt import module
     from qbopt import transform
     from qbopt import blocks as split
     from qbopt.blocks import code_map
@@ -812,9 +890,7 @@ def test_a_fold_does_not_keep_the_fixup_of_the_read_it_replaced() -> None:
                 if op.raised is None or (op.args, op.results) == op.raised:
                     continue
                 was = getattr(op.node, "semantics", None)
-                if was is None or not any(
-                    isinstance(one, (ir.Mem, ir.Address)) for one in (*was.dests, *was.sources)
-                ):
+                if was is None or not any(isinstance(one, (ir.Mem, ir.Address)) for one in (*was.dests, *was.sources)):
                     continue
                 checked += 1
                 assert not asm._still_has_an_operand_for_it(op), (
@@ -851,7 +927,6 @@ def test_an_operation_may_carry_a_fixup_for_each_instruction_it_stands_for() -> 
     assert silent.places == () and silent.relocated_at is None
 
 
-
 def test_a_restore_emits_the_idiom_and_not_the_bytes_it_stands_on() -> None:
     """negnot printed A=-7317895 for 305419897: the pair was never handed back.
 
@@ -862,12 +937,12 @@ def test_a_restore_emits_the_idiom_and_not_the_bytes_it_stands_on() -> None:
     its address, two bytes where four were measured. PRINT then consumed a
     dx the widened `neg eax` had already made stale.
     """
-    from qbopt import blocks as split
-    from qbopt import module
     from qbopt import omf
+    from qbopt import module
     from qbopt import select
-    from qbopt import transform
     from qbopt import wholeseg
+    from qbopt import transform
+    from qbopt import blocks as split
     from qbopt.blocks import code_map
 
     raw = Path("fixtures/omf/negnot-q-O.obj").read_bytes()
