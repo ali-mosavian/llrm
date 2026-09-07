@@ -513,3 +513,53 @@ def test_a_call_with_an_unestablished_interface_falls_back_and_is_not_lir() -> N
     assert got.fallback_reason and "not established" in got.fallback_reason, (
         f"it fell back for another reason: {got.fallback_reason}"
     )
+
+
+def test_the_long_divide_bodys_entry_reads_nothing_it_has_not_written() -> None:
+    """lngmix printed 3419650 where BC prints 142900.
+
+    Checked here as the emitted invariant behind that, not as the sum:
+    running the program is a manual corroboration and is recorded in the
+    commit rather than automated in this slice.
+
+    The raise's machine-state phis reached LIR unread, `phielim` gave each
+    an edge copy, and one of those copied an ax nothing had written over
+    the accumulator. Checked on the emitted bytes rather than by running
+    it: the entry block may not read a register it has not written.
+    """
+    from pathlib import Path
+
+    from iced_x86 import OpKind
+    from iced_x86 import Decoder
+    from iced_x86 import Register
+    from iced_x86 import FlowControl
+    from iced_x86 import RegisterExt
+
+    from qbopt import omf
+    from qbopt import module
+    from qbopt import wholeseg
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    got = wholeseg.emitted(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes())
+    assert got.outcome is wholeseg.Emission.LIR, f"it fell back: {got.fallback_reason}"
+    after = module.of(omf.parse(got.data))
+    entry = min(one.at for block in split.partition(after, code_map(after)) for one in block.insns)
+    written = {
+        RegisterExt.full_register(one)
+        for one in (Register.BP, Register.SP, Register.DS, Register.ES, Register.SS, Register.CS)
+    }
+    for one in Decoder(16, after.code[entry:], ip=entry):
+        if one.is_invalid or one.flow_control != FlowControl.NEXT:
+            break
+        reads = {
+            RegisterExt.full_register(one.op_register(i))
+            for i in range(one.op_count)
+            if one.op_kind(i) == OpKind.REGISTER and i
+        }
+        assert reads <= written, f"{one.ip:#06x} reads {sorted(reads - written)}, which nothing wrote"
+        written |= {
+            RegisterExt.full_register(one.op_register(i))
+            for i in range(one.op_count)
+            if one.op_kind(i) == OpKind.REGISTER and not i
+        }

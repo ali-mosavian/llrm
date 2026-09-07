@@ -888,3 +888,89 @@ def test_a_call_marked_interface_unknown_is_refused_on_that_alone() -> None:
     assert where[0x106].inputs == frozenset()
     with pytest.raises(lower.Unlowered, match="interface is not established"):
         lower.lowered("one", body, {0x106: "B$PEI2"}, set(), where)
+
+
+def test_a_phi_chain_nothing_reads_does_not_reach_lir() -> None:
+    """The raise puts a phi on every register live around a loop.
+
+    Most are read by nothing once an operation says what it computes, and
+    `phielim` materialises a copy on every edge for each -- including an
+    edge whose value has no definition. A phi feeding a live phi is live;
+    one whose chain ends in no reader is not.
+    """
+    from iced_x86 import Register
+
+    from qbopt import lower
+    from qbopt import runtime
+    from qbopt import ir as machine
+
+    kept, dead, feeder, unread = (
+        mir.Value(2, 0x20, 0, 1, 1),
+        mir.Value(3, 0x20, 0, 2, 1),
+        mir.Value(4, 0, 0, 1, 2),
+        mir.Value(5, 0, 0, 2, 2),
+    )
+    made = [
+        mir.Op(
+            0x10 + step * 3,
+            machine.Operation.MOVE,
+            "mov",
+            defines=(one,),
+            uses=(),
+            loads=(),
+            stores=(),
+            node=None,
+            kind=mir.Kind.COPY,
+            args=(mir.Const(step, 2),),
+            results=(mir.Held(one, 2),),
+            covers=(0x10 + step * 3, 0x13 + step * 3),
+        )
+        for step, one in enumerate((feeder, unread))
+    ]
+    # One reader, of the kept phi's result only.
+    reads = mir.Op(
+        0x20,
+        machine.Operation.MOVE,
+        "mov",
+        defines=(mir.Value(9, 0x20, 0, 3, 1),),
+        uses=(kept,),
+        loads=(),
+        stores=(),
+        node=None,
+        kind=mir.Kind.COPY,
+        args=(mir.Held(kept, 2),),
+        results=(mir.Held(mir.Value(9, 0x20, 0, 3, 1), 2),),
+        covers=(0x20, 0x22),
+    )
+    # phi A -> phi B -> the reader, so keeping B must keep A; and one
+    # phi whose chain ends in nobody.
+    middle = mir.Value(6, 0x18, 0, 1, 3)
+    body = mir.MirBody(
+        0,
+        (
+            mir.MirBlock(0, (), tuple(made), (0x18,)),
+            mir.MirBlock(0x18, (mir.Phi(middle, {0: feeder}),), (), (0x20,)),
+            mir.MirBlock(
+                0x20,
+                (
+                    mir.Phi(kept, {0x18: middle}),
+                    mir.Phi(dead, {0x18: unread}),
+                ),
+                (reads,),
+                (),
+            ),
+        ),
+        {
+            feeder: Register.EAX,
+            unread: Register.ECX,
+            kept: Register.EAX,
+            dead: Register.ECX,
+            middle: Register.EAX,
+        },
+        {},
+    )
+    low = lower.lowered("one", body, {}, set(), runtime.per_call({}))
+    left = {phi.result for block in low.blocks for phi in block.phis}
+    assert kept.id in left, "the phi its own reader needs was dropped"
+    assert middle.id in left, f"the phi feeding it was dropped: {sorted(left)}"
+    assert dead.id not in left, f"a phi nothing reads reached LIR: {sorted(left)}"

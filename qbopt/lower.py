@@ -316,13 +316,17 @@ def lowered(
     read |= {value.id for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
     calls = calls or {}
     making = Lowering(body, read, calls, absorbed or (), contracts)
+    # Once: expanding twice would build two of every instruction, and the
+    # question below is about the ones this body will actually hold.
+    made = {block.at: tuple(one for op in block.ops for one in making.expand(op)) for block in body.blocks}
+    live = _phis_worth_keeping(body, made)
     return lir.LirBody(
         name=name,
         entry=body.entry,
         blocks=tuple(
             lir.LirBlock(
                 at=block.at,
-                insns=tuple(one for op in block.ops for one in making.expand(op)),
+                insns=made[block.at],
                 succ=block.succ,
                 phis=tuple(
                     lir.Phi(
@@ -330,7 +334,7 @@ def lowered(
                         incoming=tuple((at, value.id) for at, value in phi.incoming.items()),
                     )
                     for phi in block.phis
-                    if not phi.result.flags
+                    if not phi.result.flags and phi.result.id in live
                 ),
             )
             for block in body.blocks
@@ -512,6 +516,38 @@ def _follows(op: "mir.Op", what: "ir.Semantics") -> "lir.Insn":
         clobbers=frozenset(),
         op=None,
     )
+
+
+def _phis_worth_keeping(body: "mir.MirBody", made: dict) -> "frozenset[int]":
+    """Which phi results this body still reads, transitively.
+
+    The raise puts a phi on every register live around a loop, which is
+    what SSA over machine state means. Once an operation says what it
+    computes, most of those are read by nothing -- and `phielim` still
+    materialises a copy on every edge for each, including edges whose
+    value has no definition at all. lngmix's entry block copied an
+    undefined ax into cx, clobbering the accumulator, and printed
+    3419650 for 142900.
+
+    Rooted in what the lowered instructions read, closed backwards
+    through the phis' own inputs: a phi feeding a live phi is live, and
+    an input read on its own account stays live through that use.
+    """
+    wanted = {value for insns in made.values() for one in insns for value in one.uses}
+    phis = {
+        phi.result.id: [value.id for value in phi.incoming.values()]
+        for block in body.blocks
+        for phi in block.phis
+        if not phi.result.flags
+    }
+    changing = True
+    while changing:
+        changing = False
+        for result, incoming in phis.items():
+            if result in wanted and not set(incoming) <= wanted:
+                wanted.update(incoming)
+                changing = True
+    return frozenset(wanted)
 
 
 def _named(where: tuple) -> "list[int]":
