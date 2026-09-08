@@ -189,6 +189,7 @@ pass that cannot cross an edge is not worth writing.
 | division by a constant | reciprocal multiply | stride, lngmix |
 | boolean materialisation | a branch and a `dec` to make -1, then a compare on it | bools |
 | absorbing the runtime call | done for the four arithmetic routines | lngmix, huge |
+| one idiv for a quotient and its remainder | done — `transform.reused_divides`. BC asks with two calls; the second is a copy of the first's other answer. lngmix 915 -> 892 bytes, lngmxx 948 -> 925, one idiv in the loop, both PASS under DOSBox | lngmix, lngmxx |
 
 **Not on the list, and why.** Loop unrolling: no measured target, and BC's
 loops are short. Inlining: untested, no example yet -- worth one, since a
