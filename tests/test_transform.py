@@ -531,6 +531,7 @@ def test_nothing_reads_a_register_nothing_wrote() -> None:
     """
     from iced_x86 import OpKind
     from iced_x86 import Decoder
+    from iced_x86 import Mnemonic
     from iced_x86 import Formatter
     from iced_x86 import RegisterExt
     from iced_x86 import FormatterSyntax
@@ -570,6 +571,14 @@ def test_nothing_reads_a_register_nothing_wrote() -> None:
             for i in range(one.op_count):
                 if one.op_kind(i) == OpKind.REGISTER:
                     written.add(root(one.op_register(i)))
+            # And what an instruction writes without naming it. `cdq` fills
+            # edx with eax's sign and `idiv` leaves the remainder there,
+            # neither as an operand -- so a later `mov ebx,edx` read as a
+            # register nothing wrote, and the scanner was the thing that
+            # was wrong.
+            if one.mnemonic in (Mnemonic.CDQ, Mnemonic.CWD, Mnemonic.IDIV, Mnemonic.DIV, Mnemonic.MUL):
+                written.add(root(Register.EDX))
+                written.add(root(Register.EAX))
 
 
 @pytest.mark.xfail(

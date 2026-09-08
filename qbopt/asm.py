@@ -230,8 +230,10 @@ def _seats(op: mir.Op, assignment: dict | None, origin: dict | None) -> "tuple |
     different thing entirely -- something placed every other value and
     not this one -- and falling back to BC's register there emits an
     answer into a register the allocation has given to something else.
-    So origin answers only when there is no allocation, and a value
-    missing from one that exists refuses the emission.
+    So origin answers only when there is no allocation at all -- None, the
+    sentinel -- and a value missing from one that exists refuses the
+    emission. An empty map that was supplied is an allocation that placed
+    nothing, not the absence of one.
 
     A value a pass invented has neither, and is refused by both arms.
     """
@@ -240,7 +242,7 @@ def _seats(op: mir.Op, assignment: dict | None, origin: dict | None) -> "tuple |
         value = getattr(one, "value", None)
         if value is None:
             return None
-        where = assignment.get(value) if assignment else (origin or {}).get(value)
+        where = assignment.get(value) if assignment is not None else (origin or {}).get(value)
         if where is None:
             return None
         seats.append(where)

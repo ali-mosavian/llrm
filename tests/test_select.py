@@ -1217,6 +1217,9 @@ def test_a_divide_refuses_an_allocation_that_forgot_one_of_its_answers() -> None
         assert asm._selected_divide(op, module_of, every, body.origin, frozenset()) is not None, (
             "an allocation naming both answers is emittable"
         )
+        assert asm._seats(op, {}, body.origin) is None, (
+            "an allocation that placed nothing is still an allocation"
+        )
         partial = {op.results[0].value: body.origin[op.results[0].value]}
         refused = asm._selected_divide(op, module_of, partial, body.origin, frozenset())
         assert refused is None or isinstance(refused, str), refused
