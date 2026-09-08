@@ -943,3 +943,240 @@ def test_a_far_cell_is_reached_through_the_register_it_was_placed_in() -> None:
     back = next(iter(Decoder(BITNESS, plain.code, ip=0)))
     assert back.memory_base == Register.BX
     assert back.memory_segment == Register.ES
+
+
+def _lngmix_divides():
+    """lngmix's two absorbed divides, with the module they came from."""
+    from qbopt import mir
+    from qbopt import omf
+    from qbopt import module
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()))
+    assert found is not None
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
+    out = []
+    for _name, body in mir.bodies(found, split.partition(found, mapped)):
+        for block in body.blocks:
+            for op in block.ops:
+                if op.kind is mir.Kind.DIVMOD:
+                    out.append((found, body, op))
+    return out
+
+
+def test_a_divide_is_emitted_from_its_operands_and_not_from_the_site() -> None:
+    """Rewrite what the operation divides, and the bytes have to follow.
+
+    An absorbed site used to be emitted from the CallSite frozen at the
+    raise, so it went on emitting the operands BC pushed however the
+    operation had since been rewritten -- which is why an SSA substitution
+    could not reach the emitted code at all.
+    """
+    from dataclasses import replace
+
+    from qbopt import mir
+
+    found = _lngmix_divides()
+    assert found, "lngmix divides twice"
+    for module_of, body, op in found:
+        seats = tuple(body.origin[one.value] for one in op.results)
+        was = select.divides(op, seats)
+        assert not isinstance(was, str), was
+        changed = select.divides(replace(op, args=(op.args[0], mir.Const(9, 4))), seats)
+        assert not isinstance(changed, str), changed
+        assert changed.code != was.code, "the divisor changed and the bytes did not"
+        assert bytes([9]) in changed.code and bytes([7]) not in changed.code
+
+        # The defect itself, still reachable as the fallback: the frozen
+        # site emits what BC pushed, and no rewrite of the operation can
+        # move it.
+        frozen = select.absorbed(*module_of.absorbed[op.id])
+        assert not isinstance(frozen, str)
+        assert frozen.code == was.code, "the two paths disagree on what BC wrote"
+        assert bytes([7]) in frozen.code, "the site cannot say anything but the operand it was raised with"
+
+
+def test_a_divide_whose_dividend_became_a_number_emits_that_number() -> None:
+    """The operand a pass rewrote is the one that runs.
+
+    The fixup the raise recorded belonged to the cell the dividend used to
+    read; a constant reads no memory, so nothing is emitted for that field
+    and the fixup goes with it. What must never happen is the site's own
+    bytes standing in -- they load the cell, and the program would divide
+    something the operation no longer says.
+    """
+    from dataclasses import replace
+
+    from qbopt import asm
+    from qbopt import mir
+
+    for module_of, body, op in _lngmix_divides():
+        moved = replace(op, args=(mir.Const(1000, 4), op.args[1]))
+        chosen = asm._selected_divide(moved, module_of, None, body.origin, frozenset())
+        assert not isinstance(chosen, str), f"a constant dividend is encodable: {chosen}"
+        assert chosen is not None, "and it is not the unrewritten case"
+        made, binds = chosen
+        assert binds == (), "the cell's fixup has no field left to sit in"
+        assert (1000).to_bytes(4, "little") in made.code, "the number the operation now divides"
+        frozen = select.absorbed(*module_of.absorbed[op.id])
+        assert not isinstance(frozen, str)
+        assert made.code != frozen.code, "the site's bytes still load the cell"
+
+
+def test_a_divide_pointed_at_another_cell_is_refused_rather_than_misbound() -> None:
+    """The case counting the fixups cannot see.
+
+    One memory operand before and one after, so the counts agree -- and the
+    fixup names the cell the raise read, not the one the operation reads
+    now. Binding them in order would relocate the new operand to the old
+    address, which is a working program reading the wrong four bytes.
+    """
+    from dataclasses import replace
+
+    from qbopt import asm
+    from qbopt import mir
+    from qbopt.module import Addr
+    from qbopt.module import Space
+
+    for module_of, body, op in _lngmix_divides():
+        assert asm._selected_divide(op, module_of, None, body.origin, frozenset()) is not None, (
+            "as raised, the fixups name the operands it reads"
+        )
+        elsewhere = mir.Cell(mir.MemRef(Addr(Space.SEGMENT, 0x20, 5), 4))
+        moved = replace(op, args=(elsewhere, op.args[1]))
+        refused = asm._selected_divide(moved, module_of, None, body.origin, frozenset())
+        assert isinstance(refused, str), "another cell has no fixup of its own here"
+        assert "not this operation" in refused
+
+
+def test_a_divide_hands_both_answers_to_wherever_they_were_placed() -> None:
+    """The allocation decides where the two answers go, including the swap.
+
+    idiv writes the quotient in eax and the remainder in edx, so an
+    allocation that wants them the other way round makes each move's
+    destination the other's source. Written as two moves in either order
+    one answer is destroyed -- the same hazard parcopy.py exists for -- so
+    this is one exchange.
+    """
+    from iced_x86 import OpKind
+    from iced_x86 import Mnemonic
+
+    for _module, body, op in _lngmix_divides():
+        swapped = select.divides(op, (Register.EDX, Register.EAX))
+        assert not isinstance(swapped, str), swapped
+        got = [one for one in Decoder(BITNESS, swapped.code)]
+        kinds = [one.mnemonic for one in got]
+        assert Mnemonic.XCHG in kinds, f"the swap needs an exchange: {kinds}"
+        assert kinds.count(Mnemonic.MOV) == 2, "the two operand loads, and no move of an answer"
+
+        # Neither answer may be written before the other is read.
+        apart = select.divides(op, (Register.ESI, Register.EAX))
+        assert not isinstance(apart, str), apart
+        order = [one for one in Decoder(BITNESS, apart.code)]
+        # Only what comes after the divide: the two loads before it write
+        # eax and ecx as operands, which is not an answer being placed.
+        after = order[[one.mnemonic for one in order].index(Mnemonic.IDIV) + 1 :]
+        moves = [one for one in after if one.mnemonic == Mnemonic.MOV and one.op0_kind == OpKind.REGISTER]
+        into = [one.op0_register for one in moves]
+        assert into.index(Register.ESI) < into.index(Register.EAX), (
+            "the quotient leaves eax before the remainder is put there"
+        )
+
+
+def test_an_absorbed_divide_tells_the_allocator_what_it_destroys() -> None:
+    """A sequence writes registers none of its operands name.
+
+    The dividend's, the divisor's, idiv's own edx and wherever the answer
+    it was not asked for is kept. With none of them declared, a value the
+    allocator left in ecx across the site was interfering with nothing it
+    could see, and `mov ecx,7` would have taken it.
+    """
+    import sys
+
+    sys.path.insert(0, "tools")
+    import stages
+
+    from qbopt import mir
+    from qbopt import lower
+    from qbopt import calls as machine
+
+    found, bodies, contracts = stages._bodies(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes())
+    wanted = {machine.RESULT, machine.DIVISOR, Register.EDX, machine.OTHER}
+    seen = 0
+    for name, body in bodies:
+        built = lower.lowered(name, body, found.calls, set(found.absorbed), contracts)
+        for block in built.blocks:
+            for insn in block.insns:
+                op = getattr(insn, "op", None)
+                if op is None or getattr(op, "kind", None) is not mir.Kind.DIVMOD:
+                    continue
+                seen += 1
+                assert wanted <= insn.clobbers, f"{insn.at:#06x} destroys {wanted - insn.clobbers} and says nothing"
+    assert seen == 2, f"lngmix divides twice; {seen} seen"
+
+
+def test_a_rewritten_divide_reaches_the_image_through_the_real_layout() -> None:
+    """The whole segment, laid out from the real object.
+
+    Two things had to hold and neither was enough alone. asm has to emit
+    the divide from the operation rather than from the site frozen at the
+    raise -- and layout._grounded has to stop handing the operation back
+    with its operands stripped, which it does for any value the allocation
+    does not cover: the op then emits its own bytes, so the image divided
+    the cell the operation no longer names and every check of the selector
+    alone still passed.
+    """
+    from dataclasses import replace
+
+    from qbopt import mir
+    from qbopt import omf
+    from qbopt import layout
+    from qbopt import module
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    at = Path("fixtures/omf/lngmix-p-g2.obj")
+    found = module.of(omf.parse(at.read_bytes()))
+    assert found is not None
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
+    blocks = split.partition(found, mapped)
+    bodies = list(mir.bodies(found, blocks))
+    fields = frozenset(one.offset for one in omf.fixups(omf.parse(at.read_bytes())) if one.seg == found.seg)
+    reached = frozenset(one for block in blocks for insn in block.insns for one in range(insn.at, insn.end))
+
+    number = 1000
+    changed = [
+        (
+            name,
+            replace(
+                body,
+                blocks=tuple(
+                    replace(
+                        block,
+                        ops=tuple(
+                            replace(one, args=(mir.Const(number, 4), one.args[1]))
+                            if one.kind is mir.Kind.DIVMOD
+                            else one
+                            for one in block.ops
+                        ),
+                    )
+                    for block in body.blocks
+                ),
+            ),
+        )
+        for name, body in bodies
+    ]
+
+    idiv, load_of_the_cell = bytes.fromhex("66f7f9"), bytes.fromhex("66a1")
+    was = layout.rebuild(found, bodies, mapped.tables, fields, reached)
+    assert not isinstance(was, str), was
+    assert idiv in was.code and load_of_the_cell in was.code, "as raised, the divide reads its cell"
+
+    got = layout.rebuild(found, changed, mapped.tables, fields, reached)
+    assert not isinstance(got, str), got
+    assert idiv in got.code, "it is still a divide"
+    assert number.to_bytes(4, "little") in got.code, "the number the operation now divides is not in the image"
+    assert load_of_the_cell not in got.code, "the site's own bytes are still loading the cell it no longer reads"

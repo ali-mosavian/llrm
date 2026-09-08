@@ -29,18 +29,12 @@ known: the x87 instructions, and the addresses in a space select.py does
 not encode.
 """
 
-from dataclasses import field
 from dataclasses import replace
-from dataclasses import dataclass
-
-from iced_x86 import OpKind
-from iced_x86 import Register
 
 from qbopt import ir
 from qbopt import asm
 from qbopt import mir
 from qbopt import lower
-from qbopt import select
 from qbopt import regalloc
 from qbopt.mir import MirBody
 from qbopt.module import Module
@@ -206,6 +200,14 @@ def _grounded(body: MirBody, held: dict | None) -> MirBody:
         return was if isinstance(was, ir.Reg) and was.width == one.width else None
 
     def resolve(op):
+        if op.kind is mir.Kind.DIVMOD:
+            # Emitted from its own operands by asm, which reads the seats
+            # out of the allocation itself -- so there is no ir.Held here
+            # for this to settle, and the fallback below would be a wrong
+            # answer rather than a conservative one: stripping the operands
+            # off an operation a pass rewrote emits the bytes BC wrote,
+            # which divide the cell the operation no longer names.
+            return op
         what = lower.current(op)
         if what is None or not any(
             isinstance(one, ir.Held) and one.value not in covered for one in (*what.dests, *what.sources)

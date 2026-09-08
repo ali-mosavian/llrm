@@ -461,8 +461,10 @@ def test_consume_divide_puts_the_dividend_in_eax_not_the_divisor() -> None:
     site = CallSite(at=0, end=0, start=0, name=DIVIDE, consume=(divisor, dividend))
     emitted = consume(site, Flag.NONE)
     assert not isinstance(emitted, str)
-    # pop eax (dividend) / pop ecx (divisor) / cdq / idiv ecx / restore
-    assert emitted.code == hx("66 58  66 59  66 99  66 F7 F9  66 50 58 5A")
+    # pop eax (dividend) / pop ecx (divisor) / cdq / idiv ecx /
+    # mov ebx,edx (the remainder this site was not asked for, kept before
+    # the restore writes over edx) / restore
+    assert emitted.code == hx("66 58  66 59  66 99  66 F7 F9  66 8B DA  66 50 58 5A")
 
 
 def test_absorb_reloads_a_classified_frame_site_rather_than_popping_it(fixtures: Path) -> None:

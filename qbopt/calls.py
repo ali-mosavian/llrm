@@ -345,6 +345,22 @@ DIVIDES = {DIVIDE, REMAINDER}
 
 RESULT = Register.EAX  # what the runtime returns a long in, as ax:dx
 
+# Where a divide leaves the answer its own name does not promise. One idiv
+# computes both, and the routine BC called returns one -- so the other is
+# free, and throwing it away is why lngmix divides the same two numbers
+# twice. It cannot stay in edx: the restore that hands BC's dx:ax pair back
+# overwrites edx, so the value is gone before anything downstream could read
+# it. ebx is where it goes because every one of these sites already declares
+# it clobbered -- B$DVI4 and B$RMI4 preserve nothing -- so BC's own code
+# cannot be expecting anything there.
+OTHER = Register.EBX
+
+# What a divide's second operand is loaded into. idiv names one operand and
+# reads edx:eax as the other, so this is the only choice the sequence makes;
+# named here because both the emitter and anything selecting a divide from
+# an operation's own operands have to make the same one.
+DIVISOR = Register.ECX
+
 # B$CPI4's actual body (runtime/rt/helpi4.asm of the QuickBASIC 4.5 source)
 # never touches cx, dx or bx at all, and its cProc save-list -- <AX>, where
 # B$MUI4/B$DVI4/B$RMI4 all declare an empty one -- preserves ax too. Its own
@@ -719,6 +735,7 @@ def consume(site: CallSite, live: Flag, restore: bool = True) -> Emitted | str:
     elif site.name in DIVIDES:
         steps.append(Instruction.create(Code.CDQ))
         steps.append(Instruction.create_reg(Code.IDIV_RM32, Register.ECX))
+        steps.extend(keeping_the_other(site.name))
         if site.name == REMAINDER:
             steps.append(Instruction.create_reg_reg(Code.MOV_R32_RM32, RESULT, Register.EDX))
     elif site.name == FIX_MULTIPLY:
@@ -727,6 +744,37 @@ def consume(site: CallSite, live: Flag, restore: bool = True) -> Emitted | str:
     if restore:
         steps.extend(restoring())
     return assemble(steps, {})
+
+
+def keeping_the_other(name: str) -> list[Instruction]:
+    """The move that puts a divide's unasked-for answer somewhere it lasts.
+
+    Straight after the idiv and before anything else: the quotient is in
+    eax and the remainder in edx, and both the `mov eax,edx` a remainder
+    site ends with and the restore idiom after it write over one of them.
+
+    Two bytes, on every idiv site whether the value is read or not. What it
+    buys is that the value exists at all -- a second divide of the same two
+    numbers is otherwise the only way to ask for it, which is what lngmix
+    does ten times a loop.
+    """
+    if name == DIVIDE:
+        return [Instruction.create_reg_reg(Code.MOV_R32_RM32, OTHER, Register.EDX)]
+    if name == REMAINDER:
+        return [Instruction.create_reg_reg(Code.MOV_R32_RM32, OTHER, RESULT)]
+    return []
+
+
+def other_result(site: CallSite) -> "Register_ | None":
+    """Where this site leaves the answer its own name does not promise.
+
+    Every divide, whichever form it is emitted as. Which instructions the
+    machine picks is not a fact about what the operation computes, and a
+    site that said DIVMOD for an idiv and DIV for a shift would be exactly
+    that leak -- so the answer here is the contract, and the emitter's job
+    is to honour it.
+    """
+    return OTHER if site.name in DIVIDES else None
 
 
 def _power_of_two(value: int) -> int | None:
@@ -802,14 +850,12 @@ def dividing(site: CallSite, live: Flag, restore: bool = True) -> Emitted | str:
     if left.kind is Kind.STATIC and left.at is not None:
         relocated[where] = left.at
 
-    if right.kind is Kind.CONSTANT and (n := _power_of_two(right.value)) is not None:
-        for insn in dividing_by_a_power_of_two(site.name, n, divisor):
-            add(insn)
-        if restore:
-            for insn in restoring():
-                add(insn)
-        return assemble(steps, relocated)
-
+    # The shift form computes one answer where idiv computes two, and a
+    # divide now has to hand back both -- see keeping_the_other(). It is
+    # kept, and tested, against the step that has it produce the second
+    # answer as well; until then a site that took it would name a result
+    # nothing wrote. Nothing in the corpus divides by a power of two, so
+    # this costs no program a cycle today.
     if right.kind is Kind.CONSTANT:
         add(Instruction.create_reg_i32(Code.MOV_R32_IMM32, divisor, right.value))
     else:
@@ -819,6 +865,8 @@ def dividing(site: CallSite, live: Flag, restore: bool = True) -> Emitted | str:
 
     add(Instruction.create(Code.CDQ))
     add(Instruction.create_reg(Code.IDIV_RM32, divisor))
+    for insn in keeping_the_other(site.name):
+        add(insn)
     if site.name == REMAINDER:
         add(Instruction.create_reg_reg(Code.MOV_R32_RM32, RESULT, Register.EDX))
     if restore:

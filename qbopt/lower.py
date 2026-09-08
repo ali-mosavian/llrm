@@ -588,6 +588,17 @@ def _clobbers(op: "mir.Op", calls: dict[int, str]) -> "frozenset[Register_]":
     from qbopt import mir
     from qbopt import runtime
 
+    if op.kind is mir.Kind.DIVMOD:
+        # An absorbed divide is emitted as a sequence, not as one
+        # instruction, and it writes registers none of its operands name:
+        # the dividend's, the divisor's, idiv's own edx, and wherever the
+        # answer it was not asked for is kept. Declared here because this
+        # is where a machine fact belongs, and because nothing else tells
+        # the allocator -- a value living in ecx across the site was not
+        # interfering with anything it could see.
+        from qbopt import calls as machine
+
+        return frozenset({machine.RESULT, machine.DIVISOR, Register.EDX, machine.OTHER} & set(target.AVAILABLE))
     if op.kind is not mir.Kind.CALL:
         return frozenset()
     contract = runtime.contract(calls.get(op.at))

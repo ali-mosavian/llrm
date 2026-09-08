@@ -483,6 +483,46 @@ def test_mir_operands_say_exactly_what_the_node_said() -> None:
     assert seen > 1980, f"only {seen} operations checked"
 
 
+def test_an_absorbed_divide_names_the_two_registers_it_leaves_answers_in() -> None:
+    """lngmix's two divides, and where each says its answers are.
+
+    A divide computes both answers and BC's call asks for one. Which
+    register the other lands in is the emitter's answer -- calls.py's
+    `other_result` -- and the raise reads it rather than choosing, because
+    the two drifting apart is a wrong value and not a crash.
+
+    They had drifted. The second role was "the first other register the
+    call clobbers", in register order, which is the one the emitted
+    sequence loads the divisor into: both of lngmix's divides named a
+    result in the register holding the constant 7, and only the fact that
+    nothing yet reads that result kept it from being read as an answer.
+    """
+    from qbopt import omf
+    from qbopt import module
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+    from qbopt import calls as machine
+
+    found = module.of(omf.parse(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()))
+    assert found is not None
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
+
+    seen = 0
+    for _name, body in mir.bodies(found, split.partition(found, mapped)):
+        for block in body.blocks:
+            for op in block.ops:
+                if op.kind is not mir.Kind.DIVMOD or op.id is None:
+                    continue
+                seen += 1
+                site, _read = found.absorbed[op.id]
+                where = {body.origin.get(one.value) for one in op.results}
+                assert where == {machine.RESULT, machine.other_result(site)}, (
+                    f"{op.at:#06x}: the site's answers are in {where}, not where it emits them"
+                )
+    assert seen == 2, f"lngmix divides twice; {seen} absorbed sites found"
+
+
 def test_a_variable_keeps_one_name_across_every_version_of_it() -> None:
     """In MIR a register is a variable and nothing more.
 

@@ -841,6 +841,88 @@ def absorbed(site, live, restore: bool = True) -> "Emitted | str":
     return Emitted(made.code, fields=tuple(where for where, _field in made.relocations))
 
 
+def divides(op, seats: "tuple[Register_, Register_]", restore: bool = True) -> "Emitted | str":
+    """A divide emitted from the operation's own operands.
+
+    The same instructions `absorbed()` produces, built from a different
+    thing: the MIR operation rather than the CallSite frozen at the raise.
+    That is the whole difference and the point of it -- a pass that rewrites
+    an operand rewrites what is emitted, where a frozen site goes on
+    emitting what BC pushed however the operation has since changed.
+
+    `fields` names one offset per operand that reads memory, in the order
+    the instructions are emitted. A caller pairing them with the fixups the
+    raise recorded has to check the counts still agree: an operand a pass
+    has turned into a register carries no fixup, and pairing what is left
+    in order would put the dividend's relocation on the divisor.
+    """
+    from qbopt import mir
+    from qbopt import calls as machine
+
+    if op.kind is not mir.Kind.DIVMOD or len(op.args) != 2:
+        return f"{op.name}: not a divide over two operands"
+
+    steps: list[Instruction] = []
+    reads: list[int] = []  # which steps carry a relocatable field
+
+    def into(where: Register_, one) -> str | None:
+        """`where` given whatever this operand is, or why it cannot be."""
+        if isinstance(one, mir.Const):
+            steps.append(Instruction.create_reg_i32(Code.MOV_R32_IMM32, where, one.n))
+            return None
+        if isinstance(one, mir.Cell) and one.ref.addr is not None:
+            # The same encoding the machine arm picks, from the same
+            # helpers: the accumulator's moffs form has no ModRM byte and
+            # is a byte shorter, and building the general form here made
+            # this sequence one byte longer than the site it replaces.
+            base = one.ref.addr.base
+            code = Code.MOV_EAX_MOFFS32 if base == Register.NONE and where == machine.RESULT else Code.MOV_R32_RM32
+            reads.append(len(steps))
+            steps.append(Instruction.create_reg_mem(code, where, machine.relocated_memory(base)))
+            return None
+        # A value in a register is where SSA substitution arrives, and it
+        # needs the allocation to say which register that is. Refused until
+        # the assignment reaches here, so a substituted operand falls back
+        # to the site's own bytes rather than being emitted from a guess.
+        return f"{one} is not an operand a divide can read yet"
+
+    for where, one in ((machine.RESULT, op.args[0]), (machine.DIVISOR, op.args[1])):
+        refused = into(where, one)
+        if refused is not None:
+            return refused
+
+    steps.append(Instruction.create(Code.CDQ))
+    steps.append(Instruction.create_reg(Code.IDIV_RM32, machine.DIVISOR))
+    # idiv leaves the quotient in eax and the remainder in edx, and the
+    # operation says which of its two results is which -- so where each
+    # goes is `seats`, and nothing here has to know which runtime routine
+    # BC called.
+    #
+    # Two moves that happen at once, which is what parcopy.py says about a
+    # phi's edge and is true here for the same reason: an allocation that
+    # wants the quotient in edx and the remainder in eax makes each move's
+    # destination the other's source, and writing them in either order
+    # destroys one. Ordered where one is free, exchanged where neither is.
+    quotient, remainder = seats
+    moves = [(quotient, machine.RESULT), (remainder, Register.EDX)]
+    moves = [(into, outof) for into, outof in moves if into != outof]
+    if len(moves) == 2 and moves[0][0] == moves[1][1] and moves[1][0] == moves[0][1]:
+        steps.append(Instruction.create_reg_reg(Code.XCHG_RM32_R32, moves[0][0], moves[0][1]))
+    else:
+        # Whichever move nothing else reads out of, first.
+        if len(moves) == 2 and moves[0][0] == moves[1][1]:
+            moves.reverse()
+        for into, outof in moves:
+            steps.append(Instruction.create_reg_reg(Code.MOV_R32_RM32, into, outof))
+    if restore:
+        steps.extend(machine.restoring())
+    # Each reading step named as its own fixup, so what comes back is the
+    # offsets alone: which fixup belongs to which is the caller's, and it
+    # is the one thing this must not decide.
+    made = machine.assemble(steps, {index: index for index in reads})
+    return Emitted(made.code, fields=tuple(where for where, _which in made.relocations))
+
+
 def absorbed_fixups(site, live, restore: bool = True) -> tuple[int, ...]:
     """Which fixup each of an absorbed site's fields names, in the same order.
 

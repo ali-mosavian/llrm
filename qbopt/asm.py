@@ -28,12 +28,10 @@ changes, then emit.
 """
 
 from dataclasses import field
-from dataclasses import replace
 from dataclasses import dataclass
 
 from iced_x86 import OpKind
 from iced_x86 import Register
-from iced_x86 import Register_
 
 from qbopt import ir
 from qbopt import mir
@@ -218,6 +216,80 @@ def _absorbed(site, read):
     return None if isinstance(made, str) else made
 
 
+def _seats(op: mir.Op, assignment: dict | None, origin: dict | None) -> "tuple | None":
+    """Which register each of an operation's results is in.
+
+    The allocation where there is one, and where BC had it otherwise --
+    the same two sources `_where` reads, asked per result rather than per
+    operand, because what an idiom has to emit is where its answers go.
+    """
+    seats = []
+    for one in op.results:
+        value = getattr(one, "value", None)
+        if value is None:
+            return None
+        where = (assignment or {}).get(value) or (origin or {}).get(value)
+        if where is None:
+            return None
+        seats.append(where)
+    return tuple(seats) if len(seats) == 2 else None
+
+
+def _divide_fields(op: mir.Op, found: Module, fields: frozenset[int]) -> "tuple[int, ...] | None":
+    """The fixup each of this op's memory operands still names, in order.
+
+    A fixup belongs to the operand it was read off. The raise recorded them
+    in the order it emitted them, which is the order of the operands that
+    read memory -- so operand i's fixup is entry i, and it is still that
+    operand's only while the operand is the one it was recorded for.
+
+    An operand a pass turned into a constant or a register reads no memory
+    and its fixup goes with it: nothing is emitted for it, and asm's own
+    accounting drops a fixup no surviving field claims. An operand pointed
+    at a different cell is the case counting cannot see -- the count is the
+    same and every byte the fixup lands on is wrong -- so it has no binding
+    and this returns None rather than guessing one.
+    """
+    was = list(op.raised[0]) if op.raised is not None else list(op.args)
+    recorded = _fields_in(found, op, fields)
+    known = {
+        position: recorded[order]
+        for order, position in enumerate(index for index, one in enumerate(was) if isinstance(one, mir.Cell))
+        if order < len(recorded)
+    }
+    out: list[int] = []
+    for index, one in enumerate(op.args):
+        if not isinstance(one, mir.Cell):
+            continue
+        if index >= len(was) or was[index] != one or index not in known:
+            return None
+        out.append(known[index])
+    return tuple(out)
+
+
+def _selected_divide(op: mir.Op, found: Module, assignment, origin, fields):
+    """A divide emitted from its own operands: (bytes, its fixups), or why not.
+
+    A string is a refusal of the whole emission and never a signal to fall
+    back. Emitting the site frozen at the raise after a pass has rewritten
+    the operation would run the operands BC pushed as if they were the new
+    ones -- a wrong answer rather than a refusal. An operation nothing has
+    rewritten is the one case where the two are the same program, and
+    mir.rewritten() is what says so.
+    """
+    if op.kind is not mir.Kind.DIVMOD:
+        return None
+    seats = _seats(op, assignment, origin)
+    made = select.divides(op, seats) if seats is not None else "no register holds a result"
+    wanted = _divide_fields(op, found, fields)
+    if not isinstance(made, str) and wanted is not None and len(made.places) == len(wanted):
+        return made, wanted
+    if mir.rewritten(op):
+        why = made if isinstance(made, str) else "no fixup here names the operands it now reads"
+        return f"{op.at:#06x}: {why}, and the bytes the site was raised with are not this operation"
+    return None
+
+
 def _fields_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -> tuple[int, ...]:
     """Every fixup this operation's own operands carry, in operand order.
 
@@ -371,7 +443,10 @@ def assemble(
         emulated = not native_fpu and op.node is not None and found.code[op.at : op.at + 1] == bytes([0xCD])
         folded = found.absorbed.get(op.id) if op.id is not None else None
         if folded is not None:
-            made = _absorbed(*folded)
+            chosen = _selected_divide(op, found, assignment, origin, fields)
+            if isinstance(chosen, str):
+                return chosen
+            made = chosen[0] if chosen is not None else _absorbed(*folded)
             if made is None:
                 return f"{op.at:#06x}: the absorbed call is not one select.py can emit"
             lengths.append(len(made.code))
@@ -510,10 +585,14 @@ def assemble(
             continue
         folded = found.absorbed.get(op.id) if op.id is not None else None
         if folded is not None:
-            made = _absorbed(*folded)
+            chosen = _selected_divide(op, found, assignment, origin, fields)
+            if isinstance(chosen, str):
+                return chosen
+            made = chosen[0] if chosen is not None else _absorbed(*folded)
             if made is None or len(made.code) != lengths[index]:
                 return f"{op.at:#06x}: the absorbed call changed length between the two passes"
-            for where, field in zip(made.places, _fields_in(found, op, fields), strict=False):
+            binds = chosen[1] if chosen is not None else _fields_in(found, op, fields)
+            for where, field in zip(made.places, binds, strict=False):
                 relocations.append((len(out) + where, field))
             out += made.code
             continue

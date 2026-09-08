@@ -587,15 +587,18 @@ def _absorbing(site, written: dict) -> "tuple[Kind, tuple, tuple] | None":
         # By role, not by register number. The runtime hands back
         # whichever of quotient and remainder its own name promises, in
         # eax either way -- so B$DVI4's visible long is the quotient and
-        # B$RMI4's is the remainder, and the other role keeps the value
-        # the raise already made for the register the call also clobbers.
-        # Ordering the pair the same way regardless of which call it came
-        # from is what lets the two sites read as one computation.
+        # B$RMI4's is the remainder, and the other role is the answer the
+        # call was not asked for. Ordering the pair the same way regardless
+        # of which call it came from is what lets the two sites read as one
+        # computation.
+        #
+        # Both come from the site rather than from register order. Taking
+        # the second as "the first other register the call clobbers" named
+        # the one the divisor is loaded into: for both of lngmix's divides
+        # MIR claimed a result in the register holding the constant 7, and
+        # only the fact that nothing read it kept that from being wrong.
         visible = written.get(machine.RESULT)
-        other = next(
-            (value for register, value in sorted(written.items()) if register != machine.RESULT and not value.flags),
-            None,
-        )
+        other = written.get(machine.other_result(site))
         if visible is None or other is None or visible.flags:
             return None
         pair = (other, visible) if site.name.upper() == machine.REMAINDER else (visible, other)
