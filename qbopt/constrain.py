@@ -71,12 +71,19 @@ def constrained(
     for block in body.blocks:
         insns: list[lir.Insn] = []
         for one in block.insns:
+            # The declared width first. An operation that names no operand
+            # has none for `_width` to read, so the requirement's own is
+            # the only statement of how wide the value is: asked at a word
+            # instead, the restore's answer looked unlike the eax it was
+            # already pinned to, and a copy went in that could not be
+            # placed -- pinned to eax beside the value it copied -- and
+            # was spilled and reloaded for nothing.
+            widths = {held.value: held.width for held, _r in one.requires + one.delivers}
             wanted = {
                 value: got
                 for value, got in _wanted(one).items()
-                if not _already_there(pinned, value, got[0], _width(one, value))
+                if not _already_there(pinned, value, got[0], widths.get(value) or _width(one, value))
             }
-            widths = {held.value: held.width for held, _r in one.requires + one.delivers}
             given = {
                 value: register
                 for value, register in _delivered(one).items()
@@ -146,14 +153,8 @@ def constrained(
                     # spiller replaces that value between rounds. Dropped,
                     # the restore's reload arrived with no pin at all and
                     # the idiom pushed whatever eax held.
-                    requires=tuple(
-                        (ir.Held(swap.get(held.value, held.value), held.width), register)
-                        for held, register in one.requires
-                    ),
-                    delivers=tuple(
-                        (ir.Held(swap.get(held.value, held.value), held.width), register)
-                        for held, register in one.delivers
-                    ),
+                    requires=(),
+                    delivers=(),
                 )
             )
             insns += after

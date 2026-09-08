@@ -182,3 +182,40 @@ def test_a_value_already_in_the_register_a_call_needs_is_not_split() -> None:
     assert not any(where is Register.CX and value != 11 for value, where in pins.items()), (
         f"a fresh value was pinned onto the same register: {pins}"
     )
+
+
+def test_a_value_already_in_the_register_an_idiom_wants_is_not_copied() -> None:
+    """The declared width is the only statement an idiom makes of one.
+
+    `_width` reads the semantics, and an operation that names no operand
+    has none -- the restore idiom is three instructions behind one node.
+    Asked at a word, its answer looked unlike the eax it was already
+    pinned to, so a copy went in that could not be placed (pinned to eax
+    beside the value it copied) and was spilled and reloaded for nothing:
+    four instructions in lngmix's loop, every iteration.
+    """
+    from iced_x86 import Register
+
+    from qbopt import ir
+    from qbopt import lir
+    from qbopt import constrain
+
+    held = ir.Held(2, 4)
+    one = lir.Insn(
+        at=0x10,
+        covers=(0x10, 0x14),
+        what=ir.Semantics(ir.Operation.RESTORE, "restore", (), ()),
+        defines=(),
+        uses=(2,),
+        requires=((held, Register.EAX),),
+    )
+    body = lir.LirBody(
+        name="one",
+        entry=0x10,
+        blocks=(lir.LirBlock(at=0x10, insns=(one,)),),
+        origin={},
+        pins={},
+    )
+    got, fixed = constrain.constrained(body, {2: Register.EAX})
+    assert fixed == {}, f"a copy was minted for a value already in eax: {fixed}"
+    assert got.insns[0].uses == (2,), "the instruction was given a fresh value it did not need"
