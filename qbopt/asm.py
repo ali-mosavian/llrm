@@ -212,7 +212,12 @@ def _absorbed(site, read):
     instructions for a long divide, two of them relocated -- which is the
     case Emitted.places exists for.
     """
-    made = select.absorbed(site, read)
+    from qbopt import calls as machine
+
+    # A divide hands its answer's high half back through an operation of
+    # its own, so the sequence must not end in the idiom as well: emitted
+    # twice, the second pops what the first had already put back.
+    made = select.absorbed(site, read, site.name not in machine.DIVIDES)
     return None if isinstance(made, str) else made
 
 
@@ -294,7 +299,7 @@ def _selected_divide(op: mir.Op, found: Module, assignment, origin, fields):
     if op.kind is not mir.Kind.DIVMOD:
         return None
     seats = _seats(op, assignment, origin)
-    made = select.divides(op, seats) if seats is not None else "no register holds a result"
+    made = select.divides(op, seats, restore=False) if seats is not None else "no register holds a result"
     wanted = _divide_fields(op, found, fields)
     if not isinstance(made, str) and wanted is not None and len(made.places) == len(wanted):
         return made, wanted

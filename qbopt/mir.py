@@ -1209,6 +1209,65 @@ def _operands(
 _IDS = itertools.count(1)
 
 
+def _hands_back(kind: "Kind", written: dict, before: dict) -> "tuple | None":
+    """(what the handed-back half defines, what it was, the answer it is of).
+
+    An absorbed divide leaves its visible answer as one 32-bit value, and
+    BC's own code reads a long as two 16-bit halves -- so the site ends by
+    handing the high one over. Until that is said, the value it writes is
+    one more register the call clobbered, and the two are not the same
+    fact: a fold reading it as a clobber substitutes what the *previous*
+    divide left there, which is the other answer's high half.
+
+    RESTORE_PAIR says where the half lands, for the same pair the emitted
+    sequence pushes. None where this is not a shape that hands one back.
+    """
+    from qbopt import calls as machine
+
+    if kind is not Kind.DIVMOD:
+        return None
+    source, into = RESTORE_PAIR[0]
+    if machine.RESULT is not source:
+        return None
+    answer, was, now = written.get(source), before.get(into), written.get(into)
+    if answer is None or was is None or now is None:
+        return None
+    return now, was, answer
+
+
+def _handing_back(at: int, node: "ir.Node", now: "Value", was: "Value", answer: "Value") -> "Op":
+    """The half a site hands back, as what it is rather than as a clobber.
+
+    Synth.HALF_TO_LOW is MIR's own word for it: this value is the one
+    before it with its low half replaced by the answer's high half. The
+    answer is among what it reads, so substituting the answer carries to
+    the half -- which is the point, and what was missing while the half
+    read as a register the call happened to write.
+
+    It owns none of BC's bytes. The site's range belongs to the divide,
+    once; what this emits is four bytes that stand for no original ones,
+    which is a different fact and the one `covers` is not for.
+
+    No operands, the way no restore here has any: the idiom is three
+    instructions behind one node, and an operand list has the lowering
+    build semantics for it and emit something else entirely. What it reads
+    and what it defines are still said, which is what a pass needs.
+    """
+    return Op(
+        at,
+        Synth.HALF_TO_LOW,
+        "restore",
+        (now,),
+        (was, answer),
+        (),
+        (),
+        ir.Restore(at=at, end=at, pair=0, effects=ir.RESTORE_EFFECTS[0]),
+        kind=Kind.JOIN,
+        covers=(at, at),
+        id=next(_IDS),
+    )
+
+
 def raise_body(
     blocks: list[Block],
     nodes: dict[int, ir.Node],
@@ -1321,6 +1380,13 @@ def raise_body(
             loads = _memrefs(node.effects.loads, namer, start, slot, where, keeps)
             stores = _memrefs(node.effects.stores, namer, start, slot, where, keeps)
             holds = dict(zip(sorted(uses, key=lambda o: (o is not FLAGS, o)), used))
+            # What each variable held before this instruction writes
+            # anything. The half an absorbed divide hands back is a
+            # read-modify-write of the variable it lands in, and `uses`
+            # does not carry that: a routine's contract names what it
+            # reads, and it does not read the register its own answer's
+            # high half goes to.
+            before = {one: namer.current(one, start) for one in TRACKED}
             made = []
             for one in sorted(defines, key=lambda o: (o is not FLAGS, o)):
                 value = namer.fresh(one, insn.at)
@@ -1333,6 +1399,7 @@ def raise_body(
             operands = _normalised(kind, node.semantics.name or "", where[0], where[1])
             site = (sites or {}).get(insn.at)
             covers, where_at = ir.span(node), insn.at
+            handed: tuple | None = None
             if site is not None:
                 folded = _absorbing(site, written)
                 if folded is not None:
@@ -1347,6 +1414,7 @@ def raise_body(
                     # push has to find something there, and lngmix's does.
                     covers = (site.start, site.end)
                     where_at = site.start
+                    handed = _hands_back(kind, written, before)
             _called = _call_args(chosen.get(insn.at), holds, insn.at) if kind is Kind.CALL else ((), True)
             # The snapshot the raise took, arguments included. `semantics`
             # carries an operation's own bytes only while its operands are
@@ -1355,12 +1423,18 @@ def raise_body(
             # the other, every residual call read as rewritten and select
             # cannot encode a call.
             _args = _called[0] if kind is Kind.CALL else operands
+            # The half the site hands back belongs to the operation that
+            # says what it is, not to the divide: read as one of the
+            # divide's clobbers it is indistinguishable from a register
+            # left alone, and a fold then puts the quotient's high half
+            # where the remainder's belongs.
+            kept = tuple(one for one in made if handed is None or one is not handed[0])
             ops[at].append(
                 Op(
                     where_at,
                     Synth.HALF_TO_LOW if isinstance(node, ir.Restore) else node.semantics.op,
                     node.semantics.name or "",
-                    tuple(made),
+                    kept,
                     used,
                     loads,
                     stores,
@@ -1378,6 +1452,8 @@ def raise_body(
                     args_known=_called[1],
                 )
             )
+            if handed is not None:
+                ops[at].append(_handing_back(where_at, node, *handed))
 
         for successor in block.succ:
             if successor not in phis:
@@ -1984,6 +2060,12 @@ def _folded(body: MirBody, found: Module, blocks: list[Block]) -> dict:
         for op in block.ops:
             site = sites.get(op.at)
             if site is None or op.id is None or op.kind is Kind.CALL:
+                continue
+            # The half a site hands back stands beside it at the same
+            # address, and everything here is keyed on the address. Without
+            # this it is recorded as an absorbed site of its own, claiming
+            # the same bytes twice and emitting the same sequence again.
+            if op.op is Synth.HALF_TO_LOW and op.kind is Kind.JOIN:
                 continue
             # The flags go with it. Which flags something reads after the
             # site decides what the sequence may be -- a comparison wraps

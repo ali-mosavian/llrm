@@ -56,14 +56,20 @@ def walked(code: bytes, start: int) -> list:
     return out
 
 
-def original(op: mir.Op) -> Instruction:
-    """The instruction an op came from.
+def original(op: mir.Op) -> "Instruction | None":
+    """The instruction an op came from, or None where it came from none.
 
-    Narrowed here rather than at each use: only nodes that carry one reach
-    these tests, since a body holding anything else does not lay out.
+    An idiom is several instructions behind one node and there is no one
+    of them this could name: the restore that hands a long back to BC's
+    halves is three, and an operation the raise made to say what a site
+    hands back has no original instruction at all. Every caller here is
+    comparing an op against the instruction it was raised from, so those
+    are skipped rather than asserted about.
     """
     node = op.node
     assert node is not None
+    if isinstance(node, ir.Restore):
+        return None
     found = getattr(node, "insn", None)
     assert found is not None
     return found.insn
@@ -96,12 +102,21 @@ def paired(ops: list, back: list, found) -> list[tuple]:
     out, at = [], 0
     for op in ops:
         folded = found.absorbed.get(getattr(op, "id", None)) if found is not None else None
-        if folded is None:
+        made = None
+        if folded is not None:
+            made = asm._absorbed(*folded)
+            assert made is not None, f"{op.at:#x}: the absorbed call emits nothing"
+        elif isinstance(getattr(op, "node", None), ir.Restore):
+            # An operation is not always an instruction the other way
+            # round either: the idiom that hands a long back to BC's two
+            # halves is `push eax / pop ax / pop dx` behind one node, and
+            # counting one left its other two belonging to nothing.
+            made = select.restore(op.node.pair)
+            assert made is not None, f"{op.at:#x}: the restore idiom emits nothing"
+        if made is None:
             out.append((op, back[at : at + 1]))
             at += 1
             continue
-        made = asm._absorbed(*folded)
-        assert made is not None, f"{op.at:#x}: the absorbed call emits nothing"
         taken, size = 0, 0
         while at + taken < len(back) and size < len(made.code):
             size += back[at + taken].len
@@ -122,6 +137,8 @@ def test_a_laid_out_body_is_the_same_instructions_in_the_same_order(obj: Path) -
             if found.absorbed.get(getattr(op, "id", None)) is not None:
                 continue  # a folded call is not the instruction it came from
             want = original(op)
+            if want is None:
+                continue  # an idiom is not the instruction it came from
             assert made[0].mnemonic == want.mnemonic, f"{obj.stem} {op.at:#x}: {made[0]} != {want}"
 
 
@@ -141,7 +158,7 @@ def test_every_branch_points_where_its_target_went(obj: Path) -> None:
             if found.absorbed.get(getattr(op, "id", None)) is not None:
                 continue  # a folded call branches nowhere
             want = original(op)
-            if want.op0_kind != OpKind.NEAR_BRANCH16:
+            if want is None or want.op0_kind != OpKind.NEAR_BRANCH16:
                 continue
             landed = got.moved.get(want.near_branch16)
             assert landed is not None, f"{obj.stem} {op.at:#x}: target left this body"
@@ -206,7 +223,7 @@ def test_relaxation_settles_and_leaves_every_branch_reaching(obj: Path) -> None:
                 continue  # a folded call branches nowhere
             made = group[0]
             want = original(op)
-            if want.op0_kind != OpKind.NEAR_BRANCH16:
+            if want is None or want.op0_kind != OpKind.NEAR_BRANCH16:
                 continue
             landed = got.moved[want.near_branch16]
             assert made.near_branch16 == landed
