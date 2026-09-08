@@ -420,6 +420,58 @@ def test_a_widening_multiply_puts_its_halves_in_ax_and_dx() -> None:
     assert made.sources[0] == made.dests[0], "the tie was broken"
 
 
+def test_a_half_register_and_its_whole_are_the_same_register() -> None:
+    """dx is edx's low half, so a value in edx does not survive a write to dx.
+
+    lngmix printed S= 771897293 for 142900 with both its divides hoisted:
+    the long the second one returned was given edx, the restore idiom
+    beside it delivers its high half in dx, and the two were counted as
+    different registers -- so the idiom overwrote the answer the loop
+    went on to read.
+    """
+    from iced_x86 import Register
+
+    from qbopt import allocate
+    from qbopt import ir
+
+    # Three longer-lived values take the registers ahead of edx, so the
+    # long below is placed in it, and a half-width value pinned to dx is
+    # defined while the long is still live.
+    holds = [_mov(one, one, 0xF0 + 2 * index) for index, one in enumerate((3, 4, 5))]
+    wide = lir.Insn(
+        at=0x100,
+        covers=(0x100, 0x104),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 4),), (ir.Imm(7, 4),)),
+        defines=(1,),
+        uses=(),
+        op=None,
+    )
+    half = _mov(2, 3, 0x104)
+    read = lir.Insn(
+        at=0x106,
+        covers=(0x106, 0x10A),
+        what=ir.Semantics(ir.Operation.BINARY, "add", (ir.Held(1, 4),), (ir.Held(1, 4), ir.Held(2, 2))),
+        defines=(1,),
+        uses=(1, 2),
+        op=None,
+    )
+    last = lir.Insn(
+        at=0x10A,
+        covers=(0x10A, 0x10C),
+        what=ir.Semantics(ir.Operation.BINARY, "add", (ir.Held(3, 2),), (ir.Held(3, 2), ir.Held(4, 2))),
+        defines=(3,),
+        uses=(3, 4, 5),
+        op=None,
+    )
+    got = allocate.allocate(_one_block(*holds, wide, half, read, last), pinned={2: Register.DX})
+    long, pinned = got.where.get(1), got.where.get(2)
+    assert long is not None or pinned is not None, got.where
+    if long is not None and pinned is not None:
+        assert ir.ROOT.get(long, long) is not ir.ROOT.get(pinned, pinned), (
+            f"the long was given {long!r} and the pinned value {pinned!r}, which are one register"
+        )
+
+
 def test_a_fixed_source_that_is_not_the_multiply_pair_is_honoured() -> None:
     """A variable shift counts from cl and names it nowhere."""
     from iced_x86 import Register

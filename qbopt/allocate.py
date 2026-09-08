@@ -307,7 +307,7 @@ def allocate(
         got = _free(mine, order, union, live, masks)
         if got is not None:
             where[value] = got
-            union.setdefault(got, []).append(value)
+            union.setdefault(_whole(got), []).append(value)
             stage[value] = Stage.DONE
             continue
 
@@ -316,12 +316,12 @@ def allocate(
             if evicted is not None:
                 got, victims = evicted
                 for one in victims:
-                    union[got].remove(one)
+                    union[_whole(got)].remove(one)
                     del where[one]
                     stage[one] = Stage.SPLIT  # it failed here once; do not send it back to ASSIGN
                     heapq.heappush(queue, (-_priority(live.get(one), stage[one]), one))
                 where[value] = got
-                union.setdefault(got, []).append(value)
+                union.setdefault(_whole(got), []).append(value)
                 stage[value] = Stage.DONE
                 continue
             stage[value] = Stage.SPLIT
@@ -372,13 +372,27 @@ def _masks(body: lir.LirBody, index: "ranges.Indexes") -> "list[tuple[int, froze
     """Every point a register is destroyed without being named, and which.
 
     LLVM's `LiveIntervals::getRegMaskSlots()`. A call is the only one here.
+
+    Rooted, because a mask naming eax destroys ax with it.
     """
     out = []
     for block in body.blocks:
         for one in block.insns:
             if one.clobbers:
-                out.append((index.at[id(one)], one.clobbers))
+                out.append((index.at[id(one)], frozenset(_whole(register) for register in one.clobbers)))
     return out
+
+
+def _whole(register: Register_) -> Register_:
+    """The 32-bit register this one is part of.
+
+    Occupancy is a fact about the register itself, and dx is edx's low
+    half: counted apart, the allocator put a long in edx while the restore
+    idiom beside it delivered its high half in dx, and lngmix printed
+    S= 771897293 for 142900. Every question about what is already in a
+    register is asked of the whole of it.
+    """
+    return ir.ROOT.get(register, register)
 
 
 def _clobbered(one: "ranges.Interval", register: Register_, masks: list) -> bool:
@@ -392,8 +406,9 @@ def _clobbered(one: "ranges.Interval", register: Register_, masks: list) -> bool
     Live *across*, not merely touching: a value the call itself writes
     starts after the clobber, and one that dies at the call ends before it.
     """
+    mine = _whole(register)
     for slot, mask in masks:
-        if register not in mask:
+        if mine not in mask:
             continue
         if any(seg.start < slot and seg.end > slot + ranges.DEF for seg in one.segments):
             return True
@@ -405,7 +420,7 @@ def _free(one: "ranges.Interval", order: tuple, union: dict, live: dict, masks: 
     for register in order:
         if _clobbered(one, register, masks):
             continue
-        if not any(live[other].overlaps(one) for other in union.get(register, ()) if other in live):
+        if not any(live[other].overlaps(one) for other in union.get(_whole(register), ()) if other in live):
             return register
     return None
 
@@ -422,7 +437,7 @@ def _evict(one: "ranges.Interval", order: tuple, union: dict, live: dict, masks:
     for register in order:
         if _clobbered(one, register, masks):
             continue
-        victims = [other for other in union.get(register, ()) if other in live and live[other].overlaps(one)]
+        victims = [other for other in union.get(_whole(register), ()) if other in live and live[other].overlaps(one)]
         if not victims:
             continue
         bill = sum(live[other].weight for other in victims)
