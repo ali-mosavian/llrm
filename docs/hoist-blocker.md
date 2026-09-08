@@ -102,3 +102,26 @@ against a target of 210 -- and neither is about registers.
 **nested and matrix do hoist** and are still worse than they were: a run is
 found, a crossing value is found, a placement is found. Whatever costs them
 is downstream of the hoist and has not been looked at.
+
+## And the allocator it was refused by is not the one that spills
+
+Measured, and it corrects a detour this took twice. `regalloc.colour()`
+refuses rather than spills, and it is the *fallback*: `wholeseg.rebuilt`
+runs the LIR route first -- `flow.machine`, with `allocate.py`'s priced
+branch-and-bound, `spiller.py`, `splitkit.py`, `frame.py` and
+`prologue.py` -- and only drops to `layout.allocated` when that route
+declines. hotlop, spill and nested go through it today.
+
+lngmix and lngmxx did not, for one reason: `objwrite._carried` read "owns
+no original bytes" as "inserted" and stripped the node off the half an
+absorbed divide hands back. The node is what says which idiom it is, so
+it reached the general encoder as an operation named `restore` with no
+operands. Every body holding an absorbed divide left the route that can
+spill and took the one that cannot.
+
+With that fixed the next refusal is `0x0071: mov is not one select.py can
+emit` -- the reused divide's copy arrives at emission still naming
+`Held(21)` and `Held(19)` while the assignment objwrite hands down is
+empty, so `allocate.applied()` did not rewrite it. That is where the
+hoisted body's five crossings get priced and split, and nothing before it
+needs a second spiller written into `regalloc.colour`.

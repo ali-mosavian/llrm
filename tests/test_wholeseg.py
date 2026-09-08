@@ -563,3 +563,29 @@ def test_the_long_divide_bodys_entry_reads_nothing_it_has_not_written() -> None:
             for i in range(one.op_count)
             if one.op_kind(i) == OpKind.REGISTER and not i
         }
+
+
+def test_the_half_a_divide_hands_back_does_not_fall_out_of_the_lir_route() -> None:
+    """Owning no original bytes is not the same as having no identity.
+
+    The projection stands for none of BC's bytes -- the site's range
+    belongs to the divide, once -- and objwrite read that as "inserted"
+    and stripped its node, which is what says which idiom it is. It
+    reached the general encoder as an operation named `restore` with no
+    operands, so every body holding an absorbed divide left the route
+    with the allocator that can spill and took the one that cannot.
+    """
+    from pathlib import Path
+
+    from qbopt import wholeseg
+
+    seen = []
+    was = wholeseg._through_lir
+    try:
+        wholeseg._through_lir = lambda *a, **k: seen.append(was(*a, **k)) or seen[-1]
+        wholeseg.rebuilt(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes())
+    finally:
+        wholeseg._through_lir = was
+    assert seen, "the LIR route was never tried"
+    why = seen[0]
+    assert not (isinstance(why, str) and "restore" in why), why

@@ -21,6 +21,7 @@ from dataclasses import replace
 
 from qbopt import layout
 from qbopt import lir
+from qbopt import ir
 from qbopt import mir
 from qbopt import omf
 from qbopt import relocate
@@ -143,7 +144,14 @@ def _carried(one: "lir.Insn") -> mir.Op:
     No node and no bytes; `made` is its whole definition and `covers` says
     it stands for none of BC's.
     """
-    inserted = one.covers is not None and one.covers[0] == one.covers[1]
+    # Owning no original bytes is not the same as having no identity. The
+    # half an absorbed divide hands back stands for none of BC's -- the
+    # site's range belongs to the divide, once -- and its node is still
+    # what says which idiom it is: stripped, it reached the general
+    # encoder as an operation named "restore" with no operands, and every
+    # body holding an absorbed divide fell out of this route.
+    idiom = isinstance(one.op.node, ir.Restore)
+    inserted = not idiom and one.covers is not None and one.covers[0] == one.covers[1]
     return replace(
         one.op,
         made=one.what,
