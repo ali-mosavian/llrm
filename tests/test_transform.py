@@ -24,6 +24,43 @@ from qbopt import rewrite
 from qbopt import transform
 
 
+def test_a_flag_phi_nothing_reads_keeps_nothing_alive() -> None:
+    """The flags are not a register a caller reads.
+
+    `_leaving` skips a flags value an operation defines, for that reason,
+    and did not skip one a phi results in. Nothing overwrites the key a
+    phi put it under -- every operation skips it -- so the flag phi at a
+    loop header reached the exit as though it were a register value and
+    was live with nothing reading it, and every flags value feeding it
+    with it. Twenty-one of the p-g2 fixtures had one. reuse refuses a
+    divide whose other answer is still wanted, and this was that answer.
+    """
+    from qbopt import transform
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    seen = 0
+    for stem in ("lngmix-p-g2", "hotlop-p-g2", "nested-p-g2", "press-p-g2", "stride-p-g2", "addrm-p-g2"):
+        found = module.of(omf.parse(Path(f"fixtures/omf/{stem}.obj").read_bytes()))
+        mapped = code_map(found)
+        assert not isinstance(mapped, str), mapped
+        blocks = split.partition(found, mapped)
+        for name, body in mir.bodies(found, blocks):
+            done = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
+            alive = transform.live(done)
+            read = {one for block in done.blocks for op in block.ops for one in op.uses}
+            read |= {one for block in done.blocks for phi in block.phis for one in phi.incoming.values()}
+            for block in done.blocks:
+                for phi in block.phis:
+                    if not phi.result.flags:
+                        continue
+                    seen += 1
+                    if phi.result in read:
+                        continue
+                    assert phi.result not in alive, f"{stem} {name} {block.at:#06x}: {phi.result} is live and unread"
+    assert seen, "no flag phi in any of these, so this proves nothing"
+
+
 def test_widening_is_on_and_runs_after_the_memory_passes() -> None:
     """Order, not preference. A widened op lies about how much it reads.
 

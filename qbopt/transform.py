@@ -1307,6 +1307,17 @@ def _leaving(body: MirBody) -> set:
                 for register, values in one.items():
                     here.setdefault(register, set()).update(values)
             for phi in block.phis:
+                # Flags the same way as below: what a caller reads is a
+                # register, and the flags are not one of them. Skipped for
+                # an operation's own defines and not for a phi's result,
+                # the flag phi at a loop header reached the exit as though
+                # it were a register value -- nothing overwrites that key,
+                # since every operation skips it -- and was live with
+                # nothing reading it. That kept the flags of every
+                # operation feeding it alive too, and reuse refuses a
+                # divide whose other answer is still wanted.
+                if phi.result.flags:
+                    continue
                 register = body.origin.get(phi.result)
                 if register is not None:
                     here[ir.ROOT.get(register, register)] = {phi.result}
