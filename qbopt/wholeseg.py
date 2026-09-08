@@ -212,6 +212,7 @@ def _through_lir(found, records, blocks, bodies, mapped, fields, reached, native
                 found.calls,
                 set(found.absorbed),
                 contracts,
+                found.coverage,
             )
             frame = frames.of(low)
             for phase in flow.machine(flow._pinned(body), frame, found.calls):

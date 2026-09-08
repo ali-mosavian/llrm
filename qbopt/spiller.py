@@ -93,7 +93,16 @@ def spilled(
 
 
 def _width(one: lir.Insn, value: int) -> int:
-    """How wide this instruction reads or writes the value, defaulting to a word."""
+    """How wide this instruction reads or writes the value, defaulting to a word.
+
+    A requirement answers for an operation that names no operand at all:
+    the restore idiom pushes four bytes and its semantics have no
+    destination to say so, so the reload came back two bytes wide and the
+    push carried a stale high half.
+    """
+    for held, _register in one.requires + one.delivers:
+        if held.value == value:
+            return held.width
     if one.what is None:
         return frames.WORD
     for where in (*one.what.dests, *one.what.sources):
@@ -120,6 +129,20 @@ def _inserted(beside: lir.Insn, what: ir.Semantics, defines: tuple, uses: tuple)
     return lir.Insn(at=beside.at, covers=(at, at), what=what, defines=defines, uses=uses, op=beside.op)
 
 
+def _wants(side: tuple, rename: dict[int, int]) -> tuple:
+    """A requirement, naming whichever value now feeds the instruction.
+
+    The register an instruction demands is a fact about the instruction,
+    so replacing the value that reaches it does not lift the demand. Left
+    naming the value that was spilled, the restore idiom's reload arrived
+    unpinned and the allocation put it in cx while `push eax` went on
+    reading eax.
+    """
+    return tuple(
+        (ir.Held(rename.get(held.value, held.value), held.width), register) for held, register in side
+    )
+
+
 def _renamed(one: lir.Insn, rename: dict[int, int]) -> lir.Insn:
     """The instruction reading and writing the reload's value instead."""
     what = one.what
@@ -128,6 +151,8 @@ def _renamed(one: lir.Insn, rename: dict[int, int]) -> lir.Insn:
             one,
             defines=tuple(rename.get(v, v) for v in one.defines),
             uses=tuple(rename.get(v, v) for v in one.uses),
+            requires=_wants(one.requires, rename),
+            delivers=_wants(one.delivers, rename),
         )
     return replace(
         one,
@@ -140,6 +165,8 @@ def _renamed(one: lir.Insn, rename: dict[int, int]) -> lir.Insn:
         ),
         defines=tuple(rename.get(v, v) for v in one.defines),
         uses=tuple(rename.get(v, v) for v in one.uses),
+        requires=_wants(one.requires, rename),
+        delivers=_wants(one.delivers, rename),
     )
 
 

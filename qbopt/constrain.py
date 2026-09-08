@@ -76,15 +76,20 @@ def constrained(
                 for value, got in _wanted(one).items()
                 if not _already_there(pinned, value, got[0], _width(one, value))
             }
-            if not wanted:
+            widths = {held.value: held.width for held, _r in one.requires + one.delivers}
+            given = {
+                value: register
+                for value, register in _delivered(one).items()
+                if not _already_there(pinned, value, register, widths.get(value) or _width(one, value))
+            }
+            if not wanted and not given:
                 insns.append(one)
                 continue
-            before, after = [], []
+            before, after, swap = [], [], {}
             what = one.what
             dests: "list[object]" = list(what.dests) if what is not None else []
             sources: "list[object]" = list(what.sources) if what is not None else []
             defines, uses = list(one.defines), list(one.uses)
-            widths = {held.value: held.width for held, _r in one.requires}
             for value, (register, where) in sorted(wanted.items()):
                 held = ir.Held(fresh, widths.get(value) or _width(one, value))
                 if not where:
@@ -96,9 +101,11 @@ def constrained(
                     before.append(_move(one, held, ir.Held(value, held.width)))
                     pins[fresh] = register
                     uses = [held.value if v == value else v for v in uses]
+                    swap[value] = held.value
                     fresh += 1
                     continue
                 pins[fresh] = register
+                swap[value] = held.value
                 if any(side == "source" for side, _ in where):
                     before.append(_move(one, held, ir.Held(value, held.width)))
                 if any(side == "dest" for side, _ in where):
@@ -111,6 +118,16 @@ def constrained(
                         sources[index] = held
                         uses = [held.value if v == value else v for v in uses]
                 fresh += 1
+            for value, register in sorted(given.items()):
+                # Behind the instruction, not in front of it: the value is
+                # what the idiom leaves in that register, so the copy
+                # carries it out to wherever the allocation put it.
+                held = ir.Held(fresh, widths.get(value) or _width(one, value))
+                after.append(_move(one, ir.Held(value, held.width), held))
+                pins[fresh] = register
+                defines = [held.value if v == value else v for v in defines]
+                swap[value] = held.value
+                fresh += 1
             insns += before
             insns.append(
                 replace(
@@ -120,9 +137,23 @@ def constrained(
                     else ir.Semantics(what.op, what.name, tuple(dests), tuple(sources), what.target),
                     defines=tuple(defines),
                     uses=tuple(uses),
-                    # Consumed: the copy is in and the fresh value is
-                    # pinned, so asking again would split the split.
-                    requires=(),
+                    # Rewritten onto the fresh values rather than
+                    # dropped. `_already_there` makes asking again a
+                    # no-op, and the requirement has to survive because
+                    # allocate.py re-derives it every round -- a
+                    # requirement is about the instruction, not about
+                    # whichever value happens to be feeding it, and the
+                    # spiller replaces that value between rounds. Dropped,
+                    # the restore's reload arrived with no pin at all and
+                    # the idiom pushed whatever eax held.
+                    requires=tuple(
+                        (ir.Held(swap.get(held.value, held.value), held.width), register)
+                        for held, register in one.requires
+                    ),
+                    delivers=tuple(
+                        (ir.Held(swap.get(held.value, held.value), held.width), register)
+                        for held, register in one.delivers
+                    ),
                 )
             )
             insns += after
@@ -146,7 +177,20 @@ def required(body: lir.LirBody) -> "dict[int, Register_]":
         for one in block.insns:
             for value, (register, _where) in _wanted(one).items():
                 out[value] = register
+            out.update(_delivered(one))
     return out
+
+
+def _delivered(one: lir.Insn) -> dict:
+    """Each value this instruction writes in a register it names nowhere.
+
+    The other half of `_wanted`. The restore idiom is three instructions
+    behind one node and names no operand at all, so nothing in its
+    semantics says it leaves the two halves in ax and dx -- the allocation
+    put one of them in cx and the idiom went on popping into dx, and
+    lngmix stored the divisor where its accumulator's high half belonged.
+    """
+    return {held.value: register for held, register in one.delivers}
 
 
 def _wanted(one: lir.Insn) -> dict:

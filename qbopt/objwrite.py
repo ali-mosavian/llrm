@@ -150,7 +150,11 @@ def _carried(one: "lir.Insn") -> mir.Op:
     # what says which idiom it is: stripped, it reached the general
     # encoder as an operation named "restore" with no operands, and every
     # body holding an absorbed divide fell out of this route.
-    idiom = isinstance(one.op.node, ir.Restore)
+    # The instruction that *is* the idiom, not everything standing beside
+    # it: a copy constrain.py puts behind it carries the same op, and read
+    # as the idiom too it emitted the whole `push/pop/pop` again and the
+    # copy never appeared at all.
+    idiom = isinstance(one.op.node, ir.Restore) and getattr(one.what, "op", None) is ir.Operation.RESTORE
     inserted = not idiom and one.covers is not None and one.covers[0] == one.covers[1]
     return replace(
         one.op,

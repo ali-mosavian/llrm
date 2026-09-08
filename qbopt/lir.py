@@ -69,6 +69,13 @@ class Insn:
     # nbody's 162 call defines were read by nothing, and each one still got
     # an interval, competed for a register and was spilled.
     clobbers: "frozenset[Register_]" = frozenset()
+    # Every disjoint range of BC's bytes the operation stands for, where
+    # that is more than the one `covers` names. A folded site whose pushes
+    # sit apart from its call is the only shape with any: `covers` cannot
+    # say "these five bytes and those twelve" without also claiming what
+    # lies between them. Carried here so `without` can see that dropping
+    # this instruction would strand bytes it cannot hand to a neighbour.
+    spread: tuple = ()
     op: object = None
     # Which parallel copy this move belongs to, or None for an ordinary
     # one. A phi says several values arrive together on one edge, and the
@@ -87,6 +94,13 @@ class Insn:
     # routine reads cx and bx, and arrprm printed an array it was never
     # told about. By value id, like `uses`.
     requires: "tuple[tuple[ir.Held, Register_], ...]" = ()
+    # And the ones it *writes* in a register it does not name. The sibling
+    # of `requires`, and it needs to be its own field because the copy
+    # goes the other way: a read is satisfied by a move in front of the
+    # instruction and a write by one behind it. Put in `requires` instead,
+    # the restore idiom's two halves each became a read with a move in
+    # front, nine of them in lngmix's loop.
+    delivers: "tuple[tuple[ir.Held, Register_], ...]" = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,6 +176,15 @@ def without(insns, drop, made=None) -> "list[Insn]":
             continue
         if not one.covers or one.covers[0] == one.covers[1]:
             continue  # inserted: it stands for nothing
+        if len(one.spread) > 1:
+            # A neighbour is given a span, and a span cannot carry two.
+            # The reused divide's copy stands for its own five bytes and
+            # for the twelve of the push run the fold deleted; handed on,
+            # those twelve were owned by nothing and layout refused the
+            # body with `0x005f: 12 bytes between the ops are not
+            # instructions`. It costs a `mov` into its own register.
+            out.append(kept)
+            continue
         where = next(
             (
                 index

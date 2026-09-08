@@ -285,6 +285,7 @@ def lowered(
     calls: dict[int, str] | None,
     absorbed: "set[int] | None",
     contracts: "dict[int, object]",
+    coverage: "dict[int, tuple] | None" = None,
 ) -> "lir.LirBody":
     """One MIR body as machine instructions, and nothing else.
 
@@ -315,7 +316,7 @@ def lowered(
     read = {one.id for block in body.blocks for op in block.ops for one in op.uses}
     read |= {value.id for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
     calls = calls or {}
-    making = Lowering(body, read, calls, absorbed or (), contracts)
+    making = Lowering(body, read, calls, absorbed or (), contracts, coverage)
     # Once: expanding twice would build two of every instruction, and the
     # question below is about the ones this body will actually hold.
     made = {block.at: tuple(one for op in block.ops for one in making.expand(op)) for block in body.blocks}
@@ -366,6 +367,28 @@ class Lowering:
     layout's accounting still adds up.
     """
 
+    def _idiom(self, op: "mir.Op") -> tuple:
+        """Where an operation that names no operand leaves what it writes.
+
+        Only the restore idiom: three instructions behind one node, whose
+        semantics have no destination to carry a value. The registers are
+        the pair's own -- `push eax / pop ax / pop dx` puts the low half
+        in ax and the high half in dx -- and which value is which is the
+        register the raise saw it in, which for these is always BC's own
+        because the idiom is BC's own.
+        """
+        if not isinstance(op.node, ir.Restore):
+            return ()
+        out = []
+        for one in op.defines:
+            if one.flags or one.id not in self._read:
+                continue
+            root = ir.ROOT.get(self._origin.get(one, -1), -1)
+            if root not in mir.RESTORE_PAIR[op.node.pair]:
+                raise Unlowered(f"{op.at:#06x}: the restore's {one} is in no register the idiom writes")
+            out.append((ir.Held(one.id, 2), target.named(root, 2)))  # a half, and the idiom pops one word into each
+        return tuple(out)
+
     def _abi(self, op: "mir.Op") -> tuple:
         """Which registers a call reads its arguments in.
 
@@ -379,6 +402,20 @@ class Lowering:
         every tracked register until a contract narrows it, and that is a
         liveness dependency rather than an argument list.
         """
+        if isinstance(op.node, ir.Restore):
+            # The idiom reads the widened value in the pair's own register
+            # -- `push eax` -- and names it nowhere, so without this the
+            # allocation left the answer in ebx and the idiom pushed
+            # whatever eax happened to hold. Only that one: the other use
+            # is the previous contents of the half it writes, which is a
+            # merge and not an input.
+            source, _into = mir.RESTORE_PAIR[op.node.pair]
+            return tuple(
+                (ir.Held(one.id, 4), target.named(source, 4))
+                for one in op.uses
+                if not one.flags and one not in op.merges
+                and ir.ROOT.get(self._origin.get(one, -1), -1) is source
+            )
         if op.kind is not mir.Kind.CALL:
             return ()
         # The raise's own answer first: `args_known` is false for a call
@@ -413,8 +450,10 @@ class Lowering:
             made.append((ir.Held(one.value.id, one.width), mir.AS_NAMED[slot]))
         return tuple(made)
 
-    def __init__(self, body: "mir.MirBody", read: set, calls: dict, absorbed, contracts=None) -> None:
+    def __init__(self, body: "mir.MirBody", read: set, calls: dict, absorbed, contracts=None, coverage=None) -> None:
         self._read = read
+        self._coverage = coverage or {}
+        self._origin = body.origin
         self._calls = calls
         # The same answer the raise used, per call site. Looked up here
         # only where the caller had none to give.
@@ -482,6 +521,8 @@ class Lowering:
                     uses=read if speaks else tuple(one.id for one in op.uses if not one.flags),
                     requires=self._abi(op),
                     clobbers=_clobbers(op, self._calls),
+                    spread=self._coverage.get(op.id, ()) if op.id is not None else (),
+                    delivers=self._idiom(op),
                     op=op,
                 ),
             )
