@@ -54,7 +54,7 @@ from qbopt import loops as loopy
 from qbopt.declen import BITNESS
 from qbopt import blocks as split
 from qbopt.blocks import code_map
-from qbopt.wholeseg import rebuilt
+from qbopt import wholeseg
 
 
 def _bodies(data: bytes):
@@ -357,50 +357,23 @@ def _says(op, cells: Cells, calls: dict, verbose: bool) -> str:
     return f"{into} := {kind} {', '.join(args)}".rstrip() + said
 
 
-def _machine(bodies, found, view, contracts) -> None:
-    """Each machine phase, one file each, the way the MIR passes get one.
+def _machine(stages, view) -> None:
+    """Each machine phase of the run that produced the object, one file each.
 
     Rule 4 asks for a file per stage so that `diff` between two adjacent
-    ones is the whole answer, and the machine half has five phases now:
-    phi elimination inserts copies, the two-address fixup inserts more,
-    coalescing removes what it can prove unnecessary, the allocator seats
-    every value and spills what it cannot, and the prologue reserves what
-    the spiller took. Watching only the ends of that is watching none of it.
+    ones is the whole answer. Recomputing the phases here to get them
+    dumped a *different* program -- a lowering handed the absorbed set
+    instead of the record, no coverage, no pins and one shared frame -- so
+    the allocation in the dump was not the one that wrote the bytes, and
+    the first bad transition was not in it. These come from the emitter's
+    own run, through the watch wholeseg.emitted takes.
     """
-    from qbopt import flow
-    from qbopt import runtime
-    from qbopt import lower as lowering
-
-    # The map the emitter builds, so the tool sees what it would see.
-    low = [(name, lowering.lowered(name, body, found.calls, set(found.absorbed), contracts)) for name, body in bodies]
-    number = 20
-    with view(number, "lir", "lowered"):
-        print("=== lowered")
-        for name, one in low:
-            _lir_body(name, one)
-    # A frame per body, the way flow.run builds one: the allocator hands
-    # its spills to it and the prologue reserves what it took, so a shared
-    # empty one would show the allocator spilling into slots the prologue
-    # never reserved.
-    from qbopt import frame as frames
-
-    frame = frames.of(low[0][1]) if low else frames.Frame(0)
-    for phase in flow.machine({}, frame, found.calls if found is not None else {}):
+    number = 19
+    for stage, bodies in stages:
         number += 1
-        done = []
-        refused = None
-        for name, one in low:
-            try:
-                done.append((name, phase.transform(one)))
-            except Exception as error:  # noqa: BLE001 -- the dump reports, it does not raise
-                refused = f"{name}: {type(error).__name__}: {error}"
-                done.append((name, one))
-        low = done
-        with view(number, "lir", phase.name):
-            print(f"=== {phase.name}")
-            if refused is not None:
-                print(f"  refused -- {refused}")
-            for name, one in low:
+        with view(number, "lir", stage):
+            print(f"=== {stage}")
+            for name, one in bodies:
                 _lir_body(name, one)
 
 
@@ -505,7 +478,7 @@ def _asm(data: bytes) -> None:
         print(f"    {insn.ip:#06x}  {formatter.format(insn)}")
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, view=None) -> int:
     ap = argparse.ArgumentParser(prog="stages")
     ap.add_argument("object", type=Path)
     ap.add_argument("--only", help="one pass by name, instead of each in turn")
@@ -541,9 +514,10 @@ def main(argv: list[str] | None = None) -> int:
         args.dump.mkdir(parents=True, exist_ok=True)
 
     step = itertools.count()
+    given = view
 
     @contextlib.contextmanager
-    def view(number: int, form: str, name: str):
+    def writing(number: int, form: str, name: str):
         """One form of one stage, in its own file where --dump asks for one.
 
         `s<N>-<form>-<name>.txt`. Numbered in the order they run and
@@ -562,6 +536,10 @@ def main(argv: list[str] | None = None) -> int:
             yield
         print(f"  {path}")
 
+    # A caller of its own, for a test that wants the text rather than a
+    # directory of files.
+    view = given or writing
+
     def dump(number: int, name: str, tag: str, bodies, was, debug, found):
         """One stage, as MIR. There is no other form of one."""
         with view(number, "mir", name):
@@ -569,7 +547,7 @@ def main(argv: list[str] | None = None) -> int:
             _mir(bodies, found, args.verbose, debug)
         return now
 
-    def lowered(number: int, bodies, out: bytes, why: str):
+    def lowered(number: int, stages, out: bytes, why: str, route: str):
         """The machine views, once: this is where lowering happens.
 
         The bodies the passes above produced, not a second raise of the
@@ -579,9 +557,10 @@ def main(argv: list[str] | None = None) -> int:
         """
         if args.dump is None and not args.asm:
             return
-        _machine(bodies, found, view, contracts)
+        _machine(stages, view)
         with view(26, "asm", "emitted"):
             print(f"=== emitted ({why}, {len(out)} bytes)")
+            print(f"  --- {route}")
             _asm(out)
 
     found, raised, contracts = _bodies(data)
@@ -622,8 +601,23 @@ def main(argv: list[str] | None = None) -> int:
 
     # And the machine, once. Everything above is MIR; this is what lowering,
     # the allocator and the selector made of the last of it.
-    out, why = rebuilt(data)
-    lowered(next(step), bodies, out, why)
+    # The emitter's own run, watched. Every machine stage below is from it,
+    # so a diff between two of them is a diff of the program that was
+    # written -- and the route says which emitter wrote it.
+    stages: list[tuple[str, list]] = []
+    route = "the route was not reported"
+
+    def watch(stage: str, name, low) -> None:
+        nonlocal route
+        if stage == "route":
+            route = low
+            return
+        if not stages or stages[-1][0] != stage:
+            stages.append((stage, []))
+        stages[-1][1].append((name, low))
+
+    got = wholeseg.emitted(data, watch=watch)
+    lowered(next(step), stages, got.data, got.reason, route)
     return 0
 
 

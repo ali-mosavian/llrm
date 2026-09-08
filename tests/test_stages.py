@@ -45,92 +45,56 @@ def test_a_based_cell_nothing_placed_says_so() -> None:
     assert "v17" in said and "BX" not in said, said
 
 
-def test_the_stage_dump_lowers_through_the_same_contracts_the_emitter_uses() -> None:
-    """Rule 4 sends you here, so the tool has to run.
+def test_the_machine_view_is_the_run_that_wrote_the_bytes() -> None:
+    """s26 and the emitted asm have to be one program.
 
-    `lower.lowered` and `mir.bodies` both take the per-site contract map
-    now, and this called them with the old signatures -- so every dump
-    raised `TypeError: lowered() missing 3 required positional arguments`
-    and the one instrument the project reaches for first was unusable.
+    The tool used to lower and run the phases itself to get them dumped --
+    handed the absorbed set instead of the record, no coverage, no pins
+    and one shared frame -- so the allocation in the dump was not the one
+    that produced the object. lngmix's dump named a spill slot `[bp-18h]`
+    the object never touches, and the first bad transition was not
+    anywhere in the files rule 4 asks you to diff.
     """
+    import re
     from pathlib import Path
 
     import stages as tool
 
-    found, bodies, contracts = tool._bodies(Path("fixtures/omf/bools-q-O.obj").read_bytes())
-    assert bodies, "the fixture raised nothing"
-
-    made = []
+    made: dict[str, str] = {}
 
     class Capture:
+        """Every view, kept as text rather than written to a file."""
+
+        def __init__(self) -> None:
+            self.into = None
+
         def __call__(self, number: int, kind: str, name: str):
-            from contextlib import nullcontext
+            import contextlib
+            import io
 
-            made.append((number, kind, name))
-            return nullcontext()
+            @contextlib.contextmanager
+            def one():
+                buffer = io.StringIO()
+                with contextlib.redirect_stdout(buffer):
+                    yield
+                made[f"{kind}-{name}"] = buffer.getvalue()
 
-    # The one map the raise was given, handed on to the lowering: built
-    # twice it can be built differently, which is the whole reason
-    # wholeseg.py threads a single object rather than an equal one.
-    assert contracts, "the tool built no contract map"
-    from qbopt import lower
+            return one()
 
-    seen = []
-    was = lower.lowered
+    was = tool.main
+    seen = Capture()
+    # --asm reaches the machine views without needing a directory.
+    argv = [str(Path("fixtures/omf/lngmix-p-g2.obj")), "--quiet", "--asm"]
+    got = tool.main(argv, view=seen)
+    assert got == 0 and was is tool.main
 
-    def watching(name, body, calls, absorbed, given):
-        seen.append(given)
-        return was(name, body, calls, absorbed, given)
+    last = made.get("lir-prologue")
+    emitted = made.get("asm-emitted")
+    assert last and emitted, f"the machine views are missing: {sorted(made)}"
+    assert "wrote these bytes" in emitted, "the dump does not say which emitter wrote them"
 
-    lower.lowered = watching
-    try:
-        tool._machine(bodies, found, Capture(), contracts)
-    finally:
-        lower.lowered = was
-    assert made, "the machine view produced no stage"
-    assert seen, "the machine view lowered nothing"
-    assert all(one is contracts for one in seen), "the lowering was given a different map"
+    slots = {int(one, 16) for one in re.findall(r"bp-0x([0-9a-f]+)", last)}
+    wrote = {int(one, 16) for one in re.findall(r"bp-([0-9A-F]+)h", emitted)}
+    assert slots <= wrote, f"the last stage names {sorted(slots - wrote)}, which the object never touches"
 
 
-def test_the_machine_view_is_the_pass_series_own_bodies() -> None:
-    """s20 sits next to s13 and must be the same program.
-
-    The machine views were built by rewriting the object and raising the
-    result, so the body lowered at s20 was not the body the passes above
-    produced -- a second raise of already-emitted bytes. Diffing s13
-    against s20 then compares two programs, which is how a miscompile in
-    the first pass reads as an extra phi in the second.
-    """
-    from pathlib import Path
-
-    import stages as tool
-
-    reads, given = [], []
-    was_bodies, was_machine = tool._bodies, tool._machine
-
-    def watching(data):
-        got = was_bodies(data)
-        reads.append(got)
-        return got
-
-    def receiving(bodies, found, view, contracts):
-        given.append((found, contracts, bodies))
-        return was_machine(bodies, found, view, contracts)
-
-    tool._bodies, tool._machine = watching, receiving
-    try:
-        tool.main([str(Path("fixtures/omf/lngmix-p-g2.obj")), "--quiet", "--asm"])
-    finally:
-        tool._bodies, tool._machine = was_bodies, was_machine
-
-    assert len(reads) == 1, f"the object was raised {len(reads)} times, not once"
-    assert len(given) == 1, f"the machine view ran {len(given)} times"
-    found, bodies, contracts = reads[0]
-    theirs, mine, ours = given[0]
-    assert theirs is found, "the machine view was given another module"
-    assert mine is contracts, "the machine view was given another contract map"
-    # The bodies are the pass series' own, which are not the raise's: every
-    # pass returns new ones. What must hold is that they came from `main`'s
-    # own loop over `found`, not from a second read.
-    assert len(ours) == len(bodies), f"{len(ours)} bodies lowered, {len(bodies)} raised"
-    assert [name for name, _one in ours] == [name for name, _one in bodies]

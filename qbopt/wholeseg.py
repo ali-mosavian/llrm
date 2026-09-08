@@ -65,9 +65,17 @@ def emitted(
     optimise: bool = True,
     native_fpu: bool = False,
     only: str | None = None,
+    watch=None,
 ) -> Emitted:
-    """The object rewritten, and which emitter did it."""
-    out, why, short = _rebuilt(data, optimise, native_fpu, only)
+    """The object rewritten, and which emitter did it.
+
+    `watch(stage, name, low)` is called after lowering and after each
+    machine phase of *this* run, and once with the route the bytes came
+    from. Rule 4 asks for a file per stage, and a tool that recomputes the
+    phases to get them dumps a different program: its allocation is not the
+    one that produced the object, so the first bad transition is not in it.
+    """
+    out, why, short = _rebuilt(data, optimise, native_fpu, only, watch)
     if why != REBUILT:
         return Emitted(out, Emission.REFUSED, why)
     return Emitted(out, Emission.MIR if short else Emission.LIR, why, short)
@@ -89,6 +97,7 @@ def _rebuilt(
     optimise: bool = True,
     native_fpu: bool = False,
     only: str | None = None,
+    watch=None,
 ) -> tuple[bytes, str, str | None]:
     """The object with its code segment rewritten, and what happened.
 
@@ -158,9 +167,13 @@ def _rebuilt(
     # one, from MIR, and objwrite.py's, from LIR -- and everything below
     # lowering reached only the second. A refusal the LIR side names is
     # what sends the body to the layout below, and nothing else does.
-    short = _through_lir(found, records, blocks, bodies, mapped, fields, reached, native_fpu, contracts)
+    short = _through_lir(found, records, blocks, bodies, mapped, fields, reached, native_fpu, contracts, watch)
     if not isinstance(short, str):
+        if watch is not None:
+            watch("route", None, "the LIR emitter wrote these bytes")
         return short, REBUILT, None
+    if watch is not None:
+        watch("route", None, f"the LIR emitter refused ({short}); the MIR layout wrote these bytes")
 
     settled, assignment = layout.allocated(bodies, plain=plain, settle=transform.widened if optimise else None)
     laid = layout.rebuild(found, settled, mapped.tables, fields, reached, native_fpu, assignment=assignment)
@@ -186,7 +199,7 @@ def _rebuilt(
     return b"".join(record.emit() for record in made), REBUILT, short
 
 
-def _through_lir(found, records, blocks, bodies, mapped, fields, reached, native_fpu, contracts):
+def _through_lir(found, records, blocks, bodies, mapped, fields, reached, native_fpu, contracts, watch=None):
     """Every body lowered, placed and written, or why one could not be.
 
     `qbopt/flow.py` names the phases and their order; this runs them and
@@ -214,9 +227,13 @@ def _through_lir(found, records, blocks, bodies, mapped, fields, reached, native
                 contracts,
                 found.coverage,
             )
+            if watch is not None:
+                watch("lowered", name, low)
             frame = frames.of(low)
             for phase in flow.machine(flow._pinned(body), frame, found.calls):
                 low = phase.transform(low)
+                if watch is not None:
+                    watch(phase.name, name, low)
         except (lower.Unlowered, mir.Unraisable) as short:
             # A contract this cannot honour, or an operand no encoding
             # covers. Named here for the same reason as the four below:
