@@ -69,12 +69,20 @@ class Emitted:
     # / idiv ecx` and two of those four carry a fixup. `relocated_at` is the
     # first and is what a caller with one wants.
     fields: tuple[int, ...] = ()
+    # Whether a displacement here can be a symbol at all. `displacement_at`
+    # stays factual -- it says where the field is, not what names it -- and
+    # a frame slot's displacement is an offset from bp that no fixup may be
+    # bound to. Default True so an Emitted built from its own bytes keeps
+    # saying what it always said.
+    symbolic: bool = True
 
     @property
     def relocated_at(self) -> int | None:
         """Where this instruction's own relocatable field landed."""
         if self.fields:
             return self.fields[0]
+        if not self.symbolic:
+            return None
         return self.displacement_at if self.displacement_at is not None else self.immediate_at
 
     @property
@@ -92,7 +100,7 @@ class Emitted:
         return () if one is None else (one,)
 
 
-def _assemble(made: Instruction, at: int) -> Emitted | None:
+def _assemble(made: Instruction, at: int, symbolic: bool = True) -> Emitted | None:
     """The bytes, with both constant fields located.
 
     Read back off the encoded bytes rather than predicted, which is what
@@ -110,9 +118,19 @@ def _assemble(made: Instruction, at: int) -> Emitted | None:
     if decoded is None:
         return None
     offsets = decoder.get_constant_offsets(decoded)
+    # A displacement is a relocatable field only where the operand names a
+    # symbol -- `operand_of` says which, and it is the address's own space
+    # and not the register it is reached through. A frame slot's
+    # displacement is an offset from bp, so binding a fixup to it writes a
+    # segment address over the slot number: lngmix, with both its divides
+    # hoisted, spilled the accumulator and turned `add cx,[a]` into a load
+    # and `add [bp-22h],bx`, and the fixup that named `a` went to the add's
+    # own displacement. An array element is symbolic and keeps its fixup
+    # though it is reached through si.
+    absolute = offsets.has_displacement and symbolic
     where = (
         offsets.displacement_offset
-        if offsets.has_displacement
+        if absolute
         else offsets.immediate_offset
         if offsets.has_immediate
         else None
@@ -122,6 +140,7 @@ def _assemble(made: Instruction, at: int) -> Emitted | None:
         offsets.displacement_offset if offsets.has_displacement else None,
         offsets.immediate_offset if offsets.has_immediate else None,
         () if where is None else (where,),
+        symbolic=symbolic,
     )
 
 
@@ -519,16 +538,16 @@ def move_from(into: Register_, cell: ir.Mem, at: int = 0) -> Emitted | None:
     built = operand_of(cell)
     if width is None or built is None or cell.width != width:
         return None
-    where, _relocated = built
+    where, relocated = built
     short = _moffs(MOFFS_LOAD, into, cell, width)
     if short is not None:
-        made = _assemble(Instruction.create_reg_mem(short, into, where), at)
+        made = _assemble(Instruction.create_reg_mem(short, into, where), at, relocated)
         if made is not None:
             return made
     code = _code(f"MOV_R{width * 8}_RM{width * 8}")
     if code is None:
         return None
-    return _assemble(Instruction.create_reg_mem(code, into, where), at)
+    return _assemble(Instruction.create_reg_mem(code, into, where), at, relocated)
 
 
 def move_into(cell: ir.Mem, outof: Register_, at: int = 0) -> Emitted | None:
@@ -537,16 +556,16 @@ def move_into(cell: ir.Mem, outof: Register_, at: int = 0) -> Emitted | None:
     built = operand_of(cell)
     if width is None or built is None or cell.width != width:
         return None
-    where, _relocated = built
+    where, relocated = built
     short = _moffs(MOFFS_STORE, outof, cell, width)
     if short is not None:
-        made = _assemble(Instruction.create_mem_reg(short, where, outof), at)
+        made = _assemble(Instruction.create_mem_reg(short, where, outof), at, relocated)
         if made is not None:
             return made
     code = _code(f"MOV_RM{width * 8}_R{width * 8}")
     if code is None:
         return None
-    return _assemble(Instruction.create_mem_reg(code, where, outof), at)
+    return _assemble(Instruction.create_mem_reg(code, where, outof), at, relocated)
 
 
 def store_imm(cell: ir.Mem, value: int, at: int = 0) -> Emitted | None:
@@ -562,9 +581,9 @@ def store_imm(cell: ir.Mem, value: int, at: int = 0) -> Emitted | None:
     code = _code(f"MOV_RM{cell.width * 8}_IMM{cell.width * 8}")
     if code is None:
         return None
-    where, _relocated = built
+    where, relocated = built
     try:
-        return _assemble(Instruction.create_mem_i32(code, where, value), at)
+        return _assemble(Instruction.create_mem_i32(code, where, value), at, relocated)
     except (ValueError, OverflowError):
         return None
 
@@ -578,8 +597,8 @@ def arith_mem(name: str, dest: Register_, cell: ir.Mem, at: int = 0) -> Emitted 
     code = _code(f"{name.upper()}_R{width * 8}_RM{width * 8}")
     if code is None:
         return None
-    where, _relocated = built
-    return _assemble(Instruction.create_reg_mem(code, dest, where), at)
+    where, relocated = built
+    return _assemble(Instruction.create_reg_mem(code, dest, where), at, relocated)
 
 
 def push_mem(cell: ir.Mem, at: int = 0) -> Emitted | None:
@@ -590,8 +609,8 @@ def push_mem(cell: ir.Mem, at: int = 0) -> Emitted | None:
     code = _code(f"PUSH_RM{cell.width * 8}")
     if code is None:
         return None
-    where, _relocated = built
-    return _assemble(Instruction.create_mem(code, where), at)
+    where, relocated = built
+    return _assemble(Instruction.create_mem(code, where), at, relocated)
 
 
 def branch(name: str, target: int, at: int = 0, short: bool = False) -> Emitted | None:
@@ -766,8 +785,8 @@ def float_memory(name: str, cell: ir.Mem, at: int = 0) -> Emitted | None:
     code = _code(f"{name.upper()}_{suffix}")
     if code is None:
         return None
-    where, _relocated = built
-    return _assemble(Instruction.create_mem(code, where), at)
+    where, relocated = built
+    return _assemble(Instruction.create_mem(code, where), at, relocated)
 
 
 def arith_into(name: str, cell: ir.Mem, source: Register_, at: int = 0) -> Emitted | None:
@@ -779,8 +798,8 @@ def arith_into(name: str, cell: ir.Mem, source: Register_, at: int = 0) -> Emitt
     code = _code(f"{name.upper()}_RM{width * 8}_R{width * 8}")
     if code is None:
         return None
-    where, _relocated = built
-    return _assemble(Instruction.create_mem_reg(code, where, source), at)
+    where, relocated = built
+    return _assemble(Instruction.create_mem_reg(code, where, source), at, relocated)
 
 
 # calls.py's own restore idiom, byte for byte: push the root, pop the two
@@ -975,7 +994,7 @@ def address_of(into: Register_, cell: ir.Address, at: int = 0) -> Emitted | None
         built = operand_of(ir.Mem(cell.addr, width))
         if built is None:
             return None
-        return _assemble(Instruction.create_reg_mem(code, into, built[0]), at)
+        return _assemble(Instruction.create_reg_mem(code, into, built[0]), at, built[1])
     if cell.through == Register.NONE and cell.index == Register.NONE:
         return None
     where = MemoryOperand(
@@ -985,7 +1004,8 @@ def address_of(into: Register_, cell: ir.Address, at: int = 0) -> Emitted | None
         displ=cell.offset,
         displ_size=cell.disp_width or _displacement_size(cell.through, cell.offset),
     )
-    return _assemble(Instruction.create_reg_mem(code, into, where), at)
+    # No address to name, so the displacement is arithmetic and not a symbol.
+    return _assemble(Instruction.create_reg_mem(code, into, where), at, False)
 
 
 def compare_registers(name: str, one: Register_, other: Register_, at: int = 0) -> Emitted | None:
@@ -1147,7 +1167,7 @@ def divide_mem(name: str, cell: ir.Mem, at: int = 0) -> Emitted | None:
     if built is None or cell.width not in (2, 4):
         return None
     code = _code(f"{name.upper()}_RM{cell.width * 8}")
-    return None if code is None else _assemble(Instruction.create_mem(code, built[0]), at)
+    return None if code is None else _assemble(Instruction.create_mem(code, built[0]), at, built[1])
 
 
 def multiply(name: str, source: Register_ | ir.Mem, at: int = 0) -> Emitted | None:
@@ -1159,7 +1179,7 @@ def multiply(name: str, source: Register_ | ir.Mem, at: int = 0) -> Emitted | No
         if built is None or source.width not in (2, 4):
             return None
         code = _code(f"{name.upper()}_RM{source.width * 8}")
-        return None if code is None else _assemble(Instruction.create_mem(code, built[0]), at)
+        return None if code is None else _assemble(Instruction.create_mem(code, built[0]), at, built[1])
     width = WIDTHS.get(source)
     if width is None:
         return None
@@ -1184,10 +1204,10 @@ def multiply_into(dest: Register_, source: Register_ | ir.Mem, value: int | None
             return None
         if value is None:
             code = _code(f"IMUL_R{width * 8}_RM{width * 8}")
-            return None if code is None else _assemble(Instruction.create_reg_mem(code, dest, built[0]), at)
+            return None if code is None else _assemble(Instruction.create_reg_mem(code, dest, built[0]), at, built[1])
         bits = 8 if fits_in_a_byte(value) else width * 8
         code = _code(f"IMUL_R{width * 8}_RM{width * 8}_IMM{bits}")
-        return None if code is None else _assemble(Instruction.create_reg_mem_i32(code, dest, built[0], value), at)
+        return None if code is None else _assemble(Instruction.create_reg_mem_i32(code, dest, built[0], value), at, built[1])
     if WIDTHS.get(source) != width:
         return None
     if value is None:
@@ -1210,7 +1230,7 @@ def move_segment(into: Register_, outof: Register_ | ir.Mem, at: int = 0) -> Emi
             return None
         if isinstance(outof, ir.Mem):
             built = operand_of(outof)
-            return None if built is None else _assemble(Instruction.create_reg_mem(code, into, built[0]), at)
+            return None if built is None else _assemble(Instruction.create_reg_mem(code, into, built[0]), at, built[1])
         return _assemble(Instruction.create_reg_reg(code, into, outof), at)
     code = _code("MOV_RM16_SREG")
     if code is None or not isinstance(outof, Register_ | int) or outof not in SEGMENTS:
@@ -1226,7 +1246,7 @@ def store_segment(cell: ir.Mem, outof: Register_, at: int = 0) -> Emitted | None
     code = _code("MOV_RM16_SREG")
     if built is None or code is None:
         return None
-    return _assemble(Instruction.create_mem_reg(code, built[0], outof), at)
+    return _assemble(Instruction.create_mem_reg(code, built[0], outof), at, built[1])
 
 
 def arith_into_imm(name: str, cell: ir.Mem, value: int, at: int = 0, relocated: bool = False) -> Emitted | None:
@@ -1246,7 +1266,7 @@ def arith_into_imm(name: str, cell: ir.Mem, value: int, at: int = 0, relocated: 
         if code is None:
             continue
         try:
-            return _assemble(Instruction.create_mem_i32(code, built[0], value), at)
+            return _assemble(Instruction.create_mem_i32(code, built[0], value), at, built[1])
         except (ValueError, OverflowError):
             continue
     return None
@@ -1275,7 +1295,7 @@ def unary_mem(name: str, cell: ir.Mem, at: int = 0) -> Emitted | None:
     if built is None or cell.width not in (2, 4):
         return None
     code = _code(f"{name.upper()}_RM{cell.width * 8}")
-    return None if code is None else _assemble(Instruction.create_mem(code, built[0]), at)
+    return None if code is None else _assemble(Instruction.create_mem(code, built[0]), at, built[1])
 
 
 def emit(

@@ -1228,6 +1228,38 @@ def test_a_divide_refuses_an_allocation_that_forgot_one_of_its_answers() -> None
         )
 
 
+def test_a_frame_slots_displacement_is_not_a_relocatable_field() -> None:
+    """`[bp-22h]` is an offset from the frame pointer, not an address.
+
+    lngmix printed S= 775174098 for 142900 with both its divides hoisted:
+    the accumulator spilled, `add cx,[a]` became a load and
+    `add [bp-22h],bx`, and the fixup that named `a` was bound to the add's
+    own displacement -- so the loop added whatever lived at that address
+    and the slot number was overwritten.
+
+    An indexed data reference is a different thing and keeps its fixup:
+    `mov [si+x],bx` reaches an array through si and the displacement is
+    the array's own address.
+    """
+    from iced_x86 import Register
+
+    from qbopt import ir
+    from qbopt import select
+
+    slot = ir.Mem(addr=None, width=2, through=Register.BP, offset=-0x22, disp_width=2)
+    store = select.emit(ir.Semantics(ir.Operation.MOVE, "mov", (slot,), (ir.Reg(Register.BX, 2),)))
+    assert store is not None
+    assert store.places == (), f"the frame slot offered a field at {store.places}"
+
+    from qbopt.module import Addr
+    from qbopt.module import Space
+
+    array = ir.Mem(Addr(Space.SEGMENT, 0x6, base=Register.SI), 2, through=Register.SI)
+    indexed = select.emit(ir.Semantics(ir.Operation.MOVE, "mov", (array,), (ir.Reg(Register.BX, 2),)))
+    assert indexed is not None
+    assert indexed.places, "an array reached through si still carries its own address"
+
+
 def _divisions(code: bytes) -> int:
     """How many divide instructions the emitted segment holds."""
     import iced_x86
