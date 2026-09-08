@@ -54,14 +54,6 @@ def spilled(
     fresh = _next_value(body)
     made: set[int] = set()
 
-    # A value the body never writes still has to reach its slot. It is a
-    # register live at entry -- BC hands one in -- and spilling it put
-    # reloads everywhere and a store nowhere: lngmix, with both its divides
-    # hoisted, read `[bp-24h]` before its last call and nothing had written
-    # that word. Stored at the top out of the register it arrived in, named
-    # outright: it is not a value the allocator has to place, because at
-    # entry it is already where it is.
-    entry = _arrivals(body, values, frame)
     blocks = []
     for block in body.blocks:
         insns: list[lir.Insn] = []
@@ -96,52 +88,8 @@ def spilled(
             insns.append(_renamed(one, rename) if rename else one)
             insns += after
             made.update(rename.values())
-        if block.at == body.entry and entry:
-            insns = list(entry) + insns
         blocks.append(replace(block, insns=tuple(insns)))
     return replace(body, blocks=tuple(blocks)), frozenset(made)
-
-
-def _arrivals(body: lir.LirBody, values: "frozenset[int]", frame) -> tuple:
-    """A store per spilled value the body never writes, for the top of it.
-
-    Out of the register the raise saw it arrive in, named outright rather
-    than as a value. That is the one point where a register is the honest
-    operand: this is the first instruction of a block nothing branches
-    back to, so the only thing that can be in that register is what
-    arrived in it, and there is no allocation for the allocator to make.
-
-    Two conditions, both checked rather than assumed. The entry block must
-    have no predecessor -- a store at the top of one something branches
-    back to writes the slot again with whatever the register holds by then.
-    And the origin must say where the value arrived; without that there is
-    nothing to store, and the reload of an unwritten word stands, which is
-    a failure the flow tests catch rather than a silent wrong answer.
-    """
-    written = {value for block in body.blocks for one in block.insns for value in one.defines}
-    written |= {phi.result for block in body.blocks for phi in block.phis}
-    origin = {one.id: where for one, where in body.origin.items() if getattr(one, "id", None) is not None}
-    first = next((one for block in body.blocks if block.at == body.entry for one in block.insns), None)
-    if first is None or any(body.entry in block.succ for block in body.blocks):
-        return ()
-    out = []
-    for value in sorted(values - written):
-        root = origin.get(value)
-        if root is None:
-            continue
-        width = next(
-            (_width(one, value) for block in body.blocks for one in block.insns if value in one.uses),
-            frames.WORD,
-        )
-        cell = frame.cell(value, width)
-        made = _inserted(
-            first,
-            ir.Semantics(ir.Operation.MOVE, "mov", (cell,), (ir.Reg(target.named(root, width), width),)),
-            (),
-            (),
-        )
-        out.append(replace(made, arrival=True))
-    return tuple(out)
 
 
 def _width(one: lir.Insn, value: int) -> int:

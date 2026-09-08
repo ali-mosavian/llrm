@@ -35,43 +35,6 @@ def _out(body, values):
     return [one for block in got.blocks for one in block.insns]
 
 
-def test_a_value_the_body_never_writes_is_stored_where_it_arrives() -> None:
-    """A register live at entry has a value and no definition.
-
-    Spilled, every use got a reload and nothing ever wrote the slot:
-    lngmix, with both its divides hoisted, read `[bp-24h]` before its last
-    call. The store goes at the top, out of the register the raise saw it
-    in and named outright -- at entry the value is already there, so it is
-    not something the allocator has to place.
-    """
-    from iced_x86 import Register
-
-    class Value:
-        """Enough of a MIR value for `origin`: the id is what is read."""
-
-        def __init__(self, one: int) -> None:
-            self.id = one
-
-    live_in = Value(2)
-    body = lir.LirBody(
-        "one",
-        0,
-        (lir.LirBlock(at=0, insns=(_add(1, 2),), succ=()),),
-        origin={live_in: Register.ESI},
-        pins={},
-    )
-    got, _made = spiller.spilled(body, frozenset({2}), frames.Frame(0))
-    insns = [one for block in got.blocks for one in block.insns]
-    first = insns[0].what
-    assert isinstance(first.dests[0], ir.Mem), f"the first instruction is {first}"
-    assert first.sources[0] == ir.Reg(Register.SI, 2), f"stored out of {first.sources[0]}"
-    assert not insns[0].uses, "the arrival store asks the allocator for nothing"
-
-    # And the reload below reads the slot it wrote.
-    reload = next(one for one in insns[1:] if one.what and isinstance(one.what.sources[0], ir.Mem))
-    assert reload.what.sources[0].offset == first.dests[0].offset, "the store and the reload disagree on the slot"
-
-
 def test_a_lifted_memory_operand_takes_the_fixup_with_it() -> None:
     """The fixup names the operand, so it goes where the operand goes.
 
@@ -97,33 +60,6 @@ def test_a_lifted_memory_operand_takes_the_fixup_with_it() -> None:
     assert lifted[0].symbol is True, "the load does not claim the operand it now holds"
     kept = [one for one in got if one is not lifted[0] and one.what and one.what.name == "add"]
     assert kept and kept[0].symbol is False, "the survivor still claims a fixup for an operand it lost"
-
-
-def test_nothing_is_stored_at_the_top_of_a_block_something_branches_back_to() -> None:
-    """The arrival store is only sound where it runs once.
-
-    At the top of a re-entered block it writes the slot again with
-    whatever the register holds by then, which is not the value that
-    arrived -- the second trip would read its own second-hand answer.
-    """
-    from iced_x86 import Register
-
-    class Value:
-        def __init__(self, one: int) -> None:
-            self.id = one
-
-    live_in = Value(2)
-    body = lir.LirBody(
-        "one",
-        0,
-        (lir.LirBlock(at=0, insns=(_add(1, 2),), succ=(0,)),),
-        origin={live_in: Register.ESI},
-        pins={},
-    )
-    got, _made = spiller.spilled(body, frozenset({2}), frames.Frame(0))
-    insns = [one for block in got.blocks for one in block.insns]
-    stores = [one for one in insns if one.what and isinstance(one.what.dests[0], ir.Mem)]
-    assert not stores, f"a store was put at the top of a re-entered block: {stores[0].what}"
 
 
 def test_a_grouped_move_reads_its_spilled_source_where_it_lives() -> None:

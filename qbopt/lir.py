@@ -116,12 +116,6 @@ class Insn:
     # does -- which bytes the operation stands for and where it stands are
     # still the operation's own.
     symbol: "bool | None" = None
-    # Whether this is the store that puts a value the body never writes
-    # into its slot. It reads a register outright rather than a value, so
-    # nothing in the allocation says that register is read there: what
-    # makes it sound is where it stands, and objwrite.py checks that
-    # rather than trusting it.
-    arrival: bool = False
 
 
 @dataclass(frozen=True, slots=True)

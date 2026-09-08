@@ -44,10 +44,6 @@ def written(
     keeps what it had: a refusal is a module some earlier pass has already
     improved, and throwing that away to report a failure helps nobody.
     """
-    for one in bodies:
-        why = _arrivals_stand(one)
-        if why is not None:
-            return why
     laid = layout.rebuild(
         found,
         [(one.name, _as_mir(one)) for one in bodies],
@@ -131,51 +127,6 @@ def _as_mir(body: "lir.LirBody") -> mir.MirBody:
 # already put there -- allocate.applied() has done that, and this passes the
 # same answer a second way so the two cannot disagree. It goes when select
 # takes an lir.Insn.
-
-
-def _arrivals_stand(body: "lir.LirBody") -> "str | None":
-    """Whether every arrival store still stands where it is sound, or why not.
-
-    A value the body never writes is put in its slot out of the register
-    it arrived in, named outright. Nothing in the allocation says that
-    register is read there, so the store is sound only where it stands:
-    at the top of the entry block, with nothing before it that writes the
-    register and nothing branching back into the block. The spiller put it
-    there and five phases run after it -- the prologue inserts, parcopy
-    reorders, the rewriter replaces -- so this is checked here, at the
-    last point before bytes, rather than assumed from where it was put.
-
-    A refusal, not an assertion: the body falls back to BC's own layout,
-    which is what every other thing this module cannot write does.
-    """
-    entry = next((block for block in body.blocks if block.at == body.entry), None)
-    if entry is None:
-        return None
-    wanted = [one for block in body.blocks for one in block.insns if one.arrival]
-    if not wanted:
-        return None
-    if any(body.entry in block.succ for block in body.blocks):
-        return f"{body.name}: a value arrives in a register at the top of a block something branches back to"
-    for one in wanted:
-        if one not in entry.insns:
-            return f"{body.name}: {one.at:#06x} stores a value where it arrived, outside the entry block"
-        source = next((x for x in (one.what.sources if one.what else ()) if isinstance(x, ir.Reg)), None)
-        if source is None:
-            return f"{body.name}: {one.at:#06x} stores a value where it arrived and names no register"
-        mine = ir.ROOT.get(source.register, source.register)
-        for before in entry.insns[: entry.insns.index(one)]:
-            written = {
-                ir.ROOT.get(x.register, x.register)
-                for x in (before.what.dests if before.what else ())
-                if isinstance(x, ir.Reg)
-            }
-            written |= {ir.ROOT.get(x, x) for x in before.clobbers}
-            if mine in written:
-                return (
-                    f"{body.name}: {before.at:#06x} writes the register {one.at:#06x} "
-                    f"stores a value out of, and the value that arrived in it is gone"
-                )
-    return None
 
 
 def _carried(one: "lir.Insn") -> mir.Op:
