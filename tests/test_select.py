@@ -1180,3 +1180,23 @@ def test_a_rewritten_divide_reaches_the_image_through_the_real_layout() -> None:
     assert idiv in got.code, "it is still a divide"
     assert number.to_bytes(4, "little") in got.code, "the number the operation now divides is not in the image"
     assert load_of_the_cell not in got.code, "the site's own bytes are still loading the cell it no longer reads"
+
+
+def test_a_divide_whose_answer_nothing_placed_refuses_rather_than_guessing() -> None:
+    """A value a pass invented has no allocation and no register BC held.
+
+    There is no seat to fall back to, and the operation has been rewritten
+    -- so emitting the bytes BC wrote in its place would be a different
+    program. The whole emission is refused instead.
+    """
+    from dataclasses import replace
+
+    from qbopt import asm
+    from qbopt import mir
+
+    for module_of, body, op in _lngmix_divides():
+        invented = mir.Value(9_000_001, op.at)
+        moved = replace(op, results=(mir.Held(invented, 4), op.results[1]))
+        refused = asm._selected_divide(moved, module_of, None, body.origin, frozenset())
+        assert isinstance(refused, str), f"nothing placed {invented}, and a seat was found anyway: {refused}"
+        assert "no register holds a result" in refused

@@ -508,6 +508,69 @@ def _substituted(op: Op, swap: dict[int, mir.Value]) -> Op:
     )
 
 
+def divided_twice(body: MirBody, dgroup: frozenset[int]) -> "list[tuple[int, Op, Op]]":
+    """Each divide whose answers the divide before it already computed.
+
+    lngmix is `s = s + v \\ 7 + v MOD 7`: BC calls B$DVI4 and then B$RMI4
+    over the same two operands, and one idiv computes the quotient and the
+    remainder together. So the second site is not work -- it is the answer
+    the first one has -- and this is the pair, as (which block, first,
+    second).
+
+    Four things have to hold, and each of them is a way the second could
+    be a different computation from the first:
+
+    - the same operands. A cell is compared by the bytes it names, which
+      is what makes two separately raised operands equal at all.
+    - nothing may have written those cells in between. A store that could
+      land on one, and any call or barrier -- whose memory is its own --
+      ends it.
+    - nothing may have written the registers the first one's answers are
+      in. In SSA that is: no operation between them defines a variable the
+      second one defines, because those are the same registers.
+    - the same block. What reaches the second one along another edge is a
+      question this does not ask, so it does not look across one.
+    """
+    found: list[tuple[int, Op, Op]] = []
+    for block in body.blocks:
+        for index, one in enumerate(block.ops):
+            if one.kind is not mir.Kind.DIVMOD:
+                continue
+            earlier = next(
+                (
+                    other
+                    for other in reversed(block.ops[:index])
+                    if other.kind is mir.Kind.DIVMOD and other.args == one.args
+                ),
+                None,
+            )
+            if earlier is None:
+                continue
+            between = block.ops[block.ops.index(earlier) + 1 : index]
+            if not _undisturbed(one, earlier, between, dgroup):
+                continue
+            found.append((block.at, earlier, one))
+    return found
+
+
+def _undisturbed(one: Op, earlier: Op, between: list, dgroup: frozenset[int]) -> bool:
+    """Whether both divides still see what the first one saw and left."""
+    cells = [arg.ref for arg in one.args if isinstance(arg, mir.Cell)]
+    theirs = {value.variable for value in one.defines}
+    for other in between:
+        if other.barrier or other.kind in (mir.Kind.CALL, mir.Kind.ESCAPE):
+            return False
+        if any(mir.overlapping(ref, wrote, dgroup) for ref in cells for wrote in other.stores):
+            return False
+        # The first one's answers are in registers, and a register written
+        # in between is not holding an answer any more. Asked of the
+        # variable rather than of the value, because that is what a
+        # register is here.
+        if theirs & {value.variable for value in other.defines if not value.flags}:
+            return False
+    return True
+
+
 def placed(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
     """Anything standing inside a call's argument run, moved ahead of it.
 

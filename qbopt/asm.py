@@ -222,6 +222,12 @@ def _seats(op: mir.Op, assignment: dict | None, origin: dict | None) -> "tuple |
     The allocation where there is one, and where BC had it otherwise --
     the same two sources `_where` reads, asked per result rather than per
     operand, because what an idiom has to emit is where its answers go.
+
+    A value a pass invented has neither: nothing allocated it and BC never
+    held it. There is no seat to fall back to and none may be guessed, so
+    this says None and the caller refuses the emission outright -- an
+    operation that has been rewritten cannot be emitted from the bytes BC
+    wrote instead, which is a different program.
     """
     seats = []
     for one in op.results:

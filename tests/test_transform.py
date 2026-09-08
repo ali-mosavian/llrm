@@ -1064,3 +1064,41 @@ def test_an_operation_dead_keeps_has_its_operands_kept_too() -> None:
             if one.id in had and one.id not in made
         ]
         assert not broken, f"{name}: " + "; ".join(broken[:3])
+
+
+def test_the_second_of_two_identical_divides_is_found_with_its_first() -> None:
+    """lngmix's `s = s + v \\ 7 + v MOD 7`, which divides twice for one idiv.
+
+    And the guards, each of which is a way the second could be a different
+    computation: a store that may reach the operands, and a write to the
+    registers the first one's answers are in.
+    """
+    import sys
+    from dataclasses import replace
+
+    sys.path.insert(0, "tools")
+    import stages
+
+    from qbopt import mir
+    from qbopt import transform
+
+    found, bodies, _contracts = stages._bodies(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes())
+    pairs = [one for _name, body in bodies for one in transform.divided_twice(body, found.dgroup)]
+    assert len(pairs) == 1, f"lngmix divides the same two numbers twice; found {len(pairs)}"
+    _at, first, second = pairs[0]
+    assert first.args == second.args, "the same operands, or it is not the same computation"
+    assert first.at < second.at
+
+    # A store between them that may land on what they divide ends it.
+    for name, body in bodies:
+        blocks = []
+        for block in body.blocks:
+            ops = list(block.ops)
+            where = next((i for i, one in enumerate(ops) if one is second), None)
+            if where is not None:
+                cell = next(one for one in second.args if isinstance(one, mir.Cell))
+                ops.insert(where, replace(ops[where - 1], stores=(cell.ref,), kind=mir.Kind.STORE))
+            blocks.append(replace(block, ops=tuple(ops)))
+        assert not transform.divided_twice(replace(body, blocks=tuple(blocks)), found.dgroup), (
+            "a store that may reach the dividend makes the second divide a different one"
+        )
