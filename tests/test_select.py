@@ -1200,3 +1200,26 @@ def test_a_divide_whose_answer_nothing_placed_refuses_rather_than_guessing() -> 
         refused = asm._selected_divide(moved, module_of, None, body.origin, frozenset())
         assert isinstance(refused, str), f"nothing placed {invented}, and a seat was found anyway: {refused}"
         assert "no register holds a result" in refused
+
+
+def test_a_divide_refuses_an_allocation_that_forgot_one_of_its_answers() -> None:
+    """An allocation that exists and omits a value is not the baseline.
+
+    Handed no allocation the assembler remaps nothing, and BC's own
+    register is where the value is. Handed one that placed everything but
+    this, falling back to BC's register puts an answer where the
+    allocation has already promised something else to live.
+    """
+    from qbopt import asm
+
+    for module_of, body, op in _lngmix_divides():
+        every = {one.value: body.origin[one.value] for one in op.results}
+        assert asm._selected_divide(op, module_of, every, body.origin, frozenset()) is not None, (
+            "an allocation naming both answers is emittable"
+        )
+        partial = {op.results[0].value: body.origin[op.results[0].value]}
+        refused = asm._selected_divide(op, module_of, partial, body.origin, frozenset())
+        assert refused is None or isinstance(refused, str), refused
+        assert asm._seats(op, partial, body.origin) is None, (
+            "the second answer is not in the allocation, and BC's register is not an answer to that"
+        )

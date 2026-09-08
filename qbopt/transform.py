@@ -525,11 +525,14 @@ def divided_twice(body: MirBody, dgroup: frozenset[int]) -> "list[tuple[int, Op,
     - nothing may have written those cells in between. A store that could
       land on one, and any call or barrier -- whose memory is its own --
       ends it.
-    - nothing may have written the registers the first one's answers are
-      in. In SSA that is: no operation between them defines a variable the
-      second one defines, because those are the same registers.
     - the same block. What reaches the second one along another edge is a
       question this does not ask, so it does not look across one.
+
+    Nothing here asks what was written to a register in between, and it
+    would be wrong to: the first divide's answers are values, and a value
+    is written once. Keeping them until the second site reads them is the
+    allocator's, not this pass's -- asking it here was a physical-register
+    test wearing an SSA variable's name.
     """
     found: list[tuple[int, Op, Op]] = []
     for block in body.blocks:
@@ -554,19 +557,12 @@ def divided_twice(body: MirBody, dgroup: frozenset[int]) -> "list[tuple[int, Op,
 
 
 def _undisturbed(one: Op, earlier: Op, between: list, dgroup: frozenset[int]) -> bool:
-    """Whether both divides still see what the first one saw and left."""
+    """Whether the second divide still reads what the first one read."""
     cells = [arg.ref for arg in one.args if isinstance(arg, mir.Cell)]
-    theirs = {value.variable for value in one.defines}
     for other in between:
         if other.barrier or other.kind in (mir.Kind.CALL, mir.Kind.ESCAPE):
             return False
         if any(mir.overlapping(ref, wrote, dgroup) for ref in cells for wrote in other.stores):
-            return False
-        # The first one's answers are in registers, and a register written
-        # in between is not holding an answer any more. Asked of the
-        # variable rather than of the value, because that is what a
-        # register is here.
-        if theirs & {value.variable for value in other.defines if not value.flags}:
             return False
     return True
 

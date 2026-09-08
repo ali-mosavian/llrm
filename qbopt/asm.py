@@ -223,18 +223,24 @@ def _seats(op: mir.Op, assignment: dict | None, origin: dict | None) -> "tuple |
     the same two sources `_where` reads, asked per result rather than per
     operand, because what an idiom has to emit is where its answers go.
 
-    A value a pass invented has neither: nothing allocated it and BC never
-    held it. There is no seat to fall back to and none may be guessed, so
-    this says None and the caller refuses the emission outright -- an
-    operation that has been rewritten cannot be emitted from the bytes BC
-    wrote instead, which is a different program.
+    The two are not interchangeable, and reading them as one map hid the
+    case that matters. No allocation at all is the identity baseline: the
+    assembler remaps nothing and BC's own register is where the value is.
+    An allocation that was supplied and does not mention this value is a
+    different thing entirely -- something placed every other value and
+    not this one -- and falling back to BC's register there emits an
+    answer into a register the allocation has given to something else.
+    So origin answers only when there is no allocation, and a value
+    missing from one that exists refuses the emission.
+
+    A value a pass invented has neither, and is refused by both arms.
     """
     seats = []
     for one in op.results:
         value = getattr(one, "value", None)
         if value is None:
             return None
-        where = (assignment or {}).get(value) or (origin or {}).get(value)
+        where = assignment.get(value) if assignment else (origin or {}).get(value)
         if where is None:
             return None
         seats.append(where)
