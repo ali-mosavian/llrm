@@ -1261,3 +1261,50 @@ def test_a_divide_whose_site_is_gone_is_refused_and_not_carried_verbatim() -> No
 
     got = layout.rebuild(found, bodies, mapped.tables, fields, reached)
     assert isinstance(got, str), "a divide with no site of its own must be refused, not emitted"
+
+
+def test_a_divide_that_has_moved_is_not_emitted_from_where_it_was_raised() -> None:
+    """The frozen sequence is only the same program where the site stands.
+
+    Its answers go to the registers calls.py picked at the raise, so two
+    of them in one block write over each other: hoisting lngmix's pair
+    into the preheader put the second's idiv and its `mov ebx,eax` on top
+    of the first's quotient and remainder, and lngmix printed the wrong
+    sum with nothing refused.
+    """
+    from dataclasses import replace
+
+    from qbopt import mir
+    from qbopt import omf
+    from qbopt import layout
+    from qbopt import module
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    at = Path("fixtures/omf/lngmix-p-g2.obj")
+    found = module.of(omf.parse(at.read_bytes()))
+    assert found is not None
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
+    blocks = split.partition(found, mapped)
+    bodies = list(mir.bodies(found, blocks))
+    fields = frozenset(one.offset for one in omf.fixups(omf.parse(at.read_bytes())) if one.seg == found.seg)
+    reached = frozenset(one for block in blocks for insn in block.insns for one in range(insn.at, insn.end))
+
+    moved, changed = False, []
+    for name, body in bodies:
+        out = []
+        for block in body.blocks:
+            ops = []
+            for one in block.ops:
+                if one.kind is mir.Kind.DIVMOD and not moved:
+                    one, moved = replace(one, at=one.at + 1), True
+                ops.append(one)
+            out.append(replace(block, ops=tuple(ops)))
+        changed.append((name, replace(body, blocks=tuple(out))))
+    assert moved, "no absorbed divide to move; this proves nothing"
+
+    was = layout.rebuild(found, bodies, mapped.tables, fields, reached)
+    assert not isinstance(was, str), was
+    got = layout.rebuild(found, changed, mapped.tables, fields, reached)
+    assert isinstance(got, str), "a divide standing somewhere else must be refused, not emitted"

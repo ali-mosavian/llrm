@@ -1018,6 +1018,20 @@ def _rewritten(ops: list[Op], phis: list) -> set:
     return out
 
 
+def _cannot_fault(op: Op) -> bool:
+    """Whether this divide can be performed where it might not have been.
+
+    `idiv` faults on a zero divisor and on the one quotient that does not
+    fit -- the most negative dividend over -1. Both are the divisor, and
+    both are answerable only where it is written down: a cell's contents
+    are whatever the loop's last iteration left there.
+    """
+    if op.kind is not mir.Kind.DIVMOD or len(op.args) != 2:
+        return False
+    divisor = op.args[1]
+    return isinstance(divisor, mir.Const) and divisor.n not in (0, -1)
+
+
 def _invariant_run(
     ops: list[Op],
     carried: set,
@@ -1035,8 +1049,15 @@ def _invariant_run(
     is one no store in the loop can reach, and every register it reads was
     defined outside the loop or by an op already in the run. That second
     clause is why this is a fixed point and not a scan.
+
+    A loop holding a call is refused whole -- a call's memory is its own,
+    so nothing in the loop can be shown to read a cell it cannot reach.
+    Asked of the address rather than of the operation, that refused every
+    loop BC had ever put a runtime call in, absorbed or not: lngmix's
+    divide folds to a copy and the copy still stands at `B$RMI4`'s
+    address. What an operation is, is the operation's to say.
     """
-    if any(one.at in calls or one.barrier for one in ops):
+    if any(one.kind in (mir.Kind.CALL, mir.Kind.ESCAPE) or one.barrier for one in ops):
         return []
     made: set = set()
     run: list = []
@@ -1054,6 +1075,29 @@ def _invariant_run(
             # writes, so all three were invariant by the test above and all
             # three left -- and the back edge left with them.
             if one.kind in (mir.Kind.JUMP, mir.Kind.BRANCH):
+                continue
+            # Nor a divide that could trap. A preheader runs whether the
+            # body does or not -- BC writes its loops rotated, entering at
+            # the test -- so hoisting one onto a zero-trip path raises a
+            # division BC never performed. Only a divisor written down and
+            # known to be neither of the two that fault leaves.
+            #
+            # And not one at all yet, faulting or not. A folded site emits
+            # from the sequence calls.py froze at the raise, whose answers
+            # go to the registers it picked -- the same program only while
+            # the site still stands where it was raised. Two divides moved
+            # into one preheader is where that stops: the second's own
+            # idiv and its `mov ebx,eax` land on the first's quotient and
+            # remainder, and lngmix printed the wrong sum. asm refuses a
+            # moved site now rather than emitting that, and a refused body
+            # is laid out as BC wrote it -- 952 bytes against 892, and a
+            # cost of 3264 against 1518. What lifts this is emission from
+            # the operands for a moved site, which needs the allocator to
+            # place the values the hoist gives fresh variables: today it
+            # answers `v13_1 interferes with every register at once`.
+            if one.kind is mir.Kind.DIVMOD and not _cannot_fault(one):
+                continue
+            if one.kind is mir.Kind.DIVMOD:
                 continue
             # Nor a move. The guard was "every source is a register", so a
             # constant load was real work and could leave; with the hoist

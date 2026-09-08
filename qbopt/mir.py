@@ -535,6 +535,22 @@ _ABSORBS = {
 }
 
 
+def _absorbed_loads(args: tuple, namer: "_Namer", at: int) -> tuple[MemRef, ...]:
+    """The memory a folded site reads: the cells among its own operands.
+
+    The routines absorption knows take their longs by value and touch no
+    user memory, so a folded site reads exactly what BC pushed into it --
+    and `_absorbing` only folds a site whose every operand is a static
+    address or a written-down constant, which is what makes that a list
+    and not an approximation.
+    """
+    return tuple(
+        MemRef(one.ref.addr, one.ref.width, None, None, one.ref.space, None)
+        for one in args
+        if isinstance(one, Cell) and one.ref.addr is not None
+    )
+
+
 def absorbs(name: str) -> "Kind | None":
     """The kind a site of this name raises as, or None where it has no one
     kind of its own -- fixMul& is absorbed and is still a call."""
@@ -1421,6 +1437,16 @@ def raise_body(
                     covers = (site.start, site.end)
                     where_at = site.start
                     handed = _hands_back(kind, written, before)
+                    # And it reads what its operands name and writes no
+                    # memory at all. The effects are iced's answer about
+                    # the `call` -- everything the reached set does not
+                    # cover, in both directions -- and carrying them past
+                    # the fold said a divide of two static cells might
+                    # land on any of them: licm refused lngmix's loop
+                    # because the operation it had already turned into
+                    # arithmetic still claimed a call's memory.
+                    loads = _absorbed_loads(where[0], namer, start)
+                    stores = ()
             _called = _call_args(chosen.get(insn.at), holds, insn.at) if kind is Kind.CALL else ((), True)
             # The snapshot the raise took, arguments included. `semantics`
             # carries an operation's own bytes only while its operands are

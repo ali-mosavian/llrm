@@ -250,6 +250,16 @@ def _folded_site(op: mir.Op, found: Module):
     kind = mir.absorbs(folded[0].name)
     if kind is not None and op.kind is not kind:
         return None
+    if op.at != folded[0].start:
+        return f"{op.at:#06x}: {folded[0].name} was raised at {folded[0].start:#06x} and no longer stands there"
+    # And only where it still stands. The frozen sequence puts its answers
+    # in the registers calls.py picked at the raise, which is the same
+    # program only while nothing else has come to stand between the site
+    # and its readers. Hoisting two divides into one preheader is where
+    # that stops being true: the second one's `mov ebx,eax` and its own
+    # idiv land on the first one's quotient and remainder, and lngmix
+    # printed the wrong sum. A moved operation emits from its operands or
+    # it does not emit.
     return folded
 
 
