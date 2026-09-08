@@ -535,6 +535,12 @@ _ABSORBS = {
 }
 
 
+def absorbs(name: str) -> "Kind | None":
+    """The kind a site of this name raises as, or None where it has no one
+    kind of its own -- fixMul& is absorbed and is still a call."""
+    return _ABSORBS.get(name.upper())
+
+
 def _within(sites: dict) -> frozenset[int]:
     """Every byte a site's pushes occupy, so the raise can pass over them."""
     out = set(at for site in sites.values() for at in range(site.start, site.at))

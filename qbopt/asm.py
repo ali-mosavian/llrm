@@ -221,6 +221,38 @@ def _absorbed(site, read):
     return None if isinstance(made, str) else made
 
 
+def _folded_site(op: mir.Op, found: Module):
+    """The site this op stands for, where it still stands for one.
+
+    The record is what says to emit a divide rather than the call BC
+    wrote, and a pass that rewrites the operation into something else --
+    a copy of an answer already computed -- leaves the id where it was.
+    So the op's own kind decides: where it no longer raises as the kind
+    its site does, the site is not what it is any more and the operation
+    speaks for itself. Emitted from the record, the copy came back as the
+    whole divide.
+
+    Dropping the record instead is what the pass must not do. A body the
+    allocator refuses is laid out as it was *raised* and still holds the
+    divide: with no record it emitted as BC's bare call with its push run
+    already folded away, and lngmix stopped early under DOSBox. That is
+    the refusal below -- the bytes at a divide's address are its call and
+    the last of its pushes, so carrying them verbatim writes a call with
+    one argument, silently.
+    """
+    if op.id is None:
+        return None
+    folded = found.absorbed.get(op.id)
+    if folded is None:
+        if op.kind is mir.Kind.DIVMOD:
+            return f"{op.at:#06x}: a divide with no site of its own cannot be emitted"
+        return None
+    kind = mir.absorbs(folded[0].name)
+    if kind is not None and op.kind is not kind:
+        return None
+    return folded
+
+
 def _seats(op: mir.Op, assignment: dict | None, origin: dict | None) -> "tuple | None":
     """Which register each of an operation's results is in.
 
@@ -460,7 +492,9 @@ def assemble(
         # carried verbatim -- zero bytes in the length pass, three in the
         # emit pass, and layout said it changed length between them.
         emulated = not native_fpu and op.node is not None and found.code[op.at : op.at + 1] == bytes([0xCD])
-        folded = found.absorbed.get(op.id) if op.id is not None else None
+        folded = _folded_site(op, found)
+        if isinstance(folded, str):
+            return folded
         if folded is not None:
             chosen = _selected_divide(op, found, assignment, origin, fields)
             if isinstance(chosen, str):
@@ -602,7 +636,9 @@ def assemble(
                 relocations.append((len(out) + (field - op.at), field))
             out += found.code[op.at : op.at + length]
             continue
-        folded = found.absorbed.get(op.id) if op.id is not None else None
+        folded = _folded_site(op, found)
+        if isinstance(folded, str):
+            return folded
         if folded is not None:
             chosen = _selected_divide(op, found, assignment, origin, fields)
             if isinstance(chosen, str):

@@ -581,23 +581,6 @@ def test_nothing_reads_a_register_nothing_wrote() -> None:
                 written.add(root(Register.EAX))
 
 
-@pytest.mark.xfail(
-    reason="Passed before this session only because the second divide was "
-    "not absorbed at all -- one idiv and one unresolved call, never a fact "
-    "about reuse. Both absorb now (test_both_lngmix_divides_absorb), and "
-    "subexpressions() already carries this exact case in its own "
-    "docstring, but _computation() only names a Held or a Const, and a "
-    "DIVMOD's own operand is a Cell -- BC's memory operand, not yet loaded "
-    "into a register. It keys on the pair once each has gone through one "
-    "round of lowering into a real idiv and been re-raised as plain "
-    "Kind.DIV (test_cse_folds_lngmix_s_second_divide), which is what the "
-    "production pipeline does not yet do in the round that already "
-    "succeeded through LIR. Teaching _computation() to name a Cell -- or "
-    "running cse on the DIVMOD pair before lowering -- is what closes "
-    "this; extending it untested is a correctness risk to every other "
-    "kind _computation() already keys on.",
-    strict=True,
-)
 def test_a_long_divide_leaves_a_loop_that_never_changes_its_operands() -> None:
     """lngmix divides a constant by a constant, ten times.
 
@@ -605,6 +588,11 @@ def test_a_long_divide_leaves_a_loop_that_never_changes_its_operands() -> None:
     aliased every named variable, the "computes nothing" guard caught `cdq`
     and `idiv` because their sources are all registers, and the restore
     idiom read as reading nothing. 8.8x against a 210 target.
+
+    Then it stayed refused for a fourth reason of its own: both divides
+    absorb, and one idiv computes what both calls asked for -- so the
+    loop holds two of them until `reuse` folds the second into a copy of
+    the first's answer.
     """
     seen = _rebuilt("lngmix-p-g2")
     start = next(i for i, (_, text) in enumerate(seen) if text.startswith("jmp"))
@@ -962,50 +950,6 @@ def test_both_lngmix_divides_absorb():
     assert calls.sites(found, reached, blocks) == []
 
 
-def test_cse_folds_lngmix_s_second_divide() -> None:
-    """`s = s + v \\ 7 + v MOD 7` divides twice by the same constant.
-
-    Not textually: BC reloads `v`, reconverts it and rebuilds the 7, so the
-    second divide names none of the first's values. Three operations go --
-    the reload's convert, the second 7 and the divide itself. Both sites
-    raise as one Kind.DIVMOD each, quotient and remainder in the same
-    order regardless of which call folded, which is what gives the two
-    the same args for cse to key on.
-    """
-    from pathlib import Path
-
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import wholeseg
-    from qbopt import transform
-    from qbopt.passes import Where
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
-
-    data = Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()
-    for _ in range(3):  # the divides absorb first; cse is what comes after
-        data, _why = wholeseg.rebuilt(data)
-    found = module.of(omf.parse(data))
-    blocks = split.partition(found, code_map(found))
-    where = Where(
-        dgroup=found.dgroup,
-        calls=found.calls,
-        bounds=module.landmarks(found),
-        blocks=blocks,
-        found=found,
-    )
-    ((_who, body),) = mir.bodies(found, blocks)
-    for one in transform.pipeline(where):
-        if one.name == "cse":
-            was = sum(1 for block in body.blocks for op in block.ops)
-            body = one.transform(body)
-            now = sum(1 for block in body.blocks for op in block.ops)
-            assert was - now == 3, f"cse removed {was - now} operations, not 3"
-            return
-        body = one.transform(body)
-    raise AssertionError("cse is not in the pipeline")
-
-
 def test_cse_refuses_an_operand_that_is_only_half_its_value() -> None:
     """nots printed NOTOR= 26390415 for -271601777: right word, wrong word.
 
@@ -1119,9 +1063,6 @@ def test_a_reused_divide_copies_the_first_answer_instead_of_dividing() -> None:
     lngmix's second divide becomes a copy of the first one's remainder,
     and the operation that hands that answer's high half back reads the
     same value it always did -- so nothing else in the body changes.
-
-    Not wired into `pipeline`: the copy is not emitted as one yet. See
-    transform.Reuse's own note, and e2e's NODONE.
     """
     import sys
 
@@ -1156,3 +1097,59 @@ def test_a_reused_divide_copies_the_first_answer_instead_of_dividing() -> None:
         assert isinstance(served, mir.Held) and served.value in divides[0].defines, (
             "the copy reads an answer the first divide defined"
         )
+
+
+def test_a_reused_divide_leaves_a_body_the_allocator_can_still_colour() -> None:
+    """The fold must not extend a value's life into another register's phi.
+
+    The copy keeps every value the site defined, so no phi that named one
+    of them loses its definition and none has to be rewritten. Rewriting
+    them was the first attempt: the ebx variable's phi ended up reading
+    the quotient in eax, that value stayed live to the back edge, and the
+    allocator refused the whole body -- `v1_5 and a value it interferes
+    with are both pinned to eax`. A refused body is laid out as it was
+    raised, so the fold cost 0 bytes and nothing said so.
+    """
+    import sys
+
+    sys.path.insert(0, "tools")
+    import stages
+
+    from qbopt import regalloc
+    from qbopt import transform
+
+    found, bodies, _contracts = stages._bodies(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes())
+    folded = 0
+    for _name, body in bodies:
+        got = transform.reused_divides(body, found.dgroup, found)
+        if got is body:
+            continue
+        folded += 1
+        one = regalloc.untangled(got)
+        where = regalloc.colour(one, one.pins)
+        assert not isinstance(where, str), f"the folded body must still colour: {where}"
+    assert folded == 1, "lngmix has one pair to fold; this proves nothing without it"
+
+
+def test_one_idiv_serves_both_of_lngmix_s_divides_in_the_image() -> None:
+    """The fold reaching the bytes, through the entry production uses.
+
+    Two things only show here. The allocator refusing the folded body is
+    invisible upstream -- the pass returns a folded body either way, and
+    the image keeps both idivs. And dropping the second site's record
+    from the module, which looked like the tidy thing, left the refused
+    body emitting BC's bare `call 0:0` with its push run already folded
+    away: lngmix stopped early under DOSBox with no diff to read.
+    """
+    from iced_x86 import Decoder, Mnemonic
+
+    from qbopt import module
+    from qbopt import omf
+    from qbopt import wholeseg
+
+    out, why = wholeseg.rebuilt(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes())
+    assert why == wholeseg.REBUILT
+    code = bytes(module.of(omf.parse(out)).code)
+    seen = [one.mnemonic for one in Decoder(16, code)]
+    assert seen.count(Mnemonic.IDIV) == 1, "one divide does the work of both"
+    assert seen.count(Mnemonic.CALL) == 4, "and no divide is left as a call"

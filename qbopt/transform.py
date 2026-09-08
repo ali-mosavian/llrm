@@ -526,31 +526,54 @@ def reused_divides(body: MirBody, dgroup: frozenset[int], found=None) -> MirBody
     bytes it stood for are still accounted for by it. What follows it --
     the operation that hands the answer's high half back -- reads the same
     value it always did and needs no changing at all.
+
+    Nothing outside the body is touched. Dropping the site's own record
+    from the module -- which is what says to emit a divide there -- looks
+    like the tidy thing and is not: a body the allocator refuses is laid
+    out as it was *raised*, and that body still holds the divide. With the
+    record gone it emitted as the bare call BC wrote, its push run already
+    folded away, and lngmix stopped early under DOSBox. What an operation
+    is, is the operation's to say: asm compares its kind against the one
+    its site raises as, and the copy no longer matches.
     """
     pairs_found = divided_twice(body, dgroup)
     if not pairs_found:
         return body
     alive = live(body)
-    swap: dict[int, mir.Value] = {}
     into: dict[int, Op] = {}
     for _at, earlier, one in pairs_found:
         if len(one.results) != 2 or len(earlier.results) != 2:
             continue
-        answers = {mine.value for mine in one.results}
-        if any(value in alive for value in one.defines if value not in answers):
-            continue  # something reads a register it merely clobbered
         served, wanted = None, None
         for mine, theirs in zip(one.results, earlier.results):
             if mine.value in alive:
                 served, wanted = theirs, mine
         if served is None or wanted is None:
             continue
+        # One register is what a copy writes, so one value is all it may
+        # define for real. Every other value the site defined -- the
+        # answer it was not asked for as much as the registers it merely
+        # clobbered -- has to be dead, or the copy hands a reader a
+        # register holding something else: the other answer's own name
+        # says quotient and ebx would still hold the first divide's
+        # remainder. They stay on `defines` because a definition is what
+        # ends a live range and a phi naming one still has to find one --
+        # dead, that is bookkeeping; live, it would be a lie.
+        if any(value in alive for value in one.defines if value is not wanted.value):
+            continue
         into[id(one)] = replace(
             one,
             kind=mir.Kind.COPY,
             op=ir.Operation.MOVE,
             name="mov",
-            defines=(wanted.value,),
+            # Every value the site defined stays defined here. The copy
+            # writes one of them and the rest are dead, but a definition
+            # is what ends a live range: dropping them let the register
+            # the first divide's answer sits in stay live across this,
+            # and the allocator refused the body with two values pinned
+            # to the same register. A phi naming one of them also has to
+            # go on finding a definition.
+            defines=one.defines,
             uses=(served.value,),
             loads=(),
             stores=(),
@@ -560,12 +583,6 @@ def reused_divides(body: MirBody, dgroup: frozenset[int], found=None) -> MirBody
             node=None,
             made=None,
         )
-        swap.update({mine.value.id: theirs.value for mine, theirs in zip(one.results, earlier.results)})
-        if found is not None and one.id is not None:
-            # It is not a call site any more, and the record is what says
-            # to emit one: left in place it writes the whole sequence back
-            # over the copy.
-            found.absorbed.pop(one.id, None)
     if not into:
         return body
     return replace(
@@ -573,7 +590,6 @@ def reused_divides(body: MirBody, dgroup: frozenset[int], found=None) -> MirBody
         blocks=tuple(
             replace(
                 block,
-                phis=tuple(_phi_reading(phi, swap) for phi in block.phis),
                 ops=tuple(into.get(id(op), op) for op in block.ops),
             )
             for block in body.blocks
@@ -2014,6 +2030,7 @@ def pipeline(where: Where, **wanted) -> list[MIRTransform]:
         Forward(where),
         DropLoads(where),
         DropStores(where),
+        Reuse(where),
         Cse(),
         promote.Promote(where),
         strength.Strength(where),

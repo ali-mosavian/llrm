@@ -1226,3 +1226,38 @@ def test_a_divide_refuses_an_allocation_that_forgot_one_of_its_answers() -> None
         assert asm._seats(op, partial, body.origin) is None, (
             "the second answer is not in the allocation, and BC's register is not an answer to that"
         )
+
+
+def test_a_divide_whose_site_is_gone_is_refused_and_not_carried_verbatim() -> None:
+    """The bytes at a folded site are the call and the last of its pushes.
+
+    So the fall-through -- copy `found.code` at the operation's address --
+    writes a call with one argument where the rest of the run was already
+    folded away. That is what lngmix emitted when a pass dropped the site's
+    own record: no diff, no refusal, and it stopped early under DOSBox.
+    """
+    from qbopt import asm
+    from qbopt import mir
+    from qbopt import omf
+    from qbopt import layout
+    from qbopt import module
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    at = Path("fixtures/omf/lngmix-p-g2.obj")
+    found = module.of(omf.parse(at.read_bytes()))
+    assert found is not None
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
+    blocks = split.partition(found, mapped)
+    bodies = list(mir.bodies(found, blocks))
+    fields = frozenset(one.offset for one in omf.fixups(omf.parse(at.read_bytes())) if one.seg == found.seg)
+    reached = frozenset(one for block in blocks for insn in block.insns for one in range(insn.at, insn.end))
+
+    divides = [one for _n, body in bodies for block in body.blocks for one in block.ops if one.kind is mir.Kind.DIVMOD]
+    assert divides, "nothing absorbed here, so this proves nothing"
+    for one in divides:
+        found.absorbed.pop(one.id, None)
+
+    got = layout.rebuild(found, bodies, mapped.tables, fields, reached)
+    assert isinstance(got, str), "a divide with no site of its own must be refused, not emitted"
