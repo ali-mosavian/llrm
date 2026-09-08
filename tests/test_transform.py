@@ -1111,3 +1111,48 @@ def test_the_second_of_two_identical_divides_is_found_with_its_first() -> None:
         assert not transform.divided_twice(replace(body, blocks=tuple(blocks)), found.dgroup), (
             "a store that may reach the dividend makes the second divide a different one"
         )
+
+
+def test_a_reused_divide_copies_the_first_answer_instead_of_dividing() -> None:
+    """The fold itself, at MIR level, on the real object.
+
+    lngmix's second divide becomes a copy of the first one's remainder,
+    and the operation that hands that answer's high half back reads the
+    same value it always did -- so nothing else in the body changes.
+
+    Not wired into `pipeline`: the copy is not emitted as one yet. See
+    transform.Reuse's own note, and e2e's NODONE.
+    """
+    import sys
+
+    sys.path.insert(0, "tools")
+    import stages
+
+    from qbopt import mir
+    from qbopt import transform
+
+    found, bodies, _contracts = stages._bodies(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes())
+    divides = [
+        one
+        for _name, body in bodies
+        for block in body.blocks
+        for one in block.ops
+        if one.kind is mir.Kind.DIVMOD
+    ]
+    assert len(divides) == 2, f"lngmix divides twice; {len(divides)} found"
+
+    for _name, body in bodies:
+        got = transform.reused_divides(body, found.dgroup, found)
+        left = [one for block in got.blocks for one in block.ops if one.kind is mir.Kind.DIVMOD]
+        copies = [
+            one
+            for block in got.blocks
+            for one in block.ops
+            if one.kind is mir.Kind.COPY and one.at == divides[1].at
+        ]
+        assert len(left) == 1, "one divide does the work of both"
+        assert len(copies) == 1, "and the other is a copy of its answer"
+        served = copies[0].args[0]
+        assert isinstance(served, mir.Held) and served.value in divides[0].defines, (
+            "the copy reads an answer the first divide defined"
+        )

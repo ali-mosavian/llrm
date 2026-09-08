@@ -508,6 +508,79 @@ def _substituted(op: Op, swap: dict[int, mir.Value]) -> Op:
     )
 
 
+def reused_divides(body: MirBody, dgroup: frozenset[int], found=None) -> MirBody:
+    """A divide whose answers the divide before it already computed.
+
+    One idiv yields the quotient and the remainder together, and BC asks
+    for them with two calls -- so lngmix's `s = s + v \\ 7 + v MOD 7`
+    divides the same two numbers ten times a loop for an answer it is
+    holding. The second divide becomes a copy of the first's answer.
+
+    Only its answers are substituted, and only where everything else it
+    defined is dead. A folded call defines a value per register it
+    clobbers, and those are not results: reading them as "what the divide
+    before it left there" would be reasoning about registers, which is not
+    this layer's to do. Where one is live the pair is refused instead.
+
+    The copy stays where the divide was and keeps its identity, so the
+    bytes it stood for are still accounted for by it. What follows it --
+    the operation that hands the answer's high half back -- reads the same
+    value it always did and needs no changing at all.
+    """
+    pairs_found = divided_twice(body, dgroup)
+    if not pairs_found:
+        return body
+    alive = live(body)
+    swap: dict[int, mir.Value] = {}
+    into: dict[int, Op] = {}
+    for _at, earlier, one in pairs_found:
+        if len(one.results) != 2 or len(earlier.results) != 2:
+            continue
+        answers = {mine.value for mine in one.results}
+        if any(value in alive for value in one.defines if value not in answers):
+            continue  # something reads a register it merely clobbered
+        served, wanted = None, None
+        for mine, theirs in zip(one.results, earlier.results):
+            if mine.value in alive:
+                served, wanted = theirs, mine
+        if served is None or wanted is None:
+            continue
+        into[id(one)] = replace(
+            one,
+            kind=mir.Kind.COPY,
+            op=ir.Operation.MOVE,
+            name="mov",
+            defines=(wanted.value,),
+            uses=(served.value,),
+            loads=(),
+            stores=(),
+            merges={},
+            args=(served,),
+            results=(wanted,),
+            node=None,
+            made=None,
+        )
+        swap.update({mine.value.id: theirs.value for mine, theirs in zip(one.results, earlier.results)})
+        if found is not None and one.id is not None:
+            # It is not a call site any more, and the record is what says
+            # to emit one: left in place it writes the whole sequence back
+            # over the copy.
+            found.absorbed.pop(one.id, None)
+    if not into:
+        return body
+    return replace(
+        body,
+        blocks=tuple(
+            replace(
+                block,
+                phis=tuple(_phi_reading(phi, swap) for phi in block.phis),
+                ops=tuple(into.get(id(op), op) for op in block.ops),
+            )
+            for block in body.blocks
+        ),
+    )
+
+
 def divided_twice(body: MirBody, dgroup: frozenset[int]) -> "list[tuple[int, Op, Op]]":
     """Each divide whose answers the divide before it already computed.
 
@@ -1888,6 +1961,25 @@ class DropStores(MIRTransform):
 
     def transform(self, body: MirBody) -> MirBody:
         return without_dead_stores(body, self.where.dgroup, self.where.named)
+
+
+class Reuse(MIRTransform):
+    """Not in `pipeline` below, and must not be until the copy it leaves
+    behind is emitted as one. Wired in, lngmix's second divide became the
+    original `call` bytes carried verbatim -- the site's own -- and the
+    program stopped early under DOSBox (e2e NODONE). The fold itself is
+    right: one idiv leaves the loop and the image is 899 bytes against
+    915. What is missing is the emission of an operation a pass invented
+    standing at an absorbed site's address.
+    """
+
+    name = "reuse"
+
+    def __init__(self, where: Where) -> None:
+        self.where = where
+
+    def transform(self, body: MirBody) -> MirBody:
+        return reused_divides(body, self.where.dgroup, self.where.found)
 
 
 class Cse(MIRTransform):
