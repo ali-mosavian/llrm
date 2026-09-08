@@ -242,6 +242,12 @@ def _folded_site(op: mir.Op, found: Module):
     """
     if op.id is None:
         return None
+    # An instruction a pass lifted the symbolic operand onto keeps the id,
+    # because the id is how its fixup is found. It is not the site: read as
+    # one it would emit the whole absorbed sequence again in place of the
+    # `mov` it actually is.
+    if op.symbol is True:
+        return None
     folded = found.absorbed.get(op.id)
     if folded is None:
         if op.kind is mir.Kind.DIVMOD:
@@ -340,6 +346,14 @@ def _selected_divide(op: mir.Op, found: Module, assignment, origin, fields):
     """
     if op.kind is not mir.Kind.DIVMOD:
         return None
+    # An instruction standing beside the site is not the site. A copy the
+    # allocator put next to a divide carries the divide's own op, and read
+    # as one it was asked to emit the whole sequence for what is a `mov`:
+    # a refusal, since an inserted instruction owns no fixup to name its
+    # operands with. `made` is its whole definition, the same way
+    # `_carried` says.
+    if op.id is None:
+        return None
     seats = _seats(op, assignment, origin)
     made = select.divides(op, seats, restore=False) if seats is not None else "no register holds a result"
     wanted = _divide_fields(op, found, fields)
@@ -358,6 +372,8 @@ def _fields_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) 
     operation that stands for an idiom has one per relocated instruction in
     it, and they are placed in the order the instructions were emitted.
     """
+    if op.symbol is False:
+        return ()  # the operand went to another instruction, and the fixup with it
     said = found.refs.get(op.id) if op.id is not None else None
     if said is not None and len(said) > 1:
         wanted = tuple(one for one in said if not fields or one in fields)
@@ -384,6 +400,21 @@ def _field_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -
     Two would mean an instruction with two relocated operands, which nothing
     here emits and which would have to say which field went where.
     """
+    # An instruction a pass lifted the symbolic operand onto: it holds no
+    # bytes of BC's and so has no node, and the fixup is still its own --
+    # the operand is what the fixup names, and the operand is here.
+    #
+    # One recorded fixup, or none of them. Two means the operation had two
+    # relocated operands and only one moved, and which is which is not
+    # something the count can say: picking the first would bind an address
+    # to the wrong operand, which is the failure this whole path exists to
+    # stop rather than to relocate.
+    if op.symbol is True:
+        said = found.refs.get(op.id) if op.id is not None else None
+        if said is None or len(said) != 1:
+            return None
+        ref = said[0]
+        return ref if not fields or ref in fields else None
     if op.node is None:
         return None
     # `push eax / pop ax / pop dx` is three register instructions and has no
@@ -396,6 +427,8 @@ def _field_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -
     # bytes, which is what `Laid.dropped` reports and relocate.py skips.
     if isinstance(op.node, ir.Restore):
         return None
+    if op.symbol is False:
+        return None  # the operand went to another instruction, and the fixup with it
     # What the operation says it carries, established at the raise while the
     # spans were still BC's. Subject to the caller's own set: `fields` is how
     # a caller says which fixups it is accounting for.

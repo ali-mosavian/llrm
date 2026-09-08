@@ -108,6 +108,14 @@ class Insn:
     # result was spilled two bytes wide and reloaded four out of the same
     # slot. The width is the value's, established once at the raise.
     widths: "tuple[tuple[int, int], ...]" = ()
+    # Whether this instruction holds the relocated operand of the operation
+    # it belongs to. None means nothing moved it and the operation answers
+    # as it always did. A pass that lifts a symbolic memory operand onto an
+    # instruction of its own sets True there and False on what it left
+    # behind: the fixup follows the operand, and it is the only thing that
+    # does -- which bytes the operation stands for and where it stands are
+    # still the operation's own.
+    symbol: "bool | None" = None
 
 
 @dataclass(frozen=True, slots=True)

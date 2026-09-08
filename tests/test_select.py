@@ -1260,6 +1260,52 @@ def test_a_frame_slots_displacement_is_not_a_relocatable_field() -> None:
     assert indexed.places, "an array reached through si still carries its own address"
 
 
+def test_an_instruction_holding_a_moved_operand_is_not_the_site_it_came_from() -> None:
+    """It keeps the id, because the id is how its fixup is found.
+
+    Everything else the id answers is about the operation's own bytes, and
+    the instruction has none: read as the site it would emit the whole
+    absorbed divide again in place of the `mov` it is. And one recorded
+    fixup or none -- two means the operation had two relocated operands
+    and only one moved, and the count cannot say which is which.
+    """
+    from qbopt import asm
+    from qbopt import ir
+    from qbopt import mir
+    from qbopt import module
+    from qbopt import omf
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()))
+    bodies = list(mir.bodies(found, split.partition(found, code_map(found))))
+    site = next(one for one in found.absorbed)
+    # Kind and all, so the site's own record would answer for it: the
+    # kind check alone lets one through whose operation still raises as a
+    # divide, and what says no is that the operand moved here.
+    kind = found.absorbed[site][0]
+    lifted = mir.Op(
+        at=kind.start,
+        op=ir.Operation.MOVE,
+        name="mov",
+        defines=(),
+        uses=(),
+        kind=mir.absorbs(kind.name),
+        id=site,
+        symbol=True,
+    )
+    assert asm._folded_site(lifted, found) is None, "the moved operand was read as the site"
+    assert bodies, "the fixture raised nothing"
+
+    # And the fixup: one is its own, two is a guess.
+    was = found.refs.get(site)
+    found.refs[site] = (0x40,)
+    assert asm._field_in(found, lifted, frozenset({0x40})) == 0x40
+    found.refs[site] = (0x40, 0x44)
+    assert asm._field_in(found, lifted, frozenset({0x40, 0x44})) is None, "one of two fixups was picked"
+    found.refs[site] = was
+
+
 def _divisions(code: bytes) -> int:
     """How many divide instructions the emitted segment holds."""
     import iced_x86

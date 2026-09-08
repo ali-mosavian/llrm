@@ -156,11 +156,18 @@ def _carried(one: "lir.Insn") -> mir.Op:
     # copy never appeared at all.
     idiom = isinstance(one.op.node, ir.Restore) and getattr(one.what, "op", None) is ir.Operation.RESTORE
     inserted = not idiom and one.covers is not None and one.covers[0] == one.covers[1]
+    # Owning the relocated operand is not owning the bytes. An instruction
+    # a pass lifted a symbolic cell onto keeps the id, because the id is
+    # how the fixup is found -- and keeps no node and no span, because it
+    # stands for none of BC's. `symbol` is what says so, set by the pass
+    # that moved the operand and by nothing else: an inserted instruction
+    # that merely stands beside a far call still claims nothing.
     return replace(
         one.op,
         made=one.what,
         at=one.at,
         covers=one.covers,
         node=None if inserted else one.op.node,
-        id=None if inserted else one.op.id,
+        id=None if inserted and one.symbol is not True else one.op.id,
+        symbol=one.symbol,
     )

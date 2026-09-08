@@ -792,6 +792,12 @@ class Op:
     # not. None means an operation a pass invented, which has no past and
     # must say what it computes in MIR's own terms.
     id: int | None = None
+    # Whether this operation still holds the relocated operand its record
+    # names. None is the ordinary answer -- nothing moved it. A pass below
+    # the boundary that lifts a symbolic cell onto an instruction of its
+    # own sets True there and False on what it left behind, so the fixup
+    # follows the operand and is not bound to whatever field remained.
+    symbol: "bool | None" = None
     # Whether `args` is the operation's real argument list. Only a CALL can
     # say no: a runtime routine whose code is not in the tree declares no
     # inputs, and `()` would then mean "reads nothing" -- the one thing
