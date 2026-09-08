@@ -134,14 +134,13 @@ def _arrivals(body: lir.LirBody, values: "frozenset[int]", frame) -> tuple:
             frames.WORD,
         )
         cell = frame.cell(value, width)
-        out.append(
-            _inserted(
-                first,
-                ir.Semantics(ir.Operation.MOVE, "mov", (cell,), (ir.Reg(target.named(root, width), width),)),
-                (),
-                (),
-            )
+        made = _inserted(
+            first,
+            ir.Semantics(ir.Operation.MOVE, "mov", (cell,), (ir.Reg(target.named(root, width), width),)),
+            (),
+            (),
         )
+        out.append(replace(made, arrival=True))
     return tuple(out)
 
 

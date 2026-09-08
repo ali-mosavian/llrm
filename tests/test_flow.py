@@ -974,6 +974,56 @@ def test_lngmix_is_written_by_the_lir_route_and_not_by_the_fallback() -> None:
     assert why is None, why
 
 
+def test_a_value_stored_where_it_arrived_is_checked_and_not_trusted() -> None:
+    """The store reads a register the allocation never said was read.
+
+    Nothing in `uses` names it, so no interference stops a later phase
+    putting something else there first, and five phases run after the one
+    that placed the store. Where it stands is the whole of the argument,
+    so where it stands is checked at the last point before bytes -- and a
+    body that fails the check falls back rather than emitting a slot
+    filled from the wrong register.
+    """
+    from iced_x86 import Register
+
+    from qbopt import ir
+    from qbopt import lir
+    from qbopt import objwrite
+
+    slot = ir.Mem(addr=None, width=2, through=Register.BP, offset=-0x18, disp_width=2)
+    store = lir.Insn(
+        at=0x100,
+        covers=(0x100, 0x100),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (slot,), (ir.Reg(Register.SI, 2),)),
+        defines=(),
+        uses=(),
+        op=None,
+        arrival=True,
+    )
+
+    def body(*insns, succ=()):
+        return lir.LirBody("one", 0, (lir.LirBlock(at=0, insns=insns, succ=succ),), origin={}, pins={})
+
+    assert objwrite._arrivals_stand(body(store)) is None, "the sound arrangement was refused"
+
+    clobber = lir.Insn(
+        at=0x0FE,
+        covers=(0x0FE, 0x100),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.ESI, 4),), (ir.Imm(0, 4),)),
+        defines=(),
+        uses=(),
+        op=None,
+    )
+    why = objwrite._arrivals_stand(body(clobber, store))
+    assert why and "the value that arrived in it is gone" in why, why
+
+    # esi and si are one register: the check asks about the whole of it.
+    assert "0x00fe" in why, why
+
+    back = objwrite._arrivals_stand(body(store, succ=(0,)))
+    assert back and "branches back" in back, back
+
+
 def test_nothing_reloads_a_frame_slot_that_was_never_stored_to() -> None:
     """A requirement outliving the value that satisfied it.
 
