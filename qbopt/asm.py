@@ -503,12 +503,18 @@ def assemble(
         # emit pass, and layout said it changed length between them.
         emulated = not native_fpu and op.node is not None and found.code[op.at : op.at + 1] == bytes([0xCD])
         folded = _folded_site(op, found)
-        if isinstance(folded, str):
+        chosen = _selected_divide(op, found, assignment, origin, fields)
+        if isinstance(chosen, str):
+            return chosen
+        # Selection first, and the refusal only where it had no answer.
+        # A site that has moved cannot be emitted from the sequence frozen
+        # at the raise -- that puts its answers in registers the
+        # allocation did not choose -- but it can be emitted from its own
+        # operands wherever the allocation placed them, and that is the
+        # whole of what a hoisted divide needs.
+        if chosen is None and isinstance(folded, str):
             return folded
-        if folded is not None:
-            chosen = _selected_divide(op, found, assignment, origin, fields)
-            if isinstance(chosen, str):
-                return chosen
+        if folded is not None or chosen is not None:
             made = chosen[0] if chosen is not None else _absorbed(*folded)
             if made is None:
                 return f"{op.at:#06x}: the absorbed call is not one select.py can emit"
@@ -647,12 +653,12 @@ def assemble(
             out += found.code[op.at : op.at + length]
             continue
         folded = _folded_site(op, found)
-        if isinstance(folded, str):
+        chosen = _selected_divide(op, found, assignment, origin, fields)
+        if isinstance(chosen, str):
+            return chosen
+        if chosen is None and isinstance(folded, str):
             return folded
-        if folded is not None:
-            chosen = _selected_divide(op, found, assignment, origin, fields)
-            if isinstance(chosen, str):
-                return chosen
+        if folded is not None or chosen is not None:
             made = chosen[0] if chosen is not None else _absorbed(*folded)
             if made is None or len(made.code) != lengths[index]:
                 return f"{op.at:#06x}: the absorbed call changed length between the two passes"

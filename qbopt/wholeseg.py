@@ -210,7 +210,7 @@ def _through_lir(found, records, blocks, bodies, mapped, fields, reached, native
                 name,
                 body,
                 found.calls,
-                set(found.absorbed),
+                found.absorbed,
                 contracts,
                 found.coverage,
             )

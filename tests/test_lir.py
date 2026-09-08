@@ -691,6 +691,48 @@ def test_a_call_still_defines_the_results_its_operands_do_not_name() -> None:
     assert not bad, f"{bad[0][0]} {bad[0][1]:#06x}: defines {bad[0][3]} where the operation defines {bad[0][2]}"
 
 
+def test_a_folded_divide_says_where_its_two_answers_arrive() -> None:
+    """The call is gone and the operands name neither register.
+
+    A folded site leaves its quotient in the one the routine returned in
+    and its remainder in the one calls.py keeps the other in, and neither
+    is anywhere in what the operation reads. Undeclared, the allocation
+    put the results wherever it liked, so the only way to emit the site
+    was the sequence frozen at the raise -- which is why a divide that had
+    been hoisted could not be emitted at all.
+    """
+    from pathlib import Path
+
+    from qbopt import calls as machine
+    from qbopt import lower
+    from qbopt import module
+    from qbopt import omf
+    from qbopt import runtime
+    from qbopt import transform
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()))
+    blocks = split.partition(found, code_map(found))
+    seen = []
+    for name, body in mir.bodies(found, blocks):
+        body = transform.widened(transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found))
+        low = lower.lowered(name, body, found.calls, found.absorbed, runtime.for_module(found))
+        for block in low.blocks:
+            for one in block.insns:
+                if one.op is None or one.op.kind is not mir.Kind.DIVMOD:
+                    continue
+                site = found.absorbed[one.op.id][0]
+                other = machine.other_result(site)
+                pair = (machine.RESULT, other)
+                want = pair[::-1] if site.name.upper() == machine.REMAINDER else pair
+                seen.append((name, one.at))
+                got = tuple(register for _held, register in one.delivers)
+                assert got == want, f"{name} {one.at:#06x}: answers said to arrive in {got}, not {want}"
+                assert tuple(held.value for held, _r in one.delivers) == one.defines
+    assert seen, "no folded divide here, so this proves nothing"
+
+
 def test_a_call_to_an_unestablished_routine_is_refused() -> None:
     """A conservative dependency is not an argument, and pretending the
     routine reads nothing is worse than refusing the body.

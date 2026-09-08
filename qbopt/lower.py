@@ -283,7 +283,7 @@ def lowered(
     name: str,
     body: "mir.MirBody",
     calls: dict[int, str] | None,
-    absorbed: "set[int] | None",
+    absorbed: "set[int] | dict[int, tuple] | None",
     contracts: "dict[int, object]",
     coverage: "dict[int, tuple] | None" = None,
 ) -> "lir.LirBody":
@@ -391,6 +391,34 @@ class Lowering:
         register the raise saw it in, which for these is always BC's own
         because the idiom is BC's own.
         """
+        if op.kind is mir.Kind.DIVMOD:
+            # A folded site is a sequence too, and it leaves its answers in
+            # registers its operands name nowhere: the one the routine
+            # returned in and the one calls.py keeps the other in. Said
+            # here so the allocator knows where they arrive -- until it
+            # did, the only way to emit the site was the sequence frozen
+            # at the raise, which is why a hoisted divide could not be
+            # emitted at all.
+            from qbopt import calls as machine
+
+            folded = self._sites.get(op.id)
+            if folded is None or len(op.results) != 2:
+                return ()
+            site = folded[0]
+            other = machine.other_result(site)
+            if other is None:
+                return ()
+            # By role, the way the raise ordered them: the visible answer
+            # is the one the routine's own name promises.
+            visible, kept = machine.RESULT, other
+            first, second = (
+                (kept, visible) if site.name.upper() == machine.REMAINDER else (visible, kept)
+            )
+            return tuple(
+                (ir.Held(one.value.id, one.width), target.named(where, one.width))
+                for one, where in zip(op.results, (first, second))
+                if getattr(one, "value", None) is not None and one.value.id in self._read
+            )
         if not isinstance(op.node, ir.Restore):
             return ()
         out = []
@@ -482,6 +510,10 @@ class Lowering:
         # -- which has both -- would establish a contract this did not.
         self._contracts = contracts
         self._absorbed = absorbed
+        # Where a folded site's answers arrive is in the record, so a
+        # caller with only the set of absorbed ids says the site is folded
+        # and nothing more.
+        self._sites = absorbed if isinstance(absorbed, dict) else {}
         every = [
             one.id for block in body.blocks for op in block.ops for one in (*op.defines, *op.uses) if one.id is not None
         ]

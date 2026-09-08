@@ -1228,6 +1228,17 @@ def test_a_divide_refuses_an_allocation_that_forgot_one_of_its_answers() -> None
         )
 
 
+def _divisions(code: bytes) -> int:
+    """How many divide instructions the emitted segment holds."""
+    import iced_x86
+
+    return sum(
+        1
+        for one in iced_x86.Decoder(16, bytes(code), ip=0)
+        if one.mnemonic in (iced_x86.Mnemonic.IDIV, iced_x86.Mnemonic.DIV)
+    )
+
+
 def test_a_divide_whose_site_is_gone_is_refused_and_not_carried_verbatim() -> None:
     """The bytes at a folded site are the call and the last of its pushes.
 
@@ -1235,6 +1246,12 @@ def test_a_divide_whose_site_is_gone_is_refused_and_not_carried_verbatim() -> No
     writes a call with one argument where the rest of the run was already
     folded away. That is what lngmix emitted when a pass dropped the site's
     own record: no diff, no refusal, and it stopped early under DOSBox.
+
+    The record is not the only thing that can emit it, though. Which
+    original bytes a site covers and which fixups it owns are kept apart
+    from where it stands, so a divide with its fixups still named is
+    emitted from its own operands. It is when neither is left that there
+    is no answer, and then it must refuse.
     """
     from qbopt import asm
     from qbopt import mir
@@ -1256,11 +1273,21 @@ def test_a_divide_whose_site_is_gone_is_refused_and_not_carried_verbatim() -> No
 
     divides = [one for _n, body in bodies for block in body.blocks for one in block.ops if one.kind is mir.Kind.DIVMOD]
     assert divides, "nothing absorbed here, so this proves nothing"
+    was = layout.rebuild(found, bodies, mapped.tables, fields, reached)
+    assert not isinstance(was, str), was
     for one in divides:
         found.absorbed.pop(one.id, None)
 
     got = layout.rebuild(found, bodies, mapped.tables, fields, reached)
-    assert isinstance(got, str), "a divide with no site of its own must be refused, not emitted"
+    assert not isinstance(got, str), got
+    assert _divisions(got.code) == _divisions(was.code), (
+        "the record is gone but the fixups are not: it is still a divide, not the call it replaced"
+    )
+
+    for one in divides:
+        found.refs.pop(one.id, None)
+    refused = layout.rebuild(found, bodies, mapped.tables, fields, reached)
+    assert isinstance(refused, str), "a divide with nothing left to emit it from must be refused"
 
 
 def test_a_divide_that_has_moved_is_not_emitted_from_where_it_was_raised() -> None:
@@ -1271,6 +1298,11 @@ def test_a_divide_that_has_moved_is_not_emitted_from_where_it_was_raised() -> No
     into the preheader put the second's idiv and its `mov ebx,eax` on top
     of the first's quotient and remainder, and lngmix printed the wrong
     sum with nothing refused.
+
+    A moved site that can be emitted from its own operands, into the
+    seats the allocation chose, is a different case and is allowed. This
+    is the other one: no allocation covers its results, so there is
+    nothing to emit it from and the frozen bytes are not it.
     """
     from dataclasses import replace
 
@@ -1306,5 +1338,8 @@ def test_a_divide_that_has_moved_is_not_emitted_from_where_it_was_raised() -> No
 
     was = layout.rebuild(found, bodies, mapped.tables, fields, reached)
     assert not isinstance(was, str), was
-    got = layout.rebuild(found, changed, mapped.tables, fields, reached)
-    assert isinstance(got, str), "a divide standing somewhere else must be refused, not emitted"
+    # An allocation that placed nothing: `_seats` answers from BC's own
+    # registers only when there is no allocation at all, so this is a
+    # moved site with no seats to be emitted into.
+    got = layout.rebuild(found, changed, mapped.tables, fields, reached, assignment={})
+    assert isinstance(got, str), "a divide standing somewhere else with no seats must be refused"
