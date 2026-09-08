@@ -195,6 +195,18 @@ def _copy(one: lir.Insn) -> "tuple[int, int] | None":
     return into.value, out_of.value
 
 
+def _wants(side: tuple, swap: dict[int, int]) -> tuple:
+    """A requirement, naming the value that survived the join.
+
+    A register an instruction demands is a fact about the instruction, and
+    joining two values does not lift it. Left naming the value that was
+    joined away, the restore idiom's requirement pointed at a value
+    nothing defined any more: the spiller gave it a frame slot, reloaded
+    from it, and nothing had ever stored to it.
+    """
+    return tuple((ir.Held(swap.get(held.value, held.value), held.width), r) for held, r in side)
+
+
 def _renamed(one: lir.Insn, swap: dict[int, int]) -> lir.Insn:
     """One instruction with every joined value naming its survivor."""
     if one.what is None:
@@ -202,6 +214,9 @@ def _renamed(one: lir.Insn, swap: dict[int, int]) -> lir.Insn:
             one,
             defines=tuple(swap.get(v, v) for v in one.defines),
             uses=tuple(swap.get(v, v) for v in one.uses),
+            requires=_wants(one.requires, swap),
+            delivers=_wants(one.delivers, swap),
+            widths=tuple((swap.get(v, v), w) for v, w in one.widths),
         )
     what = one.what
     return replace(
@@ -215,6 +230,9 @@ def _renamed(one: lir.Insn, swap: dict[int, int]) -> lir.Insn:
         ),
         defines=tuple(swap.get(v, v) for v in one.defines),
         uses=tuple(swap.get(v, v) for v in one.uses),
+        requires=_wants(one.requires, swap),
+        delivers=_wants(one.delivers, swap),
+        widths=tuple((swap.get(v, v), w) for v, w in one.widths),
     )
 
 

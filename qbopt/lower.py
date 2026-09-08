@@ -367,6 +367,20 @@ class Lowering:
     layout's accounting still adds up.
     """
 
+    def _widths(self, op: "mir.Op") -> tuple:
+        """How wide each value an operand-less operation names is.
+
+        The raise wrote it down: a folded site's answers are four bytes
+        because the routine returns a long, and nothing about the `call`
+        it replaced says so. Every consumer used to default to a word.
+        """
+        out: dict[int, int] = {}
+        for one in (*op.results, *op.args):
+            value, width = getattr(one, "value", None), getattr(one, "width", None)
+            if value is not None and width:
+                out[value.id] = width
+        return tuple(sorted(out.items()))
+
     def _idiom(self, op: "mir.Op") -> tuple:
         """Where an operation that names no operand leaves what it writes.
 
@@ -523,6 +537,7 @@ class Lowering:
                     clobbers=_clobbers(op, self._calls),
                     spread=self._coverage.get(op.id, ()) if op.id is not None else (),
                     delivers=self._idiom(op),
+                    widths=self._widths(op) if what is None else (),
                     op=op,
                 ),
             )

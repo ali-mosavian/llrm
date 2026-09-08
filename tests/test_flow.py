@@ -937,3 +937,102 @@ def test_a_wide_divide_requires_its_dividend_halves_where_idiv_reads_them() -> N
     # And the table agrees with the operands it is asked about.
     assert what.sources[0] == machine.Reg(Register.EDX, 4)
     assert what.sources[1] == machine.Reg(Register.EAX, 4)
+
+
+def _lngmix_through_the_lir_route():
+    """(what the LIR route said, the image it produced) for lngmix."""
+    from pathlib import Path
+
+    from qbopt import wholeseg
+
+    seen = []
+    was = wholeseg._through_lir
+
+    def spy(*args, **kwargs):
+        got = was(*args, **kwargs)
+        seen.append(got if isinstance(got, str) else None)
+        return got
+
+    wholeseg._through_lir = spy
+    try:
+        out, why = wholeseg.rebuilt(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes())
+    finally:
+        wholeseg._through_lir = was
+    assert seen, "the LIR route was never tried"
+    return seen[0], out
+
+
+def test_lngmix_is_written_by_the_lir_route_and_not_by_the_fallback() -> None:
+    """The route with the allocator that spills, for a body holding a divide.
+
+    Every one of them left it -- the half the divide hands back reached
+    the general encoder with no operands, the copy a reused divide becomes
+    lowered to nothing, and the push run it stands for was owned by no
+    instruction once the rewriter dropped that copy.
+    """
+    why, _out = _lngmix_through_the_lir_route()
+    assert why is None, why
+
+
+def test_nothing_reloads_a_frame_slot_that_was_never_stored_to() -> None:
+    """A requirement outliving the value that satisfied it.
+
+    The restore idiom demands its answer in eax and names it nowhere. The
+    coalescer joined that value away and the demand went on naming the
+    value that was gone, so the spiller gave *it* a slot, reloaded from
+    it, and nothing had ever written it: lngmix pushed whatever was in
+    that stack word.
+    """
+    from iced_x86 import Decoder, OpKind, Register
+
+    from qbopt import omf
+    from qbopt import module
+
+    _why, out = _lngmix_through_the_lir_route()
+    code = bytes(module.of(omf.parse(out)).code)
+
+    written, read = set(), {}
+    for one in Decoder(16, code, ip=0):
+        for index in range(one.op_count):
+            if one.op_kind(index) is not OpKind.MEMORY or one.memory_base is not Register.BP:
+                continue
+            where = one.memory_displacement
+            if index == 0:
+                written.add(where)
+            elif where not in written:
+                read.setdefault(where, one.ip)
+    assert not read, f"slot {sorted(read)[0]:#x} is read at {read[sorted(read)[0]]:#06x} and never written"
+
+
+def test_a_frame_slot_is_written_and_read_at_one_width() -> None:
+    """The width is the value's, and only the raise knows it.
+
+    A folded site and the restore idiom are both several instructions
+    behind one node, so every consumer that asked their semantics how wide
+    a value was got nothing and defaulted to a word: the divide's answer
+    was spilled two bytes wide and reloaded four out of the same slot, and
+    the high half of what came back was whatever had been there.
+    """
+    from iced_x86 import Decoder, MemorySizeExt, OpKind, Register
+
+    from qbopt import omf
+    from qbopt import module
+
+    _why, out = _lngmix_through_the_lir_route()
+    code = bytes(module.of(omf.parse(out)).code)
+
+    # Read narrower than it was written is the low half of a long, which
+    # is how BC's own code reaches one. Read *wider* is the defect: the
+    # bytes above what was stored are whatever was there before.
+    stored: dict[int, int] = {}
+    for one in Decoder(16, code, ip=0):
+        for index in range(one.op_count):
+            if one.op_kind(index) is not OpKind.MEMORY or one.memory_base is not Register.BP:
+                continue
+            where, wide = one.memory_displacement, MemorySizeExt.size(one.memory_size)
+            if index == 0:
+                stored[where] = max(stored.get(where, 0), wide)
+            elif wide > stored.get(where, 0) and where in stored:
+                raise AssertionError(
+                    f"{one.ip:#06x} reads {wide} bytes of slot {where:#x}, which was written {stored[where]}"
+                )

@@ -240,6 +240,9 @@ def _move(beside: lir.Insn, into: "ir.Held", out_of: "ir.Held") -> lir.Insn:
 
 
 def _width(one: lir.Insn, value: int) -> int:
+    for named, width in one.widths:
+        if named == value:
+            return width
     what = one.what
     if what is None:
         return 2

@@ -103,6 +103,9 @@ def _width(one: lir.Insn, value: int) -> int:
     for held, _register in one.requires + one.delivers:
         if held.value == value:
             return held.width
+    for named, width in one.widths:
+        if named == value:
+            return width
     if one.what is None:
         return frames.WORD
     for where in (*one.what.dests, *one.what.sources):

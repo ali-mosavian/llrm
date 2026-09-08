@@ -101,6 +101,13 @@ class Insn:
     # the restore idiom's two halves each became a read with a move in
     # front, nine of them in lngmix's loop.
     delivers: "tuple[tuple[ir.Held, Register_], ...]" = ()
+    # How wide each value is, for an instruction whose semantics name no
+    # operand to say so. A folded site and the restore idiom are both
+    # several instructions behind one node, so every consumer that asked
+    # the semantics got nothing and defaulted to a word: the divide's
+    # result was spilled two bytes wide and reloaded four out of the same
+    # slot. The width is the value's, established once at the raise.
+    widths: "tuple[tuple[int, int], ...]" = ()
 
 
 @dataclass(frozen=True, slots=True)
