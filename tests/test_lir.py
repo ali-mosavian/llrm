@@ -977,3 +977,56 @@ def test_a_phi_chain_nothing_reads_does_not_reach_lir() -> None:
     assert kept.id in left, "the phi its own reader needs was dropped"
     assert middle.id in left, f"the phi feeding it was dropped: {sorted(left)}"
     assert dead.id not in left, f"a phi nothing reads reached LIR: {sorted(left)}"
+
+
+def test_a_reused_divide_s_copy_lowers_to_a_move_and_not_to_nothing() -> None:
+    """A folded site's id outlives the operation that was folded.
+
+    The copy keeps it so the bytes the site stood for go on being
+    accounted for, and lowering read the id alone as "the site's own
+    sequence emits this" -- so the copy came out with nothing to emit, and
+    every body holding one left the LIR route for the allocator that
+    cannot spill with `mov is not one select.py can emit`.
+    """
+    from pathlib import Path
+
+    from qbopt import ir
+    from qbopt import mir
+    from qbopt import omf
+    from qbopt import lower
+    from qbopt import module
+    from qbopt import runtime
+    from qbopt import transform
+    from qbopt.passes import Where
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()))
+    assert found is not None
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
+    blocks = split.partition(found, mapped)
+    where = Where(
+        dgroup=found.dgroup,
+        calls=found.calls,
+        bounds=module.landmarks(found),
+        blocks=blocks,
+        found=found,
+    )
+    ((name, body),) = mir.bodies(found, blocks)
+    for one in transform.pipeline(where):
+        body = one.transform(body)
+
+    copies = [
+        op
+        for block in body.blocks
+        for op in block.ops
+        if op.kind is mir.Kind.COPY and op.id in set(found.absorbed)
+    ]
+    assert len(copies) == 1, f"lngmix folds one divide into a copy; {len(copies)} found"
+
+    low = lower.lowered(name, body, found.calls, set(found.absorbed), runtime.for_module(found))
+    made = [one for one in low.insns if one.op is copies[0]]
+    assert made, "the copy reached no instruction at all"
+    assert made[0].what is not None, "the copy lowered to nothing; the site's id is not the operation"
+    assert made[0].what.op is ir.Operation.MOVE

@@ -447,7 +447,17 @@ class Lowering:
         made = _EXPANDS.get(op.kind)
         parts = made(op, self) if made is not None else None
         if not parts:
-            what = None if op.id in self._absorbed else current(op, as_a_value)
+            # The site's own sequence emits it, so there is nothing for
+            # this to say -- while it is still that operation. A pass may
+            # rewrite a folded site into something else and keep its id,
+            # which is how the bytes it stood for go on being accounted
+            # for: the reused divide becomes a copy of the answer the
+            # divide before it computed. Identified by id alone that copy
+            # came out with nothing to emit, and every body holding one
+            # left the route that can spill. An operation with no node has
+            # no site's bytes to be emitted from.
+            folded = op.id in self._absorbed and op.node is not None
+            what = None if folded else current(op, as_a_value)
             # An instruction's dataflow is what its own operands name. The
             # two used to be separate -- `defines` from the operation and
             # the operands from BC's registers -- and once the operands
