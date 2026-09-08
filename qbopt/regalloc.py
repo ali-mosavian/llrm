@@ -120,6 +120,41 @@ def pressure(body: mir.MirBody, found: liveness.Liveness | None = None) -> int:
     return peak
 
 
+def clobbered(body: mir.MirBody, found: liveness.Liveness | None = None) -> dict[Value, frozenset]:
+    """Which registers each value may not sit in, because it lives across
+    an operation that destroys them.
+
+    An absorbed divide is a sequence, not an instruction: it writes the
+    dividend's register, the divisor's, `idiv`'s own edx and wherever the
+    answer it was not asked for is kept, and its operands name none of
+    them. `lower._clobbers` has said so all along and nothing here read
+    it -- safe only while every value stayed where BC had it, since BC's
+    own call clobbered the same registers. It stops being safe the moment
+    a value moves, which is what hoisting a divide does.
+
+    Live *across*, not merely live: a value the operation itself defines,
+    or one whose last read it is, is not crossing it.
+    """
+    found = found or liveness.live(body)
+    out: dict[Value, set] = {}
+    for block in body.blocks:
+        after = set(found.live_out[block.at])
+        for op in reversed(block.ops):
+            # Not a use that is only the previous contents of what the op
+            # writes. The restore idiom names the register its own high
+            # half lands in, and counting that as a value crossing the
+            # divide in front of it moved lngmix's accumulator out of dx
+            # for nothing -- 1518 cycles to 1616, same bytes.
+            before = (after - set(op.defines)) | {one for one in op.uses if one not in op.merges}
+            takes = lower.clobbering(op)
+            if takes:
+                for one in (before & after) - set(op.defines):
+                    if not one.flags:
+                        out.setdefault(one, set()).update(takes)
+            after = before
+    return {one: frozenset(where) for one, where in out.items()}
+
+
 def interference(body: mir.MirBody, found: liveness.Liveness | None = None) -> dict[Value, frozenset[Value]]:
     """Which values are ever live at the same moment.
 
@@ -390,7 +425,8 @@ def colour(body: mir.MirBody, pinned: dict[Value, Register_] | None = None) -> d
     failure here is never "this body cannot be allocated"; it is "this
     body cannot be allocated *the way something asked for*".
     """
-    graph = interference(body)
+    found_live = liveness.live(body)
+    graph = interference(body, found_live)
     origin = body.origin
 
     # The unit is the congruence class, not the value: a phi's members share
@@ -447,6 +483,16 @@ def colour(body: mir.MirBody, pinned: dict[Value, Register_] | None = None) -> d
         if ir.ROOT.get(want, want) not in wide_addressing:
             return f"{root} is how a cell is reached and {NAMES.get(want, want)} cannot reach one"
 
+    # What each class may not have, because one of its members lives across
+    # something that destroys it. Empty on BC's own code -- the call the
+    # divide was absorbed from clobbered the same registers, so nothing was
+    # ever left in one -- and the reason a hoisted divide cannot simply be
+    # coloured: five of lngmix's values cross the pair with only esi and
+    # edi surviving it.
+    barred: dict[Value, set] = {}
+    for one, where in clobbered(body, found_live).items():
+        barred.setdefault(of.get(one, one), set()).update(where)
+
     # Where BC had each class. Congruent by construction, so every member
     # agrees; disagreement means the body did not come from BC and there is
     # no identity to fall back on.
@@ -469,12 +515,14 @@ def colour(body: mir.MirBody, pinned: dict[Value, Register_] | None = None) -> d
             for root in clean
             if root in between
         ):
-            return {one: clean[of[one]] for one in graph if of[one] in clean}
+            return _legal({one: clean[of[one]] for one in graph if of[one] in clean}, barred, of)
 
     def offers(root: Value) -> list[Register_]:
-        if root not in reached_by:
-            return list(target.AVAILABLE)
-        return [where for where in target.AVAILABLE if ir.ROOT.get(where, where) in wide_addressing]
+        out = target.AVAILABLE if root not in reached_by else [
+            where for where in target.AVAILABLE if ir.ROOT.get(where, where) in wide_addressing
+        ]
+        gone = barred.get(root)
+        return [where for where in out if gone is None or where not in gone]
 
     # Everything back where BC had it, and then only what conflicts moves.
     # Assigning in degree order and counting only neighbours already
@@ -541,7 +589,22 @@ def colour(body: mir.MirBody, pinned: dict[Value, Register_] | None = None) -> d
             if root in assigned and other in assigned and assigned[root] is assigned[other]:
                 where = NAMES.get(assigned[root], assigned[root])
                 return f"{root} and {other} are live together and both want {where}"
-    return {one: assigned[of[one]] for one in graph if of[one] in assigned}
+    return _legal({one: assigned[of[one]] for one in graph if of[one] in assigned}, barred, of)
+
+
+def _legal(where: dict, barred: dict, of: dict):
+    """The assignment, or why it is not one.
+
+    The candidate is validated whole rather than trusted from how it was
+    built: a pin is written straight into the assignment before `offers`
+    is ever asked, so a caller could ask for a value to sit in a register
+    the divide it lives across destroys and the greedy would hand it back.
+    """
+    for value, seat in where.items():
+        gone = barred.get(of.get(value, value))
+        if gone is not None and seat in gone:
+            return f"{value} lives across something that destroys {NAMES.get(seat, seat)}"
+    return where
 
 
 def moved(body: mir.MirBody, assignment: dict[Value, Register_]) -> int:

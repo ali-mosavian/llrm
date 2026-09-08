@@ -575,6 +575,20 @@ def _read(what: "ir.Semantics") -> "list[int]":
     ]
 
 
+def clobbering(op: "mir.Op") -> "frozenset[Register_]":
+    """What an absorbed divide destroys, for a caller with no call map.
+
+    The allocation route asks this. A real call's contract is keyed by its
+    address and needs that map, and answering "everything" without it
+    would forbid every register to every value living across any call --
+    over-stating in the safe direction, but a different question from the
+    one this route is correcting.
+    """
+    from qbopt import mir
+
+    return _clobbers(op, {}) if op.kind is mir.Kind.DIVMOD else frozenset()
+
+
 def _clobbers(op: "mir.Op", calls: dict[int, str]) -> "frozenset[Register_]":
     """Which registers this instruction destroys without naming them.
 

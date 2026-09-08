@@ -298,3 +298,109 @@ def test_a_call_hands_its_result_back_where_bc_reads_it(stem: str) -> None:
         and assignment[one] != body.origin[one]
     ]
     assert not moved, "; ".join(moved[:3])
+
+
+def test_nothing_lives_across_an_absorbed_divide_in_a_register_it_destroys() -> None:
+    """An absorbed divide is a sequence and clobbers four registers.
+
+    `lower._clobbers` has said so all along and the allocation never read
+    it -- safe only while every value stayed where BC had it, since BC's
+    own call destroyed the same four. lngmix hoisted is where that stops:
+    five values cross the pair with only esi and edi surviving, which is
+    the refusal, and without this the allocator would have placed one of
+    them in a register the second divide overwrites.
+    """
+    from pathlib import Path
+
+    from qbopt import mir
+    from qbopt import omf
+    from qbopt import lower
+    from qbopt import module
+    from qbopt import regalloc
+    from qbopt import transform
+    from qbopt.passes import Where
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()))
+    assert found is not None
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
+    blocks = split.partition(found, mapped)
+    where = Where(
+        dgroup=found.dgroup,
+        calls=found.calls,
+        bounds=module.landmarks(found),
+        blocks=blocks,
+        found=found,
+    )
+    ((_who, body),) = mir.bodies(found, blocks)
+    for one in transform.pipeline(where):
+        body = one.transform(body)
+    body = regalloc.untangled(body)
+
+    takes = {
+        register
+        for block in body.blocks
+        for op in block.ops
+        for register in lower.clobbering(op)
+    }
+    assert takes, "no absorbed divide here; this proves nothing"
+    across = regalloc.clobbered(body)
+    assert across, "nothing lives across it either"
+
+    got = regalloc.colour(body, body.pins)
+    assert not isinstance(got, str), got
+    for value, barred in across.items():
+        assert got.get(value) not in barred, (
+            f"{value} lives across a divide and was placed in {mir.NAMES.get(got[value])}, which it destroys"
+        )
+
+
+def test_a_pin_cannot_park_a_value_in_a_register_the_divide_it_crosses_destroys() -> None:
+    """The candidate is validated whole, not trusted from how it was built.
+
+    A pin goes straight into the assignment before `offers` is consulted,
+    so the exclusion alone does not cover it: asked for lngmix's crossing
+    value in edx -- which the absorbed divide overwrites with the sign of
+    its dividend -- the greedy handed that back as an allocation.
+    """
+    from pathlib import Path
+
+    from iced_x86 import Register
+
+    from qbopt import mir
+    from qbopt import omf
+    from qbopt import module
+    from qbopt import regalloc
+    from qbopt import transform
+    from qbopt.passes import Where
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()))
+    assert found is not None
+    mapped = code_map(found)
+    assert not isinstance(mapped, str)
+    blocks = split.partition(found, mapped)
+    where = Where(
+        dgroup=found.dgroup,
+        calls=found.calls,
+        bounds=module.landmarks(found),
+        blocks=blocks,
+        found=found,
+    )
+    ((_who, body),) = mir.bodies(found, blocks)
+    for one in transform.pipeline(where):
+        body = one.transform(body)
+    body = regalloc.untangled(body)
+
+    across = regalloc.clobbered(body)
+    assert across, "nothing crosses an absorbed divide here; this proves nothing"
+    value, barred = next(iter(across.items()))
+    assert Register.EDX in barred
+
+    pins = dict(body.pins)
+    pins[value] = Register.EDX
+    got = regalloc.colour(body, pins)
+    assert isinstance(got, str), f"{value} was placed in edx, which the divide it crosses overwrites"

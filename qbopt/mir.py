@@ -1286,6 +1286,12 @@ def _handing_back(at: int, node: "ir.Node", now: "Value", was: "Value", answer: 
         ir.Restore(at=at, end=at, pair=0, effects=ir.RESTORE_EFFECTS[0]),
         kind=Kind.JOIN,
         covers=(at, at),
+        # `was` is the previous contents of the place the half lands in,
+        # not an input. Said here because nothing else can say it: read as
+        # an input it is a value crossing the divide in front of this, and
+        # the allocator moved lngmix's accumulator out of dx to keep it
+        # safe from a clobber that was never going to reach it.
+        merges={was: now},
         id=next(_IDS),
     )
 
