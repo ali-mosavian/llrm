@@ -1153,3 +1153,43 @@ def test_one_idiv_serves_both_of_lngmix_s_divides_in_the_image() -> None:
     seen = [one.mnemonic for one in Decoder(16, code)]
     assert seen.count(Mnemonic.IDIV) == 1, "one divide does the work of both"
     assert seen.count(Mnemonic.CALL) == 4, "and no divide is left as a call"
+
+
+def test_a_reused_divide_is_refused_when_its_other_answer_is_read() -> None:
+    """A copy writes one register, so one value is all it may define.
+
+    The guard used to exempt both answers and only check the registers
+    the site merely clobbered. lngmix's remainder site defines the
+    quotient it was not asked for -- read after the fold, ebx still holds
+    the *first* divide's remainder, and the reader would have taken that
+    for a quotient. It is dead in lngmix, which is why nothing said so.
+    """
+    import sys
+    from dataclasses import replace
+
+    sys.path.insert(0, "tools")
+    import stages
+
+    from qbopt import mir
+    from qbopt import transform
+
+    found, bodies, _contracts = stages._bodies(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes())
+    ((_name, body),) = bodies
+    ((_at, _earlier, second),) = transform.divided_twice(body, found.dgroup)
+    other = next(one.value for one in second.results if one.value not in transform.live(body))
+
+    read = False
+    blocks = []
+    for block in body.blocks:
+        ops = []
+        for one in block.ops:
+            if not read and one.kind is mir.Kind.ADD and one.at > second.at:
+                one, read = replace(one, uses=one.uses + (other,)), True
+            ops.append(one)
+        blocks.append(replace(block, ops=tuple(ops)))
+    assert read, "nothing after the divide to read its other answer; this proves nothing"
+
+    now = replace(body, blocks=tuple(blocks))
+    assert transform.reused_divides(now, found.dgroup, found) is now, (
+        f"{other} is read after the fold and the copy does not write it"
+    )
