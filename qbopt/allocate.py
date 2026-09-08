@@ -498,7 +498,14 @@ class RegAlloc(LIRTransform):
         if clash:
             raise Unplaced(f"value#{sorted(clash)[0]} is pinned and required in different registers")
         prefer = {**self.pinned, **fixed}
-        reloads: frozenset[int] = frozenset()
+        # A value constrain minted is live across one instruction and
+        # exists only to be in the register that instruction demands, so
+        # spilling it answers a different question: the reload that
+        # replaced it carried no requirement, and nested and harr ended
+        # with their fixed-register input in no register at all. LLVM
+        # says the same as `LiveInterval::markNotSpillable`, and the
+        # reloads below are already handed back the same way.
+        reloads: frozenset[int] = frozenset(fixed)
         for _round in range(self.ROUNDS):
             # Recomputed every attempt, and merged last. The spiller puts a
             # fresh value at an instruction between rounds, and a

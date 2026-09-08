@@ -686,3 +686,51 @@ def test_a_call_result_nothing_reads_becomes_a_clobber() -> None:
     assert pins.get(12) is Register.ECX, "the read result lost its pin"
     assert Register.EAX in after.clobbers, f"the register it destroyed was forgotten: {after.clobbers}"
     assert Register.ESI in after.clobbers, "an existing clobber was dropped"
+
+
+def test_a_value_minted_for_a_fixed_register_is_not_spilled_out_of_it() -> None:
+    """The only reason it exists is to be in that register.
+
+    constrain.py splits a value an instruction requires in a register it
+    names nowhere into a value of its own, live across that instruction
+    and nothing else. Spilled, the reload that replaced it carried no
+    requirement at all: nested and harr reached emission with their
+    fixed-register input in no register, and whatever the reload landed in
+    is what the instruction read.
+    """
+    from pathlib import Path
+
+    from qbopt import constrain
+    from qbopt import wholeseg
+    from qbopt import allocate as alloc
+
+    minted: dict = {}
+    last: list = []
+    was_c, was_a = constrain.constrained, alloc.allocate
+
+    def note_constrained(body, pinned):
+        got, fixed = was_c(body, pinned)
+        minted.update(fixed)
+        return got, fixed
+
+    def note_allocate(body, pinned=None, unspillable=None):
+        got = was_a(body, pinned, unspillable)
+        last.append(got)
+        return got
+
+    for name in ("nested-p-g2", "harr-p-g2"):
+        minted.clear()
+        last.clear()
+        constrain.constrained = note_constrained
+        alloc.constrain = constrain
+        alloc.allocate = note_allocate
+        try:
+            wholeseg.rebuilt(Path(f"fixtures/omf/{name}.obj").read_bytes())
+        finally:
+            constrain.constrained = was_c
+            alloc.constrain = constrain
+            alloc.allocate = was_a
+        assert minted, f"{name} requires nothing in a register it names nowhere; this proves nothing"
+        where = last[-1].where
+        wrong = {one: want for one, want in minted.items() if where.get(one) is not want}
+        assert not wrong, f"{name}: {sorted(wrong)} were minted for a register and did not get it"
