@@ -1380,6 +1380,30 @@ Pass dumps: `/tmp/qbopt-matrix-failure` and `/tmp/qbopt-matrix-stride-fixed`.
 MATRIX now models 8056/8060/8066 against 6210, about 1.30x on all three.
 This restores this benchmark's correctness evidence, not project completion.
 
+## Segment-value representation experiment
+
+After the HARR and MATRIX address fixes, an emitted-code scan of all
+available primary target fixtures (PDS /G2, QB /O, VBDOS /G3) found no
+remaining unrelocated zero-word displacements. This checks that specific
+failure shape only, not correctness of all relocations or runtime outputs.
+
+A raising experiment separated `es := [descriptor+2]` into an ordinary
+word LOAD and an opaque resource installation. CSE and LICM did hoist the
+ordinary load out of both HARR loops, as intended. The emitted result also
+kept the selector in AX for the entire nest, spilled the row counter and
+descriptor pointer, and installed ES twice in the inner loop. Modeled PDS
+cost rose from 2920 to 3072. Dumps remain in `/tmp/qbopt-harr-selector`.
+The experiment was removed; no runtime correctness claim is made for it.
+
+This is evidence against treating selector extraction alone as the completed
+address migration. The next design must represent a far address's object
+identity and offset in MIR and make the selector a lowering/allocation
+choice, including liveness across clobbers. An opaque installation cannot
+be optimized by ordinary value passes, and a permanently live GPR selector
+is not a substitute for retaining the pointer in the appropriate machine
+resources. Neither an ES-specific MIR hoist nor merely hiding ES's name
+behind a new operation meets the boundary rule.
+
 ## Target refresh and floating-point semantic audit
 
 The target scoreboard at f8c9e96 puts PDS FPCSEX at 4508/1340 (3.36x),
