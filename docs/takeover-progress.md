@@ -430,3 +430,24 @@ Artifacts: `/tmp/qbopt-constant-division-final` and
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-divfold-verified-8f_6zsli`.
 Remaining LNGMIX work includes redundant high-half reconstruction and memory
 traffic in its accumulator; inspect these stage dumps before changing them.
+# High-part extraction experiment — next boundary to repair
+
+The remaining LNGMIX joins reconstruct the high halves of constant 14285 and
+5. `mir._handing_back` currently gives them no semantic arguments or results,
+so constant propagation cannot prove either zero. A trial explicit EXTRACT
+operation made both facts provable, but is not retained:
+
+- Folding extraction to a COPY left it inside the loop (LICM excludes an
+  independent copy), pulling its dependent ADD/ADC chain back in as well.
+  Cost rose from 566 to 616. `/tmp/qbopt-extract-trial` has every stage;
+  `s58-lir-lowered.txt` shows the zero move and ADD/ADC in the loop.
+- Leaving EXTRACT unfurled instead refused at `0x004b: restore is not one
+  select.py can emit`. The legacy restore adapter cannot lower an operation
+  with explicit semantic operands. Renaming JOIN alone is not a migration.
+
+Next implementation needs an explicit bit-extraction lowering, preserving
+flags and partial-write semantics, alongside the raise change. Then propagate
+constant carry from the known ADD into ADC so the whole invariant chain folds,
+instead of replacing only its first instruction with a non-hoistable copy.
+The trial was removed; production remains at 566 and no runtime or speedup is
+claimed for this experiment.
