@@ -1217,6 +1217,8 @@ def test_cse_refuses_an_operand_that_is_only_half_its_value() -> None:
     assert not transform._full(low, {1: 4}), "half of a long passed as the whole of it"
 
     class Fake:
+        floating = None
+        barrier = False
         kind = mir.Kind.NOT
         name = "not"
         loads = stores = ()

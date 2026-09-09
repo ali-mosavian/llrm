@@ -259,11 +259,15 @@ def subexpressions(body: MirBody, dgroup: frozenset[int] = frozenset()) -> MirBo
     order = {block.at: index for index, block in enumerate(body.blocks)}
     whole = _widths(body)
     demanded = halves(body)
+    from qbopt.analysis import floatfacts
+    exact = floatfacts.known(body, dgroup, {}) if any(
+        op.floating for block in body.blocks for op in block.ops) else {}
 
     seen: dict[tuple, tuple[int, int, Op]] = {}
     stands: dict[int, mir.Value] = {}  # what a name numbers as -- copies included
     swap: dict[int, mir.Value] = {}  # what a name is rewritten to -- only what folded
     gone: set[int] = set()  # by identity: four of lngmix's ops share address 0x4b
+    floating_gone: set[int] = set()
     for block in body.blocks:
         for index, op in enumerate(block.ops):
             source = _copied(op, whole)
@@ -285,6 +289,11 @@ def subexpressions(body: MirBody, dgroup: frozenset[int] = frozenset()) -> MirBo
                 seen[key] = (order[block.at], index, op)
                 continue
             at, where, earlier = first
+            if op.floating is not None and (at != order[block.at] or not all(
+                _exact_floating(one, exact) for one in block.ops[where:index + 1]
+            )):
+                seen[key] = (order[block.at], index, op)
+                continue
             if op.loads and (at != order[block.at] or not _undisturbed(op, earlier, block.ops[where + 1:index], dgroup)):
                 seen[key] = (order[block.at], index, op)
                 continue
@@ -297,11 +306,16 @@ def subexpressions(body: MirBody, dgroup: frozenset[int] = frozenset()) -> MirBo
             folded = {mine.id: theirs for mine, theirs in zip(op.defines, earlier.defines)}
             stands.update(folded)
             swap.update(folded)
-            gone.add(id(op))
+            (floating_gone if op.floating is not None else gone).add(id(op))
 
-    if not gone:
+    if not gone and not floating_gone:
         return body
-    body = _reclaimed(body, gone)
+    if floating_gone:
+        body = replace(body, blocks=tuple(replace(block, ops=tuple(
+            _erased_floating(op) if id(op) in floating_gone else op for op in block.ops
+        )) for block in body.blocks))
+    if gone:
+        body = _reclaimed(body, gone)
     return replace(
         body,
         blocks=tuple(
@@ -313,6 +327,27 @@ def subexpressions(body: MirBody, dgroup: frozenset[int] = frozenset()) -> MirBo
             for block in body.blocks
         ),
     )
+
+
+def _exact_floating(op: Op, facts: dict) -> bool:
+    """No intervening exceptional FP work or unmodelled environment change."""
+    from qbopt.analysis import floatfacts
+    if op.barrier or op.kind in (mir.Kind.CALL, mir.Kind.OPAQUE):
+        return False
+    if op.floating is None:
+        return op.stack is None
+    if op.kind is mir.Kind.FSTORE:
+        return (len(op.args) == 1 and isinstance(op.args[0], mir.Held)
+                and op.args[0].value in facts
+                and floatfacts.evaluated(op.kind, op.floating, (facts[op.args[0].value],)) is not None)
+    return (len(op.results) == 1 and isinstance(op.results[0], mir.Held)
+            and op.results[0].value in facts)
+
+
+def _erased_floating(op: Op) -> Op:
+    return replace(op, op=ir.Operation.NOTHING, kind=mir.Kind.NOTHING, name="",
+                   args=(), results=(), uses=(), defines=(), loads=(), stores=(),
+                   merges={}, node=None, made=None, raised=None, floating=None, stack=None)
 
 
 def _reclaimed(body: MirBody, gone: set[int]) -> MirBody:
@@ -432,7 +467,9 @@ def _width(_value: mir.Value, op: Op) -> int | None:
 
 def _computation(op: Op, stands: dict[int, mir.Value], whole: dict[int, int]) -> tuple | None:
     """What this operation computes, or None where that is not only its operands."""
-    if op.kind not in _PURE | {mir.Kind.LOAD} or op.stores or op.merges or op.barrier:
+    floating = op.floating is not None and op.kind in (
+        mir.Kind.FLOAD, mir.Kind.FADD, mir.Kind.FSUB, mir.Kind.FMUL, mir.Kind.FDIV)
+    if (op.kind not in _PURE | {mir.Kind.LOAD} and not floating) or op.stores or op.merges or op.barrier:
         return None
     if not op.defines or not op.args:
         return None
@@ -455,7 +492,7 @@ def _computation(op: Op, stands: dict[int, mir.Value], whole: dict[int, int]) ->
             named.append(("m", ref))
         else:
             return None
-    return (op.kind, op.name, tuple(named))
+    return (op.kind, op.floating if floating else op.name, tuple(named))
 
 
 def _reaches(at: int, where: int, then: int, index: int, doms, body, block) -> bool:

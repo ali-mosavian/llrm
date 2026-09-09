@@ -2392,3 +2392,33 @@ preserving the sum across multiplication. The 67 focused floating lowering,
 allocation and selection tests pass. This establishes backend support, not
 an enabled optimization: the MIR effect proof and pipeline integration are
 still outstanding, and no runtime speedup is claimed.
+
+### CSE shares exact floating computations
+
+The existing CSE value-numbering walk now keys floating loads/arithmetic by
+MIR kind, operand value numbers, and floating semantics (including rounding,
+precision and exceptions), not by instruction mnemonic. Its existing memory
+overlap check still applies. Reuse is currently block-local and requires exact
+numeric evidence for the producer, duplicate, and all intervening floating
+work; calls, opaque operations, barriers and unknown floating effects block it.
+This is deliberately not unrestricted strict-FP GVN or reassociation.
+
+FPCSE on PDS and VBDOS now emits `fld a; fadd b; fld st0; fmul c; fstp p;
+wait; fdiv c; fstp q`, removing the second load/add. SINGLE stores and the
+accumulator's original addition order remain. The PDS code segment shrinks
+from 198 to 191 bytes. QB's output is unchanged because its constant-pool
+initializers are not established entry facts in production analysis yet.
+
+The fail-first regression asserts both the MIR reduction and three emitted
+additions rather than four. Rejection tests cover unknown effects, barriers,
+aliasing writes and differing rounding semantics. 103 focused tests plus three
+CSE tests pass. Of 97 audited outputs only the two FPCSE variants change;
+both changed variants pass actual runtime checks (one case each). Stage dumps
+are in `/tmp/qbopt-fpcse-cse`; runtime artifacts are in
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-fpcse-cse-runtime-6cjfzzr5`.
+
+Two legacy consumers also needed their boundaries corrected: MIR instruction
+classification no longer lowers floating values to ask whether they are an
+instruction, and integer-pair recognition ignores typed floating operations.
+Broader nonconstant floating equivalence still needs environment/effect facts;
+the exact-value guard is not a substitute for that work.

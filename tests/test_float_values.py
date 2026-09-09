@@ -73,6 +73,54 @@ def test_removed_float_operation_cannot_retain_hidden_computation():
         lower_floats.operation(replace(op, kind=mir.Kind.NOTHING))
 
 
+def test_cse_reuses_exact_fpcse_sum():
+    """FPCSE performed a+b twice despite unchanged operands and exact FP work."""
+    from qbopt.optimize import transform
+    path = Path("fixtures/omf/fpcse-p-g2.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    changed = transform.subexpressions(body, found.dgroup)
+    assert sum(op.kind is mir.Kind.FADD for block in changed.blocks for op in block.ops) == 3
+    _allocated(changed, path)
+    emitted = wholeseg.emitted(path.read_bytes())
+    assert emitted.outcome is wholeseg.Emission.LIR, emitted.reason
+    from qbopt.frontend import blocks
+    from qbopt.objectfile import module, omf
+    instructions = blocks.instructions(module.of(omf.parse(emitted.data)))
+    assert not isinstance(instructions, str)
+    assert sum(str(one.insn).startswith("fadd ") for one in instructions) == 3
+
+
+@pytest.mark.parametrize("change", ["unknown_effect", "barrier", "alias", "rounding"])
+def test_float_cse_preserves_computations_without_reuse_proof(change, monkeypatch):
+    """FPCSE's shared sum is not reusable across unknown effects or changed memory."""
+    from qbopt.analysis import floatfacts
+    from qbopt.model.floating import Rounding
+    from qbopt.optimize import transform
+    path = Path("fixtures/omf/fpcse-p-g2.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    block = next(block for block in body.blocks if any(op.floating_origin for op in block.ops))
+    floats = [op for op in block.ops if op.floating_origin]
+    if change == "unknown_effect":
+        facts = floatfacts.known(body, found.dgroup, {})
+        facts.pop(floats[2].results[0].value)
+        monkeypatch.setattr(floatfacts, "known", lambda *args, **kwargs: facts)
+    else:
+        target = floats[5] if change == "rounding" else floats[3]
+        match change:
+            case "barrier":
+                altered = replace(target, kind=mir.Kind.OPAQUE)
+            case "alias":
+                altered = replace(target, stores=floats[0].loads)
+            case "rounding":
+                altered = replace(target, floating=replace(target.floating, rounding=Rounding.NONE))
+        body = replace(body, blocks=tuple(replace(one, ops=tuple(altered if op is target else op for op in one.ops))
+                                         if one is block else one for one in body.blocks))
+    changed = transform.subexpressions(body, found.dgroup)
+    assert sum(op.kind is mir.Kind.FADD for block in changed.blocks for op in block.ops) == 4
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_fpcse_float_values_link_each_computation(tag):
     """FPCSE's opaque st0 operands concealed all cross-operation data dependencies."""

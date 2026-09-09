@@ -82,7 +82,7 @@ class Pair:
 
 def _moved(op: Op) -> ir.Semantics | None:
     """This op's semantics if it is a plain move, or None."""
-    what = lower.current(op)
+    what = _shape(op)
     if what is None or what.op is not ir.Operation.MOVE:
         return None
     return what if len(what.dests) == 1 and len(what.sources) == 1 else None
@@ -213,7 +213,7 @@ PARTNER = {"and": "and", "or": "or", "xor": "xor", "add": "adc", "sub": "sbb"}
 
 def _binary_on(op: Op) -> tuple[Register_, str, object] | None:
     """(destination root, mnemonic, cell) for `<alu> <half>,[x]`, or None."""
-    what = lower.current(op)
+    what = _shape(op)
     if what is None or what.op is not ir.Operation.BINARY:
         return None
     if len(what.dests) != 1 or len(op.loads) != 1 or op.stores or op.loads[0].addr is None:
@@ -271,6 +271,8 @@ def _written(op: Op, origin: dict) -> Register_:
 
 
 def _shape(op: Op) -> ir.Semantics | None:
+    if op.floating_origin is not None:
+        return None
     return lower.current(op)
 
 
@@ -568,7 +570,7 @@ def _span(one: Pair) -> int:
 
 
 def _semantics_of(one: Op) -> ir.Semantics | None:
-    return lower.current(one)
+    return _shape(one)
 
 
 def _widened_length(one: Pair) -> int | None:
