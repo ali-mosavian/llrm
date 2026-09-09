@@ -35,6 +35,7 @@ def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) 
             for block in body.blocks
         ),
     )
+    changed = _shared_shifts(changed, wanted | mentioned)
     removed = {value for block in body.blocks for op in block.ops for value in op.defines} - {
         value for block in changed.blocks for op in block.ops for value in op.defines
     }
@@ -57,6 +58,35 @@ def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) 
             for block in changed.blocks
         ),
     )
+
+
+def _shared_shifts(body: mir.MirBody, wanted: set[mir.Value]) -> mir.MirBody:
+    """Reuse a smaller available scale instead of shifting the original again."""
+    used = {value for block in body.blocks for op in block.ops for value in _operands_read(op)}
+    used |= {value for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
+    blocks = []
+    for block in body.blocks:
+        available = {}
+        ops = []
+        for op in block.ops:
+            scale = _scale(op, wanted) if op.kind is mir.Kind.SHL else None
+            if scale is not None:
+                source, factor = scale
+                count = factor.bit_length() - 1
+                candidates = available.setdefault(source, {})
+                smaller = [amount for amount in candidates if amount < count]
+                result = op.results[0]
+                if smaller:
+                    amount = max(smaller)
+                    previous = candidates[amount]
+                    op = replace(op, args=(previous, mir.Const(count - amount, 1)),
+                                 defines=(result.value,), uses=(previous.value,),
+                                 node=None, made=None, raised=None)
+                if result.value in used:
+                    candidates[count] = result
+            ops.append(op)
+        blocks.append(replace(block, ops=tuple(ops)))
+    return replace(body, blocks=tuple(blocks))
 
 
 def _scale(op: mir.Op, wanted: set[mir.Value]):

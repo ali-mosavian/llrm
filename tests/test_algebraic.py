@@ -10,6 +10,19 @@ from qbopt import algebraic
 from qbopt import transform
 
 
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_addrm_reuses_word_scale_for_long_address(tag):
+    """ADDRM rebuilt i*4 after using i*2, paying another copy and a larger shift each iteration."""
+    from qbopt import blocks, module, omf, wholeseg
+    from iced_x86 import Mnemonic
+    result = wholeseg.emitted(Path(f"fixtures/omf/addrm-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    found = module.of(omf.parse(result.data))
+    shifts = [one.insn for one in blocks.instructions(found) if one.insn.mnemonic == Mnemonic.SHL]
+    assert len(shifts) == 2
+    assert all(one.immediate(1) == 1 for one in shifts)
+
+
 @pytest.mark.parametrize("guard", ["none", "first_flags", "last_flags", "shared", "width", "merge"])
 def test_scaled_chain_preserves_modular_values_and_observed_intermediates(guard):
     from collections import Counter
@@ -35,6 +48,33 @@ def test_scaled_chain_preserves_modular_values_and_observed_intermediates(guard)
     assert done.args == (mir.Held(source, 2), mir.Const(2, 2))
     for value in (0, 1, 32767, 32768, 65535):
         assert ((value * 32769 & 65535) << 1) & 65535 == value * 2 & 65535
+
+
+@pytest.mark.parametrize("guard", ["none", "unused", "flags", "width", "block"])
+def test_shared_shift_requires_available_same_width_value(guard):
+    """ADDRM address reuse must preserve live flags, widths, and block availability."""
+    source, middle, result, observed = (mir.Value(index, 0) for index in range(1, 5))
+    flags = mir.Value(5, 0, flags=True)
+    first = mir.Op(0, ir.Operation.BINARY, "shl", (middle,), (source,), kind=mir.Kind.SHL,
+                   args=(mir.Held(source, 2), mir.Const(1, 1)), results=(mir.Held(middle, 2),))
+    observe = mir.Op(1, ir.Operation.MOVE, "mov", (observed,), (middle,), kind=mir.Kind.COPY,
+                     args=(mir.Held(middle, 2),), results=(mir.Held(observed, 2),))
+    width = 4 if guard == "width" else 2
+    last = mir.Op(2, ir.Operation.BINARY, "shl", (result,), (source,), kind=mir.Kind.SHL,
+                  args=(mir.Held(source, width), mir.Const(2, 1)), results=(mir.Held(result, width),))
+    if guard == "flags":
+        last = replace(last, defines=(result, flags))
+    prefix = (first,) if guard == "unused" else (first, observe)
+    blocks = (mir.MirBlock(0, (), (*prefix, last), ()),)
+    if guard == "block":
+        blocks = (mir.MirBlock(0, (), prefix, (2,)), mir.MirBlock(2, (), (last,), ()))
+    done = algebraic._shared_shifts(mir.MirBody(0, blocks), {flags}).blocks[-1].ops[-1]
+    if guard != "none":
+        assert done == last
+        return
+    assert done.args == (mir.Held(middle, 2), mir.Const(1, 1))
+    for value in (0, 1, 16383, 16384, 32767, 32768, 65535):
+        assert (((value << 1) & 65535) << 1) & 65535 == (value << 2) & 65535
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])

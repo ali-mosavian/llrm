@@ -2044,3 +2044,26 @@ all remain LIR-emitted. Final dumps are in `/tmp/qbopt-addrm-exit-final`
 (before: `/tmp/qbopt-addrm-next`). Strict runtime verification passes 18 cases
 on the five changed programs across all three compilers, with artifacts at
 `qbopt-partial-loop-exits-muo7dksz` under the system temporary directory.
+
+### Reuse available address scales
+
+ADDRM computed `i << 1` for its word array, then copied i again and shifted
+by two for its long array. Algebraic simplification now reuses a smaller
+same-width shift of the same SSA value in the same block. It requires the
+earlier result to remain used, and preserves live flag definitions. This is
+value algebra in MIR; no register or address-space names enter the pass.
+
+The first candidate also revived unused intermediate shifts, worsening
+NBODY and QB FPDEEP. Excluding those intermediates removes both regressions.
+The final 97-object audit changes only ADDRM's three primary variants;
+the other 94 objects, including NBODY, are byte-identical. PDS/QB/VBDOS
+modeled costs fall from 1166/1172/1166 to **1126/1132/1126**. The raw loop
+has two one-bit shifts with no second copy of the index. QB is still just
+above 1.5 times the historical 754 target; this is not project completion.
+
+All three emitted-code regressions failed before the change. Availability,
+unused intermediates, width, flag, and modular-value checks bring the focused
+algebraic file to 71 passing tests. All six strict ADDRM runtime cases pass.
+Stage dumps: `/tmp/qbopt-addrm-shared-before` and
+`/tmp/qbopt-addrm-shared-final`. Runtime artifacts:
+`qbopt-shared-scales-_lw1cq5h` under the system temporary directory.
