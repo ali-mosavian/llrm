@@ -1544,9 +1544,8 @@ def dead(body: MirBody) -> MirBody:
     out = []
     changed = False
     for block in body.blocks:
-        # Absorption puts several operations on one address and _absorb
-        # keys on it, so an address shared with something live is not one
-        # this may name.
+        # Absorption gives multiple operations one address; ownership must
+        # be transferred independently before removing only one of them.
         seen: dict[int, int] = {}
         for op in block.ops:
             seen[op.at] = seen.get(op.at, 0) + 1
@@ -1682,7 +1681,10 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
 
 def _constant_operands(op: Op, facts: dict) -> Op:
     """Propagate width-proven constants into commutative integer operands."""
-    if op.kind not in (mir.Kind.ADD, mir.Kind.AND, mir.Kind.OR, mir.Kind.XOR, mir.Kind.MUL) or len(op.args) != 2:
+    if (
+        op.kind not in (mir.Kind.ADD, mir.Kind.ADD_CARRY, mir.Kind.AND, mir.Kind.OR, mir.Kind.XOR, mir.Kind.MUL)
+        or len(op.args) != 2
+    ):
         return op
     if op.kind is mir.Kind.MUL and len(op.results) != 1:
         return op
@@ -1733,6 +1735,8 @@ def _folded_op(op: Op, facts: dict, wanted: set) -> Op:
 
     fact = facts[target]
     into = op.results[0]
+    if fact.width < into.width:
+        return op
     if op.kind is mir.Kind.COPY and any(isinstance(one, mir.Const) for one in op.args):
         return op  # already says so
 

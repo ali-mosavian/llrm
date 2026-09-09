@@ -251,9 +251,22 @@ def _result(
     known: dict[mir.Value, Known],
     origin: dict | None = None,
     here: Cells | None = None,
+    carries: dict[mir.Value, int] | None = None,
 ) -> Known | None:
     """What this operation computes, where every input is known."""
     if _defined(op) is None:
+        return None
+    if op.kind is mir.Kind.EXTRACT and len(op.args) == 2 and len(op.results) == 1:
+        source, offset = op.args
+        fact = _operand(op, source, known, here)
+        width = op.results[0].width
+        if (
+            isinstance(offset, mir.Const)
+            and offset.n >= 0
+            and fact is not None
+            and fact.width * 8 >= offset.n + width * 8
+        ):
+            return Known(masked(fact.n >> offset.n, width), width)
         return None
     if (
         op.kind in (mir.Kind.XOR, mir.Kind.SUB)
@@ -271,6 +284,11 @@ def _result(
     if not parts:
         return None
     width = min(one.width for one in parts)
+    if op.kind is mir.Kind.ADD_CARRY and len(parts) == 2:
+        flags = [value for value in op.uses if value.flags]
+        if len(flags) == 1 and flags[0] in (carries or {}):
+            return Known(masked(parts[0].n + parts[1].n + carries[flags[0]], width), width)
+        return None
 
     if len(parts) == 1 and (step := mir.stepping(op)) is not None and isinstance(step[1], mir.Const):
         return Known(masked(parts[0].n + step[1].n, width), width)
@@ -283,6 +301,18 @@ def _result(
     if op.kind in UNARY and len(parts) == 1:
         return Known(masked(UNARY[op.kind](parts[0].n), width), width)
     return None
+
+
+def _carry(op: mir.Op, facts: dict, here: Cells) -> int | None:
+    if op.kind is not mir.Kind.ADD or len(op.args) != 2 or len(op.results) != 1:
+        return None
+    if not isinstance(op.results[0], mir.Held):
+        return None
+    width = op.results[0].width
+    operands = [_operand(op, arg, facts, here) for arg in op.args]
+    if any(fact is None or fact.width < width for fact in operands):
+        return None
+    return int(sum(masked(fact.n, width) for fact in operands) >= 1 << (width * 8))
 
 
 def known(
@@ -298,6 +328,7 @@ def known(
     walk terminates on the count of values rather than on any ordering.
     """
     facts: dict[mir.Value, Known] = {}
+    carries: dict[mir.Value, int] = {}
     held: dict[tuple[int, int], Cells] = {}
     changing = True
     while changing:
@@ -326,10 +357,17 @@ def known(
                 facts[phi.result] = known[0]
                 changing = True
             for index, op in enumerate(block.ops):
+                here = held.get((block.at, index), {})
+                carry = _carry(op, facts, here)
+                if carry is not None:
+                    for value in op.defines:
+                        if value.flags and value not in carries:
+                            carries[value] = carry
+                            changing = True
                 target = _defined(op)
                 if target is None or target in facts:
                     continue
-                found = _result(op, facts, None, held.get((block.at, index)))
+                found = _result(op, facts, None, here, carries)
                 if found is not None:
                     facts[target] = found
                     changing = True

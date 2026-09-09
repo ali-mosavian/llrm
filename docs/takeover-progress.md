@@ -470,3 +470,24 @@ This is a boundary migration, not a speedup: LNGMIX currently costs 594 versus
 566 before it. Next fold explicit extraction plus known carry-dependent
 arithmetic together; replacing only extraction with a constant previously
 stranded its dependent chain inside the loop.
+# Constant extraction and carry propagation
+
+Constant propagation now evaluates explicit bit extraction and ADD_CARRY when
+the exact input condition's carry is proven by a constant ADD. Carry facts are
+kept separate from value facts: knowing carry does not establish the other
+condition bits. Unknown carry and insufficient source widths remain unknown.
+Folding also refuses a constant fact narrower than the result it would replace.
+
+LNGMIX's constant ADD/ADC becomes constants; propagation into the remaining ADC
+reduces cost from 594 to 580 (still 2.76x target). Fifteen focused checks pass;
+carry tests failed before implementation and the width guard test fails when
+the guard is removed. LNGMIX/HOTLPX pass on PDS, QB and VBDOS through strict LIR.
+Artifacts: `/tmp/qbopt-carry-final`,
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-carry-tmu2qjhw` (PDS/QB),
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-carry-v-ak5up4y6` (VBDOS).
+
+Next blocker: dead-code deletion groups operations by original address. A live
+operation therefore keeps dead sibling copies. A trial deleting by object
+identity instead refused with `0x005f: 12 bytes are claimed by more than one
+op`; it was withdrawn. Ownership transfer must handle these siblings before
+the newly constant chain can be fully removed. Do not loosen layout's check.
