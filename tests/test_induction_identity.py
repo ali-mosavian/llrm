@@ -14,6 +14,22 @@ from qbopt.module import Addr
 from qbopt.module import Space
 
 
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_harr_stored_row_plus_column_is_loop_carried(tag: str) -> None:
+    """HARR recomputed row + column for every element instead of advancing its stored value."""
+    import corpus
+
+    path = Path(f"fixtures/omf/harr-{tag}.obj")
+    found = corpus.loaded(path)
+    partition = corpus.partitioned(path)
+    built = mir.bodies(found, partition)[0][1]
+    result = transform.applied(built, found.dgroup, found.calls, blocks=partition, found=found)
+    store = next(op for block in result.blocks for op in block.ops if any(ref.allocation for ref in op.stores))
+    source = next(arg.value for arg in store.args if isinstance(arg, mir.Held))
+    carried = {phi.result for block in result.blocks for phi in block.phis}
+    assert source in carried
+
+
 @pytest.mark.parametrize("changed", [False, True])
 def test_harr_descriptor_offset_is_read_before_inner_loop_unless_written(changed) -> None:
     """HARR rebuilt its full pointer with an invariant descriptor read on every iteration."""

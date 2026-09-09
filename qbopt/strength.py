@@ -78,6 +78,8 @@ def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | 
                 or one.offsets
                 and one.op.kind is mir.Kind.SHL
                 or any(isinstance(offset, mir.Cell) for offset, _ in one.offsets)
+                or one.op.kind is mir.Kind.ADD
+                and any(isinstance(offset, mir.Held) for offset, _ in one.offsets)
             )
         ]
         consumed = {arg.value for one in candidates for arg in one.op.args if isinstance(arg, mir.Held)}
