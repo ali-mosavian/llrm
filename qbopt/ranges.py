@@ -1,0 +1,104 @@
+"""Non-wrapping integer intervals, scoped to the taken body of a counted loop."""
+
+from dataclasses import dataclass
+
+from qbopt import consts, induction, loops, mir
+
+
+@dataclass(frozen=True)
+class Interval:
+    low: int
+    high: int
+    width: int
+
+
+def _operand(arg, known, facts):
+    if isinstance(arg, mir.Const):
+        number = consts.masked(arg.n, arg.width)
+        sign = 1 << (arg.width * 8 - 1)
+        number = (number ^ sign) - sign
+        return Interval(number, number, arg.width)
+    if not isinstance(arg, mir.Held):
+        return None
+    interval = known.get(arg.value)
+    if interval is not None and interval.width == arg.width:
+        return interval
+    fact = facts.get(arg.value)
+    if fact is not None and fact.width >= arg.width:
+        return _operand(mir.Const(fact.n, arg.width), {}, {})
+    return None
+
+
+def _computed(op, known, facts):
+    if op.loads or op.stores or op.barrier or len(op.results) != 1:
+        return None
+    result = op.results[0]
+    if not isinstance(result, mir.Held) or result.width not in (2, 4):
+        return None
+    args = [_operand(arg, known, facts) for arg in op.args]
+    if not args or any(arg is None for arg in args) or args[0].width != result.width:
+        return None
+    first = args[0]
+    if op.kind is mir.Kind.COPY and len(args) == 1:
+        return first
+    if len(args) != 2:
+        return None
+    second = args[1]
+    if op.kind is mir.Kind.SHL:
+        if second.low != second.high or not 0 <= second.low < result.width * 8:
+            return None
+        low, high = first.low << second.low, first.high << second.low
+    elif second.width == result.width:
+        match op.kind:
+            case mir.Kind.ADD:
+                low, high = first.low + second.low, first.high + second.high
+            case mir.Kind.SUB:
+                low, high = first.low - second.high, first.high - second.low
+            case mir.Kind.MUL:
+                products = [left * right for left in (first.low, first.high) for right in (second.low, second.high)]
+                low, high = min(products), max(products)
+            case _:
+                return None
+    else:
+        return None
+    sign = 1 << (result.width * 8 - 1)
+    return Interval(low, high, result.width) if -sign <= low <= high < sign else None
+
+
+def bounded(body: mir.MirBody) -> dict[int, dict[mir.Value, Interval]]:
+    facts = consts.known(body)
+    result = {}
+    for loop in loops.loops(body.blocks, body.entry):
+        inside = set(loop.body) - {loop.header}
+        known = {}
+        header = next(block for block in body.blocks if block.at == loop.header)
+        phis = {phi.result.id: phi.result for phi in header.phis}
+        for counter in induction.basics(body, loop).values():
+            width = counter.start.width
+            last = induction._last_counter(body, loop, counter, facts, width)
+            start = induction._signed(counter.start, facts, width)
+            if last is not None and start is not None:
+                known[phis[counter.value]] = Interval(min(start, last), max(start, last), width)
+        if not known:
+            continue
+        operations = [op for block in body.blocks if block.at in inside for op in block.ops]
+        while True:
+            before = len(known)
+            for op in operations:
+                if op.results and isinstance(op.results[0], mir.Held) and op.results[0].value not in known:
+                    interval = _computed(op, known, facts)
+                    if interval is not None:
+                        known[op.results[0].value] = interval
+            if len(known) == before:
+                break
+        for at in inside:
+            destination = result.setdefault(at, {})
+            for value, interval in known.items():
+                previous = destination.get(value)
+                if previous is None:
+                    destination[value] = interval
+                elif previous.width == interval.width:
+                    low, high = max(previous.low, interval.low), min(previous.high, interval.high)
+                    if low <= high:
+                        destination[value] = Interval(low, high, interval.width)
+    return result

@@ -1008,3 +1008,18 @@ Next, propagate this counter range through index scaling and use the resulting
 byte intervals in alias analysis. Do not infer extents from neighboring symbols
 or declare different-looking indexed operands disjoint. Load extraction and
 LICM come after that proof, with branch-entry and relocation ownership intact.
+
+## Scoped interval analysis
+
+`qbopt/ranges.py` propagates signed, non-wrapping intervals through copies,
+adds, subtracts, multiplication and left shifts. Loop counters seed the
+analysis only in the taken loop body, never in its header or outside it.
+Independent enclosing-loop proofs can intersect at an inner block.
+
+For optimized PDS nbody, both the current-body scaled index and the other-body
+scaled index are proven 0..20 bytes at 0x117. The latter bound is absent at
+the inner loop header and exit. A real-fixture regression was observed failing
+without the analysis; focused cases reject signed overflow and masked shift
+counts. This is analysis only: emitted code and runtime behavior are unchanged.
+Next is consuming these intervals in alias analysis, retaining conservative
+behavior for unknown segments, wrapping addresses and unproven values.
