@@ -1,5 +1,22 @@
 # Arithmetic timing audit — incomplete
 
+## Current runtime benchmark check, 2026-09-09
+
+A fresh VBDOS `/G3` build of `bench/nbody.bas` has zero severe compiler
+errors, but cannot yet provide a current optimized timing. Requiring
+`wholeseg.Emission.LIR` (rather than timing rewrite's unchanged fallback)
+first refused at `0x0444`: the allocator inserted `mov al,cl` before the
+PIT writer's OUT, and the register-move selector supported only words and
+dwords. Byte-register moves are now supported with an emitted-code
+fail-first regression. The next refusal is `0x045d: mov has 1 fixups and 0
+fields to put them in`, also in PITSNAP. No runtime speedup is claimed.
+
+All MIR and machine stages for this investigation were dumped to
+`/tmp/qbopt-nbody-timing-stages`. The benchmark source now prints its final
+positions and velocities, so the older statement in `numbers.md` that it
+prints only ticks no longer describes the current source. Future timings
+must compare those answers and require genuine optimized emission.
+
 The CPU selector introduced in 9887b1c was not supported by a sufficiently
 precise timing model. Reciprocal division was held uncommitted during the
 initial audit. Correct runtime answers do not validate speed predictions.

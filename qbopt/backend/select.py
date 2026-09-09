@@ -267,6 +267,8 @@ def move(into: Register_, outof: Register_, at: int = 0) -> Emitted | None:
         code = Code.MOV_R32_RM32
     elif into in target.NARROW and outof in target.NARROW:
         code = Code.MOV_R16_RM16
+    elif into in target.BYTE and outof in target.BYTE:
+        code = Code.MOV_R8_RM8
     else:
         return None
     return _assemble(Instruction.create_reg_reg(code, into, outof), at)

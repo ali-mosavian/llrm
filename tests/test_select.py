@@ -20,6 +20,18 @@ from qbopt.model import ir
 from qbopt.backend import select
 
 
+@pytest.mark.parametrize("source", [Register.CL, Register.AH, Register.BL, Register.DH])
+def test_byte_copy_for_nbody_timer(source):
+    """NBODY's PIT writer refused at 0444: allocation required MOV AL,CL before OUT."""
+    what = ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.AL, 1),), (ir.Reg(source, 1),))
+    emitted = select.emit(what)
+    assert emitted is not None
+    instruction = next(iter(Decoder(16, emitted.code)))
+    assert instruction.code == Code.MOV_R8_RM8
+    assert instruction.op0_register == Register.AL
+    assert instruction.op1_register == source
+
+
 def test_signed_word_extension_uses_explicit_operands():
     """ADDRM's signed whole store needs MOVSX, not a width-mismatched MOV or CWD's fixed pair."""
     from qbopt.backend import target
