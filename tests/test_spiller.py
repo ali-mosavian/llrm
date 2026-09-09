@@ -128,11 +128,12 @@ def test_a_grouped_move_writes_its_spilled_destination_where_it_lives() -> None:
     assert got[0].what.sources == (ir.Held(2, 2),)
 
 
-def test_a_grouped_move_with_both_ends_spilled_is_refused() -> None:
-    """`mov [bp-2],[bp-4]` is not an instruction, and splitting it puts an
-    ungrouped one inside the copy."""
-    with pytest.raises(spiller.Simultaneous, match="scratch"):
-        spiller.spilled(_body(_move(1, 2, group=1)), frozenset({1, 2}), frames.Frame(0))
+def test_a_grouped_move_with_both_ends_spilled_stays_grouped() -> None:
+    """NESTED refused a phi copy between two spilled values before scheduling."""
+    got = _out(_body(_move(1, 2, group=1)), {1, 2})
+    assert len(got) == 1 and got[0].group == 1
+    assert all(isinstance(cell, ir.Mem) for cell in (*got[0].what.dests, *got[0].what.sources))
+    assert got[0].defines == got[0].uses == ()
 
 
 def test_an_ordinary_instruction_still_spills_the_way_it_did() -> None:

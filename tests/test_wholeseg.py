@@ -452,16 +452,12 @@ def test_rebuilt_still_answers_exactly_what_it_used_to(stem: str) -> None:
     assert isinstance(out, bytes) and isinstance(why, str)
 
 
-def test_a_copy_with_both_ends_spilled_falls_back_and_says_so() -> None:
+def test_a_spilled_copy_stays_grouped_and_legacy_refusals_are_reported() -> None:
     """`mov [bp-2],[bp-4]` is not an instruction, and a phi's copies happen
     at once, so breaking it into a load and a store puts an ungrouped one
-    inside the group. The spiller refuses by name -- and that refusal
-    escaped `wholeseg` as an exception, so five of the corpus's objects
-    crashed the rewrite instead of falling back to BC's own layout.
-    Constructed since jumps-v-g3 stopped needing it: raising a declared
-    call's arguments changed what the allocator sees, and that object now
-    emits through LIR and prints the right answer. The invariant is the
-    refusal and its name, not which object happens to provoke it.
+    inside the group. Keep both slots in one grouped move for scheduling.
+    Historically the refusal escaped `wholeseg` as an exception and five
+    objects crashed; retain coverage of its public exception handling too.
     """
 
     from qbopt import ir
@@ -486,8 +482,11 @@ def test_a_copy_with_both_ends_spilled_falls_back_and_says_so() -> None:
         origin={},
         pins={},
     )
-    with pytest.raises(spiller.Simultaneous):
-        spiller.spilled(body, frozenset({3, 4}), frames.Frame(floor=0))
+    copied, _ = spiller.spilled(body, frozenset({3, 4}), frames.Frame(floor=0))
+    grouped = [one for block in copied.blocks for one in block.insns if one.group == 1]
+    assert len(grouped) == 1
+    assert isinstance(grouped[0].what.dests[0], ir.Mem)
+    assert isinstance(grouped[0].what.sources[0], ir.Mem)
 
     # And the emitter catches it rather than letting it escape: five
     # objects crashed the rewrite before it was caught by name. Provoked

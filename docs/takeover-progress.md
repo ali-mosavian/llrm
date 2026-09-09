@@ -1,5 +1,23 @@
 # Takeover checkpoint — 2026-09-09
 
+## Frame-to-frame phi copies
+
+NESTED-p-g2 refused LIR at 0x004b because both ends of a parallel copy
+were spilled. The spiller now keeps that copy grouped with both frame slots
+explicit. After dependency ordering, parcopy expands it to a balanced memory
+PUSH/POP pair, preserving flags without another scratch register. Selection
+now supports 16/32-bit memory POP. Cyclic copies remain explicitly refused.
+
+NESTED now emits LIR at 2228/768 = **2.90x**, not yet the 1.5x goal.
+Stage dumps: `/tmp/qbopt-memory-parcopy-final`. Seven focused checks pass;
+the spill regression failed against the old spiller, and both encoded-width
+checks failed against the old selector. Nine saved runtime results pass:
+NESTED, PRESSX, SPILL across p-g2/q-O/v-g3, checked against golden output and
+DONE markers, not merely matching two empty files. Artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-mem-parcopy-c2493ga4`.
+The earlier wider focused run had two unrelated MIR-versus-REFUSED expectation
+failures; this is not a claim that the full test suite is green.
+
 ## Constant-divmod experiment — withdrawn
 
 `db942bd` exposes LNGMIX's 100000 dividend. Replacing its constant DIVMOD

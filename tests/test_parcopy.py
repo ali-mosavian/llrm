@@ -14,6 +14,7 @@ from iced_x86 import Register
 from qbopt import ir
 from qbopt import lir
 from qbopt import parcopy
+from qbopt import select
 
 
 def _move(into, out_of, group=None, at=0x100) -> lir.Insn:
@@ -27,6 +28,30 @@ def _reg(one) -> ir.Reg:
 
 def _slot(offset: int) -> ir.Mem:
     return ir.Mem(f"[bp-{offset:#x}]", 2, Register.BP, 0, 2)
+
+
+def test_memory_copy_expands_after_dependency_ordering() -> None:
+    """NESTED needs a spilled phi copied before another move overwrites its source."""
+    source, destination = _slot(4), _slot(8)
+    result = parcopy.scheduled(_body(_move(source, _reg(Register.AX), group=1), _move(destination, source, group=1)))
+    instructions = result.blocks[0].insns
+    assert [one.what.name for one in instructions] == ["push", "pop", "mov"]
+    assert instructions[0].what.sources == (source,)
+    assert instructions[1].what.dests == (destination,)
+    assert all(one.group is None for one in instructions)
+
+
+@pytest.mark.parametrize("width,prefix", [(2, b""), (4, b"\x66")])
+def test_frame_copy_emits_balanced_stack_transfer(width: int, prefix: bytes) -> None:
+    """NESTED refused emission when a phi needed a slot-to-slot copy."""
+    from qbopt.module import Space
+
+    source = ir.Mem(ir.Addr(Space.FRAME, -4), width, Register.BP, 0, 2)
+    destination = ir.Mem(ir.Addr(Space.FRAME, -8), width, Register.BP, 0, 2)
+    instructions = parcopy.scheduled(_body(_move(destination, source, group=1))).blocks[0].insns
+    emitted = [select.emit(one.what) for one in instructions]
+    assert all(one is not None for one in emitted)
+    assert [one.code for one in emitted] == [prefix + b"\xff\x76\xfc", prefix + b"\x8f\x46\xf8"]
 
 
 def _other(at=0x200) -> lir.Insn:

@@ -246,7 +246,8 @@ class Simultaneous(Exception):
     `mov [bp-2],[bp-4]` is not an instruction, and breaking it into a load
     and a store puts an ungrouped one inside a copy whose moves happen at
     once -- which is what parcopy.py then cannot schedule as one group.
-    Refused by name until a scratch register can be reserved for it.
+    Retained for callers reporting this legacy refusal. Frame-to-frame
+    copies now stay grouped until parcopy expands them after scheduling.
     """
 
 
@@ -256,8 +257,9 @@ def _in_place(one: lir.Insn, values: "frozenset[int]", frame) -> "lir.Insn | Non
     A phi's moves happen at once. Spilling one of them the ordinary way --
     a reload before it and a store after it -- puts an instruction inside
     the group that is not part of it, and the group stops being one run.
-    x86 reads and writes memory in a move, so the slot goes in the operand
-    and the copy stays one instruction.
+    The slots go in the operands and the copy stays one instruction until
+    parcopy has ordered the whole group. It then expands memory-to-memory
+    copies to balanced stack transfers.
     """
     what = one.what
     if one.group is None or what is None or what.op is not ir.Operation.MOVE:
@@ -269,9 +271,16 @@ def _in_place(one: lir.Insn, values: "frozenset[int]", frame) -> "lir.Insn | Non
     if not into and not outof:
         return None
     if into and outof:
-        raise Simultaneous(
-            f"{one.at:#06x}: a move in a parallel copy has both ends spilled and "
-            "needs a scratch register this does not reserve yet"
+        return replace(
+            one,
+            what=ir.Semantics(
+                what.op,
+                what.name,
+                (frame.cell(into[0], _width(one, into[0])),),
+                (frame.cell(outof[0], _width(one, outof[0])),),
+            ),
+            defines=tuple(value for value in one.defines if value not in into),
+            uses=tuple(value for value in one.uses if value not in outof),
         )
     value = (into or outof)[0]
     cell = frame.cell(value, _width(one, value))

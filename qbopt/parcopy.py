@@ -21,6 +21,8 @@ wrong.
 
 from dataclasses import replace
 
+from iced_x86 import Register
+
 from qbopt import ir
 from qbopt import lir
 from qbopt.passes import LIRTransform
@@ -52,7 +54,7 @@ def scheduled(body: lir.LirBody) -> lir.LirBody:
         for one in (*block.insns, None):
             group = one.group if one is not None else None
             if run and (group != run[0].group):
-                out += _ordered(run)
+                out += [part for move in _ordered(run) for part in _expanded(move)]
                 run = []
             if one is None:
                 break
@@ -62,6 +64,31 @@ def scheduled(body: lir.LirBody) -> lir.LirBody:
             run.append(one)
         blocks.append(replace(block, insns=tuple(out)))
     return replace(body, blocks=tuple(blocks))
+
+
+def _expanded(one: lir.Insn) -> tuple[lir.Insn, ...]:
+    """An ordered frame copy needs no scratch register and preserves flags."""
+    into, source = one.what.dests[0], one.what.sources[0]
+    if not isinstance(into, ir.Mem) or not isinstance(source, ir.Mem):
+        return (one,)
+    if (
+        into.width != source.width
+        or into.width not in (2, 4)
+        or any(cell.through != Register.BP for cell in (into, source))
+    ):
+        raise Malformed("memory parallel copy needs equal-width frame slots")
+    return (
+        replace(one, what=ir.Semantics(ir.Operation.PUSH, "push", (), (source,)), defines=(), uses=()),
+        replace(
+            one,
+            what=ir.Semantics(ir.Operation.POP, "pop", (into,), ()),
+            covers=(one.at, one.at),
+            op=None,
+            defines=(),
+            uses=(),
+            spread=(),
+        ),
+    )
 
 
 def _ordered(moves: list[lir.Insn]) -> list[lir.Insn]:

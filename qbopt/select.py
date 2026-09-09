@@ -1499,6 +1499,14 @@ def emit(
                     return pop_segment(into, dests[0].width, at)
                 case ir.Reg(register=into):
                     return pop(into, at)
+                case ir.Mem() as cell:
+                    built = operand_of(cell)
+                    code = _code(f"POP_RM{cell.width * 8}") if cell.width in (2, 4) else None
+                    return (
+                        None
+                        if built is None or code is None
+                        else _assemble(Instruction.create_mem(code, built[0]), at, built[1])
+                    )
         case ir.Operation.RETURN:
             if not sources:
                 return bare("ret", at) if what.name == "ret" else ret_far(0, at)
