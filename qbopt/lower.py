@@ -651,6 +651,8 @@ class Lowering:
         parts = made(op, self) if made is not None else None
         if op.kind is mir.Kind.CONVERT and not preserve_flags:
             parts = _sign_word(op) or parts
+        if op.kind is mir.Kind.MUL and not preserve_flags:
+            parts = _scaled(op) or parts
         if not parts:
             # The site's own sequence emits it, so there is nothing for
             # this to say -- while it is still that operation. A pass may
@@ -713,6 +715,29 @@ class Lowering:
             ),
             *(_follows(op, one) for one in parts[1:]),
         )
+
+
+def _scaled(op: mir.Op) -> tuple[ir.Semantics, ...] | None:
+    """A low product by a power of two, with no observable multiply flags."""
+    if len(op.args) != 2 or len(op.results) != 1:
+        return None
+    source, scale = op.args
+    if isinstance(source, mir.Const):
+        source, scale = scale, source
+    result = op.results[0]
+    if not (
+        isinstance(source, mir.Held) and isinstance(scale, mir.Const) and isinstance(result, mir.Held)
+        and source.width == result.width and source.width in (2, 4)
+        and 1 < scale.n < 1 << (source.width * 8) and scale.n & (scale.n - 1) == 0
+        and not op.loads and not op.stores and not op.merges
+    ):
+        return None
+    return (
+        ir.Semantics(
+            ir.Operation.BINARY, "shl", (operand(result),),
+            (operand(source), ir.Imm(scale.n.bit_length() - 1, 1)),
+        ),
+    )
 
 
 def _sign_word(op: mir.Op) -> tuple[ir.Semantics, ...] | None:
