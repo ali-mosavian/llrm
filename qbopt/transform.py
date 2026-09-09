@@ -1758,6 +1758,7 @@ def _constant_operands(op: Op, facts: dict) -> Op:
     if not ordered and isinstance(args[0], mir.Const) and isinstance(args[1], mir.Held):
         args.reverse()
     retained = {arg.value for arg in args if isinstance(arg, mir.Held)}
+    retained.update(value for ref in op.loads + op.stores for value in (ref.base, ref.segment) if value is not None)
     return replace(
         op, args=tuple(args),
         uses=tuple(value for value in op.uses if value not in replaced or value in op.merges or value in retained),

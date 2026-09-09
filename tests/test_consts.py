@@ -95,6 +95,20 @@ def test_constant_subtraction_preserves_operand_order(constant_first: bool, same
     assert args[0].value in changed.uses
 
 
+@pytest.mark.parametrize("address_part", ["base", "segment"])
+def test_constant_operand_keeps_its_memory_address_dependency(address_part: str) -> None:
+    """Substituting p in memory[p] - p orphaned the address value while the load still used it."""
+    pointer, result = mir.Value(920, 0), mir.Value(921, 1)
+    ref = mir.MemRef(None, 2, **{address_part: pointer})
+    op = mir.Op(
+        1, ir.Operation.BINARY, "sub", (result,), (pointer,), kind=mir.Kind.SUB,
+        args=(mir.Cell(ref), mir.Held(pointer, 2)), results=(mir.Held(result, 2),), loads=(ref,),
+    )
+    changed = transform._constant_operands(op, {pointer: consts.Known(16, 2)})
+    assert changed.args == (mir.Cell(ref), mir.Const(16, 2))
+    assert changed.uses == (pointer,)
+
+
 @pytest.mark.parametrize("constant_first", [False, True])
 def test_a_known_factor_becomes_a_multiply_operand(constant_first: bool) -> None:
     source, factor, result = mir.Value(900, 0), mir.Value(901, 0), mir.Value(902, 1)
