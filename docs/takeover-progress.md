@@ -1041,3 +1041,21 @@ That experiment is removed. The next step is whole-value scalar MIR before
 LICM, so two position values do not become four independently allocated words
 and inhibit widening. There is still no hand-derived nbody target establishing
 its distance from the 1.5x goal.
+
+## Whole values survive split/rejoin boundaries
+
+Before moving pair recognition, the dumps exposed an independent break in
+value continuity: recovered scalar multiplication results were extracted into
+two words and concatenated again before their next arithmetic operation.
+Algebraic simplification now replaces an exact high/low extraction round trip
+with the original 32-bit value. Different sources, offsets and widths do not
+qualify; the rule has no machine dependencies.
+
+Nbody's product at 0x1cd now feeds the signed /512 reduction at 0x1d4 directly.
+The real-fixture assertion fails with this rule disabled. PDS modeled cost
+falls from 880,313 to 820,313 (6.8%); this is not hardware timing or a target
+ratio. Dumps: `/tmp/qbopt-recombined`. Nbody (24 cases), CHAIN (7) and HARR
+(1) pass strict LIR on each of PDS, QB and VBDOS; runtime artifacts are in
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-recombined-we7utdqf`.
+Position arithmetic is still word-paired before late widening; early whole
+values and invariant-load motion remain the larger unfinished step.

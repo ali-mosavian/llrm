@@ -10,6 +10,39 @@ from qbopt import algebraic
 from qbopt import transform
 
 
+@pytest.mark.parametrize(("high_offset", "different_source", "recombined"), [(16, False, True), (0, False, False), (16, True, False)])
+def test_extracted_halves_recombine_to_the_original_value(high_offset, different_source, recombined) -> None:
+    """Nbody split a multiply result and rebuilt it before division, adding stack traffic."""
+    source, other, low, high, result = (mir.Value(index, 0) for index in range(1, 6))
+    def extract(value, original, offset):
+        return mir.Op(0, mir.Synth.HALF_TO_LOW, "extract", (value,), (original,), kind=mir.Kind.EXTRACT,
+                      args=(mir.Held(original, 4), mir.Const(offset, 4)), results=(mir.Held(value, 2),))
+    concat = mir.Op(1, mir.Synth.CONCAT_LOW, "concat", (result,), (high, low), kind=mir.Kind.CONCAT,
+                    args=(mir.Held(high, 2), mir.Held(low, 2)), results=(mir.Held(result, 4),))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (extract(low, source, 0),
+        extract(high, other if different_source else source, high_offset), concat), ()),))
+    done = algebraic.simplified(body, {result}, set()).blocks[0].ops[-1]
+    if recombined:
+        assert done.kind is mir.Kind.COPY
+        assert done.args == (mir.Held(source, 4),)
+    else:
+        assert done == concat
+
+
+def test_nbody_multiply_value_survives_into_scaled_division() -> None:
+    """Nbody rebuilt the product from two halves before /512, paying a redundant stack round trip."""
+    path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
+    found = corpus.loaded(path)
+    blocks = corpus.partitioned(path)
+    body = mir.bodies(found, blocks)[0][1]
+    done = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
+    ops = [op for block in done.blocks for op in block.ops]
+    product = next(op for op in ops if op.at == 0x1cd and op.kind is mir.Kind.MUL).results[0]
+    sign = next(op for op in ops if op.at == 0x1d4 and op.kind is mir.Kind.SAR)
+    assert sign.args[0] == product
+    assert not any(op.at == 0x1d4 and op.kind is mir.Kind.CONCAT for op in ops)
+
+
 def test_nbody_address_shifts_combine_without_an_extra_counter() -> None:
     """Nbody computed other*4 with two shifts; an extra induction counter increased spill cost."""
     path = Path("fixtures/regressions/nbody-stack-p-g2.obj")

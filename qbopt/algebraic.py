@@ -16,7 +16,7 @@ def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) 
             replace(
                 block,
                 ops=tuple(
-                    _simplified(_product(_shift_chain(op, definitions, wanted | mentioned), wanted | mentioned, wide), wanted | mentioned, wide)
+                    _simplified(_product(_shift_chain(_recombined(op, definitions), definitions, wanted | mentioned), wanted | mentioned, wide), wanted | mentioned, wide)
                     for op in block.ops
                 ),
             )
@@ -45,6 +45,30 @@ def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) 
             for block in changed.blocks
         ),
     )
+
+
+def _recombined(op: mir.Op, definitions: dict) -> mir.Op:
+    """Joining both extracted halves of one value is that value, without a round trip."""
+    if (op.kind is not mir.Kind.CONCAT or op.loads or op.stores or op.barrier
+        or len(op.args) != 2 or len(op.results) != 1
+        or not isinstance(op.results[0], mir.Held) or op.results[0].width != 4
+        or op.defines != (op.results[0].value,)):
+        return op
+    original = None
+    for arg, offset in zip(op.args, (16, 0)):
+        if not isinstance(arg, mir.Held) or arg.width != 2:
+            return op
+        extract = definitions.get(arg.value)
+        if (extract is None or extract.kind is not mir.Kind.EXTRACT or extract.results != (arg,)
+            or len(extract.args) != 2 or not isinstance(extract.args[0], mir.Held)
+            or extract.args[0].width != 4 or not isinstance(extract.args[1], mir.Const)
+            or extract.args[1].n != offset):
+            return op
+        if original is not None and original != extract.args[0]:
+            return op
+        original = extract.args[0]
+    return replace(op, kind=mir.Kind.COPY, args=(original,), uses=(original.value,),
+                   merges={}, node=None, made=None, raised=None)
 
 
 def _shift_chain(op: mir.Op, definitions: dict, wanted: set[mir.Value]) -> mir.Op:
