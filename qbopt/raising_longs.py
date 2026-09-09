@@ -52,6 +52,8 @@ def scalar(body: mir.MirBody) -> mir.MirBody:
             ref = None if immediate else replace(refs[0][0], width=4)
             if stores:
                 source = whole.get((high.args[0], low.args[0])) if len(low.args) == len(high.args) == 1 else None
+                if source is None and len(low.args) == len(high.args) == 1:
+                    source = mir.extracted_whole(high.args[0], low.args[0], definitions)
                 if source is None:
                     ops.append(op)
                     continue
@@ -107,6 +109,7 @@ def scalar(body: mir.MirBody) -> mir.MirBody:
                                       (results[0].value,), kind=mir.Kind.EXTRACT,
                                       args=(results[0], mir.Const(offset, 4)), results=half.results,
                                       covers=(high.at, high.at)))
+                    definitions[half.results[0].value] = ops[-1]
             dropped.update((id(low), id(high)))
         blocks.append(replace(block, ops=tuple(ops)))
     return replace(body, blocks=tuple(blocks))

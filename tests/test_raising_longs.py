@@ -66,6 +66,19 @@ def test_nbody_scalar_results_feed_constant_and_accumulator_arithmetic(nbody):
     assert increment.results[0].width == accumulator.results[0].width == 4
 
 
+def test_nbody_stores_whole_results_through_half_copies(nbody):
+    """Nbody stored DELTAY and FALLOFF as halves despite already having their whole scalar values."""
+    body, recognize = nbody
+    done = recognize(body)
+    ops = [op for block in done.blocks for op in block.ops]
+    delta = next(op for op in ops if op.at == 0x144 and op.kind is mir.Kind.SUB).results[0]
+    falloff = next(op for op in ops if op.at == 0x1b2 and op.kind is mir.Kind.DIVMOD).results[0]
+    for at, source in ((0x150, delta), (0x1b7, falloff)):
+        store = next(op for op in ops if op.at == at and op.kind is mir.Kind.STORE)
+        assert store.stores[0].width == 4
+        assert store.args == (source,)
+
+
 @pytest.mark.parametrize("producer", [0x12d, 0x131])
 def test_live_half_flags_prevent_scalar_arithmetic(nbody, producer):
     body, recognize = nbody

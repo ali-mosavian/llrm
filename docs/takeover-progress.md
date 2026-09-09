@@ -1125,3 +1125,18 @@ downstream of recognition. After the fix, nbody (24 cases), HARR (1), CHAIN
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-scalar-phi-final-6yt_a4th`.
 All 75 focused tests pass. The overall target and full architecture migration
 remain unfinished; this result specifically restores whole-value continuity.
+
+## Whole stores through exact half copies
+
+Scalar recovery now follows width-preserving word copies back to the exact
+high/low extractions, refusing width changes and cycles. The raise records its
+new extraction definitions and uses the shared proof for stores as well as
+arithmetic. DELTAY and FALLOFF are stored whole instead of split solely for
+the stores. The real-fixture assertion failed before the change.
+
+PDS nbody modeled cost falls from 607,037 to 517,793 (14.7%). Stage dumps:
+`/tmp/qbopt-whole-stores`. Nbody, HARR, CHAIN and negnot pass strict LIR on all
+three compilers; artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-whole-stores-8ej78xls`.
+79 focused tests pass. Memory forwarding and the remaining legacy multiply
+sites still limit value continuity; a hand-derived nbody target remains due.

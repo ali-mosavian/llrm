@@ -43,6 +43,21 @@ def test_nbody_multiply_value_survives_into_scaled_division() -> None:
     assert not any(op.at == 0x1d4 and op.kind is mir.Kind.CONCAT for op in ops)
 
 
+@pytest.mark.parametrize("mode", ["copy", "width_change", "cycle"])
+def test_recombination_follows_only_exact_word_copies(mode):
+    """Whole-value recovery through copies must not accept a different width or a cyclic definition."""
+    source, high, low, copied = (mir.Value(index, 0) for index in range(1, 5))
+    definitions = {}
+    for value, offset in ((high, 16), (low, 0)):
+        definitions[value] = mir.Op(0, mir.Synth.HALF_TO_LOW, "extract", (value,), (source,),
+            kind=mir.Kind.EXTRACT, args=(mir.Held(source, 4), mir.Const(offset, 4)), results=(mir.Held(value, 2),))
+    incoming = copied if mode == "cycle" else low
+    definitions[copied] = mir.Op(1, ir.Operation.MOVE, "mov", (copied,), (incoming,), kind=mir.Kind.COPY,
+        args=(mir.Held(incoming, 4 if mode == "width_change" else 2),), results=(mir.Held(copied, 2),))
+    answer = mir.extracted_whole(mir.Held(high, 2), mir.Held(copied, 2), definitions)
+    assert answer == (mir.Held(source, 4) if mode == "copy" else None)
+
+
 def test_nbody_address_shifts_combine_without_an_extra_counter() -> None:
     """Nbody computed other*4 with two shifts; an extra induction counter increased spill cost."""
     path = Path("fixtures/regressions/nbody-stack-p-g2.obj")

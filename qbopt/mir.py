@@ -2079,6 +2079,15 @@ def extracted_whole(high, low, definitions):
     """The scalar whose exact high and low word extractions are these operands."""
     original = None
     for arg, offset in ((high, 16), (low, 0)):
+        seen = set()
+        while isinstance(arg, Held) and arg.width == 2 and arg.value not in seen:
+            seen.add(arg.value)
+            copy = definitions.get(arg.value)
+            if (copy is None or copy.kind is not Kind.COPY or copy.loads or copy.stores or copy.barrier
+                or copy.results != (arg,) or len(copy.args) != 1
+                or not isinstance(copy.args[0], Held) or copy.args[0].width != arg.width):
+                break
+            arg = copy.args[0]
         if not isinstance(arg, Held) or arg.width != 2:
             return None
         op = definitions.get(arg.value)
