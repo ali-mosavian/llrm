@@ -55,6 +55,17 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+CSE value-identity checkpoint: removed the obsolete same-variable restriction
+on common-expression reuse. The dominator/value/width checks still apply;
+register placement belongs to allocation, not this pass. The regression now
+exercises both direct and phi uses across different variable identities and
+fails with the old restriction restored in memory. All 25 induction/SSA checks
+pass, and strict LIR chain/matrix/lngmix/pressx runtime passes on PDS /G2,
+QB /O and VBDOS /G3 (12 program/configuration cases). PDS chain shrinks three
+object bytes and modeled cost changes 1,632 -> 1,630. This is a removed
+architectural restriction, not a claim of closing the remaining target gaps.
+Stage evidence: `/tmp/qbopt-cse-chain-20260909`.
+
 Symbolic-address checkpoint: HARR's descriptor move at 0x6f was raised as
 literal zero although its immediate has a relocation to segment 5 + 6.
 Raise now preserves a symbolic operand (target, offset, width and addend),

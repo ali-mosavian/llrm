@@ -330,7 +330,8 @@ def test_inserted_counter_operations_own_their_insertion_location() -> None:
     assert update.at == 4 and update.covers == (6, 6)
 
 
-def test_cse_replaces_phi_uses_of_a_deleted_initializer() -> None:
+@pytest.mark.parametrize("second_variable", [7, 8])
+def test_cse_replaces_phi_uses_of_a_deleted_initializer(second_variable: int) -> None:
     """matrix printed T=0 for T=380 after CSE deleted a zero still named by its loop phi."""
     from pathlib import Path
 
@@ -342,7 +343,9 @@ def test_cse_replaces_phi_uses_of_a_deleted_initializer() -> None:
         for node in body.nodes
         if isinstance(node, ir.Opaque)
     )
-    first, second, result = mir.Value(10, 0, variable=7), mir.Value(11, 2, variable=7), mir.Value(12, 4, variable=7)
+    first = mir.Value(10, 0, variable=7)
+    second = mir.Value(11, 2, variable=second_variable)
+    result = mir.Value(12, 4, variable=7)
     define = mir.Op(
         0,
         ir.Operation.MOVE,
@@ -358,17 +361,19 @@ def test_cse_replaces_phi_uses_of_a_deleted_initializer() -> None:
     duplicate = replace(define, at=2, defines=(second,), results=(mir.Held(second, 2),), covers=(2, 4))
     jump = mir.Op(4, ir.Operation.JUMP, "", (), (), kind=mir.Kind.JUMP, covers=(4, 6), target=6)
     use = mir.Op(6, ir.Operation.PUSH, "", (), (result,), kind=mir.Kind.ARG, args=(mir.Held(result, 2),))
+    direct = replace(use, at=7, uses=(second,), args=(mir.Held(second, 2),))
     built = mir.MirBody(
         0,
         (
             mir.MirBlock(0, (), (define,), (2,)),
             mir.MirBlock(2, (), (duplicate, jump), (6,)),
-            mir.MirBlock(6, (mir.Phi(result, {2: second}),), (use,), ()),
+            mir.MirBlock(6, (mir.Phi(result, {2: second}),), (use, direct), ()),
         ),
     )
     after = transform.subexpressions(built)
     assert all(second not in op.defines for block in after.blocks for op in block.ops)
     assert after.blocks[2].phis[0].incoming[2] == first
+    assert after.blocks[2].ops[1].args == (mir.Held(first, 2),)
 
 
 def test_dead_byte_transfer_cannot_span_a_surviving_jump() -> None:

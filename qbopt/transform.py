@@ -238,13 +238,6 @@ def subexpressions(body: MirBody) -> MirBody:
     before it. What a name stands for is not a rewrite, and materialising
     it as one would leave dead copies for `dead` to find again.
 
-    Refused unless the two write the same variables. A value BC computed
-    into a different place is the same value and folding it is sound in
-    MIR, but its readers then want it where it no longer is, and only the
-    allocator can arrange that -- chain refused with `mov is not one
-    select.py can emit` for exactly that reason. Same queue as the hoist:
-    a value that changes register needs a register granted to it.
-
     Refused wherever the second operation's flags are read. In MIR they are
     an ordinary value and substituting them is sound; in the machine they
     are one register that everything in between has already written, so the
@@ -258,7 +251,6 @@ def subexpressions(body: MirBody) -> MirBody:
     stands: dict[int, mir.Value] = {}  # what a name numbers as -- copies included
     swap: dict[int, mir.Value] = {}  # what a name is rewritten to -- only what folded
     gone: set[int] = set()  # by identity: four of lngmix's ops share address 0x4b
-    made: dict[int, set[int]] = {}  # what each of those defined, for _readable
     for block in body.blocks:
         for index, op in enumerate(block.ops):
             source = _copied(op, whole)
@@ -282,10 +274,8 @@ def subexpressions(body: MirBody) -> MirBody:
             folded = {mine.id: theirs for mine, theirs in zip(op.defines, earlier.defines)}
             stands.update(folded)
             swap.update(folded)
-            made[id(op)] = set(folded)
             gone.add(id(op))
 
-    gone, swap = _readable(body, gone, swap, made)
     if not gone:
         return body
     body = _reclaimed(body, gone)
@@ -357,37 +347,6 @@ def _reclaimed(body: MirBody, gone: set[int]) -> MirBody:
             for block in body.blocks
         ),
     )
-
-
-def _readable(body: MirBody, gone: set[int], swap: dict, made: dict[int, set[int]]):
-    """The folds whose result its readers can still find, and only those.
-
-    A value BC computed into a different place is the same value, and in
-    MIR folding it is sound -- but a surviving reader then wants it where it
-    no longer is, and only the allocator can arrange that. chain refused
-    with `mov is not one select.py can emit` for exactly that.
-
-    Not a variables-must-match test on the fold itself, which is what this
-    was first and which refused too much: lngmix's second divide is reached
-    through a `convert` into a variable of its own, whose only reader is
-    that divide. A fold nothing outside the fold reads costs no register.
-
-    Dropping one fold can leave another's reader standing, so this settles.
-    """
-    while True:
-        loose = set()
-        for block in body.blocks:
-            for op in block.ops:
-                if id(op) in gone:
-                    continue
-                for one in (*op.uses, *(x.value for x in op.args if isinstance(x, mir.Held))):
-                    theirs = swap.get(one.id)
-                    if theirs is not None and theirs.variable != one.variable:
-                        loose.add(one.id)
-        if not loose:
-            return gone, swap
-        gone = {one for one in gone if not made[one] & loose}
-        swap = {at: value for at, value in swap.items() if at not in loose}
 
 
 def _widths(body: MirBody) -> dict[int, int]:
