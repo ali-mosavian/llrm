@@ -138,6 +138,29 @@ def test_pipeline_removes_hotlop_obsolete_constant_load() -> None:
         assert not any(op.at == 0x48 and op.args == (mir.Const(3, 2),) for block in done.blocks for op in block.ops)
 
 
+def test_dead_store_does_not_delete_a_load_at_the_same_address() -> None:
+    """nbody printed PX0=-7627 instead of 1258 after losing its counter load."""
+    from dataclasses import replace
+
+    source, loaded = mir.Value(1, 0), mir.Value(2, 3)
+    target = mir.MemRef(ir.Addr(module.Space.SEGMENT, 0, index=5), 2)
+    counter = mir.MemRef(ir.Addr(module.Space.SEGMENT, 2, index=5), 2)
+    first = mir.Op(0, ir.Operation.MOVE, "mov", (source,), (), kind=mir.Kind.COPY,
+                   args=(mir.Const(7, 2),), results=(mir.Held(source, 2),), covers=(0, 3))
+    store = mir.Op(3, ir.Operation.MOVE, "mov", (), (source,), kind=mir.Kind.STORE,
+                   args=(mir.Held(source, 2),), results=(mir.Cell(target),), stores=(target,), covers=(3, 3))
+    load = mir.Op(3, ir.Operation.MOVE, "mov", (loaded,), (), kind=mir.Kind.LOAD,
+                  args=(mir.Cell(counter),), results=(mir.Held(loaded, 2),), loads=(counter,), covers=(3, 6))
+    overwrite = replace(store, at=6, covers=(6, 9))
+    use = mir.Op(9, ir.Operation.PUSH, "push", (), (loaded,), kind=mir.Kind.ARG,
+                 args=(mir.Held(loaded, 2),), covers=(9, 10))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (first, store, load, overwrite, use), ()),), {})
+    done = transform.without_dead_stores(body, frozenset({5}), {})
+    ops = done.blocks[0].ops
+    assert any(loaded in op.defines for op in ops)
+    assert sum(bool(op.stores) for op in ops) == 1
+
+
 def test_leading_deletion_does_not_delete_its_survivor() -> None:
     first = mir.Op(0, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY, covers=(0, 3), args=(mir.Const(3, 2),))
     survivor = mir.Op(3, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY, covers=(3, 6), args=(mir.Const(21, 2),))

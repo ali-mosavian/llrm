@@ -352,7 +352,7 @@ def _dead_in(block, overwritten: dict, dgroup: frozenset[int], calls: dict[int, 
             ref = wrote
             if ref.addr is not None and ref.addr.space is not Space.STACK:
                 if any(_covered_by(ref, one, dgroup) for one in overwritten):
-                    found.append(op.at)
+                    found.append(id(op))
                 overwritten[ref] = op.at
                 continue
 
@@ -378,8 +378,11 @@ def _dead_in(block, overwritten: dict, dgroup: frozenset[int], calls: dict[int, 
     return found, overwritten
 
 
-def dead_stores(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> tuple[int, ...]:
+def dead_stores(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> tuple[Op, ...]:
     """Stores whose bytes are overwritten before anything reads them.
+
+    Return operations, not addresses: inserted stores can share an address
+    with an unrelated live load.
 
     memory.py's own pass, restated over MIR. Backward through each block:
     a store to a cell that a later store overwrites, with nothing in
@@ -433,7 +436,7 @@ def dead_stores(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) ->
             entry[block.at] = start
         if not changing:
             break
-    return tuple(sorted(found))
+    return tuple(op for block in body.blocks for op in block.ops if id(op) in found)
 
 
 def redundant(

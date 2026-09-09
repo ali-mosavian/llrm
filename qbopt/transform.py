@@ -716,12 +716,12 @@ def _may_pass(one: Op, run: list[Op], dgroup: frozenset[int], calls: dict[int, s
 
 def without_dead_stores(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
     """Every store overwritten before anything read it, removed."""
-    gone = set(avail.dead_stores(body, dgroup, calls))
+    gone = {id(op) for op in avail.dead_stores(body, dgroup, calls)}
     if not gone:
         return body
     return replace(
         body,
-        blocks=tuple(replace(one, ops=tuple(_absorb(list(one.ops), gone))) for one in body.blocks),
+        blocks=tuple(replace(one, ops=tuple(_without(list(one.ops), lambda op: id(op) in gone))) for one in body.blocks),
     )
 
 
