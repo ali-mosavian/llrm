@@ -154,6 +154,7 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
                     ir.Semantics(ir.Operation.EXCHANGE, "fxch", operands, operands), (), ()))
                 stack[0], stack[required.index] = stack[required.index], stack[0]
                 inputs = tuple(map(source, what.sources))
+            arithmetic_slot = 0
             if what.op in (ir.Operation.FLOAT_STORE, ir.Operation.FLOAT_ARITH, ir.Operation.FLOAT_UNARY):
                 if not retained_store and inputs and inputs[0] == ir.St(0) and remaining[stack[0]]:
                     if len(stack) == 8:
@@ -163,6 +164,13 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
                         ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", operands, operands), (), ()))
                     stack.insert(0, stack[0])
                     inputs = tuple(map(source, what.sources))
+                    if (what.op is ir.Operation.FLOAT_ARITH and what.name in ("fadd", "fmul")
+                        and len(what.sources) == 2 and what.sources[0] == what.sources[1]
+                        and len(what.dests) == 1 and isinstance(what.dests[0], ir.Held)
+                        and next_uses[stack[0]] and next_uses[what.dests[0].value]
+                        and next_uses[stack[0]][0] < next_uses[what.dests[0].value][0]):
+                        inputs = ir.St(1), ir.St(0)
+                        arithmetic_slot = 1
             elif what.op is ir.Operation.FLOAT_ARITH_POP:
                 if len(inputs) != 2 or not all(isinstance(arg, ir.St) for arg in inputs):
                     raise Unlowered("floating popping arithmetic requires two stack operands")
@@ -197,8 +205,8 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
                     if inputs != (ir.St(0),):
                         raise Unlowered("floating stack store requires an exchange")
                 case ir.Operation.FLOAT_ARITH | ir.Operation.FLOAT_UNARY:
-                    delta, slot = 0, 0
-                    if not inputs or inputs[0] != ir.St(0):
+                    delta, slot = 0, arithmetic_slot
+                    if not inputs or inputs[0] != ir.St(slot):
                         raise Unlowered("floating stack arithmetic requires an exchange")
                 case ir.Operation.FLOAT_ARITH_POP:
                     delta = -1

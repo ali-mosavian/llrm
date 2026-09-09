@@ -2,10 +2,11 @@
 
 FPDEEP update 2026-09-10: its complete ordinary-build reference is now
 1086 units, independently derived from its exact source expressions and
-printing sequence in `docs/targets.md`. Current costs are PDS 11829 (10.89x),
-QB 12047 (11.09x), VBDOS 11759 (10.83x). These are static ranking ratios,
-not runtime speedups. The new denominator exposes a gap; emitted bytes did
-not change. Event-enabled configurations remain provisional.
+printing sequence in `docs/targets.md`. After finite-array reuse and stack
+destination selection, costs are PDS 11729 (10.80x), QB 11947 (11.00x),
+VBDOS 11659 (10.74x). These are static ranking ratios, not runtime speedups.
+See `docs/finite-array-reuse.md` for before/after assembly and verification.
+Event-enabled configurations remain provisional.
 
 Update 2026-09-10: ARITH has a complete ordinary-build reference of 592 units.
 NOTS and NEGNOT references are corrected to 306 and 254: their earlier 378/290

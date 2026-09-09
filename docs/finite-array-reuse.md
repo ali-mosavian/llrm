@@ -57,3 +57,33 @@ Stages and runtime artifacts:
 The adjacent `s18-mir-r02-hoist.txt` / `s19-mir-r02-forward.txt` diff shows
 the memory operands replaced by held values; subsequent CSE removes the
 repeated loads.
+
+## Allocate the next-used operand on top
+
+The next backend change keeps `p` on top when it will be used before `p*p`.
+After duplicating p, the square can overwrite ST(1), leaving ST(0) ready for
+the addition. This changes no MIR operation or evaluation order:
+
+```asm
+; Before                         ; After
+fld  dword [si]                  ; fld  dword [si]
+fld  st(0)                       ; fld  st(0)
+fmul st,st(0)                    ; fmul st(1),st
+fxch                             ; removed
+fadd st,st(0)                    ; fadd st,st(0)
+fdivp                            ; fdivp
+fstp dword [q]                   ; fstp dword [q]
+```
+
+This destination choice is limited to duplicated identical operands of
+register-register addition/multiplication, when the retained input's next
+use precedes the result's. Other operations keep their existing allocation.
+PDS size falls a further 1509→1506 bytes. Static cost falls by 100 units:
+PDS 11729/1086=10.80x, QB 11947/1086=11.00x, VBDOS 11659/1086=10.74x.
+These remain ranking scores, not runtime measurements.
+
+The allocation regression failed first; 109 focused allocation/selection/
+floating-bound tests pass. FPDEEP alone changed in the ordinary PDS scan;
+all 33 runtime output cases pass across the three compiler variants.
+Artifacts and full stage dumps:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-float-destination-2byduooy`.

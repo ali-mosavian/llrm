@@ -16,6 +16,25 @@ def _body(operations):
     return lir.LirBody("floating", 0, (lir.LirBlock(0, insns),), {}, {})
 
 
+def test_square_keeps_the_next_used_operand_on_top():
+    """FPDEEP shuffled p back to the top immediately after forming p*p."""
+    value, square, total, answer = (ir.Held(index, 10) for index in range(1, 5))
+    cell = ir.Mem(Addr(Space.FRAME, -4), 4)
+    body = _body([
+        ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (value,), (cell,)),
+        ir.Semantics(ir.Operation.FLOAT_ARITH, "fmul", (square,), (value, value)),
+        ir.Semantics(ir.Operation.FLOAT_ARITH, "fadd", (total,), (value, value)),
+        ir.Semantics(ir.Operation.FLOAT_ARITH, "fdiv", (answer,), (square, total)),
+        ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cell,), (answer,)),
+    ])
+    result = floatalloc.allocated(body)
+    assert not any(one.what.name == "fxch" for one in result.insns)
+    product = next(one.what for one in result.insns if one.what.name == "fmul")
+    assert product.dests == (ir.St(1),)
+    assert product.sources == (ir.St(1), ir.St(0))
+    assert all(select.emit(one.what) is not None for one in result.insns)
+
+
 def test_ninth_float_uses_an_owned_extended_precision_spill():
     """Nine live FP values previously refused allocation instead of preserving 80 bits."""
     from qbopt.backend import frame
