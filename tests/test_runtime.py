@@ -58,6 +58,47 @@ def test_evk1_user_definition_overrides_runtime_alias() -> None:
     assert runtime.per_call({0: "B$EVK1"}, "pds71", frozenset({"B$EVK1"}))[0] == runtime.own("B$EVK1")
 
 
+@pytest.mark.parametrize("tag", ["p-evt", "v-evt"])
+def test_event_stub_near_call_has_no_register_arguments(tag: str) -> None:
+    """ADDRM /V refused at 0048 before its first statement could execute."""
+    from qbopt.objectfile import module
+    found = module.load(Path(f"fixtures/omf/addrm-{tag}.obj"))
+    routine = runtime.for_module(found)[0x48]
+    assert routine.inputs == frozenset()
+    assert routine.cleanup == 0
+    assert routine.enters_user_code and runtime.barrier(routine)
+    assert routine.reads is routine.writes is Memory.ANY
+
+
+def test_changed_event_stub_remains_unknown() -> None:
+    from qbopt.objectfile import module
+    found = module.load(Path("fixtures/omf/addrm-p-evt.obj"))
+    for at in range(0x30, 0x42):
+        code = bytearray(found.code)
+        code[at] ^= 1
+        assert 0x48 not in runtime.for_module(replace(found, code=bytes(code)))
+
+
+@pytest.mark.parametrize("field", [0x34, 0x3E])
+def test_event_stub_requires_exact_relocation(field: int, monkeypatch) -> None:
+    from qbopt.objectfile import module, omf
+    found = module.load(Path("fixtures/omf/addrm-p-evt.obj"))
+    original = omf.fixups
+    def changed(records):
+        return [replace(one, disp=1) if one.seg == found.seg and one.offset == field else one
+                for one in original(records)]
+    monkeypatch.setattr(omf, "fixups", changed)
+    assert 0x48 not in runtime.for_module(found)
+
+
+@pytest.mark.parametrize("tag", ["p-evt", "v-evt"])
+def test_addrm_event_adapter_emits_without_fallback(tag: str) -> None:
+    """ADDRM /V had no output: strict lowering refused the call at 0048."""
+    from qbopt import wholeseg
+    result = wholeseg.emitted(Path(f"fixtures/omf/addrm-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+
+
 @pytest.mark.parametrize("family", ["qb45", "pds71", "vbdos"])
 def test_command_line_has_bounded_inputs_without_optimistic_effects(family: str) -> None:
     """nbody refused strict emission at COMMAND$ before reaching its integrator."""

@@ -311,6 +311,8 @@ def for_module(found) -> "dict[int, Contract]":
 
     family = module.family(found.records)
     contracts = per_call(found.calls, family, module.defines(found.records, found.seg))
+    from qbopt.abi import events
+    contracts.update(events.contracts(found))
     if family == "vbdos":
         _zero_entry_sites(found, contracts)
     return contracts

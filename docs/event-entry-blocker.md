@@ -1,7 +1,7 @@
 # Event-entry emission blocker
 
-Current full `tools/opportunity.py --targets` exits nonzero. In particular,
-PDS and VBDOS event-enabled ADDRM both refuse at the module's near call:
+The earlier full `tools/opportunity.py --targets` exited nonzero. In particular,
+PDS and VBDOS event-enabled ADDRM both refused at the module's near call:
 `0x0048: this call's interface is not established`. The local event stub's
 far jump names B$EVK1, not B$EVCK. Many event-enabled rows share this blocker;
 they must not be reported as completed or compared to event-free targets.
@@ -17,7 +17,46 @@ The family-specific B$EVK1 contract therefore inherits the existing B$EVCK
 interface, including arbitrary memory effects and entry into user code.
 Unknown families and QB45 do not acquire this alias. This does not recognize
 the compiler's near-call stub or prove equality between runtime versions;
-the production refusal and before/after assembly remain unchanged.
+the alias alone left the production refusal and assembly unchanged.
+
+## Near-call adapter established
+
+`abi/events.py` now recognizes the exact compiler adapter and both external
+relocations, only for these established runtime families. Its pending path
+pops the near return IP into AX, pushes CS then IP, and tail-jumps to EVK1.
+Its no-event path returns directly. Neither path takes caller arguments.
+The resulting call contract retains all EVK1 clobbers and arbitrary memory
+effects; no MIR pass needs to recognize the machine sequence.
+
+Both ADDRM event objects now emit through LIR. The regression fails at 0048
+with recognition disabled and passes with it enabled. Focused PDS/VBDOS
+runtime runs pass two cases each; these do not exercise a pending handler.
+Object sizes change 1117→1076 and 1397→1310 bytes respectively, while code
+segment sizes grow 265→291 and 260→288: object size is not a speed metric.
+
+Selected PDS adapter assembly, before and after (relocations shown by name):
+
+```asm
+; before                         ; after
+0030 jmp 0042                    0030 sub sp,6
+                                0033 jmp 0046
+0032 cmp word [EVTFLG],0          0035 cmp word [EVTFLG],0
+0037 jne 003a                    003b jne 003e
+0039 ret                         003d ret
+003a pop ax                      003e pop ax
+003b push cs                     003f push cs
+003c push ax                     0040 push ax
+003d jmp far B$EVK1              0041 jmp far B$EVK1
+; first poll
+0048 call 0032                   004c call 0035
+```
+
+Remaining instrumentation issue: the final assembly dumper applies BC's
+entry-stub discovery to rewritten bytes. The inserted frame setup precedes
+the entry jump, so it misses the stub at 0035 and reports unmapped code.
+Before/after stage files were collected, but a complete emitted listing and
+event-preserving target ratio require correcting that discovery. Pending
+handler execution still needs a focused runtime witness.
 
 The shipped PDS `BCL71ENR.LIB`, module `..\rt\evtcore.asm`, defines B$EVK1
 at segment 1 offset 0103. Direct disassembly and the dependency-aware contract
