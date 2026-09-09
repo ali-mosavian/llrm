@@ -882,6 +882,9 @@ class MirBody:
     # register the loop does not already use. wholeseg.py colours with
     # these and hands the result to layout.
     pins: dict[Value, Register_] = field(default_factory=dict)
+    # Loader-established literal bytes, valid on entry only. They are not
+    # immutable: ordinary alias and call effects invalidate these facts.
+    initial: tuple[tuple[MemRef, Const], ...] = ()
 
     def block(self, at: int) -> MirBlock | None:
         return next((one for one in self.blocks if one.at == at), None)
@@ -1864,6 +1867,7 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
         ),
         dict(namer.origin),
         {again.get(one, one): where for one, where in body.pins.items()},
+        body.initial,
     )
 
 
@@ -2173,6 +2177,9 @@ def bodies(
             built = raising_floats.annotated(built)
             from qbopt.frontend import raising_float_values
             built = raising_float_values.raised(built)
+            if body.body.kind == "main":
+                from qbopt.frontend import raising_literals
+                built = raising_literals.initialized(built, found)
             found.refs.update(_referenced(built, found))
             held = {**_returned(built), **_folded(built, found, blocks)}
             if held:

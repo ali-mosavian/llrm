@@ -193,7 +193,7 @@ def loop_exits(body: mir.MirBody, dgroup: frozenset[int], calls: dict) -> tuple[
     if not any(op.kind is mir.Kind.FSTORE for block in body.blocks for op in block.ops):
         return ()
     integers = consts.known(body, dgroup, calls)
-    memory = consts.cells(body, dgroup, calls, integers)
+    memory = cells(body, dgroup, calls)
     blocks = {block.at: block for block in body.blocks}
     predecessors = loops.predecessors(body.blocks)
     exits = []
@@ -262,8 +262,17 @@ def exit_cells(body: mir.MirBody, dgroup: frozenset[int], calls: dict) -> dict[t
 
 def known(body: mir.MirBody, dgroup: frozenset[int], calls: dict[int, str], *, initial=None) -> dict[mir.Value, Finite]:
     """Numeric facts, optionally given independently established entry bytes."""
-    integers = consts.known(body, dgroup, calls)
-    seed = {(addr, 1): consts.Known(byte, 1) for addr, byte in (initial or {}).items()}
+    return _analyzed(body, dgroup, calls, initial)[0]
+
+
+def cells(body: mir.MirBody, dgroup: frozenset[int], calls: dict) -> dict:
+    """Memory facts including exact floating storage conversions."""
+    return _analyzed(body, dgroup, calls, None)[1]
+
+
+def _analyzed(body, dgroup, calls, initial):
+    seed = None if initial is None else {(addr, 1): consts.Known(byte, 1) for addr, byte in initial.items()}
+    integers = consts.known(body, dgroup, calls, initial=seed)
     facts: dict[mir.Value, Finite] = {}
     changed = True
     while changed:
@@ -289,4 +298,4 @@ def known(body: mir.MirBody, dgroup: frozenset[int], calls: dict[int, str], *, i
                             if isinstance(target, mir.Held) and target.width == 10 and target.value not in facts:
                                 facts[target.value] = result
                                 changed = True
-    return facts
+    return facts, memory

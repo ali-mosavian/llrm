@@ -10,7 +10,7 @@ from qbopt.analysis import floatfacts, loops
 from qbopt.model import mir
 
 
-@pytest.mark.parametrize("tag", ["p-g2", "v-g3"])
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_emitted_seed_and_final_store_share_the_correct_symbol(tag):
     """FPCSE printed 48.75 instead of 487.5 when its new seed lost its relocation."""
     from qbopt import wholeseg
@@ -27,20 +27,20 @@ def test_emitted_seed_and_final_store_share_the_correct_symbol(tag):
     ops = [op for _, body in bodies for block in body.blocks for op in block.ops]
     seed, = [op for op in ops if op.kind is mir.Kind.STORE and op.args == (mir.Const(0x43db6000, 4),)]
     assert seed.stores[0].addr == accumulator.addr
-    assert any(op.kind is mir.Kind.FSTORE and op.stores[0].addr == accumulator.addr for op in ops)
+    assert next(op for op in reversed(ops) if op.kind is mir.Kind.FSTORE).stores[0].addr == accumulator.addr
     final_counter, = [op for op in ops if op.kind is mir.Kind.STORE and op.args == (mir.Const(11, 2),)]
     assert final_counter.stores[0].addr == counter.addr
     assert all(not loops.loops(body.blocks, body.entry) for _, body in bodies)
 
 
-@pytest.mark.parametrize("tag", ["p-g2", "v-g3"])
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_exact_loop_retains_checkpoint_and_final_iteration(tag):
     """FPCSE computes 487.5, but previously repeated its exact FP body ten times."""
     from qbopt.optimize import floatloop
     path = Path(f"fixtures/omf/fpcse-{tag}.obj")
     found = corpus.loaded(path)
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
-    latch = next(block for block in body.blocks if any(op.floating for op in block.ops))
+    latch = body.block(next(iter(loops.loops(body.blocks, body.entry)[0].latches)))
     changed = floatloop.specialized(body, found.dgroup, found.calls)
     assert changed is not body
     assert not loops.loops(changed.blocks, changed.entry)

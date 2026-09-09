@@ -13,7 +13,8 @@ the number alone would be wrong in the direction that matters: it would fold
 a 32-bit use of a value only half of which is known, and produce a plausible
 answer that is not the program's.
 
-Memory facts come from explicit stores, not assumed static initial contents.
+Memory facts come from explicit stores and loader-established entry facts
+supplied by the raise, not assumed zero-filled or immutable static contents.
 Adjacent known fragments can supply a wider read only when every requested byte
 is covered. Unknown and overlapping writes still invalidate the cell facts.
 Phi inputs and memory facts meet on agreement across incoming paths.
@@ -169,6 +170,10 @@ def cells(
     7 even though the entry block says so three instructions earlier.
     """
     known = known if known is not None else {}
+    if initial is None:
+        initial = {}
+        for ref, value in body.initial:
+            initial.update(_fragments(ref, Known(value.n, value.width)))
     outof: dict[int, Cells | None] = {block.at: None for block in body.blocks}
     preds = {block.at: [one.at for one in body.blocks if block.at in one.succ] for block in body.blocks}
 
@@ -374,7 +379,7 @@ def known(
     body: mir.MirBody,
     dgroup: frozenset[int] | None = None,
     calls: dict[int, str] | None = None,
-    *, edges: dict[tuple[int, int], Cells] | None = None,
+    *, edges: dict[tuple[int, int], Cells] | None = None, initial: Cells | None = None,
 ) -> dict[mir.Value, Known]:
     """Every value this body computes that is a number, to a fixed point.
 
@@ -396,7 +401,7 @@ def known(
         # `n * k` inside the loop, which is three statements and a store
         # away.
         if dgroup is not None and calls is not None:
-            held = cells(body, dgroup, calls, facts, edges=edges)
+            held = cells(body, dgroup, calls, facts, edges=edges, initial=initial)
         for block in body.blocks:
             # A join is known where every path into it agrees. Nothing else
             # about a phi is knowable -- and this is what makes the

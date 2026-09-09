@@ -2604,3 +2604,45 @@ The 97-primary-object before/after audit changes only FPCSE/FPCSEX across the
 three compilers, with no new emission refusals. All six affected runtime cases
 pass. Runtime artifacts: `qbopt-fpcse-final-relocated-226hmxj3` in the system
 temporary directory. Complete stage dumps: `/tmp/qbopt-fpcse-single-checked`.
+
+### QuickBASIC literal initialization reaches the same FP optimization
+
+The raise now records explicit unrelocated numeric literal bytes as main-body
+entry memory facts. These survive SSA rebuilding but remain mutable: aliases
+and calls invalidate them, and an explicit empty initial-memory input opts
+out. No procedure inherits initial loader contents. Only complete floating
+reads from nonoverlapping, unrelocated BC_CN records without public symbols
+qualify; the entire pool is not declared readonly.
+
+Floating memory analysis includes exact storage conversions. QuickBASIC's
+`fld literal / fstp variable` initializers therefore establish a, b, c and s,
+without removing those strict FP operations. Its ordinary CSE and checked
+final-iteration specialization now run with the same proof as PDS/VBDOS.
+
+```asm
+; before (initializers unchanged): ten iterations
+loop:
+    fld dword [a]
+    ; p, q and s calculations, including a repeated a+b
+    inc ax
+    cmp ax,10
+    jle loop
+
+; after (initializers unchanged): one checked iteration
+    fld dword [a]
+    mov dword [s],43db6000h   ; 438.75
+    ; shared a+b, then the original p, q and s calculation order
+    mov word [i],11
+```
+
+QuickBASIC FPCSE cost: **4652 -> 749**, code segment **212 -> 218 bytes**.
+The QB /O DOS run prints 487.5 and DONE. The 145-object audit (primary corpus
+plus all floating variants) changes only fpcse-q-O, fpcse-q-O-zd and
+fpcse-q-noO, with no new refusals. PDS/VBDOS and FPCSEX output are unchanged.
+The focused checks include missing bytes, relocation-bearing records,
+procedure entry, alias invalidation, SSA rebuilding and emitted seed/final
+store relocation on all three compilers.
+
+Stage dumps: `/tmp/qbopt-fpcse-q-pool-before` and
+`/tmp/qbopt-fpcse-q-pool-after`. Runtime artifacts:
+`qbopt-q-literal-pool-i9b_skt4` under the system temporary directory.

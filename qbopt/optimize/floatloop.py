@@ -21,7 +21,7 @@ def specialized(body: mir.MirBody, dgroup: frozenset[int], calls: dict) -> mir.M
     blocks = {block.at: block for block in body.blocks}
     predecessors = loops.predecessors(body.blocks)
     facts = consts.known(body, dgroup, calls)
-    memory = consts.cells(body, dgroup, calls, facts)
+    memory = floatfacts.cells(body, dgroup, calls)
     for loop in loops.loops(body.blocks, body.entry):
         if (proof := proofs.get(loop.header)) is None:
             continue

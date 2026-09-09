@@ -83,6 +83,14 @@ delete the floating sequence or assume a rounding mode. Strict floating
 operations also stop dead-store elimination and loop-store sinking: an
 exception can expose memory before a later overwrite.
 
-PDS/VBDOS FPCSE now executes one such iteration, seeded with SINGLE 438.75
+FPCSE now executes one such iteration, seeded with SINGLE 438.75
 after its first load, and still prints 487.5. The numeric proof does not yet
-cover QuickBASIC's constant-pool inputs or runtime-input FPCSEX.
+cover runtime-input FPCSEX.
+
+QuickBASIC's explicit literal bytes are raised as entry memory facts, not as
+immutable cells. Only complete direct floating reads of unrelocated,
+nonoverlapping BC_CN records in the main body qualify; public pool segments,
+missing bytes and procedure entries do not. Calls and aliases invalidate the
+facts normally. BC_CN's descriptor records are not assumed to be constants.
+Exact floating stores feed memory analysis, so the original literal-loading
+FP sequence establishes the same scalar entry values as PDS's integer stores.
