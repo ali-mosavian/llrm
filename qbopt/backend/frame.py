@@ -20,9 +20,9 @@ from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.objectfile.module import Space
 
-# Every slot is a word. BC's own frame is word-aligned throughout and a
-# spilled value is at most four bytes, which is two of these.
+# BC's frame is word-aligned. Extended floating spills occupy five words.
 WORD = 2
+type SlotKey = int | tuple[str, int]
 ENTER = "B$ENRA"
 LEAVE = "B$EXSA"
 RUNTIME_SIZE = 10  # runtime/inc/stack.inc: FR_SIZE, below BP and above locals.
@@ -39,21 +39,21 @@ class Frame:
     # The deepest displacement BC's own code already reaches, which is
     # negative. Everything this hands out is below it.
     floor: int
-    slots: dict[int, int] = field(default_factory=dict)  # value id -> displacement
+    slots: dict[SlotKey, int] = field(default_factory=dict)
 
     @property
     def size(self) -> int:
         """How many bytes the prologue has to reserve beyond BC's own."""
         return -(min(self.slots.values(), default=self.floor) - self.floor)
 
-    def slot(self, value: int, width: int) -> int:
+    def slot(self, value: SlotKey, width: int) -> int:
         """This value's displacement, creating one where it has none."""
         if value not in self.slots:
             lowest = min(self.slots.values(), default=self.floor)
             self.slots[value] = lowest - max(width, WORD)
         return self.slots[value]
 
-    def cell(self, value: int, width: int) -> ir.Mem:
+    def cell(self, value: SlotKey, width: int) -> ir.Mem:
         """The memory operand that reads or writes this value's slot."""
         return ir.Mem(ir.Addr(Space.FRAME, self.slot(value, width)), width, Register.BP, 0, 2)
 

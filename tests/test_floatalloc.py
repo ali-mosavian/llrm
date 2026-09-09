@@ -16,6 +16,43 @@ def _body(operations):
     return lir.LirBody("floating", 0, (lir.LirBlock(0, insns),), {}, {})
 
 
+def test_ninth_float_uses_an_owned_extended_precision_spill():
+    """Nine live FP values previously refused allocation instead of preserving 80 bits."""
+    from qbopt.backend import frame
+    cell = ir.Mem(Addr(Space.FRAME, -4), 4)
+    values = [ir.Held(index, 10) for index in range(1, 10)]
+    body = _body([ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (value,), (cell,)) for value in values]
+                 + [ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cell,), (value,)) for value in values])
+    slots = frame.Frame(-4)
+    integer_scratch = slots.cell(1, 2)
+    allocated = floatalloc.allocated(body, slots)
+    spills = [one for one in allocated.insns if one.what.name == "fstp" and one.what.dests[0].width == 10]
+    assert spills and slots.size >= 10
+    assert all(one.what.dests[0].addr != integer_scratch.addr for one in spills)
+    stack, memory, answers = [], {}, []
+    inputs = iter(range(1, 10))
+    for one in allocated.insns:
+        what = one.what
+        assert select.emit(what) is not None
+        match what.name:
+            case "fld":
+                source = what.sources[0]
+                value = memory[source.addr.disp] if source.width == 10 else next(inputs)
+                stack.insert(0, value)
+                assert len(stack) <= 8
+            case "fxch":
+                index = what.sources[1].index
+                stack[0], stack[index] = stack[index], stack[0]
+            case "fstp":
+                value = stack.pop(0)
+                if what.dests[0].width == 10:
+                    memory[what.dests[0].addr.disp] = value
+                    assert one.covers[0] == one.covers[1]
+                else:
+                    answers.append(value)
+    assert answers == list(range(1, 10)) and not stack
+
+
 @pytest.mark.parametrize("boundary", ["linear", "fork", "join", "entry"])
 def test_shared_float_crosses_only_a_unique_straight_line_edge(boundary):
     """A shared sum was refused at a block edge despite one unchanged stack path."""

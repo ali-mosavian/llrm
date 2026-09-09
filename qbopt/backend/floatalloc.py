@@ -27,6 +27,7 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
     }
     blocks = []
     stack: list[int] = []
+    spilled: dict[int, ir.Mem] = {}
     remaining = Counter()
     for index, block in enumerate(body.blocks):
         if any(phi.result in floating or any(value in floating for _, value in phi.incoming)
@@ -60,11 +61,49 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
                                       for arg in (*what.sources, *what.dests)):
                 if floating.intersection((*one.uses, *one.defines)):
                     raise Unlowered("floating value used by an unmodelled instruction")
-                if stack and (what is None or what.op in (ir.Operation.CALL, ir.Operation.BARRIER)
+                if (stack or any(remaining[value] for value in spilled)) and (what is None or what.op in (ir.Operation.CALL, ir.Operation.BARRIER)
                               or any(isinstance(arg, ir.St) for arg in (*what.sources, *what.dests))):
                     raise Unlowered("floating stack crosses an unmodelled instruction")
                 insns.append(one)
                 continue
+
+            used = Counter(arg.value for arg in what.sources if isinstance(arg, ir.Held) and arg.width == 10)
+            missing = [value for value in used if value not in stack]
+            extra = 0
+            match what.op:
+                case ir.Operation.FLOAT_LOAD:
+                    extra = 1
+                case ir.Operation.FLOAT_STORE | ir.Operation.FLOAT_ARITH | ir.Operation.FLOAT_UNARY:
+                    if what.sources and isinstance(what.sources[0], ir.Held):
+                        value = what.sources[0].value
+                        extra = int(remaining[value] > used[value])
+                case ir.Operation.FLOAT_ARITH_POP:
+                    operands = [arg.value for arg in what.sources if isinstance(arg, ir.Held) and arg.width == 10]
+                    extra = sum(remaining[value] > used[value] for value in operands)
+                    if len(operands) == 2 and operands[0] == operands[1]:
+                        extra = max(extra, 1)
+            while len(stack) + len(missing) + extra > 8:
+                if frame is None:
+                    raise Unlowered("floating spill requires an owned frame")
+                victim = next((slot for slot in range(len(stack) - 1, -1, -1) if stack[slot] not in used), None)
+                if victim is None:
+                    raise Unlowered("floating instruction requires too many stack operands")
+                if victim:
+                    operands = ir.St(0), ir.St(victim)
+                    insns.append(lir.Insn(one.at, (one.at, one.at),
+                        ir.Semantics(ir.Operation.EXCHANGE, "fxch", operands, operands), (), ()))
+                    stack[0], stack[victim] = stack[victim], stack[0]
+                value = stack.pop(0)
+                cell = frame.cell(("floating", value), 10)
+                spilled[value] = cell
+                insns.append(lir.Insn(one.at, (one.at, one.at),
+                    ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cell,), (ir.St(0),)), (), ()))
+            for value in missing:
+                if value not in spilled:
+                    raise Unlowered("floating stack input is unavailable")
+                insns.append(lir.Insn(one.at, (one.at, one.at),
+                    ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ir.St(0),), (spilled[value],)), (), ()))
+                stack.insert(0, value)
 
             def source(arg):
                 if not isinstance(arg, ir.Held) or arg.width != 10:
@@ -167,6 +206,8 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
                 widths=tuple((value, width) for value, width in one.widths if value not in floating)))
         if stack and index not in continues:
             raise Unlowered("floating stack live-out requires cross-block allocation")
+        if index not in continues:
+            spilled.clear()
         blocks.append(replace(block, insns=tuple(insns)))
     return replace(body, blocks=tuple(blocks))
 

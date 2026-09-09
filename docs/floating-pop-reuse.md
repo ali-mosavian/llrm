@@ -56,3 +56,33 @@ The fail-first case verifies the selected sequence; fork, join and entry-edge
 variants remain refused. This does not implement floating PHIs, loop-carried
 stack assignments, arbitrary block ordering or spills. Calls and unmodelled
 operations remain barriers. The focused allocation/selection set has 61 passes.
+
+## Exact-width pressure spills
+
+When loading or preserving an operand would exceed eight stack entries,
+allocation now evicts a non-operand to an owned 10-byte frame slot. It reloads
+that value when needed and recalculates physical stack positions. Current
+operands are protected from eviction; no frame means an explicit refusal.
+Spill slots have a separate key namespace from integer-to-FP scratch slots,
+so a prior two-byte FILD scratch cannot be reused for a ten-byte value.
+
+Before, nine live FP values were refused. After, the ninth load can be preceded
+by (slot numbers depend on the current stack):
+
+```asm
+fxch st(7)
+fstp tword [spill]
+fld dword [ninthInput]
+; later, when the evicted value is consumed:
+fld tword [spill]
+```
+
+The spill retains the extended format rather than adding a SINGLE/DOUBLE
+conversion. These are waiting x87 operations at the next modeled FP operation,
+not permission to cross calls or unknown instructions with a live value.
+The fail-first nine-value regression simulates selected stack operations,
+checks all stored values in order, never exceeds eight entries, verifies
+ten-byte memory operands, and checks scratch-slot separation. Allocation,
+selection and integer spiller tests: 85 pass. The 154-object audit remains
+byte-for-byte unchanged; current suite costs are unchanged. Loop PHIs and
+arbitrary CFG stack reconciliation still remain to be implemented.
