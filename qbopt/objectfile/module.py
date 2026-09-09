@@ -262,11 +262,39 @@ def escaped(found: "Module") -> frozenset[tuple[int, int]]:
     if not fields:
         return frozenset()
     out = set()
+    values = _numeric_arguments(found)
     for at, end, text in _pushes(found):
+        if at in values:
+            continue
         for one in fields:
             if at <= one.offset < end:
                 out.add((one.index, one.disp))
     return frozenset(out)
+
+
+def _numeric_arguments(found: "Module") -> frozenset[int]:
+    """Complete adjacent push groups consumed by known by-value integer PRINTs."""
+    from iced_x86 import Mnemonic
+    from qbopt.abi import runtime
+    from qbopt.frontend import declen
+
+    pending, values = [], set()
+    at = found.start
+    while at < found.end:
+        insn = declen.decode(found.code, at)
+        if insn is None:
+            pending = []
+            at += 1
+            continue
+        if insn.insn.mnemonic == Mnemonic.PUSH:
+            pending.append(insn)
+        else:
+            width = runtime.integer_print_argument(found.calls.get(at, ""))
+            if width is not None and pending and sum(-one.insn.stack_pointer_increment for one in pending) == width:
+                values.update(one.at for one in pending)
+            pending = []
+        at = insn.end
+    return frozenset(values)
 
 
 def _pushes(found: "Module"):

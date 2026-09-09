@@ -452,6 +452,14 @@ def barrier(routine: Contract) -> bool:
 # so control does come back to the byte after the call.
 _PRINT_CLOBBERS = EVERY - {Reg.BP, Reg.SI, Reg.SP}
 
+
+def integer_print_argument(name: str) -> int | None:
+    """Bytes consumed as a by-value integer by prnval.asm's PRINTX path."""
+    if name not in {"B$PEI2", "B$PSI2", "B$PEI4", "B$PSI4"}:
+        return None
+    routine = contract(name)
+    return routine.cleanup if routine.established else None
+
 _PRINT_EVIDENCE = (
     "rt/prnval.asm: the entry point is `MOV AX,<term> SHL 8 + <type>` then `JMP SHORT B$PRINT` (B$PESD falls "
     "straight in). `cProc B$PRINT,<PUBLIC,FAR>,<SI>` saves si and the epilogue restores si and bp before "
