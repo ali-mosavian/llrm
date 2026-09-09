@@ -50,6 +50,11 @@ def scale(number: int, cpu: str) -> tuple[tuple[str, int], ...] | None:
             parts.append(("shl", shift))
         return tuple(parts)
     def clocks(parts):
+        if (cpu == "386" and len(parts) == 3 and parts[0][0] == "shl"
+            and 1 <= parts[0][1] <= 3 and parts[1] == ("add", 0) and parts[2][0] == "shl"):
+            # peephole.addresses selects LEA + SHL for this exact shape.
+            # Intel's 386 LEA entry gives two core clocks, before prefixes.
+            return 2 + cost(cpu, "shift_ri")
         # One copy seeds the accumulator without destroying the source.
         return cost(cpu, "mov_rr") + sum(cost(cpu, "shift_ri" if name == "shl" else "alu_rr")
                                          for name, _ in parts)

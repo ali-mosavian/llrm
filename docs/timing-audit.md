@@ -57,3 +57,12 @@ The chain's current estimate is 17 clocks including a seed move; the
 immediate IMUL's documented core cost is 13, not 22.
 This is a correction of the multiply input to selection, not a claim that
 the whole chain model or final machine schedule has been validated.
+
+The next fail-first check preserves factor ten's existing LEA + SHL choice:
+costing the pre-peephole shift/add/shift instead would wrongly replace it
+after the immediate correction. The exact three-operation shape recognized
+by `peephole.addresses` is ranked as LEA plus SHL on 386. Intel's LEA entry
+documents two core clocks:
+https://www.ardent-tool.com/CPU/docs/Intel/386/manuals/prref386/LEA.htm
+This remains a pre-allocation estimate; prefix and failed-coalescing costs
+remain part of the unfinished audit.

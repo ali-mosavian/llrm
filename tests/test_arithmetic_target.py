@@ -34,6 +34,7 @@ def test_unknown_cpu_is_not_silently_defaulted():
 def test_386_small_immediate_multiply_is_not_costed_as_unknown_dword():
     """The selector expanded x*85 using a 22-clock guess; its immediate multiply costs 13."""
     assert arithmetic.scale(85, "386") is None
+    assert arithmetic.scale(10, "386") is not None
 
 
 @pytest.mark.parametrize("number,clocks", [(0, 9), (1, 9), (8, 9), (9, 10), (20, 11), (85, 13), (127, 13)])
