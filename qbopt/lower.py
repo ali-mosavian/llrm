@@ -697,7 +697,7 @@ class Lowering:
                     covers=op.covers,
                     what=what,
                     defines=made
-                    if speaks
+                    if speaks and op.kind is not mir.Kind.CALL
                     else tuple(one.id for one in op.defines if not one.flags and one.id in self._read),
                     uses=read if speaks else tuple(one.id for one in op.uses if not one.flags),
                     requires=self._abi(op),

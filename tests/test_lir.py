@@ -668,6 +668,27 @@ def test_a_store_reads_the_value_its_cell_is_reached_by_and_writes_none() -> Non
     assert base.id not in next_one.uses, f"the move after it inherited {base.id}: uses={next_one.uses}"
 
 
+def test_call_with_inputs_keeps_its_implicit_result() -> None:
+    """nbody read COMMAND$ from an unwritten spill slot and skipped its simulation."""
+    from dataclasses import replace
+    from iced_x86 import Register
+    from qbopt import lower, runtime
+    from qbopt import ir as machine
+
+    source, result = mir.Value(1, 0, 0, 1, 1), mir.Value(2, 1, 0, 2, 2)
+    call = mir.Op(0, machine.Operation.CALL, "call", (result,), (source,), (), (), None,
+                  kind=mir.Kind.CALL, args=(mir.Held(source, 2),), covers=(0, 5))
+    push = mir.Op(5, machine.Operation.PUSH, "push", (), (result,), (), (), None,
+                  kind=mir.Kind.ARG, args=(mir.Held(result, 2),), covers=(5, 6))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (call, push), ()),),
+                       {source: Register.EAX, result: Register.EAX}, {})
+    contract = replace(runtime.worst("helper"), inputs=frozenset({runtime.Reg.AX}))
+    low = lower.lowered("one", body, {0: "helper"}, set(), {0: contract})
+    first, second = low.blocks[0].insns
+    assert result.id in first.defines
+    assert result.id in second.uses
+
+
 def test_a_call_still_defines_the_results_its_operands_do_not_name() -> None:
     """A call's semantics names no operand, and its results are the
     operation's own -- the runtime hands them back in registers the call
