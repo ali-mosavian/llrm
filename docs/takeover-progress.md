@@ -2646,3 +2646,45 @@ store relocation on all three compilers.
 Stage dumps: `/tmp/qbopt-fpcse-q-pool-before` and
 `/tmp/qbopt-fpcse-q-pool-after`. Runtime artifacts:
 `qbopt-q-literal-pool-i9b_skt4` under the system temporary directory.
+
+## Adjacent floating-point waits (2026-09-09)
+
+The backend peephole removes an explicit WAIT immediately before another
+waiting x87 instruction, within one block. Integer work, unknown instructions
+and non-waiting control instructions stop the scan. This is instruction
+selection cleanup, not permission for strict floating-point CSE or reassociation.
+Intel SDM Vol. 1 section 8.3.12 documents the implicit pending-exception check:
+https://cdrdv2-public.intel.com/835781/325462-sdm-vol-1-2abcd-3abcd-4.pdf
+
+FPCSEX, with symbolic operands restored for readability (/FPi bytes remain
+emulator instructions):
+
+```asm
+; before                       ; after
+fstp dword [p]                 fstp dword [p]
+wait
+fld dword [a]                  fld dword [a]
+; q calculation                ; q calculation
+fstp dword [q]                 fstp dword [q]
+wait
+fld dword [s]                  fld dword [s]
+; accumulation                 ; accumulation
+fstp dword [s]                 fstp dword [s]
+wait                           wait
+inc ax                         inc ax
+```
+
+PDS FPCSEX modeled cost **4562 -> 4462**, object **989 -> 985 bytes**;
+two waits per loop iteration disappear. PDS FPCSE cost **537 -> 527**,
+object **937 -> 933 bytes**. QuickBASIC FPCSE cost **749 -> 724**,
+object **974 -> 964 bytes**. These are modeled costs, not hardware timings;
+the floating reference target is still provisional.
+
+The 145-object audit changes 30 floating variants, all through LIR, with no
+new refusals. Focused peephole tests: 27 pass. DOS validation: FPCSE and
+FPCSEX on all three primary compilers, plus changed QB FPDEEP (11 cases)
+and FPEMU (12 cases), all pass (29 cases total). Stage files, including
+the exact prologue-to-peephole diff: `/tmp/qbopt-waits-final`.
+Runtime artifacts: `qbopt-waits-runtime-u8nzjbmj` in the system temporary
+directory. The major remaining FP opportunity is general value reuse across
+statements, not further WAIT cleanup.

@@ -9,6 +9,31 @@ from qbopt.model import ir, lir
 from qbopt.backend import peephole
 
 
+@pytest.mark.parametrize("middle", ["", "mov", "fnstsw", "fninit", None, "block"])
+def test_wait_elimination_does_not_cross_observable_work(middle):
+    """FPCSEX's redundant waits may disappear, but integer observers still need completion."""
+    def instruction(at, name):
+        what = None if name is None else ir.Semantics(ir.Operation.NOTHING, name, (), ())
+        return lir.Insn(at, (at, at + 1), what, (), ())
+    first, between, last = instruction(0, "wait"), instruction(1, middle), instruction(2, "fld")
+    blocks = (lir.LirBlock(0, (first, between, last), ()),)
+    if middle == "block":
+        blocks = (lir.LirBlock(0, (first,), (2,)), lir.LirBlock(2, (last,), ()))
+    result = peephole.waits(lir.LirBody("waits", 0, blocks, {}, {}))
+    assert any(one.what is not None and one.what.name == "wait" for one in result.insns) == (middle != "")
+
+
+@pytest.mark.parametrize("tag,waits", [("p-g2", 1), ("q-O", 2), ("v-g3", 1)])
+def test_fpcsex_keeps_only_waits_before_integer_work(tag, waits):
+    """Runtime-input FPCSEX issued three waits per iteration; two preceded waiting FP instructions."""
+    import corpus
+    from qbopt import wholeseg
+    result = wholeseg.emitted(Path(f"fixtures/omf/fpcsex-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    instructions = [one.insn for block in corpus.partitioned(result.data) for one in block.insns]
+    assert sum(str(one) == "wait" for one in instructions) == waits
+
+
 @pytest.mark.parametrize("change", [None, Register.CH, Register.AH])
 def test_repeated_copy_requires_unchanged_source_and_destination(change):
     """LNGMXX copied ECX into EAX twice around CDQ; partial writes must prevent reuse."""

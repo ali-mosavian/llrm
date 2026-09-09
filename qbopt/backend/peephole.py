@@ -13,7 +13,38 @@ class Peephole(LIRTransform):
     name = "peephole"
 
     def transform(self, body: lir.LirBody) -> lir.LirBody:
-        return constants(body)
+        return waits(constants(body))
+
+
+_WAITING = frozenset({
+    "wait", "fwait", "fld", "fild", "fst", "fstp", "fist", "fistp",
+    "fadd", "faddp", "fiadd", "fsub", "fsubp", "fsubr", "fsubrp", "fisub", "fisubr",
+    "fmul", "fmulp", "fimul", "fdiv", "fdivp", "fdivr", "fdivrp", "fidiv", "fidivr",
+    "fchs", "fabs", "fsqrt", "fxch", "fcom", "fcomp", "fcompp", "fucom", "fucomp", "fucompp",
+})
+
+
+def waits(body: lir.LirBody) -> lir.LirBody:
+    """An immediately following waiting instruction already checks pending FP exceptions.
+
+    Intel SDM Vol. 1 section 8.3.12. Never cross integer work, an unknown
+    instruction, a non-waiting control instruction, or a block boundary.
+    """
+    blocks = []
+    for block in body.blocks:
+        following = None
+        redundant = set()
+        for one in reversed(block.insns):
+            what = one.what
+            if what is not None and what.op is ir.Operation.NOTHING and not what.name:
+                continue
+            if (what is not None and what.name in {"wait", "fwait"}
+                and following is not None and following.name in _WAITING):
+                redundant.add(id(one))
+            else:
+                following = what
+        blocks.append(replace(block, insns=tuple(lir.without(block.insns, lambda one: id(one) in redundant))))
+    return replace(body, blocks=tuple(blocks))
 
 
 def constants(body: lir.LirBody) -> lir.LirBody:
