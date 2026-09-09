@@ -100,6 +100,8 @@ def semantics(op: mir.Op, was: ir.Semantics | None = None, place=None) -> ir.Sem
     # deleted. Where there is no such operand -- an operation a pass
     # invented -- ir.Held is the only honest answer and select resolves it.
     was_op, name = _MACHINE.get(op.kind, (op.op, op.name))
+    if op.kind is mir.Kind.BRANCH and not name and op.test in (mir.Kind.EQ, mir.Kind.NE):
+        was_op, name = ir.Operation.BRANCH, "je" if op.test is mir.Kind.EQ else "jne"
     if op.kind is mir.Kind.NOTHING and op.op is not ir.Operation.NOTHING:
         was_op, name = ir.Operation.NOTHING, "nop"
     args = op.args
