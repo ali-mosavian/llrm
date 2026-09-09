@@ -296,6 +296,10 @@ def _mir(bodies, found=None, verbose: bool = False, debug=None) -> None:
                     if numeric:
                         values += " exact=" + ",".join("-0" if fact.negative_zero else str(fact.value) for fact in numeric)
                 print(f"    {op.at:#06x}  {pad}{_says(op, cells, calls, verbose)}{values}")
+        if found is not None:
+            for proof in floatfacts.loop_exits(body, found.dgroup, calls):
+                values = ", ".join(f"{cells.of(ref)}={fact.n:#x}" for ref, fact in proof.stores)
+                print(f"\n    exact loop exit {proof.header:#x} after {proof.count} iterations: {values}")
         if cells.order:
             print("\n    where:")
             for line in cells.legend():

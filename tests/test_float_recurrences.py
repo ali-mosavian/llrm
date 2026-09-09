@@ -10,6 +10,52 @@ from qbopt.analysis import consts, floatfacts
 from qbopt.model import mir
 
 
+@pytest.mark.parametrize("count,bits", [(3, 0x43124000), (10, 0x43f3c000)])
+def test_loop_exit_analysis_uses_the_actual_bound(count, bits):
+    """FPCSE's exit must follow its loop bound, not an assumed ten iterations."""
+    path = Path("fixtures/omf/fpcse-p-g2.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    body = replace(body, blocks=tuple(replace(block, ops=tuple(
+        replace(op, args=(op.args[0], mir.Const(count, op.args[1].width)))
+        if op.kind is mir.Kind.SUB and len(op.args) == 2 and op.args[1] == mir.Const(10, 2) else op
+        for op in block.ops)) for block in body.blocks))
+    proofs = floatfacts.loop_exits(body, found.dgroup, found.calls)
+    assert len(proofs) == 1 and proofs[0].count == count
+    latch = next(block for block in body.blocks if any(op.floating for op in block.ops))
+    accumulator = next(op.stores[0] for op in reversed(latch.ops) if op.kind is mir.Kind.FSTORE)
+    assert dict(proofs[0].stores)[accumulator] == consts.Known(bits, 4)
+
+
+@pytest.mark.parametrize("change", ["bound", "header_alias", "header_call"])
+def test_loop_exit_analysis_rejects_unproved_control_or_header_effects(change):
+    path = Path("fixtures/omf/fpcse-p-g2.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    header = next(block for block in body.blocks if block.phis and block.ops[-1].kind is mir.Kind.BRANCH)
+    def changed(op):
+        if change == "bound" and op.kind is mir.Kind.SUB:
+            return replace(op, args=(op.args[0], mir.Opaque(None, "unknown bound")))
+        if op.stores:
+            if change == "header_alias":
+                return replace(op, stores=(mir.MemRef(None, 2),))
+            if change == "header_call":
+                return replace(op, kind=mir.Kind.CALL)
+        return op
+    body = replace(body, blocks=tuple(replace(block, ops=tuple(map(changed, block.ops)))
+                                     if block is header else block for block in body.blocks))
+    assert floatfacts.loop_exits(body, found.dgroup, found.calls) == ()
+
+
+def test_stage_dump_exposes_proved_loop_exit(capsys):
+    from tools import stages
+    path = Path("fixtures/omf/fpcse-p-g2.obj")
+    found = corpus.loaded(path)
+    stages._mir(mir.bodies(found, corpus.partitioned(path)), found)
+    report = capsys.readouterr().out
+    assert "after 10 iterations" in report and "0x43f3c000" in report
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "v-g3"])
 def test_fpcse_memory_recurrence_has_exact_single_exit(tag):
     """FPCSE retained ten iterations although its rounded accumulator exits at 487.5."""

@@ -2513,3 +2513,20 @@ Operand decoding is shared with existing scalar floating facts rather than
 duplicated. This analysis is not wired to delete a loop: its caller must prove
 the trip count and execution shape, and elimination must separately preserve
 pending-exception synchronization and observable final memory state.
+
+### Floating loop exits use proved control flow
+
+`floatfacts.loop_exits` now connects recurrence evaluation to the existing
+canonical-loop and nonwrapping induction proofs. It derives a unique positive
+trip count from the actual comparison, obtains entry bytes from explicit
+preheader stores, and rejects header effects that can disturb floating state.
+Only the final values of floating stores are reported, not stale header memory.
+No caller-supplied fixture count is needed.
+
+Before: the numeric evaluator required a manually supplied count of ten.
+After: FPCSE's MIR proves ten iterations and SINGLE 487.5; changing its bound
+to three proves SINGLE 146.25. Unknown bounds, unknown header aliases and calls
+refuse. The 71 focused tests pass. Each MIR stage can display the proof, e.g.
+`exact loop exit 0xa9 after 10 iterations: ... D:4=0x43f3c000` in
+`/tmp/qbopt-fpcse-proved-exit`. ASM and the 3956 PDS cost are unchanged: the
+remaining step is consuming this proof while preserving observable effects.

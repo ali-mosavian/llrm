@@ -3,7 +3,7 @@
 from dataclasses import dataclass, replace
 from fractions import Fraction
 
-from qbopt.analysis import consts
+from qbopt.analysis import consts, induction, loops
 from qbopt.model import mir
 from qbopt.model.floating import Format, Precision, Semantics
 
@@ -179,6 +179,64 @@ def repeated(ops: tuple[mir.Op, ...], count: int, initial: consts.Cells,
                     return None
                 floating[op.results[0].value] = result
     return memory
+
+
+@dataclass(frozen=True, slots=True)
+class LoopExit:
+    header: int
+    count: int
+    stores: tuple[tuple[mir.MemRef, consts.Known], ...]
+
+
+def loop_exits(body: mir.MirBody, dgroup: frozenset[int], calls: dict) -> tuple[LoopExit, ...]:
+    """Proven numeric exits of canonical loops with storage-rounded FP state."""
+    if not any(op.kind is mir.Kind.FSTORE for block in body.blocks for op in block.ops):
+        return ()
+    integers = consts.known(body, dgroup, calls)
+    memory = consts.cells(body, dgroup, calls, integers)
+    blocks = {block.at: block for block in body.blocks}
+    predecessors = loops.predecessors(body.blocks)
+    exits = []
+    for loop in loops.loops(body.blocks, body.entry):
+        if len(loop.body) != 2 or len(loop.latches) != 1:
+            continue
+        header = blocks[loop.header]
+        latch = blocks[next(iter(loop.latches))]
+        outside = set(predecessors.get(header.at, ())) - set(loop.body)
+        if len(outside) != 1 or latch.phis:
+            continue
+        entry = blocks[outside.pop()]
+        if entry.succ != (header.at,) or not entry.ops:
+            continue
+        references = tuple(ref for op in latch.ops for ref in (*op.loads, *op.stores))
+        stored = tuple(dict.fromkeys(ref for op in latch.ops if op.kind is mir.Kind.FSTORE for ref in op.stores))
+        if not stored or any(
+            op.barrier or op.kind not in {mir.Kind.NOTHING, mir.Kind.COPY, mir.Kind.STORE,
+                                          mir.Kind.SUB, mir.Kind.BRANCH}
+            or op.floating is not None or op.stack is not None
+            or any(mir.overlapping(written, read, dgroup) for written in op.stores for read in references)
+            for op in header.ops
+        ):
+            continue
+        counts = set()
+        for counter in induction.basics(body, loop).values():
+            width = counter.start.width
+            last = induction._last_counter(body, loop, counter, integers, width)
+            start = induction._signed(counter.start, integers, width)
+            step = induction._signed(counter.step, integers, width)
+            if last is not None and start is not None and step:
+                counts.add((last - start) // step + 1)
+        if len(counts) != 1:
+            continue
+        count = counts.pop()
+        initial = consts._kills(memory[entry.at, len(entry.ops) - 1], entry.ops[-1], integers, dgroup, calls)
+        final = repeated(latch.ops, count, initial, dgroup, integers)
+        if final is None:
+            continue
+        facts = tuple((ref, consts._cell(final, ref)) for ref in stored)
+        if all(fact is not None for _, fact in facts):
+            exits.append(LoopExit(header.at, count, facts))
+    return tuple(exits)
 
 
 def known(body: mir.MirBody, dgroup: frozenset[int], calls: dict[int, str], *, initial=None) -> dict[mir.Value, Finite]:
