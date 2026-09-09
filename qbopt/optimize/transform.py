@@ -492,7 +492,8 @@ def _computation(op: Op, stands: dict[int, mir.Value], whole: dict[int, int]) ->
             named.append(("m", ref))
         else:
             return None
-    return (op.kind, op.floating if floating else op.name, tuple(named))
+    results = tuple(one.width for one in op.results if isinstance(one, mir.Held))
+    return (op.kind, op.floating if floating else op.name, tuple(named), results)
 
 
 def _reaches(at: int, where: int, then: int, index: int, doms, body, block) -> bool:

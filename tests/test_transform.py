@@ -1225,6 +1225,7 @@ def test_cse_refuses_an_operand_that_is_only_half_its_value() -> None:
         merges: dict = {}
         node = object()
         defines = (mir.Value(id=2, at=0, variable=2, version=1),)
+        results = (mir.Held(defines[0], 2),)
         args = (low,)
 
     assert transform._computation(Fake(), {}, {1: 4}) is None

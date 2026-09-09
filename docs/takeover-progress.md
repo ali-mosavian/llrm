@@ -2435,3 +2435,14 @@ mapping; seven numeric cases failed before unary evaluation was added.
 The focused set passes 75 tests; all 97 emitted outputs remain byte-identical
 to the preceding CSE commit. This does not yet enable unrestricted
 unary CSE or change the floating-environment proof requirement.
+
+### Value numbering includes result widths
+
+CSE keyed input widths but omitted output widths. Two `movsx` operations
+reading the same byte, one producing a word and the other a dword, therefore
+received the same value number. A focused MIR regression showed the dword
+consumer rewritten to read four bytes from the word result. The computation
+key now includes every held result's width, keeping those values distinct.
+The regression failed before the fix; 31 focused tests and three existing
+CSE tests pass. This is a general value-identity correction, not an FP-only
+exception to the CSE rules.
