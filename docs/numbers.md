@@ -3,6 +3,43 @@
 Every row carries what produced it. See `docs/measurement.md` for what each
 kind of number does and does not mean.
 
+## Runtime refresh — 2026-09-10, revision b040b61
+
+Three baseline runs followed by three optimized runs per benchmark, VBDOS
+`v-g3`, tuning CPU `386`, `conf/pinned.conf`, native-FPU replacement off.
+Both compiler logs report zero severe errors; both links completed without
+errors. Optimization required LIR emission. Every run completed with DONE;
+optimized printed answers matched baseline (the same output-precision limits
+described below apply). This is two benchmarks, not full-suite timing.
+
+| Program | Steps | Baseline median | Optimized median | BASE/OPT |
+|---|---:|---:|---:|---:|
+| nbody | 25,000 | 12,360.109 ms | 3,678.857 ms | 3.3598x |
+| fpbench | 50,000 | 7,768.941 ms | 5,820.381 ms | 1.3348x |
+
+Raw PIT ticks:
+
+- nbody baseline: `14747860, 14747858, 14747860`; optimized:
+  `4387656, 4389546, 4390658`.
+- fpbench baseline: `9269760, 9269754, 9269760`; optimized:
+  `6945674, 6944774, 6944774`.
+
+nbody is about 0.34% slower than the September 9 optimized median;
+fpbench is essentially unchanged. These observations do not identify a
+responsible pass and are not real-CPU latency measurements. In particular,
+the recent FPDEEP/FPEMU improvements must not be described as measured
+FPBENCH acceleration.
+
+| Optimized artifact | SHA256 |
+|---|---|
+| nbody OBJ | `44f2b1c6c678f91c20e6481d7be93c95784acad51f251d9812dfb776d62df97d` |
+| nbody EXE | `a1a2c8a7fca26cd285b93baa5a7e4e8a94160d33a8e87bee467b3dda73786e75` |
+| fpbench OBJ | `913abf64465fa5db450a84358b256ef42a3bc06b619960365d375b5c39df84f8` |
+| fpbench EXE | `0ec3907e2e980d16290a6afa57a132064972942656dc8ce65f2a548852c62146` |
+
+Build logs, executables and individual outputs are retained locally under
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-runtime-current-2wnpyctg`.
+
 ## Current nbody runtime check — 2026-09-09
 
 `bench/nbody.bas`, VBDOS `/O /FPi /R /G3 /E /Zi`, 25,000 steps,
