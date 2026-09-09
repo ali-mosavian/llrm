@@ -80,3 +80,45 @@ def test_lngmix_dividend_is_known_after_production_passes() -> None:
     assert divides
     for at, index, op in divides:
         assert consts._operand(op, op.args[0], facts, memory[at, index]) == consts.Known(100000, 4)
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_spill_uses_the_known_seven_as_an_immediate(tag):
+    """SPILL reloaded invariant h3=7 on each of its hundred inner iterations."""
+    from qbopt import blocks, module, omf, wholeseg
+    from iced_x86 import Code
+    result = wholeseg.emitted(Path(f"fixtures/omf/spill-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    found = module.of(omf.parse(result.data))
+    assert any(one.insn.code == Code.ADD_RM16_IMM8 and one.insn.immediate8to16 == 7
+               for one in blocks.instructions(found))
+
+
+def test_partial_write_keeps_the_untouched_initializer_bytes():
+    """SPILL forgot h3=7 when updating adjacent o1, because their initializer was one dword store."""
+    address = Addr(Space.SEGMENT, 10, 5)
+    whole = mir.MemRef(address, 4)
+    initializer = mir.Op(0, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.STORE,
+                         args=(mir.Const(7, 4),), stores=(whole,))
+    overwrite = mir.Op(1, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.STORE,
+                       stores=(mir.MemRef(address.plus(2), 2),))
+    before = consts._kills({}, initializer, {}, frozenset({5}), {})
+    after = consts._kills(before, overwrite, {}, frozenset({5}), {})
+    assert consts._cell(after, mir.MemRef(address, 2)) == consts.Known(7, 2)
+    assert consts._cell(after, whole) is None
+    assert consts._cell(after, mir.MemRef(address.plus(2), 2)) is None
+
+
+def test_memory_fact_meet_is_independent_of_initializer_width():
+    """Equivalent word and dword stores must agree at a control-flow join."""
+    address = Addr(Space.SEGMENT, 10, 5)
+    def store(where, width, number):
+        return mir.Op(0, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.STORE,
+                      args=(mir.Const(number, width),), stores=(mir.MemRef(where, width),))
+    wide = consts._kills({}, store(address, 4, 0x12345678), {}, frozenset({5}), {})
+    words = consts._kills({}, store(address, 2, 0x5678), {}, frozenset({5}), {})
+    words = consts._kills(words, store(address.plus(2), 2, 0x1234), {}, frozenset({5}), {})
+    assert wide == words
+    unknown = mir.Op(1, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.STORE,
+                     stores=(mir.MemRef(None, 2),))
+    assert consts._kills(wide, unknown, {}, frozenset({5}), {}) == {}

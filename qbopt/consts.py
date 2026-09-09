@@ -44,8 +44,8 @@ UNARY = {
 }
 
 
-# What a cell holds: keyed on its address and width, because two
-# widths at one address are two different facts.
+# Memory facts are stored as bytes so partial writes and control-flow
+# joins do not discard an untouched neighbor. Reads assemble their width.
 Cells = dict
 
 
@@ -99,6 +99,11 @@ def _put(op: mir.Op, known: dict[mir.Value, Known]) -> Known | None:
     return known[from_value[0]] if len(from_value) == 1 else None
 
 
+def _fragments(ref: mir.MemRef, fact: Known) -> Cells:
+    return {(ref.addr.plus(offset), 1): Known((fact.n >> (offset * 8)) & 255, 1)
+            for offset in range(min(ref.width, fact.width))}
+
+
 def _kills(
     here: Cells, op: mir.Op, known: dict[mir.Value, Known], dgroup: frozenset[int], calls: dict[int, str]
 ) -> Cells:
@@ -119,12 +124,12 @@ def _kills(
         }
         put = _put(op, known)
         if put is not None and ref.base is None and ref.segment is None:
-            here[(ref.addr, ref.width)] = put
+            here.update(_fragments(ref, put))
     if op.kind is mir.Kind.CALL and op.memory_values:
         here = dict(here)
         for ref, value in op.memory_values:
             if ref.addr is not None and ref.base is None and ref.segment is None:
-                here[(ref.addr, ref.width)] = Known(masked(value.n, value.width), value.width)
+                here.update(_fragments(ref, Known(masked(value.n, value.width), value.width)))
     return here
 
 

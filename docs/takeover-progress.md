@@ -1576,3 +1576,28 @@ successful completion report. Four fail-first cases reproduce that defect;
 all 13 scoreboard tests now pass. Valid targets still show their measured
 ratio; HARR remains 2246/1834 in the focused CLI check. No emitted code or
 target denominator was changed in this step.
+
+### SPILL: preserve and consume partial memory constants
+
+SPILL initialized neighboring h3/o1 with one dword store. Updating o1 then
+discarded the whole fact, including the unchanged h3=7 bytes. Memory facts
+are now canonical bytes, so partial stores invalidate only potentially
+overlapping bytes and equivalent initializer widths agree at CFG joins.
+Unknown writes remain conservative. Reads still require every byte known.
+
+Operand folding now uses these width-proven memory facts as well as SSA
+constants. It removes the replaced memory dependency and regenerates the
+instruction from its MIR operation; ordered operands are not reversed.
+The real SPILL fixtures now emit `add ...,7` instead of the invariant load
+on each inner iteration. PDS/QB/VBDOS modeled costs are 2806/2812/2816
+(about 2.50x of 1122), with PDS down from 3206. The accumulator remains in
+memory; this is not completion of SPILL's optimization work.
+
+Fail-first evidence covers the partial-write fact and all three emitted
+fixtures. Constant propagation tests passed (1036 cases before operand
+integration); the focused integration selection passed 91 cases. Six
+runtime programs (SPILL's two checks, NESTED, MATRIX, HARR, NBODY's 24
+checks, LNGMIX) passed through strict LIR on all three compilers. Artifacts:
+`qbopt-memory-constants-o7e3tm7t` in system temporary storage. Stage dumps:
+`/tmp/qbopt-spill-next`, `/tmp/qbopt-spill-byte-facts`,
+`/tmp/qbopt-spill-constant-operands`.

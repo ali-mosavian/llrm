@@ -1693,7 +1693,7 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
     facts = consts.known(body, dgroup, calls)
     memory = (
         consts.cells(body, dgroup, calls, facts)
-        if any(op.kind is mir.Kind.DIVMOD for block in body.blocks for op in block.ops)
+        if any(op.loads or op.kind is mir.Kind.DIVMOD for block in body.blocks for op in block.ops)
         else {}
     )
     if not facts and not memory:
@@ -1713,14 +1713,14 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
                 ops.extend(replacements)
                 changed |= replacements != (op,)
                 continue
-            made = _constant_operands(_folded_op(op, facts, wanted), facts)
+            made = _constant_operands(_folded_op(op, facts, wanted), facts, memory.get((block.at, index), {}))
             changed = changed or made is not op
             ops.append(made)
         out.append(replace(block, ops=tuple(ops)))
     return replace(body, blocks=tuple(out)) if changed else body
 
 
-def _constant_operands(op: Op, facts: dict) -> Op:
+def _constant_operands(op: Op, facts: dict, memory: dict | None = None) -> Op:
     """Propagate width-proven constants without reversing ordered operands."""
     if (
         op.kind not in (
@@ -1733,6 +1733,7 @@ def _constant_operands(op: Op, facts: dict) -> Op:
     if op.kind is mir.Kind.MUL and len(op.results) != 1:
         return op
     replaced = set()
+    removed = set()
     args = []
     ordered = op.kind in (mir.Kind.SUB, mir.Kind.SUB_BORROW, mir.Kind.DIVMOD)
     for index, arg in enumerate(op.args):
@@ -1742,9 +1743,14 @@ def _constant_operands(op: Op, facts: dict) -> Op:
         ):
             args.append(mir.Const(consts.masked(fact.n, arg.width), arg.width))
             replaced.add(arg.value)
+        elif ((not ordered or index == 1) and isinstance(arg, mir.Cell)
+              and not op.stores and not op.barrier and arg.ref in op.loads
+              and (fact := consts._cell(memory or {}, arg.ref)) is not None):
+            args.append(mir.Const(fact.n, arg.ref.width))
+            removed.add(arg.ref)
         else:
             args.append(arg)
-    if not replaced:
+    if not replaced and not removed:
         return op
     if not ordered and isinstance(args[0], mir.Const) and isinstance(args[1], mir.Held):
         args.reverse()
@@ -1752,6 +1758,10 @@ def _constant_operands(op: Op, facts: dict) -> Op:
     retained.update(value for ref in op.loads + op.stores for value in (ref.base, ref.segment) if value is not None)
     return replace(
         op, args=tuple(args),
+        loads=tuple(ref for ref in op.loads if ref not in removed),
+        node=None if removed else op.node,
+        made=None if removed else op.made,
+        raised=None if removed else op.raised,
         uses=tuple(value for value in op.uses if value not in replaced or value in op.merges or value in retained),
     )
 
