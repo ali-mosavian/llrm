@@ -75,6 +75,7 @@ def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | 
             if _answer(body, one.op) is not None
             and (
                 _multiplies(one, derived)
+                or one.op.kind is mir.Kind.DIVMOD
                 or one.offsets
                 and one.op.kind is mir.Kind.SHL
                 or any(isinstance(offset, mir.Cell) for offset, _ in one.offsets)

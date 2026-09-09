@@ -223,7 +223,91 @@ def derived(
             out.append(Derived(op, found[counter[0].value.id], _multiplier(op, by)))
     combined = {id(one.op): one for one in out}
     combined.update({id(one.op): one for one in _composed(body, inside, found, made, settled)})
+    combined.update({id(one.op): one for one in _quotients(body, loop, found)})
     return list(combined.values())
+
+
+def _signed(arg: mir.Arg, facts: dict, width: int) -> int | None:
+    if not isinstance(arg, (mir.Held, mir.Const)) or arg.width != width:
+        return None
+    fact = facts.get(arg.value) if isinstance(arg, mir.Held) else arg
+    if fact is None or fact.width < width:
+        return None
+    sign = 1 << (width * 8 - 1)
+    return ((fact.n & (sign * 2 - 1)) ^ sign) - sign
+
+
+def _last_counter(body: mir.MirBody, loop, counter: Affine, facts: dict, width: int) -> int | None:
+    """Last executed counter of a canonical pretested loop, proving its update cannot wrap."""
+    blocks = {block.at: block for block in body.blocks}
+    if len(loop.body) != 2 or len(loop.latches) != 1:
+        return None
+    header, latch = blocks[loop.header], blocks[next(iter(loop.latches))]
+    if latch.succ != (header.at,) or not header.ops or len(header.succ) != 2:
+        return None
+    branch = header.ops[-1]
+    if branch.kind is not mir.Kind.BRANCH or branch.target != latch.at:
+        return None
+    comparisons = [
+        op for op in header.ops[:-1]
+        if op.kind is mir.Kind.SUB and len(op.args) == 2 and not op.results
+        and len(op.defines) == 1 and op.defines[0].flags and op.defines[0] in branch.uses
+        and isinstance(op.args[0], mir.Held) and op.args[0].value.id == counter.value
+        and op.args[0].width == width
+    ]
+    if len(comparisons) != 1:
+        return None
+    start, step, bound = (
+        _signed(arg, facts, width) for arg in (counter.start, counter.step, comparisons[0].args[1])
+    )
+    if start is None or step is None or bound is None or step == 0:
+        return None
+    if step > 0 and branch.test in (mir.Kind.LE, mir.Kind.LT):
+        limit = bound - (branch.test is mir.Kind.LT)
+        distance = limit - start
+    elif step < 0 and branch.test in (mir.Kind.GE, mir.Kind.GT):
+        limit = bound + (branch.test is mir.Kind.GT)
+        distance = start - limit
+    else:
+        return None
+    if distance < 0:
+        return None
+    last = start + (distance // abs(step)) * step
+    sign = 1 << (width * 8 - 1)
+    return last if -sign <= last + step < sign else None
+
+
+def _quotients(body: mir.MirBody, loop, found: dict[int, Affine]) -> list[Derived]:
+    """Exact division of a non-wrapping recurrence is another recurrence."""
+    facts = consts.known(body)
+    out = []
+    for block in body.blocks:
+        if block.at not in loop.body or block.at == loop.header:
+            continue
+        for op in block.ops:
+            if op.kind is not mir.Kind.DIVMOD or len(op.args) != 2 or len(op.results) != 2:
+                continue
+            if op.loads or op.stores or op.barrier or not all(
+                isinstance(result, mir.Held) and result.width == 2 for result in op.results
+            ):
+                continue
+            dividend, divisor = op.args
+            if not isinstance(dividend, mir.Held) or dividend.width != 2 or dividend.value.id not in found:
+                continue
+            counter = found[dividend.value.id]
+            start, step, denominator = (_signed(arg, facts, 2) for arg in (counter.start, counter.step, divisor))
+            if start is None or step is None or denominator in (None, 0):
+                continue
+            if start % denominator or step % denominator:
+                continue
+            last = _last_counter(body, loop, counter, facts, 2)
+            if last is None or not all(-32768 <= value // denominator <= 32767 for value in (start, last)):
+                continue
+            quotient = Affine(
+                counter.value, mir.Const(start // denominator, 2), mir.Const(step // denominator, 2), loop.header,
+            )
+            out.append(Derived(op, quotient, mir.Const(1, 2)))
+    return out
 
 
 def _composed(
