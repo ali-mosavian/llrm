@@ -173,6 +173,17 @@ def test_branch_to_next_instruction_keeps_the_return() -> None:
     assert not result.unknown
 
 
+def test_report_groups_register_aliases_without_losing_effects() -> None:
+    from contracts import contract_report
+
+    original = contract("b001 b501 c3")
+    report = contract_report(original)
+    assert report["clobbers"] == {"eax": ["eax", "ax", "al"], "ecx": ["ecx", "cx", "ch"]}
+    for field in ("reads", "clobbers", "preserved", "restored"):
+        assert {name for group in report[field].values() for name in group} == set(getattr(original, field))
+    assert report["preserved"]["eax"] == ["ah", "eax[31:16]"]
+
+
 def test_budget_is_unknown() -> None:
     found = library("e80100 c3 31c0 c3")
     found.functions = 1

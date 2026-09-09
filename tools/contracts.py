@@ -543,6 +543,30 @@ def alias_contract(contract: Contract) -> Contract:
     )
 
 
+def grouped_registers(registers: list[str]) -> dict[str, list[str]]:
+    """Present overlapping aliases together without dropping partial effects."""
+    selected = set(registers)
+    groups: dict[str, list[str]] = {}
+    for name, lanes in sorted(
+        ALIASES.items(), key=lambda item: ("[" in item[0], -len(item[1]), item[0].endswith("l"), item[0])
+    ):
+        if name not in selected:
+            continue
+        family = lanes[0].split(":")[0]
+        if family in ("ds", "es", "ss", "fs", "gs"):
+            family = "segments"
+        groups.setdefault(family, []).append(name)
+    order = ("eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "segments", "flags")
+    return {family: groups[family] for family in order if family in groups}
+
+
+def contract_report(contract: Contract) -> dict:
+    report = asdict(contract)
+    for attribute in ("reads", "clobbers", "preserved", "restored"):
+        report[attribute] = grouped_registers(report[attribute])
+    return report
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("symbol", nargs="?")
@@ -578,6 +602,7 @@ def main() -> int:
     graph = library.graph_from(roots)
     contracts = summarize(graph)
     report = {
+        "schema_version": 2,
         "scope": "8/16/32-bit overlapping GP registers, data segments and aggregate flags; "
         "reads include saves; x87 unproved; "
         "SP described by cleanup only; conditional on normal return with immutable code, "
@@ -601,7 +626,7 @@ def main() -> int:
         ),
         "functions": {
             routine.name: {
-                **asdict(contracts[address]),
+                **contract_report(contracts[address]),
                 "dependencies": {
                     f"{at:04x}": library.label(target) if target else reason
                     for at, (target, reason) in routine.calls.items()

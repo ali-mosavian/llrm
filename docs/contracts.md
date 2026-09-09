@@ -16,6 +16,13 @@ local call targets are both followed. Relocations, not the placeholder call
 bytes, identify targets. Duplicate symbol definitions are ambiguous, not chosen
 by file order. Recursive components are identified separately from their callers.
 
+Report schema version 2 groups `reads`, `clobbers`, `preserved`, and `restored`
+by register family, instead of alphabetically interleaving aliases. For example,
+an AL write is reported as `"clobbers": {"eax": ["eax", "ax", "al"]}` and
+`"preserved": {"eax": ["ah", "eax[31:16]"], ...}`. Segment registers have
+their own `segments` group; flags have a `flags` group. No alias effects are
+removed, and the underlying analysis is unchanged.
+
 `--all` starts from every public entry in a `CODE`-class segment and analyzes
 shared dependencies once. Additional/custom classes can be selected by repeating
 `--code-class`. Other public entries are listed as excluded, not decoded as code.
