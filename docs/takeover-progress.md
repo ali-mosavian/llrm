@@ -2108,3 +2108,38 @@ contains both whole negations, rather than requiring them to survive opt.
 All 79 algebraic tests and 72 strict NBODY runtime cases pass. Dumps:
 `/tmp/qbopt-nbody-neg-whole` and `/tmp/qbopt-nbody-reverse-sub`. Runtime
 artifacts: `qbopt-reverse-difference-1c20xxm3` under the system temporary directory.
+
+### NBODY's remaining temporary store: missing object identity
+
+At 5eeabab, the optimized MIR retains the four-byte store at original
+0x17f to `[bp-0x16]` (L16). Its original load at 0x187 has been forwarded;
+there are **zero exact readers** in final MIR. That does not prove the store
+dead: querying the existing overlap relation finds 25 call reads, 10 indexed
+loads, eight argument reads, and one indirect floating load that may alias it.
+These are whole-body counts, not a claim that every listed read is reachable
+after this particular store. The raw emitted store remains in the inner loop.
+
+Two separate missing proofs explain retention. `avail.dead_stores` proves
+overwrite-before-read, not death at object lifetime end. `MemRef.beyond`
+narrows runtime reach only inside the program data segment; it says nothing
+about frame slots. `module.escaped` discovers relocated push/LEA addresses,
+not frame-derived pointers. Calling an unreferenced frame displacement private
+would bypass both missing proofs and is not a valid fix.
+
+The next architectural step is explicit memory-object identity, size/lifetime,
+and capture facts established during raising. Static arrays and frame objects
+need distinct identities; indexed accesses need proven bounds within their
+objects. Calls need reachability from actual pointer arguments and transitive
+contracts, retaining unknown effects and event callbacks conservatively.
+Then DSE can remove stores to unobserved, nonescaping local objects at lifetime
+end. It must not infer these facts from register names inside an MIR pass.
+
+This follows the local LLVM source's BasicAliasAnalysis::aliasCheck: different
+identified underlying objects imply NoAlias; a raw numeric displacement does
+not establish such an object. Source inspected from llvm-project HEAD with
+`git show HEAD:llvm/lib/Analysis/BasicAliasAnalysis.cpp` (lines 1571-1580).
+Acceptance requires fail-first NBODY store elimination plus retained stores
+when a frame address escapes, an unknown call can inspect it, an indexed
+access may reach it, or exceptional/event control flow observes it. No source
+optimization or runtime behavior was changed in this investigation; the
+363616 modeled NBODY cost remains the baseline.
