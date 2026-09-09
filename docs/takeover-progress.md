@@ -55,6 +55,17 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+Zero-fact checkpoint: identical, same-width Held operands of integer XOR/SUB
+now establish zero without requiring an input fact. Six fail-first/mutation
+regressions and all 998 constant checks pass. Strict LIR-only runtime transforms
+(refusal raises instead of falling back) pass matrix, hotlop and pressx on PDS
+/G2, QB /O and VBDOS /G3: `/tmp/qbopt-zero-verified.PNnu34`.
+This is analysis capability, not a speedup claim: matrix production cost is
+12,500 / 6,210 = 2.01x; strength-enabled is 13,224 = 2.13x. Harr stays 6.27x;
+segld is 3.85x production / 3.91x with strength. Keep strength disabled. Constant
+materialization and allocation now need improvement; do not suppress valid facts
+merely to preserve old instruction selection.
+
 Dead-byte ownership checkpoint: `_without` now checks adjacency using `covers`,
 not the operation's old address. The former check made a survivor span bytes
 still owned by a jump after transformations separated address and ownership.

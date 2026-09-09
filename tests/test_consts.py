@@ -42,6 +42,25 @@ def test_a_fact_is_masked_to_its_own_width(n: int, width: int, want: int) -> Non
     assert consts.masked(n, width) == want
 
 
+@pytest.mark.parametrize("kind", [mir.Kind.XOR, mir.Kind.SUB])
+@pytest.mark.parametrize("width", [1, 2, 4])
+def test_equal_integer_operands_are_zero_without_input_facts(kind: mir.Kind, width: int) -> None:
+    """matrix kept multiplying its zero initializer because self-cancellation had no fact."""
+    source, result = mir.Value(900, 0), mir.Value(901, 1)
+    held = mir.Held(source, width)
+    op = mir.Op(
+        1,
+        ir.Operation.BINARY,
+        "",
+        (result,),
+        (source,),
+        kind=kind,
+        args=(held, held),
+        results=(mir.Held(result, width),),
+    )
+    assert consts._result(op, {}) == consts.Known(0, width)
+
+
 @pytest.mark.parametrize(("width", "number", "answer"), [(1, 0x101, 0), (2, 0x12350000, 0), (2, 0x12358000, 0x4000)])
 def test_a_narrow_shift_cannot_pull_bits_from_outside_its_operand(width: int, number: int, answer: int) -> None:
     """A word read of 0x12350000 shifted right once folded to 0x8000, not 0."""

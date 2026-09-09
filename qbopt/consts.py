@@ -228,6 +228,13 @@ def _result(
     """What this operation computes, where every input is known."""
     if _defined(op) is None:
         return None
+    if (
+        op.kind in (mir.Kind.XOR, mir.Kind.SUB)
+        and len(op.args) == 2
+        and isinstance(op.args[0], mir.Held)
+        and op.args[0] == op.args[1]
+    ):
+        return Known(0, op.args[0].width)
     parts: list[Known] = []
     for one in op.args:
         got = _operand(op, one, known, here)
