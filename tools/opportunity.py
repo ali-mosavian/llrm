@@ -500,8 +500,9 @@ TARGETS = {
     "PRESSX": 508,
     "FPCSEX": 1340,
     "LNGMXX": 208,
-    "NOTS": 378,
-    "NEGNOT": 290,
+    "NOTS": 306,
+    "NEGNOT": 254,
+    "ARITH": 592,
 }
 
 

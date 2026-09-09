@@ -1,12 +1,16 @@
 # Target coverage and the next floating-point gap
 
-Update 2026-09-10: NOTS and NEGNOT now have complete ordinary-build
-references in `docs/targets.md`, respectively 378 and 290 ranking units.
-PDS output costs 484 (1.28×) for NOTS after reconnecting whole unary results to
-whole stores; QB costs 496 (1.31×), VBDOS 434 (1.15×). NEGNOT costs 354 (1.22×), after
-preserving constants across calls with no program-data escapes and raising whole
-unary operations; its QB and VBDOS variants also meet the target at 1.26× and
-1.22× respectively.
+Update 2026-09-10: ARITH has a complete ordinary-build reference of 592 units.
+NOTS and NEGNOT references are corrected to 306 and 254: their earlier 378/290
+targets unnecessarily retained dead stores and split argument pushes.
+
+| Program | PDS cost / ratio | QB cost / ratio | VBDOS cost / ratio |
+|---|---|---|---|
+| ARITH | 690 / 1.17x | 712 / 1.20x | 680 / 1.15x |
+| NOTS | 450 / 1.47x | 462 / 1.51x | 400 / 1.31x |
+| NEGNOT | 288 / 1.13x | 298 / 1.17x | 288 / 1.13x |
+
+QB NOTS still exceeds the goal: 462 is greater than 1.5*306 = 459.
 The scorer now prices decoded instructions rather than synthetic raised
 operations. The historical totals below have not been rerun under that
 change and must not be quoted as the current completion percentage.
@@ -19,7 +23,7 @@ those two as measured but without targets. These are configuration rows,
 not counts of independent programs. This is not a completion claim.
 
 Programs without targets include FPDEEP, FPEMU, DIVMOD, JUMPS, CMPORD,
-CHAIN, ARITH, FLAGS and PROCS. Small standalone fixtures also
+CHAIN, FLAGS and PROCS. Small standalone fixtures also
 lack references. Event builds need event-preserving references; FPCSE and
 FPCSEX still have invalid inherited floating-point denominators.
 

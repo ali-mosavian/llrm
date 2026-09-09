@@ -41,23 +41,17 @@ expression modulo 32 bits. This reference does not grant qbopt permission
 to assume arbitrary machine-level runtime calls preserve arbitrary memory;
 recovering that source-level fact is part of the remaining work.
 
-Keep both initial stores, and NOTS's result store before each output.
-Print the same descriptors and signed LONG bit patterns through the same
-runtime entry points. The complete reference is the initialization below,
-the per-row sequence for every row in order, and the common epilogue.
+The source never exposes the numeric variables' addresses, so their stores
+are dead once each expression is folded. Print the same descriptors and signed
+LONG bit patterns through the same runtime entry points. The complete reference
+is the per-row sequence for every row in order and the common epilogue.
 Each instruction's cost uses this tool's ranking formula, not hardware timing.
 
 ```asm
-; Both programs: initialization = 12
-mov dword [a],12345678h         ; 6
-mov dword [b],0F0F0F0Fh         ; 6
-
-; Each row: 58, plus NOTS's store = 64
-mov dword [r],value             ; 6, NOTS only; NEGNOT has no r
+; Each row: 52; no initialization or result stores needed
 push word descriptor           ; 6
 call far B$PSSD                 ; 20
-push word (value >> 16)         ; 6, high half first
-push word (value & 0FFFFh)      ; 6
+push dword value               ; 6, same bytes as high-word then low-word push
 call far B$PEI4                 ; 20
 
 ; Both programs: epilogue = 46
@@ -78,17 +72,55 @@ call far B$CENP                 ; 20
 | NEGNOT | C= | NOT (a OR b) | E0C0A080 |
 | NEGNOT | D= | -(a AND b) | FDFBF9F8 |
 
-NOTS target: **12 + 5×64 + 46 = 378**.
-NEGNOT target: **12 + 4×58 + 46 = 290**.
+NOTS target: **5×52 + 46 = 306**.
+NEGNOT target: **4×52 + 46 = 254**.
 No result is carried in a register across a printing call.
+The earlier targets 378 and 290 retained unnecessary stores and split pushes;
+they were too generous. These corrected references use the backend's 386+
+instruction set, without assuming a particular instruction latency.
 
 The raw PDS listings cross-check as follows: NOTS has 12 calls, 56 other
 instructions and 60 non-call memory reads/writes, hence
 12×20 + 56×2 + 60×4 = **592**. NEGNOT has 10 calls, 46 other instructions
 and 31 non-call memory reads/writes, hence 10×20 + 46×2 + 31×4 = **416**.
 There are no loops or multiply/divide instructions to add another weight.
-Current output scores **586/378 = 1.55×** and **510/290 = 1.76×**:
-both miss the goal. Targets were not scaled from the optimized output.
+Targets are not scaled from the optimized output. Consult the current report
+for ratios; the raw costs above describe BC, not the optimizer.
+
+## ARITH — full constant-output reference
+
+The ordinary unchecked, event-free source has no input or escaping numeric
+variable. All arithmetic fits its intended LONG semantics, and all stores can
+be eliminated after evaluation. Emit the 52-unit LONG row above for each of
+these nine rows, in order:
+
+| Descriptor | Source expression | LONG bits |
+|---|---|---|
+| AND= | a AND b | 02040608 |
+| OR= | a OR b | 1F3F5F7F |
+| XOR= | a XOR b | 1D3B5977 |
+| ADD= | a + b | 21436587 |
+| SUB= | a - b | 03254769 |
+| NEG= | -a | EDCBA988 |
+| CHAIN= | ((a AND b) XOR a) + b | 1F3F5F7F |
+| CARRY= | 65535 + 1 | 00010000 |
+| BORROW= | 65536 - 1 | 0000FFFF |
+
+Then emit the two INTEGERs, preserving their distinct formatting entry points:
+
+```asm
+push word descriptorInts       ; 6
+call far B$PSSD                 ; 20
+push word 258                  ; 6
+call far B$PSI2                 ; 20
+push word 772                  ; 6
+call far B$PEI2                 ; 20
+```
+
+Finish with the same 46-unit DONE/termination epilogue above. The complete
+reference costs **9×52 + 78 + 46 = 592**: 23 calls at 20 and 22 pushes at 6.
+Descriptor data and termination behavior remain unchanged. This is a static
+reference, not a claim that all machine-level memory proofs are implemented.
 
 ### Scoring decoded instructions
 

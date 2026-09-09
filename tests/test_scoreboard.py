@@ -39,13 +39,19 @@ def test_cost_does_not_count_synthetic_raising_operations():
     assert before["cost"] == after["cost"]
 
 
-@pytest.mark.parametrize("program,target,status", [("nots", 378, 0), ("negnot", 290, 0)])
+@pytest.mark.parametrize("program,target,status", [("nots", 306, 0), ("negnot", 254, 0), ("arith", 592, 0)])
 def test_constant_bitwise_programs_have_references_and_report_the_gap(program, target, status, capsys):
     """NOTS/NEGNOT lacked targets, hiding their remaining constant-result propagation gap."""
     assert opportunity.TARGETS[program.upper()] == target
     assert opportunity.against_targets([Path(f"fixtures/omf/{program}-p-g2.obj")]) == status
     report = capsys.readouterr().out
     assert "NO TARGET" not in report and "PROVISIONAL" not in report
+
+
+def test_qb_nots_still_exceeds_the_corrected_reference(capsys):
+    """Dead stores and split pushes inflated NOTS's target and hid QB's remaining gap."""
+    assert opportunity.against_targets([Path("fixtures/omf/nots-q-O.obj")]) == 1
+    assert "1.51x" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("tag", ["p-evt", "q-evt", "v-evt"])
