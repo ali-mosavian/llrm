@@ -9,6 +9,7 @@ select.py resolves it through the allocation. Naming one here would only
 move the pass's mistake down a layer.
 """
 
+from collections import Counter
 from dataclasses import replace
 
 from iced_x86 import Register
@@ -344,7 +345,12 @@ def lowered(
     making = Lowering(body, read, calls, absorbed or (), contracts, coverage)
     # Once: expanding twice would build two of every instruction, and the
     # question below is about the ones this body will actually hold.
-    made = {block.at: tuple(one for op in block.ops for one in making.expand(op)) for block in body.blocks}
+    readers = Counter(value for block in body.blocks for op in block.ops for value in op.uses)
+    readers.update(value for block in body.blocks for phi in block.phis for value in phi.incoming.values())
+    made = {
+        block.at: tuple(one for op in _branch_condition(block, readers) for one in making.expand(op))
+        for block in body.blocks
+    }
     live = _phis_worth_keeping(body, made)
     return lir.LirBody(
         name=name,
@@ -368,6 +374,31 @@ def lowered(
         origin=dict(body.origin),
         pins=dict(getattr(body, "pins", {}) or {}),
     )
+
+
+def _branch_condition(block: mir.MirBlock, readers: Counter[mir.Value]) -> tuple[mir.Op, ...]:
+    """Keep a pure single-use comparison adjacent to its branch during selection.
+
+    MIR's condition is a value. On x86 it lives in flags, so unrelated
+    arithmetic between its definition and use cannot retain that ordering.
+    Like SelectionDAG glue, adjacency is a backend requirement, not an
+    obligation imposed on the optimization passes.
+    """
+    if not block.ops or block.ops[-1].kind is not mir.Kind.BRANCH:
+        return block.ops
+    branch = block.ops[-1]
+    conditions = [value for value in branch.uses if value.flags]
+    if len(conditions) != 1 or readers[conditions[0]] != 1:
+        return block.ops
+    for index, op in enumerate(block.ops[:-1]):
+        if (
+            op.op is ir.Operation.COMPARE
+            and op.defines == (conditions[0],)
+            and not (op.loads or op.stores or op.barrier)
+            and all(isinstance(arg, (mir.Held, mir.Const, mir.Symbol)) for arg in op.args)
+        ):
+            return (*block.ops[:index], *block.ops[index + 1 : -1], op, branch)
+    return block.ops
 
 
 # A kind whose one operation is more than one instruction, and what it

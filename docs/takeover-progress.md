@@ -55,6 +55,20 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+Condition-selection checkpoint: lowering now schedules a pure, single-use
+comparison immediately before its terminal branch. A synthesized stride add
+between them previously left the branch reading the add's machine flags,
+despite MIR naming the comparison's condition value. The change is confined
+to lowering, following the adjacency role of LLVM SelectionDAG glue; MIR
+passes retain their semantic ordering. Memory/effectful comparisons, additional
+results and multiple consumers are not moved. Those general cases still need
+condition materialization or flag-aware scheduling before unrestricted use.
+The new ordering regression fails with scheduling removed; 40 focused checks
+and 12 strict LIR program/configuration runs pass (matrix, segld, bools and
+flags across three compiler families). Dumps:
+`/tmp/qbopt-conditions-matrix-20260909`. Strength remains disabled and full
+milestone validation is outstanding.
+
 Innermost selection checkpoint: reducing matrix's outer row counter created
 a live range across its inner loop and a spill/reload on every inner iteration.
 Restricting strength reduction to innermost natural loops avoids that loss:
