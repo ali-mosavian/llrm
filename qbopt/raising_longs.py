@@ -5,6 +5,30 @@ from dataclasses import replace
 from qbopt import ir, mir, pairs
 
 
+def _negated_whole(high, low, definitions):
+    """BC negates a long with NEG low, ADC high,0, NEG high."""
+    if not all(isinstance(arg, mir.Held) and arg.width == 2 for arg in (high, low)):
+        return None
+    lower, upper = definitions.get(low.value), definitions.get(high.value)
+    if any(op is None or op.kind is not mir.Kind.NEG or len(op.args) != 1
+           or op.loads or op.stores or op.barrier or op.merges for op in (lower, upper)):
+        return None
+    if lower.results != (low,) or upper.results != (high,):
+        return None
+    carried = upper.args[0]
+    if not isinstance(carried, mir.Held) or carried.width != 2:
+        return None
+    carry = definitions.get(carried.value)
+    if (carry is None or carry.kind is not mir.Kind.ADD_CARRY or carry.loads or carry.stores
+        or carry.barrier or carry.merges or carry.results != (carried,) or len(carry.args) != 2
+        or carry.args[1] != mir.Const(0, 2)):
+        return None
+    flags = {value for value in lower.defines if value.flags}
+    if len(flags) != 1 or {value for value in carry.uses if value.flags} != flags:
+        return None
+    return mir.extracted_whole(carry.args[0], lower.args[0], definitions)
+
+
 def _constant_stores(body: mir.MirBody) -> mir.MirBody:
     blocks = []
     for block in body.blocks:
@@ -80,6 +104,13 @@ def scalar(body: mir.MirBody) -> mir.MirBody:
                 source = whole.get((high.args[0], low.args[0])) if len(low.args) == len(high.args) == 1 else None
                 if source is None and len(low.args) == len(high.args) == 1:
                     source = mir.extracted_whole(high.args[0], low.args[0], definitions)
+                if source is None and len(low.args) == len(high.args) == 1:
+                    original = _negated_whole(high.args[0], low.args[0], definitions)
+                    if original is not None:
+                        source = fresh(low.at)
+                        ops.append(mir.Op(low.at, ir.Operation.UNARY, "neg", (source.value,),
+                                          (original.value,), kind=mir.Kind.NEG,
+                                          args=(original,), results=(source,), covers=(low.at, low.at)))
                 if source is None and len(low.args) == len(high.args) == 1:
                     upper, lower = high.args[0], low.args[0]
                     extension = definitions.get(upper.value) if isinstance(upper, mir.Held) else None

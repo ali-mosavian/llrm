@@ -151,6 +151,19 @@ def test_nbody_address_shifts_combine_without_an_extra_counter() -> None:
     assert shift.kind is mir.Kind.SHL and shift.args[1] == mir.Const(2, 1)
 
 
+def test_nbody_damping_keeps_negation_whole():
+    """NBODY split both velocity negations into words, emitting push/pop traffic and paired stores."""
+    from qbopt import blocks, module, omf, wholeseg
+    from iced_x86 import Mnemonic, Register
+    result = wholeseg.emitted(Path("fixtures/regressions/nbody-stack-p-g2.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    found = module.of(omf.parse(result.data))
+    negations = [one.insn for one in blocks.instructions(found) if one.insn.mnemonic == Mnemonic.NEG]
+    assert len(negations) == 2
+    assert all(one.op0_register in (Register.EAX, Register.EBX, Register.ECX,
+                                   Register.EDX, Register.ESI, Register.EDI) for one in negations)
+
+
 @pytest.mark.parametrize(("first_count", "last_count", "live_flags"), [(15, 1, False), (32, 1, False), (1, 1, True)])
 def test_shift_combination_preserves_count_and_flag_boundaries(first_count, last_count, live_flags) -> None:
     source, middle, result = (mir.Value(index, 0) for index in range(1, 4))

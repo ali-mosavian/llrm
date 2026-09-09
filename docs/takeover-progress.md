@@ -2067,3 +2067,27 @@ algebraic file to 71 passing tests. All six strict ADDRM runtime cases pass.
 Stage dumps: `/tmp/qbopt-addrm-shared-before` and
 `/tmp/qbopt-addrm-shared-final`. Runtime artifacts:
 `qbopt-shared-scales-_lw1cq5h` under the system temporary directory.
+
+### Raise split long negations before optimization
+
+NBODY's damping still extracted a whole subtraction into words and used
+`neg low; adc high,0; neg high`, followed by two word stores. The raise
+now recognizes that exact SSA carry chain when combining the stores and
+introduces a whole-value NEG. Original word operations are left for dead
+code elimination, so any separately observed flags or halves retain their
+original definitions. No register knowledge is added to an optimization pass.
+
+The emitted damping now uses one 32-bit NEG and one long store per velocity,
+without the extraction push/pop sequences. The PDS NBODY fixture's modeled
+cost falls from **374416 to 364016**. JUMPS improves from 6942/7064/6732
+to **6482/6604/6272** on PDS/QB/VBDOS. Those four objects are the only
+changes in the 97-object audit; all still use LIR emission. NBODY still has
+no validated modern-compiler target and this does not establish completion.
+
+The emitted NBODY regression fails on the preceding implementation (four
+word negations instead of two long negations). Carry provenance, addend,
+width, mismatched halves, and modular edge values are covered; 94 focused
+tests pass. Strict runtime checks pass all 90 cases across NBODY and JUMPS
+on three compilers. Before/after dumps are `/tmp/qbopt-nbody-current` and
+`/tmp/qbopt-nbody-neg-whole`; runtime artifacts are
+`qbopt-whole-negation-wh1x42lt` under the system temporary directory.

@@ -9,6 +9,39 @@ import pytest
 from qbopt import ir, mir, raising_longs, transform
 
 
+@pytest.mark.parametrize("mismatch", ["none", "carry", "constant", "width", "source"])
+def test_whole_negation_requires_exact_carry_chain(mismatch, monkeypatch):
+    """NBODY damping paid for split negation; unrelated carry or halves are not a long negation."""
+    recognize = raising_longs._negated_whole
+    with monkeypatch.context() as patch:
+        patch.setattr(raising_longs, "_negated_whole", lambda *args: None)
+        path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
+        body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
+    ops = {op.at: op for block in body.blocks for op in block.ops}
+    definitions = {value: op for block in body.blocks for op in block.ops for value in op.defines}
+    low, high, carry = ops[0x278], ops[0x27d], ops[0x27a]
+    match mismatch:
+        case "carry":
+            carry = replace(carry, uses=tuple(mir.Value(9999, 0, flags=True) if value.flags else value
+                                              for value in carry.uses))
+        case "constant":
+            carry = replace(carry, args=(carry.args[0], mir.Const(1, 2)))
+        case "width":
+            carry = replace(carry, results=(replace(carry.results[0], width=4),))
+        case "source":
+            carry = replace(carry, args=(mir.Held(mir.Value(9998, 0), 2), carry.args[1]))
+    definitions.update({value: carry for value in carry.defines})
+    source = recognize(high.results[0], low.results[0], definitions)
+    if mismatch != "none":
+        assert source is None
+        return
+    assert source is not None and source.width == 4
+    for value in (0, 1, 65535, 65536, 0x7fffffff, 0x80000000, 0xffffffff):
+        lower, upper = value & 65535, value >> 16
+        result = (((-(upper + (lower != 0))) & 65535) << 16) | ((-lower) & 65535)
+        assert result == (-value) & 0xffffffff
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_addrm_stores_and_reuses_the_signed_whole_value(tag):
     """ADDRM stored b(i) in two words and immediately reloaded the same long on every iteration."""
