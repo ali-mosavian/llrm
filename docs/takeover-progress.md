@@ -55,6 +55,14 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+Two-address multiply checkpoint: the pass skipped all MULTIPLY operations even
+though the single-result, two-source form reads its destination. It now inserts
+the required first-factor copy, leaving widening/fixed forms alone. The old pass
+fails the regression; 48 focused checks pass. Experimental reduction passes
+matrix on PDS /G2 (`/tmp/qbopt-matrix-tied.CtbS1u/p-g2`) but still costs 13,144
+against production 12,076 and target 6,210. Reduction remains disabled pending
+profitability and broader correctness evidence; this is not a full-gate result.
+
 Insertion-location checkpoint: setup/update operations now use their insertion
 sites instead of the old product address. Tail updates retain the predecessor's
 last operation address with zero-width ownership at its end, so a branch to the

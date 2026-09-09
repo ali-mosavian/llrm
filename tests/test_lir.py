@@ -1117,6 +1117,25 @@ def test_two_address_materializes_a_constant_first_operand() -> None:
     assert fixed[1].what.sources == (result, source)
 
 
+def test_two_address_multiply_preserves_its_first_factor() -> None:
+    """Experimental matrix setup emitted 20 * 20 for 0 * 20 without a destination copy."""
+    from qbopt import twoaddr
+
+    result, first, second = ir.Held(900, 2), ir.Held(901, 2), ir.Held(902, 2)
+    insn = lir.Insn(
+        at=0,
+        covers=(0, 3),
+        what=ir.Semantics(ir.Operation.MULTIPLY, "imul", (result,), (first, second)),
+        defines=(900,),
+        uses=(901, 902),
+    )
+    fixed = twoaddr._untied(insn)
+    assert fixed is not None
+    assert fixed[0].what.sources == (first,)
+    assert fixed[1].what.sources == (result, second)
+    assert set(fixed[1].uses) == {900, 902}
+
+
 def test_lower_places_a_commutative_constant_in_the_immediate_operand() -> None:
     """hotlop needlessly loaded 21 before adding its accumulator."""
     from qbopt import ir

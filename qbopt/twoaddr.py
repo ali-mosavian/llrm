@@ -25,8 +25,8 @@ from qbopt.passes import LIRTransform
 # Operations that read their destination. Everything else writes it outright.
 # ir.py's vocabulary is coarser than a mnemonic: BINARY covers add, sub,
 # and, or, xor and adc alike, and every one of them reads its destination.
-# MULTIPLY and DIVIDE are tied to fixed registers rather than to an
-# operand, which is target.Need's business and not this pass's.
+# Widening multiply and divide use fixed registers; a single-result
+# multiply with two sources instead reads its destination.
 _TIED = frozenset({ir.Operation.BINARY, ir.Operation.UNARY})
 
 
@@ -68,7 +68,10 @@ def _nothing(beside: lir.Insn) -> tuple[int, int]:
 def _untied(one: lir.Insn) -> "list[lir.Insn] | None":
     """The copy and the fixed instruction, or None where it is already tied."""
     what = one.what
-    if what is None or what.op not in _TIED or not what.dests or not what.sources:
+    if what is None or not what.dests or not what.sources:
+        return None
+    multiply = what.op is ir.Operation.MULTIPLY and len(what.dests) == 1 and len(what.sources) == 2
+    if what.op not in _TIED and not multiply:
         return None
     into, first = what.dests[0], what.sources[0]
     if not isinstance(into, ir.Held) or not isinstance(first, (ir.Held, ir.Imm)):
