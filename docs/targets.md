@@ -668,19 +668,19 @@ and PEEK and POKE reload their segment on every use for the same reason.
 
 ## harr -- the offset recomputed for every use
 
-Two dimensions and dynamic. The element's address is affine in the inner
-counter with a stride of two, and affine in the outer with a stride of twice
-the row width -- so one `add` per pass is what it costs once an induction
+Two dimensions and dynamic. The first subscript varies fastest in storage:
+the inner `c` counter has byte stride 42 (21 elements of two bytes), and
+the outer `r` counter has byte stride two. Thus one `add` per pass is what it costs once an induction
 variable carries it. BC recomputes the whole thing from the subscripts:
 
 ```
 0058  add ax,[c]          | ; outside both loops: es, and di = array base
 005c  mov bx,ax           | ; outer: bx = &m(r,1), ax = r+1, cx = 10
-005e  mov ax,[r]          | inner:
-0061  imul word [w]       |   mov  [es:bx],ax
-0065  add ax,[c]          |   add  dx,ax
+005e  mov ax,[w]          | inner:
+0061  imul word [c]       |   mov  [es:bx],ax
+0065  add ax,[r]          |   add  dx,ax
 0069  shl ax,1            |   inc  ax
-006b  mov dx,bx           |   add  bx,2
+006b  mov dx,bx           |   add  bx,42
 006d  mov bx,ax           |   dec  cx
 006f  mov si,0            |   jnz  inner
 0072  add bx,[si+0Ah]     |
@@ -708,6 +708,15 @@ and 1,600.** Per pass, over a hundred of them:
 
 That is a multiply, two segment loads and two descriptor reads where an
 induction variable with its strength reduced uses **one add**.
+
+Current check at `aa6194c`: this gap is closed for the ordinary builds.
+PDS and VBDOS score 2086/1834 (1.14x), QB scores 2114/1834 (1.15x).
+The PDS inner loop is `mov [es:di],si; add cx,si; add si,1;
+add di,42; cmp si,dx; jne inner`. The segment load and initial address are
+outside both loops; the outer loop increments its address by two.
+These are static costs, not elapsed times. Correcting the historical
+listing's swapped subscript labels and stride does not change the target's
+instruction cost or its denominator.
 
 **`B$HARR` does not appear here, and could not be made to.** Tried:
 `REM $DYNAMIC` and `REDIM` with variable bounds, one and two dimensions, on
