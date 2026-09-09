@@ -10,6 +10,27 @@ from qbopt import algebraic
 from qbopt import transform
 
 
+def test_nbody_address_shifts_combine_without_an_extra_counter() -> None:
+    """Nbody computed other*4 with two shifts; an extra induction counter increased spill cost."""
+    path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    done = transform.Algebraic().transform(body)
+    shift = next(op for block in done.blocks for op in block.ops if op.at == 0x11b)
+    assert shift.kind is mir.Kind.SHL and shift.args[1] == mir.Const(2, 1)
+
+
+@pytest.mark.parametrize(("first_count", "last_count", "live_flags"), [(15, 1, False), (32, 1, False), (1, 1, True)])
+def test_shift_combination_preserves_count_and_flag_boundaries(first_count, last_count, live_flags) -> None:
+    source, middle, result = (mir.Value(index, 0) for index in range(1, 4))
+    flags = mir.Value(4, 0, flags=True)
+    first = mir.Op(0, ir.Operation.BINARY, "shl", (middle,), (source,), kind=mir.Kind.SHL,
+                   args=(mir.Held(source, 2), mir.Const(first_count, 1)), results=(mir.Held(middle, 2),))
+    last = mir.Op(1, ir.Operation.BINARY, "shl", (result, flags), (middle,), kind=mir.Kind.SHL,
+                  args=(mir.Held(middle, 2), mir.Const(last_count, 1)), results=(mir.Held(result, 2),))
+    assert algebraic._shift_chain(last, {middle: first}, {flags} if live_flags else set()) == last
+
+
 @pytest.mark.parametrize("divisor", [16, 512, 262144])
 @pytest.mark.parametrize("immediate", [False, True])
 def test_signed_power_division_preserves_quotient_and_remainder(divisor: int, immediate: bool) -> None:

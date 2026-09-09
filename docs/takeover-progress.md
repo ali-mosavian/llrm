@@ -971,3 +971,17 @@ integration (12.5% lower). This remains a model, not a hardware benchmark.
 Next: hoist invariant position reads themselves, strengthen address induction,
 and derive the missing nbody target. No completion claim follows from these
 nine focused runtime checks.
+
+## Shift chains versus extra induction counters
+
+Nbody's `other*4` is already recognized as an affine recurrence. Broadening
+strength reduction to replace two-shift chains with extra counters increased
+modeled cost from 886,143 to 940,015; that experiment was removed. Register
+pressure matters, so recognition alone is not a profitability argument.
+
+Algebraic simplification instead combines same-width left shifts whose final
+flags are unused and whose summed count is below the value width. PDS's
+0x119 shift disappears and 0x11b shifts by two. Cost becomes 880,313, with
+nbody and HARR passing strict LIR on all three compilers. Stage dumps are in
+`/tmp/qbopt-nbody-shift-combine`. Invariant position reads remain folded into
+their subtracts and are the next larger opportunity.

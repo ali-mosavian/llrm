@@ -9,13 +9,15 @@ def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) 
         value for block in body.blocks for phi in block.phis for value in phi.incoming.values()
     }
     mentioned |= {value for block in body.blocks for op in block.ops for value in _operands_read(op)}
+    definitions = {value: op for block in body.blocks for op in block.ops for value in op.defines}
     changed = replace(
         body,
         blocks=tuple(
             replace(
                 block,
                 ops=tuple(
-                    _simplified(_product(op, wanted | mentioned, wide), wanted | mentioned, wide) for op in block.ops
+                    _simplified(_product(_shift_chain(op, definitions, wanted | mentioned), wanted | mentioned, wide), wanted | mentioned, wide)
+                    for op in block.ops
                 ),
             )
             for block in body.blocks
@@ -43,6 +45,28 @@ def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) 
             for block in changed.blocks
         ),
     )
+
+
+def _shift_chain(op: mir.Op, definitions: dict, wanted: set[mir.Value]) -> mir.Op:
+    if op.kind is not mir.Kind.SHL or op.loads or op.stores or op.barrier or len(op.args) != 2 or len(op.results) != 1:
+        return op
+    source, count = op.args
+    if not isinstance(source, mir.Held) or not isinstance(count, mir.Const):
+        return op
+    previous = definitions.get(source.value)
+    if previous is None or previous.kind is not mir.Kind.SHL or len(previous.args) != 2 or len(previous.results) != 1:
+        return op
+    original, first_count = previous.args
+    if (not isinstance(original, mir.Held) or not isinstance(first_count, mir.Const)
+        or previous.results[0] != source or op.results[0].width != source.width or original.width != source.width
+        or any(value in wanted for value in op.defines if value != op.results[0].value)):
+        return op
+    total = first_count.n + count.n
+    if min(first_count.n, count.n) <= 0 or total >= source.width * 8:
+        return op
+    return replace(op, args=(original, mir.Const(total, count.width)),
+                   uses=tuple(dict.fromkeys(original.value if value == source.value else value for value in op.uses)),
+                   node=None, made=None, raised=None)
 
 
 def _divisions(body: mir.MirBody) -> mir.MirBody:
