@@ -39,6 +39,22 @@ def test_widened_restore_reads_the_value_it_splits() -> None:
     assert pairs._restore_op(0, 3, store, 7).uses == (value,)
 
 
+@pytest.mark.parametrize("number", [0, 1])
+def test_restore_clobbers_its_high_half_even_when_dead(number: int) -> None:
+    """nbody printed PX0=1163 for 1258 when a restore overwrote its array index."""
+    from qbopt import ir, lower
+
+    value = mir.Value(1, 0)
+    after = mir.Op(0, ir.Operation.MOVE, "mov", (value,), (),
+                   kind=mir.Kind.COPY, results=(mir.Held(value, 4),))
+    restored = pairs._restore_op(number, 3, after, 7)
+    source, high = mir.RESTORE_PAIR[number]
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (after, restored), ()),), {value: source})
+    low = lower.lowered("restore", body, {}, set(), {})
+    assert high in low.blocks[0].insns[-1].clobbers
+    assert source not in low.blocks[0].insns[-1].clobbers
+
+
 def _both(obj: Path) -> tuple[set[int], set[int], set[int], set[int]]:
     """(lift loads, pairs loads, lift stores, pairs stores) by address."""
     found = corpus.loaded(obj)

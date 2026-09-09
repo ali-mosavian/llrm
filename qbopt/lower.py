@@ -870,7 +870,7 @@ def clobbering(op: "mir.Op") -> "frozenset[Register_]":
 def _clobbers(op: "mir.Op", calls: dict[int, str]) -> "frozenset[Register_]":
     """Which registers this instruction destroys without naming them.
 
-    Only a call, and only from `runtime.py`'s own contract for the routine
+    For a call, from `runtime.py`'s own contract for the routine
     -- which is measured against the runtime's source, not assumed. An
     unestablished contract clobbers every register, and saying so is the
     safe direction: over-stating what a call destroys only keeps a value
@@ -880,6 +880,10 @@ def _clobbers(op: "mir.Op", calls: dict[int, str]) -> "frozenset[Register_]":
     from qbopt import mir
     from qbopt import runtime
 
+    if isinstance(op.node, ir.Restore):
+        # The source is unchanged by push-wide/pop-low. The second pop
+        # overwrites the other register even when its result is dead.
+        return frozenset({mir.RESTORE_PAIR[op.node.pair][1]})
     if op.kind is mir.Kind.DIVMOD:
         # An absorbed divide is emitted as a sequence, not as one
         # instruction, and it writes registers none of its operands name:
