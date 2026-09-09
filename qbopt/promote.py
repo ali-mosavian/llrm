@@ -40,6 +40,7 @@ READS = frozenset(
     {
         mir.Kind.LOAD,
         mir.Kind.ADD,
+        mir.Kind.ADD_CARRY,
         mir.Kind.SUB,
         mir.Kind.MUL,
         mir.Kind.AND,

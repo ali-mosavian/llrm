@@ -522,3 +522,22 @@ on PDS `/G2`, QB `/O`, VBDOS `/G3`. Artifacts:
 `/tmp/qbopt-dead-marker-final` and
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-dead-marker-qhdaewbz`.
 The target is still unmet; accumulator memory traffic remains in LNGMIX.
+# Promote carry-arithmetic memory reads
+
+ADD_CARRY was missing from promotion's supported read operations. It now reuses
+available stored values under the same alias/width checks as ADD, preserving
+its condition input. LNGMIX's high accumulator read becomes an SSA value and
+the loop emits `adc di,0` rather than reading its high word from memory.
+Cost drops 552 to 540 (2.57x target).
+
+The real-fixture regression failed first. Ten promotion checks and nine strict
+LIR runtime runs pass (LNGMIX, HOTLPX, MATRIX on PDS, QB, VBDOS). Artifacts:
+`/tmp/qbopt-promote-carry-final` and
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-promote-carry-m80cp_0f`.
+
+Both accumulator stores remain in the latch. Store sinking currently considers
+only stores in the block that has the exit edge, which is the test/header in
+this rotated loop, not the latch. Extending it requires selecting the exit
+phi's value and proving zero-trip behavior, not moving the latch value directly
+to a path where it may never have been defined. The two stack-local temporary
+stores and counter-copy traffic also remain visible in the emitted dump.
