@@ -32,6 +32,7 @@ from iced_x86 import Decoder
 from iced_x86 import Mnemonic
 from iced_x86 import Formatter
 from iced_x86 import FormatterSyntax
+from iced_x86 import FlowControl, OpKind
 
 from qbopt.objectfile import omf
 from qbopt.frontend.declen import BITNESS
@@ -137,13 +138,22 @@ def code_of(module: Module, seg: int) -> bytes:
 
 
 def disassemble(code: bytes, start: int, limit: int = 400) -> list[str]:
+    """A linear prefix, with explicit notice of branches omitted by its cutoff."""
     formatter = Formatter(FormatterSyntax.NASM)
     decoder = Decoder(BITNESS, code[start:], ip=start)
     out: list[str] = []
+    visited, targets = set(), set()
     for insn in decoder:
+        visited.add(insn.ip)
+        if (insn.flow_control in (FlowControl.CONDITIONAL_BRANCH, FlowControl.UNCONDITIONAL_BRANCH)
+            and insn.op0_kind in (OpKind.NEAR_BRANCH16, OpKind.NEAR_BRANCH32, OpKind.NEAR_BRANCH64)):
+            targets.add(insn.near_branch_target)
         out.append(f"  {insn.ip:04x}  {code[insn.ip : insn.ip + insn.len].hex():<14} {formatter.format(insn)}")
         if insn.mnemonic in (Mnemonic.RET, Mnemonic.RETF) or len(out) >= limit:
             break
+    if missing := targets - visited:
+        out.append("  ; linear listing has unvisited branch targets: " + ", ".join(f"{at:04x}" for at in sorted(missing)))
+        out.append("  ; use tools/contracts.py for reachable control flow and dependencies; this is not a complete contract")
     return out
 
 
