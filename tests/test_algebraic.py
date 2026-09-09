@@ -10,6 +10,47 @@ from qbopt import algebraic
 from qbopt import transform
 
 
+@pytest.mark.parametrize("guard", ["none", "first_flags", "last_flags", "shared", "width", "merge"])
+def test_scaled_chain_preserves_modular_values_and_observed_intermediates(guard):
+    from collections import Counter
+    source, middle, result = (mir.Value(index, 0) for index in range(1, 4))
+    flags = mir.Value(4, 0, flags=True)
+    first = mir.Op(0, ir.Operation.BINARY, "mul", (middle,), (source,), kind=mir.Kind.MUL,
+                   args=(mir.Held(source, 2), mir.Const(32769, 2)), results=(mir.Held(middle, 2),))
+    last = mir.Op(1, ir.Operation.BINARY, "shl", (result,), (middle,), kind=mir.Kind.SHL,
+                  args=(mir.Held(middle, 2), mir.Const(1, 1)), results=(mir.Held(result, 2),))
+    if guard == "first_flags":
+        first = replace(first, defines=(middle, flags))
+    if guard == "last_flags":
+        last = replace(last, defines=(result, flags))
+    if guard == "width":
+        last = replace(last, results=(mir.Held(result, 4),))
+    if guard == "merge":
+        last = replace(last, merges={source: result})
+    done = algebraic._scaled_chain(last, {middle: first}, {flags}, Counter({middle: 2 if guard == "shared" else 1}))
+    if guard != "none":
+        assert done == last
+        return
+    assert done.kind is mir.Kind.MUL
+    assert done.args == (mir.Held(source, 2), mir.Const(2, 2))
+    for value in (0, 1, 32767, 32768, 65535):
+        assert ((value * 32769 & 65535) << 1) & 65535 == value * 2 & 65535
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_nested_combines_row_scale_in_emitted_code(tag):
+    """NESTED multiplied the row by six, then shifted it again to address word elements."""
+    from qbopt import blocks, module, omf, wholeseg
+    from iced_x86 import Code
+    result = wholeseg.emitted(Path(f"fixtures/omf/nested-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    found = module.of(omf.parse(result.data))
+    factors = [one.insn.immediate8to16 for one in blocks.instructions(found)
+               if one.insn.code == Code.IMUL_R16_RM16_IMM8]
+    assert 12 in factors
+    assert 6 not in factors
+
+
 @pytest.mark.parametrize(("high_offset", "different_source", "recombined"), [(16, False, True), (0, False, False), (16, True, False)])
 def test_extracted_halves_recombine_to_the_original_value(high_offset, different_source, recombined) -> None:
     """Nbody split a multiply result and rebuilt it before division, adding stack traffic."""

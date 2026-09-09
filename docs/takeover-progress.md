@@ -1502,3 +1502,25 @@ compiler. Runtime artifacts: `qbopt-selector-copies-n7sza3j1` under the
 system temporary directory. The full transform test file still has nine
 failures, reproduced with its pre-change CSE function; it is not a green
 suite. HARR reaching its primary target does not complete the project goal.
+
+### NESTED: combine integer address scales
+
+The next raw loop inspection found `(row * 6) * 2` surviving as a multiply
+and shift, with an extra temporary. Algebraic simplification now combines
+single-use MUL/SHL scales at the same modular integer width. It does not
+reassociate floating arithmetic, narrow a result, discard live flags or
+high-half merges, or duplicate a shared producer. Lowering still chooses
+the instruction. NESTED now emits `imul ...,12` instead of the multiply by
+six followed by a shift; the previous spill slot disappears as well.
+
+Primary modeled costs are **1202/1206/1212** (PDS/QB/VBDOS), against 768:
+**1.57x/1.57x/1.58x**, still above goal. PDS was 1292 before this change.
+Before/after stage directories are `/tmp/qbopt-nested-next` and
+`/tmp/qbopt-nested-scales`. All three real-object regression cases failed
+before the rewrite and passed after it. Algebraic and address-space tests:
+67 passed, including modular overflow and refusal boundaries. Strict LIR
+runtime runs of NESTED, MATRIX, HARR and all 24 NBODY cases passed on each
+compiler; artifacts are `qbopt-scale-chain-brgqsuv7` in system temporary
+storage. The remaining outer-loop multiplications are still visible; the
+existing outer strength-reduction guard is pressure-related and has not
+been removed on the strength of this result.

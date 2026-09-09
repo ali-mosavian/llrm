@@ -1,4 +1,5 @@
 from dataclasses import replace
+from collections import Counter
 
 from qbopt import consts, ir, mir
 
@@ -10,13 +11,24 @@ def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) 
     }
     mentioned |= {value for block in body.blocks for op in block.ops for value in _operands_read(op)}
     definitions = {value: op for block in body.blocks for op in block.ops for value in op.defines}
+    uses = Counter(value for block in body.blocks for op in block.ops
+                   for value in _operands_read(op) | (set(op.uses) - op.merges.keys()))
+    uses.update(value for block in body.blocks for phi in block.phis for value in phi.incoming.values())
+
+    def simplify(op):
+        op = _recombined(op, definitions)
+        op = _shift_chain(op, definitions, wanted | mentioned)
+        op = _product(op, wanted | mentioned, wide)
+        op = _scaled_chain(op, definitions, wanted | mentioned, uses)
+        return _simplified(op, wanted | mentioned, wide)
+
     changed = replace(
         body,
         blocks=tuple(
             replace(
                 block,
                 ops=tuple(
-                    _simplified(_product(_shift_chain(_recombined(op, definitions), definitions, wanted | mentioned), wanted | mentioned, wide), wanted | mentioned, wide)
+                    simplify(op)
                     for op in block.ops
                 ),
             )
@@ -45,6 +57,39 @@ def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) 
             for block in changed.blocks
         ),
     )
+
+
+def _scale(op: mir.Op, wanted: set[mir.Value]):
+    if (op.kind not in (mir.Kind.MUL, mir.Kind.SHL) or op.loads or op.stores or op.barrier or op.merges
+        or len(op.args) != 2 or len(op.results) != 1 or not isinstance(op.results[0], mir.Held)
+        or any(value in wanted for value in op.defines if value != op.results[0].value)):
+        return None
+    source, factor = op.args
+    if not isinstance(source, mir.Held) or not isinstance(factor, mir.Const) or source.width != op.results[0].width:
+        return None
+    if op.kind is mir.Kind.SHL:
+        if not 0 < factor.n < source.width * 8:
+            return None
+        return source, 1 << factor.n
+    return (source, factor.n) if factor.width == source.width else None
+
+
+def _scaled_chain(op: mir.Op, definitions: dict, wanted: set[mir.Value], uses: Counter) -> mir.Op:
+    """Combine single-use integer scales at an unchanged modular width."""
+    last = _scale(op, wanted)
+    if last is None:
+        return op
+    middle, factor = last
+    previous = definitions.get(middle.value)
+    if previous is None or uses[middle.value] != 1 or previous.results != (middle,):
+        return op
+    first = _scale(previous, wanted)
+    if first is None:
+        return op
+    source, initial = first
+    factor = consts.masked(initial * factor, source.width)
+    return replace(op, kind=mir.Kind.MUL, args=(source, mir.Const(factor, source.width)),
+                   defines=(op.results[0].value,), uses=(source.value,), node=None, made=None, raised=None)
 
 
 def _recombined(op: mir.Op, definitions: dict) -> mir.Op:
