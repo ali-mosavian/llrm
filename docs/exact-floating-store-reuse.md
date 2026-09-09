@@ -53,3 +53,40 @@ the extended80 guard. VBDOS /G3 executions of the three programs pass all
 three cases each against their expected answers. No timing claim is made.
 Before/after stage dumps are `/tmp/qbopt-retained-store-before` and
 `/tmp/qbopt-retained-store-after`.
+
+## Arithmetic operands reuse exact stores
+
+Forwarding now also replaces binary32/binary64 arithmetic memory inputs
+with live extended values from exact stores. It preserves arithmetic order,
+precision and rounding. Aliasing writes invalidate providers; unknown or
+potentially exceptional intervening operations clear them. Lowering accepts
+this explicit input-format change, while retaining its other semantic guards.
+Allocation consumes a last-use register operand with popping arithmetic,
+including the reversed forms required to preserve subtraction and division.
+
+FPCSE initially cannot use this: the loop accumulator is unknown. After the
+existing exact loop specialization, its accumulator is 438.75, and the next
+forwarding round removes both product memory reads. The actual PDS sequence
+changes as follows (symbolic names replace relocated operands):
+
+```asm
+; Before                         ; After
+fstp dword [p]                   fst dword [p]
+                                 fxch
+fdiv dword [c]                   fdiv dword [c]
+fstp dword [q]                   fst dword [q]
+fld dword [s]                    fld dword [s]
+fadd dword [p]                   faddp st(2),st(0)
+                                 fxch
+fadd dword [q]                   faddp st(1),st(0)
+fstp dword [s]                   fstp dword [s]
+```
+
+Two memory reads disappear but two exchanges are added. Reachable code grows
+two bytes; the complete object shrinks from 933 to 925 bytes because fewer
+relocations are needed. This is value reuse, not a measured timing win.
+FPCSE prints the expected 487.5 on QB /O, PDS /G2 and VBDOS /G3. All three
+compile logs report zero severe errors. 98 focused checks pass; the three
+fixture regressions and four arithmetic-order cases fail with their respective
+changes disabled. Dumps: `/tmp/qbopt-float-arithmetic-False` (before) and
+`/tmp/qbopt-float-arithmetic-final` (after).

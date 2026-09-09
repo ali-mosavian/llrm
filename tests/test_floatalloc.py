@@ -151,6 +151,44 @@ def test_buried_float_operand_is_exchanged_not_reloaded(operation):
     assert all(select.emit(one.what) is not None for one in insns)
 
 
+@pytest.mark.parametrize("name,popping,expected", [
+    ("fadd", "faddp", 9), ("fmul", "fmulp", 14),
+    ("fsub", "fsubrp", 5), ("fdiv", "fdivrp", 3.5),
+])
+def test_last_register_operand_is_consumed_without_reversing_arithmetic(name, popping, expected):
+    """Forwarded floating memory operands must die without leaking a stack slot or reversing division."""
+    left, right, result = (ir.Held(index, 10) for index in (1, 2, 3))
+    cell = ir.Mem(Addr(Space.FRAME, -4), 4)
+    body = _body([
+        ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (left,), (cell,)),
+        ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (right,), (cell,)),
+        ir.Semantics(ir.Operation.FLOAT_ARITH, name, (result,), (left, right)),
+        ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cell,), (result,)),
+    ])
+    allocated = floatalloc.allocated(body)
+    stack, stored = [], []
+    values = iter((7, 2))
+    for one in allocated.insns:
+        what = one.what
+        assert select.emit(what) is not None
+        match what.name:
+            case "fld":
+                stack.insert(0, next(values))
+            case "fxch":
+                index = what.sources[1].index
+                stack[0], stack[index] = stack[index], stack[0]
+            case "fstp":
+                stored.append(stack.pop(0))
+            case _:
+                assert what.name == popping
+                index = what.sources[0].index
+                a, b = stack[index], stack[0]
+                stack[index] = {"faddp": lambda: a + b, "fmulp": lambda: a * b,
+                                "fsubrp": lambda: b - a, "fdivrp": lambda: b / a}[what.name]()
+                stack.pop(0)
+    assert stored == [expected] and not stack
+
+
 def test_missing_float_is_not_created_by_an_exchange():
     from qbopt.backend.lower import Unlowered
     body = _body([ir.Semantics(ir.Operation.FLOAT_UNARY, "fchs", (ir.Held(2, 10),), (ir.Held(1, 10),))])

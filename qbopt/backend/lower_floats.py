@@ -98,6 +98,21 @@ def operation(op: mir.Op) -> mir.Op:
         floating_origin=None)
 
 
+def _forwarded_inputs(op):
+    from qbopt.model.floating import Format
+    origin = op.floating_origin
+    if (op.floating is None or origin.semantics is None
+        or op.kind not in (mir.Kind.FADD, mir.Kind.FSUB, mir.Kind.FMUL, mir.Kind.FDIV)
+        or len(op.args) != len(origin.inputs)
+        or len(op.floating.inputs) != len(op.args)
+        or replace(op.floating, inputs=origin.semantics.inputs) != origin.semantics):
+        return set()
+    return {index for index, (arg, old, format, before) in enumerate(zip(
+        op.args, origin.inputs, op.floating.inputs, origin.semantics.inputs))
+        if isinstance(old, mir.Cell) and isinstance(arg, mir.Held) and arg.width == 10
+        and before in (Format.BINARY32, Format.BINARY64) and format is Format.EXTENDED80}
+
+
 def checked(body: mir.MirBody) -> None:
     from qbopt.backend.lower import Unlowered
 
@@ -122,10 +137,17 @@ def checked(body: mir.MirBody) -> None:
             if _removed(op):
                 continue
             origin = op.floating_origin
-            if op.kind != origin.kind or op.floating != origin.semantics:
+            forwarded = _forwarded_inputs(op)
+            semantics = op.floating
+            if forwarded:
+                formats = tuple(origin.semantics.inputs[index] if index in forwarded else format
+                                for index, format in enumerate(semantics.inputs))
+                semantics = replace(semantics, inputs=formats)
+            if op.kind != origin.kind or semantics != origin.semantics:
                 raise Unlowered("floating evaluation semantics changed")
             for current, before in ((op.args, origin.inputs), (op.results, origin.outputs)):
-                if len(current) != len(before) or any(type(arg) is not type(old)
+                allowed = forwarded if current is op.args else set()
+                if len(current) != len(before) or any((type(arg) is not type(old) and index not in allowed)
                     or (isinstance(old, mir.Held) and old.width == 10 and arg.width != 10)
-                    for arg, old in zip(current, before)):
+                    for index, (arg, old) in enumerate(zip(current, before))):
                     raise Unlowered("floating operand conversion requires instruction selection")

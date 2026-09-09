@@ -804,6 +804,7 @@ def forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> M
     Arithmetic remains intact. The allocator, not this pass, decides where
     the longer-lived provider resides.
     """
+    body = _floating_forwarded(body, dgroup, calls)
     want = frozenset(op.at for block in body.blocks for op in block.ops if op.loads)
     if not want:
         return body
@@ -820,6 +821,48 @@ def forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> M
             ops.append(op if args is None else replace(op, args=args, loads=(), uses=op.uses + (holder,)))
         out.append(replace(block, ops=tuple(ops)))
     return replace(body, blocks=tuple(out))
+
+
+def _floating_forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
+    """Exact stored values can replace arithmetic memory inputs without rounding anew."""
+    from qbopt.analysis import floatfacts
+    from qbopt.model.floating import Format
+    if not any(op.kind is mir.Kind.FSTORE for block in body.blocks for op in block.ops):
+        return body
+    facts = floatfacts.known(body, dgroup, calls)
+    blocks = []
+    for block in body.blocks:
+        available = []
+        ops = []
+        for op in block.ops:
+            changed = op
+            if (not op.barrier and op.kind in (mir.Kind.FADD, mir.Kind.FSUB, mir.Kind.FMUL, mir.Kind.FDIV)
+                and op.floating is not None and len(op.args) == len(op.floating.inputs)):
+                args, formats = list(op.args), list(op.floating.inputs)
+                for index, (arg, format) in enumerate(zip(args, formats)):
+                    if not isinstance(arg, mir.Cell):
+                        continue
+                    provider = next((one for one in reversed(available)
+                                     if one.floating.inputs == (format,)
+                                     and mir.same_bytes(one.loads[0], arg.ref)), None)
+                    if provider is not None:
+                        args[index] = provider.results[0]
+                        formats[index] = Format.EXTENDED80
+                if tuple(args) != op.args:
+                    changed = replace(op, args=tuple(args),
+                        loads=tuple(arg.ref for arg in args if isinstance(arg, mir.Cell)),
+                        uses=tuple(dict.fromkeys((*op.uses, *(arg.value for arg in args if isinstance(arg, mir.Held))))),
+                        floating=replace(op.floating, inputs=tuple(formats)))
+            ops.append(changed)
+            available = [one for one in available if not any(
+                mir.overlapping(one.loads[0], written, dgroup) for written in op.stores)]
+            if not _exact_floating(op, facts):
+                available.clear()
+            provider = _exact_stored_load(op, facts)
+            if provider is not None:
+                available.append(provider)
+        blocks.append(replace(block, ops=tuple(ops)))
+    return replace(body, blocks=tuple(blocks))
 
 
 def _served(op: Op, holder) -> "tuple[mir.Arg, ...] | None":

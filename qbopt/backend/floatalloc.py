@@ -73,6 +73,13 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
                 insns.append(one)
                 continue
 
+            if (what.op is ir.Operation.FLOAT_ARITH and what.name in ("fadd", "fmul", "fsub", "fdiv")
+                and len(what.sources) == 2
+                and all(isinstance(arg, ir.Held) and arg.width == 10 for arg in what.sources)
+                and what.sources[0] != what.sources[1] and remaining[what.sources[1].value] == 1):
+                names = {"fadd": "faddp", "fmul": "fmulp", "fsub": "fsubrp", "fdiv": "fdivrp"}
+                what = replace(what, op=ir.Operation.FLOAT_ARITH_POP, name=names[what.name],
+                               sources=what.sources[::-1])
             used = Counter(arg.value for arg in what.sources if isinstance(arg, ir.Held) and arg.width == 10)
             for value, count in used.items():
                 for _ in range(count):

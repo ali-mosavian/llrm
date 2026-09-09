@@ -88,7 +88,7 @@ def test_cse_reuses_exact_fpcse_sum():
     from qbopt.objectfile import module, omf
     instructions = blocks.instructions(module.of(omf.parse(emitted.data)))
     assert not isinstance(instructions, str)
-    assert sum(str(one.insn).startswith("fadd ") for one in instructions) == 3
+    assert sum(str(one.insn).split()[0] in {"fadd", "faddp"} for one in instructions) == 3
 
 
 @pytest.mark.parametrize("guard", [None, "unknown", "rounding", "barrier", "alias"])
@@ -128,6 +128,22 @@ def test_exact_store_can_supply_a_later_floating_load(guard, monkeypatch):
         after = _allocated(changed, path)
         assert any(one.at == load.at and one.what and one.what.name == "fld" for one in before.insns)
         assert not any(one.at == load.at and one.what and one.what.name == "fld" for one in after.insns)
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_stored_fpcse_products_feed_additions_without_memory_reads(tag):
+    """FPCSE reloaded its exact stored products as memory operands of its final additions."""
+    from qbopt.optimize import transform
+    path = Path(f"fixtures/omf/fpcse-{tag}.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    changed = transform.forwarded(body, found.dgroup, found.calls)
+    adds = [op for block in changed.blocks for op in block.ops if op.kind is mir.Kind.FADD]
+    assert all(op.loads for op in adds)  # Unknown loop accumulator is not a proof.
+    result = wholeseg.emitted(path.read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
+    assert sum(one.split()[0] == "faddp" for one in instructions) == 2
 
 
 @pytest.mark.parametrize("change", ["unknown_effect", "barrier", "alias", "rounding"])
