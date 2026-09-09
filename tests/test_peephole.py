@@ -9,6 +9,56 @@ from qbopt.model import ir, lir
 from qbopt.backend import peephole
 
 
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_hotlpx_uses_scaled_address_for_factor_five(tag):
+    """HOTLPX's factor twenty expanded to copy/shift/add/shift instead of LEA/shift."""
+    import corpus
+    from iced_x86 import Mnemonic
+    from qbopt import wholeseg
+    result = wholeseg.emitted(Path(f"fixtures/omf/hotlpx-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    insns = [one.insn for block in corpus.partitioned(result.data) for one in block.insns]
+    assert any(one.mnemonic == Mnemonic.LEA and one.memory_index_scale == 4 for one in insns)
+
+
+@pytest.mark.parametrize("guard", ["none", "dword", "carry", "zero_shift", "bytes", "wrong_source", "same", "stack", "relocation"])
+def test_scaled_address_requires_dead_flags_and_exact_allocated_operands(guard):
+    """HOTLPX's LEA must retain low-word arithmetic without losing flags or owned bytes."""
+    width = 4 if guard == "dword" else 2
+    dest = ir.Reg(Register.EBX if width == 4 else Register.BX, width)
+    source = ir.Reg(Register.ECX if width == 4 else Register.CX, width)
+    if guard == "same":
+        source = dest
+    if guard == "stack":
+        source = ir.Reg(Register.SP, width)
+    def insn(at, kind, name, sources):
+        return lir.Insn(at, (at, at), ir.Semantics(kind, name, (dest,), sources), (), ())
+    copy = insn(0, ir.Operation.MOVE, "mov", (source,))
+    shift = insn(1, ir.Operation.BINARY, "shl", (dest, ir.Imm(2, 1)))
+    add = insn(2, ir.Operation.BINARY, "add", (dest, source))
+    last = insn(3, ir.Operation.BINARY, "shl", (dest, ir.Imm(2, 1)))
+    if guard == "carry":
+        last = replace(last, what=replace(last.what, name="adc"))
+    if guard == "zero_shift":
+        last = replace(last, what=replace(last.what, sources=(dest, ir.Imm(0, 1))))
+    if guard == "bytes":
+        shift = replace(shift, covers=(1, 2))
+    if guard == "wrong_source":
+        add = replace(add, what=replace(add.what, sources=(dest, ir.Reg(Register.DX, 2))))
+    if guard == "relocation":
+        copy = replace(copy, symbol=True)
+    result = peephole._scaled_address((copy, shift, add, last))
+    if guard not in {"none", "dword"}:
+        assert result is None
+        return
+    assert result.what.dests == (dest,)
+    assert result.what.sources[0].scale == 4
+    mask = (1 << (8 * width)) - 1
+    for bits in (0, 1, 0x1234FFFF, 0x80008000, 0xFFFFFFFF):
+        original = (((bits & mask) << 2) + (bits & mask)) & mask
+        assert ((bits + bits * 4) & mask) == original
+
+
 @pytest.mark.parametrize("following,zeroed", [("cmp", True), ("add", True),
     ("adc", False), ("inc", False), ("shl", False), ("call", False), ("je", False)])
 def test_zeroing_requires_flags_overwritten_before_observation(following, zeroed):

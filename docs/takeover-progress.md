@@ -1,5 +1,29 @@
 # Takeover checkpoint — 2026-09-09
 
+## Select scaled LEA after allocation
+
+The backend peephole folds an allocated copy/shift/add into scaled LEA when
+an immediately following nonzero shift replaces its arithmetic flags. The
+removed operations must be inserted instructions owning no original bytes;
+relocations, unknown effects, unequal widths, overlapping registers, ESP
+indices and mismatched operands refuse the pattern. For word results the
+low sixteen address bits equal the original modular arithmetic independently
+of the source register's upper half. LEA reads no memory.
+
+HOTLPX before: `mov bx,cx / shl bx,2 / add bx,cx / shl bx,2`.
+After: `lea bx,[ecx+ecx*4] / shl bx,2`.
+PDS/QB/VBDOS costs **256/260/266 -> 251/255/261**, objects shrink three bytes.
+LNGMXX costs **253/255/251 -> 248/250/246**, objects shrink five bytes.
+PRESSX costs **632/636/642 -> 627/631/637**, objects shrink three bytes.
+This finishes the scaled-address opportunity found while deriving HOTLPX's
+reference; the complete target derivation remains provisional.
+
+154-object comparison changes exactly these nine objects with no new refusals.
+54 focused host checks and all nine affected runtime cases pass. The three
+real HOTLPX LEA regressions failed before implementation. All-stage dumps:
+`/tmp/qbopt-lea-before` and `/tmp/qbopt-lea-after`. Runtime evidence:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-lea-gt8xh49d`.
+
 ## Lower two-bit constant products to shifts and an addition
 
 The HOTLPX reference investigation exposed its remaining multiply by twenty.

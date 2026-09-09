@@ -2,7 +2,7 @@
 
 from dataclasses import replace
 
-from iced_x86 import RegisterExt
+from iced_x86 import Register, RegisterExt
 
 from qbopt.model import ir, lir
 from qbopt.backend import target
@@ -13,7 +13,60 @@ class Peephole(LIRTransform):
     name = "peephole"
 
     def transform(self, body: lir.LirBody) -> lir.LirBody:
-        return waits(zeroes(constants(body)))
+        return waits(zeroes(addresses(constants(body))))
+
+
+def _scaled_address(parts: tuple[lir.Insn, ...]) -> lir.Insn | None:
+    if len(parts) != 4 or any(one.what is None or one.clobbers or one.symbol is True for one in parts):
+        return None
+    copy, shift, add, following = parts
+    if any(one.spread or (one.covers and one.covers[0] != one.covers[1]) for one in (shift, add)):
+        return None
+    match copy.what:
+        case ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg() as dest,), (ir.Reg() as source,)):
+            pass
+        case _:
+            return None
+    if (dest.width != source.width or dest.width not in {2, 4}
+        or dest.register not in target.WIDTHS or source.register not in target.WIDTHS
+        or RegisterExt.full_register32(dest.register) == RegisterExt.full_register32(source.register)):
+        return None
+    match shift.what, add.what, following.what:
+        case (ir.Semantics(ir.Operation.BINARY, "shl", (shift_dest,), (shift_source, ir.Imm(amount, _, None))),
+              ir.Semantics(ir.Operation.BINARY, "add", (add_dest,), (left, right)),
+              ir.Semantics(ir.Operation.BINARY, "shl", (last_dest,), (last_source, ir.Imm(count, _, None)))):
+            if (not 1 <= amount <= 3 or not 0 < count < dest.width * 8
+                or any(one != dest for one in (shift_dest, shift_source, add_dest, left, last_dest, last_source))
+                or right != source):
+                return None
+        case _:
+            return None
+    base = RegisterExt.full_register32(source.register)
+    if base == Register.ESP:
+        return None
+    # For a word result only the low sixteen address bits are used. Unknown
+    # upper source bits cannot affect them; LEA performs no memory access.
+    what = ir.Semantics(ir.Operation.ADDRESS, "lea", (dest,),
+                        (ir.Address(None, through=base, index=base, scale=1 << amount),))
+    return replace(copy, what=what, defines=add.defines)
+
+
+def addresses(body: lir.LirBody) -> lir.LirBody:
+    """Fold allocated scale/add expansions whose following shift replaces their flags."""
+    blocks = []
+    for block in body.blocks:
+        insns = []
+        index = 0
+        while index < len(block.insns):
+            combined = _scaled_address(block.insns[index:index + 4])
+            if combined is not None:
+                insns.append(combined)
+                index += 3
+            else:
+                insns.append(block.insns[index])
+                index += 1
+        blocks.append(replace(block, insns=tuple(insns)))
+    return replace(body, blocks=tuple(blocks))
 
 
 def zeroes(body: lir.LirBody) -> lir.LirBody:
