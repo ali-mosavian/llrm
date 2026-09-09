@@ -40,3 +40,25 @@ the particular constants happen to produce an exact answer.
 No generated assembly changed during this inspection. Next implementation
 work should connect proven floating-value reuse to stack allocation; LLVM's
 strict-FP caveats in `docs/floating-environment.md` remain applicable.
+
+### Located upstream blocker
+
+Inspection of the current implementation changes the diagnosis: floating CSE
+already exists in `optimize/transform.py`, and stack allocation already handles
+shared floating values. CSE requires exact/nonexceptional facts; that guard
+must stay. `analysis/floatfacts.py` can propagate exact constants through
+typed floating operations and storage, but the assignment `d=12` is not
+represented as such a store.
+
+The initial PDS MIR at 014c loads destination BC_DATA+001a and source
+BC_CN+0022, transfers DS to ES, then carries four opaque operations at
+0154..0157. These are BC's four MOVSW instructions copying the DOUBLE
+literal. The following FLOADs therefore have no known finite value, and CSE
+correctly refuses to merge them under strict exception semantics.
+
+The next implementation is frontend recognition of this copy: explicit
+memory reads/writes plus the pointer updates, preserving direction and
+segment requirements in the machine-facing layers. Supplying `d=12` as an
+entry fact would be wrong: this assignment executes after the preceding
+loop and runtime calls. Removing the second FLD without proving its effects
+would also bypass the actual missing abstraction.
