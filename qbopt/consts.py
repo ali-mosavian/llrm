@@ -29,7 +29,6 @@ of work with its own correctness argument.
 
 from dataclasses import dataclass
 
-
 from qbopt import ir
 from qbopt import mir
 from qbopt import runtime
@@ -93,7 +92,9 @@ def _put(op: mir.Op, known: dict[mir.Value, Known]) -> Known | None:
     return known[from_value[0]] if len(from_value) == 1 else None
 
 
-def _kills(here: Cells, op: mir.Op, known: dict[mir.Value, Known], dgroup: frozenset[int], calls: dict[int, str]) -> Cells:
+def _kills(
+    here: Cells, op: mir.Op, known: dict[mir.Value, Known], dgroup: frozenset[int], calls: dict[int, str]
+) -> Cells:
     """The cell facts still standing after this operation."""
     if op.at in calls:
         contract = runtime.contract(calls[op.at])
@@ -134,9 +135,7 @@ def cells(
     """
     known = known if known is not None else {}
     outof: dict[int, Cells | None] = {block.at: None for block in body.blocks}
-    preds = {
-        block.at: [one.at for one in body.blocks if block.at in one.succ] for block in body.blocks
-    }
+    preds = {block.at: [one.at for one in body.blocks if block.at in one.succ] for block in body.blocks}
 
     def entering(at: int) -> Cells | None:
         if not preds[at]:
@@ -144,11 +143,7 @@ def cells(
         seen = [outof[one] for one in preds[at] if outof[one] is not None]
         if not seen:
             return None
-        return {
-            where: fact
-            for where, fact in seen[0].items()
-            if all(one.get(where) == fact for one in seen[1:])
-        }
+        return {where: fact for where, fact in seen[0].items() if all(one.get(where) == fact for one in seen[1:])}
 
     changing = True
     while changing:
@@ -172,6 +167,12 @@ def cells(
     return found
 
 
+def _read(fact: Known | None, width: int) -> Known | None:
+    if fact is None or fact.width < width:
+        return None
+    return Known(masked(fact.n, width), width)
+
+
 def _operand(op: mir.Op, one: mir.Arg, known: dict, here: Cells | None = None) -> Known | None:
     """One operand as a number, if it is one.
 
@@ -183,19 +184,17 @@ def _operand(op: mir.Op, one: mir.Arg, known: dict, here: Cells | None = None) -
     if isinstance(one, mir.Const):
         return Known(masked(one.n, one.width), one.width)
     if isinstance(one, mir.Held):
-        fact = known.get(one.value)
-        return fact if fact is not None and fact.width >= one.width else None
+        return _read(known.get(one.value), one.width)
     if isinstance(one, mir.Cell) and here is not None and one.ref.addr is not None:
         # A cell whose content is known is as good as a constant. Without
         # this the propagation stops at BC's first store: it keeps every
         # variable in memory, so `n * k` reads two cells and neither is a
         # value this could ask about.
-        fact = here.get((one.ref.addr, one.ref.width))
-        return fact if fact is not None and fact.width >= one.ref.width else None
+        return _read(here.get((one.ref.addr, one.ref.width)), one.ref.width)
     return None
 
 
-def _defined(op: mir.Op, semantics=None, origin: dict | None = None) -> mir.Value | None:
+def _defined(op: mir.Op, semantics: ir.Semantics | None = None, origin: dict | None = None) -> mir.Value | None:
     """The value this operation's first result gets, flags aside.
 
     Nearly every arithmetic operation defines its result and the flags

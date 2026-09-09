@@ -42,6 +42,24 @@ def test_a_fact_is_masked_to_its_own_width(n: int, width: int, want: int) -> Non
     assert consts.masked(n, width) == want
 
 
+@pytest.mark.parametrize(("width", "number", "answer"), [(1, 0x101, 0), (2, 0x12350000, 0), (2, 0x12358000, 0x4000)])
+def test_a_narrow_shift_cannot_pull_bits_from_outside_its_operand(width: int, number: int, answer: int) -> None:
+    """A word read of 0x12350000 shifted right once folded to 0x8000, not 0."""
+    source, result = mir.Value(1, 0), mir.Value(2, 1)
+    op = mir.Op(
+        1,
+        ir.Operation.BINARY,
+        "shr",
+        (result,),
+        (source,),
+        kind=mir.Kind.SHR,
+        args=(mir.Held(source, width), mir.Const(1, width)),
+        results=(mir.Held(result, width),),
+    )
+    facts = {source: consts.Known(number, 4)}
+    assert consts._result(op, facts) == consts.Known(answer, width)
+
+
 def test_flags_do_not_stop_an_operation_being_folded() -> None:
     """Nearly every arithmetic instruction defines its result and the flags
     together, so a rule wanting one definition rejects all of them. It did,
