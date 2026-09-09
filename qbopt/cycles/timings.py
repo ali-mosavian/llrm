@@ -5,9 +5,10 @@ was worked out.
     source  ~/work/badlogic/mgl, tools/cycles/timings.py
     taken   2026-08-29, unchanged but for this note and the import below
 
-These are published latencies rather than measurements, so treat what they give
-as a ranking. DOSBox charges per instruction and models no latency at all, which
-is why this exists alongside it.
+These are legacy approximate rankings, partly recalled from timing tables;
+they are not uniformly verified latencies or reciprocal throughputs. Audited
+form-specific bounds live in backend/timing.py; see docs/timing-audit.md.
+DOSBox charges per instruction and does not validate these latency estimates.
 """
 
 """

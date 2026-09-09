@@ -43,8 +43,8 @@ https://download.intel.com/design/PentiumII/manuals/24512701.pdf
 - Verify 486 and Pentium instruction tables, and exact P6 forms, from primary
   manuals. Existing recollected representative numbers are not that evidence.
 
-The current HOTLPX P6 multiply choice and reciprocal-division cost claims
-remain provisional.
+The initial HOTLPX P6 choice was corrected to rank the fused LEA sequence;
+see arithmetic-targets.md. Whole-sequence clock claims remain provisional.
 
 ## First correction
 
@@ -117,3 +117,27 @@ The multiply-chain selector's broader profiles still use approximate costs.
 Neither that nor the division comparison includes a post-allocation spill
 cost or complete scheduling model. Further optimization must not describe
 these rankings as measured execution time.
+
+## Local GCC cross-check
+
+Inspected revision `9a135e85c2e6543031657ce637e22e1eab004493` in
+`/Users/alim/work/other/gcc`, both `gcc/config/i386/x86-tune-costs.h`
+and its consumer `gcc/config/i386/i386.cc`. The latter's integer `MULT`
+case counts **set bits** of a constant, then adds `nbits * mult_bit` to
+`mult_init`; an unknown multiplier uses an explicitly arbitrary seven.
+This is not the 386 manual's logarithmic early-out formula. For example,
+positive imm8 64 and 85 have different population counts but both take
+13 core clocks under that formula. Do not replace the audited immediate
+formula with GCC's heuristic and label the result clocks.
+
+The P5 table assigns multiply 11 and divide 25 `COSTS_N_INSNS` units;
+the audited dword register forms are 10 and 46 core clocks respectively.
+P6 uses multiply 4 and divide 17 units. These tables are useful tuning
+references, not independent measurements of our operand forms, prefixes,
+or schedules. The 486 per-bit field is even stored as raw `1`, while its
+multiply startup is wrapped in `COSTS_N_INSNS`: copying printed numbers
+without reading their consumer would also lose the unit scale.
+
+This cross-check changes no selection or emitted assembly. It establishes
+that compiler heuristics and hardware timing evidence must stay separately
+identified; neither validates the other's numbers by resemblance alone.
