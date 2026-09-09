@@ -1059,3 +1059,23 @@ ratio. Dumps: `/tmp/qbopt-recombined`. Nbody (24 cases), CHAIN (7) and HARR
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-recombined-we7utdqf`.
 Position arithmetic is still word-paired before late widening; early whole
 values and invariant-load motion remain the larger unfinished step.
+
+## Early scalar position arithmetic
+
+`raising_longs.scalar` now recognizes adjacent load, memory-arithmetic and
+store pairs at the raise boundary. It produces fresh whole values and explicit
+extractions for surviving half consumers. Arithmetic requires an already
+recognized whole input; memory references must match in SSA base, segment and
+metadata as well as adjacent byte addresses. Live half flags and full-width
+readers of a half prevent recognition. Legacy widening remains for other
+idioms; this is not a claim that the migration is finished.
+
+Nbody now enters optimization with whole position loads and subtracts at
+0x11d/0x12d and 0x13c/0x144, and a whole DELTAX store at 0x135. PDS modeled
+cost falls from 820,313 to 792,437. Dumps: `/tmp/qbopt-early-longs`.
+The real-fixture regression fails with recognition disabled; 67 focused tests
+pass. Nbody, CHAIN, HARR, negnot and arridx pass strict LIR on all three
+compilers across two bounded runs. Latest artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-long-guards-ypyxvyud`.
+Invariant position memory operands are still inside the scalar subtracts;
+exposing those as whole loads is the next step toward LICM.
