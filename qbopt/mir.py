@@ -284,6 +284,14 @@ class Symbol:
 
 
 @dataclass(frozen=True, slots=True)
+class ArrayRequest:
+    descriptor: Symbol
+    element_width: int
+    bounds: tuple[tuple[int, int], ...]
+    replaces: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class Cell:
     """A memory cell -- the same MemRef the op's loads and stores name."""
 
@@ -736,6 +744,7 @@ class Op:
     name: str
     defines: tuple[Value, ...]
     uses: tuple[Value, ...]
+    array: ArrayRequest | None = field(default=None, kw_only=True)
     loads: tuple[MemRef, ...] = ()
     stores: tuple[MemRef, ...] = ()
     node: ir.Node | None = None  # what it came from, so lowering can be verbatim
@@ -2057,6 +2066,9 @@ def bodies(
             contracts,
         )
         if not isinstance(built, str):
+            from qbopt import raising_arrays
+
+            built = raising_arrays.annotated(built, found.calls)
             found.refs.update(_referenced(built, found))
             held = {**_returned(built), **_folded(built, found, blocks)}
             if held:

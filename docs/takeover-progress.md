@@ -55,6 +55,19 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+Array-request checkpoint: raise recognizes DDIM/RDIM argument setup and attaches
+`ArrayRequest` to the call: symbolic descriptor, element width, dimension bounds,
+and whether it replaces an existing allocation. Recognition stays in
+`raising_arrays.py`, outside MIR passes. The ABI is documented in QB 4.5
+`runtime/rt/dynamic.asm`; real HARR and SEGLD objects confirm argument setup on
+PDS /G2, QB /O and VBDOS /G3, including QB's register-fed pushes. ADIM is not
+classified as allocation. Thirteen focused checks pass; annotation preserves
+strict LIR emission byte-for-byte for HARR on those three configurations.
+`/tmp/qbopt-array-request-q-20260909` shows the request at raise and after opt.
+These are requested shapes, NOT proof of successful allocation, physical
+disjointness, lifetime, or in-bounds access. Next use requires those proofs;
+do not feed requests directly to no-alias. No target reduction claimed here.
+
 CSE semantic-operands checkpoint: optimizer-created operations no longer need
 an original decoded node to participate in value numbering. Symbolic operands
 also participate by their complete identity, never by their encoded zero.

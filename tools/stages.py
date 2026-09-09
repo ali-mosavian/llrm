@@ -325,6 +325,13 @@ def _says(op, cells: Cells, calls: dict, verbose: bool) -> str:
     into = ", ".join(_short(one, cells) for one in op.results)
 
     notes = []
+    if op.array is not None:
+        request = op.array
+        bounds = ", ".join(f"{low}..{high}" for low, high in request.bounds)
+        action = "replace array" if request.replaces else "allocate array"
+        notes.append(
+            f"request {action} {_short(request.descriptor, cells)} ({bounds}), element {request.element_width}"
+        )
     if verbose:
         flags = [one for one in op.uses if one.flags]
         if flags:
