@@ -423,6 +423,11 @@ def _field_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -
     # to the wrong operand, which is the failure this whole path exists to
     # stop rather than to relocate.
     if op.symbol is True:
+        what = _semantics(op)
+        if (op.id is not None and what is not None and what.op is ir.Operation.CALL
+            and what.target is None and op.at in found.calls
+            and found.code[op.at:op.at + 1] == b"\x9a" and op.at + 1 in fields):
+            return op.at + 1
         said = found.refs.get(op.id) if op.id is not None else None
         if said is None or len(said) != 1 or not _still_has_an_operand_for_it(op):
             return None

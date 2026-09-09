@@ -22,9 +22,24 @@ its relocation; following calls were bare `call 0:0`.
 
 `backend/layout.py` sorts operations by original address. Clones deliberately
 share source provenance, but must not share placement identity. The current
-input-field-to-output-field relocation mapping likewise cannot represent
-one input fixup used by three emitted instructions. These are backend
+adapter also discarded cloned calls' relocation provenance. These are backend
 requirements, not reasons for MIR to invent machine addresses.
+
+Follow-up inspection corrected the initial diagnosis: `objwrite.written` and
+`relocate.as_records` already support one-to-many fixup destinations. The loss
+was earlier, in treating zero-byte clones as unrelated inserted instructions.
+The prototype now explicitly retains symbolic operand provenance. The assembler
+recognizes an explicitly retained far-call target even without an owning node.
+Its regression emits two far calls with relocation requests `(1,1)` and `(6,1)`:
+two output fields, the same original source field.
+
+`layout.rebuild` and `objwrite.written` now accept explicit `ordered=True`.
+The byte-level regression changes the bad sequence `mov ax,1; mov ax,3;
+mov ax,2` back to the requested `mov ax,1; mov ax,2; mov ax,3` despite the
+third instruction sharing the first one's source address. Legacy callers
+retain the default ordering. A trial enabling it globally changed event
+objects and NOTS/PROCS variants; the PDS NOTS/PROCS output checks passed, but
+that is not sufficient evidence to switch every existing caller.
 
 The experimental pipeline integration and relaxed sequence guard were
 removed. Default optimization is unchanged. The regression explicitly
@@ -35,9 +50,12 @@ The failed execution is evidence of a miscompile, not successful unrolling.
 
 1. Separate ordered emitted occurrences from original byte ownership.
    Preserve the LIR block/instruction order; source addresses remain provenance.
-2. Attach relocation requests to emitted occurrences, allowing one source
-   fixup to supply multiple output fields. Keep exactly one owner for consumed
-   original bytes and one branch target mapping for each original label.
+2. Preserve exactly one original block-label destination independently of
+   repeated instruction provenance. `_placed` currently chooses the first
+   occurrence of an old address, which may now be a clone preceding the original
+   header. Keep exactly one owner for consumed original bytes. The OMF writer's
+   existing fixup fan-out is usable once every cloned instruction retains its
+   relocation request.
 3. Verify output call order, relocations, SSA live-outs and real FPDEEP output
    before enabling the pass. Only then let the ordinary passes fold indexed
    constants across the expanded iterations and compare cost against 1086.

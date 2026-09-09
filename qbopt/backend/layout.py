@@ -293,6 +293,7 @@ def rebuild(
     reached: frozenset[int] | None = None,
     native_fpu: bool = False,
     assignment: dict | None = None,
+    ordered: bool = False,
 ) -> Laid | str:
     """Every body in the module, laid out one after another.
 
@@ -339,9 +340,11 @@ def rebuild(
     # own lists are not always in byte order, so the key read every such op
     # as one a pass had moved; and `covers[0]` is not a sort key here even
     # though it is the honest answer to where an operation's bytes are.
-    # Honouring a reorder needs the op to say it was moved; nothing in MIR
-    # does yet, so `place` cannot pay until something does. docs/split.md.
-    ops = sorted((op for _, body in bodies for op in _ordered(body)), key=lambda one: one.at)
+    # A caller with an authoritative emission sequence opts into `ordered`.
+    # Keep the legacy default until every caller's input ordering is proven.
+    ops = [op for _, body in bodies for op in _ordered(body)]
+    if not ordered:
+        ops.sort(key=lambda one: one.at)
     if not ops:
         return "no bodies to rebuild"
     if any(asm._length_of(one, found) is None for one in ops):

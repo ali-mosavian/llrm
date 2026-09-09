@@ -37,12 +37,17 @@ def written(
     fields: frozenset[int] = frozenset(),
     reached: frozenset[int] | None = None,
     native_fpu: bool = False,
+    ordered: bool = False,
 ) -> bytes | str:
     """The object, with its code segment written from these bodies.
 
     A string instead, saying why, wherever anything refuses. The caller
     keeps what it had: a refusal is a module some earlier pass has already
     improved, and throwing that away to report a failure helps nobody.
+
+    `ordered` preserves each block's instruction sequence rather than sorting
+    instructions by source address. It is opt-in while legacy producers still
+    depend on that sort; cloning requires it but also needs distinct labels.
     """
     laid = layout.rebuild(
         found,
@@ -52,6 +57,7 @@ def written(
         reached,
         native_fpu,
         assignment=assignment or None,
+        ordered=ordered,
     )
     if isinstance(laid, str):
         return laid

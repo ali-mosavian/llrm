@@ -91,7 +91,8 @@ def _expanded(body, loop, header, latch, exit_at, entry, count):
                         if isinstance(arg, mir.Held) else arg for arg in read.results)
         return replace(read, defines=tuple(defined[value.id] for value in op.defines), results=results,
                        covers=op.covers if owns else (op.at, op.at),
-                       extra_covers=op.extra_covers if owns else (), raised=None)
+                       extra_covers=op.extra_covers if owns else (), raised=None,
+                       symbol=op.symbol if owns else op.symbol is not False)
 
     expanded = []
     for iteration in range(count):
