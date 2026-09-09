@@ -1528,9 +1528,9 @@ def dead(body: MirBody) -> MirBody:
     live() is the analysis, and what it needs is that every use list is
     complete. For a call that means its contract naming the registers it
     reads, which is runtime.Contract.inputs and was written for this.
-    Removing an operation hands its bytes to the one before it -- layout.py
-    requires that and _absorb() already does it, refusing where no survivor
-    is adjacent to take them.
+    A removed computation leaves an empty ownership marker. Its disjoint
+    input ranges stay accounted for without requiring an adjacent survivor
+    or keeping a dead value live through allocation.
     """
     # Not in a body holding something this cannot read. A use list is only
     # as complete as the semantics behind it, and an opaque or emulated
@@ -1544,17 +1544,34 @@ def dead(body: MirBody) -> MirBody:
     out = []
     changed = False
     for block in body.blocks:
-        # Absorption gives multiple operations one address; ownership must
-        # be transferred independently before removing only one of them.
-        seen: dict[int, int] = {}
-        for op in block.ops:
-            seen[op.at] = seen.get(op.at, 0) + 1
-        gone = {op.at for op in block.ops if seen[op.at] == 1 and _removable(op, alive)}
+        # Several semantic operations may share an input address. Their
+        # computations are independent even when their provenance is not.
+        gone = {id(op) for op in block.ops if _removable(op, alive)}
         if not gone:
             out.append(block)
             continue
-        ops = _absorb(list(block.ops), gone)
-        changed = changed or len(ops) != len(block.ops)
+        ops = [
+            replace(
+                op,
+                op=ir.Operation.NOTHING,
+                name="",
+                kind=mir.Kind.NOTHING,
+                defines=(),
+                uses=(),
+                args=(),
+                results=(),
+                loads=(),
+                merges={},
+                node=None,
+                made=None,
+                raised=None,
+                symbol=False,
+            )
+            if id(op) in gone
+            else op
+            for op in block.ops
+        ]
+        changed = True
         out.append(replace(block, ops=tuple(ops)))
     if not changed:
         return body

@@ -80,6 +80,8 @@ def semantics(op: mir.Op, was: ir.Semantics | None = None, place=None) -> ir.Sem
         # original instruction hands back BC's registers, which is the
         # machine leaking into what a value is allowed to live in.
         return None
+    if op.kind is mir.Kind.NOTHING and op.name == "":
+        return ir.Semantics(ir.Operation.NOTHING, "", (), ())
     if not op.args and not op.results and op.raised is None:
         return None  # nothing to build one from
     # A value resolves to the register the original instruction had in the

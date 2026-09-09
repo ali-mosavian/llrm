@@ -506,3 +506,19 @@ retains dead copies whose bytes have no adjacent taker. That deletion change
 was not retained. `/tmp/qbopt-dce-identity` records its stages. The next change
 should unify ownership of removed operations instead of relying on an adjacent
 instruction's single span, allowing true deletion rather than leftover moves.
+# Dead computations emit no bytes
+
+Dead-code removal now replaces each dead operation with an empty ownership
+marker: no values, operands or original node, but the same input byte ranges.
+Lowering and selection give that marker an empty encoding. A live sibling at
+the same input address no longer keeps the dead computation alive, and no
+adjacent survivor is needed to inherit its bytes. This retains layout's full
+coverage check rather than bypassing it.
+
+LNGMIX drops from 580 to 552 (2.63x target). MATRIX measures 11376/6210
+(1.83x). The regression fails against the old DCE implementation; seventeen
+focused tests and nine strict-LIR runtime runs pass: LNGMIX, HOTLPX, MATRIX
+on PDS `/G2`, QB `/O`, VBDOS `/G3`. Artifacts:
+`/tmp/qbopt-dead-marker-final` and
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-dead-marker-qhdaewbz`.
+The target is still unmet; accumulator memory traffic remains in LNGMIX.

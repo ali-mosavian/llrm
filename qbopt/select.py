@@ -1482,6 +1482,8 @@ def emit(
                     return address_of(into, cell, at)
         case ir.Operation.FILL:
             return fill(what.name or "", at)
+        case ir.Operation.NOTHING if not what.name:
+            return Emitted(b"")
         case ir.Operation.EXTEND | ir.Operation.NOTHING | ir.Operation.LEAVE:
             return bare(what.name or "", at)
         case ir.Operation.FLOAT_UNARY | ir.Operation.FLOAT_ARITH if not any(
