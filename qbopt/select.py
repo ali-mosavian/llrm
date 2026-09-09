@@ -1104,31 +1104,36 @@ def funnel(dest: Register_, high: Register_, count: int | None, at: int = 0) -> 
     return _assemble(Instruction.create_reg_reg_i32(code, dest, high, count), at)
 
 
-def shift(name: str, dest: Register_, count: int | None, at: int = 0) -> Emitted | None:
-    """`shl reg,imm` and its kind. `count` of None means by cl."""
+def shift(name: str, dest: Register_ | ir.Mem, count: int | None, at: int = 0) -> Emitted | None:
+    """Shift a register or spill cell. `count` of None means by cl."""
     if name not in SHIFTS:
         return None
-    width = WIDTHS.get(dest)
+    memory = isinstance(dest, ir.Mem)
+    built = operand_of(dest) if memory else None
+    if memory and built is None:
+        return None
+    width = dest.width if memory else WIDTHS.get(dest)
     if width is None:
         return None
     if count is None:
         code = _code(f"{name.upper()}_RM{width * 8}_CL")
-        return None if code is None else _assemble(Instruction.create_reg_reg(code, dest, Register.CL), at)
+        if code is None:
+            return None
+        instruction = Instruction.create_mem_reg(code, built[0], Register.CL) if memory else Instruction.create_reg_reg(code, dest, Register.CL)
+        return _assemble(instruction, at, built[1] if memory else False)
     # `shl reg,1` has its own opcode, a byte shorter than the immediate form
     # and what BC writes for a doubling. iced models the implicit 1 as a real
     # operand, so it is built with the count like the immediate form -- with
     # create_reg it comes out `shl ax,???` and the assembler refuses it,
     # which is how this shape sat in the table emitting nothing.
-    for shape, build in (
-        (f"{name.upper()}_RM{width * 8}_1", lambda c: Instruction.create_reg_i32(c, dest, count)),
-        (f"{name.upper()}_RM{width * 8}_IMM8", lambda c: Instruction.create_reg_i32(c, dest, count)),
-    ):
+    for shape in (f"{name.upper()}_RM{width * 8}_1", f"{name.upper()}_RM{width * 8}_IMM8"):
         if shape.endswith("_1") and count != 1:
             continue
         code = _code(shape)
         if code is None:
             continue
-        made = _assemble(build(code), at)
+        instruction = Instruction.create_mem_i32(code, built[0], count) if memory else Instruction.create_reg_i32(code, dest, count)
+        made = _assemble(instruction, at, built[1] if memory else False)
         if made is not None:
             return made
     return None
@@ -1383,6 +1388,10 @@ def emit(
                     return shift(what.name or "", into, count, at)
                 case (ir.Reg(register=into), ir.Reg(register=Register.CL)):
                     return shift(what.name or "", into, None, at)
+                case (ir.Mem() as cell, ir.Imm(value=count)):
+                    return shift(what.name or "", cell, count, at)
+                case (ir.Mem() as cell, ir.Reg(register=Register.CL)):
+                    return shift(what.name or "", cell, None, at)
         case ir.Operation.BINARY if len(dests) == 1 and len(sources) == 2:
             # BINARY's own rule: sources[0] IS dests[0].
             match (dests[0], sources[1]):

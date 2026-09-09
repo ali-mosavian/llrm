@@ -429,6 +429,17 @@ def test_a_shift_by_more_than_one_keeps_the_immediate_form() -> None:
     assert made.code.hex() == "c1e003"
 
 
+@pytest.mark.parametrize(("count", "hex_bytes"), [(1, "d166de"), (3, "c166de03"), (None, "d366de")])
+def test_spilled_shift_is_encodable(count, hex_bytes) -> None:
+    """Nbody refused a hoisted index spilled to [bp-22h] because memory SHL was missing."""
+    from qbopt.module import Addr, Space
+    cell = ir.Mem(Addr(Space.FRAME, -0x22), 2)
+    source = ir.Reg(Register.CL, 1) if count is None else ir.Imm(count, 1)
+    made = select.emit(ir.Semantics(ir.Operation.BINARY, "shl", (cell,), (cell, source)))
+    assert made is not None
+    assert made.code.hex() == hex_bytes
+
+
 @pytest.mark.parametrize(
     ("name", "value", "want"),
     [("add", 0x1286, "058612"), ("cmp", 0x1234, "3d3412"), ("sub", 0x4000, "2d0040")],
