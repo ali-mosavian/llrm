@@ -212,7 +212,7 @@ def _through_lir(
             if watch is not None:
                 watch("lowered", name, low)
             frame = frames.of(low, found.calls)
-            for phase in flow.machine(flow._pinned(body), frame, found.calls):
+            for phase in flow.machine(flow._pinned(low), frame, found.calls):
                 low = phase.transform(low)
                 if watch is not None:
                     watch(phase.name, name, low)

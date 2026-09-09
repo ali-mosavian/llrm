@@ -395,7 +395,7 @@ def lowered(
             for block in body.blocks
         ),
         origin=dict(body.origin),
-        pins=dict(getattr(body, "pins", {}) or {}),
+        pins={**body.pins, **{value: Register.ES for value in body.values if body.origin.get(value) == Register.ES}},
     )
 
 

@@ -1468,3 +1468,37 @@ The target document now flags that defect without changing the denominator
 to make the score pass. Next FP work needs explicit value types and rounding
 semantics before CSE/LICM, followed by a valid hand-derived target. Nbody's
 target derivation and event-interface coverage remain separate open work.
+
+### HARR: one address-space value across the loops
+
+`raising_addresses` now names a near-memory ES selector load as an SSA
+value and attaches that value to the following far-memory references.
+Unknown clobbers end this local binding; block exits retain its observable
+state. Lowering, not a MIR pass, constrains the live selector definitions
+to ES. This is a bounded step, not a completed migration of all address
+spaces or a cross-block resource-SSA construction.
+
+Two integration defects surfaced in adjacent stage dumps. Complete narrow
+copies were retained as though they preserved a high half, so equivalent
+selectors prevented store-to-load forwarding. CSE now distinguishes a whole
+copy from a partial write with `merges`. Lowering also collected deleted
+origin entries as pins; a reused numeric ID pinned HARR's accumulator to ES.
+Only current definitions now contribute selector pins.
+
+HARR's primary PDS/QB/VBDOS modeled costs are **2326/2342/2538**, down from
+2920/2936/3132: **1.27x/1.28x/1.38x** against the unchanged 1834 target.
+The raw emitted loop contains a far store, accumulator add, and striding
+induction variables, with no selector reload or array read. Stage dumps:
+`/tmp/qbopt-harr-selector-live-pins`. These are modeled costs, not timings.
+
+The regression verifies that the selector load lies outside every backward
+branch interval and that the far read is eliminated on all three compilers;
+disabling the raise makes all three cases fail. A clobber test and a
+fail-first narrow-copy test cover the boundaries, including preserving a
+genuine high-half merge. Focused tests: 27 passed. Seven runtime programs
+(HARR, MATRIX, NBODY, LNGMIX, NESTED, PRESS, HOTLOP) pass on all three
+compilers through strict LIR emission, including all 24 NBODY cases per
+compiler. Runtime artifacts: `qbopt-selector-copies-n7sza3j1` under the
+system temporary directory. The full transform test file still has nine
+failures, reproduced with its pre-change CSE function; it is not a green
+suite. HARR reaching its primary target does not complete the project goal.
