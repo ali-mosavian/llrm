@@ -2376,3 +2376,19 @@ Stage dumps expose exact numeric values (without assuming pool contents) in
 `/tmp/qbopt-fpcse-exact-facts`. These are numeric proofs, not permission to
 discard pending exceptions, synchronization, or floating-environment effects.
 Connecting them to a sound reusable-operation proof is still required.
+
+### Floating reuse: lowering accepts deleted computations
+
+The whole-body floating checker now retains original ordering through empty
+deletion markers rather than requiring every original floating instruction
+to remain live. Markers with residual computation are rejected. The legacy
+per-operation path clears a valid marker's floating provenance instead of
+attempting to restore its original computation.
+
+A real FPCSE MIR test removes the second load/add and redirects the division
+to the first sum. It failed at the old sequence check; it now lowers and
+allocates with three rather than four additions and a stack duplicate
+preserving the sum across multiplication. The 67 focused floating lowering,
+allocation and selection tests pass. This establishes backend support, not
+an enabled optimization: the MIR effect proof and pipeline integration are
+still outstanding, and no runtime speedup is claimed.

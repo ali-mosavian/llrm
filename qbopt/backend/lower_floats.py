@@ -1,9 +1,20 @@
-"""Validate floating value placement before restoring stack operands."""
+"""Validate floating rewrites and support the legacy per-operation baseline."""
 
 from dataclasses import replace
 
 from qbopt.model import mir
 
+
+def _removed(op: mir.Op) -> bool:
+    from qbopt.backend.lower import Unlowered
+
+    if op.kind is not mir.Kind.NOTHING:
+        return False
+    if (op.args or op.results or op.uses or op.defines or op.loads or op.stores
+        or op.floating is not None or op.stack is not None or op.node is not None
+        or op.made is not None or op.raised is not None):
+        raise Unlowered("removed floating operation retains computation")
+    return True
 
 
 
@@ -57,6 +68,8 @@ def operation(op: mir.Op) -> mir.Op:
     origin = op.floating_origin
     if origin is None:
         return op
+    if _removed(op):
+        return replace(op, floating_origin=None)
     if op.kind != origin.kind or op.floating != origin.semantics:
         raise Unlowered("floating evaluation semantics changed before stack allocation is implemented")
     variables = {arg.value.variable for arg in (*origin.inputs, *origin.outputs)
@@ -98,7 +111,7 @@ def checked(body: mir.MirBody) -> None:
                for op in block.ops):
             raise Unlowered("floating value used outside its original computation")
     for block in body.blocks:
-        typed = [op for op in block.ops if op.floating_origin is not None and op.kind is not mir.Kind.NOTHING]
+        typed = [op for op in block.ops if op.floating_origin is not None]
         if not typed:
             continue
         baseline = typed[0].floating_origin
@@ -106,6 +119,8 @@ def checked(body: mir.MirBody) -> None:
         if block.at != baseline.block or sequence != baseline.sequence:
             raise Unlowered("floating sequence changed before stack allocation is implemented")
         for op in typed:
+            if _removed(op):
+                continue
             origin = op.floating_origin
             if op.kind != origin.kind or op.floating != origin.semantics:
                 raise Unlowered("floating evaluation semantics changed")

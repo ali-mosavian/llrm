@@ -19,6 +19,32 @@ def _allocated(body, path):
     return floatalloc.allocated(lower.lowered("test", body, found.calls, found.absorbed, runtime.for_module(found)))
 
 
+def test_lowering_can_preserve_a_shared_sum_after_redundant_float_ops_are_removed():
+    """FPCSE recomputed a+b because lowering required every original FP instruction."""
+    from qbopt.analysis import ssa
+    from qbopt.model import ir
+
+    path = Path("fixtures/omf/fpcse-p-g2.obj")
+    body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
+    block = next(block for block in body.blocks if any(op.floating_origin for op in block.ops))
+    floats = [op for op in block.ops if op.floating_origin]
+    first_sum = floats[1].results[0].value
+    second_sum = floats[5].results[0].value
+    removed = {floats[4].id, floats[5].id}
+    ops = tuple(replace(op, op=ir.Operation.NOTHING, kind=mir.Kind.NOTHING,
+                        name="", args=(), results=(), uses=(), defines=(), loads=(),
+                        stores=(), merges={}, node=None, made=None, raised=None,
+                        floating=None, stack=None)
+                if op.id in removed else ssa.substituted(op, {second_sum.id: first_sum})
+                for op in block.ops)
+    changed = replace(body, blocks=tuple(replace(one, ops=ops) if one is block else one for one in body.blocks))
+    low = _allocated(changed, path)
+    names = [one.what.name for one in low.insns if one.what]
+    assert names.count("fadd") == 3  # shared sum plus the two accumulator additions
+    assert any(one.what and one.what.name == "fld" and one.what.sources == (ir.St(0),)
+               for one in low.insns), "the shared sum must survive the destructive multiply"
+
+
 def test_floating_values_survive_lowering_until_allocation():
     """FPCSE lowering must not assign physical stack registers ahead of allocation."""
     from qbopt.model import ir
@@ -35,6 +61,16 @@ def test_floating_values_survive_lowering_until_allocation():
     allocated = _allocated(body, path)
     assert not any(isinstance(arg, ir.Held) and arg.width == 10 for block in allocated.blocks
                    for one in block.insns if one.what for arg in (*one.what.sources, *one.what.dests))
+
+
+def test_removed_float_operation_cannot_retain_hidden_computation():
+    """A deletion marker must not replay FPCSE's original load through its node."""
+    from qbopt.backend.lower import Unlowered
+    path = Path("fixtures/omf/fpcse-p-g2.obj")
+    body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
+    op = next(op for block in body.blocks for op in block.ops if op.floating_origin)
+    with pytest.raises(Unlowered, match="retains computation"):
+        lower_floats.operation(replace(op, kind=mir.Kind.NOTHING))
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
