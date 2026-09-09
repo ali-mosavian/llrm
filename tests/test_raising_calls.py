@@ -66,7 +66,10 @@ def test_divide_relocation_survives_index_value_replacement() -> None:
     path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
     found = corpus.loaded(path)
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
-    op = next(op for block in body.blocks for op in block.ops if op.at == 0x25f and op.kind is mir.Kind.DIVMOD)
+    # The scalar divide now owns no address; its argument capture owns it.
+    # Keep exercising the legacy operand-binding guard on that real operand.
+    op = next(op for block in body.blocks for op in block.ops if op.at == 0x267 and op.kind is mir.Kind.LOAD)
+    op = replace(op, raised=(op.args, op.results))
     fields = frozenset(one.offset for one in omf.fixups(found.records) if one.seg == found.seg)
     expected = asm._divide_fields(op, found, fields)
     assert expected
@@ -76,6 +79,19 @@ def test_divide_relocation_survives_index_value_replacement() -> None:
     assert asm._divide_fields(renamed, found, fields) == expected
     different = replace(moved, ref=replace(moved.ref, addr=moved.ref.addr.plus(4)))
     assert asm._divide_fields(replace(op, args=(different, *op.args[1:])), found, fields) is None
+
+
+def test_nbody_classified_divide_consumes_captured_values() -> None:
+    """Forwarded nbody velocity refused at 0x25f when frozen division required memory."""
+    path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    ops = [op for block in body.blocks for op in block.ops]
+    divide = next(op for op in ops if op.at == 0x26b and op.kind is mir.Kind.DIVMOD)
+    assert divide.node is None and not divide.loads
+    assert all(isinstance(arg, mir.Held) and arg.width == 4 for arg in divide.args)
+    captured = next(op for op in ops if op.at == 0x267 and op.kind is mir.Kind.LOAD)
+    assert captured.results[0] == divide.args[0]
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])

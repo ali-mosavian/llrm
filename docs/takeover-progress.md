@@ -1198,3 +1198,20 @@ Stage dumps: `/tmp/qbopt-contract-flags`. Focused runtime/raising checks pass
 259 tests, with one old divide-relocation regression still tied to the legacy
 representation. This commit isolates the contract fix; the broader migration
 and that regression's replacement remain pending.
+
+## Forward values beyond BC's statement lifetimes
+
+Memory forwarding now adds SSA uses even when the provider was not already
+live. Allocation owns the resulting lifetime, including preservation across
+calls. Forwarding identifies operations rather than source addresses, so two
+captures at one address cannot substitute each other's operands. Classified
+divide helpers now use scalar argument recovery alongside multiplies, allowing
+them to consume the forwarded values instead of requiring frozen operands.
+
+Both new regressions failed with the old behavior restored. The legacy
+divide-relocation guard still checks index-value renaming and rejects a changed
+address, using the real argument capture and an explicit original-operand
+snapshot. Fourteen focused checks pass. The strict three-compiler runtime run
+recorded above covers this implementation: DIVMOD, nbody, CHAIN, and HARR all
+pass. PDS nbody now models 388,342 cycles, versus 402,593 at the prior scalar
+multiply milestone; this is not hardware timing or a target-completion claim.

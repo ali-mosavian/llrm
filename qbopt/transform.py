@@ -732,28 +732,15 @@ def without_dead_stores(body: MirBody, dgroup: frozenset[int], calls: dict[int, 
 
 
 def forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
-    """Reads a live register can serve, served from it.
+    """Replace known memory operands with SSA values, extending their uses.
 
-    The operand changes and the instruction does not: `add ax,[y]` becomes
-    `add ax,si`, so the destination is untouched and nothing downstream is
-    rewritten. That is what makes an accumulate safe here -- deleting one
-    would throw the arithmetic away, and this keeps it.
-
-    Both halves of the join have to hold and neither is enough: the cell's
-    content has to be known, and the value holding it has to still be live
-    at the read. BC spills across calls, and the reload after one is real
-    work.
-
-    73 of the corpus's reads, where the crude count of "a load of a cell
-    just written" is 618 -- the difference is `add [x],ax` followed by
-    `mov cx,[x]`, where the cell is written and no register holds the
-    result. Serving those means computing in a register and storing once,
-    which is a different transform.
+    Arithmetic remains intact. The allocator, not this pass, decides where
+    the longer-lived provider resides.
     """
     want = frozenset(op.at for block in body.blocks for op in block.ops if op.loads)
     if not want:
         return body
-    served = {one.at: one.value for one in avail.forwardable(body, dgroup, calls, want) if one.value is not None}
+    served = {id(one.op): one.value for one in avail.forwardable(body, dgroup, calls, want) if one.value is not None}
     if not served:
         return body
 
@@ -761,7 +748,7 @@ def forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> M
     for block in body.blocks:
         ops: list[Op] = []
         for op in block.ops:
-            holder = served.get(op.at)
+            holder = served.get(id(op))
             args = _served(op, holder) if holder is not None else None
             ops.append(op if args is None else replace(op, args=args, loads=(), uses=op.uses + (holder,)))
         out.append(replace(block, ops=tuple(ops)))

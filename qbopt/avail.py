@@ -1,14 +1,7 @@
 """
 Which value holds a cell's contents, across blocks.
 
-memory.py answers "what does this address hold" cross-block, and answers it
-about addresses. regalloc.py answers "where does this value live", and
-answers it about values. Neither alone decides whether a load can go: the
-cell's content being known says the load is redundant, and the value still
-being live says a register still has it. Only both together make a load
-removable, and forward.py makes that join one basic block at a time.
-
-This is the join, cross-block. A forward dataflow whose fact is
+A forward dataflow whose fact is
 
     MemRef -> Value
 
@@ -17,19 +10,10 @@ Addr because MemRef carries the SSA values its own address is reached
 through, so the fact survives anything that reallocates registers -- which
 is the whole reason to state it over MIR instead of over machine code.
 
-Two things it deliberately does not do.
-
-**It does not claim the value is available.** An entry says which value the
-bytes are, not that a register still holds it. BC spills across calls, and
-the reload it writes afterwards is real work:
-
-    mov [bp-18h],ax     the spill
-    call B$MUI4         ax is gone
-    add ax,[bp-18h]     the reload -- necessary
-
-memory.py calls that reload redundant and is right about the cell. The
-value is dead there, so the load stays. Ask liveness.live() before
-believing an entry means anything.
+An entry identifies an SSA value, not a physical register. Forwarding adds
+a use and extends that value's lifetime; allocation preserves or spills it
+as needed. Requiring it to be live already would retain BC's statement-local
+lifetimes instead of optimizing them.
 
 **It intersects at joins rather than placing a phi.** Where predecessors
 disagree about which value a cell holds, the fact is dropped. A phi would
@@ -42,13 +26,11 @@ from dataclasses import dataclass, replace
 
 
 from qbopt import ir
-from qbopt import liveness
 from qbopt import mir
 from qbopt.mir import Held
 from qbopt.mir import Kind
 from qbopt.mir import Op
 from qbopt import runtime
-from qbopt import regalloc
 from qbopt.mir import Value
 from qbopt.mir import MemRef
 from qbopt.mir import MirBody
@@ -186,9 +168,8 @@ def _clean(op: Op, calls: dict[int, str]) -> bool:
     established before it is still that value after.
 
     Registers are a separate question and are not answered here. A call
-    clobbers ax, cx, dx and bx whatever it does to memory, so the value an
-    entry names is usually dead afterwards -- the entry survives, and
-    liveness.live() is what says whether it means anything.
+    clobbers physical registers independently of memory. An SSA value remains
+    the same value; allocation must preserve it if forwarding extends its use.
     """
     name = calls.get(op.at)
     if name is None:
@@ -292,8 +273,7 @@ def provider(
 ) -> Value | None:
     """The value holding `ref`'s bytes just before the op at `at`.
 
-    Says nothing about whether that value is still live there -- see the
-    module docstring, and ask liveness.live().
+    A new use extends its lifetime; this says nothing about its allocation.
     """
     calls = calls or {}
     found = holders(body, dgroup, calls)
@@ -310,13 +290,14 @@ def provider(
 
 @dataclass(frozen=True, slots=True)
 class Forward:
-    """A redundant memory read whose bytes are in a live register."""
+    """A memory read whose bytes equal a known SSA value."""
 
     at: int
     # The value holding them. Which register that is, is the allocator's
     # answer; a caller that has no values -- the machine arm -- looks it up
     # in the body's own `origin`, which is where that question belongs.
     value: "mir.Value"
+    op: Op | None = None
 
 
 def _dead_in(block, overwritten: dict, dgroup: frozenset[int], calls: dict[int, str]):
@@ -480,7 +461,8 @@ def redundant(
         # `mov ax,[x]` then `mov ax,[y]`, the entry for [x] still names a
         # value whose origin is eax, and eax holds [y]. Deleting a later
         # `mov ax,[x]` on the strength of that entry is how this read the
-        # wrong cell. forwardable() asks liveness.live() for the same reason.
+        # wrong cell. SSA forwarding instead retains the load's definition
+        # and replaces its memory operand with the known value.
         inside: dict[Register_, Value] = {}
         for op in block.ops:
             # A call clobbers ax, cx, dx and bx whatever it does to memory,
@@ -488,8 +470,7 @@ def redundant(
             # _after() keeps the *memory* map across a call runtime.py has
             # proved clean, which is right and is exactly what makes this
             # separate bookkeeping necessary: the cell is still that value
-            # and the register is not. forwardable() gets the same answer
-            # from liveness.live().
+            # and the register is not.
             if op.at in calls or op.barrier:
                 inside = {}
                 continue
@@ -514,39 +495,21 @@ def forwardable(
     calls: dict[int, str],
     want: frozenset[int],
 ) -> tuple[Forward, ...]:
-    """The reads in `want` that a register can serve instead of memory.
+    """Reads in `want` that a known SSA value can serve instead of memory.
 
-    Both halves of the join, and neither is enough alone: the cell's
-    content has to be known (`want`, from memory.redundant_loads) and the
-    value holding it has to still be live here (regalloc.live). BC spills
-    across calls, and the reload after one is real work -- 42 of the
-    corpus's redundant reads have a provider that is dead by the time they
-    run, and every one of nbody's 27 does.
-
-    What the caller does with this is substitute the *operand*, not the
-    instruction: `add ax,[y]` becomes `add ax,si`, which leaves the
-    destination alone and so needs nothing downstream rewritten. That is
-    why an accumulate is safe here and was not safe to delete.
+    The caller replaces the operand, retaining any arithmetic and extending
+    the provider's lifetime. Operation identity distinguishes captures that
+    share a source address.
     """
     held = holders(body, dgroup, calls)
-    alive = liveness.live(body)
     found: list[Forward] = []
 
     for block in body.blocks:
         current = dict(held.into[block.at])
-        # Live at each op, walked backwards once and indexed rather than
-        # recomputed: liveness is a property of the point, and the point
-        # this asks about is just before the op runs.
-        after = set(alive.live_out[block.at])
-        at_point: dict[int, frozenset[Value]] = {}
-        for op in reversed(block.ops):
-            at_point[op.at] = frozenset(after)
-            after = (after - set(op.defines)) | set(op.uses)
-
         for op in block.ops:
             if op.at in want and op.loads:
                 who = next((w for cell, w in current.items() if mir.same_bytes(cell, op.loads[0])), None)
-                if who is not None and who in at_point.get(op.at, frozenset()):
-                    found.append(Forward(op.at, who))
+                if who is not None:
+                    found.append(Forward(op.at, who, op))
             current = _after(op, current, dgroup, calls)
     return tuple(found)

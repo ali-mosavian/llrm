@@ -35,13 +35,12 @@ def arithmetic(body: mir.MirBody, found, blocks) -> mir.MirBody:
     reached = [insn for block in blocks for insn in block.insns]
     sites = calls.sites(found, reached, blocks)
     sites = [replace(site, consume=tuple(insn for insn in reached if site.start <= insn.at < site.at))
-             if site.name == calls.MULTIPLY and not site.consume else site for site in sites]
+             if site.name in (*calls.DIVIDES, calls.MULTIPLY) and not site.consume else site for site in sites]
     live_flags = flags.live_in(blocks)
     candidates = {
         site.at: site
         for site in sites
-        if (not site.pushed or site.name == calls.MULTIPLY)
-        and site.consume
+        if site.consume
         and site.name in (*calls.DIVIDES, calls.MULTIPLY)
         and not isinstance(calls.absorb(site, mir._flags_after(blocks, live_flags, site.start, site.end)), str)
     }

@@ -161,6 +161,25 @@ def test_dead_store_does_not_delete_a_load_at_the_same_address() -> None:
     assert sum(bool(op.stores) for op in ops) == 1
 
 
+def test_forwarding_extends_lifetime_without_conflating_shared_addresses() -> None:
+    """Nbody kept statement reloads because their providers were not already live."""
+    source, loaded, unrelated = (mir.Value(index, index) for index in (1, 2, 3))
+    target = mir.MemRef(ir.Addr(module.Space.SEGMENT, 0, index=5), 4)
+    other = mir.MemRef(ir.Addr(module.Space.SEGMENT, 8, index=5), 4)
+    first = mir.Op(0, ir.Operation.MOVE, "mov", (source,), (), kind=mir.Kind.COPY,
+                   args=(mir.Const(7, 4),), results=(mir.Held(source, 4),))
+    store = mir.Op(1, ir.Operation.MOVE, "mov", (), (source,), kind=mir.Kind.STORE,
+                   args=(mir.Held(source, 4),), results=(mir.Cell(target),), stores=(target,))
+    load = mir.Op(2, ir.Operation.MOVE, "mov", (loaded,), (), kind=mir.Kind.LOAD,
+                  args=(mir.Cell(target),), results=(mir.Held(loaded, 4),), loads=(target,))
+    neighbor = mir.Op(2, ir.Operation.MOVE, "mov", (unrelated,), (), kind=mir.Kind.LOAD,
+                      args=(mir.Cell(other),), results=(mir.Held(unrelated, 4),), loads=(other,))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (first, store, load, neighbor), ()),), {})
+    done = transform.forwarded(body, frozenset({5}), {}).blocks[0].ops
+    assert done[2].args == (mir.Held(source, 4),) and not done[2].loads
+    assert done[3] == neighbor
+
+
 def test_leading_deletion_does_not_delete_its_survivor() -> None:
     first = mir.Op(0, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY, covers=(0, 3), args=(mir.Const(3, 2),))
     survivor = mir.Op(3, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY, covers=(3, 6), args=(mir.Const(21, 2),))
