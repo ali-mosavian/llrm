@@ -47,6 +47,32 @@ def test_hotlpx_uses_scaled_address_for_factor_five(tag):
     assert any(one.mnemonic == Mnemonic.LEA and one.memory_index_scale == 4 for one in insns)
 
 
+@pytest.mark.parametrize("amount", [1, 2, 3])
+@pytest.mark.parametrize("following", ["cmp", "adc", "je"])
+@pytest.mark.parametrize("width", [2, 4])
+def test_scaled_lea_does_not_require_another_shift(amount, following, width):
+    """HOTLPX's scale idiom needed three instructions when followed by CMP instead of SHL."""
+    dest = ir.Reg(Register.BX if width == 2 else Register.EBX, width)
+    source = ir.Reg(Register.CX if width == 2 else Register.ECX, width)
+    def insn(at, kind, name, args):
+        return lir.Insn(at, (at, at), ir.Semantics(kind, name, (dest,), args), (), ())
+    copy = insn(0, ir.Operation.MOVE, "mov", (source,))
+    shift = insn(1, ir.Operation.BINARY, "shl", (dest, ir.Imm(amount, 1)))
+    add = insn(2, ir.Operation.BINARY, "add", (dest, source))
+    last = insn(3, ir.Operation.COMPARE if following == "cmp" else ir.Operation.BINARY,
+                following, (dest, ir.Imm(0, 2)))
+    body = lir.LirBody("scale", 0, (lir.LirBlock(0, (copy, shift, add, last), ()),), {}, {})
+    result = peephole.addresses(body).insns
+    expected = ["lea", "cmp"] if following == "cmp" else (
+        ["lea", "add", following] if amount == 1 else ["mov", "shl", "add", following])
+    assert [one.what.name for one in result] == expected
+    if following == "cmp":
+        from qbopt.backend import select
+        from qbopt.frontend.declen import decode
+        emitted = decode(select.emit(result[0].what).code, 0).insn
+        assert emitted.memory_index_scale == 1 << amount
+
+
 @pytest.mark.parametrize("guard", ["none", "dword", "carry", "zero_shift", "bytes", "wrong_source", "same", "stack", "relocation"])
 def test_scaled_address_requires_dead_flags_and_exact_allocated_operands(guard):
     """HOTLPX's LEA must retain low-word arithmetic without losing flags or owned bytes."""
