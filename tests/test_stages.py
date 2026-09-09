@@ -21,6 +21,23 @@ from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
 
 
+def test_asm_names_relocations_instead_of_indistinguishable_zeroes(capsys):
+    """ADDRM's distinct array operands and runtime calls all displayed as zero."""
+    stages._asm(Path("fixtures/omf/addrm-q-O.obj").read_bytes())
+    said = capsys.readouterr().out
+    assert "reloc " in said
+    assert "segment[" in said
+    assert "B$" in said
+
+
+def test_event_tail_jump_names_its_runtime_target(capsys):
+    """BOOLS's event stub tail jump displayed 0:0, hiding the callback dispatcher."""
+    stages._asm(Path("fixtures/omf/bools-p-evt.obj").read_bytes())
+    said = capsys.readouterr().out
+    jump = next(line for line in said.splitlines() if "0x003d" in line)
+    assert "ptr16:16 B$EVK1+0x0" in jump
+
+
 def test_asm_dumps_reachable_emulator_instructions_not_header_or_operands(capsys) -> None:
     """FPCSE's dump printed `bound` for its header and `push es` inside FLD."""
     import re
@@ -114,4 +131,3 @@ def test_the_machine_view_is_the_run_that_wrote_the_bytes() -> None:
     slots = {int(one, 16) for one in re.findall(r"bp-0x([0-9a-f]+)", last)}
     wrote = {int(one, 16) for one in re.findall(r"bp-([0-9A-F]+)h", emitted)}
     assert slots <= wrote, f"the last stage names {sorted(slots - wrote)}, which the object never touches"
-

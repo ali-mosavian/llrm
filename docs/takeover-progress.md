@@ -1,5 +1,23 @@
 # Takeover checkpoint — 2026-09-09
 
+## Assembly dumps expose relocation targets
+
+Stage assembly previously displayed every relocated operand as zero, hiding
+the distinction between array cells and runtime callees. It now annotates
+each fixup with its instruction-relative location, kind, target and displacement.
+The original bytes remain visible; the annotation describes linker work rather
+than pretending the object is already linked.
+
+This immediately corrected an event investigation assumption: BOOLS PDS's
+stub at 0x003d jumps to **B$EVK1**, not B$EVCK. The original FIXUPP at 0x003e
+names that external. Do not substitute the EVCK contract for this dispatcher
+or waive the unknown near-call interface at 0x0048.
+
+Before: `jmp 0:0`. After: `jmp 0:0 ; reloc +0x1: ptr16:16 B$EVK1+0x0`.
+Generated assembly bytes and modeled costs are unchanged. Seven focused stage
+tests pass; both added display regressions failed before the change. This is
+diagnostic progress, not a reduction in the remaining optimization gap.
+
 ## Proven allocation identity removes the element reload
 
 The bounded array proof establishes both extent and the descriptor-derived

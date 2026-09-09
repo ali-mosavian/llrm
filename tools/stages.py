@@ -513,8 +513,21 @@ def _asm(data: bytes) -> None:
     if isinstance(instructions, str):
         print(f"  --- cannot map code: {instructions}")
         return
+    externals = omf.externals(found.records)
+    relocations = {}
+    for fixup in omf.fixups(found.records):
+        if fixup.seg != found.seg:
+            continue
+        target = (externals[fixup.index] if fixup.target == "external"
+                  else f"{fixup.target}[{fixup.index}]")
+        relocations.setdefault(fixup.offset, []).append(
+            f"{omf.LOCNAME.get(fixup.loc, fixup.loc)} {target}+{fixup.disp:#x}")
     for insn in instructions:
-        print(f"    {insn.at:#06x}  {formatter.format(insn.insn)}")
+        notes = [f"+{offset - insn.at:#x}: {target}"
+                 for offset in range(insn.at, insn.end)
+                 for target in relocations.get(offset, ())]
+        annotation = "  ; reloc " + ", ".join(notes) if notes else ""
+        print(f"    {insn.at:#06x}  {formatter.format(insn.insn)}{annotation}")
 
 
 def main(argv: list[str] | None = None, view=None) -> int:
