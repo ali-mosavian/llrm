@@ -108,6 +108,24 @@ def test_absorbed_multiply_defines_its_returned_high_half() -> None:
     assert seen
 
 
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_absorbed_arithmetic_has_only_operand_dependencies(tag: str) -> None:
+    """nbody refused emission: an absorbed multiply read an undefined condition."""
+    path = Path(f"fixtures/omf/divmod-{tag}.obj")
+    found = corpus.loaded(path)
+    seen = 0
+    for _, body in mir.bodies(found, corpus.partitioned(path)):
+        for block in body.blocks:
+            for op in block.ops:
+                if op.id not in found.absorbed or op.kind not in (mir.Kind.MUL, mir.Kind.DIVMOD):
+                    continue
+                seen += 1
+                expected = {arg.value for arg in op.args if isinstance(arg, mir.Held)}
+                expected.update(value for ref in op.loads for value in (ref.base, ref.segment) if value is not None)
+                assert set(op.uses) == expected
+    assert seen
+
+
 def test_an_entry_outside_the_blocks_is_refused() -> None:
     assert isinstance(mir.raise_body([block(0, ())], {}, 99), str)
 

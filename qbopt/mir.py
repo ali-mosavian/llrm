@@ -1512,7 +1512,10 @@ def raise_body(
                     references = iter(loads)
                     operands = tuple(Cell(next(references)) if isinstance(one, Cell) else one for one in operands)
                     where = operands, where[1]
-                    used = tuple(dict.fromkeys((*used, *(ref.base for ref in loads if ref.base is not None))))
+                    used = tuple(dict.fromkeys(
+                        [arg.value for arg in operands if isinstance(arg, Held)]
+                        + [value for ref in loads for value in (ref.base, ref.segment) if value is not None]
+                    ))
                     stores = ()
             _called = _call_args(chosen.get(insn.at), holds, insn.at) if kind is Kind.CALL else ((), True)
             # The snapshot the raise took, arguments included. `semantics`
