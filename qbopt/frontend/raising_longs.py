@@ -55,6 +55,62 @@ def _constant_stores(body: mir.MirBody) -> mir.MirBody:
     return replace(body, blocks=tuple(blocks))
 
 
+def unary(body: mir.MirBody) -> mir.MirBody:
+    """Recognize whole NOT and NEG before their word results cross an ABI."""
+    definitions = {value: op for block in body.blocks for op in block.ops for value in op.defines}
+    values = set(body.origin) | set(definitions)
+    values |= {value for block in body.blocks for op in block.ops for value in op.uses}
+    values |= {phi.result for block in body.blocks for phi in block.phis}
+    values |= {value for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
+    serial = max((value.id for value in values), default=0)
+    variable = max((value.variable for value in values), default=0)
+    users = {value: {id(op) for block in body.blocks for op in block.ops if value in op.uses}
+             for value in values}
+    phi_reads = {value for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
+    blocks = []
+    for block in body.blocks:
+        ops, index = [], 0
+        while index < len(block.ops):
+            low = block.ops[index]
+            count = 2 if low.kind is mir.Kind.NOT else 3
+            group = block.ops[index:index + count]
+            source = None
+            if (low.kind in (mir.Kind.NOT, mir.Kind.NEG) and len(group) == count
+                and all(not op.loads and not op.stores and not op.barrier and not op.merges
+                        and len(op.results) == 1 and isinstance(op.results[0], mir.Held)
+                        and op.results[0].width == 2 for op in group)
+                and all(one.covers[1] == other.covers[0] for one, other in zip(group, group[1:]))):
+                high = group[-1]
+                if low.kind is mir.Kind.NOT and high.kind is mir.Kind.NOT and len(low.args) == len(high.args) == 1:
+                    source = mir.extracted_whole(high.args[0], low.args[0], definitions)
+                elif low.kind is mir.Kind.NEG:
+                    source = _negated_whole(high.results[0], low.results[0], definitions)
+                internal = {id(op) for op in group}
+                removed = {value for op in group for value in op.defines} - {low.results[0].value, high.results[0].value}
+                if any(value in phi_reads or users.get(value, set()) - internal for value in removed):
+                    source = None
+            if source is None:
+                ops.append(low)
+                index += 1
+                continue
+            serial += 1
+            variable += 1
+            result = mir.Held(mir.Value(serial, low.at, variable=variable, version=1), 4)
+            ops.append(mir.Op(low.at, ir.Operation.UNARY, low.kind.value, (result.value,),
+                              (source.value,), kind=low.kind, args=(source,), results=(result,),
+                              covers=(low.covers[0], high.covers[1])))
+            for half, offset in ((low, 0), (high, 16)):
+                extract = mir.Op(high.at, mir.Synth.HALF_TO_LOW, "extract", (half.results[0].value,),
+                                 (result.value,), kind=mir.Kind.EXTRACT,
+                                 args=(result, mir.Const(offset, 4)), results=half.results,
+                                 covers=(high.covers[1], high.covers[1]))
+                ops.append(extract)
+                definitions[half.results[0].value] = extract
+            index += count
+        blocks.append(replace(block, ops=tuple(ops)))
+    return replace(body, blocks=tuple(blocks))
+
+
 def scalar(body: mir.MirBody) -> mir.MirBody:
     body = _constant_stores(body)
     candidates = {id(pair.first): pair for pair in pairs.found(body)

@@ -35,8 +35,31 @@ adc bx,0
 neg bx
 ```
 
-The reload and complement have disappeared. The remaining split negation is
-still a gap: a fully folded result would simply pass 12345679h to PRINT.
+The reload and complement disappeared. The remaining split negation was a
+raising gap: a fully folded result should simply pass 12345679h to PRINT.
+
+## Whole unary recognition
+
+The raise now recognizes adjacent paired NOTs and NEG/ADC/NEG over extracted
+halves of one value, even when the result goes to PRINT rather than a store.
+It emits one whole-value unary operation followed by extracts for existing
+word consumers. Observed flags and intermediate carry values prevent recognition.
+No carry interpretation or register knowledge was added to optimization passes.
+
+The expression above now emits:
+
+```asm
+mov ax,1234h
+mov bx,5679h
+push ax
+push bx
+; call B$PEI4
+```
+
+NEGNOT's PDS object is now 907 bytes, down from 925; static cost is 354 (1.22x).
+QB costs 364 (1.26x), VBDOS 354 (1.22x). NOTS costs 582/378 (1.54x), still
+outside the goal. NEGNOT, NOTS and ARITH pass all 57 output cases across the
+three compilers. No elapsed-time claim is made.
 
 Follow-up: supply object-range reachability in the raise, not machine knowledge
 in constant propagation. Do not infer object ends from individual operand

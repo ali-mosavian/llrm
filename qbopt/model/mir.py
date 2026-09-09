@@ -2171,6 +2171,7 @@ def bodies(
             built = raising_bytes.scalar(built)
             from qbopt.frontend import raising_longs
             built = raising_longs.scalar(built)
+            built = raising_longs.unary(built)
             from qbopt.frontend import raising_copies
             built = raising_copies.scalar(built, found)
             defined = module.defines(found.records, found.seg)

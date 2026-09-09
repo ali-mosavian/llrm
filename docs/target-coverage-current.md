@@ -2,9 +2,10 @@
 
 Update 2026-09-10: NOTS and NEGNOT now have complete ordinary-build
 references in `docs/targets.md`, respectively 378 and 290 ranking units.
-PDS output costs 586 (1.55×) for NOTS. NEGNOT now costs 370 (1.28×), after
-preserving constants across calls with no program-data escapes; its QB and
-VBDOS variants also meet the target at 1.31× and 1.28× respectively.
+PDS output costs 582 (1.54×) for NOTS. NEGNOT now costs 354 (1.22×), after
+preserving constants across calls with no program-data escapes and raising whole
+unary operations; its QB and VBDOS variants also meet the target at 1.26× and
+1.22× respectively.
 The scorer now prices decoded instructions rather than synthetic raised
 operations. The historical totals below have not been rerun under that
 change and must not be quoted as the current completion percentage.
