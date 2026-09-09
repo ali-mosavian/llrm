@@ -33,7 +33,7 @@ def _copy(byte=0xfc):
 
 @pytest.mark.parametrize("byte,step", [(0xfc, 2), (0xfd, -2)])
 def test_copy_has_explicit_memory_and_pointer_results(byte, step):
-    """FPDEEP's d=12 was four opaque MOVSWs; its two pointer results must survive."""
+    """FPDEEP's d=12 needs memory effects, not eight unused pointer definitions."""
     found, body = _copy(byte)
     raised = raising_copies.scalar(body, found)
     reads = [op for op in raised.blocks[0].ops if op.kind is mir.Kind.LOAD]
@@ -42,10 +42,40 @@ def test_copy_has_explicit_memory_and_pointer_results(byte, step):
     assert [op.stores[0].addr.disp for op in writes] == [0x1a + step * index for index in range(4)]
     assert all(store.args == load.results for load, store in zip(reads, writes))
     pointers = [op for op in raised.blocks[0].ops if op.merges and op.at >= 0x154]
-    assert len(pointers) == 8
-    assert all(op.results[0].width == 2 and tuple(op.merges.values()) == op.defines for op in pointers)
+    assert not pointers
     lowered = lower.lowered("copy", raised, {}, {}, {})
-    assert sum(one.what is not None and one.what.op is ir.Operation.MOVE for one in lowered.insns) >= 16
+    assert sum(one.what is not None and one.what.op is ir.Operation.MOVE for one in lowered.insns) == 8
+
+
+def test_only_observed_pointer_results_cross_the_raise_boundary():
+    """Reading the last copy's pointer must not resurrect its three intermediate updates."""
+    found, body = _copy()
+    original = body.blocks[0].ops
+    last = original[-1].defines[0]
+    cell = mir.MemRef(None, 4)
+    observe = mir.Op(0x158, ir.Operation.MOVE, "mov", (), (last,), kind=mir.Kind.STORE,
+                     args=(mir.Held(last, 4),), stores=(cell,), results=(mir.Cell(cell),), covers=(0x158, 0x158))
+    body = replace(body, blocks=(replace(body.blocks[0], ops=(*original, observe)),))
+    result = raising_copies.scalar(body, found)
+    updates = [op for op in result.blocks[0].ops if op.kind is mir.Kind.COPY and op.at >= 0x154]
+    assert len(updates) == 1 and updates[0].defines == (last,)
+    first = next(op for op in original if op.at == 0x154)
+    before = next(value for value in first.uses if body.origin[value] == body.origin[last])
+    assert updates[0].merges == {before: last}
+    assert updates[0].results == (mir.Held(last, 2),)
+
+
+def test_pointer_used_on_a_successor_edge_survives():
+    """Copy outputs consumed by a phi are uses even without a local reader."""
+    found, body = _copy()
+    entry = body.blocks[0]
+    last = entry.ops[-1].defines[0]
+    joined = replace(last, id=last.id + 1000, at=0x200, version=last.version + 1)
+    successor = mir.MirBlock(0x200, (mir.Phi(joined, {entry.at: last}),), (), ())
+    body = replace(body, blocks=(replace(entry, succ=(successor.at,)), successor))
+    result = raising_copies.scalar(body, found)
+    updates = [op for op in result.blocks[0].ops if op.kind is mir.Kind.COPY and op.at >= 0x154]
+    assert len(updates) == 1 and updates[0].defines == (last,)
 
 
 def test_forward_copy_propagates_the_double_literal():

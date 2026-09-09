@@ -115,3 +115,26 @@ The broader IR checks expose two pre-existing table/body-count assertions
 that fail with scalarization disabled as well. The existing Rule 5 gate
 also still reads nine obsolete flat-package paths; that gate needs repair,
 not an assertion that architecture checks passed.
+
+### Observable values, not copy-instruction bookkeeping
+
+The raiser now discards unobserved copy-pointer definitions before returning
+MIR. For the explicit-state initializer witness, that removes eight pointer
+updates and the two address-setup definitions consumed only by the copies.
+Byte-ownership markers remain for the removed input instructions. What
+crosses the boundary is four ordinary typed loads and four stores, in the
+original per-element order; it is not an eight-byte atomic load or a
+memmove-style snapshot that would change an overlapping copy's behavior.
+
+When a pointer result really is read, including on a successor phi edge,
+its definition remains. The unchanged upper portion depends directly on
+the value before the copy chain, not on three artificial intermediate
+definitions. This retains observable value semantics without asking an
+optimization pass to reason about SI/DI or the direction flag.
+
+On this controlled witness, selection before ordinary optimization drops
+from 18 MOV instructions / 54 MOV bytes to 8 / 24. These are comparisons
+against the previous scalarizer, not against BC's original four MOVSWs and
+not a production speedup. The 48 focused checks pass; the new dead/live
+pointer assertions were observed failing before the cleanup. Production
+FPDEEP still needs the previously described environment proofs.

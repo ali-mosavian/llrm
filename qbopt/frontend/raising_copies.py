@@ -25,6 +25,8 @@ def scalar(body: mir.MirBody, found) -> mir.MirBody:
     values = set(body.origin) | set(ssa.values(body))
     serial = max((value.id for value in values), default=0)
     variable = max((value.variable for value in values), default=0)
+    definitions = {value: op for block in body.blocks for op in block.ops for value in op.defines}
+    candidates, ancestors = set(), {}
     blocks = []
     for block in body.blocks:
         direction, same_segment, pushed_data = None, False, False
@@ -58,9 +60,18 @@ def scalar(body: mir.MirBody, found) -> mir.MirBody:
                     for before, after, symbol in pointers:
                         advanced = replace(symbol, offset=symbol.offset + 2 * direction)
                         symbols[after] = advanced
+                        setup = definitions.get(before)
+                        if (setup is not None and setup.id is not None and setup.kind is mir.Kind.COPY and not setup.loads
+                            and not setup.stores and not setup.extra_covers and setup.defines == (before,)
+                            and len(setup.args) == 1 and isinstance(setup.args[0], mir.Symbol)):
+                            candidates.add(setup.id)
+                        before = ancestors.get(before, before)
+                        ancestors[after] = before
+                        identity = next(mir._IDS)
+                        candidates.add(identity)
                         ops.append(mir.Op(op.at, ir.Operation.MOVE, "mov", (after,), (before,),
                                           kind=mir.Kind.COPY, args=(advanced,), results=(mir.Held(after, 2),),
-                                          merges={before: after}, covers=(op.at, op.at), id=next(mir._IDS)))
+                                          merges={before: after}, covers=(op.at, op.at), id=identity))
                     pushed_data = False
                     continue
             if insn.mnemonic in (Mnemonic.CLD, Mnemonic.STD):
@@ -76,6 +87,39 @@ def scalar(body: mir.MirBody, found) -> mir.MirBody:
                 same_segment = False
             pushed_data = insn.mnemonic == Mnemonic.PUSH and insn.op0_register == Register.DS
             ops.append(op)
+        blocks.append(replace(block, ops=tuple(ops)))
+    return _observed(replace(body, blocks=tuple(blocks)), candidates)
+
+
+def _observed(body, candidates):
+    if not candidates:
+        return body
+    definitions = {op.defines[0]: op for block in body.blocks for op in block.ops if op.id in candidates}
+    wanted = {value for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
+    for block in body.blocks:
+        for op in block.ops:
+            if op.id not in candidates:
+                wanted.update(op.uses)
+                wanted.update(arg.value for arg in op.args if isinstance(arg, mir.Held))
+                wanted.update(value for ref in (*op.loads, *op.stores)
+                              for value in (ref.base, ref.segment) if value is not None)
+    pending = list(wanted)
+    while pending:
+        op = definitions.get(pending.pop())
+        if op is not None:
+            unseen = set(op.uses) - wanted
+            wanted.update(unseen)
+            pending.extend(unseen)
+    blocks = []
+    for block in body.blocks:
+        ops = []
+        for op in block.ops:
+            if op.id in candidates and op.defines[0] not in wanted:
+                if op.covers is not None and op.covers[0] != op.covers[1]:
+                    ops.append(mir.Op(op.at, ir.Operation.NOTHING, "", (), (),
+                                      kind=mir.Kind.NOTHING, covers=op.covers, id=op.id))
+            else:
+                ops.append(op)
         blocks.append(replace(block, ops=tuple(ops)))
     return replace(body, blocks=tuple(blocks))
 
