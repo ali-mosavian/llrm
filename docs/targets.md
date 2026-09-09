@@ -55,11 +55,60 @@ constant folding, and keeping `s` and `i` in registers across the loop.
 
 ### Runtime-input twins need their own complete references
 
-HOTLPX reads `n` and `k` through the runtime. Unlike HOTLOP's listing above,
-its invariant product cannot become the immediate 21. The inherited 312
-whole-program denominator has no HOTLPX listing accounting for those reads
-and the product. The current 452/456/462 modeled costs are real, but their
-ratios against 312 do not certify completion.
+HOTLPX reads `n` and `k` through the runtime. Its old inherited 312 denominator
+is replaced by the complete **217** reference below. The inputs remain unknown;
+the DATA values are not folded into the answer.
+
+With word wrapping, twenty iterations give
+`s = (20 * ((n*k) mod 65536) + 210) mod 65536` and `i = 21`.
+No intermediate arithmetic result is observed. This applies to the ordinary
+unchecked, event-free builds, not event checks or resumable overflow handling.
+The reference retains the final counter and sum stores before output.
+
+```asm
+; Input: 64. RDI2 consumes a stacked far pointer, no register inputs.
+push ds                       ; 6
+push word n                   ; 6, relocated offset
+call far B$RDI2               ; 20
+push ds                       ; 6
+push word k                   ; 6, relocated offset
+call far B$RDI2               ; 20
+
+; Arithmetic and final state: 51. No loop remains.
+mov ax,[n]                    ; 6
+imul ax,[k]                   ; 26, low word product
+lea ax,[eax+eax*4]             ; 2, low word is product * 5
+shl ax,2                      ; 3, product * 20
+add ax,210                    ; 2, sum of 1..20
+mov [s],ax                    ; 6
+mov word [i],21               ; 6
+
+; Output and termination: 102. No value survives a runtime call in a register.
+push word labelS              ; 6, original string descriptor offset
+call far B$PSSD               ; 20
+push word [s]                 ; 10, source load plus stack store
+call far B$PEI2               ; 20
+push word labelDone           ; 6, original string descriptor offset
+call far B$PESD               ; 20
+call far B$CENP               ; 20
+```
+
+These are the existing ranking costs, not hardware timing: ordinary operations
+cost 2, shifts 3, IMUL 22, each memory access 4, and these runtime calls 20.
+Both stack writes and the load in `push [s]` count. Input setup replaces
+BC's `push ds / pop es / push es` by `push ds`: the stacked pointer is
+identical, RDI2's established contract has no register inputs, and ES is
+clobbered by the call in either case. The original module header, DATA and
+string descriptors are retained; only executable instructions are priced.
+The upper half of EAX does not affect LEA's low-word result.
+
+Independent original-PDS accounting: entry/input/setup **104**, loop body
+**58 * 20**, loop test **10 * 20**, output **102**, total **1566**. The model
+weights loop blocks by twenty, including the test, rather than claiming an
+exact dynamic trace. QB and VBDOS original totals are **1570/1576**.
+Current emitted costs are **251/255/261**, so the new ratios are
+**1.16x/1.18x/1.20x**; all three are within 1.5x. The goal as a whole is not
+complete. This target change alters no generated code.
 
 LNGMXX likewise reads its dividend at runtime; LNGMIX assigns 100000.
 The inherited 210 denominator is not backed by a separate LNGMXX listing.
@@ -69,10 +118,9 @@ for the input contract, signed division/remainder, accumulation or a valid
 closed form, and output. A modern compiler may eliminate the invariant-sum
 loop, so adding input cost to the old number is not a sufficient derivation.
 
-Both unchanged legacy denominators are **PROVISIONAL** in the scoreboard;
-their ratios are suppressed and they cannot pass completion. No new target
-has been inferred from current output. The earlier HOTLPX completion claim
-is withdrawn pending a hand-derived full reference under the same cost model.
+LNGMXX's unchanged legacy denominator remains **PROVISIONAL** in the scoreboard;
+its ratio is suppressed and it cannot pass completion. HOTLPX now uses its
+own listing and arithmetic proof above, not a scaled version of current output.
 
 ## press -- eight live variables, every product invariant
 

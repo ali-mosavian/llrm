@@ -1,5 +1,22 @@
 # Takeover checkpoint — 2026-09-09
 
+## HOTLPX has a complete independent reference
+
+Replaced HOTLPX's inherited 312 target with the hand-derived full **217**
+listing in docs/targets.md: input 64, arithmetic/final stores 51, output 102.
+It keeps runtime inputs unknown and proves the twenty-step wrapped recurrence
+equals `20*n*k + 210` modulo 65536, retaining final `i=21` and `s` stores.
+The READ/PRINT calls and their stack accesses are included, not treated as free.
+Original PDS code independently totals 104 + 58*20 + 10*20 + 102 = 1566.
+
+Before: HOTLPX denominator 312, ratio suppressed as provisional. After:
+denominator 217, normal PDS/QB/VBDOS **251/255/261 -> 1.16x/1.18x/1.20x**.
+Assembly and costs are unchanged. Event builds remain provisional; other
+provisional/missing targets remain blockers to overall completion.
+24 focused scoreboard tests pass, including a fail-first target-accounting
+regression and wrapping checks. No runtime rerun: this changes only reference
+accounting, with existing runtime validation of emitted code left intact.
+
 ## Select scaled LEA after allocation
 
 The backend peephole folds an allocated copy/shift/add into scaled LEA when

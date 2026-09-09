@@ -162,10 +162,32 @@ def test_missing_target_cannot_verify_completion(monkeypatch, capsys):
     assert "NO TARGET" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("program", ["pressx", "hotlpx", "lngmxx", "fpcse", "fpcsex"])
+@pytest.mark.parametrize("program", ["pressx", "lngmxx", "fpcse", "fpcsex"])
 def test_provisional_target_cannot_verify_completion(program, monkeypatch, capsys):
     """Runtime-input twins inherited constant-source targets; FP references changed rounding and sums."""
     from collections import Counter
     monkeypatch.setattr(opportunity, "counted", lambda *args: Counter(cost=1))
     assert opportunity.against_targets([Path(f"{program}-p-g2.obj")]) != 0
     assert "PROVISIONAL" in capsys.readouterr().out
+
+
+def test_hotlpx_target_accounts_for_the_complete_runtime_input_reference():
+    """HOTLPX inherited 312 from HOTLOP instead of pricing its own input and closed form."""
+    # Hand listing in docs/targets.md, not inferred from optimized output.
+    input_cost = 2 * (6 + 6 + 20)
+    arithmetic = 6 + 26 + 2 + 3 + 2 + 6 + 6
+    output_cost = 6 + 20 + 10 + 20 + 6 + 20 + 20
+    assert opportunity.TARGETS["HOTLPX"] == input_cost + arithmetic + output_cost == 217
+    assert "HOTLPX" not in opportunity.PROVISIONAL_TARGETS
+
+
+@pytest.mark.parametrize("left,right", [(7, 3), (-32768, -1), (32767, 32767), (-123, 71), (0, 32767)])
+def test_hotlpx_reference_preserves_word_wrap_and_loop_exit(left, right):
+    """Closed-form HOTLPX must retain wraparound rather than assume mathematical signed overflow."""
+    total = 0
+    for counter in range(1, 21):
+        total = (total + ((left * right) & 65535) + counter) & 65535
+    product = (left * right) & 65535
+    reference = ((((product + product * 4) & 65535) << 2) + 210) & 65535
+    assert reference == total
+    assert counter + 1 == 21

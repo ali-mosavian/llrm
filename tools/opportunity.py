@@ -486,10 +486,10 @@ TARGETS = {
     "HG": 304,
     "FPCSE": 1340,
     "FX": 1038,
+    "HOTLPX": 217,  # Complete runtime-input reference in docs/targets.md.
     # Legacy twin denominators. Identical loop shape does not establish an
     # identical whole-program target: PROVISIONAL_TARGETS records known
     # invalid references without silently increasing their denominators.
-    "HOTLPX": 312,
     "PRESSX": 308,
     "FPCSEX": 1340,
     "LNGMXX": 210,
@@ -498,7 +498,6 @@ TARGETS = {
 
 PROVISIONAL_TARGETS = {
     "PRESSX": "inherits PRESS's constant-folded target despite runtime inputs; derive its full reference",
-    "HOTLPX": "inherits HOTLOP's folded-product target; runtime reads and invariant multiplication need a full reference",
     "LNGMXX": "inherits LNGMIX's constant-dividend target; runtime input and division need a full reference",
     "FPCSE": "reference reassociates the sum and omits SINGLE rounding",
     "FPCSEX": "reference reassociates the sum and omits SINGLE rounding",
