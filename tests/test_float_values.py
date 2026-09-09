@@ -30,6 +30,22 @@ def test_fpdeep_integer_results_are_explicit_values(tag):
     assert "B$FIST" not in module.of(omf.parse(emitted.data)).calls.values()
 
 
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_fpdeep_does_not_materialize_dead_conversion_halves(tag):
+    """FPDEEP rebuilt unused AX/DX halves even though PRINT consumed the whole conversion."""
+    from qbopt.optimize import transform
+    path = Path(f"fixtures/omf/fpdeep-{tag}.obj")
+    found = corpus.loaded(path)
+    partition = corpus.partitioned(path)
+    body = transform.applied(mir.bodies(found, partition)[0][1], found.dgroup,
+                             found.calls, blocks=partition, found=found)
+    conversions = {op.at for block in body.blocks for op in block.ops
+                   if op.kind is mir.Kind.FSTORE and not op.stores}
+    assert conversions
+    assert not any(op.kind is mir.Kind.EXTRACT and op.at in conversions
+                   for block in body.blocks for op in block.ops)
+
+
 @pytest.mark.parametrize("guard", ["contract", "writes", "error", "flags"])
 def test_float_integer_recognition_requires_the_full_helper_contract(guard, monkeypatch):
     from qbopt.abi import runtime

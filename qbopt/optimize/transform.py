@@ -1674,21 +1674,31 @@ def dead(body: MirBody) -> MirBody:
     input ranges stay accounted for without requiring an adjacent survivor
     or keeping a dead value live through allocation.
     """
-    # Not in a body holding something this cannot read. A use list is only
-    # as complete as the semantics behind it, and an opaque or emulated
-    # instruction reads registers none of them mention: byref2 printed 0
-    # for 16 that way.
-    if any(one.barrier or one.kind is mir.Kind.OPAQUE for block in body.blocks for one in block.ops):
-        return body
-
-    body = _pruned_phis(body, live(body))
+    # Incomplete readers forbid global removal, but a result overwritten
+    # locally before reaching one cannot supply its hidden inputs.
+    limited = any(one.barrier or one.kind is mir.Kind.OPAQUE for block in body.blocks for one in block.ops)
+    if not limited:
+        body = _pruned_phis(body, live(body))
     alive = live(body)
+    if limited:
+        for block in body.blocks:
+            overwritten = _overwritten_locally(block)
+            alive.update(value for op in block.ops for value in op.defines if value not in overwritten)
+            alive.update(value for phi in block.phis for value in phi.incoming.values())
+        while True:
+            before = len(alive)
+            alive.update(value for block in body.blocks for op in block.ops
+                         if any(value in alive for value in op.defines) for value in op.uses)
+            if len(alive) == before:
+                break
     out = []
     changed = False
     for block in body.blocks:
         # Several semantic operations may share an input address. Their
         # computations are independent even when their provenance is not.
-        gone = {id(op) for op in block.ops if _removable(op, alive)}
+        overwritten = _overwritten_locally(block) if limited else None
+        gone = {id(op) for op in block.ops if _removable(op, alive)
+                and (overwritten is None or set(op.defines) <= overwritten)}
         if not gone:
             out.append(block)
             continue
@@ -1737,6 +1747,20 @@ def dead(body: MirBody) -> MirBody:
             for block in out
         ),
     )
+
+
+def _overwritten_locally(block) -> set:
+    """Results replaced before reaching an opaque reader or a block exit."""
+    written = set()
+    overwritten = set()
+    for op in reversed(block.ops):
+        if op.barrier or op.kind is mir.Kind.OPAQUE:
+            written.clear()
+            continue
+        overwritten.update(value for value in op.defines
+                           if value.version and (value.variable, value.flags) in written)
+        written.update((value.variable, value.flags) for value in op.defines if value.version)
+    return overwritten
 
 
 def _kept(op: Op) -> bool:

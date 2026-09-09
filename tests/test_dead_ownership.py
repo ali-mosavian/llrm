@@ -1,5 +1,9 @@
 """Deleting a computation does not delete ownership of its input bytes."""
 
+from dataclasses import replace
+
+import pytest
+
 from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.backend import lower
@@ -31,3 +35,23 @@ def test_dead_sibling_emits_no_bytes_and_keeps_its_ranges() -> None:
     assert select.emit(lower.current(marker)).code == b""
     assert survivor == live
     assert transform.dead(result) == result
+@pytest.mark.parametrize("guard", [None, "opaque_before", "read", "different_variable", "unversioned", "exit"])
+def test_local_overwrite_does_not_expose_an_opaque_reader(guard):
+    """FPDEEP's dead return halves are replaced before its opaque DOUBLE copy can read them."""
+    first = mir.Value(100, 0, variable=7, version=0 if guard == "unversioned" else 1)
+    later = mir.Value(101, 2, variable=8 if guard == "different_variable" else 7,
+                      version=0 if guard == "unversioned" else 2)
+    initial = mir.Op(0, ir.Operation.MOVE, "", (first,), (), kind=mir.Kind.COPY,
+                     args=(mir.Const(1, 2),), results=(mir.Held(first, 2),), covers=(0, 2))
+    overwrite = mir.Op(2, ir.Operation.MOVE, "", (later,), (), kind=mir.Kind.COPY,
+                       args=(mir.Const(2, 2),), results=(mir.Held(later, 2),), covers=(2, 4))
+    opaque = mir.Op(4, ir.Operation.BARRIER, "?", (), (), covers=(4, 5))
+    ops = (initial, opaque, overwrite) if guard == "opaque_before" else (initial, overwrite, opaque)
+    if guard == "read":
+        overwrite = replace(overwrite, args=(mir.Held(first, 2),), uses=(first,))
+        ops = (initial, overwrite, opaque)
+    if guard == "exit":
+        ops = (initial, opaque)
+    body = mir.MirBody(0, (mir.MirBlock(0, (), ops, ()),), {})
+    changed = transform.dead(body)
+    assert (changed.blocks[0].ops[0].kind is mir.Kind.NOTHING) == (guard is None)

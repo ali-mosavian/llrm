@@ -1,5 +1,10 @@
 # Target coverage and the next floating-point gap
 
+Local dead-value update: FPDEEP now costs PDS 12287 (11.31x), QB 12555
+(11.56x), VBDOS 12267 (11.30x). The target remains 1086. See
+`docs/local-dead-values.md` for the removed return-half reconstruction,
+runtime checks and pre-existing transform-test failures.
+
 Latest FPDEEP update: explicit float-to-integer values and corrected helper
 body accounting give PDS 13489 (12.42x), QB 12555 (11.56x), VBDOS 13419
 (12.36x). Under the corrected accounting the preceding revision costs
