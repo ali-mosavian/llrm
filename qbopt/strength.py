@@ -69,7 +69,12 @@ def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | 
         latches = [at for at in loop.latches if at in at_of]
         if preheader is None or at_of[preheader].succ != (loop.header,) or len(latches) != 1:
             continue  # two ways in or out is a bigger change than this
-        candidates = [one for one in derived if _answer(body, one.op) is not None and _multiplies(one, derived)]
+        candidates = [
+            one
+            for one in derived
+            if _answer(body, one.op) is not None
+            and (_multiplies(one, derived) or one.offsets and one.op.kind is mir.Kind.SHL)
+        ]
         consumed = {arg.value for one in candidates for arg in one.op.args if isinstance(arg, mir.Held)}
         candidates = [one for one in candidates if one.op.results[0].value not in consumed]
         for one in candidates:
@@ -87,7 +92,8 @@ def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | 
             start = mir.Value(id=_next(body, taken), at=preheader, variable=taken, version=1)
             step = mir.Value(id=start.id + 1, at=latches[0], variable=taken, version=2)
 
-            ahead.setdefault(preheader, []).append(_start(start, one, preheader))
+            ahead.setdefault(preheader, []).extend(_starts(start, one, preheader))
+            taken += len(one.offsets) * 2
             behind.setdefault(latches[0], []).append(
                 _made(
                     mir.Kind.ADD,
@@ -159,6 +165,37 @@ def _start(into, one, preheader: int) -> Op:
     if isinstance(one.by, mir.Const) and one.by.n == 1:
         return _made(mir.Kind.COPY, "mov", into, (one.of.start,), preheader, one.op)
     return _made(mir.Kind.MUL, "imul", into, (one.of.start, one.by), preheader, one.op)
+
+
+def _starts(into: mir.Value, one: induction.Derived, preheader: int) -> list[Op]:
+    """Initialize scale * start plus invariant offsets once, before the loop."""
+    if not one.offsets:
+        return [_start(into, one, preheader)]
+    width = _width(one.op)
+    temporaries = iter(
+        mir.Value(into.id + 2 + number, preheader, variable=into.variable + 1 + number, version=1)
+        for number in range(len(one.offsets) * 2)
+    )
+    current = next(temporaries)
+    operations = [_start(current, one, preheader)]
+    for index, (offset, coefficient) in enumerate(one.offsets):
+        if coefficient != 1:
+            product = next(temporaries)
+            operations.append(
+                _made(
+                    mir.Kind.MUL,
+                    "imul",
+                    product,
+                    (offset, mir.Const(coefficient & 0xFFFF, width)),
+                    preheader,
+                    one.op,
+                )
+            )
+            offset = mir.Held(product, width)
+        result = into if index == len(one.offsets) - 1 else next(temporaries)
+        operations.append(_made(mir.Kind.ADD, "add", result, (mir.Held(current, width), offset), preheader, one.op))
+        current = result
+    return operations
 
 
 def _answer(body: MirBody, op: Op) -> "mir.Value | None":

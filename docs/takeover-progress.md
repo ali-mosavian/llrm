@@ -1,5 +1,20 @@
 # Takeover checkpoint — 2026-09-09
 
+## Affine addresses with invariant offsets
+
+Induction analysis now retains invariant additive terms while composing
+word-width arithmetic. Strength reduction initializes these terms outside
+the loop and advances only the scaled counter. This recognizes NESTED's
+`(rowBase + column) * 2`: its address now advances by two instead of adding
+row and column then shifting on every inner iteration. No machine register
+names enter the analysis or transform.
+
+NESTED cost **1962 -> 1900, 2.55x -> 2.47x**. The real-fixture regression
+fails with the old implementation; nine runtime comparisons pass across
+NESTED/MATRIX/ADDRM on p-g2/q-O/v-g3. Stage dumps:
+`/tmp/qbopt-affine-offset`. Runtime artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-affine-offset-hx0x5oew`.
+
 ## Store motion through a nested loop body
 
 A rotated loop need not have only two blocks: a unique latch with a direct

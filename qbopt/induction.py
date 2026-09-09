@@ -50,11 +50,15 @@ class Derived:
     there would be no recurrence to reduce. The point of finding it is that
     `i * by` recomputed every iteration is `j += step * by` accumulated,
     which is an add where BC wrote a multiply.
+
+    `offsets` are invariant terms with integer coefficients, added to the
+    scaled counter. They affect initialization, never the recurrence step.
     """
 
     op: "mir.Op"
     of: Affine
     by: "mir.Arg"
+    offsets: tuple[tuple[mir.Arg, int], ...] = ()
 
 
 def invariant(body: mir.MirBody, inside: set[int]) -> set[int]:
@@ -224,8 +228,9 @@ def derived(
 
 def _composed(body: mir.MirBody, inside: set[int], found: dict[int, Affine], made: dict[int, mir.Op]) -> list[Derived]:
     known = consts.known(body)
+    still = invariant(body, inside)
     forms = {
-        value: (one, 1)
+        value: (one, 1, ())
         for value, one in found.items()
         if isinstance(one.start, (mir.Held, mir.Const)) and one.start.width == 2
     }
@@ -261,22 +266,37 @@ def _composed(body: mir.MirBody, inside: set[int], found: dict[int, Affine], mad
                         continue
                     base = first[0]
                     scale = first[1] + second[1] if op.kind is mir.Kind.ADD else first[1] - second[1]
+                    sign = 1 if op.kind is mir.Kind.ADD else -1
+                    offsets = first[2] + tuple((arg, coefficient * sign) for arg, coefficient in second[2])
+                elif op.kind is mir.Kind.ADD and (first is not None or second is not None):
+                    recurrence, offset = (first, right) if first is not None else (second, left)
+                    if not (
+                        isinstance(offset, (mir.Const, mir.Held))
+                        and offset.width == 2
+                        and (isinstance(offset, mir.Const) or offset.value.id in still)
+                    ):
+                        continue
+                    base, scale, offsets = recurrence
+                    offsets = (*offsets, (offset, 1))
                 elif op.kind is mir.Kind.MUL:
                     if first is not None and isinstance(right, mir.Const) and right.width == 2:
                         base, scale = first[0], first[1] * right.n
+                        offsets = tuple((arg, coefficient * right.n) for arg, coefficient in first[2])
                     elif second is not None and isinstance(left, mir.Const) and left.width == 2:
                         base, scale = second[0], second[1] * left.n
+                        offsets = tuple((arg, coefficient * left.n) for arg, coefficient in second[2])
                     else:
                         continue
                 elif (
                     op.kind is mir.Kind.SHL and first is not None and isinstance(right, mir.Const) and 0 <= right.n < 16
                 ):
                     base, scale = first[0], first[1] << right.n
+                    offsets = tuple((arg, coefficient << right.n) for arg, coefficient in first[2])
                 else:
                     continue
                 scale &= 0xFFFF
-                forms[result.value.id] = base, scale
-                out[id(op)] = Derived(op, base, mir.Const(scale, 2))
+                forms[result.value.id] = base, scale, offsets
+                out[id(op)] = Derived(op, base, mir.Const(scale, 2), offsets)
                 changed = True
     return list(out.values())
 

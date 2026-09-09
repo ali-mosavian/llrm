@@ -14,6 +14,26 @@ from qbopt.module import Addr
 from qbopt.module import Space
 
 
+def test_nested_address_advances_instead_of_recomputing_row_plus_column() -> None:
+    """NESTED rebuilt (row * width + column) * 2 on each of 30 inner iterations."""
+    import corpus
+
+    path = Path("fixtures/omf/nested-p-g2.obj")
+    found = corpus.loaded(path)
+    partition = corpus.partitioned(path)
+    built = mir.bodies(found, partition)[0][1]
+    result = transform.applied(built, found.dgroup, found.calls, blocks=partition, found=found)
+    inner = next(block for block in result.blocks if block.at == 0x5A)
+    assert not any(op.kind is mir.Kind.SHL for op in inner.ops)
+    header = next(block for block in result.blocks if block.at == 0x86)
+    assert any(
+        op.kind is mir.Kind.ADD
+        and mir.Const(2, 2) in op.args
+        and any(phi.incoming.get(inner.at) in op.defines for phi in header.phis)
+        for op in inner.ops
+    )
+
+
 @pytest.mark.parametrize("program", ["matrix", "addrm"])
 def test_strength_does_not_spill_cheap_loop_work(monkeypatch: pytest.MonkeyPatch, program: str) -> None:
     """Matrix rose 11,916 -> 12,974 with an outer counter; ADDRM rose 2,308 -> 2,578 replacing shifts."""
