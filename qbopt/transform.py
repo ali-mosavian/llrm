@@ -396,7 +396,7 @@ def _width(_value: mir.Value, op: Op) -> int | None:
 
 def _computation(op: Op, stands: dict[int, mir.Value], whole: dict[int, int]) -> tuple | None:
     """What this operation computes, or None where that is not only its operands."""
-    if op.kind not in _PURE or op.loads or op.stores or op.merges or op.node is None:
+    if op.kind not in _PURE or op.loads or op.stores or op.merges:
         return None
     if not op.defines or not op.args:
         return None
@@ -408,6 +408,8 @@ def _computation(op: Op, stands: dict[int, mir.Value], whole: dict[int, int]) ->
             named.append(("v", stands.get(one.value.id, one.value).id, one.width))
         elif isinstance(one, mir.Const):
             named.append(("c", one.n, one.width))
+        elif isinstance(one, mir.Symbol):
+            named.append(("s", one))
         else:
             return None
     return (op.kind, op.name, tuple(named))

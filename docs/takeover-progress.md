@@ -55,6 +55,16 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+CSE semantic-operands checkpoint: optimizer-created operations no longer need
+an original decoded node to participate in value numbering. Symbolic operands
+also participate by their complete identity, never by their encoded zero.
+The originless and symbolic cases fail under the old computation key; 33
+focused checks pass, including distinct-address negatives. Strict LIR
+HARR/matrix/chain/segld runtime passes on PDS /G2, QB /O and VBDOS /G3
+(12 program/configuration cases). HARR stage dumps are in
+`/tmp/qbopt-cse-symbolic-harr-20260909`. No new target reduction is claimed:
+partial-write preservation and the far-store/descriptor alias barrier remain.
+
 CSE value-identity checkpoint: removed the obsolete same-variable restriction
 on common-expression reuse. The dominator/value/width checks still apply;
 register placement belongs to allocation, not this pass. The regression now

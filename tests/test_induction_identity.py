@@ -331,7 +331,9 @@ def test_inserted_counter_operations_own_their_insertion_location() -> None:
 
 
 @pytest.mark.parametrize("second_variable", [7, 8])
-def test_cse_replaces_phi_uses_of_a_deleted_initializer(second_variable: int) -> None:
+@pytest.mark.parametrize("has_origin", [False, True])
+@pytest.mark.parametrize("symbolic", [False, True])
+def test_cse_replaces_phi_uses_of_a_deleted_initializer(second_variable: int, has_origin: bool, symbolic: bool) -> None:
     """matrix printed T=0 for T=380 after CSE deleted a zero still named by its loop phi."""
     from pathlib import Path
 
@@ -353,10 +355,10 @@ def test_cse_replaces_phi_uses_of_a_deleted_initializer(second_variable: int) ->
         (first,),
         (),
         kind=mir.Kind.COPY,
-        args=(mir.Const(0, 2),),
+        args=(mir.Symbol(Space.SEGMENT, 5, 6, 2) if symbolic else mir.Const(0, 2),),
         results=(mir.Held(first, 2),),
         covers=(0, 2),
-        node=node,
+        node=node if has_origin else None,
     )
     duplicate = replace(define, at=2, defines=(second,), results=(mir.Held(second, 2),), covers=(2, 4))
     jump = mir.Op(4, ir.Operation.JUMP, "", (), (), kind=mir.Kind.JUMP, covers=(4, 6), target=6)
@@ -374,6 +376,27 @@ def test_cse_replaces_phi_uses_of_a_deleted_initializer(second_variable: int) ->
     assert all(second not in op.defines for block in after.blocks for op in block.ops)
     assert after.blocks[2].phis[0].incoming[2] == first
     assert after.blocks[2].ops[1].args == (mir.Held(first, 2),)
+
+
+@pytest.mark.parametrize("other", [mir.Const(0, 2), mir.Symbol(Space.SEGMENT, 5, 8, 2)])
+def test_cse_keeps_distinct_linker_addresses(other: mir.Arg) -> None:
+    """Descriptor addresses encoded as zero must not become the same value."""
+    first, second = mir.Value(100, 0), mir.Value(101, 2)
+    define = mir.Op(
+        0,
+        ir.Operation.MOVE,
+        "mov",
+        (first,),
+        (),
+        kind=mir.Kind.COPY,
+        args=(mir.Symbol(Space.SEGMENT, 5, 6, 2),),
+        results=(mir.Held(first, 2),),
+        covers=(0, 2),
+    )
+    different = replace(define, at=2, defines=(second,), args=(other,), results=(mir.Held(second, 2),), covers=(2, 4))
+    use = mir.Op(4, ir.Operation.PUSH, "push", (), (second,), kind=mir.Kind.ARG, args=(mir.Held(second, 2),))
+    built = mir.MirBody(0, (mir.MirBlock(0, (), (define, different, use), ()),))
+    assert transform.subexpressions(built) == built
 
 
 def test_dead_byte_transfer_cannot_span_a_surviving_jump() -> None:
