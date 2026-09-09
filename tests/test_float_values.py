@@ -9,6 +9,28 @@ import pytest
 from qbopt import mir, lower_floats, raising_float_values, wholeseg
 
 
+def _allocated(body, path):
+    from qbopt import floatalloc, lower, runtime
+    found = corpus.loaded(path)
+    return floatalloc.allocated(lower.lowered("test", body, found.calls, found.absorbed, runtime.for_module(found)))
+
+
+def test_floating_values_survive_lowering_until_allocation():
+    """FPCSE lowering must not assign physical stack registers ahead of allocation."""
+    from qbopt import ir, lower, runtime
+    path = Path("fixtures/omf/fpcse-p-g2.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    low = lower.lowered("test", body, found.calls, found.absorbed, runtime.for_module(found))
+    operations = [one for block in low.blocks for one in block.insns if one.op.floating_origin]
+    assert operations
+    assert all(any(isinstance(arg, ir.Held) and arg.width == 10
+                   for arg in (*one.what.sources, *one.what.dests)) for one in operations)
+    allocated = _allocated(body, path)
+    assert not any(isinstance(arg, ir.Held) and arg.width == 10 for block in allocated.blocks
+                   for one in block.insns if one.what for arg in (*one.what.sources, *one.what.dests))
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_fpcse_float_values_link_each_computation(tag):
     """FPCSE's opaque st0 operands concealed all cross-operation data dependencies."""
@@ -49,7 +71,7 @@ def test_unimplemented_float_rewrites_cannot_silently_use_old_code(change):
         ops[second] = replace(ops[second], args=(replace(arg, value=mir.Value(9999, 0, variable=9999)), *ops[second].args[1:]))
     changed = replace(body, blocks=tuple(replace(one, ops=tuple(ops)) if one is block else one for one in body.blocks))
     with pytest.raises(Unlowered, match="floating"):
-        lower_floats.restored(changed)
+        _allocated(changed, path)
 
 
 def test_generic_memory_reuse_respects_float_conversion_and_effects():
@@ -104,7 +126,7 @@ def test_float_allocation_uses_current_ssa_values(tag):
     """FPCSE allocation must follow renamed value edges, not BC's origin identifiers."""
     path = Path(f"fixtures/omf/fpcse-{tag}.obj")
     body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
-    baseline = lower_floats.restored(body)
+    baseline = _allocated(body, path)
     variables = {arg.value.variable for block in body.blocks for op in block.ops
                  if op.floating_origin for arg in (*op.args, *op.results)
                  if isinstance(arg, mir.Held) and arg.width == 10}
@@ -116,6 +138,6 @@ def test_float_allocation_uses_current_ssa_values(tag):
         args=tuple(map(operand, op.args)), results=tuple(map(operand, op.results)),
         uses=tuple(map(renamed, op.uses)), defines=tuple(map(renamed, op.defines)))
         for op in block.ops)) for block in body.blocks))
-    allocated = lower_floats.restored(changed)
-    assert [(op.args, op.results, op.uses, op.defines) for block in allocated.blocks for op in block.ops] == [
-        (op.args, op.results, op.uses, op.defines) for block in baseline.blocks for op in block.ops]
+    allocated = _allocated(changed, path)
+    assert [(one.what, one.uses, one.defines) for block in allocated.blocks for one in block.insns] == [
+        (one.what, one.uses, one.defines) for block in baseline.blocks for one in block.insns]

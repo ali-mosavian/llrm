@@ -2282,3 +2282,23 @@ outcomes. This is initial allocation capability, not an optimization gain.
 The floating adapter still runs before general LIR construction; integrating
 floating constraints and inserted moves with the LIR allocation pipeline is
 unfinished, as are cross-block values and strict-effect-aware reuse.
+
+### Floating allocation moved behind the LIR boundary
+
+Lowering now preserves floating SSA operands as ten-byte `ir.Held` values.
+The machine pipeline's explicit `floatalloc` stage consumes LIR and assigns
+stack slots before general-register allocation; the former MIR-mutating
+placement adapter has been removed. Floating dependencies are removed from
+the general-register graph only after their slots have been assigned. The
+allocator reads machine instructions, not MIR origins or BC's saved slots.
+
+A fail-first boundary regression verifies that FPCSE reaches LIR with
+floating values and leaves floating allocation with stack operands. The
+renaming and refusal tests now exercise this production pipeline. All 90
+focused tests pass. The 97-object comparison with the previous lowering and
+machine pipeline is byte-identical. Adjacent dumps in
+`/tmp/qbopt-fpcse-lir-floatalloc` show the value-to-slot transition at
+`s30-lir-lowered.txt` / `s31-lir-floatalloc.txt`, with no change to MIR.
+Inserted stack moves, spills, cross-block allocation and profitable reuse
+remain unfinished; this change removes the premature-placement architecture
+debt rather than claiming a performance gain.

@@ -1,81 +1,96 @@
-"""Place self-contained floating value chains on the target register stack."""
+"""Assign floating LIR values to the target register stack."""
 
 from dataclasses import replace
 
-from qbopt import ir, mir
+from qbopt import ir, lir
+from qbopt.passes import LIRTransform
 
 
-def placed(block: mir.MirBlock) -> mir.MirBlock:
-    """Assign self-contained value chains to slots in evaluation order."""
+def allocated(body: lir.LirBody) -> lir.LirBody:
     from qbopt.lower import Unlowered
 
-    stack: list[int] = []
-    ops = []
-    for op in block.ops:
-        origin = op.floating_origin
-        if origin is None:
-            if stack and (op.barrier or op.kind is mir.Kind.CALL or op.stack is not None):
-                raise Unlowered("floating stack crosses an unmodelled operation")
-            ops.append(op)
-            continue
-        for current, before in ((op.args, origin.inputs), (op.results, origin.outputs)):
-            if len(current) != len(before) or any(type(arg) is not type(old)
-                or (isinstance(old, mir.Held) and old.width == 10 and arg.width != 10)
-                for arg, old in zip(current, before)):
-                raise Unlowered("floating operand conversion requires instruction selection")
-
-        def source(arg):
-            if not isinstance(arg, mir.Held) or arg.width != 10:
-                return arg
-            if arg.value.variable not in stack:
-                raise Unlowered("floating stack input is unavailable")
-            return mir.Opaque(None, f"st{stack.index(arg.value.variable)}")
-
-        inputs = tuple(map(source, op.args))
-        match op.op:
-            case ir.Operation.FLOAT_LOAD:
-                delta, slot = 1, 0
-            case ir.Operation.FLOAT_STORE:
-                delta, slot = -1, None
-                if not inputs or inputs[0] != mir.Opaque(None, "st0"):
-                    raise Unlowered("floating stack store requires an exchange")
-            case ir.Operation.FLOAT_ARITH | ir.Operation.FLOAT_UNARY:
-                delta, slot = 0, 0
-                if not inputs or inputs[0] != mir.Opaque(None, "st0"):
-                    raise Unlowered("floating stack arithmetic requires an exchange")
-            case ir.Operation.FLOAT_ARITH_POP:
-                delta = -1
-                if len(inputs) != 2 or inputs[1] != mir.Opaque(None, "st0"):
-                    raise Unlowered("floating stack popping arithmetic requires an exchange")
-                slot = stack.index(op.args[0].value.variable)
-            case _:
-                raise Unlowered("floating stack operation has no allocation rule")
-        if op.stack != delta:
-            raise Unlowered("floating stack transition disagrees with the instruction")
-        outputs = []
-        for arg in op.results:
-            if not isinstance(arg, mir.Held) or arg.width != 10:
-                outputs.append(arg)
+    floating = {arg.value for block in body.blocks for one in block.insns if one.what
+                for arg in (*one.what.sources, *one.what.dests)
+                if isinstance(arg, ir.Held) and arg.width == 10}
+    if not floating:
+        return body
+    blocks = []
+    for block in body.blocks:
+        if any(phi.result in floating or any(value in floating for _, value in phi.incoming)
+               for phi in block.phis):
+            raise Unlowered("floating phi requires cross-block allocation")
+        stack: list[int] = []
+        insns = []
+        for one in block.insns:
+            what = one.what
+            if what is None or not any(isinstance(arg, ir.Held) and arg.width == 10
+                                      for arg in (*what.sources, *what.dests)):
+                if floating.intersection((*one.uses, *one.defines)):
+                    raise Unlowered("floating value used by an unmodelled instruction")
+                if stack and (what is None or what.op in (ir.Operation.CALL, ir.Operation.BARRIER)
+                              or any(isinstance(arg, ir.St) for arg in (*what.sources, *what.dests))):
+                    raise Unlowered("floating stack crosses an unmodelled instruction")
+                insns.append(one)
                 continue
-            if slot is None or arg.value.variable in stack:
-                raise Unlowered("floating stack result is not a fresh value")
-            outputs.append(mir.Opaque(None, f"st{slot}"))
-            if delta == 1:
-                if len(stack) == 8:
-                    raise Unlowered("floating stack requires a spill")
-                stack.insert(0, arg.value.variable)
-            else:
-                if slot >= len(stack):
-                    raise Unlowered("floating stack result has no slot")
-                stack[slot] = arg.value.variable
-        if delta == -1:
-            if not stack:
-                raise Unlowered("floating stack pop has no value")
-            stack.pop(0)
-        placed = replace(origin, inputs=op.args, outputs=op.results,
-                         machine_inputs=inputs, machine_outputs=tuple(outputs))
-        ops.append(replace(op, floating_origin=placed))
-    if stack:
-        raise Unlowered("floating stack live-out requires allocation")
-    return replace(block, ops=tuple(ops))
 
+            def source(arg):
+                if not isinstance(arg, ir.Held) or arg.width != 10:
+                    return arg
+                if arg.value not in stack:
+                    raise Unlowered("floating stack input is unavailable")
+                return ir.St(stack.index(arg.value))
+
+            inputs = tuple(map(source, what.sources))
+            match what.op:
+                case ir.Operation.FLOAT_LOAD:
+                    delta, slot = 1, 0
+                case ir.Operation.FLOAT_STORE:
+                    delta, slot = -1, None
+                    if inputs != (ir.St(0),):
+                        raise Unlowered("floating stack store requires an exchange")
+                case ir.Operation.FLOAT_ARITH | ir.Operation.FLOAT_UNARY:
+                    delta, slot = 0, 0
+                    if not inputs or inputs[0] != ir.St(0):
+                        raise Unlowered("floating stack arithmetic requires an exchange")
+                case ir.Operation.FLOAT_ARITH_POP:
+                    delta = -1
+                    if len(inputs) != 2 or not isinstance(inputs[0], ir.St) or inputs[1] != ir.St(0):
+                        raise Unlowered("floating stack popping arithmetic requires an exchange")
+                    slot = inputs[0].index
+                case _:
+                    raise Unlowered("floating instruction has no allocation rule")
+            outputs = []
+            for arg in what.dests:
+                if not isinstance(arg, ir.Held) or arg.width != 10:
+                    outputs.append(arg)
+                    continue
+                if slot is None or arg.value in stack:
+                    raise Unlowered("floating stack result is not a fresh value")
+                outputs.append(ir.St(slot))
+                if delta == 1:
+                    if len(stack) == 8:
+                        raise Unlowered("floating stack requires a spill")
+                    stack.insert(0, arg.value)
+                else:
+                    if slot >= len(stack):
+                        raise Unlowered("floating stack result has no slot")
+                    stack[slot] = arg.value
+            if delta == -1:
+                if not stack:
+                    raise Unlowered("floating stack pop has no value")
+                stack.pop(0)
+            insns.append(replace(one, what=replace(what, sources=inputs, dests=tuple(outputs)),
+                uses=tuple(value for value in one.uses if value not in floating),
+                defines=tuple(value for value in one.defines if value not in floating),
+                widths=tuple((value, width) for value, width in one.widths if value not in floating)))
+        if stack:
+            raise Unlowered("floating stack live-out requires cross-block allocation")
+        blocks.append(replace(block, insns=tuple(insns)))
+    return replace(body, blocks=tuple(blocks))
+
+
+class FloatAlloc(LIRTransform):
+    name = "floatalloc"
+
+    def transform(self, body):
+        return allocated(body)

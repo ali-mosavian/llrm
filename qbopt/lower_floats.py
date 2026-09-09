@@ -2,7 +2,7 @@
 
 from dataclasses import replace
 
-from qbopt import floatalloc, mir
+from qbopt import mir
 
 
 
@@ -85,7 +85,7 @@ def operation(op: mir.Op) -> mir.Op:
         floating_origin=None)
 
 
-def restored(body: mir.MirBody) -> mir.MirBody:
+def checked(body: mir.MirBody) -> None:
     from qbopt.lower import Unlowered
 
     floating = {arg.value.variable for block in body.blocks for op in block.ops if op.floating_origin is not None
@@ -97,17 +97,20 @@ def restored(body: mir.MirBody) -> mir.MirBody:
         if any(op.floating_origin is None and any(value.variable in floating for value in (*op.uses, *op.defines))
                for op in block.ops):
             raise Unlowered("floating value used outside its original computation")
-    blocks = []
     for block in body.blocks:
         typed = [op for op in block.ops if op.floating_origin is not None and op.kind is not mir.Kind.NOTHING]
         if not typed:
-            blocks.append(block)
             continue
         baseline = typed[0].floating_origin
         sequence = tuple(op.floating_origin.at for op in typed)
         if block.at != baseline.block or sequence != baseline.sequence:
             raise Unlowered("floating sequence changed before stack allocation is implemented")
-        block = floatalloc.placed(block)
-        _stack_checked(block)
-        blocks.append(replace(block, ops=tuple(operation(op) for op in block.ops)))
-    return replace(body, blocks=tuple(blocks))
+        for op in typed:
+            origin = op.floating_origin
+            if op.kind != origin.kind or op.floating != origin.semantics:
+                raise Unlowered("floating evaluation semantics changed")
+            for current, before in ((op.args, origin.inputs), (op.results, origin.outputs)):
+                if len(current) != len(before) or any(type(arg) is not type(old)
+                    or (isinstance(old, mir.Held) and old.width == 10 and arg.width != 10)
+                    for arg, old in zip(current, before)):
+                    raise Unlowered("floating operand conversion requires instruction selection")

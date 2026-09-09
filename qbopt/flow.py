@@ -51,7 +51,9 @@ from qbopt.passes import LIRTransform
 
 def machine(pinned: dict, frame=None, calls: dict | None = None) -> list[LIRTransform]:
     """Every phase between lowering and emission, in order."""
+    from qbopt import floatalloc
     return [
+        floatalloc.FloatAlloc(),
         phielim.PhiElimination(),
         twoaddr.TwoAddress(),
         coalesce.Coalescer(),
