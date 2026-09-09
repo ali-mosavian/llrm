@@ -1060,7 +1060,12 @@ def _invariant_run(
             # joined by the carry and by nothing this can see, and with the
             # pair split across the loop edge lngmix printed 1185033780 for
             # 142900. Whatever admits the adds has to keep them together.
-            if one.kind is mir.Kind.COPY and not one.loads and not any(use in made for use in one.uses):
+            if any(isinstance(result, mir.Opaque) for result in one.results):
+                continue
+            if (
+                one.kind is mir.Kind.COPY and not one.loads and not any(use in made for use in one.uses)
+                and not (len(one.args) == 1 and isinstance(one.args[0], mir.Symbol))
+            ):
                 continue
             # Only definition of its register in the loop, or the loop's own
             # Both, and neither alone. "A phi carries it" refuses harr's
@@ -1075,6 +1080,9 @@ def _invariant_run(
                 value in begins and value in twice and (readable is None or value in readable)
                 for value in one.defines
                 if not value.flags
+            ) and not (
+                one.kind is mir.Kind.COPY and not one.merges
+                and len(one.args) == 1 and isinstance(one.args[0], mir.Symbol)
             ):
                 continue
             # An operand nothing writes down used to end the run here.
@@ -1108,7 +1116,7 @@ def _invariant_run(
     while thinning:
         thinning = False
         for one in run:
-            if one.kind is not mir.Kind.COPY or one.loads:
+            if one.kind is not mir.Kind.COPY or one.loads or any(isinstance(arg, mir.Symbol) for arg in one.args):
                 continue
             if any(value in other.uses for other in run if other is not one for value in one.defines):
                 continue
@@ -1308,6 +1316,9 @@ def halves(body: MirBody) -> set:
         for one in op.args:
             if isinstance(one, mir.Held):
                 found[one.value] = max(found.get(one.value, 0), one.width)
+        for ref in op.loads + op.stores:
+            if ref.base is not None:
+                found[ref.base] = max(found.get(ref.base, 0), ref.base_width)
         return found
 
     changing = True
@@ -1339,7 +1350,8 @@ def halves(body: MirBody) -> set:
                     for one in (ref.base, ref.segment):
                         if one is not None:
                             out.add((one, LOW))
-                            out.add((one, HIGH))
+                            if one == ref.segment or ref.base_width >= 4:
+                                out.add((one, HIGH))
             for phi in block.phis:
                 for half in (LOW, HIGH):
                     if (phi.result, half) in out:
@@ -1912,6 +1924,7 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
     readable = live(body)
     effective = _effective(body, calls)
     crossed: set = set()
+    demanded = halves(body)
     moved: dict[int, list[Op]] = {}
     gone: set[int] = set()
     placing: dict[int, int] = {}
@@ -1921,15 +1934,23 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
         if into is None or into in loop.body:
             continue
         ops = [one for at in sorted(loop.body) for one in at_of[at].ops]
+        originals = ops
+        ops = [
+            replace(one, uses=tuple(value for value in one.uses if value not in one.merges), merges={})
+            if one.kind is mir.Kind.COPY and len(one.args) == 1 and isinstance(one.args[0], mir.Symbol)
+            and all((value, HIGH) not in demanded for value in one.defines)
+            else one
+            for one in ops
+        ]
+        identities = {id(one): id(original) for one, original in zip(ops, originals, strict=True)}
         stores = [ref for one in ops for ref in one.stores]
         carried = {phi.result for at in loop.body for phi in at_of[at].phis}
         phis = [phi for at in loop.body for phi in at_of[at].phis]
         run = _invariant_run(ops, carried, stores, dgroup, calls, phis, bounds, _starts(phis), readable)
-        # Not one already taken out of a loop inside this one. Invariant in
-        # the inner loop and in the outer, it was put in both preheaders and
-        # its bytes counted twice, which layout reports as a negative gap:
-        # harr and segld nest ten by ten.
-        run = [one for one in run if one.at not in gone]
+        # Track operations, not source addresses: hoisted definitions share
+        # their anchor's address with other computations and the jump. HARR
+        # lost all of those when its descriptor moved a second time.
+        run = [one for one in run if identities[id(one)] not in gone]
         if not run:
             continue
 
@@ -1955,16 +1976,16 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
         crossed |= {value for one in run for value in one.defines if not value.flags}
         placing[into] = min(placing.get(into, index), index)
         moved[into] = moved.get(into, []) + list(run)
-        gone.update(one.at for one in run)
+        gone.update(identities[id(one)] for one in run)
 
     if not gone:
         return body
 
     out = []
     for block in body.blocks:
-        ops = [one for one in block.ops if one.at not in gone]
+        ops = [one for one in block.ops if id(one) not in gone]
 
-        if ops and block.ops and block.ops[0].at in gone:
+        if ops and block.ops and id(block.ops[0]) in gone:
             # Onto the block's own address so branches still land, and told
             # what it stands for: `covers` otherwise means the bytes at
             # `at`, which are now the hoisted operation's, and both would

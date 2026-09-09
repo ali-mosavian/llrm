@@ -249,6 +249,7 @@ class MemRef:
     beyond: "tuple[int, frozenset] | None" = None
     symbolic: "Symbol | None" = None  # proven effective address; original operands remain for lowering
     allocation: "Symbol | None" = None  # proven in-bounds access to this dynamic allocation
+    base_width: int = 4  # width of the address value, independently of the memory data width
 
     @property
     def where(self) -> "Space | None":
@@ -1144,16 +1145,19 @@ def _memrefs(
     for cell in cells:
         addr = slot if cell.addr is None and slot is not None else cell.addr
         base = segment = None
+        base_width = 4
         root = ir.ROOT.get(cell.through, cell.through)
         if root in TRACKED:
             base = namer.current(root, at)
+            base_width = RegisterExt.size(cell.through)
         if addr is not None:
             root = ir.ROOT.get(addr.base, addr.base)
             if root in TRACKED:
                 base = namer.current(root, at)
+                base_width = RegisterExt.size(addr.base)
             if addr.segment != Register.NONE:
                 segment = None  # a segment register is physical, never a value
-        out.append(MemRef(addr, cell.width, base, segment, space, beyond))
+        out.append(MemRef(addr, cell.width, base, segment, space, beyond, base_width=base_width))
     return tuple(out)
 
 
@@ -1631,7 +1635,7 @@ def _rebased(refs: tuple[MemRef, ...], namer: "_Namer", at: int) -> tuple[MemRef
             root = ir.ROOT.get(ref.addr.base, ref.addr.base)
             if root in TRACKED:
                 base = namer.current(root, at)
-        out.append(MemRef(ref.addr, ref.width, base, ref.segment))
+        out.append(replace(ref, base=base))
     return tuple(out)
 
 
