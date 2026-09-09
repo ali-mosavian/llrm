@@ -2337,3 +2337,17 @@ encoding tests pass. All 97 audited objects retain identical bytes and outcomes.
 This enables shared floating dataflow in allocation; the optimizer does not
 yet create it. FPCSE's existing floating loop remains unchanged until reuse
 has a sound floating-environment/rounding justification.
+
+### Floating environment audit against LLVM and QB runtime source
+
+The next reuse step was checked against LLVM EarlyCSE and QuickBASIC's reset
+and error-handling source. QB requests x87 control word `1332h`: invalid,
+divide-by-zero and overflow exceptions are unmasked. The error handler resets
+the floating environment before BASIC error dispatch. LLVM EarlyCSE rejects
+strict-exception arithmetic and dynamic rounding; a blanket relaxed policy
+would not be modelling its strict path.
+
+`floating-environment.md` records the sources, decoded control word, limits of
+the evidence, and next proof obligations. This changes the next implementation
+step to exact finite-value analysis rather than blanket floating CSE. No
+compiler source changed and no tests were repeated for this evidence audit.
