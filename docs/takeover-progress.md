@@ -1,5 +1,32 @@
 # Takeover checkpoint — 2026-09-09
 
+## Lower two-bit constant products to shifts and an addition
+
+The HOTLPX reference investigation exposed its remaining multiply by twenty.
+Lowering now expands same-width low integer products whose positive constant
+has two set bits: `x*(2^a+2^b) = ((x<<(a-b))+x)<<b`, modulo the original
+width. Fresh abstract temporaries expose all lifetimes to allocation. Live
+multiply flags, wide/high results, memory operands and partial merges keep
+the original multiply. A scaled-LEA form remains a future lowering improvement;
+no machine operand was added to MIR and no target denominator was changed.
+
+HOTLPX before: `imul bx,20`. After (input now allocated to CX):
+`mov bx,cx / shl bx,2 / add bx,cx / shl bx,2`.
+PDS/QB/VBDOS costs **268/272/278 -> 256/260/266**, objects grow seven bytes.
+LNGMXX costs **265/267/263 -> 253/255/251**, objects grow nine bytes.
+PRESSX costs **644/648/654 -> 632/636/642**, objects grow seven bytes.
+DIVMOD's modeled nested-loop cost drops 15000 on each compiler, with five
+extra bytes. These are model rankings, not measured hardware speedups.
+
+154-object audit: exactly these twelve objects change, no new refusals.
+Twelve focused checks pass (three real fail-first HOTLPX cases, six wrapping
+checks, two flag-preservation checks and the existing multiply selection
+check). All 69 runtime cases for affected programs pass across three compilers.
+All-stage dumps: `/tmp/qbopt-scaled-before` and `/tmp/qbopt-scaled-after`.
+Runtime artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-scaled-8tkh95ni`.
+The complete runtime-input target derivations remain unfinished/provisional.
+
 ## Combine constant offsets in MIR
 
 Algebraic simplification composes single-use ADD/SUB constant chains at the

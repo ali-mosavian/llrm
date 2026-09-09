@@ -702,7 +702,7 @@ class Lowering:
         if op.kind is mir.Kind.CONVERT and not preserve_flags:
             parts = _sign_word(op) or parts
         if op.kind is mir.Kind.MUL and not preserve_flags:
-            parts = _scaled(op) or parts
+            parts = _scaled(op, self) or parts
         if not parts:
             # The site's own sequence emits it, so there is nothing for
             # this to say -- while it is still that operation. A pass may
@@ -767,8 +767,8 @@ class Lowering:
         )
 
 
-def _scaled(op: mir.Op) -> tuple[ir.Semantics, ...] | None:
-    """A low product by a power of two, with no observable multiply flags."""
+def _scaled(op: mir.Op, context: Lowering) -> tuple[ir.Semantics, ...] | None:
+    """Low products by one- or two-bit constants, with no observable multiply flags."""
     if len(op.args) != 2 or len(op.results) != 1:
         return None
     source, scale = op.args
@@ -778,10 +778,23 @@ def _scaled(op: mir.Op) -> tuple[ir.Semantics, ...] | None:
     if not (
         isinstance(source, mir.Held) and isinstance(scale, mir.Const) and isinstance(result, mir.Held)
         and source.width == result.width and source.width in (2, 4)
-        and 1 < scale.n < 1 << (source.width * 8) and scale.n & (scale.n - 1) == 0
+        and scale.width == source.width
+        and 1 < scale.n < 1 << (source.width * 8) and scale.n.bit_count() <= 2
         and not op.loads and not op.stores and not op.merges
     ):
         return None
+    if scale.n.bit_count() == 2:
+        low = (scale.n & -scale.n).bit_length() - 1
+        high = scale.n.bit_length() - 1
+        shifted = ir.Held(context.fresh(), source.width)
+        total = ir.Held(context.fresh(), source.width) if low else operand(result)
+        parts = (
+            ir.Semantics(ir.Operation.BINARY, "shl", (shifted,), (operand(source), ir.Imm(high - low, 1))),
+            ir.Semantics(ir.Operation.BINARY, "add", (total,), (shifted, operand(source))),
+        )
+        if low:
+            parts += (ir.Semantics(ir.Operation.BINARY, "shl", (operand(result),), (total, ir.Imm(low, 1))),)
+        return parts
     return (
         ir.Semantics(
             ir.Operation.BINARY, "shl", (operand(result),),

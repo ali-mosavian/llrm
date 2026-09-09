@@ -11,6 +11,17 @@ from qbopt.optimize import transform
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_hotlpx_scales_by_twenty_without_a_second_multiply(tag):
+    """HOTLPX's closed-form sum still used IMUL for the constant factor twenty."""
+    from qbopt import wholeseg
+    from iced_x86 import Mnemonic
+    result = wholeseg.emitted(Path(f"fixtures/omf/hotlpx-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    insns = [one.insn for block in corpus.partitioned(result.data) for one in block.insns]
+    assert sum(one.mnemonic == Mnemonic.IMUL for one in insns) == 1
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_spill_combines_constant_accumulator_steps(tag):
     """SPILL added 150 and then 70 to the same accumulator on every outer iteration."""
     from qbopt import wholeseg

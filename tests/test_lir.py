@@ -1218,6 +1218,39 @@ def test_constant_multiply_lowers_without_a_destination_tie() -> None:
     assert twoaddr._untied(lir.Insn(at=1, covers=(1, 1), what=what, defines=(result.id,), uses=(source.id,))) is None
 
 
+@pytest.mark.parametrize("width,factor", [(2, 3), (2, 10), (2, 20), (2, 32769), (4, 20), (4, 2147483649)])
+def test_two_bit_product_expansion_preserves_wrapping(width, factor):
+    """HOTLPX's factor twenty is a modular low product, including negative word inputs."""
+    from itertools import count
+    from types import SimpleNamespace
+    from qbopt.backend import lower
+    source, result = mir.Value(900, 0), mir.Value(901, 0)
+    op = mir.Op(0, ir.Operation.MULTIPLY, "imul", (result,), (source,), kind=mir.Kind.MUL,
+                args=(mir.Held(source, width), mir.Const(factor, width)), results=(mir.Held(result, width),))
+    parts = lower._scaled(op, SimpleNamespace(fresh=count(1000).__next__))
+    assert parts and not any(one.op is ir.Operation.MULTIPLY for one in parts)
+    mask = (1 << (width * 8)) - 1
+    for number in (0, 1, 7, mask // 2, mask // 2 + 1, mask - 1, mask):
+        values = {source.id: number}
+        for part in parts:
+            left, right = (values[arg.value] if isinstance(arg, ir.Held) else arg.value for arg in part.sources)
+            values[part.dests[0].value] = ((left << right) if part.name == "shl" else left + right) & mask
+        assert values[result.id] == (number * factor) & mask
+
+
+@pytest.mark.parametrize("preserve", [True, False])
+def test_two_bit_scale_keeps_observed_multiply_flags(preserve):
+    """Shift/add must not replace IMUL when a following consumer observes overflow or carry."""
+    from qbopt.backend import lower
+    source, result = mir.Value(900, 0), mir.Value(901, 0)
+    op = mir.Op(0, ir.Operation.MULTIPLY, "imul", (result,), (source,), kind=mir.Kind.MUL,
+                args=(mir.Held(source, 2), mir.Const(20, 2)), results=(mir.Held(result, 2),))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),))
+    lowering = lower.Lowering(body, {source.id, result.id}, {}, {}, {})
+    parts = lowering.expand(op, preserve_flags=preserve)
+    assert any(one.what.op is ir.Operation.MULTIPLY for one in parts) == preserve
+
+
 def test_lower_places_a_commutative_constant_in_the_immediate_operand() -> None:
     """hotlop needlessly loaded 21 before adding its accumulator."""
     from qbopt.model import ir
