@@ -1,4 +1,5 @@
 from dataclasses import replace
+from functools import cache
 
 from qbopt import loops
 from qbopt import mir
@@ -111,18 +112,29 @@ def _exit_value(
     blocks = {block.at: block for block in body.blocks}
     predecessors = loops.predecessors(body.blocks)
 
+    @cache
+    def memory():
+        barriers = {one.at: "" for block in body.blocks for one in block.ops
+                    if one.barrier or one.kind in {mir.Kind.CALL, mir.Kind.ESCAPE, mir.Kind.OPAQUE}}
+        return consts.cells(body, dgroup, barriers), barriers
+
     def stored_at(at: int, expected: mir.Arg, active: frozenset) -> bool:
         expected = root(expected)
         key = (at, expected)
         if key in active:
             return True  # inductive backedge; every entry path still needs a matching store
         block = blocks[at]
-        for previous in reversed(block.ops):
+        for index in range(len(block.ops) - 1, -1, -1):
+            previous = block.ops[index]
             if previous.barrier or previous.kind in {mir.Kind.CALL, mir.Kind.ESCAPE, mir.Kind.OPAQUE}:
                 return False
             if any(mir.overlapping(ref, written, dgroup, bounds) for written in previous.stores):
                 if isinstance(expected, mir.Const):
                     fact = consts.initialized(previous, ref)
+                    if fact is None:
+                        facts, barriers = memory()
+                        after = consts._kills(facts.get((at, index), {}), previous, {}, dgroup, barriers)
+                        fact = consts._cell(after, ref)
                     if fact == consts.Known(consts.masked(expected.n, expected.width), expected.width):
                         return True
                 args = [arg for arg in previous.args if isinstance(arg, (mir.Const, mir.Held))]

@@ -111,6 +111,37 @@ def test_nested_accumulator_is_stored_only_after_the_outer_loop() -> None:
     assert writes == [body.entry, 0x9C]
 
 
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+@pytest.mark.parametrize("initialization", ["complete", "missing", "clobbered"])
+def test_addrm_exit_store_requires_complete_initial_memory(tag, initialization, monkeypatch):
+    """ADDRM wrote u 20 times; moving it must preserve memory even when the loop takes zero trips."""
+    from qbopt import transform
+    path = Path(f"fixtures/omf/addrm-{tag}.obj")
+    found = corpus.loaded(path)
+    partition = corpus.partitioned(path)
+    body = mir.bodies(found, partition)[0][1]
+    accumulator = next(ref for block in body.blocks for op in block.ops for ref in op.loads
+                       if ref.width == 4 and ref.base is None)
+    with monkeypatch.context() as patch:
+        patch.setattr(loopmotion, "sunk_stores", lambda body, *args: body)
+        body = transform.applied(body, found.dgroup, found.calls, blocks=partition, found=found)
+    entry = next(block for block in body.blocks if block.at == body.entry)
+    if initialization == "missing":
+        entry = replace(entry, ops=tuple(op for op in entry.ops
+                        if not any(mir.overlapping(ref, accumulator, found.dgroup) for ref in op.stores)))
+    elif initialization == "clobbered":
+        clobber = replace(entry.ops[-1], kind=mir.Kind.OPAQUE, defines=(), uses=(), args=(), results=(),
+                          loads=(), stores=(), node=None)
+        entry = replace(entry, ops=entry.ops[:-1] + (clobber, entry.ops[-1]))
+    body = replace(body, blocks=tuple(entry if block.at == entry.at else block for block in body.blocks))
+    result = loopmotion.sunk_stores(body, found.dgroup, module.landmarks(found))
+    hot = {at for loop in loops.loops(result.blocks, result.entry) for at in loop.body}
+    writes = [block.at for block in result.blocks for op in block.ops if accumulator in op.stores]
+    assert bool(hot.intersection(writes)) is (initialization != "complete")
+    if initialization == "complete":
+        assert any(at not in hot and at != body.entry for at in writes)
+
+
 def hotlop() -> tuple[mir.MirBody, frozenset[int], dict, mir.MemRef]:
     path = Path("fixtures/omf/hotlop-p-g2.obj")
     found = corpus.loaded(path)

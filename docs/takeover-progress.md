@@ -1655,3 +1655,23 @@ bytes, unknown overlapping writes and preservation of output memory reads.
 Strict LIR runtime checks passed for ADDRM, SPILL, HARR, MATRIX, NESTED,
 NBODY, HOTLOP and LNGMIX on all three compilers (33 cases each).
 Artifacts: `qbopt-split-initializers-u9m6172r` in system temporary storage.
+
+### Sink the split-initialized accumulator write-back
+
+The loop exit proof now consults complete byte-level memory facts when a
+single initializer cannot establish the expected entry value. This preserves
+the zero-trip requirement: missing initialization or a clobber cannot justify
+an exit store. The existing value/phi proof still establishes the backedge.
+Facts are computed lazily only when the single-store proof is insufficient.
+
+ADDRM PDS/QB costs fall again, 1460/1466 -> **1346/1352**; VBDOS remains
+1346. The accumulator write-back is now after the loop. The target remains
+754, so roughly 1.79x is still unfinished. The remaining long-array reload
+is visible directly in the emitted loop, after its two word stores.
+Before/after MIR dumps: `/tmp/qbopt-addrm-captured` and `/tmp/qbopt-addrm-sunk`.
+
+47 promotion/store-motion tests pass. The new PDS/QB complete-initialization
+cases fail before this change; missing and clobbered initializers retain
+the loop store across all three compilers. Strict LIR runtime checks pass
+for ADDRM, SPILL, NESTED, MATRIX, HARR, HOTLOP and LNGMIX (27 cases total).
+Artifacts: `qbopt-split-exit-7s7gobdb` in system temporary storage.
