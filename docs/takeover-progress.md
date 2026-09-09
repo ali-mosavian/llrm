@@ -1,5 +1,31 @@
 # Takeover checkpoint — 2026-09-09
 
+## HARR: the next major gap is array provenance, not another arithmetic pass
+
+Current stage evidence (`/tmp/qbopt-harr-current`, especially s43-mir-widen):
+the raise recognizes DDIM's `(0..20, 0..20)` bounds and element width 2,
+but that request is not connected to later element references. Those remain
+`[es:bx]` with no allocation identity. Descriptor accesses likewise remain
+`[abs+si+0xa]` and `[abs+si+0x2]`, even though their base comes from the
+descriptor symbol. `raising_arrays.annotated` annotates allocation calls only.
+
+Consequently a store through the element reference may alias the counters
+and descriptor, so promotion, CSE and LICM correctly retain their loads.
+The final loop still loads the dimension word at 0x5e, multiplies at 0x61,
+recomputes the descriptor-based address at 0x72 and 0x7d, and reloads the
+stored element at 0x83. The loop counter reload at 0x8a also blocks a simple
+SSA recurrence proof. Adding another strength-reduction pattern cannot
+resolve these missing memory facts.
+
+Next implementation milestone: connect the versioned runtime allocation
+contract to descriptor and element provenance in the raise, with an explicit
+in-bounds proof before claiming disjointness from program data. Do not treat
+every far access as heap memory or infer safety merely from a DIM request;
+unknown indexing and descriptor mutation must remain conservative. Preserve
+the original relocation-bearing operands in lowering while carrying semantic
+provenance separately. This is needed to unlock the existing general passes,
+not to add machine-aware special cases to them. No HARR speedup is claimed.
+
 ## Allocate sign extraction without fixed AX/DX when flags are dead
 
 ADDRM's promoted accumulator added pressure around CWD's fixed-register
