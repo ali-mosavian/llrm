@@ -95,14 +95,25 @@ def basics(body: mir.MirBody, loop) -> dict[int, Affine]:
         if not starts or any(value != starts[0] for value in starts):
             continue
         steps = []
+        widths = set()
         for where, value in phi.incoming.items():
             if where not in inside:
                 continue
-            root = _copied(mir.Held(value, _width(value)), made)
+            definition = made.get(value.id)
+            results = [
+                arg for arg in definition.results
+                if isinstance(arg, mir.Held) and arg.value == value
+            ] if definition else []
+            if len(results) != 1:
+                steps.append(None)
+                continue
+            width = results[0].width
+            widths.add(width)
+            root = _copied(results[0], made)
             step = _stepped(made.get(root.value.id), phi.result.id, still, made)
-            steps.append(step)
-        if steps and steps[0] is not None and all(step == steps[0] for step in steps):
-            out[phi.result.id] = Affine(phi.result.id, mir.Held(starts[0], _width(starts[0])), steps[0], loop.header)
+            steps.append(step if step is not None and step.width == width else None)
+        if len(widths) == 1 and steps and steps[0] is not None and all(step == steps[0] for step in steps):
+            out[phi.result.id] = Affine(phi.result.id, mir.Held(starts[0], widths.pop()), steps[0], loop.header)
     return out
 
 
@@ -425,11 +436,6 @@ def _multiplier(op: "mir.Op", by: "mir.Arg") -> "mir.Arg":
     if op.kind is not mir.Kind.SHL or not isinstance(by, mir.Const):
         return by
     return mir.Const(1 << by.n, max(by.width, 2))
-
-
-def _width(value) -> int:
-    """The width a value is carried at, which MIR does not say directly."""
-    return 4 if getattr(value, "wide", False) else 2
 
 
 def of(

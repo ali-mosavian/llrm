@@ -1832,3 +1832,18 @@ The earlier statement that HOTLPX meets its target is withdrawn. Its real
 scoreboard cases fail before this change because a low cost incorrectly
 certifies these unestablished references. `docs/targets.md` records the
 source differences and requirements for replacement reference listings.
+
+### Whole-width recurrence starts
+
+Induction analysis used a nonexistent `Value.wide` attribute and therefore
+reported every recurrence start as 16-bit. LNGMXX's 32-bit accumulator had
+a word start and a long step; a full-width copy on the backedge could hide
+the recurrence altogether. The analysis now reads the backedge definition's
+explicit MIR result width, requires agreement across backedges, and carries
+that width into the initial value. It uses no machine origin information.
+
+Five new cases fail against the previous analysis: direct/copied long
+recurrences and the real LNGMXX accumulator on all three compilers.
+The focused induction/range checks pass 78/78. All 96 primary fixture
+objects emit identical bytes versus the previous implementation. This is
+analysis groundwork for evaluating loop exit values, not a claimed speedup.

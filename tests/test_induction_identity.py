@@ -206,6 +206,43 @@ def test_the_backedge_must_step_the_exact_phi_value() -> None:
     assert not induction.basics(built, loop)
 
 
+@pytest.mark.parametrize("copied", [False, True])
+def test_long_recurrence_keeps_its_width(copied: bool) -> None:
+    """LNGMXX's long accumulator was described with a truncated 16-bit start."""
+    built, loop = body()
+    header = built.blocks[1]
+    update = header.ops[0]
+    update = replace(update, args=(mir.Held(update.uses[0], 4),), results=(mir.Held(update.defines[0], 4),))
+    ops = (update,)
+    if copied:
+        temporary = mir.Value(100, 1)
+        original = update.defines[0]
+        update = replace(update, defines=(temporary,), results=(mir.Held(temporary, 4),))
+        copy = mir.Op(3, ir.Operation.MOVE, "", (original,), (temporary,), kind=mir.Kind.COPY,
+                      args=(mir.Held(temporary, 4),), results=(mir.Held(original, 4),))
+        ops = (update, copy)
+    built = replace(built, blocks=(built.blocks[0], replace(header, ops=ops), built.blocks[2]))
+    recurrence = induction.basics(built, loop)[header.phis[0].result.id]
+    assert recurrence.start.width == 4
+    assert recurrence.step == mir.Const(1, 4)
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_lngmxx_accumulator_has_a_whole_long_start(tag: str) -> None:
+    """LNGMXX's 32-bit sum was reported as starting with only its low word."""
+    import corpus
+
+    path = Path(f"fixtures/omf/lngmxx-{tag}.obj")
+    found = corpus.loaded(path)
+    partition = corpus.partitioned(path)
+    built = mir.bodies(found, partition)[0][1]
+    result = transform.applied(built, found.dgroup, found.calls, blocks=partition, found=found)
+    recurrences = [counter for loop in loops.loops(result.blocks, result.entry)
+                   for counter in induction.basics(result, loop).values()]
+    accumulator, = [counter for counter in recurrences if isinstance(counter.step, mir.Held)]
+    assert accumulator.start.width == accumulator.step.width == 4
+
+
 @pytest.mark.parametrize(("factor", "expected"), [(20, 42), (32767, 0)])
 def test_composed_word_address_has_one_recurrence(factor: int, expected: int) -> None:
     """Matrix's (i * 20 + i) << 1 needs stride 42, not a separate stride-20 temporary."""
