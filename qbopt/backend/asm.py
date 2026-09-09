@@ -518,6 +518,23 @@ def _placed(
     return placed, moved
 
 
+def _emulator_protocol(op, found, native_fpu):
+    if native_fpu or not fpu.emulated_at(found.code, op.at):
+        return None
+    protocol = found.code[op.at + 1]
+    if op.node is not None:
+        return protocol
+    what = op.made
+    if (op.covers == (op.at, op.at) and protocol in STANDS_IN and what is not None
+        and what.op in (ir.Operation.FLOAT_LOAD, ir.Operation.EXCHANGE)
+        and what.name in ("fld", "fxch") and what.sources
+        and all(isinstance(arg, ir.St) for arg in (*what.sources, *what.dests))):
+        # Allocator moves inherit their anchor's mode, not its memory prefix.
+        # wrapped() derives the interrupt number from the selected ESC byte.
+        return 0x34
+    return None
+
+
 def assemble(
     ops: list,
     at: int,
@@ -595,8 +612,8 @@ def assemble(
             held=_held(assignment),
             relocated=_field_in(found, op, fields) is not None,
         )
-        if made is not None and emulated:
-            made = fpu.wrapped(made, found.code[op.at + 1])
+        if made is not None and (protocol := _emulator_protocol(op, found, native_fpu)) is not None:
+            made = fpu.wrapped(made, protocol)
         if made is None:
             return f"{op.at:#06x}: {op.name} is not one select.py can emit"
         lengths.append(len(made.code))
@@ -731,8 +748,8 @@ def assemble(
             short=index in short,
             relocated=_field_in(found, op, fields) is not None,
         )
-        if made is not None and not native_fpu and op.node is not None and fpu.emulated_at(found.code, op.at):
-            made = fpu.wrapped(made, found.code[op.at + 1])
+        if made is not None and (protocol := _emulator_protocol(op, found, native_fpu)) is not None:
+            made = fpu.wrapped(made, protocol)
         if made is None or len(made.code) != lengths[index]:
             return f"{op.at:#06x}: it changed length between the two passes"
         # A fixup goes wherever the field it names landed -- the

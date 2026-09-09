@@ -1,6 +1,7 @@
 """Assign floating LIR values to the target register stack."""
 
 from dataclasses import replace
+from collections import Counter
 
 from qbopt.model import ir, lir
 from qbopt.model.passes import LIRTransform
@@ -20,6 +21,8 @@ def allocated(body: lir.LirBody) -> lir.LirBody:
                for phi in block.phis):
             raise Unlowered("floating phi requires cross-block allocation")
         stack: list[int] = []
+        remaining = Counter(arg.value for one in block.insns if one.what for arg in one.what.sources
+                            if isinstance(arg, ir.Held) and arg.width == 10)
         insns = []
         for one in block.insns:
             what = one.what
@@ -41,6 +44,33 @@ def allocated(body: lir.LirBody) -> lir.LirBody:
                 return ir.St(stack.index(arg.value))
 
             inputs = tuple(map(source, what.sources))
+            remaining.subtract(arg.value for arg in what.sources if isinstance(arg, ir.Held) and arg.width == 10)
+            match what.op:
+                case ir.Operation.FLOAT_STORE | ir.Operation.FLOAT_ARITH | ir.Operation.FLOAT_UNARY:
+                    required = inputs[0] if inputs else None
+                case ir.Operation.FLOAT_ARITH_POP:
+                    required = inputs[1] if len(inputs) == 2 else None
+                case _:
+                    required = None
+            if isinstance(required, ir.St) and required.index:
+                operands = (ir.St(0), required)
+                insns.append(lir.Insn(one.at, (one.at, one.at),
+                    ir.Semantics(ir.Operation.EXCHANGE, "fxch", operands, operands), (), ()))
+                stack[0], stack[required.index] = stack[required.index], stack[0]
+                inputs = tuple(map(source, what.sources))
+            if what.op in (ir.Operation.FLOAT_STORE, ir.Operation.FLOAT_ARITH, ir.Operation.FLOAT_UNARY):
+                if inputs and inputs[0] == ir.St(0) and remaining[stack[0]]:
+                    if len(stack) == 8:
+                        raise Unlowered("floating stack requires a spill to preserve a live value")
+                    operands = (ir.St(0),)
+                    insns.append(lir.Insn(one.at, (one.at, one.at),
+                        ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", operands, operands), (), ()))
+                    stack.insert(0, stack[0])
+                    inputs = tuple(map(source, what.sources))
+            elif what.op is ir.Operation.FLOAT_ARITH_POP and any(
+                remaining[arg.value] for arg in what.sources if isinstance(arg, ir.Held) and arg.width == 10
+            ):
+                raise Unlowered("floating popping arithmetic requires preserving live operands")
             match what.op:
                 case ir.Operation.FLOAT_LOAD:
                     delta, slot = 1, 0

@@ -2316,3 +2316,24 @@ Validation: 82 modules import, all 50,136 tests collect, 90 focused tests pass,
 and the built wheel contains the package hierarchy plus `abi/runtime.toml`.
 All 97 before/after emitted-object hashes and outcomes are identical. No
 compiler behavior was changed and no runtime suite was repeated.
+
+### Floating stack moves and live-value preservation
+
+The LIR floating allocator now inserts `fxch` when a required input is below
+the top, and `fld st(0)` when destructive arithmetic or a store would consume
+a value used again later in the block. Popping subtraction keeps its operand
+order when an exchange changes both positions. Inserted moves own zero
+original bytes and no relocations. Eight-slot overflow and live operands of
+popping arithmetic still require allocation capabilities not implemented here.
+
+Fail-first cases cover four buried-operand forms and a producer used by both
+multiply and divide. A separate emission check found inserted moves silently
+became native x87 instructions beside emulator sites; assembly now preserves
+the anchor's emulator mode for these register-only moves, without inheriting
+its memory segment prefix. The /FPi case failed first; native opt-in is also
+checked. All 98 focused floating/stage tests plus four existing emulator
+encoding tests pass. All 97 audited objects retain identical bytes and outcomes.
+
+This enables shared floating dataflow in allocation; the optimizer does not
+yet create it. FPCSE's existing floating loop remains unchanged until reuse
+has a sound floating-environment/rounding justification.
