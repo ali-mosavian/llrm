@@ -93,7 +93,7 @@ def spilled(
                     continue
             before, after, rename = [], [], {}
             for value in one.uses:
-                if value not in values:
+                if value not in values or value in rename:
                     continue
                 rename[value] = fresh
                 before.append(_reload(one, fresh, frame.cell(value, _width(one, value))))

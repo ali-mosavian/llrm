@@ -1,5 +1,20 @@
 # Takeover checkpoint — 2026-09-09
 
+## One reload per spilled operand
+
+The NESTED allocation dump contained two identical frame reloads before each
+outer-loop multiply. The LIR instruction names the same value twice; the
+spiller made two fresh reloads, overwrote the first rename, and used only the
+second. Reusing the first rename removes the unused reload without changing
+operand multiplicity or any MIR pass. NESTED cost falls 2228 -> 2156,
+**2.90x -> 2.81x**. Adjacent backend dumps show exactly two removed loads:
+`/tmp/qbopt-single-spill-reload`.
+
+The repeated-operand regression failed before the change; all 15 spill tests
+pass. NESTED and SPILL pass strict-LIR runtime checks on p-g2, q-O and v-g3
+(six comparisons), artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-single-reload-k5nmekdv`.
+
 ## Frame-to-frame phi copies
 
 NESTED-p-g2 refused LIR at 0x004b because both ends of a parallel copy

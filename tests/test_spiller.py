@@ -37,6 +37,25 @@ def _out(body, values):
     return [one for block in got.blocks for one in block.insns]
 
 
+def test_repeated_operand_reloads_a_spill_only_once() -> None:
+    """NESTED emitted two identical frame reloads before each outer-loop IMUL."""
+    multiply = lir.Insn(
+        at=0x57,
+        covers=(0x57, 0x5A),
+        what=ir.Semantics(
+            ir.Operation.BINARY, "imul", (ir.Held(2, 2),),
+            (ir.Held(1, 2), ir.Held(1, 2), ir.Imm(6, 2)),
+        ),
+        defines=(2,), uses=(1, 1),
+    )
+    result = _out(_body(multiply), {1})
+    assert len(result) == 2
+    reload, product = result
+    assert isinstance(reload.what.sources[0], ir.Mem)
+    assert product.uses == reload.defines * 2
+    assert product.what.sources[:2] == reload.what.dests * 2
+
+
 def test_spilled_constant_is_rematerialized_without_a_frame_slot() -> None:
     """matrix spilled the invariant 20, storing it once and reloading it inside loops."""
     constant = lir.Insn(
