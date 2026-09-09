@@ -89,12 +89,19 @@ def modules(data: bytes) -> list[Module]:
     current: list[omf.Record] = []
     name = "?"
     at = 0
+    page = 1
     while at + 3 <= len(data):
         kind = data[at]
         size = int.from_bytes(data[at + 1 : at + 3], "little")
+        if kind == 0xF1:
+            break
         if at + 3 + size > len(data) or size == 0:
             break
         body = data[at + 3 : at + 2 + size]
+        if kind == 0xF0:
+            page = size + 3
+            at += page
+            continue
         if kind == THEADR:
             if current:
                 out.append(Module(name, current))
@@ -107,7 +114,6 @@ def modules(data: bytes) -> list[Module]:
             current = []
             name = "?"
             # a module is padded to the library's page boundary
-            page = 16
             while at % page:
                 at += 1
     if current:

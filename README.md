@@ -118,3 +118,7 @@ has to handle. See `docs/inherited-plan.md` for the full matrix.
     uv run python -m qbopt.rewrite F.OBJ -o G.OBJ  the pass itself
 
 `docs/testing.md` has the tiers and what each needs.
+
+[Runtime contract inspection](docs/contracts.md) follows functions through OMF
+`.lib`/`.obj` dependencies and reports proven preservation, possible clobbers,
+stack cleanup, and unresolved calls.
