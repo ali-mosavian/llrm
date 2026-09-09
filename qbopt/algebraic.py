@@ -80,6 +80,12 @@ def _simplified(op: mir.Op, wanted: set[mir.Value], wide: set[mir.Value]) -> mir
     result = op.results[0]
     if not isinstance(result, mir.Held) or result.width not in (2, 4):
         return op
+    if op.kind is mir.Kind.CONCAT:
+        high, low = op.args
+        if isinstance(high, mir.Const) and isinstance(low, mir.Const) and high.width + low.width == result.width:
+            number = ((high.n & ((1 << (high.width * 8)) - 1)) << (low.width * 8)) | (low.n & ((1 << (low.width * 8)) - 1))
+            return replace(op, kind=mir.Kind.COPY, args=(mir.Const(number, result.width),), uses=(), made=None)
+        return op
     if result.width == 2 and result.value in wide:
         return op
     if any(value != result.value and value in wanted for value in op.defines):

@@ -690,6 +690,24 @@ def test_a_store_reads_the_value_its_cell_is_reached_by_and_writes_none() -> Non
     assert base.id not in next_one.uses, f"the move after it inherited {base.id}: uses={next_one.uses}"
 
 
+def test_word_concatenation_lowers_high_then_low_without_register_assumptions() -> None:
+    from qbopt import lower
+    from qbopt import ir as machine
+
+    high, low, result = mir.Value(901, 0), mir.Value(902, 0), mir.Value(903, 1)
+    op = mir.Op(1, mir.Synth.CONCAT_LOW, "concat", (result,), (high, low),
+                kind=mir.Kind.CONCAT, args=(mir.Held(high, 2), mir.Held(low, 2)),
+                results=(mir.Held(result, 4),), covers=(1, 1))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),), {})
+    lowered = lower.lowered("concat", body, {}, set(), {})
+    insns = lowered.blocks[0].insns
+    assert [one.what.op for one in insns] == [machine.Operation.PUSH, machine.Operation.PUSH, machine.Operation.POP]
+    assert insns[0].what.sources == (machine.Held(high.id, 2),)
+    assert insns[1].what.sources == (machine.Held(low.id, 2),)
+    assert insns[2].what.dests == (machine.Held(result.id, 4),)
+    assert not any(one.requires or one.delivers or one.clobbers for one in insns)
+
+
 def test_call_with_inputs_keeps_its_implicit_result() -> None:
     """nbody read COMMAND$ from an unwritten spill slot and skipped its simulation."""
     from dataclasses import replace

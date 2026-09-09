@@ -415,6 +415,7 @@ class Kind(StrEnum):
     RESULT = "result"  # and its pop
     JOIN = "join"  # two halves of a wide value made one -- step 4
     EXTRACT = "extract"  # a bit range of a value; args[1] is the bit offset
+    CONCAT = "concat"  # high bits followed by low bits, with explicit operand widths
     OPAQUE = "opaque"  # nothing is claimed; see ir.Operation.BARRIER
     NOTHING = "nothing"
 

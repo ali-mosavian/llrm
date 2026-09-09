@@ -457,7 +457,19 @@ def _word_division(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]
     )
 
 
-_EXPANDS: dict = {mir.Kind.EXTRACT: _extract, mir.Kind.DIVMOD: _word_division}
+def _concat(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]:
+    match op.args, op.results:
+        case (mir.Held(width=2) | mir.Const(width=2), mir.Held(width=2) | mir.Const(width=2)), (mir.Held(width=4),):
+            high, low = map(operand, op.args)
+            return (
+                ir.Semantics(ir.Operation.PUSH, "push", (), (high,)),
+                ir.Semantics(ir.Operation.PUSH, "push", (), (low,)),
+                ir.Semantics(ir.Operation.POP, "pop", (operand(op.results[0]),), ()),
+            )
+    raise Unlowered(f"unsupported concatenation at {op.at:#x}")
+
+
+_EXPANDS: dict = {mir.Kind.EXTRACT: _extract, mir.Kind.DIVMOD: _word_division, mir.Kind.CONCAT: _concat}
 
 
 class Lowering:
