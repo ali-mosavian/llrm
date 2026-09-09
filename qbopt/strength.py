@@ -69,7 +69,7 @@ def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | 
         latches = [at for at in loop.latches if at in at_of]
         if preheader is None or at_of[preheader].succ != (loop.header,) or len(latches) != 1:
             continue  # two ways in or out is a bigger change than this
-        candidates = [one for one in derived if _answer(body, one.op) is not None]
+        candidates = [one for one in derived if _answer(body, one.op) is not None and _multiplies(one, derived)]
         consumed = {arg.value for one in candidates for arg in one.op.args if isinstance(arg, mir.Held)}
         candidates = [one for one in candidates if one.op.results[0].value not in consumed]
         for one in candidates:
@@ -127,6 +127,26 @@ def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | 
         ),
     )
     return ssa.constructed(changed, frozenset(range(first, taken + 1)))
+
+
+def _multiplies(one: induction.Derived, derived: list[induction.Derived]) -> bool:
+    """Replace multiplication chains, not cheap shifts needing extra counters."""
+    producers = {
+        item.op.results[0].value: item.op
+        for item in derived
+        if item.of == one.of and item.op.results and isinstance(item.op.results[0], mir.Held)
+    }
+    pending = [one.op]
+    seen = set()
+    while pending:
+        op = pending.pop()
+        if id(op) in seen:
+            continue
+        seen.add(id(op))
+        if op.kind is mir.Kind.MUL:
+            return True
+        pending.extend(producers[arg.value] for arg in op.args if isinstance(arg, mir.Held) and arg.value in producers)
+    return False
 
 
 def _start(into, one, preheader: int) -> Op:

@@ -1,5 +1,5 @@
-from dataclasses import replace
 from pathlib import Path
+from dataclasses import replace
 
 import pytest
 
@@ -8,25 +8,30 @@ from qbopt import mir
 from qbopt import ssa
 from qbopt import loops
 from qbopt import strength
-from qbopt import transform
 from qbopt import induction
+from qbopt import transform
 from qbopt.module import Addr
 from qbopt.module import Space
 
 
-def test_strength_does_not_spill_matrix_inner_loop(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Matrix cost grew from 11,916 to 12,974 when an outer recurrence spilled in its inner loop."""
+@pytest.mark.parametrize("program", ["matrix", "addrm"])
+def test_strength_does_not_spill_cheap_loop_work(monkeypatch: pytest.MonkeyPatch, program: str) -> None:
+    """Matrix rose 11,916 -> 12,974 with an outer counter; ADDRM rose 2,308 -> 2,578 replacing shifts."""
     import opportunity
 
-    obj = Path("fixtures/omf/matrix-p-g2.obj")
-    baseline = opportunity.counted([obj])["cost"]
+    obj = Path(f"fixtures/omf/{program}-p-g2.obj")
     applied = transform.applied
+    monkeypatch.setattr(transform, "applied", lambda *args, **kwargs: applied(*args, **{**kwargs, "strength_": False}))
+    baseline = opportunity.counted([obj])["cost"]
 
     def reduced(*args, **kwargs):
         return applied(*args, **{**kwargs, "strength_": True})
 
     monkeypatch.setattr(transform, "applied", reduced)
-    assert opportunity.counted([obj])["cost"] < baseline
+    cost = opportunity.counted([obj])["cost"]
+    assert cost <= baseline
+    if program == "matrix":
+        assert cost < baseline
 
 
 def body() -> tuple[mir.MirBody, loops.Loop]:

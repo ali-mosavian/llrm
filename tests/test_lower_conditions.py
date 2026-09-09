@@ -59,5 +59,5 @@ def test_condition_scheduling_does_not_move_effects_or_other_results(reason: str
     else:
         compare = replace(compare, defines=(*compare.defines, mir.Value(4, 0)))
     built = replace(built, blocks=(replace(built.blocks[0], ops=(compare, increment, branch)),))
-    result = lower.lowered("loop", built, {}, (), {})
-    assert [one.op.at for one in result.blocks[0].insns] == [0, 3, 6]
+    with pytest.raises(lower.Unlowered, match="crosses a live condition"):
+        lower.lowered("loop", built, {}, (), {})

@@ -20,6 +20,7 @@ from qbopt import ir
 from qbopt import mir
 from qbopt import target
 from qbopt import runtime
+from qbopt import liveness
 from qbopt.module import Addr
 
 
@@ -347,10 +348,11 @@ def lowered(
     # question below is about the ones this body will actually hold.
     readers = Counter(value for block in body.blocks for op in block.ops for value in op.uses)
     readers.update(value for block in body.blocks for phi in block.phis for value in phi.incoming.values())
-    made = {
-        block.at: tuple(one for op in _branch_condition(block, readers) for one in making.expand(op))
-        for block in body.blocks
-    }
+    live = liveness.live(body)
+    scheduled = {block.at: _branch_condition(block, readers) for block in body.blocks}
+    for block in body.blocks:
+        _check_inserted_conditions(scheduled[block.at], live.live_out[block.at])
+    made = {block.at: tuple(one for op in scheduled[block.at] for one in making.expand(op)) for block in body.blocks}
     live = _phis_worth_keeping(body, made)
     return lir.LirBody(
         name=name,
@@ -374,6 +376,16 @@ def lowered(
         origin=dict(body.origin),
         pins=dict(getattr(body, "pins", {}) or {}),
     )
+
+
+def _check_inserted_conditions(ops: tuple[mir.Op, ...], leaving: frozenset[mir.Value]) -> None:
+    alive = {value for value in leaving if value.flags}
+    for op in reversed(ops):
+        preserved = alive - set(op.defines)
+        if op.node is None and op.kind in (mir.Kind.ADD, mir.Kind.MUL) and preserved:
+            raise Unlowered(f"inserted {op.kind} at {op.at:#x} crosses a live condition")
+        alive.difference_update(op.defines)
+        alive.update(value for value in op.uses if value.flags)
 
 
 def _branch_condition(block: mir.MirBlock, readers: Counter[mir.Value]) -> tuple[mir.Op, ...]:

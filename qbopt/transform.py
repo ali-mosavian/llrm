@@ -2119,7 +2119,7 @@ def applied(
     drop_loads: bool = True,
     drop_stores: bool = True,
     promote_: bool = True,
-    strength_: bool = False,
+    strength_: bool = True,
     only: str | None = None,
     watch=None,
 ) -> MirBody:
@@ -2150,26 +2150,8 @@ def applied(
         "forward": forward,
         "drop_loads": drop_loads,
         "drop_stores": drop_stores,
-        # Off. Two reasons, and the second is the one that matters.
-        #
-        # It invents a three-address operation -- `j = start * by` -- and
-        # x86 is two-address, so something has to tie the destination to
-        # the first source. `twoaddr.py` does and only the flow path runs
-        # it; wholeseg goes MIR straight to layout and select refuses the
-        # form.
-        #
-        # And measured through the flow path, where that is not a problem,
-        # it costs on every program it touches:
-        #
-        #     harr    8.6x -> 9.8x      segld  6.4x -> 8.0x
-        #     split   4.3x -> 6.2x      matrix 3.4x -> 3.5x
-        #
-        # The multiply it removes read memory and the add it inserts reads
-        # the same memory, so the loop body is no cheaper -- and the new
-        # counter holds a register for the whole loop, which is what the
-        # two worst results are. LLVM's LoopStrengthReduce is mostly a cost
-        # model for exactly this: it enumerates formulas and prices them
-        # against register pressure. This prices nothing.
+        # Recurrences currently replace multiplication chains in innermost
+        # loops. Shift-only and outer-loop formulas need pressure costing.
         "promote": promote_,
         "strength": strength_,
     }

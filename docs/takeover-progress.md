@@ -55,6 +55,27 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+**Strength reduction is now enabled by default**, restricted to multiplication
+chains in innermost loops. ADDRM's cheap shift chains regressed 2,308 -> 2,578;
+excluding shift-only formulas keeps it at 2,308 and avoids an unnecessary
+counter in ARRIDX as well. This policy deliberately forgoes the earlier
+shift-only SEGLD/stride gains until pressure-aware selection exists.
+Lowering rejects an inserted ADD/MUL crossing a live condition when comparison
+scheduling cannot preserve it, including conditions live across block edges.
+This is a correctness guard, not successful optimization of those cases.
+
+Current PDS/G2 modeled costs, strength off -> on:
+matrix 11,916 -> 11,418; arridx 1,138 -> 742; split 904 -> 508;
+ivchan 1,399 -> 1,023. ADDRM 2,308, SEGLD 25,802 and stride 1,882 are unchanged.
+The three-family emission check is 94/96 LIR: all 32 PDS/G2 and 32 QB/O;
+30 VBDOS/G3. Its two pre-existing refusals remain ADDRM's unowned bytes at
+0x80 and PROCS/TWICE's unestablished B$ENRA interface. Seventeen of eighteen
+focused runtime program/configuration runs pass; VBDOS ADDRM explicitly
+reports REWRITEFAIL, not PASS. Seventy-four focused host checks pass.
+Removing either the cheap-work filter or the condition guard fails its
+regressions. Production stages: `/tmp/qbopt-strength-production-arridx-20260909`.
+Full milestone validation remains incomplete; the overall goal is not met.
+
 Condition-selection checkpoint: lowering now schedules a pure, single-use
 comparison immediately before its terminal branch. A synthesized stride add
 between them previously left the branch reading the add's machine flags,
