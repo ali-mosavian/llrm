@@ -79,8 +79,37 @@ def test_an_exit_reachable_without_the_store_gets_no_new_write() -> None:
     assert loopmotion.sunk_stores(body, dgroup, bounds) == body
 
 
-def test_a_conditional_accumulator_store_stays_in_the_loop() -> None:
+def test_an_accumulator_without_zero_trip_initialization_stays_in_the_loop() -> None:
     body, dgroup, bounds, _ = hotlop()
     block = next(block for block in body.blocks if block.at == 0x48)
+    refs = {ref for op in block.ops for ref in op.stores}
+    body = replace(
+        body,
+        blocks=tuple(
+            replace(one, ops=tuple(op for op in one.ops if not refs.intersection(op.stores)))
+            if one.at == body.entry
+            else one
+            for one in body.blocks
+        ),
+    )
     result = loopmotion.sunk_stores(body, dgroup, bounds)
     assert next(one for one in result.blocks if one.at == block.at) == block
+
+
+def test_rotated_accumulator_store_uses_exit_phi() -> None:
+    """HOTLOP wrote its accumulator every iteration despite a promoted exit value."""
+    body, dgroup, bounds, _ = hotlop()
+    latch = next(block for block in body.blocks if block.at == 0x48)
+    stores = [op for op in latch.ops if op.kind is mir.Kind.STORE]
+    assert stores
+    result = loopmotion.sunk_stores(body, dgroup, bounds)
+    after = next(block for block in result.blocks if block.at == latch.at)
+    exit_block = next(block for block in result.blocks if block.at == 0x66)
+    header = next(block for block in result.blocks if block.at == 0x5E)
+    for original in stores:
+        assert original not in after.ops
+        moved = next(op for op in exit_block.ops if op.stores == original.stores)
+        value = next(arg.value for arg in moved.args if isinstance(arg, mir.Held))
+        phi = next(phi for phi in header.phis if phi.result == value)
+        assert set(phi.incoming) == {body.entry, latch.at}
+        assert moved.covers == original.covers

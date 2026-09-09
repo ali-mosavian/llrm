@@ -541,3 +541,18 @@ this rotated loop, not the latch. Extending it requires selecting the exit
 phi's value and proving zero-trip behavior, not moving the latch value directly
 to a path where it may never have been defined. The two stack-local temporary
 stores and counter-copy traffic also remain visible in the emitted dump.
+# Rotated-loop accumulator stores sink to the exit
+
+Store sinking now handles a two-block rotated loop with one latch and one
+exit. The moved store reads the header phi, not the latch definition. Its
+outside incoming value must match the last initializing store in the entry
+predecessor; unknown/aliasing writes, observers, missing initialization and
+alternate latch entries refuse the move. COPY tracing respects result widths.
+
+LNGMIX falls from 540 to 428 (2.04x target): both accumulator stores are after
+the loop. The two temporary stack stores and counter-copy traffic remain.
+The positive real-fixture test failed before implementation; missing-zero-trip
+initialization remains a negative case. Eleven focused checks pass. Nine
+strict-LIR runtime runs pass (LNGMIX, HOTLOP, MATRIX on PDS, QB, VBDOS).
+Artifacts: `/tmp/qbopt-rotated-store-final` and
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-rotated-store-36lii9ld`.
