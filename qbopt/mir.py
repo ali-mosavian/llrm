@@ -966,7 +966,7 @@ def _call_touches(name: str | None) -> tuple[frozenset[Register_], frozenset[Reg
         # tree, so every register is an input until it is.
         return disturbed, frozenset(TRACKED) | {FLAGS}
     reads = {FROM_CONTRACT[one] for one in routine.inputs if one in FROM_CONTRACT}
-    return disturbed, frozenset(reads) | {FLAGS}
+    return disturbed, frozenset(reads)
 
 
 def _restore_touches(node: ir.Node) -> tuple[frozenset[Register_], frozenset[Register_]] | None:

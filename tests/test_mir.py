@@ -19,6 +19,19 @@ from qbopt.module import Space
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
 
+def test_call_flag_inputs_follow_the_contract(monkeypatch) -> None:
+    """DIVMOD refused MUL at 0x20a: PRINT read the deleted helper flags."""
+    from dataclasses import replace
+    from qbopt import runtime
+
+    routine = runtime.contract("B$PEI4")
+    assert routine.inputs == frozenset()
+    assert mir._call_touches("B$PEI4")[1] == frozenset()
+    for inputs in (frozenset({runtime.Reg.FLAGS}), None):
+        monkeypatch.setattr(runtime, "contract", lambda name: replace(routine, inputs=inputs))
+        assert mir.FLAGS in mir._call_touches("B$PEI4")[1]
+
+
 def block(at: int, succ: tuple[int, ...], ends: Ends = Ends.CONDITIONAL) -> Block:
     return Block(at=at, end=at + 1, insns=(), ends=ends, succ=succ)
 

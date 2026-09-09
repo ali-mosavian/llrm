@@ -1180,3 +1180,21 @@ not resolve it, indicating another live condition, and that attempted change
 was removed. Inspect the flag SSA/exceptional edges before committing this
 broader migration. Dumps: `/tmp/qbopt-forward-divmod`; runtime evidence:
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-forward-fixes-i44yb65c`.
+
+## Call flag inputs follow established contracts
+
+DIVMOD's refusal came from undefined condition values already present after
+raising: scalar recovery removed arithmetic-call flags, while PRINT retained
+reads of them. Error-handler edges propagated those phantom inputs around the
+body. Raising unconditionally added FLAGS even to an established empty input
+contract. It now uses the declared inputs, including FLAGS when explicitly
+listed; unknown inputs remain conservative. A fail-first regression checks
+the PRINT symptom and both explicit and unknown flag-input boundaries.
+
+With the pending forwarding/divide experiment present, DIVMOD (20 cases),
+nbody (24), CHAIN (7), and HARR (1) pass strict LIR on all three compilers:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-contract-flags-pziqn7pl`.
+Stage dumps: `/tmp/qbopt-contract-flags`. Focused runtime/raising checks pass
+259 tests, with one old divide-relocation regression still tied to the legacy
+representation. This commit isolates the contract fix; the broader migration
+and that regression's replacement remain pending.
