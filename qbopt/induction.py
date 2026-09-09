@@ -86,18 +86,18 @@ def basics(body: mir.MirBody, loop) -> dict[int, Affine]:
 
     out: dict[int, Affine] = {}
     for phi in header.phis:
-        start = next((value for where, value in phi.incoming.items() if where not in inside), None)
-        if start is None:
+        starts = [value for where, value in phi.incoming.items() if where not in inside]
+        if not starts or any(value != starts[0] for value in starts):
             continue
+        steps = []
         for where, value in phi.incoming.items():
             if where not in inside:
                 continue
             root = _copied(mir.Held(value, _width(value)), made)
             step = _stepped(made.get(root.value.id), phi.result.id, still, made)
-            if step is not None:
-                out[phi.result.id] = Affine(
-                    phi.result.id, mir.Held(start, _width(start)), step, loop.header
-                )
+            steps.append(step)
+        if steps and steps[0] is not None and all(step == steps[0] for step in steps):
+            out[phi.result.id] = Affine(phi.result.id, mir.Held(starts[0], _width(starts[0])), steps[0], loop.header)
     return out
 
 
@@ -207,6 +207,10 @@ def derived(
             if len(counter) != 1 or len(other) != 1:
                 continue
             by = other[0]
+            if op.kind is mir.Kind.SHL and (
+                args[0] != counter[0] or not isinstance(by, mir.Const) or not 0 <= by.n < counter[0].width * 8
+            ):
+                continue
             if isinstance(by, mir.Held) and by.value.id not in still:
                 continue
             if isinstance(by, mir.Cell) and not settled(by.ref):

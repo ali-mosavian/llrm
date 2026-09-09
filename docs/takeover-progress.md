@@ -55,6 +55,14 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+Loop recurrence guard checkpoint: all entry values and backedge steps must agree;
+one valid backedge no longer certifies the others. Shift reduction now requires a
+constant, in-range count and the counter in the value operand, not the count.
+Focused checks: 35 passing across induction identity, promotion and MIR-boundary
+tests. Restoring the old functions independently reproduces the rejected-path and
+shift regressions. Strength reduction remains disabled; this is prerequisite
+correctness work, not a new speedup or a full-gate result.
+
 1. Whole-value recognition in raise: lngmix still carries split long accumulator halves, joins and spills. Do not move register-aware widening into MIR optimization. Existing JOIN forms are not yet uniformly explicit semantic operands.
 2. Sound array objects/extents, enabling scalar promotion and loop-address reuse. FAR accesses may alias DGROUP; the next named displacement is not proof of an array boundary. Runtime descriptors distinguish near, far and huge storage. Use those facts, not a blanket no-alias rule.
 3. Close the measured target gaps, then run integration/commit gates. Keep fail-first symptom regressions per fix and dump adjacent stages when debugging.

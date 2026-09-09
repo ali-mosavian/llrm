@@ -64,6 +64,35 @@ def test_the_backedge_must_step_the_exact_phi_value() -> None:
     assert not induction.basics(built, loop)
 
 
+@pytest.mark.parametrize("mismatch", ["start", "step", "unchanged", "none"])
+def test_every_incoming_path_agrees_on_the_recurrence(mismatch: str) -> None:
+    built, loop = body()
+    header = built.blocks[1]
+    phi = header.phis[0]
+    start = phi.incoming[0]
+    following = mir.Value(20, 3, variable=7)
+    step = replace(header.ops[0], at=3, defines=(following,), results=(mir.Held(following, 2),))
+    if mismatch == "step":
+        step = replace(step, kind=mir.Kind.DECREMENT)
+    incoming = {
+        **phi.incoming,
+        4: mir.Value(21, 4, variable=7) if mismatch == "start" else start,
+        3: phi.result if mismatch == "unchanged" else following,
+    }
+    built = replace(
+        built,
+        blocks=(
+            built.blocks[0],
+            replace(header, phis=(replace(phi, incoming=incoming),), succ=(1, 2, 3)),
+            built.blocks[2],
+            mir.MirBlock(3, (), (step,), (1,)),
+            mir.MirBlock(4, (), (), (1,)),
+        ),
+    )
+    loop = replace(loop, body=frozenset({1, 3}), latches=frozenset({1, 3}))
+    assert bool(induction.basics(built, loop)) == (mismatch == "none")
+
+
 @pytest.mark.parametrize(("width", "count"), [(2, 1), (4, 0)])
 def test_only_width_preserving_copies_carry_the_recurrence(width: int, count: int) -> None:
     built, loop = body()
@@ -82,6 +111,28 @@ def test_only_width_preserving_copies_carry_the_recurrence(width: int, count: in
     )
     built = replace(built, blocks=(built.blocks[0], replace(header, ops=(copy, *header.ops)), built.blocks[2]))
     assert len(induction.derived(built, loop)) == count
+
+
+@pytest.mark.parametrize("shape", ["variable", "counter_count", "constant", "oversized"])
+def test_a_shift_recurrence_requires_a_constant_count(shape: str) -> None:
+    built, loop = body()
+    header = built.blocks[1]
+    counter = mir.Held(header.phis[0].result, 2)
+    amount = mir.Const(3, 2) if shape == "constant" else mir.Held(header.phis[0].incoming[0], 2)
+    if shape == "oversized":
+        amount = mir.Const(32, 2)
+    args = (mir.Const(3, 2), counter) if shape == "counter_count" else (counter, amount)
+    shift = replace(
+        header.ops[1],
+        kind=mir.Kind.SHL,
+        args=args,
+        uses=tuple(one.value for one in args if isinstance(one, mir.Held)),
+    )
+    built = replace(built, blocks=(built.blocks[0], replace(header, ops=(header.ops[0], shift)), built.blocks[2]))
+    derived = induction.derived(built, loop)
+    assert len(derived) == (1 if shape == "constant" else 0)
+    if derived:
+        assert derived[0].by == mir.Const(8, 2)
 
 
 def test_a_reduced_counter_has_its_own_loop_phi_and_fresh_variable() -> None:
