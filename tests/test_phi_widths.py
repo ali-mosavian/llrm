@@ -9,6 +9,21 @@ from qbopt.model import lir
 from qbopt.backend import phielim
 
 
+def test_split_fallthrough_gets_an_explicit_jump():
+    """EVTRAP's split exit edge was emitted unreachable after the handler."""
+    branch = lir.Insn(at=0, covers=(0, 2), defines=(), uses=(),
+                     what=ir.Semantics(ir.Operation.BRANCH, "jz", (), (), 20))
+    body = lir.LirBody(name="edge", entry=0, blocks=(
+        lir.LirBlock(at=0, insns=(branch,), succ=(10, 20), phis=()),
+    ), origin={}, pins={})
+    done = phielim._split_edges(body, {(0, 10): [(2, 1)]}, {}, {}, {0: ()}, {2: 2})
+    edge = done.blocks[-1]
+    last = done.blocks[0].insns[-1]
+    assert last.what.op is ir.Operation.JUMP
+    assert last.what.target == edge.at
+    assert last.at == branch.at
+
+
 @pytest.mark.parametrize("critical", [False, True])
 def test_phi_elimination_copies_the_whole_scalar(critical):
     """VBDOS nbody printed PX0=285219921 for 1258: phi copies truncated 32-bit accumulators."""

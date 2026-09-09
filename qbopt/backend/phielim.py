@@ -252,16 +252,15 @@ def _split_edges(body, split: dict, copies: dict, rename: dict, kept: dict, widt
     between the two is the only place they belong, which is what splitting
     an edge means.
 
-    The new block is given an address past everything the body already
-    holds, so layout emits it out of line, and it ends in a jump back to
-    the successor. The predecessor's branch is retargeted to it.
+    Synthetic labels are above physical offsets, in a namespace per body
+    entry. A label just past this body can be another body's real entry.
+    Layout emits the blocks out of line and each jumps to its successor.
     """
     at_of = {block.at: block for block in body.blocks}
-    highest = max((one.covers[1] if one.covers else one.at) for block in body.blocks for one in block.insns)
     made: dict[tuple[int, int], lir.LirBlock] = {}
     landing: dict[tuple[int, int], int] = {}
     for number, ((where, into), pairs) in enumerate(sorted(split.items()), 1):
-        at = highest + number * 2
+        at = ((body.entry + 1) << 32) + number
         landing[(where, into)] = at
         beside = at_of[where].insns[-1]
         insns = [
@@ -280,6 +279,11 @@ def _split_edges(body, split: dict, copies: dict, rename: dict, kept: dict, widt
     for block in body.blocks:
         succ = tuple(landing.get((block.at, one), one) for one in block.succ)
         insns = [_retargeted(one, landing, block.at) for one in _before_the_terminator(block, copies.get(block.at, []))]
+        last = block.insns[-1]
+        if last.what is not None and last.what.op is ir.Operation.BRANCH:
+            fallthrough = next((into for into in block.succ if into != last.what.target), None)
+            if (edge := landing.get((block.at, fallthrough))) is not None:
+                insns.append(_made(last, last.at, ir.Semantics(ir.Operation.JUMP, "jmp", (), (), edge), (), ()))
         blocks.append(
             replace(block, insns=tuple(_renamed(one, rename) for one in insns), succ=succ, phis=kept[block.at])
         )

@@ -68,6 +68,31 @@ def test_timer_interfaces_bound_inputs_without_claiming_preservation(family, nam
     assert runtime.per_call({0: name})[0] == runtime.worst(name)
 
 
+@pytest.mark.parametrize("family", ["pds71", "vbdos"])
+def test_runtime_return_interface_keeps_unknown_effects(family):
+    """EVTRAP reached its handler but refused the runtime RETURN interface."""
+    routine = runtime.per_call({0: "B$RETA"}, family)[0]
+    assert routine.inputs == frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI})
+    assert replace(routine, inputs=None, evidence=runtime.worst("B$RETA").evidence) == runtime.worst("B$RETA")
+
+
+@pytest.mark.parametrize("tag", ["p-evt", "v-evt"])
+def test_registered_handler_does_not_land_in_a_phi_edge(tag):
+    """Optimized EVTRAP printed HITS=0 instead of 1: a split edge stole its entry."""
+    from qbopt import wholeseg
+    from qbopt.objectfile import module, omf
+    from qbopt.abi.events import handler_entries
+    from qbopt.frontend.declen import decode
+    result = wholeseg.emitted(Path(f"fixtures/regressions/evtrap-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    found = module.of(omf.parse(result.data))
+    entry, = handler_entries(found)
+    poll = decode(found.code, entry)
+    second = decode(found.code, poll.end)
+    third = decode(found.code, second.end)
+    assert found.calls.get(second.at) == "B$ETT1" or found.calls.get(third.at) == "B$ETT1"
+
+
 @pytest.mark.parametrize("tag", ["p-evt", "v-evt"])
 def test_event_stub_near_call_has_no_register_arguments(tag: str) -> None:
     """ADDRM /V refused at 0048 before its first statement could execute."""

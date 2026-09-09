@@ -199,6 +199,20 @@ SLOTS: tuple[Reg, ...] = tuple(Reg)
 VARIANTS: "dict[tuple[str, str], Contract]" = {}
 
 for _family in ("pds71", "vbdos"):
+    VARIANTS[("B$RETA", _family)] = replace(
+        worst("B$RETA"),
+        inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
+        evidence=(
+            "Shipped PDS/VBDOS gosub.asm RETA consumes the runtime frame and saved "
+            "continuation, not caller arithmetic flags: DEC sets the tested SF; "
+            "JCXZ tests a popped word. The event path enters EXSA, whose first CMP "
+            "kills incoming flags (rtenexit.asm 004e/0068). The error path enters "
+            "ERR_RG, which reaches XOR BH,BH before further dispatch (erproc.asm "
+            "00ad/00c1). All six GP inputs retained conservatively; BP/SP, segments "
+            "and direction remain runtime environment. No preservation, cleanup or "
+            "ordinary-return claim. Frontend control flow leaves at RETA."
+        ),
+    )
     for _name in ("B$ONTA", "B$ETT0", "B$ETT1", "B$ETT2"):
         VARIANTS[(_name, _family)] = replace(
             worst(_name),

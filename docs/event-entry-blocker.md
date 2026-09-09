@@ -154,6 +154,44 @@ there is no assembly speedup to report. Both timer-handler objects now have
 complete ownership partitions and stop specifically at RETA's unknown
 interface (PDS 011e, VBDOS 0111), not at missing bodies.
 
+## Optimized timer witness now passes
+
+RETA now has a conservative six-GP-register input bound, with no ordinary
+return, preservation or cleanup claim. The SF it tests comes from DEC; JCXZ
+tests a popped continuation word. Its event path enters EXSA's flag-setting
+CMP (PDS 004e, VBDOS 0068); its error path reaches ERR_RG's XOR BH,BH
+(PDS erproc segment 1:00ad, VBDOS segment 2:00c1) before dispatch. Incoming
+arithmetic flags are not an input to these paths.
+
+Enabling this interface exposed a real miscompile: both optimized witnesses
+printed HITS=0. Adjacent dumps showed handler stores surviving through LIR.
+Phi elimination had allocated a synthetic edge at the next body's physical
+entry, so registration entered a poll followed by a jump to main's exit:
+
+```asm
+; broken registered entry          ; corrected registered entry
+call eventPoll                     call eventPoll
+jmp mainExit                       call eventPoll
+                                   call far B$ETT1
+                                   call eventPoll
+                                   inc word [hits]
+                                   call eventPoll
+                                   mov dword [value],99
+                                   call eventPoll
+                                   call far B$RETA
+```
+
+Synthetic labels now use a disjoint namespace keyed by body entry. Splitting
+a conditional's fallthrough also emits an explicit jump to its edge block;
+otherwise its copies can be bypassed when that block is laid out elsewhere.
+The registration-target and fallthrough regressions both failed before the
+corresponding fixes. PDS and VBDOS baseline/optimized runtime runs now agree
+on HITS=1, VALUE=99, DONE. All 96 primary fixtures retain identical emitted
+bytes; the new event witness is the production behavior changed here.
+This establishes the one timer scenario, not every event kind, nested event
+frame or exceptional return path. Event-preserving performance targets remain
+unfinished.
+
 Reproduce a baseline without changing the normal suite:
 
 ```python
