@@ -35,7 +35,7 @@ class Affine:
     does not change.
     """
 
-    variable: int  # which MIR variable carries it
+    value: int  # the exact SSA value at the loop header
     start: "mir.Arg"
     step: "mir.Arg"
     header: int  # the loop it recurs in
@@ -92,15 +92,15 @@ def basics(body: mir.MirBody, loop) -> dict[int, Affine]:
         for where, value in phi.incoming.items():
             if where not in inside:
                 continue
-            step = _stepped(made.get(value.id), phi.result.variable, still)
+            step = _stepped(made.get(value.id), phi.result.id, still)
             if step is not None:
-                out[phi.result.variable] = Affine(
-                    phi.result.variable, mir.Held(start, _width(start)), step, loop.header
+                out[phi.result.id] = Affine(
+                    phi.result.id, mir.Held(start, _width(start)), step, loop.header
                 )
     return out
 
 
-def _stepped(op: "mir.Op | None", variable: int, still: set[int]) -> "mir.Arg | None":
+def _stepped(op: "mir.Op | None", value: int, still: set[int]) -> "mir.Arg | None":
     """What this operation adds to `variable` each time round, or None."""
     if op is None:
         return None
@@ -111,10 +111,10 @@ def _stepped(op: "mir.Op | None", variable: int, still: set[int]) -> "mir.Arg | 
     if got is None:
         return None
     stepped, step = got
-    if not isinstance(stepped, mir.Held) or stepped.value.variable != variable:
+    if not isinstance(stepped, mir.Held) or stepped.value.id != value:
         # An `add` may name the counter second; the two that step by one
         # never do.
-        if isinstance(step, mir.Held) and step.value.variable == variable:
+        if isinstance(step, mir.Held) and step.value.id == value:
             stepped, step = step, stepped
         else:
             return None
@@ -177,7 +177,7 @@ def derived(
             # every one of the 23 sites this pass exists for.
             if op.kind not in (mir.Kind.MUL, mir.Kind.SHL) or op.stores:
                 continue
-            counter = [one for one in op.args if isinstance(one, mir.Held) and one.value.variable in found]
+            counter = [one for one in op.args if isinstance(one, mir.Held) and one.value.id in found]
             other = [one for one in op.args if one not in counter]
             if len(counter) != 1 or len(other) != 1:
                 continue
@@ -186,7 +186,7 @@ def derived(
                 continue
             if isinstance(by, mir.Cell) and not settled(by.ref):
                 continue
-            out.append(Derived(op, found[counter[0].value.variable], _multiplier(op, by)))
+            out.append(Derived(op, found[counter[0].value.id], _multiplier(op, by)))
     return out
 
 
