@@ -55,6 +55,17 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+Reassessment after immediate multiply: the whole-fixture target scan still shows
+large array gaps; ordinary bools/subexp configurations meet 1.5x. HARR's actual
+final MIR (`/tmp/qbopt-harr-reassess-20260909/s24-mir-r02-place.txt`) stores through
+F[v3_7] at 0x78, then reloads descriptor offset D[v4_5] at 0x7d to form v3_9 and
+reads F[v3_9] at 0x83. They are not yet proven equal: the far store may alias the
+descriptor in today's memory model. Removing the reload without proving distinct
+storage is unsound. Next substantial work is allocation/descriptor provenance in
+raise, exposed as object identity to MIR alias analysis. Do not treat FAR as a
+no-alias promise or next-symbol bounds as object extents. Strength tinkering alone
+does not remove this barrier.
+
 Immediate-multiply checkpoint: single-result MIR products now propagate known
 factors; lowering selects the existing three-source immediate representation,
 avoiding a destination tie. Widening/multi-result products are unchanged. Three
