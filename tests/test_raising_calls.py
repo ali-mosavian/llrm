@@ -48,3 +48,20 @@ def test_recovered_memory_arguments_keep_their_relocations() -> None:
     ]
     assert memory
     assert not any(ref.addr.space is module.Space.LITERAL and ref.addr.disp == 0 for ref in memory)
+
+
+def test_nested_multiply_consumes_values_without_stealing_outer_arguments() -> None:
+    path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    ops = [op for block in body.blocks for op in block.ops]
+    product = next(op for op in ops if op.at == 0x1cd and op.kind is mir.Kind.MUL)
+    division = next(op for op in ops if op.at == 0x1d4 and op.kind is mir.Kind.DIVMOD)
+    assert product.node is None and len(product.results) == 1
+    assert product.results[0].width == 4
+    assert len(product.args) == 2 and all(isinstance(arg, mir.Held) and arg.width == 4 for arg in product.args)
+    definitions = {value: op for op in ops for value in op.defines}
+    divisor = definitions[division.args[1].value]
+    assert divisor.kind is mir.Kind.CONCAT
+    assert [definitions[arg.value].at for arg in divisor.args] == [0x1be, 0x1c0]
+    assert all(definitions[arg.value].kind is mir.Kind.COPY for arg in divisor.args)

@@ -1,4 +1,4 @@
-"""Recover division arguments from the values present at each stack push."""
+"""Recover arithmetic arguments from the values present at each stack push."""
 
 from dataclasses import replace
 
@@ -15,7 +15,7 @@ def arithmetic(body: mir.MirBody, found, blocks) -> mir.MirBody:
         for site in sites
         if not site.pushed
         and site.consume
-        and site.name in calls.DIVIDES
+        and site.name in (*calls.DIVIDES, calls.MULTIPLY)
         and not isinstance(calls.absorb(site, mir._flags_after(blocks, live_flags, site.start, site.end)), str)
     }
     if not candidates:
@@ -107,15 +107,16 @@ def arithmetic(body: mir.MirBody, found, blocks) -> mir.MirBody:
             if len(arguments) != 2:
                 continue
             quotient, remainder = fresh(call.at), fresh(call.at)
-            answers = (quotient, remainder)
-            # Runtime division pushes the divisor first.
+            multiply = site.name == calls.MULTIPLY
+            answers = (quotient,) if multiply else (quotient, remainder)
+            # These runtime routines push their right operand first.
             arithmetic = mir.Op(
                 call.at,
-                ir.Operation.DIVIDE,
-                "idiv",
+                ir.Operation.MULTIPLY if multiply else ir.Operation.DIVIDE,
+                "imul" if multiply else "idiv",
                 answers,
                 tuple(arg.value for arg in reversed(arguments)),
-                kind=mir.Kind.DIVMOD,
+                kind=mir.Kind.MUL if multiply else mir.Kind.DIVMOD,
                 args=tuple(reversed(arguments)),
                 results=tuple(mir.Held(value, 4) for value in answers),
                 covers=call.covers,
