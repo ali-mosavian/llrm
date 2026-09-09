@@ -162,7 +162,7 @@ def test_missing_target_cannot_verify_completion(monkeypatch, capsys):
     assert "NO TARGET" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("program", ["pressx", "lngmxx", "fpcse", "fpcsex"])
+@pytest.mark.parametrize("program", ["fpcse", "fpcsex"])
 def test_provisional_target_cannot_verify_completion(program, monkeypatch, capsys):
     """Runtime-input twins inherited constant-source targets; FP references changed rounding and sums."""
     from collections import Counter
@@ -179,6 +179,43 @@ def test_hotlpx_target_accounts_for_the_complete_runtime_input_reference():
     output_cost = 6 + 20 + 10 + 20 + 6 + 20 + 20
     assert opportunity.TARGETS["HOTLPX"] == input_cost + arithmetic + output_cost == 217
     assert "HOTLPX" not in opportunity.PROVISIONAL_TARGETS
+
+
+@pytest.mark.parametrize("program,target", [("PRESSX", 508), ("LNGMXX", 208)])
+def test_integer_runtime_references_include_input_arithmetic_and_output(program, target):
+    """PRESSX and LNGMXX inherited 308/210 from different, constant-input computations."""
+    if program == "PRESSX":
+        hand = 8 * (6 + 6 + 20) + 4 * (6 + 26) + 3 * 2 + 2 + 2 + 6 + 6 + 102
+    else:
+        hand = 32 + (6 + 2 + 22 + 2 + 2 + 3 + 3 + 2 + 2 + 2 + 2 + 2 + 2 + 6 + 6) + 112
+    assert opportunity.TARGETS[program] == hand == target
+    assert program not in opportunity.PROVISIONAL_TARGETS
+
+
+def test_lngmxx_magic_reference_keeps_signed_quotient_and_wrapped_sum():
+    """LNGMXX's reference must truncate negative division toward zero, not floor it."""
+    values = set(range(-1000, 1001))
+    values.update(sign * (2**bit + delta) for bit in range(32) for sign in (-1, 1) for delta in range(-7, 8))
+    for value in values:
+        if not -(1 << 31) <= value < (1 << 31):
+            continue
+        corrected = (value * -1840700269 >> 32) + value
+        quotient = (corrected >> 2) + ((corrected & 0xFFFFFFFF) >> 31)
+        expected = abs(value) // 7 * (-1 if value < 0 else 1)
+        assert quotient == expected
+        remainder = value - expected * 7
+        assert (10 * (value - 6 * quotient)) & 0xFFFFFFFF == (10 * (expected + remainder)) & 0xFFFFFFFF
+
+
+@pytest.mark.parametrize("values", [(3,5,7,11,13,17,19,23), (-32768,)*8, (32767,)*8, (-123,71)*4])
+def test_pressx_reference_retains_modular_sum(values):
+    """The PRESSX reference combines ten iterations without assuming signed arithmetic cannot wrap."""
+    products = [values[index] * values[index + 1] for index in range(0, 8, 2)]
+    total = 0
+    for _ in range(10):
+        for product in products:
+            total = (total + product) & 65535
+    assert total == (sum(products) * 10) & 65535
 
 
 @pytest.mark.parametrize("left,right", [(7, 3), (-32768, -1), (32767, 32767), (-123, 71), (0, 32767)])

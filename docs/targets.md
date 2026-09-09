@@ -110,17 +110,61 @@ Current emitted costs are **251/255/261**, so the new ratios are
 **1.16x/1.18x/1.20x**; all three are within 1.5x. The goal as a whole is not
 complete. This target change alters no generated code.
 
-LNGMXX likewise reads its dividend at runtime; LNGMIX assigns 100000.
-The inherited 210 denominator is not backed by a separate LNGMXX listing.
-Current LNGMXX output has one invariant division and a four-instruction
-accumulation loop, not a constant answer. A complete reference must account
-for the input contract, signed division/remainder, accumulation or a valid
-closed form, and output. A modern compiler may eliminate the invariant-sum
-loop, so adding input cost to the old number is not a sufficient derivation.
+### LNGMXX -- runtime dividend, constant divisor
 
-LNGMXX's unchanged legacy denominator remains **PROVISIONAL** in the scoreboard;
-its ratio is suppressed and it cannot pass completion. HOTLPX now uses its
-own listing and arithmetic proof above, not a scaled version of current output.
+LNGMXX's independent reference is **208**, replacing the inherited 210.
+For `q = trunc(v/7)` and `r = v - 7*q`, ten wrapped additions give
+`s = 10*(q+r) = 10*(v-6*q)` modulo 2^32. The divisor is nonzero and cannot
+trigger the signed MIN/-1 case. Final `i=11` and `s` remain stored.
+
+LLVM's `llvm/lib/Support/DivisionByConstantInfo.cpp`, inspected at local commit
+`338e0c9`, supplies the signed reciprocal algorithm. Apple Clang 21.0.0 with
+`-target i386-unknown-linux-gnu -O2 -fwrapv -ffreestanding` on
+`int f(int v) { return 10*(v/7+v%7); }` independently emitted the negative
+magic multiply, sign correction and `v-6*q` form. The listing below places
+the commutative multiply's magic constant directly in EAX, avoiding Clang's
+extra operand copy, and includes BASIC input/output rather than a C return.
+
+```asm
+; Input: 32, same far-pointer convention as RDI2.
+push ds                       ; 6
+push word v                   ; 6
+call far B$RDI4               ; 20
+
+; Arithmetic and final stores: 64.
+mov ecx,[v]                   ; 6
+mov eax,092492493h            ; 2, signed -1840700269
+imul ecx                      ; 22, signed high product in EDX
+add edx,ecx                   ; 2
+mov eax,edx                   ; 2
+shr eax,31                    ; 3, sign correction
+sar edx,2                     ; 3
+add edx,eax                   ; 2, quotient truncated toward zero
+add edx,edx                   ; 2
+lea eax,[edx+edx*2]           ; 2, 6*q
+sub ecx,eax                   ; 2, v-6*q = q+r
+add ecx,ecx                   ; 2
+lea eax,[ecx+ecx*4]           ; 2, ten times q+r
+mov [s],eax                   ; 6
+mov word [i],11               ; 6
+
+; Output: 112, including both words of the LONG argument.
+push word labelS              ; 6
+call far B$PSSD               ; 20
+push word [s+2]               ; 10
+push word [s]                 ; 10
+call far B$PEI4               ; 20
+push word labelDone           ; 6
+call far B$PESD               ; 20
+call far B$CENP               ; 20
+```
+
+Original PDS accounting is **58 + 788*10 + 10*10 + 112 = 8150**;
+QB/VBDOS total **8234/8070**. Current costs **248/250/246** yield
+**1.19x/1.20x/1.18x** against 208. These are existing cost-model rankings,
+not hardware timings. Our output still contains IDIV; the reference does not.
+Boundary checks verify signed quotient correction and wrapped recurrence;
+this target change does not implement reciprocal division in qbopt.
 
 ## press -- eight live variables, every product invariant
 
@@ -154,31 +198,72 @@ variables that never change. This is the program that says BC does no
 register allocation across a statement: `bx` is the only value it keeps, and
 only because the four products are one expression.
 
-### PRESSX is not covered by PRESS's folded reference
+### PRESSX -- eight runtime inputs, four products
 
-PRESSX reads eight runtime values and hoists four products and their sum;
-PRESS's reference above replaces them with the constant 750. Reusing 308
-for both whole programs does not establish a reference for PRESSX.
+The complete reference is **508**, not PRESS's constant-folded 308.
+Ten iterations are `r = 10*(a*b+c*d+e*f+g*h)` modulo 65536, with `i=11`.
+All eight inputs remain unknown. Like HOTLPX, ordinary event-free word
+arithmetic and the established stack-based READ contract are required.
 
-The current PDS emitted program has a four-instruction loop (`add`, `inc`,
-`cmp`, `jle`), with all four multiplies outside it. Reading each emitted
-instruction under `tools/opportunity.py`'s model gives:
+```asm
+; Input: 8 * 32 = 256. Each triple costs 6 + 6 + 20.
+push ds
+push word a
+call far B$RDI2
+push ds
+push word b
+call far B$RDI2
+push ds
+push word c
+call far B$RDI2
+push ds
+push word d
+call far B$RDI2
+push ds
+push word e
+call far B$RDI2
+push ds
+push word f
+call far B$RDI2
+push ds
+push word g
+call far B$RDI2
+push ds
+push word h
+call far B$RDI2
 
-| Region | Modeled cost |
-| --- | ---: |
-| Eight B$RDI2 calls and argument setup, plus entry NOP | 370 |
-| Initialization, invariant products, loop and entry jump | 226 |
-| Final stores, printing and termination | 114 |
-| Total | 710 |
+; Arithmetic and final stores: 150.
+mov ax,[a]                    ; 6
+imul ax,[b]                   ; 26
+mov bx,[c]                    ; 6
+imul bx,[d]                   ; 26
+add ax,bx                     ; 2
+mov bx,[e]                    ; 6
+imul bx,[f]                   ; 26
+add ax,bx                     ; 2
+mov bx,[g]                    ; 6
+imul bx,[h]                   ; 26
+add ax,bx                     ; 2
+add ax,ax                     ; 2
+lea ax,[eax+eax*4]             ; 2, total factor ten
+mov [r],ax                    ; 6
+mov word [i],11               ; 6
 
-This decomposes the measured program; **it is not a new optimal target**.
-Input setup itself may improve, and the modeled helper charge is not a
-measured helper execution time. A replacement target needs its own full
-listing, including the runtime-input contract and the same accounting on
-both sides. Until then the scoreboard labels the unchanged legacy 308
-denominator PROVISIONAL, suppresses its ratio and cannot certify it as
-complete. The earlier 2.31x number is not evidence that the hot loop still
-has a comparable amount of optimization work left.
+; Output: 102, identical instruction costs to HOTLPX.
+push word labelR              ; 6
+call far B$PSSD               ; 20
+push word [r]                 ; 10
+call far B$PEI2               ; 20
+push word labelDone           ; 6
+call far B$PESD               ; 20
+call far B$CENP               ; 20
+```
+
+Original PDS accounting: **380 + 154*10 + 10*10 + 102 = 2122**;
+QB/VBDOS totals **2166/2132**. Current costs **627/631/637** give
+**1.23x/1.24x/1.25x**. The higher denominator replaces an invalid reference
+with a different computation's complete cost; it is not inferred from current
+output. The earlier 2.31x comparison did not establish an optimization gap.
 
 ## arridx -- an array element addressed three times
 

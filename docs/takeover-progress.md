@@ -1,5 +1,27 @@
 # Takeover checkpoint — 2026-09-09
 
+## Complete PRESSX and LNGMXX integer references
+
+PRESSX now uses its own **508** target (256 input + 150 arithmetic/final
+stores + 102 output), replacing the invalid constant-input 308 denominator.
+LNGMXX uses **208** (32 input + 64 arithmetic/final stores + 112 output),
+replacing its inherited 210. Full annotated listings and independent BC
+block totals are in docs/targets.md; neither target is a fraction of our code.
+
+LNGMXX's reference follows LLVM's signed reciprocal division algorithm,
+inspected via git at llvm-project 338e0c9. Clang 21's i386 output independently
+confirmed the magic constant/corrections and quotient-plus-remainder identity.
+It does not retain our IDIV. Signed boundary checks and wrapped recurrence
+checks accompany both references. Final counter and result stores remain.
+
+Before: both ratios suppressed as provisional. After: PRESSX costs
+627/631/637 give **1.23x/1.24x/1.25x**; LNGMXX costs 248/250/246 give
+**1.19x/1.20x/1.18x**. Assembly and measured costs are unchanged.
+29 focused scoreboard tests pass, including both fail-first target checks.
+No runtime rerun for this reference-only change. Floating references and
+event references remain provisional, missing targets remain missing, and
+the whole project is not declared complete.
+
 ## HOTLPX has a complete independent reference
 
 Replaced HOTLPX's inherited 312 target with the hand-derived full **217**
