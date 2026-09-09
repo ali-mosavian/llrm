@@ -285,7 +285,14 @@ def subexpressions(body: MirBody) -> MirBody:
     body = _reclaimed(body, gone)
     return replace(
         body,
-        blocks=tuple(replace(block, ops=tuple(_substituted(op, swap) for op in block.ops)) for block in body.blocks),
+        blocks=tuple(
+            replace(
+                block,
+                phis=tuple(_phi_reading(phi, swap) for phi in block.phis),
+                ops=tuple(_substituted(op, swap) for op in block.ops),
+            )
+            for block in body.blocks
+        ),
     )
 
 
@@ -455,7 +462,6 @@ def _read(body: MirBody, value: mir.Value) -> bool:
         for block in body.blocks
         for op in block.ops
     )
-
 
 
 def reused_divides(body: MirBody, dgroup: frozenset[int], found=None) -> MirBody:

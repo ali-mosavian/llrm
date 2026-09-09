@@ -55,6 +55,16 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+CSE phi checkpoint: CSE now replaces phi inputs as well as operation uses when
+deleting a repeated computation. A focused regression fails with the old pass;
+45 related checks pass. The zero-fact experiment exposed this dangling definition
+at matrix 0x79; artifacts: `/tmp/qbopt-zero-fold.ckjHrW`.
+Zero folding is withdrawn, not enabled: after fixing the phi, matrix refuses LIR
+emission with `0x0044: 9 bytes are claimed by more than one op`. Subsequent runtime
+PASS results were fallback, not successful recompilation. Without the experiment,
+matrix emission succeeds at 12,076 / 6,210 = 1.94x. Diagnose ownership before
+reintroducing identical-operand XOR/SUB zero facts; 998 host checks missed it.
+
 Two-address multiply checkpoint: the pass skipped all MULTIPLY operations even
 though the single-result, two-source form reads its destination. It now inserts
 the required first-factor copy, leaving widening/fixed forms alone. The old pass
