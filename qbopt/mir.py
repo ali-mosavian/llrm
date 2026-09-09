@@ -544,11 +544,7 @@ def _absorbed_loads(args: tuple, namer: "_Namer", at: int) -> tuple[MemRef, ...]
     address or a written-down constant, which is what makes that a list
     and not an approximation.
     """
-    return tuple(
-        MemRef(one.ref.addr, one.ref.width, None, None, one.ref.space, None)
-        for one in args
-        if isinstance(one, Cell) and one.ref.addr is not None
-    )
+    return _rebased(tuple(one.ref for one in args if isinstance(one, Cell) and one.ref.addr is not None), namer, at)
 
 
 def absorbs(name: str) -> "Kind | None":
@@ -902,10 +898,22 @@ def _call_touches(name: str | None) -> tuple[frozenset[Register_], frozenset[Reg
     worst-case, so nothing is assumed by using it.
     """
     routine = runtime.contract(name)
-    if not routine.established or runtime.barrier(routine):
+    if not routine.established:
         return None
     kept = {FROM_CONTRACT[one] for one in runtime.preserves(routine) if one in FROM_CONTRACT}
     disturbed = frozenset(one for one in TRACKED if one not in kept) | {FLAGS}
+    if runtime.barrier(routine):
+        # A barrier reaches code this module cannot see -- an event handler,
+        # an ON ERROR target -- and what the routine's own body preserves
+        # says nothing about what that code leaves behind. So it disturbs
+        # everything, which is what the worst-case ir.Effects said before
+        # any of this. What it *reads* is a different question, and the two
+        # were answered together: B$CENP, whose contract is `cProc B$CENP`
+        # with no parameters, was made to read every tracked register, so
+        # esi's entry value stayed live to the end of the body with nothing
+        # having written it, and spilling that phantom put a reload of a
+        # slot no one stored.
+        disturbed = frozenset(TRACKED) | {FLAGS}
     # Clobbering is not reading, and this returned the same set for both.
     # Every routine runtime.py has established takes its arguments on the
     # stack -- cmacros' cProc with parmW, and the print family's own AX is
@@ -924,7 +932,7 @@ def _call_touches(name: str | None) -> tuple[frozenset[Register_], frozenset[Reg
     # The x87 loads are the exception and say so: B$FILD takes a long in
     # dx:ax, B$FIL2 an integer in ax. Leaving those out of the use list is
     # what let dead code elimination delete the moves that set them up.
-    if routine.inputs is None:
+    if not runtime.established_inputs(routine):
         # Established for what it clobbers and not for what it reads. Both
         # answers are needed and they are not the same question: B$ENRA and
         # B$EXSA preserve a documented set and their code is not in the
@@ -1111,6 +1119,9 @@ def _memrefs(
     for cell in cells:
         addr = slot if cell.addr is None and slot is not None else cell.addr
         base = segment = None
+        root = ir.ROOT.get(cell.through, cell.through)
+        if root in TRACKED:
+            base = namer.current(root, at)
         if addr is not None:
             root = ir.ROOT.get(addr.base, addr.base)
             if root in TRACKED:
@@ -1220,7 +1231,13 @@ def _operands(
         if isinstance(loc, ir.Imm):
             return Const(loc.value, loc.width)
         if isinstance(loc, ir.Mem):
-            return Cell(cells.pop(0)) if cells else Opaque(loc)
+            if not cells:
+                return Opaque(loc)
+            ref = cells.pop(0)
+            root = ir.ROOT.get(loc.through, loc.through)
+            if ref.base is None and root in TRACKED:
+                ref = replace(ref, base=holds.get(root))
+            return Cell(ref)
         if isinstance(loc, ir.St):
             return Opaque(loc, f"st{loc.index}")
         return Opaque(loc)
@@ -1252,7 +1269,7 @@ def _hands_back(kind: "Kind", written: dict, before: dict) -> "tuple | None":
     """
     from qbopt import calls as machine
 
-    if kind is not Kind.DIVMOD:
+    if kind not in (Kind.DIVMOD, Kind.MUL):
         return None
     source, into = RESTORE_PAIR[0]
     if machine.RESULT is not source:
@@ -1429,6 +1446,8 @@ def raise_body(
                 made.append(value)
             written = dict(zip(sorted(defines, key=lambda o: (o is not FLAGS, o)), made))
             where = _operands(node.semantics, holds, written, loads, stores)
+            loads = tuple(one.ref for one in where[0] if isinstance(one, Cell)) or loads
+            stores = tuple(one.ref for one in where[1] if isinstance(one, Cell)) or stores
             kind = _kind_of(node.semantics, where[0], where[1])
             operands = _normalised(kind, node.semantics.name or "", where[0], where[1])
             site = (sites or {}).get(insn.at)
@@ -1458,6 +1477,10 @@ def raise_body(
                     # because the operation it had already turned into
                     # arithmetic still claimed a call's memory.
                     loads = _absorbed_loads(where[0], namer, start)
+                    references = iter(loads)
+                    operands = tuple(Cell(next(references)) if isinstance(one, Cell) else one for one in operands)
+                    where = operands, where[1]
+                    used = tuple(dict.fromkeys((*used, *(ref.base for ref in loads if ref.base is not None))))
                     stores = ()
             _called = _call_args(chosen.get(insn.at), holds, insn.at) if kind is Kind.CALL else ((), True)
             # The snapshot the raise took, arguments included. `semantics`
@@ -1616,10 +1639,12 @@ class _Renamer:
         return held[-1]
 
 
-def _renamed_arg(one, swap: dict):
+def _renamed_arg(one, swap: dict, refs: dict):
     """One operand with its value replaced by the version in scope."""
     if isinstance(one, Held) and one.value.variable in swap:
         return Held(swap[one.value.variable], one.width)
+    if isinstance(one, Cell) and one.ref in refs:
+        return Cell(refs[one.ref])
     return one
 
 
@@ -1722,6 +1747,7 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
             swap = {one.variable: now for one, now in zip(op.uses, used)}
             loads = tuple(_rehomed(one, namer, start) for one in op.loads)
             stores = tuple(_rehomed(one, namer, start) for one in op.stores)
+            refs = dict(zip((*op.loads, *op.stores), (*loads, *stores)))
             fresh = []
             for one in op.defines:
                 value = namer.fresh(one.variable, op.at, one.flags)
@@ -1742,8 +1768,8 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
                     uses=used,
                     loads=loads,
                     stores=stores,
-                    args=tuple(_renamed_arg(one, swap) for one in op.args),
-                    results=tuple(_renamed_arg(one, made) for one in op.results),
+                    args=tuple(_renamed_arg(one, swap, refs) for one in op.args),
+                    results=tuple(_renamed_arg(one, made, refs) for one in op.results),
                     # And what it was raised as, at the same versions. It is
                     # the two compared that say whether a pass rewrote the
                     # operation, so renaming one and not the other makes
@@ -1752,8 +1778,8 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
                     raised=None
                     if op.raised is None
                     else (
-                        tuple(_renamed_arg(one, swap) for one in op.raised[0]),
-                        tuple(_renamed_arg(one, made) for one in op.raised[1]),
+                        tuple(_renamed_arg(one, swap, refs) for one in op.raised[0]),
+                        tuple(_renamed_arg(one, made, refs) for one in op.raised[1]),
                     ),
                     merges={swap.get(a.variable, a): made.get(b.variable, b) for a, b in op.merges.items()},
                 )

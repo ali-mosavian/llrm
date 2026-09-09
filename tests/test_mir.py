@@ -47,6 +47,67 @@ def test_an_empty_body_is_refused_rather_than_guessed() -> None:
     assert isinstance(mir.raise_body([], {}), str)
 
 
+def test_absorbed_array_operand_keeps_its_index_value() -> None:
+    """arrays printed 53248 for -1474836480 after its untracked SI index moved."""
+    namer = mir._Namer()
+    index = namer.current(mir.Register.ESI, 0)
+    cell = mir.Cell(mir.MemRef(Addr(Space.SEGMENT, 0, base=mir.Register.SI), 4))
+    (load,) = mir._absorbed_loads((cell,), namer, 0)
+    assert load.base == index
+
+
+def test_unknown_pointee_keeps_its_address_value() -> None:
+    """procs TWICE read [si] after its BYREF pointer moved to bx, corrupting the result."""
+    namer = mir._Namer()
+    pointer = namer.current(mir.Register.ESI, 0)
+    (load,) = mir._memrefs((ir.Mem(None, 2, through=mir.Register.SI),), namer, 0)
+    assert load.base == pointer
+
+
+def test_resolving_segld_renames_memory_operands_with_their_accesses() -> None:
+    """segld kept old address values in Cell operands after its access metadata was renamed."""
+    from qbopt import omf
+    from qbopt import blocks
+    from qbopt import module
+
+    found = module.of(omf.parse(Path("fixtures/omf/segld-p-g2.obj").read_bytes()))
+    bodies = mir.bodies(found, blocks.partition(found, blocks.code_map(found)))
+    checked = 0
+    for _, body in bodies:
+        result = mir.resolved(body)
+        assert not isinstance(result, str), result
+        for block in result.blocks:
+            for op in block.ops:
+                for arg in (*op.args, *op.results):
+                    if isinstance(arg, mir.Cell) and arg.ref.base is not None:
+                        checked += 1
+                        assert arg.ref in (*op.loads, *op.stores), (op.at, arg, op.loads, op.stores)
+    assert checked
+
+
+def test_absorbed_multiply_defines_its_returned_high_half() -> None:
+    """arrays printed P0=53248 instead of -1474836480: the product's high half was a clobber."""
+    from qbopt import omf
+    from qbopt import blocks
+    from qbopt import module
+
+    found = module.of(omf.parse(Path("fixtures/omf/divmod-p-g2.obj").read_bytes()))
+    bodies = mir.bodies(found, blocks.partition(found, blocks.code_map(found)))
+    seen = 0
+    for _, body in bodies:
+        for block in body.blocks:
+            for op in block.ops:
+                if op.kind is mir.Kind.MUL and op.id in found.absorbed:
+                    seen += 1
+                    assert any(
+                        other.at == op.at
+                        and other.kind is mir.Kind.JOIN
+                        and any(value in other.uses for value in op.defines)
+                        for other in block.ops
+                    ), "the high half needs an explicit definition from the product"
+    assert seen
+
+
 def test_an_entry_outside_the_blocks_is_refused() -> None:
     assert isinstance(mir.raise_body([block(0, ())], {}, 99), str)
 
@@ -234,8 +295,58 @@ def test_a_call_that_preserves_si_does_not_give_it_a_new_value() -> None:
 def test_a_call_with_no_established_contract_still_disturbs_everything() -> None:
     """A user SUB, or a routine runtime.py could not read. Falling back to
     ir.Effects is what keeps using the contracts from being an assumption."""
+    from qbopt import runtime
+
     assert mir._call_touches("NOT_A_ROUTINE") is None
-    assert mir._call_touches("B$EVCK") is None, "it can dispatch into user code"
+    # B$EVCK can dispatch into user code, so what its own body preserves
+    # says nothing about what comes back: everything is disturbed, which is
+    # what the fallback said. Asked as one question with what it reads, that
+    # also made it read everything -- see the phantom test below.
+    disturbed, _ = mir._call_touches("B$EVCK")
+    assert runtime.barrier(runtime.contract("B$EVCK"))
+    assert disturbed == frozenset(mir.TRACKED) | {mir.FLAGS}
+
+
+def test_a_routine_that_reads_no_register_leaves_no_phantom_live_across_it() -> None:
+    """B$CENP's contract is `cProc B$CENP` with no parameters and an
+    established empty input set. Being a barrier was read as the same
+    question, so it was made to read every tracked register: esi's entry
+    value stayed live from the top of the body to the call with nothing
+    having written it, the allocator spilled that phantom, and the body came
+    out with a reload of a slot no one stored.
+
+    Both halves are the claim. What it reads narrows to its contract; what
+    it disturbs stays everything, because a barrier reaches code this module
+    cannot see, and the passes that refuse to keep values in registers
+    across one still get their answer from runtime.barrier.
+    """
+    from qbopt import runtime
+
+    site = runtime.contract("B$CENP")
+    assert runtime.established_inputs(site) and not site.inputs, "the contract declares no inputs"
+    assert runtime.barrier(site), "it is still a barrier and the passes that ask still refuse"
+
+    from qbopt import omf
+    from qbopt import module
+    from qbopt import blocks as split
+    from qbopt.blocks import code_map
+
+    found = module.of(omf.parse(Path("fixtures/omf/bools-q-O.obj").read_bytes()))
+    ((op, body),) = [
+        (op, body)
+        for _who, body in mir.bodies(found, split.partition(found, code_map(found)))
+        for block in body.blocks
+        for op in block.ops
+        if op.kind is mir.Kind.CALL and found.calls.get(op.at) == "B$CENP"
+    ]
+    written = {value for block in body.blocks for one in block.ops for value in one.defines}
+    written |= {phi.result for block in body.blocks for phi in block.phis}
+    assert not [one for one in op.uses if not one.flags and one not in written], (
+        f"the call reads {op.uses}, and nothing in the body wrote them"
+    )
+    assert {body.origin[one] for one in op.defines if not one.flags} == set(mir.TRACKED), (
+        "it still disturbs every tracked register"
+    )
 
 
 def test_the_same_address_through_a_rewritten_register_is_not_the_same_bytes() -> None:
@@ -999,27 +1110,28 @@ def test_a_procedure_this_module_defines_is_not_a_runtime_routine() -> None:
 
 
 def test_the_exit_routine_declares_what_it_reads_where_that_is_established() -> None:
-    """B$EXSA's returning path reads no register at all.
+    """procs TWICE lost its low half because the return continuation was not live.
 
     Its other path is error dispatch, and what is declared there is the
     survivor set rather than a read set: ax and bx are written before
     every terminal, cx, dx, si and di are not. A superset costs a copy
     where it is wrong and cannot be unsound. QuickBASIC 4.5's reads
-    nothing on any path.
+    nothing on any path. Both normal continuations nevertheless export
+    dx:ax to the BASIC caller, and the exit boundary must keep them live.
     """
     from qbopt import module
     from qbopt import runtime
 
-    every = frozenset({runtime.Reg.CX, runtime.Reg.DX, runtime.Reg.SI, runtime.Reg.DI})
+    every = frozenset({runtime.Reg.AX, runtime.Reg.CX, runtime.Reg.DX, runtime.Reg.SI, runtime.Reg.DI})
     assert runtime.per_call({0: "B$EXSA"}, module.Family.PDS)[0].inputs == every
-    assert runtime.per_call({0: "B$EXSA"}, module.Family.QUICKBASIC)[0].inputs == frozenset()
+    assert runtime.per_call({0: "B$EXSA"}, module.Family.QUICKBASIC)[0].inputs == {runtime.Reg.AX, runtime.Reg.DX}
     assert runtime.per_call({0: "B$EXSA"}, module.Family.VBDOS)[0].inputs is None
 
     made = _raised_calls("procs-p-g2.obj")
     assert "B$EXSA" in made, f"no B$EXSA raised; found {sorted(made)}"
     for op in made["B$EXSA"]:
         assert op.args_known is True, f"{op.at:#06x}: known={op.args_known}"
-        assert [one.width for one in op.args] == [2, 2, 2, 2], f"{op.at:#06x}: {op.args}"
+        assert [one.width for one in op.args] == [2, 2, 2, 2, 2], f"{op.at:#06x}: {op.args}"
 
 
 def test_a_residual_call_is_not_rewritten_by_its_own_arguments() -> None:

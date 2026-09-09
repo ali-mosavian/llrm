@@ -217,7 +217,7 @@ def _absorbed(site, read):
     # A divide hands its answer's high half back through an operation of
     # its own, so the sequence must not end in the idiom as well: emitted
     # twice, the second pops what the first had already put back.
-    made = select.absorbed(site, read, site.name not in machine.DIVIDES)
+    made = select.absorbed(site, read, site.name not in {*machine.DIVIDES, machine.MULTIPLY})
     return None if isinstance(made, str) else made
 
 

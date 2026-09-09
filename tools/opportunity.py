@@ -20,7 +20,6 @@ back-edge, which nothing here sees.
 
 import sys
 import argparse
-import contextlib
 from pathlib import Path
 from collections import Counter
 
@@ -289,13 +288,13 @@ def _cost(body, module_, found: Counter, trips: int = 10) -> None:
                 continue
             name = (op.name or "").lower()
             if name in FLOAT:
-                found["cost"] += (
-                    FLOAT[name] + TOUCH * len([one for one in (*op.loads, *op.stores) if named(one)])
-                ) * weight
+                found["cost"] += (FLOAT[name] + TOUCH * (len(op.loads) + len(op.stores))) * weight
                 found["a floating-point operation"] += 1
                 continue
             cycles = CYCLES.get(name, 2)
-            cycles += TOUCH * len([one for one in (*op.loads, *op.stores) if named(one)])
+            # Alias precision is not execution cost. Unknown array addresses
+            # and spill slots still access memory after register allocation.
+            cycles += TOUCH * (len(op.loads) + len(op.stores))
             found["cost"] += cycles * weight
 
 
@@ -369,6 +368,10 @@ def _invariant(body, module_, found: Counter) -> None:
                         found["read inside a loop of a cell the loop never writes"] += 1
 
 
+class Unmeasured(Exception):
+    """The instrument cannot account for the program, not a zero-cost program."""
+
+
 def counted(paths: list[Path], raw: bool = False) -> Counter:
     """Cross-block, because BC's redundancy is loop-carried.
 
@@ -385,11 +388,14 @@ def counted(paths: list[Path], raw: bool = False) -> Counter:
     for path in paths:
         module_ = _measured(path, raw)
         if module_ is None:
-            continue
+            raise Unmeasured(f"{path}: no code module")
         mapped = code_map(module_)
         if isinstance(mapped, str):
-            continue
-        for _name, body in mir.bodies(module_, split.partition(module_, mapped)):
+            raise Unmeasured(f"{path}: {mapped}")
+        bodies = mir.bodies(module_, split.partition(module_, mapped))
+        if not bodies:
+            raise Unmeasured(f"{path}: no raised bodies")
+        for _name, body in bodies:
             blocks = {block.at: block for block in body.blocks}
             preds: dict[int, list[int]] = {at: [] for at in blocks}
             for block in body.blocks:
@@ -495,10 +501,15 @@ def against_targets(paths: list[Path], raw: bool = False) -> int:
     so the target is zero and the gap is the count. The cost is the number
     to close, and the ratio is what says whether a pass earned its place.
     """
-    worst = 0
+    failed = False
     print(f"  {'program':10s} {'cost':>7s} {'target':>7s} {'ratio':>6s}   redundancy left")
     for path in sorted(paths):
-        found = counted([path], raw)
+        try:
+            found = counted([path], raw)
+        except Unmeasured as why:
+            print(f"  {path.stem:10s} UNMEASURED: {why}")
+            failed = True
+            continue
         cost = found.pop("cost", 0)
         want = TARGETS.get(_program(path))
         left = sum(count for name, count in found.items() if name.startswith(("load ", "store ", "read ")))
@@ -506,9 +517,9 @@ def against_targets(paths: list[Path], raw: bool = False) -> int:
             print(f"  {path.stem:10s} {cost:7d} {'--':>7s} {'--':>6s}   {left}")
             continue
         ratio = cost / want if want else 0
-        worst = max(worst, int(ratio * 100))
-        print(f"  {path.stem:10s} {cost:7d} {want:7d} {ratio:5.1f}x   {left}")
-    return 0
+        failed |= cost * 2 > want * 3
+        print(f"  {path.stem:10s} {cost:7d} {want:7d} {ratio:5.2f}x   {left}")
+    return int(failed)
 
 
 def _measured(path: Path, raw: bool):
@@ -521,8 +532,9 @@ def _measured(path: Path, raw: bool):
     """
     data = path.read_bytes()
     if not raw:
-        with contextlib.suppress(Exception):
-            data, _regions = rewrite.rewrite(data, dry_run=False)
+        data, _regions = rewrite.rewrite(data, dry_run=False)
+        if omf.finalised_at(omf.parse(data)) is None:
+            raise Unmeasured(f"{path}: LIR emission did not complete")
     return module.of(omf.parse(data))
 
 

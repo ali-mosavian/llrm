@@ -45,16 +45,15 @@ from qbopt import mir
 from qbopt import lower
 from qbopt import cvinfo
 from qbopt import regalloc
-from qbopt import transform
 
 _REGISTERS = {v: k for k, v in vars(Register).items() if isinstance(v, int)}
 from qbopt import omf
 from qbopt import module
+from qbopt import wholeseg
 from qbopt import loops as loopy
 from qbopt.declen import BITNESS
 from qbopt import blocks as split
 from qbopt.blocks import code_map
-from qbopt import wholeseg
 
 
 def _bodies(data: bytes):
@@ -357,7 +356,7 @@ def _says(op, cells: Cells, calls: dict, verbose: bool) -> str:
     return f"{into} := {kind} {', '.join(args)}".rstrip() + said
 
 
-def _machine(stages, view) -> None:
+def _machine(stages, view, number: int) -> int:
     """Each machine phase of the run that produced the object, one file each.
 
     Rule 4 asks for a file per stage so that `diff` between two adjacent
@@ -368,13 +367,13 @@ def _machine(stages, view) -> None:
     the first bad transition was not in it. These come from the emitter's
     own run, through the watch wholeseg.emitted takes.
     """
-    number = 19
     for stage, bodies in stages:
-        number += 1
         with view(number, "lir", stage):
             print(f"=== {stage}")
             for name, one in bodies:
                 _lir_body(name, one)
+        number += 1
+    return number
 
 
 def _lir_body(name: str, body) -> None:
@@ -557,8 +556,8 @@ def main(argv: list[str] | None = None, view=None) -> int:
         """
         if args.dump is None and not args.asm:
             return
-        _machine(stages, view)
-        with view(26, "asm", "emitted"):
+        number = _machine(stages, view, number)
+        with view(number, "asm", "emitted"):
             print(f"=== emitted ({why}, {len(out)} bytes)")
             print(f"  --- {route}")
             _asm(out)
@@ -571,44 +570,16 @@ def main(argv: list[str] | None = None, view=None) -> int:
 
     was = dump(next(step), "omf", f"BC ({len(data)} bytes)", raised, None, debug, found)
 
-    # Every pass on one body, in order, with the MIR after each. No object is
-    # written between them and none needs to be: mir.resolved() puts a body
-    # back in SSA after a pass has moved things, which is what a pass itself
-    # uses when it asks a question about its own result. This tool used to
-    # lower and re-raise after every stage -- which cost a machine round trip
-    # per pass and made the dump look as though each one had a machine form.
-    where = transform.Where(
-        dgroup=found.dgroup,
-        calls=found.calls,
-        bounds=module.landmarks(found),
-        blocks=split.partition(found, code_map(found)),
-        found=found,
-    )
-    steps = [(one.name, one.transform) for one in transform.pipeline(where)]
-    steps.append(("widen", transform.widened))
-
-    bodies = raised
-    for name, apply in steps:
-        if args.only is not None and name != args.only:
-            continue
-        after = []
-        for who, body in bodies:
-            got = apply(body)
-            settled = mir.resolved(got, found.calls)
-            after.append((who, got if isinstance(settled, str) else settled))
-        bodies = after
-        was = dump(next(step), name, name, bodies, was, debug, found)
-
-    # And the machine, once. Everything above is MIR; this is what lowering,
-    # the allocator and the selector made of the last of it.
-    # The emitter's own run, watched. Every machine stage below is from it,
-    # so a diff between two of them is a diff of the program that was
-    # written -- and the route says which emitter wrote it.
+    # Observe the actual optimization run; never rebuild or re-resolve it for a dump.
+    mir_stages: dict[str, list] = {}
     stages: list[tuple[str, list]] = []
     route = "the route was not reported"
 
     def watch(stage: str, name, low) -> None:
         nonlocal route
+        if stage.startswith("mir-"):
+            mir_stages.setdefault(stage.removeprefix("mir-"), []).append((name, low))
+            return
         if stage == "route":
             route = low
             return
@@ -616,7 +587,9 @@ def main(argv: list[str] | None = None, view=None) -> int:
             stages.append((stage, []))
         stages[-1][1].append((name, low))
 
-    got = wholeseg.emitted(data, watch=watch)
+    got = wholeseg.emitted(data, only=args.only, watch=watch)
+    for name, bodies in mir_stages.items():
+        was = dump(next(step), name, name, bodies, was, debug, found)
     lowered(next(step), stages, got.data, got.reason, route)
     return 0
 

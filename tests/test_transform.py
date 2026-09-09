@@ -13,15 +13,124 @@ from iced_x86 import Register
 
 import corpus
 from qbopt import ir
-from qbopt import lir
 from qbopt import mir
 from qbopt import omf
-from qbopt import wide
 from qbopt import lower
 from qbopt import module
-from qbopt import target
 from qbopt import rewrite
 from qbopt import transform
+
+
+def test_pipeline_reaches_a_fixed_point_without_emission() -> None:
+    """lngmix still changed on a second optimization of the same MIR body."""
+    from qbopt import blocks
+    from qbopt import runtime
+
+    found = corpus.loaded(Path("fixtures/omf/lngmix-p-g2.obj"))
+    partition = blocks.partition(found, blocks.code_map(found))
+    body = mir.bodies(found, partition, runtime.for_module(found))[0][1]
+    first = transform.applied(body, found.dgroup, found.calls, blocks=partition, found=found)
+    second = transform.applied(first, found.dgroup, found.calls, blocks=partition, found=found)
+    assert second == first
+
+
+def test_hoisted_variables_do_not_collide_with_promoted_cells() -> None:
+    """lngmix printed 4081664 for 142900 after hoisting reused a promoted variable id."""
+    from qbopt import blocks
+    from qbopt import runtime
+
+    found = corpus.loaded(Path("fixtures/omf/lngmix-p-g2.obj"))
+    partition = blocks.partition(found, blocks.code_map(found))
+    body = mir.bodies(found, partition, runtime.for_module(found))[0][1]
+    stages = {}
+    transform.applied(
+        body,
+        found.dgroup,
+        found.calls,
+        blocks=partition,
+        found=found,
+        watch=lambda name, state: stages.setdefault(name, state),
+    )
+    body = stages["r01-place"]
+    value = next(op for block in body.blocks for op in block.ops if op.at == 0x76).defines[-1]
+    after = transform._reparented(body, {value})
+    renamed = next(one for one in after.values if one.id == value.id)
+    assert renamed.variable > max(one.variable for one in body.values)
+
+
+def test_redundant_load_chains_keep_a_defined_return_value() -> None:
+    """procs-q-O's return named a deleted intermediate reload and could not allocate."""
+    from qbopt import blocks
+    from qbopt import runtime
+
+    found = corpus.loaded(Path("fixtures/omf/procs-q-O.obj"))
+    partition = blocks.partition(found, blocks.code_map(found))
+    body = next(
+        body for name, body in mir.bodies(found, partition, runtime.for_module(found)) if name == "procedure TWICE"
+    )
+    done = transform.without_redundant_loads(body, found.dgroup, found.calls)
+    defined = {value for block in done.blocks for op in block.ops for value in op.defines}
+    exit_call = next(op for block in done.blocks for op in block.ops if op.at == 0x12F)
+    assert all(arg.value in defined for arg in exit_call.args if isinstance(arg, mir.Held))
+
+
+@pytest.mark.parametrize("substitute", [transform._substituted, transform._reading])
+def test_substitution_preserves_memory_address_edges(substitute) -> None:
+    """Removing a join must not leave memory addressing its deleted value."""
+    old, survivor = mir.Value(901, 0), mir.Value(902, 0)
+    ref = mir.MemRef(None, 2, base=old, segment=old)
+    op = mir.Op(
+        0,
+        ir.Operation.MOVE,
+        "mov",
+        (),
+        (old,),
+        loads=(ref,),
+        stores=(ref,),
+        args=(mir.Cell(ref),),
+        results=(mir.Cell(ref),),
+    )
+    done = substitute(op, {old.id: survivor})
+    assert done.loads[0].base == survivor
+    assert done.loads[0].segment == survivor
+    assert done.args == (mir.Cell(done.loads[0]),)
+    assert done.results == (mir.Cell(done.stores[0]),)
+
+
+def test_pipeline_removes_hotlop_obsolete_constant_load() -> None:
+    """hotlop kept loading 3 each iteration after its product folded to 21."""
+    from qbopt import blocks
+
+    found = corpus.loaded(Path("fixtures/omf/hotlop-p-g2.obj"))
+    mapped = blocks.code_map(found)
+    assert not isinstance(mapped, str)
+    for _, body in mir.bodies(found, blocks.partition(found, mapped)):
+        done = transform.applied(body, found.dgroup, found.calls, found=found)
+        assert not any(op.at == 0x48 and op.args == (mir.Const(3, 2),) for block in done.blocks for op in block.ops)
+
+
+def test_leading_deletion_does_not_delete_its_survivor() -> None:
+    first = mir.Op(0, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY, covers=(0, 3), args=(mir.Const(3, 2),))
+    survivor = mir.Op(3, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY, covers=(3, 6), args=(mir.Const(21, 2),))
+    last = mir.Op(6, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY, covers=(6, 9), args=(mir.Const(5, 2),))
+    done = transform._absorb([first, survivor, last], {0})
+    assert [op.args for op in done] == [survivor.args, last.args]
+
+
+def test_hotlop_add_uses_its_known_product_directly() -> None:
+    """hotlop needlessly materialized 21 in a register on every iteration."""
+    from qbopt import blocks
+
+    found = corpus.loaded(Path("fixtures/omf/hotlop-p-g2.obj"))
+    mapped = blocks.code_map(found)
+    assert not isinstance(mapped, str)
+    seen = []
+    for _, body in mir.bodies(found, blocks.partition(found, mapped)):
+        done = transform.folded(body, found.dgroup, found.calls)
+        seen.extend(
+            op for block in done.blocks for op in block.ops if op.kind is mir.Kind.ADD and mir.Const(21, 2) in op.args
+        )
+    assert seen
 
 
 def test_a_flag_phi_nothing_reads_keeps_nothing_alive() -> None:
@@ -1056,6 +1165,33 @@ def test_an_operation_dead_keeps_has_its_operands_kept_too() -> None:
         assert not broken, f"{name}: " + "; ".join(broken[:3])
 
 
+def test_decided_boolean_edges_stop_generating_phi_copies() -> None:
+    """bools cost 13.37x because known branches retained impossible edges and phi copies."""
+    from qbopt import omf
+    from qbopt import blocks
+    from qbopt import module
+
+    found = module.of(omf.parse(Path("fixtures/omf/bools-p-g2.obj").read_bytes()))
+    partition = blocks.partition(found, blocks.code_map(found))
+    body = mir.bodies(found, partition)[0][1]
+    after = transform.decided(body, found.dgroup, found.calls)
+    assert after.block(0x30).succ == (0x5A,)
+    assert not after.block(0x5B).phis
+
+
+def test_dead_boolean_block_does_not_leave_an_unreachable_jump() -> None:
+    """bools-q-O could not be measured: its dead block retained a self-relative jump."""
+    from qbopt import omf
+    from qbopt import blocks
+    from qbopt import module
+    from qbopt import wholeseg
+
+    result = wholeseg.emitted(Path("fixtures/omf/bools-q-O.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result
+    found = module.of(omf.parse(result.data))
+    assert not isinstance(blocks.code_map(found), str)
+
+
 def test_the_second_of_two_identical_divides_is_found_with_its_first() -> None:
     """lngmix's `s = s + v \\ 7 + v MOD 7`, which divides twice for one idiv.
 
@@ -1111,11 +1247,7 @@ def test_a_reused_divide_copies_the_first_answer_instead_of_dividing() -> None:
 
     found, bodies, _contracts = stages._bodies(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes())
     divides = [
-        one
-        for _name, body in bodies
-        for block in body.blocks
-        for one in block.ops
-        if one.kind is mir.Kind.DIVMOD
+        one for _name, body in bodies for block in body.blocks for one in block.ops if one.kind is mir.Kind.DIVMOD
     ]
     assert len(divides) == 2, f"lngmix divides twice; {len(divides)} found"
 
@@ -1123,10 +1255,7 @@ def test_a_reused_divide_copies_the_first_answer_instead_of_dividing() -> None:
         got = transform.reused_divides(body, found.dgroup, found)
         left = [one for block in got.blocks for one in block.ops if one.kind is mir.Kind.DIVMOD]
         copies = [
-            one
-            for block in got.blocks
-            for one in block.ops
-            if one.kind is mir.Kind.COPY and one.at == divides[1].at
+            one for block in got.blocks for one in block.ops if one.kind is mir.Kind.COPY and one.at == divides[1].at
         ]
         assert len(left) == 1, "one divide does the work of both"
         assert len(copies) == 1, "and the other is a copy of its answer"
@@ -1178,10 +1307,11 @@ def test_one_idiv_serves_both_of_lngmix_s_divides_in_the_image() -> None:
     body emitting BC's bare `call 0:0` with its push run already folded
     away: lngmix stopped early under DOSBox with no diff to read.
     """
-    from iced_x86 import Decoder, Mnemonic
+    from iced_x86 import Decoder
+    from iced_x86 import Mnemonic
 
-    from qbopt import module
     from qbopt import omf
+    from qbopt import module
     from qbopt import wholeseg
 
     out, why = wholeseg.rebuilt(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes())

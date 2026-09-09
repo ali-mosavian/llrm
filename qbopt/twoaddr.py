@@ -19,7 +19,6 @@ this pass and that one just introduced.
 from dataclasses import replace
 
 from qbopt import ir
-from qbopt import target
 from qbopt import lir
 from qbopt.passes import LIRTransform
 
@@ -72,15 +71,21 @@ def _untied(one: lir.Insn) -> "list[lir.Insn] | None":
     if what is None or what.op not in _TIED or not what.dests or not what.sources:
         return None
     into, first = what.dests[0], what.sources[0]
-    if not isinstance(into, ir.Held) or not isinstance(first, ir.Held) or into.value == first.value:
+    if not isinstance(into, ir.Held) or not isinstance(first, (ir.Held, ir.Imm)):
+        return None
+    if isinstance(first, ir.Held) and into.value == first.value:
         return None
     move = lir.Insn(
         at=one.at,
         covers=_nothing(one),
         what=ir.Semantics(ir.Operation.MOVE, "mov", (into,), (first,)),
         defines=(into.value,),
-        uses=(first.value,),
+        uses=(first.value,) if isinstance(first, ir.Held) else (),
         op=one.op,
     )
     fixed = replace(one, what=ir.Semantics(what.op, what.name, what.dests, (into, *what.sources[1:]), what.target))
-    return [move, replace(fixed, uses=tuple(dict.fromkeys((into.value, *one.uses))))]
+    remaining = {value.value for operand in what.sources[1:] for value in ir.values(operand)}
+    uses = tuple(
+        value for value in one.uses if not isinstance(first, ir.Held) or value != first.value or value in remaining
+    )
+    return [move, replace(fixed, uses=tuple(dict.fromkeys((into.value, *uses))))]

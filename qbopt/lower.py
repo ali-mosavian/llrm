@@ -12,6 +12,8 @@ move the pass's mistake down a layer.
 from dataclasses import replace
 
 from iced_x86 import Register
+from iced_x86 import RegisterExt
+from iced_x86 import InstructionInfoFactory
 
 from qbopt import ir
 from qbopt import mir
@@ -83,12 +85,23 @@ def semantics(op: mir.Op, was: ir.Semantics | None = None, place=None) -> ir.Sem
     # deleted. Where there is no such operand -- an operation a pass
     # invented -- ir.Held is the only honest answer and select resolves it.
     was_op, name = _MACHINE.get(op.kind, (op.op, op.name))
+    if op.kind is mir.Kind.NOTHING and op.op is not ir.Operation.NOTHING:
+        was_op, name = ir.Operation.NOTHING, "nop"
+    args = op.args
+    if (
+        place is as_a_value
+        and op.kind in (mir.Kind.ADD, mir.Kind.AND, mir.Kind.OR, mir.Kind.XOR)
+        and len(args) == 2
+        and isinstance(args[0], mir.Const)
+        and isinstance(args[1], mir.Held)
+    ):
+        args = (args[1], args[0])
     place = place or _place
     return ir.Semantics(
         was_op,
         name,
         dests=tuple(place(one, was.dests if was else (), i) for i, one in enumerate(op.results)),
-        sources=tuple(place(one, was.sources if was else (), i) for i, one in enumerate(op.args)),
+        sources=tuple(place(one, was.sources if was else (), i) for i, one in enumerate(args)),
         target=_target(op, was),
     )
 
@@ -391,6 +404,8 @@ class Lowering:
         register the raise saw it in, which for these is always BC's own
         because the idiom is BC's own.
         """
+        if op.kind is mir.Kind.OPAQUE:
+            return self._implicit_values(op, op.defines)
         if op.kind is mir.Kind.DIVMOD:
             # A folded site is a sequence too, and it leaves its answers in
             # registers its operands name nowhere: the one the routine
@@ -411,9 +426,7 @@ class Lowering:
             # By role, the way the raise ordered them: the visible answer
             # is the one the routine's own name promises.
             visible, kept = machine.RESULT, other
-            first, second = (
-                (kept, visible) if site.name.upper() == machine.REMAINDER else (visible, kept)
-            )
+            first, second = (kept, visible) if site.name.upper() == machine.REMAINDER else (visible, kept)
             return tuple(
                 (ir.Held(one.value.id, one.width), target.named(where, one.width))
                 for one, where in zip(op.results, (first, second))
@@ -444,6 +457,17 @@ class Lowering:
         every tracked register until a contract narrows it, and that is a
         liveness dependency rather than an argument list.
         """
+        if op.kind is mir.Kind.OPAQUE:
+            return self._implicit_values(op, op.uses)
+        if op.id in self._sites:
+            # These selected multi-instruction sequences still encode their
+            # original addressing registers. Make that constraint explicit
+            # so allocation supplies the current address value there.
+            return tuple(
+                (ir.Held(ref.base.id, 2), target.named(ref.addr.base, 2))
+                for ref in op.loads
+                if ref.base is not None and ref.addr is not None
+            )
         if isinstance(op.node, ir.Restore):
             # The idiom reads the widened value in the pair's own register
             # -- `push eax` -- and names it nowhere, so without this the
@@ -455,8 +479,7 @@ class Lowering:
             return tuple(
                 (ir.Held(one.id, 4), target.named(source, 4))
                 for one in op.uses
-                if not one.flags and one not in op.merges
-                and ir.ROOT.get(self._origin.get(one, -1), -1) is source
+                if not one.flags and one not in op.merges and ir.ROOT.get(self._origin.get(one, -1), -1) is source
             )
         if op.kind is not mir.Kind.CALL:
             return ()
@@ -491,6 +514,21 @@ class Lowering:
                 raise Unlowered(f"{op.at:#06x}: {one!r} is not a value a register can hold")
             made.append((ir.Held(one.value.id, one.width), mir.AS_NAMED[slot]))
         return tuple(made)
+
+    def _implicit_values(self, op: mir.Op, values: tuple[mir.Value, ...]) -> tuple:
+        """Unencoded operands of an opaque instruction still have machine locations."""
+        if not isinstance(op.node, ir.Opaque):
+            return ()
+        registers = {
+            ir.ROOT.get(one.register, one.register): one.register
+            for one in InstructionInfoFactory().info(op.node.insn.insn).used_registers()
+        }
+        return tuple(
+            (ir.Held(value.id, RegisterExt.size(register)), register)
+            for value in values
+            if not value.flags
+            if (register := registers.get(self._origin.get(value))) is not None
+        )
 
     def __init__(self, body: "mir.MirBody", read: set, calls: dict, absorbed, contracts=None, coverage=None) -> None:
         self._read = read

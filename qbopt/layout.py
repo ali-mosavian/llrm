@@ -337,7 +337,10 @@ def rebuild(
         return f"{ops[0].at:#06x}: an op with no instruction behind it"
 
     lowest = min(one.at for one in ops)
-    highest = max((asm._stands_for(one, found) or (one.at, one.at))[1] for one in ops)
+    highest = max(
+        (span[1] for one in ops if (span := asm._stands_for(one, found)) and span[0] < span[1]),
+        default=lowest,
+    )
     inside = [Table(lo, hi) for lo, hi in tables if lowest <= lo and hi <= highest]
 
     # BC pads the end of its code segment with zeros, and every object in

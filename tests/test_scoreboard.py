@@ -21,6 +21,84 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 import opportunity
 
 
+def test_a_fallback_is_not_scored_as_success(monkeypatch) -> None:
+    """A backend refusal could score BC or fallback bytes as optimized output."""
+    monkeypatch.setattr(opportunity.rewrite, "rewrite", lambda data, **kwargs: (data, []))
+    with pytest.raises(opportunity.Unmeasured, match="LIR"):
+        opportunity._measured(Path("fixtures/omf/hotlop-p-g2.obj"), raw=False)
+
+
+def test_unmapped_output_is_not_a_zero_cost_success(monkeypatch, capsys) -> None:
+    """bools-q-O was reported as 0.0x when the output could not be mapped."""
+    monkeypatch.setattr(opportunity, "code_map", lambda _: "unmapped code")
+    status = opportunity.against_targets([Path("fixtures/omf/bools-q-O.obj")])
+    report = capsys.readouterr().out
+    assert status != 0
+    assert "UNMEASURED" in report and "0.0x" not in report
+
+
+def test_above_target_is_not_success(monkeypatch) -> None:
+    """A target report returned success even when press exceeded 1.5x."""
+    from collections import Counter
+
+    monkeypatch.setattr(opportunity, "counted", lambda *args: Counter(cost=463))
+    assert opportunity.against_targets([Path("press-p-g2.obj")]) != 0
+
+
+def test_rewrite_failure_cannot_be_scored_as_optimized_output(monkeypatch) -> None:
+    """A failed rewrite silently scored BC's original hotlop as our output."""
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("rewrite failed")
+
+    monkeypatch.setattr(opportunity.rewrite, "rewrite", broken)
+    path = Path("fixtures/omf/hotlop-p-g2.obj")
+    with pytest.raises(RuntimeError, match="rewrite failed"):
+        opportunity._measured(path, raw=False)
+    assert opportunity._measured(path, raw=True) is not None
+
+
+def test_cost_does_not_make_unknown_memory_accesses_free() -> None:
+    """harr's cost changed when allocation obscured an array's address.
+
+    The instruction still accesses memory if its exact address is unknown.
+    Changing only address knowledge must not change its execution cost.
+    """
+    from collections import Counter
+    from dataclasses import replace
+
+    from qbopt import mir
+    from qbopt import omf
+    from qbopt import module
+    from qbopt import blocks as split
+
+    found = module.of(omf.parse(Path("fixtures/omf/harr-p-g2.obj").read_bytes()))
+    blocks = split.partition(found, split.code_map(found))
+    before, after = Counter(), Counter()
+    for _name, body in mir.bodies(found, blocks):
+        obscured = replace(
+            body,
+            blocks=tuple(
+                replace(
+                    block,
+                    ops=tuple(
+                        replace(
+                            op,
+                            loads=tuple(replace(ref, addr=None) for ref in op.loads),
+                            stores=tuple(replace(ref, addr=None) for ref in op.stores),
+                        )
+                        for op in block.ops
+                    ),
+                )
+                for block in body.blocks
+            ),
+        )
+        opportunity._cost(body, found, before)
+        opportunity._cost(obscured, found, after)
+    assert before["cost"] > 0
+    assert after["cost"] == before["cost"], "unknown addresses made real memory accesses free"
+
+
 # Programs the passes provably change. Any of them would do; more than one
 # so that a single fixture going quiet cannot make this vacuous.
 MOVED = ("hotlop-p-g2", "press-p-g2", "spill-p-g2")

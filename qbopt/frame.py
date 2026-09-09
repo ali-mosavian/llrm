@@ -11,8 +11,8 @@ deepest slot it uses is what this starts below. A slot is two bytes at
 `CreateSpillStackObject` is the LLVM name for `slot()`.
 """
 
-from dataclasses import dataclass
 from dataclasses import field
+from dataclasses import dataclass
 
 from iced_x86 import Register
 
@@ -23,6 +23,13 @@ from qbopt.module import Space
 # Every slot is a word. BC's own frame is word-aligned throughout and a
 # spilled value is at most four bytes, which is two of these.
 WORD = 2
+ENTER = "B$ENRA"
+LEAVE = "B$EXSA"
+RUNTIME_SIZE = 10  # runtime/inc/stack.inc: FR_SIZE, below BP and above locals.
+
+
+class Refused(Exception):
+    """The existing runtime frame has no established extent."""
 
 
 @dataclass
@@ -51,13 +58,23 @@ class Frame:
         return ir.Mem(ir.Addr(Space.FRAME, self.slot(value, width)), width, Register.BP, 0, 2)
 
 
-def of(body: lir.LirBody) -> Frame:
+def of(body: lir.LirBody, calls: dict | None = None) -> Frame:
     """A frame for this body, starting below everything it already reaches."""
     floor = 0
+    constants = {}
     for block in body.blocks:
         for one in block.insns:
             if one.what is None:
                 continue
+            match one.what:
+                case ir.Semantics(op=ir.Operation.MOVE, dests=(ir.Held(value, _),), sources=(ir.Imm(count, _),)):
+                    constants[value] = count
+                case ir.Semantics(op=ir.Operation.CALL, sources=(ir.Held(value, _),)) if (calls or {}).get(
+                    one.at
+                ) == ENTER:
+                    if value not in constants:
+                        raise Refused("runtime frame size is not a known constant")
+                    floor = min(floor, -RUNTIME_SIZE - constants[value])
             for where in (*one.what.dests, *one.what.sources):
                 if isinstance(where, ir.Mem) and where.addr is not None and where.addr.space is Space.FRAME:
                     floor = min(floor, where.addr.disp)

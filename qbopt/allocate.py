@@ -1,4 +1,4 @@
-"""Registers for a lowered body: the cheapest assignment, not the first one.
+"""Registers for a lowered body, using greedy allocation with eviction.
 
 Two things separate this from `regalloc.colour()`, which it will replace.
 
@@ -8,14 +8,9 @@ the value is live. The division is the half a plain count misses -- two
 values referenced equally often are not equally worth keeping if one is
 live for three instructions and the other for the whole body.
 
-**The assignment is searched, not greedy.** Greedy colouring in the order
-values are most constrained is optimal on a chordal graph with nothing
-pre-coloured, and neither half holds here: a barrier pins every register it
-touches, an absorbed divide pins eax and edx, and BC's own calling
-convention pins more. Branch and bound over the values, most expensive
-first, pruning as soon as the spill bill reaches the best answer so far.
-The search has a node budget; where it runs out this says so and the
-greedy answer stands, rather than pretending the result is optimal.
+**Fixed intervals go first.** Hardware requirements reserve their registers
+before flexible intervals compete for the rest. Assignment, eviction and
+spill stages advance monotonically; the result does not claim optimality.
 """
 
 import heapq
@@ -31,9 +26,7 @@ from qbopt import target
 from qbopt import intervals as ranges
 from qbopt.passes import LIRTransform
 
-# How many assignments the search will consider before it gives up and says
-# so. Bodies in this corpus colour in a few hundred; the cap is for the one
-# that would not.
+# Maximum queue visits before the remaining values are spilled.
 BUDGET = 200_000
 
 # How long a range may be and still count as a reload. One instruction is
@@ -122,7 +115,7 @@ def narrowed(body: lir.LirBody, pinned: "dict[int, Register_]") -> "tuple[lir.Li
     """
     read = {value for block in body.blocks for one in block.insns for value in one.uses}
     read |= {value for block in body.blocks for value in block.arrives}
-    dropped: "dict[int, Register_]" = {}
+    dropped: dict[int, Register_] = {}
     blocks = []
     for block in body.blocks:
         insns = []
@@ -131,7 +124,7 @@ def narrowed(body: lir.LirBody, pinned: "dict[int, Register_]") -> "tuple[lir.Li
             if one.what is None or one.what.op is not ir.Operation.CALL or not dead:
                 insns.append(one)
                 continue
-            gone: "dict[int, Register_]" = {value: pinned[value] for value in dead}
+            gone: dict[int, Register_] = {value: pinned[value] for value in dead}
             dropped.update(gone)
             insns.append(
                 replace(
@@ -290,12 +283,18 @@ def allocate(
     spilled: set[int] = set()
     cost = 0.0
 
-    queue = [(-_priority(live.get(one), stage.get(one, Stage.ASSIGN)), one) for one in _values(body)]
+    def queued(value: int) -> tuple[bool, float, int]:
+        # Fixed intervals have no alternative placement. Reserve them before
+        # flexible ranges, so a late hardware requirement does not evict an
+        # otherwise placeable loop value straight into the spill stage.
+        return value not in fixed, -_priority(live.get(value), stage.get(value, Stage.ASSIGN)), value
+
+    queue = [queued(one) for one in _values(body)]
     heapq.heapify(queue)
     seen = 0
     while queue and seen < BUDGET:
         seen += 1
-        _prio, value = heapq.heappop(queue)
+        _flexible, _prio, value = heapq.heappop(queue)
         if value in where or value in spilled:
             continue
         at = stage.setdefault(value, Stage.ASSIGN)
@@ -319,13 +318,13 @@ def allocate(
                     union[_whole(got)].remove(one)
                     del where[one]
                     stage[one] = Stage.SPLIT  # it failed here once; do not send it back to ASSIGN
-                    heapq.heappush(queue, (-_priority(live.get(one), stage[one]), one))
+                    heapq.heappush(queue, queued(one))
                 where[value] = got
                 union.setdefault(_whole(got), []).append(value)
                 stage[value] = Stage.DONE
                 continue
             stage[value] = Stage.SPLIT
-            heapq.heappush(queue, (-_priority(mine, Stage.SPLIT), value))
+            heapq.heappush(queue, queued(value))
             continue
 
         # Splitting is a rewrite of the body, not a decision about this
@@ -470,7 +469,7 @@ class RegAlloc(LIRTransform):
     ROUNDS = 12
 
     def __init__(self, pinned: "dict[int, Register_] | None" = None, frame=None) -> None:
-        self.pinned: "dict[int, Register_]" = dict(pinned or {})
+        self.pinned: dict[int, Register_] = dict(pinned or {})
         self.frame = frame
 
     def transform(self, body: lir.LirBody) -> lir.LirBody:

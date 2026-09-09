@@ -240,12 +240,13 @@ for _one in ("pds71", "qb45"):
 # which is what the conservative fields still say.
 VARIANTS[("B$EXSA", "pds71")] = replace(
     worst("B$EXSA"),
-    inputs=frozenset({Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
+    inputs=frozenset({Reg.AX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
     cleanup=0,
     evidence=(
         "disassembled from the linked image at 0x1d6c: the returning path reads no register "
         "and removes no argument; on the error path ax and bx are written before every "
-        "terminal, and cx, dx, si and di are not"
+        "terminal, and cx, dx, si and di are not. The normal return continuation "
+        "exports dx:ax to the BASIC caller, so both halves are live at this boundary."
     ),
 )
 
@@ -253,9 +254,12 @@ VARIANTS[("B$EXSA", "pds71")] = replace(
 # exit, no unresolved edge.
 VARIANTS[("B$EXSA", "qb45")] = replace(
     worst("B$EXSA"),
-    inputs=frozenset(),
+    inputs=frozenset({Reg.AX, Reg.DX}),
     cleanup=0,
-    evidence="disassembled from the linked image at 0x20f2: no register read, one exit",
+    evidence=(
+        "disassembled from the linked image at 0x20f2: no register read, one exit; "
+        "the normal return continuation exports dx:ax to the BASIC caller"
+    ),
 )
 
 

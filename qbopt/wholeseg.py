@@ -134,16 +134,28 @@ def _rebuilt(
         # below the boundary; until the two are separated it runs here,
         # after every pass and before lowering, which is where it ran
         # anyway and is where rule 5 puts it.
-        def one(body):
+        def one(name, body):
             # `only="widen"` is the step on its own, which tools/stages.py
             # asks for; every other name selects a pass and leaves widening
             # out, so the two can be diffed apart.
             if only == "widen":
                 return transform.widened(body)
-            done = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found, only=only)
-            return done if only is not None else transform.widened(done)
+            done = transform.applied(
+                body,
+                found.dgroup,
+                found.calls,
+                blocks=blocks,
+                found=found,
+                only=only,
+                watch=(lambda stage, state: watch(f"mir-{stage}", name, state)) if watch is not None else None,
+            )
+            if only is None:
+                done = transform.widened(done)
+                if watch is not None:
+                    watch("mir-widen", name, done)
+            return done
 
-        bodies = [(name, one(body)) for name, body in bodies]
+        bodies = [(name, one(name, body)) for name, body in bodies]
 
     # Every byte the decoder walked into, so layout.py can tell a gap it may
     # carry from one that is real code it simply did not raise.
@@ -229,12 +241,12 @@ def _through_lir(found, records, blocks, bodies, mapped, fields, reached, native
             )
             if watch is not None:
                 watch("lowered", name, low)
-            frame = frames.of(low)
+            frame = frames.of(low, found.calls)
             for phase in flow.machine(flow._pinned(body), frame, found.calls):
                 low = phase.transform(low)
                 if watch is not None:
                     watch(phase.name, name, low)
-        except (lower.Unlowered, mir.Unraisable) as short:
+        except (lower.Unlowered, mir.Unraisable, frames.Refused) as short:
             # A contract this cannot honour, or an operand no encoding
             # covers. Named here for the same reason as the four below:
             # this body falls back to BC's own layout instead of taking

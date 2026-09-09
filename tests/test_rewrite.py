@@ -165,12 +165,8 @@ def test_exactly_one_marker_and_one_frame() -> None:
     assert len(reserved) <= 1, f"a frame reserved {len(reserved)} times"
 
 
-def test_a_fallback_is_not_finalised_and_keeps_being_looked_at() -> None:
-    """Only the LIR emitter's own output is terminal. A fallback is BC's
-    layout with this pass's choices in it, which is what the loop exists
-    to look at again -- so absence of a marker is not enough to prove: the
-    driver has to come back for it until the bytes settle.
-    """
+def test_a_fallback_is_not_finalised_or_raised_again() -> None:
+    """Re-raising fallback machine code loses SSA and can reserve a second frame."""
     from qbopt import omf
     from qbopt import allocate
     from qbopt import wholeseg
@@ -195,7 +191,8 @@ def test_a_fallback_is_not_finalised_and_keeps_being_looked_at() -> None:
         allocate.RegAlloc.transform, wholeseg.emitted = was_alloc, was_emit
 
     assert seen and set(seen) == {"mir"}, seen
-    assert len(seen) > 1, "a fallback was treated as terminal after one pass"
+    assert len(seen) == 1, "fallback machine code was raised again"
+    assert out == raw, "a failed backend must preserve the original object"
     assert omf.finalised_at(omf.parse(out)) is None, "a fallback was marked as final"
 
 

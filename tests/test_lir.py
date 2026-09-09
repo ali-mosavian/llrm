@@ -17,6 +17,27 @@ from qbopt.blocks import code_map
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
 
+def test_string_copy_keeps_its_implicit_address_registers() -> None:
+    """fpdeep printed DSQ=0 for 144: movsw lost the SI/DI addresses of its double copy."""
+    from qbopt import lower
+    from qbopt import runtime
+
+    found = module.of(omf.parse(Path("fixtures/omf/fpdeep-p-g2.obj").read_bytes()))
+    contracts = runtime.for_module(found)
+    name, body = mir.bodies(found, split.partition(found, code_map(found)), contracts)[0]
+    lowered = lower.lowered(name, body, found.calls, found.absorbed, contracts)
+    copies = [
+        one
+        for block in lowered.blocks
+        for one in block.insns
+        if one.op is not None and one.op.kind is mir.Kind.OPAQUE and one.op.at in range(0x154, 0x158)
+    ]
+    assert len(copies) == 4
+    for one in copies:
+        assert {register for _, register in one.requires} == {Register.SI, Register.DI}
+        assert {register for _, register in one.delivers} == {Register.SI, Register.DI}
+
+
 def _semantics(op: mir.Op) -> ir.Semantics | None:
     return op.made if op.made is not None else getattr(op.node, "semantics", None)
 
@@ -667,7 +688,11 @@ def test_a_call_still_defines_the_results_its_operands_do_not_name() -> None:
     from qbopt import blocks as split
     from qbopt.blocks import code_map
 
-    found = module.of(omf.parse(Path("fixtures/omf/bools-q-O.obj").read_bytes()))
+    # divmod, because bools stopped showing it: its only operand-free
+    # operation is the terminating B$CENP, and once a call to a routine
+    # whose contract reads no register stopped holding every caller value
+    # live across it, nothing read that call's results either.
+    found = module.of(omf.parse(Path("fixtures/omf/divmod-p-g2.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
     absorbed = set(found.absorbed)
     seen = []
@@ -703,14 +728,14 @@ def test_a_folded_divide_says_where_its_two_answers_arrive() -> None:
     """
     from pathlib import Path
 
-    from qbopt import calls as machine
+    from qbopt import omf
     from qbopt import lower
     from qbopt import module
-    from qbopt import omf
     from qbopt import runtime
     from qbopt import transform
     from qbopt import blocks as split
     from qbopt.blocks import code_map
+    from qbopt import calls as machine
 
     found = module.of(omf.parse(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
@@ -1060,10 +1085,7 @@ def test_a_reused_divide_s_copy_lowers_to_a_move_and_not_to_nothing() -> None:
         body = one.transform(body)
 
     copies = [
-        op
-        for block in body.blocks
-        for op in block.ops
-        if op.kind is mir.Kind.COPY and op.id in set(found.absorbed)
+        op for block in body.blocks for op in block.ops if op.kind is mir.Kind.COPY and op.id in set(found.absorbed)
     ]
     assert len(copies) == 1, f"lngmix folds one divide into a copy; {len(copies)} found"
 
@@ -1072,3 +1094,63 @@ def test_a_reused_divide_s_copy_lowers_to_a_move_and_not_to_nothing() -> None:
     assert made, "the copy reached no instruction at all"
     assert made[0].what is not None, "the copy lowered to nothing; the site's id is not the operation"
     assert made[0].what.op is ir.Operation.MOVE
+
+
+def test_two_address_materializes_a_constant_first_operand() -> None:
+    """hotlop printed 420 for 630 when 21 + accumulator lost its 21."""
+    from qbopt import ir
+    from qbopt import lir
+    from qbopt import twoaddr
+
+    result, source = ir.Held(900, 2), ir.Held(901, 2)
+    insn = lir.Insn(
+        at=0,
+        covers=(0, 3),
+        what=ir.Semantics(ir.Operation.BINARY, "add", (result,), (ir.Imm(21, 2), source)),
+        defines=(900,),
+        uses=(901,),
+    )
+    fixed = twoaddr._untied(insn)
+    assert fixed is not None
+    assert fixed[0].what.sources == (ir.Imm(21, 2),)
+    assert fixed[0].uses == ()
+    assert fixed[1].what.sources == (result, source)
+
+
+def test_lower_places_a_commutative_constant_in_the_immediate_operand() -> None:
+    """hotlop needlessly loaded 21 before adding its accumulator."""
+    from qbopt import ir
+    from qbopt import mir
+    from qbopt import lower
+
+    result, source = mir.Value(900, 0), mir.Value(901, 0)
+    op = mir.Op(
+        0,
+        ir.Operation.BINARY,
+        "add",
+        (result,),
+        (source,),
+        kind=mir.Kind.ADD,
+        args=(mir.Const(21, 2), mir.Held(source, 2)),
+        results=(mir.Held(result, 2),),
+    )
+    what = lower.semantics(op, place=lower.as_a_value)
+    assert what.sources == (ir.Held(source.id, 2), ir.Imm(21, 2))
+
+
+def test_two_address_copy_ends_the_original_source_use() -> None:
+    """hotlop kept its old accumulator live through the add after copying it."""
+    from qbopt import ir
+    from qbopt import lir
+    from qbopt import twoaddr
+
+    result, source = ir.Held(900, 2), ir.Held(901, 2)
+    insn = lir.Insn(
+        at=0,
+        covers=(0, 3),
+        what=ir.Semantics(ir.Operation.BINARY, "add", (result,), (source, ir.Imm(21, 2))),
+        defines=(900,),
+        uses=(901,),
+    )
+    fixed = twoaddr._untied(insn)
+    assert fixed[1].uses == (900,)

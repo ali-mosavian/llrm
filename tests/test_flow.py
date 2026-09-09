@@ -258,10 +258,11 @@ def test_a_spilled_value_gets_a_slot_and_the_prologue_reserves_it() -> None:
     from qbopt import prologue
     from qbopt import frame as frames
 
-    # divmod, because nested stopped spilling: the coalescer now asks
-    # Briggs before a join and leaves the allocator a body it can place.
-    # The claim here is the spiller's, so it needs a body that spills.
-    _found, _blocks, bodies = _raised("divmod-p-g2")
+    # jumptable, because divmod stopped spilling: a call to a routine whose
+    # contract reads no register no longer holds every caller value live
+    # across it, and the corpus went from 64 spilling bodies to 13. The
+    # claim here is the spiller's, so it needs a body that still spills.
+    _found, _blocks, bodies = _raised("jumptable")
     ((name, body),) = bodies
     low = lower.lowered(name, body, _found.calls, set(_found.absorbed), runtime.for_module(_found))
     # Everything up to the allocator, which now owns the spill loop -- so
@@ -272,7 +273,7 @@ def test_a_spilled_value_gets_a_slot_and_the_prologue_reserves_it() -> None:
         low = phase.transform(low)
 
     got = allocate.allocate(low, {})
-    assert got.spilled, "divmod spills; the allocator says otherwise"
+    assert got.spilled, "jumptable spills; the allocator says otherwise"
     frame = frames.of(low)
     after, reloads = spiller.spilled(low, got.spilled, frame)
     assert frame.size >= 2 * len(got.spilled), "the frame did not grow by a slot per spilled value"
@@ -340,9 +341,10 @@ def test_a_reload_cannot_be_spilled_again() -> None:
     from qbopt import spiller
     from qbopt import frame as frames
 
-    # divmod, because fpcsex stopped spilling once the coalescer began
-    # refusing a join that would leave a class uncolourable.
-    _found, _blocks, bodies = _raised("divmod-p-g2")
+    # procs, because divmod stopped spilling: a call to a routine whose
+    # contract reads no register no longer holds every caller value live
+    # across it. TWICE still spills three.
+    _found, _blocks, bodies = _raised("procs-q-O")
     ran = False
     for name, body in bodies:
         low = lower.lowered(name, body, _found.calls, set(_found.absorbed), runtime.for_module(_found))
@@ -358,7 +360,7 @@ def test_a_reload_cannot_be_spilled_again() -> None:
         assert reloads, "spilling made no reload values"
         again = allocate.allocate(after, {}, reloads)
         assert not (again.spilled & reloads), f"a reload was spilled: {sorted(again.spilled & reloads)}"
-    assert ran, "divmod spills; the allocator says otherwise"
+    assert ran, "procs spills; the allocator says otherwise"
 
 
 def test_the_allocator_settles_on_every_program() -> None:
@@ -448,10 +450,11 @@ def test_a_spilled_value_gets_a_slot_and_the_prologue_reserves_it() -> None:
     from qbopt import prologue
     from qbopt import frame as frames
 
-    # divmod, because nested stopped spilling: the coalescer now asks
-    # Briggs before a join and leaves the allocator a body it can place.
-    # The claim here is the spiller's, so it needs a body that spills.
-    _found, _blocks, bodies = _raised("divmod-p-g2")
+    # jumptable, because divmod stopped spilling: a call to a routine whose
+    # contract reads no register no longer holds every caller value live
+    # across it, and the corpus went from 64 spilling bodies to 13. The
+    # claim here is the spiller's, so it needs a body that still spills.
+    _found, _blocks, bodies = _raised("jumptable")
     ((name, body),) = bodies
     low = lower.lowered(name, body, _found.calls, set(_found.absorbed), runtime.for_module(_found))
     # Everything up to the allocator, which now owns the spill loop -- so
@@ -462,7 +465,7 @@ def test_a_spilled_value_gets_a_slot_and_the_prologue_reserves_it() -> None:
         low = phase.transform(low)
 
     got = allocate.allocate(low, {})
-    assert got.spilled, "divmod spills; the allocator says otherwise"
+    assert got.spilled, "jumptable spills; the allocator says otherwise"
     frame = frames.of(low)
     after, reloads = spiller.spilled(low, got.spilled, frame)
     assert frame.size >= 2 * len(got.spilled), "the frame did not grow by a slot per spilled value"
@@ -530,9 +533,10 @@ def test_a_reload_cannot_be_spilled_again() -> None:
     from qbopt import spiller
     from qbopt import frame as frames
 
-    # divmod, because fpcsex stopped spilling once the coalescer began
-    # refusing a join that would leave a class uncolourable.
-    _found, _blocks, bodies = _raised("divmod-p-g2")
+    # procs, because divmod stopped spilling: a call to a routine whose
+    # contract reads no register no longer holds every caller value live
+    # across it. TWICE still spills three.
+    _found, _blocks, bodies = _raised("procs-q-O")
     ran = False
     for name, body in bodies:
         low = lower.lowered(name, body, _found.calls, set(_found.absorbed), runtime.for_module(_found))
@@ -548,7 +552,7 @@ def test_a_reload_cannot_be_spilled_again() -> None:
         assert reloads, "spilling made no reload values"
         again = allocate.allocate(after, {}, reloads)
         assert not (again.spilled & reloads), f"a reload was spilled: {sorted(again.spilled & reloads)}"
-    assert ran, "divmod spills; the allocator says otherwise"
+    assert ran, "procs spills; the allocator says otherwise"
 
 
 def test_the_allocator_settles_on_every_program() -> None:
@@ -703,11 +707,8 @@ def test_strength_reduction_is_off_because_it_measured_worse() -> None:
 def test_promotion_takes_a_variable_out_of_memory() -> None:
     """LLVM's mem2reg. A cell nothing else can name becomes a value.
 
-    It is off, and the reason is not the pass: `layout.allocated` hands
-    back the *raised* body for one the allocator refuses, throwing away
-    every pass's work. Promotion makes press's body unallocatable, so all
-    of it is discarded and press costs 468 -> 1788 -- a four-fold
-    regression from a pass that removed 207 memory operations.
+    Stores remain observable; eligible loads use the stored SSA value.
+    Lowering and allocation decide where that value lives.
     """
     from pathlib import Path
 
@@ -962,6 +963,30 @@ def _lngmix_through_the_lir_route():
     return seen[0], out
 
 
+@pytest.mark.parametrize("stem", ["lngmix-p-g2", "lngmxx-p-g2"])
+def test_invariant_divides_execute_before_the_loop(stem: str) -> None:
+    """lngmix/lngmxx kept costly invariant idiv instructions in the loop.
+
+    The old guard hid allocation and relocation defects. Check the actual
+    emitted route and CFG, not merely that a MIR operation moved.
+    """
+    from iced_x86 import Mnemonic
+
+    from qbopt import loops
+    from qbopt import wholeseg
+
+    result = wholeseg.emitted(Path(f"fixtures/omf/{stem}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.fallback_reason
+    found = module.of(omf.parse(result.data))
+    mapped = code_map(found)
+    assert not isinstance(mapped, str), mapped
+    blocks = split.partition(found, mapped)
+    inside = {at for loop in loops.loops(blocks, 0x30) for at in loop.body}
+    divides = [block.at for block in blocks for insn in block.insns if insn.insn.mnemonic == Mnemonic.IDIV]
+    assert divides, "the fixture must exercise division"
+    assert not inside.intersection(divides), "an invariant divide still executes inside the loop"
+
+
 def test_lngmix_is_written_by_the_lir_route_and_not_by_the_fallback() -> None:
     """The route with the allocator that spills, for a body holding a divide.
 
@@ -983,7 +1008,9 @@ def test_nothing_reloads_a_frame_slot_that_was_never_stored_to() -> None:
     it, and nothing had ever written it: lngmix pushed whatever was in
     that stack word.
     """
-    from iced_x86 import Decoder, OpKind, Register
+    from iced_x86 import OpKind
+    from iced_x86 import Decoder
+    from iced_x86 import Register
 
     from qbopt import omf
     from qbopt import module
@@ -1013,7 +1040,10 @@ def test_a_frame_slot_is_written_and_read_at_one_width() -> None:
     was spilled two bytes wide and reloaded four out of the same slot, and
     the high half of what came back was whatever had been there.
     """
-    from iced_x86 import Decoder, MemorySizeExt, OpKind, Register
+    from iced_x86 import OpKind
+    from iced_x86 import Decoder
+    from iced_x86 import Register
+    from iced_x86 import MemorySizeExt
 
     from qbopt import omf
     from qbopt import module

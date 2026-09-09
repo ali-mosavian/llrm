@@ -42,19 +42,10 @@ def rewrite(
     whole_segment: bool = True,
     absorb_calls: bool = True,
 ) -> tuple[bytes, list[Region]]:
-    """Rewrite to a fixed point, or once where the caller is bisecting.
+    """Optimize one raised body, lower once, and preserve the input on refusal.
 
-    One pass is not a fixed point and the reason is worth stating: absorbing
-    a call removes a barrier, and a store and reload the call used to sit
-    between only becomes visible afterwards. procs-q-O ends up with
-    `mov [bp-12h],eax` immediately followed by `mov eax,[bp-12h]`, which the
-    first pass could not see because the call was still there when it
-    looked. Every deletion in the corpus after the first pass is of that
-    shape.
-
-    `take` and `max_regions` exist to bisect a failure by region index, and
-    an index only means anything within one pass -- so those run once, as
-    they did before.
+    Repeated optimization belongs on MIR, never on emitted machine code.
+    Only output from the allocating backend receives the completion marker.
     """
     # `take`, `max_regions` and `dry_run` bisected the machine arm by
     # region index. There are no regions to bisect: what replaced them is
@@ -91,16 +82,11 @@ def rewrite(
             raise Finalised(f"this object was written by {was!r}, and this run is {made_by!r}")
         return data, regions
 
-    for _ in range(PASS_ROUNDS):
-        out, terminal = _written(data, whole_segment, native_fpu, absorb_calls)
-        if terminal:
-            # Only the LIR emitter's own output is final. A fallback is
-            # BC's layout with this pass's choices in it, and raising that
-            # again is what the loop is for.
-            return b"".join(one.emit() for one in omf.finalised(omf.parse(out), made_by)), regions
-        if out == data:
-            break
-        data = out
+    out, terminal = _written(data, whole_segment, native_fpu, absorb_calls)
+    if terminal:
+        return b"".join(one.emit() for one in omf.finalised(omf.parse(out), made_by)), regions
+    # A backend refusal leaves the input intact. Machine output is never
+    # fed back into the raise to approximate a MIR fixed point.
     return data, regions
 
 
@@ -124,74 +110,11 @@ def _configuration(whole_segment: bool, native_fpu: bool, absorb_calls: bool) ->
 def _written(
     data: bytes, whole_segment: bool, native_fpu: bool = False, absorb_calls: bool = True
 ) -> tuple[bytes, bool]:
-    """The object with its code segment emitted from MIR, where that works.
-
-    Every edit above patches BC's own bytes in place and keeps the layout BC
-    chose. This replaces the segment: layout.py places every instruction and
-    relocate.py writes the records, so chunk boundaries, branch
-    displacements and fixup offsets are all produced rather than preserved.
-
-    Silent fallback is the point. wholeseg.rebuilt() returns the input
-    unchanged and says why whenever anything refuses, and a refusal is a
-    module this pass has already improved by absorption -- there is nothing
-    to gain by throwing that away too.
-
-    It is not a size cost: measured over fixtures/omf it saves 201 bytes
-    against the patched output and over qb-qrender 616, because the selector
-    picks the shorter encoding in places BC's own layout could not be
-    changed to use. docs/numbers.md has the table.
-
-    It was off for a while, because it was not correct: `add ax,offset X`
-    arrives at the selector as `add ax,0`, the sign-extended byte form fits
-    zero, and the two-byte fixup then named a one-byte field. The linker
-    patched two bytes regardless, over the immediate and the byte after it,
-    and a generated program read 0 for an array element. select.emit had a
-    `relocated` flag for exactly this and none of its callers passed it.
-
-    Nothing that compared the emitted code could see it -- before linking,
-    both forms disassemble as `add ax,0`. It took reducing the program to
-    thirty-one lines and diffing the two linked images, where one says
-    `add ax,0DCh` and the other `add ax,0FFDCh`.
-    """
+    """Lower and emit once; report whether the allocating backend completed."""
     if not whole_segment:
-        # The legacy arm patches BC's own bytes and leaves a program this
-        # can raise again. It is the only one the loop above is for.
         return data, False
-    # To a fixed point, because that is what re-raises the SSA. Every
-    # transform here rewrites the op list, and the values an op defines and
-    # uses are computed when the body is raised -- so after one transform
-    # they describe the body that went in, not the one that came out. The
-    # ordering in transform.applied() is what has been holding that
-    # together, and it is load-bearing: widening ran before avail.py once
-    # and avail forwarded a stale high half across an op that said it read
-    # two bytes where the instruction read four.
-    #
-    # Re-parsing the emitted object is the honest way to get the values
-    # back, and the only one that needs no transform to maintain them. Each
-    # round sees a body raised from what the last round actually wrote.
-    # One transform per round, each seeing a body raised from what the last
-    # round wrote. Not stopped early on "nothing changed": a pass that finds
-    # nothing says nothing about the one after it.
-    # Each pass once is not a fixed point: a pass can only see what the
-    # round before it wrote, so one that fires on the result of another
-    # needs the sequence run again. Capped, and the corpus settles in two.
-    # Every pass on one MIR body, then lowered once. This ran each pass
-    # through its own rebuilt() -- parse, raise, one pass, lower, allocate,
-    # lay out, emit -- so the program round-tripped through machine code
-    # between every pair of passes and resolved() re-derived SSA by register
-    # each time. transform.applied() already runs them all on one body.
-    #
-    # It is what the architecture says and it is also why a live range split
-    # "comes back through emission as an ordinary move": emission was
-    # happening between the passes. Same output on every program, 2.4x less
-    # work to get it.
-    # Once. Only the LIR emitter's output is terminal, and it says so
-    # rather than being inferred from bytes that stopped changing.
     got = wholeseg.emitted(data, native_fpu=native_fpu)
     return got.data, got.outcome is wholeseg.Emission.LIR
-
-
-PASS_ROUNDS = 4
 
 
 def orphaned_externals_renamed(records: list[omf.Record]) -> list[omf.Record]:

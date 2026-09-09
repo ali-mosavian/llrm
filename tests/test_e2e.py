@@ -76,7 +76,7 @@ def test_every_suite_program_has_dos_line_endings(source: Path) -> None:
 # neither, so "no operands" was the wrong test for it.
 # jumps is here for the ON GOTO tables BC drops between the instructions:
 # carried verbatim, with every entry's fixup moved with them.
-REBUILDS = ("arith", "cmpord", "flags", "nots", "fpemu", "jumps")
+REBUILDS = ("arith", "cmpord", "flags", "nots", "fpemu", "jumps", "arrays", "arrprm", "cmpof")
 # Every configuration now: what used to be two compilers is all three,
 # since carrying BC's trailing zero padding stopped it blocking them.
 REBUILDING_TAGS = tuple(CONFIGS)
@@ -174,8 +174,8 @@ def test_every_compiled_object_round_trips_through_the_selector(tag: str) -> Non
     from qbopt import omf
     from qbopt import module
     from qbopt import select
-    from qbopt import blocks as split
     from qbopt.declen import BITNESS
+    from qbopt import blocks as split
     from qbopt.blocks import code_map
 
     work = Path("build/e2e") / f"{tag}-roundtrip"

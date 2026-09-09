@@ -49,9 +49,9 @@ from qbopt.module import Addr
 # Keyed on the mnemonics -- ("add", "adc") -- this was a pass knowing that
 # x86 spells the second half differently.
 FOLDS = {
-    (mir.Kind.ADD, mir.Kind.ADD): mir.Kind.ADD,
-    (mir.Kind.SUB, mir.Kind.SUB): mir.Kind.SUB,
-    (mir.Kind.NEG, mir.Kind.ADD): mir.Kind.NEG,
+    (mir.Kind.ADD, mir.Kind.ADD_CARRY): mir.Kind.ADD,
+    (mir.Kind.SUB, mir.Kind.SUB_BORROW): mir.Kind.SUB,
+    (mir.Kind.NEG, mir.Kind.ADD_CARRY): mir.Kind.NEG,
 }
 
 # What the machine spells each half, which only lowering needs.
@@ -156,7 +156,7 @@ def refused(body: mir.MirBody) -> tuple[tuple[mir.Op, mir.Op, str], ...]:
             if len(carried) != 1 or carried[0] not in produced:
                 continue
             low = produced[carried[0]]
-            if (low.name, op.name) not in FOLDS:
+            if (low.kind, op.kind) not in FOLDS:
                 continue
             if not _halves_agree(low, op):
                 out.append((low, op, "the two halves do not name adjacent bytes"))

@@ -4,12 +4,10 @@ LLVM's `PrologEpilogInserter`. `frame.py` hands out slots and says how much
 bigger the frame got; this is what makes that space exist -- `sub sp,N` at
 the body's entry and `add sp,N` before every return.
 
-**BC's bodies have no prologue of their own to grow.** The runtime sets the
-frame up before the body runs (`B$CENP`), and every `[bp-n]` the body uses
-is inside what the runtime reserved. So the space a spill slot needs is not
-in the frame BC declared, and taking it means lowering sp ourselves -- and
-putting it back, because the caller is the runtime and it did not ask for a
-different stack.
+For a runtime-framed procedure, reserve after B$ENRA establishes BP and
+release before B$EXSA tears it down. Reserving before entry moves the
+arguments relative to the frame; releasing after exit adjusts the caller's
+stack. Main bodies already have their frame when their code starts.
 
 Refused where the body's exits cannot all be found. A `sub sp` with no
 matching `add sp` on some path is not a missed optimisation, it is a
@@ -20,9 +18,9 @@ from dataclasses import replace
 
 from iced_x86 import Register
 
-from qbopt import frame as frames
 from qbopt import ir
 from qbopt import lir
+from qbopt import frame as frames
 from qbopt.passes import LIRTransform
 
 
@@ -45,18 +43,27 @@ def reserved(body: lir.LirBody, frame: frames.Frame, calls: dict | None = None) 
     """`body` with sp lowered by what the frame grew, and put back."""
     if not frame.size:
         return body
+    calls = calls or {}
+    entry = next((block for block in body.blocks if block.at == body.entry), None)
+    if entry is None or not entry.insns:
+        raise Refused("the entry block has no instruction to put the prologue in front of")
+    runtime_entry = next(
+        (
+            index
+            for index, one in enumerate(entry.insns)
+            if calls.get(one.at, "").upper() == frames.ENTER and (one.what is None or one.what.op is ir.Operation.CALL)
+        ),
+        None,
+    )
     leaves = [
         (block, index)
         for block in body.blocks
         for index, one in enumerate(block.insns)
-        if one.what is not None and one.what.op is ir.Operation.RETURN
+        if (calls.get(one.at, "").upper() == frames.LEAVE and (one.what is None or one.what.op is ir.Operation.CALL))
+        or (runtime_entry is None and one.what is not None and one.what.op is ir.Operation.RETURN)
     ]
     if not leaves and not _ends_the_program(body, calls or {}):
         raise Refused(f"{frame.size} bytes of frame are wanted and this body has no return to give them back at")
-
-    entry = next((block for block in body.blocks if block.at == body.entry), None)
-    if entry is None or not entry.insns:
-        raise Refused("the entry block has no instruction to put the prologue in front of")
 
     take = _adjust(entry.insns[0], -frame.size)
     give = {(block.at, index): _adjust(block.insns[index], frame.size) for block, index in leaves}
@@ -65,17 +72,26 @@ def reserved(body: lir.LirBody, frame: frames.Frame, calls: dict | None = None) 
         blocks=tuple(
             replace(
                 block,
-                insns=tuple(_woven(block, take if block.at == body.entry else None, give)),
+                insns=tuple(
+                    _woven(
+                        block,
+                        take if block.at == body.entry else None,
+                        give,
+                        runtime_entry + 1 if runtime_entry is not None else 0,
+                    )
+                ),
             )
             for block in body.blocks
         ),
     )
 
 
-def _woven(block: lir.LirBlock, take: "lir.Insn | None", give: dict) -> "list[lir.Insn]":
+def _woven(block: lir.LirBlock, take: "lir.Insn | None", give: dict, entry_index: int = 0) -> "list[lir.Insn]":
     """The block with the prologue in front and an epilogue before each return."""
-    out: list[lir.Insn] = [take] if take is not None else []
+    out: list[lir.Insn] = []
     for index, one in enumerate(block.insns):
+        if take is not None and index == entry_index:
+            out.append(replace(take, at=one.at, covers=(one.at, one.at), op=one.op))
         found = give.get((block.at, index))
         if found is not None:
             out.append(found)

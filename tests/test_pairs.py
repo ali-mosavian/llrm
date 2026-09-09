@@ -454,13 +454,16 @@ def test_a_widened_negate_drops_its_carry_too() -> None:
 
 
 def test_no_two_widened_ops_land_on_one_address() -> None:
-    """layout.py keys every op by its address, so two on one is a silent loss.
+    """Two byte-owning operations on one address would be a silent loss.
 
     The restore used to go four bytes back from the end of the chain, to
     make its `covers` the four bytes it emits. A chain ending in a
     two-and-two pair -- `not ax / not dx` -- has its last low on exactly
     that address, and the two ops collided: one length overwrote the other
     and the body either refused or came out wrong.
+
+    Absorption also introduces zero-span result joins at its leader's
+    address. They own no source bytes and already exist before widening.
     """
     seen = 0
     for obj in FIXTURES:
@@ -471,7 +474,9 @@ def test_no_two_widened_ops_land_on_one_address() -> None:
             continue
         for name, body in mir.bodies(found, split.partition(found, mapped)):
             after = pairs.widened(body)
-            at = [op.at for block in after.blocks for op in block.ops]
+            at = [
+                op.at for block in after.blocks for op in block.ops if op.covers is None or op.covers[0] != op.covers[1]
+            ]
             assert len(at) == len(set(at)), f"{obj.stem} {name}: two ops on one address"
             seen += len(at)
     assert seen, "no ops at all, so this proves nothing"

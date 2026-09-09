@@ -39,6 +39,30 @@ from qbopt.blocks import code_map
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
 
+def test_harr_keeps_its_inner_loop_value_out_of_a_spill_slot() -> None:
+    """harr-p-g2 acquired three stack accesses per 10x10 loop iteration.
+
+    A long interval took eax before the multiply's fixed inputs were
+    assigned. Their eviction sent it directly toward spilling although a
+    different initial placement fits the entire body in registers.
+    Modeled cost grew from 11274 to 12876, worse than BC's 12454.
+    """
+    from qbopt import wholeseg
+
+    result = wholeseg.emitted(Path("fixtures/omf/harr-p-g2.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.fallback_reason
+    found = module.of(omf.parse(result.data))
+    mapped = code_map(found)
+    assert not isinstance(mapped, str), mapped
+    reads = [
+        insn
+        for at in sorted(mapped.starts)
+        for insn in (Decoder(16, found.code[at:], ip=at).decode(),)
+        if insn.memory_base == Register.BP
+    ]
+    assert not reads, f"harr introduced frame accesses: {reads}"
+
+
 def _shown(code: bytes) -> str:
     formatter = Formatter(FormatterSyntax.NASM)
     return "; ".join(formatter.format(one) for one in Decoder(16, code, ip=0))
@@ -173,9 +197,15 @@ def test_an_allocation_keeps_every_value_where_it_was_unless_forced() -> None:
                     # them has no home to keep, so moving it is not unforced.
                     if len(homes[klass.get(value, value)]) != 1:
                         continue
-                    # It moved. Something it interferes with has to be in
-                    # the register it left, or nothing forced it.
-                    assert [one for one in graph.get(value, ()) if got.get(one) is was], (
+                    # It moved. Something the class interferes with has to
+                    # be in the register it left, or nothing forced it --
+                    # the class, because a class moves as one: addrm's v1_1
+                    # has no neighbours at all and left eax because its
+                    # sibling v1_12 interferes with the pinned value now
+                    # sitting there. Asked of the value alone this reported
+                    # an unforced move that never happened.
+                    kin = {value} | {one for one in klass if klass.get(one, one) is klass.get(value, value)}
+                    assert [one for near in kin for one in graph.get(near, ()) if got.get(one) is was], (
                         f"{obj.stem} {body_name}: {value} left {regalloc.NAMES.get(was, was)} with nothing in it"
                     )
                 break
@@ -343,9 +373,11 @@ def test_a_copy_on_the_phi_edge_untangles_a_class() -> None:
     blocks = split.partition(found, mapped)
     seen = 0
     for _who, body in mir.bodies(found, blocks):
-        # The same pipeline wholeseg runs: widening is not a pass and goes
-        # after every one of them, just before lowering.
-        done = transform.widened(transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found))
+        # Exercise the legacy colourer's edge split without promotion's
+        # new variables, which the production LIR allocator handles.
+        done = transform.widened(
+            transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found, promote_=False)
+        )
         if not regalloc._tangled(done):
             continue
         seen += 1
@@ -431,8 +463,8 @@ def test_a_half_register_and_its_whole_are_the_same_register() -> None:
     """
     from iced_x86 import Register
 
-    from qbopt import allocate
     from qbopt import ir
+    from qbopt import allocate
 
     # Three longer-lived values take the registers ahead of edx, so the
     # long below is placed in it, and a half-width value pinned to dx is
@@ -752,8 +784,8 @@ def test_a_value_minted_for_a_fixed_register_is_not_spilled_out_of_it() -> None:
     """
     from pathlib import Path
 
-    from qbopt import constrain
     from qbopt import wholeseg
+    from qbopt import constrain
     from qbopt import allocate as alloc
 
     minted: dict = {}

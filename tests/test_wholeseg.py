@@ -18,6 +18,22 @@ from qbopt import wholeseg
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
 
+@pytest.mark.parametrize("tag", ["p-g2", "v-g3"])
+def test_split_edges_do_not_create_phantom_padding(tag) -> None:
+    """cmpof hung because synthetic phi blocks created 72 nonexistent padding bytes.
+
+    bools has the same critical-edge shape in the checked-in BC corpus.
+    The emitted branches must land on instructions, not shifted addresses.
+    """
+    from qbopt.blocks import code_map
+
+    result = wholeseg.emitted(Path(f"fixtures/omf/bools-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result
+    found = module.of(omf.parse(result.data))
+    mapped = code_map(found)
+    assert not isinstance(mapped, str), mapped
+
+
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
 def test_a_rebuilt_object_parses_and_agrees_with_itself(obj: Path) -> None:
     """The segment may change length -- selection chooses encodings BC did
@@ -529,11 +545,12 @@ def test_the_long_divide_bodys_entry_reads_nothing_it_has_not_written() -> None:
     """
     from pathlib import Path
 
-    from iced_x86 import OpKind
     from iced_x86 import Decoder
+    from iced_x86 import OpAccess
     from iced_x86 import Register
     from iced_x86 import FlowControl
     from iced_x86 import RegisterExt
+    from iced_x86 import InstructionInfoFactory
 
     from qbopt import omf
     from qbopt import module
@@ -549,19 +566,23 @@ def test_the_long_divide_bodys_entry_reads_nothing_it_has_not_written() -> None:
         RegisterExt.full_register(one)
         for one in (Register.BP, Register.SP, Register.DS, Register.ES, Register.SS, Register.CS)
     }
+    factory = InstructionInfoFactory()
     for one in Decoder(16, after.code[entry:], ip=entry):
         if one.is_invalid or one.flow_control != FlowControl.NEXT:
             break
+        used = factory.info(one).used_registers()
         reads = {
-            RegisterExt.full_register(one.op_register(i))
-            for i in range(one.op_count)
-            if one.op_kind(i) == OpKind.REGISTER and i
+            RegisterExt.full_register(register.register)
+            for register in used
+            if register.access in (OpAccess.READ, OpAccess.COND_READ, OpAccess.READ_WRITE, OpAccess.READ_COND_WRITE)
         }
         assert reads <= written, f"{one.ip:#06x} reads {sorted(reads - written)}, which nothing wrote"
+        # cdq and idiv define edx without an explicit destination operand.
+        # Operand position is not a read/write model (cmp writes neither).
         written |= {
-            RegisterExt.full_register(one.op_register(i))
-            for i in range(one.op_count)
-            if one.op_kind(i) == OpKind.REGISTER and not i
+            RegisterExt.full_register(register.register)
+            for register in used
+            if register.access in (OpAccess.WRITE, OpAccess.READ_WRITE)
         }
 
 

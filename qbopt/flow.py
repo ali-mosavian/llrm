@@ -88,7 +88,7 @@ def run(data: bytes, native_fpu: bool = False, optimise: bool = True) -> tuple[b
             )
             body = transform.widened(body)
         low = lower.lowered(name, body, found.calls, set(found.absorbed), contracts)
-        frame = frames.of(low)
+        frame = frames.of(low, found.calls)
         for phase in machine(_pinned(body), frame, found.calls):
             low = phase.transform(low)
         done.append(low)
