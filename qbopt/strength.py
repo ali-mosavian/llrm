@@ -56,8 +56,7 @@ def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | 
     first = taken + 1
     ahead: dict[int, list[Op]] = {}
     behind: dict[int, list[Op]] = {}
-    swap: dict[int, mir.Value] = {}
-    gone: set[int] = set()
+    replacements: dict[int, Op] = {}
 
     for loop, _basics, derived in found:
         preheader = passes._preheader(body, loop)
@@ -67,9 +66,9 @@ def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | 
         for one in derived:
             # Once each. A multiply inside a nest is derived in every loop
             # that contains it, and reducing it twice would set up two
-            # counters for one value and delete the multiply once.
+            # counters for one value.
             answer = _answer(body, one.op)
-            if answer is None or id(one.op) in gone or not _removable(at_of, one.op):
+            if answer is None or id(one.op) in replacements:
                 continue
             width = _width(one.op)
             stride = _times(one.of.step, one.by, width)
@@ -90,42 +89,35 @@ def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | 
                     one.op,
                 )
             )
-            swap[answer.id] = start
-            gone.add(id(one.op))
+            replacements[id(one.op)] = replace(
+                one.op,
+                kind=mir.Kind.COPY,
+                name="",
+                node=None,
+                made=None,
+                defines=(answer,),
+                uses=(start,),
+                args=(mir.Held(start, width),),
+                results=(mir.Held(answer, width),),
+                loads=(),
+                stores=(),
+                merges={},
+                symbol=False,
+            )
 
-    if not gone:
+    if not replacements:
         return body
     changed = replace(
         body,
         blocks=tuple(
             replace(
                 block,
-                ops=tuple(
-                    ssa.substituted(op, swap)
-                    for op in _woven(block, ahead.get(block.at, []), behind.get(block.at, []), gone)
-                ),
+                ops=tuple(_woven(block, ahead.get(block.at, []), behind.get(block.at, []), replacements)),
             )
             for block in body.blocks
         ),
     )
     return ssa.constructed(changed, frozenset(range(first, taken + 1)))
-
-
-def _removable(at_of: dict, op: Op) -> bool:
-    """Whether this multiply's own bytes can go to a survivor beside it.
-
-    `_without` refuses a deletion no neighbour can account for, and leaves
-    the operation standing -- which for this pass would compute the value
-    twice, once in the loop and once in the counter its readers now name.
-    Better to leave the multiply alone than to leave it *and* replace it.
-    """
-    from qbopt import mir as form
-    from qbopt import transform as passes
-
-    block = next((b for b in at_of.values() if any(one is op for one in b.ops)), None)
-    if block is None:
-        return False
-    return len(passes._without(list(block.ops), lambda one: one is op)) < len(block.ops)
 
 
 def _start(into, one, preheader: int) -> Op:
@@ -149,13 +141,7 @@ def _answer(body: MirBody, op: Op) -> "mir.Value | None":
     the high half or the flags are read too, the multiply is doing work an
     add does not do and it stays.
     """
-    read = {
-        value.id
-        for block in body.blocks
-        for other in block.ops
-        if other is not op
-        for value in other.uses
-    }
+    read = {value.id for block in body.blocks for other in block.ops if other is not op for value in other.uses}
     # A phi arm counts only where the phi's own result is read. The raise
     # makes a phi per register at every header, so dx appears in one after
     # every widening multiply whether or not anything wants its value --
@@ -180,7 +166,7 @@ def _answer(body: MirBody, op: Op) -> "mir.Value | None":
     return wanted[0]
 
 
-def _woven(block, ahead: list, behind: list, gone: set) -> list:
+def _woven(block, ahead: list, behind: list, replacements: dict[int, Op]) -> list:
     """The block with the new counter set up and advanced, and the multiply out.
 
     `ahead` goes at the end of the preheader, after everything it may read.
@@ -188,13 +174,7 @@ def _woven(block, ahead: list, behind: list, gone: set) -> list:
     the flags something before it set and a new add would be read as having
     changed them.
     """
-    # The multiply's bytes go to a survivor in its own block. Every byte
-    # between the first op and the last has to be accounted for, and an op
-    # that simply disappears leaves a hole layout reports rather than emits
-    # -- harr refused with "2 bytes between the ops are not instructions".
-    from qbopt import transform as passes
-
-    kept = passes._without(list(block.ops), lambda one: id(one) in gone)
+    kept = [replacements.get(id(op), op) for op in block.ops]
     if ahead:
         cut = len(kept)
         while cut and kept[cut - 1].kind in (mir.Kind.JUMP, mir.Kind.BRANCH):

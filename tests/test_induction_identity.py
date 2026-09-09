@@ -175,11 +175,16 @@ def test_a_reduced_counter_has_its_own_loop_phi_and_fresh_variable(address: bool
     phi = added[0]
     assert phi.result.variable > livein.variable
     consumer = next(op for op in after.ops if op.kind is mir.Kind.ARG)
+
+    def source(value: mir.Value) -> mir.Value:
+        definition = next((op for op in after.ops if value in op.defines), None)
+        return definition.args[0].value if definition is not None and definition.kind is mir.Kind.COPY else value
+
     if address:
-        assert consumer.args[0].ref.base == phi.result
-        assert consumer.loads[0].base == phi.result
+        assert source(consumer.args[0].ref.base) == phi.result
+        assert source(consumer.loads[0].base) == phi.result
     else:
-        assert consumer.args[0].value == phi.result
+        assert source(consumer.args[0].value) == phi.result
     assert phi.incoming[0] != phi.incoming[1]
     step = next(op for op in after.ops if phi.incoming[1] in op.defines)
     assert step.args[0].value == phi.result
@@ -271,3 +276,30 @@ def test_existing_phi_inputs_follow_their_predecessor_versions() -> None:
     assert phi.incoming[0] == result.blocks[0].ops[0].defines[0]
     assert phi.incoming[1] == result.blocks[1].ops[0].defines[0]
     assert [len(block.ops) for block in result.blocks] == [1, 1, 0]
+
+
+def test_reduced_product_keeps_the_current_iteration_on_exit() -> None:
+    built, _loop = body()
+    header = built.blocks[1]
+    counter = header.phis[0].result
+    product = replace(header.ops[1], uses=(counter,), args=(mir.Held(counter, 2), mir.Const(3, 2)), covers=(2, 4))
+    answer = product.defines[0]
+    exit_value = mir.Value(40, 2, variable=10)
+    consume = mir.Op(5, ir.Operation.PUSH, "", (), (exit_value,), kind=mir.Kind.ARG, args=(mir.Held(exit_value, 2),))
+    built = replace(
+        built,
+        blocks=(
+            built.blocks[0],
+            replace(header, ops=(replace(header.ops[0], covers=(1, 2)), product)),
+            mir.MirBlock(2, (mir.Phi(exit_value, {1: answer}),), (consume,), ()),
+        ),
+    )
+    result = strength.reduced(built)
+    after = result.blocks[1]
+    phi = next(one for one in after.phis if one.result != counter)
+    preserved = next((op for op in after.ops if answer in op.defines), None)
+    assert preserved is not None
+    assert preserved.kind is mir.Kind.COPY
+    assert preserved.args == (mir.Held(phi.result, 2),)
+    assert result.blocks[2].phis[0].incoming[1] == answer
+    assert preserved.args[0].value != phi.incoming[1]

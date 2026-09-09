@@ -55,6 +55,15 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+Current-iteration checkpoint: reduction now replaces a product with a semantic
+copy into its original result instead of deleting that definition and replacing
+all consumers. Exit phis therefore retain the pre-increment result. This removes
+the separate deletion/renaming path and leaves copy elimination to allocation.
+The exit regression fails with the old reducer; 43 focused checks pass.
+Experimental `matrix-p-g2` modeled cost is 14,164 versus production 12,076
+(2.28x versus 1.94x, target 6,210). No enablement: inspect production-stage dumps
+to explain the added cost and condition preservation before any runtime batch.
+
 Phi-edge SSA checkpoint: isolated construction now resolves existing phi inputs
 at their predecessor ends using analysis-only reads, removed from the returned
 body. The regression fails with the old constructor; 42 focused checks pass.
