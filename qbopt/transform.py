@@ -977,7 +977,9 @@ def _cannot_fault(op: Op) -> bool:
     if op.kind is not mir.Kind.DIVMOD or len(op.args) != 2:
         return False
     divisor = op.args[1]
-    return isinstance(divisor, mir.Const) and divisor.n not in (0, -1)
+    return isinstance(divisor, mir.Const) and consts.masked(divisor.n, divisor.width) not in (
+        0, (1 << (divisor.width * 8)) - 1,
+    )
 
 
 def _invariant_run(

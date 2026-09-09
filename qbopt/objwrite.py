@@ -166,6 +166,8 @@ def _carried(one: "lir.Insn") -> mir.Op:
     # that merely stands beside a far call still claims nothing.
     return replace(
         one.op,
+        kind=mir._kind_of(one.what, (), ())
+        if one.op.kind is mir.Kind.DIVMOD and one.what is not None else one.op.kind,
         made=one.what,
         at=one.at,
         covers=one.covers,

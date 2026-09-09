@@ -441,7 +441,20 @@ def _extract(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]:
     raise Unlowered(f"unsupported extraction at {op.at:#x}")
 
 
-_EXPANDS: dict = {mir.Kind.EXTRACT: _extract}
+def _word_division(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...] | None:
+    if len(op.args) != 2 or len(op.results) != 2:
+        return None
+    if not all(isinstance(arg, mir.Held) and arg.width == 2 for arg in (*op.args, *op.results)):
+        return None
+    dividend, divisor = map(operand, op.args)
+    high = ir.Held(lowering.fresh(), 2)
+    return (
+        ir.Semantics(ir.Operation.EXTEND, "cwd", (high,), (dividend,)),
+        ir.Semantics(ir.Operation.DIVIDE, "idiv", tuple(map(operand, op.results)), (high, dividend, divisor)),
+    )
+
+
+_EXPANDS: dict = {mir.Kind.EXTRACT: _extract, mir.Kind.DIVMOD: _word_division}
 
 
 class Lowering:
