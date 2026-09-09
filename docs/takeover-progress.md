@@ -1700,3 +1700,24 @@ loaded in isolation (`/tmp/qbopt-signed-stores-select-baseline.txt`). This is
 not a claim of a green selection suite. Strict LIR runtime checks passed
 99 cases across ADDRM, SPILL, NESTED, MATRIX, HARR, HOTLOP, LNGMIX and NBODY
 on all three compilers. Artifacts: `qbopt-signed-stores-g026xtr_`.
+
+### Address-shift recurrence probe: not shipped
+
+Allowing plain SHL address recurrences would put ADDRM at 1096/1102/1096,
+within 1.5x, and improve ARRIDX from 590/594/600 to 538/542/548. However,
+STRIDE regresses by 25 modeled cycles and NBODY PDS regresses from 377016
+to 410356. Runtime output still passes: correctness alone misses this loss.
+
+NBODY's existing whole-position-load regression catches the important
+structural difference: a position load stays in block 0x117 instead of
+hoisting to 0xf0. Its inner loop also gains a second affine counter with
+step 4 alongside the step-1 counter; existing range/alias proofs must remain
+useful after this transformation. Unit-step and constant-start eligibility
+gates did not prevent the NBODY regression. Do not repeat those probes or
+ship a fixture-specific exception. Preserve the induction/range/alias
+relationships before enabling these cheaper recurrences.
+
+All experimental source/test changes were removed. The authoritative ADDRM
+cost remains 1206/1212/1206, not the attractive probe number. Probe dumps:
+`/tmp/qbopt-addrm-strides`, `/tmp/qbopt-nbody-shift-probe`; runtime artifacts
+`qbopt-address-recurrences-adusqjrb` (96 passing cases across three compilers).
