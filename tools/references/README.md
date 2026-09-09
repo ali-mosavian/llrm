@@ -67,3 +67,30 @@ based only on EarlyCSE would also be wrong. The immediate engineering gaps
 are cross-block floating allocation (currently explicitly refused by
 `backend/floatalloc.py`) and a justified FP reuse rule. No full-program score
 is derived from this kernel, and qbopt's own before/after output is unchanged.
+
+### Trap-enabled limitation found in the source
+
+At local LLVM revision `338e0c94943a6fb917c276bbbd9ff4b6cd6dd71e`,
+`llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp` explains the difference:
+
+- `getFPOperationRoot`, lines 1187–1201, allows strict operations between
+  barriers to share a root when exceptions are observed through status flags.
+  Its comment requires source ordering when traps are enabled, then explicitly
+  leaves support for that scenario as a TODO.
+- `pushFPOpOutChain`, lines 8667–8687, defers root updates and groups pending
+  chains with a TokenFactor, treating them as independent.
+- `visitConstrainedFPIntrinsic`, lines 8691–8703, uses that shared root.
+
+The installed Clang's before/after `machine-cse` dumps already contain a single
+`ADD_Fp80` for a+b **before** MachineCSE. That pass is not the source of the
+merge; in the local source it also explicitly rejects `mayRaiseFPException()`.
+The shared-DAG-root behavior explains how identical strict operations can
+be shared earlier, but the installed Apple compiler revision is different:
+this is a source-supported explanation, not a trace of its exact build.
+
+Consequently, do not adopt this reference's operation reuse as proof for
+trap-enabled BASIC. Reuse needs an exception-free operation proof or a verified
+masked-exception region with no intervening environment observation/change.
+Cross-block allocation must separately retain conversion and synchronization
+semantics. Neither changing the global strict contract nor accepting the old
+1340 denominator follows from this experiment.
