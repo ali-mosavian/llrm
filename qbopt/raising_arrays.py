@@ -32,7 +32,9 @@ def annotated(body: mir.MirBody, calls: dict[int, str], *, family: str = "") -> 
                 arguments.clear()
             ops.append(op)
         blocks.append(replace(block, ops=tuple(ops)))
-    return _addresses(replace(body, blocks=tuple(blocks)), symbols)
+    from qbopt import raising_array_bounds
+
+    return raising_array_bounds.proven(_addresses(replace(body, blocks=tuple(blocks)), symbols))
 
 
 def _descriptor_values(request: mir.ArrayRequest | None, arguments: list, family: str) -> tuple:

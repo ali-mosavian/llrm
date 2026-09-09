@@ -1,5 +1,30 @@
 # Takeover checkpoint — 2026-09-09
 
+## Bounded array paths unlock existing optimization
+
+The raise now proves finite word-width array paths by exact scalar evaluation.
+Each far access must use the descriptor's loaded segment and adjusted pointer,
+and fit the allocation before its memory effect is interpreted. Unknown branches,
+calls before later accesses, descriptor writes, unsupported operations, nonzero
+lower bounds and traversal exhaustion discard the proof. No alias assumption is
+used to establish the bounds. The resulting allocation metadata only excludes
+direct accesses to the descriptor's program-data segment; other pointers remain
+conservative. This is a bounded proof, not general symbolic range analysis.
+
+Existing constant propagation and promotion now retain descriptor dimensions and
+counter values across the element stores. PDS modeled costs improve:
+**HARR 11294 -> 7930, 6.16x -> 4.32x**;
+**SEGLD 25002 -> 20096, 3.73x -> 3.00x**.
+Both still miss the 1.5x target. Segment-load optimization and further loop/codegen
+work remain. No array-specific optimization pass was introduced.
+
+Three real HARR dimension-fact regressions fail with the proof disabled; 35
+focused checks pass, including rejected out-of-bounds/unknown-condition/changed-
+descriptor/wrong-segment/exhausted proofs. Six strict-LIR runtime comparisons
+pass for HARR/SEGLD across p-g2/q-O/v-g3. Stage dumps display allocation proofs:
+`/tmp/qbopt-array-bounds-final`. Runtime artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-array-bounds-k2_79k98`.
+
 ## Memory identity requires the segment, not just the offset
 
 HARR's descriptor-segment loads still produce Opaque results; element references

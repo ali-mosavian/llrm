@@ -325,6 +325,9 @@ def _says(op, cells: Cells, calls: dict, verbose: bool) -> str:
     into = ", ".join(_short(one, cells) for one in op.results)
 
     notes = []
+    for ref in dict.fromkeys(op.loads + op.stores):
+        if ref.allocation is not None:
+            notes.append(f"in bounds {_short(mir.Cell(ref), cells)} of {_short(ref.allocation, cells)}")
     if op.memory_values:
         notes.append(
             "on return "

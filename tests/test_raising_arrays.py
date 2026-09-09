@@ -118,7 +118,10 @@ def test_only_allocating_calls_carry_requests(name: str) -> None:
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
-def test_array_annotation_does_not_change_emission(tag: str, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_descriptor_metadata_alone_does_not_change_emission(tag: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    from qbopt import raising_array_bounds
+
+    monkeypatch.setattr(raising_array_bounds, "proven", lambda body: body)
     data = (Path("fixtures/omf") / f"harr-{tag}.obj").read_bytes()
     annotated = wholeseg.emitted(data)
     monkeypatch.setattr(raising_arrays, "annotated", lambda body, calls, **kwargs: body)

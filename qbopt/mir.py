@@ -248,6 +248,7 @@ class MemRef:
     # guarantee is worth nothing.
     beyond: "tuple[int, frozenset] | None" = None
     symbolic: "Symbol | None" = None  # proven effective address; original operands remain for lowering
+    allocation: "Symbol | None" = None  # proven in-bounds access to this dynamic allocation
 
     @property
     def where(self) -> "Space | None":
@@ -1956,6 +1957,8 @@ def overlapping(
     written in between.
     """
     one, other = _symbolic_ref(one), _symbolic_ref(other)
+    if _allocation_disjoint(one, other) or _allocation_disjoint(other, one):
+        return False
     if one.addr is None or other.addr is None:
         # Neither names the byte, but each may name the object. LLVM's
         # PseudoSourceValue rule: two different kinds never alias, and one
@@ -1980,6 +1983,15 @@ def _symbolic_ref(ref: MemRef) -> MemRef:
         return ref
     symbol = ref.symbolic
     return replace(ref, addr=module.Addr(symbol.space, symbol.offset + symbol.addend, symbol.index), base=None, segment=None)
+
+
+def _allocation_disjoint(allocated: MemRef, static: MemRef) -> bool:
+    return (
+        allocated.allocation is not None and static.allocation is None
+        and static.addr is not None and static.addr.space is Space.SEGMENT
+        and static.addr.index == allocated.allocation.index
+        and static.base is None and static.segment is None and static.addr.base == Register.NONE
+    )
 
 
 def _out_of_reach(blind: MemRef, named: MemRef) -> bool:
