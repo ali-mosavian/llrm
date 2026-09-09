@@ -41,11 +41,23 @@ def test_emission_preserves_the_empty_statement_table():
     """ADDRM VBDOS refused OF_STA at 00bc when layout omitted trailing data."""
     from qbopt import wholeseg
     from qbopt.objectfile import omf
-    from qbopt.frontend.blocks import empty_statement_table
+    from qbopt.frontend.blocks import statement_table
     result = wholeseg.emitted(Path("fixtures/omf/addrm-v-g3.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
-    assert empty_statement_table(found) is not None
+    assert statement_table(found) is not None
+
+
+@pytest.mark.parametrize("tag", ["p-evt", "v-evt"])
+def test_emitted_statement_table_does_not_hide_code(tag):
+    """DIVMOD event output had unmapped bytes after its RESUME table."""
+    from qbopt import wholeseg
+    from qbopt.objectfile import omf
+    from qbopt.frontend.blocks import code_map
+    result = wholeseg.emitted(Path(f"fixtures/omf/divmod-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    found = module.of(omf.parse(result.data))
+    assert not isinstance(code_map(found), str), code_map(found)
 
 
 def test_every_fixture_partitions_completely(obj: Path) -> None:

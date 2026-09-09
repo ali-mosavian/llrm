@@ -134,7 +134,7 @@ def test_an_on_goto_table_is_found_and_is_not_code(fixtures: Path) -> None:
     assert found is not None
     mapped = corpus.mapped(fixtures / "jumptable.obj")
     assert not isinstance(mapped, str)
-    assert mapped.tables == ((0x3F, 0x46),)
+    assert mapped.tables == ((0x3F, 0x46), (0xEA, 0xEC))
     lo, hi = mapped.tables[0]
     assert found.code[lo] == 3, "the count byte says three labels"
     assert not [at for at in mapped.starts if lo <= at < hi], "no instruction begins inside a table"
@@ -148,7 +148,10 @@ def test_on_goto_comes_back_past_the_table(fixtures: Path) -> None:
     mapped = corpus.mapped(fixtures / "jumps-v-g3.obj")
     assert not isinstance(mapped, str)
     assert mapped.tables
-    assert all(hi in mapped.leaders for _lo, hi in mapped.tables)
+    from qbopt.frontend.blocks import statement_table
+    inline = [table for table in mapped.tables if table != statement_table(found)]
+    assert inline
+    assert all(hi in mapped.leaders for _lo, hi in inline)
 
 
 def test_padding_is_inert_but_a_branch_is_not(fixtures: Path) -> None:

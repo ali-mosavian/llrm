@@ -164,12 +164,15 @@ def walk(module: Module, entry: int) -> CodeMap | str:
 
     starts: set[int] = set()
     leaders = set(entries)
-    tables: list[tuple[int, int]] = []
+    declared = statement_table(module)
+    tables: list[tuple[int, int]] = [declared] if declared is not None else []
     pending = list(entries)
 
     while pending:
         at = pending.pop()
         while module.start <= at < module.end and at not in starts:
+            if declared is not None and declared[0] <= at < declared[1]:
+                break
             insn = decode(module.code, at)
             if insn is None:
                 return f"the decoder gave up at {at:#x}, reached from an entry point"
@@ -237,7 +240,7 @@ HEADER_SEARCH = 0x40
 SHORTEST_TABLE = 3
 
 
-def empty_statement_table(module: Module) -> tuple[int, int] | None:
+def statement_table(module: Module) -> tuple[int, int] | None:
     """OF_STA points to an address/line table terminated by a zero word."""
     if not has_header(module):
         return None
@@ -245,11 +248,22 @@ def empty_statement_table(module: Module) -> tuple[int, int] | None:
     if (ref is None or ref.space is not Space.SEGMENT or ref.index != module.seg
             or module.code[0x0A:0x0C] != b"\x00\x00"):
         return None
-    at = ref.disp
-    if (at < ENTRY or at + 2 != module.end or module.code[at:at + 2] != b"\x00\x00"
-            or any(at <= site < at + 2 for site in module.sites)):
+    start = at = ref.disp
+    if at < ENTRY:
         return None
-    return at, at + 2
+    while at + 2 <= module.end:
+        address = module.operands.get(at)
+        if address is None:
+            if (module.code[at:at + 2] == b"\x00\x00"
+                    and not any(at <= site < at + 2 for site in module.sites)):
+                return start, at + 2
+            return None
+        if (address.space is not Space.SEGMENT or address.index != module.seg
+                or at + 4 > module.end or module.code[at:at + 2] != b"\x00\x00"
+                or any(at < site < at + 4 for site in module.sites)):
+            return None
+        at += 4
+    return None
 
 
 def unexplained_tables(module: Module, fields: set[int], entry: int) -> tuple[tuple[int, int], ...]:
@@ -363,10 +377,6 @@ def code_map(module: Module) -> CodeMap | str:
         found = walk(module, entry)
         if isinstance(found, str):
             continue
-        if (table := empty_statement_table(module)) is not None:
-            lo, hi = table
-            found = replace(found, starts=found.starts - set(range(lo, hi)),
-                            tables=tuple(sorted({*found.tables, table})))
         dead: list[Insn] = []
         stranded = False
         for gap in found.unreached:

@@ -192,6 +192,26 @@ This establishes the one timer scenario, not every event kind, nested event
 frame or exceptional return path. Event-preserving performance targets remain
 unfinished.
 
+## Nonempty statement tables
+
+OF_STA recognition now follows the complete address/line-pair format through
+its unrelocated zero terminator. Reachability skips the declared data before
+decoding, including when synthetic edge blocks follow the table. Previously
+the emitted DIVMOD event tables hid the remaining code: PDS reported an
+unmapped 03b6..040a and VBDOS 039a..03e8. Both now produce complete listings
+and measured costs (2374/2334), still NO TARGET rather than successful ratios.
+
+The mapping change altered only the three ordinary DIVMOD objects among 96
+primary fixtures. Focused runtime checks pass 20 cases on each of PDS, QB45
+and VBDOS, plus 20 each on PDS/VBDOS event builds. The two ON GOTO tests now
+distinguish their inline jump tables from the separately declared statement
+table; only inline jump tables imply fallthrough past their data.
+
+The pre-fix full target report had 487 rows: 229 comparable rows all within
+1.5x, 169 without targets, 87 provisional and these two unmeasured event
+DIVMOD rows. Missing and provisional references remain substantial completion
+work; the successful ratios do not establish the project goal.
+
 Reproduce a baseline without changing the normal suite:
 
 ```python
