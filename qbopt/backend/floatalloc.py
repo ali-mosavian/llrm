@@ -81,10 +81,32 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
                         ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", operands, operands), (), ()))
                     stack.insert(0, stack[0])
                     inputs = tuple(map(source, what.sources))
-            elif what.op is ir.Operation.FLOAT_ARITH_POP and any(
-                remaining[arg.value] for arg in what.sources if isinstance(arg, ir.Held) and arg.width == 10
-            ):
-                raise Unlowered("floating popping arithmetic requires preserving live operands")
+            elif what.op is ir.Operation.FLOAT_ARITH_POP:
+                if len(inputs) != 2 or not all(isinstance(arg, ir.St) for arg in inputs):
+                    raise Unlowered("floating popping arithmetic requires two stack operands")
+                left, right = (arg.index for arg in inputs)
+
+                def duplicate(index):
+                    if len(stack) == 8:
+                        raise Unlowered("floating stack requires a spill to preserve a live value")
+                    insns.append(lir.Insn(one.at, (one.at, one.at),
+                        ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ir.St(0),), (ir.St(index),)), (), ()))
+                    stack.insert(0, stack[index])
+
+                if remaining[stack[left]]:
+                    duplicate(left)
+                    left, right = 0, right + 1
+                if remaining[stack[right]] or left == right:
+                    duplicate(right)
+                    left, right = left + 1, 0
+                if right:
+                    operands = (ir.St(0), ir.St(right))
+                    insns.append(lir.Insn(one.at, (one.at, one.at),
+                        ir.Semantics(ir.Operation.EXCHANGE, "fxch", operands, operands), (), ()))
+                    stack[0], stack[right] = stack[right], stack[0]
+                    if left == 0:
+                        left = right
+                inputs = ir.St(left), ir.St(0)
             match what.op:
                 case ir.Operation.FLOAT_LOAD:
                     delta, slot = 1, 0

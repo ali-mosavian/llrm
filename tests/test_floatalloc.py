@@ -95,6 +95,48 @@ def test_shared_producer_is_kept_across_two_arithmetic_consumers():
     assert result.insns[4].what.sources == (ir.St(0), cell)
 
 
+@pytest.mark.parametrize("live", ["left", "right", "both", "same", "same_dead"])
+def test_popping_subtraction_preserves_reused_values(live):
+    """Shared FP values were refused when FSUBP consumed an operand used later."""
+    left, right, result = (ir.Held(index, 10) for index in (1, 2, 3))
+    cell = ir.Mem(Addr(Space.FRAME, -4), 4)
+    operations = [ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (left,), (cell,))]
+    if live in {"same", "same_dead"}:
+        right = left
+    else:
+        operations.append(ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (right,), (cell,)))
+    operations.extend([
+        ir.Semantics(ir.Operation.FLOAT_ARITH_POP, "fsubp", (result,), (left, right)),
+        ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cell,), (result,)),
+    ])
+    if live in {"left", "both", "same"}:
+        operations.append(ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cell,), (left,)))
+    if live in {"right", "both"}:
+        operations.append(ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cell,), (right,)))
+    allocated = floatalloc.allocated(_body(operations))
+    stack, stored = [], []
+    loads = iter((7, 2))
+    for one in allocated.insns:
+        what = one.what
+        assert select.emit(what) is not None
+        match what.name:
+            case "fld":
+                source = what.sources[0]
+                stack.insert(0, stack[source.index] if isinstance(source, ir.St) else next(loads))
+            case "fxch":
+                index = what.sources[1].index
+                stack[0], stack[index] = stack[index], stack[0]
+            case "fsubp":
+                index = what.sources[0].index
+                assert index > 0 and what.sources[1] == ir.St(0)
+                stack[index] -= stack[0]
+                stack.pop(0)
+            case "fstp":
+                stored.append(stack.pop(0))
+    assert stored == {"left": [5, 7], "right": [5, 2], "both": [5, 7, 2], "same": [0, 7], "same_dead": [0]}[live]
+    assert not stack
+
+
 @pytest.mark.parametrize("native", [False, True])
 def test_inserted_stack_move_keeps_the_anchor_emulator_mode(native):
     """An inserted FLD beside FPCSE must not silently require a coprocessor under /FPi."""
