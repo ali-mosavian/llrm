@@ -75,3 +75,25 @@ def test_direct_lowering_uses_the_same_float_baseline():
     assert lower.current(op) == op.node.semantics
     with pytest.raises(lower.Unlowered, match="floating dataflow"):
         lower.current(replace(op, args=(replace(op.args[0], value=mir.Value(9999, 0, variable=9999)), *op.args[1:])))
+
+
+@pytest.mark.parametrize("change", ["missing_push", "premature_pop", "wrong_slot"])
+def test_float_lowering_checks_actual_stack_transitions(change):
+    """FPCSE must not consume an empty or different slot despite unchanged SSA names."""
+    from qbopt.lower import Unlowered
+    path = Path("fixtures/omf/fpcse-p-g2.obj")
+    body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
+    block = next(block for block in body.blocks if any(op.floating_origin for op in block.ops))
+    ops = list(block.ops)
+    index = next(index for index, op in enumerate(ops)
+                 if op.kind is (mir.Kind.FLOAD if change == "missing_push" else mir.Kind.FADD))
+    op = ops[index]
+    if change == "wrong_slot":
+        origin = op.floating_origin
+        ops[index] = replace(op, floating_origin=replace(origin,
+            machine_inputs=(mir.Opaque(None, "st1"), *origin.machine_inputs[1:])))
+    else:
+        ops[index] = replace(op, stack=0 if change == "missing_push" else -1)
+    changed = replace(body, blocks=tuple(replace(one, ops=tuple(ops)) if one is block else one for one in body.blocks))
+    with pytest.raises(Unlowered, match="floating stack"):
+        lower_floats.restored(changed)

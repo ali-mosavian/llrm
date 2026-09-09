@@ -1,8 +1,52 @@
-"""Check the floating identity baseline before restoring stack operands."""
+"""Validate floating value placement before restoring stack operands."""
 
 from dataclasses import replace
 
 from qbopt import mir
+
+
+def _stack_checked(block: mir.MirBlock) -> None:
+    from qbopt.lower import Unlowered
+
+    stack: list[int] = []
+
+    def slots(values, machine):
+        if len(values) != len(machine):
+            raise Unlowered("floating stack operand arity changed")
+        for value, operand in zip(values, machine, strict=True):
+            if isinstance(value, mir.Held) and value.width == 10:
+                if (not isinstance(operand, mir.Opaque) or not operand.name.startswith("st")
+                    or not operand.name[2:].isdigit()):
+                    raise Unlowered("floating stack operand has no slot")
+                yield value.value.variable, int(operand.name[2:])
+
+    for op in block.ops:
+        origin = op.floating_origin
+        if origin is None:
+            if stack and (op.barrier or op.kind is mir.Kind.CALL or op.stack is not None):
+                raise Unlowered("floating stack crosses an unmodelled operation")
+            continue
+        if op.stack not in (-1, 0, 1):
+            raise Unlowered("floating stack transition is unknown")
+        for value, index in slots(op.args, origin.machine_inputs):
+            if not 0 <= index < len(stack) or stack[index] != value:
+                raise Unlowered("floating stack input does not hold the required value")
+        outputs = list(slots(op.results, origin.machine_outputs))
+        if op.stack == 1:
+            if len(stack) == 8 or len(outputs) != 1 or outputs[0][1] != 0:
+                raise Unlowered("floating stack push cannot be placed")
+            stack.insert(0, outputs[0][0])
+        else:
+            for value, index in outputs:
+                if not 0 <= index < len(stack):
+                    raise Unlowered("floating stack result has no occupied slot")
+                stack[index] = value
+            if op.stack == -1:
+                if not stack:
+                    raise Unlowered("floating stack pop has no value")
+                stack.pop(0)
+    if stack:
+        raise Unlowered("floating stack live-out requires allocation")
 
 
 def operation(op: mir.Op) -> mir.Op:
@@ -61,5 +105,6 @@ def restored(body: mir.MirBody) -> mir.MirBody:
         sequence = tuple(op.floating_origin.at for op in typed)
         if block.at != baseline.block or sequence != baseline.sequence:
             raise Unlowered("floating sequence changed before stack allocation is implemented")
+        _stack_checked(block)
         blocks.append(replace(block, ops=tuple(operation(op) for op in block.ops)))
     return replace(body, blocks=tuple(blocks))

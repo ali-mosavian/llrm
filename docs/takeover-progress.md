@@ -2232,3 +2232,18 @@ performance claim and no unchanged runtime suite was repeated. Final dumps:
 `/tmp/qbopt-fpcse-ssa-probe`. Next work must replace the identity baseline
 with floating scheduling/allocation and model environment effects before
 changing strict evaluation order or sharing arithmetic.
+
+### Floating lowering checks stack occupancy
+
+Lowering now walks the actual stack of floating value identities: inputs
+must occupy their required slots, arithmetic replaces a slot before popping,
+pushes respect the eight-slot capacity, and live values cannot cross an
+unmodelled call or leave a self-contained block. The original sequence guard
+remains; this is validation, not yet a scheduler or a speedup.
+
+Three fail-first regressions demonstrate that a missing push, premature pop,
+or incorrect input slot used to pass the identity check. All 44 focused tests
+pass. All 97 audited objects retain identical outcomes and bytes, so no
+unchanged runtime suite was repeated. Stage dumps are in
+`/tmp/qbopt-fpcse-stack-validation`. Actual floating value reuse and stack
+scheduling, with rounding and environment effects preserved, remain next.
