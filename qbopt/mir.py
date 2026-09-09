@@ -2075,6 +2075,23 @@ def _unreached(found: Module) -> "tuple[int, frozenset] | None":
     return (found.program_data, module.escaped(found))
 
 
+def extracted_whole(high, low, definitions):
+    """The scalar whose exact high and low word extractions are these operands."""
+    original = None
+    for arg, offset in ((high, 16), (low, 0)):
+        if not isinstance(arg, Held) or arg.width != 2:
+            return None
+        op = definitions.get(arg.value)
+        if (op is None or op.kind is not Kind.EXTRACT or op.results != (arg,) or len(op.args) != 2
+            or not isinstance(op.args[0], Held) or op.args[0].width != 4
+            or not isinstance(op.args[1], Const) or op.args[1].n != offset):
+            return None
+        if original is not None and original != op.args[0]:
+            return None
+        original = op.args[0]
+    return original
+
+
 def bodies(
     found: Module, blocks: list[Block], contracts: "dict[int, runtime.Contract] | None" = None
 ) -> list[tuple[str, MirBody]]:

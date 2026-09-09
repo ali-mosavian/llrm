@@ -424,7 +424,7 @@ def _field_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -
     # stop rather than to relocate.
     if op.symbol is True:
         said = found.refs.get(op.id) if op.id is not None else None
-        if said is None or len(said) != 1:
+        if said is None or len(said) != 1 or not _still_has_an_operand_for_it(op):
             return None
         ref = said[0]
         return ref if not fields or ref in fields else None
@@ -665,9 +665,9 @@ def assemble(
         # without silently requiring a coprocessor.
         if (
             not native_fpu
-            and (_semantics(op) is None or found.code[op.at + 1] not in STANDS_IN)
             and op.node is not None  # an inserted instruction has no original bytes
             and found.code[op.at : op.at + 1] == bytes([0xCD])
+            and (_semantics(op) is None or found.code[op.at + 1] not in STANDS_IN)
             and (length := _length_of(op, found))
         ):
             # Copied, so any fixup inside it keeps its place within the

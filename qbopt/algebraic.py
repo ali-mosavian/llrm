@@ -54,19 +54,9 @@ def _recombined(op: mir.Op, definitions: dict) -> mir.Op:
         or not isinstance(op.results[0], mir.Held) or op.results[0].width != 4
         or op.defines != (op.results[0].value,)):
         return op
-    original = None
-    for arg, offset in zip(op.args, (16, 0)):
-        if not isinstance(arg, mir.Held) or arg.width != 2:
-            return op
-        extract = definitions.get(arg.value)
-        if (extract is None or extract.kind is not mir.Kind.EXTRACT or extract.results != (arg,)
-            or len(extract.args) != 2 or not isinstance(extract.args[0], mir.Held)
-            or extract.args[0].width != 4 or not isinstance(extract.args[1], mir.Const)
-            or extract.args[1].n != offset):
-            return op
-        if original is not None and original != extract.args[0]:
-            return op
-        original = extract.args[0]
+    original = mir.extracted_whole(*op.args, definitions)
+    if original is None:
+        return op
     return replace(op, kind=mir.Kind.COPY, args=(original,), uses=(original.value,),
                    merges={}, node=None, made=None, raised=None)
 

@@ -53,6 +53,19 @@ def test_nbody_whole_position_loads_leave_the_inner_loop():
         assert load.loads[0].addr == site.loads[0].addr
 
 
+def test_nbody_scalar_results_feed_constant_and_accumulator_arithmetic(nbody):
+    """Nbody split division results for +1 and ACCX, forcing repeated stack reconstruction."""
+    body, recognize = nbody
+    done = recognize(body)
+    ops = [op for block in done.blocks for op in block.ops]
+    increment = next(op for op in ops if op.at == 0x1a5 and op.kind is mir.Kind.ADD)
+    accumulator = next(op for op in ops if op.at == 0x1d9 and op.kind is mir.Kind.ADD)
+    assert increment.args[1] == mir.Const(1, 4)
+    assert all(arg.width == 4 for arg in increment.args)
+    assert all(arg.width == 4 for arg in accumulator.args)
+    assert increment.results[0].width == accumulator.results[0].width == 4
+
+
 @pytest.mark.parametrize("producer", [0x12d, 0x131])
 def test_live_half_flags_prevent_scalar_arithmetic(nbody, producer):
     body, recognize = nbody

@@ -44,6 +44,7 @@ def eliminated(body: lir.LirBody) -> lir.LirBody:
     """`body` with every phi it can lower replaced by copies."""
     at_of = {block.at: block for block in body.blocks}
     successors = {block.at: len(block.succ) for block in body.blocks}
+    widths = _widths(body)
 
     once = _read_once(body)
     # One per predecessor->successor edge. Every move a phi becomes on
@@ -89,17 +90,17 @@ def eliminated(body: lir.LirBody) -> lir.LirBody:
                         split.setdefault((where, block.at), []).append((phi.result, value))
                     else:
                         copies.setdefault(where, []).append(
-                            _copy(at_of[where], phi.result, value, edge_group(where, block.at))
+                            _copy(at_of[where], phi.result, value, edge_group(where, block.at), widths[phi.result])
                         )
                 continue
             for where, value in edges:
-                copies.setdefault(where, []).append(_copy(at_of[where], phi.result, value, edge_group(where, block.at)))
+                copies.setdefault(where, []).append(_copy(at_of[where], phi.result, value, edge_group(where, block.at), widths[phi.result]))
         kept[block.at] = tuple(stays)
 
     if not copies and not rename and not split:
         return body
     if split:
-        return _split_edges(body, split, copies, rename, kept)
+        return _split_edges(body, split, copies, rename, kept, widths)
     return replace(
         body,
         blocks=tuple(
@@ -165,7 +166,30 @@ def _settled(where, rename: dict[int, int]):
     return ir.mapped(where, lambda one: ir.Held(rename.get(one.value, one.value), one.width))
 
 
-def _copy(where: lir.LirBlock, into: int, out_of: int, group: int | None = None) -> lir.Insn:
+def _widths(body: lir.LirBody) -> dict[int, int]:
+    widths = {}
+    for block in body.blocks:
+        for op in block.insns:
+            operands = [held for held, _ in (*op.requires, *op.delivers)]
+            if op.what is not None:
+                operands += [held for arg in (*op.what.dests, *op.what.sources) for held in ir.values(arg)]
+            for value, width in (*op.widths, *((held.value, held.width) for held in operands)):
+                widths[value] = max(widths.get(value, 0), width)
+    phis = [phi for block in body.blocks for phi in block.phis]
+    changing = True
+    while changing:
+        changing = False
+        for phi in phis:
+            values = (phi.result, *(value for _, value in phi.incoming))
+            width = max(widths.get(value, 2) for value in values)
+            for value in values:
+                if widths.get(value) != width:
+                    widths[value] = width
+                    changing = True
+    return widths
+
+
+def _copy(where: lir.LirBlock, into: int, out_of: int, group: int | None = None, width: int = 2) -> lir.Insn:
     """The move a phi becomes, at the end of the block it arrives from.
 
     Placed on the predecessor's last instruction's address and claiming
@@ -180,7 +204,7 @@ def _copy(where: lir.LirBlock, into: int, out_of: int, group: int | None = None)
         group=group,
         at=at,
         covers=edge,
-        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(into, 2),), (ir.Held(out_of, 2),)),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(into, width),), (ir.Held(out_of, width),)),
         defines=(into,),
         uses=(out_of,),
         op=last.op if last is not None else None,
@@ -219,7 +243,7 @@ def _leaves(one: lir.Insn) -> bool:
     return one.what is not None and one.what.op in (ir.Operation.JUMP, ir.Operation.BRANCH, ir.Operation.RETURN)
 
 
-def _split_edges(body, split: dict, copies: dict, rename: dict, kept: dict) -> lir.LirBody:
+def _split_edges(body, split: dict, copies: dict, rename: dict, kept: dict, widths: dict) -> lir.LirBody:
     """A block of its own on each critical edge, holding that edge's copies.
 
     The copies cannot go at the end of the predecessor -- it has another
@@ -243,7 +267,7 @@ def _split_edges(body, split: dict, copies: dict, rename: dict, kept: dict) -> l
         insns = [
             replace(
                 _made(
-                    beside, at, ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(a, 2),), (ir.Held(b, 2),)), (a,), (b,)
+                    beside, at, ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(a, widths[a]),), (ir.Held(b, widths[a]),)), (a,), (b,)
                 ),
                 group=number,
             )

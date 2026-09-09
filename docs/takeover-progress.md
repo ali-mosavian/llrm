@@ -1098,3 +1098,30 @@ VBDOS in `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-scalar-licm-z36
 This closes the specific invariant-position-load opportunity, not the overall
 nbody target. Register pressure, accumulator halves and remaining arithmetic
 round trips still limit the emitted loop.
+
+## Scalar arithmetic across runtime results and loop edges
+
+The raise now recognizes immediate arithmetic pairs and accepts an existing
+scalar's exact extractions as a whole input, not only newly recognized load
+pairs. The extraction proof is shared with algebraic recombination. Nbody's
+post-division +1 and accumulator additions now remain 32-bit operations;
+promotion can keep the whole accumulators across loop edges. PDS modeled cost
+falls from 788,837 to 607,037 (23.0%). This remains a model, not hardware timing
+or proof of the missing nbody target. Dumps: `/tmp/qbopt-scalar-immediates`.
+
+VBDOS exposed three defects, each with a fail-first regression:
+
+- A promoted symbolic load kept its relocation after becoming a register
+  copy. Symbolic fixups now require a surviving operand just like other ones.
+- Emission indexed original bytes before checking whether an instruction was
+  synthetic. Original interrupt bytes are inspected only for original nodes.
+- Phi elimination hardcoded word copies on ordinary and split edges. Nbody
+  printed PX0=285219921 instead of 1258. Copies now preserve the width required
+  across the phi's connected values, including implicit operand contracts.
+
+The raised-only VBDOS program passed before the phi fix, isolating the defect
+downstream of recognition. After the fix, nbody (24 cases), HARR (1), CHAIN
+(7), and negnot (4) pass strict LIR on PDS, QB and VBDOS. Runtime artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-scalar-phi-final-6yt_a4th`.
+All 75 focused tests pass. The overall target and full architecture migration
+remain unfinished; this result specifically restores whole-value continuity.

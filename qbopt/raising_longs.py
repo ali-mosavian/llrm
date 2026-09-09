@@ -7,7 +7,8 @@ from qbopt import ir, mir, pairs
 
 def scalar(body: mir.MirBody) -> mir.MirBody:
     candidates = {id(pair.first): pair for pair in pairs.found(body)
-                  if pair.kind in (pairs.Kind.LOAD, pairs.Kind.ALU, pairs.Kind.STORE)}
+                  if pair.kind in (pairs.Kind.LOAD, pairs.Kind.ALU, pairs.Kind.ALU_IMM, pairs.Kind.STORE)}
+    definitions = {value: op for block in body.blocks for op in block.ops for value in op.defines}
     values = {value for block in body.blocks for op in block.ops for value in (*op.uses, *op.defines)} | set(body.origin)
     phi_reads = {value for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
     values |= phi_reads | {phi.result for block in body.blocks for phi in block.phis}
@@ -38,13 +39,17 @@ def scalar(body: mir.MirBody) -> mir.MirBody:
                 continue
             low, high = pair.low, pair.high
             stores = pair.kind is pairs.Kind.STORE
+            immediate = pair.kind is pairs.Kind.ALU_IMM
             refs = (low.stores, high.stores) if stores else (low.loads, high.loads)
-            if (len(refs[0]) != 1 or len(refs[1]) != 1 or refs[0][0].addr is None
-                or replace(refs[0][0], addr=refs[0][0].addr.plus(2)) != refs[1][0]
-                or low.barrier or high.barrier):
+            if low.barrier or high.barrier:
                 ops.append(op)
                 continue
-            ref = replace(refs[0][0], width=4)
+            if not immediate and (len(refs[0]) != 1 or len(refs[1]) != 1 or refs[0][0].addr is None
+                or replace(refs[0][0], addr=refs[0][0].addr.plus(2)) != refs[1][0]
+                ):
+                ops.append(op)
+                continue
+            ref = None if immediate else replace(refs[0][0], width=4)
             if stores:
                 source = whole.get((high.args[0], low.args[0])) if len(low.args) == len(high.args) == 1 else None
                 if source is None:
@@ -63,18 +68,26 @@ def scalar(body: mir.MirBody) -> mir.MirBody:
                 if pair.kind is pairs.Kind.LOAD:
                     args, kind = (mir.Cell(ref),), mir.Kind.LOAD
                 else:
-                    source = whole.get((high.args[0], low.args[0]))
+                    source = whole.get((high.args[0], low.args[0])) or mir.extracted_whole(high.args[0], low.args[0], definitions)
                     if source is None or low.kind not in (mir.Kind.ADD, mir.Kind.SUB, mir.Kind.AND, mir.Kind.OR, mir.Kind.XOR):
                         ops.append(op)
                         continue
-                    args, kind = (source, mir.Cell(ref)), low.kind
+                    if immediate:
+                        upper, lower = high.args[-1], low.args[-1]
+                        if not all(isinstance(arg, mir.Const) and arg.width == 2 for arg in (upper, lower)):
+                            ops.append(op)
+                            continue
+                        operand = mir.Const(((upper.n & 0xffff) << 16) | (lower.n & 0xffff), 4)
+                    else:
+                        operand = mir.Cell(ref)
+                    args, kind = (source, operand), low.kind
                 results = (fresh(low.at),)
             uses = tuple(dict.fromkeys(
                 [arg.value for arg in args if isinstance(arg, mir.Held)]
-                + [value for value in (ref.base, ref.segment) if value is not None]))
+                + ([value for value in (ref.base, ref.segment) if value is not None] if ref else [])))
             widened = replace(low, kind=kind, args=args, results=results, uses=uses,
                               defines=() if stores else (results[0].value,),
-                              loads=() if stores else (ref,), stores=(ref,) if stores else (),
+                              loads=() if stores or ref is None else (ref,), stores=(ref,) if stores else (),
                               merges={}, made=None, raised=None,
                               covers=(min(low.covers[0], high.covers[0]), max(low.covers[1], high.covers[1])))
             if pair.kind is pairs.Kind.ALU:
