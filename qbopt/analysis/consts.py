@@ -20,7 +20,7 @@ is covered. Unknown and overlapping writes still invalidate the cell facts.
 Phi inputs and memory facts meet on agreement across incoming paths.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from qbopt.model import ir
 from qbopt.model import mir
@@ -122,20 +122,21 @@ def _kills(
     """The cell facts still standing after this operation."""
     if op.at in calls:
         contract = runtime.contract(calls[op.at])
-        if runtime.writes_caller_memory(contract) or runtime.barrier(contract):
+        if runtime.barrier(contract) or (runtime.writes_caller_memory(contract) and not op.stores):
             here = {}
     for ref in op.stores:
         ref = mir._symbolic_ref(ref)
-        if ref.addr is None:
-            here = {}
-            break
+        # Escape metadata names pointer origins, not byte extents. A byte
+        # fragment cannot use an absent origin as proof of disjointness.
+        if ref.beyond is not None and ref.beyond[1]:
+            ref = replace(ref, beyond=None)
         here = {
             where: fact
             for where, fact in here.items()
             if not mir.overlapping(mir.MemRef(where[0], where[1], None, None), ref, dgroup)
         }
         put = _put(op, known)
-        if put is not None and ref.base is None and ref.segment is None:
+        if put is not None and ref.addr is not None and ref.base is None and ref.segment is None:
             here.update(_fragments(ref, put))
     if op.kind is mir.Kind.CALL and op.memory_values:
         here = dict(here)
