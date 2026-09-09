@@ -479,7 +479,9 @@ def _field_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -
 REACH = range(-128, 128)
 
 
-def _placed(ops: list, at: int, lengths: list[int]) -> tuple[list[int], dict[int, int]]:
+def _placed(
+    ops: list, at: int, lengths: list[int], labels: dict[int, int] | None = None
+) -> tuple[list[int], dict[int, int]]:
     """Where each op lands, given what each one measures.
 
     Two things, because they are two questions. The list is where each op in
@@ -497,6 +499,9 @@ def _placed(ops: list, at: int, lengths: list[int]) -> tuple[list[int], dict[int
         placed.append(where)
         moved.setdefault(op.at, where)
         where += length
+    for label, destination in (labels or {}).items():
+        if destination in moved:
+            moved.setdefault(label, moved[destination])
     return placed, moved
 
 
@@ -508,6 +513,7 @@ def assemble(
     native_fpu: bool = False,
     assignment: dict | None = None,
     origin: dict | None = None,
+    labels: dict[int, int] | None = None,
 ) -> Laid | str:
     """Every item in order from `at`, shrunk to a fixed point and emitted.
 
@@ -584,7 +590,7 @@ def assemble(
     # target within a signed byte becomes short, which moves everything after
     # it closer and can only let more of them shrink.
     short: set[int] = set()  # by position, since an address may hold several
-    placed, moved = _placed(ops, at, lengths)
+    placed, moved = _placed(ops, at, lengths, labels)
     changing = True
     while changing:
         changing = False
@@ -623,7 +629,7 @@ def assemble(
             lengths[index] = len(made.code)
             changing = True
         if changing:
-            placed, moved = _placed(ops, at, lengths)
+            placed, moved = _placed(ops, at, lengths, labels)
 
     # The bytes, at the addresses the fixed point settled on.
     out = bytearray()

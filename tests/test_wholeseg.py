@@ -18,6 +18,24 @@ from qbopt import wholeseg
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
 
+@pytest.mark.parametrize("name", ["qb45", "pds-g2"])
+def test_absorbed_division_survives_removed_call_result_pins(name: str) -> None:
+    """qb45 and pds-g2 refused emission when a fresh restore reused pinned value 13."""
+    import corpus
+
+    output, _ = corpus.rewritten(Path(f"fixtures/omf/{name}.obj"), dry_run=False)
+    assert omf.finalised_at(omf.parse(output)) is not None
+
+
+@pytest.mark.parametrize("name", ["hotlop", "press", "matrix", "jumps"])
+def test_a_loop_label_survives_coalescing_its_first_copy(name: str) -> None:
+    """hotlop refused its branch at 0x45 after the copy at loop entry 0x5e disappeared."""
+    import corpus
+
+    output, _ = corpus.rewritten(Path(f"fixtures/omf/{name}-p-g2.obj"), dry_run=False)
+    assert omf.finalised_at(omf.parse(output)) is not None
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "v-g3"])
 def test_split_edges_do_not_create_phantom_padding(tag) -> None:
     """cmpof hung because synthetic phi blocks created 72 nonexistent padding bytes.
@@ -352,10 +370,9 @@ def test_an_emission_says_which_emitter_produced_it() -> None:
     assert got.reason == wholeseg.REBUILT and got.fallback_reason is None
 
 
-def test_a_fallback_keeps_its_reason_where_a_caller_can_read_it() -> None:
-    """A body nothing can place is laid out the way it always was. The
-    public reason stays REBUILT -- every caller reads that -- and what the
-    allocator actually said is beside it."""
+def test_an_allocation_refusal_preserves_the_input_and_original_reason() -> None:
+    """hotlop: an injected spill failure was hidden by the MIR emitter's
+    unrelated 'mov is not one select.py can emit' error at 0x003c."""
     from qbopt import allocate
 
     was = allocate.RegAlloc.transform
@@ -368,12 +385,12 @@ def test_a_fallback_keeps_its_reason_where_a_caller_can_read_it() -> None:
         got = wholeseg.emitted((Path("fixtures/omf") / "hotlop-p-g2.obj").read_bytes())
     finally:
         allocate.RegAlloc.transform = was
-    assert got.outcome is wholeseg.Emission.MIR
-    assert got.reason == wholeseg.REBUILT
-    assert got.fallback_reason and "nothing can hold it" in got.fallback_reason
+    assert got.outcome is wholeseg.Emission.REFUSED
+    assert got.data == Path("fixtures/omf/hotlop-p-g2.obj").read_bytes()
+    assert "nothing can hold it" in got.reason
 
 
-def test_a_tangled_copy_falls_back_and_says_which() -> None:
+def test_a_tangled_copy_refuses_without_trying_another_emitter() -> None:
     """A phi's copies that all read each other's destinations need a
     temporary this does not have. Named, not emitted in the wrong order."""
     from qbopt import parcopy
@@ -388,9 +405,9 @@ def test_a_tangled_copy_falls_back_and_says_which() -> None:
         got = wholeseg.emitted((Path("fixtures/omf") / "hotlop-p-g2.obj").read_bytes())
     finally:
         parcopy.ParallelCopy.transform = was
-    assert got.outcome is wholeseg.Emission.MIR
-    assert got.reason == wholeseg.REBUILT
-    assert got.fallback_reason and "Tangled" in got.fallback_reason
+    assert got.outcome is wholeseg.Emission.REFUSED
+    assert got.data == Path("fixtures/omf/hotlop-p-g2.obj").read_bytes()
+    assert "Tangled" in got.reason
 
 
 def test_a_malformed_copy_group_is_a_bug_and_escapes() -> None:
@@ -485,9 +502,9 @@ def test_a_copy_with_both_ends_spilled_falls_back_and_says_so() -> None:
         got = wholeseg.emitted((Path("fixtures/omf") / "jumps-v-g3.obj").read_bytes())
     finally:
         spiller.spilled = real
-    assert got.outcome is wholeseg.Emission.MIR, f"it emitted through {got.outcome}"
-    assert got.reason == wholeseg.REBUILT
-    assert got.fallback_reason and "Simultaneous" in got.fallback_reason, got.fallback_reason
+    assert got.outcome is wholeseg.Emission.REFUSED
+    assert got.data == Path("fixtures/omf/jumps-v-g3.obj").read_bytes()
+    assert "Simultaneous" in got.reason
 
 
 def test_a_body_that_falls_back_is_not_reported_as_lir() -> None:
@@ -507,8 +524,10 @@ def test_a_body_that_falls_back_is_not_reported_as_lir() -> None:
         if got.outcome is wholeseg.Emission.LIR:
             assert got.fallback_reason is None, f"{one.name}: reported LIR while falling back -- {got.fallback_reason}"
             seen += 1
-        elif got.outcome is wholeseg.Emission.MIR:
-            assert got.fallback_reason, f"{one.name}: fell back to MIR and said nothing"
+        else:
+            assert got.outcome is wholeseg.Emission.REFUSED
+            assert got.data == one.read_bytes()
+            assert got.reason != wholeseg.REBUILT
     assert seen, "nothing emitted through LIR; the gate proves nothing"
 
 
@@ -517,18 +536,17 @@ def test_a_call_with_an_unestablished_interface_falls_back_and_is_not_lir() -> N
 
     procs-p-evt calls B$ENRA, whose contract declares no inputs, so the
     lowering refuses it rather than emitting a call whose arguments the
-    allocation is free to move. The object still comes back -- rewritten
-    by the MIR emitter -- and the outcome says which wrote it.
+    allocation is free to move. The original object comes back unchanged,
+    with no second emitter hiding the missing contract.
     """
     from pathlib import Path
 
     from qbopt import wholeseg
 
     got = wholeseg.emitted(Path("fixtures/omf/procs-p-evt.obj").read_bytes())
-    assert got.outcome is not wholeseg.Emission.LIR, "an unestablished call emitted through LIR"
-    assert got.fallback_reason and "not established" in got.fallback_reason, (
-        f"it fell back for another reason: {got.fallback_reason}"
-    )
+    assert got.outcome is wholeseg.Emission.REFUSED
+    assert got.data == Path("fixtures/omf/procs-p-evt.obj").read_bytes()
+    assert "not established" in got.reason
 
 
 def test_the_long_divide_bodys_entry_reads_nothing_it_has_not_written() -> None:

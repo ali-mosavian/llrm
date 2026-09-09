@@ -8,6 +8,56 @@ from qbopt import lir
 from qbopt import coalesce
 
 
+def test_a_copy_can_share_a_register_while_its_equal_source_is_still_read() -> None:
+    body = lir.LirBody("equal", 0, (lir.LirBlock(0, (_define(0, 1), _move(3, 2, 1), _use(5, 1), _use(6, 2))),), {}, {})
+    done = coalesce.joined(body)
+    assert len(done.insns) == 3
+    assert done.insns[-1].uses == done.insns[-2].uses
+
+
+def test_a_source_redefined_while_its_copy_is_live_cannot_share() -> None:
+    insns = (_define(0, 1), _move(3, 2, 1), _define(5, 1), _use(8, 1), _use(9, 2))
+    body = lir.LirBody("different", 0, (lir.LirBlock(0, insns),), {}, {})
+    done = coalesce.joined(body)
+    assert len(done.insns) == len(insns)
+    assert done.insns[-1].uses != done.insns[-2].uses
+
+
+def test_different_entry_values_cannot_share_even_if_copied_later() -> None:
+    insns = (_use(0, 1), _use(1, 2), _move(2, 2, 1), _use(4, 2))
+    body = lir.LirBody("inputs", 0, (lir.LirBlock(0, insns),), {}, {})
+    assert len(coalesce.joined(body).insns) == len(insns)
+
+
+def test_a_narrow_copy_is_not_equality_of_a_wide_source() -> None:
+    from dataclasses import replace
+
+    wide = replace(_use(5, 1), what=ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Held(1, 4),)))
+    insns = (_define(0, 1), _move(3, 2, 1), wide, _use(6, 2))
+    body = lir.LirBody("partial", 0, (lir.LirBlock(0, insns),), {}, {})
+    assert len(coalesce.joined(body).insns) == len(insns)
+
+
+def test_a_coalesced_address_keeps_its_memory_operand_defined() -> None:
+    memory = ir.Mem(addr=None, width=2, base=ir.Held(2, 2))
+    load = lir.Insn(
+        at=5,
+        covers=(5, 7),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(3, 2),), (memory,)),
+        defines=(3,),
+        uses=(2,),
+        op=None,
+    )
+    body = lir.LirBody(
+        "address", 0, (lir.LirBlock(0, (_define(0, 1), _move(3, 2, 1), load, _use(7, 1), _use(8, 3))),), {}, {}
+    )
+    done = coalesce.joined(body)
+    made = {value for one in done.insns for value in one.defines}
+    for one in done.insns:
+        for operand in (*one.what.dests, *one.what.sources):
+            assert {value.value for value in ir.values(operand)} <= made
+
+
 def _move(at: int, into: int, out_of: int) -> lir.Insn:
     what = ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(into, 2),), (ir.Held(out_of, 2),))
     return lir.Insn(at=at, covers=(at, at + 2), what=what, defines=(into,), uses=(out_of,), op=None)

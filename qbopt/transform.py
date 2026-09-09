@@ -42,6 +42,7 @@ from qbopt import consts
 from qbopt import module
 from qbopt.mir import Op
 from qbopt import promote
+from qbopt import loopmotion
 from qbopt import strength
 from qbopt.mir import MirBody
 from qbopt.module import Space
@@ -2037,7 +2038,8 @@ class Hoist(MIRTransform):
         self.where = where
 
     def transform(self, body: MirBody) -> MirBody:
-        return hoisted(body, self.where.dgroup, self.where.named, self.where.bounds)
+        body = hoisted(body, self.where.dgroup, self.where.named, self.where.bounds)
+        return loopmotion.sunk_stores(body, self.where.dgroup, self.where.bounds)
 
 
 class Forward(MIRTransform):

@@ -30,7 +30,7 @@ import pytest
 HERE = Path(__file__).resolve().parent.parent / "qbopt"
 
 # The passes: what runs between mir.raise_body and lowering.
-PASSES = ("transform.py", "pairs.py", "consts.py", "avail.py", "wide.py", "segments.py")
+PASSES = ("transform.py", "pairs.py", "consts.py", "avail.py", "wide.py", "segments.py", "loopmotion.py")
 
 # Naming any of these is naming the machine.
 NAMED = frozenset(

@@ -52,9 +52,9 @@ def joined(body: lir.LirBody, pinned: dict | None = None) -> lir.LirBody:
 
     where_of = allocate.classes(body)
     everything = frozenset(target.AVAILABLE)
-    may: dict[int, frozenset] = {one: where_of.get(one, everything) for one in live}
+    may: dict[int, frozenset] = {one: frozenset(target.order(where_of.get(one))) for one in live}
     held: dict[int, int] = dict(pinned)
-    near = _adjacent(live)
+    near = _interference(body)
     parent: dict[int, int] = {}
 
     def find(one: int) -> int:
@@ -78,7 +78,7 @@ def joined(body: lir.LirBody, pinned: dict | None = None) -> lir.LirBody:
             if mine_pin is not None and theirs_pin is not None and mine_pin != theirs_pin:
                 continue
             mine, theirs = live.get(here), live.get(there)
-            if mine is None or theirs is None or mine.overlaps(theirs):
+            if mine is None or theirs is None or there in near.get(here, set()):
                 continue
             # The registers the merged class could take, which is what K
             # counts: a value some instruction reaches a cell through is
@@ -134,25 +134,51 @@ def joined(body: lir.LirBody, pinned: dict | None = None) -> lir.LirBody:
     )
 
 
-def _adjacent(live: dict) -> dict[int, set]:
-    """Which values are ever live at the same moment, by value.
+def _interference(body: lir.LirBody) -> dict[int, set[int]]:
+    from qbopt import allocate
 
-    The interference graph Briggs counts degrees in. Bounded first: two
-    whose whole spans do not touch cannot have segments that do, and that
-    is most pairs.
-    """
-    bounds = {one: (iv.segments[0].start, iv.segments[-1].end) for one, iv in live.items() if iv.segments}
-    out: dict[int, set] = {one: set() for one in live}
-    order = sorted(bounds, key=lambda one: bounds[one])
-    for index, one in enumerate(order):
-        _lo, hi = bounds[one]
-        for other in order[index + 1 :]:
-            if bounds[other][0] >= hi:
-                break
-            if live[one].overlaps(live[other]):
-                out[one].add(other)
-                out[other].add(one)
-    return out
+    incoming, outgoing = allocate.live(body)
+    widths: dict[int, int] = {}
+    for one in body.insns:
+        operands = (*one.what.dests, *one.what.sources) if one.what is not None else ()
+        held = [value for operand in operands for value in ir.values(operand)]
+        held.extend(value for value, _ in (*one.requires, *one.delivers))
+        for value in held:
+            widths[value.value] = max(widths.get(value.value, 0), value.width)
+        for value, width in one.widths:
+            widths[value] = max(widths.get(value, 0), width)
+    graph: dict[int, set[int]] = {}
+
+    def edge(one: int, other: int) -> None:
+        if one != other:
+            graph.setdefault(one, set()).add(other)
+            graph.setdefault(other, set()).add(one)
+
+    targets = {to for block in body.blocks for to in block.succ}
+    entries = {body.entry} | {block.at for block in body.blocks if block.at not in targets}
+    for block in body.blocks:
+        if block.at in entries:
+            for value in incoming[block.at]:
+                for other in incoming[block.at]:
+                    edge(value, other)
+        alive = set(outgoing[block.at])
+        for one in reversed(block.insns):
+            copy = _copy(one)
+            equal = None
+            if copy is not None and one.defines == (copy[0],) and one.uses == (copy[1],):
+                into, source = one.what.dests[0], one.what.sources[0]
+                if into.width == source.width == widths.get(copy[0]) == widths.get(copy[1]):
+                    equal = copy[1]
+            for value in one.defines:
+                for other in alive:
+                    if other != equal:
+                        edge(value, other)
+            alive.difference_update(one.defines)
+            alive.update(one.uses)
+        for value in block.arrives:
+            for other in alive:
+                edge(value, other)
+    return graph
 
 
 def _kept(block: "lir.LirBlock", swap: dict) -> "list[lir.Insn]":
@@ -236,7 +262,5 @@ def _renamed(one: lir.Insn, swap: dict[int, int]) -> lir.Insn:
     )
 
 
-def _settled(where, swap: dict[int, int]):
-    if isinstance(where, ir.Held) and where.value in swap:
-        return ir.Held(swap[where.value], where.width)
-    return where
+def _settled(where: ir.Loc | ir.Held, swap: dict[int, int]) -> ir.Loc | ir.Held:
+    return ir.mapped(where, lambda value: ir.Held(swap.get(value.value, value.value), value.width))

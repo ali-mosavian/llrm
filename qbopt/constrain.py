@@ -65,7 +65,7 @@ def constrained(
     honour.
     """
     pinned = {**body.pins, **(pinned or {})}
-    fresh = _next_value(body)
+    fresh = max(_next_value(body), max((getattr(value, "id", value) for value in pinned), default=0) + 1)
     pins: "dict[int, Register_]" = {}
     blocks = []
     for block in body.blocks:

@@ -1,42 +1,52 @@
 # Takeover checkpoint — 2026-09-09
 
-Goal: correct modern-compiler-quality output, machine-independent MIR, every documented target within 1.5x. Not complete. Work is uncommitted on `restore-through-lir`, based on `db9f25c`; inherited changes and stashes are preserved.
+Goal: correct modern-compiler-quality output, machine-independent MIR, every documented target within 1.5x. **Not complete.** Branch `restore-through-lir`; checkpoint `dda3d46` is committed. Subsequent improvements below are uncommitted. Stashes are untouched.
 
-## Implemented in the working tree
+## Current implementation
 
-- Write-through memory promotion with SSA construction limited to newly introduced variables.
-- Fixed allocation priority, implicit address/register requirements, runtime-frame spill placement, returned high halves and synthetic-edge layout accounting.
-- Resolved branch edges, trivial-phi removal and dead-block byte ownership.
-- Corrected carry-operation recognition, transitive value substitution and leading-instruction deletion.
-- Constant operand propagation; two-address conversion handles immediate first operands and ends the copied source's use.
-- MIR fixed-point iteration. Hoisting allocates fresh variable IDs from the value graph, including promoted cells.
-- No re-raising of fallback machine output. A failed backend leaves the original input unmarked.
-- Stage dumps observe the actual production MIR and machine passes. The scoreboard rejects missing LIR completion and unmappable output.
+The checkpoint introduced write-through memory promotion, allocation/spill corrections, MIR fixed-point iteration, truthful measurements and dumps of actual production passes. No re-raising of emitted bytes.
+
+Since the checkpoint:
+- Sink unobserved fixed-cell loop stores into a dedicated single exit. The store must execute in the exiting block; observers and unknown effects prevent motion.
+- Coalesce equal copies using def/live-out interference, preserving unequal live-in values and partial-width distinctions. Normalize register classes and rename nested memory operands.
+- Preserve block labels when their first instruction disappears, and transfer removed leading-copy byte ownership across inserted zero-span copies.
+- Allocate constraint IDs above retained pins, fixing QuickBASIC/PDS division refusals.
+- Remove the production MIR-emitter fallback. Backend refusal returns the byte-identical input and original diagnostic, never another emitter's output. Historical emission enum/field remain for compatibility.
 
 ## Measurements
 
-Current PDS `/G2` modeled costs, not hardware timings:
+Selected PDS `/G2` modeled costs, not hardware timings:
 
-| Program | Cost | Target | Ratio |
-| --- | ---: | ---: | ---: |
-| bools | 176 | 126 | 1.40x |
-| press | 420 | 308 | 1.36x |
-| hotlop | 646 | 312 | 2.07x |
-| lngmix | 921 | 210 | 4.39x |
-| harr | 11694 | 1834 | 6.38x |
-| matrix | 14708 | 6210 | 2.37x |
-| segld | 26602 | 6704 | 3.97x |
+| Program | Checkpoint | Current | Target | Current ratio |
+| --- | ---: | ---: | ---: | ---: |
+| press | 420 | 326 | 308 | 1.06x |
+| hotlop | 646 | 452 | 312 | 1.45x |
+| lngmix | 921 | 867 | 210 | 4.13x |
+| harr | 11694 | 11494 | 1834 | 6.27x |
+| matrix | 14708 | 12076 | 6210 | 1.94x |
+| segld | 26602 | 25802 | 6704 | 3.85x |
 
-The bounded emission scan completed 487 fixtures in 20 seconds: 413 LIR, 74 fallback. Most fallbacks concern unknown event-call interfaces. The subsequent chained-load fix restored QuickBASIC `procs` to LIR; the whole scan has not been repeated after that fix.
+Checkpoint bools was 176/126 (1.40x); not remeasured in the latest selected run. No final all-target claim. The full opportunity command completed but its output was lost to truncation, so it supplies no recorded evidence.
 
-Focused runtime checks passed the changed arithmetic kernels across PDS, QuickBASIC and VBDOS. The fixed-point variable collision was caught as `lngmix` printing 4081664/55 instead of 142900; after its fix both `lngmix` and `lngmxx` pass all three. QuickBASIC `procs`, `arridx` and `flags` also pass after transitive substitution was repaired. Full commit gates have not run on the final tree.
+The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven jumps refusals and removing the fallback. Do not treat that as the current count.
 
-## Next work
+## Validation
 
-1. Independent review remains outstanding. The isolated, read-only Opus request failed because Claude Code OAuth expired; Fable is unavailable. The user authorized proceeding without it. No Desktop session was resumed.
-2. Review SSA rebuilding in hoisting and remaining alias/width assumptions before expanding optimization. Preserve explicit inputs, flags and return values through every substitution.
-3. Resolve unsupported event interfaces and VBDOS procedure contracts from evidence; never count fallback as success. `pds-g2.obj` and `qb45.obj` also have conflicting pin/requirement refusals.
-4. Complete intrinsic value recognition at raise, then reduce loop stores, address recomputation and register pressure. Promoting long high-half carry reads was tried and removed because it increased spills and cost.
-5. Repair remaining failures and run the required batch/commit gates. The checkpoint gate failed lint checks and reported 787 type diagnostics; its full pytest run was interrupted once the gate was already blocked. The user explicitly authorized an unsigned checkpoint with hooks bypassed and incomplete validation recorded. This exception does not waive future gates. The removed legacy rewrite arm left an unused `orphaned_externals_renamed` function referring to undefined `RENAMABLE_IF_ORPHANED`; FIXMUL integration is still unfinished.
+- Changed backend modules: 1,519 passed, two failures in historical fallback expectations (71.65 seconds).
+- Those failures exposed a second emitter hiding injected backend diagnostics. Updated tests require refusal, byte-identical input, and the original reason; three failed before removing fallback. All five selected refusal checks now pass.
+- Final focused check: 43 passed in 1.09 seconds. Rechecked hotlop 1.45x, press 1.06x and matrix 1.94x after fallback removal; matrix still fails the target. Ruff passed for the new loop-motion/coalescer work and edited whole-segment emitter; this is not a whole-project lint claim.
+- Focused runtime programs passed on PDS, QuickBASIC and VBDOS: hotlop, hotlpx, press, pressx, matrix, harr, lngmix, flags. After address-class changes: jumps, arridx, arrprm, fpdeep, procs, harr, hotlop and pressx passed all three. VBDOS procs used unchanged input, not LIR success.
+- Latest runtime artifacts: `/tmp/qbopt-coalesced-addresses-runtime-20260909`. Stage evidence: `/tmp/qbopt-lngmix-next-20260909`, `/tmp/qbopt-harr-next-20260909`, `/tmp/qbopt-jumps-coalesce-20260909`.
+- Full commit gates have not passed. The checkpoint had lint failures and 787 type diagnostics; pytest was interrupted once its gate was already blocked. User authorized that unsigned checkpoint with hooks bypassed, not future commits.
+- Subsequent authorization: use focused checks for progress commits and reserve the full gate for milestones. Current full type check reports 802 diagnostics; the milestone gate remains outstanding. Progress commits may bypass hooks under this explicit authorization, without claiming full validation.
+- Required independent review was unavailable (expired Claude OAuth; Fable unavailable); user authorized proceeding. No Claude Desktop session was resumed.
 
-The old architecture/status prose contains stale descriptions. In particular, spilling exists, promotion is enabled in production, and the optimizer now iterates on MIR rather than through emission. Runtime correctness and the 1.5x target remain separate gates.
+## Next implementation priorities
+
+1. Whole-value recognition in raise: lngmix still carries split long accumulator halves, joins and spills. Do not move register-aware widening into MIR optimization. Existing JOIN forms are not yet uniformly explicit semantic operands.
+2. Sound array objects/extents, enabling scalar promotion and loop-address reuse. FAR accesses may alias DGROUP; the next named displacement is not proof of an array boundary. Runtime descriptors distinguish near, far and huge storage. Use those facts, not a blanket no-alias rule.
+3. Close the measured target gaps, then run integration/commit gates. Keep fail-first symptom regressions per fix and dump adjacent stages when debugging.
+
+Generic copy propagation plus trimming merge dependencies was tried and **reverted**: pressx printed 0 instead of 7500 on all three compilers, and some QuickBASIC runs failed to complete. Do not resurrect that shortcut. A suspected moved-store relocation defect was disproved by the emitted-object check; removing its unnecessary symbol override did not fix a runtime bug.
+
+Runtime scope explicitly excludes /V, /W event trapping and /X resumable errors; do not spend the next round inventing event interfaces. VBDOS B$ENRA remains unestablished. LLVM LICM dedicated-exit/store-dominance rules informed store sinking; LLVM/GCC references are under /Users/alim/work/other.

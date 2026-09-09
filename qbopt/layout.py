@@ -167,7 +167,18 @@ def selectable(op: mir.Op) -> bool:
 
 def lay_out(body: MirBody, at: int, found: Module, fields: frozenset[int] = frozenset()) -> Laid | str:
     """Every op in `body`, emitted in order from `at`, or why it could not be."""
-    return asm.assemble(_ordered(body), at, found, fields)
+    return asm.assemble(_ordered(body), at, found, fields, labels=_labels(body))
+
+
+def _labels(body: MirBody) -> dict[int, int]:
+    labels: dict[int, int] = {}
+    following: int | None = None
+    for block in sorted(body.blocks, key=lambda one: one.at, reverse=True):
+        if block.ops:
+            following = block.ops[0].at
+        if following is not None:
+            labels[block.at] = following
+    return labels
 
 
 def _names_a_value(body) -> bool:
@@ -398,7 +409,8 @@ def rebuild(
     origin = {}
     for _name, body in bodies:
         origin.update(body.origin)
-    return asm.assemble(_interleaved(ops, inside), lowest, found, fields, native_fpu, assignment, origin)
+    labels = {label: target for _, body in bodies for label, target in _labels(body).items()}
+    return asm.assemble(_interleaved(ops, inside), lowest, found, fields, native_fpu, assignment, origin, labels)
 
 
 def _starts_at(op: mir.Op) -> int:

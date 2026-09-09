@@ -20,16 +20,17 @@ anything downstream could reason about.
 
 from enum import StrEnum
 from dataclasses import dataclass
+from collections.abc import Callable
 
 from qbopt import mir
 from qbopt import omf
-from qbopt import layout
 from qbopt import module
 from qbopt import runtime
-from qbopt import relocate
 from qbopt import transform
 from qbopt import blocks as split
 from qbopt.blocks import code_map
+
+type Watch = Callable[[str, str | None, object], None]
 
 
 class Emission(StrEnum):
@@ -54,9 +55,8 @@ class Emitted:
     data: bytes
     outcome: Emission
     reason: str
-    # Why the LIR pipeline would not take it, where the MIR emitter
-    # stepped in. `reason` stays REBUILT so every caller reads what it
-    # always did; this is the part that says a fallback happened at all.
+    # Retained for readers of historical MIR-emission results. Production
+    # has one backend now; a refusal is in `reason` and preserves the input.
     fallback_reason: str | None = None
 
 
@@ -65,7 +65,7 @@ def emitted(
     optimise: bool = True,
     native_fpu: bool = False,
     only: str | None = None,
-    watch=None,
+    watch: Watch | None = None,
 ) -> Emitted:
     """The object rewritten, and which emitter did it.
 
@@ -75,10 +75,10 @@ def emitted(
     phases to get them dumps a different program: its allocation is not the
     one that produced the object, so the first bad transition is not in it.
     """
-    out, why, short = _rebuilt(data, optimise, native_fpu, only, watch)
+    out, why, _ = _rebuilt(data, optimise, native_fpu, only, watch)
     if why != REBUILT:
         return Emitted(out, Emission.REFUSED, why)
-    return Emitted(out, Emission.MIR if short else Emission.LIR, why, short)
+    return Emitted(out, Emission.LIR, why)
 
 
 def rebuilt(
@@ -97,7 +97,7 @@ def _rebuilt(
     optimise: bool = True,
     native_fpu: bool = False,
     only: str | None = None,
-    watch=None,
+    watch: Watch | None = None,
 ) -> tuple[bytes, str, str | None]:
     """The object with its code segment rewritten, and what happened.
 
@@ -124,7 +124,6 @@ def _rebuilt(
     # docstring has why every original byte still has to be accounted for
     # after a deletion; `optimise=False` emits the body exactly as raised,
     # which is what a caller bisecting a layout question wants.
-    plain = bodies
     if optimise:
         # Widening is not a MIR pass and is no longer in the list. It
         # recognises an idiom -- a long written as two halves joined by a
@@ -134,7 +133,7 @@ def _rebuilt(
         # below the boundary; until the two are separated it runs here,
         # after every pass and before lowering, which is where it ran
         # anyway and is where rule 5 puts it.
-        def one(name, body):
+        def one(name: str, body: mir.MirBody) -> mir.MirBody:
             # `only="widen"` is the step on its own, which tools/stages.py
             # asks for; every other name selects a pass and leaves widening
             # out, so the two can be diffed apart.
@@ -161,57 +160,28 @@ def _rebuilt(
     # carry from one that is real code it simply did not raise.
     reached = frozenset(at for block in blocks for insn in block.insns for at in range(insn.at, insn.end))
     fields = frozenset(one.offset for one in omf.fixups(records) if one.seg == found.seg)
-    # An allocation, where a pass asked for one. colour() gives back the
-    # identity unless something pinned, so this costs nothing when nothing
-    # did -- and refuses the pin rather than guessing when it cannot be had.
-    # A body the allocator refuses is laid out as it was raised -- widened,
-    # because widening writes machine form with the registers BC had, so it
-    # needs no allocation and is right either way; without it nbody lost
-    # every byte the object gained. Handed as the raise plus the step
-    # rather than pre-widened, so the walk happens for the body that needs
-    # it instead of for all of them.
-    # Allocation first, and separately: the assembler emits what it is
-    # handed. It used to colour inside rebuild(), where nothing downstream
-    # could be told it had already happened -- objwrite.py runs after a
-    # real allocator and was allocated over a second time, which produced a
-    # call encoding with no field for its own fixup.
-    # Through the machine phases first, and once. Two emitters exist: this
-    # one, from MIR, and objwrite.py's, from LIR -- and everything below
-    # lowering reached only the second. A refusal the LIR side names is
-    # what sends the body to the layout below, and nothing else does.
     short = _through_lir(found, records, blocks, bodies, mapped, fields, reached, native_fpu, contracts, watch)
     if not isinstance(short, str):
         if watch is not None:
             watch("route", None, "the LIR emitter wrote these bytes")
         return short, REBUILT, None
     if watch is not None:
-        watch("route", None, f"the LIR emitter refused ({short}); the MIR layout wrote these bytes")
-
-    settled, assignment = layout.allocated(bodies, plain=plain, settle=transform.widened if optimise else None)
-    laid = layout.rebuild(found, settled, mapped.tables, fields, reached, native_fpu, assignment=assignment)
-    if isinstance(laid, str):
-        return data, laid, None
-
-    # Whatever sits before the first instruction is BC's own module header --
-    # 48 bytes of name and padding, and the only thing in these code segments
-    # that is not in a body. Kept, and the layout starts after it.
-    kept = min(op.at for _, body in bodies for op in layout._ordered(body))
-    image = found.code[:kept] + laid.code
-    made = relocate.as_records(
-        records,
-        found.seg,
-        kept,
-        image,
-        {**laid.covered, **laid.moved},
-        {old: kept + new for new, old in laid.relocations},
-        laid.dropped,
-    )
-    if isinstance(made, str):
-        return data, made, None
-    return b"".join(record.emit() for record in made), REBUILT, short
+        watch("route", None, f"the LIR emitter refused ({short}); the input is unchanged")
+    return data, short, None
 
 
-def _through_lir(found, records, blocks, bodies, mapped, fields, reached, native_fpu, contracts, watch=None):
+def _through_lir(
+    found: module.Module,
+    records: list[omf.Record],
+    blocks: list[split.Block],
+    bodies: list[tuple[str, mir.MirBody]],
+    mapped: split.CodeMap,
+    fields: frozenset[int],
+    reached: frozenset[int],
+    native_fpu: bool,
+    contracts: dict[int, runtime.Contract],
+    watch: Watch | None = None,
+) -> bytes | str:
     """Every body lowered, placed and written, or why one could not be.
 
     `qbopt/flow.py` names the phases and their order; this runs them and

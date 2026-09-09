@@ -213,4 +213,19 @@ def without(insns, drop, made=None) -> "list[Insn]":
             out.append(kept)  # nothing to give them to
             continue
         out[where] = replace(last, covers=(last.covers[0], one.covers[1]))
+    if len(out) > 1:
+        first = out[0]
+        following = next((index for index, one in enumerate(out[1:], 1)
+                          if one.covers and one.covers[0] < one.covers[1]), None)
+        second = out[following] if following is not None else None
+        if (
+            drop(first)
+            and first.covers
+            and second is not None
+            and len(first.spread) <= 1
+            and len(second.spread) <= 1
+            and first.covers[1] == second.covers[0]
+        ):
+            out[following] = replace(second, covers=(first.covers[0], second.covers[1]))
+            out = out[1:]
     return out
