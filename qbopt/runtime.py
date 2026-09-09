@@ -198,6 +198,22 @@ SLOTS: tuple[Reg, ...] = tuple(Reg)
 # VBDOS stays at the worst case.
 VARIANTS: "dict[tuple[str, str], Contract]" = {}
 
+for _family in ("qb45", "pds71", "vbdos"):
+    VARIANTS[("B$FCMD", _family)] = replace(
+        worst("B$FCMD"),
+        inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
+        cleanup=0,
+        evidence=(
+            "BCOM45.LIB/BCL71ENR.LIB/VBDCL10E.LIB oscmd.asm B$FCMD at 1:0023: "
+            "balanced local saves and RETF (0041 in QB/PDS, 004a in VBDOS), no caller arguments. "
+            "Its first call is B$CmdCopy at 1:0000, whose XOR BX,BX at 0002 kills incoming "
+            "arithmetic flags before any conditional use or further call. Bound inputs by all "
+            "six allocatable GP registers; segments, BP/SP and direction are runtime environment. "
+            "Heap helper dependencies are incomplete, so memory, clobber and control effects "
+            "remain worst-case; no preservation or termination claim."
+        ),
+    )
+
 
 def own(name: str) -> Contract:
     """A call into the program's own code, by name.

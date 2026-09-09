@@ -38,6 +38,16 @@ def test_an_unnamed_call_is_the_worst_case() -> None:
     assert runtime.contract(None).clobbers == EVERY
 
 
+@pytest.mark.parametrize("family", ["qb45", "pds71", "vbdos"])
+def test_command_line_has_bounded_inputs_without_optimistic_effects(family: str) -> None:
+    """nbody refused strict emission at COMMAND$ before reaching its integrator."""
+    routine = runtime.per_call({0: "B$FCMD"}, family)[0]
+    assert routine.inputs == frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI})
+    assert routine.cleanup == 0
+    assert replace(routine, inputs=None, cleanup=None, evidence=runtime.worst("B$FCMD").evidence) == runtime.worst("B$FCMD")
+    assert runtime.per_call({0: "B$FCMD"}, "")[0].inputs is None
+
+
 def test_the_worst_case_concedes_nothing() -> None:
     blank = runtime.worst("")
     assert blank.writes is Memory.ANY
