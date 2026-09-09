@@ -1,5 +1,22 @@
 # Takeover checkpoint — 2026-09-09
 
+## Proven allocation identity removes the element reload
+
+The bounded array proof establishes both extent and the descriptor-derived
+segment for every marked access. Equal offset SSA values in that same proven
+allocation therefore identify equal bytes without segment-register SSA.
+Memory equality now uses that fact, while missing or different allocation
+proofs still refuse equality. Existing forwarding removes the immediate reload
+of HARR/SEGLD's just-stored element.
+
+PDS costs: **HARR 5062 -> 4462 (2.43x)**;
+**SEGLD 13456 -> 11056 (1.65x)**. Two new regressions fail against old memory
+equality, including HARR's surviving element load; 20 focused checks and six
+strict-LIR runtime comparisons pass across p-g2/q-O/v-g3. Segment setup remains
+in the loop and remains the next placement opportunity.
+Dumps: `/tmp/qbopt-allocation-equality`; runtime artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-allocation-equality-hkp11p3v`.
+
 ## Induct the complete offset pointer, including invariant descriptor data
 
 Affine composition now accepts a proven unchanged direct cell as an additive
