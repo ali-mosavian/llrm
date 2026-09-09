@@ -1961,3 +1961,25 @@ pass 35/35, followed by the five augmented fold assertions. All 96 primary
 fixture objects remain byte-identical, so this is analysis groundwork rather
 than a measured execution improvement. No runtime suite was repeated for
 unchanged emitted bytes.
+
+### Retain constants across modeled sign extension
+
+NBODY's interaction loop emitted `mov eax,512; cdq; mov eax,512; idiv ...`.
+The post-allocation constant peephole forgot every fact at CDQ, although its
+explicit destination is EDX. It now preserves unaffected constants across
+register-only CWD/CDQ/MOVSX operations. Destination aliases and explicit
+clobbers still invalidate facts; unknown operations, calls, and block edges
+remain barriers. A conversion writing EAX is not treated like one merely
+reading EAX.
+
+The emitted constant-count assertion was tightened from two copies to one
+and failed first, alongside the non-clobbering-extension case. All 11 focused
+peephole checks pass. Dumps at `/tmp/qbopt-nbody-next` and
+`/tmp/qbopt-nbody-constant-after` show the one deleted hot-loop materialization.
+NBODY's modeled cost falls 376416 -> 374416. CHAIN also loses one materialization
+per object: 921/933/881 -> 919/931/879. Those three CHAIN variants are the only
+changed primary objects among 96. NBODY passes all 72 runtime cases across the
+three compilers; CHAIN is separately checked on those same compiler variants.
+Artifacts: `qbopt-nbody-constant-7k9vkbz8` and `qbopt-chain-constant-4j353rz8`
+under the system temporary directory. No claim is made that NBODY's still
+missing reference target has been reached.
