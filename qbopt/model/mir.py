@@ -2167,6 +2167,8 @@ def bodies(
 
             built = raising_division.scalar(built)
             built = raising_calls.arithmetic(built, found, mine)
+            from qbopt.frontend import raising_bytes
+            built = raising_bytes.scalar(built)
             from qbopt.frontend import raising_longs
             built = raising_longs.scalar(built)
             from qbopt.frontend import raising_copies

@@ -3,6 +3,45 @@
 Every row carries what produced it. See `docs/measurement.md` for what each
 kind of number does and does not mean.
 
+## Current nbody runtime check — 2026-09-09
+
+`bench/nbody.bas`, VBDOS `/O /FPi /R /G3 /E /Zi`, 25,000 steps,
+five paired repetitions, `conf/pinned.conf`, tuning CPU `386`, native-FPU
+replacement disabled. BASE is BC's unchanged object; OPT must report
+`wholeseg.Emission.LIR`, not fallback. All 24 final position/velocity values
+and DONE matched in every pair. This is benchmark coverage, not the full suite.
+
+| | BC original | Optimized |
+|---|---:|---:|
+| Median PIT ticks | 14,747,860 | 4,374,864 |
+| Median milliseconds | 12,360.109 | 3,666.552 |
+| Tick spread (max minus min) | 2 | 2,366 |
+| Millisecond spread | 0.002 | 1.983 |
+
+BASE/OPT = **3.3710x** in DOSBox. This does not establish 386/486/P5/P6
+hardware speedups: the emulator does not model those instruction latencies.
+The earlier optimized timer returning zero was a compiler defect, not a
+speedup; `docs/timing-audit.md` records the stage-level diagnosis and fix.
+
+Raw BASE ticks: `14747860, 14747858, 14747860, 14747860, 14747860`.
+Raw OPT ticks: `4373286, 4374896, 4373286, 4374864, 4375652`.
+
+Reproduction stamp: revision `6020221` plus the `raising_bytes` fix committed
+with this measurement; macOS 27.0 arm64; DOSBox-X 2026.06.02 SDL2.
+The compiled BC input is `fixtures/bench/nbody-v-g3.obj`.
+SHA256 values:
+
+| Artifact | SHA256 |
+|---|---|
+| DOSBox-X executable | `dc6d3e9517099b6f4868786fd541de3b099eb3e89f9e49cb4650e4dfe05d12c2` |
+| Pinned configuration | `6683b8921c4f410f2eeed9c454ebedce03e3587ca7aa9637471b0190fc602c0f` |
+| BC.EXE | `fa8a089bb6ec4a5dcd81705d704929e7c41894efcc09dc453e7e0311f9331efb` |
+| LINK.EXE | `2b5236e3f6198a5c4cebec02178786cdcea423f9b6b9823d538a1838e65f045c` |
+| VBDCL10E.LIB | `59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301` |
+| Input OBJ | `a2b4d2939696f613120db4f01efe05e1e0dd80e0f0dc19948e753041bc9a1d3a` |
+| BASE.EXE | `bf57ef07f94e24f9dbbd90d66e84bc05e9c5152b8848f2dc7bf89ba27abfb546` |
+| OPT.EXE | `a71a8072f12f04a9ac0cc30bf9b298973985a0443e3bf7cbb47d1aa6aa649397` |
+
 ## Static: what the pass does to the corpus
 
 Measured 2026-08-30, over the 110 objects in `fixtures/omf`, with

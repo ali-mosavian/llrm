@@ -27,6 +27,24 @@ correctness smoke run completed for BASE, but OPT did not complete within
 execution failure, not a timing result. The unmodified BC object is kept
 in `fixtures/bench/nbody-v-g3.obj` for reproduction.
 
+The 30-second failure used the FAST dynamic-core profile, not the pinned
+measurement profile. With the pinned normal core, both programs finished,
+but optimized NBODY printed `TICKS=0` even after 25,000 steps. Its coordinates
+and velocities matched BASE. The stage dumps localized a high-byte-clear
+defect: `mov bl,es:[bx]; xor bh,bh` became a load into AL followed by the
+unchanged physical BH clear and a read of an unwritten spill slot. The XOR's
+whole-word SSA definition had only opaque operands, not an allocatable result.
+
+The frontend now raises an unobserved high-byte clear as a word-sized mask
+with an explicit value result and upper-word preservation. This is allowed
+only when its flags are unobserved and overwritten within the block. It
+introduces no machine knowledge into optimization passes. Dumps before and
+after are in `/tmp/qbopt-nbody-external-stages` and
+`/tmp/qbopt-nbody-byte-stages`; the repaired allocated sequence is
+`mov al,es:[bx]; and ax,255`. The pinned 100-step run now reports nonzero
+ticks and unchanged simulation results. The dynamic-core discrepancy has
+not been separately rechecked and is not used as timing evidence.
+
 The CPU selector introduced in 9887b1c was not supported by a sufficiently
 precise timing model. Reciprocal division was held uncommitted during the
 initial audit. Correct runtime answers do not validate speed predictions.
