@@ -1086,6 +1086,17 @@ def _cannot_fault(op: Op) -> bool:
     )
 
 
+def _whole_shift(op: Op, readable: set | None) -> bool:
+    """A complete scalar definition needs no loop-carried destination contents."""
+    match op.kind, op.args, op.results:
+        case mir.Kind.SHL, (mir.Held(width=width), mir.Const(n=count)), (mir.Held(width=result_width),):
+            return (width == result_width and 0 < count < width * 8 and not op.merges
+                    and readable is not None
+                    and not any(value.flags and value in readable for value in op.defines))
+        case _:
+            return False
+
+
 def _invariant_run(
     ops: list[Op],
     carried: set,
@@ -1190,7 +1201,7 @@ def _invariant_run(
             ) and not (
                 one.kind is mir.Kind.COPY and not one.merges
                 and len(one.args) == 1 and isinstance(one.args[0], mir.Symbol)
-            ):
+            ) and not _whole_shift(one, readable):
                 continue
             # An operand nothing writes down used to end the run here.
             # hotlop hoisted `mov ax,[n] / imul word [k]`, the recolour

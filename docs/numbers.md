@@ -5,6 +5,9 @@ kind of number does and does not mean.
 
 ## Runtime refresh — 2026-09-10, revision b040b61
 
+Subsequent invariant-index hoisting lowers FPBENCH to **5,725.080 ms**;
+see [the change and its before/after assembly](invariant-shift.md).
+
 Three baseline runs followed by three optimized runs per benchmark, VBDOS
 `v-g3`, tuning CPU `386`, `conf/pinned.conf`, native-FPU replacement off.
 Both compiler logs report zero severe errors; both links completed without
