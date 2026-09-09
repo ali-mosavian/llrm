@@ -1,8 +1,8 @@
 # Arithmetic timing audit — incomplete
 
-The CPU selector introduced in 9887b1c is not yet supported by a sufficiently
-precise timing model. The pending reciprocal-division change remains
-uncommitted. Correct runtime answers do not validate speed predictions.
+The CPU selector introduced in 9887b1c was not supported by a sufficiently
+precise timing model. Reciprocal division was held uncommitted during the
+initial audit. Correct runtime answers do not validate speed predictions.
 
 ## Verified findings
 
@@ -97,3 +97,23 @@ Next model change: represent instruction-form-specific cost evidence and
 ranges, separate from the old scoreboard estimates. A candidate must not
 win merely because an unknown multiplier was assigned an arbitrary midpoint.
 No emitted code changed during this primary-table inspection.
+
+## Bounds integrated into division selection
+
+`backend/timing.py` now separates audited multiplication ranges and division
+widths from the old scoreboard's midpoint guesses. Reciprocal selection
+uses the maximum multiply cost and minimum divide cost. Missing exact-form
+evidence (currently P6 and later profiles) retains IDIV. This is not a
+claim that reciprocal division cannot win on those CPUs.
+
+Pentium manual section 24.3 (printed 24-3, PDF page 610) charges one clock
+per prefix. P5's reciprocal estimate includes a 66h prefix for every dword
+operation and reserved copy. Division by seven still wins that static
+comparison, 36 versus IDIV's 46 without setup. It no longer wins on 486
+using an arbitrary midpoint. P5 is the currently exercised reciprocal path;
+all three LNGMXX compiler variants pass actual-program checks.
+
+The multiply-chain selector's broader profiles still use approximate costs.
+Neither that nor the division comparison includes a post-allocation spill
+cost or complete scheduling model. Further optimization must not describe
+these rankings as measured execution time.

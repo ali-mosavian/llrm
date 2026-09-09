@@ -533,6 +533,8 @@ def _asm(data: bytes) -> None:
 def main(argv: list[str] | None = None, view=None) -> int:
     ap = argparse.ArgumentParser(prog="stages")
     ap.add_argument("object", type=Path)
+    from qbopt.cycles.timings import ARCHS
+    ap.add_argument("--cpu", choices=("386", *ARCHS), default="386", help="CPU used for arithmetic selection")
     ap.add_argument("--only", help="one pass by name, instead of each in turn")
     ap.add_argument("--asm", action="store_true", help="disassemble what came out, after the last stage")
     ap.add_argument("--quiet", action="store_true", help="shape only, no per-op detail")
@@ -640,7 +642,7 @@ def main(argv: list[str] | None = None, view=None) -> int:
             stages.append((stage, []))
         stages[-1][1].append((name, low))
 
-    got = wholeseg.emitted(data, only=args.only, watch=watch)
+    got = wholeseg.emitted(data, only=args.only, watch=watch, cpu=args.cpu)
     for name, bodies in mir_stages.items():
         was = dump(next(step), name, name, bodies, was, debug, found)
     lowered(next(step), stages, got.data, got.reason, route)

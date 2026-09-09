@@ -20,6 +20,7 @@ from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.backend import target
 from qbopt.backend import arithmetic
+from qbopt.backend import division
 from qbopt.abi import runtime
 from qbopt.analysis import liveness
 from qbopt.objectfile.module import Addr
@@ -469,6 +470,11 @@ def _word_division(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]
         or not isinstance(op.args[1], (mir.Held, mir.Const)) or op.args[1].width != width):
         return None
     dividend, divisor = map(operand, op.args)
+    if isinstance(op.args[1], mir.Const):
+        reciprocal = division.reciprocal(dividend, op.args[1].n, tuple(map(operand, op.results)),
+                                         lowering.fresh, lowering.cpu)
+        if reciprocal is not None:
+            return reciprocal
     setup = ()
     if isinstance(op.args[1], mir.Const):
         held = ir.Held(lowering.fresh(), width)
