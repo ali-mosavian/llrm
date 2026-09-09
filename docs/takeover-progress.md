@@ -1883,3 +1883,36 @@ pass 39 cases across all three compilers, covering the three changed programs
 and LNGMIX, HOTLOP, HOTLPX, HARR, MATRIX, NESTED, ADDRM and SPILL.
 Artifacts: `qbopt-loop-exit-34rk4ekd` and `qbopt-loop-exit-press-_bngjbd0`
 under the system temporary directory. No full test suite was run.
+
+### Sum affine increments in closed form
+
+Loop-exit evaluation now handles an accumulator whose increment is a linear
+expression of invariant values and basic recurrences. It expands same-width
+COPY/ADD/SUB/INCREMENT/DECREMENT expressions, requires the accumulator's own
+coefficient to be exactly one, and sums each changing term using the exact
+integer coefficient `N*(N-1)/2` before reducing modulo the value width.
+Repeated expression nodes are memoized. Nonlinear recurrences and mixed-width
+expressions are not guessed. No machine origin or register is consulted.
+
+HOTLPX becomes `20*(n*k)+210`, and constant HOTLOP folds to its answer.
+Six real emitted-loop regressions failed first (both programs, all three
+compilers). Additional cases cover descending counters, an overflowing
+triangular sum, and refusal of a doubled accumulator. Stage dumps are in
+`/tmp/qbopt-hotlpx-sum-before` and `/tmp/qbopt-hotlpx-sum-after`.
+
+| Program | Before (PDS/QB/VBDOS) | After |
+| --- | --- | --- |
+| HOTLOP | 332 / 336 / 342 | 128 / 132 / 138 |
+| HOTLPX | 452 / 456 / 462 | 272 / 276 / 282 |
+| ROTATE | 452 / 456 / 462 | 296 / 300 / 306 |
+| SPILL | 1410 / 1416 / 1420 | 470 / 476 / 480 |
+| SPLIT | 352 / 356 / 362 | 152 / 156 / 162 |
+
+These 15 are the only changed objects among 96 primary fixtures, all retaining
+LIR emission. Focused loop/induction/range checks pass 98/98; strict runtime
+checks pass 27 cases across the three compilers for these five programs plus
+LNGMXX, PRESS and PRESSX. Runtime artifacts are `qbopt-triangular-sums-gxxko6e7`
+and `qbopt-triangular-others-3q1oerpo` under the system temporary directory.
+These are actual numerator improvements, not reference revisions; HOTLPX's
+target remains provisional, and completion still requires valid modern-compiler
+reference listings (including loop evaluation where legal).

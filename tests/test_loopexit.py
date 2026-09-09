@@ -9,9 +9,10 @@ from qbopt import blocks, module, omf, wholeseg
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
-def test_lngmxx_has_no_accumulation_backedge(tag):
-    """LNGMXX added its invariant quotient/remainder sum ten times instead of multiplying once."""
-    result = wholeseg.emitted(Path(f"fixtures/omf/lngmxx-{tag}.obj").read_bytes())
+@pytest.mark.parametrize("program", ["lngmxx", "hotlpx", "hotlop"])
+def test_accumulation_has_no_backedge(tag, program):
+    """LNGMXX repeated a fixed sum; HOTLPX/HOTLOP repeated product + index twenty times."""
+    result = wholeseg.emitted(Path(f"fixtures/omf/{program}-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     from qbopt import loops
@@ -19,11 +20,11 @@ def test_lngmxx_has_no_accumulation_backedge(tag):
     assert not loops.loops(partition, 0x30)
 
 
-def _body(monkeypatch):
+def _body(monkeypatch, program="lngmxx"):
     import corpus
     from qbopt import loopexit, mir, transform
 
-    path = Path("fixtures/omf/lngmxx-p-g2.obj")
+    path = Path(f"fixtures/omf/{program}-p-g2.obj")
     found = corpus.loaded(path)
     partition = corpus.partitioned(path)
     with monkeypatch.context() as context:
@@ -72,3 +73,47 @@ def test_accumulation_exit_wraps_at_its_own_width(monkeypatch, start, step):
     facts = consts.known(result)
     answer = next(value for value in facts if value.id == counter.value)
     assert facts[answer].n == (start + 10 * step) & 0xffffffff
+
+
+@pytest.mark.parametrize("start,bound,step", [(1, 20, 1), (1, 300, 1), (20, 1, -1)])
+def test_index_sum_uses_the_exact_triangular_coefficient(monkeypatch, start, bound, step):
+    """HOTLPX must sum the original index values even when the 16-bit triangular product wraps."""
+    from qbopt import consts, induction, loopexit, loops, mir
+
+    body = _body(monkeypatch, "hotlpx")
+    loop, = loops.loops(body.blocks, body.entry)
+    counter, = induction.basics(body, loop).values()
+    header = next(block for block in body.blocks if block.at == loop.header)
+    accumulator = next(phi.result for phi in header.phis if phi.result.id != counter.value)
+    changed = []
+    for block in body.blocks:
+        ops = []
+        for op in block.ops:
+            if op.defines == (counter.start.value,):
+                op = replace(op, args=(mir.Const(start, 2),))
+            if op.kind is mir.Kind.MUL:
+                op = replace(op, kind=mir.Kind.COPY, args=(mir.Const(21, 2),), loads=(), uses=())
+            if op.kind is mir.Kind.INCREMENT:
+                op = replace(op, kind=mir.Kind.INCREMENT if step == 1 else mir.Kind.DECREMENT)
+            if block.at == loop.header and op.kind is mir.Kind.SUB:
+                op = replace(op, args=(op.args[0], mir.Const(bound, 2)))
+            if block.at == loop.header and op.kind is mir.Kind.BRANCH:
+                op = replace(op, test=mir.Kind.LE if step == 1 else mir.Kind.GE)
+            ops.append(op)
+        changed.append(replace(block, ops=tuple(ops)))
+    result = loopexit.evaluated(replace(body, blocks=tuple(changed)))
+    assert not loops.loops(result.blocks, result.entry)
+    expected = sum(21 + index for index in range(start, bound + step, step)) & 0xffff
+    assert consts.known(result)[accumulator].n == expected
+
+
+def test_a_doubled_accumulator_is_not_a_linear_sum(monkeypatch):
+    """Replacing s := 2*s + index by a triangular sum would silently change HOTLPX's answer."""
+    from qbopt import loopexit, mir
+
+    body = _body(monkeypatch, "hotlpx")
+    body = replace(body, blocks=tuple(replace(block, ops=tuple(
+        replace(op, args=(op.args[1], op.args[1]), uses=(op.args[1].value,))
+        if op.at == 0x56 and op.kind is mir.Kind.ADD else op
+        for op in block.ops)) for block in body.blocks))
+    assert loopexit.evaluated(body) is body
