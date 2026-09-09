@@ -53,21 +53,41 @@ def spilled(
     frame = frame if frame is not None else frames.of(body)
     fresh = _next_value(body)
     made: set[int] = set()
+    constants = _constants(body, values)
+    stored = values - constants.keys()
 
     blocks = []
     for block in body.blocks:
         insns: list[lir.Insn] = []
         for one in block.insns:
-            direct = _in_place(one, values, frame) or _tied(one, values, frame)
+            remade = {}
+            for value in one.uses:
+                if value not in constants or value in remade:
+                    continue
+                constant = constants[value]
+                remade[value] = fresh
+                insns.append(
+                    _inserted(
+                        one,
+                        ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(fresh, constant.width),), (constant,)),
+                        (fresh,),
+                        (),
+                    )
+                )
+                made.add(fresh)
+                fresh += 1
+            if remade:
+                one = _renamed(one, remade)
+            direct = _in_place(one, stored, frame) or _tied(one, stored, frame)
             if direct is not None:
                 insns.append(direct)
                 continue
-            loaded = _memory_source_read_first(one, values, fresh)
+            loaded = _memory_source_read_first(one, stored, fresh)
             if loaded is not None:
                 before, one = loaded
                 fresh += 1
                 insns.append(before)
-                direct = _tied(one, values, frame)
+                direct = _tied(one, stored, frame)
                 if direct is not None:
                     insns.append(direct)
                     continue
@@ -82,7 +102,8 @@ def spilled(
                 if value not in values:
                     continue
                 rename[value] = fresh
-                after.append(_store(one, fresh, frame.cell(value, _width(one, value))))
+                if value not in constants:
+                    after.append(_store(one, fresh, frame.cell(value, _width(one, value))))
                 fresh += 1
             insns += before
             insns.append(_renamed(one, rename) if rename else one)
@@ -90,6 +111,38 @@ def spilled(
             made.update(rename.values())
         blocks.append(replace(block, insns=tuple(insns)))
     return replace(body, blocks=tuple(blocks)), frozenset(made)
+
+
+def _constants(body: lir.LirBody, values: frozenset[int]) -> dict[int, ir.Imm]:
+    definitions: dict[int, list[lir.Insn]] = {}
+    excluded = set()
+    for one in body.insns:
+        for value in one.defines:
+            definitions.setdefault(value, []).append(one)
+        if one.group is not None:
+            excluded.update((*one.uses, *one.defines))
+    result = {}
+    for value in values - excluded:
+        defining = definitions.get(value, [])
+        if len(defining) != 1:
+            continue
+        one = defining[0]
+        what = one.what
+        if (
+            what is None
+            or what.op is not ir.Operation.MOVE
+            or one.uses
+            or len(what.dests) != 1
+            or len(what.sources) != 1
+            or one.defines != (value,)
+            or one.clobbers
+        ):
+            continue
+        into, source = what.dests[0], what.sources[0]
+        if isinstance(into, ir.Held) and isinstance(source, ir.Imm) and into.width == source.width:
+            if all(_width(use, value) <= source.width for use in body.insns if value in use.uses):
+                result[value] = source
+    return result
 
 
 def _width(one: lir.Insn, value: int) -> int:
@@ -141,9 +194,7 @@ def _wants(side: tuple, rename: dict[int, int]) -> tuple:
     unpinned and the allocation put it in cx while `push eax` went on
     reading eax.
     """
-    return tuple(
-        (ir.Held(rename.get(held.value, held.value), held.width), register) for held, register in side
-    )
+    return tuple((ir.Held(rename.get(held.value, held.value), held.width), register) for held, register in side)
 
 
 def _renamed(one: lir.Insn, rename: dict[int, int]) -> lir.Insn:

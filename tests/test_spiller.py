@@ -35,6 +35,38 @@ def _out(body, values):
     return [one for block in got.blocks for one in block.insns]
 
 
+def test_spilled_constant_is_rematerialized_without_a_frame_slot() -> None:
+    """matrix spilled the invariant 20, storing it once and reloading it inside loops."""
+    constant = lir.Insn(
+        at=0,
+        covers=(0, 3),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),), (ir.Imm(20, 2),)),
+        defines=(1,),
+        uses=(),
+    )
+    result = _out(_body(constant, _add(2, 1)), {1})
+    assert not any(
+        isinstance(operand, ir.Mem) for one in result if one.what for operand in (*one.what.dests, *one.what.sources)
+    )
+    assert result[-2].what.sources == (ir.Imm(20, 2),)
+    assert result[-1].what.sources[1].value == result[-2].defines[0]
+
+
+def test_constant_reload_precedes_an_in_place_spilled_update() -> None:
+    constant = lir.Insn(
+        at=0,
+        covers=(0, 3),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),), (ir.Imm(20, 2),)),
+        defines=(1,),
+        uses=(),
+    )
+    result = _out(_body(constant, _add(2, 1)), {1, 2})
+    assert all(1 not in one.uses for one in result)
+    assert result[-2].what.sources == (ir.Imm(20, 2),)
+    assert isinstance(result[-1].what.dests[0], ir.Mem)
+    assert result[-1].what.sources[1].value == result[-2].defines[0]
+
+
 def test_a_lifted_memory_operand_takes_the_fixup_with_it() -> None:
     """The fixup names the operand, so it goes where the operand goes.
 
@@ -51,6 +83,7 @@ def test_a_lifted_memory_operand_takes_the_fixup_with_it() -> None:
     what = ir.Semantics(ir.Operation.BINARY, "add", (ir.Held(1, 2),), (ir.Held(1, 2), cell))
     add = lir.Insn(at=0x100, covers=(0x100, 0x104), what=what, defines=(1,), uses=(1,), op=None)
     got = _out(_body(add), {1})
+
     def symbolic(one) -> bool:
         every = (one.what.dests if one.what else ()) + (one.what.sources if one.what else ())
         return any(isinstance(x, ir.Mem) and x.addr is not None and x.addr.space is Space.SEGMENT for x in every)

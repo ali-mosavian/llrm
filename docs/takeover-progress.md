@@ -55,6 +55,15 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+Constant-rematerialization checkpoint: the spiller recreates single-definition
+immediate constants at uses instead of allocating a stack slot. Grouped parallel
+copies and redefined values are excluded; rematerialization precedes in-place
+updates of other spilled values. Thirteen spiller checks pass; the old spiller
+fails the no-slot regression. Strict LIR-only runtime passes matrix, hotlop,
+pressx and lngmix across PDS /G2, QB /O and VBDOS /G3 (12 cases), artifacts
+`/tmp/qbopt-remat.YNcAMl`. Matrix modeled cost falls 12,500 -> 12,334 (1.99x).
+The target remains 6,210; this is progress, not completion or a full gate.
+
 Zero-fact checkpoint: identical, same-width Held operands of integer XOR/SUB
 now establish zero without requiring an input fact. Six fail-first/mutation
 regressions and all 998 constant checks pass. Strict LIR-only runtime transforms
