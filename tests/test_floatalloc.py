@@ -27,7 +27,7 @@ def test_ninth_float_uses_an_owned_extended_precision_spill():
     integer_scratch = slots.cell(1, 2)
     allocated = floatalloc.allocated(body, slots)
     spills = [one for one in allocated.insns if one.what.name == "fstp" and one.what.dests[0].width == 10]
-    assert spills and slots.size >= 10
+    assert len(spills) == 1 and slots.size >= 10
     assert all(one.what.dests[0].addr != integer_scratch.addr for one in spills)
     stack, memory, answers = [], {}, []
     inputs = iter(range(1, 10))

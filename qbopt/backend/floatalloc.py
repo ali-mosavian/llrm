@@ -1,7 +1,7 @@
 """Assign floating LIR values to the target register stack."""
 
 from dataclasses import replace
-from collections import Counter
+from collections import Counter, defaultdict, deque
 
 from qbopt.model import ir, lir
 from qbopt.model.passes import LIRTransform
@@ -29,6 +29,7 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
     stack: list[int] = []
     spilled: dict[int, ir.Mem] = {}
     remaining = Counter()
+    next_uses = defaultdict(deque)
     for index, block in enumerate(body.blocks):
         if any(phi.result in floating or any(value in floating for _, value in phi.incoming)
                for phi in block.phis):
@@ -37,9 +38,14 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
             end = index
             while end in continues:
                 end += 1
-            remaining = Counter(arg.value for member in body.blocks[index:end + 1]
-                                for one in member.insns if one.what for arg in one.what.sources
-                                if isinstance(arg, ir.Held) and arg.width == 10)
+            next_uses = defaultdict(deque)
+            region = (one for member in body.blocks[index:end + 1] for one in member.insns)
+            for position, instruction in enumerate(region):
+                if instruction.what:
+                    for arg in instruction.what.sources:
+                        if isinstance(arg, ir.Held) and arg.width == 10:
+                            next_uses[arg.value].append(position)
+            remaining = Counter({value: len(uses) for value, uses in next_uses.items()})
         insns = []
         for one in block.insns:
             what = one.what
@@ -68,6 +74,9 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
                 continue
 
             used = Counter(arg.value for arg in what.sources if isinstance(arg, ir.Held) and arg.width == 10)
+            for value, count in used.items():
+                for _ in range(count):
+                    next_uses[value].popleft()
             missing = [value for value in used if value not in stack]
             extra = 0
             match what.op:
@@ -85,7 +94,9 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
             while len(stack) + len(missing) + extra > 8:
                 if frame is None:
                     raise Unlowered("floating spill requires an owned frame")
-                victim = next((slot for slot in range(len(stack) - 1, -1, -1) if stack[slot] not in used), None)
+                victim = max((slot for slot in range(len(stack)) if stack[slot] not in used),
+                             key=lambda slot: next_uses[stack[slot]][0] if next_uses[stack[slot]] else float("inf"),
+                             default=None)
                 if victim is None:
                     raise Unlowered("floating instruction requires too many stack operands")
                 if victim:

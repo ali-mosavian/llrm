@@ -86,3 +86,13 @@ ten-byte memory operands, and checks scratch-slot separation. Allocation,
 selection and integer spiller tests: 85 pass. The 154-object audit remains
 byte-for-byte unchanged; current suite costs are unchanged. Loop PHIs and
 arbitrary CFG stack reconciliation still remain to be implemented.
+
+Spill selection uses the next explicit use across the linear region, excluding
+current operands. In the nine-load/ascending-store case, the initial deepest-slot
+policy evicted value 1, then had to evict value 2 immediately to reload it.
+The farthest-next-use policy evicts value 8 instead; values 1 through 7 free
+space before its reload. Before: two spill stores and two reloads. After: one
+of each, with identical stored answers and no extra frame allocation for the
+second victim. The count regression failed under the old policy; all 85 focused
+checks pass after the change. This is an allocator pressure-case improvement,
+not a claimed suite-program speedup.
