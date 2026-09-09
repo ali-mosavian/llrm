@@ -1,5 +1,21 @@
 # Takeover checkpoint — 2026-09-09
 
+## Reuse unchanged memory-dependent computations
+
+CSE now admits explicit cell operands and checks intervening writes/barriers
+before reusing them within one block. Far references without segment identity
+remain excluded. This removes HARR's duplicate descriptor-adjusted address;
+the existing induction-variable reduction still supplies the 42-byte step.
+PDS costs: HARR **7930 -> 7130 (3.89x)**, SEGLD **20096 -> 16896 (2.52x)**.
+The larger remaining goal is invariant descriptor/base/segment placement and
+complete-pointer induction, not merely duplicate-expression removal.
+
+Three fixture regressions fail against old CSE; corresponding unknown-write
+cases retain both computations. Fourteen focused checks and nine strict-LIR
+runtime comparisons pass (HARR/SEGLD/LNGMIX across p-g2/q-O/v-g3).
+Dumps: `/tmp/qbopt-memory-cse`; runtime evidence:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-memory-cse-hslacsvl`.
+
 ## Bounded array paths unlock existing optimization
 
 The raise now proves finite word-width array paths by exact scalar evaluation.

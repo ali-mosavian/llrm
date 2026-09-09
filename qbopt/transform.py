@@ -230,7 +230,7 @@ _PURE = frozenset(
 )
 
 
-def subexpressions(body: MirBody) -> MirBody:
+def subexpressions(body: MirBody, dgroup: frozenset[int] = frozenset()) -> MirBody:
     """One operation where two computed the same thing from the same values.
 
     lngmix is the program this exists for. `s = s + v \\ 7 + v MOD 7`
@@ -284,6 +284,9 @@ def subexpressions(body: MirBody) -> MirBody:
                 seen[key] = (order[block.at], index, op)
                 continue
             at, where, earlier = first
+            if op.loads and (at != order[block.at] or not _undisturbed(op, earlier, block.ops[where + 1:index], dgroup)):
+                seen[key] = (order[block.at], index, op)
+                continue
             if len(earlier.defines) != len(op.defines):
                 continue
             if not _reaches(at, where, order[block.at], index, doms, body, block):
@@ -428,9 +431,11 @@ def _width(_value: mir.Value, op: Op) -> int | None:
 
 def _computation(op: Op, stands: dict[int, mir.Value], whole: dict[int, int]) -> tuple | None:
     """What this operation computes, or None where that is not only its operands."""
-    if op.kind not in _PURE or op.loads or op.stores or op.merges:
+    if op.kind not in _PURE | {mir.Kind.LOAD} or op.stores or op.merges or op.barrier:
         return None
     if not op.defines or not op.args:
+        return None
+    if set(op.loads) != {arg.ref for arg in op.args if isinstance(arg, mir.Cell)}:
         return None
     named = []
     for one in op.args:
@@ -442,6 +447,11 @@ def _computation(op: Op, stands: dict[int, mir.Value], whole: dict[int, int]) ->
             named.append(("c", one.n, one.width))
         elif isinstance(one, mir.Symbol):
             named.append(("s", one))
+        elif isinstance(one, mir.Cell):
+            ref = mir._symbolic_ref(one.ref)
+            if not mir.same_bytes(ref, ref):
+                return None
+            named.append(("m", ref))
         else:
             return None
     return (op.kind, op.name, tuple(named))
@@ -2121,8 +2131,11 @@ class Reuse(MIRTransform):
 class Cse(MIRTransform):
     name = "cse"
 
+    def __init__(self, where: Where) -> None:
+        self.where = where
+
     def transform(self, body: MirBody) -> MirBody:
-        return subexpressions(body)
+        return subexpressions(body, self.where.dgroup)
 
 
 class Place(MIRTransform):
@@ -2160,7 +2173,7 @@ def pipeline(where: Where, **wanted) -> list[MIRTransform]:
         DropLoads(where),
         DropStores(where),
         Reuse(where),
-        Cse(),
+        Cse(where),
         promote.Promote(where),
         strength.Strength(where),
         Algebraic(),
