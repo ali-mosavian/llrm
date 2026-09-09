@@ -13,9 +13,25 @@ from qbopt import promote
 from qbopt import wholeseg
 
 
-def test_nested_memory_update_becomes_a_value_and_preserves_its_store() -> None:
+def test_unpromotable_memory_update_does_not_cancel_other_cells() -> None:
+    """SEGLD rose from 25002 to 28202 when its memory sum canceled counter promotion."""
+    from qbopt import transform
+
+    path = Path("fixtures/omf/segld-p-g2.obj")
+    found = module.of(omf.parse(path.read_bytes()))
+    partition = blocks.partition(found, blocks.code_map(found))
+    body = mir.bodies(found, partition)[0][1]
+    counter = next(op.loads[0] for block in body.blocks for op in block.ops if op.at == 0x61)
+    body = transform.applied(body, found.dgroup, found.calls, blocks=partition, found=found)
+    assert not any(counter in op.loads for block in body.blocks for op in block.ops)
+
+
+def test_nested_memory_update_becomes_a_value_and_preserves_its_store(monkeypatch: pytest.MonkeyPatch) -> None:
     """NESTED's accumulator stayed a memory ADD instead of a loop-carried value."""
     from qbopt import transform
+    from qbopt import loopmotion
+
+    monkeypatch.setattr(loopmotion, "sunk_stores", lambda body, *args: body)
 
     found = module.of(omf.parse(Path("fixtures/omf/nested-p-g2.obj").read_bytes()))
     partition = blocks.partition(found, blocks.code_map(found))

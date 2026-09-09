@@ -142,11 +142,16 @@ def _available(body: MirBody, cells: dict, dgroup: frozenset[int], bounds: dict 
 
 
 def promoted(
-    body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | None = None, *, loop_only: bool = False
+    body: MirBody,
+    dgroup: frozenset[int] = frozenset(),
+    bounds: dict | None = None,
+    *,
+    loop_only: bool = False,
+    split_updates: bool = True,
 ) -> MirBody:
     """Reuse eligible stored values without removing observable writes."""
     original = body
-    body = _separated(body)
+    body = _separated(body) if split_updates else body
     found = promotable(body, dgroup, bounds)
     if loop_only:
         hot = {at for loop in loops.loops(body.blocks, body.entry) for at in loop.body}
@@ -156,12 +161,12 @@ def promoted(
         return original
     usable = _available(body, found, dgroup, bounds)
     updates = {op.id for block in original.blocks for op in block.ops if op.loads and op.stores}
-    if any(
+    if split_updates and any(
         op.id in updates and op.loads and not op.stores and id(op) not in usable
         for block in body.blocks
         for op in block.ops
     ):
-        return original
+        return promoted(original, dgroup, bounds, loop_only=loop_only, split_updates=False)
 
     taken = max((one.variable for one in ssa.values(body)), default=0)
     fresh = _next(body)

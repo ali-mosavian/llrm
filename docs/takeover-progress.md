@@ -1,5 +1,25 @@
 # Takeover checkpoint — 2026-09-09
 
+## Preserve independent promotion when an update cannot be split
+
+The PDS scoreboard refresh caught SEGLD regressing 25002 -> 28202: an
+unpromotable memory update caused promotion to return the original body,
+discarding unrelated counter promotions too. Retry write-through promotion
+without update splitting in that case; retain the unsafe update in memory.
+SEGLD returns to **25002/6704 = 3.73x**. A real-fixture regression fails
+before the fix. Twelve focused promotion checks and nine strict-LIR runtime
+comparisons pass (SEGLD/NESTED/HARR across p-g2/q-O/v-g3). The older
+promotion-store test now isolates store motion, whose separate tests verify
+the store's new exit placement rather than its original instruction address.
+
+Dumps: `/tmp/qbopt-segld-promotion-fixed`. Runtime artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-promote-independent-7qcme0hf`.
+
+Current PDS measurements also show ARRIDX 0.89x, PRESS 0.82x, SPILL 1.37x,
+SPLIT 1.30x; MATRIX 1.62x, ROTATE 1.54x and IVCHAN 1.51x remain above goal.
+ADDRM regressed to 2.38x from the earlier 1.98x and is not fixed by this
+change. HARR 6.16x and floating-point cases above 3x remain major gaps.
+
 ## Affine addresses with invariant offsets
 
 Induction analysis now retains invariant additive terms while composing
