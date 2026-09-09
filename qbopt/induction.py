@@ -22,6 +22,7 @@ time round, because it compiles a statement at a time.
 from dataclasses import dataclass
 
 from qbopt import mir
+from qbopt import consts
 from qbopt import loops as loopy
 
 
@@ -216,7 +217,68 @@ def derived(
             if isinstance(by, mir.Cell) and not settled(by.ref):
                 continue
             out.append(Derived(op, found[counter[0].value.id], _multiplier(op, by)))
-    return out
+    combined = {id(one.op): one for one in out}
+    combined.update({id(one.op): one for one in _composed(body, inside, found, made)})
+    return list(combined.values())
+
+
+def _composed(body: mir.MirBody, inside: set[int], found: dict[int, Affine], made: dict[int, mir.Op]) -> list[Derived]:
+    known = consts.known(body)
+    forms = {
+        value: (one, 1)
+        for value, one in found.items()
+        if isinstance(one.start, (mir.Held, mir.Const)) and one.start.width == 2
+    }
+    out: dict[int, Derived] = {}
+    changed = True
+    while changed:
+        changed = False
+        for block in body.blocks:
+            if block.at not in inside:
+                continue
+            for op in block.ops:
+                if op.stores or op.loads or op.barrier or len(op.args) != 2 or not op.results:
+                    continue
+                result = op.results[0]
+                if not isinstance(result, mir.Held) or result.width != 2 or result.value.id in forms:
+                    continue
+                args = tuple(_copied(arg, made) if isinstance(arg, mir.Held) else arg for arg in op.args)
+                args = tuple(
+                    mir.Const(fact.n & 0xFFFF, 2)
+                    if isinstance(arg, mir.Held)
+                    and arg.width == 2
+                    and arg.value.id not in forms
+                    and (fact := known.get(arg.value)) is not None
+                    and fact.width >= 2
+                    else arg
+                    for arg in args
+                )
+                left, right = args
+                first = forms.get(left.value.id) if isinstance(left, mir.Held) and left.width == 2 else None
+                second = forms.get(right.value.id) if isinstance(right, mir.Held) and right.width == 2 else None
+                if op.kind in (mir.Kind.ADD, mir.Kind.SUB) and first is not None and second is not None:
+                    if first[0] != second[0]:
+                        continue
+                    base = first[0]
+                    scale = first[1] + second[1] if op.kind is mir.Kind.ADD else first[1] - second[1]
+                elif op.kind is mir.Kind.MUL:
+                    if first is not None and isinstance(right, mir.Const) and right.width == 2:
+                        base, scale = first[0], first[1] * right.n
+                    elif second is not None and isinstance(left, mir.Const) and left.width == 2:
+                        base, scale = second[0], second[1] * left.n
+                    else:
+                        continue
+                elif (
+                    op.kind is mir.Kind.SHL and first is not None and isinstance(right, mir.Const) and 0 <= right.n < 16
+                ):
+                    base, scale = first[0], first[1] << right.n
+                else:
+                    continue
+                scale &= 0xFFFF
+                forms[result.value.id] = base, scale
+                out[id(op)] = Derived(op, base, mir.Const(scale, 2))
+                changed = True
+    return list(out.values())
 
 
 def _multiplier(op: "mir.Op", by: "mir.Arg") -> "mir.Arg":

@@ -55,6 +55,21 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+Affine-address checkpoint: induction analysis composes word multiply,
+same-counter add/subtract and shifts, including known SSA constants. Matrix's
+diagonal `(i * 20 + i) << 1` is recognized as stride 42; strength reduction
+chooses terminal candidates rather than introducing counters for every term.
+Thirty-five focused checks pass; disabling composition makes the two new
+coefficient/wrap regressions fail. Six strict LIR runtime cases pass for
+matrix/segld across PDS /G2, QB /O and VBDOS /G3. Stage-by-stage evidence is
+in `/tmp/qbopt-affine-matrix-20260909`.
+Strength remains disabled: experimentally enabling it costs matrix 12,974
+versus production 11,916, though segld improves 25,802 -> 24,642. This is
+analysis infrastructure, not a production performance gain. Profitable
+selection and latch flag safety remain prerequisites to enabling it. The
+focused lint invocation reports existing annotation/zip diagnostics; no
+full-gate claim.
+
 Dead-phi checkpoint: dead-code elimination now removes unused phi cycles,
 retaining externally demanded values and all real argument/address readers.
 Dependencies propagate through live phis; obsolete preservation-only references

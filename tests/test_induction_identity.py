@@ -68,6 +68,55 @@ def test_the_backedge_must_step_the_exact_phi_value() -> None:
     assert not induction.basics(built, loop)
 
 
+@pytest.mark.parametrize(("factor", "expected"), [(20, 42), (32767, 0)])
+def test_composed_word_address_has_one_recurrence(factor: int, expected: int) -> None:
+    """Matrix's (i * 20 + i) << 1 needs stride 42, not a separate stride-20 temporary."""
+    built, loop = body()
+    header = built.blocks[1]
+    counter = header.phis[0].result
+    product = header.ops[1].results[0].value
+    summed = mir.Value(30, 1, variable=30)
+    address = mir.Value(31, 1, variable=31)
+    factor_value = mir.Value(32, 0, variable=32)
+    constant = replace(
+        header.ops[1],
+        kind=mir.Kind.COPY,
+        defines=(factor_value,),
+        uses=(),
+        args=(mir.Const(factor, 2),),
+        results=(mir.Held(factor_value, 2),),
+    )
+    multiply = replace(
+        header.ops[1], uses=(counter, factor_value), args=(mir.Held(counter, 2), mir.Held(factor_value, 2))
+    )
+    add = replace(
+        multiply,
+        kind=mir.Kind.ADD,
+        defines=(summed,),
+        uses=(product, counter),
+        args=(mir.Held(product, 2), mir.Held(counter, 2)),
+        results=(mir.Held(summed, 2),),
+    )
+    shift = replace(
+        multiply,
+        kind=mir.Kind.SHL,
+        defines=(address,),
+        uses=(summed,),
+        args=(mir.Held(summed, 2), mir.Const(1, 2)),
+        results=(mir.Held(address, 2),),
+    )
+    built = replace(
+        built,
+        blocks=(
+            replace(built.blocks[0], ops=(constant,)),
+            replace(header, ops=(*header.ops[:1], multiply, add, shift)),
+            built.blocks[2],
+        ),
+    )
+    derived = induction.derived(built, loop)
+    assert next(one.by for one in derived if one.op is shift) == mir.Const(expected, 2)
+
+
 @pytest.mark.parametrize("mismatch", ["start", "step", "unchanged", "none"])
 def test_every_incoming_path_agrees_on_the_recurrence(mismatch: str) -> None:
     built, loop = body()

@@ -63,7 +63,10 @@ def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | 
         latches = [at for at in loop.latches if at in at_of]
         if preheader is None or at_of[preheader].succ != (loop.header,) or len(latches) != 1:
             continue  # two ways in or out is a bigger change than this
-        for one in derived:
+        candidates = [one for one in derived if _answer(body, one.op) is not None]
+        consumed = {arg.value for one in candidates for arg in one.op.args if isinstance(arg, mir.Held)}
+        candidates = [one for one in candidates if one.op.results[0].value not in consumed]
+        for one in candidates:
             # Once each. A multiply inside a nest is derived in every loop
             # that contains it, and reducing it twice would set up two
             # counters for one value.
