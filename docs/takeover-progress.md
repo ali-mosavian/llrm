@@ -55,6 +55,18 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+VBDOS entry-contract checkpoint: `B$ENRA` can now be lowered at sites with
+an unrelocated immediate `MOV BX,0` immediately before the call in the same
+basic block. `tools/libdump.py B$ENRA` shows VBDCL10E.LIB's rtenexit.asm:
+entry 0x17 builds the frame from CX; `or bx,bx` at 0x4b skips the unresolved
+helper call at 0x5b when zero. Both BX and CX remain fixed call inputs,
+so the selector's zero value must survive allocation. All other effects use
+the worst-case contract. Nonzero, relocated, unknown or separately entered
+call sites remain unestablished. Four focused checks pass; removing the
+site specialization fails the positive case. PROCS is **still refused**:
+the next exposed blocker is VBDOS `B$EXSA` at 0x113, not B$ENRA. No claim
+of completed procedure support or runtime success is made for this increment.
+
 ADDRM ownership checkpoint: VBDOS/G3's three-byte emission refusal at 0x80
 is fixed. CSE had correctly transferred the deleted index reload's bytes to
 the preceding high-word store. Widening recomputed its chain end from the

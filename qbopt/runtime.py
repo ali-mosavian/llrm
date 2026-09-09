@@ -70,7 +70,11 @@ from enum import StrEnum
 from pathlib import Path
 from dataclasses import field
 from dataclasses import replace
+from typing import TYPE_CHECKING
 from dataclasses import dataclass
+
+if TYPE_CHECKING:
+    from qbopt.module import Module
 
 from qbopt.blocks import INLINE_TABLE
 
@@ -275,7 +279,44 @@ def for_module(found) -> "dict[int, Contract]":
     """
     from qbopt import module
 
-    return per_call(found.calls, module.family(found.records), module.defines(found.records, found.seg))
+    family = module.family(found.records)
+    contracts = per_call(found.calls, family, module.defines(found.records, found.seg))
+    if family == "vbdos":
+        _zero_entry_sites(found, contracts)
+    return contracts
+
+
+def _zero_entry_sites(found: "Module", contracts: dict[int, Contract]) -> None:
+    """VBDOS's zero-BX entry bypasses its unresolved helper call."""
+    from iced_x86 import Code
+    from iced_x86 import Register
+
+    from qbopt import blocks
+
+    if "B$ENRA" not in found.calls.values():
+        return
+    mapped = blocks.code_map(found)
+    if isinstance(mapped, str):
+        return
+    for block in blocks.partition(found, mapped):
+        for previous, call in zip(block.insns, block.insns[1:], strict=False):
+            if found.calls.get(call.at) != "B$ENRA" or previous.end != call.at:
+                continue
+            insn = previous.insn
+            if insn.code != Code.MOV_R16_IMM16 or insn.op0_register != Register.BX or insn.immediate16 != 0:
+                continue
+            if any(previous.at <= field < previous.end for field in found.fixup_at):
+                continue
+            contracts[call.at] = replace(
+                worst("B$ENRA"),
+                inputs=frozenset({Reg.BX, Reg.CX}),
+                cleanup=0,
+                evidence=(
+                    "VBDCL10E.LIB rtenexit.asm B$ENRA 0x17..0x55: CX sizes the frame; "
+                    "BX=0 at 0x4b bypasses the helper at 0x5b. A same-block immediate MOV BX,0 "
+                    "immediately precedes this call. All other effects remain worst-case."
+                ),
+            )
 
 
 def per_call(
