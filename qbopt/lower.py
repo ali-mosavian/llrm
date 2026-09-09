@@ -550,6 +550,10 @@ class Lowering:
         every tracked register until a contract narrows it, and that is a
         liveness dependency rather than an argument list.
         """
+        if isinstance(op.node, ir.Opaque) and op.node.insn.length != op.node.insn.insn.len:
+            # Emulator wrappers are longer than their decoded x87 operation.
+            # asm copies their bytes, so their encoded operands are fixed.
+            return self._implicit_values(op, op.uses)
         if op.kind is mir.Kind.OPAQUE:
             return self._implicit_values(op, op.uses)
         if op.id in self._sites:

@@ -17,6 +17,23 @@ from qbopt.blocks import code_map
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
 
+def test_emulated_float_load_keeps_its_encoded_pointer() -> None:
+    """nbody printed initial PX0=-7680 for 1258 after its copied FLD lost SI."""
+    from qbopt import lower, declen
+
+    pointer = mir.Value(1, 0, 0, 1, 1)
+    insn = declen.emulated(bytes.fromhex("cd3504"), 0)
+    semantics = ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ir.St(0),),
+                             (ir.Mem(None, 4, through=Register.SI),))
+    node = ir.Opaque(insn, ir.NO_EFFECT, semantics)
+    ref = mir.MemRef(None, 4, base=pointer, base_width=2)
+    op = mir.Op(0, ir.Operation.FLOAT_LOAD, "fld", (), (pointer,), (ref,), (), node,
+                kind=mir.Kind.FLOAD, args=(mir.Cell(ref),), results=(mir.Opaque(ir.St(0)),), covers=(0, 3))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),), {pointer: Register.ESI}, {})
+    low = lower.lowered("one", body, {}, set(), {})
+    assert (ir.Held(pointer.id, 2), Register.SI) in low.blocks[0].insns[0].requires
+
+
 def test_string_copy_keeps_its_implicit_address_registers() -> None:
     """fpdeep printed DSQ=0 for 144: movsw lost the SI/DI addresses of its double copy."""
     from qbopt import lower
