@@ -17,6 +17,19 @@ from qbopt import transform
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
 
+@pytest.mark.parametrize(("high", "low", "answer"), [(4, 0, 262144), (0, 512, 512), (-1, -1, 0xffffffff)])
+def test_recovered_argument_constants(high: int, low: int, answer: int) -> None:
+    """Nbody kept its 262144 and 512 divisors hidden behind recovered word copies."""
+    upper, bottom, result = (mir.Value(index, 0) for index in range(1, 4))
+    op = mir.Op(0, mir.Synth.CONCAT_LOW, "concat", (result,), (upper, bottom),
+                kind=mir.Kind.CONCAT, args=(mir.Held(upper, 2), mir.Held(bottom, 2)),
+                results=(mir.Held(result, 4),))
+    facts = {upper: consts.Known(high, 2), bottom: consts.Known(low, 2)}
+    assert consts._result(op, facts) == consts.Known(answer, 4)
+    facts[upper] = consts.Known(high, 1)
+    assert consts._result(op, facts) is None
+
+
 def test_relocated_descriptor_address_is_not_integer_zero() -> None:
     """HARR's descriptor at segment 5 + 6 was reported as the constant zero."""
     obj = Path("fixtures/omf/harr-p-g2.obj")
@@ -27,6 +40,23 @@ def test_relocated_descriptor_address_is_not_integer_zero() -> None:
     op = next(op for block in body.blocks for op in block.ops if op.at == 0x6F)
     assert op.defines[0] not in consts.known(body)
     assert lower.operand(op.args[0]).address == found.operands[0x70]
+
+
+def test_folded_extraction_has_no_implicit_machine_result() -> None:
+    """CHAIN printed MODMOD=92344 instead of 13106 after stale DX replaced a folded high word."""
+    path = Path("fixtures/regressions/chain-stack-q-O.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    folded = transform.folded(body, found.dgroup, found.calls)
+    folded = transform.folded(folded, found.dgroup, found.calls)
+    extracts = {op.results[0].value for block in body.blocks for op in block.ops if op.kind is mir.Kind.EXTRACT}
+    copies = [op for block in folded.blocks for op in block.ops
+              if op.kind is mir.Kind.COPY and op.results and op.results[0].value in extracts
+              and isinstance(op.args[0], mir.Const)]
+    assert copies
+    lowering = lower.Lowering(folded, {value.id for value in extracts}, {}, ())
+    for op in copies:
+        assert lowering._idiom(op) == ()
 
 
 def raised(obj: Path) -> list[mir.MirBody]:

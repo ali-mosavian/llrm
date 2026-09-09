@@ -1813,6 +1813,8 @@ def _folded_op(op: Op, facts: dict, wanted: set) -> Op:
         args=(mir.Const(fact.n, into.width),),
         results=(mir.Held(target, into.width),),
         made=None,
+        node=None,
+        raised=None,
     )
 
 

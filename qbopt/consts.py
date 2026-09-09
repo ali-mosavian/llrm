@@ -291,6 +291,12 @@ def _result(
         parts.append(got)
     if not parts:
         return None
+    if op.kind is mir.Kind.CONCAT and len(parts) == 2 and len(op.results) == 1:
+        high, low = op.args
+        width = high.width + low.width
+        if op.results[0].width != width or any(fact.width < arg.width for fact, arg in zip(parts, op.args)):
+            return None
+        return Known((masked(parts[0].n, high.width) << (low.width * 8)) | masked(parts[1].n, low.width), width)
     width = min(one.width for one in parts)
     if op.kind is mir.Kind.ADD_CARRY and len(parts) == 2:
         flags = [value for value in op.uses if value.flags]
