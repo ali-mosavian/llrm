@@ -75,7 +75,7 @@ def loaded_into(op: Op) -> tuple[MemRef, Value] | None:
     it as a load is the bug tools/matrix.py caught in forward.py, and the
     same shape has to be refused here.
     """
-    if len(op.loads) != 1 or op.stores or op.barrier or op.loads[0].addr is None:
+    if op.floating is not None or len(op.loads) != 1 or op.stores or op.barrier or op.loads[0].addr is None:
         return None
     defines = _real(op.defines)
     if len(defines) != 1:
@@ -114,7 +114,7 @@ def _preserved(op: Op) -> set[Value]:
 
 def stored_from(op: Op) -> tuple[MemRef, Value] | None:
     """The cell this op purely stores, and the value it wrote there."""
-    if len(op.stores) != 1 or op.loads or op.barrier or op.stores[0].addr is None:
+    if op.floating is not None or len(op.stores) != 1 or op.loads or op.barrier or op.stores[0].addr is None:
         return None
     if _real(op.defines):
         return None
@@ -151,7 +151,7 @@ def stored_cell(op: Op) -> MemRef | None:
     to the dead-store walk. Which cell was written is the whole question
     there; what was written is not.
     """
-    if len(op.stores) != 1 or op.loads or op.barrier or op.stores[0].addr is None:
+    if op.floating is not None or len(op.stores) != 1 or op.loads or op.barrier or op.stores[0].addr is None:
         return None
     if _real(op.defines):
         return None

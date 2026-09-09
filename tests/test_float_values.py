@@ -1,0 +1,77 @@
+"""Floating MIR uses value edges, not rotating stack-slot names."""
+
+from pathlib import Path
+from dataclasses import replace
+
+import corpus
+import pytest
+
+from qbopt import mir, lower_floats, raising_float_values, wholeseg
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_fpcse_float_values_link_each_computation(tag):
+    """FPCSE's opaque st0 operands concealed all cross-operation data dependencies."""
+    path = Path(f"fixtures/omf/fpcse-{tag}.obj")
+    body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
+    operations = [op for block in body.blocks for op in block.ops if op.floating is not None]
+    assert operations and all(op.floating_origin is not None for op in operations)
+    assert not any(isinstance(arg, mir.Opaque) for op in operations for arg in (*op.args, *op.results))
+    start = next(index for index, op in enumerate(operations) if op.kind is mir.Kind.FADD) - 1
+    load, add, multiply, store = operations[start:start+4]
+    assert add.args[0] == load.results[0]
+    assert multiply.args[0] == add.results[0]
+    assert store.args[0] == multiply.results[0]
+    assert all(op.results[0].value in op.defines for op in (load, add, multiply))
+    variables = {op.results[0].value.variable for op in operations if op.results and isinstance(op.results[0], mir.Held)}
+    assert not variables.intersection(value.variable for block in body.blocks for op in block.ops
+                                      if op.floating_origin is None for value in (*op.uses, *op.defines))
+    result = wholeseg.emitted(path.read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+
+
+@pytest.mark.parametrize("change", ["operand", "order", "rounding"])
+def test_unimplemented_float_rewrites_cannot_silently_use_old_code(change):
+    from qbopt.lower import Unlowered
+    from qbopt.floating import Rounding
+    path = Path("fixtures/omf/fpcse-p-g2.obj")
+    body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
+    block = next(block for block in body.blocks if any(op.floating_origin for op in block.ops))
+    ops = list(block.ops)
+    indices = [index for index, op in enumerate(ops) if op.floating_origin]
+    first, second = indices[:2]
+    if change == "order":
+        ops[first], ops[second] = ops[second], ops[first]
+    elif change == "rounding":
+        ops[second] = replace(ops[second], floating=replace(ops[second].floating, rounding=Rounding.NONE))
+    else:
+        arg = ops[second].args[0]
+        ops[second] = replace(ops[second], args=(replace(arg, value=mir.Value(9999, 0, variable=9999)), *ops[second].args[1:]))
+    changed = replace(body, blocks=tuple(replace(one, ops=tuple(ops)) if one is block else one for one in body.blocks))
+    with pytest.raises(Unlowered, match="floating"):
+        lower_floats.restored(changed)
+
+
+def test_generic_memory_reuse_respects_float_conversion_and_effects():
+    """An extended producer is not the rounded SINGLE stored by FPCSE."""
+    from qbopt import avail, transform
+    path = Path("fixtures/omf/fpcse-p-g2.obj")
+    body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
+    operations = [op for block in body.blocks for op in block.ops if op.floating_origin]
+    load = next(op for op in operations if op.kind is mir.Kind.FLOAD)
+    store = next(op for op in operations if op.kind is mir.Kind.FSTORE)
+    assert avail.loaded_into(load) is None
+    assert avail.stored_from(store) is None
+    assert avail.stored_cell(store) is None
+    assert transform._served(load, store.args[0].value) is None
+
+
+def test_direct_lowering_uses_the_same_float_baseline():
+    """Legacy instruction consumers must not mistake a floating value for a general register."""
+    from qbopt import lower
+    path = Path("fixtures/omf/fpcse-p-g2.obj")
+    body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
+    op = next(op for block in body.blocks for op in block.ops if op.kind is mir.Kind.FMUL)
+    assert lower.current(op) == op.node.semantics
+    with pytest.raises(lower.Unlowered, match="floating dataflow"):
+        lower.current(replace(op, args=(replace(op.args[0], value=mir.Value(9999, 0, variable=9999)), *op.args[1:])))

@@ -8,6 +8,12 @@ import pytest
 from qbopt import fpstack, ir, mir
 
 
+@pytest.fixture(autouse=True)
+def inspect_before_float_ssa(monkeypatch):
+    from qbopt import raising_float_values
+    monkeypatch.setattr(raising_float_values, "raised", lambda body: body)
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_fpcse_store_reads_product_not_original_load(tag):
     """FPCSE's (a+b)*c was reported as the original a because arithmetic minted no value."""

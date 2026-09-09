@@ -743,6 +743,21 @@ def _kind_of(what: "ir.Semantics", args, results) -> Kind:
 
 
 @dataclass(frozen=True, slots=True)
+class FloatingOrigin:
+    """Lowering's identity baseline while general floating allocation is unfinished."""
+
+    block: int
+    sequence: tuple[int, ...]
+    at: int
+    kind: Kind
+    semantics: FloatingSemantics
+    inputs: tuple[Arg, ...]
+    outputs: tuple[Arg, ...]
+    machine_inputs: tuple[Arg, ...]
+    machine_outputs: tuple[Arg, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class Op:
     """One instruction, as values in and values out."""
 
@@ -754,6 +769,7 @@ class Op:
     array: ArrayRequest | None = field(default=None, kw_only=True)
     memory_values: tuple[tuple[MemRef, Const], ...] = field(default=(), kw_only=True)
     floating: FloatingSemantics | None = field(default=None, kw_only=True)
+    floating_origin: FloatingOrigin | None = field(default=None, kw_only=True)
     loads: tuple[MemRef, ...] = ()
     stores: tuple[MemRef, ...] = ()
     node: ir.Node | None = None  # what it came from, so lowering can be verbatim
@@ -2154,6 +2170,8 @@ def bodies(
             built = raising_addresses.loaded(built)
             from qbopt import raising_floats
             built = raising_floats.annotated(built)
+            from qbopt import raising_float_values
+            built = raising_float_values.raised(built)
             found.refs.update(_referenced(built, found))
             held = {**_returned(built), **_folded(built, found, blocks)}
             if held:

@@ -74,6 +74,9 @@ def semantics(op: mir.Op, was: ir.Semantics | None = None, place=None) -> ir.Sem
     lands on a longer form for the same instruction is how a rebuild starts
     growing without anything having been optimised.
     """
+    if op.floating_origin is not None:
+        from qbopt import lower_floats
+        op = lower_floats.operation(op)
     same_target = was is None or op.target == was.target
     if place is None and op.raised is not None and (op.args, op.results) == op.raised and same_target:
         # Nothing rewrote it, so the MIR emitter carries its own bytes.
@@ -339,6 +342,9 @@ def lowered(
     without anything having been optimised.
     """
     from qbopt import lir
+    from qbopt import lower_floats
+
+    body = lower_floats.restored(body)
 
     # An absorbed call site is emitted by select.absorbed, seventeen bytes
     # of mov and idiv, and not from any semantics this could give it.

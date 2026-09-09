@@ -282,7 +282,7 @@ def _mir(bodies, found=None, verbose: bool = False, debug=None) -> None:
             for op in block.ops:
                 # The address stays in a gutter: it is what `diff` between
                 # two stages keys on, and rule 4 is why these files exist.
-                flow = floats.get(op.at) if op.stack is not None else None
+                flow = floats.get(op.at) if op.stack is not None and op.floating_origin is None else None
                 values = ""
                 if flow is not None and (flow.uses or flow.defines is not None):
                     uses = ", ".join(str(value) for value in flow.uses.values()) or "-"

@@ -764,6 +764,8 @@ def _served(op: Op, holder) -> "tuple[mir.Arg, ...] | None":
     `_at_width(root, width)` and wrote the register down, which was
     forward.py's 22 machine references in one line.
     """
+    if op.floating is not None:
+        return None
     cells = [one for one in op.args if isinstance(one, mir.Cell)]
     if len(cells) != 1:
         return None
@@ -1007,7 +1009,7 @@ def _invariant_run(
         changing = False
         for one in ops:
             real = mir.instruction(one)
-            if one in run or one.stores or not real:
+            if one in run or one.stores or one.floating is not None or not real:
                 continue
             # A branch is where the loop is. hotlop's latch block held
             # `cmp`, `jle` and `jmp`, all three reading nothing the loop

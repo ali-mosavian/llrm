@@ -2196,3 +2196,39 @@ Conversion-format, unary, and dump checks bring the focused set to 33 passing
 tests. All 97 audited objects remain byte-identical and LIR-emitted, so no
 unchanged runtime suite was repeated. Pass dumps now expose the contracts
 alongside value identities: `/tmp/qbopt-fpcse-semantics`.
+
+### Floating operands become MIR value edges
+
+Self-contained, balanced floating blocks now raise to ordinary `Held` values
+with ten-byte extended results, linked through `defines`/`uses` and SSA.
+FPCSE's load, add, multiply and store no longer name st0 in MIR. Storage
+operands and their rounding contracts remain explicit. Blocks with incoming
+floating state, unsupported operations, or unknown stack state retain the
+existing opaque representation; cross-block float phis are not implemented.
+
+Lowering owns an identity baseline for these values and restores the original
+stack operands only after checking operation order, value bindings and
+evaluation semantics. Changed schedules, operands, formats or cross-block
+values are refused until general floating stack allocation exists. Direct
+legacy instruction consumers use the same operand check rather than treating
+ten-byte values as general registers. This is an integration step, not a
+floating optimization tier or a completed allocator.
+
+The first adjacent dumps exposed generic memory forwarding substituting an
+extended value for a SINGLE store/reload and LICM moving strict operations.
+Both now respect floating semantics: conversion stores do not establish raw
+value availability, and strict floating work cannot be hoisted or removed
+as an ordinary memory store. Another integration test caught reused variable
+numbers from consuming an iterator twice; fresh floating variables are now
+distinct from all existing variables.
+
+The three FPCSE value-edge regressions fail with float SSA disabled. Guards
+cover changed dataflow, operation ordering, rounding, integer/float variable
+separation, raw forwarding, and direct lowering. All 41 focused tests pass.
+The complete preceding implementation comparison and final SSA toggle audit
+both leave all 97 primary/regression objects byte-identical; there is no
+performance claim and no unchanged runtime suite was repeated. Final dumps:
+`/tmp/qbopt-fpcse-ssa-final`; the unsafe initial pass behavior is recorded in
+`/tmp/qbopt-fpcse-ssa-probe`. Next work must replace the identity baseline
+with floating scheduling/allocation and model environment effects before
+changing strict evaluation order or sharing arithmetic.
