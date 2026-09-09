@@ -18,6 +18,14 @@ from iced_x86 import Register_
 import corpus
 from qbopt import ir
 from qbopt import select
+
+
+def test_load_accepts_unsigned_dword_bit_pattern():
+    """CHAIN refused a folded 0xbffffff9 because iced's i32 constructor requires a signed integer."""
+    from iced_x86 import Register
+    emitted = select.load(Register.ESI, 0xbffffff9)
+    assert emitted is not None
+    assert emitted.code == bytes.fromhex("66bef9ffffbf")
 from qbopt.declen import BITNESS
 
 ROOTS = (Register.EAX, Register.ECX, Register.EDX, Register.EBX, Register.ESI, Register.EDI)

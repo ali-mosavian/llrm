@@ -368,6 +368,8 @@ def load(into: Register_, value: int, at: int = 0) -> Emitted | None:
     code = _code(f"MOV_R{width * 8}_IMM{width * 8}")
     if code is None:
         return None
+    if width == 4:
+        value = ((value & 0xffffffff) ^ 0x80000000) - 0x80000000
     try:
         return _assemble(Instruction.create_reg_i32(code, into, value), at)
     except (ValueError, OverflowError):

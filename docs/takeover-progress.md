@@ -1161,3 +1161,22 @@ PDS, QB and VBDOS; artifacts:
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-whole-multiply-z2y54a7y`.
 This removes the remaining frozen multiply sites in nbody, not every legacy
 runtime idiom in the project. Target derivation and broader migration remain.
+
+## Unsigned dword constants and the next forwarding experiment
+
+The encoder now converts a dword immediate's bit pattern to the signed i32
+representation required by iced. CHAIN's folded 0xbffffff9 previously refused
+with `mov is not one select.py can emit`; a fail-first regression checks the
+exact `66 be f9 ff ff bf` encoding. PDS CHAIN passes with the fix.
+
+The next experiment is still uncommitted: value forwarding extends SSA
+lifetimes instead of requiring a provider to be live already, and uses
+operation identity rather than source address. It exposes legacy division
+sites that cannot consume SSA operands, so classified divides are provisionally
+routed through scalar recovery too. Nbody passes and models 388,393, but this
+is **not an accepted milestone**: DIVMOD refuses an inserted multiply crossing
+a live condition (PDS 0x20a). Retaining the multiply's own flag definition did
+not resolve it, indicating another live condition, and that attempted change
+was removed. Inspect the flag SSA/exceptional edges before committing this
+broader migration. Dumps: `/tmp/qbopt-forward-divmod`; runtime evidence:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-forward-fixes-i44yb65c`.
