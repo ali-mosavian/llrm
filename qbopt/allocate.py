@@ -577,7 +577,10 @@ def applied(body: lir.LirBody, got: Assignment) -> lir.LirBody:
                 # cannot account for every one of -- matrix and nested
                 # refused with `2 bytes between the ops are not
                 # instructions` at a `mov bx,ax`.
-                insns=tuple(lir.without(block.insns, _pointless, lambda one: _placed(one, held, body.origin))),
+                insns=tuple(
+                    _identity_anchor(one)
+                    for one in lir.without(block.insns, _pointless, lambda one: _placed(one, held, body.origin))
+                ),
                 succ=block.succ,
                 phis=block.phis,
             )
@@ -586,6 +589,13 @@ def applied(body: lir.LirBody, got: Assignment) -> lir.LirBody:
         origin=body.origin,
         pins=body.pins,
     )
+
+
+def _identity_anchor(one: lir.Insn) -> lir.Insn:
+    """Retain byte ownership without requiring an encodable register self-copy."""
+    if not _pointless(one):
+        return one
+    return replace(one, what=ir.Semantics(ir.Operation.NOTHING, "nop", (), ()))
 
 
 def _pointless(one: lir.Insn) -> bool:

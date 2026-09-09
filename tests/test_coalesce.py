@@ -9,6 +9,20 @@ from qbopt import coalesce
 import pytest
 
 
+def test_retained_resource_identity_has_a_legal_encoding():
+    """HARR's hoisted selector copy became unencodable mov es,es across a coverage gap."""
+    from iced_x86 import Register
+    from qbopt import allocate, select
+
+    body = lir.LirBody("resource-copy", 0,
+                       (lir.LirBlock(0, (_move(3, 1, 1),)),), {}, {1: Register.ES})
+    result = allocate.applied(body, allocate.allocate(body, body.pins))
+    assert len(result.insns) == 1
+    assert result.insns[0].covers == body.insns[0].covers
+    assert select.emit(result.insns[0].what, 3) is not None
+    assert select.emit(result.insns[0].what, 3).code == b"\x90"
+
+
 def test_equal_resource_values_coalesce_without_consuming_a_gpr():
     """Address-space values pinned to ES were excluded by the GPR-only coalescing domain."""
     from iced_x86 import Register
