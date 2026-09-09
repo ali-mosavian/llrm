@@ -93,6 +93,16 @@ def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | 
             if answer is None or id(one.op) in replacements:
                 continue
             width = _width(one.op)
+            if _times(one.of.step, one.by, width) is None:
+                continue
+            if isinstance(one.by, mir.Cell):
+                if one.op.loads != (one.by.ref,) or one.by not in one.op.args:
+                    continue
+                taken += 1
+                multiplier = mir.Value(id=_next(body, taken), at=preheader, variable=taken, version=1)
+                load = _made(mir.Kind.LOAD, "mov", multiplier, (one.by,), preheader, one.op)
+                ahead.setdefault(preheader, []).append(replace(load, id=one.op.id, symbol=True))
+                one = replace(one, by=mir.Held(multiplier, width))
             stride = _times(one.of.step, one.by, width)
             if stride is None:
                 continue

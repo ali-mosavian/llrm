@@ -15,6 +15,19 @@ from qbopt.module import Space
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_matrix_reduced_stride_keeps_its_multiplier_address(tag):
+    """MATRIX printed T=190 instead of T=380 after its stride read DS:0 instead of w."""
+    from qbopt import wholeseg, module, omf, blocks
+
+    result = wholeseg.emitted(Path(f"fixtures/omf/matrix-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    found = module.of(omf.parse(result.data))
+    for one in blocks.instructions(found):
+        if one.disp_at is not None and one.disp_len == 2:
+            assert found.code[one.disp_at:one.disp_at + 2] != b"\0\0" or one.disp_at in found.fixup_at
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_harr_hoisted_descriptor_read_keeps_its_address(tag):
     """HARR's reduced pointer read DS:0 instead of the array-base descriptor field."""
     from qbopt import wholeseg, module, omf, blocks

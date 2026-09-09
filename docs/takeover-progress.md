@@ -1355,6 +1355,31 @@ pre-fix definitions reproduces the PDS failure independently, in
 Its earlier 1.31x score is therefore not evidence of goal completion. Fix
 this existing correctness failure before further optimization.
 
+## MATRIX recurrence multiplier: retain the load and its relocation
+
+The next dump showed MATRIX's second loop initializing and advancing its
+recurrence with unrelocated reads at DS:0. Unlike HARR's based descriptor
+read, this multiplier was a direct relocated memory operand. Strength
+reduction copied the Cell into newly invented arithmetic without moving the
+original operation's relocation to either copy. With a zero stride the
+diagonal became the first row, producing 190 instead of 380.
+
+Strength reduction now materializes the invariant multiplier as one LOAD
+in the preheader, retaining the original operand identity there, and uses
+its SSA value for initialization and stride. Lowering explicitly maps an
+invented LOAD to MOVE, independently of the originating multiply's machine
+operation. The loop now advances with register arithmetic, not a repeated
+memory read. Reductions whose stride cannot be constructed are rejected
+before inserting any load.
+
+All three new emitted-address regressions failed before the fix; all 50
+focused induction tests pass afterwards. MATRIX prints 380 on PDS, QB and
+VBDOS; HARR and NESTED also pass on all three. Runtime artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-matrix-stride-adva5wll`.
+Pass dumps: `/tmp/qbopt-matrix-failure` and `/tmp/qbopt-matrix-stride-fixed`.
+MATRIX now models 8056/8060/8066 against 6210, about 1.30x on all three.
+This restores this benchmark's correctness evidence, not project completion.
+
 ## Target refresh and floating-point semantic audit
 
 The target scoreboard at f8c9e96 puts PDS FPCSEX at 4508/1340 (3.36x),
