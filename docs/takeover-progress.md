@@ -1,5 +1,20 @@
 # Takeover checkpoint — 2026-09-09
 
+## VBDOS procedure-exit interface
+
+PROCS `/G3` now emits through LIR rather than refusing B$EXSA at 0x113.
+The exit retains all six allocatable general-register inputs, including DX:AX
+exported to the BASIC caller. Disassembly of VBDCL10E.LIB rtenexit.asm at 0x68
+establishes that the incoming arithmetic flags are overwritten; the normal
+frame-restoring return removes no caller arguments. Helper effects remain
+unknown: no memory, clobber, or control guarantee is relaxed. Full-library
+contract analysis is evidence for unresolved dependencies, not an automatic ABI.
+
+The emission regression failed first; five focused checks pass. Strict-LIR
+runtime checks pass PROCS on PDS `/G2`, QB `/O`, and VBDOS `/G3` (three cases
+each). Stages: `/tmp/qbopt-procs-exit-20260909`. This removes a coverage blocker,
+not a claim of target completion or a full integration gate.
+
 Goal: correct modern-compiler-quality output, machine-independent MIR, every documented target within 1.5x. **Not complete.** Branch `restore-through-lir`; checkpoint `dda3d46` and backend increment `abf9ab5` are committed. Stashes are untouched.
 
 ## Operand-width increment

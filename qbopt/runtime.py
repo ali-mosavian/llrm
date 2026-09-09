@@ -231,6 +231,20 @@ def _entry(family: str) -> None:
 for _one in ("pds71", "qb45"):
     _entry(_one)
 
+VARIANTS[("B$EXSA", "vbdos")] = replace(
+    worst("B$EXSA"),
+    inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
+    cleanup=0,
+    evidence=(
+        "VBDCL10E.LIB rtenexit.asm, seg 1:0x68: CMP [bp-12h],0 kills incoming arithmetic flags. "
+        "Bound inputs by all six allocatable GP registers, not by incomplete helper summaries. "
+        "The normal exit saves/restores DX:AX, restores the frame at 0x8e..0x97, then jumps "
+        "through the return address popped at 0x6e/0x72; it removes no caller arguments. "
+        "BP/SP and segments are the fixed runtime environment. Indirect/error/helper effects "
+        "remain unknown: no clobber, memory or control guarantee is relaxed."
+    ),
+)
+
 # B$EXSA under PDS 7.1, bounded from the linked image at 0x1d6c. Its
 # returning path -- `pop word [422h]`/`[424h]`, `lea sp,[bp-6]`, four pops,
 # `jmp far [422h]` -- reads no register and removes no caller argument, so

@@ -8,6 +8,7 @@ import pytest
 from qbopt import omf
 from qbopt import module
 from qbopt import runtime
+from qbopt import wholeseg
 
 
 def loaded() -> module.Module:
@@ -34,3 +35,16 @@ def test_unknown_entry_path_keeps_unknown_contract(variant: str) -> None:
     else:
         found = replace(found, publics=found.publics | {0xF0})
     assert runtime.for_module(found)[0xF0].inputs is None
+
+
+def test_vbdos_exit_keeps_every_possible_general_input() -> None:
+    """PROCS /G3 refused at B$EXSA despite a conservative six-register input bound."""
+    result = wholeseg.emitted(Path("fixtures/omf/procs-v-g3.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    contract = runtime.for_module(loaded())[0x113]
+    assert contract.inputs == frozenset(
+        {runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX, runtime.Reg.DX, runtime.Reg.SI, runtime.Reg.DI}
+    )
+    assert contract.clobbers == runtime.EVERY
+    assert contract.writes is runtime.Memory.ANY
+    assert contract.control is runtime.Control.UNKNOWN
