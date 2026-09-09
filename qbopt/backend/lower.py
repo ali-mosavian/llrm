@@ -19,6 +19,7 @@ from iced_x86 import InstructionInfoFactory
 from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.backend import target
+from qbopt.backend import arithmetic
 from qbopt.abi import runtime
 from qbopt.analysis import liveness
 from qbopt.objectfile.module import Addr
@@ -327,6 +328,7 @@ def lowered(
     absorbed: "set[int] | dict[int, tuple] | None",
     contracts: "dict[int, object]",
     coverage: "dict[int, tuple] | None" = None,
+    cpu: str = "386",
 ) -> "lir.LirBody":
     """One MIR body as machine instructions, and nothing else.
 
@@ -360,7 +362,7 @@ def lowered(
     read = {one.id for block in body.blocks for op in block.ops for one in op.uses}
     read |= {value.id for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
     calls = calls or {}
-    making = Lowering(body, read, calls, absorbed or (), contracts, coverage)
+    making = Lowering(body, read, calls, absorbed or (), contracts, coverage, cpu)
     # Once: expanding twice would build two of every instruction, and the
     # question below is about the ones this body will actually hold.
     readers = Counter(value for block in body.blocks for op in block.ops for value in op.uses)
@@ -678,7 +680,9 @@ class Lowering:
             if (register := registers.get(self._origin.get(value))) is not None
         )
 
-    def __init__(self, body: "mir.MirBody", read: set, calls: dict, absorbed, contracts=None, coverage=None) -> None:
+    def __init__(self, body: "mir.MirBody", read: set, calls: dict, absorbed, contracts=None, coverage=None, cpu="386") -> None:
+        arithmetic.validate(cpu)
+        self.cpu = cpu
         self._read = read
         self._coverage = coverage or {}
         self._origin = body.origin
@@ -786,7 +790,7 @@ class Lowering:
 
 
 def _scaled(op: mir.Op, context: Lowering) -> tuple[ir.Semantics, ...] | None:
-    """Low products by one- or two-bit constants, with no observable multiply flags."""
+    """Select a cheaper target-specific chain when multiply flags are unobserved."""
     if len(op.args) != 2 or len(op.results) != 1:
         return None
     source, scale = op.args
@@ -797,28 +801,21 @@ def _scaled(op: mir.Op, context: Lowering) -> tuple[ir.Semantics, ...] | None:
         isinstance(source, mir.Held) and isinstance(scale, mir.Const) and isinstance(result, mir.Held)
         and source.width == result.width and source.width in (2, 4)
         and scale.width == source.width
-        and 1 < scale.n < 1 << (source.width * 8) and scale.n.bit_count() <= 2
+        and 1 < scale.n < 1 << (source.width * 8)
         and not op.loads and not op.stores and not op.merges
     ):
         return None
-    if scale.n.bit_count() == 2:
-        low = (scale.n & -scale.n).bit_length() - 1
-        high = scale.n.bit_length() - 1
-        shifted = ir.Held(context.fresh(), source.width)
-        total = ir.Held(context.fresh(), source.width) if low else operand(result)
-        parts = (
-            ir.Semantics(ir.Operation.BINARY, "shl", (shifted,), (operand(source), ir.Imm(high - low, 1))),
-            ir.Semantics(ir.Operation.BINARY, "add", (total,), (shifted, operand(source))),
-        )
-        if low:
-            parts += (ir.Semantics(ir.Operation.BINARY, "shl", (operand(result),), (total, ir.Imm(low, 1))),)
-        return parts
-    return (
-        ir.Semantics(
-            ir.Operation.BINARY, "shl", (operand(result),),
-            (operand(source), ir.Imm(scale.n.bit_length() - 1, 1)),
-        ),
-    )
+    chain = arithmetic.scale(scale.n, getattr(context, "cpu", "386"))
+    if chain is None or any(count >= source.width * 8 for name, count in chain if name == "shl"):
+        return None
+    parts = []
+    current = operand(source)
+    for index, (name, count) in enumerate(chain):
+        into = operand(result) if index == len(chain) - 1 else ir.Held(context.fresh(), source.width)
+        other = ir.Imm(count, 1) if name == "shl" else operand(source)
+        parts.append(ir.Semantics(ir.Operation.BINARY, name, (into,), (current, other)))
+        current = into
+    return tuple(parts)
 
 
 def _sign_word(op: mir.Op) -> tuple[ir.Semantics, ...] | None:

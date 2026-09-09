@@ -66,6 +66,7 @@ def emitted(
     native_fpu: bool = False,
     only: str | None = None,
     watch: Watch | None = None,
+    cpu: str = "386",
 ) -> Emitted:
     """The object rewritten, and which emitter did it.
 
@@ -75,7 +76,7 @@ def emitted(
     phases to get them dumps a different program: its allocation is not the
     one that produced the object, so the first bad transition is not in it.
     """
-    out, why, _ = _rebuilt(data, optimise, native_fpu, only, watch)
+    out, why, _ = _rebuilt(data, optimise, native_fpu, only, watch, cpu)
     if why != REBUILT:
         return Emitted(out, Emission.REFUSED, why)
     return Emitted(out, Emission.LIR, why)
@@ -98,6 +99,7 @@ def _rebuilt(
     native_fpu: bool = False,
     only: str | None = None,
     watch: Watch | None = None,
+    cpu: str = "386",
 ) -> tuple[bytes, str, str | None]:
     """The object with its code segment rewritten, and what happened.
 
@@ -160,7 +162,7 @@ def _rebuilt(
     # carry from one that is real code it simply did not raise.
     reached = frozenset(at for block in blocks for insn in block.insns for at in range(insn.at, insn.end))
     fields = frozenset(one.offset for one in omf.fixups(records) if one.seg == found.seg)
-    short = _through_lir(found, records, blocks, bodies, mapped, fields, reached, native_fpu, contracts, watch)
+    short = _through_lir(found, records, blocks, bodies, mapped, fields, reached, native_fpu, contracts, watch, cpu)
     if not isinstance(short, str):
         if watch is not None:
             watch("route", None, "the LIR emitter wrote these bytes")
@@ -181,6 +183,7 @@ def _through_lir(
     native_fpu: bool,
     contracts: dict[int, runtime.Contract],
     watch: Watch | None = None,
+    cpu: str = "386",
 ) -> bytes | str:
     """Every body lowered, placed and written, or why one could not be.
 
@@ -208,6 +211,7 @@ def _through_lir(
                 found.absorbed,
                 contracts,
                 found.coverage,
+                cpu,
             )
             if watch is not None:
                 watch("lowered", name, low)
