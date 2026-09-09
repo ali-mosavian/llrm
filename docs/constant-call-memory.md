@@ -21,6 +21,7 @@ Follow-up: supply object-range reachability in the raise, not machine knowledge
 in constant propagation. Do not infer object ends from individual operand
 addresses: a reference can name a field or the high half of the same object.
 
-Focused verification also found the three compiler variants of
-`test_spill_uses_the_known_seven_as_an_immediate` failing with both HEAD's and
-the revised constant invalidation. They remain unchanged and unresolved.
+Focused verification also found three stale SPILL assertions requiring an
+immediate 7. Stage dumps show strength reduction has already replaced the inner
+loop's ten additions of 22 with one addition of 220. The regression now requires
+that collapsed sum and no reload of h3, rather than an obsolete instruction.
