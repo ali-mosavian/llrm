@@ -41,7 +41,7 @@ def ticks(text: str) -> int | None:
     return None
 
 
-def build(tag: str, prog: str = "nbody", native_fpu: bool = False, transform=None) -> tuple[Path, Path]:
+def build(tag: str, prog: str = "nbody", native_fpu: bool = False, transform=None, cpu: str = "386") -> tuple[Path, Path]:
     cfg = CONFIGS[tag]
     if not cfg.available:
         raise SystemExit(f"no toolchain at {cfg.mount}; see docs/testing.md")
@@ -61,7 +61,7 @@ def build(tag: str, prog: str = "nbody", native_fpu: bool = False, transform=Non
     obj = work / f"{name}.OBJ"
     if not obj.is_file():
         raise SystemExit(f"BC did not produce {name}.OBJ; see {work / 'BC.OUT'}")
-    change = transform or (lambda data: rewrite(data, dry_run=False, native_fpu=native_fpu)[0])
+    change = transform or (lambda data: rewrite(data, dry_run=False, native_fpu=native_fpu, cpu=cpu)[0])
     (work / f"{name}Q.OBJ").write_bytes(change(obj.read_bytes()))
 
     launch(
@@ -106,13 +106,15 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="bench")
     ap.add_argument("--config", default="v-g3", choices=list(CONFIGS))
     ap.add_argument("--prog", default="nbody")
+    from qbopt.cycles.timings import ARCHS
+    ap.add_argument("--cpu", choices=("386", *ARCHS), default="386")
     ap.add_argument("--native-fpu", action="store_true")
     ap.add_argument("--steps", type=int, default=2000)
     ap.add_argument("--reps", type=int, default=5)
     args = ap.parse_args(argv)
 
     cfg = CONFIGS[args.config]
-    base_exe, opt_exe = build(args.config, args.prog, args.native_fpu)
+    base_exe, opt_exe = build(args.config, args.prog, args.native_fpu, cpu=args.cpu)
     base_ticks = run(args.config, base_exe, args.steps, args.reps, args.prog)
     opt_ticks = run(args.config, opt_exe, args.steps, args.reps, args.prog)
 
@@ -130,6 +132,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  dosbox-x: {dosbox_bin()}")
     print(f"  conf sha256: {sha256(PINNED)}")
     print(f"  config: {args.config}, steps: {args.steps}, reps: {args.reps}")
+    print(f"  tuning CPU: {args.cpu} (does not change DOSBox timing model)")
     print(f"  BC.EXE sha256: {sha256(host_path(cfg.mount, cfg.bc))}")
     print(f"  LINK.EXE sha256: {sha256(host_path(cfg.mount, cfg.link))}")
     print(f"  runtime sha256: {sha256(host_path(cfg.mount, cfg.runtime))}")

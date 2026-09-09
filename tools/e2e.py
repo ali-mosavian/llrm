@@ -243,11 +243,14 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="e2e")
     ap.add_argument("config", choices=list(CONFIGS))
     ap.add_argument("--prog")
+    from qbopt.cycles.timings import ARCHS
+    ap.add_argument("--cpu", choices=("386", *ARCHS), default="386")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--timeout", type=int, default=300)
     args = ap.parse_args(argv)
 
-    result = run(args.config, args.prog, dry_run=args.dry_run, timeout=args.timeout)
+    result = run(args.config, args.prog, dry_run=args.dry_run, timeout=args.timeout,
+                 transform=lambda data: rewrite(data, dry_run=False, cpu=args.cpu)[0])
     for v in result.verdicts:
         print(f"  {v.program:10} {v.status:9} {v.detail}")
     print(f"{args.config}: {'PASS' if result.ok else 'FAIL'}   (build/e2e/{args.config})")

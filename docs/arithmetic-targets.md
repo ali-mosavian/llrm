@@ -1,5 +1,13 @@
 # CPU-dependent constant arithmetic
 
+Production CLI: `uv run python -m qbopt.rewrite input.obj -o output.obj --cpu P5`.
+`tools/stages.py`, `tools/e2e.py`, and `tools/bench.py` accept the same
+`--cpu` option. The rewrite manifest and completion marker record tuning;
+the legacy marker without an explicit CPU means 386. An already rewritten
+object cannot be retuned: start again from BC's original object.
+Benchmark reports identify the tuning target separately from DOSBox's
+execution model; choosing P5 does not turn DOSBox timings into P5 timings.
+
 `wholeseg.emitted(data, cpu="386")` selects a tuning CPU explicitly;
 the default preserves the existing 386 policy. `lower.lowered` accepts
 the same option. Tuning changes instruction selection, not MIR semantics
