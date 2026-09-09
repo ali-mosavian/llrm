@@ -355,7 +355,18 @@ def lowered(
     scheduled = {block.at: _branch_condition(block, readers) for block in body.blocks}
     for block in body.blocks:
         _check_inserted_conditions(scheduled[block.at], live.live_out[block.at])
-    made = {block.at: tuple(one for op in scheduled[block.at] for one in making.expand(op)) for block in body.blocks}
+    made = {}
+    for block in body.blocks:
+        alive = {value for value in live.live_out[block.at] if value.flags}
+        preserve = set()
+        for op in reversed(scheduled[block.at]):
+            if alive:
+                preserve.add(id(op))
+            alive.difference_update(op.defines)
+            alive.update(value for value in op.uses if value.flags)
+        made[block.at] = tuple(
+            one for op in scheduled[block.at] for one in making.expand(op, preserve_flags=id(op) in preserve)
+        )
     live = _phis_worth_keeping(body, made)
     return lir.LirBody(
         name=name,
@@ -632,12 +643,14 @@ class Lowering:
         self._next += 1
         return self._next - 1
 
-    def expand(self, op: "mir.Op") -> "tuple[lir.Insn, ...]":
+    def expand(self, op: "mir.Op", *, preserve_flags: bool = True) -> "tuple[lir.Insn, ...]":
         """Every instruction this operation becomes, the leader first."""
         from qbopt import lir
 
         made = _EXPANDS.get(op.kind)
         parts = made(op, self) if made is not None else None
+        if op.kind is mir.Kind.CONVERT and not preserve_flags:
+            parts = _sign_word(op) or parts
         if not parts:
             # The site's own sequence emits it, so there is nothing for
             # this to say -- while it is still that operation. A pass may
@@ -700,6 +713,24 @@ class Lowering:
             ),
             *(_follows(op, one) for one in parts[1:]),
         )
+
+
+def _sign_word(op: mir.Op) -> tuple[ir.Semantics, ...] | None:
+    if (
+        op.op is not ir.Operation.EXTEND
+        or len(op.args) != 1
+        or len(op.results) != 1
+        or not isinstance(op.args[0], mir.Held)
+        or not isinstance(op.results[0], mir.Held)
+        or op.args[0].width != op.results[0].width
+        or op.args[0].width not in (2, 4)
+    ):
+        return None
+    source, result = operand(op.args[0]), operand(op.results[0])
+    return (
+        ir.Semantics(ir.Operation.MOVE, "mov", (result,), (source,)),
+        ir.Semantics(ir.Operation.BINARY, "sar", (result,), (result, ir.Imm(source.width * 8 - 1, 1))),
+    )
 
 
 def _follows(op: "mir.Op", what: "ir.Semantics") -> "lir.Insn":

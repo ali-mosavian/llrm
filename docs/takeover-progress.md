@@ -1,5 +1,21 @@
 # Takeover checkpoint — 2026-09-09
 
+## Allocate sign extraction without fixed AX/DX when flags are dead
+
+ADDRM's promoted accumulator added pressure around CWD's fixed-register
+interface, producing a spill. Lowering now selects copy plus arithmetic
+shift for word/dword sign extraction when flags are dead; the operands stay
+abstract until allocation. Otherwise it retains the original flag-preserving
+conversion. The decision uses backward flag liveness after branch scheduling,
+including block live-outs, not a scan of the next instruction alone.
+
+ADDRM cost **1794 -> 1320 (2.38x -> 1.75x)**, improving on the earlier 1492
+baseline as well. The new dead-flags test fails before the change, and the
+live-flags cross-block case retains CWD. Nine focused lowering checks and
+nine strict-LIR runtime comparisons pass (ADDRM/LNGMIX/NEGNOT across the three
+compiler configurations). Dumps: `/tmp/qbopt-sign-shift`; runtime artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-sign-lower-2h24eknr`.
+
 ## Preserve independent promotion when an update cannot be split
 
 The PDS scoreboard refresh caught SEGLD regressing 25002 -> 28202: an
