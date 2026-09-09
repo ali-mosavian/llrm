@@ -115,6 +115,30 @@ and RET after RETA and now stops at the call. This fixes a false CFG edge,
 not the remaining continuation/interface work; generated witness output
 remains refused rather than being described as successfully optimized.
 
+## Separate handler ownership
+
+The real compiler outputs are preserved as `fixtures/regressions/evtrap-p-evt.obj`
+and `evtrap-v-evt.obj`, compiled from the CRLF reference source above. TIMER
+registration hands a relocated code offset to ONTA: PDS emits MOV AX,offset /
+PUSH CS / PUSH AX; VBDOS emits PUSH CS / MOV AX,offset / PUSH AX. Recognition
+now seeds a separate event-handler body at that relocation's target, only
+for those established shapes and families. Main's SSA no longer owns handler
+instructions. Before: PDS main included the handler at 00fa. After: main and
+the event handler have separate bodies; RETA remains an explicit refusal in
+the latter. No optimized handler assembly is available yet.
+
+Separating main also exposed the spiller's termination check accepting only
+implicit B$CENP, not explicit B$CEND. Both terminate the program, so a main
+body ending in CEND now accepts its spill reservation without inventing a
+return epilogue.
+
+Two follow-ups remain distinct from handler entry recognition. General END
+fallthrough removal exposes compiler-generated dead blocks and statement-table
+data that the current partitioner misclassifies; that broader change is not
+enabled. VBDOS's handler fixture has an unexplained trailing 0000 word at
+0116, also referenced by the header's OF_STA statement-table pointer at 000a.
+Do not treat the absent VBDOS body or a refused handler as optimized success.
+
 Reproduce a baseline without changing the normal suite:
 
 ```python

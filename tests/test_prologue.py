@@ -1,5 +1,7 @@
 """arrprm printed 0 0 for 7 8 when spilling moved its runtime frame entry."""
 
+from dataclasses import replace
+
 from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.backend import frame
@@ -30,3 +32,13 @@ def test_spill_reservation_is_inside_the_runtime_frame() -> None:
 def test_slots_are_below_runtime_metadata_and_declared_locals() -> None:
     slots = frame.of(procedure(), {1: "B$ENRA", 2: "B$EXSA"})
     assert slots.slot(9, 2) == -18
+
+
+def test_explicit_end_needs_no_spill_frame_return() -> None:
+    """EVTRAP main refused four spill bytes after its END edge was corrected."""
+    body = procedure()
+    body = replace(body, blocks=(replace(body.blocks[0], insns=body.blocks[0].insns[:3]),))
+    slots = frame.Frame(-16)
+    slots.slot(1, 4)
+    result = prologue.reserved(body, slots, {2: "B$CEND"})
+    assert result.blocks[0].insns[0].what.name == "sub"

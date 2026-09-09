@@ -122,7 +122,7 @@ def _adjust(beside: lir.Insn, by: int) -> lir.Insn:
 # this one never returns to anybody, so the stack it leaves behind is not
 # read: sp may be lowered and never put back. Every BC main body ends here,
 # which is the difference between spilling being available in one and not.
-ENDS = "B$CENP"
+ENDS = frozenset({"B$CEND", "B$CENP"})
 
 
 def _ends_the_program(body: lir.LirBody, calls: dict) -> bool:
@@ -134,4 +134,4 @@ def _ends_the_program(body: lir.LirBody, calls: dict) -> bool:
     terminator at all. A body that calls the exit and has no return of its
     own leaves by that call on every path.
     """
-    return any(calls.get(one.at, "").upper() == ENDS for block in body.blocks for one in block.insns)
+    return any(calls.get(one.at, "").upper() in ENDS for block in body.blocks for one in block.insns)

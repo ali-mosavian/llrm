@@ -4,6 +4,7 @@ neither.
 """
 
 from pathlib import Path
+import pytest
 
 import corpus
 from qbopt.objectfile import module
@@ -11,6 +12,18 @@ from qbopt.frontend.extent import Body
 from qbopt.frontend.extent import BodyKind
 from qbopt.frontend.extent import Partition
 from qbopt.frontend.extent import partition
+
+
+@pytest.mark.parametrize("tag,entry", [("p-evt", 0xFA), ("v-evt", 0xF0)])
+def test_timer_handler_has_its_own_entry(tag, entry):
+    """EVTRAP's handler was assigned main's SSA by falling through END."""
+    found = module.load(Path(f"fixtures/regressions/evtrap-{tag}.obj"))
+    result = partition(found)
+    assert not isinstance(result, str), result
+    handler = next(body for body in result.bodies if body.seed == entry)
+    assert handler.kind.value == "event-handler"
+    assert not any(lo <= entry < hi for body in result.bodies
+                   if body.kind is BodyKind.MAIN for lo, hi in body.ranges)
 
 
 def test_every_fixture_partitions_completely(obj: Path) -> None:

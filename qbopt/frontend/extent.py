@@ -81,6 +81,7 @@ class BodyKind(StrEnum):
     MAIN = "main"
     PROCEDURE = "procedure"
     EVENT_STUB = "event-stub"
+    EVENT_HANDLER = "event-handler"
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,6 +195,9 @@ def partition(module: Module) -> Partition | str:
     if (stub := event_stub(module)) is not None:
         seeds.append((BodyKind.EVENT_STUB, stub, EVENT_STUB_NAME))
     seeds += [(BodyKind.PROCEDURE, at, names.get(at)) for at in sorted(module.publics)]
+    from qbopt.abi.events import handler_entries
+    seeds += [(BodyKind.EVENT_HANDLER, at, "timer handler")
+              for at in sorted(handler_entries(module) - module.publics)]
 
     seed_offsets = frozenset(seed for _, seed, _ in seeds)
     reached = {seed: _reachable(seed, seed_offsets - {seed}, blocks_by_at, module, mapped) for _, seed, _ in seeds}
