@@ -29,7 +29,7 @@ is what an x87 pass would have to ask first.
 from dataclasses import field
 from dataclasses import dataclass
 
-from qbopt import mir
+from qbopt import ir, mir
 from qbopt.mir import Op
 from qbopt.mir import Opaque
 from qbopt.mir import MirBody
@@ -43,7 +43,7 @@ DEPTH = 8
 class Float:
     """One value living on the x87 stack.
 
-    `at` is where it was pushed, or None for one that was already there when
+    `at` is where it was computed, or None for one that was already there when
     the block was entered. Identity is the id, so two Floats compare equal
     only when they are the same value in the same place.
     """
@@ -61,11 +61,11 @@ class Reading:
 
     at: int
     uses: dict[int, Float] = field(default_factory=dict)  # st index -> the value there
-    defines: Float | None = None  # what it leaves on top, where it pushes one
+    defines: Float | None = None  # new load or arithmetic result, before any pop
     popped: tuple[Float, ...] = ()  # what it took off
 
 
-def _slots(op: Op) -> list[int]:
+def _slots(operands) -> list[int]:
     """Every stack slot this operation names, in the order it names them.
 
     A float operand has no MIR value -- that is what makes this pass exist
@@ -74,7 +74,7 @@ def _slots(op: Op) -> list[int]:
     """
     return [
         int(one.name[2:])
-        for one in (*op.results, *op.args)
+        for one in operands
         if isinstance(one, Opaque) and one.name.startswith("st") and one.name[2:].isdigit()
     ]
 
@@ -101,10 +101,10 @@ def readings(body: MirBody) -> dict[int, Reading]:
 
         def at(index: int) -> Float | None:
             nonlocal minted, entering
-            if not known:
+            if not known or not 0 <= index < DEPTH:
                 return None
             while len(stack) <= index:
-                if entering >= DEPTH:
+                if entering >= DEPTH or len(stack) >= DEPTH:
                     return None
                 minted += 1
                 entering += 1
@@ -112,14 +112,20 @@ def readings(body: MirBody) -> dict[int, Reading]:
             return stack[index]
 
         for op in block.ops:
-            named = _slots(op)
-            if op.barrier or (op.stack is None and named):
+            named = _slots(op.args)
+            destinations = _slots(op.results)
+            if op.barrier or op.kind is mir.Kind.CALL or (op.stack is None and (named or destinations)):
                 # It touches the stack in a way this does not model.
                 known = False
                 stack = []
                 out[op.at] = Reading(op.at)
                 continue
             if op.stack is None:
+                continue
+            if op.stack not in (-1, 0, 1):
+                known = False
+                stack = []
+                out[op.at] = Reading(op.at)
                 continue
 
             uses = {}
@@ -137,10 +143,26 @@ def readings(body: MirBody) -> dict[int, Reading]:
             made: Float | None = None
             popped: tuple[Float, ...] = ()
             if op.stack > 0:
+                if op.stack != 1 or destinations != [0] or len(stack) >= DEPTH:
+                    known = False
+                    stack = []
+                    out[op.at] = Reading(op.at)
+                    continue
                 minted += 1
                 made = Float(minted, op.at)
                 stack.insert(0, made)
-            elif op.stack < 0:
+            elif destinations:
+                if (len(destinations) != 1 or op.op not in (
+                    ir.Operation.FLOAT_ARITH, ir.Operation.FLOAT_ARITH_POP, ir.Operation.FLOAT_UNARY
+                ) or at(destinations[0]) is None):
+                    known = False
+                    stack = []
+                    out[op.at] = Reading(op.at)
+                    continue
+                minted += 1
+                made = Float(minted, op.at)
+                stack[destinations[0]] = made
+            if op.stack < 0:
                 popped = (stack[0],) if stack else ()
                 if stack:
                     stack.pop(0)

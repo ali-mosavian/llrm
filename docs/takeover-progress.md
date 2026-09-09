@@ -2143,3 +2143,29 @@ when a frame address escapes, an unknown call can inspect it, an indexed
 access may reach it, or exceptional/event control flow observes it. No source
 optimization or runtime behavior was changed in this investigation; the
 363616 modeled NBODY cost remains the baseline.
+
+### Floating value tracking must distinguish arithmetic results
+
+FPCSE's MIR still contains opaque floating operands. Before using the
+existing fpstack analysis to raise those into ordinary values, inspection
+found that it only minted values on pushes: FADD/FMUL and unary arithmetic
+never defined a new value, and an arithmetic pop discarded its result.
+FLOAD also incorrectly read its destination's old value. Thus the analysis
+reported the value stored after `(a+b)*c` as the initial load of a.
+
+The tracker now resolves sources separately from destinations, creates a
+new identity for arithmetic, and writes the arithmetic destination before
+applying a pop. Calls and unsupported operations invalidate tracking;
+stack-capacity checks prevent identities being claimed after an overflow.
+Every MIR stage dump now appends the floating input/result identities,
+making the incorrect chain visible without reading backward from assembly.
+
+All seven new regression cases fail with the preceding tracker, including
+FPCSE on three compilers, arithmetic-pop/unary flow, calls, stack capacity,
+and the actual stage output. Together with stage tests, 11 tests pass.
+New dumps are `/tmp/qbopt-fpcse-values` (before: `/tmp/qbopt-fpcse-current`).
+This changes analysis and diagnostics, not generated code or measured cost.
+The block-local tracker is not yet typed MIR SSA: the next step must carry
+storage conversions, arithmetic precision, rounding mode, and FP effects
+explicitly before enabling float CSE/LICM. In particular, an extended value
+must not substitute for a SINGLE store/reload without its rounding.

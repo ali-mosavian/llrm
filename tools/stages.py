@@ -45,6 +45,7 @@ from qbopt import mir
 from qbopt import lower
 from qbopt import cvinfo
 from qbopt import regalloc
+from qbopt import fpstack
 
 _REGISTERS = {v: k for k, v in vars(Register).items() if isinstance(v, int)}
 from qbopt import omf
@@ -270,6 +271,7 @@ def _mir(bodies, found=None, verbose: bool = False, debug=None) -> None:
             print(line)
         cells = Cells(debug)
         depth = _depth(body)
+        floats = fpstack.readings(body)
         for block in body.blocks:
             pad = "  " * depth.get(block.at, 0)
             succ = ", ".join(f"{one:#x}" for one in block.succ) or "-"
@@ -280,7 +282,12 @@ def _mir(bodies, found=None, verbose: bool = False, debug=None) -> None:
             for op in block.ops:
                 # The address stays in a gutter: it is what `diff` between
                 # two stages keys on, and rule 4 is why these files exist.
-                print(f"    {op.at:#06x}  {pad}{_says(op, cells, calls, verbose)}")
+                flow = floats.get(op.at) if op.stack is not None else None
+                values = ""
+                if flow is not None and (flow.uses or flow.defines is not None):
+                    uses = ", ".join(str(value) for value in flow.uses.values()) or "-"
+                    values = f"  ; fp values: {uses} -> {flow.defines or '-'}"
+                print(f"    {op.at:#06x}  {pad}{_says(op, cells, calls, verbose)}{values}")
         if cells.order:
             print("\n    where:")
             for line in cells.legend():
