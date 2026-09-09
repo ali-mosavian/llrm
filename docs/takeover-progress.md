@@ -1328,6 +1328,33 @@ LNGMXX (1), and NESTED (1) pass strict LIR on all three compilers:
 The initializer/sinking experiment is now accepted with this allocation fix.
 Nbody still needs its hand-derived target; the project-wide goal is not met.
 
+## HARR descriptor addressing: symbolic analysis is not an emitted operand
+
+The side-by-side assembly exposed `add di,[0]` at PDS output 0x66 with
+no relocation. Induction composition converted a descriptor-relative read
+to its alias-analysis symbolic address and handed that new operand to
+strength reduction. The new instruction had no original fixup to carry.
+HARR's printed sum did not detect this: forwarding already serves the sum
+from the stored value, independently of where the array store lands.
+
+Composition now retains the actual reference and requires its base to be
+invariant. Generated operations include memory-address SSA uses; lowering
+accepts literal displacements through those abstract bases. The read becomes
+`add di,[bx+0Ah]`, preserving the descriptor pointer instead of reading DS:0.
+The three emitted-code regressions failed before the fix. All 47 focused
+induction tests pass; HARR and NESTED pass runtime on all three compilers.
+Stage dumps: `/tmp/qbopt-harr-es` and `/tmp/qbopt-harr-address-fixed`.
+Runtime artifacts: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-harr-address-y0z6zjgj`.
+HARR costs remain 2920/2936/3132 for PDS/QB/VBDOS. The opaque ES load still
+needs a machine-independent address representation; this fix does not hoist it.
+
+The same focused runtime run found MATRIX prints T=190 instead of T=380 on
+all three compilers. Replacing the changed functions in memory with HEAD's
+pre-fix definitions reproduces the PDS failure independently, in
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-matrix-baseline-xgc4dvts`.
+Its earlier 1.31x score is therefore not evidence of goal completion. Fix
+this existing correctness failure before further optimization.
+
 ## Target refresh and floating-point semantic audit
 
 The target scoreboard at f8c9e96 puts PDS FPCSEX at 4508/1340 (3.36x),

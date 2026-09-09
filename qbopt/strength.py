@@ -269,13 +269,16 @@ def _woven(block, ahead: list, behind: list, replacements: dict[int, Op]) -> lis
 
 def _made(kind, name: str, into, args: tuple, at: int, beside: Op) -> Op:
     """One operation this pass invented, claiming none of BC's bytes."""
+    loads = tuple(one.ref for one in args if isinstance(one, mir.Cell))
+    uses = dict.fromkeys(one.value for one in args if isinstance(one, mir.Held))
+    uses.update((value, None) for ref in loads for value in (ref.base, ref.segment) if value is not None)
     return Op(
         at=at,
         op=beside.op,
         name=name,
         defines=(into,),
-        uses=tuple(one.value for one in args if isinstance(one, mir.Held)),
-        loads=tuple(one.ref for one in args if isinstance(one, mir.Cell)),
+        uses=tuple(uses),
+        loads=loads,
         stores=(),
         node=None,
         made=None,

@@ -294,7 +294,8 @@ def _addressed(one: "mir.MemRef") -> "ir.Mem":
     two elements at the same displacement are not the same address unless
     that register agrees. So that is written down rather than guessed.
 
-    Anything else -- a far pointer, the stack -- is refused by name.
+    A literal displacement through an SSA base retains that base; allocation
+    chooses an address register. Far pointers and the stack remain refused.
     """
     from qbopt.module import Space
 
@@ -303,6 +304,8 @@ def _addressed(one: "mir.MemRef") -> "ir.Mem":
         raise Unlowered("a cell with no address cannot be encoded: nothing says which register reaches it")
     if addr.space is Space.FRAME:
         return ir.Mem(addr, one.width, Register.BP, 0, 2)
+    if addr.space is Space.LITERAL and one.base is not None:
+        return ir.Mem(addr, one.width, Register.NONE, 0, 2)
     if addr.space is Space.SEGMENT:
         # An indexed element says which register reaches it: `addr.base` is
         # part of the address's own identity, because two elements at the

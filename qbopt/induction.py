@@ -374,16 +374,15 @@ def _composed(
                 elif op.kind is mir.Kind.ADD and (first is not None or second is not None):
                     recurrence, offset = (first, right) if first is not None else (second, left)
                     if isinstance(offset, mir.Cell):
-                        ref = mir._symbolic_ref(offset.ref)
+                        ref = offset.ref
                         if (
                             ref.addr is None
-                            or ref.base is not None
+                            or ref.base is not None and ref.base.id not in still
                             or ref.segment is not None
                             or ref.width != 2
                             or not settled(ref)
                         ):
                             continue
-                        offset = mir.Cell(ref)
                     elif not (
                         isinstance(offset, (mir.Const, mir.Held))
                         and offset.width == 2

@@ -14,6 +14,21 @@ from qbopt.module import Addr
 from qbopt.module import Space
 
 
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_harr_hoisted_descriptor_read_keeps_its_address(tag):
+    """HARR's reduced pointer read DS:0 instead of the array-base descriptor field."""
+    from qbopt import wholeseg, module, omf, blocks
+
+    result = wholeseg.emitted(Path(f"fixtures/omf/harr-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    found = module.of(omf.parse(result.data))
+    bad = [one.at for one in blocks.instructions(found)
+           if one.disp_at is not None and one.disp_len == 2
+           and found.code[one.disp_at:one.disp_at + 2] == b"\0\0"
+           and one.disp_at not in found.fixup_at]
+    assert not bad, f"unrelocated zero displacements: {bad}"
+
+
 def test_nbody_inner_counter_has_a_proven_upper_bound() -> None:
     """Nbody's conditional interaction body hid the 0..5 counter range from the two-block proof."""
     import corpus
@@ -76,6 +91,7 @@ def test_harr_descriptor_offset_is_read_before_inner_loop_unless_written(changed
     if not changed:
         preheader = next(block for block in result.blocks if block.at == 0x52)
         assert any(mir.same_bytes(ref, field) for op in preheader.ops for ref in op.loads)
+        assert all(ref.base in op.uses for op in preheader.ops for ref in op.loads if ref.base is not None)
 
 
 def test_nested_address_advances_instead_of_recomputing_row_plus_column() -> None:
