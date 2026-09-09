@@ -238,6 +238,9 @@ def _result(
         return None
     width = min(one.width for one in parts)
 
+    if len(parts) == 1 and (step := mir.stepping(op)) is not None and isinstance(step[1], mir.Const):
+        return Known(masked(parts[0].n + step[1].n, width), width)
+
     if op.kind in (mir.Kind.COPY, mir.Kind.LOAD) and len(parts) == 1:
         return Known(masked(parts[0].n, width), width)
     if op.kind in ARITH and len(parts) == 2:

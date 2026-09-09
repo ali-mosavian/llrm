@@ -70,6 +70,24 @@ def test_flags_do_not_stop_an_operation_being_folded() -> None:
     assert consts._defined(mir.Op(0, ir.Operation.UNARY, "dec", (flags,), ())) is None
 
 
+@pytest.mark.parametrize("width", [1, 2, 4])
+@pytest.mark.parametrize(("kind", "number", "answer"), [(mir.Kind.INCREMENT, -1, 0), (mir.Kind.DECREMENT, 0, -1)])
+def test_constant_steps_wrap_at_the_value_width(kind: mir.Kind, number: int, answer: int, width: int) -> None:
+    """cmpord's zero decremented into BASIC true was not known to be -1."""
+    result = mir.Value(1, 0)
+    op = mir.Op(
+        0,
+        ir.Operation.UNARY,
+        "",
+        (result,),
+        (),
+        kind=kind,
+        args=(mir.Const(number, width),),
+        results=(mir.Held(result, width),),
+    )
+    assert consts._result(op, {}) == consts.Known(consts.masked(answer, width), width)
+
+
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
 def test_a_fact_never_claims_more_bytes_than_the_instruction_wrote(obj: Path) -> None:
     """`mov ax,5` does not make eax five. Claiming it would fold a 32-bit
