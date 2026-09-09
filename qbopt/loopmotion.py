@@ -99,23 +99,46 @@ def _exit_value(
         return arg
 
     ref = op.stores[0]
+    blocks = {block.at: block for block in body.blocks}
+    predecessors = loops.predecessors(body.blocks)
+
+    def stored_at(at: int, expected: mir.Arg, active: frozenset) -> bool:
+        expected = root(expected)
+        key = (at, expected)
+        if key in active:
+            return True  # inductive backedge; every entry path still needs a matching store
+        block = blocks[at]
+        for previous in reversed(block.ops):
+            if previous.barrier or previous.kind in {mir.Kind.CALL, mir.Kind.ESCAPE, mir.Kind.OPAQUE}:
+                return False
+            if any(mir.overlapping(ref, written, dgroup, bounds) for written in previous.stores):
+                args = [arg for arg in previous.args if isinstance(arg, (mir.Const, mir.Held))]
+                return (
+                    previous.kind is mir.Kind.STORE
+                    and previous.stores == (ref,)
+                    and len(args) == 1
+                    and root(args[0]) == expected
+                )
+        if at == body.entry or not predecessors[at]:
+            return False
+        phi = next((phi for phi in block.phis if isinstance(expected, mir.Held) and phi.result == expected.value), None)
+        if phi is not None and set(phi.incoming) != predecessors[at]:
+            return False
+        return all(
+            stored_at(
+                parent,
+                mir.Held(phi.incoming[parent], expected.width) if phi is not None else expected,
+                active | {key},
+            )
+            for parent in predecessors[at]
+        )
+
     for phi in header.phis:
         if set(phi.incoming) != {entry.at, latch} or root(mir.Held(phi.incoming[latch], stored.width)) != root(stored):
             continue
         seed = root(mir.Held(phi.incoming[entry.at], stored.width))
-        for previous in reversed(entry.ops):
-            if previous.barrier or previous.kind in {mir.Kind.CALL, mir.Kind.ESCAPE, mir.Kind.OPAQUE}:
-                break
-            if any(mir.overlapping(ref, written, dgroup, bounds) for written in previous.stores):
-                args = [arg for arg in previous.args if isinstance(arg, (mir.Const, mir.Held))]
-                if (
-                    previous.kind is mir.Kind.STORE
-                    and previous.stores == (ref,)
-                    and len(args) == 1
-                    and root(args[0]) == seed
-                ):
-                    return mir.Held(phi.result, stored.width)
-                break
+        if stored_at(entry.at, seed, frozenset()):
+            return mir.Held(phi.result, stored.width)
     return None
 
 

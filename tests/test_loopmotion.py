@@ -12,6 +12,35 @@ from qbopt import promote
 from qbopt import runtime
 
 
+@pytest.mark.parametrize("initialized", [True, False])
+def test_nested_accumulator_seed_follows_outer_phi(monkeypatch, initialized: bool) -> None:
+    """NESTED stored its accumulator 30 times; an outer phi carries the zero-trip seed."""
+    from qbopt import transform
+
+    path = Path("fixtures/omf/nested-p-g2.obj")
+    found = corpus.loaded(path)
+    partition = corpus.partitioned(path)
+    body = mir.bodies(found, partition)[0][1]
+    sink = loopmotion.sunk_stores
+    with monkeypatch.context() as patch:
+        patch.setattr(loopmotion, "sunk_stores", lambda body, *args: body)
+        body = transform.applied(body, found.dgroup, found.calls, blocks=partition, found=found)
+    accumulator = next(op.stores[0] for block in body.blocks for op in block.ops if op.at == 0x7E and op.stores)
+    if not initialized:
+        body = replace(
+            body,
+            blocks=tuple(
+                replace(block, ops=tuple(op for op in block.ops if accumulator not in op.stores))
+                if block.at == body.entry
+                else block
+                for block in body.blocks
+            ),
+        )
+    result = sink(body, found.dgroup, module.landmarks(found))
+    inner = next(block for block in result.blocks if block.at == 0x5A)
+    assert any(accumulator in op.stores for op in inner.ops) is not initialized
+
+
 def hotlop() -> tuple[mir.MirBody, frozenset[int], dict, mir.MemRef]:
     path = Path("fixtures/omf/hotlop-p-g2.obj")
     found = corpus.loaded(path)

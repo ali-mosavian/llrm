@@ -1,5 +1,23 @@
 # Takeover checkpoint — 2026-09-09
 
+## Sink the nested accumulator's inner-loop store
+
+The zero-trip seed proof now follows predecessor edges and translates phi
+inputs, instead of requiring initialization in the immediate preheader.
+Every incoming path must establish the same cell/value pair; an unknown
+write, barrier or uninitialized entry rejects the move. Backedges discharge
+the same inductive obligation, while entry paths still need an actual store.
+This recognizes NESTED's outer phi as the inner loop's memory seed.
+
+NESTED now writes its sum at the inner-loop exit (five times instead of 30),
+not on each inner iteration. Cost **2172 -> 1990; 2.83x -> 2.59x**. The
+outer-loop exit store and remaining allocation costs are still opportunities.
+The new real-fixture regression fails before the change; removing its seed
+keeps the store in the loop. All 12 store-motion checks and nine strict-LIR
+runtime comparisons pass (NESTED/HOTLOP/LNGMIX, p-g2/q-O/v-g3).
+Dumps: `/tmp/qbopt-nested-store-sink`. Runtime artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-nested-sink-9g9z4h2i`.
+
 ## Promote read-modify-write accumulators
 
 Promotion previously excluded arithmetic with both a memory read and write.
