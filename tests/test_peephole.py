@@ -8,6 +8,52 @@ from iced_x86 import Register
 from qbopt import ir, lir, peephole
 
 
+@pytest.mark.parametrize("change", [None, Register.CH, Register.AH])
+def test_repeated_copy_requires_unchanged_source_and_destination(change):
+    """LNGMXX copied ECX into EAX twice around CDQ; partial writes must prevent reuse."""
+    move = lir.Insn(0, (0, 1), ir.Semantics(ir.Operation.MOVE, "mov",
+                    (ir.Reg(Register.EAX, 4),), (ir.Reg(Register.ECX, 4),)), (), ())
+    extend = lir.Insn(1, (1, 2), ir.Semantics(ir.Operation.EXTEND, "cdq",
+                      (ir.Reg(Register.EDX, 4),), (ir.Reg(Register.EAX, 4),)), (), ())
+    if change is not None:
+        extend = replace(extend, clobbers=frozenset({change}))
+    final = replace(move, at=2, covers=(2, 3))
+    body = lir.LirBody("copies", 0, (lir.LirBlock(0, (move, extend, final), ()),), {}, {})
+    result = peephole.constants(body)
+    assert len(result.insns) == (2 if change is None else 3)
+
+
+def test_copied_value_survives_overwriting_its_original_register():
+    """A copied value is a snapshot, not an alias of the register it came from."""
+    def copy(at, dest, source):
+        return lir.Insn(at, (at, at + 1), ir.Semantics(ir.Operation.MOVE, "mov",
+                        (ir.Reg(dest, 4),), (source,)), (), ())
+    insns = (
+        copy(0, Register.EAX, ir.Reg(Register.ECX, 4)),
+        copy(1, Register.EDX, ir.Reg(Register.ECX, 4)),
+        copy(2, Register.ECX, ir.Imm(7, 4)),
+        copy(3, Register.EAX, ir.Reg(Register.EDX, 4)),
+        copy(4, Register.EAX, ir.Reg(Register.ECX, 4)),
+    )
+    body = lir.LirBody("snapshot", 0, (lir.LirBlock(0, insns, ()),), {}, {})
+    result = peephole.constants(body)
+    assert [one.what for one in result.insns] == [one.what for one in insns if one.at != 3]
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_lngmxx_does_not_reload_dividend_after_sign_extension(tag):
+    """LNGMXX's CDQ leaves its dividend intact, but lowering reloaded it before IDIV."""
+    import corpus
+    from iced_x86 import Mnemonic
+    from qbopt import wholeseg
+    result = wholeseg.emitted(Path(f"fixtures/omf/lngmxx-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    insns = [one.insn for block in corpus.partitioned(result.data) for one in block.insns]
+    divides = [index for index, one in enumerate(insns) if one.mnemonic == Mnemonic.IDIV]
+    assert len(divides) == 1
+    assert insns[divides[0] - 1].mnemonic == Mnemonic.CDQ
+
+
 def test_nbody_repeated_fixed_constant_is_removed():
     """Nbody materialized 512 twice before one divide, with a non-clobbering CDQ between them."""
     from qbopt import wholeseg, module, omf, blocks

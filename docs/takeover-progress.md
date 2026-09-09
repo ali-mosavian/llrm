@@ -1983,3 +1983,27 @@ three compilers; CHAIN is separately checked on those same compiler variants.
 Artifacts: `qbopt-nbody-constant-7k9vkbz8` and `qbopt-chain-constant-4j353rz8`
 under the system temporary directory. No claim is made that NBODY's still
 missing reference target has been reached.
+
+### Reuse copied register values around sign extension
+
+The post-allocation peephole now tracks scalar register-value snapshots as
+well as literals. Equal-width register copies transfer the snapshot; writes
+invalidate every alias of their destination, not other registers holding a
+copy of the old value. A changed source therefore prevents a repeated copy
+from disappearing, while two preserved copies still compare equal after
+their original source is overwritten. Memory loads and segment-register
+loads are not treated as reusable register copies.
+
+LNGMXX's `mov eax,ecx; cdq; mov eax,ecx` now has one copy. Its three emitted
+regressions and the basic snapshot-reuse case failed first. All 18 focused
+peephole checks pass, including partial source/destination clobbers and
+snapshot lifetime. `/tmp/qbopt-lngmxx-copy-after` records the final stages.
+Strict runtime checks pass 156 cases across three compilers for LNGMXX,
+CHAIN, DIVMOD, FPDEEP, FPEMU and MATRIX (`qbopt-copy-values-k3tpmxd3` under
+the system temporary directory).
+
+The 97-object audit (96 primary objects plus NBODY) finds only improvements:
+LNGMXX 269/271/269 -> 267/269/267, CHAIN improves 12 cycles on each compiler,
+MATRIX and FPEMU improve 2, FPDEEP improves 12 on PDS/VBDOS (QB unchanged).
+DIVMOD loses copies too, though its very large loop-weighted score is not
+an independently validated runtime cost. NBODY remains byte-identical.

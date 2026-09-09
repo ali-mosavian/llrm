@@ -16,6 +16,7 @@ class Peephole(LIRTransform):
 
 
 def constants(body: lir.LirBody) -> lir.LirBody:
+    """Reuse identical scalar register contents within a straight-line move sequence."""
     blocks = []
     for block in body.blocks:
         held = {}
@@ -34,9 +35,11 @@ def constants(body: lir.LirBody) -> lir.LirBody:
             if move and len(what.dests) == len(what.sources) == 1:
                 dest, source = what.dests[0], what.sources[0]
                 if (isinstance(dest, ir.Reg) and dest.register in target.WIDTHS
-                    and isinstance(source, ir.Imm) and source.address is None
-                    and dest.width == source.width):
-                    candidate = dest, source.value & ((1 << (dest.width * 8)) - 1)
+                    and isinstance(source, (ir.Reg, ir.Imm)) and dest.width == source.width):
+                    if isinstance(source, ir.Imm) and source.address is None:
+                        candidate = dest, source.value & ((1 << (dest.width * 8)) - 1)
+                    elif isinstance(source, ir.Reg) and source.register in target.WIDTHS:
+                        candidate = dest, held.setdefault(source, object())
             if candidate is not None and not one.clobbers and held.get(candidate[0]) == candidate[1]:
                 redundant.add(id(one))
                 continue
