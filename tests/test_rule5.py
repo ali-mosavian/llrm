@@ -30,7 +30,19 @@ import pytest
 HERE = Path(__file__).resolve().parent.parent / "qbopt"
 
 # The passes: what runs between mir.raise_body and lowering.
-PASSES = ("transform.py", "pairs.py", "consts.py", "avail.py", "wide.py", "segments.py", "loopmotion.py")
+PASSES = (
+    "transform.py",
+    "pairs.py",
+    "consts.py",
+    "avail.py",
+    "wide.py",
+    "segments.py",
+    "loopmotion.py",
+    "ssa.py",
+    "promote.py",
+    "induction.py",
+    "strength.py",
+)
 
 # Naming any of these is naming the machine.
 NAMED = frozenset(
@@ -94,12 +106,9 @@ def test_a_pass_names_nothing_about_the_machine(name: str) -> None:
     allowed = ALLOWED.get(name, set())
     if allowed is None:
         return
-    offending = {
-        where: sorted(what) for where, what in _named_in(HERE / name).items() if where not in allowed
-    }
+    offending = {where: sorted(what) for where, what in _named_in(HERE / name).items() if where not in allowed}
     assert not offending, (
-        f"{name}: {offending} name a register. Rule 5: only lower, regalloc "
-        "and peephole see machine form."
+        f"{name}: {offending} name a register. Rule 5: only lower, regalloc and peephole see machine form."
     )
 
 

@@ -1,8 +1,11 @@
 from dataclasses import replace
 
+import pytest
+
 from qbopt import ir
 from qbopt import mir
 from qbopt import loops
+from qbopt import strength
 from qbopt import induction
 
 
@@ -59,3 +62,61 @@ def test_the_backedge_must_step_the_exact_phi_value() -> None:
     step = replace(header.ops[0], args=(unrelated,), uses=(unrelated.value,))
     built = replace(built, blocks=(built.blocks[0], replace(header, ops=(step, header.ops[1])), built.blocks[2]))
     assert not induction.basics(built, loop)
+
+
+@pytest.mark.parametrize(("width", "count"), [(2, 1), (4, 0)])
+def test_only_width_preserving_copies_carry_the_recurrence(width: int, count: int) -> None:
+    built, loop = body()
+    header = built.blocks[1]
+    counter = header.phis[0].result
+    copied = header.ops[1].args[0].value
+    copy = mir.Op(
+        1,
+        ir.Operation.MOVE,
+        "",
+        (copied,),
+        (counter,),
+        kind=mir.Kind.COPY,
+        args=(mir.Held(counter, width),),
+        results=(mir.Held(copied, 2),),
+    )
+    built = replace(built, blocks=(built.blocks[0], replace(header, ops=(copy, *header.ops)), built.blocks[2]))
+    assert len(induction.derived(built, loop)) == count
+
+
+def test_a_reduced_counter_has_its_own_loop_phi_and_fresh_variable() -> None:
+    """harr's experimental stride reused a promoted variable and read its initial value on every iteration."""
+    built, _loop = body()
+    header = built.blocks[1]
+    counter = header.phis[0].result
+    answer = header.ops[1].defines[0]
+    multiply = replace(header.ops[1], uses=(counter,), args=(mir.Held(counter, 2), mir.Const(2, 2)), covers=(2, 4))
+    livein = mir.Value(99, 0, variable=77)
+    use = mir.Op(
+        4,
+        ir.Operation.PUSH,
+        "",
+        (),
+        (answer, livein),
+        kind=mir.Kind.ARG,
+        args=(mir.Held(answer, 2), mir.Held(livein, 2)),
+        covers=(4, 6),
+    )
+    built = replace(
+        built,
+        blocks=(
+            built.blocks[0],
+            replace(header, ops=(replace(header.ops[0], covers=(1, 2)), multiply, use)),
+            built.blocks[2],
+        ),
+    )
+    result = strength.reduced(built)
+    after = result.blocks[1]
+    added = [phi for phi in after.phis if phi.result != counter]
+    assert len(added) == 1
+    phi = added[0]
+    assert phi.result.variable > livein.variable
+    assert next(op for op in after.ops if op.kind is mir.Kind.ARG).args[0].value == phi.result
+    assert phi.incoming[0] != phi.incoming[1]
+    step = next(op for op in after.ops if phi.incoming[1] in op.defines)
+    assert step.args[0].value == phi.result

@@ -92,7 +92,8 @@ def basics(body: mir.MirBody, loop) -> dict[int, Affine]:
         for where, value in phi.incoming.items():
             if where not in inside:
                 continue
-            step = _stepped(made.get(value.id), phi.result.id, still)
+            root = _copied(mir.Held(value, _width(value)), made)
+            step = _stepped(made.get(root.value.id), phi.result.id, still, made)
             if step is not None:
                 out[phi.result.id] = Affine(
                     phi.result.id, mir.Held(start, _width(start)), step, loop.header
@@ -100,7 +101,25 @@ def basics(body: mir.MirBody, loop) -> dict[int, Affine]:
     return out
 
 
-def _stepped(op: "mir.Op | None", value: int, still: set[int]) -> "mir.Arg | None":
+def _copied(operand: mir.Held, made: dict[int, mir.Op]) -> mir.Held:
+    seen = set()
+    while operand.value.id not in seen:
+        seen.add(operand.value.id)
+        op = made.get(operand.value.id)
+        if op is None or op.kind is not mir.Kind.COPY or op.loads or op.stores:
+            break
+        if len(op.args) != 1 or len(op.results) != 1:
+            break
+        source, result = op.args[0], op.results[0]
+        if not isinstance(source, mir.Held) or not isinstance(result, mir.Held):
+            break
+        if source.width != operand.width or result.width != operand.width:
+            break
+        operand = source
+    return operand
+
+
+def _stepped(op: "mir.Op | None", value: int, still: set[int], made: dict[int, mir.Op]) -> "mir.Arg | None":
     """What this operation adds to `variable` each time round, or None."""
     if op is None:
         return None
@@ -111,6 +130,10 @@ def _stepped(op: "mir.Op | None", value: int, still: set[int]) -> "mir.Arg | Non
     if got is None:
         return None
     stepped, step = got
+    if isinstance(stepped, mir.Held):
+        stepped = _copied(stepped, made)
+    if isinstance(step, mir.Held):
+        step = _copied(step, made)
     if not isinstance(stepped, mir.Held) or stepped.value.id != value:
         # An `add` may name the counter second; the two that step by one
         # never do.
@@ -168,6 +191,7 @@ def derived(
         return []
     still = invariant(body, inside)
     settled = unwritten(body, inside, dgroup, bounds)
+    made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
 
     out = []
     for at in inside:
@@ -177,8 +201,9 @@ def derived(
             # every one of the 23 sites this pass exists for.
             if op.kind not in (mir.Kind.MUL, mir.Kind.SHL) or op.stores:
                 continue
-            counter = [one for one in op.args if isinstance(one, mir.Held) and one.value.id in found]
-            other = [one for one in op.args if one not in counter]
+            args = tuple(_copied(one, made) if isinstance(one, mir.Held) else one for one in op.args)
+            counter = [one for one in args if isinstance(one, mir.Held) and one.value.id in found]
+            other = [one for one in args if one not in counter]
             if len(counter) != 1 or len(other) != 1:
                 continue
             by = other[0]

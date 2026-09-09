@@ -24,12 +24,13 @@ address. BC has one, and it wrote the worst of them.
 
 from dataclasses import replace
 
-from qbopt import induction
 from qbopt import mir
-from qbopt.mir import MirBody
+from qbopt import ssa
 from qbopt.mir import Op
-from qbopt.passes import MIRTransform
+from qbopt import induction
+from qbopt.mir import MirBody
 from qbopt.passes import Where
+from qbopt.passes import MIRTransform
 
 
 class Strength(MIRTransform):
@@ -51,7 +52,8 @@ def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | 
         return body
 
     at_of = {block.at: block for block in body.blocks}
-    taken = max((one.variable for one in body.origin), default=0)
+    taken = max((one.variable for one in ssa.values(body)), default=0)
+    first = taken + 1
     ahead: dict[int, list[Op]] = {}
     behind: dict[int, list[Op]] = {}
     swap: dict[int, mir.Value] = {}
@@ -67,10 +69,13 @@ def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | 
             # that contains it, and reducing it twice would set up two
             # counters for one value and delete the multiply once.
             answer = _answer(body, one.op)
-            if answer is None or not _removable(at_of, one.op):
+            if answer is None or id(one.op) in gone or not _removable(at_of, one.op):
+                continue
+            width = _width(one.op)
+            stride = _times(one.of.step, one.by, width)
+            if stride is None:
                 continue
             taken += 1
-            width = _width(one.op)
             start = mir.Value(id=_next(body, taken), at=preheader, variable=taken, version=1)
             step = mir.Value(id=start.id + 1, at=latches[0], variable=taken, version=2)
 
@@ -80,7 +85,7 @@ def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | 
                     mir.Kind.ADD,
                     "add",
                     step,
-                    (mir.Held(start, width), _times(one.of.step, one.by, width)),
+                    (mir.Held(start, width), stride),
                     latches[0],
                     one.op,
                 )
@@ -90,7 +95,7 @@ def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | 
 
     if not gone:
         return body
-    return replace(
+    changed = replace(
         body,
         blocks=tuple(
             replace(
@@ -103,6 +108,7 @@ def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | 
             for block in body.blocks
         ),
     )
+    return ssa.constructed(changed, frozenset(range(first, taken + 1)))
 
 
 def _removable(at_of: dict, op: Op) -> bool:
