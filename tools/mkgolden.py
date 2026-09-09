@@ -230,6 +230,10 @@ def fpcsex() -> list[str]:
     return fpcse()
 
 
+def fpicse() -> list[str]:
+    return [f"VALUE={seq(value, value)}" for value in (-32768, 123, 32767)] + ["DONE"]
+
+
 def lngmxx() -> list[str]:
     return lngmix()
 
@@ -498,6 +502,7 @@ PROGRAMS = {
     "hotlpx": hotlpx,
     "pressx": pressx,
     "fpcsex": fpcsex,
+    "fpicse": fpicse,
     "lngmxx": lngmxx,
     "fpemu": fpemu,
     "fpdeep": fpdeep,

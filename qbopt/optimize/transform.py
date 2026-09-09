@@ -259,9 +259,10 @@ def subexpressions(body: MirBody, dgroup: frozenset[int] = frozenset()) -> MirBo
     order = {block.at: index for index, block in enumerate(body.blocks)}
     whole = _widths(body)
     demanded = halves(body)
-    from qbopt.analysis import floatfacts
+    from qbopt.analysis import floatbounds, floatfacts
     exact = floatfacts.known(body, dgroup, {}) if any(
         op.floating for block in body.blocks for op in block.ops) else {}
+    bounded = floatbounds.exact(body, exact)
 
     seen: dict[tuple, list[tuple[int, int, Op]]] = {}
     stands: dict[int, mir.Value] = {}  # what a name numbers as -- copies included
@@ -292,7 +293,7 @@ def subexpressions(body: MirBody, dgroup: frozenset[int] = frozenset()) -> MirBo
                 continue
             at, where, earlier = first
             if op.floating is not None and (at != order[block.at] or not all(
-                _exact_floating(one, exact) for one in block.ops[where:index + 1]
+                (id(one) in bounded or _exact_floating(one, exact)) for one in block.ops[where:index + 1]
             )):
                 candidates.append((order[block.at], index, op))
                 continue

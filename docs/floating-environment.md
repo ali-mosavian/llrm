@@ -94,3 +94,46 @@ missing bytes and procedure entries do not. Calls and aliases invalidate the
 facts normally. BC_CN's descriptor records are not assumed to be constants.
 Exact floating stores feed memory analysis, so the original literal-loading
 FP sequence establishes the same scalar entry values as PDS's integer stores.
+
+## Bounded runtime integers
+
+`analysis/floatbounds.py` now proves numerical exactness without proving a
+specific value. Signed integer loads fit extended precision; integer sums,
+differences and products qualify only when the entire resulting interval
+fits the minimum dynamic precision. Destination conversions must fit too.
+Bounds assert neither a zero sign nor a concrete constant. Division, unknown
+floating inputs and unproved rounding still fail the proof. CSE retains its
+same-block, unchanged-memory and intervening-effects checks.
+
+The typed-MIR regression changes two identical unknown integer conversions
+to one shared value. The emitted-code audit of all 60 existing floating
+fixtures is unchanged: **no cost or assembly improvement is claimed**.
+The expanded 148-object audit (primary corpus, all floating variants and
+regression objects in scope) also has no changed outputs. The 61 focused
+analysis/CSE checks pass; disabling the bounds makes both unknown-integer
+reuse regressions fail as intended.
+
+`suite/fpicse.bas` exposes the missing frontend link. On all three primary
+compilers, assigning a runtime LONG to two DOUBLE variables emits two
+`B$FILD` calls, not typed FLOADs. The earlier INTEGER variant emitted
+`B$FIL2`. These conversions must be recognized at the raise, with verified
+helper contracts, before the bounds can remove their duplication. Direct
+DOUBLE printing also exposed an unestablished `B$PSR8` lowering interface;
+the fixture prints its integral results through CLNG instead.
+
+Current emitted shape, before **and after** this analysis change:
+
+```asm
+; materialize input argument
+call B$FILD
+fstp qword [firstValue]
+; materialize the same input argument
+call B$FILD
+fstp qword [secondValue]
+```
+
+The final LONG fixture passes three runtime cases on each compiler. Its
+committed objects in `fixtures/regressions/fpicse-{p-g2,q-O,v-g3}.obj`
+come from `tools/e2e.py` using the matching `tools/configs.py` configurations,
+with zero severe compile errors, in temporary run
+`qbopt-fpicse-implicit-stxjen_l`. Source is DOS CRLF, as required by BC.
