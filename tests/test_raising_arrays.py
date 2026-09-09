@@ -12,6 +12,38 @@ from qbopt import raising_arrays
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_descriptor_fields_have_proven_addresses_without_new_relocations(tag: str) -> None:
+    """HARR's descriptor fields looked like arbitrary pointer accesses to alias analysis."""
+    from qbopt.module import Addr
+
+    path = Path("fixtures/omf") / f"harr-{tag}.obj"
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    fields = [ref for block in body.blocks for op in block.ops for ref in op.loads if ref.symbolic is not None]
+    assert {ref.symbolic.offset for ref in fields} >= {8, 16}
+    for ref in fields:
+        assert ref.addr.space is Space.LITERAL and ref.base is not None
+        symbol = ref.symbolic
+        direct = mir.MemRef(Addr(Space.SEGMENT, symbol.offset, symbol.index), ref.width)
+        assert mir.same_bytes(ref, direct)
+        assert mir.overlapping(ref, direct, found.dgroup)
+        unrelated = replace(direct, addr=Addr(Space.SEGMENT, symbol.offset + ref.width, symbol.index))
+        assert not mir.overlapping(ref, unrelated, found.dgroup)
+
+
+@pytest.mark.parametrize("space,offset,width", [(Space.FAR, 6, 2), (Space.LITERAL, 65535, 2), (Space.LITERAL, 6, 4)])
+def test_unknown_segment_wrapping_or_wide_pointer_is_not_resolved(space: Space, offset: int, width: int) -> None:
+    from qbopt.module import Addr
+
+    pointer = mir.Value(1, 0)
+    ref = mir.MemRef(Addr(space, 2), 2, pointer)
+    op = mir.Op(0, ir.Operation.MOVE, "mov", (), (pointer,), loads=(ref,), args=(mir.Cell(ref),))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),))
+    result = raising_arrays._addresses(body, {pointer: mir.Symbol(Space.SEGMENT, 5, offset, width)})
+    assert result.blocks[0].ops[0].loads[0].symbolic is None
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 @pytest.mark.parametrize(("name", "bounds"), [("harr", ((0, 20), (0, 20))), ("segld", ((0, 100),))])
 def test_real_array_requests(name: str, bounds: tuple[tuple[int, int], ...], tag: str) -> None:
     obj = Path("fixtures/omf") / f"{name}-{tag}.obj"

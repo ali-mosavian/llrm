@@ -2,6 +2,7 @@ from dataclasses import replace
 
 from qbopt import mir
 from qbopt import consts
+from qbopt.module import Space
 
 
 def annotated(body: mir.MirBody, calls: dict[int, str]) -> mir.MirBody:
@@ -30,7 +31,45 @@ def annotated(body: mir.MirBody, calls: dict[int, str]) -> mir.MirBody:
                 arguments.clear()
             ops.append(op)
         blocks.append(replace(block, ops=tuple(ops)))
-    return replace(body, blocks=tuple(blocks))
+    return _addresses(replace(body, blocks=tuple(blocks)), symbols)
+
+
+def _addresses(body: mir.MirBody, symbols: dict[mir.Value, mir.Symbol]) -> mir.MirBody:
+    """Resolve descriptor fields without moving their original relocation operands."""
+
+    def reference(ref: mir.MemRef) -> mir.MemRef:
+        symbol = symbols.get(ref.base)
+        if symbol is None or symbol.space is not Space.SEGMENT or symbol.width != 2:
+            return ref
+        if ref.addr is None or ref.addr.space is not Space.LITERAL or ref.segment is not None:
+            return ref
+        offset = symbol.offset + symbol.addend + ref.addr.disp
+        if not 0 <= offset <= 0x10000 - ref.width:
+            return ref
+        return replace(ref, symbolic=mir.Symbol(symbol.space, symbol.index, offset, 2))
+
+    def argument(arg: mir.Arg) -> mir.Arg:
+        return mir.Cell(reference(arg.ref)) if isinstance(arg, mir.Cell) else arg
+
+    return replace(
+        body,
+        blocks=tuple(
+            replace(
+                block,
+                ops=tuple(
+                    replace(
+                        op,
+                        loads=tuple(map(reference, op.loads)),
+                        stores=tuple(map(reference, op.stores)),
+                        args=tuple(map(argument, op.args)),
+                        results=tuple(map(argument, op.results)),
+                    )
+                    for op in block.ops
+                ),
+            )
+            for block in body.blocks
+        ),
+    )
 
 
 def _argument(

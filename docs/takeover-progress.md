@@ -1,5 +1,21 @@
 # Takeover checkpoint — 2026-09-09
 
+## Proven descriptor addresses without changing relocation operands
+
+The raise now attaches a symbolic effective address to descriptor references
+whose pointer is a known word-width symbol. Memory equality and alias checks
+use that address; lowering retains the original address/base and relocation
+operands. Thus HARR's descriptor fields at offsets 8 and 16 can be identified
+without turning their unrelocated pointer-relative operands into invented
+relocations. This proves field identity, not field contents or heap bounds.
+
+Far accesses, wide pointers and effective offsets that wrap remain unknown.
+Nineteen focused checks pass; all three compiler-family metadata regressions
+fail against the old raise. HARR and SEGLD emit byte-identical objects with
+and without the metadata on p-g2/q-O/v-g3 (six comparisons), so no additional
+runtime loop was needed. Costs are unchanged. Array-element provenance and
+in-bounds reasoning remain the next required part of the work.
+
 ## HARR: the next major gap is array provenance, not another arithmetic pass
 
 Current stage evidence (`/tmp/qbopt-harr-current`, especially s43-mir-widen):

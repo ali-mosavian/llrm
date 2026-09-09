@@ -247,6 +247,7 @@ class MemRef:
     # address at all -- all 32 of the corpus's programs do, and the
     # guarantee is worth nothing.
     beyond: "tuple[int, frozenset] | None" = None
+    symbolic: "Symbol | None" = None  # proven effective address; original operands remain for lowering
 
     @property
     def where(self) -> "Space | None":
@@ -1928,6 +1929,7 @@ def same_bytes(one: MemRef, other: MemRef) -> bool:
     this the load I already did"), and its negation is not a disjointness
     proof. `may_alias` still answers that one.
     """
+    one, other = _symbolic_ref(one), _symbolic_ref(other)
     if one.addr is None or other.addr is None:
         return False  # nothing this can name is never known to be anything
     if one.width != other.width or one.base != other.base or one.segment != other.segment:
@@ -1950,6 +1952,7 @@ def overlapping(
     identity rather than by the caller having promised the register was not
     written in between.
     """
+    one, other = _symbolic_ref(one), _symbolic_ref(other)
     if one.addr is None or other.addr is None:
         # Neither names the byte, but each may name the object. LLVM's
         # PseudoSourceValue rule: two different kinds never alias, and one
@@ -1967,6 +1970,13 @@ def overlapping(
     ):
         return one.addr.disp < other.addr.disp + other.width and other.addr.disp < one.addr.disp + one.width
     return module.may_alias(one.addr, other.addr, dgroup, one.width, other.width, bounds)
+
+
+def _symbolic_ref(ref: MemRef) -> MemRef:
+    if ref.symbolic is None:
+        return ref
+    symbol = ref.symbolic
+    return replace(ref, addr=module.Addr(symbol.space, symbol.offset + symbol.addend, symbol.index), base=None, segment=None)
 
 
 def _out_of_reach(blind: MemRef, named: MemRef) -> bool:
