@@ -115,15 +115,19 @@ def spilled(
 
 
 def _constants(body: lir.LirBody, values: frozenset[int]) -> dict[int, ir.Imm]:
+    """Literal values, including full-width copies with one unambiguous definition."""
     definitions: dict[int, list[lir.Insn]] = {}
     excluded = set()
+    widths = {}
     for one in body.insns:
         for value in one.defines:
             definitions.setdefault(value, []).append(one)
+        for value in one.uses:
+            widths[value] = max(widths.get(value, 0), _width(one, value))
         if one.group is not None:
             excluded.update((*one.uses, *one.defines))
-    result = {}
-    for value in values - excluded:
+    sources = {}
+    for value in definitions.keys() - excluded:
         defining = definitions.get(value, [])
         if len(defining) != 1:
             continue
@@ -132,7 +136,6 @@ def _constants(body: lir.LirBody, values: frozenset[int]) -> dict[int, ir.Imm]:
         if (
             what is None
             or what.op is not ir.Operation.MOVE
-            or one.uses
             or len(what.dests) != 1
             or len(what.sources) != 1
             or one.defines != (value,)
@@ -142,13 +145,22 @@ def _constants(body: lir.LirBody, values: frozenset[int]) -> dict[int, ir.Imm]:
         into, source = what.dests[0], what.sources[0]
         if (
             isinstance(into, ir.Held)
-            and isinstance(source, ir.Imm)
-            and source.address is None
+            and isinstance(source, (ir.Imm, ir.Held))
+            and (not isinstance(source, ir.Imm) or source.address is None)
             and into.width == source.width
+            and one.uses == ((source.value,) if isinstance(source, ir.Held) else ())
         ):
-            if all(_width(use, value) <= source.width for use in body.insns if value in use.uses):
-                result[value] = source
-    return result
+            if widths.get(value, 0) <= source.width:
+                sources[value] = source
+    result = {}
+    while True:
+        before = len(result)
+        for value, source in sources.items():
+            constant = result.get(source.value) if isinstance(source, ir.Held) else source
+            if constant is not None:
+                result[value] = constant
+        if len(result) == before:
+            return {value: constant for value, constant in result.items() if value in values}
 
 
 def _width(one: lir.Insn, value: int) -> int:

@@ -1747,3 +1747,24 @@ Strict LIR runtime checks pass 93 cases across ADDRM, ARRIDX, STRIDE,
 MATRIX, NESTED, HARR and NBODY on three compilers. Artifacts:
 `qbopt-shared-trip-ranges-p3em9ms0`. The preceding probe's runtime total was
 also 93, not the 96 recorded above.
+
+### Pressure audit and copied-constant rematerialization
+
+Final MIR peak live values in the shift-recurrence probe grow from 5 to 6
+in ADDRM and from 12 to 15 in NBODY's interaction nest. The range proof is
+repaired; additional loop-carried values still make allocation more costly.
+Discounting literal spill weights did not change either NBODY result.
+
+The spiller now follows full-width, uniquely defined copy chains when
+proving a literal can be rematerialized. Previously a copy of a known
+constant acquired a frame slot and reload even though the direct constant
+did not. Redefinitions, grouped operands, symbolic addresses, width changes
+and unseeded copy cycles remain excluded. Use widths are collected once,
+not by rescanning the body per candidate.
+
+23 focused spiller tests pass; the copied-constant no-frame-memory test
+fails with the previous spiller. All 97 compared primary fixture objects,
+including NBODY's regression fixture, are byte-identical before and after.
+This is a backend capability improvement, not a benchmark improvement.
+The NBODY pressure regression and ADDRM's 1.60x gap remain open; do not
+claim copied-constant rematerialization resolved them.

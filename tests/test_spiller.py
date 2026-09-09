@@ -97,6 +97,30 @@ def test_spilled_constant_is_rematerialized_without_a_frame_slot() -> None:
     assert result[-1].what.sources[1].value == result[-2].defines[0]
 
 
+@pytest.mark.parametrize("redefined", [False, True])
+def test_copied_constant_rematerializes_only_with_a_unique_definition(redefined):
+    """A copy of MATRIX's invariant 20 must not need a stack reload; a later redefinition invalidates it."""
+    constant = lir.Insn(at=0, covers=(0, 3),
+                        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),), (ir.Imm(20, 2),)),
+                        defines=(1,), uses=())
+    operations = [constant, _move(2, 1), _move(3, 2)]
+    if redefined:
+        operations.append(_add(1, 4))
+    operations.append(_add(5, 3))
+    result = _out(_body(*operations), {3})
+    memory = [operand for one in result if one.what for operand in (*one.what.dests, *one.what.sources)
+              if isinstance(operand, ir.Mem)]
+    assert bool(memory) is redefined
+    if not redefined:
+        assert result[-2].what.sources == (ir.Imm(20, 2),)
+        assert result[-1].what.sources[1].value == result[-2].defines[0]
+
+
+def test_copy_cycle_is_not_a_constant():
+    """A copy cycle with no literal seed cannot justify rematerializing any value."""
+    assert spiller._constants(_body(_move(1, 2), _move(2, 1)), frozenset({1, 2})) == {}
+
+
 def test_relocated_address_is_not_rematerialized_as_literal_zero() -> None:
     """HARR's descriptor pointer has zero bytes, but LINK supplies its address."""
     address = ir.Imm(0, 2, Addr(Space.SEGMENT, 6, 5))
