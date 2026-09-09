@@ -1,5 +1,28 @@
 # Takeover checkpoint — 2026-09-09
 
+## Combine constant offsets in MIR
+
+Algebraic simplification composes single-use ADD/SUB constant chains at the
+same modular integer width. Both operations must have no observable auxiliary
+results, memory effects, barriers or partial merges. No floating reassociation
+or register knowledge is involved; ordinary dead-code elimination removes the
+orphaned intermediate. Constants wrap at the original integer width.
+
+SPILL before: `add cx,150 / add cx,70`. After: `add cx,220`.
+PDS/QB/VBDOS costs **450/456/460 -> 430/436/440**, objects
+**876/859/1116 -> 873/856/1113**. HOTLPX also loses one addition:
+costs **270/274/280 -> 268/272/278**, each object three bytes smaller.
+HOTLPX's target remains provisional, not certified by this improvement.
+
+154-object audit changes exactly these six objects, with no new refusals.
+96 focused algebraic checks pass, including live-flag, shared-result, width,
+merge, memory and wrapping cases; the three real SPILL regressions failed
+before implementation. Nine strict-LIR runtime cases pass across three
+compilers. All-stage dumps: `/tmp/qbopt-offsets-before` and
+`/tmp/qbopt-offsets-after`; the MIR already contains the combined constant
+before lowering. Runtime artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-offsets-o2hoo5km`.
+
 ## Remove jumps to the next emitted instruction
 
 Branch relaxation now removes unconditional direct jumps whose destination

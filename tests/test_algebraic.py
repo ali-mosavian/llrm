@@ -11,6 +11,51 @@ from qbopt.optimize import transform
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_spill_combines_constant_accumulator_steps(tag):
+    """SPILL added 150 and then 70 to the same accumulator on every outer iteration."""
+    from qbopt import wholeseg
+    from iced_x86 import Mnemonic, OpKind
+    result = wholeseg.emitted(Path(f"fixtures/omf/spill-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    additions = [one.insn.immediate(1) for block in corpus.partitioned(result.data) for one in block.insns
+                 if one.insn.mnemonic == Mnemonic.ADD and one.insn.op1_kind in
+                 (OpKind.IMMEDIATE8TO16, OpKind.IMMEDIATE16)]
+    assert 220 in additions
+    assert 150 not in additions and 70 not in additions
+
+
+@pytest.mark.parametrize("kind", [mir.Kind.ADD, mir.Kind.SUB])
+@pytest.mark.parametrize("guard", ["none", "first_flags", "last_flags", "shared", "width", "merge", "memory"])
+def test_offset_composition_preserves_modular_values_and_observers(kind, guard):
+    """SPILL's combined increment must preserve wraparound and any observed intermediate."""
+    from collections import Counter
+    source, middle, result = (mir.Value(index, 0) for index in range(1, 4))
+    flags = mir.Value(4, 0, flags=True)
+    first = mir.Op(0, ir.Operation.BINARY, "add", (middle,), (source,), kind=mir.Kind.ADD,
+                   args=(mir.Held(source, 2), mir.Const(65530, 2)), results=(mir.Held(middle, 2),))
+    last = mir.Op(1, ir.Operation.BINARY, "add" if kind is mir.Kind.ADD else "sub", (result,), (middle,), kind=kind,
+                  args=(mir.Held(middle, 2), mir.Const(20, 2)), results=(mir.Held(result, 2),))
+    if guard == "first_flags":
+        first = replace(first, defines=(middle, flags))
+    if guard == "last_flags":
+        last = replace(last, defines=(result, flags))
+    if guard == "width":
+        last = replace(last, results=(mir.Held(result, 4),))
+    if guard == "merge":
+        first = replace(first, merges={source: middle})
+    if guard == "memory":
+        first = replace(first, loads=(ir.Mem(None, 2),))
+    done = algebraic._offset_chain(last, {middle: first}, {flags}, Counter({middle: 2 if guard == "shared" else 1}))
+    if guard != "none":
+        assert done == last
+        return
+    delta = 20 if kind is mir.Kind.ADD else -20
+    assert done.args == (mir.Held(source, 2), mir.Const((65530 + delta) & 65535, 2))
+    for value in (0, 1, 32767, 32768, 65535):
+        assert (((value + 65530) & 65535) + delta) & 65535 == (value + done.args[1].n) & 65535
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_addrm_reuses_word_scale_for_long_address(tag):
     """ADDRM rebuilt i*4 after using i*2, paying another copy and a larger shift each iteration."""
     from qbopt.frontend import blocks

@@ -22,6 +22,7 @@ def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) 
         op = _shift_chain(op, definitions, wanted | mentioned)
         op = _product(op, wanted | mentioned, wide)
         op = _scaled_chain(op, definitions, wanted | mentioned, uses)
+        op = _offset_chain(op, definitions, wanted | mentioned, uses)
         return _simplified(op, wanted | mentioned, wide)
 
     changed = replace(
@@ -145,6 +146,39 @@ def _scaled_chain(op: mir.Op, definitions: dict, wanted: set[mir.Value], uses: C
     source, initial = first
     factor = consts.masked(initial * factor, source.width)
     return replace(op, kind=mir.Kind.MUL, args=(source, mir.Const(factor, source.width)),
+                   defines=(op.results[0].value,), uses=(source.value,), node=None, made=None, raised=None)
+
+
+def _offset(op: mir.Op, wanted: set[mir.Value]):
+    if (op.kind not in (mir.Kind.ADD, mir.Kind.SUB) or op.loads or op.stores or op.barrier or op.merges
+        or len(op.args) != 2 or len(op.results) != 1 or not isinstance(op.results[0], mir.Held)
+        or any(value in wanted for value in op.defines if value != op.results[0].value)):
+        return None
+    source, amount = op.args
+    if op.kind is mir.Kind.ADD and isinstance(source, mir.Const):
+        source, amount = amount, source
+    if (not isinstance(source, mir.Held) or not isinstance(amount, mir.Const)
+        or source.width != amount.width or source.width != op.results[0].width):
+        return None
+    return source, amount.n if op.kind is mir.Kind.ADD else -amount.n
+
+
+def _offset_chain(op: mir.Op, definitions: dict, wanted: set[mir.Value], uses: Counter) -> mir.Op:
+    """Compose single-use modular offsets without preserving intermediate flags."""
+    last = _offset(op, wanted)
+    if last is None:
+        return op
+    middle, amount = last
+    previous = definitions.get(middle.value)
+    if previous is None or uses[middle.value] != 1 or previous.results != (middle,):
+        return op
+    first = _offset(previous, wanted)
+    if first is None:
+        return op
+    source, initial = first
+    amount = consts.masked(initial + amount, source.width)
+    return replace(op, kind=mir.Kind.ADD, name="add", op=ir.Operation.BINARY,
+                   args=(source, mir.Const(amount, source.width)),
                    defines=(op.results[0].value,), uses=(source.value,), node=None, made=None, raised=None)
 
 
