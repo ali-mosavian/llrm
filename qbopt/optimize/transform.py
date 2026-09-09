@@ -1927,6 +1927,7 @@ def _folded_op(op: Op, facts: dict, wanted: set) -> Op:
         loads=(),
         args=(mir.Const(fact.n, into.width),),
         results=(mir.Held(target, into.width),),
+        symbol=False,
         made=None,
         node=None,
         raised=None,
