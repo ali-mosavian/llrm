@@ -545,7 +545,9 @@ def instruction_effects(insn: Insn, resolve: Resolver) -> Effects:
     instruction_semantics' own x87 section says what makes that safe.
     Registers are *not* widened to match a barrier's memory reach, because a
     barrier already pins them and nothing may be reordered across it -- so
-    exact liveness across one costs no safety.
+    exact liveness across one costs no safety. CLD and STD are also known
+    to have no memory effect. They remain barriers for their unmodelled
+    direction state, but must not erase literal bytes before a string copy.
     """
     if insn.flow in CLOBBERS:
         # The callee's flag reads are as unknowable as its writes. Costs
@@ -555,7 +557,7 @@ def instruction_effects(insn: Insn, resolve: Resolver) -> Effects:
     defs, uses = _register_effects(insn)
     read = Flag(insn.reads & ALL)
     fp_stack = _touches_fp_stack(insn)
-    if barrier(instruction_semantics(insn, resolve)):
+    if barrier(instruction_semantics(insn, resolve)) and insn.insn.mnemonic not in (Mnemonic.CLD, Mnemonic.STD):
         return Effects(defs, uses, written_by(insn), read, ANY_MEMORY, ANY_MEMORY, fp_stack)
     loads, stores = _memory_effects(insn, resolve)
     return Effects(defs, uses, written_by(insn), read, loads, stores, fp_stack)

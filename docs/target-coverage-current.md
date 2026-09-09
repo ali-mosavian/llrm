@@ -77,3 +77,41 @@ All 96 primary configuration outputs are byte-identical before and after
 this prerequisite. FPDEEP still emits the two FLDs shown above. Copy raising
 and propagation across intervening effects remain unfinished; these entry
 facts are deliberately not an immutability claim about the literal pool.
+
+### Copy scalarization with explicit environment evidence
+
+`frontend/raising_copies.py` now raises an individual word copy into an
+ordinary MIR load/store and two narrow pointer definitions. It recognizes
+explicit CLD/STD traversal and adjacent PUSH DS / POP ES selector setup,
+requires known in-segment DGROUP addresses, and does not carry those
+environment facts through a call or infer them at a non-entry block.
+The pointer copies retain their upper-half merge inputs and emit MOVs,
+not flag-clobbering additions. Overlap retains load-before-store ordering
+for each element. Unknown traversal, selector state, or pointer wrap is
+not scalarized. CLD/STD remain machine-state barriers but no longer claim
+to modify arbitrary memory.
+
+The focused witness uses FPDEEP's real copy and floating operations with
+an explicitly established direction state. Existing strict CSE then changes:
+
+```asm
+; before                   ; after, in the explicit-state witness
+fld qword [d]              fld qword [d]
+fld qword [d]              fld st(0)
+fadd qword [d]             fadd qword [d]
+```
+
+This is not yet a production FPDEEP speedup. Its copy occurs after a loop
+and runtime calls, without a local CLD. Establishing the runtime direction
+and selector contracts and propagating them through control flow remains
+necessary. All 96 primary outputs are byte-identical with this raiser
+enabled or disabled. Production stage dumps are in
+`/tmp/qbopt-copy-raising-current`.
+
+The 46 focused copy/literal/floating-value tests pass. Four copy proof
+tests fail with scalarization disabled; the literal propagation test also
+fails when CLD is restored to its old arbitrary-memory-clobber model.
+The broader IR checks expose two pre-existing table/body-count assertions
+that fail with scalarization disabled as well. The existing Rule 5 gate
+also still reads nine obsolete flat-package paths; that gate needs repair,
+not an assertion that architecture checks passed.

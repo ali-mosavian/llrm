@@ -2169,6 +2169,8 @@ def bodies(
             built = raising_calls.arithmetic(built, found, mine)
             from qbopt.frontend import raising_longs
             built = raising_longs.scalar(built)
+            from qbopt.frontend import raising_copies
+            built = raising_copies.scalar(built, found)
             defined = module.defines(found.records, found.seg)
             array_calls = {at: name for at, name in found.calls.items() if name not in defined}
             built = raising_arrays.annotated(built, array_calls, family=module.family(found.records))
