@@ -1285,3 +1285,45 @@ LNGMXX, DIVMOD, and nbody pass strict LIR on all three compilers in
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-divisor-constants-dbsfgqw2`.
 This fix is separate from the uncommitted initializer/conditional-sinking
 experiment, whose nbody cost remains 409,016 pending allocator work.
+
+## Allocator evidence for the remaining promotion regression
+
+Processing coalescing blocks by descending loop depth changed no modeled
+cost (409,016), so that experiment was removed. Instrumenting the first
+allocation, rather than guessing from final spills, identifies accumulator
+intervals 556/557 with weights 14.04/11.42 and sizes 185/239 slots. Neither
+has a fixed register or a clobber-mask conflict in any of the six registers.
+They lose to shorter-lived intervals: ESI's sole overlapping assigned interval
+501 weighs 46.67; EDI's 509 weighs 58.82. The allocation dump shows EDI
+holding the constant 512 before the scalar divide.
+
+The spiller already recognizes and rematerializes single-definition constants,
+but allocation weights only count weighted references divided by interval
+length, with no rematerialization discount. Next investigate that cost mismatch
+and the competing ESI interval before changing allocation policy. Do not infer
+that discounting constants alone will resolve the two accumulator spills.
+
+## Whole accumulators and direct fixed-input rematerialization
+
+LLVM's `CalcSpillWeights.cpp` halves rematerializable intervals' weights.
+Trying that exact discount here changed no nbody cost, so it was removed.
+The useful change is structural: constraint preparation now materializes a
+proven constant directly into its required temporary instead of copying from
+a separate live value. It uses the spiller's existing single-definition,
+width-complete, nonrelocated constant proof. Its regression failed when the
+old copy behavior was restored.
+
+Together with whole constant-store recognition and conditional store sinking,
+PDS nbody models 379,016, below the committed 388,342 baseline and the
+409,016 intermediate. Dumps in `/tmp/qbopt-fixed-remat` show immediate 512
+loads directly into EAX rather than preserving a separate constant in EDI.
+Redundant preparations remain visible and are a later cleanup opportunity,
+not hidden in the result. This is modeled cost, not hardware timing.
+
+All 38 focused constraint, loop-motion, and whole-recognition checks pass.
+Conditional sinking is refused without the matching initialization or without
+either available alias proof. Nbody (24), HARR (1), CHAIN (7), DIVMOD (20),
+LNGMXX (1), and NESTED (1) pass strict LIR on all three compilers:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-fixed-remat-nkr3jy7h`.
+The initializer/sinking experiment is now accepted with this allocation fix.
+Nbody still needs its hand-derived target; the project-wide goal is not met.

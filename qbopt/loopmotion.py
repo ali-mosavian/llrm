@@ -3,12 +3,15 @@ from dataclasses import replace
 from qbopt import loops
 from qbopt import mir
 from qbopt import induction
+from qbopt import ranges
 from qbopt.module import Space
 
 
 def sunk_stores(body: mir.MirBody, dgroup: frozenset[int], bounds: dict | None = None) -> mir.MirBody:
     predecessors = loops.predecessors(body.blocks)
     for loop in loops.loops(body.blocks, body.entry):
+        scoped = ranges.bounded(body)
+        intervals = {id(op): scoped.get(block.at, {}) for block in body.blocks for op in block.ops}
         blocks = {block.at: block for block in body.blocks}
         inside = [blocks[at] for at in loop.body]
         exits = {(block.at, to) for block in inside for to in block.succ if to not in loop.body}
@@ -28,7 +31,7 @@ def sunk_stores(body: mir.MirBody, dgroup: frozenset[int], bounds: dict | None =
         exit_block = blocks[destination]
         if not exit_block.ops:
             continue
-        moved = [op for op in blocks[source].ops if _unobserved(op, operations, dgroup, bounds)]
+        moved = [op for op in blocks[source].ops if _unobserved(op, operations, dgroup, bounds, intervals)]
         relocated = {id(op): op for op in moved}
         if len(loop.latches) == 1 and source == loop.header:
             latch = next(iter(loop.latches))
@@ -36,10 +39,10 @@ def sunk_stores(body: mir.MirBody, dgroup: frozenset[int], bounds: dict | None =
             if len(outside) == 1 and latch != source and blocks[latch].succ == (source,):
                 entry = next(iter(outside))
                 invariant = induction.invariant(body, set(loop.body)) if induction.nonempty(body, loop) else set()
-                for op in blocks[latch].ops:
-                    if _unobserved(op, operations, dgroup, bounds):
+                for op in operations:
+                    if id(op) not in relocated and _unobserved(op, operations, dgroup, bounds, intervals):
                         value = _exit_value(op, blocks[source], blocks[entry], latch, body, dgroup, bounds)
-                        if value is None and len(op.args) == 1 and isinstance(op.args[0], mir.Held):
+                        if value is None and any(op is one for one in blocks[latch].ops) and len(op.args) == 1 and isinstance(op.args[0], mir.Held):
                             if op.args[0].value.id in invariant:
                                 value = op.args[0]
                         if value is not None:
@@ -139,22 +142,22 @@ def _exit_value(
         )
 
     for phi in header.phis:
-        if set(phi.incoming) != {entry.at, latch} or root(mir.Held(phi.incoming[latch], stored.width)) != root(stored):
+        if set(phi.incoming) != {entry.at, latch}:
             continue
         seed = root(mir.Held(phi.incoming[entry.at], stored.width))
-        if stored_at(entry.at, seed, frozenset()):
+        if stored_at(entry.at, seed, frozenset()) and stored_at(latch, mir.Held(phi.incoming[latch], stored.width), frozenset()):
             return mir.Held(phi.result, stored.width)
     return None
 
 
-def _unobserved(op: mir.Op, operations: list[mir.Op], dgroup: frozenset[int], bounds: dict | None) -> bool:
+def _unobserved(op: mir.Op, operations: list[mir.Op], dgroup: frozenset[int], bounds: dict | None, intervals: dict | None = None) -> bool:
     if op.kind is not mir.Kind.STORE or op.loads or op.defines or len(op.stores) != 1:
         return False
     ref = op.stores[0]
     if ref.addr is None or ref.addr.space not in (Space.SEGMENT, Space.FRAME) or ref.base is not None or ref.segment is not None:
         return False
     return not any(
-        mir.overlapping(ref, other, dgroup, bounds)
+        mir.overlapping(ref, other, dgroup, bounds, other_known=(intervals or {}).get(id(one)))
         for one in operations
         if one is not op
         for other in (*one.loads, *one.stores)

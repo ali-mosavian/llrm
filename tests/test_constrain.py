@@ -33,6 +33,15 @@ def _extend(one: int, into: int) -> lir.Insn:
     return _insn(ir.Semantics(ir.Operation.EXTEND, "cwd", (ir.Held(into, 2),), (ir.Held(one, 2),)), (into,), (one,))
 
 
+def test_fixed_input_rematerializes_constant_without_retaining_source():
+    """Nbody kept 512 in EDI while copying it into EAX, displacing its accumulator."""
+    constant = _insn(ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),), (ir.Imm(512, 2),)), (1,), ())
+    done, pins = constrain.constrained(_body(constant, _extend(1, 2)))
+    prepared = next(one for one in done.insns if one.defines and pins.get(one.defines[0]) == Register.EAX)
+    assert prepared.what.sources == (ir.Imm(512, 2),)
+    assert not prepared.uses
+
+
 def _multiply(low: int, high: int, by: int) -> lir.Insn:
     what = ir.Semantics(
         ir.Operation.MULTIPLY,

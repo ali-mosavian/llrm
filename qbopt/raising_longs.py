@@ -5,7 +5,33 @@ from dataclasses import replace
 from qbopt import ir, mir, pairs
 
 
+def _constant_stores(body: mir.MirBody) -> mir.MirBody:
+    blocks = []
+    for block in body.blocks:
+        ops = []
+        for op in block.ops:
+            if ops:
+                low = ops[-1]
+                if (all(one.kind is mir.Kind.STORE and not one.barrier and not one.defines
+                        and not one.loads and len(one.stores) == len(one.args) == 1
+                        and isinstance(one.args[0], mir.Const) and one.args[0].width == 2
+                        and one.stores[0].width == 2 for one in (low, op))
+                    and low.covers[1] == op.covers[0]
+                    and low.stores[0].addr is not None
+                    and replace(low.stores[0], addr=low.stores[0].addr.plus(2)) == op.stores[0]):
+                    ref = replace(low.stores[0], width=4)
+                    value = mir.Const(((op.args[0].n & 0xffff) << 16) | (low.args[0].n & 0xffff), 4)
+                    ops[-1] = replace(low, args=(value,), results=(mir.Cell(ref),), stores=(ref,),
+                                      uses=tuple(dict.fromkeys((*low.uses, *op.uses))), raised=None,
+                                      covers=(low.covers[0], op.covers[1]))
+                    continue
+            ops.append(op)
+        blocks.append(replace(block, ops=tuple(ops)))
+    return replace(body, blocks=tuple(blocks))
+
+
 def scalar(body: mir.MirBody) -> mir.MirBody:
+    body = _constant_stores(body)
     candidates = {id(pair.first): pair for pair in pairs.found(body)
                   if pair.kind in (pairs.Kind.LOAD, pairs.Kind.ALU, pairs.Kind.ALU_IMM, pairs.Kind.STORE)}
     definitions = {value: op for block in body.blocks for op in block.ops for value in op.defines}

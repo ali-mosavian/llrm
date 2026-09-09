@@ -20,6 +20,32 @@ def nbody(monkeypatch):
     return body, recognize
 
 
+def test_accumulator_initializers_are_whole_values(nbody):
+    """Nbody's split zero stores blocked promotion of its whole-long accumulators."""
+    body, recognize = nbody
+    done = recognize(body)
+    for at in (0xf0, 0xfc):
+        op = next(op for block in done.blocks for op in block.ops if op.at == at)
+        assert op.args == (mir.Const(0, 4),)
+        assert op.stores[0].width == 4
+
+
+@pytest.mark.parametrize("mismatch", ["base", "gap", "address"])
+def test_constant_stores_require_identical_adjacent_addresses(nbody, mismatch):
+    body, _ = nbody
+    block = next(block for block in body.blocks if block.at == 0xf0)
+    low, high = block.ops[:2]
+    match mismatch:
+        case "base":
+            high = replace(high, stores=(replace(high.stores[0], base=mir.Value(99999, 0)),))
+        case "gap":
+            high = replace(high, covers=(high.covers[0] + 1, high.covers[1]))
+        case "address":
+            high = replace(high, stores=(replace(high.stores[0], addr=high.stores[0].addr.plus(2)),))
+    sample = replace(body, blocks=(replace(block, ops=(low, high)),))
+    assert raising_longs._constant_stores(sample) == sample
+
+
 def test_position_arithmetic_is_scalar_before_optimization(nbody):
     """Nbody's four position halves blocked LICM; extracting them separately increased spills."""
     body, recognize = nbody

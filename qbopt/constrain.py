@@ -65,6 +65,13 @@ def constrained(
     honour.
     """
     pinned = {**body.pins, **(pinned or {})}
+    from qbopt import spiller
+    constants = spiller._constants(body, frozenset(value for one in body.insns for value in one.defines))
+
+    def source(value, width):
+        constant = constants.get(value)
+        return constant if constant is not None and constant.width == width else ir.Held(value, width)
+
     fresh = max(_next_value(body), max((getattr(value, "id", value) for value in pinned), default=0) + 1)
     pins: "dict[int, Register_]" = {}
     blocks = []
@@ -105,7 +112,7 @@ def constrained(
                     # in, so what is pinned is a value that lives from the
                     # copy to the call and nowhere else -- the original
                     # stays free to live wherever the allocation likes.
-                    before.append(_move(one, held, ir.Held(value, held.width)))
+                    before.append(_move(one, held, source(value, held.width)))
                     pins[fresh] = register
                     uses = [held.value if v == value else v for v in uses]
                     swap[value] = held.value
@@ -114,7 +121,7 @@ def constrained(
                 pins[fresh] = register
                 swap[value] = held.value
                 if any(side == "source" for side, _ in where):
-                    before.append(_move(one, held, ir.Held(value, held.width)))
+                    before.append(_move(one, held, source(value, held.width)))
                 if any(side == "dest" for side, _ in where):
                     after.append(_move(one, ir.Held(value, held.width), held))
                 for side, index in where:
@@ -223,14 +230,14 @@ def _wanted(one: lir.Insn) -> dict:
     return out
 
 
-def _move(beside: lir.Insn, into: "ir.Held", out_of: "ir.Held") -> lir.Insn:
+def _move(beside: lir.Insn, into: "ir.Held", out_of: "ir.Held | ir.Imm") -> lir.Insn:
     """One copy, claiming none of the instruction's own bytes."""
     return lir.Insn(
         at=beside.at,
         covers=(beside.at, beside.at),
         what=ir.Semantics(ir.Operation.MOVE, "mov", (into,), (out_of,)),
         defines=(into.value,),
-        uses=(out_of.value,),
+        uses=(out_of.value,) if isinstance(out_of, ir.Held) else (),
         # The operation it stands beside, the way spiller.py's store and
         # phielim.py's copy do: objwrite re-derives MIR from LIR and reads
         # `op` for every instruction, so `None` there is not a valid

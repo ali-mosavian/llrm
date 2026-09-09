@@ -12,6 +12,31 @@ from qbopt import promote
 from qbopt import runtime
 
 
+@pytest.mark.parametrize("proof", ["complete", "no_seed", "no_bounds"])
+def test_nbody_conditional_accumulator_stores_sink(monkeypatch, proof):
+    """Nbody's promoted accumulators still wrote memory on every other-body update."""
+    from qbopt import transform
+    path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
+    found = corpus.loaded(path)
+    partition = corpus.partitioned(path)
+    body = mir.bodies(found, partition)[0][1]
+    with monkeypatch.context() as patch:
+        patch.setattr(loopmotion, "sunk_stores", lambda body, *args: body)
+        body = transform.applied(body, found.dgroup, found.calls, blocks=partition, found=found)
+    stores = [op for block in body.blocks for op in block.ops if op.at in (0x1e1, 0x211) and op.stores]
+    assert len(stores) == 2
+    if proof == "no_seed":
+        body = replace(body, blocks=tuple(replace(block, ops=tuple(
+            op for op in block.ops if not (op.at in (0xf0, 0xfc) and op.stores)
+        )) for block in body.blocks))
+    if proof == "no_bounds":
+        monkeypatch.setattr(loopmotion.ranges, "bounded", lambda body: {})
+    result = loopmotion.sunk_stores(body, found.dgroup, None if proof == "no_bounds" else module.landmarks(found))
+    for store in stores:
+        owners = [block.at for block in result.blocks for op in block.ops if op.id == store.id]
+        assert owners == ([0x227] if proof == "complete" else [0x117])
+
+
 @pytest.mark.parametrize("nonempty", [False, True])
 def test_lngmxx_invariant_temporaries_sink_only_when_loop_executes(monkeypatch, nonempty: bool) -> None:
     """LNGMXX wrote invariant quotient halves ten times; a zero-trip loop must not acquire those stores."""
@@ -35,9 +60,10 @@ def test_lngmxx_invariant_temporaries_sink_only_when_loop_executes(monkeypatch, 
     def writes(candidate):
         return [op for block in candidate.blocks if block.at in hot for op in block.ops
                 if any(ref.addr and ref.addr.space is module.Space.FRAME for ref in op.stores)]
-    assert len(writes(body)) == 2
+    before = writes(body)
+    assert sum(op.stores[0].width for op in before) == 4
     result = loopmotion.sunk_stores(body, found.dgroup, module.landmarks(found))
-    assert len(writes(result)) == (0 if nonempty else 2)
+    assert writes(result) == ([] if nonempty else before)
 
 
 @pytest.mark.parametrize("initialized", [True, False])
