@@ -42,7 +42,62 @@ SHA256 values:
 | BASE.EXE | `bf57ef07f94e24f9dbbd90d66e84bc05e9c5152b8848f2dc7bf89ba27abfb546` |
 | OPT.EXE | `a71a8072f12f04a9ac0cc30bf9b298973985a0443e3bf7cbb47d1aa6aa649397` |
 
+## Current floating benchmark — 2026-09-09
+
+`bench/fpbench.bas`, revision `a24fc54`, VBDOS `/O /FPi /R /G3 /E /Zi`,
+50,000 steps, five paired repetitions. Same pinned configuration, host,
+emulator and toolchain hashes as the nbody measurement above. Both compile
+and link logs were checked; optimization reports LIR emission, not fallback.
+Native-FPU replacement is **off** in both versions.
+
+| | BC original | Optimized |
+|---|---:|---:|
+| Median PIT ticks | 9,269,760 | 6,945,566 |
+| Median milliseconds | 7,768.941 | 5,821.045 |
+| Spread, milliseconds | 0.003 | 0.964 |
+
+BASE/OPT = **1.3346x in DOSBox**, not a hardware latency measurement.
+All twelve printed coordinates and DONE matched in every pair. The source
+prints positions rounded to thousandths; this is not a bitwise check of
+every floating value or of the velocities.
+
+Raw BASE ticks: `9269760, 9269760, 9269760, 9269758, 9269762`.
+Raw OPT ticks: `6944778, 6945566, 6945860, 6945924, 6944774`.
+
+The reachable x87 opcode counts are unchanged: 18 FLD, 14 FSTP, seven FADD,
+six FMUL, three FDIV, two FSUB, two FSUBP, one FISTP and one FADDP.
+WAITs fall from 15 to 11. Total reachable instructions, including timer
+and cold code, grow from 321 to 403. These static facts do not isolate
+which transformation accounts for the dynamic gain.
+
+Before and after for the distance calculation (emulator operations shown
+as their x87 equivalents; symbolic operands resolved from fixups):
+
+```asm
+; both versions retain this arithmetic
+fld  dword [deltaX]
+fmul dword [deltaX]
+fld  dword [deltaY]
+fmul dword [deltaY]
+faddp
+fadd dword [one]
+fstp dword [dist2]
+; BC follows this with WAIT; optimized code proceeds without that WAIT
+```
+
+The arithmetic optimization gap remains; do not describe this as improved
+floating CSE or a fully optimized integrator. Full stages are in
+`/tmp/qbopt-fpbench-current-stages`.
+
+| Artifact | SHA256 |
+|---|---|
+| `fixtures/bench/fpbench-v-g3.obj` | `24b93d10ff0b16c00ffa39ceff4e29446021958c7f5fcc28fd7892cc9a0918d1` |
+| Optimized OBJ | `b11b99d1ef80493f412472252b70a63d12bc797839728ed94c2cfa2b74bcd3bb` |
+| BASE.EXE | `0a3b75b9abd194d7cd7f26a5605f414f947c9dd70c6255d49f2f6e2a182d2431` |
+| OPT.EXE | `76d17625a0373da4886c04145982813e813b8a7745dbb09cc651ce618d050bd3` |
+
 ## Static: what the pass does to the corpus
+
 
 Measured 2026-08-30, over the 110 objects in `fixtures/omf`, with
 `uv run python tools/census.py`, after `docs/residue.md`'s D, I and B all

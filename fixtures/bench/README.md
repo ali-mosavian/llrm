@@ -6,3 +6,8 @@
 It retains the PIT reader as well as the simulation; unlike the small
 operator corpus, it references runtime data `B$SEG` through an external
 OFFSET16 relocation. No bytes were synthesized or patched.
+
+`fpbench-v-g3.obj` is the corresponding real build of `bench/fpbench.bas`,
+with the same compiler, switches and zero compiler errors, also built on
+2026-09-09. It is retained for the current floating-point benchmark and
+optimization investigation; `docs/numbers.md` records its hash and results.
