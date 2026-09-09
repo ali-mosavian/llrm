@@ -272,6 +272,11 @@ def subexpressions(body: MirBody, dgroup: frozenset[int] = frozenset()) -> MirBo
     floating_gone: set[int] = set()
     for block in body.blocks:
         for index, op in enumerate(block.ops):
+            stored = _exact_stored_load(op, exact)
+            if stored is not None:
+                key = _computation(stored, stands, whole)
+                if key is not None:
+                    seen.setdefault(key, []).append((order[block.at], index, stored))
             source = _copied(op, whole)
             if source is None and op.merges and all((value, HIGH) not in demanded for value in op.merges.values()):
                 source = _copied(replace(op, merges={}), whole)
@@ -329,6 +334,23 @@ def subexpressions(body: MirBody, dgroup: frozenset[int] = frozenset()) -> MirBo
             for block in body.blocks
         ),
     )
+
+
+def _exact_stored_load(op: Op, facts: dict) -> Op | None:
+    """An exact storage conversion leaves the source value available for reloads."""
+    from qbopt.model.floating import Format, Precision, Rounding, Semantics
+    if (op.kind is not mir.Kind.FSTORE or op.floating is None
+        or op.floating.inputs != (Format.EXTENDED80,)
+        or op.floating.result not in (Format.BINARY32, Format.BINARY64)
+        or len(op.stores) != 1 or op.loads or not _exact_floating(op, facts)):
+        return None
+    source, = op.args
+    if not isinstance(source, mir.Held) or source.width != 10:
+        return None
+    rule = Semantics((op.floating.result,), Format.EXTENDED80, Precision.EXACT, Rounding.NONE,
+                     op.floating.exceptions)
+    return replace(op, kind=mir.Kind.FLOAD, args=(mir.Cell(op.stores[0]),), results=(source,),
+                   defines=(source.value,), uses=(), loads=op.stores, stores=(), merges={}, floating=rule)
 
 
 def _exact_floating(op: Op, facts: dict) -> bool:

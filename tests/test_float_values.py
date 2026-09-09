@@ -91,6 +91,45 @@ def test_cse_reuses_exact_fpcse_sum():
     assert sum(str(one.insn).startswith("fadd ") for one in instructions) == 3
 
 
+@pytest.mark.parametrize("guard", [None, "unknown", "rounding", "barrier", "alias"])
+def test_exact_store_can_supply_a_later_floating_load(guard, monkeypatch):
+    """Controlled FPCSE witness: an exact stored product was loaded again instead of kept alive."""
+    from qbopt.analysis import floatfacts
+    from qbopt.optimize import transform
+    path = Path("fixtures/omf/fpcse-p-g2.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    block = next(block for block in body.blocks if any(op.floating for op in block.ops))
+    floats = [op for op in block.ops if op.floating]
+    store, load = floats[3:5]
+    reload = replace(load, args=store.results, loads=store.stores)
+    ops = list(block.ops)
+    ops[ops.index(load)] = reload
+    if guard in ("barrier", "alias"):
+        marker = replace(store, floating=None, stack=None,
+                         kind=mir.Kind.OPAQUE if guard == "barrier" else mir.Kind.STORE,
+                         stores=store.stores if guard == "alias" else ())
+        ops.insert(ops.index(reload), marker)
+    body = replace(body, blocks=tuple(replace(one, ops=tuple(ops)) if one is block else one
+                                     for one in body.blocks))
+    if guard in ("unknown", "rounding"):
+        facts = floatfacts.known(body, found.dgroup, {})
+        if guard == "unknown":
+            facts.pop(store.args[0].value)
+        else:
+            from fractions import Fraction
+            facts[store.args[0].value] = floatfacts.Finite(Fraction(1, 3))
+        monkeypatch.setattr(floatfacts, "known", lambda *args: facts)
+    changed = transform.subexpressions(body, found.dgroup)
+    survivor = next(op for one in changed.blocks for op in one.ops if op.id == load.id)
+    assert (survivor.kind is mir.Kind.NOTHING) == (guard is None)
+    if guard is None:
+        before = _allocated(body, path)
+        after = _allocated(changed, path)
+        assert any(one.at == load.at and one.what and one.what.name == "fld" for one in before.insns)
+        assert not any(one.at == load.at and one.what and one.what.name == "fld" for one in after.insns)
+
+
 @pytest.mark.parametrize("change", ["unknown_effect", "barrier", "alias", "rounding"])
 def test_float_cse_preserves_computations_without_reuse_proof(change, monkeypatch):
     """FPCSE's shared sum is not reusable across unknown effects or changed memory."""
