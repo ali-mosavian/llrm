@@ -62,3 +62,18 @@ segment requirements in the machine-facing layers. Supplying `d=12` as an
 entry fact would be wrong: this assignment executes after the preceding
 loop and runtime calls. Removing the second FLD without proving its effects
 would also bypass the actual missing abstraction.
+
+The literal reader now exposes bytes to integer as well as floating loads.
+It also excludes the two bytes patched by each OFFSET16 fixup rather than
+discarding its entire LEDATA record. This matters for BC_CN+0022: the DOUBLE
+12 shares a record with relocated string descriptors. Other relocation
+forms conservatively exclude the pool until their patch extent is supported.
+The new scalar-load regressions fail on the previous implementation and
+pass with the change; 56 focused literal/constant/floating checks pass.
+Three existing SPILL immediate-encoding assertions fail unchanged on HEAD
+and on this change; they were not altered or counted as passes.
+
+All 96 primary configuration outputs are byte-identical before and after
+this prerequisite. FPDEEP still emits the two FLDs shown above. Copy raising
+and propagation across intervening effects remain unfinished; these entry
+facts are deliberately not an immutability claim about the literal pool.
