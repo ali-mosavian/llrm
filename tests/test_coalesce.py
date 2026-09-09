@@ -6,6 +6,47 @@ and the claim has to hold for every reader of either of them.
 from qbopt import ir
 from qbopt import lir
 from qbopt import coalesce
+import pytest
+
+
+def test_equal_resource_values_coalesce_without_consuming_a_gpr():
+    """Address-space values pinned to ES were excluded by the GPR-only coalescing domain."""
+    from iced_x86 import Register
+    from qbopt import allocate, target
+    from dataclasses import replace
+
+    load = replace(_define(0, 1), what=ir.Semantics(ir.Operation.MOVE, "mov",
+                   (ir.Held(1, 2),), (ir.Mem(None, 2, Register.BP, 0, 2),)))
+    general = tuple(_define(3 + index * 3, 10 + index) for index in range(6))
+    reads = tuple(_use(30 + index * 3, 10 + index) for index in range(6))
+    body = lir.LirBody("resources", 0, (lir.LirBlock(0,
+           (load, *general, _move(21, 2, 1), _use(26, 1), _use(28, 2), *reads)),),
+           {}, {1: Register.ES, 2: Register.ES})
+    done = coalesce.joined(body)
+    assert len(done.insns) == len(body.insns) - 1
+    result = allocate.allocate(done, done.pins)
+    assert not result.spilled
+    assert Register.ES in result.where.values()
+    assert set(target.AVAILABLE) <= {allocate._whole(reg) for reg in result.where.values()}
+
+
+@pytest.mark.parametrize("other", ["different_resource", "clobber"])
+def test_resource_constraints_survive_coalescing(other):
+    from iced_x86 import Register
+    from qbopt import allocate
+    from dataclasses import replace
+    insns = (_define(0, 1), _move(3, 2, 1), _use(6, 2))
+    pins = {1: Register.ES, 2: Register.FS if other == "different_resource" else Register.ES}
+    if other == "clobber":
+        call = lir.Insn(5, (5, 5), ir.Semantics(ir.Operation.CALL, "call", (), ()), (), (),
+                        clobbers=frozenset({Register.ES}))
+        insns = (*insns[:2], call, insns[2])
+    body = lir.LirBody("resource-safety", 0, (lir.LirBlock(0, insns),), {}, pins)
+    done = coalesce.joined(body)
+    if other == "different_resource":
+        assert len(done.insns) == len(body.insns)
+    else:
+        assert allocate.allocate(done, done.pins).spilled
 
 
 def test_a_copy_can_share_a_register_while_its_equal_source_is_still_read() -> None:

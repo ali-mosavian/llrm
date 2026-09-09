@@ -1427,6 +1427,29 @@ Nbody's 24 cases, MATRIX and HARR pass strict LIR runtime on all three
 compilers in `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-peephole-gc_sg3g2`.
 Dumps: `/tmp/qbopt-nbody-peephole`, including the new final machine phase.
 
+## Fixed-resource allocation and coalescing
+
+A direct allocator probe corrects the earlier blanket statement that
+non-GPR resources cannot be allocated: an explicitly pinned virtual value
+already allocates to ES and the interference masks already honor ES
+clobbers. Flexible classes remain GPR/addressing-only. The missing piece
+found here was the coalescer's candidate domain: even two values pinned to
+ES were intersected against the GPR set and could never coalesce.
+
+Pinned non-GPR values without an incompatible addressing constraint now
+have their explicit singleton domain. The Briggs test counts only neighbours
+whose domains overlap the prospective merged class. A fail-first regression
+proves an equal ES-bound copy coalesces while six GPR values are simultaneously
+live, and allocation needs no spill. Additional checks retain different ES/FS
+pins and reject keeping an ES value live through an ES clobber.
+
+All 20 coalescer/peephole checks pass. Nbody (24 cases), MATRIX and HARR pass
+strict LIR runtime on all three compilers in
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-resource-coalesce-jwvqpoim`.
+This establishes a backend prerequisite, not HARR's far-address migration:
+MIR still needs to express the address-space value and each access's
+dependency on it, with resource constraints supplied only by lowering.
+
 ## Target refresh and floating-point semantic audit
 
 The target scoreboard at f8c9e96 puts PDS FPCSEX at 4508/1340 (3.36x),

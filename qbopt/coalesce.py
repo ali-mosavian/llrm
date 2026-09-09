@@ -56,6 +56,9 @@ def joined(body: lir.LirBody, pinned: dict | None = None) -> lir.LirBody:
     where_of = allocate.classes(body)
     everything = frozenset(target.AVAILABLE)
     may: dict[int, frozenset] = {one: frozenset(target.order(where_of.get(one))) for one in live}
+    for value, register in pinned.items():
+        if register not in everything and value not in where_of:
+            may[value] = frozenset({register})
     held: dict[int, int] = dict(pinned)
     near = _interference(body)
     parent: dict[int, int] = {}
@@ -94,7 +97,7 @@ def joined(body: lir.LirBody, pinned: dict | None = None) -> lir.LirBody:
                 continue
             neighbours = (near.get(here, set()) | near.get(there, set())) - {here, there}
             k = len(allowed)
-            if len([o for o in neighbours if len(near.get(o, ())) >= k]) >= k:
+            if len([o for o in neighbours if may.get(o, everything) & allowed and len(near.get(o, ())) >= k]) >= k:
                 continue  # Briggs: the merged class would not be colourable
             # Allocation receives pins keyed by the original value ids.
             # Keep the pinned member as the class representative.
