@@ -101,10 +101,11 @@ def spilled(
             for value in one.defines:
                 if value not in values:
                     continue
-                rename[value] = fresh
+                if value not in rename:
+                    rename[value] = fresh
+                    fresh += 1
                 if value not in constants:
-                    after.append(_store(one, fresh, frame.cell(value, _width(one, value))))
-                fresh += 1
+                    after.append(_store(one, rename[value], frame.cell(value, _width(one, value))))
             insns += before
             insns.append(_renamed(one, rename) if rename else one)
             insns += after

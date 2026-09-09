@@ -56,6 +56,16 @@ def test_repeated_operand_reloads_a_spill_only_once() -> None:
     assert product.what.sources[:2] == reload.what.dests * 2
 
 
+def test_two_spilled_add_operands_keep_the_accumulator_reload() -> None:
+    """LNGMXX printed 169330 instead of 142900 after a tied spill discarded its loaded accumulator."""
+    result = _out(_body(_add(1, 2)), {1, 2})
+    first, second, add, store = result
+    assert add.what.sources == (*first.what.dests, *second.what.dests)
+    assert add.what.dests == first.what.dests
+    assert store.what.sources == add.what.dests
+    assert store.what.dests == first.what.sources
+
+
 def test_spilled_constant_is_rematerialized_without_a_frame_slot() -> None:
     """matrix spilled the invariant 20, storing it once and reloading it inside loops."""
     constant = lir.Insn(
