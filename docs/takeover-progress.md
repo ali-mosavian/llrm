@@ -1721,3 +1721,29 @@ All experimental source/test changes were removed. The authoritative ADDRM
 cost remains 1206/1212/1206, not the attractive probe number. Probe dumps:
 `/tmp/qbopt-addrm-strides`, `/tmp/qbopt-nbody-shift-probe`; runtime artifacts
 `qbopt-address-recurrences-adusqjrb` (96 passing cases across three compilers).
+
+### Share the exit counter's proven iteration count
+
+`ranges.bounded` previously bounded only the recurrence explicitly compared
+at the loop exit. An independently advanced offset has no such comparison,
+so replacing a scaled index with that recurrence discarded its interval.
+The analysis now derives the number of advances from a proven canonical
+exit counter and applies it to the other affine header recurrences.
+Each start and step must be known; all taken values and the final latch
+update must fit without wrapping. Bounds remain scoped to the taken body.
+
+With the experimental shift policy injected only for diagnosis, this
+restores NBODY's 0..20 offset intervals and position-load hoisting, reducing
+the probe cost from 410356 to 401956. That is still worse than 377016,
+so recurrence generation remains unchanged. The remaining probe regression
+needs allocation/profitability analysis, not more alias speculation.
+Production NBODY remains 377016 and ADDRM 1206 on PDS.
+Stage diff: `/tmp/qbopt-nbody-shift-probe` -> `/tmp/qbopt-nbody-shared-ranges`.
+
+73 focused range/induction tests pass. The injected-recurrence real-program
+range regression fails with the previous analysis. Wraparound, final-latch
+overflow, decreasing and constant recurrences have focused coverage.
+Strict LIR runtime checks pass 93 cases across ADDRM, ARRIDX, STRIDE,
+MATRIX, NESTED, HARR and NBODY on three compilers. Artifacts:
+`qbopt-shared-trip-ranges-p3em9ms0`. The preceding probe's runtime total was
+also 93, not the 96 recorded above.

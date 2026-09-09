@@ -80,6 +80,15 @@ def _computed(op, known, facts):
     return Interval(low, high, result.width) if -sign <= low <= high < sign else None
 
 
+def _recurrence_span(start: int, step: int, advances: int, width: int) -> Interval | None:
+    """Taken values and the final latch update must all fit without wrapping."""
+    last = start + advances * step
+    sign = 1 << (width * 8 - 1)
+    if advances >= 0 and -sign <= min(start, last, last + step) <= max(start, last, last + step) < sign:
+        return Interval(min(start, last), max(start, last), width)
+    return None
+
+
 def bounded(body: mir.MirBody) -> dict[int, dict[mir.Value, Interval]]:
     facts = consts.known(body)
     result = {}
@@ -88,12 +97,27 @@ def bounded(body: mir.MirBody) -> dict[int, dict[mir.Value, Interval]]:
         known = {}
         header = next(block for block in body.blocks if block.at == loop.header)
         phis = {phi.result.id: phi.result for phi in header.phis}
-        for counter in induction.basics(body, loop).values():
+        counters = induction.basics(body, loop).values()
+        trips = set()
+        for counter in counters:
             width = counter.start.width
             last = induction._last_counter(body, loop, counter, facts, width)
             start = induction._signed(counter.start, facts, width)
             if last is not None and start is not None:
                 known[phis[counter.value]] = Interval(min(start, last), max(start, last), width)
+                step = induction._signed(counter.step, facts, width)
+                trips.add((last - start) // step)
+        if len(trips) == 1:
+            advances = next(iter(trips))
+            for counter in counters:
+                width = counter.start.width
+                start = induction._signed(counter.start, facts, width)
+                step = induction._signed(counter.step, facts, width)
+                if start is None or step is None:
+                    continue
+                interval = _recurrence_span(start, step, advances, width)
+                if interval is not None:
+                    known[phis[counter.value]] = interval
         if not known:
             continue
         operations = [op for block in body.blocks if block.at in inside for op in block.ops]

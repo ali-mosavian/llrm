@@ -7,8 +7,13 @@ from qbopt import ir, mir, ranges, transform
 from qbopt.module import Addr, Space
 
 
-def test_nbody_scaled_index_is_bounded_only_inside_its_loop() -> None:
+@pytest.mark.parametrize("recurrences", [False, True])
+def test_nbody_scaled_index_is_bounded_only_inside_its_loop(recurrences, monkeypatch) -> None:
     """Nbody's other*4 had no interval, so position reads aliased every scalar store."""
+    if recurrences:
+        from qbopt import strength
+        original = strength._multiplies
+        monkeypatch.setattr(strength, "_multiplies", lambda one, derived: one.op.kind is mir.Kind.SHL or original(one, derived))
     path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
     found = corpus.loaded(path)
     blocks = corpus.partitioned(path)
@@ -27,6 +32,20 @@ def test_nbody_scaled_index_is_bounded_only_inside_its_loop() -> None:
     assert not mir.overlapping(access, stored, found.dgroup, known=known[0x117])
     assert index not in known.get(0x21C, {})
     assert index not in known.get(0x227, {})
+
+
+@pytest.mark.parametrize(("start", "step", "advances", "expected"), [
+    (0, 4, 5, ranges.Interval(0, 20, 2)),
+    (20, -4, 5, ranges.Interval(0, 20, 2)),
+    (7, 0, 5, ranges.Interval(7, 7, 2)),
+    (32760, 4, 1, None),
+    (-32760, -4, 2, None),
+    (0, 16384, 4, None),
+    (0, 4, -1, None),
+])
+def test_secondary_recurrence_bounds_reject_wrap(start, step, advances, expected):
+    """A derived address range must not hide wraparound, including on the final latch update."""
+    assert ranges._recurrence_span(start, step, advances, 2) == expected
 
 
 @pytest.mark.parametrize(
