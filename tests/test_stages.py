@@ -21,6 +21,24 @@ from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
 
 
+def test_asm_dumps_reachable_emulator_instructions_not_header_or_operands(capsys) -> None:
+    """FPCSE's dump printed `bound` for its header and `push es` inside FLD."""
+    import re
+    from qbopt.frontend import blocks
+    from qbopt.objectfile import module, omf
+
+    data = Path("fixtures/omf/fpcse-p-g2.obj").read_bytes()
+    found = module.of(omf.parse(data))
+    reached = blocks.instructions(found)
+    assert not isinstance(reached, str)
+    stages._asm(data)
+    said = capsys.readouterr().out
+    addresses = [int(at, 16) for at in re.findall(r"^\s+(0x[0-9a-f]+)  ", said, re.M)]
+    assert addresses == [insn.at for insn in reached]
+    assert "fld" in said and "fadd" in said
+    assert "emulator" in said
+
+
 def test_a_based_cell_renders_the_value_and_the_register_it_was_placed_in() -> None:
     """`[es:bx+0x0]` said nothing about which value reached it."""
     where = Addr(Space.LITERAL, 0x2, base=Register.SI)
@@ -96,5 +114,4 @@ def test_the_machine_view_is_the_run_that_wrote_the_bytes() -> None:
     slots = {int(one, 16) for one in re.findall(r"bp-0x([0-9a-f]+)", last)}
     wrote = {int(one, 16) for one in re.findall(r"bp-([0-9A-F]+)h", emitted)}
     assert slots <= wrote, f"the last stage names {sorted(slots - wrote)}, which the object never touches"
-
 

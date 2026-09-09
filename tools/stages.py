@@ -35,7 +35,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from iced_x86 import Decoder
 from iced_x86 import Register
 from iced_x86 import Formatter
 from iced_x86 import FormatterSyntax
@@ -52,7 +51,6 @@ from qbopt.objectfile import omf
 from qbopt.objectfile import module
 from qbopt import wholeseg
 from qbopt.analysis import loops as loopy
-from qbopt.frontend.declen import BITNESS
 from qbopt.frontend import blocks as split
 from qbopt.frontend.blocks import code_map
 
@@ -506,9 +504,13 @@ def _asm(data: bytes) -> None:
     if found is None:
         return
     formatter = Formatter(FormatterSyntax.NASM)
-    print("  --- code")
-    for insn in Decoder(BITNESS, bytes(found.code), ip=0):
-        print(f"    {insn.ip:#06x}  {formatter.format(insn)}")
+    print("  --- reachable code (FP emulator instructions shown as x87 equivalents)")
+    instructions = split.instructions(found)
+    if isinstance(instructions, str):
+        print(f"  --- cannot map code: {instructions}")
+        return
+    for insn in instructions:
+        print(f"    {insn.at:#06x}  {formatter.format(insn.insn)}")
 
 
 def main(argv: list[str] | None = None, view=None) -> int:
