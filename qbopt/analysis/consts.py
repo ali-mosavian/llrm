@@ -344,6 +344,16 @@ def _result(
             return None
         return Known((masked(parts[0].n, high.width) << (low.width * 8)) | masked(parts[1].n, low.width), width)
     width = min(one.width for one in parts)
+    if op.kind is mir.Kind.SMULHI and len(parts) == 2 and len(op.results) == 1:
+        result = op.results[0]
+        if (not isinstance(result, mir.Held) or result.width not in (2, 4)
+            or any(not isinstance(arg, (mir.Held, mir.Const)) or arg.width != result.width for arg in op.args)
+            or width < result.width):
+            return None
+        width = result.width
+        sign = 1 << (width * 8 - 1)
+        first, second = ((masked(part.n, width) ^ sign) - sign for part in parts)
+        return Known(masked((first * second) >> (width * 8), width), width)
     if op.kind is mir.Kind.ADD_CARRY and len(parts) == 2:
         flags = [value for value in op.uses if value.flags]
         if len(flags) == 1 and flags[0] in (carries or {}):

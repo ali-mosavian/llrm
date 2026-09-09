@@ -410,7 +410,7 @@ def _check_inserted_conditions(ops: tuple[mir.Op, ...], leaving: frozenset[mir.V
     alive = {value for value in leaving if value.flags}
     for op in reversed(ops):
         preserved = alive - set(op.defines)
-        if op.node is None and op.kind in (mir.Kind.ADD, mir.Kind.MUL) and preserved:
+        if op.node is None and op.kind in (mir.Kind.ADD, mir.Kind.MUL, mir.Kind.SMULHI) and preserved:
             raise Unlowered(f"inserted {op.kind} at {op.at:#x} crosses a live condition")
         alive.difference_update(op.defines)
         alive.update(value for value in op.uses if value.flags)
@@ -491,7 +491,25 @@ def _concat(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]:
     raise Unlowered(f"unsupported concatenation at {op.at:#x}")
 
 
-_EXPANDS: dict = {mir.Kind.EXTRACT: _extract, mir.Kind.DIVMOD: _word_division, mir.Kind.CONCAT: _concat}
+def _signed_high_product(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]:
+    if (len(op.args) != 2 or len(op.results) != 1
+        or not isinstance(result := op.results[0], mir.Held) or result.width not in (2, 4)
+        or any(not isinstance(arg, (mir.Held, mir.Const)) or arg.width != result.width for arg in op.args)):
+        raise Unlowered(f"unsupported signed high product at {op.at:#x}")
+    setup, sources = [], []
+    for arg in op.args:
+        source = operand(arg)
+        if isinstance(arg, mir.Const):
+            held = ir.Held(lowering.fresh(), result.width)
+            setup.append(ir.Semantics(ir.Operation.MOVE, "mov", (held,), (source,)))
+            source = held
+        sources.append(source)
+    low = ir.Held(lowering.fresh(), result.width)
+    return (*setup, ir.Semantics(ir.Operation.MULTIPLY, "imul", (low, operand(result)), tuple(sources)))
+
+
+_EXPANDS: dict = {mir.Kind.EXTRACT: _extract, mir.Kind.DIVMOD: _word_division, mir.Kind.CONCAT: _concat,
+                 mir.Kind.SMULHI: _signed_high_product}
 
 
 class Lowering:

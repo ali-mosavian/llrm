@@ -359,6 +359,7 @@ class Kind(StrEnum):
     INCREMENT = "increment"
     DECREMENT = "decrement"
     MUL = "mul"
+    SMULHI = "smulhi"  # Signed product's upper half, at the operands' common width.
     DIV = "div"
     REM = "rem"
     # One computation with two results, quotient then remainder. BC calls
