@@ -66,3 +66,34 @@ documents two core clocks:
 https://www.ardent-tool.com/CPU/docs/Intel/386/manuals/prref386/LEA.htm
 This remains a pre-allocation estimate; prefix and failed-coalescing costs
 remain part of the unfinished audit.
+
+## 486 and Pentium primary-table inspection
+
+Intel 240440-002, November 1989 i486 data sheet, Table 10.1
+(PDF page 135), gives IMUL ranges of 13–26 for word and 13–42 for
+dword operands. Printed page 143, note 3, makes multiplier dependence
+explicit and distinguishes positive and negative multipliers. Its logarithm
+notation does not explicitly state rounding, so do not invent an exact
+non-power-of-two cost from the OCR text. The original footnote was rendered
+and inspected. A flat 26 is not an established cost for the large negative
+magic multiplier used by division by seven. The pending 486 reciprocal
+win (41 versus 48) must not be accepted on that basis.
+
+https://bitsavers.trailing-edge.com/components/intel/80486/240440-002_i486_Microprocessor_Nov89.pdf
+
+Intel 241430-004, July 1995 Pentium Family Developer's Manual Volume 3,
+Table F-2, printed F-13 (PDF page 1006), was also rendered and inspected:
+immediate and two-operand IMUL are 10 clocks; accumulator-form word
+IMUL is 11, dword is 10. IMUL is non-pairable. F-12 lists IDIV as
+30 for word and 46 for dword, also non-pairable. These support the old
+P5 scalar numbers for the relevant dword register forms, but do not
+validate a whole dependency-chain or prefix model. F-6 specifies cache
+hits, aligned accesses, available bus, TLB hits and no exceptions among
+its assumptions.
+
+https://www.ardent-tool.com/CPU/docs/Intel/Pentium/241430-004_scan.pdf
+
+Next model change: represent instruction-form-specific cost evidence and
+ranges, separate from the old scoreboard estimates. A candidate must not
+win merely because an unknown multiplier was assigned an arbitrary midpoint.
+No emitted code changed during this primary-table inspection.
