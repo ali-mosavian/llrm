@@ -2475,3 +2475,22 @@ operations retain ordered keys. Seven fail-first key cases establish the
 missing capability; full CSE tests verify actual substitution and the observed
 flags guard. All 47 focused tests pass. All 97 audited outputs are unchanged,
 so no current-suite speedup is attributed to this capability.
+
+### Reprioritize by the remaining executed work
+
+The current PDS target report puts FPCSE at 3956 (4386 before floating CSE)
+and FPCSEX at 4508. All currently valid PDS denominators are within 1.5x;
+missing and provisional references still prevent any completion claim.
+The literal FPCSE source admits full exact evaluation to SINGLE 487.5.
+The source-ordered rational trace, including p/q/s storage rounding, confirms
+all ten iterations without assuming a rounding mode. `docs/targets.md` now
+separates that destination from FPCSEX's runtime-input optimization problem.
+
+The concrete remaining implementation boundary is memory-carried FP state:
+`loopexit.evaluated` operates on header SSA phis, whereas FPCSE's accumulator
+is still FLOAD/FSTORE memory state inside a block. Its exact exit value is not
+a header value available to the loop-exit evaluator. Next work should expose
+rounding-aware scalar memory recurrences and connect their exact exit values
+to existing loop evaluation, not keep adding CSE key variants that leave the
+benchmark costs unchanged. No numeric target is changed until a complete
+strict reference has been constructed and verified.

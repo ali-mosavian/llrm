@@ -497,6 +497,39 @@ floor.
 
 ## fpcse -- float is just as bad the moment a value crosses a statement
 
+### Literal FPCSE and runtime-input FPCSEX need different references
+
+The actual literal fixture initializes `a=2`, `b=4`, `c=8`, `s=0`, then
+runs ten iterations. Its modern-compiler destination is constant evaluation,
+not merely retaining `(a+b)` between statements. In source order:
+
+- `a+b=6`, `p=48`, and `q=3/4`, including the SINGLE stores to p and q.
+- After iteration k, `s=195*k/4`. The two individual additions are still
+  evaluated as `(s+48)+3/4`, not reassociated.
+- The largest intermediate numerator over denominator four is 1950. Every
+  intermediate is exactly representable at 24 significant bits and within
+  the normal SINGLE range. Each SINGLE store is exact too. No chosen rounding
+  mode or extended precision is needed for these values.
+- At exit, `s=975/2=487.5`, with SINGLE bits `0x43f3c000`, matching the golden
+  output. The ten source-ordered steps were also checked using rational
+  `floatfacts.evaluated`, including every storage conversion.
+
+The intended reference therefore has no arithmetic loop: it prints this
+constant through the existing runtime ABI. This is a numerical proof, not
+yet an approved whole-program target listing. A complete reference must also
+account for pending-exception synchronization, observable final stores and
+the print/termination calls, and be linked and run before replacing the
+provisional denominator. Do not replace 1340 with an estimated constant.
+
+FPCSEX reads its inputs at runtime and cannot use this argument. It remains
+the general floating value-numbering and loop-invariant-motion benchmark;
+its strict storage rounding and exception obligations remain intact.
+
+Current PDS scores (2026-09-09): FPCSE **3956**, down from **4386** before
+floating CSE; FPCSEX **4508**, unchanged. The reduction is 430 model units,
+about 9.8%, not a measured hardware latency improvement. Both denominators
+remain provisional.
+
 **Semantic audit (2026-09-09): the proposed listing below is not yet a
 valid strict-floating-point target.** It changes `(s + p) + q` into
 `(p + q) + s` and retains intermediates beyond their SINGLE storage
