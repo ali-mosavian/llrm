@@ -1634,3 +1634,24 @@ Strict LIR runtime checks passed on all three compilers for SPILL, HOTLOP,
 NESTED, MATRIX, HARR, NBODY and LNGMIX; artifacts are
 `qbopt-packed-promotion-762zykcv` in system temporary storage. This verifies
 those programs, not the full corpus or project goal.
+
+### Split initialization and narrower output reads
+
+ADDRM's long accumulator was excluded from promotion because output pushes
+read its two words separately. Supported reads now determine the candidate
+width; unsupported output reads remain in memory, backed by intact stores.
+Promotion uses the existing byte-level constant memory analysis to capture
+a full value after split initializers, only when every byte is established.
+Calls and barriers conservatively invalidate these initializer facts.
+
+ADDRM modeled costs: PDS 1578 -> 1460, QB 1584 -> 1466, VBDOS unchanged
+at 1346. The accumulator reload is gone, but its loop write-back and the
+long array store/reload remain opportunities; the 754 target is not met.
+Stage evidence: `/tmp/qbopt-addrm-next` and `/tmp/qbopt-addrm-captured`.
+
+The real PDS/QB regressions and complete split-initializer case failed with
+the previous implementation. All 20 promotion tests pass, including missing
+bytes, unknown overlapping writes and preservation of output memory reads.
+Strict LIR runtime checks passed for ADDRM, SPILL, HARR, MATRIX, NESTED,
+NBODY, HOTLOP and LNGMIX on all three compilers (33 cases each).
+Artifacts: `qbopt-split-initializers-u9m6172r` in system temporary storage.

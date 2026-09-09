@@ -1,4 +1,4 @@
-"""Promotion must replace every access to a cell, or leave it in memory."""
+"""Write-through promotion reuses proven values while preserving other memory accesses."""
 
 from pathlib import Path
 from dataclasses import replace
@@ -192,3 +192,45 @@ def test_packed_capture_keeps_wide_and_narrow_definitions_and_rejects_unknown_ov
     assert next(op for op in ops if op.at == 18).loads == (half,)
     captures = [op for op in ops if op.at == 0 and op.kind is mir.Kind.COPY]
     assert {op.results[0].width for op in captures} == {2, 4}
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_addrm_long_accumulator_survives_split_initialization(tag):
+    """ADDRM reloaded u on all 20 iterations despite initializing both words to zero."""
+    from qbopt import loops, transform
+    found = module.of(omf.parse(Path(f"fixtures/omf/addrm-{tag}.obj").read_bytes()))
+    partition = blocks.partition(found, blocks.code_map(found))
+    body = mir.bodies(found, partition)[0][1]
+    cell = next(ref for block in body.blocks for op in block.ops for ref in op.loads
+                if ref.width == 4 and ref.base is None)
+    output = [op.loads for block in body.blocks for op in block.ops
+              if op.kind is mir.Kind.ARG and any(mir.overlapping(ref, cell, found.dgroup) for ref in op.loads)]
+    result = transform.applied(body, found.dgroup, found.calls, blocks=partition, found=found)
+    inside = {at for loop in loops.loops(result.blocks, result.entry) for at in loop.body}
+    assert not any(cell in op.loads for block in result.blocks if block.at in inside for op in block.ops)
+    assert output
+    remaining = [op.loads for block in result.blocks for op in block.ops if op.kind is mir.Kind.ARG]
+    assert all(refs in remaining for refs in output)
+
+
+@pytest.mark.parametrize("complete", [False, True])
+def test_split_initializer_requires_every_byte(complete):
+    """ADDRM's two word stores may initialize a long; one word must not invent the other."""
+    from qbopt import ir
+    from qbopt.module import Addr, Space
+    address = Addr(Space.SEGMENT, 6, 5)
+    whole = mir.MemRef(address, 4)
+    def store(at, offset, number):
+        return mir.Op(at, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.STORE,
+                      args=(mir.Const(number, 2),), stores=(mir.MemRef(address.plus(offset), 2),), covers=(at, at+2))
+    value = mir.Value(10, 10, variable=10, version=1)
+    load = mir.Op(10, ir.Operation.MOVE, "mov", (value,), (), kind=mir.Kind.LOAD,
+                  args=(mir.Cell(whole),), results=(mir.Held(value, 4),), loads=(whole,), covers=(10, 12))
+    stores = (store(0, 0, 0x5678), store(2, 2, 0x1234)) if complete else (store(0, 0, 0x5678),)
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (*stores, load), ()),))
+    result = promote.promoted(body, frozenset({5}))
+    ops = result.blocks[0].ops
+    assert all(op in ops for op in stores)
+    assert bool(next(op for op in ops if op.at == 10).loads) is not complete
+    if complete:
+        assert any(op.kind is mir.Kind.COPY and op.args == (mir.Const(0x12345678, 4),) for op in ops)

@@ -7,11 +7,11 @@ register allocator can keep that value across statements. Unlike LLVM's
 local allocas, these cells can be visible outside this body: every store
 stays in place. Removing stores needs a separate proof of observability.
 
-**Which cells.** A fixed address in the program's own data, read at one width.
+**Which cells.** A fixed address in the program's own data, with reusable reads at one width.
 A read reuses the stored value only when it is available along every
 incoming path. Any possibly aliasing write invalidates that availability;
-a later direct store establishes it again. A wider constant initializer
-can establish each fully covered field without splitting the actual store.
+a later direct store establishes it again. Constant initializers can establish
+each fully covered field, including across split stores, without changing the stores.
 Runtime calls use the same
 memory-effect contracts as the rest of the alias analysis.
 
@@ -67,12 +67,11 @@ def promotable(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict
     """Cells whose reads can use a known stored value, by address.
 
     Touched more than once, because promoting a cell read or written once
-    removes no work. Reads must agree on one width. Exact stores and wider
-    constant initializers can establish that value; arbitrary partial
+    removes no work. Supported reads must agree on one width. Exact stores and
+    complete constant initializers can establish that value; arbitrary partial
     writes cannot. Availability excludes reads after intervening aliasing writes.
     """
     every = [one for block in body.blocks for op in block.ops for one in (*op.loads, *op.stores)]
-    read = {ref.addr for block in body.blocks for op in block.ops for ref in op.loads}
     seen: Counter = Counter()
     widths: dict = {}
     for one in every:
@@ -81,13 +80,13 @@ def promotable(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict
         seen[one.addr] += 1
     for block in body.blocks:
         for op in block.ops:
-            for ref in op.loads:
+            if op.loads and (ref := _cell(op)) is not None:
                 widths.setdefault(ref.addr, set()).add(ref.width)
 
     candidates = {
         addr: next(iter(widths[addr]))
         for addr, times in seen.items()
-        if times > 1 and addr in read and len(widths[addr]) == 1
+        if times > 1 and addr in widths and len(widths[addr]) == 1
     }
     usable = _available(body, candidates, dgroup, bounds)
     used = {ref.addr for block in body.blocks for op in block.ops if id(op) in usable for ref in op.loads}
@@ -104,14 +103,25 @@ def _cell(op: Op) -> mir.MemRef | None:
     return None
 
 
-def _initializers(op: Op, cells: dict) -> dict:
-    """Narrow cells fully initialized by a wider constant store that remains intact."""
-    cell = _cell(op)
-    if (op.kind is not mir.Kind.STORE or op.barrier or cell is None or cell.addr is None
-        or cell.segment is not None or cell.addr.space is not Space.SEGMENT):
-        return {}
-    return {addr: known for addr, width in cells.items() if width < cell.width
-            and (known := consts.initialized(op, mir.MemRef(addr, width))) is not None}
+def _initializers(body: MirBody, cells: dict, dgroup: frozenset[int], bounds: dict | None) -> dict:
+    """Complete scalar constants established by intact, possibly split stores."""
+    calls = {op.at: "" for block in body.blocks for op in block.ops if op.barrier or op.kind is mir.Kind.CALL}
+    memory = consts.cells(body, dgroup, calls)
+    initialized = {}
+    for block in body.blocks:
+        for index, op in enumerate(block.ops):
+            cell = _cell(op)
+            if (op.kind is not mir.Kind.STORE or op.barrier or cell is None or cell.addr is None
+                or cell.segment is not None or cell.addr.space is not Space.SEGMENT):
+                continue
+            after = consts._kills(memory.get((block.at, index), {}), op, {}, dgroup, calls)
+            initialized[id(op)] = {
+                addr: fact for addr, width in cells.items()
+                if (addr, width) != (cell.addr, cell.width)
+                and mir.overlapping(mir.MemRef(addr, width), cell, dgroup, bounds)
+                and (fact := consts._cell(after, mir.MemRef(addr, width))) is not None
+            }
+    return initialized
 
 
 def _available(body: MirBody, cells: dict, dgroup: frozenset[int], bounds: dict | None) -> set[int]:
@@ -120,6 +130,7 @@ def _available(body: MirBody, cells: dict, dgroup: frozenset[int], bounds: dict 
     predecessors = loops.predecessors(body.blocks)
     leaving = {at: set(cells) for at in reachable}
     refs = {addr: mir.MemRef(addr, width) for addr, width in cells.items()}
+    initializers = _initializers(body, cells, dgroup, bounds)
 
     def entering(at: int) -> set:
         parents = predecessors[at] & reachable
@@ -139,7 +150,7 @@ def _available(body: MirBody, cells: dict, dgroup: frozenset[int], bounds: dict 
             if (op.kind is mir.Kind.STORE and cell is not None and cell.addr in cells
                 and cell.width == cells[cell.addr]):
                 available.add(cell.addr)
-            available.update(_initializers(op, cells))
+            available.update(initializers.get(id(op), {}))
         return available
 
     while True:
@@ -194,11 +205,12 @@ def promoted(
         holds[addr] = taken + number
 
     changed = False
+    initializers = _initializers(body, found, dgroup, bounds)
     blocks = []
     for block in body.blocks:
         ops = []
         for op in block.ops:
-            initialized = _initializers(op, found)
+            initialized = initializers.get(id(op), {})
             if initialized:
                 ops.append(op)
                 exact = _instead(op, holds, found, fresh)
