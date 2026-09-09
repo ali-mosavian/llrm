@@ -493,7 +493,11 @@ def _computation(op: Op, stands: dict[int, mir.Value], whole: dict[int, int]) ->
         else:
             return None
     results = tuple(one.width for one in op.results if isinstance(one, mir.Held))
-    return (op.kind, op.floating if floating else op.name, tuple(named), results)
+    operands = frozenset(named) if len(named) == 2 and op.kind in {
+        mir.Kind.ADD, mir.Kind.MUL, mir.Kind.AND, mir.Kind.OR, mir.Kind.XOR,
+        mir.Kind.EQ, mir.Kind.NE,
+    } else tuple(named)
+    return (op.kind, op.floating if floating else op.name, operands, results)
 
 
 def _reaches(at: int, where: int, then: int, index: int, doms, body, block) -> bool:

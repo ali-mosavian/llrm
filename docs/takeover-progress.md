@@ -2464,3 +2464,14 @@ NBODY's object changes; its 24 PDS runtime cases pass. Its measured cost stays
 instructions, so this is not reported as a benchmark speedup. Dumps are in
 `/tmp/qbopt-nbody-cse-dominance` and runtime artifacts in
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-nbody-cse-dominance-qrk0imxa`.
+
+### CSE numbers commutative integer expressions independently of operand order
+
+Two-input integer ADD, MUL, AND, OR, XOR, EQ and NE now use an unordered
+operand pair in their value-numbering key. The operations themselves are not
+reordered. Result widths, dominance, memory invalidation and observed-flag
+guards still apply. SUB, DIV, shifts, ordered comparisons and strict floating
+operations retain ordered keys. Seven fail-first key cases establish the
+missing capability; full CSE tests verify actual substitution and the observed
+flags guard. All 47 focused tests pass. All 97 audited outputs are unchanged,
+so no current-suite speedup is attributed to this capability.
