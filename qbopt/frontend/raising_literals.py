@@ -28,10 +28,11 @@ def initialized(body: mir.MirBody, found) -> mir.MirBody:
     for fixup in fixups:
         if fixup.seg not in pools:
             continue
-        if fixup.loc != omf.LOC_OFF16:
+        width = {omf.LOC_OFF16: 2, omf.LOC_BASE: 2, omf.LOC_PTR32: 4}.get(fixup.loc)
+        if width is None:
             unknown.add(fixup.seg)
             continue
-        ambiguous.update((fixup.seg, fixup.offset + byte) for byte in range(2))
+        ambiguous.update((fixup.seg, fixup.offset + byte) for byte in range(width))
     for _, index, start, payload in omf.ledata(found.records):
         if index not in pools or index in unknown:
             continue

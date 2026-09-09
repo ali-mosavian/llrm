@@ -40,7 +40,9 @@ def test_literal_bytes_are_available_to_scalar_loads(width):
 @pytest.mark.parametrize("offset,location,admitted", [
     (-1, omf.LOC_OFF16, False), (0, omf.LOC_OFF16, False),
     (7, omf.LOC_OFF16, False), (8, omf.LOC_OFF16, True),
-    (8, omf.LOC_PTR32, False),
+    (-3, omf.LOC_PTR32, False), (-4, omf.LOC_PTR32, True),
+    (-1, omf.LOC_BASE, False), (-2, omf.LOC_BASE, True),
+    (8, omf.LOC_PTR32, True), (8, 99, False),
 ])
 def test_literal_relocation_exclusion_covers_the_whole_patch(monkeypatch, offset, location, admitted):
     """FPDEEP's DOUBLE shares a LEDATA record with relocated string descriptors."""
@@ -59,6 +61,15 @@ def test_literal_relocation_exclusion_covers_the_whole_patch(monkeypatch, offset
     monkeypatch.setattr(omf, "fixups", lambda records: [fixup])
     result = raising_literals.initialized(body, found)
     assert (ref in dict(result.initial)) is admitted
+
+
+def test_fpbench_one_survives_unrelated_pointer_relocations():
+    """FPBENCH lost its 1.0 literal fact because array descriptors elsewhere have far fixups."""
+    path = Path("fixtures/bench/fpbench-v-g3.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    ref = mir.MemRef(Addr(Space.SEGMENT, 0, 9), 4)
+    assert dict(body.initial)[ref] == mir.Const(0x3f800000, 4)
 
 
 def test_quickbasic_literal_initializers_prove_the_same_floating_exit():

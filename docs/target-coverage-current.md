@@ -14,6 +14,16 @@ FPCSEX still have invalid inherited floating-point denominators.
 
 ## FPDEEP: verified duplicate floating load
 
+The timed FPBENCH fixture exposed another literal-raising gap: BASE16 and
+PTR16:16 relocations in its array descriptors invalidated the entire BC_CN
+pool, including the unrelated 1.0 at offset zero. Known relocation shapes
+now exclude their exact two- or four-byte fields; unknown shapes still
+invalidate the pool. FPBENCH now has three entry literal facts instead of
+zero, with boundary-overlap regressions. It still has zero exact floating
+value facts at use sites: intervening memory effects kill the entry facts.
+Emitted bytes are unchanged. Preserving a literal across those effects
+requires a separate alias/escape proof, not declaring BC_CN immutable.
+
 Current ordinary-build costs: PDS 11603, QB45 11819, VBDOS 11533. No ratio
 is valid without an independently derived reference. The source's DOUBLE
 expression is `(d*d)/(d+d)` after assigning `d=12`.
