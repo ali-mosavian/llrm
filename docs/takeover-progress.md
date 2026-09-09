@@ -887,3 +887,34 @@ passes, and fifteen focused checks plus nine strict-LIR runtime runs pass
 Artifacts: `/tmp/qbopt-phi-width-final` and
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-phi-width-99x3f49l`.
 Two temporary stack stores and the split-word accumulator arithmetic remain.
+
+# Nbody: correctness baseline and the next optimization boundary
+
+At `051de97`, strict optimized LIR passes all 24 nbody outputs on PDS `/G2`,
+QuickBASIC `/O`, and VBDOS `/G3`. This follows fixes for lost coalescing pins,
+address-keyed dead-store deletion, duplicate widening, and undeclared restore
+clobbers. NEGNOT and LNGMIX also pass on all three. This is a correctness
+baseline, not evidence that the modern-backend performance goal is met.
+
+The PDS stage dump at `/tmp/qbopt-nbody-pds-baseline` shows five runtime calls
+in the interaction loop that `calls.sites()` recognizes with `consume`
+arguments but an empty `pushed` classification. `mir._sites()` skips them:
+
+- `0x1a0`: divide distance by 262144.
+- `0x1b2`: divide 512 by the computed denominator.
+- `0x1cd`: multiply deltaX by falloff.
+- `0x1d4` and `0x204`: divide the respective products by 512.
+
+The emitted loop spills `other` at `[bp-0x24]` and both halves of accX/accY
+at `[bp-0x26]` through `[bp-0x2c]`. Array-index shifts and invariant position
+reads remain too, but the arithmetic calls are an upstream constraint on
+retaining those values.
+
+Next: represent stack-fed runtime arithmetic as semantic MIR at the raise.
+Resolve each argument's actual pushed value, including arguments pushed before
+a nested call; combine high/low words with their exact width and ordering.
+Do not merely inline stack pops into an opaque machine sequence: that hides
+constant division and value lifetimes from the optimizer again. Preserve
+stack balance and return-half consumers, then verify nbody and one focused
+nested-call regression before measuring the resulting loop. No hand-derived
+nbody target exists yet, so no modern-target ratio is established.
