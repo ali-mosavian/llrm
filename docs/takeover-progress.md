@@ -2247,3 +2247,19 @@ pass. All 97 audited objects retain identical outcomes and bytes, so no
 unchanged runtime suite was repeated. Stage dumps are in
 `/tmp/qbopt-fpcse-stack-validation`. Actual floating value reuse and stack
 scheduling, with rounding and environment effects preserved, remain next.
+
+### Floating register forms are selectable
+
+The selector now emits `fld st(i)`, `fxch st(i)`, and non-popping
+add/multiply/subtract/divide (including reversed forms) with either operand
+at the top. This supplies the missing instructions for future floating
+allocation to duplicate a live value and compute with it without reloading
+memory. The stack positions exist only on the machine side of the boundary.
+
+Thirty-nine fail-first cases cover the new forms; three refusal cases reject
+invalid slots or two non-top operands. Raw-byte expectations distinguish the
+opposite subtraction/division opcode senses in the D8 and DC forms. All 86
+focused floating/selection/stage tests pass, and the 97-object before/after
+audit retains identical bytes and outcomes. No speedup is claimed: the
+allocator does not yet request these forms, and strict rounding/effect
+constraints still prevent generic floating CSE.

@@ -1168,6 +1168,26 @@ def float_pop(name: str, index: int, at: int = 0) -> Emitted | None:
     return _assemble(Instruction.create_reg_reg(code, STACK_REGISTERS[index], Register.ST0), at)
 
 
+def float_stack(what: ir.Semantics, at: int = 0) -> Emitted | None:
+    """Select explicit stack operands without changing their evaluation order."""
+    if any(not 0 <= operand.index < len(STACK_REGISTERS)
+           for operand in (*what.dests, *what.sources) if isinstance(operand, ir.St)):
+        return None
+    match what.op, what.name, what.dests, what.sources:
+        case ir.Operation.FLOAT_LOAD, "fld", (ir.St(index=0),), (ir.St(index=index),):
+            return _assemble(Instruction.create_reg(Code.FLD_STI, STACK_REGISTERS[index]), at)
+        case ir.Operation.EXCHANGE, "fxch", (ir.St(index=0), ir.St(index=index)), sources if sources == what.dests:
+            return _assemble(Instruction.create_reg_reg(Code.FXCH_ST0_STI, Register.ST0, STACK_REGISTERS[index]), at)
+        case ir.Operation.FLOAT_ARITH, name, (ir.St(index=dest),), (left, ir.St(index=source)) if left == what.dests[0]:
+            if name not in ("fadd", "fsub", "fsubr", "fmul", "fdiv", "fdivr") or (dest != 0 and source != 0):
+                return None
+            form = "ST0_STI" if dest == 0 else "STI_ST0"
+            code = _code(f"{name.upper()}_{form}")
+            return None if code is None else _assemble(Instruction.create_reg_reg(
+                code, STACK_REGISTERS[dest], STACK_REGISTERS[source]), at)
+    return None
+
+
 def divide_mem(name: str, cell: ir.Mem, at: int = 0) -> Emitted | None:
     """`idiv [x]` -- the divisor in memory rather than a register."""
     if name not in ("idiv", "div"):
@@ -1355,6 +1375,9 @@ def emit(
         return None
 
     dests, sources = what.dests, what.sources
+    if (what.op in (ir.Operation.FLOAT_LOAD, ir.Operation.FLOAT_ARITH, ir.Operation.EXCHANGE)
+        and sources and all(isinstance(operand, ir.St) for operand in (*dests, *sources))):
+        return float_stack(what, at)
     match what.op:
         case ir.Operation.EXTEND if what.name == "movsx" and len(dests) == len(sources) == 1:
             match dests[0], sources[0]:
