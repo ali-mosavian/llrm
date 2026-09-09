@@ -83,6 +83,7 @@ class Contract:
     memory_write: bool
     cleanup: int | None
     unknown: list[str]
+    flag_values: dict[str, int] = field(default_factory=dict)
 
 
 def opaque(reason: str) -> Contract:
@@ -386,6 +387,10 @@ def analyze(routine: Routine, contracts: dict[Address, Contract], budget: int = 
             if insn.rflags_modified & bit:
                 written.add(lane)
                 values[lane] = "?"
+            if insn.rflags_cleared & bit:
+                values[lane] = "0"
+            if insn.rflags_set & bit:
+                values[lane] = "1"
         destination = register_parts(insn.op0_register) if insn.op0_kind == OpKind.REGISTER else ()
         source = register_parts(insn.op1_register) if insn.op_count > 1 and insn.op1_kind == OpKind.REGISTER else ()
         width = abs(insn.stack_pointer_increment)
@@ -440,6 +445,7 @@ def analyze(routine: Routine, contracts: dict[Address, Contract], budget: int = 
             written.update(callee.clobbers)
             for name in callee.clobbers:
                 values[name] = "?"
+            values.update({name: str(value) for name, value in callee.flag_values.items()})
             memory_write |= callee.memory_write
             if callee.memory_write:
                 stack = tuple("?" for _ in stack)
@@ -484,6 +490,14 @@ def analyze(routine: Routine, contracts: dict[Address, Contract], budget: int = 
         memory_write,
         next(iter(cleanups)) if len(cleanups) == 1 and not unknown else None,
         sorted(unknown),
+        {
+            lane: int(returns[0][0][lane])
+            for lane in FLAG_BITS
+            if not unknown
+            and returns
+            and returns[0][0][lane] in ("0", "1")
+            and all(values[lane] == returns[0][0][lane] for values, _ in returns)
+        },
     )
 
 
@@ -547,6 +561,7 @@ def alias_contract(contract: Contract) -> Contract:
         contract.memory_write,
         contract.cleanup,
         contract.unknown,
+        {lane.split(":")[1]: value for lane, value in contract.flag_values.items()},
     )
 
 

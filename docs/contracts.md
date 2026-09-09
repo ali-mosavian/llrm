@@ -66,7 +66,16 @@ For example, `xor ax,ax; ret` previously reported only an aggregate flag
 clobber. It now reports arithmetic-flag clobbers and DF preservation, including
 through direct-call dependencies. `movsw; ret` reads and preserves DF;
 `cld; ret` may clobber incoming DF. Preservation does **not** establish DF=0:
-constant return-state propagation and an entry-state proof are still needed
+`flag_values` separately reports constant bits on every modeled normal return:
+`cld; ret` gives `{"df": 0}`, whereas `std; ret` gives `{"df": 1}`.
+These facts propagate through direct dependencies and survive callees that
+preserve the bit. Disagreeing return paths or incomplete analysis suppress
+the guarantee. This does not specialize a callee using its caller's inputs.
+
+A bounded check on 2026-09-10 followed B$PEI4 in QB 4.5, PDS and VBDOS
+(7, 8 and 14 routines respectively; 64-function budget). All three reached
+unresolved indirect control flow, so none proved a returned DF value or DF
+preservation. An entry-state and complete runtime-path proof are still needed
 before this evidence can unlock FPDEEP's four scalar-copy MOVSW instructions.
 Unsupported flag-stack operations still suppress preservation guarantees.
 

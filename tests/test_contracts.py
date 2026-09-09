@@ -82,6 +82,24 @@ def test_string_copy_reads_direction() -> None:
     assert "df" in result.preserved
 
 
+@pytest.mark.parametrize("code", ["fc c3", "fd fc c3", "e80100 c3 fc c3", "fc e80100 c3 31c0 c3"])
+def test_returned_direction_is_clear(code: str) -> None:
+    """FPDEEP needs DF=0, not merely the fact that a helper preserves its input."""
+    result = contract(code)
+    assert result.flag_values["df"] == 0
+    assert "df" not in result.preserved
+
+
+def test_returned_direction_is_set() -> None:
+    assert contract("fd c3").flag_values["df"] == 1
+
+
+@pytest.mark.parametrize("code", ["c3", "7402 fc c3 fd c3", "fc ffd3 c3", "fc e8fcff c3"])
+def test_direction_requires_complete_agreeing_returns(code: str) -> None:
+    """Disagreeing exits and unresolved dependencies cannot promise forward copies."""
+    assert "df" not in contract(code).flag_values
+
+
 def test_cleanup_propagates() -> None:
     result = contract("50 e80100 c3 c20200")
     assert result.cleanup == 0
