@@ -161,21 +161,21 @@ def _answer(body: MirBody, op: Op) -> "mir.Value | None":
     # every widening multiply whether or not anything wants its value --
     # and counting that as a read said the high half was wanted, which
     # refused every site in matrix.
-    wanted_phis = {
-        phi.result.id
-        for block in body.blocks
-        for phi in block.phis
-        if phi.result.id in read
-    }
-    read |= {
-        value.id
-        for block in body.blocks
-        for phi in block.phis
-        if phi.result.id in wanted_phis
-        for value in phi.incoming.values()
-    }
+    incoming = {phi.result.id: phi.incoming.values() for block in body.blocks for phi in block.phis}
+    pending = list(read)
+    while pending:
+        for value in incoming.get(pending.pop(), ()):
+            if value.id not in read:
+                read.add(value.id)
+                pending.append(value.id)
     wanted = [one for one in op.defines if one.id in read]
-    if len(wanted) != 1 or wanted[0].flags:
+    if (
+        len(wanted) != 1
+        or wanted[0].flags
+        or not op.results
+        or not isinstance(op.results[0], mir.Held)
+        or wanted[0] != op.results[0].value
+    ):
         return None
     return wanted[0]
 

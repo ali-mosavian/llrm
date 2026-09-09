@@ -55,6 +55,12 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+Product-result checkpoint: loop reduction now requires the first semantic result
+to be the only live result, following phi dependencies transitively. Previously
+a high-only result could be replaced by the low recurrence, and a second live
+result behind two phis was missed. Both regressions fail with the old function;
+38 focused checks pass with the fix. No production switch changed.
+
 Loop recurrence guard checkpoint: all entry values and backedge steps must agree;
 one valid backedge no longer certifies the others. Shift reduction now requires a
 constant, in-range count and the counter in the value operand, not the count.

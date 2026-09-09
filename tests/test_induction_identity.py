@@ -171,3 +171,28 @@ def test_a_reduced_counter_has_its_own_loop_phi_and_fresh_variable() -> None:
     assert phi.incoming[0] != phi.incoming[1]
     step = next(op for op in after.ops if phi.incoming[1] in op.defines)
     assert step.args[0].value == phi.result
+
+
+@pytest.mark.parametrize("use", ["low", "high", "both_through_phis"])
+def test_reduction_preserves_every_live_product_result(use: str) -> None:
+    built, _loop = body()
+    header = built.blocks[1]
+    low = header.ops[1].defines[0]
+    high = mir.Value(30, 1, variable=9)
+    middle = mir.Value(31, 2, variable=9)
+    final = mir.Value(32, 3, variable=9)
+    product = replace(header.ops[1], defines=(low, high), results=(mir.Held(low, 2), mir.Held(high, 2)))
+    values = (low,) if use == "low" else (high,) if use == "high" else (low, final)
+    consume = mir.Op(
+        3, ir.Operation.PUSH, "", (), values, kind=mir.Kind.ARG, args=tuple(mir.Held(value, 2) for value in values)
+    )
+    built = replace(
+        built,
+        blocks=(
+            built.blocks[0],
+            replace(header, ops=(header.ops[0], product)),
+            mir.MirBlock(2, (mir.Phi(middle, {1: high}),), (), (3,)),
+            mir.MirBlock(3, (mir.Phi(final, {2: middle}),), (consume,), ()),
+        ),
+    )
+    assert strength._answer(built, product) == (low if use == "low" else None)
