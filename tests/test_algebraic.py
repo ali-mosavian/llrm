@@ -10,6 +10,40 @@ from qbopt import algebraic
 from qbopt import transform
 
 
+@pytest.mark.parametrize("divisor", [16, 512, 262144])
+@pytest.mark.parametrize("immediate", [False, True])
+def test_signed_power_division_preserves_quotient_and_remainder(divisor: int, immediate: bool) -> None:
+    """Nbody paid for IDIV by fixed scales; negative deltas require truncation, not flooring."""
+    source, constant, quotient, remainder = (mir.Value(index, 0) for index in range(1, 5))
+    copy = mir.Op(0, ir.Operation.MOVE, "mov", (constant,), (), kind=mir.Kind.COPY,
+                  args=(mir.Const(divisor, 4),), results=(mir.Held(constant, 4),))
+    divide = mir.Op(1, ir.Operation.DIVIDE, "idiv", (quotient, remainder), (source, constant),
+                    kind=mir.Kind.DIVMOD, args=(mir.Held(source, 4), mir.Held(constant, 4)),
+                    results=(mir.Held(quotient, 4), mir.Held(remainder, 4)), covers=(1, 5))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (copy, divide), ()),))
+    if immediate:
+        divide = replace(divide, args=(mir.Held(source, 4), mir.Const(divisor, 4)), uses=(source,))
+        body = replace(body, blocks=(replace(body.blocks[0], ops=(divide,)),))
+    done = algebraic._divisions(body)
+    assert all(op.kind is not mir.Kind.DIVMOD for op in done.blocks[0].ops)
+    for number in [-2147483648, -divisor-1, -divisor, -divisor+1, -1, 0, 1, divisor-1, divisor, 2147483647]:
+        values = {source: number}
+        for op in done.blocks[0].ops:
+            args = [arg.n if isinstance(arg, mir.Const) else values[arg.value] for arg in op.args]
+            match op.kind:
+                case mir.Kind.COPY: answer = args[0]
+                case mir.Kind.SAR: answer = args[0] >> args[1]
+                case mir.Kind.SHL: answer = args[0] << args[1]
+                case mir.Kind.AND: answer = args[0] & args[1]
+                case mir.Kind.ADD: answer = args[0] + args[1]
+                case mir.Kind.SUB: answer = args[0] - args[1]
+                case _: pytest.fail(str(op.kind))
+            values[op.results[0].value] = ((answer & 0xffffffff) ^ 0x80000000) - 0x80000000
+        expected = abs(number) // divisor * (-1 if number < 0 else 1)
+        assert values[quotient] == expected
+        assert values[remainder] == number - expected * divisor
+
+
 @pytest.mark.parametrize(("high", "low", "answer"), [(4, 0, 262144), (0, 512, 512), (-1, -1, 0xffffffff), (1, -1, 0x1ffff)])
 def test_constant_word_concatenation(high: int, low: int, answer: int) -> None:
     result = mir.Value(1, 0)

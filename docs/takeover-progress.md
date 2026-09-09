@@ -918,3 +918,29 @@ constant division and value lifetimes from the optimizer again. Preserve
 stack balance and return-half consumers, then verify nbody and one focused
 nested-call regression before measuring the resulting loop. No hand-derived
 nbody target exists yet, so no modern-target ratio is established.
+
+## Nbody: recovered arithmetic and constant division
+
+`f921137` and `f2f5d57` recover stack-fed division and multiplication into
+scalar MIR, including arguments pushed before nested calls. `3a8ac25`
+propagates constants through word concatenation and removes stale machine
+metadata from folded computations (CHAIN's MODMOD otherwise became 92344
+instead of 13106).
+
+Positive power-of-two scalar division now expands in algebraic MIR to a
+sign-derived bias, addition and arithmetic shift; remainder is reconstructed
+as dividend minus quotient times divisor and removed when unused. No register
+or encoding is chosen by this transformation. Both negative inputs and the
+minimum signed value preserve truncation toward zero.
+
+PDS nbody's divisions at 0x1a0 and 0x1d4 become these sequences. With only
+this transformation disabled, the weighted cost is 1,094,861; enabled it is
+1,012,861 (7.5% lower). This is the opportunity model, not measured hardware
+cycles or a ratio against a hand-derived target. Stage dumps:
+`/tmp/qbopt-nbody-powdiv`. Strict LIR runtime checks pass nbody (24 outputs),
+chain (7), and divmod (20), each on p-g2, q-O and v-g3. Focused regressions
+were observed failing with the transformation disabled.
+
+Remaining: loop-invariant current-body position loads, array-address
+induction, live accumulators, the still-opaque arithmetic call, and a
+hand-derived nbody target. The overall modern-compiler goal is not complete.

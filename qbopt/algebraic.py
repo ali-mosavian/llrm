@@ -1,9 +1,10 @@
 from dataclasses import replace
 
-from qbopt import mir
+from qbopt import consts, ir, mir
 
 
 def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) -> mir.MirBody:
+    body = _divisions(body)
     mentioned = {value for block in body.blocks for op in block.ops for value in op.uses if value not in op.merges} | {
         value for block in body.blocks for phi in block.phis for value in phi.incoming.values()
     }
@@ -42,6 +43,62 @@ def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) 
             for block in changed.blocks
         ),
     )
+
+
+def _divisions(body: mir.MirBody) -> mir.MirBody:
+    """Divide by positive powers of two, biasing negatives to truncate toward zero."""
+    if not any(op.kind is mir.Kind.DIVMOD for block in body.blocks for op in block.ops):
+        return body
+    facts = consts.known(body)
+    values = {value for block in body.blocks for op in block.ops for value in (*op.defines, *op.uses)}
+    values |= {value for block in body.blocks for phi in block.phis for value in (phi.result, *phi.incoming.values())}
+    serial = max((value.id for value in values), default=0)
+    variable = max((value.variable for value in values), default=0)
+    blocks = []
+    for block in body.blocks:
+        ops = []
+        for op in block.ops:
+            if (op.kind is not mir.Kind.DIVMOD or op.loads or op.stores or op.barrier
+                or len(op.args) != 2 or len(op.results) != 2
+                or not all(isinstance(arg, mir.Held) and arg.width == 4 for arg in (op.args[0], *op.results))
+                or not isinstance(op.args[1], (mir.Held, mir.Const)) or op.args[1].width != 4
+                or set(op.defines) != {result.value for result in op.results}):
+                ops.append(op)
+                continue
+            fact = consts._operand(op, op.args[1], facts)
+            divisor = consts.masked(fact.n, 4) if fact is not None and fact.width >= 4 else 0
+            if divisor <= 1 or divisor >= 0x80000000 or divisor & (divisor - 1):
+                ops.append(op)
+                continue
+            shift = divisor.bit_length() - 1
+            sequence = []
+
+            def emit(kind, args, result=None):
+                nonlocal serial, variable
+                if result is None:
+                    serial += 1
+                    variable += 1
+                    result = mir.Held(mir.Value(serial, op.at, variable=variable, version=1), 4)
+                sequence.append(mir.Op(
+                    op.at, ir.Operation.BINARY, kind.value, (result.value,),
+                    tuple(arg.value for arg in args if isinstance(arg, mir.Held)),
+                    kind=kind, args=args, results=(result,),
+                    covers=op.covers if not sequence else (op.at, op.at),
+                    id=op.id if not sequence else None,
+                    extra_covers=op.extra_covers if not sequence else (),
+                ))
+                return result
+
+            dividend = op.args[0]
+            sign = emit(mir.Kind.SAR, (dividend, mir.Const(31, 1)))
+            bias = emit(mir.Kind.AND, (sign, mir.Const(divisor - 1, 4)))
+            adjusted = emit(mir.Kind.ADD, (dividend, bias))
+            quotient = emit(mir.Kind.SAR, (adjusted, mir.Const(shift, 1)), op.results[0])
+            product = emit(mir.Kind.SHL, (quotient, mir.Const(shift, 1)))
+            emit(mir.Kind.SUB, (dividend, product), op.results[1])
+            ops.extend(sequence)
+        blocks.append(replace(block, ops=tuple(ops)))
+    return replace(body, blocks=tuple(blocks))
 
 
 def _product(op: mir.Op, wanted: set[mir.Value], wide: set[mir.Value]) -> mir.Op:
