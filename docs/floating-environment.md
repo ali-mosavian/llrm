@@ -67,3 +67,22 @@ known inputs, not disabling exception tracking for all floating operations.
 FPCSE's literal inputs make it a useful initial case; its runtime-input twin
 must remain a separate test of generality. No speedup is established by this
 audit, and its provisional numerical target remains provisional.
+
+## Exact final-iteration specialization
+
+An exact finite recurrence can retain its first invariant floating load as
+the original exception checkpoint, then install the proven pre-final memory
+state and execute the remaining operations once. The load must not read a
+cell written by the loop. Every original iteration must evaluate exactly,
+with every storage conversion included; calls, unknown effects, live outgoing
+flags, and unsupported live-out values reject the transformation.
+
+This preserves initial memory at the first check and reproduces the final
+iteration's floating operands, operation order and conversions. It does not
+delete the floating sequence or assume a rounding mode. Strict floating
+operations also stop dead-store elimination and loop-store sinking: an
+exception can expose memory before a later overwrite.
+
+PDS/VBDOS FPCSE now executes one such iteration, seeded with SINGLE 438.75
+after its first load, and still prints 487.5. The numeric proof does not yet
+cover QuickBASIC's constant-pool inputs or runtime-input FPCSEX.

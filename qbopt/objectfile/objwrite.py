@@ -61,13 +61,16 @@ def written(
     # segments that is not in a body. Kept, and the layout starts after it.
     kept = min(one.at for body in bodies for one in body.insns)
     image = found.code[:kept] + laid.code
+    relocations = {}
+    for new, old in laid.relocations:
+        relocations.setdefault(old, []).append(kept + new)
     made = relocate.as_records(
         records,
         found.seg,
         kept,
         image,
         {**laid.covered, **laid.moved},
-        {old: kept + new for new, old in laid.relocations},
+        {old: tuple(dict.fromkeys(destinations)) for old, destinations in relocations.items()},
         laid.dropped,
     )
     if isinstance(made, str):

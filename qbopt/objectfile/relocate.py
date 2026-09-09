@@ -398,7 +398,7 @@ def as_records(
     kept: int,
     image: bytes,
     moved: dict[int, int],
-    relocations: dict[int, int],
+    relocations: dict[int, int | tuple[int, ...]],
     dropped: frozenset[int] = frozenset(),
 ) -> list[omf.Record] | str:
     """Every record, with the code segment replaced by `image`.
@@ -407,7 +407,10 @@ def as_records(
     relocate() derives what moved from a list of edits and refuses anything
     naming an offset inside one, which for a rebuilt segment is everything.
     Here the map is given: `moved` says where each instruction went and
-    `relocations` says where each fixup's field did.
+    `relocations` says where each fixup's field did. Multiple destinations
+    duplicate the resolved relocation, including its frame, for an inserted
+    operation referencing the same symbol. Collapsing that list to one
+    offset silently leaves one of the instructions unrelocated.
 
     The code LEDATA records and the FIXUPPs that follow them are dropped and
     one fresh block is written where the LAST of them stood. Dropping them
@@ -439,7 +442,8 @@ def as_records(
                 # a fixup nothing explained is still the bug this catches.
                 continue
             return f"the fixup at {one.offset:#x} has nowhere to go in the rebuilt segment"
-        placed.append((landed, one))
+        for destination in landed if isinstance(landed, tuple) else (landed,):
+            placed.append((destination, one))
     placed.sort()
 
     last = None

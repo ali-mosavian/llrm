@@ -26,7 +26,8 @@ def sunk_stores(body: mir.MirBody, dgroup: frozenset[int], bounds: dict | None =
             continue
         operations = [op for block in inside for op in block.ops]
         if any(
-            op.barrier or op.kind in {mir.Kind.CALL, mir.Kind.ARG, mir.Kind.OPAQUE, mir.Kind.ESCAPE, mir.Kind.RETURN}
+            op.floating is not None or op.barrier
+            or op.kind in {mir.Kind.CALL, mir.Kind.ARG, mir.Kind.OPAQUE, mir.Kind.ESCAPE, mir.Kind.RETURN}
             for op in operations
         ):
             continue

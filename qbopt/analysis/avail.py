@@ -316,7 +316,7 @@ def _dead_in(block, overwritten: dict, dgroup: frozenset[int], calls: dict[int, 
             # store, since sp comes back where it started and nothing
             # outside the idiom reads the cells it passed through.
             continue
-        if op.barrier or (op.at in calls and not _clean(op, calls)):
+        if op.floating is not None or op.barrier or (op.at in calls and not _clean(op, calls)):
             overwritten = {}
             continue
         if op.at in calls:
@@ -381,9 +381,10 @@ def dead_stores(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) ->
     A block with no successor, or one this cannot see, starts from nothing:
     the caller may read the cell.
 
-    Three things clear what is known, and each is a way the cell could be
+    These clear what is known, and each is a way the cell could be
     read without this seeing a load of it: a barrier, whose addresses are
     its own; a call runtime.py has not proved leaves caller memory alone;
+    a strict floating operation whose exception handler can observe memory;
     and a load that may alias, which is the ordinary case.
 
     Stack slots are excluded outright rather than reasoned about. A

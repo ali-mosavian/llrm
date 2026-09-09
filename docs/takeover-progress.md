@@ -2548,3 +2548,59 @@ refuse. The 71 focused tests pass. Each MIR stage can display the proof, e.g.
 `exact loop exit 0xa9 after 10 iterations: ... D:4=0x43f3c000` in
 `/tmp/qbopt-fpcse-proved-exit`. ASM and the 3956 PDS cost are unchanged: the
 remaining step is consuming this proof while preserving observable effects.
+
+### Execute one checked final floating iteration
+
+`floatloop.specialized` consumes the exact recurrence proof. It retains the
+first invariant floating load with the original initial memory/counter state,
+installs only loop-carried memory needed by the last iteration, and executes
+the original floating sequence once. It removes the backedge and materializes
+the final integer counter. Unknown/inexact iterations, calls, outgoing flags,
+and unsupported live-outs are not eligible.
+
+FPCSE, normalized symbolic assembly:
+
+```asm
+; before: ten iterations
+loop:
+    fld  dword [a]
+    ; shared addition, p and q computations
+    fld  dword [s]
+    fadd dword [p]
+    fadd dword [q]
+    fstp dword [s]
+    wait
+    inc  ax
+    cmp  ax,10
+    jle  loop
+
+; after: one iteration, the same floating operation sequence
+    fld  dword [a]                 ; original first exception check
+    mov  dword [s],43db6000h       ; proven 438.75 before final iteration
+    ; same shared addition, p and q computations
+    fld  dword [s]
+    fadd dword [p]
+    fadd dword [q]
+    fstp dword [s]                 ; 487.5
+    wait
+    mov  word [i],11
+```
+
+PDS/VBDOS modeled cost: **3956 -> 537**. PDS code segment grows 191 -> 204
+bytes; the runtime saving comes from removing nine executions, not shrinking
+the static body. QuickBASIC FPCSE remains unproved, 4598 -> 4652. PDS FPCSEX
+is 4508 -> 4562: strict FP checks now prevent moving its counter store out
+of the loop. Existing provisional FP target denominators remain unapproved.
+
+The initial runtime probe printed 48.75: the inserted seed had no relocation.
+Inserted stores now retain their symbolic reference provenance, and object
+emission preserves multiple destinations of one relocation instead of dropping
+all but one. The emitted-code regression fails with the old single-destination
+behavior, then passes with the fix. DSE and store-sinking regressions likewise
+failed before retaining exception-visible initial state.
+
+112 focused FP/recurrence/loop tests and two symbolic-relocation tests pass.
+The 97-primary-object before/after audit changes only FPCSE/FPCSEX across the
+three compilers, with no new emission refusals. All six affected runtime cases
+pass. Runtime artifacts: `qbopt-fpcse-final-relocated-226hmxj3` in the system
+temporary directory. Complete stage dumps: `/tmp/qbopt-fpcse-single-checked`.
