@@ -504,6 +504,7 @@ def push_imm(value: int, width: int = 2, at: int = 0, relocated: bool = False) -
     # one, which cost a byte at every `push 0` BC writes -- 513 of them in
     # qb-qrender. fixtures/omf could not show it, because the suite pushes
     # addresses and long literals rather than small constants.
+    value = _immediate(value, width)
     names = ["PUSHD_IMM32"] if width == 4 else ["PUSH_IMM16"]
     if fits_in_a_byte(value) and not relocated:
         names.insert(0, "PUSHD_IMM8" if width == 4 else "PUSHW_IMM8")

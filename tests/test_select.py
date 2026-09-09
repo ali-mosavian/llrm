@@ -50,6 +50,16 @@ def test_load_accepts_unsigned_dword_bit_pattern():
     emitted = select.load(Register.ESI, 0xbffffff9)
     assert emitted is not None
     assert emitted.code == bytes.fromhex("66bef9ffffbf")
+
+
+@pytest.mark.parametrize("value", [0x80000000, 0xedcba987, 0xffffffff])
+def test_push_accepts_unsigned_dword_bit_patterns(value):
+    """NOTS refused constant arguments with the sign bit set at the encoder's signed-i32 boundary."""
+    emitted = select.push_imm(value, 4)
+    assert emitted is not None
+    instruction = next(iter(Decoder(16, emitted.code)))
+    assert instruction.stack_pointer_increment == -4
+    assert instruction.immediate(0) & 0xffffffff == value
 from qbopt.frontend.declen import BITNESS
 
 
