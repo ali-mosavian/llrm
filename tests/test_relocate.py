@@ -7,23 +7,23 @@ from pathlib import Path
 import pytest
 
 import corpus
-from qbopt import omf
+from qbopt.objectfile import omf
 from helpers import hx
-from qbopt.declen import run
-from qbopt.declen import decode
-from qbopt.relocate import Edit
-from qbopt.relocate import REL8
-from qbopt.relocate import Shift
-from qbopt.relocate import apply
-from qbopt.relocate import Branch
-from qbopt.relocate import Inside
-from qbopt.relocate import reaches
+from qbopt.frontend.declen import run
+from qbopt.frontend.declen import decode
+from qbopt.objectfile.relocate import Edit
+from qbopt.objectfile.relocate import REL8
+from qbopt.objectfile.relocate import Shift
+from qbopt.objectfile.relocate import apply
+from qbopt.objectfile.relocate import Branch
+from qbopt.objectfile.relocate import Inside
+from qbopt.objectfile.relocate import reaches
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
-from qbopt.relocate import branches
-from qbopt.relocate import relocate
-from qbopt.relocate import retarget
-from qbopt.relocate import retarget_branches
+from qbopt.objectfile.relocate import branches
+from qbopt.objectfile.relocate import relocate
+from qbopt.objectfile.relocate import retarget
+from qbopt.objectfile.relocate import retarget_branches
 
 # 0x20..0x30 shrinks to 8 bytes, 0x40..0x50 to 4
 SHRUNK = Shift.of([Edit(0x20, 0x30, bytes(8)), Edit(0x40, 0x50, bytes(4))])
@@ -232,7 +232,7 @@ def test_a_fixup_naming_an_offset_the_layout_did_not_place_is_refused(monkeypatc
     removed from the map after the records have had theirs, so the fixup
     loop is the only thing that can see it missing.
     """
-    from qbopt import relocate
+    from qbopt.objectfile import relocate
     from qbopt.wholeseg import REBUILT
     from qbopt.wholeseg import rebuilt
 
@@ -243,7 +243,7 @@ def test_a_fixup_naming_an_offset_the_layout_did_not_place_is_refused(monkeypatc
         seen.append(offset)
         return real(offset, kept, moved)
 
-    from qbopt import module
+    from qbopt.objectfile import module
 
     def asks_a_fixup(one: Path) -> bool:
         records = omf.parse(one.read_bytes())
@@ -291,7 +291,7 @@ def test_every_rebuilt_object_maps_every_code_offset_it_names(obj: Path, monkeyp
     to an instruction the layout placed. If one did not, the refusal above
     would fire -- so a rebuild that succeeds is the assertion.
     """
-    from qbopt import relocate
+    from qbopt.objectfile import relocate
     from qbopt.wholeseg import REBUILT
     from qbopt.wholeseg import rebuilt
 

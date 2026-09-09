@@ -2,9 +2,9 @@ from dataclasses import replace
 
 from iced_x86 import Register
 
-from qbopt import mir
-from qbopt.module import Addr
-from qbopt.module import Space
+from qbopt.model import mir
+from qbopt.objectfile.module import Addr
+from qbopt.objectfile.module import Space
 
 
 def test_equal_offsets_do_not_prove_far_segments_disjoint() -> None:

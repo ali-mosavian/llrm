@@ -2,9 +2,9 @@ from dataclasses import replace
 
 import pytest
 
-from qbopt import ir
-from qbopt import mir
-from qbopt import transform
+from qbopt.model import ir
+from qbopt.model import mir
+from qbopt.optimize import transform
 
 
 @pytest.mark.parametrize("read_width", [2, 4])

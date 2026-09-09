@@ -15,29 +15,29 @@ import pytest
 from iced_x86 import Register
 
 from helpers import hx
-from qbopt.lift import Op
-from qbopt.lift import Kind
-from qbopt.lift import emit
-from qbopt.lift import lift
-from qbopt.lift import tail
-from qbopt.declen import run
-from qbopt.flags import Flag
-from qbopt.lift import FIXUP
-from qbopt.lift import Value
-from qbopt.lift import Bridge
-from qbopt.lift import encode
-from qbopt.lift import needed
-from qbopt.lift import refuse
-from qbopt.lift import sizeof
-from qbopt.module import Addr
-from qbopt.lift import Emitted
-from qbopt.lift import operand
-from qbopt.lift import regions
-from qbopt.module import Space
-from qbopt.declen import decode
+from qbopt.legacy.lift import Op
+from qbopt.legacy.lift import Kind
+from qbopt.legacy.lift import emit
+from qbopt.legacy.lift import lift
+from qbopt.legacy.lift import tail
+from qbopt.frontend.declen import run
+from qbopt.analysis.flags import Flag
+from qbopt.legacy.lift import FIXUP
+from qbopt.legacy.lift import Value
+from qbopt.legacy.lift import Bridge
+from qbopt.legacy.lift import encode
+from qbopt.legacy.lift import needed
+from qbopt.legacy.lift import refuse
+from qbopt.legacy.lift import sizeof
+from qbopt.objectfile.module import Addr
+from qbopt.legacy.lift import Emitted
+from qbopt.legacy.lift import operand
+from qbopt.legacy.lift import regions
+from qbopt.objectfile.module import Space
+from qbopt.frontend.declen import decode
 from helpers import classify_code
-from qbopt.lift import emit_region
-from qbopt.module import literal_only
+from qbopt.legacy.lift import emit_region
+from qbopt.objectfile.module import literal_only
 
 
 def test_operand_refuses_a_segment_override() -> None:
@@ -794,9 +794,9 @@ def test_a_widened_far_pointer_keeps_its_segment_override() -> None:
     from iced_x86 import Encoder
     from iced_x86 import Instruction
 
-    from qbopt import lift as lifting
-    from qbopt.module import Space
-    from qbopt.module import far_pointer
+    from qbopt.legacy import lift as lifting
+    from qbopt.objectfile.module import Space
+    from qbopt.objectfile.module import far_pointer
 
     where = far_pointer(0, Register.BX, Register.ES)
     assert where.space is Space.FAR and where.segment is Register.ES

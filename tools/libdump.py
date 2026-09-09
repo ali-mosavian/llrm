@@ -1,7 +1,7 @@
 """
 One routine out of a DOS runtime library, disassembled.
 
-qbopt/runtime.py's contracts are meant to be established from evidence
+qbopt/abi/runtime.py's contracts are meant to be established from evidence
 rather than assumed, and its own standard is the QuickBASIC 4.5 source. For
 the float routines there is no source to read: runtime/inc/rtmint.inc
 declares B$FCMP, B$FILD and B$FIST and nothing in the 148-file runtime tree
@@ -33,8 +33,8 @@ from iced_x86 import Mnemonic
 from iced_x86 import Formatter
 from iced_x86 import FormatterSyntax
 
-from qbopt import omf
-from qbopt.declen import BITNESS
+from qbopt.objectfile import omf
+from qbopt.frontend.declen import BITNESS
 
 THEADR = 0x80
 MODEND = (0x8A, 0x8B)

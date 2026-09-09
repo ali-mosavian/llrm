@@ -4,17 +4,17 @@ from dataclasses import replace
 import pytest
 
 import corpus
-from qbopt import runtime
-from qbopt.calls import ARITY
-from qbopt.runtime import Reg
-from qbopt.calls import DIVIDE
-from qbopt.calls import COMPARE
-from qbopt.runtime import EVERY
-from qbopt.calls import MULTIPLY
-from qbopt.runtime import Memory
-from qbopt.calls import REMAINDER
-from qbopt.runtime import Control
-from qbopt.blocks import INLINE_TABLE
+from qbopt.abi import runtime
+from qbopt.legacy.calls import ARITY
+from qbopt.abi.runtime import Reg
+from qbopt.legacy.calls import DIVIDE
+from qbopt.legacy.calls import COMPARE
+from qbopt.abi.runtime import EVERY
+from qbopt.legacy.calls import MULTIPLY
+from qbopt.abi.runtime import Memory
+from qbopt.legacy.calls import REMAINDER
+from qbopt.abi.runtime import Control
+from qbopt.frontend.blocks import INLINE_TABLE
 
 NAMES = sorted(runtime.CONTRACTS)
 
@@ -358,7 +358,7 @@ def test_the_semicolon_long_print_reads_no_register() -> None:
     compilers: `mov ax,114h` at 0x189 under VBDOS, 0x5db under PDS 7.1
     and 0x1ef6 under QuickBASIC 4.5, so there is no variant.
     """
-    from qbopt import runtime
+    from qbopt.abi import runtime
 
     one = runtime.contract("B$PSI4")
     assert one.established, "B$PSI4 is not in the table"

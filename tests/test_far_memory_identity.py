@@ -4,8 +4,9 @@ from dataclasses import replace
 
 import pytest
 
-from qbopt import avail, mir
-from qbopt.module import Addr, Space
+from qbopt.analysis import avail
+from qbopt.model import mir
+from qbopt.objectfile.module import Addr, Space
 
 
 @pytest.mark.parametrize("segment", [None, mir.Value(3, 0)])
@@ -44,7 +45,7 @@ def test_harr_uses_the_value_it_just_stored() -> None:
     """HARR loaded each element immediately after storing its already-available value."""
     from pathlib import Path
     import corpus
-    from qbopt import transform
+    from qbopt.optimize import transform
 
     path = Path("fixtures/omf/harr-p-g2.obj")
     module = corpus.loaded(path)

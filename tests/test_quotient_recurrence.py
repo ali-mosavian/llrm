@@ -3,7 +3,9 @@ from pathlib import Path
 import corpus
 import pytest
 
-from qbopt import induction, ir, loops, mir, transform
+from qbopt.analysis import induction, loops
+from qbopt.model import ir, mir
+from qbopt.optimize import transform
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])

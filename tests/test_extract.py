@@ -1,10 +1,10 @@
 """Bit extraction has value operands; only lowering chooses machine form."""
 
-from qbopt import ir
-from qbopt import lir
-from qbopt import mir
-from qbopt import lower
-from qbopt import objwrite
+from qbopt.model import ir
+from qbopt.model import lir
+from qbopt.model import mir
+from qbopt.backend import lower
+from qbopt.objectfile import objwrite
 
 
 def test_restore_declares_its_input_and_high_result() -> None:
@@ -22,7 +22,7 @@ def test_restore_declares_its_input_and_high_result() -> None:
 
 def test_lowering_preserves_relocated_store_ownership() -> None:
     """NESTED printed T=0 instead of 675 when its promoted store lost its fixup."""
-    from qbopt.module import Addr, Space
+    from qbopt.objectfile.module import Addr, Space
 
     value = mir.Value(1, 0)
     cell = mir.MemRef(Addr(Space.SEGMENT, 0x88, 5), 2)

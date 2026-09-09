@@ -16,7 +16,7 @@ from pathlib import Path
 from dataclasses import asdict
 from dataclasses import dataclass
 
-from qbopt import omf
+from qbopt.objectfile import omf
 from qbopt import wholeseg
 
 

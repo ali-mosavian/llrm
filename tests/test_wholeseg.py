@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from qbopt import omf
-from qbopt import module
+from qbopt.objectfile import omf
+from qbopt.objectfile import module
 from qbopt import wholeseg
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
@@ -43,7 +43,7 @@ def test_split_edges_do_not_create_phantom_padding(tag) -> None:
     bools has the same critical-edge shape in the checked-in BC corpus.
     The emitted branches must land on instructions, not shifted addresses.
     """
-    from qbopt.blocks import code_map
+    from qbopt.frontend.blocks import code_map
 
     result = wholeseg.emitted(Path(f"fixtures/omf/bools-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result
@@ -102,9 +102,9 @@ def test_a_rebuilt_object_keeps_every_code_fixup_it_still_has_a_home_for(obj: Pa
     it cannot explain is still refused outright -- so the count is checked
     against what was deliberately dropped rather than relaxed.
     """
-    from qbopt import layout
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.backend import layout
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     data = obj.read_bytes()
     # Through whichever emitter ran. Both converge on layout.rebuild, and
@@ -157,7 +157,7 @@ def test_a_rebuilt_object_keeps_every_code_fixup_it_still_has_a_home_for(obj: Pa
     # Each survivor still names what it named. `inside` maps an offset in
     # the old code to where the layout put it, which is what a fixup into
     # this same segment carries as its displacement.
-    from qbopt import relocate
+    from qbopt.objectfile import relocate
 
     both = {**laid.covered, **laid.moved}
     inside = {one: relocate._mapped(one, header, both) for one in both}
@@ -177,7 +177,7 @@ def test_the_partition_notices_an_occurrence_that_went_missing() -> None:
     it. A set of what each fixup names would not notice: flags-p-g2-zd
     references one cell nine times, and eight of them could go with the
     set unchanged."""
-    from qbopt import layout
+    from qbopt.backend import layout
 
     grabbed: dict = {}
     was = layout.rebuild
@@ -257,13 +257,13 @@ def test_a_refused_body_is_laid_out_widened_and_only_that_body_is_widened() -> N
     raised body as well as every optimised one walked each pair chain twice:
     68 calls over the p-g2 fixtures where 38 do.
     """
-    from qbopt import mir
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import regalloc
-    from qbopt import transform
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.model import mir
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.legacy import regalloc
+    from qbopt.optimize import transform
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     calls = []
     real = transform.widened
@@ -325,8 +325,8 @@ def _unrelocated(data: bytes) -> list[str]:
     reads offset zero of the segment instead -- the right instruction on
     the wrong address, which no structural check on the object notices.
     """
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(data))
     fields = {one.offset for one in omf.fixups(omf.parse(data)) if one.seg == found.seg}
@@ -373,7 +373,7 @@ def test_an_emission_says_which_emitter_produced_it() -> None:
 def test_an_allocation_refusal_preserves_the_input_and_original_reason() -> None:
     """hotlop: an injected spill failure was hidden by the MIR emitter's
     unrelated 'mov is not one select.py can emit' error at 0x003c."""
-    from qbopt import allocate
+    from qbopt.backend import allocate
 
     was = allocate.RegAlloc.transform
 
@@ -393,7 +393,7 @@ def test_an_allocation_refusal_preserves_the_input_and_original_reason() -> None
 def test_a_tangled_copy_refuses_without_trying_another_emitter() -> None:
     """A phi's copies that all read each other's destinations need a
     temporary this does not have. Named, not emitted in the wrong order."""
-    from qbopt import parcopy
+    from qbopt.backend import parcopy
 
     was = parcopy.ParallelCopy.transform
 
@@ -413,7 +413,7 @@ def test_a_tangled_copy_refuses_without_trying_another_emitter() -> None:
 def test_a_malformed_copy_group_is_a_bug_and_escapes() -> None:
     """Something that is not a move in a copy group is this pass being
     wrong about its own data, not a body it cannot place."""
-    from qbopt import parcopy
+    from qbopt.backend import parcopy
 
     was = parcopy.ParallelCopy.transform
 
@@ -429,7 +429,7 @@ def test_a_malformed_copy_group_is_a_bug_and_escapes() -> None:
 
 
 def test_a_refusal_says_so_rather_than_looking_like_a_rebuild() -> None:
-    from qbopt import module
+    from qbopt.objectfile import module
 
     was = module.of
     try:
@@ -460,10 +460,10 @@ def test_a_spilled_copy_stays_grouped_and_legacy_refusals_are_reported() -> None
     objects crashed; retain coverage of its public exception handling too.
     """
 
-    from qbopt import ir
-    from qbopt import lir
-    from qbopt import spiller
-    from qbopt import frame as frames
+    from qbopt.model import ir
+    from qbopt.model import lir
+    from qbopt.backend import spiller
+    from qbopt.backend import frame as frames
 
     # One parallel copy, `v3 <- v4`, with both ends spilled.
     move = lir.Insn(
@@ -569,11 +569,11 @@ def test_the_long_divide_bodys_entry_reads_nothing_it_has_not_written() -> None:
     from iced_x86 import RegisterExt
     from iced_x86 import InstructionInfoFactory
 
-    from qbopt import omf
-    from qbopt import module
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
     from qbopt import wholeseg
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     got = wholeseg.emitted(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes())
     assert got.outcome is wholeseg.Emission.LIR, f"it fell back: {got.fallback_reason}"

@@ -14,9 +14,9 @@ import subprocess
 import pytest
 
 from helpers import hx
-from qbopt.declen import run
-from qbopt.declen import decode
-from qbopt.declen import length
+from qbopt.frontend.declen import run
+from qbopt.frontend.declen import decode
+from qbopt.frontend.declen import length
 
 FORMS = [
     ("A1 5E 00", 3, "mov ax,moffs16"),

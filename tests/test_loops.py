@@ -1,5 +1,5 @@
 """
-qbopt/loops.py's own gate: the shapes BC actually compiles, and the one it
+qbopt/analysis/loops.py's own gate: the shapes BC actually compiles, and the one it
 never does.
 """
 
@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 
 import corpus
-from qbopt import loops
-from qbopt.blocks import Ends
-from qbopt.blocks import Block
+from qbopt.analysis import loops
+from qbopt.frontend.blocks import Ends
+from qbopt.frontend.blocks import Block
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 

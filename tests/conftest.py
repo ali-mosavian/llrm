@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 import corpus
-from qbopt import omf
+from qbopt.objectfile import omf
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "omf"
 

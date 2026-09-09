@@ -19,14 +19,14 @@ from dosbox import dosbox_bin
 from cache import cached_launch
 from cache import toolchain_identity
 
-from qbopt import omf
-from qbopt import module
-from qbopt.calls import sites
-from qbopt.blocks import code_map
+from qbopt.objectfile import omf
+from qbopt.objectfile import module
+from qbopt.legacy.calls import sites
+from qbopt.frontend.blocks import code_map
 from qbopt.rewrite import rewrite
-from qbopt.blocks import partition
-from qbopt.calls import FIX_MULTIPLY
-from qbopt.blocks import instructions
+from qbopt.frontend.blocks import partition
+from qbopt.legacy.calls import FIX_MULTIPLY
+from qbopt.frontend.blocks import instructions
 
 pytestmark = [pytest.mark.e2e, pytest.mark.skipif(dosbox_bin() is None, reason="no dosbox-x")]
 

@@ -1,5 +1,5 @@
 """
-qbopt/pairs.py's own gate.
+qbopt/frontend/pairs.py's own gate.
 
 The load half is checked against lift.py, which answers the same question
 over bytes rather than over values. Two independent implementations agreeing
@@ -15,19 +15,19 @@ from pathlib import Path
 import pytest
 
 import corpus
-from qbopt import mir
-from qbopt import pairs
-from qbopt import runtime
-from qbopt.lift import lift
-from qbopt import blocks as split
-from qbopt.blocks import code_map
+from qbopt.model import mir
+from qbopt.frontend import pairs
+from qbopt.abi import runtime
+from qbopt.legacy.lift import lift
+from qbopt.frontend import blocks as split
+from qbopt.frontend.blocks import code_map
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
 
 def test_widened_restore_reads_the_value_it_splits() -> None:
     """nbody widening changed PX0 from 1258 to 47624: restores had no input dependency."""
-    from qbopt import ir
+    from qbopt.model import ir
 
     value = mir.Value(1, 0, 0, 1, 1)
     after = mir.Op(0, ir.Operation.MOVE, "mov", (value,), (), (), (), None,
@@ -42,7 +42,8 @@ def test_widened_restore_reads_the_value_it_splits() -> None:
 @pytest.mark.parametrize("number", [0, 1])
 def test_restore_clobbers_its_high_half_even_when_dead(number: int) -> None:
     """nbody printed PX0=1163 for 1258 when a restore overwrote its array index."""
-    from qbopt import ir, lower
+    from qbopt.model import ir
+    from qbopt.backend import lower
 
     value = mir.Value(1, 0)
     after = mir.Op(0, ir.Operation.MOVE, "mov", (value,), (),
@@ -172,8 +173,8 @@ def test_a_pair_needs_adjacent_addresses_and_a_known_pair() -> None:
     """The two facts that make two moves one long, and neither is optional."""
     from iced_x86 import Register
 
-    from qbopt.module import Addr
-    from qbopt.module import Space
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     where = Addr(Space.LITERAL, 0x10)
     assert pairs._adjacent(mir.MemRef(addr=where, width=2), mir.MemRef(addr=where.plus(2), width=2))
@@ -291,7 +292,7 @@ def test_a_pair_doubled_is_recognised_and_not_chained() -> None:
     the corpus is exactly that case -- so the shape is counted and the
     provenance is still refused.
     """
-    from qbopt import declen
+    from qbopt.frontend import declen
 
     at = 0x12D
     found = corpus.loaded(Path("fixtures/omf/procs-p-evt.obj"))
@@ -319,7 +320,7 @@ def test_a_sign_extension_from_a_segment_register_is_not_a_long() -> None:
     """
     from iced_x86 import Register
 
-    from qbopt import ir
+    from qbopt.model import ir
 
     def extending(source: ir.Loc) -> tuple[mir.Op, mir.Op]:
         into = ir.Reg(register=Register.AX, width=2)
@@ -365,7 +366,7 @@ def test_two_negates_without_the_borrow_are_not_one_long_negate() -> None:
     from iced_x86 import Register
     from iced_x86 import Register_
 
-    from qbopt import ir
+    from qbopt.model import ir
 
     def unary(at: int, name: str, register: Register_, value: int) -> mir.Op:
         where = ir.Reg(register=register, width=2)
@@ -487,7 +488,7 @@ def test_a_widened_negate_drops_its_carry_too() -> None:
 def test_inserted_operation_at_chain_entry_survives_widening(before: bool) -> None:
     """nbody's counter chain emitted three times at 0x31b and refused layout."""
     from dataclasses import replace
-    from qbopt import ir
+    from qbopt.model import ir
 
     found = corpus.loaded(Path("fixtures/omf/negnot-p-g2.obj"))
     body = mir.bodies(found, split.partition(found, code_map(found)))[0][1]
@@ -543,8 +544,8 @@ def test_a_widened_body_still_lays_out(obj: Path) -> None:
     overlap in the coverage arithmetic, one as a length that changed between
     the two passes -- so this is the check that would have caught either.
     """
-    from qbopt import omf
-    import qbopt.layout as layout
+    from qbopt.objectfile import omf
+    import qbopt.backend.layout as layout
 
     found = corpus.loaded(obj)
     assert found is not None
@@ -581,7 +582,7 @@ def test_a_long_immediate_is_both_halves_of_it() -> None:
     widening took the low half's semantics and renamed the register, so
     every long constant with a high half came out wrong.
     """
-    from qbopt import ir
+    from qbopt.model import ir
 
     seen = 0
     for obj in FIXTURES:
@@ -762,9 +763,9 @@ def _pushed(data: bytes) -> list[tuple[str, ...]]:
     from iced_x86 import OpKind
     from iced_x86 import Mnemonic
 
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import target
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.backend import target
 
     found = module.of(omf.parse(data))
     insns = [one for block in split.partition(found, code_map(found)) for one in block.insns]
@@ -791,13 +792,13 @@ def test_a_restore_hands_the_pair_back_into_the_registers_bc_reads() -> None:
     widening did not touch may be re-encoded freely, so long as the values
     are right -- and a legal rename there read as this defect.
     """
-    from qbopt import ir
-    from qbopt import omf
-    from qbopt import lower
-    from qbopt import module
-    from qbopt import target
+    from qbopt.model import ir
+    from qbopt.objectfile import omf
+    from qbopt.backend import lower
+    from qbopt.objectfile import module
+    from qbopt.backend import target
     from qbopt import wholeseg
-    from qbopt import transform
+    from qbopt.optimize import transform
 
     raw = Path("fixtures/omf/negnot-q-O.obj").read_bytes()
     found = module.of(omf.parse(raw))
@@ -845,9 +846,9 @@ def test_widening_leaves_no_consumer_without_a_producer(stem: str) -> None:
     defined nothing -- so the value had no interval, the allocator skipped
     it, and its pin was never applied.
     """
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import transform
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.optimize import transform
 
     found = module.of(omf.parse((Path("fixtures/omf") / f"{stem}.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))

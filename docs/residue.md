@@ -23,7 +23,7 @@ predate both fixes and are kept here only as history. The corpus-wide census
 (`docs/numbers.md`) is still a real 19 per cent smaller in aggregate; this
 one program currently regresses. B, D, E, F and I below are re-counted fresh
 against the current object by `tools/residue_census.py` -- a mechanical walk
-of `qbopt/ir.py`'s own node stream, cross-checked by hand against
+of `qbopt/model/ir.py`'s own node stream, cross-checked by hand against
 `build/dump/NBODYQ/ir.txt` for 2-3 instances per pattern (noted per section)
 -- not reread from the disassembly by eye a second time. Every remaining
 instance below is additional, real slack on top of the +80: fixing all of it
@@ -47,7 +47,7 @@ existing growth check, for reasons F's own section now gives in full.
 
 ## A -- `popped_into`'s recombination is an unconditional no-op
 
-**15 instances.** `qbopt/calls.py`'s `popped_into()` pops a two-word argument
+**15 instances.** `qbopt/legacy/calls.py`'s `popped_into()` pops a two-word argument
 low-then-high, then does `push bx / push <lo16> / pop <target32>` to
 "recombine" them -- but two consecutive 16-bit pushes already leave the pair
 contiguous in dword layout on a 386; `pop e<target>` alone reads exactly that.
@@ -287,7 +287,7 @@ The machine arm still has the rule this describes. Its fix is the large
 one; MIR's was not.
 
 **Design review (2026-08-30), before any code:** E and F were both candidates
-for a shared, general (pattern, replacement) peephole engine in `qbopt/ir.py`,
+for a shared, general (pattern, replacement) peephole engine in `qbopt/model/ir.py`,
 mirroring `lift.PAIRED`/`NEGATE`'s own table-driven idiom matching. Opus's
 review (traced against the actual code, not the prose) came back **bespoke,
 not a general engine**, on two grounds neither of which is "wait for more
@@ -312,7 +312,7 @@ entry), I (a liveness module) or B (a fold over decided edits) -- five
 patterns, four different mechanisms, and no repetition an engine would
 actually be removing.
 
-**Fixed, 2026-08-30.** `qbopt/lift.py` gains `_bridges(insn) -> bool`: an
+**Fixed, 2026-08-30.** `qbopt/legacy/lift.py` gains `_bridges(insn) -> bool`: an
 unrecognised instruction may sit inside a widened region, unmoved, only if
 its own `FlowControl` is exactly `NEXT` (a plain, unconditionally-falls-
 through instruction -- neither a call, whose real effect is the callee's and
@@ -468,7 +468,7 @@ but the narrower 6 is the more conservative number if only the literal
 The design review above (E's own section) applies here too: bespoke, not a
 peephole engine, and F itself is two of the register/memory-sourced cwd
 shapes above (`mov ax,bx/cwd` and `mov ax,[mem]/cwd`), not the ALU-result or
-diverted-constant ones. `qbopt/lift.py` gains `Op.MOVSX` and
+diverted-constant ones. `qbopt/legacy/lift.py` gains `Op.MOVSX` and
 `_sign_extend_step()`, tried in `lift()`'s own walk the same way
 `_negate_step()` already is: `mov ax,<register>/cwd` or `mov ax,<memory>/cwd`
 (`classify()`'s own `LOADS` codes), contiguous, becomes a `movsx eax,<source>`
@@ -588,7 +588,7 @@ shapes exist in this object, and a re-measurement against the corrected
 `ir.Restore` and looking at what immediately follows for the same pair,
 rather than manual disassembly reading -- found **12** instances (2 G, 10 H),
 not 15. The fix took the second of the two sub-pieces above: the absorption
-result fed back in as a synthetic `Value`. `qbopt/lift.py` gains an `Op.CALL`
+result fed back in as a synthetic `Value`. `qbopt/legacy/lift.py` gains an `Op.CALL`
 value (its bytes are `calls.py`'s own already-assembled `Emitted`, verbatim,
 not something `instruction()`/`Encoder` builds) and a `tail()` function that
 seeds pair 0 with it and re-runs `lift()`'s own pairing rules
@@ -632,7 +632,7 @@ own restores is.
 where `dx`/`cx`/`bx` are each killed before being read on every path.
 
 **Fix**: the cheapest of the real fixes, because the machinery already
-exists. `qbopt/flags.py` is a complete iterative backward liveness analysis
+exists. `qbopt/analysis/flags.py` is a complete iterative backward liveness analysis
 over the block graph (`reads()`, `writes()`, `live_in()`, `live_after()`),
 and `rewrite.plan()` already computes `flags_after(blocks, live, at, end)` and
 threads it into `emit_region` -- the call site and the plumbing are in place.
@@ -647,7 +647,7 @@ ever killed by a call in between.
 `0x014a`, `0x01ec`, `0x0218`, `0x024f`, `0x0270`, `0x0291`, `0x02cf`, all
 pair 0 -- `bx`'s own restores, pair 1, are all still live). `tools/
 residue_census.py` reimplements this section's own planned fix: a real
-`live_in()`/`live_after()` over `qbopt.blocks`' own `Block`/`succ` graph, one
+`live_in()`/`live_after()` over `qbopt.frontend.blocks`' own `Block`/`succ` graph, one
 register at a time, `call far` treated as reading and writing conservatively
 as described above. It deliberately does *not* reuse `ir.py`'s own
 `Effects.defs`/`.uses` for this -- those root every sub-register write to its
@@ -792,22 +792,22 @@ table originally shipped with.
 | F -- sign-extension invisible | 9 (6 on the narrowest reading); recognition closed for 6 of the 9 (register/memory-sourced) | 0 measured -- every site still refused | **partly built**, 2026-08-30, no byte win yet |
 
 A, C, D, I, B, G+H and E are fixed; F's recognition gap is closed for two of
-its four sub-shapes with no measured payoff yet. A and C: `qbopt/calls.py`'s
+its four sub-shapes with no measured payoff yet. A and C: `qbopt/legacy/calls.py`'s
 `popped_into()` and `absorb()`; corpus-wide, not just this object, they took
-the static census from 17414 to 16942 bytes. G+H: `qbopt/lift.py`'s
-`tail()`, `qbopt/calls.py`'s `restore=` parameter, and `qbopt/rewrite.py`'s
+the static census from 17414 to 16942 bytes. G+H: `qbopt/legacy/lift.py`'s
+`tail()`, `qbopt/legacy/calls.py`'s `restore=` parameter, and `qbopt/rewrite.py`'s
 `tail_widened_calls()`; static census unchanged in region *count* (commit 3
 widens 19 existing call regions, corpus-wide, rather than adding new ones)
-but 57 bytes better, net, than before it. D, I and B: `qbopt/lift.py`'s
+but 57 bytes better, net, than before it. D, I and B: `qbopt/legacy/lift.py`'s
 `Kind.ALU_IMM`/`Op.ALUI`, the new `qbopt/registers.py`, and
 `qbopt/rewrite.py`'s `dead_pairs_after()` and
 `drop_restore_repush_round_trips()`; corpus-wide static census 26446 ->
 21302, 19 per cent smaller (110 `fixtures/omf` objects are mostly too small
 to exercise I or B at all -- see each pattern's own paragraph). E:
-`qbopt/lift.py`'s `_bridges()`, `Bridge`, and the `committed` gate;
+`qbopt/legacy/lift.py`'s `_bridges()`, `Bridge`, and the `committed` gate;
 corpus-wide static census does not move (110 fixtures/omf objects do not
 happen to interleave an unrelated instruction the way `bench/nbody.bas`
-does), `bench/nbody.bas` itself -9 bytes. F: `qbopt/lift.py`'s `Op.MOVSX`
+does), `bench/nbody.bas` itself -9 bytes. F: `qbopt/legacy/lift.py`'s `Op.MOVSX`
 and `_sign_extend_step()`; corpus-wide static census does not move either,
 and neither does `bench/nbody.bas`'s own object. See `docs/numbers.md` for
 the full progression.

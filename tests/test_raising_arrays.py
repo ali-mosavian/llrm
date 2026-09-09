@@ -4,12 +4,12 @@ from dataclasses import replace
 import pytest
 
 import corpus
-from qbopt import ir
-from qbopt import mir
+from qbopt.model import ir
+from qbopt.model import mir
 from qbopt import wholeseg
-from qbopt.module import Space
-from qbopt import raising_arrays
-from qbopt import consts
+from qbopt.objectfile.module import Space
+from qbopt.frontend import raising_arrays
+from qbopt.analysis import consts
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
@@ -20,7 +20,7 @@ def test_dim_normal_return_supplies_descriptor_constants(tag: str) -> None:
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
     call = next(op for block in body.blocks for op in block.ops if op.array)
     facts = consts._kills({}, call, {}, found.dgroup, found.calls)
-    from qbopt.module import Addr
+    from qbopt.objectfile.module import Addr
 
     assert consts._cell(facts, mir.MemRef(Addr(Space.SEGMENT, 20, found.program_data), 2)) == consts.Known(21, 2)
     assert consts._cell(facts, mir.MemRef(Addr(Space.SEGMENT, 24, found.program_data), 2)) == consts.Known(21, 2)
@@ -49,7 +49,7 @@ def test_descriptor_dimensions_follow_stack_order() -> None:
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_descriptor_fields_have_proven_addresses_without_new_relocations(tag: str) -> None:
     """HARR's descriptor fields looked like arbitrary pointer accesses to alias analysis."""
-    from qbopt.module import Addr
+    from qbopt.objectfile.module import Addr
 
     path = Path("fixtures/omf") / f"harr-{tag}.obj"
     found = corpus.loaded(path)
@@ -68,7 +68,7 @@ def test_descriptor_fields_have_proven_addresses_without_new_relocations(tag: st
 
 @pytest.mark.parametrize("space,offset,width", [(Space.FAR, 6, 2), (Space.LITERAL, 65535, 2), (Space.LITERAL, 6, 4)])
 def test_unknown_segment_wrapping_or_wide_pointer_is_not_resolved(space: Space, offset: int, width: int) -> None:
-    from qbopt.module import Addr
+    from qbopt.objectfile.module import Addr
 
     pointer = mir.Value(1, 0)
     ref = mir.MemRef(Addr(space, 2), 2, pointer)
@@ -119,7 +119,7 @@ def test_only_allocating_calls_carry_requests(name: str) -> None:
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_descriptor_metadata_alone_does_not_change_emission(tag: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    from qbopt import raising_array_bounds
+    from qbopt.frontend import raising_array_bounds
 
     monkeypatch.setattr(raising_array_bounds, "proven", lambda body: body)
     data = (Path("fixtures/omf") / f"harr-{tag}.obj").read_bytes()

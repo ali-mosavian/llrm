@@ -5,7 +5,7 @@ from pathlib import Path
 import corpus
 import pytest
 
-from qbopt import mir
+from qbopt.model import mir
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
@@ -38,7 +38,8 @@ def test_single_store_is_a_rounding_boundary(tag):
 ])
 def test_conversion_formats_do_not_confuse_integer_and_real(name, width, expected):
     """The same four bytes mean signed integer for FILD, binary32 for FLD."""
-    from qbopt import ir, raising_floats
+    from qbopt.model import ir
+    from qbopt.frontend import raising_floats
     store = name in ("fstp", "fistp")
     ref = mir.MemRef(None, width)
     op = mir.Op(0, ir.Operation.FLOAT_STORE if store else ir.Operation.FLOAT_LOAD, name, (), (),
@@ -57,7 +58,8 @@ def test_conversion_formats_do_not_confuse_integer_and_real(name, width, expecte
     ("fchs", "exact", "none"), ("fabs", "exact", "none"), ("fsqrt", "dynamic", "dynamic")
 ])
 def test_unary_precision_is_explicit(name, precision, rounding):
-    from qbopt import ir, raising_floats
+    from qbopt.model import ir
+    from qbopt.frontend import raising_floats
     op = mir.Op(0, ir.Operation.FLOAT_UNARY, name, (), ())
     rule = raising_floats.semantics(op)
     assert rule.precision == precision and rule.rounding == rounding

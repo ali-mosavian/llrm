@@ -1,5 +1,5 @@
 """
-qbopt/fpu.py: the emulator's interrupt, replaced by what it stands for.
+qbopt/backend/fpu.py: the emulator's interrupt, replaced by what it stands for.
 
 This is the one rewrite in the pass that changes what the output needs to
 run -- from any 8086 to one with a coprocessor -- so it is off unless asked
@@ -12,13 +12,13 @@ import pytest
 from iced_x86 import Decoder
 
 import corpus
-from qbopt import fpu
-from qbopt.declen import ESC
-from qbopt.declen import Stands
-from qbopt.declen import BITNESS
-from qbopt.declen import EMULATED
-from qbopt.declen import INTERRUPT
-from qbopt.blocks import instructions
+from qbopt.backend import fpu
+from qbopt.frontend.declen import ESC
+from qbopt.frontend.declen import Stands
+from qbopt.frontend.declen import BITNESS
+from qbopt.frontend.declen import EMULATED
+from qbopt.frontend.declen import INTERRUPT
+from qbopt.frontend.blocks import instructions
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 WAIT = 0x9B
@@ -31,7 +31,7 @@ WAIT = 0x9B
 ])
 def test_emulator_reencoding_moves_relocation_fields(native, protocol, wanted, shift) -> None:
     """nbody's FLD must follow allocation without changing its emulator protocol."""
-    from qbopt.select import Emitted
+    from qbopt.backend.select import Emitted
 
     made = fpu.wrapped(Emitted(bytes.fromhex(native), displacement_at=2, fields=(2,)), protocol)
     assert made.code == bytes.fromhex(wanted)
@@ -40,7 +40,7 @@ def test_emulator_reencoding_moves_relocation_fields(native, protocol, wanted, s
 
 
 def test_emulator_wait_remains_an_emulator_wait() -> None:
-    from qbopt.select import Emitted
+    from qbopt.backend.select import Emitted
 
     assert fpu.wrapped(Emitted(b"\x9b"), 0x3d).code == b"\xcd\x3d"
     assert fpu.wrapped(Emitted(b"\x67\xd9\x00"), 0x35) is None
@@ -144,7 +144,7 @@ EMULATOR_SITES = (
 
 @pytest.mark.parametrize(("raw", "text", "want"), EMULATOR_SITES, ids=lambda v: str(v)[:24])
 def test_a_hand_built_site_converts_to_the_documented_bytes(raw: bytes, text: str | None, want: bytes) -> None:
-    from qbopt.declen import decode
+    from qbopt.frontend.declen import decode
 
     found = decode(raw, 0)
     assert found is not None, f"declen decoded nothing from {raw.hex()}"
@@ -156,7 +156,7 @@ def test_a_hand_built_site_converts_to_the_documented_bytes(raw: bytes, text: st
 
 def test_a_hand_built_segment_override_is_refused() -> None:
     """int 3Ch, with a real ESC opcode following it."""
-    from qbopt.declen import decode
+    from qbopt.frontend.declen import decode
 
     raw = bytes([INTERRUPT, Stands.SEGMENTED, 0xD9, 0x06, 0x00, 0x00])
     found = decode(raw, 0)
@@ -165,7 +165,7 @@ def test_a_hand_built_segment_override_is_refused() -> None:
 
 
 def test_an_ordinary_interrupt_is_refused() -> None:
-    from qbopt.declen import decode
+    from qbopt.frontend.declen import decode
 
     raw = bytes([INTERRUPT, 0x21, 0x90, 0x90])
     found = decode(raw, 0)

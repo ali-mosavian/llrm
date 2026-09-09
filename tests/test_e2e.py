@@ -13,8 +13,8 @@ import pytest
 from configs import CONFIGS
 from dosbox import dosbox_bin
 
-from qbopt.extent import BodyKind
-from qbopt.bodyedit import rewritten
+from qbopt.frontend.extent import BodyKind
+from qbopt.optimize.bodyedit import rewritten
 
 pytestmark = [pytest.mark.e2e, pytest.mark.skipif(dosbox_bin() is None, reason="no dosbox-x")]
 
@@ -169,14 +169,14 @@ def test_every_compiled_object_round_trips_through_the_selector(tag: str) -> Non
     """
     from iced_x86 import Decoder
 
-    from qbopt import ir
-    from qbopt import mir
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import select
-    from qbopt.declen import BITNESS
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.model import ir
+    from qbopt.model import mir
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.backend import select
+    from qbopt.frontend.declen import BITNESS
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     work = Path("build/e2e") / f"{tag}-roundtrip"
     e2e.run(tag, None, dry_run=True, work=work)

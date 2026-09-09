@@ -1,5 +1,5 @@
 """
-qbopt/constrain.py: a required register gets a value of its own.
+qbopt/backend/constrain.py: a required register gets a value of its own.
 
 `imul`'s product is dx:ax and it names neither. While the operands were the
 registers BC had, that was satisfied by not moving anything; once lowering
@@ -11,9 +11,9 @@ and ax and printed R= 6460 for 7500.
 import pytest
 from iced_x86 import Register
 
-from qbopt import ir
-from qbopt import lir
-from qbopt import constrain
+from qbopt.model import ir
+from qbopt.model import lir
+from qbopt.backend import constrain
 
 
 def _body(*insns) -> lir.LirBody:
@@ -127,9 +127,9 @@ def test_a_value_a_call_reads_in_a_register_it_names_nowhere() -> None:
     """
     from iced_x86 import Register
 
-    from qbopt import ir
-    from qbopt import lir
-    from qbopt import constrain
+    from qbopt.model import ir
+    from qbopt.model import lir
+    from qbopt.backend import constrain
 
     call = lir.Insn(
         at=0x106,
@@ -168,9 +168,9 @@ def test_a_value_already_in_the_register_a_call_needs_is_not_split() -> None:
     """
     from iced_x86 import Register
 
-    from qbopt import ir
-    from qbopt import lir
-    from qbopt import constrain
+    from qbopt.model import ir
+    from qbopt.model import lir
+    from qbopt.backend import constrain
 
     call = lir.Insn(
         at=0x10,
@@ -205,9 +205,9 @@ def test_a_value_already_in_the_register_an_idiom_wants_is_not_copied() -> None:
     """
     from iced_x86 import Register
 
-    from qbopt import ir
-    from qbopt import lir
-    from qbopt import constrain
+    from qbopt.model import ir
+    from qbopt.model import lir
+    from qbopt.backend import constrain
 
     held = ir.Held(2, 4)
     one = lir.Insn(

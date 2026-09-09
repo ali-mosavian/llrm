@@ -5,11 +5,11 @@ from pathlib import Path
 import pytest
 
 import corpus
-from qbopt import mir
-from qbopt import consts
-from qbopt import ir
-from qbopt.module import Addr
-from qbopt.module import Space
+from qbopt.model import mir
+from qbopt.analysis import consts
+from qbopt.model import ir
+from qbopt.objectfile.module import Addr
+from qbopt.objectfile.module import Space
 
 
 @pytest.mark.parametrize("indirect", ["base", "segment"])
@@ -85,7 +85,9 @@ def test_lngmix_dividend_is_known_after_production_passes() -> None:
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_spill_uses_the_known_seven_as_an_immediate(tag):
     """SPILL reloaded invariant h3=7 on each of its hundred inner iterations."""
-    from qbopt import blocks, module, omf, wholeseg
+    from qbopt.frontend import blocks
+    from qbopt.objectfile import module, omf
+    from qbopt import wholeseg
     from iced_x86 import Code
     result = wholeseg.emitted(Path(f"fixtures/omf/spill-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason

@@ -3,7 +3,9 @@ from pathlib import Path
 import corpus
 import pytest
 
-from qbopt import mir, transform, wholeseg
+from qbopt.model import mir
+from qbopt.optimize import transform
+from qbopt import wholeseg
 
 
 @pytest.mark.parametrize("program", ["harr", "segld"])

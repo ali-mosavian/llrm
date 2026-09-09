@@ -1,5 +1,5 @@
 """
-qbopt/ir.py's own gate: decode every Body to Nodes, re-emit, byte-identical.
+qbopt/model/ir.py's own gate: decode every Body to Nodes, re-emit, byte-identical.
 
 Everything here runs against the real corpus, not a hand-built stand-in
 where one exists -- the segment/DGROUP work in test_module.py and
@@ -15,19 +15,19 @@ from iced_x86 import Register
 from iced_x86 import Register_
 
 import corpus
-from qbopt import ir
+from qbopt.model import ir
 from helpers import hx
-from qbopt import extent
-from qbopt import module
-from qbopt.flags import ALL
-from qbopt.flags import Flag
-from qbopt.blocks import Ends
-from qbopt.declen import Insn
-from qbopt.extent import Body
-from qbopt.blocks import Block
-from qbopt.declen import decode
-from qbopt.blocks import CodeMap
-from qbopt.extent import BodyKind
+from qbopt.frontend import extent
+from qbopt.objectfile import module
+from qbopt.analysis.flags import ALL
+from qbopt.analysis.flags import Flag
+from qbopt.frontend.blocks import Ends
+from qbopt.frontend.declen import Insn
+from qbopt.frontend.extent import Body
+from qbopt.frontend.blocks import Block
+from qbopt.frontend.declen import decode
+from qbopt.frontend.blocks import CodeMap
+from qbopt.frontend.extent import BodyKind
 
 
 def _decode(source: Path | bytes) -> tuple[module.Module, tuple[ir.BodyIR, ...]]:

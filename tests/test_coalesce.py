@@ -1,11 +1,11 @@
 """
-qbopt/coalesce.py's own gate: a join is a claim that two values are one,
+qbopt/backend/coalesce.py's own gate: a join is a claim that two values are one,
 and the claim has to hold for every reader of either of them.
 """
 
-from qbopt import ir
-from qbopt import lir
-from qbopt import coalesce
+from qbopt.model import ir
+from qbopt.model import lir
+from qbopt.backend import coalesce
 import pytest
 
 
@@ -14,7 +14,10 @@ def test_matrix_diagonal_stride_needs_no_register_copies(tag):
     """MATRIX copied its diagonal pointer out and back on each of twenty iterations."""
     from pathlib import Path
     from iced_x86 import Mnemonic, OpKind
-    from qbopt import blocks, loops, module, omf, wholeseg
+    from qbopt.frontend import blocks
+    from qbopt.analysis import loops
+    from qbopt.objectfile import module, omf
+    from qbopt import wholeseg
 
     result = wholeseg.emitted(Path(f"fixtures/omf/matrix-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
@@ -30,7 +33,7 @@ def test_matrix_diagonal_stride_needs_no_register_copies(tag):
 def test_retained_resource_identity_has_a_legal_encoding():
     """HARR's hoisted selector copy became unencodable mov es,es across a coverage gap."""
     from iced_x86 import Register
-    from qbopt import allocate, select
+    from qbopt.backend import allocate, select
 
     body = lir.LirBody("resource-copy", 0,
                        (lir.LirBlock(0, (_move(3, 1, 1),)),), {}, {1: Register.ES})
@@ -44,7 +47,7 @@ def test_retained_resource_identity_has_a_legal_encoding():
 def test_equal_resource_values_coalesce_without_consuming_a_gpr():
     """Address-space values pinned to ES were excluded by the GPR-only coalescing domain."""
     from iced_x86 import Register
-    from qbopt import allocate, target
+    from qbopt.backend import allocate, target
     from dataclasses import replace
 
     load = replace(_define(0, 1), what=ir.Semantics(ir.Operation.MOVE, "mov",
@@ -65,7 +68,7 @@ def test_equal_resource_values_coalesce_without_consuming_a_gpr():
 @pytest.mark.parametrize("other", ["different_resource", "clobber"])
 def test_resource_constraints_survive_coalescing(other):
     from iced_x86 import Register
-    from qbopt import allocate
+    from qbopt.backend import allocate
     from dataclasses import replace
     insns = (_define(0, 1), _move(3, 2, 1), _use(6, 2))
     pins = {1: Register.ES, 2: Register.FS if other == "different_resource" else Register.ES}
@@ -154,7 +157,7 @@ def test_coalescing_keeps_the_pinned_return_as_representative() -> None:
     done = coalesce.joined(body, {2: Register.EAX})
     assert done.insns[0].defines == (2,)
     assert done.insns[-1].uses == (2,)
-    from qbopt import allocate, target
+    from qbopt.backend import allocate, target
 
     for register in (Register.EAX, Register.EBX, Register.ECX, Register.EDX):
         pins = {2: register}
@@ -233,14 +236,14 @@ def test_a_join_that_would_make_a_class_uncolourable_is_refused() -> None:
     """
     from pathlib import Path
 
-    from qbopt import mir
-    from qbopt import omf
+    from qbopt.model import mir
+    from qbopt.objectfile import omf
     from qbopt import flow
-    from qbopt import lower
-    from qbopt import module
-    from qbopt import runtime
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.backend import lower
+    from qbopt.objectfile import module
+    from qbopt.abi import runtime
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/divmod-p-g2.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))

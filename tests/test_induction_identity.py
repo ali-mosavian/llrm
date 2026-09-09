@@ -3,21 +3,23 @@ from dataclasses import replace
 
 import pytest
 
-from qbopt import ir
-from qbopt import mir
-from qbopt import ssa
-from qbopt import loops
-from qbopt import strength
-from qbopt import induction
-from qbopt import transform
-from qbopt.module import Addr
-from qbopt.module import Space
+from qbopt.model import ir
+from qbopt.model import mir
+from qbopt.analysis import ssa
+from qbopt.analysis import loops
+from qbopt.optimize import strength
+from qbopt.analysis import induction
+from qbopt.optimize import transform
+from qbopt.objectfile.module import Addr
+from qbopt.objectfile.module import Space
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_matrix_reduced_stride_keeps_its_multiplier_address(tag):
     """MATRIX printed T=190 instead of T=380 after its stride read DS:0 instead of w."""
-    from qbopt import wholeseg, module, omf, blocks
+    from qbopt import wholeseg
+    from qbopt.objectfile import module, omf
+    from qbopt.frontend import blocks
 
     result = wholeseg.emitted(Path(f"fixtures/omf/matrix-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
@@ -30,7 +32,9 @@ def test_matrix_reduced_stride_keeps_its_multiplier_address(tag):
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_harr_hoisted_descriptor_read_keeps_its_address(tag):
     """HARR's reduced pointer read DS:0 instead of the array-base descriptor field."""
-    from qbopt import wholeseg, module, omf, blocks
+    from qbopt import wholeseg
+    from qbopt.objectfile import module, omf
+    from qbopt.frontend import blocks
 
     result = wholeseg.emitted(Path(f"fixtures/omf/harr-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
@@ -45,7 +49,7 @@ def test_harr_hoisted_descriptor_read_keeps_its_address(tag):
 def test_nbody_inner_counter_has_a_proven_upper_bound() -> None:
     """Nbody's conditional interaction body hid the 0..5 counter range from the two-block proof."""
     import corpus
-    from qbopt import consts
+    from qbopt.analysis import consts
     path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
     found = corpus.loaded(path)
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
@@ -102,7 +106,7 @@ def test_harr_descriptor_offset_is_read_before_inner_loop_unless_written(changed
     inner = next(block for block in result.blocks if block.at == 0x58)
     assert any(mir.same_bytes(ref, field) for op in inner.ops for ref in op.loads) is changed
     if not changed:
-        from qbopt import loops
+        from qbopt.analysis import loops
         dominators = loops.dominators(list(result.blocks), result.entry)
         reads = [(block, op, ref) for block in result.blocks for op in block.ops for ref in op.loads
                  if mir.same_bytes(ref, field)]
@@ -231,7 +235,7 @@ def test_long_recurrence_keeps_its_width(copied: bool) -> None:
 def test_lngmxx_accumulator_has_a_whole_long_start(tag: str, monkeypatch) -> None:
     """LNGMXX's 32-bit sum was reported as starting with only its low word."""
     import corpus
-    from qbopt import loopexit
+    from qbopt.optimize import loopexit
 
     # Inspect recurrence analysis before exit evaluation removes the loop.
     monkeypatch.setattr(loopexit, "evaluated", lambda body: body)
@@ -652,7 +656,9 @@ def test_nested_row_recurrences_remove_repeated_multiplication(tag):
     """NESTED recomputed both row scales because all outer-loop recurrences were disabled."""
     from pathlib import Path
     from iced_x86 import Mnemonic
-    from qbopt import wholeseg, module, omf, blocks
+    from qbopt import wholeseg
+    from qbopt.objectfile import module, omf
+    from qbopt.frontend import blocks
     result = wholeseg.emitted(Path(f"fixtures/omf/nested-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))

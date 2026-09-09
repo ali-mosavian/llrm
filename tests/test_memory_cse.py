@@ -4,7 +4,8 @@ from pathlib import Path
 import pytest
 import corpus
 
-from qbopt import mir, transform
+from qbopt.model import mir
+from qbopt.optimize import transform
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])

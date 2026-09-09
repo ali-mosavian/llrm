@@ -1,6 +1,6 @@
-from qbopt.lift import Decoded
-from qbopt.declen import decode
-from qbopt.lift import classify
+from qbopt.legacy.lift import Decoded
+from qbopt.frontend.declen import decode
+from qbopt.legacy.lift import classify
 
 
 def hx(s: str) -> bytes:

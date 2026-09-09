@@ -1,5 +1,5 @@
 """
-qbopt/select.py: the first instructions this pass writes rather than moves.
+qbopt/backend/select.py: the first instructions this pass writes rather than moves.
 
 Everything before it rearranged bytes BC had already emitted. So the tests
 are about refusal as much as output -- an emitter that guesses at a form it
@@ -16,13 +16,13 @@ from iced_x86 import Register
 from iced_x86 import Register_
 
 import corpus
-from qbopt import ir
-from qbopt import select
+from qbopt.model import ir
+from qbopt.backend import select
 
 
 def test_signed_word_extension_uses_explicit_operands():
     """ADDRM's signed whole store needs MOVSX, not a width-mismatched MOV or CWD's fixed pair."""
-    from qbopt import target
+    from qbopt.backend import target
     what = ir.Semantics(ir.Operation.EXTEND, "movsx", (ir.Reg(Register.EBX, 4),), (ir.Reg(Register.SI, 2),))
     emitted = select.emit(what)
     assert emitted is not None
@@ -38,12 +38,12 @@ def test_load_accepts_unsigned_dword_bit_pattern():
     emitted = select.load(Register.ESI, 0xbffffff9)
     assert emitted is not None
     assert emitted.code == bytes.fromhex("66bef9ffffbf")
-from qbopt.declen import BITNESS
+from qbopt.frontend.declen import BITNESS
 
 
 def test_store_accepts_unsigned_dword_bit_pattern():
     """CHAIN refused its whole 0xc1747c23 initializer at 0x48 instead of emitting it."""
-    from qbopt.module import Addr, Space
+    from qbopt.objectfile.module import Addr, Space
     cell = ir.Mem(Addr(Space.FRAME, -4), 4)
     emitted = select.store_imm(cell, 0xc1747c23)
     assert emitted is not None
@@ -123,10 +123,10 @@ FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
 def selected(obj: Path) -> Iterator[tuple]:
     """Every op in the object the selector will emit, with what it emitted."""
-    from qbopt import ir
-    from qbopt import mir
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.model import ir
+    from qbopt.model import mir
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = corpus.loaded(obj)
     if found is None:
@@ -172,10 +172,10 @@ def test_the_covered_share_of_the_corpus_is_what_was_measured() -> None:
     across the corpus and qb-qrender together decodes to what it was asked
     for. A canary: if this stops being all of them, something narrowed.
     """
-    from qbopt import ir
-    from qbopt import mir
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.model import ir
+    from qbopt.model import mir
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     total = emitted = 0
     for obj in FIXTURES:
@@ -254,9 +254,9 @@ def test_a_relocated_address_is_emitted_as_zero_and_says_where() -> None:
     landed so the fixup moves with it. Both halves, or the field reads a
     bare zero at run time.
     """
-    from qbopt import ir
-    from qbopt.module import Addr
-    from qbopt.module import Space
+    from qbopt.model import ir
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     cell = ir.Mem(Addr(Space.SEGMENT, 0x1234, 5), 2)
     made = select.move_from(Register.AX, cell)
@@ -269,9 +269,9 @@ def test_a_relocated_address_is_emitted_as_zero_and_says_where() -> None:
 def test_a_frame_slot_keeps_its_displacement() -> None:
     """bp-relative is the other way round: the number really is in the code
     and no fixup names it, so there is nothing to move."""
-    from qbopt import ir
-    from qbopt.module import Addr
-    from qbopt.module import Space
+    from qbopt.model import ir
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     cell = ir.Mem(Addr(Space.FRAME, -0x18), 2)
     made = select.move_from(Register.AX, cell)
@@ -297,9 +297,9 @@ def test_the_spaces_that_cannot_be_encoded_are_refused() -> None:
     real address in the code, which encodes like any other and needs
     nothing moved with it.
     """
-    from qbopt import ir
-    from qbopt.module import Addr
-    from qbopt.module import Space
+    from qbopt.model import ir
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     for space in (Space.FAR, Space.GROUP, Space.STACK):
         assert select.operand_of(ir.Mem(Addr(space, 4), 2)) is None, space
@@ -310,9 +310,9 @@ def test_the_spaces_that_cannot_be_encoded_are_refused() -> None:
 
 def test_a_cell_of_the_wrong_width_is_refused() -> None:
     """`mov ax,[dword x]` is not an instruction."""
-    from qbopt import ir
-    from qbopt.module import Addr
-    from qbopt.module import Space
+    from qbopt.model import ir
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     cell = ir.Mem(Addr(Space.FRAME, -4), 4)
     assert select.move_from(Register.AX, cell) is None
@@ -340,9 +340,9 @@ def test_a_near_call_and_a_far_call_are_told_apart_by_the_target() -> None:
 def test_a_store_of_an_immediate_takes_the_cell_s_width() -> None:
     """`mov word ptr [x],0` writes two bytes and `mov dword ptr [x],0` four.
     The immediate says nothing about which was meant."""
-    from qbopt import ir
-    from qbopt.module import Addr
-    from qbopt.module import Space
+    from qbopt.model import ir
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     for width, text in ((2, "word"), (4, "dword")):
         made = select.store_imm(ir.Mem(Addr(Space.FRAME, -4), width), 0)
@@ -390,8 +390,8 @@ def test_a_literal_address_through_a_register_uses_the_byte_displacement() -> No
     through a register, which is how it writes a field of a record: 1,247
     `add` sites and 785 `mov` sites in qb-qrender, a byte each.
     """
-    from qbopt.module import Addr
-    from qbopt.module import Space
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     cell = ir.Mem(addr=Addr(Space.LITERAL, 0x0A, 0, base=Register.SI), width=2, through=Register.SI, offset=0x0A)
     made = select.arith_mem("add", Register.BX, cell)
@@ -407,8 +407,8 @@ def test_a_bare_literal_address_keeps_two_bytes_however_small_it_is() -> None:
     a different address entirely. So the size is the encoding's, not the
     value's.
     """
-    from qbopt.module import Addr
-    from qbopt.module import Space
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     for value in (0, 1, 0x10, 0x7F):
         cell = ir.Mem(addr=Addr(Space.LITERAL, value, 0), width=2)
@@ -461,7 +461,7 @@ def test_a_shift_by_more_than_one_keeps_the_immediate_form() -> None:
 @pytest.mark.parametrize(("count", "hex_bytes"), [(1, "d166de"), (3, "c166de03"), (None, "d366de")])
 def test_spilled_shift_is_encodable(count, hex_bytes) -> None:
     """Nbody refused a hoisted index spilled to [bp-22h] because memory SHL was missing."""
-    from qbopt.module import Addr, Space
+    from qbopt.objectfile.module import Addr, Space
     cell = ir.Mem(Addr(Space.FRAME, -0x22), 2)
     source = ir.Reg(Register.CL, 1) if count is None else ir.Imm(count, 1)
     made = select.emit(ir.Semantics(ir.Operation.BINARY, "shl", (cell,), (cell, source)))
@@ -504,8 +504,8 @@ def test_a_compare_of_memory_against_a_small_literal_takes_the_byte_form(value: 
     slot paid a byte. 209 sites in qb-qrender, and the fix is to stop having
     two of these.
     """
-    from qbopt.module import Addr
-    from qbopt.module import Space
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     cell = ir.Mem(addr=Addr(Space.FRAME, -0x1E, 0), width=2)
     made = select.compare(cell, value)
@@ -514,8 +514,8 @@ def test_a_compare_of_memory_against_a_small_literal_takes_the_byte_form(value: 
 
 
 def test_a_compare_of_memory_against_a_large_literal_stays_wide() -> None:
-    from qbopt.module import Addr
-    from qbopt.module import Space
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     cell = ir.Mem(addr=Addr(Space.FRAME, -0x1E, 0), width=2)
     made = select.compare(cell, 0x1234)
@@ -553,8 +553,8 @@ def test_a_relocated_arithmetic_immediate_keeps_its_width(name: str) -> None:
 
 def test_a_relocated_immediate_against_memory_keeps_its_width() -> None:
     """The same for `add word ptr [bp-4],offset X`."""
-    from qbopt.module import Addr
-    from qbopt.module import Space
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     cell = ir.Mem(addr=Addr(Space.FRAME, -4, 0), width=2)
     wide = select.arith_into_imm("add", cell, 0, relocated=True)
@@ -579,12 +579,12 @@ def test_a_relocated_field_never_changes_width(obj: Path) -> None:
     program to 31 lines and diffing the two linked images, where one said
     `add ax,0DCh` and the other `add ax,0FFDCh`.
     """
-    from qbopt import asm
-    from qbopt import mir
-    from qbopt import omf
-    from qbopt import declen
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.backend import asm
+    from qbopt.model import mir
+    from qbopt.objectfile import omf
+    from qbopt.frontend import declen
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = corpus.loaded(obj)
     assert found is not None
@@ -655,9 +655,9 @@ def test_a_compare_keeps_the_mnemonic_it_was_given(hexs: str, want: str) -> None
     `cmp reg,0` into the shorter `test reg,reg`, which is where this was
     found.
     """
-    from qbopt import declen
-    from qbopt.module import Addr
-    from qbopt.module import Space
+    from qbopt.frontend import declen
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     insn = declen.decode(bytes.fromhex(hexs), 0)
     assert insn is not None
@@ -724,9 +724,9 @@ def test_a_remap_reaches_inside_a_memory_operand() -> None:
     Addr.base is the one that gets encoded, so remapping only the first
     changed nothing at all and did it silently.
     """
-    from qbopt import ir
-    from qbopt.module import Addr
-    from qbopt.module import Space
+    from qbopt.model import ir
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     where = {Register.SI: Register.DI, Register.ESI: Register.EDI}
     cell = ir.Mem(Addr(Space.LITERAL, 0x0A, base=Register.SI), 2, through=Register.SI, offset=0x0A, disp_width=1)
@@ -796,13 +796,13 @@ def test_an_absorbed_site_comes_back_with_a_field_for_every_fixup() -> None:
     """
     from pathlib import Path
 
-    from qbopt import omf
-    from qbopt import calls
-    from qbopt import flags
-    from qbopt import module
-    from qbopt import select
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.objectfile import omf
+    from qbopt.legacy import calls
+    from qbopt.analysis import flags
+    from qbopt.objectfile import module
+    from qbopt.backend import select
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     seen = both = 0
     for name in ("chain-p-g2", "lngmix-p-g2", "matrix-p-g2", "press-p-g2"):
@@ -843,7 +843,7 @@ def test_a_funnel_shift_is_two_address_in_its_low_half() -> None:
     """`shrd r,r,n` shifts the destination and reads it, like every other
     two-address form: an allocation that moves the destination without the
     operand it also reads shifts whatever that register happened to hold."""
-    from qbopt import target
+    from qbopt.backend import target
 
     assert target.tied(_funnel(ir.Imm(16, 1))) is Register.EAX
 
@@ -851,7 +851,7 @@ def test_a_funnel_shift_is_two_address_in_its_low_half() -> None:
 def test_a_funnel_shift_by_a_register_takes_its_count_in_cl() -> None:
     """The only register `shrd` can count from. Nothing else about it is
     fixed -- the two sources are whichever registers the allocation picked."""
-    from qbopt import target
+    from qbopt.backend import target
 
     dynamic = target.reads(_funnel(ir.Reg(Register.CL, 1)))
     assert dynamic.get(Register.ECX) is not None and dynamic[Register.ECX].fixed is Register.ECX
@@ -908,9 +908,9 @@ def test_a_relocated_cell_is_reached_through_the_register_it_was_placed_in() -> 
     and `through` says so -- but this branch went on encoding `addr.base`,
     which names element zero through whatever si happens to hold.
     """
-    from qbopt import ir
-    from qbopt.module import Addr
-    from qbopt.module import Space
+    from qbopt.model import ir
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     where = Addr(Space.SEGMENT, 0x2, base=Register.SI)
     placed = ir.Mem(where, 2, Register.BX, 2, 1, base=ir.Held(17, 2))
@@ -936,9 +936,9 @@ def test_a_literal_cell_is_reached_through_the_register_it_was_placed_in() -> No
     program printed ' 0  0' where it wanted ' 7  8'. The displacement size
     follows the register actually encoded, not the one BC wrote.
     """
-    from qbopt import ir
-    from qbopt.module import Addr
-    from qbopt.module import Space
+    from qbopt.model import ir
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     where = Addr(Space.LITERAL, 0x2, base=Register.SI)
     placed = ir.Mem(where, 2, Register.BX, 2, 1, base=ir.Held(17, 2))
@@ -965,9 +965,9 @@ def test_a_far_cell_is_reached_through_the_register_it_was_placed_in() -> None:
     whatever bx still holds -- which is how ' 7  8' reached the wrong
     four bytes and the program printed ' 0  0'.
     """
-    from qbopt import ir
-    from qbopt.module import Addr
-    from qbopt.module import Space
+    from qbopt.model import ir
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     where = Addr(Space.FAR, 0, base=Register.BX, segment=Register.ES)
     placed = ir.Mem(where, 2, Register.DI, 0, 0, base=ir.Held(21, 2))
@@ -987,11 +987,11 @@ def test_a_far_cell_is_reached_through_the_register_it_was_placed_in() -> None:
 
 def _lngmix_divides():
     """lngmix's two absorbed divides, with the module they came from."""
-    from qbopt import mir
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.model import mir
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()))
     assert found is not None
@@ -1016,7 +1016,7 @@ def test_a_divide_is_emitted_from_its_operands_and_not_from_the_site() -> None:
     """
     from dataclasses import replace
 
-    from qbopt import mir
+    from qbopt.model import mir
 
     found = _lngmix_divides()
     assert found, "lngmix divides twice"
@@ -1049,8 +1049,8 @@ def test_a_divide_whose_dividend_became_a_number_emits_that_number() -> None:
     """
     from dataclasses import replace
 
-    from qbopt import asm
-    from qbopt import mir
+    from qbopt.backend import asm
+    from qbopt.model import mir
 
     for module_of, body, op in _lngmix_divides():
         moved = replace(op, args=(mir.Const(1000, 4), op.args[1]))
@@ -1075,10 +1075,10 @@ def test_a_divide_pointed_at_another_cell_is_refused_rather_than_misbound() -> N
     """
     from dataclasses import replace
 
-    from qbopt import asm
-    from qbopt import mir
-    from qbopt.module import Addr
-    from qbopt.module import Space
+    from qbopt.backend import asm
+    from qbopt.model import mir
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     for module_of, body, op in _lngmix_divides():
         assert asm._selected_divide(op, module_of, None, body.origin, frozenset()) is not None, (
@@ -1138,9 +1138,9 @@ def test_an_absorbed_divide_tells_the_allocator_what_it_destroys() -> None:
     sys.path.insert(0, "tools")
     import stages
 
-    from qbopt import mir
-    from qbopt import lower
-    from qbopt import calls as machine
+    from qbopt.model import mir
+    from qbopt.backend import lower
+    from qbopt.legacy import calls as machine
 
     found, bodies, contracts = stages._bodies(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes())
     wanted = {machine.RESULT, machine.DIVISOR, Register.EDX, machine.OTHER}
@@ -1170,12 +1170,12 @@ def test_a_rewritten_divide_reaches_the_image_through_the_real_layout() -> None:
     """
     from dataclasses import replace
 
-    from qbopt import mir
-    from qbopt import omf
-    from qbopt import layout
-    from qbopt import module
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.model import mir
+    from qbopt.objectfile import omf
+    from qbopt.backend import layout
+    from qbopt.objectfile import module
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     at = Path("fixtures/omf/lngmix-p-g2.obj")
     found = module.of(omf.parse(at.read_bytes()))
@@ -1231,8 +1231,8 @@ def test_a_divide_whose_answer_nothing_placed_refuses_rather_than_guessing() -> 
     """
     from dataclasses import replace
 
-    from qbopt import asm
-    from qbopt import mir
+    from qbopt.backend import asm
+    from qbopt.model import mir
 
     for module_of, body, op in _lngmix_divides():
         invented = mir.Value(9_000_001, op.at)
@@ -1250,7 +1250,7 @@ def test_a_divide_refuses_an_allocation_that_forgot_one_of_its_answers() -> None
     this, falling back to BC's register puts an answer where the
     allocation has already promised something else to live.
     """
-    from qbopt import asm
+    from qbopt.backend import asm
 
     for module_of, body, op in _lngmix_divides():
         every = {one.value: body.origin[one.value] for one in op.results}
@@ -1283,16 +1283,16 @@ def test_a_frame_slots_displacement_is_not_a_relocatable_field() -> None:
     """
     from iced_x86 import Register
 
-    from qbopt import ir
-    from qbopt import select
+    from qbopt.model import ir
+    from qbopt.backend import select
 
     slot = ir.Mem(addr=None, width=2, through=Register.BP, offset=-0x22, disp_width=2)
     store = select.emit(ir.Semantics(ir.Operation.MOVE, "mov", (slot,), (ir.Reg(Register.BX, 2),)))
     assert store is not None
     assert store.places == (), f"the frame slot offered a field at {store.places}"
 
-    from qbopt.module import Addr
-    from qbopt.module import Space
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     array = ir.Mem(Addr(Space.SEGMENT, 0x6, base=Register.SI), 2, through=Register.SI)
     indexed = select.emit(ir.Semantics(ir.Operation.MOVE, "mov", (array,), (ir.Reg(Register.BX, 2),)))
@@ -1309,13 +1309,13 @@ def test_an_instruction_holding_a_moved_operand_is_not_the_site_it_came_from() -
     fixup or none -- two means the operation had two relocated operands
     and only one moved, and the count cannot say which is which.
     """
-    from qbopt import asm
-    from qbopt import ir
-    from qbopt import mir
-    from qbopt import module
-    from qbopt import omf
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.backend import asm
+    from qbopt.model import ir
+    from qbopt.model import mir
+    from qbopt.objectfile import module
+    from qbopt.objectfile import omf
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()))
     bodies = list(mir.bodies(found, split.partition(found, code_map(found))))
@@ -1371,13 +1371,13 @@ def test_a_divide_whose_site_is_gone_is_refused_and_not_carried_verbatim() -> No
     emitted from its own operands. It is when neither is left that there
     is no answer, and then it must refuse.
     """
-    from qbopt import asm
-    from qbopt import mir
-    from qbopt import omf
-    from qbopt import layout
-    from qbopt import module
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.backend import asm
+    from qbopt.model import mir
+    from qbopt.objectfile import omf
+    from qbopt.backend import layout
+    from qbopt.objectfile import module
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     at = Path("fixtures/omf/lngmix-p-g2.obj")
     found = module.of(omf.parse(at.read_bytes()))
@@ -1424,12 +1424,12 @@ def test_a_divide_that_has_moved_is_not_emitted_from_where_it_was_raised() -> No
     """
     from dataclasses import replace
 
-    from qbopt import mir
-    from qbopt import omf
-    from qbopt import layout
-    from qbopt import module
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.model import mir
+    from qbopt.objectfile import omf
+    from qbopt.backend import layout
+    from qbopt.objectfile import module
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     at = Path("fixtures/omf/lngmix-p-g2.obj")
     found = module.of(omf.parse(at.read_bytes()))

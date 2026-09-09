@@ -75,7 +75,7 @@ the line, and `tests/test_rule5.py` is the fence.
 
 ## How it is enforced
 
-- `qbopt/passes.py` -- `MIRTransform` has one method, `transform(mir) -> mir`.
+- `qbopt/model/passes.py` -- `MIRTransform` has one method, `transform(mir) -> mir`.
   Module facts go in at construction, so the signature cannot grow a way to
   ask the machine a question.
 - `tests/test_rule5.py` -- walks the AST of every pass for `Register`,
@@ -156,7 +156,7 @@ Audited 2026-09-05. What was broken, and what it is now:
 | --- | --- |
 | `transform` asked `layout.selectable(op)` | `mir.rewritable(op)` -- what an operation *is* is the raise's answer |
 | `transform` asked `lower.current(op)` | `mir.instruction(op)`, same reason |
-| `transform`, `avail` and `simplify` asked `regalloc.live()` | `qbopt/liveness.py`. Liveness over SSA values names no register; it sat in regalloc because that is what first needed it |
+| `transform`, `avail` and `simplify` asked `regalloc.live()` | `qbopt/analysis/liveness.py`. Liveness over SSA values names no register; it sat in regalloc because that is what first needed it |
 
 Still open, and each is a change rather than a move:
 

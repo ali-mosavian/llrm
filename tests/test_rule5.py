@@ -132,10 +132,10 @@ def test_a_pass_is_a_transform_and_nothing_else() -> None:
     layout as arguments and ended up choosing registers with it. A class
     whose only entry point is `transform(body)` cannot.
     """
-    from qbopt.passes import MIRTransform
-    from qbopt.passes import Where
-    from qbopt.transform import PASSES
-    from qbopt.transform import pipeline
+    from qbopt.model.passes import MIRTransform
+    from qbopt.model.passes import Where
+    from qbopt.optimize.transform import PASSES
+    from qbopt.optimize.transform import pipeline
 
     every = pipeline(Where())
     assert [one.name for one in every] == list(PASSES)

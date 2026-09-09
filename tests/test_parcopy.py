@@ -1,5 +1,5 @@
 """
-qbopt/parcopy.py: moves that happen at once, written in an order that
+qbopt/backend/parcopy.py: moves that happen at once, written in an order that
 computes them.
 
 The bug it exists for: pressx-v-evt emitted a phi edge's six moves in the
@@ -11,10 +11,10 @@ had already overwritten -- `r24 <- [bp-8]` and then `r27 <- r24`. R came out
 import pytest
 from iced_x86 import Register
 
-from qbopt import ir
-from qbopt import lir
-from qbopt import parcopy
-from qbopt import select
+from qbopt.model import ir
+from qbopt.model import lir
+from qbopt.backend import parcopy
+from qbopt.backend import select
 
 
 def _move(into, out_of, group=None, at=0x100) -> lir.Insn:
@@ -44,7 +44,7 @@ def test_memory_copy_expands_after_dependency_ordering() -> None:
 @pytest.mark.parametrize("width,prefix", [(2, b""), (4, b"\x66")])
 def test_frame_copy_emits_balanced_stack_transfer(width: int, prefix: bytes) -> None:
     """NESTED refused emission when a phi needed a slot-to-slot copy."""
-    from qbopt.module import Space
+    from qbopt.objectfile.module import Space
 
     source = ir.Mem(ir.Addr(Space.FRAME, -4), width, Register.BP, 0, 2)
     destination = ir.Mem(ir.Addr(Space.FRAME, -8), width, Register.BP, 0, 2)
@@ -141,8 +141,8 @@ def test_the_scheduler_runs_after_the_allocation_and_before_the_prologue() -> No
     cannot be asked before the allocator has chosen them -- and it has to
     be answered before anything reads the code as a sequence."""
     from qbopt import flow
-    from qbopt import allocate
-    from qbopt import prologue
+    from qbopt.backend import allocate
+    from qbopt.backend import prologue
 
     order = [type(one) for one in flow.machine({}, None, {})]
     assert order.index(parcopy.ParallelCopy) == order.index(allocate.RegAlloc) + 1
@@ -152,16 +152,16 @@ def test_the_scheduler_runs_after_the_allocation_and_before_the_prologue() -> No
 def test_nothing_leaves_the_machine_pipeline_still_grouped() -> None:
     from pathlib import Path
 
-    from qbopt import mir
-    from qbopt import omf
+    from qbopt.model import mir
+    from qbopt.objectfile import omf
     from qbopt import flow
-    from qbopt import lower
-    from qbopt import module
-    from qbopt import runtime
-    from qbopt import transform
-    from qbopt import blocks as split
-    from qbopt import frame as frames
-    from qbopt.blocks import code_map
+    from qbopt.backend import lower
+    from qbopt.objectfile import module
+    from qbopt.abi import runtime
+    from qbopt.optimize import transform
+    from qbopt.frontend import blocks as split
+    from qbopt.backend import frame as frames
+    from qbopt.frontend.blocks import code_map
 
     # pressx-p-g2 rather than pressx-v-evt: the event build calls a
     # routine nothing is established about, so the lowering refuses it and
@@ -183,7 +183,7 @@ def test_a_tangled_copy_falls_back_and_says_so() -> None:
     own final output."""
     from pathlib import Path
 
-    from qbopt import omf
+    from qbopt.objectfile import omf
     from qbopt import wholeseg
 
     was = parcopy.ParallelCopy.transform

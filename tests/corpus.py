@@ -40,16 +40,16 @@ from functools import cache
 from importlib import metadata
 from collections.abc import Callable
 
-from qbopt import ir
-from qbopt import omf
-from qbopt import blocks
-from qbopt import extent
-from qbopt import module
-from qbopt.declen import Insn
-from qbopt.relocate import Shift
+from qbopt.model import ir
+from qbopt.objectfile import omf
+from qbopt.frontend import blocks
+from qbopt.frontend import extent
+from qbopt.objectfile import module
+from qbopt.frontend.declen import Insn
+from qbopt.objectfile.relocate import Shift
 from qbopt.rewrite import Region
 from qbopt.rewrite import rewrite
-from qbopt.relocate import relocate
+from qbopt.objectfile.relocate import relocate
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE_ROOT = ROOT / "build" / "corpus-cache"

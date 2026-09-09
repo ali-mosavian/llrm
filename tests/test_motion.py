@@ -16,12 +16,12 @@ import pytest
 from configs import CONFIGS
 from dosbox import dosbox_bin
 
-from qbopt import omf
-from qbopt import module
-from qbopt.relocate import Edit
-from qbopt.relocate import Shift
-from qbopt.relocate import relocate
-from qbopt.blocks import instructions
+from qbopt.objectfile import omf
+from qbopt.objectfile import module
+from qbopt.objectfile.relocate import Edit
+from qbopt.objectfile.relocate import Shift
+from qbopt.objectfile.relocate import relocate
+from qbopt.frontend.blocks import instructions
 
 pytestmark = [pytest.mark.e2e, pytest.mark.skipif(dosbox_bin() is None, reason="no dosbox-x")]
 

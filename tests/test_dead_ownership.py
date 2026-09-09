@@ -1,10 +1,10 @@
 """Deleting a computation does not delete ownership of its input bytes."""
 
-from qbopt import ir
-from qbopt import mir
-from qbopt import lower
-from qbopt import select
-from qbopt import transform
+from qbopt.model import ir
+from qbopt.model import mir
+from qbopt.backend import lower
+from qbopt.backend import select
+from qbopt.optimize import transform
 
 
 def test_dead_sibling_emits_no_bytes_and_keeps_its_ranges() -> None:

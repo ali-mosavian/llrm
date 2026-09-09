@@ -31,10 +31,10 @@ from iced_x86 import Register_
 from iced_x86 import FlowControl
 from iced_x86 import FormatterSyntax
 
-from qbopt import omf
-from qbopt.declen import INFO
-from qbopt.declen import READS
-from qbopt.declen import WRITES
+from qbopt.objectfile import omf
+from qbopt.frontend.declen import INFO
+from qbopt.frontend.declen import READS
+from qbopt.frontend.declen import WRITES
 
 ALIASES: dict[str, tuple[str, ...]] = {"flags": ("flags",)}
 for _word in ("ax", "bx", "cx", "dx", "si", "di", "bp"):

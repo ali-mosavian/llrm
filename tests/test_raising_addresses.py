@@ -5,7 +5,10 @@ from pathlib import Path
 import pytest
 from iced_x86 import Register
 
-from qbopt import blocks, ir, module, omf, wholeseg
+from qbopt.frontend import blocks
+from qbopt.model import ir
+from qbopt.objectfile import module, omf
+from qbopt import wholeseg
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
@@ -27,8 +30,9 @@ def test_harr_reuses_one_selector_and_forwards_the_array_store(tag):
 
 def test_a_clobber_ends_the_raised_selector_dependency():
     from types import SimpleNamespace
-    from qbopt import mir, raising_addresses
-    from qbopt.module import Addr, Space
+    from qbopt.model import mir
+    from qbopt.frontend import raising_addresses
+    from qbopt.objectfile.module import Addr, Space
 
     descriptor = mir.MemRef(Addr(Space.SEGMENT, 2, 5), 2)
     element = mir.MemRef(Addr(Space.FAR, 0, segment=Register.ES), 2)

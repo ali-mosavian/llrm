@@ -1,5 +1,5 @@
 """
-qbopt/reencode.py's own gate: re-encoding with a mapping that changes
+qbopt/backend/reencode.py's own gate: re-encoding with a mapping that changes
 nothing must give back the bytes that were read.
 """
 
@@ -10,10 +10,10 @@ from iced_x86 import Decoder
 from iced_x86 import Register
 
 import corpus
-from qbopt import reencode
-from qbopt.declen import run
-from qbopt.declen import Insn
-from qbopt.declen import BITNESS
+from qbopt.backend import reencode
+from qbopt.frontend.declen import run
+from qbopt.frontend.declen import Insn
+from qbopt.frontend.declen import BITNESS
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 

@@ -23,18 +23,18 @@ from iced_x86 import FormatterSyntax
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from qbopt import ir
-from qbopt import liveness
-from qbopt import mir
-from qbopt import target
-from qbopt import omf
-from qbopt import wide
-from qbopt import loops
-from qbopt import blocks
-from qbopt import consts
-from qbopt import extent
-from qbopt import module
-from qbopt import regalloc
+from qbopt.model import ir
+from qbopt.analysis import liveness
+from qbopt.model import mir
+from qbopt.backend import target
+from qbopt.objectfile import omf
+from qbopt.frontend import wide
+from qbopt.analysis import loops
+from qbopt.frontend import blocks
+from qbopt.analysis import consts
+from qbopt.frontend import extent
+from qbopt.objectfile import module
+from qbopt.legacy import regalloc
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "build" / "dump"

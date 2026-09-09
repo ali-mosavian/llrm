@@ -1,5 +1,5 @@
 """
-qbopt/mir.py's own gate: SSA is either well-formed or it is not a graph you
+qbopt/model/mir.py's own gate: SSA is either well-formed or it is not a graph you
 can reason about, so the invariants are the test.
 """
 
@@ -9,12 +9,12 @@ from dataclasses import fields
 import pytest
 
 import corpus
-from qbopt import ir
-from qbopt import mir
-from qbopt.blocks import Ends
-from qbopt.module import Addr
-from qbopt.blocks import Block
-from qbopt.module import Space
+from qbopt.model import ir
+from qbopt.model import mir
+from qbopt.frontend.blocks import Ends
+from qbopt.objectfile.module import Addr
+from qbopt.frontend.blocks import Block
+from qbopt.objectfile.module import Space
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
@@ -22,7 +22,7 @@ FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 def test_call_flag_inputs_follow_the_contract(monkeypatch) -> None:
     """DIVMOD refused MUL at 0x20a: PRINT read the deleted helper flags."""
     from dataclasses import replace
-    from qbopt import runtime
+    from qbopt.abi import runtime
 
     routine = runtime.contract("B$PEI4")
     assert routine.inputs == frozenset()
@@ -79,9 +79,9 @@ def test_unknown_pointee_keeps_its_address_value() -> None:
 
 def test_resolving_segld_renames_memory_operands_with_their_accesses() -> None:
     """segld kept old address values in Cell operands after its access metadata was renamed."""
-    from qbopt import omf
-    from qbopt import blocks
-    from qbopt import module
+    from qbopt.objectfile import omf
+    from qbopt.frontend import blocks
+    from qbopt.objectfile import module
 
     found = module.of(omf.parse(Path("fixtures/omf/segld-p-g2.obj").read_bytes()))
     bodies = mir.bodies(found, blocks.partition(found, blocks.code_map(found)))
@@ -100,9 +100,9 @@ def test_resolving_segld_renames_memory_operands_with_their_accesses() -> None:
 
 def test_absorbed_multiply_defines_its_returned_high_half() -> None:
     """arrays printed P0=53248 instead of -1474836480: the product's high half was a clobber."""
-    from qbopt import omf
-    from qbopt import blocks
-    from qbopt import module
+    from qbopt.objectfile import omf
+    from qbopt.frontend import blocks
+    from qbopt.objectfile import module
 
     found = module.of(omf.parse(Path("fixtures/omf/divmod-p-g2.obj").read_bytes()))
     bodies = mir.bodies(found, blocks.partition(found, blocks.code_map(found)))
@@ -326,7 +326,7 @@ def test_a_call_that_preserves_si_does_not_give_it_a_new_value() -> None:
 def test_a_call_with_no_established_contract_still_disturbs_everything() -> None:
     """A user SUB, or a routine runtime.py could not read. Falling back to
     ir.Effects is what keeps using the contracts from being an assumption."""
-    from qbopt import runtime
+    from qbopt.abi import runtime
 
     assert mir._call_touches("NOT_A_ROUTINE") is None
     # B$EVCK can dispatch into user code, so what its own body preserves
@@ -351,16 +351,16 @@ def test_a_routine_that_reads_no_register_leaves_no_phantom_live_across_it() -> 
     cannot see, and the passes that refuse to keep values in registers
     across one still get their answer from runtime.barrier.
     """
-    from qbopt import runtime
+    from qbopt.abi import runtime
 
     site = runtime.contract("B$CENP")
     assert runtime.established_inputs(site) and not site.inputs, "the contract declares no inputs"
     assert runtime.barrier(site), "it is still a barrier and the passes that ask still refuse"
 
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/bools-q-O.obj").read_bytes()))
     ((op, body),) = [
@@ -517,10 +517,10 @@ def test_resolving_a_body_that_has_not_moved_changes_nothing(obj: Path) -> None:
     blocks with the same operations, the same number of phis in each, and
     the same nodes coming back out of lower().
     """
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(obj.read_bytes()))
     if found is None:
@@ -549,13 +549,13 @@ def test_mir_operands_say_exactly_what_the_node_said() -> None:
     Opaque and reproduces itself; if the model were lossy this is where it
     would show, and it is 2,343 operations across the suite.
     """
-    from qbopt import ir
-    from qbopt import mir
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import select
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.model import ir
+    from qbopt.model import mir
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.backend import select
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     def back(arg, origin):
         if isinstance(arg, mir.Held):
@@ -641,11 +641,11 @@ def test_an_absorbed_divide_names_the_two_registers_it_leaves_answers_in() -> No
     result in the register holding the constant 7, and only the fact that
     nothing yet reads that result kept it from being read as an answer.
     """
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
-    from qbopt import calls as machine
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
+    from qbopt.legacy import calls as machine
 
     found = module.of(omf.parse(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()))
     assert found is not None
@@ -679,11 +679,11 @@ def test_a_variable_keeps_one_name_across_every_version_of_it() -> None:
     """
     from collections import Counter
 
-    from qbopt import mir
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.model import mir
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/hotlop-p-g2.obj").read_bytes()))
     assert found is not None
@@ -719,7 +719,7 @@ def test_a_push_does_not_alias_a_global() -> None:
     Two thirds of the corpus's pushes had no nameable slot and so aliased
     every named cell in their own body.
     """
-    from qbopt.module import Space
+    from qbopt.objectfile.module import Space
 
     stack = mir.MemRef(addr=None, width=2, space=Space.STACK)
     glob = mir.MemRef(addr=Addr(Space.SEGMENT, 8), width=2)
@@ -739,11 +739,11 @@ def test_the_raise_says_which_object_a_push_reaches() -> None:
     """Measured: 413 of the corpus's references name an object and no byte."""
     from pathlib import Path
 
-    from qbopt import omf
-    from qbopt import module
-    from qbopt.module import Space
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.objectfile.module import Space
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
@@ -771,11 +771,11 @@ def test_induction_finds_a_counter_and_what_it_derives() -> None:
     """
     from pathlib import Path
 
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import induction
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.analysis import induction
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/matrix-p-g2.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
@@ -802,11 +802,11 @@ def test_a_multiply_by_something_the_loop_writes_is_not_reducible() -> None:
     """There is no recurrence to reduce if the multiplier moves."""
     from pathlib import Path
 
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import induction
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.analysis import induction
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     for name in ("matrix-p-g2", "hotlop-p-g2", "stride-p-g2"):
         found = module.of(omf.parse(Path(f"fixtures/omf/{name}.obj").read_bytes()))
@@ -841,10 +841,10 @@ def test_every_program_hands_the_runtime_an_address() -> None:
     """
     from pathlib import Path
 
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     clean = []
     for path in sorted(Path("fixtures/omf").glob("*-p-g2.obj"))[:8]:
@@ -868,8 +868,8 @@ def test_the_object_says_which_segment_holds_the_program_s_variables() -> None:
     """BC_DATA is the program's; BR_DATA and BR_SKYS are the runtime's."""
     from pathlib import Path
 
-    from qbopt import omf
-    from qbopt import module
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
 
     found = module.of(omf.parse(Path("fixtures/omf/matrix-p-g2.obj").read_bytes()))
     assert found.program_data is not None, "no segment is named BC_DATA"
@@ -879,11 +879,11 @@ def test_the_object_says_which_segment_holds_the_program_s_variables() -> None:
 def _op_at(stem: str, at: int):
     from pathlib import Path
 
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import mir as raised
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.model import mir as raised
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse((Path("fixtures/omf") / f"{stem}.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
@@ -903,7 +903,7 @@ def test_an_add_that_carries_is_not_an_ordinary_add() -> None:
     tell them apart -- and a lowering that re-encodes from MIR wrote a
     plain `add`, dropping the carry.
     """
-    from qbopt import mir as raised
+    from qbopt.model import mir as raised
 
     op, _body = _op_at("negnot-q-O", 0xCE)
     assert op is not None, "the adc is not where this test thinks"
@@ -927,7 +927,7 @@ def test_what_an_operation_steps_by_is_asked_in_one_place() -> None:
     """`mir.stepping` is what a pass asks instead of listing kinds: the
     machine spells an affine step four ways and MIR should say one thing.
     """
-    from qbopt import mir as raised
+    from qbopt.model import mir as raised
 
     def made(kind, args):
         return raised.Op(0, None, kind.value, (), (), (), (), None, kind=kind, args=args, results=())
@@ -954,11 +954,11 @@ def test_a_declared_call_raises_its_arguments_as_operands() -> None:
     """
     from pathlib import Path
 
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import runtime
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.abi import runtime
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/fpemu-p-evt.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
@@ -985,10 +985,10 @@ def _raised_calls(name: str):
     """
     from pathlib import Path
 
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     at = Path("fixtures/omf") / name
     assert at.exists(), f"{name} is checked in and this test needs it"
@@ -1011,7 +1011,7 @@ def test_a_call_whose_interface_is_unestablished_says_so_rather_than_empty() -> 
     the difference is why constraining nothing let arrprm's `mov cx,0`
     move to another register.
     """
-    from qbopt import runtime
+    from qbopt.abi import runtime
 
     assert runtime.contract("B$ENRA").inputs is None
     # VBDOS's, where the `bx` path reaches a call no disassembly follows.
@@ -1028,7 +1028,7 @@ def test_a_call_established_to_read_nothing_says_that_instead() -> None:
     means "reads no register", which is a fact, and the unknown case above
     means nothing is known. Both are `args == ()`.
     """
-    from qbopt import runtime
+    from qbopt.abi import runtime
 
     assert runtime.contract("B$PEI2").inputs == frozenset()
     made = _raised_calls("addrm-p-evt.obj")
@@ -1039,7 +1039,7 @@ def test_a_call_established_to_read_nothing_says_that_instead() -> None:
 
 def test_a_call_established_to_read_its_arguments_raises_them() -> None:
     """B$FILD takes a long in dx:ax, and its contract says so."""
-    from qbopt import runtime
+    from qbopt.abi import runtime
 
     assert runtime.slots(runtime.contract("B$FILD")) == (runtime.Reg.AX, runtime.Reg.DX)
     made = _raised_calls("fpemu-p-evt.obj")
@@ -1054,7 +1054,7 @@ def test_a_call_established_to_read_its_arguments_raises_them() -> None:
 def test_an_unknown_calls_read_set_and_its_flag_survive_a_pass() -> None:
     """The conservative uses keep a live value from being discarded, and
     `args_known` has to reach the lowering."""
-    from qbopt import transform
+    from qbopt.optimize import transform
 
     made = _raised_calls("procs-v-evt.obj")
     op = made["B$ENRA"][0]
@@ -1076,8 +1076,8 @@ def test_the_entry_routine_declares_its_frame_size_where_that_is_established() -
     reaches `call far [di+24h]`, which no disassembly can follow, so
     nothing is established for it.
     """
-    from qbopt import module
-    from qbopt import runtime
+    from qbopt.objectfile import module
+    from qbopt.abi import runtime
 
     made = _raised_calls("procs-p-g2.obj")
     assert "B$ENRA" in made, f"no B$ENRA raised; found {sorted(made)}"
@@ -1095,7 +1095,7 @@ def test_the_entry_routine_declares_its_frame_size_where_that_is_established() -
     # And where nothing is established, nothing is claimed.
     from pathlib import Path
 
-    from qbopt import omf
+    from qbopt.objectfile import omf
 
     assert module.family(omf.parse(Path("fixtures/omf/procs-v-evt.obj").read_bytes())) is module.Family.VBDOS
     theirs = _raised_calls("procs-v-evt.obj")
@@ -1114,9 +1114,9 @@ def test_a_procedure_this_module_defines_is_not_a_runtime_routine() -> None:
     """
     from pathlib import Path
 
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import runtime
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.abi import runtime
 
     records = omf.parse(Path("fixtures/omf/procs-p-evt.obj").read_bytes())
     found = module.of(records)
@@ -1152,8 +1152,8 @@ def test_the_exit_routine_declares_what_it_reads_where_that_is_established() -> 
     nothing on any path. Both normal continuations nevertheless export
     dx:ax to the BASIC caller, and the exit boundary must keep them live.
     """
-    from qbopt import module
-    from qbopt import runtime
+    from qbopt.objectfile import module
+    from qbopt.abi import runtime
 
     every = frozenset({runtime.Reg.AX, runtime.Reg.CX, runtime.Reg.DX, runtime.Reg.SI, runtime.Reg.DI})
     assert runtime.per_call({0: "B$EXSA"}, module.Family.PDS)[0].inputs == every
@@ -1180,12 +1180,12 @@ def test_a_residual_call_is_not_rewritten_by_its_own_arguments() -> None:
     from pathlib import Path
     from dataclasses import replace
 
-    from qbopt import omf
-    from qbopt import lower
-    from qbopt import module
-    from qbopt import runtime
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.objectfile import omf
+    from qbopt.backend import lower
+    from qbopt.objectfile import module
+    from qbopt.abi import runtime
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/fpemu-p-g2.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))

@@ -4,6 +4,9 @@ Recompile BC's output into what a modern optimising compiler would have
 produced -- integers, longs, floats, array addressing, loops -- measured
 against a hand-derived optimal listing rather than against BC.
 
+See [the source layout](docs/source-layout.md) for package responsibilities
+and [the MIR boundary](docs/split.md) for the architectural rules.
+
 The first case of that, and the one furthest along, is making a `LONG` cost
 what an `INTEGER` costs.
 
@@ -75,14 +78,14 @@ authored from what the program means rather than captured from a compiler.
 
 ## What is here
 
-    qbopt/omf.py       read and write OMF; round trips byte-exact
-    qbopt/module.py    a module as the analysis sees it, addresses and all
-    qbopt/declen.py    instructions, via iced-x86
-    qbopt/blocks.py    which bytes are code, found by reachability
-    qbopt/flags.py     which flags are live
-    qbopt/lift.py      decoded code as 32-bit values, and back to bytes
-    qbopt/calls.py     the runtime calls, and what replaces them
-    qbopt/relocate.py  what has to change when code moves
+    qbopt/objectfile/omf.py       read and write OMF; round trips byte-exact
+    qbopt/objectfile/module.py    a module as the analysis sees it, addresses and all
+    qbopt/frontend/declen.py    instructions, via iced-x86
+    qbopt/frontend/blocks.py    which bytes are code, found by reachability
+    qbopt/analysis/flags.py     which flags are live
+    qbopt/legacy/lift.py      decoded code as 32-bit values, and back to bytes
+    qbopt/legacy/calls.py     the runtime calls, and what replaces them
+    qbopt/objectfile/relocate.py  what has to change when code moves
     qbopt/rewrite.py   the driver: an .OBJ in, an .OBJ out
     qbopt/price.py     cycle costs per part, 486 through Core
     fixtures/omf/      real BC output, with a manifest saying what made it

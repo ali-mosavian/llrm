@@ -22,19 +22,19 @@ from iced_x86 import Formatter
 from iced_x86 import FormatterSyntax
 
 import corpus
-from qbopt import ir
-from qbopt import asm
-from qbopt import lir
-from qbopt import mir
-from qbopt import omf
-from qbopt import module
-from qbopt import select
-from qbopt import target
-from qbopt import runtime
-from qbopt import regalloc
-from qbopt import transform
-from qbopt import blocks as split
-from qbopt.blocks import code_map
+from qbopt.model import ir
+from qbopt.backend import asm
+from qbopt.model import lir
+from qbopt.model import mir
+from qbopt.objectfile import omf
+from qbopt.objectfile import module
+from qbopt.backend import select
+from qbopt.backend import target
+from qbopt.abi import runtime
+from qbopt.legacy import regalloc
+from qbopt.optimize import transform
+from qbopt.frontend import blocks as split
+from qbopt.frontend.blocks import code_map
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
@@ -390,8 +390,8 @@ def test_a_copy_on_the_phi_edge_untangles_a_class() -> None:
 
 def _through_regalloc(body, pinned=None):
     """The whole phase, which is where the constraint splitter runs."""
-    from qbopt import allocate
-    from qbopt import frame as frames
+    from qbopt.backend import allocate
+    from qbopt.backend import frame as frames
 
     return allocate.RegAlloc(pinned or {}, frames.of(body)).transform(body)
 
@@ -401,7 +401,7 @@ def _one_block(*insns):
 
 
 def _mov(into: int, value: int, at: int):
-    from qbopt import ir
+    from qbopt.model import ir
 
     return lir.Insn(
         at=at,
@@ -414,14 +414,14 @@ def _mov(into: int, value: int, at: int):
 
 
 def _shl(result: int, count: int, at: int):
-    from qbopt import ir
+    from qbopt.model import ir
 
     what = ir.Semantics(ir.Operation.BINARY, "shl", (ir.Held(result, 2),), (ir.Held(result, 2), ir.Held(count, 2)))
     return lir.Insn(at=at, covers=(at, at + 2), what=what, defines=(result,), uses=(result, count), op=None)
 
 
 def _named(body, name: str):
-    from qbopt import ir
+    from qbopt.model import ir
 
     return [
         one.what
@@ -436,7 +436,7 @@ def test_a_widening_multiply_puts_its_halves_in_ax_and_dx() -> None:
     the `add` after the multiply read a register it never wrote."""
     from iced_x86 import Register
 
-    from qbopt import ir
+    from qbopt.model import ir
 
     what = ir.Semantics(
         ir.Operation.MULTIPLY,
@@ -463,8 +463,8 @@ def test_a_half_register_and_its_whole_are_the_same_register() -> None:
     """
     from iced_x86 import Register
 
-    from qbopt import ir
-    from qbopt import allocate
+    from qbopt.model import ir
+    from qbopt.backend import allocate
 
     # Three longer-lived values take the registers ahead of edx, so the
     # long below is placed in it, and a half-width value pinned to dx is
@@ -508,7 +508,7 @@ def test_a_fixed_source_that_is_not_the_multiply_pair_is_honoured() -> None:
     """A variable shift counts from cl and names it nowhere."""
     from iced_x86 import Register
 
-    from qbopt import ir
+    from qbopt.model import ir
 
     got = _through_regalloc(_one_block(_mov(9, 1, 0x100), _mov(7, 2, 0x102), _shl(9, 7, 0x104)))
     (made,) = _named(got, "shl")
@@ -520,7 +520,7 @@ def test_a_value_required_in_two_registers_gets_one_fresh_value_per_site() -> No
     own short-lived value and the original keeps one place."""
     from iced_x86 import Register
 
-    from qbopt import ir
+    from qbopt.model import ir
 
     cwd = lir.Insn(
         at=0x106,
@@ -543,7 +543,7 @@ def test_an_origin_pin_does_not_override_what_the_instruction_requires() -> None
     override the other."""
     from iced_x86 import Register
 
-    from qbopt import ir
+    from qbopt.model import ir
 
     body = _one_block(_mov(9, 1, 0x100), _mov(7, 2, 0x102), _shl(9, 7, 0x104))
     got = _through_regalloc(body, {7: Register.EBX})
@@ -559,15 +559,15 @@ def test_the_rewriter_hands_on_the_bytes_a_dropped_copy_stood_for(stem: str) -> 
     it, so layout could not account for them."""
     from pathlib import Path
 
-    from qbopt import mir
-    from qbopt import omf
+    from qbopt.model import mir
+    from qbopt.objectfile import omf
     from qbopt import flow
-    from qbopt import lower
-    from qbopt import module
-    from qbopt import transform
-    from qbopt import blocks as split
-    from qbopt import frame as frames
-    from qbopt.blocks import code_map
+    from qbopt.backend import lower
+    from qbopt.objectfile import module
+    from qbopt.optimize import transform
+    from qbopt.frontend import blocks as split
+    from qbopt.backend import frame as frames
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path(f"fixtures/omf/{stem}.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
@@ -587,10 +587,10 @@ def test_the_rewriter_hands_on_the_bytes_a_dropped_copy_stood_for(stem: str) -> 
 def _based_cell(through=None):
     from iced_x86 import Register
 
-    from qbopt import ir
-    from qbopt import lir
-    from qbopt.module import Addr
-    from qbopt.module import Space
+    from qbopt.model import ir
+    from qbopt.model import lir
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     where = Addr(Space.SEGMENT, 0x10, base=Register.SI)
     cell = ir.Mem(where, 2, through if through is not None else Register.NONE, 0, 2, base=ir.Held(21, 2))
@@ -604,8 +604,8 @@ def test_a_placed_cell_reaches_memory_by_the_register_its_value_got() -> None:
     register whatever the allocator chose."""
     from iced_x86 import Register
 
-    from qbopt import ir
-    from qbopt import allocate
+    from qbopt.model import ir
+    from qbopt.backend import allocate
 
     for register in (Register.EBX, Register.ESI):
         got = allocate._settled(_based_cell().what.sources[0], {21: register}, {})
@@ -618,7 +618,7 @@ def test_a_placed_cell_reaches_memory_by_the_register_its_value_got() -> None:
 
 def test_a_cell_whose_address_nothing_placed_is_refused() -> None:
     """Guessing a base register is how arrprm printed ' 0  0' for ' 7  8'."""
-    from qbopt import select
+    from qbopt.backend import select
 
     assert select.emit(_based_cell().what) is None
 
@@ -626,8 +626,8 @@ def test_a_cell_whose_address_nothing_placed_is_refused() -> None:
 def test_a_placed_cell_emits_the_register_it_was_given() -> None:
     from iced_x86 import Register
 
-    from qbopt import ir
-    from qbopt import select
+    from qbopt.model import ir
+    from qbopt.backend import select
 
     cell = _based_cell(Register.SI).what.sources[0]
     what = ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.AX, 2),), (cell,))
@@ -647,11 +647,11 @@ def test_a_based_cell_keeps_the_register_the_allocation_gave_its_base() -> None:
     """
     from iced_x86 import Register
 
-    from qbopt import ir
-    from qbopt import lir
-    from qbopt import allocate
-    from qbopt.module import Addr
-    from qbopt.module import Space
+    from qbopt.model import ir
+    from qbopt.model import lir
+    from qbopt.backend import allocate
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     where = Addr(Space.LITERAL, 0x2, base=Register.SI)
     cell = ir.Mem(where, 2, Register.NONE, 2, 1, base=ir.Held(17, 2))
@@ -692,8 +692,8 @@ def test_a_fixed_call_argument_reaches_its_register_through_the_whole_phase() ->
     """
     from iced_x86 import Register
 
-    from qbopt import ir
-    from qbopt import lir
+    from qbopt.model import ir
+    from qbopt.model import lir
 
     made = lir.Insn(
         at=0,
@@ -741,9 +741,9 @@ def test_a_call_result_nothing_reads_becomes_a_clobber() -> None:
     """
     from iced_x86 import Register
 
-    from qbopt import ir
-    from qbopt import lir
-    from qbopt import allocate
+    from qbopt.model import ir
+    from qbopt.model import lir
+    from qbopt.backend import allocate
 
     call = lir.Insn(
         at=0x10,
@@ -785,8 +785,8 @@ def test_a_value_minted_for_a_fixed_register_is_not_spilled_out_of_it() -> None:
     from pathlib import Path
 
     from qbopt import wholeseg
-    from qbopt import constrain
-    from qbopt import allocate as alloc
+    from qbopt.backend import constrain
+    from qbopt.backend import allocate as alloc
 
     minted: dict = {}
     last: list = []

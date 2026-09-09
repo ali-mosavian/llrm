@@ -39,7 +39,7 @@ class Mutation:
 MUTATIONS = (
     Mutation(
         "absorbed-divide-without-the-sign",
-        "qbopt/transform.py",
+        "qbopt/optimize/transform.py",
         '        steps.append(made(ir.Operation.EXTEND, "cdq", (_wide(Register.EDX),), (_wide(RESULT),)))',
         "        pass  # no cdq",
         "`idiv` reads edx:eax and `cdq` is what puts the dividend's sign in edx -- "
@@ -47,7 +47,7 @@ MUTATIONS = (
     ),
     Mutation(
         "absorbed-operands-the-wrong-way-round",
-        "qbopt/transform.py",
+        "qbopt/optimize/transform.py",
         "INTO = (Register.EAX, Register.ECX)",
         "INTO = (Register.ECX, Register.EAX)",
         "the dividend goes in eax and the divisor in ecx -- swapped, every divide "
@@ -55,7 +55,7 @@ MUTATIONS = (
     ),
     Mutation(
         "absorbed-over-a-live-flag",
-        "qbopt/transform.py",
+        "qbopt/optimize/transform.py",
         "            if read & wrong:",
         "            if False:",
         "`imul` and `idiv` leave their own flags where the call left the runtime's, "
@@ -63,7 +63,7 @@ MUTATIONS = (
     ),
     Mutation(
         "compare-absorbed-over-a-synthesised-flag",
-        "qbopt/transform.py",
+        "qbopt/optimize/transform.py",
         '            wrong = SYNTHESISED if name == "B$CPI4" else flags.ALL',
         '            wrong = flags.Flag.NONE if name == "B$CPI4" else flags.ALL',
         "B$CPI4 builds CF, PF and AF through lahf/sahf and a `cmp` does not "
@@ -71,7 +71,7 @@ MUTATIONS = (
     ),
     Mutation(
         "compared-operands-the-wrong-way-round",
-        "qbopt/transform.py",
+        "qbopt/optimize/transform.py",
         '        made(ir.Operation.MOVE, "mov", (edx,), (_frame(10, 4),)),',
         '        made(ir.Operation.MOVE, "mov", (edx,), (_frame(6, 4),)),',
         "B$CPI4 takes its left operand first, so the left one is the deeper of "
@@ -80,7 +80,7 @@ MUTATIONS = (
     ),
     Mutation(
         "an-unknown-call-trusted-for-its-arity",
-        "qbopt/transform.py",
+        "qbopt/optimize/transform.py",
         "    return 2 if name is not None and name.upper() in ABSORB else None",
         "    return 2 if name is not None else None",
         "stack.frames() trusts a recognised call to have consumed exactly arity*4 "
@@ -97,7 +97,7 @@ MUTATIONS = (
     ),
     Mutation(
         "written-operand-substituted",
-        "qbopt/reencode.py",
+        "qbopt/backend/reencode.py",
         "    if any(one.access in WRITES for one in INFO.info(insn.insn).used_memory()):",
         "    if False:",
         "`add [x],1` writes its result back to memory and `add ax,1` does not -- "
@@ -105,7 +105,7 @@ MUTATIONS = (
     ),
     Mutation(
         "accumulate-read-as-a-load",
-        "qbopt/avail.py",
+        "qbopt/analysis/avail.py",
         "    reading = set(_real(op.uses)) - _addressing(op) - _preserved(op, defines[0], origin)",
         "    reading = set()",
         "`and cx,[x]` reads cx as data as well as defining it, so the bytes it "
@@ -114,133 +114,133 @@ MUTATIONS = (
     ),
     Mutation(
         "checksum",
-        "qbopt/omf.py",
+        "qbopt/objectfile/omf.py",
         "return head + body + bytes([(-sum(head) - sum(body)) & 0xFF])",
         "return head + body + bytes([0])",
         "a zero checksum, which many tools write and BC does not",
     ),
     Mutation(
         "frame-thread-index",
-        "qbopt/omf.py",
+        "qbopt/objectfile/omf.py",
         "    if method < 3:",
         "    if method & 3 < 3:",
         "frame methods 4 and 5 read an index they do not carry",
     ),
     Mutation(
         "displacement-dropped",
-        "qbopt/omf.py",
+        "qbopt/objectfile/omf.py",
         '                disp, disp_pos = struct.unpack_from("<H", body, at)[0], at',
         "                disp, disp_pos = 0, at",
         "the target displacement, which holds every static address",
     ),
     Mutation(
         "ledata-first-write-wins",
-        "qbopt/omf.py",
+        "qbopt/objectfile/omf.py",
         "    for _record, index, offset, payload in ledata(records):",
         "    for _record, index, offset, payload in reversed(ledata(records)):",
         "BC's backpatch records overwritten by the earlier ones",
     ),
     Mutation(
         "shift-boundary",
-        "qbopt/relocate.py",
+        "qbopt/objectfile/relocate.py",
         "            if offset >= edit.hi:",
         "            if offset > edit.hi:",
         "an offset exactly at a region's end is treated as inside it",
     ),
     Mutation(
         "branch-from-start",
-        "qbopt/relocate.py",
+        "qbopt/objectfile/relocate.py",
         "    return shift.at(branch.target) - shift.before(branch.end)",
         "    return shift.at(branch.target) - shift.before(branch.at)",
         "a branch mapped from its own start rather than its end",
     ),
     Mutation(
         "rel8-truncated",
-        "qbopt/relocate.py",
+        "qbopt/objectfile/relocate.py",
         "        if not reaches(branch, moved):",
         "        if False:",
         "a rel8 that no longer reaches, truncated instead of refused",
     ),
     Mutation(
         "target-not-shifted",
-        "qbopt/relocate.py",
+        "qbopt/objectfile/relocate.py",
         "                disp = shift.at(fixup.disp) if into_code else None",
         "                disp = fixup.disp if into_code else None",
         "a fixup's offset moved but not what it points at",
     ),
     Mutation(
         "branch-end-not-before-insertion",
-        "qbopt/relocate.py",
+        "qbopt/objectfile/relocate.py",
         "    return shift.at(branch.target) - shift.before(branch.end)",
         "    return shift.at(branch.target) - shift.at(branch.end)",
         "a branch ending exactly at a pure insertion shifted past it instead of left in front",
     ),
     Mutation(
         "divergence-gate",
-        "qbopt/flags.py",
+        "qbopt/analysis/flags.py",
         "DIVERGENT = Flag.ZF | Flag.PF | Flag.AF",
         "DIVERGENT = Flag.NONE",
         "the flag gate opened",
     ),
     Mutation(
         "cleared-is-not-written",
-        "qbopt/declen.py",
+        "qbopt/frontend/declen.py",
         "self.insn.rflags_written | self.insn.rflags_cleared",
         "self.insn.rflags_written",
         "a flag forced to zero counted as untouched -- what `and` does to CF",
     ),
     Mutation(
         "displacement-sign",
-        "qbopt/declen.py",
+        "qbopt/frontend/declen.py",
         "return to_signed(self.insn.memory_displacement, BITNESS // 8) if self.disp_len else 0",
         "return to_signed(self.insn.memory_displacement, self.disp_len) if self.disp_len else 0",
         "a bp-relative displacement widened from its encoded size rather than the address size",
     ),
     Mutation(
         "leaves-not-conservative",
-        "qbopt/flags.py",
+        "qbopt/analysis/flags.py",
         "            out = ALL if block.leaves else Flag.NONE",
         "            out = Flag.NONE",
         "flags assumed dead past an edge nothing can see",
     ),
     Mutation(
         "call-ends-a-block",
-        "qbopt/blocks.py",
+        "qbopt/frontend/blocks.py",
         "    FlowControl.CALL: Ends.FALLS_THROUGH,",
         "    FlowControl.CALL: Ends.RETURN,",
         "a call treated as the end of a block, which it is not",
     ),
     Mutation(
         "relocated-operand-not-zero",
-        "qbopt/lift.py",
+        "qbopt/legacy/lift.py",
         "return MemoryOperand(base=base, displ=0, displ_size=2)",
         "return MemoryOperand(base=base, displ=1, displ_size=2)",
         "a relocated operand emitted with its address in the code, which LINK adds to",
     ),
     Mutation(
         "consume-slot-order-not-reversed",
-        "qbopt/calls.py",
+        "qbopt/legacy/calls.py",
         "steps: list[Instruction] = [popped_into(target) for target in targets]",
         "steps: list[Instruction] = [popped_into(target) for target in reversed(targets)]",
         "a popped argument landing in the wrong register -- dividend and divisor swapped, not a crash",
     ),
     Mutation(
         "absorb-always-reloads-the-right-operand",
-        "qbopt/calls.py",
+        "qbopt/legacy/calls.py",
         "same_address = left.kind is Kind.STATIC and right.kind is Kind.STATIC and left.addr == right.addr",
         "same_address = False",
         "x*x reloads the same address twice instead of loading it once -- correct, just wasteful",
     ),
     Mutation(
         "popped-into-wrong-width",
-        "qbopt/calls.py",
+        "qbopt/legacy/calls.py",
         "return Instruction.create_reg(Code.POP_R32, target)",
         "return Instruction.create_reg(Code.POP_R16, target)",
         "a popped argument only recovers its low 16 bits, garbage in the rest of the register",
     ),
     Mutation(
         "segment-override-dropped",
-        "qbopt/lift.py",
+        "qbopt/legacy/lift.py",
         "            return MemoryOperand(base=base, displ=disp, displ_size=2, seg=segment)",
         "            return MemoryOperand(base=base, displ=disp, displ_size=2)",
         "`es:[bx]` widened to `ds:[bx]` -- the override dropped, so the pair "
@@ -248,28 +248,28 @@ MUTATIONS = (
     ),
     Mutation(
         "group-address-not-refused",
-        "qbopt/lift.py",
+        "qbopt/legacy/lift.py",
         "            return None if resolved.space is Space.GROUP else resolved",
         "            return resolved",
         "a group-relative fixup treated as a real address instead of refused",
     ),
     Mutation(
         "ir-node-dropped-from-emit-order",
-        "qbopt/ir.py",
+        "qbopt/model/ir.py",
         "    return tuple(nodes)",
         "    return tuple(nodes[1:])",
         "a node missing from decode_body's own output -- the byte-identical gate must notice",
     ),
     Mutation(
         "ir-root-register-narrowed",
-        "qbopt/ir.py",
+        "qbopt/model/ir.py",
         "    Register.AL: Register.EAX,",
         "",
         "a sub-register no longer normalised to its root -- a node's own def/use set narrowed by one register",
     ),
     Mutation(
         "bodyedit-range-edge",
-        "qbopt/bodyedit.py",
+        "qbopt/optimize/bodyedit.py",
         "    if at == hi and at in owner:",
         "    if False:",
         "an insertion exactly on a body range's own edge accepted -- unreachable from a branch "
@@ -277,14 +277,14 @@ MUTATIONS = (
     ),
     Mutation(
         "bodyedit-table-not-skipped",
-        "qbopt/bodyedit.py",
+        "qbopt/optimize/bodyedit.py",
         "        if isinstance(node, ir.Data):",
         "        if False:",
         "an inline table's own start considered as a candidate insertion point instead of skipped",
     ),
     Mutation(
         "tail-seed-not-preserved",
-        "qbopt/lift.py",
+        "qbopt/legacy/lift.py",
         "    live: dict[int, int | None] = {0: 0, 1: None}",
         "    live: dict[int, int | None] = {0: None, 1: None}",
         "a call's own result treated as fully clobbered instead of the value it always leaves in eax, "
@@ -308,7 +308,7 @@ MUTATIONS = (
     ),
     Mutation(
         "immediate-combination-not-resigned",
-        "qbopt/lift.py",
+        "qbopt/legacy/lift.py",
         "combined = to_signed((high.imm << 16) | (low.imm & 0xFFFF), 4)",
         "combined = (high.imm << 16) | (low.imm & 0xFFFF)",
         "a negative immediate pair left as an unsigned 32-bit pattern -- iced's own builders "
@@ -348,7 +348,7 @@ MUTATIONS = (
     ),
     Mutation(
         "bridge-crosses-control-flow",
-        "qbopt/lift.py",
+        "qbopt/legacy/lift.py",
         "    if insn.flow != FlowControl.NEXT:\n        return False",
         "    if False:\n        return False",
         "a jump or branch bridged like an ordinary instruction -- fixtures/omf's own "
@@ -357,7 +357,7 @@ MUTATIONS = (
     ),
     Mutation(
         "bridge-continues-after-a-store",
-        "qbopt/lift.py",
+        "qbopt/legacy/lift.py",
         "        if not committed and _bridges(insn):",
         "        if _bridges(insn):",
         "a gap bridged right after a value is already committed to memory -- suite/nots.bas "
@@ -366,7 +366,7 @@ MUTATIONS = (
     ),
     Mutation(
         "commit-tracked-only-by-the-last-value",
-        "qbopt/lift.py",
+        "qbopt/legacy/lift.py",
         "                stores.append(len(values) - 1)\n                committed = True",
         "                stores.append(len(values) - 1)",
         "a store's own commit forgotten the moment one more, unrelated value (a second pair's "
@@ -374,7 +374,7 @@ MUTATIONS = (
     ),
     Mutation(
         "bridged-fixup-dropped",
-        "qbopt/lift.py",
+        "qbopt/legacy/lift.py",
         "            fields = (field,) if field is not None else ()",
         "            fields = ()",
         "a relocated address inside a bridged instruction (BC's own `mov di,[array]`) spliced "
@@ -383,7 +383,7 @@ MUTATIONS = (
     ),
     Mutation(
         "sign-extend-not-adjacent",
-        "qbopt/lift.py",
+        "qbopt/legacy/lift.py",
         "    if cwd.code != Code.CWD or cwd.at != first.end or first.register(0) != Register.AX:",
         "    if cwd.code != Code.CWD or first.register(0) != Register.AX:",
         "movsx claimed for a mov and a cwd that are not actually adjacent -- whatever real "

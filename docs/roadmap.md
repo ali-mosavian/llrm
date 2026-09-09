@@ -236,7 +236,7 @@ Built, no consumer:
       known**: no join has every path into it agreeing on a number. The
       262 it gained came from reading `Op.made`, so a value an earlier
       pass computed counts too
-- [x] `wide.py` — superseded by `qbopt/pairs.py`, which is on. See M5
+- [x] `wide.py` — superseded by `qbopt/frontend/pairs.py`, which is on. See M5
 - [ ] `regalloc.colour()` — correct, and cannot pay while identity is optimal at pressure 6/6
 
 ## M1 — instruction selection
@@ -490,7 +490,7 @@ says 283, which is what measuring the easy way costs.
 
 So the work is deleting a reload, not allocating a class:
 
-- [x] the redundant reload — `qbopt/segments.py`, without making es a value.
+- [x] the redundant reload — `qbopt/optimize/segments.py`, without making es a value.
       42 sites, about 170 bytes in 26,290 instructions. Making it an SSA
       value would change what every op uses and defines, what regalloc has
       to colour and what select has to emit, for an optimisation nothing
@@ -572,7 +572,7 @@ have to be measured with their MIR counterparts carrying the load alone.
 
 ### What the pair analysis is for
 
-`qbopt/pairs.py` reads BC's two long register pairs over values, and five of
+`qbopt/frontend/pairs.py` reads BC's two long register pairs over values, and five of
 its shapes agree with `lift.py` exactly, object by object -- load 533,
 alu-m 363, alu-i 121, not 51, move 12 across the corpus. It is easy to
 mistake it for widening's prerequisite and judge it on what widening saves.
@@ -596,7 +596,7 @@ version without it would make qb-qrender bigger.
 
 - [x] widening — **on**, and clean on the fuzz corpus, all twelve
       configurations of `matrix.py`, and 20,813 host tests. Recognition, a
-      rename, a restore and a cost model, all in `qbopt/pairs.py`;
+      rename, a restore and a cost model, all in `qbopt/frontend/pairs.py`;
       `transform.widened()` applies it, last, after the passes that reason
       about memory -- a widened op keeps the low half's own `loads`, two
       bytes at `[x]`, while the instruction reads four, and `avail.py` was
@@ -675,7 +675,7 @@ version without it would make qb-qrender bigger.
         high and low halves of one long -- and of the long stranded there
         for the *next* call, not either operand of this one
 
-      **And `qbopt/stack.py` already answered all three**, and did before
+      **And `qbopt/frontend/stack.py` already answered all three**, and did before
       any of that was written -- a virtual stack per block, a closed
       allowlist of push widths, a recognised call popping `4 * arity`, and
       an unknown one resetting rather than guessing. `calls.py` has used it
@@ -791,7 +791,7 @@ Largest untouched surface, newly testable: `fuzzgen.py` generates SINGLE
 and DOUBLE, and `87bhelp.asm`'s six helpers have contracts.
 
 - [x] the x87 memory and popping forms select — `fld [x]`, `faddp st(i),st(0)`
-- [x] x87 stack positions as MIR values — `qbopt/fpstack.py`. Entering slots
+- [x] x87 stack positions as MIR values — `qbopt/frontend/fpstack.py`. Entering slots
       are minted rather than assumed empty: BC leaves values on the stack
       across a branch
 - [x] that shape, measured. qb-qrender's 191 bodies hold 743 `fld` against

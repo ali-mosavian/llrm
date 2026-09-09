@@ -5,12 +5,13 @@ from pathlib import Path
 import corpus
 import pytest
 
-from qbopt import fpstack, ir, mir
+from qbopt.frontend import fpstack
+from qbopt.model import ir, mir
 
 
 @pytest.fixture(autouse=True)
 def inspect_before_float_ssa(monkeypatch):
-    from qbopt import raising_float_values
+    from qbopt.frontend import raising_float_values
     monkeypatch.setattr(raising_float_values, "raised", lambda body: body)
 
 

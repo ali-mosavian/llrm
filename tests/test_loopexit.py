@@ -5,7 +5,9 @@ from dataclasses import replace
 
 import pytest
 
-from qbopt import blocks, module, omf, wholeseg
+from qbopt.frontend import blocks
+from qbopt.objectfile import module, omf
+from qbopt import wholeseg
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
@@ -15,14 +17,15 @@ def test_accumulation_has_no_backedge(tag, program):
     result = wholeseg.emitted(Path(f"fixtures/omf/{program}-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
-    from qbopt import loops
+    from qbopt.analysis import loops
     partition = blocks.partition(found, blocks.code_map(found))
     assert not loops.loops(partition, 0x30)
 
 
 def _body(monkeypatch, program="lngmxx"):
     import corpus
-    from qbopt import loopexit, mir, transform
+    from qbopt.optimize import loopexit, transform
+    from qbopt.model import mir
 
     path = Path(f"fixtures/omf/{program}-p-g2.obj")
     found = corpus.loaded(path)
@@ -36,7 +39,8 @@ def _body(monkeypatch, program="lngmxx"):
 @pytest.mark.parametrize("hazard", ["zero-trip", "wrapping-control", "store", "live-latch"])
 def test_loop_exit_requires_a_complete_proof(monkeypatch, hazard):
     """Deleting LNGMXX's loop must not discard stores, live latch values, or an unproved exit."""
-    from qbopt import loopexit, mir
+    from qbopt.optimize import loopexit
+    from qbopt.model import mir
 
     body = _body(monkeypatch)
     changed = []
@@ -63,7 +67,9 @@ def test_loop_exit_requires_a_complete_proof(monkeypatch, hazard):
 @pytest.mark.parametrize("start,step", [(0, 14290), (2147483640, 10), (-2147483640, -10)])
 def test_accumulation_exit_wraps_at_its_own_width(monkeypatch, start, step):
     """A long sum must keep its modulo-32-bit answer when ten updates overflow."""
-    from qbopt import consts, induction, loopexit, loops, mir
+    from qbopt.analysis import consts, induction, loops
+    from qbopt.optimize import loopexit
+    from qbopt.model import mir
 
     body = _body(monkeypatch)
     loop, = loops.loops(body.blocks, body.entry)
@@ -83,7 +89,9 @@ def test_accumulation_exit_wraps_at_its_own_width(monkeypatch, start, step):
 @pytest.mark.parametrize("start,bound,step", [(1, 20, 1), (1, 300, 1), (20, 1, -1)])
 def test_index_sum_uses_the_exact_triangular_coefficient(monkeypatch, start, bound, step):
     """HOTLPX must sum the original index values even when the 16-bit triangular product wraps."""
-    from qbopt import consts, induction, loopexit, loops, mir
+    from qbopt.analysis import consts, induction, loops
+    from qbopt.optimize import loopexit
+    from qbopt.model import mir
 
     body = _body(monkeypatch, "hotlpx")
     loop, = loops.loops(body.blocks, body.entry)
@@ -114,7 +122,8 @@ def test_index_sum_uses_the_exact_triangular_coefficient(monkeypatch, start, bou
 
 def test_a_doubled_accumulator_is_not_a_linear_sum(monkeypatch):
     """Replacing s := 2*s + index by a triangular sum would silently change HOTLPX's answer."""
-    from qbopt import loopexit, mir
+    from qbopt.optimize import loopexit
+    from qbopt.model import mir
 
     body = _body(monkeypatch, "hotlpx")
     body = replace(body, blocks=tuple(replace(block, ops=tuple(
@@ -130,7 +139,9 @@ def test_a_doubled_accumulator_is_not_a_linear_sum(monkeypatch):
 def test_addrm_long_sum_is_computed_outside_the_store_loop(tag):
     """ADDRM accumulated 1..20 into a long every iteration even though its final sum is 210."""
     import corpus
-    from qbopt import consts, loops, mir, transform
+    from qbopt.analysis import consts, loops
+    from qbopt.model import mir
+    from qbopt.optimize import transform
     path = Path(f"fixtures/omf/addrm-{tag}.obj")
     found = corpus.loaded(path)
     partition = corpus.partitioned(path)
@@ -150,7 +161,9 @@ def test_addrm_long_sum_is_computed_outside_the_store_loop(tag):
 @pytest.mark.parametrize("hazard", ["observed-in-loop", "shared-exit"])
 def test_partial_exit_rewrite_preserves_observations(monkeypatch, hazard):
     """An ADDRM accumulator observed each iteration cannot be replaced by only its final 210."""
-    from qbopt import loopexit, loops, mir
+    from qbopt.optimize import loopexit
+    from qbopt.analysis import loops
+    from qbopt.model import mir
 
     body = _body(monkeypatch, "addrm")
     loop, = loops.loops(body.blocks, body.entry)

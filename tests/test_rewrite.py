@@ -13,7 +13,7 @@ import pytest
 from iced_x86 import Code
 
 import corpus
-from qbopt import omf
+from qbopt.objectfile import omf
 
 pytestmark = pytest.mark.corpus
 
@@ -151,8 +151,8 @@ def test_exactly_one_marker_and_one_frame() -> None:
     from iced_x86 import Formatter
     from iced_x86 import FormatterSyntax
 
-    from qbopt import omf
-    from qbopt import module
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
     from qbopt.rewrite import rewrite
 
     raw = Path("fixtures/omf/hotlop-q-evt.obj").read_bytes()
@@ -167,8 +167,8 @@ def test_exactly_one_marker_and_one_frame() -> None:
 
 def test_a_fallback_is_not_finalised_or_raised_again() -> None:
     """Re-raising fallback machine code loses SSA and can reserve a second frame."""
-    from qbopt import omf
-    from qbopt import allocate
+    from qbopt.objectfile import omf
+    from qbopt.backend import allocate
     from qbopt import wholeseg
     from qbopt.rewrite import rewrite
 
@@ -199,7 +199,7 @@ def test_a_fallback_is_not_finalised_or_raised_again() -> None:
 def test_a_refusal_is_unmarked_non_terminal_and_does_not_loop_for_nothing() -> None:
     """A refusal leaves BC's own bytes. Nothing is marked, and once they
     stop changing the driver stops asking."""
-    from qbopt import omf
+    from qbopt.objectfile import omf
     from qbopt import wholeseg
     from qbopt.rewrite import rewrite
 

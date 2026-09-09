@@ -19,7 +19,7 @@ from collections.abc import Iterator
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from qbopt.declen import length  # noqa: E402
+from qbopt.frontend.declen import length  # noqa: E402
 
 
 def segments(exe: str, mapfile: str, cls: str = "BC_CODE") -> list[tuple[str, int, int]]:

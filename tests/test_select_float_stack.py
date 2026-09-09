@@ -3,7 +3,8 @@
 import pytest
 from iced_x86 import Decoder
 
-from qbopt import ir, select
+from qbopt.model import ir
+from qbopt.backend import select
 
 
 @pytest.mark.parametrize("name,base", [("fadd", 0xc0), ("fmul", 0xc8),

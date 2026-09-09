@@ -1,8 +1,8 @@
 import pytest
 
-from qbopt import ir
-from qbopt import mir
-from qbopt import ssa
+from qbopt.model import ir
+from qbopt.model import mir
+from qbopt.analysis import ssa
 
 
 @pytest.mark.parametrize("reader", ["none", "argument", "memory", "root"])

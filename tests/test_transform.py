@@ -1,5 +1,5 @@
 """
-qbopt/transform.py's own gate.
+qbopt/optimize/transform.py's own gate.
 
 What is checked here is mostly the *order* the transforms run in and what
 each one had to be right about, because widening was written wrong twice and
@@ -12,19 +12,19 @@ import pytest
 from iced_x86 import Register
 
 import corpus
-from qbopt import ir
-from qbopt import mir
-from qbopt import omf
-from qbopt import lower
-from qbopt import module
+from qbopt.model import ir
+from qbopt.model import mir
+from qbopt.objectfile import omf
+from qbopt.backend import lower
+from qbopt.objectfile import module
 from qbopt import rewrite
-from qbopt import transform
+from qbopt.optimize import transform
 
 
 def test_pipeline_reaches_a_fixed_point_without_emission() -> None:
     """lngmix still changed on a second optimization of the same MIR body."""
-    from qbopt import blocks
-    from qbopt import runtime
+    from qbopt.frontend import blocks
+    from qbopt.abi import runtime
 
     found = corpus.loaded(Path("fixtures/omf/lngmix-p-g2.obj"))
     partition = blocks.partition(found, blocks.code_map(found))
@@ -36,8 +36,8 @@ def test_pipeline_reaches_a_fixed_point_without_emission() -> None:
 
 def test_hoisted_variables_do_not_collide_with_promoted_cells() -> None:
     """lngmix printed 4081664 for 142900 after hoisting reused a promoted variable id."""
-    from qbopt import blocks
-    from qbopt import runtime
+    from qbopt.frontend import blocks
+    from qbopt.abi import runtime
 
     found = corpus.loaded(Path("fixtures/omf/lngmix-p-g2.obj"))
     partition = blocks.partition(found, blocks.code_map(found))
@@ -60,7 +60,7 @@ def test_hoisted_variables_do_not_collide_with_promoted_cells() -> None:
 
 def test_hoisting_preserves_cross_variable_accumulator_edges() -> None:
     """LNGMIX's constant-divide experiment lost its accumulator phi and folded it to zero."""
-    from qbopt import runtime
+    from qbopt.abi import runtime
 
     path = Path("fixtures/omf/lngmix-p-g2.obj")
     found = corpus.loaded(path)
@@ -89,8 +89,8 @@ def test_hoisting_preserves_cross_variable_accumulator_edges() -> None:
 
 def test_redundant_load_chains_keep_a_defined_return_value() -> None:
     """procs-q-O's return named a deleted intermediate reload and could not allocate."""
-    from qbopt import blocks
-    from qbopt import runtime
+    from qbopt.frontend import blocks
+    from qbopt.abi import runtime
 
     found = corpus.loaded(Path("fixtures/omf/procs-q-O.obj"))
     partition = blocks.partition(found, blocks.code_map(found))
@@ -128,7 +128,7 @@ def test_substitution_preserves_memory_address_edges(substitute) -> None:
 
 def test_pipeline_removes_hotlop_obsolete_constant_load() -> None:
     """hotlop kept loading 3 each iteration after its product folded to 21."""
-    from qbopt import blocks
+    from qbopt.frontend import blocks
 
     found = corpus.loaded(Path("fixtures/omf/hotlop-p-g2.obj"))
     mapped = blocks.code_map(found)
@@ -183,7 +183,7 @@ def test_forwarding_extends_lifetime_without_conflating_shared_addresses() -> No
 @pytest.mark.parametrize("number,safe", [(7, True), (0, False), (0xffffffff, False)])
 def test_divisor_constants_propagate_without_reordering(number, safe):
     """LNGMXX retained invariant division by 7 because its constant divisor stayed opaque to LICM."""
-    from qbopt import consts
+    from qbopt.analysis import consts
     dividend, divisor, quotient, remainder = (mir.Value(index, 0) for index in range(1, 5))
     op = mir.Op(0, ir.Operation.DIVIDE, "idiv", (quotient, remainder), (dividend, divisor),
                 kind=mir.Kind.DIVMOD, args=(mir.Held(dividend, 4), mir.Held(divisor, 4)),
@@ -205,7 +205,7 @@ def test_leading_deletion_does_not_delete_its_survivor() -> None:
 
 def test_hotlop_add_uses_its_known_product_directly() -> None:
     """hotlop needlessly materialized 21 in a register on every iteration."""
-    from qbopt import blocks
+    from qbopt.frontend import blocks
 
     found = corpus.loaded(Path("fixtures/omf/hotlop-p-g2.obj"))
     mapped = blocks.code_map(found)
@@ -230,9 +230,9 @@ def test_a_flag_phi_nothing_reads_keeps_nothing_alive() -> None:
     with it. Twenty-one of the p-g2 fixtures had one. reuse refuses a
     divide whose other answer is still wanted, and this was that answer.
     """
-    from qbopt import transform
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.optimize import transform
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     seen = 0
     for stem in ("lngmix-p-g2", "hotlop-p-g2", "nested-p-g2", "press-p-g2", "stride-p-g2", "addrm-p-g2"):
@@ -317,10 +317,10 @@ def test_a_transform_accounts_for_every_byte_it_removes() -> None:
 def _corpus():
     from pathlib import Path
 
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     for obj in sorted(Path("fixtures/omf").glob("*.obj")):
         found = module.of(omf.parse(obj.read_bytes()))
@@ -334,7 +334,7 @@ def _corpus():
 
 def _strategy(found, blocks):
     """{call address: True where calls.py would pop rather than reload}."""
-    from qbopt import calls as machine
+    from qbopt.legacy import calls as machine
 
     reached = [one for block in blocks for one in block.insns]
     return {one.at: bool(one.consume) for one in machine.sites(found, reached, blocks)}
@@ -347,8 +347,8 @@ def _absorbed_ops(obj, found, blocks):
     the operands are popped, and push-through-call where they are reloaded
     and the pushes go too.
     """
-    from qbopt import mir
-    from qbopt import calls as machine
+    from qbopt.model import mir
+    from qbopt.legacy import calls as machine
 
     reached = [one for block in blocks for one in block.insns]
     sites = {
@@ -381,8 +381,8 @@ def test_the_invariant_run_never_takes_control_flow_a_flag_or_a_carried_value() 
     And `inside` collected only `op.defines`, missing the phi results,
     which are the loop-carried values themselves.
     """
-    from qbopt import mir
-    from qbopt import loops as loopy
+    from qbopt.model import mir
+    from qbopt.analysis import loops as loopy
 
     seen = 0
     for obj, found, blocks in _corpus():
@@ -430,8 +430,8 @@ def test_hoisting_leaves_every_loop_and_every_terminator_where_it_was() -> None:
     are the loop-carried values themselves: hotlop's counter read as
     something defined outside.
     """
-    from qbopt import mir
-    from qbopt import loops as loopy
+    from qbopt.model import mir
+    from qbopt.analysis import loops as loopy
 
     seen = 0
     for obj, found, blocks in _corpus():
@@ -479,8 +479,8 @@ def test_a_run_whose_flag_the_loop_still_reads_is_not_hoistable() -> None:
     Driven rather than found: with the other two guards in place no loop in
     the corpus offers a run at all, so this shape cannot be observed there.
     """
-    from qbopt import ir
-    from qbopt import mir
+    from qbopt.model import ir
+    from qbopt.model import mir
 
     def op(at: int, name: str, defines: tuple, uses: tuple) -> mir.Op:
         return mir.Op(at, ir.Operation.COMPARE, name, defines, uses, kind=mir.Kind.SUB)
@@ -513,8 +513,8 @@ def test_an_operand_nothing_writes_down_may_leave_with_its_run() -> None:
     """
     from iced_x86 import Register
 
-    from qbopt import ir
-    from qbopt import mir
+    from qbopt.model import ir
+    from qbopt.model import mir
 
     ax = ir.Reg(register=Register.AX, width=2)
     dx = ir.Reg(register=Register.DX, width=2)
@@ -566,8 +566,8 @@ def test_a_definition_a_phi_carries_and_the_loop_rewrites_does_not_leave_it() ->
     """
     from iced_x86 import Register
 
-    from qbopt import ir
-    from qbopt import mir
+    from qbopt.model import ir
+    from qbopt.model import mir
 
     ax = ir.Reg(register=Register.AX, width=2)
     setup = ir.Semantics(ir.Operation.MOVE, "mov", dests=(ax,), sources=(ir.Imm(value=1, width=2),))
@@ -982,8 +982,8 @@ def test_a_served_read_names_the_value_and_not_a_register() -> None:
     forward.py's 22 machine references in one line. It says mir.Held now --
     the value -- and lower.py is where that becomes a register.
     """
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     seen = 0
     for obj in sorted(Path("fixtures/omf").glob("*-p-g2.obj")):
@@ -1009,9 +1009,9 @@ def test_a_served_read_names_the_value_and_not_a_register() -> None:
 
 def _bodies(name: str):
     """Every raised body of one fixture, before any pass has run."""
-    from qbopt import module
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.objectfile import module
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path(f"fixtures/omf/{name}").read_bytes()))
     assert found is not None
@@ -1047,9 +1047,9 @@ def test_an_unplaced_held_keeps_its_fold() -> None:
     operation emitted from its own bytes, and lngmix printed 110 for 142900
     with its dividend deleted.
     """
-    from qbopt import ir
-    from qbopt import lower
-    from qbopt import layout
+    from qbopt.model import ir
+    from qbopt.backend import lower
+    from qbopt.backend import layout
 
     found, bodies = _bodies("hotlop-p-g2.obj")
     for name, body in bodies:
@@ -1093,10 +1093,10 @@ def test_what_leaves_a_loop_is_its_own_variable_and_keeps_its_origin() -> None:
     raised with, whatever the allocator decided, and the hoisted load lands
     on the counter again.
     """
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/hotlpx-p-g2.obj").read_bytes()))
     assert found is not None
@@ -1133,12 +1133,12 @@ def test_place_takes_a_store_out_of_a_push_run():
     """
     from pathlib import Path
 
-    from qbopt import mir
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import transform
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.model import mir
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.optimize import transform
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
@@ -1166,12 +1166,12 @@ def test_both_lngmix_divides_absorb():
     """
     from pathlib import Path
 
-    from qbopt import omf
-    from qbopt import calls
-    from qbopt import module
+    from qbopt.objectfile import omf
+    from qbopt.legacy import calls
+    from qbopt.objectfile import module
     from qbopt import wholeseg
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     data = Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()
     for _round in range(3):
@@ -1210,7 +1210,7 @@ def test_cse_refuses_an_operand_that_is_only_half_its_value() -> None:
     operations reading opposite halves compare equal on the value they name.
     Nothing in MIR says which half, so nothing narrow is a subexpression.
     """
-    from qbopt import transform
+    from qbopt.optimize import transform
 
     low = mir.Held(mir.Value(id=1, at=0, variable=1, version=1), 2)
     assert transform._full(low, {1: 2})
@@ -1249,10 +1249,10 @@ def test_an_operation_dead_keeps_has_its_operands_kept_too() -> None:
     """
     from pathlib import Path
 
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/bools-q-O.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
@@ -1274,9 +1274,9 @@ def test_an_operation_dead_keeps_has_its_operands_kept_too() -> None:
 
 def test_decided_boolean_edges_stop_generating_phi_copies() -> None:
     """bools cost 13.37x because known branches retained impossible edges and phi copies."""
-    from qbopt import omf
-    from qbopt import blocks
-    from qbopt import module
+    from qbopt.objectfile import omf
+    from qbopt.frontend import blocks
+    from qbopt.objectfile import module
 
     found = module.of(omf.parse(Path("fixtures/omf/bools-p-g2.obj").read_bytes()))
     partition = blocks.partition(found, blocks.code_map(found))
@@ -1288,9 +1288,9 @@ def test_decided_boolean_edges_stop_generating_phi_copies() -> None:
 
 def test_dead_boolean_block_does_not_leave_an_unreachable_jump() -> None:
     """bools-q-O could not be measured: its dead block retained a self-relative jump."""
-    from qbopt import omf
-    from qbopt import blocks
-    from qbopt import module
+    from qbopt.objectfile import omf
+    from qbopt.frontend import blocks
+    from qbopt.objectfile import module
     from qbopt import wholeseg
 
     result = wholeseg.emitted(Path("fixtures/omf/bools-q-O.obj").read_bytes())
@@ -1312,8 +1312,8 @@ def test_the_second_of_two_identical_divides_is_found_with_its_first() -> None:
     sys.path.insert(0, "tools")
     import stages
 
-    from qbopt import mir
-    from qbopt import transform
+    from qbopt.model import mir
+    from qbopt.optimize import transform
 
     found, bodies, _contracts = stages._bodies(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes())
     pairs = [one for _name, body in bodies for one in transform.divided_twice(body, found.dgroup)]
@@ -1349,8 +1349,8 @@ def test_a_reused_divide_copies_the_first_answer_instead_of_dividing() -> None:
     sys.path.insert(0, "tools")
     import stages
 
-    from qbopt import mir
-    from qbopt import transform
+    from qbopt.model import mir
+    from qbopt.optimize import transform
 
     found, bodies, _contracts = stages._bodies(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes())
     divides = [
@@ -1388,8 +1388,8 @@ def test_a_reused_divide_leaves_a_body_the_allocator_can_still_colour() -> None:
     sys.path.insert(0, "tools")
     import stages
 
-    from qbopt import regalloc
-    from qbopt import transform
+    from qbopt.legacy import regalloc
+    from qbopt.optimize import transform
 
     found, bodies, _contracts = stages._bodies(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes())
     folded = 0
@@ -1417,9 +1417,9 @@ def test_one_idiv_serves_both_of_lngmix_s_divides_in_the_image(monkeypatch) -> N
     from iced_x86 import Decoder
     from iced_x86 import Mnemonic
 
-    from qbopt import omf
-    from qbopt import consts
-    from qbopt import module
+    from qbopt.objectfile import omf
+    from qbopt.analysis import consts
+    from qbopt.objectfile import module
     from qbopt import wholeseg
 
     # Exercise reuse separately from folding both constant answers away.
@@ -1448,8 +1448,8 @@ def test_a_reused_divide_is_refused_when_its_other_answer_is_read() -> None:
     sys.path.insert(0, "tools")
     import stages
 
-    from qbopt import mir
-    from qbopt import transform
+    from qbopt.model import mir
+    from qbopt.optimize import transform
 
     found, bodies, _contracts = stages._bodies(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes())
     ((_name, body),) = bodies

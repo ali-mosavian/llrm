@@ -1011,7 +1011,7 @@ LICM come after that proof, with branch-entry and relocation ownership intact.
 
 ## Scoped interval analysis
 
-`qbopt/ranges.py` propagates signed, non-wrapping intervals through copies,
+`qbopt/analysis/ranges.py` propagates signed, non-wrapping intervals through copies,
 adds, subtracts, multiplication and left shifts. Loop counters seed the
 analysis only in the taken loop body, never in its header or outside it.
 Independent enclosing-loop proofs can intersect at an inner block.
@@ -2302,3 +2302,17 @@ machine pipeline is byte-identical. Adjacent dumps in
 Inserted stack moves, spills, cross-block allocation and profitable reuse
 remain unfinished; this change removes the premature-placement architecture
 debt rather than claiming a performance gain.
+
+### Source organized by responsibility
+
+Moved 68 flat modules into `objectfile`, `frontend`, `model`, `analysis`,
+`optimize`, `backend`, `abi`, and `legacy`. `cycles` retains its existing
+package; `flow`, `rewrite`, and `wholeseg` remain root pipeline entry points.
+Imports, source-path references, tools, tests, and runtime data packaging were
+updated together, with no flat compatibility wrappers. `source-layout.md`
+documents ownership and the architectural debt that moving files does not fix.
+
+Validation: 82 modules import, all 50,136 tests collect, 90 focused tests pass,
+and the built wheel contains the package hierarchy plus `abi/runtime.toml`.
+All 97 before/after emitted-object hashes and outcomes are identical. No
+compiler behavior was changed and no runtime suite was repeated.

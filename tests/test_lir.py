@@ -5,22 +5,22 @@ from pathlib import Path
 import pytest
 from iced_x86 import Register
 
-from qbopt import ir
-from qbopt import lir
-from qbopt import mir
-from qbopt import omf
-from qbopt import module
-from qbopt import target
-from qbopt import blocks as split
-from qbopt.blocks import code_map
+from qbopt.model import ir
+from qbopt.model import lir
+from qbopt.model import mir
+from qbopt.objectfile import omf
+from qbopt.objectfile import module
+from qbopt.backend import target
+from qbopt.frontend import blocks as split
+from qbopt.frontend.blocks import code_map
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
 
 def test_preselected_memory_keeps_its_address_value() -> None:
     """nbody widened posY(other) at 0x125 and read through stale SI: PX0=-4385 for 1258."""
-    from qbopt import lower
-    from qbopt.module import Addr, Space
+    from qbopt.backend import lower
+    from qbopt.objectfile.module import Addr, Space
 
     pointer, result = mir.Value(1, 0, 0, 1, 1), mir.Value(2, 0, 0, 1, 2)
     addr = Addr(Space.SEGMENT, 0, base=Register.SI)
@@ -41,8 +41,8 @@ def test_x87_memory_operands_still_need_address_registers() -> None:
 
 def test_string_copy_keeps_its_implicit_address_registers() -> None:
     """fpdeep printed DSQ=0 for 144: movsw lost the SI/DI addresses of its double copy."""
-    from qbopt import lower
-    from qbopt import runtime
+    from qbopt.backend import lower
+    from qbopt.abi import runtime
 
     found = module.of(omf.parse(Path("fixtures/omf/fpdeep-p-g2.obj").read_bytes()))
     contracts = runtime.for_module(found)
@@ -162,8 +162,8 @@ def test_a_byte_wide_held_is_the_low_byte() -> None:
     """
     from iced_x86 import Register
 
-    from qbopt import ir
-    from qbopt import select
+    from qbopt.model import ir
+    from qbopt.backend import select
 
     for root, low in (
         (Register.EAX, Register.AL),
@@ -176,7 +176,7 @@ def test_a_byte_wide_held_is_the_low_byte() -> None:
 
 
 def _one_body(stem: str):
-    from qbopt import lower
+    from qbopt.backend import lower
 
     found = module.of(omf.parse((Path("fixtures/omf") / f"{stem}.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
@@ -188,7 +188,7 @@ def test_lowering_is_one_instruction_per_operation_unless_something_expands() ->
     """The default, and it has to stay exactly what it was: every operation
     is one instruction, carrying its own address, span and operation."""
     lower, name, body, found = _one_body("hotlop-p-g2")
-    from qbopt import runtime
+    from qbopt.abi import runtime
 
     low = lower.lowered(name, body, found.calls, None, runtime.for_module(found))
     ops = [op for block in body.blocks for op in block.ops]
@@ -221,7 +221,7 @@ def test_an_expansion_gives_its_leader_the_operation_and_its_followers_none(monk
         )
 
     monkeypatch.setitem(lower._EXPANDS, kind, two)
-    from qbopt import runtime
+    from qbopt.abi import runtime
 
     low = lower.lowered(name, body, found.calls, None, runtime.for_module(found))
     runs = []
@@ -269,14 +269,14 @@ def test_an_allocatable_value_stays_a_value_through_lowering() -> None:
     ranges overlap -- which is why this asserts on the lowered form and
     stops there.
     """
-    from qbopt import lower
-    from qbopt import transform
+    from qbopt.backend import lower
+    from qbopt.optimize import transform
 
     found = module.of(omf.parse(Path("fixtures/omf/pressx-v-g3.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
     name, body = next(iter(mir.bodies(found, blocks)))
     body = transform.widened(transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found))
-    from qbopt import runtime
+    from qbopt.abi import runtime
 
     low = lower.lowered(name, body, found.calls, set(found.absorbed), runtime.for_module(found))
 
@@ -314,14 +314,14 @@ def test_a_widened_operation_hands_over_values_like_every_other() -> None:
     no operand to rewrite, so its choice and the emitted register
     disagreed and the high word went.
     """
-    from qbopt import lower
-    from qbopt import transform
+    from qbopt.backend import lower
+    from qbopt.optimize import transform
 
     found = module.of(omf.parse(Path("fixtures/omf/arith-v-g3.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
     name, body = next(iter(mir.bodies(found, blocks)))
     body = transform.widened(transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found))
-    from qbopt import runtime
+    from qbopt.abi import runtime
 
     low = lower.lowered(name, body, found.calls, set(found.absorbed), runtime.for_module(found))
     wide = [
@@ -349,15 +349,15 @@ def test_a_restore_keeps_the_idiom_it_stands_for() -> None:
     select emitted nothing, so the widened pair was never split back and
     arith pushed a stale high word.
     """
-    from qbopt import lower
-    from qbopt import select
-    from qbopt import transform
+    from qbopt.backend import lower
+    from qbopt.backend import select
+    from qbopt.optimize import transform
 
     found = module.of(omf.parse(Path("fixtures/omf/arith-v-g3.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
     name, body = next(iter(mir.bodies(found, blocks)))
     body = transform.widened(transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found))
-    from qbopt import runtime
+    from qbopt.abi import runtime
 
     low = lower.lowered(name, body, found.calls, set(found.absorbed), runtime.for_module(found))
     kept = [
@@ -408,8 +408,8 @@ def test_an_increment_is_its_own_operation(stem: str, at: int, kind: str, want: 
     all three sites (`Flag.NONE` live after each). The reason is that the
     operation now says what it is.
     """
-    from qbopt import lower
-    from qbopt import transform
+    from qbopt.backend import lower
+    from qbopt.optimize import transform
 
     found = module.of(omf.parse((Path("fixtures/omf") / f"{stem}.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
@@ -451,15 +451,15 @@ def test_a_stores_address_is_the_value_that_computed_it() -> None:
     `bx` path reaches a `call far [di+24h]` no disassembly can follow --
     so the lowering refuses that body before reaching this at all.
     """
-    from qbopt import lower
-    from qbopt import transform
+    from qbopt.backend import lower
+    from qbopt.optimize import transform
 
     found = module.of(omf.parse(Path("fixtures/omf/addrm-p-g2.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
     seen = 0
     for name, body in mir.bodies(found, blocks):
         body = transform.widened(transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found))
-        from qbopt import runtime
+        from qbopt.abi import runtime
 
         low = lower.lowered(name, body, found.calls, set(found.absorbed), runtime.for_module(found))
         for block in low.blocks:
@@ -501,10 +501,10 @@ def test_a_lowered_cell_names_the_value_that_computed_its_address() -> None:
     """
     from iced_x86 import Register
 
-    from qbopt import lower
-    from qbopt.module import Addr
-    from qbopt.module import Space
-    from qbopt import ir as machine
+    from qbopt.backend import lower
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+    from qbopt.model import ir as machine
 
     # A segment-relative element reached by a register, which is what
     # `_addressed` derives an encoding for.
@@ -525,7 +525,7 @@ def test_a_lowered_cell_names_the_value_that_computed_its_address() -> None:
         covers=(0x100, 0x104),
     )
     body = mir.MirBody(0, (mir.MirBlock(0, (), (stored,), ()),), {}, {})
-    from qbopt import runtime
+    from qbopt.abi import runtime
 
     low = lower.lowered("one", body, {}, set(), runtime.per_call({}))
     made = [one for block in low.blocks for one in block.insns if one.what]
@@ -547,7 +547,7 @@ def test_a_lowered_cell_names_the_value_that_computed_its_address() -> None:
 def _celled(base, through, at: int = 0x100):
     from iced_x86 import Register
 
-    from qbopt import ir as machine
+    from qbopt.model import ir as machine
 
     del Register
     cell = machine.Mem("[bx]", 2, through, 0, 0, base=base)
@@ -575,8 +575,8 @@ def test_an_address_value_takes_the_class_a_base_register_must_be_in() -> None:
     encoding register must not decide it."""
     from iced_x86 import Register
 
-    from qbopt import target
-    from qbopt import allocate
+    from qbopt.backend import target
+    from qbopt.backend import allocate
 
     for through in (Register.BX, Register.SI):
         got = allocate.classes(_celled(ir.Held(21, 2), through))
@@ -586,7 +586,7 @@ def test_an_address_value_takes_the_class_a_base_register_must_be_in() -> None:
 def test_an_unbased_cell_confines_no_value() -> None:
     from iced_x86 import Register
 
-    from qbopt import allocate
+    from qbopt.backend import allocate
 
     assert 21 not in allocate.classes(_celled(None, Register.BX))
 
@@ -603,10 +603,10 @@ def test_phi_elimination_renames_a_value_a_cell_is_reached_by() -> None:
     """
     from iced_x86 import Register
 
-    from qbopt import phielim
-    from qbopt.module import Addr
-    from qbopt.module import Space
-    from qbopt import ir as machine
+    from qbopt.backend import phielim
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+    from qbopt.model import ir as machine
 
     where = Addr(Space.SEGMENT, 0x10, base=Register.SI)
     cell = machine.Mem(where, 2, Register.NONE, 0, 2, base=machine.Held(21, 2))
@@ -638,10 +638,10 @@ def test_a_store_reads_the_value_its_cell_is_reached_by_and_writes_none() -> Non
     """
     from iced_x86 import Register
 
-    from qbopt import lower
-    from qbopt.module import Addr
-    from qbopt.module import Space
-    from qbopt import ir as machine
+    from qbopt.backend import lower
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+    from qbopt.model import ir as machine
 
     base = mir.Value(21, 0, 0, 1, 5)
     # Segment-relative rather than the far cell FILLNUMS had: the space
@@ -680,7 +680,7 @@ def test_a_store_reads_the_value_its_cell_is_reached_by_and_writes_none() -> Non
         covers=(0x104, 0x107),
     )
     body = mir.MirBody(0, (mir.MirBlock(0, (), (stored, after), ()),), {}, {})
-    from qbopt import runtime
+    from qbopt.abi import runtime
 
     low = lower.lowered("one", body, {}, set(), runtime.per_call({}))
     out = [x for block in low.blocks for x in block.insns if x.what]
@@ -691,8 +691,8 @@ def test_a_store_reads_the_value_its_cell_is_reached_by_and_writes_none() -> Non
 
 
 def test_word_concatenation_lowers_high_then_low_without_register_assumptions() -> None:
-    from qbopt import lower
-    from qbopt import ir as machine
+    from qbopt.backend import lower
+    from qbopt.model import ir as machine
 
     high, low, result = mir.Value(901, 0), mir.Value(902, 0), mir.Value(903, 1)
     op = mir.Op(1, mir.Synth.CONCAT_LOW, "concat", (result,), (high, low),
@@ -712,8 +712,9 @@ def test_call_with_inputs_keeps_its_implicit_result() -> None:
     """nbody read COMMAND$ from an unwritten spill slot and skipped its simulation."""
     from dataclasses import replace
     from iced_x86 import Register
-    from qbopt import lower, runtime
-    from qbopt import ir as machine
+    from qbopt.backend import lower
+    from qbopt.abi import runtime
+    from qbopt.model import ir as machine
 
     source, result = mir.Value(1, 0, 0, 1, 1), mir.Value(2, 1, 0, 2, 2)
     call = mir.Op(0, machine.Operation.CALL, "call", (result,), (source,), (), (), None,
@@ -742,12 +743,12 @@ def test_a_call_still_defines_the_results_its_operands_do_not_name() -> None:
     """
     from pathlib import Path
 
-    from qbopt import omf
-    from qbopt import lower
-    from qbopt import module
-    from qbopt import transform
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.objectfile import omf
+    from qbopt.backend import lower
+    from qbopt.objectfile import module
+    from qbopt.optimize import transform
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     # divmod, because bools stopped showing it: its only operand-free
     # operation is the terminating B$CENP, and once a call to a routine
@@ -759,7 +760,7 @@ def test_a_call_still_defines_the_results_its_operands_do_not_name() -> None:
     seen = []
     for name, body in mir.bodies(found, blocks):
         body = transform.widened(transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found))
-        from qbopt import runtime
+        from qbopt.abi import runtime
 
         low = lower.lowered(name, body, found.calls, absorbed, runtime.for_module(found))
         # A result nothing reads is deliberately not recorded -- a Held the
@@ -789,14 +790,14 @@ def test_a_folded_divide_says_where_its_two_answers_arrive() -> None:
     """
     from pathlib import Path
 
-    from qbopt import omf
-    from qbopt import lower
-    from qbopt import module
-    from qbopt import runtime
-    from qbopt import transform
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
-    from qbopt import calls as machine
+    from qbopt.objectfile import omf
+    from qbopt.backend import lower
+    from qbopt.objectfile import module
+    from qbopt.abi import runtime
+    from qbopt.optimize import transform
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
+    from qbopt.legacy import calls as machine
 
     found = module.of(omf.parse(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
@@ -833,9 +834,9 @@ def test_a_call_to_an_unestablished_routine_is_refused() -> None:
     """
     from iced_x86 import Register
 
-    from qbopt import lower
-    from qbopt import runtime
-    from qbopt import ir as machine
+    from qbopt.backend import lower
+    from qbopt.abi import runtime
+    from qbopt.model import ir as machine
 
     assert runtime.contract("B$ENRA").inputs is None, "B$ENRA's inputs are established now"
 
@@ -877,9 +878,9 @@ def test_a_call_argument_is_required_where_the_contract_reads_it() -> None:
     """
     from iced_x86 import Register
 
-    from qbopt import lower
-    from qbopt import runtime
-    from qbopt import ir as machine
+    from qbopt.backend import lower
+    from qbopt.abi import runtime
+    from qbopt.model import ir as machine
 
     assert runtime.slots(runtime.contract("B$FILD")) == (runtime.Reg.AX, runtime.Reg.DX)
 
@@ -919,8 +920,8 @@ def test_a_declared_contract_its_arguments_do_not_answer_is_refused() -> None:
     import pytest
     from iced_x86 import Register
 
-    from qbopt import lower
-    from qbopt import ir as machine
+    from qbopt.backend import lower
+    from qbopt.model import ir as machine
 
     only = mir.Value(2, 0, 0, 1, 5)
     called = mir.Op(
@@ -939,7 +940,7 @@ def test_a_declared_contract_its_arguments_do_not_answer_is_refused() -> None:
     )
     body = mir.MirBody(0x106, (mir.MirBlock(0x106, (), (called,), ()),), {only: Register.ESI}, {})
     with pytest.raises(lower.Unlowered, match="1 arguments for 2 declared inputs"):
-        from qbopt import runtime
+        from qbopt.abi import runtime
 
         lower.lowered("one", body, {0x106: "B$FILD"}, set(), runtime.per_call({0x106: "B$FILD"}))
 
@@ -955,9 +956,9 @@ def test_lowering_a_call_the_caller_chose_no_contract_for_is_refused() -> None:
     import pytest
     from iced_x86 import Register
 
-    from qbopt import lower
-    from qbopt import runtime
-    from qbopt import ir as machine
+    from qbopt.backend import lower
+    from qbopt.abi import runtime
+    from qbopt.model import ir as machine
 
     only = mir.Value(2, 0, 0, 1, 5)
     called = mir.Op(
@@ -993,9 +994,9 @@ def test_a_call_marked_interface_unknown_is_refused_on_that_alone() -> None:
     import pytest
     from iced_x86 import Register
 
-    from qbopt import lower
-    from qbopt import runtime
-    from qbopt import ir as machine
+    from qbopt.backend import lower
+    from qbopt.abi import runtime
+    from qbopt.model import ir as machine
 
     only = mir.Value(2, 0, 0, 1, 5)
     called = mir.Op(
@@ -1031,9 +1032,9 @@ def test_a_phi_chain_nothing_reads_does_not_reach_lir() -> None:
     """
     from iced_x86 import Register
 
-    from qbopt import lower
-    from qbopt import runtime
-    from qbopt import ir as machine
+    from qbopt.backend import lower
+    from qbopt.abi import runtime
+    from qbopt.model import ir as machine
 
     kept, dead, feeder, unread = (
         mir.Value(2, 0x20, 0, 1, 1),
@@ -1118,16 +1119,16 @@ def test_a_reused_divide_s_copy_lowers_to_a_move_and_not_to_nothing() -> None:
     """
     from pathlib import Path
 
-    from qbopt import ir
-    from qbopt import mir
-    from qbopt import omf
-    from qbopt import lower
-    from qbopt import module
-    from qbopt import runtime
-    from qbopt import transform
-    from qbopt.passes import Where
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.model import ir
+    from qbopt.model import mir
+    from qbopt.objectfile import omf
+    from qbopt.backend import lower
+    from qbopt.objectfile import module
+    from qbopt.abi import runtime
+    from qbopt.optimize import transform
+    from qbopt.model.passes import Where
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()))
     assert found is not None
@@ -1159,9 +1160,9 @@ def test_a_reused_divide_s_copy_lowers_to_a_move_and_not_to_nothing() -> None:
 
 def test_two_address_materializes_a_constant_first_operand() -> None:
     """hotlop printed 420 for 630 when 21 + accumulator lost its 21."""
-    from qbopt import ir
-    from qbopt import lir
-    from qbopt import twoaddr
+    from qbopt.model import ir
+    from qbopt.model import lir
+    from qbopt.backend import twoaddr
 
     result, source = ir.Held(900, 2), ir.Held(901, 2)
     insn = lir.Insn(
@@ -1180,7 +1181,7 @@ def test_two_address_materializes_a_constant_first_operand() -> None:
 
 def test_two_address_multiply_preserves_its_first_factor() -> None:
     """Experimental matrix setup emitted 20 * 20 for 0 * 20 without a destination copy."""
-    from qbopt import twoaddr
+    from qbopt.backend import twoaddr
 
     result, first, second = ir.Held(900, 2), ir.Held(901, 2), ir.Held(902, 2)
     insn = lir.Insn(
@@ -1198,8 +1199,8 @@ def test_two_address_multiply_preserves_its_first_factor() -> None:
 
 
 def test_constant_multiply_lowers_without_a_destination_tie() -> None:
-    from qbopt import lower
-    from qbopt import twoaddr
+    from qbopt.backend import lower
+    from qbopt.backend import twoaddr
 
     source, result = mir.Value(900, 0), mir.Value(901, 1)
     op = mir.Op(
@@ -1219,9 +1220,9 @@ def test_constant_multiply_lowers_without_a_destination_tie() -> None:
 
 def test_lower_places_a_commutative_constant_in_the_immediate_operand() -> None:
     """hotlop needlessly loaded 21 before adding its accumulator."""
-    from qbopt import ir
-    from qbopt import mir
-    from qbopt import lower
+    from qbopt.model import ir
+    from qbopt.model import mir
+    from qbopt.backend import lower
 
     result, source = mir.Value(900, 0), mir.Value(901, 0)
     op = mir.Op(
@@ -1240,9 +1241,9 @@ def test_lower_places_a_commutative_constant_in_the_immediate_operand() -> None:
 
 def test_two_address_copy_ends_the_original_source_use() -> None:
     """hotlop kept its old accumulator live through the add after copying it."""
-    from qbopt import ir
-    from qbopt import lir
-    from qbopt import twoaddr
+    from qbopt.model import ir
+    from qbopt.model import lir
+    from qbopt.backend import twoaddr
 
     result, source = ir.Held(900, 2), ir.Held(901, 2)
     insn = lir.Insn(

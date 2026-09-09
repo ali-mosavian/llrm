@@ -1,5 +1,5 @@
 """
-qbopt/spiller.py: a value the allocator would not keep, kept in memory.
+qbopt/backend/spiller.py: a value the allocator would not keep, kept in memory.
 
 The case this file exists for beyond the ordinary one: a move that belongs
 to a phi's parallel copy. Spilling it the usual way -- a reload before, a
@@ -10,12 +10,12 @@ emitted `r24 <- [bp-8]` and then `r27 <- r24`, and R came out 6460 for 7500.
 
 import pytest
 
-from qbopt import ir
-from qbopt import lir
-from qbopt import spiller
-from qbopt.module import Addr
-from qbopt.module import Space
-from qbopt import frame as frames
+from qbopt.model import ir
+from qbopt.model import lir
+from qbopt.backend import spiller
+from qbopt.objectfile.module import Addr
+from qbopt.objectfile.module import Space
+from qbopt.backend import frame as frames
 
 
 def _move(into, out_of, group=None, at=0x100) -> lir.Insn:
@@ -160,8 +160,8 @@ def test_a_lifted_memory_operand_takes_the_fixup_with_it() -> None:
     the fixup was bound to whatever field it did have, and the address of
     `a` was written over the frame offset the add kept.
     """
-    from qbopt.module import Addr
-    from qbopt.module import Space
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     cell = ir.Mem(Addr(Space.SEGMENT, 0xA), 2)
     what = ir.Semantics(ir.Operation.BINARY, "add", (ir.Held(1, 2),), (ir.Held(1, 2), cell))
@@ -267,11 +267,11 @@ def test_spilling_a_pointer_renames_the_cell_it_is_the_base_of() -> None:
     """
     from iced_x86 import Register
 
-    from qbopt import ir
-    from qbopt import lir
-    from qbopt import spiller
-    from qbopt.module import Addr
-    from qbopt.module import Space
+    from qbopt.model import ir
+    from qbopt.model import lir
+    from qbopt.backend import spiller
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     where = Addr(Space.SEGMENT, 0x10, base=Register.SI)
     cell = ir.Mem(where, 2, Register.NONE, 0, 2, base=ir.Held(3, 2))
@@ -305,20 +305,20 @@ def test_spilling_a_pointer_renames_the_cell_it_is_the_base_of() -> None:
 
 
 def _one_block(*insns) -> "lir.LirBody":
-    from qbopt import lir
+    from qbopt.model import lir
 
     return lir.LirBody("one", 0, (lir.LirBlock(at=0, insns=insns, succ=()),), origin={}, pins={})
 
 
 def _frame():
-    from qbopt import frame as frames
+    from qbopt.backend import frame as frames
 
     return frames.Frame(floor=0)
 
 
 def _through_regalloc(body):
-    from qbopt import allocate
-    from qbopt import frame as frames
+    from qbopt.backend import allocate
+    from qbopt.backend import frame as frames
 
     return allocate.RegAlloc({}, frames.of(body)).transform(body)
 
@@ -335,19 +335,19 @@ def test_the_body_that_never_settled_allocates() -> None:
     """
     from pathlib import Path
 
-    from qbopt import omf
+    from qbopt.objectfile import omf
     from qbopt import flow
-    from qbopt import lower
-    from qbopt import module
-    from qbopt import phielim
-    from qbopt import runtime
-    from qbopt import twoaddr
-    from qbopt import allocate
-    from qbopt import coalesce
-    from qbopt import mir as raise_
-    from qbopt import blocks as split
-    from qbopt import frame as frames
-    from qbopt.blocks import code_map
+    from qbopt.backend import lower
+    from qbopt.objectfile import module
+    from qbopt.backend import phielim
+    from qbopt.abi import runtime
+    from qbopt.backend import twoaddr
+    from qbopt.backend import allocate
+    from qbopt.backend import coalesce
+    from qbopt.model import mir as raise_
+    from qbopt.frontend import blocks as split
+    from qbopt.backend import frame as frames
+    from qbopt.frontend.blocks import code_map
 
     records = omf.parse(Path("fixtures/omf/nested-p-g2.obj").read_bytes())
     found = module.of(records)

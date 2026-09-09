@@ -16,28 +16,28 @@ from iced_x86 import BlockEncoder
 
 import corpus
 from helpers import hx
-from qbopt import calls
-from qbopt import module
-from qbopt.calls import Kind
-from qbopt.flags import Flag
-from qbopt.lift import FIXUP
-from qbopt.calls import match
-from qbopt.calls import sites
-from qbopt.calls import DIVIDE
-from qbopt.calls import absorb
-from qbopt.calls import COMPARE
-from qbopt.calls import Operand
-from qbopt.calls import consume
-from qbopt.calls import grouped
-from qbopt.declen import decode
-from qbopt.calls import CallSite
-from qbopt.calls import MULTIPLY
-from qbopt.declen import BITNESS
-from qbopt.calls import REMAINDER
-from qbopt.calls import LEFT_FIRST
-from qbopt.calls import popped_into
-from qbopt.calls import FIX_MULTIPLY
-from qbopt.calls import fix_multiply
+from qbopt.legacy import calls
+from qbopt.objectfile import module
+from qbopt.legacy.calls import Kind
+from qbopt.analysis.flags import Flag
+from qbopt.legacy.lift import FIXUP
+from qbopt.legacy.calls import match
+from qbopt.legacy.calls import sites
+from qbopt.legacy.calls import DIVIDE
+from qbopt.legacy.calls import absorb
+from qbopt.legacy.calls import COMPARE
+from qbopt.legacy.calls import Operand
+from qbopt.legacy.calls import consume
+from qbopt.legacy.calls import grouped
+from qbopt.frontend.declen import decode
+from qbopt.legacy.calls import CallSite
+from qbopt.legacy.calls import MULTIPLY
+from qbopt.frontend.declen import BITNESS
+from qbopt.legacy.calls import REMAINDER
+from qbopt.legacy.calls import LEFT_FIRST
+from qbopt.legacy.calls import popped_into
+from qbopt.legacy.calls import FIX_MULTIPLY
+from qbopt.legacy.calls import fix_multiply
 
 
 def found_sites(obj: Path) -> dict[str, tuple]:
@@ -88,8 +88,8 @@ def test_a_call_with_anything_between_the_pushes_is_refused(fixtures: Path) -> N
 def test_a_pushed_constant_is_not_a_static(fixtures: Path) -> None:
     parsed = corpus.loaded(fixtures / "vbdos-g3.obj")
     assert parsed is not None
-    from qbopt.declen import decode
-    from qbopt.calls import static_at
+    from qbopt.frontend.declen import decode
+    from qbopt.legacy.calls import static_at
 
     immediate = decode(hx("66 68 78 56 34 12"), 0)  # push dword 0x12345678
     assert immediate is not None
@@ -104,8 +104,8 @@ def test_a_pushed_negative_dword_constant_keeps_its_sign() -> None:
     # absorbed against it hands iced-x86's own instruction builder a Python
     # int outside i32 range and it raises OverflowError -- found by
     # tools/fuzzcheck.py generating a LONG multiply against a large negative
-    # literal, which crashed qbopt/calls.py's absorb() outright.
-    from qbopt.calls import constant_at
+    # literal, which crashed qbopt/legacy/calls.py's absorb() outright.
+    from qbopt.legacy.calls import constant_at
 
     pushed = decode(hx("66 68 a8 16 8c 8a"), 0)  # push dword -1970530648
     assert pushed is not None
@@ -115,8 +115,8 @@ def test_a_pushed_negative_dword_constant_keeps_its_sign() -> None:
 
 
 def test_an_indexed_push_is_a_static_operand_carrying_its_base() -> None:
-    from qbopt.declen import decode
-    from qbopt.calls import static_at
+    from qbopt.frontend.declen import decode
+    from qbopt.legacy.calls import static_at
 
     insn = decode(hx("66 FF B4 10 00"), 0)  # push dword [si+0x10]
     assert insn is not None and insn.disp_at is not None
@@ -127,8 +127,8 @@ def test_an_indexed_push_is_a_static_operand_carrying_its_base() -> None:
 
 
 def test_a_scaled_index_push_is_not_a_static_operand() -> None:
-    from qbopt.declen import decode
-    from qbopt.calls import static_at
+    from qbopt.frontend.declen import decode
+    from qbopt.legacy.calls import static_at
 
     insn = decode(hx("66 67 FF 34 85 10 00 00 00"), 0)  # push dword [eax*4+0x10], no base at all
     assert insn is not None and insn.disp_at is not None

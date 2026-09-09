@@ -2,10 +2,10 @@
 Naming a call's arguments by stack position, not by adjacency to the call.
 """
 
-from qbopt.declen import run
-from qbopt.blocks import Ends
-from qbopt.blocks import Block
-from qbopt.stack import frames
+from qbopt.frontend.declen import run
+from qbopt.frontend.blocks import Ends
+from qbopt.frontend.blocks import Block
+from qbopt.frontend.stack import frames
 
 ARITY = {"F1": 1, "F2": 2}
 

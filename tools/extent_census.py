@@ -14,9 +14,9 @@ from collections import Counter
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from qbopt import module
-from qbopt.extent import BodyKind
-from qbopt.extent import partition
+from qbopt.objectfile import module
+from qbopt.frontend.extent import BodyKind
+from qbopt.frontend.extent import partition
 
 
 def main(argv: list[str] | None = None) -> int:

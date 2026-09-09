@@ -14,12 +14,12 @@ from dosbox import dosbox_bin
 from cache import cached_launch
 from cache import toolchain_identity
 
-from qbopt import omf
-from qbopt import cvinfo
-from qbopt import module
-from qbopt.extent import BodyKind
-from qbopt.extent import Partition
-from qbopt.extent import partition
+from qbopt.objectfile import omf
+from qbopt.objectfile import cvinfo
+from qbopt.objectfile import module
+from qbopt.frontend.extent import BodyKind
+from qbopt.frontend.extent import Partition
+from qbopt.frontend.extent import partition
 
 pytestmark = [pytest.mark.e2e, pytest.mark.skipif(dosbox_bin() is None, reason="no dosbox-x")]
 

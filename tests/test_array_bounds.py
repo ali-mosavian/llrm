@@ -6,8 +6,10 @@ from pathlib import Path
 import pytest
 import corpus
 
-from qbopt import consts, mir, raising_array_bounds
-from qbopt.module import Addr, Space
+from qbopt.analysis import consts
+from qbopt.model import mir
+from qbopt.frontend import raising_array_bounds
+from qbopt.objectfile.module import Addr, Space
 
 
 def raw(name, tag, monkeypatch):

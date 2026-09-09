@@ -29,29 +29,29 @@ The machine half, against LLVM's own order:
 answer questions and change nothing, which is why nothing here lists them.
 """
 
-from qbopt import mir
-from qbopt import omf
-from qbopt import lower
-from qbopt import module
-from qbopt import parcopy
-from qbopt import phielim
-from qbopt import runtime
-from qbopt import twoaddr
-from qbopt import allocate
-from qbopt import coalesce
-from qbopt import objwrite
-from qbopt import prologue
-from qbopt import peephole
-from qbopt import transform
-from qbopt import blocks as split
-from qbopt import frame as frames
-from qbopt.blocks import code_map
-from qbopt.passes import LIRTransform
+from qbopt.model import mir
+from qbopt.objectfile import omf
+from qbopt.backend import lower
+from qbopt.objectfile import module
+from qbopt.backend import parcopy
+from qbopt.backend import phielim
+from qbopt.abi import runtime
+from qbopt.backend import twoaddr
+from qbopt.backend import allocate
+from qbopt.backend import coalesce
+from qbopt.objectfile import objwrite
+from qbopt.backend import prologue
+from qbopt.backend import peephole
+from qbopt.optimize import transform
+from qbopt.frontend import blocks as split
+from qbopt.backend import frame as frames
+from qbopt.frontend.blocks import code_map
+from qbopt.model.passes import LIRTransform
 
 
 def machine(pinned: dict, frame=None, calls: dict | None = None) -> list[LIRTransform]:
     """Every phase between lowering and emission, in order."""
-    from qbopt import floatalloc
+    from qbopt.backend import floatalloc
     return [
         floatalloc.FloatAlloc(),
         phielim.PhiElimination(),

@@ -5,17 +5,17 @@ from dataclasses import replace
 
 import pytest
 
-from qbopt import mir
-from qbopt import omf
-from qbopt import blocks
-from qbopt import module
-from qbopt import promote
+from qbopt.model import mir
+from qbopt.objectfile import omf
+from qbopt.frontend import blocks
+from qbopt.objectfile import module
+from qbopt.optimize import promote
 from qbopt import wholeseg
 
 
 def test_unpromotable_memory_update_does_not_cancel_other_cells() -> None:
     """SEGLD rose from 25002 to 28202 when its memory sum canceled counter promotion."""
-    from qbopt import transform
+    from qbopt.optimize import transform
 
     path = Path("fixtures/omf/segld-p-g2.obj")
     found = module.of(omf.parse(path.read_bytes()))
@@ -28,8 +28,8 @@ def test_unpromotable_memory_update_does_not_cancel_other_cells() -> None:
 
 def test_nested_memory_update_becomes_a_value_and_preserves_its_store(monkeypatch: pytest.MonkeyPatch) -> None:
     """NESTED's accumulator stayed a memory ADD instead of a loop-carried value."""
-    from qbopt import transform
-    from qbopt import loopmotion
+    from qbopt.optimize import transform
+    from qbopt.optimize import loopmotion
 
     monkeypatch.setattr(loopmotion, "sunk_stores", lambda body, *args: body)
 
@@ -54,7 +54,7 @@ def test_nested_memory_update_becomes_a_value_and_preserves_its_store(monkeypatc
 
 def test_promotion_preserves_existing_cse_value_edges() -> None:
     """flags printed BOTH=nonzero for zero after promotion rebound CSE's constant to an entry phi."""
-    from qbopt import transform
+    from qbopt.optimize import transform
 
     found = module.of(omf.parse(Path("fixtures/omf/flags-p-g2.obj").read_bytes()))
     partition = blocks.partition(found, blocks.code_map(found))
@@ -77,7 +77,7 @@ def test_hotlop_keeps_initialization_for_memory_arithmetic() -> None:
     body = mir.bodies(found, blocks.partition(found, mapped))[0][1]
     multiply = next(op for block in body.blocks for op in block.ops if op.at == 0x4B)
     cell = multiply.loads[0]
-    from qbopt import consts
+    from qbopt.analysis import consts
     stores = [op for block in body.blocks for op in block.ops
               if consts.initialized(op, cell) == consts.Known(7, 2)]
     assert stores
@@ -154,7 +154,8 @@ def test_only_an_intervening_call_invalidates_a_stored_value(position: int, reus
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_spill_accumulator_is_a_loop_carried_value(tag):
     """SPILL's packed zero initializer prevented promotion of t across its hundred inner iterations."""
-    from qbopt import transform, loops
+    from qbopt.optimize import transform
+    from qbopt.analysis import loops
     path = Path(f"fixtures/omf/spill-{tag}.obj")
     found = module.of(omf.parse(path.read_bytes()))
     partition = blocks.partition(found, blocks.code_map(found))
@@ -168,8 +169,8 @@ def test_spill_accumulator_is_a_loop_carried_value(tag):
 
 def test_packed_capture_keeps_wide_and_narrow_definitions_and_rejects_unknown_overlap():
     """Capturing one field must not lose the whole store or reuse a field after an unknown wide write."""
-    from qbopt import ir
-    from qbopt.module import Addr, Space
+    from qbopt.model import ir
+    from qbopt.objectfile.module import Addr, Space
     address = Addr(Space.SEGMENT, 6, 5)
     whole = mir.MemRef(address, 4)
     half = mir.MemRef(address.plus(2), 2)
@@ -197,7 +198,8 @@ def test_packed_capture_keeps_wide_and_narrow_definitions_and_rejects_unknown_ov
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_addrm_long_accumulator_survives_split_initialization(tag):
     """ADDRM reloaded u on all 20 iterations despite initializing both words to zero."""
-    from qbopt import loops, transform
+    from qbopt.analysis import loops
+    from qbopt.optimize import transform
     found = module.of(omf.parse(Path(f"fixtures/omf/addrm-{tag}.obj").read_bytes()))
     partition = blocks.partition(found, blocks.code_map(found))
     body = mir.bodies(found, partition)[0][1]
@@ -216,8 +218,8 @@ def test_addrm_long_accumulator_survives_split_initialization(tag):
 @pytest.mark.parametrize("complete", [False, True])
 def test_split_initializer_requires_every_byte(complete):
     """ADDRM's two word stores may initialize a long; one word must not invent the other."""
-    from qbopt import ir
-    from qbopt.module import Addr, Space
+    from qbopt.model import ir
+    from qbopt.objectfile.module import Addr, Space
     address = Addr(Space.SEGMENT, 6, 5)
     whole = mir.MemRef(address, 4)
     def store(at, offset, number):

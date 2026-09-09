@@ -16,9 +16,9 @@ from collections import Counter
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from qbopt import omf
-from qbopt import module
-from qbopt.blocks import code_map
+from qbopt.objectfile import omf
+from qbopt.objectfile import module
+from qbopt.frontend.blocks import code_map
 from qbopt.rewrite import rewrite
 
 

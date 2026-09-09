@@ -2,10 +2,11 @@
 
 import pytest
 
-from qbopt import ir
-from qbopt import mir
-from qbopt import transform
-from qbopt import lir, phielim
+from qbopt.model import ir
+from qbopt.model import mir
+from qbopt.optimize import transform
+from qbopt.model import lir
+from qbopt.backend import phielim
 
 
 @pytest.mark.parametrize("critical", [False, True])

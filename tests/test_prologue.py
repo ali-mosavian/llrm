@@ -1,9 +1,9 @@
 """arrprm printed 0 0 for 7 8 when spilling moved its runtime frame entry."""
 
-from qbopt import ir
-from qbopt import lir
-from qbopt import frame
-from qbopt import prologue
+from qbopt.model import ir
+from qbopt.model import lir
+from qbopt.backend import frame
+from qbopt.backend import prologue
 
 
 def procedure() -> lir.LirBody:

@@ -10,10 +10,10 @@ from pathlib import Path
 import pytest
 
 import corpus
-from qbopt import omf
-from qbopt import module
-from qbopt.lift import lift
-from qbopt.lift import literal_only
+from qbopt.objectfile import omf
+from qbopt.objectfile import module
+from qbopt.legacy.lift import lift
+from qbopt.legacy.lift import literal_only
 
 # The operator fixtures are compare-and-divide programs: both are calls into the
 # runtime, so they contain no instruction pair to lift. jumptable.obj is the one
@@ -258,7 +258,7 @@ def test_an_indexed_operand_is_bounded_by_the_next_thing_named_after_it() -> Non
     """
     from iced_x86 import Register
 
-    from qbopt import omf
+    from qbopt.objectfile import omf
 
     found = module.of(omf.parse(Path("fixtures/omf/matrix-p-g2.obj").read_bytes()))
     assert found is not None
@@ -294,8 +294,8 @@ def test_the_compiler_that_made_an_object_is_read_off_it() -> None:
     """
     from pathlib import Path
 
-    from qbopt import omf
-    from qbopt import module
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
 
     for name, want in (
         ("bools-q-O.obj", module.Family.QUICKBASIC),

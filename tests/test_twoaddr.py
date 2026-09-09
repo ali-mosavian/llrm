@@ -6,7 +6,11 @@ from pathlib import Path
 import pytest
 from iced_x86 import Mnemonic, OpKind
 
-from qbopt import blocks, ir, lir, module, omf, twoaddr, wholeseg
+from qbopt.frontend import blocks
+from qbopt.model import ir, lir
+from qbopt.objectfile import module, omf
+from qbopt.backend import twoaddr
+from qbopt import wholeseg
 
 
 def addition(name="add"):

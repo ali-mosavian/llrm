@@ -6,7 +6,9 @@ from pathlib import Path
 import corpus
 import pytest
 
-from qbopt import ir, mir, raising_longs, transform
+from qbopt.model import ir, mir
+from qbopt.frontend import raising_longs
+from qbopt.optimize import transform
 
 
 @pytest.mark.parametrize("mismatch", ["none", "carry", "constant", "width", "source"])

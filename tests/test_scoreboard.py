@@ -67,10 +67,10 @@ def test_cost_does_not_make_unknown_memory_accesses_free() -> None:
     from collections import Counter
     from dataclasses import replace
 
-    from qbopt import mir
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import blocks as split
+    from qbopt.model import mir
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.frontend import blocks as split
 
     found = module.of(omf.parse(Path("fixtures/omf/harr-p-g2.obj").read_bytes()))
     blocks = split.partition(found, split.code_map(found))

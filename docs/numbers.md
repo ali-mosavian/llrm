@@ -114,7 +114,7 @@ computes.
 `calls.py` could not previously classify at all: an operand pushed from a
 register rather than reloaded from memory (with or without a backing
 store), or one stranded on the stack under an entirely separate,
-self-contained call. See `qbopt/stack.py`'s `frames()` and `calls.py`'s
+self-contained call. See `qbopt/frontend/stack.py`'s `frames()` and `calls.py`'s
 `consume()`.
 
 Every module maps. It did not before: the entry point was searched for, and the
@@ -127,7 +127,7 @@ largest refusal category, 73 of 1337. `relocate()` moves the shared boundary
 to the edit's own edge instead of merging the two records: neither is removed,
 so no FIXUPP is re-parented to whatever LEDATA happens to precede it after the
 edit, which is the failure mode an earlier, merging design hit on 72 of 73
-corpus cases. See `qbopt/relocate.py`'s `crossed_pair` and
+corpus cases. See `qbopt/objectfile/relocate.py`'s `crossed_pair` and
 `_boundary_overrides`, and AGENTS.md's "Moving code across a LEDATA boundary".
 
 ## The real program
@@ -257,7 +257,7 @@ For the calls, `python -m qbopt.cycles.cycles` carries the routine bodies. All
 four rows below are real: the `stock` rows are BC's own call plus the actual
 runtime routine, confirmed 2026-08-30 byte-for-byte against VBDOS's
 `VBDCL10E.LIB` (`..\rt\helpi4.asm`, offset 0x1d00); the `qbopt absorbed` rows
-are `Emitted.code` taken directly from `qbopt/calls.py`'s `absorb()` /
+are `Emitted.code` taken directly from `qbopt/legacy/calls.py`'s `absorb()` /
 `dividing()` -- what this pass emits today, not a hand-written guess. Standing
 alone, in cycles:
 
@@ -432,7 +432,7 @@ recording rather than only the final figure. The first measurement, before
 8.25 per cent -- diluted by two calls per body per step into `B$POW4`, a
 floating-point routine absorption was never going to touch. The second,
 before `calls.py` could recognise a register-resident or stack-stranded
-operand at all (see `qbopt/stack.py`), read 13 per cent. The third, 2.18x at
+operand at all (see `qbopt/frontend/stack.py`), read 13 per cent. The third, 2.18x at
 `9c02db9`, was real but measured before this session's comparison-absorption
 correctness fix and the phase-2 IR work that followed it. None was a wrong
 measurement; each was measuring a program, or a pass, that was not yet what

@@ -9,11 +9,11 @@ than spill.
 
 from iced_x86 import Register
 
-from qbopt import ir
-from qbopt import lir
-from qbopt import splitkit
-from qbopt.module import Addr
-from qbopt.module import Space
+from qbopt.model import ir
+from qbopt.model import lir
+from qbopt.backend import splitkit
+from qbopt.objectfile.module import Addr
+from qbopt.objectfile.module import Space
 
 
 def _insn(at: int, what: ir.Semantics, defines=(), uses=()) -> lir.Insn:

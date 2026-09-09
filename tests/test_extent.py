@@ -6,11 +6,11 @@ neither.
 from pathlib import Path
 
 import corpus
-from qbopt import module
-from qbopt.extent import Body
-from qbopt.extent import BodyKind
-from qbopt.extent import Partition
-from qbopt.extent import partition
+from qbopt.objectfile import module
+from qbopt.frontend.extent import Body
+from qbopt.frontend.extent import BodyKind
+from qbopt.frontend.extent import Partition
+from qbopt.frontend.extent import partition
 
 
 def test_every_fixture_partitions_completely(obj: Path) -> None:

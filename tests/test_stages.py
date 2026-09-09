@@ -16,9 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 
 import stages
 
-from qbopt import ir
-from qbopt.module import Addr
-from qbopt.module import Space
+from qbopt.model import ir
+from qbopt.objectfile.module import Addr
+from qbopt.objectfile.module import Space
 
 
 def test_a_based_cell_renders_the_value_and_the_register_it_was_placed_in() -> None:

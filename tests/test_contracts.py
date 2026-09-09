@@ -9,7 +9,7 @@ from contracts import Library
 from contracts import Contract
 from contracts import summarize
 
-from qbopt import omf
+from qbopt.objectfile import omf
 
 
 def library(code: str) -> Library:

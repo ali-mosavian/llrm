@@ -8,15 +8,15 @@ import pytest
 
 import corpus
 from helpers import hx
-from qbopt import module
-from qbopt.blocks import PAD
-from qbopt.blocks import Ends
-from qbopt.blocks import ENTRY
-from qbopt.blocks import benign
-from qbopt.declen import decode
-from qbopt.blocks import event_stub
-from qbopt.blocks import has_header
-from qbopt.blocks import terminator
+from qbopt.objectfile import module
+from qbopt.frontend.blocks import PAD
+from qbopt.frontend.blocks import Ends
+from qbopt.frontend.blocks import ENTRY
+from qbopt.frontend.blocks import benign
+from qbopt.frontend.declen import decode
+from qbopt.frontend.blocks import event_stub
+from qbopt.frontend.blocks import has_header
+from qbopt.frontend.blocks import terminator
 
 
 @pytest.mark.parametrize(

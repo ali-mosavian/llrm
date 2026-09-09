@@ -5,7 +5,8 @@ import pytest
 
 from iced_x86 import Register
 
-from qbopt import ir, lir, peephole
+from qbopt.model import ir, lir
+from qbopt.backend import peephole
 
 
 @pytest.mark.parametrize("change", [None, Register.CH, Register.AH])
@@ -56,7 +57,9 @@ def test_lngmxx_does_not_reload_dividend_after_sign_extension(tag):
 
 def test_nbody_repeated_fixed_constant_is_removed():
     """Nbody materialized 512 twice before one divide, with a non-clobbering CDQ between them."""
-    from qbopt import wholeseg, module, omf, blocks
+    from qbopt import wholeseg
+    from qbopt.objectfile import module, omf
+    from qbopt.frontend import blocks
     from iced_x86 import Code
     result = wholeseg.emitted(Path("fixtures/regressions/nbody-stack-p-g2.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
@@ -78,7 +81,7 @@ def test_partial_write_invalidates_constant():
 
 @pytest.mark.parametrize("interruption", ["none", "extend", "extend_write", "extend_clobber", "call", "clobber", "unknown", "relocation", "block"])
 def test_constant_knowledge_is_local_and_invalidated(interruption):
-    from qbopt.module import Addr, Space
+    from qbopt.objectfile.module import Addr, Space
     source = ir.Imm(512, 4)
     if interruption == "relocation":
         source = ir.Imm(512, 4, Addr(Space.SEGMENT, 0, 5))

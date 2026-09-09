@@ -6,18 +6,24 @@ from dataclasses import replace
 import corpus
 import pytest
 
-from qbopt import mir, lower_floats, raising_float_values, wholeseg
+from qbopt.model import mir
+from qbopt.backend import lower_floats
+from qbopt.frontend import raising_float_values
+from qbopt import wholeseg
 
 
 def _allocated(body, path):
-    from qbopt import floatalloc, lower, runtime
+    from qbopt.backend import floatalloc, lower
+    from qbopt.abi import runtime
     found = corpus.loaded(path)
     return floatalloc.allocated(lower.lowered("test", body, found.calls, found.absorbed, runtime.for_module(found)))
 
 
 def test_floating_values_survive_lowering_until_allocation():
     """FPCSE lowering must not assign physical stack registers ahead of allocation."""
-    from qbopt import ir, lower, runtime
+    from qbopt.model import ir
+    from qbopt.backend import lower
+    from qbopt.abi import runtime
     path = Path("fixtures/omf/fpcse-p-g2.obj")
     found = corpus.loaded(path)
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
@@ -54,8 +60,8 @@ def test_fpcse_float_values_link_each_computation(tag):
 
 @pytest.mark.parametrize("change", ["operand", "order", "rounding"])
 def test_unimplemented_float_rewrites_cannot_silently_use_old_code(change):
-    from qbopt.lower import Unlowered
-    from qbopt.floating import Rounding
+    from qbopt.backend.lower import Unlowered
+    from qbopt.model.floating import Rounding
     path = Path("fixtures/omf/fpcse-p-g2.obj")
     body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
     block = next(block for block in body.blocks if any(op.floating_origin for op in block.ops))
@@ -76,7 +82,8 @@ def test_unimplemented_float_rewrites_cannot_silently_use_old_code(change):
 
 def test_generic_memory_reuse_respects_float_conversion_and_effects():
     """An extended producer is not the rounded SINGLE stored by FPCSE."""
-    from qbopt import avail, transform
+    from qbopt.analysis import avail
+    from qbopt.optimize import transform
     path = Path("fixtures/omf/fpcse-p-g2.obj")
     body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
     operations = [op for block in body.blocks for op in block.ops if op.floating_origin]
@@ -90,7 +97,7 @@ def test_generic_memory_reuse_respects_float_conversion_and_effects():
 
 def test_direct_lowering_uses_the_same_float_baseline():
     """Legacy instruction consumers must not mistake a floating value for a general register."""
-    from qbopt import lower
+    from qbopt.backend import lower
     path = Path("fixtures/omf/fpcse-p-g2.obj")
     body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
     op = next(op for block in body.blocks for op in block.ops if op.kind is mir.Kind.FMUL)
@@ -102,7 +109,7 @@ def test_direct_lowering_uses_the_same_float_baseline():
 @pytest.mark.parametrize("change", ["missing_push", "premature_pop", "wrong_slot"])
 def test_float_lowering_checks_actual_stack_transitions(change):
     """FPCSE must not consume an empty or different slot despite unchanged SSA names."""
-    from qbopt.lower import Unlowered
+    from qbopt.backend.lower import Unlowered
     path = Path("fixtures/omf/fpcse-p-g2.obj")
     body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
     block = next(block for block in body.blocks if any(op.floating_origin for op in block.ops))

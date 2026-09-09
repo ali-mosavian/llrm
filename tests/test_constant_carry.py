@@ -4,10 +4,10 @@ from dataclasses import replace
 
 import pytest
 
-from qbopt import ir
-from qbopt import mir
-from qbopt import consts
-from qbopt import transform
+from qbopt.model import ir
+from qbopt.model import mir
+from qbopt.analysis import consts
+from qbopt.optimize import transform
 
 
 @pytest.mark.parametrize("left,right,expected", [(65535, 1, 6), (3, 4, 5)])

@@ -1,5 +1,5 @@
 """
-qbopt/regalloc.py's own gate: liveness is where an allocator goes wrong
+qbopt/legacy/regalloc.py's own gate: liveness is where an allocator goes wrong
 quietly, so the invariants that bound it are the test.
 """
 
@@ -8,11 +8,11 @@ from pathlib import Path
 import pytest
 
 import corpus
-from qbopt import ir
-from qbopt import mir
-from qbopt import target
-from qbopt import liveness
-from qbopt import regalloc
+from qbopt.model import ir
+from qbopt.model import mir
+from qbopt.backend import target
+from qbopt.analysis import liveness
+from qbopt.legacy import regalloc
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
@@ -267,12 +267,12 @@ def test_a_call_hands_its_result_back_where_bc_reads_it(stem: str) -> None:
     which then agreed with each other and not with the callee, so the push
     run handing the result on pushed whatever bx held.
     """
-    from qbopt import omf
-    from qbopt import layout
-    from qbopt import module
-    from qbopt import transform
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.objectfile import omf
+    from qbopt.backend import layout
+    from qbopt.objectfile import module
+    from qbopt.optimize import transform
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse((Path("fixtures/omf") / f"{stem}.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
@@ -308,15 +308,15 @@ def test_nothing_lives_across_an_absorbed_divide_in_a_register_it_destroys(hoist
     """
     from pathlib import Path
 
-    from qbopt import mir
-    from qbopt import omf
-    from qbopt import lower
-    from qbopt import module
-    from qbopt import regalloc
-    from qbopt import transform
-    from qbopt.passes import Where
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.model import mir
+    from qbopt.objectfile import omf
+    from qbopt.backend import lower
+    from qbopt.objectfile import module
+    from qbopt.legacy import regalloc
+    from qbopt.optimize import transform
+    from qbopt.model.passes import Where
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()))
     assert found is not None
@@ -367,14 +367,14 @@ def test_a_pin_cannot_park_a_value_in_a_register_the_divide_it_crosses_destroys(
 
     from iced_x86 import Register
 
-    from qbopt import mir
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import regalloc
-    from qbopt import transform
-    from qbopt.passes import Where
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.model import mir
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.legacy import regalloc
+    from qbopt.optimize import transform
+    from qbopt.model.passes import Where
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()))
     assert found is not None

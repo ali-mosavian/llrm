@@ -4,9 +4,9 @@ from dataclasses import replace
 
 import pytest
 
-from qbopt import ir
-from qbopt import mir
-from qbopt import lower
+from qbopt.model import ir
+from qbopt.model import mir
+from qbopt.backend import lower
 
 
 def body() -> mir.MirBody:
@@ -49,8 +49,8 @@ def test_condition_scheduling_does_not_move_effects_or_other_results(reason: str
     built = body()
     compare, increment, branch = built.blocks[0].ops
     if reason == "memory":
-        from qbopt.module import Addr
-        from qbopt.module import Space
+        from qbopt.objectfile.module import Addr
+        from qbopt.objectfile.module import Space
 
         cell = mir.MemRef(Addr(Space.SEGMENT, 0, 1), 2)
         compare = replace(compare, loads=(cell,), args=(mir.Cell(cell), mir.Const(19, 2)))

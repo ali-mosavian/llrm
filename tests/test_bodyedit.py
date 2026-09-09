@@ -6,15 +6,15 @@ smallest possible replacement, one inserted nop.
 from pathlib import Path
 
 import corpus
-from qbopt import ir
-from qbopt import omf
-from qbopt.extent import Body
-from qbopt.bodyedit import edit
-from qbopt.declen import decode
-from qbopt.relocate import Shift
-from qbopt.extent import BodyKind
-from qbopt.bodyedit import rewritten
-from qbopt.bodyedit import insert_nop
+from qbopt.model import ir
+from qbopt.objectfile import omf
+from qbopt.frontend.extent import Body
+from qbopt.optimize.bodyedit import edit
+from qbopt.frontend.declen import decode
+from qbopt.objectfile.relocate import Shift
+from qbopt.frontend.extent import BodyKind
+from qbopt.optimize.bodyedit import rewritten
+from qbopt.optimize.bodyedit import insert_nop
 
 MAIN = Body(BodyKind.MAIN, 0x30, None, ((0x30, 0x50), (0x60, 0x80)))
 

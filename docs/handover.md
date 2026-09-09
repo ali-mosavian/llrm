@@ -142,7 +142,7 @@ reloading it, sometimes with a backing store and sometimes without one, and
 sometimes leaves one argument stranded on the stack under an entirely
 separate, self-contained nested call before pushing the second and calling.
 `match()`'s backward scan only ever saw a push immediately, contiguously
-before the call, and missed all three shapes. `qbopt/stack.py` tracks stack
+before the call, and missed all three shapes. `qbopt/frontend/stack.py` tracks stack
 depth in raw bytes, block-scoped, to name what fed a call regardless of
 where the pushes sit; `consume()` in `calls.py` pops every one of them
 unconditionally rather than reloading any -- reloading a classifiable operand

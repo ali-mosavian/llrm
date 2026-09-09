@@ -1,5 +1,5 @@
 """
-qbopt/avail.py's own gate.
+qbopt/analysis/avail.py's own gate.
 
 The counts here are canaries, not specifications: the point of each is that
 it moved for a reason someone can name. The important one is the last --
@@ -12,17 +12,17 @@ from pathlib import Path
 import pytest
 
 import corpus
-from qbopt import ir
-from qbopt import liveness
-from qbopt import mir
-from qbopt import avail
-from qbopt import module
-from qbopt import regalloc
-from qbopt import blocks as blockmod
-from qbopt.blocks import code_map
-from qbopt.mir import MirBody
-from qbopt.module import Addr
-from qbopt.module import Space
+from qbopt.model import ir
+from qbopt.analysis import liveness
+from qbopt.model import mir
+from qbopt.analysis import avail
+from qbopt.objectfile import module
+from qbopt.legacy import regalloc
+from qbopt.frontend import blocks as blockmod
+from qbopt.frontend.blocks import code_map
+from qbopt.model.mir import MirBody
+from qbopt.objectfile.module import Addr
+from qbopt.objectfile.module import Space
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
@@ -187,7 +187,7 @@ def test_no_stack_slot_crosses_a_block_boundary(obj: Path) -> None:
     the top of another are different bytes that compare equal, so carrying
     one across an edge is the single way this analysis could be unsound.
     """
-    from qbopt.module import Space
+    from qbopt.objectfile.module import Space
 
     found = corpus.loaded(obj)
     assert found is not None
@@ -210,7 +210,7 @@ def test_a_stack_slot_never_survives_a_call(obj: Path) -> None:
     call is entered by pushing a return address and the callee pops its own
     arguments, so the scratch below sp is gone either way.
     """
-    from qbopt.module import Space
+    from qbopt.objectfile.module import Space
 
     found = corpus.loaded(obj)
     assert found is not None
@@ -242,10 +242,10 @@ def test_an_accumulate_is_not_a_load_however_its_values_look() -> None:
     thing forward._loads_only exists to stop, arrived at from the other
     side.
     """
-    from qbopt import declen
-    from qbopt import ir
-    from qbopt.module import Addr
-    from qbopt.module import Space
+    from qbopt.frontend import declen
+    from qbopt.model import ir
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     def somewhere(*_args: object, **_kwargs: object) -> Addr:
         return Addr(Space.LITERAL, 0, 0)
@@ -266,10 +266,10 @@ def test_an_accumulate_is_not_a_load_however_its_values_look() -> None:
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
 def test_nothing_redundant_is_an_accumulate(obj: Path) -> None:
     """Corpus-wide: every deletion redundant() proposes is a move."""
-    from qbopt import ir
-    from qbopt import mir
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.model import ir
+    from qbopt.model import mir
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = corpus.loaded(obj)
     assert found is not None
@@ -298,7 +298,7 @@ def test_preserved_allows_a_move_and_refuses_a_binary() -> None:
     """
     from iced_x86 import Register
 
-    from qbopt import ir
+    from qbopt.model import ir
 
     old = mir.Value(1, 0x100)
     new = mir.Value(2, 0x100)
@@ -380,7 +380,7 @@ def test_only_redundant_asks_the_map_for_partial_writes(monkeypatch: pytest.Monk
 
     The switch is the entire fix, so this pins who turns it on.
     """
-    from qbopt import avail as under_test
+    from qbopt.analysis import avail as under_test
 
     obj = FIXTURES[0]
     found = corpus.loaded(obj)
@@ -431,7 +431,7 @@ def _read(body) -> dict[int, str]:
     or segment of a memory operand, or along a phi's incoming edge. A
     deletion that forgets any of them leaves a use with no definition.
     """
-    from qbopt import mir as form
+    from qbopt.model import mir as form
 
     out: dict[int, str] = {}
     for block in body.blocks:
@@ -484,12 +484,12 @@ def test_dropping_a_redundant_load_leaves_no_use_without_a_definition(obj: str) 
     """
     from pathlib import Path
 
-    from qbopt import blocks as split
-    from qbopt import mir
-    from qbopt import module
-    from qbopt import omf
-    from qbopt import transform
-    from qbopt.blocks import code_map
+    from qbopt.frontend import blocks as split
+    from qbopt.model import mir
+    from qbopt.objectfile import module
+    from qbopt.objectfile import omf
+    from qbopt.optimize import transform
+    from qbopt.frontend.blocks import code_map
 
     path = Path(f"fixtures/omf/{obj}.obj")
     if not path.exists():

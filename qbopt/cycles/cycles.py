@@ -12,7 +12,7 @@ is why this exists alongside it.
 `CASES` below is no longer only what was vendored. The `mgl: *` entries
 (renamed 2026-08-30 from `qbext`) price mgl's own design -- a call into a
 small helper routine (`do_mui4` etc.) mgl itself injected into the runtime
-image. That is not what this project's `qbopt/calls.py` emits, and the old
+image. That is not what this project's `qbopt/legacy/calls.py` emits, and the old
 `qbext` naming invited exactly that confusion. The `*: qbopt absorbed, *`
 entries are this project's own current output, taken directly from
 `absorb()`/`dividing()`/`consume()` against a constructed `CallSite`, the way

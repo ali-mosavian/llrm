@@ -1,5 +1,5 @@
 """
-qbopt/simplify.py's own gate.
+qbopt/optimize/simplify.py's own gate.
 
 A deletion that is wrong is silent, so what is tested here is not that the
 round trips are found but that nothing else is: the identity has to hold
@@ -13,10 +13,10 @@ import pytest
 import corpus
 from iced_x86 import Register
 
-from qbopt import ir
-from qbopt import mir
-from qbopt import simplify
-from qbopt.module import Space
+from qbopt.model import ir
+from qbopt.model import mir
+from qbopt.optimize import simplify
+from qbopt.objectfile.module import Space
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 REWRITTEN = Path("build/bench/v-g3/NBODY.OBJ")
@@ -62,11 +62,11 @@ def test_a_real_round_trip_is_found_and_proved() -> None:
     of docs/variables.md's stages -- an abstract variable, a sayable half,
     and a stack slot with an address.
     """
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import blocks as split
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.frontend import blocks as split
     from qbopt.rewrite import rewrite
-    from qbopt.blocks import code_map
+    from qbopt.frontend.blocks import code_map
 
     assert REWRITTEN.exists(), "the bench object is what this test is about"
     result = rewrite(REWRITTEN.read_bytes(), dry_run=False)

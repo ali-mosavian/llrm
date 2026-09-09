@@ -3,8 +3,10 @@ from pathlib import Path
 import corpus
 import pytest
 from iced_x86 import Register
-from qbopt import ir, mir, ranges, transform
-from qbopt.module import Addr, Space
+from qbopt.model import ir, mir
+from qbopt.analysis import ranges
+from qbopt.optimize import transform
+from qbopt.objectfile.module import Addr, Space
 
 
 @pytest.mark.parametrize("low,high", [(1, 20), (-32768, -1), (-10, 10)])
@@ -36,7 +38,7 @@ def test_addrm_long_array_value_keeps_counter_bounds(tag):
 def test_nbody_scaled_index_is_bounded_only_inside_its_loop(recurrences, monkeypatch) -> None:
     """Nbody's other*4 had no interval, so position reads aliased every scalar store."""
     if recurrences:
-        from qbopt import strength
+        from qbopt.optimize import strength
         original = strength._multiplies
         monkeypatch.setattr(strength, "_multiplies", lambda one, derived: one.op.kind is mir.Kind.SHL or original(one, derived))
     path = Path("fixtures/regressions/nbody-stack-p-g2.obj")

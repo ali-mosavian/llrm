@@ -17,7 +17,7 @@ import struct
 
 import pytest
 
-from qbopt import omf
+from qbopt.objectfile import omf
 
 
 def test_round_trip_is_byte_identical(obj: Path) -> None:

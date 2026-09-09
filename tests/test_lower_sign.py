@@ -2,7 +2,8 @@
 
 import pytest
 
-from qbopt import ir, mir, lower
+from qbopt.model import ir, mir
+from qbopt.backend import lower
 
 
 @pytest.mark.parametrize("live_flags", [False, True])

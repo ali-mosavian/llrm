@@ -1,5 +1,5 @@
 """
-qbopt/consts.py's own gate: a fold that is wrong produces a plausible number,
+qbopt/analysis/consts.py's own gate: a fold that is wrong produces a plausible number,
 so the width rule and what seeds it are the test.
 """
 
@@ -8,11 +8,11 @@ from pathlib import Path
 import pytest
 
 import corpus
-from qbopt import ir
-from qbopt import mir
-from qbopt import lower
-from qbopt import consts
-from qbopt import transform
+from qbopt.model import ir
+from qbopt.model import mir
+from qbopt.backend import lower
+from qbopt.analysis import consts
+from qbopt.optimize import transform
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 

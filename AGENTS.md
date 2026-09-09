@@ -324,7 +324,7 @@ full matrix.
   order suits the specific one and are never uniform with each other. `AS
   LONG` on a `DECLARE FUNCTION`'s own return type is rejected by PDS and
   QB 4.5 with `Syntax error`; only the type suffix (`fixMul&`) compiles on all
-  three. See `qbopt/calls.py`'s `FIX_MULTIPLY`.
+  three. See `qbopt/legacy/calls.py`'s `FIX_MULTIPLY`.
 - **A LEDATA record is flushed roughly every 128 bytes**, on QB 4.5 at least,
   regardless of what statement is mid-emission when the threshold is crossed.
   It is not a per-statement or per-line boundary; a single call's own pushes
@@ -521,13 +521,13 @@ is what the fix rests on -- it does not attempt the general case.
 region crossing from record A into record B extends A's own span to the
 edit's own end and shrinks B's to start there; neither is removed. That
 matters because a FIXUPP's offset is relative to whichever LEDATA precedes it
-in the file -- `qbopt/omf.py`'s `fixups()` tracks `base` exactly that way, and
+in the file -- `qbopt/objectfile/omf.py`'s `fixups()` tracks `base` exactly that way, and
 `relocate()` mirrors it with `covered`, reset on every LEDATA it passes. An
 earlier design that dropped the fully-absorbed record instead re-parented
 every FIXUPP that used to follow it: measured, 72 of 73 corpus crossings have
 a *data*-segment LEDATA between the leader and the record it would have
 merged in, so dropping it left the FIXUPP with nothing to attach to and
-refused the whole module. `qbopt/relocate.py`'s `crossed_pair` and
+refused the whole module. `qbopt/objectfile/relocate.py`'s `crossed_pair` and
 `_boundary_overrides` do the moving; a record an edit swallows whole is
 dropped rather than shrunk to nothing, safe only because every fixup that
 would have followed it falls inside the edit and is already refused a home.

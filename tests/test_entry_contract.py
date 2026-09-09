@@ -5,9 +5,9 @@ from dataclasses import replace
 
 import pytest
 
-from qbopt import omf
-from qbopt import module
-from qbopt import runtime
+from qbopt.objectfile import omf
+from qbopt.objectfile import module
+from qbopt.abi import runtime
 from qbopt import wholeseg
 
 

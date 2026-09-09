@@ -4,16 +4,18 @@ from dataclasses import replace
 import pytest
 
 import corpus
-from qbopt import ir
-from qbopt import mir
-from qbopt import algebraic
-from qbopt import transform
+from qbopt.model import ir
+from qbopt.model import mir
+from qbopt.optimize import algebraic
+from qbopt.optimize import transform
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_addrm_reuses_word_scale_for_long_address(tag):
     """ADDRM rebuilt i*4 after using i*2, paying another copy and a larger shift each iteration."""
-    from qbopt import blocks, module, omf, wholeseg
+    from qbopt.frontend import blocks
+    from qbopt.objectfile import module, omf
+    from qbopt import wholeseg
     from iced_x86 import Mnemonic
     result = wholeseg.emitted(Path(f"fixtures/omf/addrm-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
@@ -80,7 +82,9 @@ def test_shared_shift_requires_available_same_width_value(guard):
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_nested_combines_row_scale_in_emitted_code(tag):
     """NESTED multiplied the row by six, then shifted it again to address word elements."""
-    from qbopt import blocks, module, omf, wholeseg
+    from qbopt.frontend import blocks
+    from qbopt.objectfile import module, omf
+    from qbopt import wholeseg
     from iced_x86 import Code
     result = wholeseg.emitted(Path(f"fixtures/omf/nested-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
@@ -153,7 +157,9 @@ def test_nbody_address_shifts_combine_without_an_extra_counter() -> None:
 
 def test_nbody_damping_keeps_negation_whole():
     """NBODY split both velocity negations into words, emitting push/pop traffic and paired stores."""
-    from qbopt import blocks, module, omf, wholeseg
+    from qbopt.frontend import blocks
+    from qbopt.objectfile import module, omf
+    from qbopt import wholeseg
     from iced_x86 import Mnemonic, Register
     path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
     body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
@@ -169,7 +175,9 @@ def test_nbody_damping_keeps_negation_whole():
 
 def test_nbody_damping_reverses_subtraction_without_negation():
     """NBODY paid for -(quotient-velocity) instead of one velocity-quotient subtraction."""
-    from qbopt import blocks, module, omf, wholeseg
+    from qbopt.frontend import blocks
+    from qbopt.objectfile import module, omf
+    from qbopt import wholeseg
     from iced_x86 import Mnemonic
     result = wholeseg.emitted(Path("fixtures/regressions/nbody-stack-p-g2.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason

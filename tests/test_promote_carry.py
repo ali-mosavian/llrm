@@ -3,8 +3,8 @@
 from pathlib import Path
 
 import corpus
-from qbopt import mir
-from qbopt import transform
+from qbopt.model import mir
+from qbopt.optimize import transform
 
 
 def test_lngmix_high_accumulator_is_a_value() -> None:

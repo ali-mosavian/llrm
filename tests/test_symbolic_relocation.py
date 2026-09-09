@@ -1,7 +1,8 @@
 from types import SimpleNamespace
 from iced_x86 import Register
 
-from qbopt import asm, ir, mir
+from qbopt.backend import asm
+from qbopt.model import ir, mir
 
 
 def test_promoted_symbolic_load_drops_its_old_fixup():

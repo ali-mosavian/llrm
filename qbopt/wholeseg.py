@@ -22,13 +22,13 @@ from enum import StrEnum
 from dataclasses import dataclass
 from collections.abc import Callable
 
-from qbopt import mir
-from qbopt import omf
-from qbopt import module
-from qbopt import runtime
-from qbopt import transform
-from qbopt import blocks as split
-from qbopt.blocks import code_map
+from qbopt.model import mir
+from qbopt.objectfile import omf
+from qbopt.objectfile import module
+from qbopt.abi import runtime
+from qbopt.optimize import transform
+from qbopt.frontend import blocks as split
+from qbopt.frontend.blocks import code_map
 
 type Watch = Callable[[str, str | None, object], None]
 
@@ -191,12 +191,12 @@ def _through_lir(
     is the measurement the phase order is judged by.
     """
     from qbopt import flow
-    from qbopt import lower
-    from qbopt import parcopy
-    from qbopt import spiller
-    from qbopt import allocate
-    from qbopt import objwrite
-    from qbopt import frame as frames
+    from qbopt.backend import lower
+    from qbopt.backend import parcopy
+    from qbopt.backend import spiller
+    from qbopt.backend import allocate
+    from qbopt.objectfile import objwrite
+    from qbopt.backend import frame as frames
 
     done = []
     for name, body in bodies:

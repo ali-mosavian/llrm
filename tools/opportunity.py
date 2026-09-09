@@ -27,15 +27,15 @@ import iced_x86
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from qbopt import ir
-from qbopt import mir
-from qbopt import omf
-from qbopt import module
+from qbopt.model import ir
+from qbopt.model import mir
+from qbopt.objectfile import omf
+from qbopt.objectfile import module
 from qbopt import rewrite
-from qbopt.module import Space
-from qbopt import loops as loopy
-from qbopt import blocks as split
-from qbopt.blocks import code_map
+from qbopt.objectfile.module import Space
+from qbopt.analysis import loops as loopy
+from qbopt.frontend import blocks as split
+from qbopt.frontend.blocks import code_map
 
 
 def _program(path: Path) -> str:

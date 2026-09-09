@@ -40,21 +40,21 @@ from iced_x86 import Register
 from iced_x86 import Formatter
 from iced_x86 import FormatterSyntax
 
-from qbopt import ir
-from qbopt import mir
-from qbopt import lower
-from qbopt import cvinfo
-from qbopt import regalloc
-from qbopt import fpstack
+from qbopt.model import ir
+from qbopt.model import mir
+from qbopt.backend import lower
+from qbopt.objectfile import cvinfo
+from qbopt.legacy import regalloc
+from qbopt.frontend import fpstack
 
 _REGISTERS = {v: k for k, v in vars(Register).items() if isinstance(v, int)}
-from qbopt import omf
-from qbopt import module
+from qbopt.objectfile import omf
+from qbopt.objectfile import module
 from qbopt import wholeseg
-from qbopt import loops as loopy
-from qbopt.declen import BITNESS
-from qbopt import blocks as split
-from qbopt.blocks import code_map
+from qbopt.analysis import loops as loopy
+from qbopt.frontend.declen import BITNESS
+from qbopt.frontend import blocks as split
+from qbopt.frontend.blocks import code_map
 
 
 def _bodies(data: bytes):
@@ -65,7 +65,7 @@ def _bodies(data: bytes):
     mapped = code_map(found)
     if isinstance(mapped, str):
         return found, [], {}
-    from qbopt import runtime
+    from qbopt.abi import runtime
 
     # One map for the whole run, kept on the module the tool passes on, so
     # the raise and the lowering are given the same object -- built twice
@@ -322,7 +322,7 @@ def _declared(one) -> str:
 
 def _depth(body) -> dict:
     """How deeply nested each block is, so the structure is visible."""
-    from qbopt import loops as loopy
+    from qbopt.analysis import loops as loopy
 
     out: dict = {}
     for loop in loopy.loops(list(body.blocks), body.entry):
@@ -426,7 +426,7 @@ def _lir_body(name: str, body) -> None:
 
 def _operand(one) -> str:
     """One machine operand, short enough to diff."""
-    from qbopt import ir
+    from qbopt.model import ir
 
     if isinstance(one, ir.Reg):
         return _name_of(one.register)

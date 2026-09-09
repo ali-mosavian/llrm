@@ -5,9 +5,9 @@ from pathlib import Path
 import pytest
 
 import corpus
-from qbopt import ir
-from qbopt import mir
-from qbopt import consts
+from qbopt.model import ir
+from qbopt.model import mir
+from qbopt.analysis import consts
 from qbopt import wholeseg
 
 

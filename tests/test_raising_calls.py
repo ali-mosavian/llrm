@@ -4,7 +4,13 @@ from dataclasses import replace
 import pytest
 
 import corpus
-from qbopt import asm, ir, mir, module, omf, pairs, transform, wholeseg, raising_calls, calls
+from qbopt.backend import asm
+from qbopt.model import ir, mir
+from qbopt.objectfile import module, omf
+from qbopt.frontend import pairs, raising_calls
+from qbopt.optimize import transform
+from qbopt import wholeseg
+from qbopt.legacy import calls
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])

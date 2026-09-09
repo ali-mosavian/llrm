@@ -12,19 +12,19 @@ from pathlib import Path
 
 import pytest
 
-from qbopt import lir
-from qbopt import mir
-from qbopt import omf
+from qbopt.model import lir
+from qbopt.model import mir
+from qbopt.objectfile import omf
 from qbopt import flow
-from qbopt import lower
-from qbopt import module
-from qbopt import phielim
-from qbopt import runtime
-from qbopt import allocate
-from qbopt import intervals
-from qbopt import blocks as split
-from qbopt.blocks import code_map
-from qbopt.passes import LIRTransform
+from qbopt.backend import lower
+from qbopt.objectfile import module
+from qbopt.backend import phielim
+from qbopt.abi import runtime
+from qbopt.backend import allocate
+from qbopt.analysis import intervals
+from qbopt.frontend import blocks as split
+from qbopt.frontend.blocks import code_map
+from qbopt.model.passes import LIRTransform
 
 # One configuration per program rather than all twelve. The full sweep is
 # `tools/flow.py`, which is where the byte total comes from; running 487
@@ -201,9 +201,9 @@ def test_the_register_file_is_written_down_once() -> None:
     built from `ir.ROOT`, so it resolved to its root and `mov [k],al`
     became `mov [k],eax`.
     """
-    from qbopt import select
-    from qbopt import target
-    from qbopt import regalloc
+    from qbopt.backend import select
+    from qbopt.backend import target
+    from qbopt.legacy import regalloc
 
     assert select.AT_WIDTH is target.AT_WIDTH
     assert select.WIDTHS is target.WIDTHS
@@ -214,7 +214,7 @@ def test_the_register_file_is_written_down_once() -> None:
 def test_a_value_that_addresses_memory_is_confined_to_a_base_register() -> None:
     """`[dx+0Ah]` has no encoding. An allocator that does not know the class
     hands out dx eventually, and the instruction cannot be emitted."""
-    from qbopt import target
+    from qbopt.backend import target
 
     for path in CORPUS[:12]:
         found = module.of(omf.parse(path.read_bytes()))
@@ -237,7 +237,7 @@ def test_the_verifier_objects_to_a_body_that_claims_a_byte_twice() -> None:
     """
     from dataclasses import replace
 
-    from qbopt import verify
+    from qbopt.backend import verify
 
     _found, _blocks, bodies = _raised("hotlop-p-g2")
     ((name, body),) = bodies
@@ -253,10 +253,10 @@ def test_a_spilled_value_gets_a_slot_and_the_prologue_reserves_it() -> None:
     """Choosing to spill is half of it. Until the spiller existed the
     choice was made and 237 of 487 objects were refused because an operand
     still named a value with no register."""
-    from qbopt import verify
-    from qbopt import spiller
-    from qbopt import prologue
-    from qbopt import frame as frames
+    from qbopt.backend import verify
+    from qbopt.backend import spiller
+    from qbopt.backend import prologue
+    from qbopt.backend import frame as frames
 
     # jumptable, because divmod stopped spilling: a call to a routine whose
     # contract reads no register no longer holds every caller value live
@@ -291,7 +291,7 @@ def test_a_register_names_which_bytes_of_its_root_it_is() -> None:
     of NOTOR and the wrong high one."""
     from iced_x86 import Register
 
-    from qbopt import target
+    from qbopt.backend import target
 
     assert not target.overlaps(Register.AL, Register.AH)
     assert target.overlaps(Register.AL, Register.AX)
@@ -312,7 +312,7 @@ def test_an_inserted_instruction_carries_no_fixup() -> None:
     instruction an operation was raised from, and every question answered
     by reading the original bytes goes through it.
     """
-    from qbopt import objwrite
+    from qbopt.objectfile import objwrite
 
     _found, _blocks, bodies = _raised("divmod-p-g2-zd")
     for name, body in bodies:
@@ -338,8 +338,8 @@ def test_a_reload_cannot_be_spilled_again() -> None:
     `LiveInterval::markNotSpillable`; here the reloads are handed back to
     `allocate` and weigh infinity.
     """
-    from qbopt import spiller
-    from qbopt import frame as frames
+    from qbopt.backend import spiller
+    from qbopt.backend import frame as frames
 
     # procs, because divmod stopped spilling: a call to a routine whose
     # contract reads no register no longer holds every caller value live
@@ -393,9 +393,9 @@ def test_the_register_file_is_written_down_once() -> None:
     built from `ir.ROOT`, so it resolved to its root and `mov [k],al`
     became `mov [k],eax`.
     """
-    from qbopt import select
-    from qbopt import target
-    from qbopt import regalloc
+    from qbopt.backend import select
+    from qbopt.backend import target
+    from qbopt.legacy import regalloc
 
     assert select.AT_WIDTH is target.AT_WIDTH
     assert select.WIDTHS is target.WIDTHS
@@ -406,7 +406,7 @@ def test_the_register_file_is_written_down_once() -> None:
 def test_a_value_that_addresses_memory_is_confined_to_a_base_register() -> None:
     """`[dx+0Ah]` has no encoding. An allocator that does not know the class
     hands out dx eventually, and the instruction cannot be emitted."""
-    from qbopt import target
+    from qbopt.backend import target
 
     for path in CORPUS[:12]:
         found = module.of(omf.parse(path.read_bytes()))
@@ -429,7 +429,7 @@ def test_the_verifier_objects_to_a_body_that_claims_a_byte_twice() -> None:
     """
     from dataclasses import replace
 
-    from qbopt import verify
+    from qbopt.backend import verify
 
     _found, _blocks, bodies = _raised("hotlop-p-g2")
     ((name, body),) = bodies
@@ -445,10 +445,10 @@ def test_a_spilled_value_gets_a_slot_and_the_prologue_reserves_it() -> None:
     """Choosing to spill is half of it. Until the spiller existed the
     choice was made and 237 of 487 objects were refused because an operand
     still named a value with no register."""
-    from qbopt import verify
-    from qbopt import spiller
-    from qbopt import prologue
-    from qbopt import frame as frames
+    from qbopt.backend import verify
+    from qbopt.backend import spiller
+    from qbopt.backend import prologue
+    from qbopt.backend import frame as frames
 
     # jumptable, because divmod stopped spilling: a call to a routine whose
     # contract reads no register no longer holds every caller value live
@@ -483,7 +483,7 @@ def test_a_register_names_which_bytes_of_its_root_it_is() -> None:
     of NOTOR and the wrong high one."""
     from iced_x86 import Register
 
-    from qbopt import target
+    from qbopt.backend import target
 
     assert not target.overlaps(Register.AL, Register.AH)
     assert target.overlaps(Register.AL, Register.AX)
@@ -504,7 +504,7 @@ def test_an_inserted_instruction_carries_no_fixup() -> None:
     instruction an operation was raised from, and every question answered
     by reading the original bytes goes through it.
     """
-    from qbopt import objwrite
+    from qbopt.objectfile import objwrite
 
     _found, _blocks, bodies = _raised("divmod-p-g2-zd")
     for name, body in bodies:
@@ -530,8 +530,8 @@ def test_a_reload_cannot_be_spilled_again() -> None:
     `LiveInterval::markNotSpillable`; here the reloads are handed back to
     `allocate` and weigh infinity.
     """
-    from qbopt import spiller
-    from qbopt import frame as frames
+    from qbopt.backend import spiller
+    from qbopt.backend import frame as frames
 
     # procs, because divmod stopped spilling: a call to a routine whose
     # contract reads no register no longer holds every caller value live
@@ -583,7 +583,7 @@ def test_the_allocator_evicts_rather_than_spilling_a_costlier_range() -> None:
     everything, which only proved the cost model right at a price that
     grows with the body.
     """
-    from qbopt import target
+    from qbopt.backend import target
 
     for path in CORPUS[:16]:
         found = module.of(omf.parse(path.read_bytes()))
@@ -612,8 +612,8 @@ def test_a_call_carries_a_mask_rather_than_defining_a_value_per_register() -> No
     The mask has to be honoured or the drop is a miscompile: nothing live
     across the call may sit in a register the call destroys.
     """
-    from qbopt import target
-    from qbopt import intervals as ranges
+    from qbopt.backend import target
+    from qbopt.analysis import intervals as ranges
 
     _found, _blocks, bodies = _raised("lngmix-p-g2")
     masked = 0
@@ -659,11 +659,11 @@ def test_strength_reduction_replaces_a_loop_multiply_with_an_add() -> None:
     """
     from pathlib import Path
 
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import strength
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.optimize import strength
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/matrix-p-g2.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
@@ -699,7 +699,7 @@ def test_strength_reduction_is_off_because_it_measured_worse() -> None:
     register for the whole loop. LLVM's LoopStrengthReduce is mostly a cost
     model for this; ours prices nothing.
     """
-    from qbopt import transform
+    from qbopt.optimize import transform
 
     assert "strength" not in transform.PASSES_ON, "strength is on and it measured worse"
 
@@ -712,11 +712,11 @@ def test_promotion_takes_a_variable_out_of_memory() -> None:
     """
     from pathlib import Path
 
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import promote
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.optimize import promote
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     was = now = cells = 0
     for name in ("arith-p-g2", "bools-p-g2", "flags-p-g2"):
@@ -740,12 +740,12 @@ def test_promotion_is_only_sound_because_the_runtime_was_measured() -> None:
     reach. With every call conceding `ANY`, nothing is promotable."""
     from pathlib import Path
 
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import promote
-    from qbopt import runtime
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.optimize import promote
+    from qbopt.abi import runtime
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/arith-p-g2.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
@@ -767,8 +767,8 @@ def test_the_coalescer_joins_the_intervals_it_merges() -> None:
     `RegisterCoalescer` joins the live intervals as it goes so the next
     join sees what the last one made.
     """
-    from qbopt import coalesce
-    from qbopt import intervals as ranges
+    from qbopt.backend import coalesce
+    from qbopt.analysis import intervals as ranges
 
     one = ranges.Interval(1, (ranges.Segment(15, 16), ranges.Segment(59, 60)))
     other = ranges.Interval(2, (ranges.Segment(0, 15),))
@@ -798,12 +798,12 @@ def test_an_absorbed_site_keeps_its_own_emission() -> None:
     """
     from pathlib import Path
 
-    from qbopt import omf
-    from qbopt import lower
-    from qbopt import module
-    from qbopt import transform
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.objectfile import omf
+    from qbopt.backend import lower
+    from qbopt.objectfile import module
+    from qbopt.optimize import transform
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
@@ -828,13 +828,13 @@ def test_no_phi_survives_elimination_on_a_critical_edge() -> None:
     """bools-q-O has three, and every one was silently discarded."""
     from pathlib import Path
 
-    from qbopt import omf
-    from qbopt import lower
-    from qbopt import module
-    from qbopt import phielim
-    from qbopt import transform
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.objectfile import omf
+    from qbopt.backend import lower
+    from qbopt.objectfile import module
+    from qbopt.backend import phielim
+    from qbopt.optimize import transform
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/bools-q-O.obj").read_bytes()))
     blocks = split.partition(found, code_map(found))
@@ -857,8 +857,8 @@ def test_no_phi_survives_elimination_on_a_critical_edge() -> None:
 
 def test_emission_refuses_a_body_that_still_has_a_phi() -> None:
     """A phi is not an instruction, so emitting one emits nothing."""
-    from qbopt import lir
-    from qbopt import objwrite
+    from qbopt.model import lir
+    from qbopt.objectfile import objwrite
 
     stuck = lir.LirBody(
         name="one",
@@ -877,11 +877,11 @@ def test_verification_catches_a_cell_left_on_a_value_the_rename_ended() -> None:
     three renames that got this wrong could not have been caught here."""
     from iced_x86 import Register
 
-    from qbopt import lir
-    from qbopt import verify
-    from qbopt.module import Addr
-    from qbopt.module import Space
-    from qbopt import ir as machine
+    from qbopt.model import lir
+    from qbopt.backend import verify
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+    from qbopt.model import ir as machine
 
     where = Addr(Space.SEGMENT, 0x10, base=Register.SI)
     stale = machine.Mem(where, 2, Register.NONE, 0, 2, base=machine.Held(3, 2))
@@ -923,8 +923,8 @@ def test_a_wide_divide_requires_its_dividend_halves_where_idiv_reads_them() -> N
     """
     from iced_x86 import Register
 
-    from qbopt import target
-    from qbopt import ir as machine
+    from qbopt.backend import target
+    from qbopt.model import ir as machine
 
     dests, halves = machine.DIVIDE_PAIR[4]
     what = machine.Semantics(machine.Operation.DIVIDE, "idiv", dests, (*halves, machine.Reg(Register.ECX, 4)))
@@ -972,7 +972,7 @@ def test_invariant_divides_execute_before_the_loop(stem: str) -> None:
     """
     from iced_x86 import Mnemonic
 
-    from qbopt import loops
+    from qbopt.analysis import loops
     from qbopt import wholeseg
 
     result = wholeseg.emitted(Path(f"fixtures/omf/{stem}.obj").read_bytes())
@@ -1012,8 +1012,8 @@ def test_nothing_reloads_a_frame_slot_that_was_never_stored_to() -> None:
     from iced_x86 import Decoder
     from iced_x86 import Register
 
-    from qbopt import omf
-    from qbopt import module
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
 
     _why, out = _lngmix_through_the_lir_route()
     code = bytes(module.of(omf.parse(out)).code)
@@ -1045,8 +1045,8 @@ def test_a_frame_slot_is_written_and_read_at_one_width() -> None:
     from iced_x86 import Register
     from iced_x86 import MemorySizeExt
 
-    from qbopt import omf
-    from qbopt import module
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
 
     _why, out = _lngmix_through_the_lir_route()
     code = bytes(module.of(omf.parse(out)).code)

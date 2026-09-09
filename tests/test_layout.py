@@ -1,5 +1,5 @@
 """
-qbopt/layout.py: a whole body emitted, and everything that moves with it.
+qbopt/backend/layout.py: a whole body emitted, and everything that moves with it.
 
 The claim is not that the bytes match. select.py may choose an encoding BC
 did not -- it emits the near form of every branch where BC often wrote the
@@ -19,16 +19,16 @@ from iced_x86 import Register_
 from iced_x86 import Instruction
 
 import corpus
-from qbopt import ir
-from qbopt import asm
-from qbopt import mir
-from qbopt import omf
-from qbopt import layout
-from qbopt import select
-from qbopt import target
-from qbopt.declen import decode
-from qbopt import blocks as split
-from qbopt.blocks import code_map
+from qbopt.model import ir
+from qbopt.backend import asm
+from qbopt.model import mir
+from qbopt.objectfile import omf
+from qbopt.backend import layout
+from qbopt.backend import select
+from qbopt.backend import target
+from qbopt.frontend.declen import decode
+from qbopt.frontend import blocks as split
+from qbopt.frontend.blocks import code_map
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
@@ -37,7 +37,7 @@ def test_emulator_load_uses_the_allocated_address() -> None:
     """nbody's copied FLD still read SI after allocation moved its pointer."""
     from types import SimpleNamespace
     from iced_x86 import Register
-    from qbopt import declen
+    from qbopt.frontend import declen
 
     raw = bytes.fromhex("cd3504")
     original = ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ir.St(0),),
@@ -117,7 +117,7 @@ def paired(ops: list, back: list, found) -> list[tuple]:
     argument values, and lowering writes four instructions for it. So these
     are paired by how many bytes each op emitted rather than one for one.
     """
-    from qbopt import layout as laying
+    from qbopt.backend import layout as laying
 
     out, at = [], 0
     for op in ops:
@@ -300,7 +300,7 @@ def test_a_rebuilt_segment_carries_every_fixup(obj: Path) -> None:
     relocated field is the immediate rather than the displacement, and
     reporting only the displacement missed every one.
     """
-    from qbopt import omf
+    from qbopt.objectfile import omf
 
     found, bodies, got = rebuilt(obj)
     if got is None:
@@ -488,7 +488,7 @@ def test_an_allocation_reaches_the_bytes() -> None:
     """
     from iced_x86 import Register
 
-    from qbopt import regalloc
+    from qbopt.legacy import regalloc
 
     found, bodies, base = rebuilt(Path("fixtures/omf/hotlop-p-g2.obj"))
     assert base is not None and found is not None
@@ -568,13 +568,13 @@ def test_a_served_read_does_not_keep_the_fixup_of_the_operand_it_removed(name: s
     the question is not the operand kind but whether a transform is what
     took the memory operand away.
     """
-    from qbopt import mir
-    from qbopt import omf
-    from qbopt import layout
-    from qbopt import module
-    from qbopt import transform
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.model import mir
+    from qbopt.objectfile import omf
+    from qbopt.backend import layout
+    from qbopt.objectfile import module
+    from qbopt.optimize import transform
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse((Path("fixtures/omf") / f"{name}.obj").read_bytes()))
     assert found is not None
@@ -610,11 +610,11 @@ def test_bytes_claimed_twice_are_reported_rather_than_raising() -> None:
     """
     from dataclasses import replace
 
-    from qbopt import ir
-    from qbopt import mir
-    from qbopt import omf
-    from qbopt import module
-    from qbopt.blocks import code_map
+    from qbopt.model import ir
+    from qbopt.model import mir
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/hotlop-p-g2.obj").read_bytes()))
     assert found is not None
@@ -645,11 +645,11 @@ def test_allocation_is_a_phase_and_the_assembler_emits_what_it_is_handed(obj: Pa
     allocated over a second time. `layout.allocated()` is that work, and
     the two together give what rebuild alone used to.
     """
-    from qbopt import mir
-    from qbopt import regalloc
-    from qbopt import transform
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.model import mir
+    from qbopt.legacy import regalloc
+    from qbopt.optimize import transform
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = corpus.loaded(obj)
     mapped = code_map(found)
@@ -703,10 +703,10 @@ def test_a_relocation_belongs_to_the_operand_and_not_to_a_place(obj: Path) -> No
     Checked as: the answer from the operation matches the answer the search
     gave, on every operation in the corpus that has one.
     """
-    from qbopt import ir
-    from qbopt import mir
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.model import ir
+    from qbopt.model import mir
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = corpus.loaded(obj)
     mapped = code_map(found)
@@ -770,9 +770,9 @@ def test_a_tangled_class_is_split_on_the_phi_edge() -> None:
 
     from iced_x86 import Register
 
-    from qbopt import ir
-    from qbopt import mir
-    from qbopt import regalloc
+    from qbopt.model import ir
+    from qbopt.model import mir
+    from qbopt.legacy import regalloc
 
     made, carried = mir.Value(1, 0x10, 0, 1, 1), mir.Value(2, 0x20, 0, 1, 2)
     other = mir.Value(5, 0x11, 0, 4, 1)
@@ -878,11 +878,11 @@ def test_a_moved_operation_keeps_its_fixup() -> None:
     """
     from dataclasses import replace
 
-    from qbopt import mir
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.model import mir
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/hotlop-p-g2.obj").read_bytes()))
     assert found is not None
@@ -915,13 +915,13 @@ def test_a_fold_does_not_keep_the_fixup_of_the_read_it_replaced() -> None:
     and a pass that says what it computes in MIR's own operands sets no
     `made` at all -- so every fold was answered "nothing touched it".
     """
-    from qbopt import ir
-    from qbopt import mir
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import transform
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.model import ir
+    from qbopt.model import mir
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.optimize import transform
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/bools-p-g2.obj").read_bytes()))
     assert found is not None
@@ -957,7 +957,7 @@ def test_an_operation_may_carry_a_fixup_for_each_instruction_it_stands_for() -> 
     where each landed, the module's refs say which fixup each operand
     carries, and layout pairs them in the order the instructions came out.
     """
-    from qbopt import select
+    from qbopt.backend import select
 
     # However it was built: _assemble reads the two offsets iced gives back,
     # an idiom says where its own fields are, and both answer `places`.
@@ -982,13 +982,13 @@ def test_a_restore_emits_the_idiom_and_not_the_bytes_it_stands_on() -> None:
     its address, two bytes where four were measured. PRINT then consumed a
     dx the widened `neg eax` had already made stale.
     """
-    from qbopt import omf
-    from qbopt import module
-    from qbopt import select
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.backend import select
     from qbopt import wholeseg
-    from qbopt import transform
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.optimize import transform
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     raw = Path("fixtures/omf/negnot-q-O.obj").read_bytes()
     found = module.of(omf.parse(raw))

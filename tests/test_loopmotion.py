@@ -4,18 +4,18 @@ from pathlib import Path
 import pytest
 
 import corpus
-from qbopt import loops
-from qbopt import loopmotion
-from qbopt import mir
-from qbopt import module
-from qbopt import promote
-from qbopt import runtime
+from qbopt.analysis import loops
+from qbopt.optimize import loopmotion
+from qbopt.model import mir
+from qbopt.objectfile import module
+from qbopt.optimize import promote
+from qbopt.abi import runtime
 
 
 @pytest.mark.parametrize("proof", ["complete", "no_seed", "no_bounds"])
 def test_nbody_conditional_accumulator_stores_sink(monkeypatch, proof):
     """Nbody's promoted accumulators still wrote memory on every other-body update."""
-    from qbopt import transform
+    from qbopt.optimize import transform
     path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
     found = corpus.loaded(path)
     partition = corpus.partitioned(path)
@@ -40,7 +40,7 @@ def test_nbody_conditional_accumulator_stores_sink(monkeypatch, proof):
 @pytest.mark.parametrize("nonempty", [False, True])
 def test_lngmxx_invariant_temporaries_sink_only_when_loop_executes(monkeypatch, nonempty: bool) -> None:
     """LNGMXX wrote invariant quotient halves ten times; a zero-trip loop must not acquire those stores."""
-    from qbopt import transform
+    from qbopt.optimize import transform
 
     path = Path("fixtures/omf/lngmxx-p-g2.obj")
     found = corpus.loaded(path)
@@ -69,7 +69,7 @@ def test_lngmxx_invariant_temporaries_sink_only_when_loop_executes(monkeypatch, 
 @pytest.mark.parametrize("initialized", [True, False])
 def test_nested_accumulator_seed_follows_outer_phi(monkeypatch, initialized: bool) -> None:
     """NESTED stored its accumulator 30 times; an outer phi carries the zero-trip seed."""
-    from qbopt import transform
+    from qbopt.optimize import transform
 
     path = Path("fixtures/omf/nested-p-g2.obj")
     found = corpus.loaded(path)
@@ -97,7 +97,7 @@ def test_nested_accumulator_seed_follows_outer_phi(monkeypatch, initialized: boo
 
 def test_nested_accumulator_is_stored_only_after_the_outer_loop() -> None:
     """NESTED wrote its sum once per row after inner-loop sinking; only the exit needs it."""
-    from qbopt import transform
+    from qbopt.optimize import transform
 
     path = Path("fixtures/omf/nested-p-g2.obj")
     found = corpus.loaded(path)
@@ -115,7 +115,7 @@ def test_nested_accumulator_is_stored_only_after_the_outer_loop() -> None:
 @pytest.mark.parametrize("initialization", ["complete", "missing", "clobbered"])
 def test_addrm_exit_store_requires_complete_initial_memory(tag, initialization, monkeypatch):
     """ADDRM wrote u 20 times; moving it must preserve memory even when the loop takes zero trips."""
-    from qbopt import transform
+    from qbopt.optimize import transform
     path = Path(f"fixtures/omf/addrm-{tag}.obj")
     found = corpus.loaded(path)
     partition = corpus.partitioned(path)

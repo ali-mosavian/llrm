@@ -1,6 +1,6 @@
 """
 Re-measures docs/residue.md's patterns B, D, E, F, I against the CURRENT
-rewritten object -- a mechanical, scripted walk of qbopt/ir.py's own node
+rewritten object -- a mechanical, scripted walk of qbopt/model/ir.py's own node
 stream, not a re-read of the disassembly by eye. Built because residue.md's
 own counts for these five were stale twice over: once from the comparison-
 absorption correctness fix (`f2b6f05`), and again from G+H's own closure
@@ -10,7 +10,7 @@ absorption correctness fix (`f2b6f05`), and again from G+H's own closure
 
 Regenerates NBODYQ.OBJ fresh from build/bench/v-g3/NBODY.OBJ via
 qbopt.rewrite.rewrite() -- never trusts a possibly-stale copy on disk -- then
-decodes it with qbopt.ir.decode_module() and walks the node stream:
+decodes it with qbopt.model.ir.decode_module() and walks the node stream:
 
   B  a Restore node immediately followed by a push of its own pair's high
      and low halves and a pop of the same pair's 32-bit root -- the value
@@ -23,7 +23,7 @@ decodes it with qbopt.ir.decode_module() and walks the node stream:
      computed-source INTEGER-to-LONG sign extension.
   I  a Restore node whose high-half register (dx for pair 0, bx for pair 1)
      is not read by anything reachable after it before being overwritten --
-     real block-graph backward liveness over qbopt.blocks' own Block/succ
+     real block-graph backward liveness over qbopt.frontend.blocks' own Block/succ
      graph, not a same-block-only heuristic.
   E  regions tools/rewrite --report itself refuses with a "grows N bytes to
      M" reason -- the planner saw a smaller region than the statement really
@@ -44,18 +44,18 @@ from iced_x86 import Register_
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from qbopt import ir
-from qbopt import omf
-from qbopt import module
-from qbopt.declen import INFO
-from qbopt.declen import Insn
-from qbopt.blocks import Block
-from qbopt.declen import READS
-from qbopt.lift import HALF_OF
-from qbopt.declen import WRITES
-from qbopt.flags import CLOBBERS
+from qbopt.model import ir
+from qbopt.objectfile import omf
+from qbopt.objectfile import module
+from qbopt.frontend.declen import INFO
+from qbopt.frontend.declen import Insn
+from qbopt.frontend.blocks import Block
+from qbopt.frontend.declen import READS
+from qbopt.legacy.lift import HALF_OF
+from qbopt.frontend.declen import WRITES
+from qbopt.analysis.flags import CLOBBERS
 from qbopt.rewrite import rewrite
-from qbopt import blocks as blocks_mod
+from qbopt.frontend import blocks as blocks_mod
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE_OBJ = ROOT / "build" / "bench" / "v-g3" / "NBODY.OBJ"
@@ -242,7 +242,7 @@ def find_f(built: Built) -> list[Instance]:
 
 # ---------------------------------------------------------------------------
 # I -- restores whose high half nothing reads. Real block-graph backward
-# liveness for one register root at a time, mirroring qbopt/flags.py's own
+# liveness for one register root at a time, mirroring qbopt/analysis/flags.py's own
 # live_in()/live_after() shape exactly, generalised from Flag bits to a
 # single Register_ root.
 

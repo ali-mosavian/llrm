@@ -1,5 +1,5 @@
 """
-qbopt/wide.py's own gate: the pair is a graph property, and the check that
+qbopt/frontend/wide.py's own gate: the pair is a graph property, and the check that
 two halves belong together is the part that fails silently if it is wrong.
 """
 
@@ -8,11 +8,11 @@ from pathlib import Path
 import pytest
 
 import corpus
-from qbopt import ir
-from qbopt import mir
-from qbopt import wide
-from qbopt.module import Addr
-from qbopt.module import Space
+from qbopt.model import ir
+from qbopt.model import mir
+from qbopt.frontend import wide
+from qbopt.objectfile.module import Addr
+from qbopt.objectfile.module import Space
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 SOMEWHERE = Addr(Space.SEGMENT, 0x10, 5)
@@ -212,12 +212,12 @@ def test_a_widened_operation_says_four_bytes_in_mir_too() -> None:
     """
     from pathlib import Path
 
-    from qbopt import mir
-    from qbopt import module
-    from qbopt import omf
-    from qbopt import transform
-    from qbopt import blocks as split
-    from qbopt.blocks import code_map
+    from qbopt.model import mir
+    from qbopt.objectfile import module
+    from qbopt.objectfile import omf
+    from qbopt.optimize import transform
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
 
     found = module.of(omf.parse(Path("fixtures/omf/arith-v-g3.obj").read_bytes()))
     assert found is not None

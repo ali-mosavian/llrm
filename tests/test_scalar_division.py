@@ -4,7 +4,10 @@ from pathlib import Path
 import corpus
 import pytest
 
-from qbopt import mir, raising_division, transform, wholeseg
+from qbopt.model import mir
+from qbopt.frontend import raising_division
+from qbopt.optimize import transform
+from qbopt import wholeseg
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])

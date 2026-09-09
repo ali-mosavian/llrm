@@ -6,7 +6,7 @@ the *resolved* type name -- "ARRAY OF LONG", "BYREF LONG" -- rather than the
 raw type_index, which is compiler-specific (VBDOS/PDS route a BYREF LONG
 parameter through a $$TYPES chain; QB 4.5 uses its own primitive-plus-0x20
 code and never touches $$TYPES for it at all). The resolved name is the one
-invariant across all three; see qbopt/cvinfo.py's module docstring.
+invariant across all three; see qbopt/objectfile/cvinfo.py's module docstring.
 """
 
 import tempfile
@@ -19,8 +19,8 @@ from dosbox import dosbox_bin
 from cache import cached_launch
 from cache import toolchain_identity
 
-from qbopt import omf
-from qbopt import cvinfo
+from qbopt.objectfile import omf
+from qbopt.objectfile import cvinfo
 
 pytestmark = [pytest.mark.e2e, pytest.mark.skipif(dosbox_bin() is None, reason="no dosbox-x")]
 
@@ -293,8 +293,8 @@ def test_a_module_variable_is_where_its_fixup_says() -> None:
     """
     from pathlib import Path
 
-    from qbopt import cvinfo
-    from qbopt import omf
+    from qbopt.objectfile import cvinfo
+    from qbopt.objectfile import omf
 
     got = cvinfo.parse(omf.parse(Path("fixtures/omf/procs-p-g2-zi.obj").read_bytes()))
     assert got.variables, "the object carries no symbols; it was not built with /Zi"
@@ -313,8 +313,8 @@ def test_a_parameter_is_above_the_frame_pointer_and_a_local_below() -> None:
     """
     from pathlib import Path
 
-    from qbopt import cvinfo
-    from qbopt import omf
+    from qbopt.objectfile import cvinfo
+    from qbopt.objectfile import omf
 
     got = cvinfo.parse(omf.parse(Path("fixtures/omf/procs-p-g2-zi.obj").read_bytes()))
     named = {one.name: one for one in got.procedures}
@@ -341,8 +341,8 @@ def test_an_array_is_where_its_descriptor_points() -> None:
     """
     from pathlib import Path
 
-    from qbopt import cvinfo
-    from qbopt import omf
+    from qbopt.objectfile import cvinfo
+    from qbopt.objectfile import omf
 
     got = cvinfo.parse(omf.parse(Path("fixtures/omf/arridx-p-g2-zi.obj").read_bytes()))
     arrays = [one for one in got.variables if "ARRAY" in (one.type_name or "")]
