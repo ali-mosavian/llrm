@@ -38,6 +38,26 @@ def test_an_unnamed_call_is_the_worst_case() -> None:
     assert runtime.contract(None).clobbers == EVERY
 
 
+@pytest.mark.parametrize("family", ["pds71", "vbdos"])
+def test_evk1_alias_keeps_event_effects(family: str) -> None:
+    """Event-enabled ADDRM refused emission before executing its first statement."""
+    alias = runtime.per_call({0: "B$EVK1"}, family)[0]
+    original = runtime.contract("B$EVCK")
+    assert replace(alias, name=original.name, evidence=original.evidence) == original
+    assert runtime.barrier(alias)
+    assert alias.enters_user_code
+    assert alias.writes is Memory.ANY
+
+
+@pytest.mark.parametrize("family", ["", "qb45", "unknown"])
+def test_evk1_alias_requires_an_established_family(family: str) -> None:
+    assert runtime.per_call({0: "B$EVK1"}, family)[0] == runtime.worst("B$EVK1")
+
+
+def test_evk1_user_definition_overrides_runtime_alias() -> None:
+    assert runtime.per_call({0: "B$EVK1"}, "pds71", frozenset({"B$EVK1"}))[0] == runtime.own("B$EVK1")
+
+
 @pytest.mark.parametrize("family", ["qb45", "pds71", "vbdos"])
 def test_command_line_has_bounded_inputs_without_optimistic_effects(family: str) -> None:
     """nbody refused strict emission at COMMAND$ before reaching its integrator."""

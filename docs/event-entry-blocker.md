@@ -6,6 +6,19 @@ PDS and VBDOS event-enabled ADDRM both refuse at the module's near call:
 far jump names B$EVK1, not B$EVCK. Many event-enabled rows share this blocker;
 they must not be reported as completed or compared to event-free targets.
 
+PUBDEF inspection establishes that the two names are exact aliases within
+each shipped runtime: both name segment 1 offset 0103 in PDS and 0127 in
+VBDOS, in the same `..\rt\evtcore.asm` module. The library SHA-256 values are:
+
+- PDS BCL71ENR.LIB: `873fde67aa6fcf27961ec76d9f57ea8a621f6d16ea064da3312aa8d9e3a8c117`
+- VBDOS VBDCL10E.LIB: `59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301`
+
+The family-specific B$EVK1 contract therefore inherits the existing B$EVCK
+interface, including arbitrary memory effects and entry into user code.
+Unknown families and QB45 do not acquire this alias. This does not recognize
+the compiler's near-call stub or prove equality between runtime versions;
+the production refusal and before/after assembly remain unchanged.
+
 The shipped PDS `BCL71ENR.LIB`, module `..\rt\evtcore.asm`, defines B$EVK1
 at segment 1 offset 0103. Direct disassembly and the dependency-aware contract
 tool establish two different paths:

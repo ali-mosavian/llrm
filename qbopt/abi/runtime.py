@@ -550,6 +550,21 @@ def _contracts(path: Path | None = None) -> dict[str, Contract]:
 
 CONTRACTS = _contracts()
 
+for _family, _library, _offset in (
+    ("pds71", "BCL71ENR.LIB", "0103"),
+    ("vbdos", "VBDCL10E.LIB", "0127"),
+):
+    VARIANTS[("B$EVK1", _family)] = replace(
+        CONTRACTS["B$EVCK"],
+        name="B$EVK1",
+        evidence=(
+            f"{_library} evtcore.asm PUBDEF: B$EVK1 and B$EVCK both name "
+            f"segment 1 offset {_offset}; exact entry aliases in this runtime family. "
+            "Library hashes and scope: docs/event-entry-blocker.md. "
+            + CONTRACTS["B$EVCK"].evidence
+        ),
+    )
+
 
 # Routines that hand control back to the program. What they write is what
 # the code they call writes, which is anything -- GCC's modref gives up on
