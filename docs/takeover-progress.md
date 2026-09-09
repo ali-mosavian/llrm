@@ -1,5 +1,26 @@
 # Takeover checkpoint — 2026-09-09
 
+## Constant-divmod experiment — withdrawn
+
+`db942bd` exposes LNGMIX's 100000 dividend. Replacing its constant DIVMOD
+with quotient/remainder copies (14285 and 5) was prototyped but not retained.
+Production remains unchanged: the prototype refused emission with
+`0x005f: 12 bytes between the ops are not instructions`.
+
+More importantly, adjacent MIR dumps pinpoint an SSA defect in round-three
+hoist: the accumulator phi `v11_1 := phi entry:v11_2, latch:v1_6` disappears,
+and its loop use becomes a use of the entry zero. Round-four fold then correctly
+folds that *incorrect input* to `0 + 14290`. Fix hoist's handling of existing
+cross-variable phis before reintroducing the divmod fold; do not blame the
+constant evaluator for the phi already lost in the previous stage.
+
+Evidence: `/tmp/qbopt-lngmix-divfold-20260909`, especially
+`s29-mir-r03-fold.txt` versus `s32-mir-r03-hoist.txt`, then
+`s42-mir-r03-place.txt` versus `s43-mir-r04-fold.txt`.
+The prototype copied both semantic results, retained original byte ownership on
+the first copy and used zero-width ownership on the second. Ownership remains
+another blocker. No speedup or runtime success is claimed for this experiment.
+
 ## VBDOS procedure-exit interface
 
 PROCS `/G3` now emits through LIR rather than refusing B$EXSA at 0x113.
