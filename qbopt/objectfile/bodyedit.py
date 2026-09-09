@@ -1,5 +1,5 @@
 """
-A whole Body, replaced rather than widened in place.
+Object-file editing: a whole Body, replaced rather than widened in place.
 
 relocate.py's Edit/Shift/relocate() already work at the whole code-segment
 level: an Edit is a byte span and a Shift a set of them, and neither assumes

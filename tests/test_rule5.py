@@ -11,39 +11,33 @@ one cannot be added quietly.
 
 What is allowed, and why. `MirBody.origin` is where BC kept a value, and
 `Value`'s own docstring sanctions reading it "with a reason, not by
-accident". Four readers have one:
+accident". Three compatibility readers remain:
 
   pairs.py    which register pair a long arrived in -- ax:dx or cx:bx is
               BC's convention and the only evidence a load pair is one long
-  consts.py   resolving a semantic operand back to the value it names
-  avail.py    the same, for a cell's holder
+  avail.py    the legacy redundant-load query still uses register identity
   wide.py     widening a register operand to its own root
 
 Everything else in the list is a defect with a name attached.
 """
 
 import ast
+import inspect
 from pathlib import Path
 
 import pytest
 
 HERE = Path(__file__).resolve().parent.parent / "qbopt"
 
-# The passes: what runs between mir.raise_body and lowering.
-PASSES = (
-    "algebraic.py",
-    "transform.py",
-    "pairs.py",
-    "consts.py",
-    "avail.py",
-    "wide.py",
-    "segments.py",
-    "loopmotion.py",
-    "ssa.py",
-    "promote.py",
-    "induction.py",
-    "strength.py",
-)
+# Discover every optimization module, including new passes and subpackages.
+# Shared analyses and the remaining frontend compatibility helpers are explicit.
+PASSES = tuple(sorted({
+    path.relative_to(HERE).as_posix() for path in (HERE / "optimize").rglob("*.py")
+    if path.name != "__init__.py"
+} | {
+    "frontend/pairs.py", "frontend/wide.py", "analysis/consts.py",
+    "analysis/avail.py", "analysis/ssa.py", "analysis/induction.py",
+}))
 
 # Naming any of these is naming the machine.
 NAMED = frozenset(
@@ -62,19 +56,15 @@ NAMED = frozenset(
 # Functions that may, with the reason above. Narrowed as each step lands;
 # a name leaving this list is progress and a name joining it needs one.
 ALLOWED = {
-    "pairs.py": None,  # whole file: pair identity is BC's register convention
-    "consts.py": None,
-    "avail.py": None,
-    "wide.py": None,
-    # transform.py and segments.py have no blanket permission. This is the
-    # baseline the AST reports today, grouped by what empties it. Every
-    # entry is a defect with a name attached; the list only shrinks.
+    "frontend/pairs.py": None,  # pair identity is BC's register convention
+    "analysis/avail.py": {"redundant"},
+    "frontend/wide.py": {"_wider"},
     # transform.py and segments.py have no blanket permission. What is
     # left is one function: `_leaving`, which answers "what does the caller
     # see" -- a statement about registers, and the reading Value's own
     # docstring sanctions.
-    "transform.py": {"_leaving"},
-    "segments.py": set(),
+    "optimize/transform.py": {"_leaving"},
+    "optimize/segments.py": set(),
 }
 
 
@@ -84,6 +74,16 @@ def _named_in(path: Path) -> dict[str, set[str]]:
     where = ["<module>"]
 
     class Walk(ast.NodeVisitor):
+        def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+            for name in node.names:
+                if name.name in NAMED or (node.module or "").startswith("iced_x86"):
+                    found.setdefault(where[-1], set()).add(name.name)
+
+        def visit_Import(self, node: ast.Import) -> None:
+            for name in node.names:
+                if name.name == "iced_x86" or name.name.startswith("iced_x86."):
+                    found.setdefault(where[-1], set()).add(name.name)
+
         def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
             where.append(node.name)
             self.generic_visit(node)
@@ -100,6 +100,17 @@ def _named_in(path: Path) -> dict[str, set[str]]:
 
     Walk().visit(ast.parse(path.read_text()))
     return found
+
+
+@pytest.mark.parametrize("source", [
+    "from iced_x86 import Register as R\ndef f(): return R.EAX\n",
+    "import iced_x86 as machine\ndef f(): return machine.Code.MOV_R16_RM16\n",
+])
+def test_architecture_scan_cannot_be_bypassed_by_an_import_alias(tmp_path, source):
+    """The boundary instrument must not report clean after Register is renamed R."""
+    path = tmp_path / "pass.py"
+    path.write_text(source)
+    assert _named_in(path)
 
 
 @pytest.mark.parametrize("name", PASSES)
@@ -134,14 +145,16 @@ def test_a_pass_is_a_transform_and_nothing_else() -> None:
     """
     from qbopt.model.passes import MIRTransform
     from qbopt.model.passes import Where
-    from qbopt.optimize.transform import PASSES
+    from qbopt.optimize.transform import PASSES as ORDER
     from qbopt.optimize.transform import pipeline
 
     every = pipeline(Where())
-    assert [one.name for one in every] == list(PASSES)
+    assert [one.name for one in every] == list(ORDER)
     assert all(isinstance(one, MIRTransform) for one in every)
 
     # one method, and it is the contract
     assert [n for n in vars(MIRTransform) if not n.startswith("_")] == ["name", "transform"]
     for one in every:
         assert type(one).transform is not MIRTransform.transform, f"{one.name} overrides nothing"
+        implementation = Path(inspect.getfile(type(one))).relative_to(HERE).as_posix()
+        assert implementation in PASSES, f"{one.name}: {implementation} is outside the architecture scan"

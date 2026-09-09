@@ -9,12 +9,12 @@ import corpus
 from qbopt.model import ir
 from qbopt.objectfile import omf
 from qbopt.frontend.extent import Body
-from qbopt.optimize.bodyedit import edit
+from qbopt.objectfile.bodyedit import edit
 from qbopt.frontend.declen import decode
 from qbopt.objectfile.relocate import Shift
 from qbopt.frontend.extent import BodyKind
-from qbopt.optimize.bodyedit import rewritten
-from qbopt.optimize.bodyedit import insert_nop
+from qbopt.objectfile.bodyedit import rewritten
+from qbopt.objectfile.bodyedit import insert_nop
 
 MAIN = Body(BodyKind.MAIN, 0x30, None, ((0x30, 0x50), (0x60, 0x80)))
 

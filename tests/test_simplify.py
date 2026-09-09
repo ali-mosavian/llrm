@@ -1,5 +1,5 @@
 """
-qbopt/optimize/simplify.py's own gate.
+qbopt/legacy/simplify.py's own gate.
 
 A deletion that is wrong is silent, so what is tested here is not that the
 round trips are found but that nothing else is: the identity has to hold
@@ -15,7 +15,7 @@ from iced_x86 import Register
 
 from qbopt.model import ir
 from qbopt.model import mir
-from qbopt.optimize import simplify
+from qbopt.legacy import simplify
 from qbopt.objectfile.module import Space
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))

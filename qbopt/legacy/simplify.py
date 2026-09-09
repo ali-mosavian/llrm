@@ -1,5 +1,5 @@
 """
-Values that are other values, proved rather than pattern-matched.
+Legacy register-identity elimination of split/rejoin sequences.
 
 Absorption emits each call site in isolation -- calls.py has no view past
 its own call -- so every site ends by putting the pair back the way BC's

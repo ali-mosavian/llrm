@@ -14,7 +14,7 @@ from configs import CONFIGS
 from dosbox import dosbox_bin
 
 from qbopt.frontend.extent import BodyKind
-from qbopt.optimize.bodyedit import rewritten
+from qbopt.objectfile.bodyedit import rewritten
 
 pytestmark = [pytest.mark.e2e, pytest.mark.skipif(dosbox_bin() is None, reason="no dosbox-x")]
 
