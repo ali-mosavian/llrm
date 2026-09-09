@@ -1136,6 +1136,26 @@ def test_two_address_multiply_preserves_its_first_factor() -> None:
     assert set(fixed[1].uses) == {900, 902}
 
 
+def test_constant_multiply_lowers_without_a_destination_tie() -> None:
+    from qbopt import lower
+    from qbopt import twoaddr
+
+    source, result = mir.Value(900, 0), mir.Value(901, 1)
+    op = mir.Op(
+        1,
+        ir.Operation.MULTIPLY,
+        "",
+        (result,),
+        (source,),
+        kind=mir.Kind.MUL,
+        args=(mir.Held(source, 2), mir.Const(20, 2)),
+        results=(mir.Held(result, 2),),
+    )
+    what = lower.semantics(op, place=lower.as_a_value)
+    assert what.sources[1:] == (ir.Held(source.id, 2), ir.Imm(20, 2))
+    assert twoaddr._untied(lir.Insn(at=1, covers=(1, 1), what=what, defines=(result.id,), uses=(source.id,))) is None
+
+
 def test_lower_places_a_commutative_constant_in_the_immediate_operand() -> None:
     """hotlop needlessly loaded 21 before adding its accumulator."""
     from qbopt import ir

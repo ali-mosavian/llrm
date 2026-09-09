@@ -11,6 +11,7 @@ import corpus
 from qbopt import ir
 from qbopt import mir
 from qbopt import consts
+from qbopt import transform
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
@@ -59,6 +60,27 @@ def test_equal_integer_operands_are_zero_without_input_facts(kind: mir.Kind, wid
         results=(mir.Held(result, width),),
     )
     assert consts._result(op, {}) == consts.Known(0, width)
+
+
+@pytest.mark.parametrize("constant_first", [False, True])
+def test_a_known_factor_becomes_a_multiply_operand(constant_first: bool) -> None:
+    source, factor, result = mir.Value(900, 0), mir.Value(901, 0), mir.Value(902, 1)
+    args = (mir.Held(source, 2), mir.Held(factor, 2))
+    if constant_first:
+        args = args[::-1]
+    op = mir.Op(
+        1,
+        ir.Operation.MULTIPLY,
+        "",
+        (result,),
+        (source, factor),
+        kind=mir.Kind.MUL,
+        args=args,
+        results=(mir.Held(result, 2),),
+    )
+    changed = transform._constant_operands(op, {factor: consts.Known(20, 2)})
+    assert changed.args == (mir.Held(source, 2), mir.Const(20, 2))
+    assert changed.uses == (source,)
 
 
 @pytest.mark.parametrize(("width", "number", "answer"), [(1, 0x101, 0), (2, 0x12350000, 0), (2, 0x12358000, 0x4000)])

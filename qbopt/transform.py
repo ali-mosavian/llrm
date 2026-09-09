@@ -1660,7 +1660,9 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
 
 def _constant_operands(op: Op, facts: dict) -> Op:
     """Propagate width-proven constants into commutative integer operands."""
-    if op.kind not in (mir.Kind.ADD, mir.Kind.AND, mir.Kind.OR, mir.Kind.XOR) or len(op.args) != 2:
+    if op.kind not in (mir.Kind.ADD, mir.Kind.AND, mir.Kind.OR, mir.Kind.XOR, mir.Kind.MUL) or len(op.args) != 2:
+        return op
+    if op.kind is mir.Kind.MUL and len(op.results) != 1:
         return op
     replaced = set()
     args = []

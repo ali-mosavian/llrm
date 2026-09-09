@@ -96,6 +96,15 @@ def semantics(op: mir.Op, was: ir.Semantics | None = None, place=None) -> ir.Sem
         and isinstance(args[1], mir.Held)
     ):
         args = (args[1], args[0])
+    if (
+        place is as_a_value
+        and op.kind is mir.Kind.MUL
+        and len(op.results) == 1
+        and len(args) == 2
+        and isinstance(args[0], mir.Held)
+        and isinstance(args[1], mir.Const)
+    ):
+        args = (args[0], args[0], args[1])
     place = place or _place
     return ir.Semantics(
         was_op,

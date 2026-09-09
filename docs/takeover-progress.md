@@ -55,6 +55,15 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+Immediate-multiply checkpoint: single-result MIR products now propagate known
+factors; lowering selects the existing three-source immediate representation,
+avoiding a destination tie. Widening/multi-result products are unchanged. Three
+regressions fail with the old propagation/lowering; six focused checks pass.
+Strict LIR matrix/lngmix runtime passes on PDS /G2 with experimental reduction
+(`/tmp/qbopt-immediate-multiply.jthvzG/p-g2`). No measured kernel gain yet:
+experimental matrix stays 13,138 (2.12x); production stays 12,334 (1.99x).
+Do not enable strength on these figures.
+
 Constant-rematerialization checkpoint: the spiller recreates single-definition
 immediate constants at uses instead of allocating a stack slot. Grouped parallel
 copies and redefined values are excluded; rematerialization precedes in-place
