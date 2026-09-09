@@ -1790,3 +1790,29 @@ Raw/stage evidence: `/tmp/qbopt-lngmix-q-gap`, `/tmp/qbopt-lngmix-q-pushes`,
 with the previous raiser; PDS/VBDOS cases already passed. Strict LIR runtime
 checks pass 147 cases across LNGMIX, LNGMXX, DIVMOD, ADDRM, NBODY and HOTLOP
 on all three compilers. Artifacts: `qbopt-runtime-arguments-cmdgbxab`.
+
+### Choose the dying operand during two-address legalization
+
+LNGMXX's accumulator addition had the invariant first, so two-address
+legalization copied the invariant into a temporary, added the accumulator,
+then copied the answer back at the phi. For commutative integer ADD/AND/OR/XOR,
+legalization now prefers an already-tied second operand or a dying second
+operand when the first remains live. Equal widths and explicit value operands
+are required; grouped and fixed-interface instructions retain their order.
+This is instruction legalization before allocation, not a new LIR pass tier.
+
+PDS/QB/VBDOS LNGMXX costs fall 371/373/371 -> **331/333/331**. HOTLPX falls
+532/536/542 -> **452/456/462**, meeting its 312 target in all three variants
+(1.45x/1.46x/1.48x). The 63-target-fixture audit has only these six changes,
+all improvements. NBODY PDS improves slightly, 377016 -> 376416, but the
+shift-recurrence probe still regresses (401156), so its policy stays disabled.
+LNGMXX remains above target. Stage evidence: `/tmp/qbopt-lngmxx-next` and
+`/tmp/qbopt-lngmxx-commuted`.
+
+12 focused legalization tests pass, including three real emitted-loop tests
+that fail with the previous legalization. The wider LIR tests have 37 existing
+failures, reproduced with the previous two-address code in
+`/tmp/qbopt-twoaddr-lir-baseline.txt`; they are not presented as green.
+Strict LIR runtime checks pass for LNGMIX, LNGMXX, DIVMOD, ADDRM, NBODY,
+HOTLOP, SPILL, MATRIX, NESTED and HARR (162 cases), plus HOTLPX separately.
+Artifacts: `qbopt-commuted-operands-hozw1s5m`, `qbopt-commuted-hotlpx-32srgv2g`.

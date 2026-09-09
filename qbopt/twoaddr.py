@@ -40,10 +40,21 @@ class TwoAddress(LIRTransform):
 def tied(body: lir.LirBody) -> lir.LirBody:
     """`body` with every tied instruction reading what it writes."""
     changed = False
+    from qbopt import allocate
+    _, leaving = allocate.live(body)
     blocks = []
     for block in body.blocks:
+        alive = set(leaving[block.at])
+        live_after = {}
+        for one in reversed(block.insns):
+            live_after[id(one)] = frozenset(alive)
+            alive.difference_update(one.defines)
+            alive.update(one.uses)
         insns: list[lir.Insn] = []
         for one in block.insns:
+            chosen = _commuted(one, live_after[id(one)])
+            changed |= chosen is not one
+            one = chosen
             fix = _untied(one)
             if fix is None:
                 insns.append(one)
@@ -52,6 +63,21 @@ def tied(body: lir.LirBody) -> lir.LirBody:
             changed = True
         blocks.append(replace(block, insns=tuple(insns)))
     return replace(body, blocks=tuple(blocks)) if changed else body
+
+
+def _commuted(one: lir.Insn, alive: frozenset[int]) -> lir.Insn:
+    what = one.what
+    if (what is None or what.op is not ir.Operation.BINARY or what.name not in {"add", "and", "or", "xor"}
+        or len(what.dests) != 1 or len(what.sources) != 2 or one.group is not None
+        or one.requires or one.delivers):
+        return one
+    into, first, second = what.dests[0], *what.sources
+    if (not all(isinstance(arg, ir.Held) for arg in (into, first, second))
+        or not into.width == first.width == second.width or into.value == first.value):
+        return one
+    if second.value == into.value or first.value in alive and second.value not in alive:
+        return replace(one, what=replace(what, sources=(second, first)))
+    return one
 
 
 def _nothing(beside: lir.Insn) -> tuple[int, int]:
