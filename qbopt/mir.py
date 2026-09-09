@@ -70,6 +70,7 @@ from iced_x86 import Register_
 from iced_x86 import RegisterExt
 
 from qbopt import ir
+from qbopt.floating import Semantics as FloatingSemantics
 from qbopt import loops
 from qbopt import stack
 from qbopt import module
@@ -752,6 +753,7 @@ class Op:
     uses: tuple[Value, ...]
     array: ArrayRequest | None = field(default=None, kw_only=True)
     memory_values: tuple[tuple[MemRef, Const], ...] = field(default=(), kw_only=True)
+    floating: FloatingSemantics | None = field(default=None, kw_only=True)
     loads: tuple[MemRef, ...] = ()
     stores: tuple[MemRef, ...] = ()
     node: ir.Node | None = None  # what it came from, so lowering can be verbatim
@@ -2150,6 +2152,8 @@ def bodies(
             built = raising_arrays.annotated(built, array_calls, family=module.family(found.records))
             from qbopt import raising_addresses
             built = raising_addresses.loaded(built)
+            from qbopt import raising_floats
+            built = raising_floats.annotated(built)
             found.refs.update(_referenced(built, found))
             held = {**_returned(built), **_folded(built, found, blocks)}
             if held:

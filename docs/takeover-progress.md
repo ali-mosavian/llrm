@@ -2169,3 +2169,30 @@ The block-local tracker is not yet typed MIR SSA: the next step must carry
 storage conversions, arithmetic precision, rounding mode, and FP effects
 explicitly before enabling float CSE/LICM. In particular, an extended value
 must not substitute for a SINGLE store/reload without its rounding.
+
+### Explicit floating evaluation contracts at the raise boundary
+
+MIR operations now carry optional machine-independent floating semantics:
+input/result formats, evaluation precision, rounding, and strict exception
+behavior. `raising_floats` supplies those facts from decoded shapes; later
+passes need not inspect instruction names to distinguish integer conversion
+from real loading or SINGLE storage from an extended intermediate.
+
+Formats cover binary32, binary64, extended80, and signed 16/32/64-bit input
+and output conversions. Arithmetic precision and rounding remain dynamic:
+no default control word has been assumed. Widening loads and sign operations
+need no numeric rounding but still carry strict effects. Narrow stores and
+integer stores explicitly round to the destination under the environment;
+unknown shapes/formats remain unannotated, not optimistically pure.
+
+This follows LLVM's constrained-operation separation of formats, rounding,
+and exception semantics (local `llvm/IR/ConstrainedOps.def` inspected).
+It does not yet create floating MIR SSA values or environment effect tokens,
+and grants no permission to move or CSE strict operations. Those are the next
+integration steps, not claims established by this metadata change.
+
+The three real FPCSE rounding-boundary tests failed before implementation.
+Conversion-format, unary, and dump checks bring the focused set to 33 passing
+tests. All 97 audited objects remain byte-identical and LIR-emitted, so no
+unchanged runtime suite was repeated. Pass dumps now expose the contracts
+alongside value identities: `/tmp/qbopt-fpcse-semantics`.

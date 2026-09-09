@@ -287,6 +287,11 @@ def _mir(bodies, found=None, verbose: bool = False, debug=None) -> None:
                 if flow is not None and (flow.uses or flow.defines is not None):
                     uses = ", ".join(str(value) for value in flow.uses.values()) or "-"
                     values = f"  ; fp values: {uses} -> {flow.defines or '-'}"
+                if op.floating is not None:
+                    rule = op.floating
+                    inputs = ",".join(rule.inputs)
+                    values += (f"  ; {inputs} -> {rule.result}; precision={rule.precision}"
+                               f" rounding={rule.rounding} exceptions={rule.exceptions}")
                 print(f"    {op.at:#06x}  {pad}{_says(op, cells, calls, verbose)}{values}")
         if cells.order:
             print("\n    where:")
