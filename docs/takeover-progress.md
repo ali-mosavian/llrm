@@ -55,6 +55,14 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+Dead-byte ownership checkpoint: `_without` now checks adjacency using `covers`,
+not the operation's old address. The former check made a survivor span bytes
+still owned by a jump after transformations separated address and ownership.
+The focused regression fails with the old function; 46 checks pass. With the
+zero-fact and strength experiments enabled in memory, matrix now reports LIR
+`rebuilt` and passes PDS /G2 (`/tmp/qbopt-zero-fold.ckjHrW/ownership-p-g2`).
+Neither experimental production switch changed in this checkpoint.
+
 CSE phi checkpoint: CSE now replaces phi inputs as well as operation uses when
 deleting a repeated computation. A focused regression fails with the old pass;
 45 related checks pass. The zero-fact experiment exposed this dangling definition

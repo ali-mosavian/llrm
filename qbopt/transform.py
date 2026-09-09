@@ -90,14 +90,20 @@ def _without(ops: list[Op], drop) -> list[Op]:
             #
             # Where neither holds the op simply stays. A deletion this cannot
             # account for is not one worth making.
-            if out and mir.rewritable(out[-1]) and _end_of(out[-1]) == op.at:
+            start = op.covers[0] if op.covers is not None else op.at
+            if out and mir.rewritable(out[-1]) and _end_of(out[-1]) == start:
                 lo = out[-1].covers[0] if out[-1].covers is not None else out[-1].at
                 out[-1] = replace(out[-1], covers=(lo, _end_of(op)))
                 continue
             out.append(op)
             continue
         out.append(op)
-    if len(out) > 1 and drop(out[0]) and mir.rewritable(out[1]) and _end_of(out[0]) == out[1].at:
+    if (
+        len(out) > 1
+        and drop(out[0])
+        and mir.rewritable(out[1])
+        and _end_of(out[0]) == (out[1].covers[0] if out[1].covers is not None else out[1].at)
+    ):
         first, survivor = out[:2]
         start = first.covers[0] if first.covers is not None else first.at
         out[:2] = [replace(survivor, at=first.at, covers=(start, _end_of(survivor)))]

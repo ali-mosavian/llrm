@@ -369,3 +369,23 @@ def test_cse_replaces_phi_uses_of_a_deleted_initializer() -> None:
     after = transform.subexpressions(built)
     assert all(second not in op.defines for block in after.blocks for op in block.ops)
     assert after.blocks[2].phis[0].incoming[2] == first
+
+
+def test_dead_byte_transfer_cannot_span_a_surviving_jump() -> None:
+    """matrix refused emission after dead assigned the live jump's nine bytes twice."""
+    from pathlib import Path
+
+    import corpus
+
+    node = next(
+        node
+        for body in corpus.bodies(Path("fixtures/omf/matrix-p-g2.obj"))
+        for node in body.nodes
+        if isinstance(node, ir.Opaque)
+    )
+    first = mir.Op(0, ir.Operation.MOVE, "", (), (), kind=mir.Kind.COPY, node=node, covers=(0, 4))
+    removed = replace(first, at=4, covers=(8, 10))
+    jump = replace(first, at=4, kind=mir.Kind.JUMP, covers=(4, 8))
+    result = transform._without([first, removed, jump], lambda op: op is removed)
+    spans = sorted(op.covers for op in result if op.covers)
+    assert all(left[1] <= right[0] for left, right in zip(spans, spans[1:]))
