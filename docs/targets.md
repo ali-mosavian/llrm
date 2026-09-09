@@ -450,6 +450,23 @@ floor.
 
 ## fpcse -- float is just as bad the moment a value crosses a statement
 
+**Semantic audit (2026-09-09): the proposed listing below is not yet a
+valid strict-floating-point target.** It changes `(s + p) + q` into
+`(p + q) + s` and retains intermediates beyond their SINGLE storage
+rounding points. Neither transformation is generally valid without a
+separate proof or an explicit relaxed-FP contract. For example, with
+exactly representable SINGLE inputs `s=2^65`, `p=-2^65`, `q=1`, 64-bit
+significand arithmetic with round-to-nearest/ties-even yields 1 in the
+source order and 0 in the proposed order. This is an arithmetic
+counterexample, not a claim about the runtime's configured precision.
+
+Keep the existing numeric target visible as provisional, not as proof of
+completion or permission to reassociate. A replacement derivation must
+preserve source evaluation order and explicitly represent SINGLE rounding
+at the p, q, and s stores. Raising needs floating SSA identities and those
+rounding operations; MIR passes must not manage x87 stack positions.
+Lowering owns their eventual stack placement and necessary memory round trips.
+
 The previous section said BC's float code keeps its intermediates on the
 x87 stack. That is true *within one statement*, and it is the only place it
 is true. Give a subexpression to two statements and use both results in a

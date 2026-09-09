@@ -1327,3 +1327,22 @@ LNGMXX (1), and NESTED (1) pass strict LIR on all three compilers:
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-fixed-remat-nkr3jy7h`.
 The initializer/sinking experiment is now accepted with this allocation fix.
 Nbody still needs its hand-derived target; the project-wide goal is not met.
+
+## Target refresh and floating-point semantic audit
+
+The target scoreboard at f8c9e96 puts PDS FPCSEX at 4508/1340 (3.36x),
+FPCSE at 4386/1340 (3.27x), SPILL at 3206/1122 (2.86x), PRESSX at
+710/308 (2.31x), and HARR at 2920/1834 (1.59x). These are modeled costs.
+Numerous event-enabled PDS/VBDOS fixtures remain unmeasured because LIR
+emission refuses them; direct checks of hotlop-p-evt and harr-p-evt report
+an unestablished call interface, not an optimization success.
+
+FPCSEX dumps in `/tmp/qbopt-fpcsex-current` show the repeated loads and
+arithmetic still naming st0 rather than floating SSA identities. Its target
+listing also reassociates the accumulator and bypasses SINGLE rounding.
+An exact integer simulation of a 64-bit significand gives different results
+for `(2^65 + -2^65) + 1` and `(-2^65 + 1) + 2^65` (1 versus 0).
+The target document now flags that defect without changing the denominator
+to make the score pass. Next FP work needs explicit value types and rounding
+semantics before CSE/LICM, followed by a valid hand-derived target. Nbody's
+target derivation and event-interface coverage remain separate open work.
