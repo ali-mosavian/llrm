@@ -55,6 +55,20 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+Algebraic checkpoint: a machine-independent pass now simplifies integer
+identities and projects a two-result word multiply to its low result when
+the high answer, flags and preserved upper bits are unobserved. Actual reads
+and phi inputs prevent projection; discarded preservation references are
+removed with the discarded definitions. This lets lowering choose ordinary
+two-address/immediate multiply forms without accumulator-pair constraints.
+HARR PDS now emits `imul bx,cx`; modeled cost falls 11,494 -> 11,094 (6.05x,
+still far above 1.5x). pressx changes 824 -> 820; the sampled matrix, SEGLD,
+lngmix and arridx costs remain unchanged. Forty-six focused/algebraic-boundary
+checks pass; disabling projection fails the real-HARR regression. Strict LIR
+HARR/matrix/nots/SEGLD/lngmix runtime passes across PDS /G2, QB /O and
+VBDOS /G3 (15 cases). `/tmp/qbopt-low-product-harr-20260909` contains every
+stage and the emitted assembly. Full validation remains outstanding.
+
 Copy-propagation checkpoint: CSE now substitutes full-width copy values into
 their uses and removes the copies. Low-word copies are also eligible when
 the existing bit-demand analysis proves their preserved upper word unobserved;

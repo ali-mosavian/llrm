@@ -42,8 +42,9 @@ from qbopt import consts
 from qbopt import module
 from qbopt.mir import Op
 from qbopt import promote
-from qbopt import loopmotion
 from qbopt import strength
+from qbopt import algebraic
+from qbopt import loopmotion
 from qbopt.mir import MirBody
 from qbopt.module import Space
 from qbopt.passes import Where
@@ -2053,6 +2054,16 @@ class Place(MIRTransform):
         return placed(body, self.where.dgroup, self.where.named)
 
 
+class Algebraic(MIRTransform):
+    name = "algebraic"
+
+    def transform(self, body: MirBody) -> MirBody:
+        demanded = halves(body)
+        return algebraic.simplified(
+            body, {value for value, _ in demanded}, {value for value, part in demanded if part == HIGH}
+        )
+
+
 def pipeline(where: Where, **wanted) -> list[MIRTransform]:
     """The passes, in order, that `wanted` leaves on.
 
@@ -2071,6 +2082,7 @@ def pipeline(where: Where, **wanted) -> list[MIRTransform]:
         Cse(),
         promote.Promote(where),
         strength.Strength(where),
+        Algebraic(),
         Dead(),
         Place(where),
     ]

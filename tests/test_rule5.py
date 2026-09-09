@@ -31,6 +31,7 @@ HERE = Path(__file__).resolve().parent.parent / "qbopt"
 
 # The passes: what runs between mir.raise_body and lowering.
 PASSES = (
+    "algebraic.py",
     "transform.py",
     "pairs.py",
     "consts.py",
