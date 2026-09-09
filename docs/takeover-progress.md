@@ -2007,3 +2007,40 @@ LNGMXX 269/271/269 -> 267/269/267, CHAIN improves 12 cycles on each compiler,
 MATRIX and FPEMU improve 2, FPDEEP improves 12 on PDS/VBDOS (QB unchanged).
 DIVMOD loses copies too, though its very large loop-weighted score is not
 an independently validated runtime cost. NBODY remains byte-identical.
+
+### Evaluate dead accumulations without deleting observable loops
+
+MIR exit evaluation now separates knowing a final value from deleting a loop.
+It can replace a constant live-out in the uniquely reached exit and dominated
+blocks while retaining the loop's stores and control. The original recurrence
+must become dead after substitution; replacing a still-live loop counter only
+adds materialization work and is not taken. Partial rewrites leave phi-edge
+uses untouched and require an exit reached only from this loop's header.
+
+A sign-extended basic recurrence can participate when range analysis proves
+its narrow values do not wrap and its start/step are known. ADDRM's long
+accumulator is therefore the constant sum 1..20 = 210, while both its word
+and long array stores remain in the loop. Three real-fixture regressions
+failed before the change; new guards check shared exits and accumulators
+observed inside the loop. Earlier whole-body identity assertions for store
+and nonlinear loops now assert exact preservation of their loop blocks,
+allowing independent final-value simplifications without weakening the
+no-loop-deletion requirement.
+
+The initial attempt replaced counters still needed in their loops and raised
+costs in several programs. Requiring the original recurrence to become dead
+removed those regressions. Final modeled costs (PDS/QB/VBDOS):
+
+| Program | Before | After |
+| --- | --- | --- |
+| ADDRM | 1206 / 1212 / 1206 | 1166 / 1172 / 1166 |
+| ARRIDX | 590 / 594 / 600 | 508 / 512 / 518 |
+| IVCHAN | 810 / 814 / 820 | 762 / 766 / 772 |
+| LNGMIX | 302 / 306 / 302 | 282 / 286 / 282 |
+| STRIDE | 569 / 573 / 579 | 527 / 531 / 537 |
+
+These 15 objects are the only changes among 96 primary fixtures plus NBODY;
+all remain LIR-emitted. Final dumps are in `/tmp/qbopt-addrm-exit-final`
+(before: `/tmp/qbopt-addrm-next`). Strict runtime verification passes 18 cases
+on the five changed programs across all three compilers, with artifacts at
+`qbopt-partial-loop-exits-muo7dksz` under the system temporary directory.

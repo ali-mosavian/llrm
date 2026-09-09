@@ -52,7 +52,12 @@ def test_loop_exit_requires_a_complete_proof(monkeypatch, hazard):
             ops[0] = replace(ops[0], uses=(value,), args=(mir.Held(value, 2),))
         changed.append(replace(block, ops=tuple(ops)))
     body = replace(body, blocks=tuple(changed))
-    assert loopexit.evaluated(body) is body
+    result = loopexit.evaluated(body)
+    if hazard == "store":
+        assert [block for block in result.blocks if block.at in (0x50, 0x91)] == [
+            block for block in body.blocks if block.at in (0x50, 0x91)]
+    else:
+        assert result is body
 
 
 @pytest.mark.parametrize("start,step", [(0, 14290), (2147483640, 10), (-2147483640, -10)])
@@ -116,4 +121,44 @@ def test_a_doubled_accumulator_is_not_a_linear_sum(monkeypatch):
         replace(op, args=(op.args[1], op.args[1]), uses=(op.args[1].value,))
         if op.at == 0x56 and op.kind is mir.Kind.ADD else op
         for op in block.ops)) for block in body.blocks))
+    result = loopexit.evaluated(body)
+    assert [block for block in result.blocks if block.at in (0x56, 0x6c)] == [
+        block for block in body.blocks if block.at in (0x56, 0x6c)]
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_addrm_long_sum_is_computed_outside_the_store_loop(tag):
+    """ADDRM accumulated 1..20 into a long every iteration even though its final sum is 210."""
+    import corpus
+    from qbopt import consts, loops, mir, transform
+    path = Path(f"fixtures/omf/addrm-{tag}.obj")
+    found = corpus.loaded(path)
+    partition = corpus.partitioned(path)
+    body = transform.applied(mir.bodies(found, partition)[0][1], found.dgroup,
+                             found.calls, blocks=partition, found=found)
+    loop, = loops.loops(body.blocks, body.entry)
+    stores = [op for block in body.blocks if block.at in loop.body for op in block.ops if op.stores]
+    assert sorted(ref.width for op in stores for ref in op.stores) == [2, 4]
+    assert not any(op.kind is mir.Kind.ADD and any(result.width == 4 for result in op.results)
+                   for block in body.blocks if block.at in loop.body for op in block.ops)
+    facts = consts.known(body)
+    output = [op for block in body.blocks if block.at not in loop.body for op in block.ops
+              if op.kind is mir.Kind.STORE and any(ref.width == 4 for ref in op.stores)]
+    assert any(consts._put(op, facts) == consts.Known(210, 4) for op in output)
+
+
+@pytest.mark.parametrize("hazard", ["observed-in-loop", "shared-exit"])
+def test_partial_exit_rewrite_preserves_observations(monkeypatch, hazard):
+    """An ADDRM accumulator observed each iteration cannot be replaced by only its final 210."""
+    from qbopt import loopexit, loops, mir
+
+    body = _body(monkeypatch, "addrm")
+    loop, = loops.loops(body.blocks, body.entry)
+    if hazard == "shared-exit":
+        body = replace(body, blocks=(*body.blocks, mir.MirBlock(10000, (), (), (0x8f,))))
+    else:
+        output = next(op for block in body.blocks if block.at == 0x8f for op in block.ops
+                      if op.kind is mir.Kind.STORE and any(ref.width == 4 for ref in op.stores))
+        body = replace(body, blocks=tuple(replace(block, ops=(*block.ops, output))
+                       if block.at == 0x48 else block for block in body.blocks))
     assert loopexit.evaluated(body) is body
