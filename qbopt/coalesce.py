@@ -46,7 +46,10 @@ class Coalescer(LIRTransform):
 
 def joined(body: lir.LirBody, pinned: dict | None = None) -> lir.LirBody:
     """`body` with every copy this can prove unnecessary removed."""
-    pinned = pinned or {}
+    pinned = {
+        getattr(value, "id", value): ir.ROOT.get(register, register)
+        for value, register in {**body.pins, **(pinned or {})}.items()
+    }
     live = ranges.intervals(body)
     from qbopt import allocate
 
@@ -86,6 +89,8 @@ def joined(body: lir.LirBody, pinned: dict | None = None) -> lir.LirBody:
             # those is confined with it.
             allowed = may.get(here, everything) & may.get(there, everything)
             if not allowed:
+                continue
+            if any(pin is not None and pin not in allowed for pin in (mine_pin, theirs_pin)):
                 continue
             neighbours = (near.get(here, set()) | near.get(there, set())) - {here, there}
             k = len(allowed)

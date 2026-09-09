@@ -58,6 +58,20 @@ def test_a_coalesced_address_keeps_its_memory_operand_defined() -> None:
             assert {value.value for value in ir.values(operand)} <= made
 
 
+def test_pinned_return_cannot_absorb_an_incompatible_address_class() -> None:
+    """nbody's FVAL pointer lost its AX-to-SI copy, leaving FLD with an invalid base."""
+    from iced_x86 import Register
+
+    load = lir.Insn(at=5, covers=(5, 7),
+                    what=ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ir.St(0),),
+                                      (ir.Mem(None, 8, base=ir.Held(2, 2)),)),
+                    defines=(), uses=(2,), op=None)
+    body = lir.LirBody("pointer", 0, (lir.LirBlock(0, (_define(0, 1), _move(3, 2, 1), load)),), {}, {})
+    assert len(coalesce.joined(body, {1: Register.EAX}).insns) == 3
+    from dataclasses import replace
+    assert len(coalesce.joined(replace(body, pins={1: Register.EAX})).insns) == 3
+
+
 def _move(at: int, into: int, out_of: int) -> lir.Insn:
     what = ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(into, 2),), (ir.Held(out_of, 2),))
     return lir.Insn(at=at, covers=(at, at + 2), what=what, defines=(into,), uses=(out_of,), op=None)

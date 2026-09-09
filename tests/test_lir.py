@@ -17,6 +17,13 @@ from qbopt.blocks import code_map
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
 
+def test_x87_memory_operands_still_need_address_registers() -> None:
+    """nbody's FLD pointer was allocated to AX, which cannot address 16-bit memory."""
+    what = ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ir.St(0),),
+                        (ir.Mem(None, 4, through=Register.SI),))
+    assert target.reads(what)[Register.ESI].where == frozenset(ir.ROOT[x] for x in target.ADDRESSING)
+
+
 def test_string_copy_keeps_its_implicit_address_registers() -> None:
     """fpdeep printed DSQ=0 for 144: movsw lost the SI/DI addresses of its double copy."""
     from qbopt import lower

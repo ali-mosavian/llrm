@@ -155,8 +155,6 @@ def reads(what: ir.Semantics) -> dict[Register_, Need]:
     instruction is written.
     """
     out: dict[Register_, Need] = {}
-    if _on_the_stack(what):
-        return out
     for where, register in requirements(what).items():
         if where.side == "source":
             out[register] = Need(frozenset({register}))
