@@ -1838,6 +1838,8 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
 
 def _constant_operands(op: Op, facts: dict, memory: dict | None = None) -> Op:
     """Propagate width-proven constants without reversing ordered operands."""
+    if op.kind is mir.Kind.ARG:
+        return _constant_argument(op, facts, memory or {})
     if (
         op.kind not in (
             mir.Kind.ADD, mir.Kind.ADD_CARRY, mir.Kind.AND, mir.Kind.OR, mir.Kind.XOR,
@@ -1880,6 +1882,28 @@ def _constant_operands(op: Op, facts: dict, memory: dict | None = None) -> Op:
         raised=None if removed else op.raised,
         uses=tuple(value for value in op.uses if value not in replaced or value in op.merges or value in retained),
     )
+
+
+def _constant_argument(op: Op, facts: dict, memory: dict) -> Op:
+    """Substitute the value read for an argument, keeping its stack write."""
+    if len(op.args) != 1 or op.defines or op.merges or op.barrier:
+        return op
+    arg = op.args[0]
+    if not isinstance(arg, (mir.Held, mir.Cell)):
+        return op
+    if isinstance(arg, mir.Held) and op.loads:
+        return op
+    if isinstance(arg, mir.Cell) and (op.loads != (arg.ref,) or arg.ref in op.stores):
+        return op
+    width = arg.ref.width if isinstance(arg, mir.Cell) else arg.width
+    fact = consts._operand(op, arg, facts, memory)
+    if fact is None or fact.width < width:
+        return op
+    kept = tuple(ref for ref in op.loads if not isinstance(arg, mir.Cell) or ref != arg.ref)
+    uses = tuple(dict.fromkeys(value for ref in (*kept, *op.stores)
+                               for value in (ref.base, ref.segment) if value is not None))
+    return replace(op, args=(mir.Const(consts.masked(fact.n, width), width),), uses=uses,
+                   loads=kept, node=None, made=None, raised=None, symbol=False)
 
 
 def _folded_op(op: Op, facts: dict, wanted: set) -> Op:

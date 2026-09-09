@@ -6,11 +6,11 @@ targets unnecessarily retained dead stores and split argument pushes.
 
 | Program | PDS cost / ratio | QB cost / ratio | VBDOS cost / ratio |
 |---|---|---|---|
-| ARITH | 690 / 1.17x | 712 / 1.20x | 680 / 1.15x |
-| NOTS | 450 / 1.47x | 462 / 1.51x | 400 / 1.31x |
-| NEGNOT | 288 / 1.13x | 298 / 1.17x | 288 / 1.13x |
+| ARITH | 658 / 1.11x | 680 / 1.15x | 652 / 1.10x |
+| NOTS | 426 / 1.39x | 438 / 1.43x | 388 / 1.27x |
+| NEGNOT | 282 / 1.11x | 292 / 1.15x | 282 / 1.11x |
 
-QB NOTS still exceeds the goal: 462 is greater than 1.5*306 = 459.
+Constant argument propagation closes QB NOTS's gap without increasing its target.
 The scorer now prices decoded instructions rather than synthetic raised
 operations. The historical totals below have not been rerun under that
 change and must not be quoted as the current completion percentage.

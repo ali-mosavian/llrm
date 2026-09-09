@@ -48,10 +48,10 @@ def test_constant_bitwise_programs_have_references_and_report_the_gap(program, t
     assert "NO TARGET" not in report and "PROVISIONAL" not in report
 
 
-def test_qb_nots_still_exceeds_the_corrected_reference(capsys):
-    """Dead stores and split pushes inflated NOTS's target and hid QB's remaining gap."""
-    assert opportunity.against_targets([Path("fixtures/omf/nots-q-O.obj")]) == 1
-    assert "1.51x" in capsys.readouterr().out
+def test_qb_nots_meets_the_corrected_reference(capsys):
+    """Constant argument propagation closes QB NOTS's gap without increasing its target."""
+    assert opportunity.against_targets([Path("fixtures/omf/nots-q-O.obj")]) == 0
+    assert "1.43x" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("tag", ["p-evt", "q-evt", "v-evt"])
