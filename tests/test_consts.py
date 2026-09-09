@@ -76,6 +76,26 @@ def test_equal_integer_operands_are_zero_without_input_facts(kind: mir.Kind, wid
 
 
 @pytest.mark.parametrize("constant_first", [False, True])
+@pytest.mark.parametrize("same", [False, True])
+def test_constant_subtraction_preserves_operand_order(constant_first: bool, same: bool) -> None:
+    """NESTED kept constant loop bounds in registers; propagating them must not reverse subtraction."""
+    source, bound, result = mir.Value(910, 0), mir.Value(911, 0), mir.Value(912, 1)
+    if same:
+        source = bound
+    args = (mir.Held(source, 2), mir.Held(bound, 2))
+    if constant_first:
+        args = args[::-1]
+    op = mir.Op(
+        1, ir.Operation.COMPARE, "cmp", (result,), tuple(dict.fromkeys((source, bound))),
+        kind=mir.Kind.SUB, args=args, results=(),
+    )
+    changed = transform._constant_operands(op, {bound: consts.Known(5, 2)})
+    expected = (args[0], mir.Const(5, 2)) if not constant_first or same else args
+    assert changed.args == expected
+    assert args[0].value in changed.uses
+
+
+@pytest.mark.parametrize("constant_first", [False, True])
 def test_a_known_factor_becomes_a_multiply_operand(constant_first: bool) -> None:
     source, factor, result = mir.Value(900, 0), mir.Value(901, 0), mir.Value(902, 1)
     args = (mir.Held(source, 2), mir.Held(factor, 2))

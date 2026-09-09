@@ -1730,9 +1730,12 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
 
 
 def _constant_operands(op: Op, facts: dict) -> Op:
-    """Propagate width-proven constants into commutative integer operands."""
+    """Propagate width-proven constants without reversing ordered operands."""
     if (
-        op.kind not in (mir.Kind.ADD, mir.Kind.ADD_CARRY, mir.Kind.AND, mir.Kind.OR, mir.Kind.XOR, mir.Kind.MUL)
+        op.kind not in (
+            mir.Kind.ADD, mir.Kind.ADD_CARRY, mir.Kind.AND, mir.Kind.OR, mir.Kind.XOR,
+            mir.Kind.MUL, mir.Kind.SUB, mir.Kind.SUB_BORROW,
+        )
         or len(op.args) != 2
     ):
         return op
@@ -1740,18 +1743,24 @@ def _constant_operands(op: Op, facts: dict) -> Op:
         return op
     replaced = set()
     args = []
-    for arg in op.args:
-        if isinstance(arg, mir.Held) and (fact := facts.get(arg.value)) is not None and fact.width >= arg.width:
+    ordered = op.kind in (mir.Kind.SUB, mir.Kind.SUB_BORROW)
+    for index, arg in enumerate(op.args):
+        if (
+            (not ordered or index == 1) and isinstance(arg, mir.Held)
+            and (fact := facts.get(arg.value)) is not None and fact.width >= arg.width
+        ):
             args.append(mir.Const(consts.masked(fact.n, arg.width), arg.width))
             replaced.add(arg.value)
         else:
             args.append(arg)
     if not replaced:
         return op
-    if isinstance(args[0], mir.Const) and isinstance(args[1], mir.Held):
+    if not ordered and isinstance(args[0], mir.Const) and isinstance(args[1], mir.Held):
         args.reverse()
+    retained = {arg.value for arg in args if isinstance(arg, mir.Held)}
     return replace(
-        op, args=tuple(args), uses=tuple(value for value in op.uses if value not in replaced or value in op.merges)
+        op, args=tuple(args),
+        uses=tuple(value for value in op.uses if value not in replaced or value in op.merges or value in retained),
     )
 
 
