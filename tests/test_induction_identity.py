@@ -14,6 +14,22 @@ from qbopt.module import Addr
 from qbopt.module import Space
 
 
+def test_nbody_inner_counter_has_a_proven_upper_bound() -> None:
+    """Nbody's conditional interaction body hid the 0..5 counter range from the two-block proof."""
+    import corpus
+    from qbopt import consts
+    path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    body = transform.applied(body, found.dgroup, found.calls, blocks=corpus.partitioned(path), found=found)
+    loop = next(loop for loop in loops.loops(body.blocks, body.entry) if loop.header == 0x21c)
+    counters = induction.basics(body, loop)
+    assert len(counters) == 1
+    assert induction._last_counter(body, loop, next(iter(counters.values())), consts.known(body), 2) == 5
+    escaping = replace(body, blocks=tuple(replace(block, succ=(0x227,)) if block.at == 0x117 else block for block in body.blocks))
+    assert induction._last_counter(escaping, loop, next(iter(counters.values())), consts.known(body), 2) is None
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_harr_stored_row_plus_column_is_loop_carried(tag: str) -> None:
     """HARR recomputed row + column for every element instead of advancing its stored value."""

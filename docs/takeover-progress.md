@@ -985,3 +985,26 @@ flags are unused and whose summed count is below the value width. PDS's
 nbody and HARR passing strict LIR on all three compilers. Stage dumps are in
 `/tmp/qbopt-nbody-shift-combine`. Invariant position reads remain folded into
 their subtracts and are the next larger opportunity.
+
+## Invariant reads need an index-range proof first
+
+The current-body index is invariant, but the indexed POSX read at 0x12d
+has no allocation metadata. Alias analysis consequently considers it able to
+overlap DELTAX, DELTAY, DIST2, FALLOFF, both accumulators and frame temporaries.
+The existing dynamic-array path proof does not cover these fixed near arrays.
+Extracting arithmetic memory operands alone therefore does not hoist the
+position reads. That experiment was removed; extracting comparison operands
+also produced wrong programs and is not part of the implementation.
+
+The next prerequisite is now implemented: `_last_counter` accepts a
+single-latch pretested loop with internal branches, provided its sole exit
+is in the header. It handles either branch orientation and still proves the
+update cannot wrap. On optimized PDS nbody it proves the inner counter's last
+executed value is 5; a side-exit mutation is rejected. The regression failed
+under the old two-block restriction. Nbody and stride pass strict LIR on all
+three compilers.
+
+Next, propagate this counter range through index scaling and use the resulting
+byte intervals in alias analysis. Do not infer extents from neighboring symbols
+or declare different-looking indexed operands disjoint. Load extraction and
+LICM come after that proof, with branch-entry and relocation ownership intact.

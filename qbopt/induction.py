@@ -240,14 +240,23 @@ def _signed(arg: mir.Arg, facts: dict, width: int) -> int | None:
 def _last_counter(body: mir.MirBody, loop, counter: Affine, facts: dict, width: int) -> int | None:
     """Last executed counter of a canonical pretested loop, proving its update cannot wrap."""
     blocks = {block.at: block for block in body.blocks}
-    if len(loop.body) != 2 or len(loop.latches) != 1:
+    if len(loop.latches) != 1:
         return None
     header, latch = blocks[loop.header], blocks[next(iter(loop.latches))]
     if latch.succ != (header.at,) or not header.ops or len(header.succ) != 2:
         return None
     branch = header.ops[-1]
-    if branch.kind is not mir.Kind.BRANCH or branch.target != latch.at:
+    if branch.kind is not mir.Kind.BRANCH or branch.target not in header.succ:
         return None
+    inside = set(loop.body)
+    if any(not blocks[at].succ or any(to not in inside for to in blocks[at].succ) for at in inside if at != header.at):
+        return None
+    if sum(to in inside for to in header.succ) != 1:
+        return None
+    test = branch.test
+    if branch.target not in inside:
+        test = {mir.Kind.LE: mir.Kind.GT, mir.Kind.LT: mir.Kind.GE,
+                mir.Kind.GE: mir.Kind.LT, mir.Kind.GT: mir.Kind.LE}.get(test)
     comparisons = [
         op for op in header.ops[:-1]
         if op.kind is mir.Kind.SUB and len(op.args) == 2 and not op.results
@@ -262,11 +271,11 @@ def _last_counter(body: mir.MirBody, loop, counter: Affine, facts: dict, width: 
     )
     if start is None or step is None or bound is None or step == 0:
         return None
-    if step > 0 and branch.test in (mir.Kind.LE, mir.Kind.LT):
-        limit = bound - (branch.test is mir.Kind.LT)
+    if step > 0 and test in (mir.Kind.LE, mir.Kind.LT):
+        limit = bound - (test is mir.Kind.LT)
         distance = limit - start
-    elif step < 0 and branch.test in (mir.Kind.GE, mir.Kind.GT):
-        limit = bound + (branch.test is mir.Kind.GT)
+    elif step < 0 and test in (mir.Kind.GE, mir.Kind.GT):
+        limit = bound + (test is mir.Kind.GT)
         distance = start - limit
     else:
         return None
