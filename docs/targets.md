@@ -33,6 +33,27 @@ is written in the loop.
 expensive part: it runs twenty times over two constants. Wanted: LICM,
 constant folding, and keeping `s` and `i` in registers across the loop.
 
+### Runtime-input twins need their own complete references
+
+HOTLPX reads `n` and `k` through the runtime. Unlike HOTLOP's listing above,
+its invariant product cannot become the immediate 21. The inherited 312
+whole-program denominator has no HOTLPX listing accounting for those reads
+and the product. The current 452/456/462 modeled costs are real, but their
+ratios against 312 do not certify completion.
+
+LNGMXX likewise reads its dividend at runtime; LNGMIX assigns 100000.
+The inherited 210 denominator is not backed by a separate LNGMXX listing.
+Current LNGMXX output has one invariant division and a four-instruction
+accumulation loop, not a constant answer. A complete reference must account
+for the input contract, signed division/remainder, accumulation or a valid
+closed form, and output. A modern compiler may eliminate the invariant-sum
+loop, so adding input cost to the old number is not a sufficient derivation.
+
+Both unchanged legacy denominators are **PROVISIONAL** in the scoreboard;
+their ratios are suppressed and they cannot pass completion. No new target
+has been inferred from current output. The earlier HOTLPX completion claim
+is withdrawn pending a hand-derived full reference under the same cost model.
+
 ## press -- eight live variables, every product invariant
 
 `r = r + a*b + c*d + e*f + g*h`, ten passes, nothing in the body written by

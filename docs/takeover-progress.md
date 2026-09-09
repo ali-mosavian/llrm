@@ -1816,3 +1816,19 @@ failures, reproduced with the previous two-address code in
 Strict LIR runtime checks pass for LNGMIX, LNGMXX, DIVMOD, ADDRM, NBODY,
 HOTLOP, SPILL, MATRIX, NESTED and HARR (162 cases), plus HOTLPX separately.
 Artifacts: `qbopt-commuted-operands-hozw1s5m`, `qbopt-commuted-hotlpx-32srgv2g`.
+
+### Target audit correction: HOTLPX and LNGMXX remain unverified
+
+Both runtime-input twins inherited the original program's whole-program
+denominator, without their own full reference listing. HOTLPX cannot use
+HOTLOP's folded product 21, and LNGMXX cannot fold its runtime dividend to
+100000. Input setup and arithmetic must be derived, not copied or added
+to the denominator until the output happens to pass. Closed-form loop
+evaluation is also a valid optimization the reference must consider.
+
+Their legacy 312/210 values remain unchanged but are now PROVISIONAL.
+The earlier statement that HOTLPX meets its target is withdrawn. Its real
+80-cycle improvement remains; no optimization was removed. The two new
+scoreboard cases fail before this change because a low cost incorrectly
+certifies these unestablished references. `docs/targets.md` records the
+source differences and requirements for replacement reference listings.

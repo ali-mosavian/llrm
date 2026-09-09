@@ -144,9 +144,9 @@ def test_missing_target_cannot_verify_completion(monkeypatch, capsys):
     assert "NO TARGET" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("program", ["pressx", "fpcse", "fpcsex"])
+@pytest.mark.parametrize("program", ["pressx", "hotlpx", "lngmxx", "fpcse", "fpcsex"])
 def test_provisional_target_cannot_verify_completion(program, monkeypatch, capsys):
-    """PRESSX inherited a folded-constant target; FP targets changed rounding and reassociated sums."""
+    """Runtime-input twins inherited constant-source targets; FP references changed rounding and sums."""
     from collections import Counter
     monkeypatch.setattr(opportunity, "counted", lambda *args: Counter(cost=1))
     assert opportunity.against_targets([Path(f"{program}-p-g2.obj")]) != 0
