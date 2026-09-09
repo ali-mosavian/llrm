@@ -389,6 +389,8 @@ def counted(paths: list[Path], raw: bool = False) -> Counter:
         module_ = _measured(path, raw)
         if module_ is None:
             raise Unmeasured(f"{path}: no code module")
+        if split.event_enabled(module_):
+            found["event-enabled configuration"] += 1
         mapped = code_map(module_)
         if isinstance(mapped, str):
             raise Unmeasured(f"{path}: {mapped}")
@@ -527,7 +529,10 @@ def against_targets(paths: list[Path], raw: bool = False) -> int:
             failed = True
             print(f"  {path.stem:10s} {cost:7d} {'--':>7s} {'--':>6s}   {left}  NO TARGET")
             continue
-        if reason := PROVISIONAL_TARGETS.get(program):
+        reason = PROVISIONAL_TARGETS.get(program)
+        if found.get("event-enabled configuration"):
+            reason = "event-enabled build requires a reference retaining event checks; the plain-program target is not comparable"
+        if reason:
             failed = True
             print(f"  {path.stem:10s} {cost:7d} {want:7d} {'--':>6s}   {left}  PROVISIONAL: {reason}")
             continue

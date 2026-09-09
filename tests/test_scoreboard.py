@@ -21,6 +21,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 import opportunity
 
 
+@pytest.mark.parametrize("tag", ["p-evt", "q-evt", "v-evt"])
+def test_event_build_does_not_use_a_plain_program_target(tag, tmp_path, capsys):
+    """BOOLS /V/W was scored against a reference with no event checks (QB read as 4.57x)."""
+    path = tmp_path / "bools-renamed.obj"
+    path.write_bytes(Path(f"fixtures/omf/bools-{tag}.obj").read_bytes())
+    assert opportunity.against_targets([path], raw=True) != 0
+    report = capsys.readouterr().out
+    assert "PROVISIONAL" in report and "event" in report
+    assert "x " not in report
+
+
+def test_event_configuration_cannot_pass_even_below_plain_target(monkeypatch, capsys):
+    from collections import Counter
+    monkeypatch.setattr(opportunity, "counted", lambda *args: Counter({"cost": 1, "event-enabled configuration": 1}))
+    assert opportunity.against_targets([Path("bools-q-O.obj")]) != 0
+    assert "PROVISIONAL" in capsys.readouterr().out
+
+
 def test_a_fallback_is_not_scored_as_success(monkeypatch) -> None:
     """A backend refusal could score BC or fallback bytes as optimized output."""
     monkeypatch.setattr(opportunity.rewrite, "rewrite", lambda data, **kwargs: (data, []))

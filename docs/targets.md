@@ -11,6 +11,26 @@ and beside it what the same loop should be. Counts are instructions in the
 body and bytes; the bytes matter less than the reloads, since a reload in a
 loop costs a memory access every iteration.
 
+## Event-enabled configurations need separate references
+
+The listings below do not account for `/V` or `/W` event checks. Comparing
+an event-enabled build to those plain-program denominators does not measure
+the same semantics. The scoreboard now detects the actual module header's
+event bits, not an `-evt` filename, and marks such comparisons PROVISIONAL.
+It keeps their measured costs, suppresses the ratios, and cannot pass them
+as complete even if their cost happens to be below a plain target.
+
+Before: optimized QB BOOLS with event checks was reported as
+`576 / 126 = 4.57x`. After: its cost remains **576**, but its ratio is
+unverified until a complete event-preserving reference is derived. Plain
+QB BOOLS remains **172 / 126 = 1.37x**. This changes no emitted assembly.
+Emission refusals remain UNMEASURED, not provisional successes or optimized
+fallbacks. Event semantics and unsupported event paths still need work.
+
+The fail-first instrument regressions cover renamed objects from QB, PDS
+and VBDOS, plus a below-target cost that must still fail completion. No
+denominator was increased or inferred from current output.
+
 ## hotlop -- a loop-invariant product
 
 `s = s + (n * k) + i`, twenty passes. `n` and `k` are constants and neither

@@ -124,11 +124,15 @@ def has_header(module: Module) -> bool:
     return module.code[:2] in SIGNATURES
 
 
+def event_enabled(module: Module) -> bool:
+    """The compiler requested event checks, whether or not it emitted a stub."""
+    return (has_header(module) and len(module.code) >= U_FLAG + 2
+            and bool(int.from_bytes(module.code[U_FLAG:U_FLAG + 2], "little") & EVENTS))
+
+
 def event_stub(module: Module) -> int | None:
     """Where the event-poll routine starts, in a module that carries one."""
-    if not has_header(module) or len(module.code) < U_FLAG + 2:
-        return None
-    if not int.from_bytes(module.code[U_FLAG : U_FLAG + 2], "little") & EVENTS:
+    if not event_enabled(module):
         return None
     jump = decode(module.code, ENTRY)
     if jump is None or terminator(jump) is not Ends.JUMP:
