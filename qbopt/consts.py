@@ -26,10 +26,7 @@ from qbopt import mir
 from qbopt import runtime
 
 # What each operation does to two known numbers, within one width. Division
-# is absent deliberately: BC's own divide has semantics this pass already
-# refuses to reproduce (calls.py -- `x/0` and the signed extreme), and a
-# folder that answered them here would be inventing a result the running
-# program never produces.
+# has two results and is handled separately, with the faulting cases excluded.
 ARITH = {
     mir.Kind.ADD: lambda a, b: a + b,
     mir.Kind.SUB: lambda a, b: a - b,
@@ -65,6 +62,24 @@ class Known:
 
 def masked(n: int, width: int) -> int:
     return n & ((1 << (width * 8)) - 1)
+
+
+def division(op: mir.Op, known: dict, here: Cells) -> tuple[int, int] | None:
+    """Signed quotient and remainder, excluding the two faulting cases."""
+    if op.kind is not mir.Kind.DIVMOD or len(op.args) != 2 or len(op.results) != 2 or op.stores:
+        return None
+    if any(not isinstance(result, mir.Held) or result.width != 4 for result in op.results):
+        return None
+    operands = [_operand(op, arg, known, here) for arg in op.args]
+    if any(fact is None or fact.width < 4 for fact in operands):
+        return None
+    dividend, divisor = [((fact.n & 0xFFFFFFFF) ^ 0x80000000) - 0x80000000 for fact in operands]
+    if divisor == 0 or (dividend == -0x80000000 and divisor == -1):
+        return None
+    quotient = abs(dividend) // abs(divisor)
+    if (dividend < 0) != (divisor < 0):
+        quotient = -quotient
+    return masked(quotient, 4), masked(dividend - quotient * divisor, 4)
 
 
 def _put(op: mir.Op, known: dict[mir.Value, Known]) -> Known | None:

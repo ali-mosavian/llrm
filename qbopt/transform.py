@@ -95,7 +95,9 @@ def _without(ops: list[Op], drop) -> list[Op]:
             start = op.covers[0] if op.covers is not None else op.at
             if out and mir.rewritable(out[-1]) and _end_of(out[-1]) == start:
                 lo = out[-1].covers[0] if out[-1].covers is not None else out[-1].at
-                out[-1] = replace(out[-1], covers=(lo, _end_of(op)))
+                out[-1] = replace(
+                    out[-1], covers=(lo, _end_of(op)), extra_covers=out[-1].extra_covers + op.extra_covers
+                )
                 continue
             out.append(op)
             continue
@@ -108,7 +110,14 @@ def _without(ops: list[Op], drop) -> list[Op]:
     ):
         first, survivor = out[:2]
         start = first.covers[0] if first.covers is not None else first.at
-        out[:2] = [replace(survivor, at=first.at, covers=(start, _end_of(survivor)))]
+        out[:2] = [
+            replace(
+                survivor,
+                at=first.at,
+                covers=(start, _end_of(survivor)),
+                extra_covers=survivor.extra_covers + first.extra_covers,
+            )
+        ]
     return out
 
 
@@ -324,6 +333,7 @@ def _reclaimed(body: MirBody, gone: set[int]) -> MirBody:
             if id(op) not in gone and mir.rewritable(op) and op.covers is not None:
                 ends[op.covers[1]] = op
     grown: dict[int, tuple[int, int]] = {}
+    extra: dict[int, tuple] = {}
     dropped: set[int] = set()
     # In byte order, so a run of deletions collapses onto the one operation
     # standing before all of them. Taken in block order, the second of two
@@ -338,6 +348,7 @@ def _reclaimed(body: MirBody, gone: set[int]) -> MirBody:
             continue
         span = grown.get(id(taker), taker.covers)
         grown[id(taker)] = (span[0], op.covers[1])
+        extra[id(taker)] = extra.get(id(taker), taker.extra_covers) + op.extra_covers
         ends.pop(op.covers[0], None)
         ends[op.covers[1]] = taker
         dropped.add(id(op))
@@ -349,7 +360,7 @@ def _reclaimed(body: MirBody, gone: set[int]) -> MirBody:
             replace(
                 block,
                 ops=tuple(
-                    replace(op, covers=grown[id(op)]) if id(op) in grown else op
+                    replace(op, covers=grown[id(op)], extra_covers=extra[id(op)]) if id(op) in grown else op
                     for op in block.ops
                     if id(op) not in dropped
                 ),
@@ -1594,6 +1605,34 @@ def _removable(op: Op, alive: set) -> bool:
     return not any(one in alive for one in op.defines)
 
 
+def _folded_division(op: Op, numbers: tuple[int, int], wanted: set) -> tuple[Op, ...]:
+    results = {result.value for result in op.results}
+    if any(value in wanted and value not in results for value in op.defines):
+        return (op,)
+    return tuple(
+        replace(
+            op,
+            op=ir.Operation.MOVE,
+            name="mov",
+            kind=mir.Kind.COPY,
+            args=(mir.Const(number, 4),),
+            results=(result,),
+            defines=(result.value,),
+            uses=(),
+            loads=(),
+            merges={},
+            made=None,
+            raised=None,
+            symbol=False,
+            node=None,
+            covers=op.covers if index == 0 else (op.at, op.at),
+            id=op.id if index == 0 else None,
+            extra_covers=op.extra_covers if index == 0 else (),
+        )
+        for index, (result, number) in enumerate(zip(op.results, numbers, strict=True))
+    )
+
+
 def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
     """An operation whose result is a number, replaced by that number.
 
@@ -1612,7 +1651,12 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
     number and a carry, and only one of them is expressible as `mov ax,n`.
     """
     facts = consts.known(body, dgroup, calls)
-    if not facts:
+    memory = (
+        consts.cells(body, dgroup, calls, facts)
+        if any(op.kind is mir.Kind.DIVMOD for block in body.blocks for op in block.ops)
+        else {}
+    )
+    if not facts and not memory:
         return body
 
     # Live, not merely mentioned: see live()'s own note on hotlop's dx.
@@ -1622,7 +1666,13 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
     changed = False
     for block in body.blocks:
         ops = []
-        for op in block.ops:
+        for index, op in enumerate(block.ops):
+            numbers = consts.division(op, facts, memory.get((block.at, index), {}))
+            if numbers is not None:
+                replacements = _folded_division(op, numbers, wanted)
+                ops.extend(replacements)
+                changed |= replacements != (op,)
+                continue
             made = _constant_operands(_folded_op(op, facts, wanted), facts)
             changed = changed or made is not op
             ops.append(made)
@@ -2160,6 +2210,22 @@ def applied(
         found=found,
     )
     passes = [one for one in pipeline(where, **wanted) if only is None or one.name == only]
+    if found is not None:
+        body = replace(
+            body,
+            blocks=tuple(
+                replace(
+                    block,
+                    ops=tuple(
+                        replace(op, extra_covers=found.coverage[op.id][1:])
+                        if not op.extra_covers and op.id in found.coverage
+                        else op
+                        for op in block.ops
+                    ),
+                )
+                for block in body.blocks
+            ),
+        )
     for iteration in range(16):
         before = body
         for one in passes:

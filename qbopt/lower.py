@@ -660,7 +660,7 @@ class Lowering:
                     uses=read if speaks else tuple(one.id for one in op.uses if not one.flags),
                     requires=self._abi(op),
                     clobbers=_clobbers(op, self._calls),
-                    spread=self._coverage.get(op.id, ()) if op.id is not None else (),
+                    spread=(op.covers, *op.extra_covers) if op.extra_covers else self._coverage.get(op.id, ()),
                     delivers=self._idiom(op),
                     widths=self._widths(op) if what is None else (),
                     op=op,

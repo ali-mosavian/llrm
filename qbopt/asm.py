@@ -104,6 +104,14 @@ def _ranges_of(op, found: Module) -> tuple[tuple[int, int], ...]:
     """
     if isinstance(op, Table):
         return ((op.lo, op.hi),)
+    if op.extra_covers:
+        ranges = []
+        for lo, hi in sorted((*op.extra_covers, *((op.covers,) if op.covers is not None else ()))):
+            if ranges and lo <= ranges[-1][1]:
+                ranges[-1] = (ranges[-1][0], max(hi, ranges[-1][1]))
+            else:
+                ranges.append((lo, hi))
+        return tuple(ranges)
     full = found.coverage.get(op.id) if op.id is not None else None
     if full is not None:
         return full
@@ -147,6 +155,8 @@ def _length_of(op: mir.Op, found: Module) -> int | None:
     apart from its call stands for both runs, and `covers` alone would
     only ever name one of them.
     """
+    if op.extra_covers:
+        return sum(hi - lo for lo, hi in _ranges_of(op, found))
     full = found.coverage.get(op.id) if op.id is not None else None
     if full is not None:
         return sum(hi - lo for lo, hi in full)

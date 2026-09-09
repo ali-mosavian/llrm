@@ -408,3 +408,25 @@ runtime passes). Stage files: `/tmp/qbopt-hoist-ssa-20260909`. Runtime artifacts
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-hoist-ssa-6h90ojay`.
 Constant DIVMOD folding remains withdrawn; its byte-ownership issue is still
 open. No performance improvement is claimed for this correctness repair.
+# Constant division now reaches the executable
+
+LNGMIX's constant quotient/remainder fold to 14285 and 5. The production cost
+falls from 867 to 566 against target 210 (4.13x to 2.70x, not yet complete).
+The folder uses signed truncation toward zero and retains zero-divisor and
+signed-overflow cases, unknown operands, and live non-result effects.
+
+Two ownership/selection issues were exposed and repaired in the same slice:
+noncontiguous push-byte ownership now travels with MIR operations through CSE
+and deletion, rather than disappearing with an operation ID; replacement
+constants clear the original runtime-call node. Keeping that node emitted a
+bare runtime call after its arguments had disappeared and timed out. No result
+from that failed run is counted as validation.
+
+Validation: 24 focused checks pass, one existing xfail. The emitted-code
+regression fails when constant folding is disabled and separately when CSE's
+extra-range transfer is disabled (the original 12-byte refusal). LNGMIX and
+HOTLPX pass strict LIR execution on all three compiler families (six runs).
+Artifacts: `/tmp/qbopt-constant-division-final` and
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-divfold-verified-8f_6zsli`.
+Remaining LNGMIX work includes redundant high-half reconstruction and memory
+traffic in its accumulator; inspect these stage dumps before changing them.

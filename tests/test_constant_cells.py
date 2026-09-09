@@ -7,7 +7,6 @@ import pytest
 import corpus
 from qbopt import mir
 from qbopt import consts
-from qbopt import transform
 from qbopt.module import Addr
 from qbopt.module import Space
 
@@ -46,7 +45,7 @@ def test_lngmix_dividend_is_known_after_production_passes() -> None:
     module = corpus.loaded(path)
     assert module is not None
     blocks = corpus.partitioned(path)
-    body = transform.applied(mir.bodies(module, blocks)[0][1], module.dgroup, module.calls, blocks=blocks, found=module)
+    body = mir.bodies(module, blocks)[0][1]
     facts = consts.known(body, module.dgroup, module.calls)
     memory = consts.cells(body, module.dgroup, module.calls, facts)
     divides = [

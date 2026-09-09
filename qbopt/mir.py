@@ -819,6 +819,9 @@ class Op:
     # either way, so no live value is discarded. At the end of the field
     # list because every construction here is positional.
     args_known: bool = True
+    # Noncontiguous input bytes (such as an absorbed call's argument pushes).
+    # Deletion transfers these alongside covers; no machine semantics live here.
+    extra_covers: tuple[tuple[int, int], ...] = ()
 
     @property
     def barrier(self) -> bool:

@@ -1326,7 +1326,7 @@ def test_a_reused_divide_leaves_a_body_the_allocator_can_still_colour() -> None:
     assert folded == 1, "lngmix has one pair to fold; this proves nothing without it"
 
 
-def test_one_idiv_serves_both_of_lngmix_s_divides_in_the_image() -> None:
+def test_one_idiv_serves_both_of_lngmix_s_divides_in_the_image(monkeypatch) -> None:
     """The fold reaching the bytes, through the entry production uses.
 
     Two things only show here. The allocator refusing the folded body is
@@ -1340,8 +1340,12 @@ def test_one_idiv_serves_both_of_lngmix_s_divides_in_the_image() -> None:
     from iced_x86 import Mnemonic
 
     from qbopt import omf
+    from qbopt import consts
     from qbopt import module
     from qbopt import wholeseg
+
+    # Exercise reuse separately from folding both constant answers away.
+    monkeypatch.setattr(consts, "division", lambda *args: None)
 
     out, why = wholeseg.rebuilt(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes())
     assert why == wholeseg.REBUILT
