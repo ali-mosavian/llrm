@@ -155,13 +155,56 @@ def test_nbody_damping_keeps_negation_whole():
     """NBODY split both velocity negations into words, emitting push/pop traffic and paired stores."""
     from qbopt import blocks, module, omf, wholeseg
     from iced_x86 import Mnemonic, Register
-    result = wholeseg.emitted(Path("fixtures/regressions/nbody-stack-p-g2.obj").read_bytes())
+    path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
+    body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
+    assert sum(op.kind is mir.Kind.NEG and op.results[0].width == 4
+               for block in body.blocks for op in block.ops) == 2
+    result = wholeseg.emitted(path.read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     negations = [one.insn for one in blocks.instructions(found) if one.insn.mnemonic == Mnemonic.NEG]
-    assert len(negations) == 2
     assert all(one.op0_register in (Register.EAX, Register.EBX, Register.ECX,
                                    Register.EDX, Register.ESI, Register.EDI) for one in negations)
+
+
+def test_nbody_damping_reverses_subtraction_without_negation():
+    """NBODY paid for -(quotient-velocity) instead of one velocity-quotient subtraction."""
+    from qbopt import blocks, module, omf, wholeseg
+    from iced_x86 import Mnemonic
+    result = wholeseg.emitted(Path("fixtures/regressions/nbody-stack-p-g2.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    found = module.of(omf.parse(result.data))
+    assert not any(one.insn.mnemonic == Mnemonic.NEG for one in blocks.instructions(found))
+
+
+@pytest.mark.parametrize("guard", ["none", "shared", "sub_flags", "neg_flags", "width", "merge"])
+def test_reversed_difference_preserves_observed_values_and_flags(guard):
+    """NBODY's negated subtraction can be reversed only without duplicating work or changing flags."""
+    from collections import Counter
+    left, right, middle, result = (mir.Value(index, 0) for index in range(1, 5))
+    flags = mir.Value(5, 0, flags=True)
+    difference = mir.Op(0, ir.Operation.BINARY, "sub", (middle,), (left, right), kind=mir.Kind.SUB,
+                        args=(mir.Held(left, 4), mir.Held(right, 4)), results=(mir.Held(middle, 4),))
+    negate = mir.Op(1, ir.Operation.UNARY, "neg", (result,), (middle,), kind=mir.Kind.NEG,
+                    args=(mir.Held(middle, 4),), results=(mir.Held(result, 4),))
+    match guard:
+        case "sub_flags":
+            difference = replace(difference, defines=(middle, flags))
+        case "neg_flags":
+            negate = replace(negate, defines=(result, flags))
+        case "width":
+            negate = replace(negate, results=(mir.Held(result, 2),))
+        case "merge":
+            difference = replace(difference, merges={left: middle})
+    done = algebraic._negated_difference(negate, {middle: difference}, {flags},
+                                         Counter({middle: 2 if guard == "shared" else 1}))
+    if guard != "none":
+        assert done == negate
+        return
+    assert done.kind is mir.Kind.SUB and done.args == tuple(reversed(difference.args))
+    for first in (0, 1, 0x7fffffff, 0x80000000, 0xffffffff):
+        for second in (0, 1, 0x7fffffff, 0x80000000, 0xffffffff):
+            assert (-((first - second) & 0xffffffff)) & 0xffffffff == (second - first) & 0xffffffff
 
 
 @pytest.mark.parametrize(("first_count", "last_count", "live_flags"), [(15, 1, False), (32, 1, False), (1, 1, True)])

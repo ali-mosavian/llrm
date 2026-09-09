@@ -17,6 +17,7 @@ def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) 
 
     def simplify(op):
         op = _recombined(op, definitions)
+        op = _negated_difference(op, definitions, wanted | mentioned, uses)
         op = _shift_chain(op, definitions, wanted | mentioned)
         op = _product(op, wanted | mentioned, wide)
         op = _scaled_chain(op, definitions, wanted | mentioned, uses)
@@ -58,6 +59,30 @@ def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) 
             for block in changed.blocks
         ),
     )
+
+
+def _negated_difference(op: mir.Op, definitions: dict, wanted: set[mir.Value], uses: Counter) -> mir.Op:
+    """Negating a single-use modular difference reverses its operands."""
+    if (op.kind is not mir.Kind.NEG or op.loads or op.stores or op.barrier or op.merges
+        or len(op.args) != 1 or len(op.results) != 1
+        or not all(isinstance(arg, mir.Held) for arg in (*op.args, *op.results))):
+        return op
+    source, result = op.args[0], op.results[0]
+    if source.width != result.width or uses[source.value] != 1:
+        return op
+    difference = definitions.get(source.value)
+    if (difference is None or difference.kind is not mir.Kind.SUB or difference.loads or difference.stores
+        or difference.barrier or difference.merges or difference.results != (source,)
+        or len(difference.args) != 2
+        or any(not isinstance(arg, (mir.Held, mir.Const)) or arg.width != result.width
+               for arg in difference.args)
+        or any(value in wanted for one in (op, difference) for value in one.defines
+               if value != one.results[0].value)):
+        return op
+    args = tuple(reversed(difference.args))
+    return replace(op, kind=mir.Kind.SUB, name="sub", op=ir.Operation.BINARY, args=args,
+                   defines=(result.value,), uses=tuple(arg.value for arg in args if isinstance(arg, mir.Held)),
+                   node=None, made=None, raised=None)
 
 
 def _shared_shifts(body: mir.MirBody, wanted: set[mir.Value]) -> mir.MirBody:

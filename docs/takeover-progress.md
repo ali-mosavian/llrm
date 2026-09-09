@@ -2091,3 +2091,20 @@ tests pass. Strict runtime checks pass all 90 cases across NBODY and JUMPS
 on three compilers. Before/after dumps are `/tmp/qbopt-nbody-current` and
 `/tmp/qbopt-nbody-neg-whole`; runtime artifacts are
 `qbopt-whole-negation-wh1x42lt` under the system temporary directory.
+
+### Reverse negated differences in MIR
+
+With the negation raised, NBODY's damping exposed `-(quotient - velocity)`.
+Algebraic simplification now reverses a single-use, same-width integer SUB
+under NEG, provided neither operation has observed flag results or partial
+writes. This removes the extra negation without importing machine details.
+The adjacent MIR dumps show the original SUB becoming dead and the NEG
+becoming `velocity - quotient`; raw emission contains the direct subtractions.
+
+NBODY's modeled cost falls from **364016 to 363616**. It is the only changed
+object in the 97-object audit. The new emitted regression failed before the
+change; the preceding whole-negation test now also checks the raised MIR
+contains both whole negations, rather than requiring them to survive opt.
+All 79 algebraic tests and 72 strict NBODY runtime cases pass. Dumps:
+`/tmp/qbopt-nbody-neg-whole` and `/tmp/qbopt-nbody-reverse-sub`. Runtime
+artifacts: `qbopt-reverse-difference-1c20xxm3` under the system temporary directory.
