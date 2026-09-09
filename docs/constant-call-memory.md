@@ -61,6 +61,38 @@ QB costs 364 (1.26x), VBDOS 354 (1.22x). NOTS costs 582/378 (1.54x), still
 outside the goal. NEGNOT, NOTS and ARITH pass all 57 output cases across the
 three compilers. No elapsed-time claim is made.
 
+### Keeping unary results whole through stores
+
+Scalar recognition runs again after unary recognition, so the extracted halves
+of a newly recognized unary result can rejoin at an adjacent word-store pair.
+This is one raise over the same body, not an emit/re-raise optimization cycle.
+
+NOTS previously emitted this after EQV's XOR:
+
+```asm
+not eax
+push eax
+pop bx
+pop cx
+push eax
+pop ax
+pop ax
+mov [r],bx
+mov [r+2],ax
+```
+
+It now emits:
+
+```asm
+not eax
+mov [r],eax
+```
+
+PDS object size falls from 1168 to 1126 bytes; static cost falls from 582 to
+484 (1.28x target). QB costs 496 (1.31x), VBDOS 434 (1.15x). All fifteen NOTS
+runtime cases pass. The three emitted-code regressions failed before the change
+and now pass. No memory-effect assumptions changed.
+
 Follow-up: supply object-range reachability in the raise, not machine knowledge
 in constant propagation. Do not infer object ends from individual operand
 addresses: a reference can name a field or the high half of the same object.

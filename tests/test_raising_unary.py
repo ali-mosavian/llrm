@@ -6,6 +6,7 @@ import corpus
 import pytest
 
 from qbopt.model import mir
+from qbopt import wholeseg
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
@@ -17,6 +18,15 @@ def test_negnot_raises_printed_long_negations(tag):
     ops = [op for block in body.blocks for op in block.ops]
     assert not any(op.kind is mir.Kind.ADD_CARRY for op in ops)
     assert sum(op.kind is mir.Kind.NEG and op.results[0].width == 4 for op in ops) == 3
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_nots_stores_whole_unary_results_without_stack_splitting(tag):
+    """NOTS split whole EQV/NAND results with PUSH/POP merely to store their halves."""
+    result = wholeseg.emitted(Path(f"fixtures/omf/nots-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
+    assert not any(instruction.startswith("pop ") for instruction in instructions)
 
 
 @pytest.mark.parametrize("observed", ["low-flags", "high-flags", "carry-value"])
