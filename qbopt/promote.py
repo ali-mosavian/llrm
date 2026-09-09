@@ -145,14 +145,23 @@ def promoted(
     body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | None = None, *, loop_only: bool = False
 ) -> MirBody:
     """Reuse eligible stored values without removing observable writes."""
+    original = body
+    body = _separated(body)
     found = promotable(body, dgroup, bounds)
     if loop_only:
         hot = {at for loop in loops.loops(body.blocks, body.entry) for at in loop.body}
         read = {ref.addr for block in body.blocks if block.at in hot for op in block.ops for ref in op.loads}
         found = {addr: width for addr, width in found.items() if addr in read}
     if not found:
-        return body
+        return original
     usable = _available(body, found, dgroup, bounds)
+    updates = {op.id for block in original.blocks for op in block.ops if op.loads and op.stores}
+    if any(
+        op.id in updates and op.loads and not op.stores and id(op) not in usable
+        for block in body.blocks
+        for op in block.ops
+    ):
+        return original
 
     taken = max((one.variable for one in ssa.values(body)), default=0)
     fresh = _next(body)
@@ -182,6 +191,52 @@ def promoted(
     if not changed:
         return body
     return ssa.constructed(replace(body, blocks=tuple(blocks)), frozenset(holds.values()))
+
+
+def _separated(body: MirBody) -> MirBody:
+    """Expose a memory update as a value computation and an observable store."""
+    fresh = _next(body)
+    variable = max((one.variable for one in ssa.values(body)), default=0) + 1
+    blocks = []
+    for block in body.blocks:
+        ops = []
+        for op in block.ops:
+            if (
+                op.kind not in READS - {mir.Kind.LOAD}
+                or len(op.loads) != 1
+                or op.loads != op.stores
+                or op.results != (mir.Cell(op.loads[0]),)
+                or any(not value.flags for value in op.defines)
+                or op.loads[0].base is not None
+                or op.loads[0].segment is not None
+            ):
+                ops.append(op)
+                continue
+            result = mir.Value(fresh, op.at, variable=variable, version=1)
+            fresh += 1
+            variable += 1
+            held = mir.Held(result, op.loads[0].width)
+            ops.append(replace(op, results=(held,), stores=(), defines=(result, *op.defines), symbol=False))
+            ops.append(
+                replace(
+                    op,
+                    kind=mir.Kind.STORE,
+                    name="mov",
+                    args=(held,),
+                    loads=(),
+                    defines=(),
+                    uses=(result,),
+                    node=None,
+                    made=None,
+                    raised=None,
+                    covers=(op.at, op.at),
+                    extra_covers=(),
+                    merges={},
+                    symbol=True,
+                )
+            )
+        blocks.append(replace(block, ops=tuple(ops)))
+    return replace(body, blocks=tuple(blocks))
 
 
 def _instead(op: Op, holds: dict, found: dict, fresh: int) -> "Op | None":

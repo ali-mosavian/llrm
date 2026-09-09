@@ -1,5 +1,25 @@
 # Takeover checkpoint — 2026-09-09
 
+## Promote read-modify-write accumulators
+
+Promotion previously excluded arithmetic with both a memory read and write.
+It now separates eligible fixed-cell updates into a value computation and an
+observable store, then uses the existing availability and SSA construction.
+If a separated read cannot be served from a proven available value, the
+original body is retained. NESTED's sum now flows through the nested loop
+phis. Its write remains: this enables subsequent store-motion work, not a
+speedup by itself (2156 -> 2172, **2.81x -> 2.83x**).
+
+The first runtime trial printed T=0 instead of 675: lowering discarded the
+inserted store's relocation ownership. STORE now selects its own machine
+operation, and lowering carries its symbol marker into LIR. The computation
+owns the original bytes; the inserted store owns the relocated operand.
+Both the promotion and backend ownership regressions failed with their old
+implementations. Fourteen focused checks pass; NESTED/HOTLOP/FLAGS pass on
+p-g2, q-O and v-g3 (nine runtime comparisons).
+Dumps: `/tmp/qbopt-rmw-promote-verified`. Runtime artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-rmw-final-rto51u8w`.
+
 ## One reload per spilled operand
 
 The NESTED allocation dump contained two identical frame reloads before each

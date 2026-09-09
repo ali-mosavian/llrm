@@ -7,6 +7,34 @@ from qbopt import lower
 from qbopt import objwrite
 
 
+def test_lowering_preserves_relocated_store_ownership() -> None:
+    """NESTED printed T=0 instead of 675 when its promoted store lost its fixup."""
+    from qbopt.module import Addr, Space
+
+    value = mir.Value(1, 0)
+    cell = mir.MemRef(Addr(Space.SEGMENT, 0x88, 5), 2)
+    op = mir.Op(
+        10,
+        ir.Operation.BINARY,
+        "mov",
+        (),
+        (value,),
+        kind=mir.Kind.STORE,
+        args=(mir.Held(value, 2),),
+        results=(mir.Cell(cell),),
+        stores=(cell,),
+        covers=(10, 10),
+        id=31,
+        symbol=True,
+    )
+    body = mir.MirBody(10, (mir.MirBlock(10, (), (op,), ()),))
+    (instruction,) = lower.Lowering(body, {value.id}, {}, ()).expand(op)
+    assert instruction.what.op is ir.Operation.MOVE
+    assert instruction.symbol is True
+    carried = objwrite._carried(instruction)
+    assert carried.symbol is True and carried.id == 31
+
+
 def test_high_word_extraction_lowers_without_clobbering_flags() -> None:
     """LNGMIX's explicit high-part extraction refused as an unselectable restore."""
     source, result = mir.Value(1, 0), mir.Value(2, 1)

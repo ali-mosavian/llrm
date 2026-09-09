@@ -52,6 +52,7 @@ _MACHINE: dict[mir.Kind, tuple[ir.Operation, str]] = {
     mir.Kind.INCREMENT: (ir.Operation.UNARY, "inc"),
     mir.Kind.DECREMENT: (ir.Operation.UNARY, "dec"),
     mir.Kind.COPY: (ir.Operation.MOVE, "mov"),
+    mir.Kind.STORE: (ir.Operation.MOVE, "mov"),
     mir.Kind.JUMP: (ir.Operation.JUMP, "jmp"),
     # Strength reduction writes both: one multiply in a preheader and one
     # add at a latch, where BC recomputed the product every iteration. The
@@ -677,6 +678,7 @@ class Lowering:
                     delivers=self._idiom(op),
                     widths=self._widths(op) if what is None else (),
                     op=op,
+                    symbol=op.symbol,
                 ),
             )
         # The leader keeps the operation's identity -- its address, the

@@ -13,6 +13,29 @@ from qbopt import promote
 from qbopt import wholeseg
 
 
+def test_nested_memory_update_becomes_a_value_and_preserves_its_store() -> None:
+    """NESTED's accumulator stayed a memory ADD instead of a loop-carried value."""
+    from qbopt import transform
+
+    found = module.of(omf.parse(Path("fixtures/omf/nested-p-g2.obj").read_bytes()))
+    partition = blocks.partition(found, blocks.code_map(found))
+    body = mir.bodies(found, partition)[0][1]
+    before = next(op for block in body.blocks for op in block.ops if op.at == 0x7E)
+    separated = promote._separated(body)
+    computation, write = [op for block in separated.blocks for op in block.ops if op.at == 0x7E]
+    assert tuple(value for value in computation.defines if value.flags) == before.defines
+    assert write.symbol is True and write.id == before.id
+    assert computation.symbol is False
+    body = transform.applied(body, found.dgroup, found.calls, blocks=partition, found=found)
+    updates = [op for block in body.blocks for op in block.ops if op.at == 0x7E]
+    addition = next(op for op in updates if op.kind is mir.Kind.ADD)
+    store = next(op for op in updates if op.kind is mir.Kind.STORE)
+    assert not addition.loads and not addition.stores
+    assert all(isinstance(arg, mir.Held) for arg in addition.args)
+    assert store.stores == before.stores
+    assert store.args == addition.results
+
+
 def test_promotion_preserves_existing_cse_value_edges() -> None:
     """flags printed BOTH=nonzero for zero after promotion rebound CSE's constant to an entry phi."""
     from qbopt import transform
