@@ -263,7 +263,7 @@ def subexpressions(body: MirBody, dgroup: frozenset[int] = frozenset()) -> MirBo
     exact = floatfacts.known(body, dgroup, {}) if any(
         op.floating for block in body.blocks for op in block.ops) else {}
 
-    seen: dict[tuple, tuple[int, int, Op]] = {}
+    seen: dict[tuple, list[tuple[int, int, Op]]] = {}
     stands: dict[int, mir.Value] = {}  # what a name numbers as -- copies included
     swap: dict[int, mir.Value] = {}  # what a name is rewritten to -- only what folded
     gone: set[int] = set()  # by identity: four of lngmix's ops share address 0x4b
@@ -284,22 +284,22 @@ def subexpressions(body: MirBody, dgroup: frozenset[int] = frozenset()) -> MirBo
             key = _computation(op, stands, whole)
             if key is None:
                 continue
-            first = seen.get(key)
+            candidates = seen.setdefault(key, [])
+            first = next((candidate for candidate in reversed(candidates)
+                          if _reaches(candidate[0], candidate[1], order[block.at], index, doms, body, block)), None)
             if first is None:
-                seen[key] = (order[block.at], index, op)
+                candidates.append((order[block.at], index, op))
                 continue
             at, where, earlier = first
             if op.floating is not None and (at != order[block.at] or not all(
                 _exact_floating(one, exact) for one in block.ops[where:index + 1]
             )):
-                seen[key] = (order[block.at], index, op)
+                candidates.append((order[block.at], index, op))
                 continue
             if op.loads and (at != order[block.at] or not _undisturbed(op, earlier, block.ops[where + 1:index], dgroup)):
-                seen[key] = (order[block.at], index, op)
+                candidates.append((order[block.at], index, op))
                 continue
             if len(earlier.defines) != len(op.defines):
-                continue
-            if not _reaches(at, where, order[block.at], index, doms, body, block):
                 continue
             if any(one.flags and _read(body, one) for one in op.defines):
                 continue

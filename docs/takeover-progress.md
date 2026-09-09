@@ -2446,3 +2446,21 @@ key now includes every held result's width, keeping those values distinct.
 The regression failed before the fix; 31 focused tests and three existing
 CSE tests pass. This is a general value-identity correction, not an FP-only
 exception to the CSE rules.
+
+### CSE retains dominance-scoped alternatives
+
+One expression key previously held only one producer. A producer encountered
+in one arm of a diamond prevented the other arm from recording its own
+producer, so even two consecutive identical operations in that arm failed to
+reuse a value. CSE now retains alternatives and selects the latest visited
+candidate that dominates the use. Memory and floating-effect checks remain
+unchanged; sibling producers cannot be used at a join they do not dominate.
+
+Both block-order variants of the diamond regression failed before the fix.
+They now reuse locally in each arm and at the join, without borrowing a
+sibling value. The 33 focused tests pass. Among 97 emitted outputs, only
+NBODY's object changes; its 24 PDS runtime cases pass. Its measured cost stays
+363616: the final LIR diff removes seven empty markers, not seven executed
+instructions, so this is not reported as a benchmark speedup. Dumps are in
+`/tmp/qbopt-nbody-cse-dominance` and runtime artifacts in
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-nbody-cse-dominance-qrk0imxa`.
