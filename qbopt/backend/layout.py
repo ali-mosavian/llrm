@@ -352,7 +352,8 @@ def rebuild(
         (span[1] for one in ops if (span := asm._stands_for(one, found)) and span[0] < span[1]),
         default=lowest,
     )
-    inside = [Table(lo, hi) for lo, hi in tables if lowest <= lo and hi <= highest]
+    inside = [Table(lo, hi) for lo, hi in tables if lowest <= lo and hi <= found.end]
+    highest = max(highest, *(one.hi for one in inside)) if inside else highest
 
     # BC pads the end of its code segment with zeros, and every object in
     # the corpus ends with four of them. Reachability walks in and the

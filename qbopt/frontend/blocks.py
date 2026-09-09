@@ -27,6 +27,7 @@ from qbopt.frontend.declen import Insn
 from qbopt.frontend.declen import decode
 from qbopt.objectfile.module import Module
 from qbopt.objectfile.module import family, defines
+from qbopt.objectfile.module import Space
 
 # Runtime routines that do not return to the byte after the call, because their
 # arguments are sitting there.
@@ -236,6 +237,21 @@ HEADER_SEARCH = 0x40
 SHORTEST_TABLE = 3
 
 
+def empty_statement_table(module: Module) -> tuple[int, int] | None:
+    """OF_STA points to an address/line table terminated by a zero word."""
+    if not has_header(module):
+        return None
+    ref = module.operands.get(0x0A)
+    if (ref is None or ref.space is not Space.SEGMENT or ref.index != module.seg
+            or module.code[0x0A:0x0C] != b"\x00\x00"):
+        return None
+    at = ref.disp
+    if (at < ENTRY or at + 2 != module.end or module.code[at:at + 2] != b"\x00\x00"
+            or any(at <= site < at + 2 for site in module.sites)):
+        return None
+    return at, at + 2
+
+
 def unexplained_tables(module: Module, fields: set[int], entry: int) -> tuple[tuple[int, int], ...]:
     """Runs of relocations no instruction accounts for, which are a table.
 
@@ -347,6 +363,10 @@ def code_map(module: Module) -> CodeMap | str:
         found = walk(module, entry)
         if isinstance(found, str):
             continue
+        if (table := empty_statement_table(module)) is not None:
+            lo, hi = table
+            found = replace(found, starts=found.starts - set(range(lo, hi)),
+                            tables=tuple(sorted({*found.tables, table})))
         dead: list[Insn] = []
         stranded = False
         for gap in found.unreached:

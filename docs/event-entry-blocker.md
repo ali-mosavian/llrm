@@ -139,6 +139,21 @@ enabled. VBDOS's handler fixture has an unexplained trailing 0000 word at
 0116, also referenced by the header's OF_STA statement-table pointer at 000a.
 Do not treat the absent VBDOS body or a refused handler as optimized success.
 
+The VBDOS trailing-word issue is now resolved. `runtime/rt/error.asm`,
+B$RESN, loads OF_STA, reads an address word and stops immediately on zero;
+otherwise it skips the following line-number word. An empty table is exactly
+one zero word. The frontend recognizes this form only when OF_STA relocates
+to the final, unrelocated zero word of this code segment. Nonempty tables
+continue through the existing table recognition path.
+
+Layout now carries named tables beyond the last instruction, rather than
+requiring an instruction to overlap their bytes. ADDRM's header fixup had
+otherwise named an address layout dropped. Before/after primary-fixture
+emitted bytes are identical with sentinel recognition disabled/enabled;
+there is no assembly speedup to report. Both timer-handler objects now have
+complete ownership partitions and stop specifically at RETA's unknown
+interface (PDS 011e, VBDOS 0111), not at missing bodies.
+
 Reproduce a baseline without changing the normal suite:
 
 ```python
