@@ -1916,3 +1916,26 @@ and `qbopt-triangular-others-3q1oerpo` under the system temporary directory.
 These are actual numerator improvements, not reference revisions; HOTLPX's
 target remains provisional, and completion still requires valid modern-compiler
 reference listings (including loop evaluation where legal).
+
+### Coalesce with the neighbour's register palette
+
+MATRIX's diagonal loop retained `mov temporary,pointer; add temporary,42;
+mov pointer,temporary`. The coalescer rejected joining them because it
+counted general-register neighbours as high-degree against the pointer's
+three-register palette. In an unpinned neighbourhood, a neighbour with fewer
+edges than its own available-register count can be coloured last. The test
+now uses that count. Pinned neighbourhoods keep the established rule.
+
+Prioritizing loop copies was tried first and did not remove the copies;
+that ordering experiment was removed. Applying the new degree test around
+pins also moved costs backwards in FPDEEP/NBODY; that expansion was removed.
+The final change reduces MATRIX by 80 modeled cycles on every compiler:
+7408/7412/7418 -> 7328/7332/7338. ARRIDX changes register assignment without
+changing cost. The other 90 primary objects and NBODY's regression object
+are byte-identical to the previous implementation (97-object comparison).
+
+Three emitted-copy regressions failed before the change and pass afterwards;
+all 16 focused coalescing tests pass. Stage dumps are at
+`/tmp/qbopt-matrix-next` and `/tmp/qbopt-matrix-palette-after`. The broader
+intermediate candidate passed 111 runtime cases; the final pinned-guard
+version is separately checked on the six changed MATRIX/ARRIDX variants.

@@ -9,6 +9,24 @@ from qbopt import coalesce
 import pytest
 
 
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_matrix_diagonal_stride_needs_no_register_copies(tag):
+    """MATRIX copied its diagonal pointer out and back on each of twenty iterations."""
+    from pathlib import Path
+    from iced_x86 import Mnemonic, OpKind
+    from qbopt import blocks, loops, module, omf, wholeseg
+
+    result = wholeseg.emitted(Path(f"fixtures/omf/matrix-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    found = module.of(omf.parse(result.data))
+    partition = blocks.partition(found, blocks.code_map(found))
+    diagonal = max(loops.loops(partition, 0x30), key=lambda loop: loop.header)
+    copies = [one for block in partition if block.at in diagonal.body for one in block.insns
+              if one.insn.mnemonic == Mnemonic.MOV
+              and one.insn.op0_kind == one.insn.op1_kind == OpKind.REGISTER]
+    assert not copies
+
+
 def test_retained_resource_identity_has_a_legal_encoding():
     """HARR's hoisted selector copy became unencodable mov es,es across a coverage gap."""
     from iced_x86 import Register

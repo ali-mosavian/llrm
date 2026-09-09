@@ -97,7 +97,13 @@ def joined(body: lir.LirBody, pinned: dict | None = None) -> lir.LirBody:
                 continue
             neighbours = (near.get(here, set()) | near.get(there, set())) - {here, there}
             k = len(allowed)
-            if len([o for o in neighbours if may.get(o, everything) & allowed and len(near.get(o, ())) >= k]) >= k:
+            # An unpinned neighbour can be coloured last if its degree is
+            # smaller than its own palette, not this merged class's palette.
+            # Keep the established test around pins, where recolouring is
+            # not free and the heterogeneous-palette argument does not apply.
+            constrained = any(value in held for value in (*neighbours, here, there))
+            if len([o for o in neighbours if may.get(o, everything) & allowed
+                    and len(near.get(o, ())) >= (k if constrained else len(may.get(o, everything)))]) >= k:
                 continue  # Briggs: the merged class would not be colourable
             # Allocation receives pins keyed by the original value ids.
             # Keep the pinned member as the class representative.
