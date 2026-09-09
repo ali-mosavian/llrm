@@ -53,6 +53,22 @@ def test_ninth_float_uses_an_owned_extended_precision_spill():
     assert answers == list(range(1, 10)) and not stack
 
 
+@pytest.mark.parametrize("width", [4, 8, 10])
+def test_live_store_uses_nonpopping_encoding_when_available(width):
+    """Exact-store reuse duplicated ST0 solely to pop the duplicate into memory."""
+    value = ir.Held(1, 10)
+    cell = ir.Mem(Addr(Space.FRAME, -16), width)
+    body = _body([
+        ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (value,), (cell,)),
+        ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cell,), (value,)),
+        ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cell,), (value,)),
+    ])
+    result = floatalloc.allocated(body)
+    assert [one.what.name for one in result.insns] == (
+        ["fld", "fst", "fstp"] if width in (4, 8) else ["fld", "fld", "fstp", "fstp"])
+    assert all(select.emit(one.what) is not None for one in result.insns)
+
+
 @pytest.mark.parametrize("boundary", ["linear", "fork", "join", "entry"])
 def test_shared_float_crosses_only_a_unique_straight_line_edge(boundary):
     """A shared sum was refused at a block edge despite one unchanged stack path."""

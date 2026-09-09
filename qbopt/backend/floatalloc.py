@@ -78,6 +78,13 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
                 for _ in range(count):
                     next_uses[value].popleft()
             missing = [value for value in used if value not in stack]
+            retained_store = (what.op is ir.Operation.FLOAT_STORE and what.name == "fstp"
+                              and len(what.sources) == len(what.dests) == 1
+                              and isinstance(what.sources[0], ir.Held)
+                              and isinstance(what.dests[0], ir.Mem) and what.dests[0].width in (4, 8)
+                              and remaining[what.sources[0].value] > used[what.sources[0].value])
+            if retained_store:
+                what = replace(what, name="fst")
             extra = 0
             match what.op:
                 case ir.Operation.FLOAT_LOAD:
@@ -85,7 +92,7 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
                 case ir.Operation.FLOAT_STORE | ir.Operation.FLOAT_ARITH | ir.Operation.FLOAT_UNARY:
                     if what.sources and isinstance(what.sources[0], ir.Held):
                         value = what.sources[0].value
-                        extra = int(remaining[value] > used[value])
+                        extra = int(not retained_store and remaining[value] > used[value])
                 case ir.Operation.FLOAT_ARITH_POP:
                     operands = [arg.value for arg in what.sources if isinstance(arg, ir.Held) and arg.width == 10]
                     extra = sum(remaining[value] > used[value] for value in operands)
@@ -139,7 +146,7 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
                 stack[0], stack[required.index] = stack[required.index], stack[0]
                 inputs = tuple(map(source, what.sources))
             if what.op in (ir.Operation.FLOAT_STORE, ir.Operation.FLOAT_ARITH, ir.Operation.FLOAT_UNARY):
-                if inputs and inputs[0] == ir.St(0) and remaining[stack[0]]:
+                if not retained_store and inputs and inputs[0] == ir.St(0) and remaining[stack[0]]:
                     if len(stack) == 8:
                         raise Unlowered("floating stack requires a spill to preserve a live value")
                     operands = (ir.St(0),)
@@ -177,7 +184,7 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
                 case ir.Operation.FLOAT_LOAD:
                     delta, slot = 1, 0
                 case ir.Operation.FLOAT_STORE:
-                    delta, slot = -1, None
+                    delta, slot = (0 if retained_store else -1), None
                     if inputs != (ir.St(0),):
                         raise Unlowered("floating stack store requires an exchange")
                 case ir.Operation.FLOAT_ARITH | ir.Operation.FLOAT_UNARY:

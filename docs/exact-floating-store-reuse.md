@@ -34,3 +34,22 @@ values, rounding, an intervening unknown operation and a same-cell write.
 98 focused floating and architecture checks pass. FPEMU, FPCSE and FPDEEP
 PDS /G2 production instruction counts are unchanged. No runtime speedup is
 claimed. Production stage dumps: `/tmp/qbopt-exact-store-stages`.
+
+## Follow-up: retain live values with a non-popping store
+
+Floating allocation now selects `fst` for a binary32/binary64 memory store
+whose input remains live. It needs neither a duplicate nor an extra stack
+slot. Extended80 stores still duplicate and pop because there is no matching
+non-popping memory encoding. The last use still pops normally.
+
+Real FPICSE, FPI2CS and FPCALC fixtures from QB, PDS and VBDOS now emit one
+`fst` and one `fstp`, with a single integer conversion. Previously their
+first store emitted `fld st(0); fstp [destination]`. Thus nine fixture
+configurations each remove one duplicate instruction. MIR is unchanged;
+the first stage difference is floating allocation.
+
+115 focused checks pass, including fail-first non-popping-store cases and
+the extended80 guard. VBDOS /G3 executions of the three programs pass all
+three cases each against their expected answers. No timing claim is made.
+Before/after stage dumps are `/tmp/qbopt-retained-store-before` and
+`/tmp/qbopt-retained-store-after`.
