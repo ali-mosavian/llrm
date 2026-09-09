@@ -58,6 +58,35 @@ def test_hoisted_variables_do_not_collide_with_promoted_cells() -> None:
     assert renamed.variable > max(one.variable for one in body.values)
 
 
+def test_hoisting_preserves_cross_variable_accumulator_edges() -> None:
+    """LNGMIX's constant-divide experiment lost its accumulator phi and folded it to zero."""
+    from qbopt import runtime
+
+    path = Path("fixtures/omf/lngmix-p-g2.obj")
+    found = corpus.loaded(path)
+    partition = corpus.partitioned(path)
+    body = mir.bodies(found, partition, runtime.for_module(found))[0][1]
+    stages = {}
+    transform.applied(
+        body,
+        found.dgroup,
+        found.calls,
+        blocks=partition,
+        found=found,
+        watch=lambda name, state: stages.setdefault(name, state),
+    )
+    body = stages["r01-segments"]
+    phi = next(phi for block in body.blocks for phi in block.phis if not phi.result.flags)
+    body = transform._reparented(body, {phi.result})
+    before = next(one for block in body.blocks for one in block.phis if one.result.id == phi.result.id)
+    expected = {at: value.id for at, value in before.incoming.items()}
+    after = transform.hoisted(body, found.dgroup, found.calls)
+    assert after != body, "the fixture must actually move invariant work"
+    carried = next((one for block in after.blocks for one in block.phis if one.result == before.result), None)
+    assert carried is not None, "hoisting discarded the existing accumulator phi"
+    assert {at: value.id for at, value in carried.incoming.items()} == expected
+
+
 def test_redundant_load_chains_keep_a_defined_return_value() -> None:
     """procs-q-O's return named a deleted intermediate reload and could not allocate."""
     from qbopt import blocks

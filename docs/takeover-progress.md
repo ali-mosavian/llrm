@@ -393,3 +393,18 @@ correctness work, not a new speedup or a full-gate result.
 Generic copy propagation plus trimming merge dependencies was tried and **reverted**: pressx printed 0 instead of 7500 on all three compilers, and some QuickBASIC runs failed to complete. Do not resurrect that shortcut. A suspected moved-store relocation defect was disproved by the emitted-object check; removing its unnecessary symbol override did not fix a runtime bug.
 
 Runtime scope explicitly excludes /V, /W event trapping and /X resumable errors; do not spend the next round inventing event interfaces. VBDOS B$ENRA remains unestablished. LLVM LICM dedicated-exit/store-dominance rules informed store sinking; LLVM/GCC references are under /Users/alim/work/other.
+# Hoisting preserves existing SSA edges
+
+Hoisting no longer reconstructs the entire body from variable numbers after
+moving invariant definitions. Their existing uses and phi edges remain valid
+when the definitions move to the dominating preheader; reconstruction discarded
+cross-variable accumulator phis. A regression on real LNGMIX MIR gives a phi
+its own variable and checks its incoming value identities survive an actual
+hoist. It failed before the fix and passes after it.
+
+Validation: nine focused hoist/fixed-point checks pass. Strict-LIR LNGMIX,
+HOTLPX and PRESSX run correctly on PDS `/G2`, QB `/O` and VBDOS `/G3` (nine
+runtime passes). Stage files: `/tmp/qbopt-hoist-ssa-20260909`. Runtime artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-hoist-ssa-6h90ojay`.
+Constant DIVMOD folding remains withdrawn; its byte-ownership issue is still
+open. No performance improvement is claimed for this correctness repair.

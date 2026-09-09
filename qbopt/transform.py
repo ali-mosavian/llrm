@@ -1917,13 +1917,10 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
     if crossed:
         moved_out = _reparented(moved_out, crossed)
 
-    # In SSA again, because the operations have moved and the phis raised
-    # with the original body no longer describe them: a load hoisted out of
-    # a loop was loop-carried and is now live once, ahead of it. Nothing
-    # after this asks the allocator anything -- every register is written
-    # down -- so a refusal here is the only way the rewrite can fail.
-    laid = mir.resolved(moved_out, calls)
-    return body if isinstance(laid, str) else laid
+    # Moving a definition to its dominating preheader preserves its SSA
+    # edges. Reconstructing by variable number loses cross-variable phis
+    # introduced by promotion and substitution, including accumulators.
+    return moved_out
 
 
 # The passes, in the order they run. One per whole-segment round, because
