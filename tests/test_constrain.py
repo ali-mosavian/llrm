@@ -24,6 +24,17 @@ def _insn(what, defines, uses, at=0x100) -> lir.Insn:
     return lir.Insn(at=at, covers=(at, at + 2), what=what, defines=defines, uses=uses, op=None)
 
 
+def test_runtime_requirement_renames_its_explicit_source():
+    """JUMPS refused emission: ON GOTO read old v20 while its required input became v143."""
+    from dataclasses import replace
+    value = ir.Held(20, 2)
+    call = replace(_insn(ir.Semantics(ir.Operation.CALL, "call", (), (value,)), (), (20,)),
+                   requires=((value, Register.AX),))
+    got, _ = constrain.constrained(_body(call))
+    result = next(one for one in got.insns if one.what.op is ir.Operation.CALL)
+    assert result.what.sources[0].value == result.uses[0]
+
+
 def _shift(count: int) -> lir.Insn:
     what = ir.Semantics(ir.Operation.BINARY, "shl", (ir.Held(9, 2),), (ir.Held(9, 2), ir.Held(count, 2)))
     return _insn(what, (9,), (9, count))

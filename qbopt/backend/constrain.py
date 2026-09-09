@@ -215,6 +215,9 @@ def _wanted(one: lir.Insn) -> dict:
     out: dict[int, tuple[object, list]] = {held.value: (register, []) for held, register in one.requires}
     if what is None:
         return out
+    for index, operand in enumerate(what.sources):
+        if isinstance(operand, ir.Held) and operand.value in out:
+            out[operand.value][1].append(("source", index))
     for where, register in target.requirements(what).items():
         side = what.dests if where.side == "dest" else what.sources
         if where.index >= len(side):
@@ -225,7 +228,8 @@ def _wanted(one: lir.Insn) -> dict:
         held, places = out.get(operand.value, (register, []))
         if held != register:
             raise Impossible(f"{one.at:#06x}: value#{operand.value} is required in two registers at once")
-        places.append((where.side, where.index))
+        if (where.side, where.index) not in places:
+            places.append((where.side, where.index))
         out[operand.value] = (register, places)
     return out
 
