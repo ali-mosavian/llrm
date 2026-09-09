@@ -13,7 +13,44 @@ class Peephole(LIRTransform):
     name = "peephole"
 
     def transform(self, body: lir.LirBody) -> lir.LirBody:
-        return waits(constants(body))
+        return waits(zeroes(constants(body)))
+
+
+def zeroes(body: lir.LirBody) -> lir.LirBody:
+    """Use XOR for zero only when later integer work replaces every arithmetic flag."""
+    blocks = []
+    for block in body.blocks:
+        flags_dead = False
+        insns = []
+        for one in reversed(block.insns):
+            what = one.what
+            if what is None or one.clobbers:
+                flags_dead = False
+            else:
+                match what:
+                    case ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg() as dest,), (ir.Imm(0, width, None),)):
+                        if (flags_dead and dest.width == width and width in {2, 4}
+                            and dest.register in target.WIDTHS and one.symbol is not True):
+                            one = replace(one, what=ir.Semantics(ir.Operation.BINARY, "xor", (dest,), (dest, dest)))
+                    case ir.Semantics(ir.Operation.COMPARE, "cmp" | "test"):
+                        flags_dead = True
+                    case ir.Semantics(ir.Operation.BINARY, "add" | "sub" | "and" | "or" | "xor"):
+                        flags_dead = True
+                    case ir.Semantics(ir.Operation.UNARY, "neg"):
+                        flags_dead = True
+                    case ir.Semantics(ir.Operation.MOVE, "mov") | ir.Semantics(ir.Operation.ADDRESS, "lea"):
+                        pass
+                    case ir.Semantics(ir.Operation.EXTEND, "movsx" | "movzx" | "cwd" | "cdq"):
+                        pass
+                    case ir.Semantics(ir.Operation.PUSH, "push") | ir.Semantics(ir.Operation.POP, "pop"):
+                        pass
+                    case ir.Semantics(ir.Operation.NOTHING, None | ""):
+                        pass
+                    case _:
+                        flags_dead = False
+            insns.append(one)
+        blocks.append(replace(block, insns=tuple(reversed(insns))))
+    return replace(body, blocks=tuple(blocks))
 
 
 _WAITING = frozenset({

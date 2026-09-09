@@ -9,6 +9,51 @@ from qbopt.model import ir, lir
 from qbopt.backend import peephole
 
 
+@pytest.mark.parametrize("following,zeroed", [("cmp", True), ("add", True),
+    ("adc", False), ("inc", False), ("shl", False), ("call", False), ("je", False)])
+def test_zeroing_requires_flags_overwritten_before_observation(following, zeroed):
+    """HARR-style zeroing is safe before CMP, but not before a carry consumer."""
+    dest = ir.Reg(Register.AX, 2)
+    first = lir.Insn(0, (0, 3), ir.Semantics(ir.Operation.MOVE, "mov", (dest,), (ir.Imm(0, 2),)), (), ())
+    last = lir.Insn(3, (3, 5), ir.Semantics(ir.Operation.COMPARE if following == "cmp" else ir.Operation.BINARY,
+                    following, (), (dest, ir.Imm(1, 2))), (), ())
+    body = lir.LirBody("zero", 0, (lir.LirBlock(0, (first, last), ()),), {}, {})
+    assert peephole.Peephole().transform(body).insns[0].what.name == ("xor" if zeroed else "mov")
+
+
+def test_harr_uses_short_zeroing_before_overwritten_flags():
+    """HARR's CX initialization cost three bytes despite ADD replacing its flags."""
+    import corpus
+    from qbopt import wholeseg
+    result = wholeseg.emitted(Path("fixtures/omf/harr-p-g2.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
+    assert "xor cx,cx" in instructions
+
+
+@pytest.mark.parametrize("variant", ["plain", "dword", "byte", "relocation", "boundary", "unknown", "clobber"])
+def test_zeroing_preserves_width_relocations_and_unknown_flag_observers(variant):
+    from qbopt.objectfile.module import Addr, Space
+    width = 4 if variant == "dword" else 1 if variant == "byte" else 2
+    register = {1: Register.AL, 2: Register.AX, 4: Register.EAX}[width]
+    dest = ir.Reg(register, width)
+    address = Addr(Space.SEGMENT, 0, 5) if variant == "relocation" else None
+    first = lir.Insn(0, (0, 3), ir.Semantics(ir.Operation.MOVE, "mov", (dest,), (ir.Imm(0, width, address),)), (), ())
+    middle = lir.Insn(3, (3, 4), ir.Semantics(ir.Operation.NOTHING, ""), (), ())
+    if variant == "unknown":
+        middle = replace(middle, what=None)
+    if variant == "clobber":
+        middle = replace(middle, clobbers=frozenset({Register.EAX}))
+    last = lir.Insn(4, (4, 6), ir.Semantics(ir.Operation.COMPARE, "cmp", (), (dest, ir.Imm(1, width))), (), ())
+    blocks = (lir.LirBlock(0, (first, middle, last), ()),)
+    if variant == "boundary":
+        blocks = (lir.LirBlock(0, (first,), (3,)), lir.LirBlock(3, (middle, last), ()))
+    result = peephole.zeroes(lir.LirBody("zero", 0, blocks, {}, {})).insns[0]
+    assert result.what.name == ("xor" if variant in {"plain", "dword"} else "mov")
+    assert result.what.dests == (dest,)
+    assert result.covers == first.covers
+
+
 @pytest.mark.parametrize("middle", ["", "mov", "fnstsw", "fninit", None, "block"])
 def test_wait_elimination_does_not_cross_observable_work(middle):
     """FPCSEX's redundant waits may disappear, but integer observers still need completion."""

@@ -1,5 +1,26 @@
 # Takeover checkpoint — 2026-09-09
 
+## Short zeroing when arithmetic flags are dead
+
+The post-allocation peephole replaces a word/dword immediate zero with a
+same-width XOR only when later work in the same block overwrites all arithmetic
+flags before observation. Calls, unknown instructions, partial flag writers,
+shifts and block boundaries stop the proof. Relocated zero operands remain
+addresses, and byte moves are left alone because XOR saves no bytes there.
+
+HARR: `mov cx,0` -> `xor cx,cx`; the later descriptor-offset ADD replaces the
+flags. Object sizes PDS/QB/VBDOS: **852/843/1036 -> 851/842/1035**. Modeled
+costs **2246/2262/2256 remain unchanged**. This is a one-byte code-generation
+improvement, not a loop-speed gain or closure of the larger target gaps.
+
+154-object comparison changes only those three HARR objects with no new
+refusals. 42 focused host checks and three strict-LIR HARR runtime comparisons
+pass. Disabling the change makes the real emitted-code regression fail.
+All-stage dumps: `/tmp/qbopt-zeroing-before`, `/tmp/qbopt-zeroing-after`;
+the adjacent prologue/peephole diff shows only the CX zeroing replacement.
+Runtime artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-zeroing-uwzzcdfn`.
+
 ## Assembly dumps expose relocation targets
 
 Stage assembly previously displayed every relocated operand as zero, hiding
