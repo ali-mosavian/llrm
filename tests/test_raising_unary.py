@@ -29,6 +29,42 @@ def test_nots_stores_whole_unary_results_without_stack_splitting(tag):
     assert not any(instruction.startswith("pop ") for instruction in instructions)
 
 
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_arith_passes_whole_results_without_splitting_them(tag):
+    """ARITH split eight long results through PUSH/POP just to push the same bytes again."""
+    result = wholeseg.emitted(Path(f"fixtures/omf/arith-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
+    assert not any(instruction.startswith("pop ") for instruction in instructions)
+
+
+@pytest.mark.parametrize("hazard", ["reversed", "same-half", "separated"])
+def test_argument_join_requires_ordered_adjacent_halves(monkeypatch, hazard):
+    """Joining low/high, duplicate halves, or separated pushes changes the argument bytes."""
+    from dataclasses import replace
+    from qbopt.frontend import raising_longs
+    path = Path("fixtures/omf/arith-p-g2.obj")
+    found = corpus.loaded(path)
+    with monkeypatch.context() as context:
+        context.setattr(raising_longs, "arguments", lambda body: body)
+        body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    block = body.blocks[0]
+    index = next(index for index, op in enumerate(block.ops[:-1])
+                 if op.kind is mir.Kind.ARG and block.ops[index + 1].kind is mir.Kind.ARG)
+    high, low = block.ops[index:index + 2]
+    match hazard:
+        case "reversed":
+            high, low = replace(high, args=low.args, uses=low.uses), replace(low, args=high.args, uses=high.uses)
+        case "same-half":
+            low = replace(low, args=high.args, uses=high.uses)
+        case "separated":
+            low = replace(low, covers=(low.covers[0] + 1, low.covers[1] + 1))
+    body = replace(body, blocks=(replace(block, ops=(*block.ops[:index], high, low, *block.ops[index + 2:])),))
+    raised = raising_longs.arguments(body)
+    kept = [op for block in raised.blocks for op in block.ops if op.at in (high.at, low.at)]
+    assert all(op in kept for op in (high, low))
+
+
 @pytest.mark.parametrize("observed", ["low-flags", "high-flags", "carry-value"])
 def test_long_negation_keeps_observed_intermediate_results(monkeypatch, observed):
     """Widening a pair must not erase flags or an independently observed intermediate."""

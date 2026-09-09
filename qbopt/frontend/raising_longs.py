@@ -6,6 +6,33 @@ from qbopt.model import ir, mir
 from qbopt.frontend import pairs
 
 
+def arguments(body: mir.MirBody) -> mir.MirBody:
+    """Rejoin high/low argument words extracted from the same whole value."""
+    definitions = {value: op for block in body.blocks for op in block.ops for value in op.defines}
+    blocks = []
+    for block in body.blocks:
+        ops = []
+        for low in block.ops:
+            high = ops[-1] if ops else None
+            if (high is not None and high.covers[1] == low.covers[0]
+                and all(op.kind is mir.Kind.ARG and not op.defines and not op.loads
+                        and not op.barrier and not op.merges and op.stack is None
+                        and len(op.args) == len(op.stores) == 1
+                        and isinstance(op.args[0], mir.Held) and op.args[0].width == 2
+                        and op.stores[0] == mir.MemRef(None, 2, space=mir.Space.STACK)
+                        for op in (high, low))):
+                source = mir.extracted_whole(high.args[0], low.args[0], definitions)
+                if source is not None:
+                    ops[-1] = replace(high, args=(source,), uses=(source.value,),
+                                      stores=(replace(high.stores[0], width=4),),
+                                      covers=(high.covers[0], low.covers[1]),
+                                      node=None, made=None, raised=None)
+                    continue
+            ops.append(low)
+        blocks.append(replace(block, ops=tuple(ops)))
+    return replace(body, blocks=tuple(blocks))
+
+
 def _negated_whole(high, low, definitions):
     """BC negates a long with NEG low, ADC high,0, NEG high."""
     if not all(isinstance(arg, mir.Held) and arg.width == 2 for arg in (high, low)):

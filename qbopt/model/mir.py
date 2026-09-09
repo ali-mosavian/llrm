@@ -2174,6 +2174,7 @@ def bodies(
             built = raising_longs.unary(built)
             # Unary recognition exposes whole sources for adjacent word stores.
             built = raising_longs.scalar(built)
+            built = raising_longs.arguments(built)
             from qbopt.frontend import raising_copies
             built = raising_copies.scalar(built, found)
             defined = module.defines(found.records, found.seg)
