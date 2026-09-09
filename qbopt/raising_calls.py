@@ -7,6 +7,11 @@ from iced_x86 import Register
 from qbopt import calls, flags, ir, mir
 
 
+def _discarded(push):
+    return mir.Op(push.at, ir.Operation.NOTHING, "", (), (),
+                  kind=mir.Kind.NOTHING, covers=push.covers, id=push.id)
+
+
 def _capture(push, arg, held):
     memory = isinstance(arg, mir.Cell)
     uses = ((arg.value,) if isinstance(arg, mir.Held) else
@@ -34,7 +39,8 @@ def _whole_memory(group):
 def arithmetic(body: mir.MirBody, found, blocks) -> mir.MirBody:
     reached = [insn for block in blocks for insn in block.insns]
     sites = calls.sites(found, reached, blocks)
-    sites = [replace(site, consume=tuple(insn for insn in reached if site.start <= insn.at < site.at))
+    sites = [replace(site, consume=tuple(insn for insn in reached
+                                       if site.start <= insn.at < site.at and insn.code in calls.PUSH_BYTES))
              if site.name in (*calls.DIVIDES, calls.MULTIPLY) and not site.consume else site for site in sites]
     live_flags = flags.live_in(blocks)
     candidates = {
@@ -92,13 +98,21 @@ def arithmetic(body: mir.MirBody, found, blocks) -> mir.MirBody:
             ):
                 continue
             pending, arguments, setup = {}, [], []
-            for group in incoming:
+            for index, group in enumerate(incoming):
+                literal = site.pushed[index] if len(site.pushed) == len(incoming) else None
+                if literal is not None and literal.kind is calls.Kind.CONSTANT:
+                    last = group[-1]
+                    held = mir.Held(fresh(last.at), 4)
+                    for push in group[:-1]:
+                        pending[id(push)] = (_discarded(push),)
+                    pending[id(last)] = (_capture(last, mir.Const(literal.value, 4), held),)
+                    arguments.append(held)
+                    continue
                 memory = _whole_memory(group)
                 if memory is not None:
                     high, low = group
                     held = mir.Held(fresh(low.at), 4)
-                    pending[id(high)] = (mir.Op(high.at, ir.Operation.NOTHING, "", (), (),
-                                               kind=mir.Kind.NOTHING, covers=high.covers, id=high.id),)
+                    pending[id(high)] = (_discarded(high),)
                     pending[id(low)] = (_capture(low, mir.Cell(memory), held),)
                     arguments.append(held)
                     continue

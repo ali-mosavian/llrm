@@ -7,6 +7,25 @@ import corpus
 from qbopt import asm, ir, mir, module, omf, pairs, transform, wholeseg, raising_calls, calls
 
 
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+@pytest.mark.parametrize("name", ["lngmix", "lngmxx"])
+def test_long_division_setup_is_not_counted_as_stack_arguments(tag, name):
+    """QB LNGMIX kept two runtime divisions per iteration because MOV/CWD setup polluted push grouping."""
+    path = Path(f"fixtures/omf/{name}-{tag}.obj")
+    found = corpus.loaded(path)
+    partition = corpus.partitioned(path)
+    body = mir.bodies(found, partition)[0][1]
+    assert not any(op.kind is mir.Kind.CALL and found.calls.get(op.at) in calls.DIVIDES
+                   for block in body.blocks for op in block.ops)
+    result = transform.applied(body, found.dgroup, found.calls, blocks=partition, found=found)
+    divisions = [op for block in result.blocks for op in block.ops if op.kind is mir.Kind.DIVMOD]
+    assert len(divisions) == (0 if name == "lngmix" else 1)
+    emitted = wholeseg.emitted(path.read_bytes())
+    assert emitted.outcome is wholeseg.Emission.LIR, emitted.reason
+    rewritten = module.of(omf.parse(emitted.data))
+    assert not calls.DIVIDES.intersection(rewritten.calls.values())
+
+
 def test_nbody_all_runtime_multiplies_are_scalar_values():
     """Nbody's classified memory multiplies remained frozen machine sites, blocking forwarding."""
     path = Path("fixtures/regressions/nbody-stack-p-g2.obj")

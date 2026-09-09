@@ -1768,3 +1768,25 @@ including NBODY's regression fixture, are byte-identical before and after.
 This is a backend capability improvement, not a benchmark improvement.
 The NBODY pressure regression and ADDRM's 1.60x gap remain open; do not
 claim copied-constant rematerialization resolved them.
+
+### QB long arithmetic: setup instructions were not pushes
+
+The QB LNGMIX/LNGMXX outlier was real retained runtime work. For classified
+call sites, raising reconstructed the argument list from every instruction
+between setup and call, including MOV/CWD. Push grouping then rejected it,
+leaving both runtime helpers in the loop. The reconstructed list now contains
+only actual pushes; setup computations remain separate MIR operations.
+Classified literal arguments retain their proven whole constant at capture,
+instead of becoming a concatenation of opaque sign-word computations.
+
+QB LNGMIX cost falls **10592 -> 306**, within 1.5x of its 210 target.
+QB LNGMXX falls **10634 -> 373**, still above target. PDS/VBDOS are unchanged:
+LNGMIX 302, LNGMXX 371. LNGMIX folds both arithmetic operations; LNGMXX
+retains one shared DIVMOD. These are model costs, not hardware speedups.
+Raw/stage evidence: `/tmp/qbopt-lngmix-q-gap`, `/tmp/qbopt-lngmix-q-pushes`,
+`/tmp/qbopt-lngmix-q-constants`.
+
+18 focused raising tests pass. Both new QB real-fixture regressions fail
+with the previous raiser; PDS/VBDOS cases already passed. Strict LIR runtime
+checks pass 147 cases across LNGMIX, LNGMXX, DIVMOD, ADDRM, NBODY and HOTLOP
+on all three compilers. Artifacts: `qbopt-runtime-arguments-cmdgbxab`.
