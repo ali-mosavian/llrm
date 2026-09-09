@@ -246,6 +246,7 @@ def subexpressions(body: MirBody) -> MirBody:
     doms = loopy.dominators(list(body.blocks), body.entry)
     order = {block.at: index for index, block in enumerate(body.blocks)}
     whole = _widths(body)
+    demanded = halves(body)
 
     seen: dict[tuple, tuple[int, int, Op]] = {}
     stands: dict[int, mir.Value] = {}  # what a name numbers as -- copies included
@@ -254,8 +255,15 @@ def subexpressions(body: MirBody) -> MirBody:
     for block in body.blocks:
         for index, op in enumerate(block.ops):
             source = _copied(op, whole)
+            if source is None and op.merges and all((value, HIGH) not in demanded for value in op.merges.values()):
+                source = _copied(replace(op, merges={}), whole)
             if source is not None:
-                stands[op.defines[0].id] = stands.get(source.id, source)
+                result = op.defines[0]
+                source = _provider(source, stands)
+                stands[result.id] = source
+                if _width(result, op) == 4 or (result, HIGH) not in demanded:
+                    swap[result.id] = source
+                    gone.add(id(op))
                 continue
             key = _computation(op, stands, whole)
             if key is None:

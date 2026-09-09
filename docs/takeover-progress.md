@@ -55,6 +55,21 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+Copy-propagation checkpoint: CSE now substitutes full-width copy values into
+their uses and removes the copies. Low-word copies are also eligible when
+the existing bit-demand analysis proves their preserved upper word unobserved;
+wide readers and partial reads of a wider source still prevent substitution.
+HARR's first CSE stage removes copies at 0x5c, 0x6b, 0x6d and 0x7b. Required
+machine moves are reintroduced downstream: modeled PDS costs remain unchanged
+for HARR, SEGLD, pressx, lngmix and matrix. This improves the MIR boundary,
+not the target scoreboard yet. Thirty-five focused checks pass; restoring the
+old copy-retention code fails the regression. Strict LIR runtime passes those
+five programs on PDS /G2, QB /O and VBDOS /G3 (15 cases). Stage evidence is in
+`/tmp/qbopt-copy-values-harr-20260909`.
+Rejected experiment: simply allowing CSE to share partial-write copies lowered
+HARR 11,494 -> 11,296 but worsened SEGLD 25,802 -> 26,604. That relaxation is
+not enabled; direct source-value propagation avoids the measured regression.
+
 Array-request checkpoint: raise recognizes DDIM/RDIM argument setup and attaches
 `ArrayRequest` to the call: symbolic descriptor, element width, dimension bounds,
 and whether it replaces an existing allocation. Recognition stays in
