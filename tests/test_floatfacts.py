@@ -11,6 +11,22 @@ from qbopt.model import mir
 from qbopt.model.floating import Format, Precision, Rounding, Semantics
 
 
+@pytest.mark.parametrize("kind,number,negative_zero,expected,expected_negative_zero", [
+    (mir.Kind.FNEG, 2, False, -2, False),
+    (mir.Kind.FABS, 2, False, 2, False),
+    (mir.Kind.FNEG, -2, False, 2, False),
+    (mir.Kind.FABS, -2, False, 2, False),
+    (mir.Kind.FNEG, 0, False, 0, True),
+    (mir.Kind.FNEG, 0, True, 0, False),
+    (mir.Kind.FABS, 0, True, 0, False),
+])
+def test_unary_facts_preserve_negation_absolute_value_and_zero_sign(kind, number, negative_zero, expected, expected_negative_zero):
+    """Conflating FABS with FNEG would number abs(2) as -2 and abs(-0) as -0."""
+    rule = Semantics((Format.EXTENDED80,), Format.EXTENDED80, Precision.EXACT, Rounding.NONE)
+    fact = floatfacts.evaluated(kind, rule, (floatfacts.Finite(Fraction(number), negative_zero),))
+    assert fact == floatfacts.Finite(Fraction(expected), expected_negative_zero)
+
+
 @pytest.mark.parametrize("bits,expected,negative_zero", [
     (0x40000000, 2, False), (0x40800000, 4, False),
     (0x3f400000, Fraction(3, 4), False), (0xc0400000, -3, False),

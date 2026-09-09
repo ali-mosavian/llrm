@@ -1233,6 +1233,7 @@ _OBSERVED = frozenset(
         mir.Kind.FMUL,
         mir.Kind.FDIV,
         mir.Kind.FNEG,
+        mir.Kind.FABS,
         mir.Kind.FCOMPARE,
     }
 )

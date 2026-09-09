@@ -408,6 +408,7 @@ class Kind(StrEnum):
     FMUL = "fmul"
     FDIV = "fdiv"
     FNEG = "fneg"
+    FABS = "fabs"
     FLOAD = "fload"
     FSTORE = "fstore"
     FCOMPARE = "fcompare"
@@ -460,7 +461,7 @@ _BY_NAME: dict[str, Kind] = {
     "fdivr": Kind.FDIV,
     "fdivrp": Kind.FDIV,
     "fchs": Kind.FNEG,
-    "fabs": Kind.FNEG,
+    "fabs": Kind.FABS,
     "fcom": Kind.FCOMPARE,
     "fcomp": Kind.FCOMPARE,
     "fcompp": Kind.FCOMPARE,

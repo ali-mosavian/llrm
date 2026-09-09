@@ -65,6 +65,10 @@ def evaluated(kind: mir.Kind, rule: Semantics, inputs: tuple[Finite, ...]) -> Fi
     match kind, inputs:
         case mir.Kind.FLOAD | mir.Kind.FSTORE, (value,):
             result = value
+        case mir.Kind.FNEG, (value,):
+            result = Finite(-value.value, not value.negative_zero if not value.value else False)
+        case mir.Kind.FABS, (value,):
+            result = Finite(abs(value.value))
         case mir.Kind.FADD | mir.Kind.FSUB, (left, right):
             right_value = right.value if kind is mir.Kind.FADD else -right.value
             value = left.value + right_value

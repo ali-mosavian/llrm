@@ -2422,3 +2422,16 @@ classification no longer lowers floating values to ask whether they are an
 instruction, and integer-pair recognition ignores typed floating operations.
 Broader nonconstant floating equivalence still needs environment/effect facts;
 the exact-value guard is not a substitute for that work.
+
+### Distinguish floating unary meanings before value numbering
+
+The raise mapped both FCHS and FABS to `FNEG`. They now raise as distinct
+`FNEG` and `FABS` kinds, so a MIR consumer need not inspect a machine
+mnemonic to distinguish negation from absolute value. Strict absolute-value
+operations remain observable to dead-code elimination. Exact finite facts
+now support both meanings, including `neg(+0) = -0`, `neg(-0) = +0`, and
+`abs(-0) = +0`. The kind-distinction regression failed with the original
+mapping; seven numeric cases failed before unary evaluation was added.
+The focused set passes 75 tests; all 97 emitted outputs remain byte-identical
+to the preceding CSE commit. This does not yet enable unrestricted
+unary CSE or change the floating-environment proof requirement.

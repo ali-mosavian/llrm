@@ -8,6 +8,15 @@ import pytest
 from qbopt.model import mir
 
 
+def test_negation_and_absolute_value_have_distinct_mir_meanings():
+    """FABS and FCHS both raised as FNEG, concealing abs(2)=2 versus -2."""
+    from qbopt.model import ir
+    argument = ir.St(0)
+    absolute = ir.Semantics(ir.Operation.FLOAT_UNARY, name="fabs", sources=(argument,), dests=(argument,))
+    negate = ir.Semantics(ir.Operation.FLOAT_UNARY, name="fchs", sources=(argument,), dests=(argument,))
+    assert mir._kind_of(absolute, (), ()) != mir._kind_of(negate, (), ())
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_single_store_is_a_rounding_boundary(tag):
     """FPCSE stores p and q as SINGLE; replacing their reloads by extended intermediates changes semantics."""
