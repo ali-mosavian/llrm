@@ -1932,7 +1932,14 @@ def overlapping(
         if _out_of_reach(one, other) or _out_of_reach(other, one):
             return False
         return _may_reach(one.where, other.where)
-    if one.base is not None and one.base == other.base and one.addr.space is other.addr.space:
+    if (
+        one.base is not None
+        and one.base == other.base
+        and one.addr.space is other.addr.space
+        and one.addr.index == other.addr.index
+        and one.segment == other.segment
+        and (one.addr.space is not Space.FAR or one.segment is not None)
+    ):
         return one.addr.disp < other.addr.disp + other.width and other.addr.disp < one.addr.disp + one.width
     return module.may_alias(one.addr, other.addr, dgroup, one.width, other.width, bounds)
 
