@@ -2,6 +2,7 @@ from dataclasses import replace
 from collections.abc import Iterator
 
 from qbopt import mir
+from qbopt import ir
 from qbopt.mir import Op
 from qbopt.mir import MirBody
 
@@ -50,6 +51,16 @@ def constructed(body: MirBody, variables: frozenset[int]) -> MirBody:
     def owned(values: tuple[mir.Value, ...]) -> tuple[mir.Value, ...]:
         return tuple(one for one in values if one.variable in variables)
 
+    edges: dict[int, dict[int, mir.Value]] = {}
+    for block in body.blocks:
+        for phi in block.phis:
+            for predecessor, value in phi.incoming.items():
+                if value.variable in variables:
+                    edges.setdefault(predecessor, {})[value.variable] = value
+
+    # Phi inputs are reads at the predecessor's end, not at the merge block.
+    probes = {at: (Op(at, ir.Operation.MOVE, "", (), tuple(names.values())),) for at, names in edges.items()}
+
     skeleton = replace(
         body,
         origin={},
@@ -71,7 +82,8 @@ def constructed(body: MirBody, variables: frozenset[int]) -> MirBody:
                         raised=None,
                     )
                     for op in block.ops
-                ),
+                )
+                + probes.get(block.at, ()),
             )
             for block in body.blocks
         ),
@@ -127,13 +139,29 @@ def constructed(body: MirBody, variables: frozenset[int]) -> MirBody:
             for block in repaired.blocks
         ),
     )
+    outgoing = {
+        block.at: {value.variable: value for value in block.ops[-1].uses}
+        for block in repaired.blocks
+        if block.at in probes
+    }
     return replace(
         body,
         blocks=tuple(
             replace(
                 block,
-                phis=block.phis + fixed.phis,
-                ops=tuple(merge(op, changed) for op, changed in zip(block.ops, fixed.ops, strict=True)),
+                phis=tuple(
+                    replace(
+                        phi,
+                        incoming={
+                            at: outgoing.get(at, {}).get(value.variable, value) for at, value in phi.incoming.items()
+                        },
+                    )
+                    for phi in block.phis
+                )
+                + fixed.phis,
+                ops=tuple(
+                    merge(op, changed) for op, changed in zip(block.ops, fixed.ops[: len(block.ops)], strict=True)
+                ),
             )
             for block, fixed in zip(body.blocks, repaired.blocks, strict=True)
         ),

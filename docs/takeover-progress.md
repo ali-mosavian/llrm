@@ -55,6 +55,13 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+Phi-edge SSA checkpoint: isolated construction now resolves existing phi inputs
+at their predecessor ends using analysis-only reads, removed from the returned
+body. The regression fails with the old constructor; 42 focused checks pass.
+This does not yet substitute strength-reduced exit phis: the outgoing counter
+may already be incremented, whereas the original product denotes the current
+iteration. Preserve that pre-increment value explicitly before wiring exit uses.
+
 Address-use checkpoint: strength reduction and isolated SSA construction now use
 one semantic substitution utility in `ssa.py`, shared with existing transforms.
 Memory operands, access lists and merge inputs stay aligned with the renamed SSA

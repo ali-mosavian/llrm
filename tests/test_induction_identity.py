@@ -4,6 +4,7 @@ import pytest
 
 from qbopt import ir
 from qbopt import mir
+from qbopt import ssa
 from qbopt import loops
 from qbopt import strength
 from qbopt import induction
@@ -231,3 +232,42 @@ def test_reduction_does_not_speculate_on_a_loop_bypass(bypass: bool) -> None:
         ),
     )
     assert (strength.reduced(built) == built) == bypass
+
+
+def test_existing_phi_inputs_follow_their_predecessor_versions() -> None:
+    initial = mir.Value(10, 0, variable=7)
+    updated = mir.Value(11, 1, variable=7)
+    joined = mir.Value(12, 2, variable=8)
+    define = mir.Op(
+        0,
+        ir.Operation.MOVE,
+        "",
+        (initial,),
+        (),
+        kind=mir.Kind.COPY,
+        args=(mir.Const(1, 2),),
+        results=(mir.Held(initial, 2),),
+    )
+    step = replace(
+        define,
+        at=1,
+        defines=(updated,),
+        uses=(initial,),
+        kind=mir.Kind.ADD,
+        args=(mir.Held(initial, 2), mir.Const(1, 2)),
+        results=(mir.Held(updated, 2),),
+    )
+    built = mir.MirBody(
+        0,
+        (
+            mir.MirBlock(0, (), (define,), (1, 2)),
+            mir.MirBlock(1, (), (step,), (2,)),
+            mir.MirBlock(2, (mir.Phi(joined, {0: initial, 1: initial}),), (), ()),
+        ),
+    )
+    result = ssa.constructed(built, frozenset({7}))
+    phi = result.blocks[2].phis[0]
+    assert phi.result == joined
+    assert phi.incoming[0] == result.blocks[0].ops[0].defines[0]
+    assert phi.incoming[1] == result.blocks[1].ops[0].defines[0]
+    assert [len(block.ops) for block in result.blocks] == [1, 1, 0]
