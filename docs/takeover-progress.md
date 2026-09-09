@@ -1140,3 +1140,24 @@ three compilers; artifacts:
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-whole-stores-8ej78xls`.
 79 focused tests pass. Memory forwarding and the remaining legacy multiply
 sites still limit value continuity; a hand-derived nbody target remains due.
+
+## Multiply sites use the scalar call-recovery path
+
+Classified B$MUI4 sites no longer enter the frozen machine-sequence path.
+They retain their original pushes through initial raising, then use the same
+scalar argument-capture and result extraction as computed multiplies. Nbody's
+real-fixture regression fails when the old route is restored.
+
+Routing alone increased cost because paired memory pushes became separate word
+loads and a concatenation. Adjacent high/low memory pushes with matching SSA
+addresses now capture one whole load, retaining the low operand's relocation.
+Separated pushes keep independent snapshots. DELTAX's full subtraction result
+now feeds its later multiply directly; the older regression checks this full
+dependency rather than insisting that a removed high-half concatenation exist.
+
+PDS nbody modeled cost falls from 517,793 to 402,593 (22.2%). Dumps:
+`/tmp/qbopt-whole-multiply`. Nbody, HARR, CHAIN and negnot pass strict LIR on
+PDS, QB and VBDOS; artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-whole-multiply-z2y54a7y`.
+This removes the remaining frozen multiply sites in nbody, not every legacy
+runtime idiom in the project. Target derivation and broader migration remain.

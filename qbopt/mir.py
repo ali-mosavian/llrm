@@ -2174,6 +2174,8 @@ def _sites(found: Module, blocks: list[Block]) -> dict:
     live = flagged.live_in(blocks)
     out = {}
     for one in found_sites:
+        if one.name == machine.MULTIPLY:
+            continue  # raising_calls recovers values at the pushes, not a frozen machine sequence.
         if not one.pushed or one.name.upper() not in _ABSORBS:
             continue
         # Only where the sequence exists. The raise and the emitter have to

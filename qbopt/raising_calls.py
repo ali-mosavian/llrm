@@ -7,13 +7,40 @@ from iced_x86 import Register
 from qbopt import calls, flags, ir, mir
 
 
+def _capture(push, arg, held):
+    memory = isinstance(arg, mir.Cell)
+    uses = ((arg.value,) if isinstance(arg, mir.Held) else
+            tuple(value for value in (arg.ref.base, arg.ref.segment) if value is not None) if memory else ())
+    return replace(push, kind=mir.Kind.LOAD if memory else mir.Kind.COPY,
+                   op=ir.Operation.MOVE, name="mov", defines=(held.value,), uses=uses,
+                   args=(arg,), results=(held,), loads=(arg.ref,) if memory else (), stores=(),
+                   made=None, raised=None, merges={}, stack=None)
+
+
+def _whole_memory(group):
+    if len(group) != 2:
+        return None
+    high, low = group
+    if (high.covers[1] != low.covers[0] or not isinstance(high.args[0], mir.Cell)
+        or not isinstance(low.args[0], mir.Cell)):
+        return None
+    upper, lower = high.args[0].ref, low.args[0].ref
+    if (lower.addr is None or lower.width != 2 or upper.width != 2
+        or replace(lower, addr=lower.addr.plus(2)) != upper):
+        return None
+    return replace(lower, width=4)
+
+
 def arithmetic(body: mir.MirBody, found, blocks) -> mir.MirBody:
-    sites = calls.sites(found, [insn for block in blocks for insn in block.insns], blocks)
+    reached = [insn for block in blocks for insn in block.insns]
+    sites = calls.sites(found, reached, blocks)
+    sites = [replace(site, consume=tuple(insn for insn in reached if site.start <= insn.at < site.at))
+             if site.name == calls.MULTIPLY and not site.consume else site for site in sites]
     live_flags = flags.live_in(blocks)
     candidates = {
         site.at: site
         for site in sites
-        if not site.pushed
+        if (not site.pushed or site.name == calls.MULTIPLY)
         and site.consume
         and site.name in (*calls.DIVIDES, calls.MULTIPLY)
         and not isinstance(calls.absorb(site, mir._flags_after(blocks, live_flags, site.start, site.end)), str)
@@ -67,27 +94,22 @@ def arithmetic(body: mir.MirBody, found, blocks) -> mir.MirBody:
                 continue
             pending, arguments, setup = {}, [], []
             for group in incoming:
+                memory = _whole_memory(group)
+                if memory is not None:
+                    high, low = group
+                    held = mir.Held(fresh(low.at), 4)
+                    pending[id(high)] = (mir.Op(high.at, ir.Operation.NOTHING, "", (), (),
+                                               kind=mir.Kind.NOTHING, covers=high.covers, id=high.id),)
+                    pending[id(low)] = (_capture(low, mir.Cell(memory), held),)
+                    arguments.append(held)
+                    continue
                 words = []
                 for push in group:
                     arg = push.args[0]
                     width = arg.ref.width if isinstance(arg, mir.Cell) else arg.width
                     value = fresh(push.at)
                     held = mir.Held(value, width)
-                    pending[id(push)] = (
-                        replace(
-                            push,
-                            kind=mir.Kind.LOAD if isinstance(arg, mir.Cell) else mir.Kind.COPY,
-                            op=ir.Operation.MOVE,
-                            name="mov",
-                            defines=(value,),
-                            results=(held,),
-                            stores=(),
-                            made=None,
-                            raised=None,
-                            merges={},
-                            stack=None,
-                        ),
-                    )
+                    pending[id(push)] = (_capture(push, arg, held),)
                     words.append(held)
                 if len(words) == 1 and words[0].width == 4:
                     arguments.append(words[0])

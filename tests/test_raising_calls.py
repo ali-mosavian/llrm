@@ -4,7 +4,33 @@ from dataclasses import replace
 import pytest
 
 import corpus
-from qbopt import asm, ir, mir, module, omf, pairs, transform, wholeseg
+from qbopt import asm, ir, mir, module, omf, pairs, transform, wholeseg, raising_calls, calls
+
+
+def test_nbody_all_runtime_multiplies_are_scalar_values():
+    """Nbody's classified memory multiplies remained frozen machine sites, blocking forwarding."""
+    path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    for at, name in found.calls.items():
+        if name != calls.MULTIPLY:
+            continue
+        op = next(op for block in body.blocks for op in block.ops if op.at == at and op.kind is mir.Kind.MUL)
+        assert op.node is None and not op.loads
+        assert len(op.results) == 1 and op.results[0].width == 4
+        assert all(isinstance(arg, mir.Held) and arg.width == 4 for arg in op.args)
+
+
+@pytest.mark.parametrize("separated", [False, True])
+def test_memory_argument_capture_requires_adjacent_pushes(separated):
+    """A separated pair must keep its original snapshots, not reread both words at the second push."""
+    low = mir.MemRef(module.Addr(module.Space.SEGMENT, 4, 5), 2)
+    high = replace(low, addr=low.addr.plus(2))
+    def push(at, ref):
+        return mir.Op(at, ir.Operation.PUSH, "push", (), (), kind=mir.Kind.ARG,
+                      args=(mir.Cell(ref),), loads=(ref,), covers=(at, at+3))
+    answer = raising_calls._whole_memory([push(0, high), push(6 if separated else 3, low)])
+    assert answer == (None if separated else replace(low, width=4))
 
 
 def test_unused_loop_clobbers_do_not_hide_nbody_division() -> None:
@@ -28,8 +54,11 @@ def test_widening_does_not_move_nbody_store_before_its_definition() -> None:
     store = next(op for op in ops if op.at == 0x150 and op.kind is mir.Kind.STORE)
     source = store.args[0].value
     assert next(index for index, op in enumerate(ops) if source in op.defines) < ops.index(store)
-    high = next(op for op in ops if op.at == 0x1cd and op.kind is mir.Kind.CONCAT and op.args[0].value.at == 0x131).args[0].value
-    assert any(high in op.defines for op in ops)
+    difference = next(op for op in ops if op.at == 0x12d and op.kind is mir.Kind.SUB)
+    multiply = next(op for op in ops if op.at == 0x1cd and op.kind is mir.Kind.MUL)
+    assert difference.results[0].width == 4
+    assert difference.results[0] in multiply.args
+    assert ops.index(difference) < ops.index(multiply)
 
 
 def test_divide_relocation_survives_index_value_replacement() -> None:
