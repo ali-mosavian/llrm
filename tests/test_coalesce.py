@@ -72,6 +72,24 @@ def test_pinned_return_cannot_absorb_an_incompatible_address_class() -> None:
     assert len(coalesce.joined(replace(body, pins={1: Register.EAX})).insns) == 3
 
 
+def test_coalescing_keeps_the_pinned_return_as_representative() -> None:
+    """nbody read FIST's result from BX, making its 100-step limit 1857."""
+    from iced_x86 import Register
+
+    body = lir.LirBody("return", 0,
+                       (lir.LirBlock(0, (_define(0, 1), _move(3, 2, 1), _use(5, 2))),), {}, {})
+    done = coalesce.joined(body, {2: Register.EAX})
+    assert done.insns[0].defines == (2,)
+    assert done.insns[-1].uses == (2,)
+    from qbopt import allocate, target
+
+    for register in (Register.EAX, Register.EBX, Register.ECX, Register.EDX):
+        pins = {2: register}
+        joined = coalesce.joined(body, pins)
+        emitted = allocate.applied(joined, allocate.allocate(joined, pins))
+        assert emitted.insns[-1].what.sources == (ir.Reg(target.named(register, 2), 2),)
+
+
 def _move(at: int, into: int, out_of: int) -> lir.Insn:
     what = ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(into, 2),), (ir.Held(out_of, 2),))
     return lir.Insn(at=at, covers=(at, at + 2), what=what, defines=(into,), uses=(out_of,), op=None)

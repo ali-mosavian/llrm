@@ -96,6 +96,10 @@ def joined(body: lir.LirBody, pinned: dict | None = None) -> lir.LirBody:
             k = len(allowed)
             if len([o for o in neighbours if len(near.get(o, ())) >= k]) >= k:
                 continue  # Briggs: the merged class would not be colourable
+            # Allocation receives pins keyed by the original value ids.
+            # Keep the pinned member as the class representative.
+            if mine_pin is not None and theirs_pin is None:
+                here, there = there, here
             parent[here] = there
             live[there] = _merged(mine, theirs)
             live.pop(here, None)
