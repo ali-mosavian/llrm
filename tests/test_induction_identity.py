@@ -14,6 +14,38 @@ from qbopt.module import Addr
 from qbopt.module import Space
 
 
+@pytest.mark.parametrize("changed", [False, True])
+def test_harr_descriptor_offset_is_read_before_inner_loop_unless_written(changed) -> None:
+    """HARR rebuilt its full pointer with an invariant descriptor read on every iteration."""
+    import corpus
+
+    path = Path("fixtures/omf/harr-p-g2.obj")
+    found = corpus.loaded(path)
+    partition = corpus.partitioned(path)
+    built = mir.bodies(found, partition)[0][1]
+    field = mir.MemRef(Addr(Space.SEGMENT, 16, found.program_data), 2)
+    if changed:
+        built = replace(
+            built,
+            blocks=tuple(
+                replace(
+                    block,
+                    ops=tuple(
+                        replace(op, stores=(field,), results=(mir.Cell(field),)) if op.at == 0x78 else op
+                        for op in block.ops
+                    ),
+                )
+                for block in built.blocks
+            ),
+        )
+    result = transform.applied(built, found.dgroup, found.calls, blocks=partition, found=found)
+    inner = next(block for block in result.blocks if block.at == 0x58)
+    assert any(mir.same_bytes(ref, field) for op in inner.ops for ref in op.loads) is changed
+    if not changed:
+        preheader = next(block for block in result.blocks if block.at == 0x52)
+        assert any(mir.same_bytes(ref, field) for op in preheader.ops for ref in op.loads)
+
+
 def test_nested_address_advances_instead_of_recomputing_row_plus_column() -> None:
     """NESTED rebuilt (row * width + column) * 2 on each of 30 inner iterations."""
     import corpus

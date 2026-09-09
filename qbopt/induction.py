@@ -222,11 +222,13 @@ def derived(
                 continue
             out.append(Derived(op, found[counter[0].value.id], _multiplier(op, by)))
     combined = {id(one.op): one for one in out}
-    combined.update({id(one.op): one for one in _composed(body, inside, found, made)})
+    combined.update({id(one.op): one for one in _composed(body, inside, found, made, settled)})
     return list(combined.values())
 
 
-def _composed(body: mir.MirBody, inside: set[int], found: dict[int, Affine], made: dict[int, mir.Op]) -> list[Derived]:
+def _composed(
+    body: mir.MirBody, inside: set[int], found: dict[int, Affine], made: dict[int, mir.Op], settled
+) -> list[Derived]:
     known = consts.known(body)
     still = invariant(body, inside)
     forms = {
@@ -242,7 +244,9 @@ def _composed(body: mir.MirBody, inside: set[int], found: dict[int, Affine], mad
             if block.at not in inside:
                 continue
             for op in block.ops:
-                if op.stores or op.loads or op.barrier or len(op.args) != 2 or not op.results:
+                if op.stores or op.barrier or len(op.args) != 2 or not op.results:
+                    continue
+                if set(op.loads) != {arg.ref for arg in op.args if isinstance(arg, mir.Cell)}:
                     continue
                 result = op.results[0]
                 if not isinstance(result, mir.Held) or result.width != 2 or result.value.id in forms:
@@ -270,7 +274,18 @@ def _composed(body: mir.MirBody, inside: set[int], found: dict[int, Affine], mad
                     offsets = first[2] + tuple((arg, coefficient * sign) for arg, coefficient in second[2])
                 elif op.kind is mir.Kind.ADD and (first is not None or second is not None):
                     recurrence, offset = (first, right) if first is not None else (second, left)
-                    if not (
+                    if isinstance(offset, mir.Cell):
+                        ref = mir._symbolic_ref(offset.ref)
+                        if (
+                            ref.addr is None
+                            or ref.base is not None
+                            or ref.segment is not None
+                            or ref.width != 2
+                            or not settled(ref)
+                        ):
+                            continue
+                        offset = mir.Cell(ref)
+                    elif not (
                         isinstance(offset, (mir.Const, mir.Held))
                         and offset.width == 2
                         and (isinstance(offset, mir.Const) or offset.value.id in still)

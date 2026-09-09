@@ -1,5 +1,22 @@
 # Takeover checkpoint — 2026-09-09
 
+## Induct the complete offset pointer, including invariant descriptor data
+
+Affine composition now accepts a proven unchanged direct cell as an additive
+offset. Strength reduction reads it in the preheader and advances the full
+offset pointer thereafter. Symbolic descriptor references are canonicalized for
+the inserted operand; no register names enter the induction analysis.
+HARR's adjusted-offset read leaves the inner loop, which advances by 42 bytes.
+The segment reload still remains in the loop.
+
+PDS modeled cost: **HARR 7130 -> 5062, 3.89x -> 2.76x**;
+**SEGLD 16896 -> 13456, 2.52x -> 2.01x**. Forty focused induction checks
+pass; the real HARR preheader-read regression fails with old analysis, and a
+descriptor-write variant keeps the read inside. Nine strict-LIR runtime
+comparisons pass (HARR/SEGLD/NESTED across p-g2/q-O/v-g3).
+Dumps: `/tmp/qbopt-invariant-pointer`; runtime artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-invariant-pointer-p8ksw05l`.
+
 ## Reuse unchanged memory-dependent computations
 
 CSE now admits explicit cell operands and checks intervening writes/barriers

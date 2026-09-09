@@ -73,7 +73,12 @@ def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | 
             one
             for one in derived
             if _answer(body, one.op) is not None
-            and (_multiplies(one, derived) or one.offsets and one.op.kind is mir.Kind.SHL)
+            and (
+                _multiplies(one, derived)
+                or one.offsets
+                and one.op.kind is mir.Kind.SHL
+                or any(isinstance(offset, mir.Cell) for offset, _ in one.offsets)
+            )
         ]
         consumed = {arg.value for one in candidates for arg in one.op.args if isinstance(arg, mir.Held)}
         candidates = [one for one in candidates if one.op.results[0].value not in consumed]
