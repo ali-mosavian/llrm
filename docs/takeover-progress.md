@@ -2494,3 +2494,22 @@ rounding-aware scalar memory recurrences and connect their exact exit values
 to existing loop evaluation, not keep adding CSE key variants that leave the
 benchmark costs unchanged. No numeric target is changed until a complete
 strict reference has been constructed and verified.
+
+### Exact evaluation of storage-rounded floating recurrences
+
+`floatfacts.repeated` now evaluates a caller-proven count of a straight-line
+MIR body against explicit entry memory facts. Each iteration has fresh local
+SSA facts and carries memory bytes forward through the ordinary alias-aware
+store transfer. Every floating operation and storage conversion must evaluate
+exactly; no summation formula, reassociation, or host float arithmetic is used.
+Unknown values/effects, calls, nonlocal addresses and inexact results refuse.
+A bounded operation budget prevents compile-time runaway.
+
+Real PDS and VBDOS FPCSE MIR bodies, seeded from their explicit pre-loop
+stores, reach SINGLE `0x43f3c000` after ten iterations. The entry map is not
+mutated. Focused cases reject 6/7, missing inputs, calls and invalid/excessive
+counts; zero iterations preserve the entry state. The 83 focused tests pass.
+Operand decoding is shared with existing scalar floating facts rather than
+duplicated. This analysis is not wired to delete a loop: its caller must prove
+the trip count and execution shape, and elimination must separately preserve
+pending-exception synchronization and observable final memory state.

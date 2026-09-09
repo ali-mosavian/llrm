@@ -114,6 +114,73 @@ def encoded(value: Finite, format: Format) -> int | None:
     return sign | ((exponent + bias) << (precision - 1)) | (int(significand) - (1 << (precision - 1)))
 
 
+def _inputs(op, integers, memory, facts):
+    if op.floating is None or len(op.args) != len(op.floating.inputs):
+        return None
+    inputs = []
+    for arg, format in zip(op.args, op.floating.inputs):
+        if isinstance(arg, mir.Held) and arg.width == 10:
+            fact = facts.get(arg.value)
+        else:
+            bits = consts._operand(op, arg, integers, memory)
+            fact = decoded(bits.n, format) if bits is not None else None
+        if fact is None:
+            return None
+        inputs.append(fact)
+    return tuple(inputs)
+
+
+def repeated(ops: tuple[mir.Op, ...], count: int, initial: consts.Cells,
+             dgroup: frozenset[int], known: dict | None = None) -> consts.Cells | None:
+    """Exact memory facts after a caller-proven repetition of a straight-line body.
+
+    Each storage conversion is evaluated in order on every iteration. This
+    proves numeric exits only, not that the loop's effects may be removed.
+    Unknown values, inexact conversions and unmodelled control flow refuse.
+    """
+    if count < 0 or count * len(ops) > 100_000:
+        return None
+    internal = {value for op in ops for value in op.defines}
+    invariant = {value: fact for value, fact in (known or {}).items() if value not in internal}
+    memory = dict(initial)
+    allowed = {mir.Kind.NOTHING, mir.Kind.COPY, mir.Kind.ADD, mir.Kind.SUB,
+               mir.Kind.INCREMENT, mir.Kind.DECREMENT}
+    for _ in range(count):
+        integers = dict(invariant)
+        floating = {}
+        for op in ops:
+            if op.barrier or op.merges:
+                return None
+            if op.floating is None:
+                if op.kind not in allowed or op.loads or op.stores or op.stack is not None:
+                    return None
+                result = consts._result(op, integers, here=memory)
+                if result is not None:
+                    for value in op.defines:
+                        if not value.flags:
+                            integers[value] = result
+                continue
+            inputs = _inputs(op, integers, memory, floating)
+            result = evaluated(op.kind, op.floating, inputs) if inputs is not None else None
+            if result is None:
+                return None
+            if op.kind is mir.Kind.FSTORE:
+                if len(op.stores) != 1:
+                    return None
+                ref = mir._symbolic_ref(op.stores[0])
+                bits = encoded(result, op.floating.result)
+                if bits is None or ref.addr is None or ref.base is not None or ref.segment is not None:
+                    return None
+                store = replace(op, kind=mir.Kind.STORE, args=(mir.Const(bits, ref.width),),
+                                stores=(ref,), uses=())
+                memory = consts._kills(memory, store, integers, dgroup, {})
+            else:
+                if op.stores or len(op.results) != 1 or not isinstance(op.results[0], mir.Held):
+                    return None
+                floating[op.results[0].value] = result
+    return memory
+
+
 def known(body: mir.MirBody, dgroup: frozenset[int], calls: dict[int, str], *, initial=None) -> dict[mir.Value, Finite]:
     """Numeric facts, optionally given independently established entry bytes."""
     integers = consts.known(body, dgroup, calls)
@@ -135,20 +202,9 @@ def known(body: mir.MirBody, dgroup: frozenset[int], calls: dict[int, str], *, i
         memory = consts.cells(shadow, dgroup, calls, integers, initial=seed)
         for block in body.blocks:
             for index, op in enumerate(block.ops):
-                if op.floating is None or len(op.args) != len(op.floating.inputs):
-                    continue
-                inputs = []
-                for arg, format in zip(op.args, op.floating.inputs):
-                    if isinstance(arg, mir.Held) and arg.width == 10:
-                        fact = facts.get(arg.value)
-                    else:
-                        bits = consts._operand(op, arg, integers, memory.get((block.at, index), {}))
-                        fact = decoded(bits.n, format) if bits is not None else None
-                    if fact is None:
-                        break
-                    inputs.append(fact)
-                else:
-                    result = evaluated(op.kind, op.floating, tuple(inputs))
+                inputs = _inputs(op, integers, memory.get((block.at, index), {}), facts)
+                if inputs is not None:
+                    result = evaluated(op.kind, op.floating, inputs)
                     if result is not None:
                         for target in op.results:
                             if isinstance(target, mir.Held) and target.width == 10 and target.value not in facts:
