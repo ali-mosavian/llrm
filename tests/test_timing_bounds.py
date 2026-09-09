@@ -17,3 +17,13 @@ def test_486_reciprocal_does_not_win_using_midpoint_multiply():
 def test_unverified_p6_forms_are_not_silently_priced():
     assert timing.signed_multiply("P6",4,full=True) is None
     assert timing.signed_divide("P6",4) is None
+
+
+def test_quotient_only_reciprocal_omits_remainder_reconstruction():
+    """A quotient-only divide should not multiply back and subtract for a dead remainder."""
+    quotient, remainder = ir.Held(2, 4), ir.Held(3, 4)
+    parts = division.reciprocal(ir.Held(1, 4), 7, (quotient, remainder), count(4).__next__, "P5", remainder=False)
+    assert parts is not None
+    assert parts[-1].dests == (quotient,)
+    assert not any(remainder in one.dests for one in parts)
+    assert not any(one.name == "sub" for one in parts)

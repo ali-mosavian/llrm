@@ -102,3 +102,24 @@ rather than irreversibly expanding before lowering. Selection is still
 conservative about register copies and does not model allocation spills or
 full superscalar scheduling. Other profiles and the multiply-chain selector
 still need the remaining timing audit; see `timing-audit.md`.
+
+For a quotient-only MIR DIVMOD, lowering now tells reciprocal selection that
+the remainder is unused. The candidate stops at the quotient and excludes
+reconstruction from its estimate. For P5 division by seven the conservative
+estimate becomes 28 rather than 36; this is still not a measured clock count.
+The otherwise generated tail is absent:
+
+```asm
+mov ecx,eax
+shl ecx,3
+sub ecx,eax
+sub ebx,ecx       ; unused remainder
+```
+
+Both-result consumers such as LNGMXX are unchanged. Do not rewrite q+r into
+x-(d-1)*q indiscriminately in MIR: native IDIV already provides the remainder,
+so that can replace one addition with a multiply and subtraction. This consumer
+combine remains an instruction-selection opportunity, not grounds for an LIR
+optimization tier. The 96-object P5 audit changes no current fixture; 23 focused
+division/driver checks pass, and the old emitted reconstruction fails the new
+quotient-only regression.

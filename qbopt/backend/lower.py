@@ -472,7 +472,8 @@ def _word_division(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]
     dividend, divisor = map(operand, op.args)
     if isinstance(op.args[1], mir.Const):
         reciprocal = division.reciprocal(dividend, op.args[1].n, tuple(map(operand, op.results)),
-                                         lowering.fresh, lowering.cpu)
+                                         lowering.fresh, lowering.cpu,
+                                         remainder=op.results[1].value.id in lowering._read)
         if reciprocal is not None:
             return reciprocal
     setup = ()

@@ -31,7 +31,7 @@ def magic(divisor: int, bits: int) -> tuple[int, int]:
     return multiplier, exponent - bits
 
 
-def reciprocal(dividend, divisor, results, fresh, cpu):
+def reciprocal(dividend, divisor, results, fresh, cpu, *, remainder=True):
     width = dividend.width
     if width != 4 or not 1 < divisor < 1 << 31:
         return None
@@ -44,16 +44,21 @@ def reciprocal(dividend, divisor, results, fresh, cpu):
     cost = lambda name: arithmetic.cost(cpu, name)
     reconstruction = (sum(cost("shift_ri" if name == "shl" else "alu_rr") for name, _ in chain)
                       if chain else timing.signed_multiply(cpu, width).maximum)
+    if not remainder:
+        reconstruction = 0
     # Materialize magic, seed multiply, preserve dividend and correction,
     # and seed reconstruction. Allocation may eliminate some of these moves.
-    estimate = (5 * cost("mov_rr") + multiply_cost.maximum + reconstruction
+    copies = 5 if remainder else 4
+    estimate = (copies * cost("mov_rr") + multiply_cost.maximum + reconstruction
                 + (1 + bool(shift)) * cost("shift_ri")
-                + (2 + (multiplier < 0)) * cost("alu_rr"))
+                + (1 + remainder + (multiplier < 0)) * cost("alu_rr"))
     if cpu == "P5":
         # Intel 241430-004 section 24.3: one clock per prefix. Every
         # dword operation needs 66h in this 16-bit code segment. Charge
         # the reserved copies too; do not assume prefix decoding overlaps.
-        estimate += 5 + 5 + (multiplier < 0) + bool(shift) + (len(chain) if chain else 1)
+        estimate += copies + 4 + remainder + (multiplier < 0) + bool(shift)
+        if remainder:
+            estimate += len(chain) if chain else 1
     direct = divide_cost.minimum
     if estimate >= direct:
         return None
@@ -71,6 +76,8 @@ def reciprocal(dividend, divisor, results, fresh, cpu):
     if shift:
         high = emit(ir.Operation.BINARY, "sar", (high, ir.Imm(shift, 1)))
     quotient = emit(ir.Operation.BINARY, "add", (high, sign), results[0])
+    if not remainder:
+        return tuple(parts)
     product = quotient
     if chain:
         for name, amount in chain:
