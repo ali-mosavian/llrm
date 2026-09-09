@@ -1558,3 +1558,21 @@ The descriptor-hoist regression now requires its read to dominate the inner
 preheader, allowing it to move farther out without weakening its memory
 dependency checks. Product-width testing disables strength reduction to
 inspect the multiply before recurrence formation eliminates it.
+
+### PRESSX reference audit and completion-report correctness
+
+PRESSX's emitted loop already has only add/inc/cmp/jle. Its apparent 2.31x
+gap comes from comparing a runtime-input program to PRESS's folded-constant
+reference. Instruction-by-instruction modeled decomposition is input 370,
+computation 226, output 114, total 710. `docs/targets.md` records the audit
+without inventing a more flattering denominator. A complete hand-derived
+PRESSX reference remains required; this does not declare PRESSX finished.
+
+The scoreboard now reports known invalid references (PRESSX, FPCSE, FPCSEX)
+as PROVISIONAL and returns failure regardless of their numerical ratio.
+Missing targets, including NBODY, also return failure with NO TARGET.
+Previously an arbitrarily cheap result or absent target could return a
+successful completion report. Four fail-first cases reproduce that defect;
+all 13 scoreboard tests now pass. Valid targets still show their measured
+ratio; HARR remains 2246/1834 in the focused CLI check. No emitted code or
+target denominator was changed in this step.

@@ -484,13 +484,20 @@ TARGETS = {
     "HG": 304,
     "FPCSE": 1340,
     "FX": 1038,
-    # A twin's target is its own program's: the loop is the same and
-    # only the operands' provenance differs, so hoisting has the same
-    # work to do and folding has none.
+    # Legacy twin denominators. Identical loop shape does not establish an
+    # identical whole-program target: PROVISIONAL_TARGETS records known
+    # invalid references without silently increasing their denominators.
     "HOTLPX": 312,
     "PRESSX": 308,
     "FPCSEX": 1340,
     "LNGMXX": 210,
+}
+
+
+PROVISIONAL_TARGETS = {
+    "PRESSX": "inherits PRESS's constant-folded target despite runtime inputs; derive its full reference",
+    "FPCSE": "reference reassociates the sum and omits SINGLE rounding",
+    "FPCSEX": "reference reassociates the sum and omits SINGLE rounding",
 }
 
 
@@ -511,10 +518,16 @@ def against_targets(paths: list[Path], raw: bool = False) -> int:
             failed = True
             continue
         cost = found.pop("cost", 0)
-        want = TARGETS.get(_program(path))
+        program = _program(path)
+        want = TARGETS.get(program)
         left = sum(count for name, count in found.items() if name.startswith(("load ", "store ", "read ")))
         if want is None:
-            print(f"  {path.stem:10s} {cost:7d} {'--':>7s} {'--':>6s}   {left}")
+            failed = True
+            print(f"  {path.stem:10s} {cost:7d} {'--':>7s} {'--':>6s}   {left}  NO TARGET")
+            continue
+        if reason := PROVISIONAL_TARGETS.get(program):
+            failed = True
+            print(f"  {path.stem:10s} {cost:7d} {want:7d} {'--':>6s}   {left}  PROVISIONAL: {reason}")
             continue
         ratio = cost / want if want else 0
         failed |= cost * 2 > want * 3

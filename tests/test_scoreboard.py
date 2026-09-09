@@ -134,3 +134,20 @@ def test_a_target_is_a_number_the_board_can_reach() -> None:
         assert want > 0, f"{program}: a target of {want} makes every ratio infinite"
     dead = {program for program in opportunity.TARGETS if program not in named}
     assert dead == UNBUILT, f"targets naming no fixture: {sorted(dead)}, expected {sorted(UNBUILT)}"
+
+
+def test_missing_target_cannot_verify_completion(monkeypatch, capsys):
+    """Nbody had no hand-derived target, yet its target report returned success."""
+    from collections import Counter
+    monkeypatch.setattr(opportunity, "counted", lambda *args: Counter(cost=1))
+    assert opportunity.against_targets([Path("nbody-p-g2.obj")]) != 0
+    assert "NO TARGET" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("program", ["pressx", "fpcse", "fpcsex"])
+def test_provisional_target_cannot_verify_completion(program, monkeypatch, capsys):
+    """PRESSX inherited a folded-constant target; FP targets changed rounding and reassociated sums."""
+    from collections import Counter
+    monkeypatch.setattr(opportunity, "counted", lambda *args: Counter(cost=1))
+    assert opportunity.against_targets([Path(f"{program}-p-g2.obj")]) != 0
+    assert "PROVISIONAL" in capsys.readouterr().out

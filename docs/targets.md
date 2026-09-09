@@ -65,6 +65,32 @@ variables that never change. This is the program that says BC does no
 register allocation across a statement: `bx` is the only value it keeps, and
 only because the four products are one expression.
 
+### PRESSX is not covered by PRESS's folded reference
+
+PRESSX reads eight runtime values and hoists four products and their sum;
+PRESS's reference above replaces them with the constant 750. Reusing 308
+for both whole programs does not establish a reference for PRESSX.
+
+The current PDS emitted program has a four-instruction loop (`add`, `inc`,
+`cmp`, `jle`), with all four multiplies outside it. Reading each emitted
+instruction under `tools/opportunity.py`'s model gives:
+
+| Region | Modeled cost |
+| --- | ---: |
+| Eight B$RDI2 calls and argument setup, plus entry NOP | 370 |
+| Initialization, invariant products, loop and entry jump | 226 |
+| Final stores, printing and termination | 114 |
+| Total | 710 |
+
+This decomposes the measured program; **it is not a new optimal target**.
+Input setup itself may improve, and the modeled helper charge is not a
+measured helper execution time. A replacement target needs its own full
+listing, including the runtime-input contract and the same accounting on
+both sides. Until then the scoreboard labels the unchanged legacy 308
+denominator PROVISIONAL, suppresses its ratio and cannot certify it as
+complete. The earlier 2.31x number is not evidence that the hot loop still
+has a comparable amount of optimization work left.
+
 ## arridx -- an array element addressed three times
 
 `a(i) = i * 3` then `t = t + a(i) + a(i)`.
