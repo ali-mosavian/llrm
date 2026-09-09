@@ -385,6 +385,17 @@ def _widths(body: MirBody) -> dict[int, int]:
             for one in op.results:
                 if isinstance(one, mir.Held):
                     out.setdefault(one.value.id, one.width)
+    changing = True
+    while changing:
+        changing = False
+        for block in body.blocks:
+            for phi in block.phis:
+                if phi.result.id in out or not phi.incoming:
+                    continue
+                widths = {out.get(value.id) for value in phi.incoming.values()}
+                if len(widths) == 1 and None not in widths:
+                    out[phi.result.id] = next(iter(widths))
+                    changing = True
     return out
 
 

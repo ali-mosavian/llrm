@@ -556,3 +556,18 @@ initialization remains a negative case. Eleven focused checks pass. Nine
 strict-LIR runtime runs pass (LNGMIX, HOTLOP, MATRIX on PDS, QB, VBDOS).
 Artifacts: `/tmp/qbopt-rotated-store-final` and
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-rotated-store-36lii9ld`.
+# Phi widths enable counter-copy propagation
+
+The CSE/copy-propagation width map previously described only operation results,
+never phi results. It now reaches a fixed point across phis whose incoming
+definitions all have the same known width. Unknown or conflicting widths stay
+unknown; demanded-high-half checks still apply before substitution.
+
+LNGMIX falls from 428 to 386 (1.84x target). The emitted loop counter now stays
+in one register through increment and comparison; its two per-iteration copies
+are gone. The positive width test failed first, the conflicting-width negative
+passes, and fifteen focused checks plus nine strict-LIR runtime runs pass
+(LNGMIX, HOTLOP, MATRIX across PDS, QB, VBDOS).
+Artifacts: `/tmp/qbopt-phi-width-final` and
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-phi-width-99x3f49l`.
+Two temporary stack stores and the split-word accumulator arithmetic remain.
