@@ -90,3 +90,19 @@ compile logs report zero severe errors. 98 focused checks pass; the three
 fixture regressions and four arithmetic-order cases fail with their respective
 changes disabled. Dumps: `/tmp/qbopt-float-arithmetic-False` (before) and
 `/tmp/qbopt-float-arithmetic-final` (after).
+
+### Stack-order selection
+
+Allocation now chooses the normal or reversed popping form from the current
+operand positions. If the right operand is already on top, it need not be
+exchanged with the left before arithmetic. Subtraction and division select
+their corresponding non-reversed forms to retain the original operand order.
+
+FPCSE's final `faddp st(2),st(0); fxch; faddp` is now simply
+`faddp st(2),st(0); faddp`. The earlier exchange before division remains.
+The PDS object shrinks another three bytes, 925 to 922, with the software-FP
+protocol intact. All three fixture configurations assert one exchange, not
+two. Eight allocator cases cover both stack orders and all four arithmetic
+operations; the four right-on-top cases failed before this change.
+61 focused checks pass, and VBDOS FPCSE still prints the expected answer.
+Stage dumps: `/tmp/qbopt-float-stack-order`.

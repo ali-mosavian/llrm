@@ -144,6 +144,7 @@ def test_stored_fpcse_products_feed_additions_without_memory_reads(tag):
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
     assert sum(one.split()[0] == "faddp" for one in instructions) == 2
+    assert sum(one.split()[0] == "fxch" for one in instructions) == 1
 
 
 @pytest.mark.parametrize("change", ["unknown_effect", "barrier", "alias", "rounding"])

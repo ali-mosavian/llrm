@@ -77,9 +77,11 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
                 and len(what.sources) == 2
                 and all(isinstance(arg, ir.Held) and arg.width == 10 for arg in what.sources)
                 and what.sources[0] != what.sources[1] and remaining[what.sources[1].value] == 1):
-                names = {"fadd": "faddp", "fmul": "fmulp", "fsub": "fsubrp", "fdiv": "fdivrp"}
-                what = replace(what, op=ir.Operation.FLOAT_ARITH_POP, name=names[what.name],
-                               sources=what.sources[::-1])
+                reverse = not stack or stack[0] != what.sources[1].value
+                names = {"fadd": ("faddp", "faddp"), "fmul": ("fmulp", "fmulp"),
+                         "fsub": ("fsubp", "fsubrp"), "fdiv": ("fdivp", "fdivrp")}
+                what = replace(what, op=ir.Operation.FLOAT_ARITH_POP, name=names[what.name][reverse],
+                               sources=what.sources[::-1] if reverse else what.sources)
             used = Counter(arg.value for arg in what.sources if isinstance(arg, ir.Held) and arg.width == 10)
             for value, count in used.items():
                 for _ in range(count):
