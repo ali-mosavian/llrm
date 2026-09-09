@@ -58,6 +58,16 @@ def test_evk1_user_definition_overrides_runtime_alias() -> None:
     assert runtime.per_call({0: "B$EVK1"}, "pds71", frozenset({"B$EVK1"}))[0] == runtime.own("B$EVK1")
 
 
+@pytest.mark.parametrize("family", ["pds71", "vbdos"])
+@pytest.mark.parametrize("name", ["B$ONTA", "B$ETT0", "B$ETT1", "B$ETT2"])
+def test_timer_interfaces_bound_inputs_without_claiming_preservation(family, name) -> None:
+    """The real timer-handler witness refused at B$ONTA before registration."""
+    routine = runtime.per_call({0: name}, family)[0]
+    assert routine.inputs == frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI})
+    assert replace(routine, inputs=None, evidence=runtime.worst(name).evidence) == runtime.worst(name)
+    assert runtime.per_call({0: name})[0] == runtime.worst(name)
+
+
 @pytest.mark.parametrize("tag", ["p-evt", "v-evt"])
 def test_event_stub_near_call_has_no_register_arguments(tag: str) -> None:
     """ADDRM /V refused at 0048 before its first statement could execute."""

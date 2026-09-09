@@ -198,6 +198,23 @@ SLOTS: tuple[Reg, ...] = tuple(Reg)
 # VBDOS stays at the worst case.
 VARIANTS: "dict[tuple[str, str], Contract]" = {}
 
+for _family in ("pds71", "vbdos"):
+    for _name in ("B$ONTA", "B$ETT0", "B$ETT1", "B$ETT2"):
+        VARIANTS[(_name, _family)] = replace(
+            worst(_name),
+            inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
+            evidence=(
+                "BCL71ENR.LIB/VBDCL10E.LIB evttim.asm: ONTA at 002e/002f "
+                "executes OR AX,DX at 003b/003c before every branch or call; "
+                "ETT0/1/2 converge on XOR BL,BL at 0023/0024 before EVNT_SET. "
+                "Incoming arithmetic flags cannot reach a dependency. Bound inputs "
+                "by all six allocatable GP registers; segments, BP/SP and direction "
+                "are runtime environment. No transitive preservation, cleanup, "
+                "memory or control claim: error paths and indirect dependencies "
+                "remain worst-case. See docs/event-entry-blocker.md."
+            ),
+        )
+
 for _family in ("qb45", "pds71", "vbdos"):
     VARIANTS[("B$FCMD", _family)] = replace(
         worst("B$FCMD"),

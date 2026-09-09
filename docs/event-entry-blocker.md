@@ -84,6 +84,22 @@ not permission to assume the complete transitive contract. B$RETA's event
 continuation and handler reachability also need verification before this
 fixture can become a passing optimized runtime regression.
 
+Timer setup now has a conservative family-scoped input bound. Shipped ONTA
+executes `or ax,dx` before every branch or call (PDS 003b, VBDOS 003c);
+ETT0/1/2 converge on `xor bl,bl` before EVNT_SET (0023/0024). Thus incoming
+arithmetic flags do not reach dependencies. All six allocatable GP registers
+remain declared inputs rather than claiming that the routines use none.
+Memory, clobbers, cleanup and control remain at the worst case. In particular,
+the visible ONTA `retf 8` alone does not settle its error-path stack contract.
+The dependency-aware report still has unresolved error and indirect paths.
+
+With this bound, the witness advances from ONTA at 0063 to an unestablished
+B$RETA interface at 011e. Its PDS `gosub.asm` entry at 0029 decrements
+`[bp-12h]`, pops three words, and takes an event-specific path when the third
+is zero. It is not an ordinary call returning to the following instruction;
+do not resolve this refusal by assigning an ordinary return contract.
+No optimized bytes or handler runtime result are claimed yet.
+
 Reproduce a baseline without changing the normal suite:
 
 ```python
