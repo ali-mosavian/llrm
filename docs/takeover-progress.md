@@ -1601,3 +1601,36 @@ checks, LNGMIX) passed through strict LIR on all three compilers. Artifacts:
 `qbopt-memory-constants-o7e3tm7t` in system temporary storage. Stage dumps:
 `/tmp/qbopt-spill-next`, `/tmp/qbopt-spill-byte-facts`,
 `/tmp/qbopt-spill-constant-operands`.
+
+### SPILL: promote fields initialized by a packed store
+
+Promotion now chooses the width of each cell's reads and can capture a
+fully covered field of a wider constant initializer. The original memory
+store remains intact, including neighboring bytes. Exact-width stores still
+capture their complete value, including when a narrower field is captured
+beside them; unknown overlapping writes invalidate the narrow field's
+availability. Unsupported partial updates remain in memory.
+
+`consts.initialized` provides the same contained-value proof to promotion
+and loop store sinking. The latter can therefore establish the accumulator's
+entry value even when its zero was part of a wider initializer, and move
+the write-back out of both loops. No machine register is selected by this
+work. SPILL's inner loop now contains two immediate adds, increment,
+compare and branch, with no memory reads or writes. Final global stores
+remain before output calls.
+
+SPILL's PDS/QB/VBDOS modeled costs fall from 2806/2812/2816 to
+**1410/1416/1420**, or **1.26x/1.26x/1.27x** against 1122. All three primary
+variants now meet the target. Stage directories:
+`/tmp/qbopt-spill-promoted` (before the store-sinking proof) and
+`/tmp/qbopt-spill-promoted-sunk` (after it).
+
+The three real-fixture loop-memory regressions failed before the change.
+Promotion, constant-cell and induction tests: 83 passed, including a shared
+wide/narrow capture and an unknown overlapping write. The older HOTLOP
+initializer-preservation test was corrected to find its packed initializer
+and still requires that exact original store to remain after promotion.
+Strict LIR runtime checks passed on all three compilers for SPILL, HOTLOP,
+NESTED, MATRIX, HARR, NBODY and LNGMIX; artifacts are
+`qbopt-packed-promotion-762zykcv` in system temporary storage. This verifies
+those programs, not the full corpus or project goal.

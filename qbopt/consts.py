@@ -99,6 +99,17 @@ def _put(op: mir.Op, known: dict[mir.Value, Known]) -> Known | None:
     return known[from_value[0]] if len(from_value) == 1 else None
 
 
+def initialized(op: mir.Op, ref: mir.MemRef) -> Known | None:
+    """The complete value a direct constant store writes to a contained cell."""
+    if op.kind is not mir.Kind.STORE or op.loads or op.barrier or len(op.stores) != 1:
+        return None
+    written = mir._symbolic_ref(op.stores[0])
+    if written.addr is None or written.base is not None or written.segment is not None:
+        return None
+    fact = _put(op, {})
+    return _cell({(written.addr, written.width): fact}, ref) if fact is not None else None
+
+
 def _fragments(ref: mir.MemRef, fact: Known) -> Cells:
     return {(ref.addr.plus(offset), 1): Known((fact.n >> (offset * 8)) & 255, 1)
             for offset in range(min(ref.width, fact.width))}

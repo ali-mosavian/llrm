@@ -7,10 +7,12 @@ register allocator can keep that value across statements. Unlike LLVM's
 local allocas, these cells can be visible outside this body: every store
 stays in place. Removing stores needs a separate proof of observability.
 
-**Which cells.** A fixed address in the program's own data, at one width.
+**Which cells.** A fixed address in the program's own data, read at one width.
 A read reuses the stored value only when it is available along every
 incoming path. Any possibly aliasing write invalidates that availability;
-a later direct store establishes it again. Runtime calls use the same
+a later direct store establishes it again. A wider constant initializer
+can establish each fully covered field without splitting the actual store.
+Runtime calls use the same
 memory-effect contracts as the rest of the alias analysis.
 
 Direct loads, stores and selected integer arithmetic reads are supported;
@@ -30,6 +32,7 @@ from dataclasses import replace
 from qbopt import mir
 from qbopt import ssa
 from qbopt import loops
+from qbopt import consts
 from qbopt.mir import Op
 from qbopt.mir import MirBody
 from qbopt.module import Space
@@ -64,9 +67,9 @@ def promotable(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict
     """Cells whose reads can use a known stored value, by address.
 
     Touched more than once, because promoting a cell read or written once
-    removes no work. At one width, because a long stored as two words and
-    read as one is two variables in the same place and this does not model
-    that. Availability excludes reads after intervening aliasing writes.
+    removes no work. Reads must agree on one width. Exact stores and wider
+    constant initializers can establish that value; arbitrary partial
+    writes cannot. Availability excludes reads after intervening aliasing writes.
     """
     every = [one for block in body.blocks for op in block.ops for one in (*op.loads, *op.stores)]
     read = {ref.addr for block in body.blocks for op in block.ops for ref in op.loads}
@@ -76,12 +79,15 @@ def promotable(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict
         if one.addr is None or one.base is not None or one.addr.space is not Space.SEGMENT:
             continue
         seen[one.addr] += 1
-        widths.setdefault(one.addr, set()).add(one.width)
+    for block in body.blocks:
+        for op in block.ops:
+            for ref in op.loads:
+                widths.setdefault(ref.addr, set()).add(ref.width)
 
     candidates = {
         addr: next(iter(widths[addr]))
         for addr, times in seen.items()
-        if times > 1 and len(widths[addr]) == 1 and addr in read
+        if times > 1 and addr in read and len(widths[addr]) == 1
     }
     usable = _available(body, candidates, dgroup, bounds)
     used = {ref.addr for block in body.blocks for op in block.ops if id(op) in usable for ref in op.loads}
@@ -98,6 +104,16 @@ def _cell(op: Op) -> mir.MemRef | None:
     return None
 
 
+def _initializers(op: Op, cells: dict) -> dict:
+    """Narrow cells fully initialized by a wider constant store that remains intact."""
+    cell = _cell(op)
+    if (op.kind is not mir.Kind.STORE or op.barrier or cell is None or cell.addr is None
+        or cell.segment is not None or cell.addr.space is not Space.SEGMENT):
+        return {}
+    return {addr: known for addr, width in cells.items() if width < cell.width
+            and (known := consts.initialized(op, mir.MemRef(addr, width))) is not None}
+
+
 def _available(body: MirBody, cells: dict, dgroup: frozenset[int], bounds: dict | None) -> set[int]:
     """Reads reached by a stored value on every path, without an intervening aliasing write."""
     reachable = {at for at, doms in loops.dominators(body.blocks, body.entry).items() if doms}
@@ -112,15 +128,18 @@ def _available(body: MirBody, cells: dict, dgroup: frozenset[int], bounds: dict 
     def through(block: mir.MirBlock, available: set, reads: set[int] | None = None) -> set:
         for op in block.ops:
             cell = _cell(op)
-            if reads is not None and op.loads and cell is not None and cell.addr in available:
+            if (reads is not None and op.loads and cell is not None and cell.addr in available
+                and cell.width == cells[cell.addr]):
                 reads.add(id(op))
             available.difference_update(
                 addr
                 for addr, ref in refs.items()
                 if any(mir.overlapping(ref, written, dgroup, bounds) for written in op.stores)
             )
-            if op.kind is mir.Kind.STORE and cell is not None and cell.addr in cells:
+            if (op.kind is mir.Kind.STORE and cell is not None and cell.addr in cells
+                and cell.width == cells[cell.addr]):
                 available.add(cell.addr)
+            available.update(_initializers(op, cells))
         return available
 
     while True:
@@ -179,6 +198,23 @@ def promoted(
     for block in body.blocks:
         ops = []
         for op in block.ops:
+            initialized = _initializers(op, found)
+            if initialized:
+                ops.append(op)
+                exact = _instead(op, holds, found, fresh)
+                if exact is not None:
+                    fresh += 1
+                    ops.append(replace(exact, node=None, made=None, id=None, covers=(op.at, op.at),
+                                       extra_covers=(), symbol=False))
+                for addr, fact in initialized.items():
+                    value = mir.Value(fresh, op.at, variable=holds[addr], version=1)
+                    fresh += 1
+                    ops.append(replace(op, kind=mir.Kind.COPY, name="mov", defines=(value,), uses=(),
+                        loads=(), stores=(), merges={}, args=(mir.Const(fact.n, fact.width),),
+                        results=(mir.Held(value, fact.width),), node=None, made=None, raised=None,
+                        id=None, covers=(op.at, op.at), extra_covers=(), symbol=False))
+                changed = True
+                continue
             if op.loads and id(op) not in usable:
                 ops.append(op)
                 continue
@@ -253,7 +289,7 @@ def _instead(op: Op, holds: dict, found: dict, fresh: int) -> "Op | None":
     and a half-rewritten body reads stale memory.
     """
     cell = _cell(op)
-    if cell is None or cell.addr not in holds:
+    if cell is None or cell.addr not in holds or cell.width != found[cell.addr]:
         return None
     addr = cell.addr
     width = found[addr]

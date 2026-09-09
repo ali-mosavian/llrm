@@ -4,6 +4,7 @@ from qbopt import loops
 from qbopt import mir
 from qbopt import induction
 from qbopt import ranges
+from qbopt import consts
 from qbopt.module import Space
 
 
@@ -120,6 +121,10 @@ def _exit_value(
             if previous.barrier or previous.kind in {mir.Kind.CALL, mir.Kind.ESCAPE, mir.Kind.OPAQUE}:
                 return False
             if any(mir.overlapping(ref, written, dgroup, bounds) for written in previous.stores):
+                if isinstance(expected, mir.Const):
+                    fact = consts.initialized(previous, ref)
+                    if fact == consts.Known(consts.masked(expected.n, expected.width), expected.width):
+                        return True
                 args = [arg for arg in previous.args if isinstance(arg, (mir.Const, mir.Held))]
                 return (
                     previous.kind is mir.Kind.STORE

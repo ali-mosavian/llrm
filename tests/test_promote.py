@@ -77,11 +77,13 @@ def test_hotlop_keeps_initialization_for_memory_arithmetic() -> None:
     body = mir.bodies(found, blocks.partition(found, mapped))[0][1]
     multiply = next(op for block in body.blocks for op in block.ops if op.at == 0x4B)
     cell = multiply.loads[0]
-    stores = [op for block in body.blocks for op in block.ops if cell in op.stores]
+    from qbopt import consts
+    stores = [op for block in body.blocks for op in block.ops
+              if consts.initialized(op, cell) == consts.Known(7, 2)]
     assert stores
     result = promote.promoted(body, found.dgroup, module.landmarks(found))
     remaining = [op for block in result.blocks for op in block.ops]
-    assert all(any(op.at == before.at and cell in op.stores for op in remaining) for before in stores)
+    assert all(before in remaining for before in stores)
 
 
 def test_hotlop_multiply_uses_the_initialized_value() -> None:
@@ -148,3 +150,45 @@ def test_only_an_intervening_call_invalidates_a_stored_value(position: int, reus
     result = promote.promoted(body, found.dgroup, module.landmarks(found))
     load = next(op for op in result.blocks[0].ops if op.at == load.at)
     assert bool(load.loads) is not reused
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_spill_accumulator_is_a_loop_carried_value(tag):
+    """SPILL's packed zero initializer prevented promotion of t across its hundred inner iterations."""
+    from qbopt import transform, loops
+    path = Path(f"fixtures/omf/spill-{tag}.obj")
+    found = module.of(omf.parse(path.read_bytes()))
+    partition = blocks.partition(found, blocks.code_map(found))
+    body = mir.bodies(found, partition)[0][1]
+    result = transform.applied(body, found.dgroup, found.calls, blocks=partition, found=found)
+    inner = {at for loop in loops.loops(result.blocks, result.entry)
+             if not any(other.body < loop.body for other in loops.loops(result.blocks, result.entry))
+             for at in loop.body}
+    assert not any(op.loads or op.stores for block in result.blocks if block.at in inner for op in block.ops)
+
+
+def test_packed_capture_keeps_wide_and_narrow_definitions_and_rejects_unknown_overlap():
+    """Capturing one field must not lose the whole store or reuse a field after an unknown wide write."""
+    from qbopt import ir
+    from qbopt.module import Addr, Space
+    address = Addr(Space.SEGMENT, 6, 5)
+    whole = mir.MemRef(address, 4)
+    half = mir.MemRef(address.plus(2), 2)
+    first = mir.Op(0, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.STORE,
+                   args=(mir.Const(0x12345678, 4),), stores=(whole,), covers=(0, 8))
+    def load(at, ref):
+        result = mir.Value(at, at, variable=at, version=1)
+        return mir.Op(at, ir.Operation.MOVE, "mov", (result,), (), kind=mir.Kind.LOAD,
+                      args=(mir.Cell(ref),), results=(mir.Held(result, ref.width),), loads=(ref,), covers=(at, at+2))
+    incoming = mir.Value(100, 0, variable=100, version=1)
+    overwrite = mir.Op(14, ir.Operation.MOVE, "mov", (), (incoming,), kind=mir.Kind.STORE,
+                       args=(mir.Held(incoming, 4),), stores=(whole,), covers=(14, 18))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (first, load(8, whole), load(10, half),
+                      overwrite, load(18, half)), ()),))
+    result = promote.promoted(body, frozenset({5}))
+    ops = result.blocks[0].ops
+    assert first in ops and overwrite in ops
+    assert not next(op for op in ops if op.at == 8).loads
+    assert not next(op for op in ops if op.at == 10).loads
+    assert next(op for op in ops if op.at == 18).loads == (half,)
+    captures = [op for op in ops if op.at == 0 and op.kind is mir.Kind.COPY]
+    assert {op.results[0].width for op in captures} == {2, 4}
