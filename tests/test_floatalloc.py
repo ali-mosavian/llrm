@@ -5,6 +5,7 @@ import pytest
 from qbopt.backend import floatalloc, select
 from qbopt.model import ir, lir
 from qbopt.objectfile.module import Addr, Space
+from dataclasses import replace
 
 
 def _body(operations):
@@ -13,6 +14,36 @@ def _body(operations):
         tuple(arg.value for arg in what.sources if isinstance(arg, ir.Held)))
         for index, what in enumerate(operations))
     return lir.LirBody("floating", 0, (lir.LirBlock(0, insns),), {}, {})
+
+
+@pytest.mark.parametrize("boundary", ["linear", "fork", "join", "entry"])
+def test_shared_float_crosses_only_a_unique_straight_line_edge(boundary):
+    """A shared sum was refused at a block edge despite one unchanged stack path."""
+    from qbopt.backend.lower import Unlowered
+    shared, product, quotient = (ir.Held(index, 10) for index in (1, 2, 3))
+    cell = ir.Mem(Addr(Space.FRAME, -4), 4)
+    body = _body([
+        ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (shared,), (cell,)),
+        ir.Semantics(ir.Operation.FLOAT_ARITH, "fmul", (product,), (shared, cell)),
+        ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cell,), (product,)),
+        ir.Semantics(ir.Operation.FLOAT_ARITH, "fdiv", (quotient,), (shared, cell)),
+        ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cell,), (quotient,)),
+    ])
+    first = lir.LirBlock(0, body.insns[:3], (24, 80) if boundary == "fork" else (24,))
+    second = lir.LirBlock(24, body.insns[3:], ())
+    blocks = (first, second)
+    if boundary in {"fork", "join"}:
+        blocks += (lir.LirBlock(80, (), (24,) if boundary == "join" else ()),)
+    body = replace(body, entry=24 if boundary == "entry" else 0, blocks=blocks)
+    if boundary != "linear":
+        with pytest.raises(Unlowered):
+            floatalloc.allocated(body)
+        return
+    allocated = floatalloc.allocated(body)
+    assert [one.what.name for one in allocated.blocks[0].insns] == ["fld", "fld", "fmul", "fstp"]
+    assert [one.what.name for one in allocated.blocks[1].insns] == ["fdiv", "fstp"]
+    assert allocated.blocks[1].insns[0].what.sources == (ir.St(0), cell)
+    assert all(select.emit(one.what) is not None for one in allocated.insns)
 
 
 @pytest.mark.parametrize("width", [2, 4])

@@ -15,14 +15,30 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
                 if isinstance(arg, ir.Held) and arg.width == 10}
     if not floating:
         return body
-    blocks = []
+    predecessors = {block.at: set() for block in body.blocks}
     for block in body.blocks:
+        for successor in block.succ:
+            if successor in predecessors:
+                predecessors[successor].add(block.at)
+    continues = {
+        index for index, (block, following) in enumerate(zip(body.blocks, body.blocks[1:]))
+        if block.succ == (following.at,) and predecessors[following.at] == {block.at}
+        and following.at != body.entry
+    }
+    blocks = []
+    stack: list[int] = []
+    remaining = Counter()
+    for index, block in enumerate(body.blocks):
         if any(phi.result in floating or any(value in floating for _, value in phi.incoming)
                for phi in block.phis):
             raise Unlowered("floating phi requires cross-block allocation")
-        stack: list[int] = []
-        remaining = Counter(arg.value for one in block.insns if one.what for arg in one.what.sources
-                            if isinstance(arg, ir.Held) and arg.width == 10)
+        if index - 1 not in continues:
+            end = index
+            while end in continues:
+                end += 1
+            remaining = Counter(arg.value for member in body.blocks[index:end + 1]
+                                for one in member.insns if one.what for arg in one.what.sources
+                                if isinstance(arg, ir.Held) and arg.width == 10)
         insns = []
         for one in block.insns:
             what = one.what
@@ -149,7 +165,7 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
                 uses=tuple(value for value in one.uses if value not in floating),
                 defines=tuple(value for value in one.defines if value not in floating),
                 widths=tuple((value, width) for value, width in one.widths if value not in floating)))
-        if stack:
+        if stack and index not in continues:
             raise Unlowered("floating stack live-out requires cross-block allocation")
         blocks.append(replace(block, insns=tuple(insns)))
     return replace(body, blocks=tuple(blocks))

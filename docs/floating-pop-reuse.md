@@ -29,3 +29,30 @@ checks: 57 pass. A 154-object audit including the primary corpus and floating
 regressions changes no emitted object or emission outcome. Therefore current
 program metrics and before/after production assembly are unchanged; this
 removes an allocation blocker for future valid FP value reuse.
+
+## Straight-line block edges
+
+The allocator now retains its stack across adjacent blocks when the predecessor
+has exactly that successor, the successor has exactly that predecessor, and
+the successor is not the function entry. Remaining-use counts cover the whole
+linear region, so a use in the next block causes the producer to be preserved
+before an earlier destructive operation. No boundary reload or store is added.
+
+Before, a shared sum consumed by multiplication in one block and division in
+its uniquely connected successor was unavailable at the division. After:
+
+```asm
+; first block
+fld dword [input]
+fld st(0)           ; preserve the shared value for the successor
+fmul dword [factor]
+fstp dword [product]
+; unique successor: the original value is still ST(0)
+fdiv dword [factor]
+fstp dword [quotient]
+```
+
+The fail-first case verifies the selected sequence; fork, join and entry-edge
+variants remain refused. This does not implement floating PHIs, loop-carried
+stack assignments, arbitrary block ordering or spills. Calls and unmodelled
+operations remain barriers. The focused allocation/selection set has 61 passes.
