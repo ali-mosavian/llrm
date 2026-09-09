@@ -149,6 +149,7 @@ def cells(
     dgroup: frozenset[int],
     calls: dict[int, str],
     known: dict[mir.Value, Known] | None = None,
+    *, initial: Cells | None = None,
 ) -> dict[tuple[int, int], Cells]:
     """What each memory cell holds before each operation, where it is a number.
 
@@ -169,8 +170,10 @@ def cells(
 
     def entering(at: int) -> Cells | None:
         if not preds[at]:
-            return {}
+            return dict(initial or {}) if at == body.entry else {}
         seen = [outof[one] for one in preds[at] if outof[one] is not None]
+        if at == body.entry:
+            seen.append(initial or {})
         if not seen:
             return None
         return {where: fact for where, fact in seen[0].items() if all(one.get(where) == fact for one in seen[1:])}

@@ -2351,3 +2351,28 @@ would not be modelling its strict path.
 the evidence, and next proof obligations. This changes the next implementation
 step to exact finite-value analysis rather than blanket floating CSE. No
 compiler source changed and no tests were repeated for this evidence audit.
+
+### Exact finite floating value analysis
+
+`analysis.floatfacts` decodes normal finite binary32/binary64 bit patterns
+and signed integers using integers and rational arithmetic. Signed zero is
+retained; NaNs, infinities and subnormal storage inputs are not accepted as
+these facts. Arithmetic is reported exact only if its result fits every
+supported dynamic precision (24/53/64 significant bits) within the extended
+exponent range. Cancellation with rounding-dependent zero sign, inexact
+division, overflow/underflow and inexact destination conversions stay unknown.
+
+The analysis consumes existing SSA and memory facts and propagates exactly
+representable floating stores through an analysis-only memory transfer view.
+It does not rewrite MIR. Independently established entry bytes can be supplied;
+they are subject to normal write/call invalidation, not treated as immutable.
+FPCSE reaches 6, 48 and 3/4 on all three compiler fixtures. QB requires explicit
+constant-pool entry bytes because it loads initializers from BC_CN instead of
+writing immediate bits; production optimization does not assume those bytes.
+
+All three fixture tests fail with the analysis disabled. The focused set
+passes 121 tests, and all 97 emitted-object hashes/outcomes remain unchanged.
+Stage dumps expose exact numeric values (without assuming pool contents) in
+`/tmp/qbopt-fpcse-exact-facts`. These are numeric proofs, not permission to
+discard pending exceptions, synchronization, or floating-environment effects.
+Connecting them to a sound reusable-operation proof is still required.

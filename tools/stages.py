@@ -272,6 +272,8 @@ def _mir(bodies, found=None, verbose: bool = False, debug=None) -> None:
         cells = Cells(debug)
         depth = _depth(body)
         floats = fpstack.readings(body)
+        from qbopt.analysis import floatfacts
+        exact = floatfacts.known(body, found.dgroup, calls) if found is not None else {}
         for block in body.blocks:
             pad = "  " * depth.get(block.at, 0)
             succ = ", ".join(f"{one:#x}" for one in block.succ) or "-"
@@ -292,6 +294,9 @@ def _mir(bodies, found=None, verbose: bool = False, debug=None) -> None:
                     inputs = ",".join(rule.inputs)
                     values += (f"  ; {inputs} -> {rule.result}; precision={rule.precision}"
                                f" rounding={rule.rounding} exceptions={rule.exceptions}")
+                    numeric = [exact[arg.value] for arg in op.results if isinstance(arg, mir.Held) and arg.value in exact]
+                    if numeric:
+                        values += " exact=" + ",".join("-0" if fact.negative_zero else str(fact.value) for fact in numeric)
                 print(f"    {op.at:#06x}  {pad}{_says(op, cells, calls, verbose)}{values}")
         if cells.order:
             print("\n    where:")
