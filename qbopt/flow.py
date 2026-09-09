@@ -41,6 +41,7 @@ from qbopt import allocate
 from qbopt import coalesce
 from qbopt import objwrite
 from qbopt import prologue
+from qbopt import peephole
 from qbopt import transform
 from qbopt import blocks as split
 from qbopt import frame as frames
@@ -61,6 +62,7 @@ def machine(pinned: dict, frame=None, calls: dict | None = None) -> list[LIRTran
         # is nothing to ask.
         parcopy.ParallelCopy(),
         prologue.Prologue(frame, calls) if frame is not None else prologue.Prologue(frames.Frame(0), calls),
+        peephole.Peephole(),
     ]
 
 

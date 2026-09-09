@@ -14,7 +14,7 @@ values and operations. **Nothing crosses except at the two doors.**
                                          │    drop_stores           │
                                          │                          │
                                          │                          │  ──▶ peephole ──▶ layout ──▶ omf
-                                         │                          │      (none yet)   select
+                                         │                          │      peephole.py select
                                          │                          │                   relocate
                                     the raise                   lowering
                                     (one door)                  (the other)

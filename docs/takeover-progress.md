@@ -1404,6 +1404,29 @@ is not a substitute for retaining the pointer in the appropriate machine
 resources. Neither an ES-specific MIR hoist nor merely hiding ES's name
 behind a new operation meets the boundary rule.
 
+## Post-allocation constant-load peephole
+
+The allocator's flexible classes still cover GPRs and addressing registers,
+not address-space resources. A segment-value migration needs that capability
+as well as abstract far-address operands; it is not complete.
+
+The previously absent final peephole phase now exists after allocation,
+parallel-copy expansion and frame insertion. Its first rule removes repeated
+equal nonrelocated immediate MOVs into the same physical register at the
+same width. Knowledge is local to a block and resets at any non-MOV or
+unknown instruction. Writes invalidate all overlapping register aliases,
+including AH versus EAX; memory reads are never removed. Dropped instructions
+transfer their byte coverage through the existing LIR removal mechanism.
+This is post-allocation encoding cleanup, not a new LIR optimization tier.
+
+Nbody's emitted immediate-512 count drops from three to two; its regression
+failed with three before the phase was connected. PDS cost drops from
+379016 to 377016. All 10 focused peephole/prologue checks pass, including
+partial writes, call/unknown barriers, clobbers, relocation and block edges.
+Nbody's 24 cases, MATRIX and HARR pass strict LIR runtime on all three
+compilers in `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-peephole-gc_sg3g2`.
+Dumps: `/tmp/qbopt-nbody-peephole`, including the new final machine phase.
+
 ## Target refresh and floating-point semantic audit
 
 The target scoreboard at f8c9e96 puts PDS FPCSEX at 4508/1340 (3.36x),
