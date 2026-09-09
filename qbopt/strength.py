@@ -19,16 +19,15 @@ the same thing twice, and the two would drift.
 LLVM's LSR is far larger than this: it enumerates formulas for every use,
 prices them against register pressure, and picks. That machinery exists
 because a target with many addressing modes has many ways to write the same
-address. Until pressure is modeled here, only innermost loops are reduced:
-matrix's outer counter saves a multiply per row but spills a value on every
-inner iteration, making the whole program more expensive.
+address. Both inner and outer loops are eligible. Allocation owns pressure
+and spilling: an older blanket ban on outer recurrences outlived the
+allocator behavior that motivated it and retained NESTED's row multiplies.
 """
 
 from dataclasses import replace
 
 from qbopt import mir
 from qbopt import ssa
-from qbopt import loops
 from qbopt.mir import Op
 from qbopt import induction
 from qbopt.mir import MirBody
@@ -60,11 +59,7 @@ def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | 
     ahead: dict[int, list[Op]] = {}
     behind: dict[int, list[Op]] = {}
     replacements: dict[int, Op] = {}
-    nested = loops.loops(list(body.blocks), body.entry)
-
     for loop, _basics, derived in found:
-        if any(other.body < loop.body for other in nested):
-            continue
         preheader = passes._preheader(body, loop)
         latches = [at for at in loop.latches if at in at_of]
         if preheader is None or at_of[preheader].succ != (loop.header,) or len(latches) != 1:

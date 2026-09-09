@@ -1524,3 +1524,37 @@ compiler; artifacts are `qbopt-scale-chain-brgqsuv7` in system temporary
 storage. The remaining outer-loop multiplications are still visible; the
 existing outer strength-reduction guard is pressure-related and has not
 been removed on the strength of this result.
+
+### Outer recurrences: remeasure the pressure guard
+
+A fresh probe of the existing outer-loop ban contradicted its historical
+rationale. With today's algebraic simplification and allocator, enabling
+outer recurrences improves all three affected programs. NESTED spills only
+outside its inner loop; its row multiplications disappear. The guard is
+removed, leaving allocation responsible for splitting and spilling rather
+than making every outer recurrence ineligible in MIR.
+
+Primary modeled costs (PDS/QB/VBDOS):
+
+| Program | Before | After | After / target |
+| --- | --- | --- | --- |
+| NESTED | 1202 / 1206 / 1212 | 1128 / 1132 / 1138 | 1.47 / 1.47 / 1.48 |
+| MATRIX | 7996 / 8000 / 8006 | 7656 / 7660 / 7666 | 1.23 / 1.23 / 1.23 |
+| HARR | 2326 / 2342 / 2508 | 2246 / 2262 / 2256 | 1.22 / 1.23 / 1.23 |
+
+The preceding scale-chain change also improved MATRIX and VBDOS HARR;
+the before column above is freshly measured, not copied from older rows.
+The 63 available primary target fixtures show no other modeled change and
+no new unmeasured result (`/tmp/qbopt-outer-target-audit.txt`). This is not a
+correctness claim over those 63 fixtures. Strict LIR runtime validation is
+NESTED, MATRIX, HARR and all 24 NBODY cases on each compiler, all passing;
+artifacts: `qbopt-outer-recurrences-sh7l7689` under system temporary storage.
+Induction, algebraic and address-space tests: 120 passed. The new emitted
+NESTED regression failed on all three compilers with the guard present.
+
+Dumps: `/tmp/qbopt-nested-outer-probe`,
+`/tmp/qbopt-matrix-outer-recurrences`, `/tmp/qbopt-harr-outer-recurrences`.
+The descriptor-hoist regression now requires its read to dominate the inner
+preheader, allowing it to move farther out without weakening its memory
+dependency checks. Product-width testing disables strength reduction to
+inspect the multiply before recurrence formation eliminates it.

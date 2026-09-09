@@ -102,9 +102,13 @@ def test_harr_descriptor_offset_is_read_before_inner_loop_unless_written(changed
     inner = next(block for block in result.blocks if block.at == 0x58)
     assert any(mir.same_bytes(ref, field) for op in inner.ops for ref in op.loads) is changed
     if not changed:
-        preheader = next(block for block in result.blocks if block.at == 0x52)
-        assert any(mir.same_bytes(ref, field) for op in preheader.ops for ref in op.loads)
-        assert all(ref.base in op.uses for op in preheader.ops for ref in op.loads if ref.base is not None)
+        from qbopt import loops
+        dominators = loops.dominators(list(result.blocks), result.entry)
+        reads = [(block, op, ref) for block in result.blocks for op in block.ops for ref in op.loads
+                 if mir.same_bytes(ref, field)]
+        assert reads
+        assert all(block.at in dominators[0x52] for block, op, ref in reads)
+        assert all(ref.base in op.uses for block, op, ref in reads if ref.base is not None)
 
 
 def test_nested_address_advances_instead_of_recomputing_row_plus_column() -> None:
@@ -600,3 +604,15 @@ def test_dead_byte_transfer_cannot_span_a_surviving_jump() -> None:
     result = transform._without([first, removed, jump], lambda op: op is removed)
     spans = sorted(op.covers for op in result if op.covers)
     assert all(left[1] <= right[0] for left, right in zip(spans, spans[1:]))
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_nested_row_recurrences_remove_repeated_multiplication(tag):
+    """NESTED recomputed both row scales because all outer-loop recurrences were disabled."""
+    from pathlib import Path
+    from iced_x86 import Mnemonic
+    from qbopt import wholeseg, module, omf, blocks
+    result = wholeseg.emitted(Path(f"fixtures/omf/nested-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    found = module.of(omf.parse(result.data))
+    assert not any(one.insn.mnemonic == Mnemonic.IMUL for one in blocks.instructions(found))

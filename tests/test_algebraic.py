@@ -47,7 +47,9 @@ def test_nested_combines_row_scale_in_emitted_code(tag):
     found = module.of(omf.parse(result.data))
     factors = [one.insn.immediate8to16 for one in blocks.instructions(found)
                if one.insn.code == Code.IMUL_R16_RM16_IMM8]
-    assert 12 in factors
+    strides = [one.insn.immediate8to16 for one in blocks.instructions(found)
+               if one.insn.code == Code.ADD_RM16_IMM8]
+    assert 12 in factors or 12 in strides
     assert 6 not in factors
 
 
@@ -268,6 +270,6 @@ def test_dead_phis_do_not_keep_matrix_product_halves() -> None:
     assert found is not None
     blocks = corpus.partitioned(obj)
     body = mir.bodies(found, blocks)[0][1]
-    after = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
+    after = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found, strength_=False)
     products = [op for block in after.blocks for op in block.ops if op.kind is mir.Kind.MUL]
     assert products and all(len(op.results) == 1 for op in products)
