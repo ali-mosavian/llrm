@@ -6,6 +6,7 @@ import pytest
 import corpus
 from qbopt.model import mir
 from qbopt.analysis import loops
+from qbopt.analysis import floatfacts
 from qbopt.backend import lower, lower_floats
 from qbopt.optimize import transform, unroll
 
@@ -41,6 +42,18 @@ def test_unrolled_latch_explicitly_skips_the_original_header():
     assert latch.ops[-1].kind is mir.Kind.JUMP
     assert latch.ops[-1].target == latch.succ[0]
     assert latch.ops[-1].target not in loop.body
+
+
+def test_fpdeep_expansion_exposes_exact_array_arithmetic():
+    """FPDEEP's 144/784/3600 squares and 6/14/30 ratios stayed unknown after expansion."""
+    found, original = body()
+    changed = unroll.expanded(original, found.dgroup, found.calls)
+    facts = floatfacts.known(changed, found.dgroup, found.calls)
+    for address, expected in ((0x9c, [144, 784, 3600]), (0xe4, [6, 14, 30])):
+        values = [facts.get(op.args[0].value) for block in changed.blocks for op in block.ops
+                  if op.at == address and op.kind is mir.Kind.FSTORE and not op.stores]
+        assert all(value is not None for value in values)
+        assert [value.value for value in values] == expected
 
 
 def test_emission_must_not_accept_unrolled_provenance_yet():

@@ -125,7 +125,7 @@ def _kills(
         if runtime.barrier(contract) or (runtime.writes_caller_memory(contract) and not op.stores):
             here = {}
     for ref in op.stores:
-        ref = mir._symbolic_ref(ref)
+        ref = _addressed(ref, known)
         # Escape metadata names pointer origins, not byte extents. A byte
         # fragment cannot use an absent origin as proof of disjointness.
         if ref.beyond is not None and any(segment == ref.beyond[0] for segment, _ in ref.beyond[1]):
@@ -247,6 +247,18 @@ def _cell(here: Cells, ref: mir.MemRef) -> Known | None:
     return Known(number, ref.width)
 
 
+def _addressed(ref: mir.MemRef, known: dict) -> mir.MemRef:
+    """Resolve one proven constant offset using the existing no-wrap address proof."""
+    from qbopt.analysis import ranges
+    ref = mir._symbolic_ref(ref)
+    if ref.base is None:
+        return ref
+    interval = ranges._operand(mir.Held(ref.base, ref.base_width), {}, known)
+    if interval is None:
+        return ref
+    return ranges.covering(ref, {ref.base: interval})
+
+
 def _operand(op: mir.Op, one: mir.Arg, known: dict, here: Cells | None = None) -> Known | None:
     """One operand as a number, if it is one.
 
@@ -259,12 +271,12 @@ def _operand(op: mir.Op, one: mir.Arg, known: dict, here: Cells | None = None) -
         return Known(masked(one.n, one.width), one.width)
     if isinstance(one, mir.Held):
         return _read(known.get(one.value), one.width)
-    if isinstance(one, mir.Cell) and here is not None and one.ref.addr is not None:
+    if isinstance(one, mir.Cell) and here is not None:
         # A cell whose content is known is as good as a constant. Without
         # this the propagation stops at BC's first store: it keeps every
         # variable in memory, so `n * k` reads two cells and neither is a
         # value this could ask about.
-        return _cell(here, one.ref)
+        return _cell(here, _addressed(one.ref, known))
     return None
 
 
@@ -344,6 +356,12 @@ def _result(
         if op.results[0].width != width or any(fact.width < arg.width for fact, arg in zip(parts, op.args)):
             return None
         return Known((masked(parts[0].n, high.width) << (low.width * 8)) | masked(parts[1].n, low.width), width)
+    if op.kind in (mir.Kind.SHL, mir.Kind.SHR) and len(parts) == 2 and len(op.results) == 1:
+        source, result = op.args[0], op.results[0]
+        if (not isinstance(source, (mir.Held, mir.Const)) or not isinstance(result, mir.Held)
+            or source.width != result.width or parts[0].width < source.width):
+            return None
+        return Known(masked(ARITH[op.kind](parts[0].n, parts[1].n), result.width), result.width)
     width = min(one.width for one in parts)
     if op.kind is mir.Kind.SMULHI and len(parts) == 2 and len(op.results) == 1:
         result = op.results[0]
