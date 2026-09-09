@@ -7,6 +7,31 @@ from qbopt import ir, mir, ranges, transform
 from qbopt.module import Addr, Space
 
 
+@pytest.mark.parametrize("low,high", [(1, 20), (-32768, -1), (-10, 10)])
+def test_signed_widening_keeps_the_numeric_range(low, high):
+    """ADDRM's bounded 1..20 counter lost its interval when converted to a long array value."""
+    source, result = mir.Value(1, 0), mir.Value(2, 0)
+    op = mir.Op(0, ir.Operation.EXTEND, "", (result,), (source,),
+                kind=mir.Kind.SIGN_EXTEND, args=(mir.Held(source, 2),), results=(mir.Held(result, 4),))
+    assert ranges._computed(op, {source: ranges.Interval(low, high, 2)}, {}) == ranges.Interval(low, high, 4)
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_addrm_long_array_value_keeps_counter_bounds(tag):
+    """ADDRM lost the 1..20 bound at the integer-to-long conversion feeding b(i)."""
+    path = Path(f"fixtures/omf/addrm-{tag}.obj")
+    found = corpus.loaded(path)
+    partition = corpus.partitioned(path)
+    body = transform.applied(mir.bodies(found, partition)[0][1], found.dgroup,
+                             found.calls, blocks=partition, found=found)
+    known = ranges.bounded(body)
+    converted = [(block.at, op.results[0].value) for block in body.blocks for op in block.ops
+                 if op.kind is mir.Kind.SIGN_EXTEND]
+    assert converted
+    for at, value in converted:
+        assert known[at][value] == ranges.Interval(1, 20, 4)
+
+
 @pytest.mark.parametrize("recurrences", [False, True])
 def test_nbody_scaled_index_is_bounded_only_inside_its_loop(recurrences, monkeypatch) -> None:
     """Nbody's other*4 had no interval, so position reads aliased every scalar store."""

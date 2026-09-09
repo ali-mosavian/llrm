@@ -17,6 +17,23 @@ from qbopt import transform
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
 
+@pytest.mark.parametrize("number", [0, 1, 32767, 32768, 65535])
+def test_signed_widening_produces_a_whole_long_constant(number):
+    """ADDRM's explicit word-to-long conversion could not fold even with a known input."""
+    source, result = mir.Value(1, 0), mir.Value(2, 0)
+    op = mir.Op(0, ir.Operation.EXTEND, "", (result,), (source,),
+                kind=mir.Kind.SIGN_EXTEND, args=(mir.Held(source, 2),), results=(mir.Held(result, 4),))
+    expected = ((number ^ 0x8000) - 0x8000) & 0xffffffff
+    assert consts._result(op, {source: consts.Known(number, 2)}) == consts.Known(expected, 4)
+    assert consts._result(op, {source: consts.Known(number, 1)}) is None
+    from dataclasses import replace
+    literal = replace(op, args=(mir.Const(number, 2),), uses=())
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (literal,), ()),))
+    folded = transform.folded(body, frozenset(), {})
+    assert folded.blocks[0].ops[0].kind is mir.Kind.COPY
+    assert folded.blocks[0].ops[0].args == (mir.Const(expected, 4),)
+
+
 @pytest.mark.parametrize(("high", "low", "answer"), [(4, 0, 262144), (0, 512, 512), (-1, -1, 0xffffffff)])
 def test_recovered_argument_constants(high: int, low: int, answer: int) -> None:
     """Nbody kept its 262144 and 512 divisors hidden behind recovered word copies."""

@@ -307,6 +307,14 @@ def _result(
         parts.append(got)
     if not parts:
         return None
+    if op.kind is mir.Kind.SIGN_EXTEND and len(parts) == len(op.results) == 1:
+        source, result = op.args[0], op.results[0]
+        if (not isinstance(source, (mir.Held, mir.Const)) or not isinstance(result, mir.Held)
+            or not 0 < source.width < result.width <= 4 or parts[0].width < source.width):
+            return None
+        sign = 1 << (source.width * 8 - 1)
+        signed = (masked(parts[0].n, source.width) ^ sign) - sign
+        return Known(masked(signed, result.width), result.width)
     if op.kind is mir.Kind.CONCAT and len(parts) == 2 and len(op.results) == 1:
         high, low = op.args
         width = high.width + low.width

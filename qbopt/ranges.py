@@ -51,9 +51,14 @@ def _computed(op, known, facts):
     if not isinstance(result, mir.Held) or result.width not in (2, 4):
         return None
     args = [_operand(arg, known, facts) for arg in op.args]
-    if not args or any(arg is None for arg in args) or args[0].width != result.width:
+    if not args or any(arg is None for arg in args):
         return None
     first = args[0]
+    if op.kind is mir.Kind.SIGN_EXTEND and len(args) == 1 and 0 < first.width < result.width:
+        sign = 1 << (first.width * 8 - 1)
+        return Interval(first.low, first.high, result.width) if -sign <= first.low <= first.high < sign else None
+    if first.width != result.width:
+        return None
     if op.kind is mir.Kind.COPY and len(args) == 1:
         return first
     if len(args) != 2:

@@ -1939,3 +1939,25 @@ all 16 focused coalescing tests pass. Stage dumps are at
 `/tmp/qbopt-matrix-next` and `/tmp/qbopt-matrix-palette-after`. The broader
 intermediate candidate passed 111 runtime cases; the final pinned-guard
 version is separately checked on the six changed MATRIX/ARRIDX variants.
+
+### Signed widening participates in value analysis
+
+The scoreboard still does not certify completion: ADDRM remains at
+1.60--1.62x on ordinary variants, event variants remain refused or expensive,
+and several reference listings are missing/provisional. No gate was relaxed.
+
+The explicit MIR SIGN_EXTEND introduced for whole long stores previously
+had no constant or interval semantics. Constant propagation now interprets
+the source's own sign bit and produces a full-width result; incomplete
+source facts are insufficient. Range propagation retains the same signed
+numeric interval at the wider width, rejecting intervals outside the
+source's signed domain. No machine names or origin information are needed.
+
+Eight constant/range cases failed first, as did the three real ADDRM
+word-to-long counter-bound cases. ADDRM now retains 1..20 through the long
+conversion feeding b(i). The constant cases also assert that the fold pass
+actually replaces the conversion with a constant copy. The focused checks
+pass 35/35, followed by the five augmented fold assertions. All 96 primary
+fixture objects remain byte-identical, so this is analysis groundwork rather
+than a measured execution improvement. No runtime suite was repeated for
+unchanged emitted bytes.
