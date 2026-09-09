@@ -12,6 +12,34 @@ from qbopt import promote
 from qbopt import runtime
 
 
+@pytest.mark.parametrize("nonempty", [False, True])
+def test_lngmxx_invariant_temporaries_sink_only_when_loop_executes(monkeypatch, nonempty: bool) -> None:
+    """LNGMXX wrote invariant quotient halves ten times; a zero-trip loop must not acquire those stores."""
+    from qbopt import transform
+
+    path = Path("fixtures/omf/lngmxx-p-g2.obj")
+    found = corpus.loaded(path)
+    partition = corpus.partitioned(path)
+    body = mir.bodies(found, partition)[0][1]
+    with monkeypatch.context() as patch:
+        patch.setattr(loopmotion, "sunk_stores", lambda body, *args: body)
+        body = transform.applied(body, found.dgroup, found.calls, blocks=partition, found=found)
+    if not nonempty:
+        body = replace(body, blocks=tuple(
+            replace(block, ops=tuple(
+                replace(op, args=(op.args[0], mir.Const(0, 2))) if op.at == 0x94 else op
+                for op in block.ops
+            )) for block in body.blocks
+        ))
+    hot = {at for loop in loops.loops(body.blocks, body.entry) for at in loop.body}
+    def writes(candidate):
+        return [op for block in candidate.blocks if block.at in hot for op in block.ops
+                if any(ref.addr and ref.addr.space is module.Space.FRAME for ref in op.stores)]
+    assert len(writes(body)) == 2
+    result = loopmotion.sunk_stores(body, found.dgroup, module.landmarks(found))
+    assert len(writes(result)) == (0 if nonempty else 2)
+
+
 @pytest.mark.parametrize("initialized", [True, False])
 def test_nested_accumulator_seed_follows_outer_phi(monkeypatch, initialized: bool) -> None:
     """NESTED stored its accumulator 30 times; an outer phi carries the zero-trip seed."""

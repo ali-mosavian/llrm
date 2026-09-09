@@ -310,6 +310,12 @@ def _quotients(body: mir.MirBody, loop, found: dict[int, Affine]) -> list[Derive
     return out
 
 
+def nonempty(body: mir.MirBody, loop) -> bool:
+    """A canonical counted loop whose first iteration and finite exit are proven."""
+    facts = consts.known(body)
+    return any(_last_counter(body, loop, counter, facts, 2) is not None for counter in basics(body, loop).values())
+
+
 def _composed(
     body: mir.MirBody, inside: set[int], found: dict[int, Affine], made: dict[int, mir.Op], settled
 ) -> list[Derived]:

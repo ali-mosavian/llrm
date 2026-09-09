@@ -2,6 +2,7 @@ from dataclasses import replace
 
 from qbopt import loops
 from qbopt import mir
+from qbopt import induction
 from qbopt.module import Space
 
 
@@ -34,9 +35,13 @@ def sunk_stores(body: mir.MirBody, dgroup: frozenset[int], bounds: dict | None =
             outside = predecessors[source] - loop.body
             if len(outside) == 1 and latch != source and blocks[latch].succ == (source,):
                 entry = next(iter(outside))
+                invariant = induction.invariant(body, set(loop.body)) if induction.nonempty(body, loop) else set()
                 for op in blocks[latch].ops:
                     if _unobserved(op, operations, dgroup, bounds):
                         value = _exit_value(op, blocks[source], blocks[entry], latch, body, dgroup, bounds)
+                        if value is None and len(op.args) == 1 and isinstance(op.args[0], mir.Held):
+                            if op.args[0].value.id in invariant:
+                                value = op.args[0]
                         if value is not None:
                             moved.append(op)
                             relocated[id(op)] = replace(
@@ -146,7 +151,7 @@ def _unobserved(op: mir.Op, operations: list[mir.Op], dgroup: frozenset[int], bo
     if op.kind is not mir.Kind.STORE or op.loads or op.defines or len(op.stores) != 1:
         return False
     ref = op.stores[0]
-    if ref.addr is None or ref.addr.space is not Space.SEGMENT or ref.base is not None or ref.segment is not None:
+    if ref.addr is None or ref.addr.space not in (Space.SEGMENT, Space.FRAME) or ref.base is not None or ref.segment is not None:
         return False
     return not any(
         mir.overlapping(ref, other, dgroup, bounds)
