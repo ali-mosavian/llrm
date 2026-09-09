@@ -1,5 +1,20 @@
 # Takeover checkpoint — 2026-09-09
 
+## Store motion through a nested loop body
+
+A rotated loop need not have only two blocks: a unique latch with a direct
+backedge still runs on every completed iteration. Store motion now uses
+that property while retaining the unique header exit, zero-trip seed and
+whole-loop observability checks. NESTED's accumulated sum is stored once
+after the outer loop instead of once per row; initialization remains.
+Cost **1990 -> 1962, 2.59x -> 2.55x**. It still misses the overall goal.
+
+The real-fixture regression failed before this change. All 13 store-motion
+checks pass, as do nine strict-LIR runtime comparisons of NESTED, MATRIX,
+HOTLOP across p-g2/q-O/v-g3. Dumps: `/tmp/qbopt-outer-store-sink`.
+Runtime artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-outer-sink-o3uxyvdc`.
+
 ## Sink the nested accumulator's inner-loop store
 
 The zero-trip seed proof now follows predecessor edges and translates phi

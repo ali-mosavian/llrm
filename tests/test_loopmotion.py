@@ -41,6 +41,22 @@ def test_nested_accumulator_seed_follows_outer_phi(monkeypatch, initialized: boo
     assert any(accumulator in op.stores for op in inner.ops) is not initialized
 
 
+def test_nested_accumulator_is_stored_only_after_the_outer_loop() -> None:
+    """NESTED wrote its sum once per row after inner-loop sinking; only the exit needs it."""
+    from qbopt import transform
+
+    path = Path("fixtures/omf/nested-p-g2.obj")
+    found = corpus.loaded(path)
+    partition = corpus.partitioned(path)
+    body = mir.bodies(found, partition)[0][1]
+    accumulator = next(op.stores[0] for block in body.blocks for op in block.ops if op.at == 0x7E)
+    body = transform.applied(body, found.dgroup, found.calls, blocks=partition, found=found)
+    hot = {at for loop in loops.loops(body.blocks, body.entry) for at in loop.body}
+    writes = [block.at for block in body.blocks for op in block.ops if accumulator in op.stores]
+    assert not hot.intersection(writes)
+    assert writes == [body.entry, 0x9C]
+
+
 def hotlop() -> tuple[mir.MirBody, frozenset[int], dict, mir.MemRef]:
     path = Path("fixtures/omf/hotlop-p-g2.obj")
     found = corpus.loaded(path)

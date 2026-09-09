@@ -29,10 +29,10 @@ def sunk_stores(body: mir.MirBody, dgroup: frozenset[int], bounds: dict | None =
             continue
         moved = [op for op in blocks[source].ops if _unobserved(op, operations, dgroup, bounds)]
         relocated = {id(op): op for op in moved}
-        if len(loop.body) == 2 and source == loop.header:
-            latch = next(at for at in loop.body if at != source)
+        if len(loop.latches) == 1 and source == loop.header:
+            latch = next(iter(loop.latches))
             outside = predecessors[source] - loop.body
-            if len(outside) == 1 and blocks[latch].succ == (source,) and predecessors[latch] == frozenset({source}):
+            if len(outside) == 1 and latch != source and blocks[latch].succ == (source,):
                 entry = next(iter(outside))
                 for op in blocks[latch].ops:
                     if _unobserved(op, operations, dgroup, bounds):
