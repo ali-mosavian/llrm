@@ -26,6 +26,7 @@ from libdump import modules
 from iced_x86 import Decoder
 from iced_x86 import Mnemonic
 from iced_x86 import Register
+from iced_x86 import RflagsBits
 from iced_x86 import Formatter
 from iced_x86 import Register_
 from iced_x86 import FlowControl
@@ -36,7 +37,12 @@ from qbopt.frontend.declen import INFO
 from qbopt.frontend.declen import READS
 from qbopt.frontend.declen import WRITES
 
-ALIASES: dict[str, tuple[str, ...]] = {"flags": ("flags",)}
+FLAG_BITS = {
+    f"flags:{name.lower()}": getattr(RflagsBits, name)
+    for name in ("OF", "SF", "ZF", "AF", "CF", "PF", "DF", "IF", "AC", "UIF", "C0", "C1", "C2", "C3")
+}
+ALIASES: dict[str, tuple[str, ...]] = {"flags": tuple(FLAG_BITS)}
+ALIASES.update({lane.split(":")[1]: (lane,) for lane in FLAG_BITS})
 for _word in ("ax", "bx", "cx", "dx", "si", "di", "bp"):
     _lanes = tuple(f"e{_word}:{byte}" for byte in range(4))
     ALIASES["e" + _word] = _lanes
@@ -374,11 +380,12 @@ def analyze(routine: Routine, contracts: dict[Address, Contract], budget: int = 
                     values[part] = "?"
                 if used.register == Register.SS:
                     unknown.add(f"{at:04x}: stack segment change")
-        if insn.rflags_read:
-            reads.add("flags")
-        if insn.rflags_modified:
-            written.add("flags")
-            values["flags"] = "?"
+        for lane, bit in FLAG_BITS.items():
+            if insn.rflags_read & bit:
+                reads.add(lane)
+            if insn.rflags_modified & bit:
+                written.add(lane)
+                values[lane] = "?"
         destination = register_parts(insn.op0_register) if insn.op0_kind == OpKind.REGISTER else ()
         source = register_parts(insn.op1_register) if insn.op_count > 1 and insn.op1_kind == OpKind.REGISTER else ()
         width = abs(insn.stack_pointer_increment)
@@ -602,8 +609,8 @@ def main() -> int:
     graph = library.graph_from(roots)
     contracts = summarize(graph)
     report = {
-        "schema_version": 2,
-        "scope": "8/16/32-bit overlapping GP registers, data segments and aggregate flags; "
+        "schema_version": 3,
+        "scope": "8/16/32-bit overlapping GP registers, data segments and decoder-modeled flag bits; "
         "reads include saves; x87 unproved; "
         "SP described by cleanup only; conditional on normal return with immutable code, "
         "not termination or exception safety; memory aliasing conservative",

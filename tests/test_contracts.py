@@ -59,6 +59,29 @@ def test_transitive_clobber() -> None:
     assert all("ax" in one.clobbers for one in result.values())
 
 
+@pytest.mark.parametrize("code", ["31c0 c3", "e80100 c3 31c0 c3"])
+def test_arithmetic_preserves_direction(code: str) -> None:
+    """Aggregate flags hid DF preservation needed to analyze FPDEEP's MOVSW copies."""
+    result = contract(code)
+    assert "df" in result.preserved
+    assert "zf" in result.clobbers
+    assert "flags" not in result.preserved
+
+
+@pytest.mark.parametrize("code", ["fc c3", "fd c3", "e80100 c3 fd c3"])
+def test_direction_write_is_not_entry_preservation(code: str) -> None:
+    """CLD establishes a direction, but does not preserve an unknown incoming DF."""
+    result = contract(code)
+    assert "df" in result.clobbers
+    assert "cf" in result.preserved
+
+
+def test_string_copy_reads_direction() -> None:
+    result = contract("a5 c3")
+    assert "df" in result.reads
+    assert "df" in result.preserved
+
+
 def test_cleanup_propagates() -> None:
     result = contract("50 e80100 c3 c20200")
     assert result.cleanup == 0

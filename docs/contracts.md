@@ -16,12 +16,13 @@ local call targets are both followed. Relocations, not the placeholder call
 bytes, identify targets. Duplicate symbol definitions are ambiguous, not chosen
 by file order. Recursive components are identified separately from their callers.
 
-Report schema version 2 groups `reads`, `clobbers`, `preserved`, and `restored`
+Report schema version 3 groups `reads`, `clobbers`, `preserved`, and `restored`
 by register family, instead of alphabetically interleaving aliases. For example,
 an AL write is reported as `"clobbers": {"eax": ["eax", "ax", "al"]}` and
 `"preserved": {"eax": ["ah", "eax[31:16]"], ...}`. Segment registers have
 their own `segments` group; flags have a `flags` group. No alias effects are
-removed, and the underlying analysis is unchanged.
+removed. Version 3 splits flag effects into individual decoder-modeled bits,
+while retaining `flags` as their aggregate alias.
 
 `--all` starts from every public entry in a `CODE`-class segment and analyzes
 shared dependencies once. Additional/custom classes can be selected by repeating
@@ -46,10 +47,12 @@ execution. `reads` conservatively includes saves and pass-through uses; it is
 not a minimal argument list. `cleanup` is bytes removed beyond the return address.
 
 The current scope is 8/16/32-bit general registers (SP reported through cleanup),
-data segment registers, and aggregate flags. Byte lanes model overlapping aliases:
+data segment registers, and decoder-modeled flag bits. Byte lanes model overlapping aliases:
 writing AL clobbers AL, AX and EAX but preserves AH and `eax[31:16]`. Saving AX
 does not save EAX's upper half; saving EAX does. Callee effects propagate with
-this same precision. x87 state is not proved. Code is assumed immutable; this is not a termination, exception,
+this same precision. The flag group includes OF, SF, ZF, AF, CF, PF, DF, IF,
+AC, UIF and x87 condition bits C0–C3; it is not the entire architectural
+FLAGS register or a proof of x87 stack/control state. Code is assumed immutable; this is not a termination, exception,
 or memory-safety proof. USE32 segments and wide OMF records are unsupported.
 
 Register moves and word/dword stack saves/restores carry byte-lane entry tokens.
@@ -58,6 +61,14 @@ tokens. This intentionally overstates clobbers until stronger alias evidence is
 available. Indirect transfers, unavailable callees, recursion, unsupported stack
 changes, and missing code prevent preservation guarantees. Nothing here installs
 a contract into the optimizer automatically.
+
+For example, `xor ax,ax; ret` previously reported only an aggregate flag
+clobber. It now reports arithmetic-flag clobbers and DF preservation, including
+through direct-call dependencies. `movsw; ret` reads and preserves DF;
+`cld; ret` may clobber incoming DF. Preservation does **not** establish DF=0:
+constant return-state propagation and an entry-state proof are still needed
+before this evidence can unlock FPDEEP's four scalar-copy MOVSW instructions.
+Unsupported flag-stack operations still suppress preservation guarantees.
 
 Single-symbol traversal defaults to 256 functions; `--all` has no function-count
 limit by default. Both use 2,000 instructions per function;
