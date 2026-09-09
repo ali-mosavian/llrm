@@ -13,18 +13,10 @@ the number alone would be wrong in the direction that matters: it would fold
 a 32-bit use of a value only half of which is known, and produce a plausible
 answer that is not the program's.
 
-What seeds it, measured across fixtures/omf and bench/nbody.bas: 2,120
-`mov reg,imm16`, 155 `mov reg,imm32`, and 56 arithmetic instructions against
-an immediate. What it will not seed from is memory. A static's contents are
-constant far more often than not -- BC initialises one and never writes it
-again -- but proving that needs to know every store in the module reaches
-it, which is memory.py's question and a whole-program one, not this pass's.
-
-Meets are not needed yet and so are not written. A phi whose arguments are
-all the same constant is one, and nothing here folds it: with 871 branches
-all reading a comparison, the conditional half of a sparse conditional
-propagation is where that value would come from, and it is a separate piece
-of work with its own correctness argument.
+Memory facts come from explicit stores, not assumed static initial contents.
+Adjacent known fragments can supply a wider read only when every requested byte
+is covered. Unknown and overlapping writes still invalidate the cell facts.
+Phi inputs and memory facts meet on agreement across incoming paths.
 """
 
 from dataclasses import dataclass
@@ -173,6 +165,26 @@ def _read(fact: Known | None, width: int) -> Known | None:
     return Known(masked(fact.n, width), width)
 
 
+def _cell(here: Cells, ref: mir.MemRef) -> Known | None:
+    if ref.addr is None or ref.base is not None or ref.segment is not None:
+        return None
+    if exact := _read(here.get((ref.addr, ref.width)), ref.width):
+        return exact
+    number = 0
+    for offset in range(ref.width):
+        wanted = ref.addr.plus(offset)
+        fragments = {
+            (fact.n >> (8 * byte)) & 255
+            for (address, width), fact in here.items()
+            for byte in range(min(width, fact.width))
+            if address.plus(byte) == wanted
+        }
+        if len(fragments) != 1:
+            return None
+        number |= fragments.pop() << (8 * offset)
+    return Known(number, ref.width)
+
+
 def _operand(op: mir.Op, one: mir.Arg, known: dict, here: Cells | None = None) -> Known | None:
     """One operand as a number, if it is one.
 
@@ -190,7 +202,7 @@ def _operand(op: mir.Op, one: mir.Arg, known: dict, here: Cells | None = None) -
         # this the propagation stops at BC's first store: it keeps every
         # variable in memory, so `n * k` reads two cells and neither is a
         # value this could ask about.
-        return _read(here.get((one.ref.addr, one.ref.width)), one.ref.width)
+        return _cell(here, one.ref)
     return None
 
 
