@@ -52,9 +52,15 @@ def _scaled_address(parts: tuple[lir.Insn, ...]) -> lir.Insn | None:
 
 
 def addresses(body: lir.LirBody) -> lir.LirBody:
-    """Fold allocated scale/add expansions whose following shift replaces their flags."""
+    """Select LEA for allocated arithmetic when the replaced flags are dead."""
     blocks = []
     for block in body.blocks:
+        dead = set()
+        flags_dead = False
+        for one in reversed(block.insns):
+            if flags_dead:
+                dead.add(id(one))
+            flags_dead = _flags_before(one, flags_dead)
         insns = []
         index = 0
         while index < len(block.insns):
@@ -63,10 +69,61 @@ def addresses(body: lir.LirBody) -> lir.LirBody:
                 insns.append(combined)
                 index += 3
             else:
+                pair = block.insns[index:index + 2]
+                combined = _shift_address(pair) if len(pair) == 2 and id(pair[1]) in dead else None
+                if combined is not None:
+                    folded = ([combined] if pair[0].covers == (pair[1].at, pair[1].at)
+                              else lir.without((combined, pair[1]), lambda one: one is pair[1]))
+                    if len(folded) == 1:
+                        insns.extend(folded)
+                        index += 2
+                        continue
                 insns.append(block.insns[index])
                 index += 1
         blocks.append(replace(block, insns=tuple(insns)))
     return replace(body, blocks=tuple(blocks))
+
+
+def _shift_address(parts: tuple[lir.Insn, ...]) -> lir.Insn | None:
+    copy, shift = parts
+    if any(one.what is None or one.clobbers or one.symbol is True or one.spread for one in parts):
+        return None
+    match copy.what, shift.what:
+        case (ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg() as dest,), (ir.Reg() as source,)),
+              ir.Semantics(ir.Operation.BINARY, "shl", (written,), (read, ir.Imm(1, _, None)))):
+            if (written != dest or read != dest or dest.width != source.width or dest.width not in {2, 4}
+                or dest.register not in target.WIDTHS or source.register not in target.WIDTHS):
+                return None
+        case _:
+            return None
+    base = RegisterExt.full_register32(source.register)
+    if base == Register.ESP or base == RegisterExt.full_register32(dest.register):
+        return None
+    what = ir.Semantics(ir.Operation.ADDRESS, "lea", (dest,), (ir.Address(None, through=base, index=base),))
+    if copy.covers == (shift.at, shift.at):
+        return replace(shift, what=what, uses=copy.uses)
+    return replace(copy, what=what, defines=shift.defines)
+
+
+def _flags_before(one: lir.Insn, flags_dead: bool) -> bool:
+    if one.what is None or one.clobbers:
+        return False
+    match one.what:
+        case ir.Semantics(ir.Operation.COMPARE, "cmp" | "test"):
+            return True
+        case ir.Semantics(ir.Operation.BINARY, "add" | "sub" | "and" | "or" | "xor"):
+            return True
+        case ir.Semantics(ir.Operation.UNARY, "neg"):
+            return True
+        case ir.Semantics(ir.Operation.MOVE, "mov") | ir.Semantics(ir.Operation.ADDRESS, "lea"):
+            return flags_dead
+        case ir.Semantics(ir.Operation.EXTEND, "movsx" | "movzx" | "cwd" | "cdq"):
+            return flags_dead
+        case ir.Semantics(ir.Operation.PUSH, "push") | ir.Semantics(ir.Operation.POP, "pop"):
+            return flags_dead
+        case ir.Semantics(ir.Operation.NOTHING, None | ""):
+            return flags_dead
+    return False
 
 
 def zeroes(body: lir.LirBody) -> lir.LirBody:
@@ -77,30 +134,14 @@ def zeroes(body: lir.LirBody) -> lir.LirBody:
         insns = []
         for one in reversed(block.insns):
             what = one.what
-            if what is None or one.clobbers:
-                flags_dead = False
-            else:
+            previous = _flags_before(one, flags_dead)
+            if what is not None and not one.clobbers:
                 match what:
                     case ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg() as dest,), (ir.Imm(0, width, None),)):
                         if (flags_dead and dest.width == width and width in {2, 4}
                             and dest.register in target.WIDTHS and one.symbol is not True):
                             one = replace(one, what=ir.Semantics(ir.Operation.BINARY, "xor", (dest,), (dest, dest)))
-                    case ir.Semantics(ir.Operation.COMPARE, "cmp" | "test"):
-                        flags_dead = True
-                    case ir.Semantics(ir.Operation.BINARY, "add" | "sub" | "and" | "or" | "xor"):
-                        flags_dead = True
-                    case ir.Semantics(ir.Operation.UNARY, "neg"):
-                        flags_dead = True
-                    case ir.Semantics(ir.Operation.MOVE, "mov") | ir.Semantics(ir.Operation.ADDRESS, "lea"):
-                        pass
-                    case ir.Semantics(ir.Operation.EXTEND, "movsx" | "movzx" | "cwd" | "cdq"):
-                        pass
-                    case ir.Semantics(ir.Operation.PUSH, "push") | ir.Semantics(ir.Operation.POP, "pop"):
-                        pass
-                    case ir.Semantics(ir.Operation.NOTHING, None | ""):
-                        pass
-                    case _:
-                        flags_dead = False
+            flags_dead = previous
             insns.append(one)
         blocks.append(replace(block, insns=tuple(reversed(insns))))
     return replace(body, blocks=tuple(blocks))

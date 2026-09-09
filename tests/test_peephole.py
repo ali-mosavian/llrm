@@ -9,6 +9,32 @@ from qbopt.model import ir, lir
 from qbopt.backend import peephole
 
 
+def test_addrm_index_scale_uses_one_lea():
+    """ADDRM QB copied and shifted SI on every iteration instead of one LEA."""
+    import corpus
+    from qbopt import wholeseg
+    result = wholeseg.emitted(Path("fixtures/omf/addrm-q-O.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
+    assert "lea si,[ebx+ebx]" in instructions
+
+
+@pytest.mark.parametrize("following", ["add", "adc", "inc", "shl", "call", "je"])
+def test_index_lea_preserves_observed_shift_flags(following):
+    """ADDRM's copy/shift can become LEA only before a complete flag overwrite."""
+    dest, source = ir.Reg(Register.SI, 2), ir.Reg(Register.BX, 2)
+    copy = lir.Insn(0, (0, 0), ir.Semantics(ir.Operation.MOVE, "mov", (dest,), (source,)), (2,), (1,))
+    shift = lir.Insn(0, (0, 2), ir.Semantics(ir.Operation.BINARY, "shl", (dest,), (dest, ir.Imm(1, 1))), (2,), (2,))
+    last = lir.Insn(2, (2, 4), ir.Semantics(ir.Operation.BINARY, following, (source,), (source, ir.Imm(1, 2))), (), ())
+    body = lir.LirBody("index", 0, (lir.LirBlock(0, (copy, shift, last), ()),), {}, {})
+    result = peephole.addresses(body).insns
+    assert result[0].what.name == ("lea" if following == "add" else "mov")
+    if following == "add":
+        assert result[0].covers == (0, 2)
+        assert result[0].uses == (1,)
+        assert result[0].defines == (2,)
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_hotlpx_uses_scaled_address_for_factor_five(tag):
     """HOTLPX's factor twenty expanded to copy/shift/add/shift instead of LEA/shift."""
