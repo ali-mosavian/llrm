@@ -19,6 +19,7 @@ from qbopt import ir
 from qbopt import mir
 from qbopt import target
 from qbopt import runtime
+from qbopt.module import Addr
 
 
 def operand(arg: mir.Arg) -> ir.Loc:
@@ -27,6 +28,8 @@ def operand(arg: mir.Arg) -> ir.Loc:
         return ir.Held(value=arg.value.id, width=arg.width)
     if isinstance(arg, mir.Const):
         return ir.Imm(value=arg.n, width=arg.width)
+    if isinstance(arg, mir.Symbol):
+        return ir.Imm(arg.addend, arg.width, Addr(arg.space, arg.offset, arg.index))
     if isinstance(arg, mir.Cell):
         return arg.ref
     return arg.what  # the x87 stack, which has no MIR form

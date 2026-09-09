@@ -244,6 +244,8 @@ def _short(one, cells: Cells) -> str:
         return f"{one.value}"
     if isinstance(one, mir.Const):
         return f"{one.n}"
+    if isinstance(one, mir.Symbol):
+        return f"&{one.space}:{one.index}+{one.offset + one.addend:#x}"
     if isinstance(one, mir.Cell):
         return cells.of(one.ref)
     return one.name or "?"

@@ -81,6 +81,7 @@ from qbopt.module import Addr
 from qbopt.blocks import Block
 from qbopt.declen import READS
 from qbopt.lift import Decoded
+from qbopt.module import Space
 from qbopt.declen import WRITES
 from qbopt.lift import Resolver
 from qbopt.lift import classify
@@ -203,6 +204,7 @@ class Imm:
 
     value: int
     width: int
+    address: Addr | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -603,7 +605,11 @@ def _location(insn: Insn, index: int, resolve: Resolver) -> Loc | None:
             )
         case kind if kind in IMMEDIATE_WIDTH:
             width = IMMEDIATE_WIDTH[kind]
-            return Imm(to_signed(insn.insn.immediate(index) & ((1 << (width * 8)) - 1), width), width)
+            value = to_signed(insn.insn.immediate(index) & ((1 << (width * 8)) - 1), width)
+            address = resolve(insn.imm_at, value) if insn.imm_at is not None else None
+            if address is not None and address.space is Space.LITERAL:
+                address = None
+            return Imm(value, width, address)
         case _:
             return None
 

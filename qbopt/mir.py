@@ -275,6 +275,15 @@ class Const:
 
 
 @dataclass(frozen=True, slots=True)
+class Symbol:
+    space: Space
+    index: int
+    offset: int
+    width: int
+    addend: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class Cell:
     """A memory cell -- the same MemRef the op's loads and stores name."""
 
@@ -299,7 +308,7 @@ class Opaque:
     name: str = ""
 
 
-type Arg = Held | Const | Cell | Opaque
+type Arg = Held | Const | Symbol | Cell | Opaque
 
 
 class Kind(StrEnum):
@@ -1229,6 +1238,9 @@ def _operands(
                 return Opaque(loc, _RESOURCE.get(loc.register, ""))
             return Held(value, loc.width)
         if isinstance(loc, ir.Imm):
+            if loc.address is not None:
+                address = loc.address
+                return Symbol(address.space, address.index, address.disp, loc.width, loc.value)
             return Const(loc.value, loc.width)
         if isinstance(loc, ir.Mem):
             if not cells:

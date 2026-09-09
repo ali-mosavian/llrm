@@ -139,7 +139,12 @@ def _constants(body: lir.LirBody, values: frozenset[int]) -> dict[int, ir.Imm]:
         ):
             continue
         into, source = what.dests[0], what.sources[0]
-        if isinstance(into, ir.Held) and isinstance(source, ir.Imm) and into.width == source.width:
+        if (
+            isinstance(into, ir.Held)
+            and isinstance(source, ir.Imm)
+            and source.address is None
+            and into.width == source.width
+        ):
             if all(_width(use, value) <= source.width for use in body.insns if value in use.uses):
                 result[value] = source
     return result

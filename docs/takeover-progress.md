@@ -55,6 +55,18 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+Symbolic-address checkpoint: HARR's descriptor move at 0x6f was raised as
+literal zero although its immediate has a relocation to segment 5 + 6.
+Raise now preserves a symbolic operand (target, offset, width and addend),
+lowering retains its relocation identity, and spilling excludes these operands
+from literal rematerialization. This corrects an unsound constant fact; no
+runtime miscompile from that fact is claimed. Both regressions catch in-memory
+restorations of the bugs; 1,015 consts/spiller checks and two focused LIR checks
+pass. Strict LIR HARR/segld/matrix runtime passes across PDS /G2, QB /O and
+VBDOS /G3 (nine cases). Stage dumps are in `/tmp/qbopt-symbol-harr-20260909`.
+Full validation remains outstanding; touched files retain baseline lint errors.
+This establishes symbolic descriptor identity, not allocation extents or no-alias.
+
 Reassessment after immediate multiply: the whole-fixture target scan still shows
 large array gaps; ordinary bools/subexp configurations meet 1.5x. HARR's actual
 final MIR (`/tmp/qbopt-harr-reassess-20260909/s24-mir-r02-place.txt`) stores through

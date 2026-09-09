@@ -13,6 +13,8 @@ import pytest
 from qbopt import ir
 from qbopt import lir
 from qbopt import spiller
+from qbopt.module import Addr
+from qbopt.module import Space
 from qbopt import frame as frames
 
 
@@ -50,6 +52,21 @@ def test_spilled_constant_is_rematerialized_without_a_frame_slot() -> None:
     )
     assert result[-2].what.sources == (ir.Imm(20, 2),)
     assert result[-1].what.sources[1].value == result[-2].defines[0]
+
+
+def test_relocated_address_is_not_rematerialized_as_literal_zero() -> None:
+    """HARR's descriptor pointer has zero bytes, but LINK supplies its address."""
+    address = ir.Imm(0, 2, Addr(Space.SEGMENT, 6, 5))
+    defining = lir.Insn(
+        at=0,
+        covers=(0, 3),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),), (address,)),
+        defines=(1,),
+        uses=(),
+    )
+    result = _out(_body(defining, _add(2, 1)), {1})
+    assert sum(one.what.sources == (address,) for one in result if one.what) == 1
+    assert any(isinstance(source, ir.Mem) for one in result if one.what for source in one.what.sources)
 
 
 def test_constant_reload_precedes_an_in_place_spilled_update() -> None:

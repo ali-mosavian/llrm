@@ -10,10 +10,23 @@ import pytest
 import corpus
 from qbopt import ir
 from qbopt import mir
+from qbopt import lower
 from qbopt import consts
 from qbopt import transform
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
+
+
+def test_relocated_descriptor_address_is_not_integer_zero() -> None:
+    """HARR's descriptor at segment 5 + 6 was reported as the constant zero."""
+    obj = Path("fixtures/omf/harr-p-g2.obj")
+    found = corpus.loaded(obj)
+    assert found is not None
+    assert found.operands[0x70].disp == 6
+    body = next(body for body in raised(obj) if any(op.at == 0x6F for block in body.blocks for op in block.ops))
+    op = next(op for block in body.blocks for op in block.ops if op.at == 0x6F)
+    assert op.defines[0] not in consts.known(body)
+    assert lower.operand(op.args[0]).address == found.operands[0x70]
 
 
 def raised(obj: Path) -> list[mir.MirBody]:
