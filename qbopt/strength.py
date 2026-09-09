@@ -62,7 +62,7 @@ def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | 
     for loop, _basics, derived in found:
         preheader = passes._preheader(body, loop)
         latches = [at for at in loop.latches if at in at_of]
-        if preheader is None or len(latches) != 1:
+        if preheader is None or at_of[preheader].succ != (loop.header,) or len(latches) != 1:
             continue  # two ways in or out is a bigger change than this
         for one in derived:
             # Once each. A multiply inside a nest is derived in every loop

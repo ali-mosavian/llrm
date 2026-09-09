@@ -55,6 +55,13 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+Loop-entry checkpoint: reduced-counter setup now requires a dedicated preheader;
+an entry block with a bypass successor could previously introduce a memory read
+on the bypass path. The focused regression fails with the old reducer and passes
+with the guard; 40 related checks pass. Still outstanding before enablement:
+condition preservation in lowering and complete replacement of address/phi uses.
+Do not solve condition preservation by teaching MIR optimization machine flags.
+
 Product-result checkpoint: loop reduction now requires the first semantic result
 to be the only live result, following phi dependencies transitively. Previously
 a high-only result could be replaced by the low recurrence, and a second live

@@ -7,6 +7,8 @@ from qbopt import mir
 from qbopt import loops
 from qbopt import strength
 from qbopt import induction
+from qbopt.module import Addr
+from qbopt.module import Space
 
 
 def body() -> tuple[mir.MirBody, loops.Loop]:
@@ -196,3 +198,27 @@ def test_reduction_preserves_every_live_product_result(use: str) -> None:
         ),
     )
     assert strength._answer(built, product) == (low if use == "low" else None)
+
+
+@pytest.mark.parametrize("bypass", [False, True])
+def test_reduction_does_not_speculate_on_a_loop_bypass(bypass: bool) -> None:
+    built, _loop = body()
+    header = built.blocks[1]
+    counter = header.phis[0].result
+    answer = header.ops[1].defines[0]
+    memory = mir.MemRef(Addr(Space.SEGMENT, 0x20, 1), 2)
+    product = replace(
+        header.ops[1], uses=(counter,), args=(mir.Held(counter, 2), mir.Cell(memory)), loads=(memory,), covers=(2, 4)
+    )
+    consume = mir.Op(
+        4, ir.Operation.PUSH, "", (), (answer,), kind=mir.Kind.ARG, args=(mir.Held(answer, 2),), covers=(4, 6)
+    )
+    built = replace(
+        built,
+        blocks=(
+            replace(built.blocks[0], succ=(1, 2) if bypass else (1,)),
+            replace(header, ops=(replace(header.ops[0], covers=(1, 2)), product, consume)),
+            built.blocks[2],
+        ),
+    )
+    assert (strength.reduced(built) == built) == bypass
