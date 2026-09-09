@@ -944,3 +944,30 @@ were observed failing with the transformation disabled.
 Remaining: loop-invariant current-body position loads, array-address
 induction, live accumulators, the still-opaque arithmetic call, and a
 hand-derived nbody target. The overall modern-compiler goal is not complete.
+
+## Nbody: final inner call recovered, loop optimization unblocked
+
+The last inner runtime division (PDS 0x204) was retained because dead phi
+cycles mentioned its unused clobber results. Raising now follows phi inputs
+only from actually read results and removes the unused phis. This exposes
+the arithmetic and permits LICM to hoist the current-body scaled index;
+accumulator promotion can also operate across the formerly opaque call.
+
+Three integration defects surfaced and were fixed, not bypassed:
+
+- Division relocation matching now permits a different index SSA value when
+  the relocated address itself is unchanged; different addresses still fail.
+- Widening cannot move a pair above an intervening definition it consumes.
+  PDS otherwise stored DELTAY before computing it (PX0=6137536, expected 1258).
+- A chain ending in stores restores the last computed high-half definition,
+  not the empty definition list of its last store. Restore inputs and outputs
+  are declared to allocation even though the operation is opaque. Otherwise
+  PDS read an uninitialized spill and printed PX0=17758202 instead of 1258.
+
+Each defect has a regression observed failing without its fix. Strict LIR
+runtime checks pass nbody (24), negnot (4), and chain (7) on p-g2, q-O and
+v-g3. PDS nbody's modeled cost is now 886,143, versus 1,012,861 before this
+integration (12.5% lower). This remains a model, not a hardware benchmark.
+Next: hoist invariant position reads themselves, strengthen address induction,
+and derive the missing nbody target. No completion claim follows from these
+nine focused runtime checks.

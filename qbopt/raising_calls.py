@@ -24,7 +24,12 @@ def arithmetic(body: mir.MirBody, found, blocks) -> mir.MirBody:
     values |= {value for block in body.blocks for phi in block.phis for value in (phi.result, *phi.incoming.values())}
     values |= set(body.origin)
     readers = {value for block in body.blocks for op in block.ops for value in op.uses if value not in op.merges}
-    readers |= {value for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
+    phis = [phi for block in body.blocks for phi in block.phis]
+    while True:
+        incoming = {value for phi in phis if phi.result in readers for value in phi.incoming.values()}
+        if incoming <= readers:
+            break
+        readers |= incoming
     serial = max((value.id for value in values), default=0)
     variable = max((value.variable for value in values), default=0)
 
@@ -148,6 +153,7 @@ def arithmetic(body: mir.MirBody, found, blocks) -> mir.MirBody:
         blocks=tuple(
             replace(
                 block,
+                phis=tuple(phi for phi in block.phis if phi.result in readers),
                 ops=tuple(
                     replace(op, uses=tuple(value for value in op.uses if value not in removed_flags))
                     if op.kind is mir.Kind.CALL

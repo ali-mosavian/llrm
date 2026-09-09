@@ -1,9 +1,52 @@
 from pathlib import Path
+from dataclasses import replace
 
 import pytest
 
 import corpus
-from qbopt import ir, mir, module, omf, wholeseg
+from qbopt import asm, ir, mir, module, omf, pairs, transform, wholeseg
+
+
+def test_unused_loop_clobbers_do_not_hide_nbody_division() -> None:
+    """Nbody's final force division stayed opaque solely because dead phis carried call clobbers."""
+    path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    ops = [op for block in body.blocks for op in block.ops]
+    assert any(op.at == 0x204 and op.kind is mir.Kind.DIVMOD for op in ops)
+    assert not any(op.at == 0x204 and op.kind is mir.Kind.CALL for op in ops)
+
+
+def test_widening_does_not_move_nbody_store_before_its_definition() -> None:
+    """PDS nbody printed PX0=6137536 for 1258 after widening moved DELTAY before its subtract."""
+    path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
+    found = corpus.loaded(path)
+    blocks = corpus.partitioned(path)
+    body = mir.bodies(found, blocks)[0][1]
+    body = pairs.widened(transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found))
+    ops = next(block.ops for block in body.blocks if block.at == 0x117)
+    store = next(op for op in ops if op.at == 0x150 and op.kind is mir.Kind.STORE)
+    source = store.args[0].value
+    assert next(index for index, op in enumerate(ops) if source in op.defines) < ops.index(store)
+    high = next(op for op in ops if op.at == 0x1cd and op.kind is mir.Kind.CONCAT and op.args[0].value.at == 0x131).args[0].value
+    assert any(high in op.defines for op in ops)
+
+
+def test_divide_relocation_survives_index_value_replacement() -> None:
+    """Nbody refused its velocity divide after LICM renamed an index without changing its relocation."""
+    path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    op = next(op for block in body.blocks for op in block.ops if op.at == 0x25f and op.kind is mir.Kind.DIVMOD)
+    fields = frozenset(one.offset for one in omf.fixups(found.records) if one.seg == found.seg)
+    expected = asm._divide_fields(op, found, fields)
+    assert expected
+    cell = op.args[0]
+    moved = replace(cell, ref=replace(cell.ref, base=mir.Value(99999, 0)))
+    renamed = replace(op, args=(moved, *op.args[1:]))
+    assert asm._divide_fields(renamed, found, fields) == expected
+    different = replace(moved, ref=replace(moved.ref, addr=moved.ref.addr.plus(4)))
+    assert asm._divide_fields(replace(op, args=(different, *op.args[1:])), found, fields) is None
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])

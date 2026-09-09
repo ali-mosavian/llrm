@@ -516,7 +516,7 @@ class Lowering:
         register the raise saw it in, which for these is always BC's own
         because the idiom is BC's own.
         """
-        if op.kind is mir.Kind.OPAQUE:
+        if op.kind is mir.Kind.OPAQUE and not isinstance(op.node, ir.Restore):
             return self._implicit_values(op, op.defines)
         if op.kind is mir.Kind.DIVMOD:
             # A folded site is a sequence too, and it leaves its answers in
@@ -569,7 +569,7 @@ class Lowering:
         every tracked register until a contract narrows it, and that is a
         liveness dependency rather than an argument list.
         """
-        if op.kind is mir.Kind.OPAQUE:
+        if op.kind is mir.Kind.OPAQUE and not isinstance(op.node, ir.Restore):
             return self._implicit_values(op, op.uses)
         if op.id in self._sites:
             # These selected multi-instruction sequences still encode their

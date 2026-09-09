@@ -28,7 +28,7 @@ changes, then emit.
 """
 
 from dataclasses import field
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from iced_x86 import OpKind
 from iced_x86 import Register
@@ -340,7 +340,8 @@ def _divide_fields(op: mir.Op, found: Module, fields: frozenset[int]) -> "tuple[
     for index, one in enumerate(op.args):
         if not isinstance(one, mir.Cell):
             continue
-        if index >= len(was) or was[index] != one or index not in known:
+        if (index >= len(was) or not isinstance(was[index], mir.Cell) or index not in known
+            or replace(was[index].ref, base=one.ref.base, segment=one.ref.segment) != one.ref):
             return None
         out.append(known[index])
     return tuple(out)

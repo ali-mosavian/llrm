@@ -7,6 +7,19 @@ from qbopt import lower
 from qbopt import objwrite
 
 
+def test_restore_declares_its_input_and_high_result() -> None:
+    """Nbody's preserved high half must reach its assigned location instead of an uninitialized spill."""
+    from iced_x86 import Register
+    source, high = mir.Value(1, 0), mir.Value(2, 0)
+    op = mir.Op(0, ir.Operation.BARRIER, "restore", (high,), (source,),
+                kind=mir.Kind.OPAQUE, node=ir.Restore(at=0, end=4, pair=0, effects=ir.RESTORE_EFFECTS[0]))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),),
+                       {source: Register.EAX, high: Register.EDX})
+    lowering = lower.Lowering(body, {source.id, high.id}, {}, ())
+    assert lowering._abi(op) == ((ir.Held(source.id, 4), Register.EAX),)
+    assert lowering._idiom(op) == ((ir.Held(high.id, 2), Register.DX),)
+
+
 def test_lowering_preserves_relocated_store_ownership() -> None:
     """NESTED printed T=0 instead of 675 when its promoted store lost its fixup."""
     from qbopt.module import Addr, Space

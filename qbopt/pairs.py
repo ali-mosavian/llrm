@@ -667,10 +667,13 @@ def _follows(previous: Pair, one: Pair, block=None, origin: dict | None = None) 
     if block is None or origin is None:
         return False
     roots = PAIRS[previous.pair]
+    needed = set(one.low.uses) | set(one.high.uses)
     for op in block.ops:
         if not (ends <= op.at < lo):
             continue
         if op.barrier or op.at in getattr(block, "calls", ()):
+            return False
+        if needed.intersection(op.defines):
             return False
         if {origin.get(value) for value in (*op.defines, *op.uses)} & set(roots):
             return False
@@ -769,7 +772,7 @@ def _handed(chain: Chain) -> tuple:
     the widened operation defines is the low half's own id, so defining it
     again would say one value is written twice.
     """
-    last = chain.ops[-1]
+    last = next((pair for pair in reversed(chain.ops) if pair.high.defines), chain.ops[-1])
     whole = {one for one in last.low.defines if not one.flags}
     return tuple(one for one in last.high.defines if not one.flags and one not in whole)
 
