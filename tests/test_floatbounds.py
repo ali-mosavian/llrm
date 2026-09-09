@@ -12,6 +12,70 @@ from qbopt.model.floating import Format, Precision, Rounding, Semantics
 from qbopt.optimize import transform
 
 
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_fpdeep_reuses_proven_finite_array_loads(tag):
+    """FPDEEP loaded p(i) five times despite its three initialized finite elements."""
+    path = Path(f"fixtures/omf/fpdeep-{tag}.obj")
+    found = corpus.loaded(path)
+    partition = corpus.partitioned(path)
+    body = transform.applied(mir.bodies(found, partition)[0][1], found.dgroup,
+                             found.calls, blocks=partition, found=found)
+    loads = [op for block in body.blocks for op in block.ops
+             if op.kind is mir.Kind.FLOAD and op.loads and op.loads[0].base is not None]
+    assert len(loads) == 3
+    from qbopt import wholeseg
+    emitted = wholeseg.emitted(path.read_bytes())
+    assert emitted.outcome is wholeseg.Emission.LIR, emitted.reason
+    instructions = [str(one.insn) for block in corpus.partitioned(emitted.data) for one in block.insns]
+    assert instructions.count("fld dword ptr [si]") == 3
+    assert instructions.count("fld st(0)") == 2
+    assert not any(one.startswith(("fmul dword ptr [si]", "fadd dword ptr [si]")) for one in instructions)
+
+
+@pytest.mark.parametrize("bits", [0x7f800000, 0x7fc00000, 1, 0x3f000000])
+def test_array_reuse_requires_every_element_to_have_proven_integer_bounds(bits):
+    """An infinite, NaN, denormal or nonintegral p(1) is not a finite-integer proof."""
+    path = Path("fixtures/omf/fpdeep-p-g2.obj")
+    found = corpus.loaded(path)
+    partition = corpus.partitioned(path)
+    body = mir.bodies(found, partition)[0][1]
+    first = body.blocks[0].ops[0]
+    assert first.args == (mir.Const(0x41400000, 4),)
+    body = replace(body, blocks=tuple(replace(block, ops=tuple(
+        replace(op, args=(mir.Const(bits, 4),)) if op is first else op for op in block.ops
+    )) for block in body.blocks))
+    changed = transform.applied(body, found.dgroup, found.calls, blocks=partition, found=found)
+    assert sum(op.kind is mir.Kind.FLOAD and bool(op.loads) and op.loads[0].base is not None
+               for block in changed.blocks for op in block.ops) == 5
+
+
+@pytest.mark.parametrize("guard", [None, "missing", "alignment", "segment", "wrap"])
+def test_finite_array_proof_requires_known_aligned_nonwrapping_bytes(guard):
+    from qbopt.analysis import floatfacts, ranges
+    path = Path("fixtures/omf/fpdeep-p-g2.obj")
+    found = corpus.loaded(path)
+    partition = corpus.partitioned(path)
+    body = transform.applied(mir.bodies(found, partition)[0][1], found.dgroup,
+                             found.calls, blocks=partition, found=found)
+    block, index, op = next((block, index, op) for block in body.blocks
+        for index, op in enumerate(block.ops)
+        if op.kind is mir.Kind.FLOAD and op.loads and op.loads[0].base is not None)
+    memory = floatfacts.cells(body, found.dgroup, found.calls)[block.at, index]
+    scoped = ranges.bounded(body)[block.at]
+    definitions = {value: one for block in body.blocks for one in block.ops for value in one.defines}
+    arg = op.args[0]
+    if guard == "missing":
+        memory = {}
+    elif guard == "alignment":
+        definitions = {}
+    elif guard == "segment":
+        arg = mir.Cell(replace(arg.ref, segment=mir.Value(99999, 0)))
+    elif guard == "wrap":
+        scoped = {arg.ref.base: ranges.Interval(0, 65535, 2)}
+    assert floatbounds._memory(arg, op.floating.inputs[0], memory, scoped, definitions) == (
+        (12, 60) if guard is None else None)
+
+
 def test_integer_helper_with_a_live_clobbered_result_is_not_removed(monkeypatch):
     """B$FIL2 sign-extends into DX; replacing it must not discard a live DX result."""
     from iced_x86 import Register

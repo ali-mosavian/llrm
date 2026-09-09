@@ -162,6 +162,9 @@ def test_float_cse_preserves_computations_without_reuse_proof(change, monkeypatc
         facts = floatfacts.known(body, found.dgroup, {})
         facts.pop(floats[2].results[0].value)
         monkeypatch.setattr(floatfacts, "known", lambda *args, **kwargs: facts)
+        from qbopt.analysis import floatbounds
+        bounded = floatbounds.exact
+        monkeypatch.setattr(floatbounds, "exact", lambda *args: bounded(*args) - {id(floats[2])})
     else:
         target = floats[5] if change == "rounding" else floats[3]
         match change:

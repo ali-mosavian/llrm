@@ -263,7 +263,7 @@ def subexpressions(body: MirBody, dgroup: frozenset[int] = frozenset()) -> MirBo
     from qbopt.analysis import floatbounds, floatfacts
     exact = floatfacts.known(body, dgroup, {}) if any(
         op.floating for block in body.blocks for op in block.ops) else {}
-    bounded = floatbounds.exact(body, exact)
+    bounded = floatbounds.exact(body, exact, dgroup)
 
     seen: dict[tuple, list[tuple[int, int, Op]]] = {}
     stands: dict[int, mir.Value] = {}  # what a name numbers as -- copies included
@@ -825,11 +825,12 @@ def forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> M
 
 def _floating_forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
     """Exact stored values can replace arithmetic memory inputs without rounding anew."""
-    from qbopt.analysis import floatfacts
+    from qbopt.analysis import floatbounds, floatfacts
     from qbopt.model.floating import Format
     if not any(op.kind is mir.Kind.FSTORE for block in body.blocks for op in block.ops):
         return body
     facts = floatfacts.known(body, dgroup, calls)
+    bounded = floatbounds.exact(body, facts, dgroup)
     blocks = []
     for block in body.blocks:
         available = []
@@ -856,9 +857,13 @@ def _floating_forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, 
             ops.append(changed)
             available = [one for one in available if not any(
                 mir.overlapping(one.loads[0], written, dgroup) for written in op.stores)]
-            if not _exact_floating(op, facts):
+            if id(op) not in bounded and not _exact_floating(op, facts):
                 available.clear()
             provider = _exact_stored_load(op, facts)
+            if (id(op) in bounded and op.kind is mir.Kind.FLOAD
+                and len(op.loads) == len(op.results) == 1 and not op.stores
+                and isinstance(op.results[0], mir.Held) and op.results[0].width == 10):
+                provider = op
             if provider is not None:
                 available.append(provider)
         blocks.append(replace(block, ops=tuple(ops)))
