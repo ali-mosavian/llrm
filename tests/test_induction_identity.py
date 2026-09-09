@@ -1,4 +1,5 @@
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -11,6 +12,21 @@ from qbopt import transform
 from qbopt import induction
 from qbopt.module import Addr
 from qbopt.module import Space
+
+
+def test_strength_does_not_spill_matrix_inner_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Matrix cost grew from 11,916 to 12,974 when an outer recurrence spilled in its inner loop."""
+    import opportunity
+
+    obj = Path("fixtures/omf/matrix-p-g2.obj")
+    baseline = opportunity.counted([obj])["cost"]
+    applied = transform.applied
+
+    def reduced(*args, **kwargs):
+        return applied(*args, **{**kwargs, "strength_": True})
+
+    monkeypatch.setattr(transform, "applied", reduced)
+    assert opportunity.counted([obj])["cost"] < baseline
 
 
 def body() -> tuple[mir.MirBody, loops.Loop]:

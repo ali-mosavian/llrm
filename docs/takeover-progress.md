@@ -55,6 +55,17 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+Innermost selection checkpoint: reducing matrix's outer row counter created
+a live range across its inner loop and a spill/reload on every inner iteration.
+Restricting strength reduction to innermost natural loops avoids that loss:
+experimental matrix cost is now 11,418 versus production 11,916; segld is
+24,642 versus 25,802; HARR is unchanged at 11,094. The new real-output cost
+regression fails at 12,974 when the restriction is removed. Thirty-six focused
+checks and six strict LIR runtime cases pass. Full dumps and final assembly:
+`/tmp/qbopt-inner-strength-matrix-20260909`. Strength is still disabled pending
+backend condition/flag safety and a broader milestone validation. This is a
+temporary selection policy, not a substitute for target-aware pressure costing.
+
 Affine-address checkpoint: induction analysis composes word multiply,
 same-counter add/subtract and shifts, including known SSA constants. Matrix's
 diagonal `(i * 20 + i) << 1` is recognized as stride 42; strength reduction
