@@ -434,12 +434,13 @@ def _branch_condition(block: mir.MirBlock, readers: Counter[mir.Value]) -> tuple
 # becomes. Intrinsic expansions belong here rather than in `expand` itself.
 def _extract(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]:
     match op.args, op.results:
-        case (mir.Held(value=source, width=4), mir.Const(n=16)), (mir.Held(value=result, width=2),):
+        case (mir.Held(value=source, width=4), mir.Const(n=offset)), (mir.Held(value=result, width=2),) if offset in (0, 16):
             discarded = ir.Held(lowering.fresh(), 2)
+            kept = ir.Held(result.id, 2)
             return (
                 ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Held(source.id, 4),)),
-                ir.Semantics(ir.Operation.POP, "pop", (discarded,), ()),
-                ir.Semantics(ir.Operation.POP, "pop", (ir.Held(result.id, 2),), ()),
+                ir.Semantics(ir.Operation.POP, "pop", (kept if offset == 0 else discarded,), ()),
+                ir.Semantics(ir.Operation.POP, "pop", (discarded if offset == 0 else kept,), ()),
             )
     raise Unlowered(f"unsupported extraction at {op.at:#x}")
 
@@ -447,12 +448,15 @@ def _extract(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]:
 def _word_division(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...] | None:
     if len(op.args) != 2 or len(op.results) != 2:
         return None
-    if not all(isinstance(arg, mir.Held) and arg.width == 2 for arg in (*op.args, *op.results)):
+    width = op.results[0].width if isinstance(op.results[0], mir.Held) else 0
+    if width == 4 and op.node is not None:
+        return None  # Legacy folded sites order results by their runtime entry point.
+    if width not in (2, 4) or not all(isinstance(arg, mir.Held) and arg.width == width for arg in (*op.args, *op.results)):
         return None
     dividend, divisor = map(operand, op.args)
-    high = ir.Held(lowering.fresh(), 2)
+    high = ir.Held(lowering.fresh(), width)
     return (
-        ir.Semantics(ir.Operation.EXTEND, "cwd", (high,), (dividend,)),
+        ir.Semantics(ir.Operation.EXTEND, "cwd" if width == 2 else "cdq", (high,), (dividend,)),
         ir.Semantics(ir.Operation.DIVIDE, "idiv", tuple(map(operand, op.results)), (high, dividend, divisor)),
     )
 

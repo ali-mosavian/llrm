@@ -2107,8 +2107,10 @@ def bodies(
         if not isinstance(built, str):
             from qbopt import raising_arrays
             from qbopt import raising_division
+            from qbopt import raising_calls
 
             built = raising_division.scalar(built)
+            built = raising_calls.arithmetic(built, found, mine)
             defined = module.defines(found.records, found.seg)
             array_calls = {at: name for at, name in found.calls.items() if name not in defined}
             built = raising_arrays.annotated(built, array_calls, family=module.family(found.records))
