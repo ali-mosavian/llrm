@@ -10,6 +10,7 @@ import sys
 import json
 import argparse
 from pathlib import Path
+from hashlib import sha256
 from dataclasses import field
 from dataclasses import asdict
 from dataclasses import dataclass
@@ -27,7 +28,6 @@ from iced_x86 import Register
 from iced_x86 import Formatter
 from iced_x86 import Register_
 from iced_x86 import FlowControl
-from iced_x86 import RegisterExt
 from iced_x86 import FormatterSyntax
 
 from qbopt import omf
@@ -35,15 +35,25 @@ from qbopt.declen import INFO
 from qbopt.declen import READS
 from qbopt.declen import WRITES
 
-REGISTERS = ("ax", "bx", "cx", "dx", "si", "di", "bp", "ds", "es", "ss", "fs", "gs", "flags")
-WORDS = {getattr(Register, name.upper()): name for name in REGISTERS if name != "flags"}
-ROOTS = {RegisterExt.full_register(reg): name for reg, name in WORDS.items()}
+ALIASES: dict[str, tuple[str, ...]] = {"flags": ("flags",)}
+for _word in ("ax", "bx", "cx", "dx", "si", "di", "bp"):
+    _lanes = tuple(f"e{_word}:{byte}" for byte in range(4))
+    ALIASES["e" + _word] = _lanes
+    ALIASES[_word] = _lanes[:2]
+    ALIASES[f"e{_word}[31:16]"] = _lanes[2:]
+    if _word[1] == "x":
+        ALIASES[_word[0] + "l"] = _lanes[:1]
+        ALIASES[_word[0] + "h"] = _lanes[1:2]
+for _segment in ("ds", "es", "ss", "fs", "gs"):
+    ALIASES[_segment] = tuple(f"{_segment}:{byte}" for byte in range(2))
+PARTS = {getattr(Register, name.upper()): lanes for name, lanes in ALIASES.items() if hasattr(Register, name.upper())}
+REGISTERS = tuple(dict.fromkeys(lane for lanes in ALIASES.values() for lane in lanes))
 FORMAT = Formatter(FormatterSyntax.NASM)
 type Address = tuple[int, int, int]
 
 
-def register_name(reg: Register_) -> str | None:
-    return ROOTS.get(RegisterExt.full_register(reg))
+def register_parts(reg: Register_) -> tuple[str, ...]:
+    return PARTS.get(reg, ())
 
 
 @dataclass
@@ -72,7 +82,7 @@ def opaque(reason: str) -> Contract:
 
 
 class Library:
-    def __init__(self, objects: list[Module], limit: int = 2000, functions: int = 256) -> None:
+    def __init__(self, objects: list[Module], limit: int = 2000, functions: int | None = 256) -> None:
         self.objects = objects
         self.limit = limit
         self.functions = functions
@@ -185,9 +195,28 @@ class Library:
         return routine
 
     def graph(self, root: Address) -> dict[Address, Routine]:
+        return self.graph_from([root])
+
+    def code_entries(self, classes: set[str]) -> list[Address]:
+        code = set()
+        for index, module in enumerate(self.objects):
+            names = omf.names(module.records)
+            segment = 0
+            for record in module.records:
+                if record.type != omf.SEGDEF:
+                    continue
+                segment += 1
+                at = 3 + (3 if record.body[0] >> 5 == 0 else 0)
+                _, at = omf._index(record.body, at)
+                kind, _ = omf._index(record.body, at)
+                if kind < len(names) and names[kind].upper() in classes:
+                    code.add((index, segment))
+        return sorted(address for address in self.names if address[:2] in code)
+
+    def graph_from(self, roots: list[Address]) -> dict[Address, Routine]:
         graph = {}
-        pending = [root]
-        while pending and len(graph) < self.functions:
+        pending = list(reversed(roots))
+        while pending and (self.functions is None or len(graph) < self.functions):
             address = pending.pop()
             if address in graph:
                 continue
@@ -197,10 +226,10 @@ class Library:
 
 
 def analyze(routine: Routine, contracts: dict[Address, Contract], budget: int = 10000) -> Contract:
-    """Path-sensitive entry-value tokens, with conservative memory aliasing.
+    """Path-sensitive byte-lane entry tokens, with conservative memory aliasing.
 
     Reads include save/pass-through reads, not merely semantic arguments.
-    Only whole 16-bit register moves and stack pushes/pops preserve tokens.
+    Register moves and word/dword stack pushes/pops preserve matching lanes.
     Arbitrary stores invalidate saved stack tokens: SS can alias DS/ES.
     """
     unknown = set(routine.unknown)
@@ -226,44 +255,49 @@ def analyze(routine: Routine, contracts: dict[Address, Contract], budget: int = 
         before = values.copy()
         info = INFO.info(insn)
         for used in info.used_registers():
-            name = register_name(used.register)
-            if name and used.access in READS:
-                reads.add(name)
-            if name and used.access in WRITES:
-                written.add(name)
-                values[name] = "?"
-                if name == "ss":
+            parts = register_parts(used.register)
+            if used.access in READS:
+                reads.update(parts)
+            if used.access in WRITES:
+                written.update(parts)
+                for part in parts:
+                    values[part] = "?"
+                if used.register == Register.SS:
                     unknown.add(f"{at:04x}: stack segment change")
         if insn.rflags_read:
             reads.add("flags")
         if insn.rflags_modified:
             written.add("flags")
             values["flags"] = "?"
-        destination = WORDS.get(insn.op0_register) if insn.op0_kind == OpKind.REGISTER else None
-        source = WORDS.get(insn.op1_register) if insn.op_count > 1 and insn.op1_kind == OpKind.REGISTER else None
-        push = insn.mnemonic == Mnemonic.PUSH and insn.stack_pointer_increment == -2
-        pop = insn.mnemonic == Mnemonic.POP and destination is not None and insn.stack_pointer_increment == 2
+        destination = register_parts(insn.op0_register) if insn.op0_kind == OpKind.REGISTER else ()
+        source = register_parts(insn.op1_register) if insn.op_count > 1 and insn.op1_kind == OpKind.REGISTER else ()
+        width = abs(insn.stack_pointer_increment)
+        push = insn.mnemonic == Mnemonic.PUSH and width in (2, 4)
+        pop = insn.mnemonic == Mnemonic.POP and len(destination) == width and width in (2, 4)
         call = insn.flow_control in (FlowControl.CALL, FlowControl.INDIRECT_CALL)
         returning = insn.mnemonic in (Mnemonic.RET, Mnemonic.RETF)
         if push:
-            stack += (before[destination] if destination else "?",)
+            stack += tuple(before[part] for part in destination) if len(destination) == width else ("?",) * width
         elif pop:
-            if stack:
-                values[destination] = stack[-1]
-                stack = stack[:-1]
+            if len(stack) >= width:
+                values.update(zip(destination, stack[-width:], strict=True))
+                stack = stack[:-width]
             else:
                 unknown.add(f"{at:04x}: pop outside tracked stack")
         elif insn.mnemonic == Mnemonic.MOV and destination and source:
-            values[destination] = before[source]
-        elif insn.mnemonic == Mnemonic.MOV and destination == "bp" and insn.op1_register == Register.SP:
-            values["bp"] = f"stack:{len(stack)}"
+            if len(destination) == len(source):
+                values.update(zip(destination, (before[part] for part in source), strict=True))
+        elif insn.mnemonic == Mnemonic.MOV and insn.op0_register == Register.BP and insn.op1_register == Register.SP:
+            for part in ALIASES["bp"]:
+                values[part] = f"stack:{len(stack)}"
         elif (
             insn.mnemonic == Mnemonic.MOV
             and insn.op0_register == Register.SP
-            and source == "bp"
-            and before["bp"].startswith("stack:")
+            and insn.op1_register == Register.BP
+            and before[ALIASES["bp"][0]].startswith("stack:")
+            and before[ALIASES["bp"][0]] == before[ALIASES["bp"][1]]
         ):
-            depth = int(before["bp"].split(":")[1])
+            depth = int(before[ALIASES["bp"][0]].split(":")[1])
             if depth <= len(stack):
                 stack = stack[:depth]
             else:
@@ -295,10 +329,10 @@ def analyze(routine: Routine, contracts: dict[Address, Contract], budget: int = 
             if callee.unknown:
                 unknown.add(f"{at:04x}: dependency incomplete ({'; '.join(callee.unknown[:2])[:200]})")
             if call:
-                if callee.cleanup is None or callee.cleanup % 2 or callee.cleanup > len(stack) * 2:
+                if callee.cleanup is None or callee.cleanup > len(stack):
                     unknown.add(f"{at:04x}: unmodeled callee stack cleanup")
                 elif callee.cleanup:
-                    stack = stack[: -callee.cleanup // 2]
+                    stack = stack[: -callee.cleanup]
             else:
                 if stack:
                     unknown.add(f"{at:04x}: tail transfer with pending stack saves")
@@ -375,36 +409,77 @@ def summarize(graph: dict[Address, Routine]) -> dict[Address, Contract]:
     # back into itself. Every cyclic member keeps an opaque summary as input.
     details = {address: analyze(graph[address], contracts) for address in recursive}
     contracts.update(details)
-    return contracts
+    return {address: alias_contract(contract) for address, contract in contracts.items()}
+
+
+def alias_contract(contract: Contract) -> Contract:
+    preserved = set(contract.preserved)
+
+    def overlaps(parts: list[str]) -> list[str]:
+        return sorted(name for name, lanes in ALIASES.items() if set(lanes).intersection(parts))
+
+    return Contract(
+        overlaps(contract.reads),
+        overlaps(contract.clobbers),
+        sorted(name for name, lanes in ALIASES.items() if set(lanes) <= preserved),
+        sorted(
+            name
+            for name, lanes in ALIASES.items()
+            if set(lanes) <= preserved and set(lanes).intersection(contract.restored)
+        ),
+        contract.memory_write,
+        contract.cleanup,
+        contract.unknown,
+    )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("symbol")
+    parser.add_argument("symbol", nargs="?")
+    parser.add_argument("--all", action="store_true", help="analyze every public code entry and reachable helper")
+    parser.add_argument("--code-class", action="append", help="code segment class (default CODE)")
     parser.add_argument(
         "--lib", type=Path, action="append", required=True, help="OMF .lib or .obj; repeat for dependencies"
     )
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--dump", type=Path, help="write reachable disassembly and contracts to JSON")
     parser.add_argument("--instructions", type=int, default=2000)
-    parser.add_argument("--functions", type=int, default=256)
+    parser.add_argument("--functions", type=int, help="default 256 for one symbol; unlimited for --all")
     args = parser.parse_args()
-    if min(args.instructions, args.functions) <= 0:
+    if args.instructions <= 0 or (args.functions is not None and args.functions <= 0):
         parser.error("budgets must be positive")
+    if bool(args.symbol) == args.all:
+        parser.error("supply either a symbol or --all")
+    inputs = [(path, path.read_bytes()) for path in args.lib]
     library = Library(
-        [module for path in args.lib for module in modules(path.read_bytes())], args.instructions, args.functions
+        [module for _, data in inputs for module in modules(data)],
+        args.instructions,
+        args.functions if args.functions is not None else (None if args.all else 256),
     )
-    roots = library.symbols.get(args.symbol, [])
-    if len(roots) != 1:
+    roots = (
+        library.code_entries({name.upper() for name in args.code_class or ["CODE"]})
+        if args.all
+        else library.symbols.get(args.symbol, [])
+    )
+    if not args.all and len(roots) != 1:
         parser.error(f"expected one definition of {args.symbol}, found {len(roots)}")
-    graph = library.graph(roots[0])
+    if not roots:
+        parser.error("no public entries in selected code classes")
+    graph = library.graph_from(roots)
     contracts = summarize(graph)
     report = {
-        "scope": "16-bit GP/segment registers and aggregate flags; reads include saves; upper halves/x87 unproved; "
+        "scope": "8/16/32-bit overlapping GP registers, data segments and aggregate flags; "
+        "reads include saves; x87 unproved; "
         "SP described by cleanup only; conditional on normal return with immutable code, "
         "not termination or exception safety; memory aliasing conservative",
-        "root": library.label(roots[0]),
+        "root": None if args.all else library.label(roots[0]),
+        "roots": [library.label(address) for address in roots],
+        "unvisited_roots": [library.label(address) for address in roots if address not in graph],
+        "excluded_public_entries": [library.label(address) for address in library.names if address not in roots]
+        if args.all
+        else [],
         "inputs": [str(path.resolve()) for path in args.lib],
+        "input_sha256": {str(path.resolve()): sha256(data).hexdigest() for path, data in inputs},
         "recursive_components": [[library.label(address) for address in sorted(group)] for group in cycles(graph)],
         "unvisited_dependencies": sorted(
             {
@@ -422,7 +497,7 @@ def main() -> int:
                     for at, (target, reason) in routine.calls.items()
                 },
                 "disassembly": [
-                    f"{at:04x}: {library.codes[address[:2]][at:insn.next_ip].hex():<16} {FORMAT.format(insn)}"
+                    f"{at:04x}: {library.codes[address[:2]][at : insn.next_ip].hex():<16} {FORMAT.format(insn)}"
                     for at, insn in sorted(routine.instructions.items())
                 ],
             }
@@ -436,6 +511,19 @@ def main() -> int:
         print(output)
     else:
         print(report["scope"])
+        if args.all:
+            complete = sum(not contract.unknown for contract in contracts.values())
+            print(
+                f"{len(roots)} public code entries; {len(graph)} unique routines; "
+                f"{complete} modeled, {len(graph) - complete} incomplete"
+            )
+            print(
+                f"{len(report['unvisited_roots'])} unvisited roots; "
+                f"{len(report['unvisited_dependencies'])} unvisited dependencies"
+            )
+            if args.dump:
+                print(f"Full contract map: {args.dump}")
+                return 0
         for name, contract in report["functions"].items():
             print(f"\n{name}")
             for key in (

@@ -65,6 +65,59 @@ def test_cleanup_propagates() -> None:
     assert not result.unknown
 
 
+def test_low_byte_write_preserves_other_lanes() -> None:
+    """MOV AL,1 must not claim AH is clobbered or AX/EAX preserved."""
+    result = contract("b001 c3")
+    assert {"al", "ax", "eax"} <= set(result.clobbers)
+    assert {"ah", "eax[31:16]"} <= set(result.preserved)
+
+
+def test_word_write_preserves_upper_half() -> None:
+    result = contract("b80100 c3")
+    assert {"al", "ah", "ax", "eax"} <= set(result.clobbers)
+    assert "eax[31:16]" in result.preserved
+
+
+def test_dword_save_restores_every_lane() -> None:
+    result = contract("6650 66b801000000 6658 c3")
+    assert {"al", "ah", "ax", "eax", "eax[31:16]"} <= set(result.restored)
+    assert not result.unknown
+
+
+def test_word_save_does_not_restore_upper_half() -> None:
+    result = contract("50 66b801000000 58 c3")
+    assert "ax" in result.restored
+    assert "eax" in result.clobbers
+    assert "eax[31:16]" in result.clobbers
+
+
+def test_partial_callee_effect_keeps_lane_precision() -> None:
+    result = contract("e80100 c3 b401 c3")
+    assert {"ah", "ax", "eax"} <= set(result.clobbers)
+    assert {"al", "eax[31:16]"} <= set(result.preserved)
+
+
+def test_multiple_roots_share_one_helper() -> None:
+    found = library("e80500 c3 e80100 c3 b001 c3")
+    graph = found.graph_from([(0, 1, 0), (0, 1, 4)])
+    result = summarize(graph)
+    assert len(graph) == 3
+    assert all("al" in one.clobbers and "ah" in one.preserved for one in result.values())
+
+
+def test_code_roots_exclude_data_symbols() -> None:
+    found = library("c3")
+    found.objects[0].records.extend(
+        [
+            omf.Record(omf.LNAMES, b"\x04text\x04CODE\x04data\x04DATA"),
+            omf.Record(omf.SEGDEF, b"\x20\x01\x00\x01\x02\x00"),
+            omf.Record(omf.SEGDEF, b"\x20\x01\x00\x03\x04\x00"),
+        ]
+    )
+    found.names = {(0, 1, 0): "function", (0, 2, 0): "variable"}
+    assert found.code_entries({"CODE"}) == [(0, 1, 0)]
+
+
 def test_budget_is_unknown() -> None:
     found = library("e80100 c3 31c0 c3")
     found.functions = 1
