@@ -21,6 +21,33 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 import opportunity
 
 
+def test_cost_does_not_count_synthetic_raising_operations():
+    """NOTS acquired extra cost from MIR extracts even though its emitted bytes were unchanged."""
+    from collections import Counter
+    from dataclasses import replace
+    from qbopt.model import mir
+    from qbopt.objectfile import module, omf
+    from qbopt.frontend import blocks
+    found = module.of(omf.parse(Path("fixtures/omf/nots-p-g2.obj").read_bytes()))
+    partition = blocks.partition(found, blocks.code_map(found))
+    body = mir.bodies(found, partition)[0][1]
+    extra = next(op for block in body.blocks for op in block.ops if op.name == "extract")
+    duplicate = replace(body, blocks=tuple(replace(block, ops=(*block.ops, extra)) for block in body.blocks))
+    before, after = Counter(), Counter()
+    opportunity._cost(body, found, before)
+    opportunity._cost(duplicate, found, after)
+    assert before["cost"] == after["cost"]
+
+
+@pytest.mark.parametrize("program,target", [("nots", 378), ("negnot", 290)])
+def test_constant_bitwise_programs_have_references_and_still_fail_the_goal(program, target, capsys):
+    """NOTS/NEGNOT lacked targets, hiding their remaining constant-result propagation gap."""
+    assert opportunity.TARGETS[program.upper()] == target
+    assert opportunity.against_targets([Path(f"fixtures/omf/{program}-p-g2.obj")]) != 0
+    report = capsys.readouterr().out
+    assert "NO TARGET" not in report and "PROVISIONAL" not in report
+
+
 @pytest.mark.parametrize("tag", ["p-evt", "q-evt", "v-evt"])
 def test_event_build_does_not_use_a_plain_program_target(tag, tmp_path, capsys):
     """BOOLS /V/W was scored against a reference with no event checks (QB read as 4.57x)."""

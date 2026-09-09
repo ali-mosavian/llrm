@@ -280,21 +280,30 @@ def _cost(body, module_, found: Counter, trips: int = 10) -> None:
     actually costs.
     """
     depth = loopy.depth(list(body.blocks), body.entry)
+    mapped = code_map(module_)
+    if isinstance(mapped, str):
+        raise Unmeasured(mapped)
+    physical = {block.at: block for block in split.partition(module_, mapped)}
+    formatter = iced_x86.Formatter(iced_x86.FormatterSyntax.NASM)
     for block in body.blocks:
         weight = trips ** min(depth.get(block.at, 0), 3)
-        for op in block.ops:
-            if op.at in module_.calls:
-                found["cost"] += CALLED.get((module_.calls[op.at] or "").upper(), CALL) * weight
+        if block.at not in physical:
+            raise Unmeasured(f"no decoded block at {block.at:#x}")
+        for one in physical[block.at].insns:
+            if one.at in module_.calls:
+                found["cost"] += CALLED.get((module_.calls[one.at] or "").upper(), CALL) * weight
                 continue
-            name = (op.name or "").lower()
+            name = formatter.format_mnemonic(one.insn).split()[-1].lower()
+            memory = tuple(ir.INFO.info(one.insn).used_memory())
+            touches = sum((access.access in ir.READS) + (access.access in ir.WRITES) for access in memory)
             if name in FLOAT:
-                found["cost"] += (FLOAT[name] + TOUCH * (len(op.loads) + len(op.stores))) * weight
+                found["cost"] += (FLOAT[name] + TOUCH * touches) * weight
                 found["a floating-point operation"] += 1
                 continue
             cycles = CYCLES.get(name, 2)
             # Alias precision is not execution cost. Unknown array addresses
             # and spill slots still access memory after register allocation.
-            cycles += TOUCH * (len(op.loads) + len(op.stores))
+            cycles += TOUCH * touches
             found["cost"] += cycles * weight
 
 
@@ -491,6 +500,8 @@ TARGETS = {
     "PRESSX": 508,
     "FPCSEX": 1340,
     "LNGMXX": 208,
+    "NOTS": 378,
+    "NEGNOT": 290,
 }
 
 

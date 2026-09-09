@@ -31,6 +31,76 @@ The fail-first instrument regressions cover renamed objects from QB, PDS
 and VBDOS, plus a below-target cost that must still fail completion. No
 denominator was increased or inferred from current output.
 
+## NOTS and NEGNOT — constant expressions across output statements
+
+These ordinary, unchecked, event-free programs initialize two unescaped
+LONG scalars, then print expressions over them. Their sources contain no
+READ, user callback, assignment to either input after initialization, or
+runtime-dependent arithmetic. A source-level compiler can evaluate every
+expression modulo 32 bits. This reference does not grant qbopt permission
+to assume arbitrary machine-level runtime calls preserve arbitrary memory;
+recovering that source-level fact is part of the remaining work.
+
+Keep both initial stores, and NOTS's result store before each output.
+Print the same descriptors and signed LONG bit patterns through the same
+runtime entry points. The complete reference is the initialization below,
+the per-row sequence for every row in order, and the common epilogue.
+Each instruction's cost uses this tool's ranking formula, not hardware timing.
+
+```asm
+; Both programs: initialization = 12
+mov dword [a],12345678h         ; 6
+mov dword [b],0F0F0F0Fh         ; 6
+
+; Each row: 58, plus NOTS's store = 64
+mov dword [r],value             ; 6, NOTS only; NEGNOT has no r
+push word descriptor           ; 6
+call far B$PSSD                 ; 20
+push word (value >> 16)         ; 6, high half first
+push word (value & 0FFFFh)      ; 6
+call far B$PEI4                 ; 20
+
+; Both programs: epilogue = 46
+push word descriptorDone       ; 6
+call far B$PESD                 ; 20
+call far B$CENP                 ; 20
+```
+
+| Program | Descriptor | Source expression | LONG bits |
+| --- | --- | --- | --- |
+| NOTS | NOT= | NOT a | EDCBA987 |
+| NOTS | EQV= | a EQV b | E2C4A688 |
+| NOTS | IMP= | a IMP b | EFCFAF8F |
+| NOTS | NAND= | NOT (a AND b) | FDFBF9F7 |
+| NOTS | NOTOR= | (NOT a) OR b | EFCFAF8F |
+| NEGNOT | A= | -(NOT a) | 12345679 |
+| NEGNOT | B= | -(NOT (a AND b)) | 02040609 |
+| NEGNOT | C= | NOT (a OR b) | E0C0A080 |
+| NEGNOT | D= | -(a AND b) | FDFBF9F8 |
+
+NOTS target: **12 + 5×64 + 46 = 378**.
+NEGNOT target: **12 + 4×58 + 46 = 290**.
+No result is carried in a register across a printing call.
+
+The raw PDS listings cross-check as follows: NOTS has 12 calls, 56 other
+instructions and 60 non-call memory reads/writes, hence
+12×20 + 56×2 + 60×4 = **592**. NEGNOT has 10 calls, 46 other instructions
+and 31 non-call memory reads/writes, hence 10×20 + 46×2 + 31×4 = **416**.
+There are no loops or multiply/divide instructions to add another weight.
+Current output scores **586/378 = 1.55×** and **510/290 = 1.76×**:
+both miss the goal. Targets were not scaled from the optimized output.
+
+### Scoring decoded instructions
+
+The scorer now counts each reached decoded instruction, not raised MIR
+operations. A synthetic `extract` added to NOTS's raised body previously
+increased its score by two without changing any object byte. The fail-first
+regression now leaves its score unchanged. Memory traffic is counted from
+instruction accesses regardless of whether an address can be resolved.
+This changes no assembly. FPCSE's current score changes from 491 to 539;
+its old reference remains provisional. Existing targets are not increased
+to compensate for changed measurements.
+
 ## hotlop -- a loop-invariant product
 
 `s = s + (n * k) + i`, twenty passes. `n` and `k` are constants and neither

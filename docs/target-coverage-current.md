@@ -1,5 +1,12 @@
 # Target coverage and the next floating-point gap
 
+Update 2026-09-10: NOTS and NEGNOT now have complete ordinary-build
+references in `docs/targets.md`, respectively 378 and 290 ranking units.
+PDS output costs 586 (1.55×) and 510 (1.76×), so both remain above goal.
+The scorer now prices decoded instructions rather than synthetic raised
+operations. The historical totals below have not been rerun under that
+change and must not be quoted as the current completion percentage.
+
 Snapshot after event-handler correctness and statement-table discovery work.
 The full report before the latest table fix had 487 configuration rows:
 229 comparable (all within 1.5x), 169 without targets, 87 provisional,
@@ -8,7 +15,7 @@ those two as measured but without targets. These are configuration rows,
 not counts of independent programs. This is not a completion claim.
 
 Programs without targets include FPDEEP, FPEMU, DIVMOD, JUMPS, CMPORD,
-CHAIN, ARITH, FLAGS, PROCS, NOTS and NEGNOT. Small standalone fixtures also
+CHAIN, ARITH, FLAGS and PROCS. Small standalone fixtures also
 lack references. Event builds need event-preserving references; FPCSE and
 FPCSEX still have invalid inherited floating-point denominators.
 
