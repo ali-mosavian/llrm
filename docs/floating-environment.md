@@ -188,3 +188,39 @@ operand regression fails with that defect restored and passes with the fix.
 Disabling helper recognition independently fails all three compiler checks.
 Final stage dump: `/tmp/qbopt-fpicse-relocated-final`. Successful runtime
 directories: `qbopt-fild-relocated-etv3ig3s` and `qbopt-fild-events-36wa7wbo`.
+
+## INTEGER conversion helpers
+
+The same frontend path now recognizes B$FIL2's 16-bit memory input. It uses
+the established contract rather than duplicating its register interface in
+a second table. A live DX result or flags still prevents removal: unlike
+B$FILD, B$FIL2 sign-extends its argument into DX before loading the FPU.
+
+FPI2CS before/after (relocation names restored, /FPi shown as x87):
+
+```asm
+; before                         ; after
+mov ax,[inputValue]               fild word [inputValue]
+call B$FIL2                      fld st0
+fstp qword [firstValue]           fstp qword [firstValue]
+wait                             fstp qword [secondValue]
+mov ax,[inputValue]               wait
+call B$FIL2
+fstp qword [secondValue]
+wait
+```
+
+| Compiler | Modeled cost before -> after | Code bytes before -> after |
+| --- | --- | --- |
+| PDS /G2 | 3820 -> 3660 | 182 -> 170 |
+| QB /O | 3842 -> 3682 | 184 -> 172 |
+| VBDOS /G3 | 3830 -> 3670 | 184 -> 172 |
+
+The 151-object audit changes only the three new FPI2CS fixtures; all prior
+outputs remain identical. The new fixture's -32768, 123 and 32767 cases
+pass on all three compilers. Disabling B$FIL2 recognition fails the emitted
+code regression on each compiler; the focused bounds/helper tests total 20.
+Objects in `fixtures/regressions/fpi2cs-*.obj` came from `suite/fpi2cs.bas`
+through e2e/configs in run `qbopt-fil2-final-agr4msen`. The first attempted
+name exceeded the harness's six-character limit once its output prefixes
+were added; that run proved nothing. Stage dumps: `/tmp/qbopt-fil2-final-stages`.

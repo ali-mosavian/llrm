@@ -503,6 +503,7 @@ PROGRAMS = {
     "pressx": pressx,
     "fpcsex": fpcsex,
     "fpicse": fpicse,
+    "fpi2cs": fpicse,
     "lngmxx": lngmxx,
     "fpemu": fpemu,
     "fpdeep": fpdeep,

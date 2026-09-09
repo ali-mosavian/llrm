@@ -12,6 +12,28 @@ from qbopt.model.floating import Format, Precision, Rounding, Semantics
 from qbopt.optimize import transform
 
 
+def test_integer_helper_with_a_live_clobbered_result_is_not_removed(monkeypatch):
+    """B$FIL2 sign-extends into DX; replacing it must not discard a live DX result."""
+    from iced_x86 import Register
+    from qbopt.abi import runtime
+    from qbopt.frontend import raising_float_calls
+    path = Path("fixtures/regressions/fpi2cs-p-g2.obj")
+    found = corpus.loaded(path)
+    contracts = runtime.for_module(found)
+    raise_calls = raising_float_calls.raised
+    monkeypatch.setattr(raising_float_calls, "raised", lambda body, *args: body)
+    body = mir.bodies(found, corpus.partitioned(path), contracts)[0][1]
+    block = next(one for one in body.blocks if any(found.calls.get(op.at) == "B$FIL2" for op in one.ops))
+    index = next(index for index, op in enumerate(block.ops) if found.calls.get(op.at) == "B$FIL2")
+    call = block.ops[index]
+    result = next(value for value in call.defines if body.origin.get(value) == Register.EDX)
+    observer = block.ops[index + 1]
+    changed = replace(block, ops=tuple(replace(op, uses=(*op.uses, result)) if op is observer else op for op in block.ops))
+    body = replace(body, blocks=tuple(changed if one is block else one for one in body.blocks))
+    raised = raise_calls(body, found, contracts)
+    assert next(op for one in raised.blocks for op in one.ops if op.id == call.id).kind is mir.Kind.CALL
+
+
 @pytest.mark.parametrize("change", ["unknown", "writes", "control", "inputs"])
 def test_helper_conversion_respects_its_effect_contract(change):
     from qbopt.abi import runtime
@@ -28,15 +50,16 @@ def test_helper_conversion_respects_its_effect_contract(change):
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
-def test_runtime_long_conversion_is_shared_in_emitted_code(tag):
-    """FPICSE paid two B$FILD calls for the same READ value across two assignments."""
+@pytest.mark.parametrize("program,helper", [("fpicse", "B$FILD"), ("fpi2cs", "B$FIL2")])
+def test_runtime_integer_conversion_is_shared_in_emitted_code(tag, program, helper):
+    """FPICSE/FPI2CS paid two conversion calls for the same READ value across assignments."""
     from qbopt import wholeseg
     from qbopt.objectfile import module, omf
-    path = Path(f"fixtures/regressions/fpicse-{tag}.obj")
+    path = Path(f"fixtures/regressions/{program}-{tag}.obj")
     result = wholeseg.emitted(path.read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
-    assert "B$FILD" not in found.calls.values()
+    assert helper not in found.calls.values()
     instructions = [one for block in corpus.partitioned(result.data) for one in block.insns]
     assert sum(str(one.insn).startswith("fild ") for one in instructions) == 1
     assert sum(str(one.insn).startswith("fstp ") for one in instructions) == 2

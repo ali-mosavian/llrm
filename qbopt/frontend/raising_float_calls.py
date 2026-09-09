@@ -9,6 +9,24 @@ from qbopt.model import ir, mir
 from qbopt.objectfile import module, omf
 
 
+_WIDTHS = {"B$FILD": 4, "B$FIL2": 2}
+
+
+def _source(op, width, origin, definitions):
+    inputs = {origin.get(arg.value): definitions.get(arg.value)
+              for arg in op.args if isinstance(arg, mir.Held)}
+    low, high = inputs.get(Register.EAX), inputs.get(Register.EDX)
+    if width == 2:
+        return low
+    if (low is not None and high is not None
+        and low[1].kind is mir.Kind.EXTRACT and high[1].kind is mir.Kind.EXTRACT
+        and len(low[1].args) == len(high[1].args) == 2
+        and low[1].args[1] == mir.Const(0, 4) and high[1].args[1] == mir.Const(16, 4)
+        and low[1].args[0] == high[1].args[0] and isinstance(low[1].args[0], mir.Held)):
+        return definitions.get(low[1].args[0].value)
+    return None
+
+
 def raised(body, found, contracts):
     if "FIDRQQ" not in omf.externals(found.records):
         return body
@@ -20,31 +38,24 @@ def raised(body, found, contracts):
         definitions = {}
         ops = []
         for index, op in enumerate(block.ops):
+            name = found.calls.get(op.at)
+            width = _WIDTHS.get(name)
             contract = contracts.get(op.at)
-            candidate = (op.kind is mir.Kind.CALL and found.calls.get(op.at) == "B$FILD"
-                         and "B$FILD" not in local and contract is not None and contract.established
+            expected = runtime.contract(name) if width else None
+            candidate = (op.kind is mir.Kind.CALL and width is not None
+                         and name not in local and contract is not None and contract.established
                          and contract.writes is runtime.Memory.NONE
                          and contract.reads is runtime.Memory.NONE and contract.cleanup == 0
                          and contract.control is runtime.Control.RETURNS
                          and not (contract.enters_user_code or contract.raises_error or contract.error_handling)
-                         and contract.inputs == {runtime.Reg.AX, runtime.Reg.DX}
-                         and contract.clobbers == {runtime.Reg.FLAGS}
+                         and contract.inputs == expected.inputs
+                         and contract.clobbers == expected.clobbers
                          and not any(value in read for value in op.defines))
-            source = None
-            if candidate:
-                halves = {body.origin.get(arg.value): definitions.get(arg.value)
-                          for arg in op.args if isinstance(arg, mir.Held)}
-                low, high = halves.get(Register.EAX), halves.get(Register.EDX)
-                if (low is not None and high is not None
-                    and low[1].kind is mir.Kind.EXTRACT and high[1].kind is mir.Kind.EXTRACT
-                    and len(low[1].args) == len(high[1].args) == 2
-                    and low[1].args[1] == mir.Const(0, 4) and high[1].args[1] == mir.Const(16, 4)
-                    and low[1].args[0] == high[1].args[0] and isinstance(low[1].args[0], mir.Held)):
-                    source = definitions.get(low[1].args[0].value)
+            source = _source(op, width, body.origin, definitions) if candidate else None
             if source is not None:
                 where, load = source
                 if (load.kind is mir.Kind.LOAD and len(load.args) == 1
-                    and isinstance(load.args[0], mir.Cell) and load.args[0].ref.width == 4
+                    and isinstance(load.args[0], mir.Cell) and load.args[0].ref.width == width
                     and all(not one.stores and not one.barrier and one.kind is not mir.Kind.CALL
                             for one in block.ops[where + 1:index])):
                     ref = load.args[0].ref
