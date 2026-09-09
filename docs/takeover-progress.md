@@ -1248,3 +1248,40 @@ pass strict LIR on PDS, QB and VBDOS:
 The promotion cost regression remains: global accumulator stores survive
 alongside private spill-slot loads/stores and phi edge transfers. This encoder
 fix is committed independently; initializer recognition remains uncommitted.
+
+## Pending conditional store sinking
+
+Nbody's update stores are in a conditional body, not its latch, and POSX/POSY
+reads appeared to alias ACCX/ACCY without scoped index intervals. The experiment
+passes those intervals to alias queries and proves the exit value by tracing
+the header phi's latch input back through conditional paths to matching stores,
+including the initialized entry path. The invariant-only fallback remains
+restricted to latch stores; a nonempty loop does not imply a conditional store
+executes. The real Nbody sinking regression failed before this change.
+
+Both accumulator writes now move to exit 0x227. Modeled cost improves from
+418,616 to 409,016, still worse than committed 388,342 because private phi-spill
+traffic remains. Dumps: `/tmp/qbopt-conditional-sink`. Nbody, HARR, LNGMXX and
+NESTED pass strict LIR on all three compilers in
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-conditional-sink-y6v0bvte`.
+26 focused tests pass, but LNGMXX's nonempty invariant-temporary sinking check
+still fails: its remaining whole temporary's provider is not classified
+invariant. Do not weaken that check. Source changes remain uncommitted pending
+that investigation, conditional-path boundary checks, and allocator improvement.
+
+## Scalar divisor constants reach LICM
+
+LNGMXX's remaining temporary came from a scalar divide by a value known to
+be 7. Constant propagation excluded DIVMOD operands, so LICM could not prove
+the operation nonfaulting. Divisor propagation now preserves operand order
+and requires a width-complete fact. Lowering materializes a constant divisor
+as an abstract temporary before the divide, leaving allocation to place it.
+
+Three fail-first checks cover 7, zero, and -1, including insufficient-width
+facts; the latter two divisors remain unsafe to speculate. All 16 loop-motion
+checks pass, including the previously failing invariant-store check. The
+dump in `/tmp/qbopt-divisor-constants` places the divide at preheader 0x4c.
+LNGMXX, DIVMOD, and nbody pass strict LIR on all three compilers in
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-divisor-constants-dbsfgqw2`.
+This fix is separate from the uncommitted initializer/conditional-sinking
+experiment, whose nbody cost remains 409,016 pending allocator work.

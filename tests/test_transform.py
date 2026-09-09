@@ -180,6 +180,21 @@ def test_forwarding_extends_lifetime_without_conflating_shared_addresses() -> No
     assert done[3] == neighbor
 
 
+@pytest.mark.parametrize("number,safe", [(7, True), (0, False), (0xffffffff, False)])
+def test_divisor_constants_propagate_without_reordering(number, safe):
+    """LNGMXX retained invariant division by 7 because its constant divisor stayed opaque to LICM."""
+    from qbopt import consts
+    dividend, divisor, quotient, remainder = (mir.Value(index, 0) for index in range(1, 5))
+    op = mir.Op(0, ir.Operation.DIVIDE, "idiv", (quotient, remainder), (dividend, divisor),
+                kind=mir.Kind.DIVMOD, args=(mir.Held(dividend, 4), mir.Held(divisor, 4)),
+                results=(mir.Held(quotient, 4), mir.Held(remainder, 4)))
+    done = transform._constant_operands(op, {divisor: consts.Known(number, 4)})
+    assert done.args == (mir.Held(dividend, 4), mir.Const(number, 4))
+    assert done.uses == (dividend,)
+    assert transform._cannot_fault(done) is safe
+    assert transform._constant_operands(op, {divisor: consts.Known(number, 2)}) == op
+
+
 def test_leading_deletion_does_not_delete_its_survivor() -> None:
     first = mir.Op(0, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY, covers=(0, 3), args=(mir.Const(3, 2),))
     survivor = mir.Op(3, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY, covers=(3, 6), args=(mir.Const(21, 2),))

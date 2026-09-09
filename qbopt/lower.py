@@ -451,11 +451,18 @@ def _word_division(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]
     width = op.results[0].width if isinstance(op.results[0], mir.Held) else 0
     if width == 4 and op.node is not None:
         return None  # Legacy folded sites order results by their runtime entry point.
-    if width not in (2, 4) or not all(isinstance(arg, mir.Held) and arg.width == width for arg in (*op.args, *op.results)):
+    if (width not in (2, 4)
+        or not all(isinstance(arg, mir.Held) and arg.width == width for arg in (op.args[0], *op.results))
+        or not isinstance(op.args[1], (mir.Held, mir.Const)) or op.args[1].width != width):
         return None
     dividend, divisor = map(operand, op.args)
+    setup = ()
+    if isinstance(op.args[1], mir.Const):
+        held = ir.Held(lowering.fresh(), width)
+        setup = (ir.Semantics(ir.Operation.MOVE, "mov", (held,), (divisor,)),)
+        divisor = held
     high = ir.Held(lowering.fresh(), width)
-    return (
+    return (*setup,
         ir.Semantics(ir.Operation.EXTEND, "cwd" if width == 2 else "cdq", (high,), (dividend,)),
         ir.Semantics(ir.Operation.DIVIDE, "idiv", tuple(map(operand, op.results)), (high, dividend, divisor)),
     )

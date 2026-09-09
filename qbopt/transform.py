@@ -1725,7 +1725,7 @@ def _constant_operands(op: Op, facts: dict) -> Op:
     if (
         op.kind not in (
             mir.Kind.ADD, mir.Kind.ADD_CARRY, mir.Kind.AND, mir.Kind.OR, mir.Kind.XOR,
-            mir.Kind.MUL, mir.Kind.SUB, mir.Kind.SUB_BORROW,
+            mir.Kind.MUL, mir.Kind.SUB, mir.Kind.SUB_BORROW, mir.Kind.DIVMOD,
         )
         or len(op.args) != 2
     ):
@@ -1734,7 +1734,7 @@ def _constant_operands(op: Op, facts: dict) -> Op:
         return op
     replaced = set()
     args = []
-    ordered = op.kind in (mir.Kind.SUB, mir.Kind.SUB_BORROW)
+    ordered = op.kind in (mir.Kind.SUB, mir.Kind.SUB_BORROW, mir.Kind.DIVMOD)
     for index, arg in enumerate(op.args):
         if (
             (not ordered or index == 1) and isinstance(arg, mir.Held)
