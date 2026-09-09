@@ -137,3 +137,54 @@ committed objects in `fixtures/regressions/fpicse-{p-g2,q-O,v-g3}.obj`
 come from `tools/e2e.py` using the matching `tools/configs.py` configurations,
 with zero severe compile errors, in temporary run
 `qbopt-fpicse-implicit-stxjen_l`. Source is DOS CRLF, as required by BC.
+
+## Conversion helpers now enter typed MIR
+
+The next implementation closes the demonstrated B$FILD case. The raise
+recognizes its two extracted halves of one LONG loaded from unchanged
+memory. It requires the established returning, memory-free, flags-only
+contract, no live clobbered result, and the object's FIDRQQ linkage. Other
+argument shapes and B$FIL2 remain outside this recognition.
+
+Balanced floating regions can now receive SSA values independently of
+unmodelled READ/PRINT calls elsewhere in their block. CSE shares the raised
+integer conversion, and float allocation duplicates its live result before
+the first store. The encoding protocol and relocation provenance stay in
+the object module's side maps, not in MIR optimization decisions.
+
+```asm
+; before (argument setup abbreviated)
+mov ax,[inputValue]
+mov dx,[inputValue+2]
+call B$FILD
+fstp qword [firstValue]
+wait
+mov ax,[inputValue]
+mov dx,[inputValue+2]
+call B$FILD
+fstp qword [secondValue]
+wait
+
+; after (/FPi instructions displayed as x87 equivalents)
+fild dword [inputValue]
+fld st0
+fstp qword [firstValue]
+fstp qword [secondValue]
+wait
+```
+
+| FPICSE compiler | Modeled cost before -> after | Code bytes before -> after |
+| --- | --- | --- |
+| PDS /G2 | 4540 -> 3660 | 199 -> 170 |
+| QB /O | 4562 -> 3682 | 201 -> 172 |
+| VBDOS /G3 | 4550 -> 3670 | 201 -> 172 |
+
+Costs use opportunity.py's default loop weighting, not wall-clock timing.
+The 148-object audit changes 16 objects (FPICSE and FPEMU variants), all LIR,
+with no new refusals. Validation: 46 focused tests; 57 DOS cases including
+both programs on three primary compilers and FPEMU under QB event flags.
+The initial missing relocation printed zero instead of -32768; the emitted
+operand regression fails with that defect restored and passes with the fix.
+Disabling helper recognition independently fails all three compiler checks.
+Final stage dump: `/tmp/qbopt-fpicse-relocated-final`. Successful runtime
+directories: `qbopt-fild-relocated-etv3ig3s` and `qbopt-fild-events-36wa7wbo`.

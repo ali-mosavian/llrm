@@ -2173,6 +2173,8 @@ def bodies(
             built = raising_arrays.annotated(built, array_calls, family=module.family(found.records))
             from qbopt.frontend import raising_addresses
             built = raising_addresses.loaded(built)
+            from qbopt.frontend import raising_float_calls
+            built = raising_float_calls.raised(built, found, contracts)
             from qbopt.frontend import raising_floats
             built = raising_floats.annotated(built)
             from qbopt.frontend import raising_float_values

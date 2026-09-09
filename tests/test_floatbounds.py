@@ -12,6 +12,43 @@ from qbopt.model.floating import Format, Precision, Rounding, Semantics
 from qbopt.optimize import transform
 
 
+@pytest.mark.parametrize("change", ["unknown", "writes", "control", "inputs"])
+def test_helper_conversion_respects_its_effect_contract(change):
+    from qbopt.abi import runtime
+    path = Path("fixtures/regressions/fpicse-p-g2.obj")
+    found = corpus.loaded(path)
+    contracts = runtime.for_module(found)
+    alterations = {"unknown": {"established": False}, "writes": {"writes": runtime.Memory.ANY},
+                   "control": {"enters_user_code": True}, "inputs": {"inputs": None}}
+    contracts = {at: replace(rule, **alterations[change]) if found.calls.get(at) == "B$FILD" else rule
+                 for at, rule in contracts.items()}
+    body = mir.bodies(found, corpus.partitioned(path), contracts)[0][1]
+    assert sum(op.kind is mir.Kind.CALL and found.calls.get(op.at) == "B$FILD"
+               for block in body.blocks for op in block.ops) == 2
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_runtime_long_conversion_is_shared_in_emitted_code(tag):
+    """FPICSE paid two B$FILD calls for the same READ value across two assignments."""
+    from qbopt import wholeseg
+    from qbopt.objectfile import module, omf
+    path = Path(f"fixtures/regressions/fpicse-{tag}.obj")
+    result = wholeseg.emitted(path.read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    found = module.of(omf.parse(result.data))
+    assert "B$FILD" not in found.calls.values()
+    instructions = [one for block in corpus.partitioned(result.data) for one in block.insns]
+    assert sum(str(one.insn).startswith("fild ") for one in instructions) == 1
+    assert sum(str(one.insn).startswith("fstp ") for one in instructions) == 2
+    load = next(one for one in instructions if str(one.insn).startswith("fild "))
+    assert found.code[load.at] == 0xcd  # Keep the object's software-FP protocol.
+    body = mir.bodies(found, corpus.partitioned(result.data))[0][1]
+    converted = next(op for block in body.blocks for op in block.ops if op.name == "fild")
+    from qbopt.objectfile.module import Space
+    assert converted.loads[0].addr.space is Space.SEGMENT
+    assert converted.loads[0].addr.disp == 6
+
+
 @pytest.mark.parametrize("format,expected", [(Format.SIGNED16, 1), (Format.SIGNED32, 1), (Format.BINARY32, 2)])
 def test_unknown_integer_loads_share_a_value_but_unknown_floats_do_not(format, expected):
     """FPCSEX reloads its runtime input; integer conversion can share without assuming finite REALs."""

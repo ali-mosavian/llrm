@@ -519,6 +519,9 @@ def _placed(
 
 
 def _emulator_protocol(op, found, native_fpu):
+    if (not native_fpu and op.id in found.float_protocols and op.made is not None
+        and op.made.op is ir.Operation.FLOAT_LOAD):
+        return found.float_protocols[op.id]
     if native_fpu or not fpu.emulated_at(found.code, op.at):
         return None
     protocol = found.code[op.at + 1]

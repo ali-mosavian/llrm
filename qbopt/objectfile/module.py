@@ -187,6 +187,9 @@ class Module:
     # it, because that is the only moment the bytes can answer it. Keyed by
     # the operation rather than by its address: a pass may move it.
     refs: dict[int, tuple[int, ...]] = field(default_factory=dict)
+    # Encoding provenance for FP operations raised from runtime helpers.
+    # Kept outside MIR; only the frontend and emitter use the protocol.
+    float_protocols: dict[int, int] = field(default_factory=dict)
     # Which absorbable call each folded operation stands for, by mir.Op.id.
     # The raise turns a push run and its call into one operation over the
     # argument values; lowering asks this what instructions to write for it.

@@ -7,14 +7,37 @@ from qbopt.model import mir
 from qbopt.analysis import ssa
 
 
+def _regions(block):
+    """Balanced typed sequences, separated by calls or unknown stack effects."""
+    run = []
+    depth = 0
+    for op in block.ops:
+        if op.barrier or op.kind is mir.Kind.CALL or (op.stack is not None and op.floating is None):
+            run, depth = [], 0
+            continue
+        run.append(op)
+        if op.stack is not None:
+            depth += op.stack
+            if depth < 0:
+                run, depth = [], 0
+                continue
+        if depth == 0:
+            if any(one.stack is not None for one in run):
+                yield tuple(run)
+            run = []
+
+
 def raised(body: mir.MirBody) -> mir.MirBody:
     values = tuple(ssa.values(body))
     serial = max((value.id for value in values), default=0)
     variable = max((value.variable for value in values), default=0)
-    readings = fpstack.readings(body)
     blocks = []
     for block in body.blocks:
-        operations = [op for op in block.ops if op.stack is not None]
+        regions = tuple(_regions(block))
+        operations = [op for region in regions for op in region if op.stack is not None]
+        readings = {}
+        for region in regions:
+            readings.update(fpstack.readings(replace(body, blocks=(replace(block, ops=region),))))
         if (not operations or any(op.floating is None for op in operations)
             or len({op.at for op in operations}) != len(operations)
             or sum(op.stack for op in operations) != 0):
