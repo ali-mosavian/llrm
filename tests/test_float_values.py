@@ -96,4 +96,26 @@ def test_float_lowering_checks_actual_stack_transitions(change):
         ops[index] = replace(op, stack=0 if change == "missing_push" else -1)
     changed = replace(body, blocks=tuple(replace(one, ops=tuple(ops)) if one is block else one for one in body.blocks))
     with pytest.raises(Unlowered, match="floating stack"):
-        lower_floats.restored(changed)
+        lower_floats._stack_checked(next(one for one in changed.blocks if one.at == block.at))
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_float_allocation_uses_current_ssa_values(tag):
+    """FPCSE allocation must follow renamed value edges, not BC's origin identifiers."""
+    path = Path(f"fixtures/omf/fpcse-{tag}.obj")
+    body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
+    baseline = lower_floats.restored(body)
+    variables = {arg.value.variable for block in body.blocks for op in block.ops
+                 if op.floating_origin for arg in (*op.args, *op.results)
+                 if isinstance(arg, mir.Held) and arg.width == 10}
+    def renamed(value):
+        return replace(value, id=value.id + 10000, variable=value.variable + 10000) if value.variable in variables else value
+    def operand(arg):
+        return replace(arg, value=renamed(arg.value)) if isinstance(arg, mir.Held) else arg
+    changed = replace(body, blocks=tuple(replace(block, ops=tuple(replace(op,
+        args=tuple(map(operand, op.args)), results=tuple(map(operand, op.results)),
+        uses=tuple(map(renamed, op.uses)), defines=tuple(map(renamed, op.defines)))
+        for op in block.ops)) for block in body.blocks))
+    allocated = lower_floats.restored(changed)
+    assert [(op.args, op.results, op.uses, op.defines) for block in allocated.blocks for op in block.ops] == [
+        (op.args, op.results, op.uses, op.defines) for block in baseline.blocks for op in block.ops]

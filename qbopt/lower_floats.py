@@ -2,7 +2,9 @@
 
 from dataclasses import replace
 
-from qbopt import mir
+from qbopt import floatalloc, mir
+
+
 
 
 def _stack_checked(block: mir.MirBlock) -> None:
@@ -87,7 +89,7 @@ def restored(body: mir.MirBody) -> mir.MirBody:
     from qbopt.lower import Unlowered
 
     floating = {arg.value.variable for block in body.blocks for op in block.ops if op.floating_origin is not None
-                for arg in (*op.floating_origin.inputs, *op.floating_origin.outputs)
+                for arg in (*op.args, *op.results)
                 if isinstance(arg, mir.Held) and arg.width == 10}
     for block in body.blocks:
         if any(value.variable in floating for phi in block.phis for value in (phi.result, *phi.incoming.values())):
@@ -105,6 +107,7 @@ def restored(body: mir.MirBody) -> mir.MirBody:
         sequence = tuple(op.floating_origin.at for op in typed)
         if block.at != baseline.block or sequence != baseline.sequence:
             raise Unlowered("floating sequence changed before stack allocation is implemented")
+        block = floatalloc.placed(block)
         _stack_checked(block)
         blocks.append(replace(block, ops=tuple(operation(op) for op in block.ops)))
     return replace(body, blocks=tuple(blocks))

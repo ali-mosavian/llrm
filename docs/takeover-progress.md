@@ -2263,3 +2263,22 @@ focused floating/selection/stage tests pass, and the 97-object before/after
 audit retains identical bytes and outcomes. No speedup is claimed: the
 allocator does not yet request these forms, and strict rounding/effect
 constraints still prevent generic floating CSE.
+
+### Floating allocation follows current value identities
+
+`floatalloc.placed` now assigns slots to self-contained floating value
+chains from their current definitions and uses. It no longer derives those
+positions from BC's saved input/output operands. Whole-body lowering accepts
+consistent SSA renaming while its single-instruction legacy entry retains
+the conservative identity baseline. Strict evaluation order and conversion
+shapes remain guarded; missing operands, exchanges, spills and live-outs
+that the allocator cannot yet handle are explicit refusals.
+
+Three fail-first tests rename FPCSE's floating values for PDS, QB and VBDOS.
+The stack-corruption tests now exercise the stack verifier directly, since
+saved operand positions are no longer the allocator's authority. All 89
+focused tests pass and all 97 audited objects retain identical bytes and
+outcomes. This is initial allocation capability, not an optimization gain.
+The floating adapter still runs before general LIR construction; integrating
+floating constraints and inserted moves with the LIR allocation pipeline is
+unfinished, as are cross-block values and strict-effect-aware reuse.
