@@ -82,6 +82,21 @@ def test_only_an_event_build_has_a_stub_and_it_sits_after_the_jump(obj: Path) ->
         assert stub in mapped.starts, "seeded, or nothing reaches it"
 
 
+@pytest.mark.parametrize("tag", ["p-evt", "v-evt"])
+def test_rebuilt_event_code_is_fully_visible(tag: str) -> None:
+    """Rebuilt ADDRM hid 0035..0046 from the assembly dump and target scorer."""
+    from qbopt import wholeseg
+    from qbopt.objectfile import omf
+    from qbopt.frontend.blocks import instructions
+    result = wholeseg.emitted(Path(f"fixtures/omf/addrm-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR
+    found = module.of(omf.parse(result.data))
+    code = instructions(found)
+    assert not isinstance(code, str), code
+    assert event_stub(found) == 0x35
+    assert 0x35 in {one.at for one in code}
+
+
 def test_the_instruction_stream_tiles(mapped_obj: Path) -> None:
     # Overlapping instructions are what a decode that began one byte off looks
     # like, and its invented fragments are dangerous: `78 56`, the middle of the

@@ -21,6 +21,7 @@ from dataclasses import replace
 from dataclasses import dataclass
 
 from iced_x86 import FlowControl
+from iced_x86 import Code, Register
 
 from qbopt.frontend.declen import Insn
 from qbopt.frontend.declen import decode
@@ -135,6 +136,12 @@ def event_stub(module: Module) -> int | None:
     if not event_enabled(module):
         return None
     jump = decode(module.code, ENTRY)
+    if (jump is not None
+            and jump.insn.code in (Code.SUB_RM16_IMM8, Code.SUB_RM16_IMM16)
+            and jump.insn.op0_register == Register.SP):
+        # The allocator's main-body spill reservation precedes the original
+        # entry jump. This is emitted layout, not a BC prologue convention.
+        jump = decode(module.code, jump.end)
     if jump is None or terminator(jump) is not Ends.JUMP:
         return None
     return jump.end
