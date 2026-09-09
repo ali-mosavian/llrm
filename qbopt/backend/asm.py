@@ -625,6 +625,7 @@ def assemble(
     # target within a signed byte becomes short, which moves everything after
     # it closer and can only let more of them shrink.
     short: set[int] = set()  # by position, since an address may hold several
+    fallthrough: set[int] = set()
     placed, moved = _placed(ops, at, lengths, labels)
     changing = True
     while changing:
@@ -633,10 +634,19 @@ def assemble(
             if isinstance(op, Table):
                 continue
             what = _semantics(op)
-            if what is None or what.target is None or index in short:
+            if what is None or what.target is None or index in fallthrough:
                 continue
             landed = moved.get(what.target)
             if landed is None:
+                continue
+            if (what.op is ir.Operation.JUMP and what.name == "jmp"
+                and lengths[index] > 0 and landed == placed[index] + lengths[index]
+                and not _fields_in(found, op, fields)):
+                fallthrough.add(index)
+                lengths[index] = 0
+                changing = True
+                continue
+            if index in short:
                 continue
             # Through `moved`, the same as the emission below. Asking for the
             # short form of a branch that still names its *original* target,
@@ -670,6 +680,8 @@ def assemble(
     out = bytearray()
     relocations: list[tuple[int, int]] = []
     for index, op in enumerate(ops):
+        if index in fallthrough:
+            continue
         if isinstance(op, Table):
             # Copied verbatim, with every fixup inside it moved by the same
             # amount the table itself moved. The entries are relocated words

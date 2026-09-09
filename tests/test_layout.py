@@ -33,6 +33,47 @@ from qbopt.frontend.blocks import code_map
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
 
+def test_pressx_has_no_jump_to_the_following_instruction():
+    """PRESSX retained an unconditional jump to its exit immediately after loop elimination."""
+    from qbopt import wholeseg
+    result = wholeseg.emitted(Path("fixtures/omf/pressx-p-g2.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    for block in corpus.partitioned(result.data):
+        for one in block.insns:
+            insn = one.insn
+            if insn.mnemonic == Mnemonic.JMP and insn.op0_kind in (OpKind.NEAR_BRANCH16, OpKind.NEAR_BRANCH32):
+                assert insn.near_branch_target != insn.next_ip
+
+
+@pytest.mark.parametrize("shape", ["next", "chain", "self", "data"])
+def test_fallthrough_relaxation_preserves_targets_and_intervening_data(shape):
+    """Removing PRESSX's empty exit jump must not remove a loop or execute skipped data."""
+    from types import SimpleNamespace
+    def jump(at, to):
+        return mir.Op(at, ir.Operation.JUMP, "jmp", (), (), (), (), None,
+                      made=ir.Semantics(ir.Operation.JUMP, "jmp", target=to), covers=(at, at + 2))
+    def ret(at):
+        return mir.Op(at, ir.Operation.RETURN, "ret", (), (), (), (), None,
+                      made=ir.Semantics(ir.Operation.RETURN, "ret"), covers=(at, at + 1))
+    ops = [jump(0, 2), ret(2)]
+    code = bytes.fromhex("eb00c3")
+    if shape == "chain":
+        ops, code = [jump(0, 2), jump(2, 4), ret(4)], bytes.fromhex("eb00eb00c3")
+    elif shape == "self":
+        ops = [jump(0, 0), ret(2)]
+    elif shape == "data":
+        ops, code = [jump(0, 3), asm.Table(2, 3), ret(3)], bytes.fromhex("eb0190c3")
+    found = SimpleNamespace(code=code, absorbed={}, fixup_at={}, calls={}, refs={}, float_protocols={})
+    result = asm.assemble(ops, 0, found)
+    assert not isinstance(result, str), result
+    if shape in {"next", "chain"}:
+        assert result.code == bytes.fromhex("c3")
+    elif shape == "self":
+        assert result.code == bytes.fromhex("ebfec3")
+    else:
+        assert result.code == bytes.fromhex("eb0190c3")
+
+
 def test_emulator_load_uses_the_allocated_address() -> None:
     """nbody's copied FLD still read SI after allocation moved its pointer."""
     from types import SimpleNamespace

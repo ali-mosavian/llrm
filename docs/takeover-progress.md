@@ -1,5 +1,29 @@
 # Takeover checkpoint — 2026-09-09
 
+## Remove jumps to the next emitted instruction
+
+Branch relaxation now removes unconditional direct jumps whose destination
+is exactly their emitted end. It iterates with short-branch selection, retains
+the address mapping for collapsed labels, and leaves jumps over carried data,
+self-loops and relocated operands intact. This is layout, not a MIR pass.
+
+SPILL previously emitted `add cx,70 / jmp next / next: mov [i],si`; it now
+falls straight through to the counter store. Its PDS/QB/VBDOS modeled costs fall
+**470/476/480 -> 450/456/460**, with two bytes removed per object. Other
+changed programs: HOTLOP, HOTLPX, LNGMXX, PRESS, PRESSX, ROTATE and SPLIT.
+PRESSX PDS falls 646 -> 644; SPLIT PDS 152 -> 144. These references still
+include provisional targets where already documented; no completion claim.
+
+154-object audit: 24 changed objects, no new refusals. All 27 runtime cases
+for the eight changed programs pass across three compilers. Five new focused
+checks pass, including a real PRESSX symptom that failed before the fix.
+Three existing targeted relocation/coverage checks pass. One additional old
+BOOLS fold-test fails because it finds no qualifying fold; verified unchanged
+with the previous assembler, and not weakened or included in the pass count.
+Before/after all-stage dumps: `/tmp/qbopt-fallthrough-before` and
+`/tmp/qbopt-fallthrough-after`. Runtime evidence:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-fallthrough-j_82rc5r`.
+
 ## Short zeroing when arithmetic flags are dead
 
 The post-allocation peephole replaces a word/dword immediate zero with a
