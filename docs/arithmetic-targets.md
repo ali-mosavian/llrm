@@ -32,15 +32,19 @@ lea bx,[ecx+ecx*4]
 shl bx,2
 ```
 
-After selection: unchanged on 386/486/P5; on P6:
+The first P6 selector incorrectly chose:
 
 ```asm
 imul bx,bx,20
 ```
 
-The full emitted object is 841 bytes for the chain, 837 for P6.
-All three compiler variants pass the P6-output runtime check. The default
-386 output is byte-identical for all 96 primary fixtures.
+That choice has been corrected: P6 also selects the LEA + SHL form, making
+the full emitted object 841 rather than 837 bytes. GCC's `pentiumpro_cost`
+in `gcc/config/i386/x86-tune-costs.h` (local revision 9a135e85c) assigns
+one instruction-cost unit each to LEA and constant shift, four to multiply.
+The selector now costs the fused form rather than the longer pre-peephole
+sequence. This is a compiler tuning heuristic, not a measured clock count
+for these 16-bit-mode encodings. The default 386 selection is unchanged.
 
 Signed positive constant division now compares a reciprocal sequence,
 including remainder reconstruction, against IDIV during lowering.

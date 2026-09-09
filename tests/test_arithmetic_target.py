@@ -22,7 +22,8 @@ def test_fast_multiply_changes_break_even():
     assert arithmetic.scale(20, "386") is not None
     assert arithmetic.scale(20, "486") is not None
     assert arithmetic.scale(20, "P5") is not None
-    assert arithmetic.scale(20, "P6") is None
+    assert arithmetic.scale(20, "P6") is not None
+    assert arithmetic.scale(85, "P6") is None
     assert arithmetic.scale(7, "386") == (("shl", 3), ("sub", 0))
 
 
@@ -42,7 +43,7 @@ def test_386_positive_immediate_early_out(number, clocks):
     assert arithmetic.immediate_multiply("386", number) == clocks
 
 
-@pytest.mark.parametrize("cpu,multiplies", [("386", 1), ("486", 1), ("P5", 1), ("P6", 2)])
+@pytest.mark.parametrize("cpu,multiplies", [("386", 1), ("486", 1), ("P5", 1), ("P6", 1)])
 def test_hotlpx_emission_obeys_selected_cpu(cpu, multiplies):
     """HOTLPX's factor twenty should not become a slower chain on a fast multiplier."""
     from pathlib import Path
