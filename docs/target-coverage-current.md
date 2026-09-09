@@ -1,5 +1,12 @@
 # Target coverage and the next floating-point gap
 
+FPDEEP update 2026-09-10: its complete ordinary-build reference is now
+1086 units, independently derived from its exact source expressions and
+printing sequence in `docs/targets.md`. Current costs are PDS 11829 (10.89x),
+QB 12047 (11.09x), VBDOS 11759 (10.83x). These are static ranking ratios,
+not runtime speedups. The new denominator exposes a gap; emitted bytes did
+not change. Event-enabled configurations remain provisional.
+
 Update 2026-09-10: ARITH has a complete ordinary-build reference of 592 units.
 NOTS and NEGNOT references are corrected to 306 and 254: their earlier 378/290
 targets unnecessarily retained dead stores and split argument pushes.
@@ -22,7 +29,7 @@ and two unmeasured DIVMOD event builds. The latest focused check resolves
 those two as measured but without targets. These are configuration rows,
 not counts of independent programs. This is not a completion claim.
 
-Programs without targets include FPDEEP, FPEMU, DIVMOD, JUMPS, CMPORD,
+Programs without targets include FPEMU, DIVMOD, JUMPS, CMPORD,
 CHAIN, FLAGS and PROCS. Small standalone fixtures also
 lack references. Event builds need event-preserving references; FPCSE and
 FPCSEX still have invalid inherited floating-point denominators.
@@ -39,8 +46,8 @@ value facts at use sites: intervening memory effects kill the entry facts.
 Emitted bytes are unchanged. Preserving a literal across those effects
 requires a separate alias/escape proof, not declaring BC_CN immutable.
 
-Current ordinary-build costs: PDS 11603, QB45 11819, VBDOS 11533. No ratio
-is valid without an independently derived reference. The source's DOUBLE
+Earlier ordinary-build costs were PDS 11603, QB45 11819, VBDOS 11533;
+the update above supersedes these. The source's DOUBLE
 expression is `(d*d)/(d+d)` after assigning `d=12`.
 
 The PDS emitted listing contains:

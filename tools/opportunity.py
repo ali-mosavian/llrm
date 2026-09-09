@@ -503,6 +503,7 @@ TARGETS = {
     "NOTS": 306,
     "NEGNOT": 254,
     "ARITH": 592,
+    "FPDEEP": 1086,
 }
 
 

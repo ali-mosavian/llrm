@@ -31,6 +31,57 @@ The fail-first instrument regressions cover renamed objects from QB, PDS
 and VBDOS, plus a below-target cost that must still fail completion. No
 denominator was increased or inferred from current output.
 
+## FPDEEP — exact constant floating expressions
+
+For ordinary unchecked, event-free builds, the three array elements are
+12, 28 and 60, `k=4`, and `d=12`; no numeric address escapes. Expand the
+three known iterations in source order. Every intermediate product, sum,
+difference and quotient below is exactly representable even with a 24-bit
+significand. SINGLE stores and CLNG therefore do not change the answers,
+regardless of rounding mode. There is no division by zero, overflow,
+underflow or cancellation to signed zero. No reassociation is needed.
+
+| i | p | p*p | (p*p)/(p+p) | (p-4)/(p+4) | MIX after multiplying by 1024 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 12 | 144 | 6 | 1/2 | 512 |
+| 2 | 28 | 784 | 14 | 3/4 | 768 |
+| 3 | 60 | 3600 | 30 | 7/8 | 896 |
+
+Emit SQ, RATIO, MIX for i=1, then i=2, then i=3. Follow with DSQ=144,
+DRATIO=6, DONE and termination. Keep each runtime printing call, including
+the index and equals descriptor, so spacing and numeric formatting are
+unchanged. Calls below were checked against all three ordinary BC objects.
+
+```asm
+; Each of the nine indexed rows: 104 ranking units
+push word labelDescriptor      ; 6
+call far B$PSSD                ; 20
+push word index                ; 6
+call far B$PSI2                ; 20
+push word equalsDescriptor     ; 6
+call far B$PSSD                ; 20
+push dword result              ; 6
+call far B$PEI4                ; 20
+
+; DSQ and DRATIO: 52 each
+push word labelDescriptor      ; 6
+call far B$PSSD                ; 20
+push dword result              ; 6
+call far B$PEI4                ; 20
+
+; Epilogue: 46
+push word doneDescriptor       ; 6
+call far B$PESD                ; 20
+call far B$CEND                ; 20
+```
+
+Complete target: **9×104 + 2×52 + 46 = 1086**. This is the same static
+ranking used by the scoreboard, not elapsed time or a hardware-cycle claim.
+The optimized program has not reached this form: opaque scalar copies and
+missing array/value facts still block its floating constant propagation.
+Event-enabled builds remain provisional because their event observations
+cannot be discarded by this reference.
+
 ## NOTS and NEGNOT — constant expressions across output statements
 
 These ordinary, unchecked, event-free programs initialize two unescaped

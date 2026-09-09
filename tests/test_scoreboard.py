@@ -54,6 +54,14 @@ def test_qb_nots_meets_the_corrected_reference(capsys):
     assert "1.43x" in capsys.readouterr().out
 
 
+def test_fpdeep_has_a_source_derived_reference(capsys):
+    """FPDEEP's missing denominator hid its constant floating-expression gap."""
+    assert opportunity.TARGETS["FPDEEP"] == 9 * (4 * (6 + 20)) + 2 * 52 + 46
+    assert opportunity.against_targets([Path("fixtures/omf/fpdeep-p-g2.obj")]) == 1
+    report = capsys.readouterr().out
+    assert "NO TARGET" not in report and "PROVISIONAL" not in report
+
+
 @pytest.mark.parametrize("tag", ["p-evt", "q-evt", "v-evt"])
 def test_event_build_does_not_use_a_plain_program_target(tag, tmp_path, capsys):
     """BOOLS /V/W was scored against a reference with no event checks (QB read as 4.57x)."""
