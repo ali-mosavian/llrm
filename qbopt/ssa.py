@@ -6,6 +6,46 @@ from qbopt.mir import Op
 from qbopt.mir import MirBody
 
 
+def provider(value: mir.Value, swap: dict[int, mir.Value]) -> mir.Value:
+    seen = set()
+    while value.id in swap and swap[value.id] != value:
+        if value.id in seen:
+            raise ValueError("cyclic value substitution")
+        seen.add(value.id)
+        value = swap[value.id]
+    return value
+
+
+def substituted(op: Op, swap: dict[int, mir.Value]) -> Op:
+    if not swap:
+        return op
+
+    def value(one: mir.Value | None) -> mir.Value | None:
+        return provider(one, swap) if one is not None else None
+
+    def reference(ref: mir.MemRef) -> mir.MemRef:
+        return replace(ref, base=value(ref.base), segment=value(ref.segment))
+
+    def operand(one: mir.Arg) -> mir.Arg:
+        match one:
+            case mir.Held(value=held, width=width):
+                return mir.Held(provider(held, swap), width)
+            case mir.Cell(ref=ref):
+                return mir.Cell(reference(ref))
+            case _:
+                return one
+
+    return replace(
+        op,
+        uses=tuple(provider(one, swap) for one in op.uses),
+        args=tuple(operand(one) for one in op.args),
+        results=tuple(operand(one) if isinstance(one, mir.Cell) else one for one in op.results),
+        loads=tuple(reference(ref) for ref in op.loads),
+        stores=tuple(reference(ref) for ref in op.stores),
+        merges={provider(source, swap): mask for source, mask in op.merges.items()},
+    )
+
+
 def constructed(body: MirBody, variables: frozenset[int]) -> MirBody:
     def owned(values: tuple[mir.Value, ...]) -> tuple[mir.Value, ...]:
         return tuple(one for one in values if one.variable in variables)
@@ -51,12 +91,12 @@ def constructed(body: MirBody, variables: frozenset[int]) -> MirBody:
                 else one
             )
 
+        changed = substituted(op, {one.id: uses[one.variable] for one in op.uses if one.variable in uses})
         return replace(
-            op,
+            changed,
             uses=tuple(uses.get(one.variable, one) for one in op.uses),
             defines=tuple(defines.get(one.variable, one) for one in op.defines),
-            args=tuple(operand(one, uses) for one in op.args),
-            results=tuple(operand(one, defines) for one in op.results),
+            results=tuple(operand(one, defines) for one in changed.results),
         )
 
     # The isolated renamer starts ids at zero; keep its namespace disjoint.

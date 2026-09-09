@@ -55,6 +55,13 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+Address-use checkpoint: strength reduction and isolated SSA construction now use
+one semantic substitution utility in `ssa.py`, shared with existing transforms.
+Memory operands, access lists and merge inputs stay aligned with the renamed SSA
+uses. The indexed-use regression fails independently with either old renamer;
+41 focused checks plus two existing substitution checks pass. Existing phi-edge
+replacement and lowering condition preservation still prevent enablement.
+
 Loop-entry checkpoint: reduced-counter setup now requires a dedicated preheader;
 an entry block with a bypass successor could previously introduce a memory read
 on the bypass path. The focused regression fails with the old reducer and passes

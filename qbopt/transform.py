@@ -50,6 +50,8 @@ from qbopt.passes import Where
 from qbopt import loops as loopy
 from qbopt.passes import MIRTransform
 from qbopt import liveness as alive_at
+from qbopt.ssa import provider as _provider
+from qbopt.ssa import substituted as _substituted
 
 
 def _end_of(op: Op) -> int:
@@ -454,46 +456,6 @@ def _read(body: MirBody, value: mir.Value) -> bool:
         for op in block.ops
     )
 
-
-def _provider(value: mir.Value, swap: dict[int, mir.Value]) -> mir.Value:
-    seen = set()
-    while value.id in swap and swap[value.id] != value:
-        if value.id in seen:
-            raise ValueError("cyclic value substitution")
-        seen.add(value.id)
-        value = swap[value.id]
-    return value
-
-
-def _substituted(op: Op, swap: dict[int, mir.Value]) -> Op:
-    """One operation with every use of a removed value naming its survivor."""
-    if not swap:
-        return op
-
-    def value(one):
-        return _provider(one, swap) if one is not None else None
-
-    def reference(ref):
-        return replace(ref, base=value(ref.base), segment=value(ref.segment))
-
-    def operand(one):
-        match one:
-            case mir.Held(value=held, width=width):
-                return mir.Held(value(held), width)
-            case mir.Cell(ref=ref):
-                return mir.Cell(reference(ref))
-            case _:
-                return one
-
-    return replace(
-        op,
-        uses=tuple(value(one) for one in op.uses),
-        args=tuple(operand(one) for one in op.args),
-        results=tuple(operand(one) if isinstance(one, mir.Cell) else one for one in op.results),
-        loads=tuple(reference(ref) for ref in op.loads),
-        stores=tuple(reference(ref) for ref in op.stores),
-        merges={value(source): mask for source, mask in op.merges.items()},
-    )
 
 
 def reused_divides(body: MirBody, dgroup: frozenset[int], found=None) -> MirBody:

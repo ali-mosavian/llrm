@@ -101,7 +101,7 @@ def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | 
             replace(
                 block,
                 ops=tuple(
-                    _renamed(op, swap)
+                    ssa.substituted(op, swap)
                     for op in _woven(block, ahead.get(block.at, []), behind.get(block.at, []), gone)
                 ),
             )
@@ -240,24 +240,6 @@ def _times(step, by, width: int):
     if isinstance(step, mir.Const) and isinstance(by, mir.Const):
         return mir.Const(step.n * by.n, max(step.width, by.width))
     return None
-
-
-def _renamed(op: Op, swap: dict) -> Op:
-    """One operation reading the new counter where it read the multiply."""
-    if not any(one.id in swap for one in op.uses) and not any(
-        isinstance(one, mir.Held) and one.value.id in swap for one in op.args
-    ):
-        return op
-    return replace(
-        op,
-        uses=tuple(swap.get(one.id, one) for one in op.uses),
-        args=tuple(
-            mir.Held(swap[one.value.id], one.width)
-            if isinstance(one, mir.Held) and one.value.id in swap
-            else one
-            for one in op.args
-        ),
-    )
 
 
 def _width(op: Op) -> int:

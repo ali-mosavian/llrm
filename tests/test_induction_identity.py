@@ -137,7 +137,8 @@ def test_a_shift_recurrence_requires_a_constant_count(shape: str) -> None:
         assert derived[0].by == mir.Const(8, 2)
 
 
-def test_a_reduced_counter_has_its_own_loop_phi_and_fresh_variable() -> None:
+@pytest.mark.parametrize("address", [False, True])
+def test_a_reduced_counter_has_its_own_loop_phi_and_fresh_variable(address: bool) -> None:
     """harr's experimental stride reused a promoted variable and read its initial value on every iteration."""
     built, _loop = body()
     header = built.blocks[1]
@@ -155,6 +156,9 @@ def test_a_reduced_counter_has_its_own_loop_phi_and_fresh_variable() -> None:
         args=(mir.Held(answer, 2), mir.Held(livein, 2)),
         covers=(4, 6),
     )
+    if address:
+        memory = mir.MemRef(Addr(Space.SEGMENT, 0x20, 1), 2, answer)
+        use = replace(use, args=(mir.Cell(memory), mir.Held(livein, 2)), loads=(memory,))
     built = replace(
         built,
         blocks=(
@@ -169,7 +173,12 @@ def test_a_reduced_counter_has_its_own_loop_phi_and_fresh_variable() -> None:
     assert len(added) == 1
     phi = added[0]
     assert phi.result.variable > livein.variable
-    assert next(op for op in after.ops if op.kind is mir.Kind.ARG).args[0].value == phi.result
+    consumer = next(op for op in after.ops if op.kind is mir.Kind.ARG)
+    if address:
+        assert consumer.args[0].ref.base == phi.result
+        assert consumer.loads[0].base == phi.result
+    else:
+        assert consumer.args[0].value == phi.result
     assert phi.incoming[0] != phi.incoming[1]
     step = next(op for op in after.ops if phi.incoming[1] in op.defines)
     assert step.args[0].value == phi.result
