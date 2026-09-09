@@ -25,6 +25,20 @@ from qbopt.blocks import code_map
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
 
+def test_widened_restore_reads_the_value_it_splits() -> None:
+    """nbody widening changed PX0 from 1258 to 47624: restores had no input dependency."""
+    from qbopt import ir
+
+    value = mir.Value(1, 0, 0, 1, 1)
+    after = mir.Op(0, ir.Operation.MOVE, "mov", (value,), (), (), (), None,
+                   kind=mir.Kind.COPY, results=(mir.Held(value, 4),))
+    restored = pairs._restore_op(0, 3, after, 7)
+    assert restored.uses == (value,)
+    from dataclasses import replace
+    store = replace(after, defines=(), results=(), args=(mir.Held(value, 4),))
+    assert pairs._restore_op(0, 3, store, 7).uses == (value,)
+
+
 def _both(obj: Path) -> tuple[set[int], set[int], set[int], set[int]]:
     """(lift loads, pairs loads, lift stores, pairs stores) by address."""
     found = corpus.loaded(obj)

@@ -786,13 +786,10 @@ def _restore_op(number: int, at: int, after: Op, end: int, hands: tuple = ()) ->
     layout.py asks select.restore() rather than covers for that.
     """
     node = ir.Restore(at=at, end=at + RESTORE, pair=number, effects=ir.RESTORE_EFFECTS[number])
-    # A barrier, and defining and using nothing. It used to be built by
-    # replacing the op before it, which handed it that op's own values: the
-    # restore claimed to define what the widened operation defined, and
-    # avail.py reasons on exactly that. What it really does -- write both of
-    # BC's sixteen-bit halves out of the wide register -- is not something
-    # this can name in SSA from here, so it says nothing and stops anything
-    # reasoning across it instead.
+    source = next((arg.value for arg in (*after.results, *after.args) if isinstance(arg, mir.Held)), None)
+    # The wide source stays live until the restore consumes it. Only the
+    # separate high-half result is defined here; the low value is already
+    # the widened operation's definition.
     return replace(
         after,
         at=at,
@@ -805,7 +802,7 @@ def _restore_op(number: int, at: int, after: Op, end: int, hands: tuple = ()) ->
         # places: negnot pushed whatever dx held and printed A=-7317895
         # for 305419897.
         defines=hands,
-        uses=(),
+        uses=() if source is None else (source,),
         loads=(),
         stores=(),
         # And no operands. Built by replacing the operation before it, so

@@ -151,6 +151,9 @@ def _valueized(what: "ir.Semantics", op: "mir.Op") -> "ir.Semantics":
             was = mine[index] if index < len(mine) else None
             if isinstance(one, ir.Reg) and isinstance(was, mir.Held) and not was.value.flags:
                 out.append(ir.Held(was.value.id, one.width))
+            elif isinstance(one, ir.Mem) and isinstance(was, mir.Cell):
+                base = ir.Held(was.ref.base.id, was.ref.base_width) if was.ref.base is not None else None
+                out.append(replace(one, base=base))
             else:
                 out.append(one)
         return tuple(out)

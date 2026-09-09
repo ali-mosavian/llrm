@@ -17,6 +17,21 @@ from qbopt.blocks import code_map
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
 
+def test_preselected_memory_keeps_its_address_value() -> None:
+    """nbody widened posY(other) at 0x125 and read through stale SI: PX0=-4385 for 1258."""
+    from qbopt import lower
+    from qbopt.module import Addr, Space
+
+    pointer, result = mir.Value(1, 0, 0, 1, 1), mir.Value(2, 0, 0, 1, 2)
+    addr = Addr(Space.SEGMENT, 0, base=Register.SI)
+    cell = mir.Cell(mir.MemRef(addr, 4, base=pointer, base_width=2))
+    what = ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.EAX, 4),), (ir.Mem(addr, 4),))
+    op = mir.Op(0, ir.Operation.MOVE, "mov", (result,), (pointer,), (cell.ref,), (), None,
+                made=what, kind=mir.Kind.COPY, args=(cell,), results=(mir.Held(result, 4),))
+    selected = lower.current(op, lower.as_a_value)
+    assert selected.sources[0].base == ir.Held(pointer.id, 2)
+
+
 def test_x87_memory_operands_still_need_address_registers() -> None:
     """nbody's FLD pointer was allocated to AX, which cannot address 16-bit memory."""
     what = ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ir.St(0),),
