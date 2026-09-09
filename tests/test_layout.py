@@ -33,6 +33,26 @@ from qbopt.blocks import code_map
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
 
+def test_emulator_load_uses_the_allocated_address() -> None:
+    """nbody's copied FLD still read SI after allocation moved its pointer."""
+    from types import SimpleNamespace
+    from iced_x86 import Register
+    from qbopt import declen
+
+    raw = bytes.fromhex("cd3504")
+    original = ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ir.St(0),),
+                            (ir.Mem(None, 4, through=Register.SI),))
+    changed = ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ir.St(0),),
+                           (ir.Mem(None, 4, through=Register.DI),))
+    op = mir.Op(0, ir.Operation.FLOAT_LOAD, "fld", (), (), (), (),
+                ir.Opaque(declen.decode(raw, 0), ir.NO_EFFECT, original),
+                made=changed, covers=(0, 3), kind=mir.Kind.FLOAD)
+    found = SimpleNamespace(code=raw, absorbed={}, fixup_at={}, calls={}, refs={})
+    done = asm.assemble([op], 0, found)
+    assert not isinstance(done, str), done
+    assert done.code == bytes.fromhex("cd3505")
+
+
 def walked(code: bytes, start: int) -> list:
     """Every instruction in `code`, read the way this project reads code.
 

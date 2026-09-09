@@ -24,6 +24,28 @@ FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 WAIT = 0x9B
 
 
+@pytest.mark.parametrize("native,protocol,wanted,shift", [
+    ("d9860000", 0x35, "cd35860000", 1),
+    ("dd860000", 0x39, "cd39860000", 1),
+    ("d9860000", 0x3c, "cd3cd9860000", 2),
+])
+def test_emulator_reencoding_moves_relocation_fields(native, protocol, wanted, shift) -> None:
+    """nbody's FLD must follow allocation without changing its emulator protocol."""
+    from qbopt.select import Emitted
+
+    made = fpu.wrapped(Emitted(bytes.fromhex(native), displacement_at=2, fields=(2,)), protocol)
+    assert made.code == bytes.fromhex(wanted)
+    assert made.displacement_at == 2 + shift
+    assert made.fields == (2 + shift,)
+
+
+def test_emulator_wait_remains_an_emulator_wait() -> None:
+    from qbopt.select import Emitted
+
+    assert fpu.wrapped(Emitted(b"\x9b"), 0x3d).code == b"\xcd\x3d"
+    assert fpu.wrapped(Emitted(b"\x67\xd9\x00"), 0x35) is None
+
+
 def sites(obj: Path) -> tuple:
     found = corpus.loaded(obj)
     assert found is not None

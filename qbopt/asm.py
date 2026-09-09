@@ -38,7 +38,9 @@ from qbopt import mir
 from qbopt import lower
 from qbopt import select
 from qbopt import target
+from qbopt import fpu
 from qbopt.module import Module
+from qbopt.declen import STANDS_IN
 
 
 @dataclass(frozen=True, slots=True)
@@ -582,7 +584,7 @@ def assemble(
                 return f"{op.at:#06x}: the restore idiom is not one select.py can emit"
             lengths.append(len(made.code))
             continue
-        if what is None or emulated:
+        if what is None or emulated and found.code[op.at + 1] not in STANDS_IN:
             lengths.append(_length_of(op, found) or 0)
             continue
         made = select.emit(
@@ -592,6 +594,8 @@ def assemble(
             held=_held(assignment),
             relocated=_field_in(found, op, fields) is not None,
         )
+        if made is not None and emulated:
+            made = fpu.wrapped(made, found.code[op.at + 1])
         if made is None:
             return f"{op.at:#06x}: {op.name} is not one select.py can emit"
         lengths.append(len(made.code))
@@ -654,17 +658,13 @@ def assemble(
             for field in sorted(one for one in (fields or frozenset(found.fixup_at)) if op.lo <= one < op.hi):
                 relocations.append((placed[index] - at + (field - op.lo), field))
             continue
-        # An emulated x87 site is emitted as it was found. declen.py decodes
-        # `cd 35 46 c8` as the fld it stands for, so selecting from the
-        # semantics would emit `d9 46 c8` -- a native instruction, on a
-        # machine that may have no coprocessor. That conversion is a
-        # decision fpu.py gates behind --native-fpu -- so laying a segment
-        # out does not make it silently, and makes it when asked: with
-        # native_fpu the site is selected from its own semantics instead,
-        # which is the same x87 instruction the emulator stands for and is
-        # what M5 means by expressing fpu.py's pass over MIR.
+        # Unmodelled interrupts retain their original encoding. Modelled
+        # x87 operations are selected below and wrapped back in their
+        # emulator protocol, so allocation may change their operands
+        # without silently requiring a coprocessor.
         if (
             not native_fpu
+            and (_semantics(op) is None or found.code[op.at + 1] not in STANDS_IN)
             and op.node is not None  # an inserted instruction has no original bytes
             and found.code[op.at : op.at + 1] == bytes([0xCD])
             and (length := _length_of(op, found))
@@ -730,6 +730,8 @@ def assemble(
             short=index in short,
             relocated=_field_in(found, op, fields) is not None,
         )
+        if made is not None and not native_fpu and op.node is not None and fpu.emulated_at(found.code, op.at):
+            made = fpu.wrapped(made, found.code[op.at + 1])
         if made is None or len(made.code) != lengths[index]:
             return f"{op.at:#06x}: it changed length between the two passes"
         # A fixup goes wherever the field it names landed -- the

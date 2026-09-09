@@ -7,12 +7,10 @@ interrupts, and the real opcode lives inside them:
 
     cd 35 46 c8     int 35h, operand inline   ->   d9 46 c8   fld dword [bp-38h]
 
-declen.py already decodes these, because a walk that reads the int as an
-ordinary interrupt lands in the middle of the operand. What it has never
-done is emit the other direction, and reencode.py refuses on purpose:
-turning an emulated site into a real one changes what the program needs to
-run, from any 8086 to one with a coprocessor. That is a decision, not an
-optimisation, which is why nothing here is on by default.
+declen.py decodes these; wrapped() restores the protocol after selecting
+new operands. Turning an emulated site into a native instruction instead
+changes what the program needs to run, from any 8086 to one with a
+coprocessor. That separate conversion remains opt-in.
 
 Where it is asked for the win is not the byte -- though every site does
 shrink by one. It is the interrupt: each of these traps into the emulator,
@@ -27,12 +25,42 @@ there would mean choosing a segment on no evidence. In qb-qrender that is
 201 sites of 2,130; the other 1,929 convert.
 """
 
+from typing import TYPE_CHECKING
+
 from qbopt.declen import ESC
 from qbopt.declen import Insn
 from qbopt.declen import Stands
 from qbopt.declen import EMULATED
 from qbopt.declen import INTERRUPT
 from qbopt.declen import stood_in_for
+
+if TYPE_CHECKING:
+    from qbopt.select import Emitted
+
+
+def wrapped(made: "Emitted", protocol: int) -> "Emitted | None":
+    """Reapply an existing emulator protocol to newly selected x87 bytes."""
+    from dataclasses import replace
+
+    code = made.code
+    if not code:
+        return None
+    if protocol == Stands.FWAIT:
+        if code != bytes([0x9B]):
+            return None
+        prefix, tail, shift = bytes([INTERRUPT, Stands.FWAIT]), b"", 1
+    elif protocol == Stands.SEGMENTED:
+        if code[0] not in ESC:
+            return None
+        prefix, tail, shift = bytes([INTERRUPT, Stands.SEGMENTED]), code, 2
+    elif protocol in EMULATED and code[0] in ESC:
+        prefix, tail, shift = bytes([INTERRUPT, EMULATED.start + code[0] - ESC.start]), code[1:], 1
+    else:
+        return None
+    return replace(made, code=prefix + tail,
+                   displacement_at=None if made.displacement_at is None else made.displacement_at + shift,
+                   immediate_at=None if made.immediate_at is None else made.immediate_at + shift,
+                   fields=tuple(field + shift for field in made.fields))
 
 
 def emulated_at(code: bytes, at: int) -> bool:
