@@ -55,6 +55,21 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+ADDRM ownership checkpoint: VBDOS/G3's three-byte emission refusal at 0x80
+is fixed. CSE had correctly transferred the deleted index reload's bytes to
+the preceding high-word store. Widening recomputed its chain end from the
+original instruction nodes, discarding that transferred ownership. Pair and
+chain endpoints now honor current `covers`, with original node spans only as
+fallback. The real-object emission regression failed before the fix and now
+requires strict LIR output. ADDRM, ARITH and NEGNOT pass runtime checks on
+PDS/G2, QB/O and VBDOS/G3 (nine program/configuration runs). Before/after
+stage dumps: `/tmp/qbopt-addrm-ownership-20260909` and
+`/tmp/qbopt-addrm-ownership-fixed-20260909`. The known PROCS/TWICE runtime
+contract refusal remains, and broader full-goal validation is outstanding.
+Five existing widening ownership/restore checks also pass (75.93 seconds;
+these five checks internally traverse the fixture corpus, so they were run
+once, not as a repeated test loop).
+
 **Strength reduction is now enabled by default**, restricted to multiplication
 chains in innermost loops. ADDRM's cheap shift chains regressed 2,308 -> 2,578;
 excluding shift-only formulas keeps it at 2,308 and avoids an unnecessary

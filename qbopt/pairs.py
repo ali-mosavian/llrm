@@ -630,7 +630,11 @@ def wider(pair: Pair) -> ir.Semantics | None:
 
 
 def _ends(one: Pair) -> int | None:
-    ends = [ir.span(op.node)[1] for op in (one.low, one.high) if op.node is not None]
+    ends = [
+        (op.covers if op.covers is not None else ir.span(op.node))[1]
+        for op in (one.low, one.high)
+        if op.covers is not None or op.node is not None
+    ]
     return max(ends) if ends else None
 
 
@@ -839,7 +843,7 @@ def replaced(chain: Chain, block) -> tuple[int, int, set[int]]:
     everything inside it is part of it.
     """
     lo = min(min(pair.at) for pair in chain.ops)
-    hi = max(ir.span(one.node)[1] for pair in chain.ops for one in (pair.low, pair.high) if one.node is not None)
+    hi = max(end for pair in chain.ops if (end := _ends(pair)) is not None)
     # Each pair's own stretch, not the whole span. A chain may now step over
     # an instruction that touches neither of its registers -- residue.md's E
     # -- and that instruction stays exactly where BC put it, so it is not
