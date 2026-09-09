@@ -368,6 +368,10 @@ def _tied(one: lir.Insn, values: "frozenset[int]", frame) -> "lir.Insn | None":
     if len(tied) != 1:
         return None
     value = tied[0]
+    # The destination's read is implicit in a two-address operation;
+    # a second source naming it still needs a distinct encoded operand.
+    if any(isinstance(arg, ir.Held) and arg.value == value for arg in what.sources[1:]):
+        return None
     # A fixed register is a fixed register: a slot is not one.
     if any(
         isinstance(side[where.index], ir.Held) and side[where.index].value == value

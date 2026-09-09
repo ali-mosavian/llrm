@@ -37,6 +37,20 @@ def _out(body, values):
     return [one for block in got.blocks for one in block.insns]
 
 
+@pytest.mark.parametrize("name", ["xor", "add", "and", "sub"])
+def test_repeated_tied_operand_does_not_become_memory_to_memory(name: str) -> None:
+    """nbody-q-O refused XOR at 0x54 after both sources became the same frame slot."""
+    from dataclasses import replace
+
+    op = _add(1, 1)
+    op = replace(op, what=replace(op.what, name=name), uses=(1,))
+    reload, arithmetic, store = _out(_body(op), {1})
+    assert isinstance(reload.what.sources[0], ir.Mem)
+    assert all(isinstance(arg, ir.Held) for arg in (*arithmetic.what.dests, *arithmetic.what.sources))
+    assert arithmetic.what.sources[0] == arithmetic.what.sources[1] == arithmetic.what.dests[0]
+    assert isinstance(store.what.dests[0], ir.Mem)
+
+
 def test_repeated_operand_reloads_a_spill_only_once() -> None:
     """NESTED emitted two identical frame reloads before each outer-loop IMUL."""
     multiply = lir.Insn(
