@@ -1,6 +1,7 @@
 """Bit extraction has value operands; only lowering chooses machine form."""
 
 from qbopt import ir
+from qbopt import lir
 from qbopt import mir
 from qbopt import lower
 from qbopt import objwrite
@@ -33,3 +34,14 @@ def test_high_word_extraction_lowers_without_clobbering_flags() -> None:
     assert carried.id is None
     assert carried.covers == (10, 10)
     assert carried.made == expanded[1].what
+
+
+def test_inserted_move_does_not_inherit_disjoint_input_bytes() -> None:
+    """LNGMIX deletion refused because an inserted move also claimed 12 push bytes."""
+    parent = mir.Op(0x71, ir.Operation.MOVE, "mov", (), (), covers=(0x71, 0x76), extra_covers=((0x5F, 0x6B),), id=14)
+    move = ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(2, 2),), (ir.Held(1, 2),))
+    inserted = lir.Insn(0x71, (0x71, 0x71), move, (2,), (1,), op=parent)
+    carried = objwrite._carried(inserted)
+    assert carried.covers == (0x71, 0x71)
+    assert carried.extra_covers == ()
+    assert carried.id is None

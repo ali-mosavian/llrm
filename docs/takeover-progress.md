@@ -491,3 +491,18 @@ operation therefore keeps dead sibling copies. A trial deleting by object
 identity instead refused with `0x005f: 12 bytes are claimed by more than one
 op`; it was withdrawn. Ownership transfer must handle these siblings before
 the newly constant chain can be fully removed. Do not loosen layout's check.
+# Inserted moves own no disjoint input ranges
+
+The shared-address deletion experiment's duplicate 12-byte ownership was
+introduced by `objwrite._carried`, not the MIR deletion itself. Stage-by-stage
+range counting found no overlapping ownership through optimization. An inserted
+allocator move then inherited its parent operation's `extra_covers`, despite
+correctly clearing its ordinary span and ID. It now clears the extra ranges too.
+The targeted regression fails before the fix; ten extraction/division checks
+pass after it. Production LNGMIX still emits at cost 580.
+
+Deleting dead siblings by object identity now emits, but costs 598 and still
+retains dead copies whose bytes have no adjacent taker. That deletion change
+was not retained. `/tmp/qbopt-dce-identity` records its stages. The next change
+should unify ownership of removed operations instead of relying on an adjacent
+instruction's single span, allowing true deletion rather than leftover moves.

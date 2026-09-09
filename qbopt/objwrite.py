@@ -169,6 +169,7 @@ def _carried(one: "lir.Insn") -> mir.Op:
         made=one.what,
         at=one.at,
         covers=one.covers,
+        extra_covers=() if inserted else one.op.extra_covers,
         node=None if inserted else one.op.node,
         id=None if inserted and one.symbol is not True else one.op.id,
         symbol=one.symbol,
