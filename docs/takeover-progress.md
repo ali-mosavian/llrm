@@ -1023,3 +1023,21 @@ without the analysis; focused cases reject signed overflow and masked shift
 counts. This is analysis only: emitted code and runtime behavior are unchanged.
 Next is consuming these intervals in alias analysis, retaining conservative
 behavior for unknown segments, wrapping addresses and unproven values.
+
+## Range-aware alias queries
+
+Alias analysis now projects a proven near 16-bit indexed access to its covering
+byte interval. Unknown segments, width mismatches and address wrap remain
+conservative. LICM supplies block-scoped read-side facts to these queries.
+The real nbody POSX/DELTAX regression fails when the projection is disabled;
+all twelve focused interval tests pass with it enabled. Saved runtime outputs
+for nbody and HARR match BC on PDS, QB and VBDOS in
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-range-alias-2382vm4p`.
+
+This establishes an alias proof, not an nbody speedup. A separate experiment
+extracting position reads from word arithmetic did hoist them, but increased
+PDS nbody modeled cost from 880,313 to 905,513 and broke HARR on PDS and QB.
+That experiment is removed. The next step is whole-value scalar MIR before
+LICM, so two position values do not become four independently allocated words
+and inhibit widening. There is still no hand-derived nbody target establishing
+its distance from the 1.5x goal.

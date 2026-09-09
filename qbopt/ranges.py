@@ -1,8 +1,9 @@
 """Non-wrapping integer intervals, scoped to the taken body of a counted loop."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from qbopt import consts, induction, loops, mir
+from qbopt.module import Space
 
 
 @dataclass(frozen=True)
@@ -10,6 +11,20 @@ class Interval:
     low: int
     high: int
     width: int
+
+
+def covering(ref: mir.MemRef, known: dict[mir.Value, Interval]) -> mir.MemRef:
+    """A non-wrapping near indexed access as the static byte interval it can touch."""
+    ref = mir._symbolic_ref(ref)
+    if ref.addr is None or ref.addr.space is not Space.SEGMENT or ref.segment is not None:
+        return ref
+    interval = known.get(ref.base)
+    if interval is None or interval.width != ref.base_width or ref.base_width != 2:
+        return ref
+    low, end = ref.addr.disp + interval.low, ref.addr.disp + interval.high + ref.width
+    if not 0 <= low < end <= 1 << (8 * ref.base_width):
+        return ref
+    return replace(ref, addr=replace(ref.addr, disp=low, base=0), base=None, width=end - low)
 
 
 def _operand(arg, known, facts):

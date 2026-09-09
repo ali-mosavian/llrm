@@ -992,6 +992,7 @@ def _invariant_run(
     bounds: dict | None = None,
     starts: set | None = None,
     readable: set | None = None,
+    intervals: dict | None = None,
 ) -> list[Op]:
     """The ops in this loop whose result never changes, in order.
 
@@ -1096,7 +1097,8 @@ def _invariant_run(
             # it, and a result the machine places is copied out rather than
             # re-seated -- see `copied` below.
             if any(
-                ref.addr is None or mir.overlapping(ref, other, dgroup, bounds) for ref in one.loads for other in stores
+                ref.addr is None or mir.overlapping(ref, other, dgroup, bounds, known=(intervals or {}).get(id(one)))
+                for ref in one.loads for other in stores
             ):
                 continue
             # A phi result is the loop-carried value itself: `v2` at
@@ -1933,6 +1935,9 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
     inside = loopy.loops(list(body.blocks), body.entry)
     if not inside:
         return body
+    from qbopt import ranges
+    scoped = ranges.bounded(body)
+    intervals = {id(op): scoped.get(block.at, {}) for block in body.blocks for op in block.ops}
     at_of = {block.at: block for block in body.blocks}
     alive = alive_at.live(body)
     readable = live(body)
@@ -1960,7 +1965,7 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
         stores = [ref for one in ops for ref in one.stores]
         carried = {phi.result for at in loop.body for phi in at_of[at].phis}
         phis = [phi for at in loop.body for phi in at_of[at].phis]
-        run = _invariant_run(ops, carried, stores, dgroup, calls, phis, bounds, _starts(phis), readable)
+        run = _invariant_run(ops, carried, stores, dgroup, calls, phis, bounds, _starts(phis), readable, intervals)
         # Track operations, not source addresses: hoisted definitions share
         # their anchor's address with other computations and the jump. HARR
         # lost all of those when its descriptor moved a second time.

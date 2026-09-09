@@ -1956,6 +1956,8 @@ def overlapping(
     other: MemRef,
     dgroup: frozenset[int],
     bounds: dict | None = None,
+    known: dict | None = None,
+    other_known: dict | None = None,
 ) -> bool:
     """Whether a write through `other` could land on `one`.
 
@@ -1966,6 +1968,9 @@ def overlapping(
     identity rather than by the caller having promised the register was not
     written in between.
     """
+    if known or other_known:
+        from qbopt import ranges
+        one, other = ranges.covering(one, known or {}), ranges.covering(other, other_known or {})
     one, other = _symbolic_ref(one), _symbolic_ref(other)
     if _allocation_disjoint(one, other) or _allocation_disjoint(other, one):
         return False
