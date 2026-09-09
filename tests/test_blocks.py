@@ -46,6 +46,23 @@ def test_what_ends_a_block(enc: str, ends: Ends) -> None:
     assert terminator(insn) is ends
 
 
+@pytest.mark.parametrize("tag", ["p-evt", "v-evt"])
+def test_runtime_return_does_not_fall_into_the_next_statement(tag: str) -> None:
+    """EVTRAP's B$RETA discards its call return address, not a normal CALL."""
+    from dataclasses import replace
+    from qbopt.frontend.blocks import walk, partition
+    found = module.load(Path(f"fixtures/omf/addrm-{tag}.obj"))
+    found = replace(found, code=hx("9a 00 00 00 00 90 c3"), start=0, end=7,
+                    calls={0: "B$RETA"}, targets=frozenset(), publics=frozenset())
+    mapped = walk(found, 0)
+    assert not isinstance(mapped, str), mapped
+    assert mapped.starts == frozenset({0})
+    body = partition(found, mapped)
+    assert len(body) == 1
+    assert body[0].ends is Ends.LEAVES
+    assert body[0].succ == ()
+
+
 def test_every_module_is_mapped(obj: Path) -> None:
     found = corpus.loaded(obj)
     assert found is not None

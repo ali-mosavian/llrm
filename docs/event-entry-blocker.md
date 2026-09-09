@@ -100,6 +100,21 @@ is zero. It is not an ordinary call returning to the following instruction;
 do not resolve this refusal by assigning an ordinary return contract.
 No optimized bytes or handler runtime result are claimed yet.
 
+The frontend previously gave RETA an ordinary CALL fallthrough edge. Direct
+PDS/VBDOS `gosub.asm` disassembly disproves that: at 002e/0032 it pops the
+call IP, then the call CS, then the saved GOSUB IP. The nonzero-IP path
+reconstructs that GOSUB continuation and RETFs there. A zero saved IP calls
+B$EXSA and tail-jumps to B$EVTRET (PDS 0036/003b, VBDOS 003a/003f).
+The negative frame-count path transfers to B$ERR_RG. None establishes
+fallthrough to the byte after the original RETA call.
+
+Reachability and block construction now classify the established PDS/VBDOS
+runtime RETA as leaving the current control-flow graph; same-module public
+definitions are excluded. The focused regression previously reached a NOP
+and RET after RETA and now stops at the call. This fixes a false CFG edge,
+not the remaining continuation/interface work; generated witness output
+remains refused rather than being described as successfully optimized.
+
 Reproduce a baseline without changing the normal suite:
 
 ```python

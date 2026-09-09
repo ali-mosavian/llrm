@@ -26,6 +26,7 @@ from iced_x86 import Code, Register
 from qbopt.frontend.declen import Insn
 from qbopt.frontend.declen import decode
 from qbopt.objectfile.module import Module
+from qbopt.objectfile.module import family, defines
 
 # Runtime routines that do not return to the byte after the call, because their
 # arguments are sitting there.
@@ -85,8 +86,14 @@ class CodeMap:
     unreached: tuple[tuple[int, int], ...] = ()
 
 
-def terminator(insn: Insn) -> Ends:
+def terminator(insn: Insn, module: Module | None = None) -> Ends:
     """What this instruction does to control flow."""
+    if (module is not None and module.calls.get(insn.at) == "B$RETA"
+            and family(module.records) in ("pds71", "vbdos")
+            and "B$RETA" not in defines(module.records, module.seg)):
+        # gosub.asm discards this call's return IP, then returns to the
+        # GOSUB continuation or tail-jumps through B$EVTRET for an event.
+        return Ends.LEAVES
     ends = ENDS.get(insn.flow, Ends.LEAVES)
     # a far jump goes somewhere this module cannot follow
     if ends is Ends.JUMP and insn.target is None:
@@ -178,7 +185,7 @@ def walk(module: Module, entry: int) -> CodeMap | str:
                 at = hi
                 continue
 
-            ends = terminator(insn)
+            ends = terminator(insn, module)
             if ends in (Ends.CONDITIONAL, Ends.JUMP):
                 target = insn.target
                 if target is None or not module.start <= target < module.end:
@@ -420,7 +427,7 @@ def partition(module: Module, mapped: CodeMap) -> list[Block]:
             out.append(_close(module, run, mapped))
             run = []
         run.append(insn)
-        if terminator(insn) is not Ends.FALLS_THROUGH or _table_at(module, mapped, insn):
+        if terminator(insn, module) is not Ends.FALLS_THROUGH or _table_at(module, mapped, insn):
             out.append(_close(module, run, mapped))
             run = []
     if run:
@@ -434,7 +441,7 @@ def _table_at(module: Module, mapped: CodeMap, insn: Insn) -> tuple[int, int] | 
 
 def _close(module: Module, run: list[Insn], mapped: CodeMap) -> Block:
     last = run[-1]
-    ends = terminator(last)
+    ends = terminator(last, module)
     succ: list[int] = []
 
     if (table := _table_at(module, mapped, last)) is not None:
