@@ -272,7 +272,7 @@ def subexpressions(body: MirBody, dgroup: frozenset[int] = frozenset()) -> MirBo
                 result = op.defines[0]
                 source = _provider(source, stands)
                 stands[result.id] = source
-                if _width(result, op) == 4 or (result, HIGH) not in demanded:
+                if not op.merges or _width(result, op) == 4 or (result, HIGH) not in demanded:
                     swap[result.id] = source
                     gone.add(id(op))
                 continue

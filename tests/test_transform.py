@@ -1182,6 +1182,27 @@ def test_both_lngmix_divides_absorb():
     assert calls.sites(found, reached, blocks) == []
 
 
+@pytest.mark.parametrize("preserves_high", [False, True])
+def test_cse_propagates_a_complete_narrow_copy_to_an_opaque_reader(preserves_high) -> None:
+    """HARR's equal selector names blocked forwarding, adding an array reload per iteration."""
+    source = mir.Value(1, 0, variable=1, version=1)
+    copied = mir.Value(2, 2, variable=2, version=1)
+    first = mir.Op(0, ir.Operation.MOVE, "mov", (source,), (), kind=mir.Kind.COPY,
+                   args=(mir.Const(7, 2),), results=(mir.Held(source, 2),), covers=(0, 2))
+    copy = mir.Op(2, ir.Operation.MOVE, "mov", (copied,), (source,), kind=mir.Kind.COPY,
+                  args=(mir.Held(source, 2),), results=(mir.Held(copied, 2),), covers=(2, 4))
+    if preserves_high:
+        from dataclasses import replace
+        previous = mir.Value(3, 0, variable=3, version=1)
+        copy = replace(copy, uses=(source, previous), merges={previous: copied})
+    use = mir.Op(4, ir.Operation.PUSH, "push", (), (copied,), kind=mir.Kind.OPAQUE,
+                 covers=(4, 6))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (first, copy, use), ()),), {})
+    done = transform.subexpressions(body)
+    assert done.blocks[0].ops[-1].uses == (copied if preserves_high else source,)
+    assert any(copied in op.defines for op in done.blocks[0].ops) == preserves_high
+
+
 def test_cse_refuses_an_operand_that_is_only_half_its_value() -> None:
     """nots printed NOTOR= 26390415 for -271601777: right word, wrong word.
 
