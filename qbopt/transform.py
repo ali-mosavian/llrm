@@ -217,6 +217,7 @@ _PURE = frozenset(
         mir.Kind.NEG,
         mir.Kind.NOT,
         mir.Kind.CONVERT,
+        mir.Kind.SIGN_EXTEND,
         mir.Kind.COPY,
         mir.Kind.LT,
         mir.Kind.LE,

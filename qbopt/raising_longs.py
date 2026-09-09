@@ -80,6 +80,18 @@ def scalar(body: mir.MirBody) -> mir.MirBody:
                 source = whole.get((high.args[0], low.args[0])) if len(low.args) == len(high.args) == 1 else None
                 if source is None and len(low.args) == len(high.args) == 1:
                     source = mir.extracted_whole(high.args[0], low.args[0], definitions)
+                if source is None and len(low.args) == len(high.args) == 1:
+                    upper, lower = high.args[0], low.args[0]
+                    extension = definitions.get(upper.value) if isinstance(upper, mir.Held) else None
+                    if (isinstance(lower, mir.Held) and lower.width == 2
+                        and extension is not None and extension.kind is mir.Kind.CONVERT
+                        and extension.op is ir.Operation.EXTEND and extension.name == "cwd"
+                        and extension.args == (lower,) and extension.results == (upper,)
+                        and upper.width == 2 and not extension.loads and not extension.stores):
+                        source = fresh(low.at)
+                        ops.append(mir.Op(low.at, ir.Operation.EXTEND, "sign_extend", (source.value,),
+                                          (lower.value,), kind=mir.Kind.SIGN_EXTEND,
+                                          args=(lower,), results=(source,), covers=(low.at, low.at)))
                 if source is None:
                     ops.append(op)
                     continue

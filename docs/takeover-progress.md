@@ -1675,3 +1675,28 @@ cases fail before this change; missing and clobbered initializers retain
 the loop store across all three compilers. Strict LIR runtime checks pass
 for ADDRM, SPILL, NESTED, MATRIX, HARR, HOTLOP and LNGMIX (27 cases total).
 Artifacts: `qbopt-split-exit-7s7gobdb` in system temporary storage.
+
+### Raise signed word-pair stores as whole values
+
+ADDRM stored an integer and its CWD-produced sign word into adjacent array
+words, then loaded the same long. Raising now recognizes that complete
+store as a machine-independent `sign_extend` value and a single long store.
+Existing forwarding removes the reload. Recognition requires the matching
+source, word widths and CWD definition, plus the existing identical-address
+and adjacency proof for paired stores.
+
+Lowering selects MOVSX; selection emits its explicit operands. Only CWD/CDQ
+require AX/DX: applying that old blanket EXTEND constraint to MOVSX added two
+unnecessary moves, so the target constraint now distinguishes those forms.
+The resulting PDS/QB/VBDOS ADDRM costs are **1206/1212/1206**, down from
+1346/1352/1346, still about 1.60x against 754. Address scales remain inside
+the loop. Stage diff: `/tmp/qbopt-addrm-sunk` -> `/tmp/qbopt-addrm-whole-store`.
+
+All three real-fixture whole-store regressions fail before the change;
+the MOVSX encoding regression also fails before selection support. The
+combined focused run reports 1118 passes and 12 existing selection failures;
+all 12 also fail with the previous raising/lowering/selection/target code
+loaded in isolation (`/tmp/qbopt-signed-stores-select-baseline.txt`). This is
+not a claim of a green selection suite. Strict LIR runtime checks passed
+99 cases across ADDRM, SPILL, NESTED, MATRIX, HARR, HOTLOP, LNGMIX and NBODY
+on all three compilers. Artifacts: `qbopt-signed-stores-g026xtr_`.

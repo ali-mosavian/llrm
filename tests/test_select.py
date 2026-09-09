@@ -20,6 +20,18 @@ from qbopt import ir
 from qbopt import select
 
 
+def test_signed_word_extension_uses_explicit_operands():
+    """ADDRM's signed whole store needs MOVSX, not a width-mismatched MOV or CWD's fixed pair."""
+    from qbopt import target
+    what = ir.Semantics(ir.Operation.EXTEND, "movsx", (ir.Reg(Register.EBX, 4),), (ir.Reg(Register.SI, 2),))
+    emitted = select.emit(what)
+    assert emitted is not None
+    instruction = next(iter(Decoder(16, emitted.code)))
+    assert instruction.code == Code.MOVSX_R32_RM16
+    assert instruction.op0_register == Register.EBX and instruction.op1_register == Register.SI
+    assert not target.requirements(what)
+
+
 def test_load_accepts_unsigned_dword_bit_pattern():
     """CHAIN refused a folded 0xbffffff9 because iced's i32 constructor requires a signed integer."""
     from iced_x86 import Register

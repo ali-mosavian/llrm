@@ -1356,6 +1356,11 @@ def emit(
 
     dests, sources = what.dests, what.sources
     match what.op:
+        case ir.Operation.EXTEND if what.name == "movsx" and len(dests) == len(sources) == 1:
+            match dests[0], sources[0]:
+                case ir.Reg(register=into), ir.Reg(register=outof) if into in target.WIDE and outof in target.NARROW:
+                    return _assemble(Instruction.create_reg_reg(Code.MOVSX_R32_RM16, into, outof), at)
+            return None
         case ir.Operation.MOVE if len(dests) == 1 and len(sources) == 1:
             match (dests[0], sources[0]):
                 # Before the plain register move, which cannot say a

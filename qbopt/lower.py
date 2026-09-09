@@ -52,6 +52,7 @@ _MACHINE: dict[mir.Kind, tuple[ir.Operation, str]] = {
     mir.Kind.INCREMENT: (ir.Operation.UNARY, "inc"),
     mir.Kind.DECREMENT: (ir.Operation.UNARY, "dec"),
     mir.Kind.COPY: (ir.Operation.MOVE, "mov"),
+    mir.Kind.SIGN_EXTEND: (ir.Operation.EXTEND, "movsx"),
     mir.Kind.LOAD: (ir.Operation.MOVE, "mov"),
     mir.Kind.STORE: (ir.Operation.MOVE, "mov"),
     mir.Kind.JUMP: (ir.Operation.JUMP, "jmp"),

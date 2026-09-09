@@ -391,6 +391,7 @@ class Kind(StrEnum):
     LOAD = "load"  # c := [m]
     STORE = "store"  # [m] := a
     CONVERT = "convert"  # c := a, at another width or signedness
+    SIGN_EXTEND = "sign_extend"
     ADDRESS = "address"  # c := the number an address is
 
     # control

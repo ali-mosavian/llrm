@@ -9,6 +9,42 @@ import pytest
 from qbopt import ir, mir, raising_longs, transform
 
 
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_addrm_stores_and_reuses_the_signed_whole_value(tag):
+    """ADDRM stored b(i) in two words and immediately reloaded the same long on every iteration."""
+    path = Path(f"fixtures/omf/addrm-{tag}.obj")
+    found = corpus.loaded(path)
+    partition = corpus.partitioned(path)
+    body = mir.bodies(found, partition)[0][1]
+    stores = [op for block in body.blocks for op in block.ops
+              if any(ref.base is not None and ref.width == 4 for ref in op.stores)]
+    assert stores
+    result = transform.applied(body, found.dgroup, found.calls, blocks=partition, found=found)
+    assert not any(ref.base is not None and ref.width == 4
+                   for block in result.blocks for op in block.ops for ref in op.loads)
+
+
+@pytest.mark.parametrize("mismatch", ["source", "width", "kind"])
+def test_signed_store_requires_the_matching_sign_word(mismatch, monkeypatch):
+    recognize = raising_longs.scalar
+    with monkeypatch.context() as patch:
+        patch.setattr(raising_longs, "scalar", lambda body: body)
+        path = Path("fixtures/omf/addrm-p-g2.obj")
+        body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
+    extension = next(op for block in body.blocks for op in block.ops if op.at == 0x5c)
+    match mismatch:
+        case "source":
+            changed = replace(extension, args=(mir.Held(mir.Value(9999, 0), 2),))
+        case "width":
+            changed = replace(extension, results=(replace(extension.results[0], width=4),))
+        case "kind":
+            changed = replace(extension, kind=mir.Kind.COPY)
+    body = replace(body, blocks=tuple(replace(block, ops=tuple(changed if op is extension else op for op in block.ops))
+                                     for block in body.blocks))
+    result = recognize(body)
+    assert not any(op.kind is mir.Kind.SIGN_EXTEND for block in result.blocks for op in block.ops)
+
+
 @pytest.fixture
 def nbody(monkeypatch):
     recognize = raising_longs.scalar

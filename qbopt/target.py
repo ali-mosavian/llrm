@@ -81,7 +81,7 @@ def requirements(what: "ir.Semantics") -> dict[Occurrence, Register_]:
             out[Occurrence("source", 1)] = Register.EAX
         else:
             out[Occurrence("source", 0)] = Register.EAX
-    if what.op is ir.Operation.EXTEND:
+    if what.op is ir.Operation.EXTEND and what.name in {"cwd", "cdq"}:
         out[Occurrence("source", 0)] = Register.EAX
         out[Occurrence("dest", 0)] = Register.EDX
     # A shift or rotate by anything but a literal counts from cl. Asked of
