@@ -10,6 +10,57 @@ from qbopt.analysis import consts, floatfacts
 from qbopt.model import mir
 
 
+def test_proved_exit_folds_a_read_without_removing_strict_operations():
+    """FPCSE's 487.5 exit was reported but unavailable to later integer reads."""
+    from qbopt.optimize import transform
+    path = Path("fixtures/omf/fpcse-p-g2.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    latch = next(block for block in body.blocks if any(op.floating for op in block.ops))
+    accumulator = next(op.stores[0] for op in reversed(latch.ops) if op.kind is mir.Kind.FSTORE)
+    exit_block = next(block for block in body.blocks if any(op.kind is mir.Kind.CALL for op in block.ops))
+    value = mir.Value(10000, exit_block.at, variable=10000)
+    read = replace(exit_block.ops[0], kind=mir.Kind.LOAD, args=(mir.Cell(accumulator),),
+                   results=(mir.Held(value, 4),), defines=(value,), uses=(),
+                   loads=(accumulator,), stores=(), merges={}, node=None, made=None, raised=None)
+    body = replace(body, blocks=tuple(replace(block, ops=(read, *block.ops))
+                                     if block is exit_block else block for block in body.blocks))
+    changed = transform.folded(body, found.dgroup, found.calls)
+    result = next(op for block in changed.blocks for op in block.ops if value in op.defines)
+    assert result.kind is mir.Kind.COPY and result.args == (mir.Const(0x43f3c000, 4),)
+    assert next(block for block in changed.blocks if block.at == latch.at) == latch
+
+
+@pytest.mark.parametrize("change", ["none", "call", "alias", "bypass"])
+def test_exit_facts_stay_on_the_proved_edge_and_obey_memory_effects(change):
+    """487.5 is the normal FPCSE exit, not an invariant or a post-call guarantee."""
+    path = Path("fixtures/omf/fpcse-p-g2.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    latch = next(block for block in body.blocks if any(op.floating for op in block.ops))
+    accumulator = next(op.stores[0] for op in reversed(latch.ops) if op.kind is mir.Kind.FSTORE)
+    edges = floatfacts.exit_cells(body, found.dgroup, found.calls)
+    (header, destination), = edges
+    exit_block = next(block for block in body.blocks if block.at == destination)
+    index = 0
+    match change:
+        case "call":
+            index = next(index + 1 for index, op in enumerate(exit_block.ops) if op.kind is mir.Kind.CALL)
+        case "alias":
+            store = replace(exit_block.ops[0], kind=mir.Kind.STORE, stores=(mir.MemRef(None, 4),))
+            body = replace(body, blocks=tuple(replace(block, ops=(store, *block.ops))
+                                             if block is exit_block else block for block in body.blocks))
+            index = 1
+        case "bypass":
+            body = replace(body, blocks=tuple(replace(block, succ=(*block.succ, destination))
+                                             if block.at == body.entry else block for block in body.blocks))
+    memory = consts.cells(body, found.dgroup, found.calls, consts.known(body, found.dgroup, found.calls), edges=edges)
+    assert consts._cell(memory[header, 0], accumulator) is None
+    assert consts._cell(memory[latch.at, 0], accumulator) is None
+    assert consts._cell(memory[destination, index], accumulator) == (
+        consts.Known(0x43f3c000, 4) if change == "none" else None)
+
+
 @pytest.mark.parametrize("count,bits", [(3, 0x43124000), (10, 0x43f3c000)])
 def test_loop_exit_analysis_uses_the_actual_bound(count, bits):
     """FPCSE's exit must follow its loop bound, not an assumed ten iterations."""

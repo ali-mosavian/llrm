@@ -2514,6 +2514,24 @@ duplicated. This analysis is not wired to delete a loop: its caller must prove
 the trip count and execution shape, and elimination must separately preserve
 pending-exception synchronization and observable final memory state.
 
+### Floating exit facts feed constant propagation
+
+`fold` now passes independently proved floating-loop exit bytes into the
+ordinary constant-propagation solver. Facts belong to a particular CFG edge:
+they are applied before predecessor agreement, never at the loop header or
+backedge. Subsequent aliases and runtime calls still invalidate them.
+
+Before: an integer read of the FPCSE accumulator immediately after its loop
+remained `value := load s:4`, despite the exact exit proof.
+After: the focused MIR regression gets `value := 0x43f3c000` (SINGLE 487.5),
+with every original strict floating operation and loop edge retained.
+
+This is a consumer of the proof, not loop deletion. All 60 floating fixture
+objects are byte-identical before/after enabling it. In literal FPCSE,
+`B$PSSD` precedes the output value reads and its current contract permits
+caller-memory writes, so the proof cannot cross that call. No speedup is
+claimed. Stage dumps: `/tmp/qbopt-fpcse-exit-propagation`.
+
 ### Floating loop exits use proved control flow
 
 `floatfacts.loop_exits` now connects recurrence evaluation to the existing

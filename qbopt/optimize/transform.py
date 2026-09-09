@@ -1736,9 +1736,12 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
     Refused where the flags it also sets are read. `add ax,[c]` computes a
     number and a carry, and only one of them is expressible as `mov ax,n`.
     """
-    facts = consts.known(body, dgroup, calls)
+    from qbopt.analysis import floatfacts
+
+    edges = floatfacts.exit_cells(body, dgroup, calls)
+    facts = consts.known(body, dgroup, calls, edges=edges)
     memory = (
-        consts.cells(body, dgroup, calls, facts)
+        consts.cells(body, dgroup, calls, facts, edges=edges)
         if any(op.loads or op.kind is mir.Kind.DIVMOD for block in body.blocks for op in block.ops)
         else {}
     )

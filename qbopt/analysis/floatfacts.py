@@ -239,6 +239,27 @@ def loop_exits(body: mir.MirBody, dgroup: frozenset[int], calls: dict) -> tuple[
     return tuple(exits)
 
 
+def exit_cells(body: mir.MirBody, dgroup: frozenset[int], calls: dict) -> dict[tuple[int, int], consts.Cells]:
+    """Numeric memory facts on exit edges, never on a header's backedge.
+
+    These facts describe executions which reach the exit. The strict
+    operations establishing them remain in place, including their checks.
+    """
+    proofs = loop_exits(body, dgroup, calls)
+    if not proofs:
+        return {}
+    regions = {loop.header: loop.body for loop in loops.loops(body.blocks, body.entry)}
+    blocks = {block.at: block for block in body.blocks}
+    edges = {}
+    for proof in proofs:
+        destination, = [at for at in blocks[proof.header].succ if at not in regions[proof.header]]
+        memory = {}
+        for ref, fact in proof.stores:
+            memory.update(consts._fragments(mir._symbolic_ref(ref), fact))
+        edges[proof.header, destination] = memory
+    return edges
+
+
 def known(body: mir.MirBody, dgroup: frozenset[int], calls: dict[int, str], *, initial=None) -> dict[mir.Value, Finite]:
     """Numeric facts, optionally given independently established entry bytes."""
     integers = consts.known(body, dgroup, calls)

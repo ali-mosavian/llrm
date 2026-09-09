@@ -149,7 +149,7 @@ def cells(
     dgroup: frozenset[int],
     calls: dict[int, str],
     known: dict[mir.Value, Known] | None = None,
-    *, initial: Cells | None = None,
+    *, initial: Cells | None = None, edges: dict[tuple[int, int], Cells] | None = None,
 ) -> dict[tuple[int, int], Cells]:
     """What each memory cell holds before each operation, where it is a number.
 
@@ -157,6 +157,10 @@ def cells(
     same shape as known() and for the same reason. Keyed on the block and
     the operation's index within it rather than its address, because
     absorption puts several operations on one address.
+
+    Optional edge facts are independently proved byte fragments. Apply them
+    before the predecessor meet, so a loop's final value is not its invariant
+    value and a bypass path must agree before a following read can fold.
 
     A block none of whose predecessors have been visited yet is *deferred*,
     not treated as knowing nothing. Saying "nothing is known here" poisons
@@ -171,7 +175,17 @@ def cells(
     def entering(at: int) -> Cells | None:
         if not preds[at]:
             return dict(initial or {}) if at == body.entry else {}
-        seen = [outof[one] for one in preds[at] if outof[one] is not None]
+        seen = []
+        for one in preds[at]:
+            if outof[one] is None:
+                continue
+            extra = (edges or {}).get((one, at), {})
+            here = outof[one]
+            if extra:
+                here = {where: fact for where, fact in here.items()
+                        if not any((where[0].plus(offset), 1) in extra for offset in range(where[1]))}
+                here = {**here, **extra}
+            seen.append(here)
         if at == body.entry:
             seen.append(initial or {})
         if not seen:
@@ -360,6 +374,7 @@ def known(
     body: mir.MirBody,
     dgroup: frozenset[int] | None = None,
     calls: dict[int, str] | None = None,
+    *, edges: dict[tuple[int, int], Cells] | None = None,
 ) -> dict[mir.Value, Known]:
     """Every value this body computes that is a number, to a fixed point.
 
@@ -381,7 +396,7 @@ def known(
         # `n * k` inside the loop, which is three statements and a store
         # away.
         if dgroup is not None and calls is not None:
-            held = cells(body, dgroup, calls, facts)
+            held = cells(body, dgroup, calls, facts, edges=edges)
         for block in body.blocks:
             # A join is known where every path into it agrees. Nothing else
             # about a phi is knowable -- and this is what makes the
