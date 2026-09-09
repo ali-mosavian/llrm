@@ -9,6 +9,38 @@ from qbopt.optimize import transform
 from qbopt.objectfile.module import Addr, Space
 
 
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_fpdeep_one_based_index_has_a_bounded_byte_offset(tag):
+    """FPDEEP lost its 1..3 bound at i-1, leaving p(i)'s byte extent unknown."""
+    path = Path(f"fixtures/omf/fpdeep-{tag}.obj")
+    found = corpus.loaded(path)
+    partition = corpus.partitioned(path)
+    body = transform.applied(mir.bodies(found, partition)[0][1], found.dgroup,
+                             found.calls, blocks=partition, found=found)
+    known = ranges.bounded(body)
+    accesses = [(block.at, ref) for block in body.blocks for op in block.ops
+                for ref in op.loads if op.kind is mir.Kind.FLOAD and ref.base is not None]
+    assert accesses
+    for at, ref in accesses:
+        covered = ranges.covering(ref, known[at])
+        assert covered.base is None
+        assert covered.addr.disp == 6
+        assert covered.width == 12
+
+
+@pytest.mark.parametrize("kind,low,high,expected", [
+    (mir.Kind.DECREMENT, 1, 3, ranges.Interval(0, 2, 2)),
+    (mir.Kind.INCREMENT, -3, -1, ranges.Interval(-2, 0, 2)),
+    (mir.Kind.DECREMENT, -32768, 0, None),
+    (mir.Kind.INCREMENT, 0, 32767, None),
+])
+def test_unit_steps_require_nonwrapping_intervals(kind, low, high, expected):
+    source, result = mir.Value(1, 0), mir.Value(2, 0)
+    op = mir.Op(0, ir.Operation.UNARY, "", (result,), (source,), kind=kind,
+                args=(mir.Held(source, 2),), results=(mir.Held(result, 2),))
+    assert ranges._computed(op, {source: ranges.Interval(low, high, 2)}, {}) == expected
+
+
 @pytest.mark.parametrize("low,high", [(1, 20), (-32768, -1), (-10, 10)])
 def test_signed_widening_keeps_the_numeric_range(low, high):
     """ADDRM's bounded 1..20 counter lost its interval when converted to a long array value."""

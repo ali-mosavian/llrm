@@ -62,6 +62,11 @@ def _computed(op, known, facts):
         return None
     if op.kind is mir.Kind.COPY and len(args) == 1:
         return first
+    if op.kind in (mir.Kind.INCREMENT, mir.Kind.DECREMENT) and len(args) == 1:
+        step = 1 if op.kind is mir.Kind.INCREMENT else -1
+        low, high = first.low + step, first.high + step
+        sign = 1 << (result.width * 8 - 1)
+        return Interval(low, high, result.width) if -sign <= low <= high < sign else None
     if len(args) != 2:
         return None
     second = args[1]
