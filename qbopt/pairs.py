@@ -75,6 +75,10 @@ class Pair:
     def at(self) -> tuple[int, int]:
         return (self.low.at, self.high.at)
 
+    @property
+    def first(self) -> Op:
+        return min((self.low, self.high), key=lambda op: op.at)
+
 
 def _moved(op: Op) -> ir.Semantics | None:
     """This op's semantics if it is a plain move, or None."""
@@ -689,7 +693,7 @@ def chains(body: MirBody, dead: frozenset[int] = frozenset()) -> tuple[Chain, ..
     why lift.py refuses 156 regions in qb-qrender against the ones it takes.
     """
     state = held(body)
-    every = {min(one.at): one for one in found(body)}
+    every = {id(one.first): one for one in found(body)}
     out: list[Chain] = []
 
     for block in body.blocks:
@@ -709,7 +713,7 @@ def chains(body: MirBody, dead: frozenset[int] = frozenset()) -> tuple[Chain, ..
             out.append(Chain(number, tuple(run), was, now, restored))
 
         for op in block.ops:
-            one = every.get(op.at)
+            one = every.get(id(op))
             if one is None:
                 continue
             number = one.pair
@@ -871,20 +875,17 @@ def widened(body: MirBody, dead: frozenset[int] = frozenset()) -> MirBody:
     if not taken:
         return body
 
-    starts = {one.at: one for one in taken}
-    inside = {min(pair.at) for one in taken for pair in one.ops}
+    starts = {id(one.ops[0].first): one for one in taken}
     blocks = []
     pins: dict = {}
     for block in body.blocks:
         ops: list[Op] = []
         drop: set[int] = set()
         for op in block.ops:
-            if op.at in drop:
+            if op.at in drop and op.covers != (op.at, op.at):
                 continue
-            chain = starts.get(op.at)
+            chain = starts.get(id(op))
             if chain is None:
-                if op.at in inside:
-                    continue  # a half whose chain already emitted it
                 ops.append(op)
                 continue
 
@@ -933,7 +934,6 @@ def widened(body: MirBody, dead: frozenset[int] = frozenset()) -> MirBody:
             if chain.restored:
                 ops.append(_restore_op(chain.pair, _restore_at, ops[-1], hi, _handed(chain)))
                 pins.update(_handed_back(chain, body.origin))
-            drop.discard(op.at)
         blocks.append(replace(block, ops=tuple(ops)))
     return replace(body, blocks=tuple(blocks), pins={**body.pins, **pins})
 

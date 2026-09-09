@@ -467,6 +467,29 @@ def test_a_widened_negate_drops_its_carry_too() -> None:
     assert seen, "no negates with a carry between their halves, so this proves nothing"
 
 
+@pytest.mark.parametrize("before", [True, False])
+def test_inserted_operation_at_chain_entry_survives_widening(before: bool) -> None:
+    """nbody's counter chain emitted three times at 0x31b and refused layout."""
+    from dataclasses import replace
+    from qbopt import ir
+
+    found = corpus.loaded(Path("fixtures/omf/negnot-p-g2.obj"))
+    body = mir.bodies(found, split.partition(found, code_map(found)))[0][1]
+    chain = next(one for one in pairs.chains(body) if one.saved > 0)
+    marker = mir.Op(chain.at, ir.Operation.NOTHING, "nop", (), (),
+                    kind=mir.Kind.NOTHING, covers=(chain.at, chain.at))
+    blocks = tuple(replace(block, ops=tuple(item for op in block.ops
+                        for item in (((marker, op) if before else (op, marker))
+                                     if op is chain.ops[0].first else (op,))))
+                   for block in body.blocks)
+    altered = replace(body, blocks=blocks)
+    done = pairs.widened(altered)
+    assert any(op is marker for block in done.blocks for op in block.ops)
+    owned = [op.at for block in done.blocks for op in block.ops
+             if op.covers and op.covers[0] != op.covers[1]]
+    assert len(owned) == len(set(owned))
+
+
 def test_no_two_widened_ops_land_on_one_address() -> None:
     """Two byte-owning operations on one address would be a silent loss.
 
