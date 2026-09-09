@@ -181,6 +181,18 @@ def _labels(body: MirBody) -> dict[int, int]:
     return labels
 
 
+def _anchors(body: MirBody) -> dict[int, mir.Op]:
+    """Block labels designate occurrences, not repeated source addresses."""
+    labels = {}
+    following = None
+    for block in sorted(body.blocks, key=lambda one: one.at, reverse=True):
+        if block.ops:
+            following = block.ops[0]
+        if following is not None:
+            labels[block.at] = following
+    return labels
+
+
 def _names_a_value(body) -> bool:
     """Whether any operand in this body names a value rather than a place."""
     return any(
@@ -414,7 +426,8 @@ def rebuild(
     for _name, body in bodies:
         origin.update(body.origin)
     labels = {label: target for _, body in bodies for label, target in _labels(body).items()}
-    return asm.assemble(_interleaved(ops, inside), lowest, found, fields, native_fpu, assignment, origin, labels)
+    anchors = {label: op for _, body in bodies for label, op in _anchors(body).items()} if ordered else None
+    return asm.assemble(_interleaved(ops, inside), lowest, found, fields, native_fpu, assignment, origin, labels, anchors)
 
 
 def _starts_at(op: mir.Op) -> int:

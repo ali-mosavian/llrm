@@ -42,3 +42,21 @@ def test_cloned_far_call_keeps_its_relocation_without_claiming_input_bytes():
     assert emitted.relocations == ((1, 1), (6, 1))
     assert asm._field_in(found, replace(clone, id=None), frozenset({1})) is None
     assert asm._field_in(found, replace(clone, symbol=False), frozenset({1})) is None
+
+
+def test_block_entry_is_not_the_first_clone_of_its_source_address():
+    """FPDEEP's entry jump landed in a cloned header before its first iteration."""
+    def move(at, number, covers):
+        return mir.Op(at, ir.Operation.MOVE, "mov", (), (), covers=covers,
+                      made=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.AX, 2),), (ir.Imm(number, 2),)))
+    initial = move(0, 1, (0, 3))
+    cloned_header = move(3, 99, (3, 3))
+    header = move(3, 2, (3, 6))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (initial, cloned_header), (3,)),
+                          mir.MirBlock(3, (), (header,), ())))
+    found = SimpleNamespace(code=bytes.fromhex("b80100b80200"), end=6,
+                            coverage={}, refs={}, calls={}, absorbed={}, fixup_at={}, float_protocols={})
+    emitted = layout.rebuild(found, [("labels", body)], ordered=True)
+    assert not isinstance(emitted, str), emitted
+    assert emitted.code == bytes.fromhex("b80100b86300b80200")
+    assert emitted.moved[3] == 6

@@ -48,6 +48,24 @@ The failed execution is evidence of a miscompile, not successful unrolling.
 
 ## Next implementation boundary
 
+Block-entry occurrences are now anchored independently in the opt-in ordered
+emitter. Branch relaxation recomputes those positions on every layout round;
+an earlier clone no longer captures the original header's label. The prototype
+also emits an explicit jump from the expanded latch to the exit instead of
+falling through to the original header.
+
+With an experimental, process-local allowance for exact repeated floating
+sequences and ordered emission, FPDEEP passes all 33 output checks across PDS,
+QB and VBDOS. The default pipeline and floating refusal guard remain unchanged.
+Artifacts: `qbopt-clone-labels-k8wgg42a` and `qbopt-clone-compilers-a_p3y6ax`
+under `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T`.
+
+Unrolling alone does not yet establish the expected numeric facts: PDS has
+zero exact floating facts before and after another optimization round.
+`consts._operand` hands indexed cells directly to `_cell`, which refuses a
+base even when its SSA value is constant. Resolving a proven constant offset
+is the next dataflow step, before deciding whether expanded code is profitable.
+
 1. Separate ordered emitted occurrences from original byte ownership.
    Preserve the LIR block/instruction order; source addresses remain provenance.
 2. Preserve exactly one original block-label destination independently of

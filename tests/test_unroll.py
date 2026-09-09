@@ -32,6 +32,17 @@ def test_fpdeep_unroll_preserves_order_and_fresh_definitions():
     assert unroll.expanded(changed, found.dgroup, found.calls) == changed
 
 
+def test_unrolled_latch_explicitly_skips_the_original_header():
+    """FPDEEP fell through to its original header and started the expanded body again."""
+    found, original = body()
+    loop, = loops.loops(original.blocks, original.entry)
+    changed = unroll.expanded(original, found.dgroup, found.calls)
+    latch = changed.block(next(iter(loop.latches)))
+    assert latch.ops[-1].kind is mir.Kind.JUMP
+    assert latch.ops[-1].target == latch.succ[0]
+    assert latch.ops[-1].target not in loop.body
+
+
 def test_emission_must_not_accept_unrolled_provenance_yet():
     """FPDEEP timed out when repeated input addresses interleaved its calls and lost fixups."""
     found, original = body()

@@ -498,7 +498,8 @@ REACH = range(-128, 128)
 
 
 def _placed(
-    ops: list, at: int, lengths: list[int], labels: dict[int, int] | None = None
+    ops: list, at: int, lengths: list[int], labels: dict[int, int] | None = None,
+    anchors: dict[int, mir.Op] | None = None,
 ) -> tuple[list[int], dict[int, int]]:
     """Where each op lands, given what each one measures.
 
@@ -520,6 +521,9 @@ def _placed(
     for label, destination in (labels or {}).items():
         if destination in moved:
             moved.setdefault(label, moved[destination])
+    positions = {id(op): position for op, position in zip(ops, placed)}
+    for label, operation in (anchors or {}).items():
+        moved[label] = positions[id(operation)]
     return placed, moved
 
 
@@ -552,6 +556,7 @@ def assemble(
     assignment: dict | None = None,
     origin: dict | None = None,
     labels: dict[int, int] | None = None,
+    anchors: dict[int, mir.Op] | None = None,
 ) -> Laid | str:
     """Every item in order from `at`, shrunk to a fixed point and emitted.
 
@@ -631,7 +636,10 @@ def assemble(
     # it closer and can only let more of them shrink.
     short: set[int] = set()  # by position, since an address may hold several
     fallthrough: set[int] = set()
-    placed, moved = _placed(ops, at, lengths, labels)
+    occurrences = {id(one) for one in ops}
+    if anchors and any(id(op) not in occurrences for op in anchors.values()):
+        return "a block entry has no emitted occurrence"
+    placed, moved = _placed(ops, at, lengths, labels, anchors)
     changing = True
     while changing:
         changing = False
@@ -679,7 +687,7 @@ def assemble(
             lengths[index] = len(made.code)
             changing = True
         if changing:
-            placed, moved = _placed(ops, at, lengths, labels)
+            placed, moved = _placed(ops, at, lengths, labels, anchors)
 
     # The bytes, at the addresses the fixed point settled on.
     out = bytearray()

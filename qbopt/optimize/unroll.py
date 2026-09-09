@@ -102,6 +102,11 @@ def _expanded(body, loop, header, latch, exit_at, entry, count):
         carried = {phi.result.id: ssa.provider(phi.incoming[latch.at], swap) for phi in header.phis}
         swap.update(carried)
     expanded.extend(clone(op, False) for op in header.ops[:-1])
+    anchor = latch.ops[-1].at
+    expanded.append(replace(header.ops[-1], at=anchor, kind=mir.Kind.JUMP, name="",
+                            args=(), results=(), uses=(), defines=(), loads=(), stores=(),
+                            merges={}, node=None, made=None, raised=((), ()),
+                            covers=(anchor, anchor), extra_covers=(), target=exit_at, test=None, symbol=False))
     changed = []
     dominators = loops.dominators(body.blocks, body.entry)
     for block in body.blocks:
