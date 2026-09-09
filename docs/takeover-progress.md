@@ -1,5 +1,27 @@
 # Takeover checkpoint — 2026-09-09
 
+## Numeric DIM postconditions reach constant propagation
+
+The raise now emits generic normal-return memory values for numeric DDIM:
+dimension count, element width, and each dimension's count/lower bound.
+The descriptor layout stays in raising_arrays; constant propagation sees only
+memory/value pairs, and stage dumps print them. Unknown stores still kill
+the facts. This does not prove bounds or disjointness for element accesses.
+
+Verified against shipped BCOM45/BCL71ENR/VBDCL10E dynamic.asm disassembly:
+dimension count at +8, element width +12, counts/lower bounds +14/+16 with
+stride 4. The stack is consumed backwards, so the last dimension is first.
+QB's stores are at 0034/003a/004b/0052; PDS/VB at 0017/001d/0030/0037.
+Only recognized compiler families and numeric allocation attributes use these
+facts. Unknown families, strings, wrapping descriptors, RDIM and locally defined
+runtime-name substitutes do not acquire these postconditions.
+
+All three real HARR postcondition regressions fail with the old constant walk;
+33 focused checks pass. Six HARR/SEGLD emission comparisons across the compiler
+families are byte-identical with/without postconditions, so no new runtime loop
+was needed. No speedup yet: loop element stores still conservatively invalidate
+the facts. Dumps: `/tmp/qbopt-dim-postconditions-visible`.
+
 ## Constant memory facts retain pointer identity
 
 The constant-cell walk recorded a constant pointer-relative store using only

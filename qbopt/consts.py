@@ -106,11 +106,12 @@ def _kills(
     if op.at in calls:
         contract = runtime.contract(calls[op.at])
         if runtime.writes_caller_memory(contract) or runtime.barrier(contract):
-            return {}
+            here = {}
     for ref in op.stores:
         ref = mir._symbolic_ref(ref)
         if ref.addr is None:
-            return {}  # a store nothing can name reaches every cell
+            here = {}
+            break
         here = {
             where: fact
             for where, fact in here.items()
@@ -119,6 +120,11 @@ def _kills(
         put = _put(op, known)
         if put is not None and ref.base is None and ref.segment is None:
             here[(ref.addr, ref.width)] = put
+    if op.kind is mir.Kind.CALL and op.memory_values:
+        here = dict(here)
+        for ref, value in op.memory_values:
+            if ref.addr is not None and ref.base is None and ref.segment is None:
+                here[(ref.addr, ref.width)] = Known(masked(value.n, value.width), value.width)
     return here
 
 

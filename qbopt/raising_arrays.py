@@ -2,10 +2,10 @@ from dataclasses import replace
 
 from qbopt import mir
 from qbopt import consts
-from qbopt.module import Space
+from qbopt.module import Addr, Space
 
 
-def annotated(body: mir.MirBody, calls: dict[int, str]) -> mir.MirBody:
+def annotated(body: mir.MirBody, calls: dict[int, str], *, family: str = "") -> mir.MirBody:
     sites = {at: name for at, name in calls.items() if name in ("B$DDIM", "B$RDIM")}
     if not sites:
         return body
@@ -25,13 +25,35 @@ def annotated(body: mir.MirBody, calls: dict[int, str]) -> mir.MirBody:
                 arguments.append(_argument(op.args[0], known, symbols))
             elif op.at in sites and op.kind is mir.Kind.CALL:
                 request = _request(arguments, sites[op.at] == "B$RDIM")
-                op = replace(op, array=request)
+                values = _descriptor_values(request, arguments, family) if sites[op.at] == "B$DDIM" else ()
+                op = replace(op, array=request, memory_values=values)
                 arguments.clear()
             elif op.kind not in (mir.Kind.COPY, mir.Kind.XOR) or op.stores or op.barrier:
                 arguments.clear()
             ops.append(op)
         blocks.append(replace(block, ops=tuple(ops)))
     return _addresses(replace(body, blocks=tuple(blocks)), symbols)
+
+
+def _descriptor_values(request: mir.ArrayRequest | None, arguments: list, family: str) -> tuple:
+    """Normal-return facts for the numeric DDIM layout verified in the three shipped libraries."""
+    if request is None or family not in ("qb45", "pds71", "vbdos"):
+        return ()
+    attributes = arguments[-2].n >> 8
+    if attributes not in (0, 1, 2, 3):
+        return ()
+    descriptor = request.descriptor
+    start = descriptor.offset + descriptor.addend
+    if descriptor.space is not Space.SEGMENT or not 0 <= start <= 65536 - (14 + 4 * len(request.bounds)):
+        return ()
+    # dynamic.asm consumes the stack backwards: last dimension comes first.
+    fields = [(8, len(request.bounds), 1), (12, request.element_width, 2)]
+    for dimension, (lower, upper) in enumerate(reversed(request.bounds)):
+        fields.extend(((14 + 4 * dimension, upper - lower + 1, 2), (16 + 4 * dimension, lower, 2)))
+    return tuple(
+        (mir.MemRef(Addr(Space.SEGMENT, start + offset, descriptor.index), width), mir.Const(number, width))
+        for offset, number, width in fields
+    )
 
 
 def _addresses(body: mir.MirBody, symbols: dict[mir.Value, mir.Symbol]) -> mir.MirBody:

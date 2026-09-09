@@ -9,6 +9,41 @@ from qbopt import mir
 from qbopt import wholeseg
 from qbopt.module import Space
 from qbopt import raising_arrays
+from qbopt import consts
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_dim_normal_return_supplies_descriptor_constants(tag: str) -> None:
+    """HARR's 21-element dimensions were unknown immediately after DDIM returned."""
+    path = Path("fixtures/omf") / f"harr-{tag}.obj"
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    call = next(op for block in body.blocks for op in block.ops if op.array)
+    facts = consts._kills({}, call, {}, found.dgroup, found.calls)
+    from qbopt.module import Addr
+
+    assert consts._cell(facts, mir.MemRef(Addr(Space.SEGMENT, 20, found.program_data), 2)) == consts.Known(21, 2)
+    assert consts._cell(facts, mir.MemRef(Addr(Space.SEGMENT, 24, found.program_data), 2)) == consts.Known(21, 2)
+    unknown = replace(call, kind=mir.Kind.STORE, memory_values=())
+    assert consts._kills(facts, unknown, {}, found.dgroup, {}) == {}
+
+
+def test_descriptor_dimensions_follow_stack_order() -> None:
+    """Unequal dimensions must not be swapped: the last pushed bound lives at descriptor +14."""
+    request = mir.ArrayRequest(mir.Symbol(Space.SEGMENT, 5, 6, 2), 2, ((-3, 2), (4, 14)))
+    arguments = [mir.Const(2, 2), mir.Const(2, 2), request.descriptor]
+    fields = raising_arrays._descriptor_values(request, arguments, "qb45")
+    assert [(ref.addr.disp, value.n) for ref, value in fields] == [
+        (14, 2),
+        (18, 2),
+        (20, 11),
+        (22, 4),
+        (24, 6),
+        (26, -3),
+    ]
+    assert raising_arrays._descriptor_values(request, arguments, "unknown") == ()
+    arguments[-2] = mir.Const(0x8002, 2)
+    assert raising_arrays._descriptor_values(request, arguments, "vbdos") == ()
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
@@ -86,7 +121,7 @@ def test_only_allocating_calls_carry_requests(name: str) -> None:
 def test_array_annotation_does_not_change_emission(tag: str, monkeypatch: pytest.MonkeyPatch) -> None:
     data = (Path("fixtures/omf") / f"harr-{tag}.obj").read_bytes()
     annotated = wholeseg.emitted(data)
-    monkeypatch.setattr(raising_arrays, "annotated", lambda body, calls: body)
+    monkeypatch.setattr(raising_arrays, "annotated", lambda body, calls, **kwargs: body)
     original = wholeseg.emitted(data)
     assert annotated.outcome is wholeseg.Emission.LIR
     assert original.outcome is wholeseg.Emission.LIR
