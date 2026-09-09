@@ -7,8 +7,31 @@ import pytest
 import corpus
 from qbopt import mir
 from qbopt import consts
+from qbopt import ir
 from qbopt.module import Addr
 from qbopt.module import Space
+
+
+@pytest.mark.parametrize("indirect", ["base", "segment"])
+def test_indirect_store_does_not_invent_a_direct_constant(indirect: str) -> None:
+    """A store through a pointer reported 7 at the bare displacement, ignoring the pointer."""
+    address = Addr(Space.SEGMENT, 6, 5)
+    pointer = mir.Value(1, 0)
+    ref = mir.MemRef(address, 2, **{indirect: pointer})
+    store = mir.Op(0, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.STORE, args=(mir.Const(7, 2),), stores=(ref,))
+    cells = consts._kills({}, store, {}, frozenset({5}), {})
+    assert consts._cell(cells, mir.MemRef(address, 2)) is None
+
+
+def test_proven_symbolic_store_and_read_share_constant() -> None:
+    """HARR-style symbolic field references should retain the proven address, not displacement 2."""
+    address = Addr(Space.SEGMENT, 8, 5)
+    ref = mir.MemRef(Addr(Space.LITERAL, 2), 2, mir.Value(1, 0), symbolic=mir.Symbol(Space.SEGMENT, 5, 8, 2))
+    store = mir.Op(0, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.STORE, args=(mir.Const(21, 2),), stores=(ref,))
+    cells = consts._kills({}, store, {}, frozenset({5}), {})
+    assert consts._cell(cells, mir.MemRef(address, 2)) == consts.Known(21, 2)
+    assert consts._cell(cells, ref) == consts.Known(21, 2)
+    assert consts._cell(cells, mir.MemRef(Addr(Space.LITERAL, 2), 2)) is None
 
 
 def test_long_from_two_word_stores() -> None:

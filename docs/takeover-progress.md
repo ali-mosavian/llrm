@@ -1,5 +1,25 @@
 # Takeover checkpoint — 2026-09-09
 
+## Constant memory facts retain pointer identity
+
+The constant-cell walk recorded a constant pointer-relative store using only
+its displacement, dropping the base/segment SSA value. A direct read could
+then incorrectly acquire that constant. It now invalidates potentially aliased
+facts but records a new direct fact only for a proven direct address. Proven
+symbolic references are canonicalized on both reads and writes, making the
+descriptor-address metadata usable by constant propagation.
+
+Three new cases fail before the fix; 1030 focused constant/array checks pass.
+Nine strict-LIR runtime comparisons pass (HARR/SEGLD/LNGMIX across p-g2/q-O/v-g3).
+HARR's final MIR is identical to the previous stage dump; no speedup claimed.
+Dumps: `/tmp/qbopt-constant-pointer-identity`; runtime evidence:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-constant-pointer-68wnorjb`.
+
+Runtime source inspection also confirms that dynamic allocation can be near:
+QB45 `dynamic.asm` uses the near allocator and DGROUP when FADF_FAR/HUGE are
+clear. Array provenance therefore still requires an in-bounds proof; a DIM
+request alone cannot establish disjointness from program data.
+
 ## Proven descriptor addresses without changing relocation operands
 
 The raise now attaches a symbolic effective address to descriptor references

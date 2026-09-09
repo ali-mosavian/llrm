@@ -108,6 +108,7 @@ def _kills(
         if runtime.writes_caller_memory(contract) or runtime.barrier(contract):
             return {}
     for ref in op.stores:
+        ref = mir._symbolic_ref(ref)
         if ref.addr is None:
             return {}  # a store nothing can name reaches every cell
         here = {
@@ -116,7 +117,7 @@ def _kills(
             if not mir.overlapping(mir.MemRef(where[0], where[1], None, None), ref, dgroup)
         }
         put = _put(op, known)
-        if put is not None:
+        if put is not None and ref.base is None and ref.segment is None:
             here[(ref.addr, ref.width)] = put
     return here
 
@@ -181,6 +182,7 @@ def _read(fact: Known | None, width: int) -> Known | None:
 
 
 def _cell(here: Cells, ref: mir.MemRef) -> Known | None:
+    ref = mir._symbolic_ref(ref)
     if ref.addr is None or ref.base is not None or ref.segment is not None:
         return None
     if exact := _read(here.get((ref.addr, ref.width)), ref.width):
