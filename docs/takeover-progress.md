@@ -1847,3 +1847,39 @@ recurrences and the real LNGMXX accumulator on all three compilers.
 The focused induction/range checks pass 78/78. All 96 primary fixture
 objects emit identical bytes versus the previous implementation. This is
 analysis groundwork for evaluating loop exit values, not a claimed speedup.
+
+### Evaluate affine loop exits instead of running the loop
+
+`loopexit.evaluated`, within the MIR strength stage, now replaces a finite,
+side-effect-free two-block loop with each header recurrence's final value:
+`start + count * step`. This follows the exit-value evaluation idea used by
+LLVM IndVarSimplify. The control recurrence must have a proven finite,
+non-wrapping count; integer accumulators retain their own modular width.
+Stores, unmodelled operations, escaping latch/flag values, incomplete
+recurrence descriptions, and unproved termination prevent deletion.
+Zero-trip loops are currently left to other simplification, not guessed.
+
+The real emitted-backedge assertions failed first on all three LNGMXX
+fixtures. Adjacent MIR dumps at `/tmp/qbopt-lngmxx-exit-before` and
+`/tmp/qbopt-lngmxx-exit-fixed` show the recurrence becoming a multiply and
+the loop disappearing. An intermediate dump caught retained original bytes
+on removed operations; cleared operations now explicitly own no computation,
+and the rewritten jump retains the provenance needed to lower its new target.
+
+Modeled costs (PDS/QB/VBDOS):
+
+| Program | Before | After |
+| --- | --- | --- |
+| LNGMXX | 331 / 333 / 331 | 269 / 271 / 269 |
+| PRESS | 230 / 234 / 240 | 146 / 150 / 156 |
+| PRESSX | 710 / 714 / 720 | 646 / 650 / 656 |
+
+These nine objects are the only changes among 96 primary fixture objects;
+all retain LIR emission. LNGMXX and PRESSX references remain provisional.
+Focused loop-exit/induction/range checks pass 88/88. The earlier LNGMXX
+width regression now disables exit evaluation so it still examines the
+recurrence itself; its width assertion is unchanged. Strict runtime checks
+pass 39 cases across all three compilers, covering the three changed programs
+and LNGMIX, HOTLOP, HOTLPX, HARR, MATRIX, NESTED, ADDRM and SPILL.
+Artifacts: `qbopt-loop-exit-34rk4ekd` and `qbopt-loop-exit-press-_bngjbd0`
+under the system temporary directory. No full test suite was run.

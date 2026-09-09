@@ -42,7 +42,9 @@ class Strength(MIRTransform):
         self.where = where
 
     def transform(self, body: MirBody) -> MirBody:
-        return reduced(body, self.where.dgroup, self.where.bounds)
+        from qbopt import loopexit
+
+        return loopexit.evaluated(reduced(body, self.where.dgroup, self.where.bounds))
 
 
 def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | None = None) -> MirBody:

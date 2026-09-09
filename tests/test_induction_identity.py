@@ -228,9 +228,13 @@ def test_long_recurrence_keeps_its_width(copied: bool) -> None:
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
-def test_lngmxx_accumulator_has_a_whole_long_start(tag: str) -> None:
+def test_lngmxx_accumulator_has_a_whole_long_start(tag: str, monkeypatch) -> None:
     """LNGMXX's 32-bit sum was reported as starting with only its low word."""
     import corpus
+    from qbopt import loopexit
+
+    # Inspect recurrence analysis before exit evaluation removes the loop.
+    monkeypatch.setattr(loopexit, "evaluated", lambda body: body)
 
     path = Path(f"fixtures/omf/lngmxx-{tag}.obj")
     found = corpus.loaded(path)
