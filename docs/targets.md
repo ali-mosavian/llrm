@@ -678,6 +678,40 @@ FPCSEX reads its inputs at runtime and cannot use this argument. It remains
 the general floating value-numbering and loop-invariant-motion benchmark;
 its strict storage rounding and exception obligations remain intact.
 
+**LLVM cross-check, 2026-09-09:** local LLVM revision
+`338e0c94943a6fb917c276bbbd9ff4b6cd6dd71e`,
+`llvm/lib/Transforms/Scalar/EarlyCSE.cpp`, `SimpleValue::canHandle`, rejects
+constrained floating add/subtract/multiply/divide with `ebStrict` exception
+behavior or dynamic rounding. The current FPCSEX MIR explicitly carries both.
+Thus ordinary LLVM-style CSE is not evidence that these operations may be
+merged under our existing contract. This is a statement about that pass,
+not proof that no modern compiler can improve this program.
+
+The current PDS stage dump (`/tmp/qbopt-fpcsex-strict-current`) retains both
+additions in both CSE rounds. Emission still evaluates, in order:
+
+```asm
+fld  dword [a]
+fadd dword [b]
+fmul dword [c]
+fstp dword [p]       ; SINGLE conversion
+fld  dword [a]
+fadd dword [b]
+fdiv dword [c]
+fstp dword [q]       ; SINGLE conversion
+fld  dword [s]
+fadd dword [p]
+fadd dword [q]
+fstp dword [s]       ; SINGLE conversion
+wait
+```
+
+Next steps are to derive and validate a strict reference with these conversions
+and observable exception ordering, and separately improve allocation or prove
+specific operations exception-free. Do not turn on relaxed FP, erase conversion
+points, or change the denominator merely to make this row pass. The inspection
+changes no emitted code: PDS remains 985 object bytes and cost 4462.
+
 Current PDS scores (2026-09-09): FPCSE **3956**, down from **4386** before
 floating CSE; FPCSEX **4508**, unchanged. The reduction is 430 model units,
 about 9.8%, not a measured hardware latency improvement. Both denominators
