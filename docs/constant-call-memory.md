@@ -9,13 +9,34 @@ It cannot prove that a byte fragment above an escaped address is unreachable.
 The first implementation retained bytes 1–3 of an escaped long after a possible
 write; the fail-first regression in `tests/test_constant_call_memory.py` catches
 each byte. Constant propagation therefore ignores nonempty escape exclusions
-until the raise supplies trustworthy extents. Empty escape sets remain usable.
+until the raise supplies trustworthy extents. Escape sets with no addresses in
+the protected program-data segment remain usable, even when string-segment
+addresses escape.
 
 Before: even a proven no-escape call discarded a complete constant.
 After: that constant survives; an escaped long loses every byte fact.
-The PDS/G2 fixture emission comparison against HEAD showed no changed objects.
-This is not a measured speedup, and the experimental NOTS/NEGNOT improvements
-from trusting nonempty escape exclusions are withdrawn.
+The first guarded implementation changed no PDS/G2 objects. Filtering escapes
+by their segment then removed NEGNOT's input reloads and reduced FLAGS as well.
+NOTS still exposes program-data addresses and remains conservative.
+
+NEGNOT's PDS object shrank from 991 to 925 bytes. Static cost fell from 510 to
+370 against an unchanged target of 290 (1.28x). QB costs 380 (1.31x), VBDOS 370
+(1.28x). These are ranking units, not elapsed time. All four runtime cases pass
+on all three compilers.
+
+For `-(not a)`, the earlier emitted sequence reloads a, splits its halves,
+complements both, then negates the pair. The new sequence is:
+
+```asm
+mov ax,0A987h
+neg ax
+mov bx,0EDCBh
+adc bx,0
+neg bx
+```
+
+The reload and complement have disappeared. The remaining split negation is
+still a gap: a fully folded result would simply pass 12345679h to PRINT.
 
 Follow-up: supply object-range reachability in the raise, not machine knowledge
 in constant propagation. Do not infer object ends from individual operand

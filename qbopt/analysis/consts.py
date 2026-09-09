@@ -128,7 +128,7 @@ def _kills(
         ref = mir._symbolic_ref(ref)
         # Escape metadata names pointer origins, not byte extents. A byte
         # fragment cannot use an absent origin as proof of disjointness.
-        if ref.beyond is not None and ref.beyond[1]:
+        if ref.beyond is not None and any(segment == ref.beyond[0] for segment, _ in ref.beyond[1]):
             ref = replace(ref, beyond=None)
         here = {
             where: fact
