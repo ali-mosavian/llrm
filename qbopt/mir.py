@@ -1933,6 +1933,8 @@ def same_bytes(one: MemRef, other: MemRef) -> bool:
     one, other = _symbolic_ref(one), _symbolic_ref(other)
     if one.addr is None or other.addr is None:
         return False  # nothing this can name is never known to be anything
+    if one.addr.space is Space.FAR and one.segment is None:
+        return False
     if one.width != other.width or one.base != other.base or one.segment != other.segment:
         return False
     return one.addr == other.addr

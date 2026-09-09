@@ -1,5 +1,25 @@
 # Takeover checkpoint — 2026-09-09
 
+## Memory identity requires the segment, not just the offset
+
+HARR's descriptor-segment loads still produce Opaque results; element references
+have no segment SSA identity. `same_bytes` previously accepted two such far
+references as equal, even though an intervening segment reload can change the
+address. It now requires known segment identity for far-reference equality.
+Dead-store coverage reuses that equality rule after aligning displacements;
+its old independent check also ignored relocated segment indices, allowing
+equal offsets in different objects to appear to cover each other.
+
+Three failing-before cases cover unknown segment, changed segment and different
+relocated objects; a positive case preserves coverage for known same pointers.
+3417 availability checks pass in 15 seconds; nine strict-LIR runtime comparisons
+pass (HARR/SEGLD/NESTED across p-g2/q-O/v-g3). HARR's emitted stage is unchanged.
+Dumps: `/tmp/qbopt-far-identity`; runtime artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-far-identity-7nomd5wb`.
+
+Next array proof must include segment provenance as well as offset bounds;
+neither an unchanged offset nor a DIM request alone proves address identity.
+
 ## Numeric DIM postconditions reach constant propagation
 
 The raise now emits generic normal-return memory values for numeric DDIM:

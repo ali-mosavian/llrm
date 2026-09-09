@@ -357,11 +357,13 @@ def test_the_same_address_through_a_rewritten_register_is_not_the_same_bytes() -
         Addr(Space.FAR, 0, base=mir.Register.BX, segment=mir.Register.ES),
         1,
         base=mir.Value(41, 0x461),
+        segment=mir.Value(50, 0),
     )
     there = mir.MemRef(
         Addr(Space.FAR, 0, base=mir.Register.BX, segment=mir.Register.ES),
         1,
         base=mir.Value(47, 0x476),
+        segment=mir.Value(50, 0),
     )
     assert here.addr == there.addr, "the same Addr, which is the point"
     assert not mir.same_bytes(here, there)

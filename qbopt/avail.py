@@ -38,7 +38,7 @@ for a memory cell is a new value with no defining instruction, which
 lowering has no way to emit. Conservative here is the honest floor.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 
 from qbopt import ir
@@ -151,11 +151,11 @@ def _covered_by(ref: MemRef, other: MemRef, dgroup: frozenset[int]) -> bool:
     what memory.py was finding and this was not, since absorption emits
     exactly that shape.
     """
+    ref, other = mir._symbolic_ref(ref), mir._symbolic_ref(other)
     if ref.addr is None or other.addr is None:
         return False
-    if ref.base != other.base or ref.addr.space is not other.addr.space:
-        return False
-    if ref.addr.space is Space.SEGMENT and ref.addr.base != other.addr.base:
+    aligned = replace(other, addr=other.addr.plus(ref.addr.disp - other.addr.disp), width=ref.width)
+    if not mir.same_bytes(ref, aligned):
         return False
     return other.addr.disp <= ref.addr.disp and ref.addr.disp + ref.width <= other.addr.disp + other.width
 
