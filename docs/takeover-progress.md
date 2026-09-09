@@ -1215,3 +1215,36 @@ snapshot. Fourteen focused checks pass. The strict three-compiler runtime run
 recorded above covers this implementation: DIVMOD, nbody, CHAIN, and HARR all
 pass. PDS nbody now models 388,342 cycles, versus 402,593 at the prior scalar
 multiply milestone; this is not hardware timing or a target-completion claim.
+
+## Pending whole constant-store recognition
+
+Current experiment combines adjacent constant word stores in raising, with
+exact address/SSA equality and contiguous coverage. Nbody's ACCX/ACCY zero
+initializers then have the same whole width as their updates, enabling
+promotion and loop phis. The initializer regression failed before the change;
+11 focused recognition tests pass, including base/address/gap exclusions.
+
+Not accepted yet: nbody's modeled cost rises from 388,342 to 418,616. The
+allocation diff shows both accumulator phis spilled, with additional edge
+copies rather than register-resident accumulators. Compare
+`/tmp/qbopt-accumulator-current` and `/tmp/qbopt-accumulator-whole`.
+Nbody and HARR pass all three compilers, but CHAIN and DIVMOD refuse immediate
+stores on PDS/QB (CHAIN 0x48; DIVMOD 0x9a/0x9c). VBDOS passes all four.
+Runtime artifacts: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-whole-initializers-x6ij0ddp`.
+Next: inspect the immediate-store encoding refusal, then eliminate the
+promoted-phi spill/edge-copy overhead. The source experiment is uncommitted.
+
+## Dword constant stores accept their full bit patterns
+
+CHAIN's refused initializer was `mov [seg:5+0xe],0xc1747c23`, not an
+unsupported machine form. The encoder passed that positive bit pattern to
+iced's signed-i32 constructor. Loads and stores now share the conversion to
+the equivalent signed value. The exact-byte store regression failed before
+the fix; both immediate load/store tests pass afterwards.
+
+With whole initializers still experimental, CHAIN (7 cases) and DIVMOD (20)
+pass strict LIR on PDS, QB and VBDOS:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-store-immediates-eqtnx5t9`.
+The promotion cost regression remains: global accumulator stores survive
+alongside private spill-slot loads/stores and phi edge transfers. This encoder
+fix is committed independently; initializer recognition remains uncommitted.

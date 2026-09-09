@@ -360,6 +360,10 @@ def _operand(one: ir.Loc, where: dict[Register_, Register_] | None, held: dict |
     return one
 
 
+def _immediate(value: int, width: int) -> int:
+    return ((value & 0xffffffff) ^ 0x80000000) - 0x80000000 if width == 4 else value
+
+
 def load(into: Register_, value: int, at: int = 0) -> Emitted | None:
     """`mov into, imm`, at the width `into` names."""
     width = WIDTHS.get(into)
@@ -368,10 +372,8 @@ def load(into: Register_, value: int, at: int = 0) -> Emitted | None:
     code = _code(f"MOV_R{width * 8}_IMM{width * 8}")
     if code is None:
         return None
-    if width == 4:
-        value = ((value & 0xffffffff) ^ 0x80000000) - 0x80000000
     try:
-        return _assemble(Instruction.create_reg_i32(code, into, value), at)
+        return _assemble(Instruction.create_reg_i32(code, into, _immediate(value, width)), at)
     except (ValueError, OverflowError):
         return None
 
@@ -585,7 +587,7 @@ def store_imm(cell: ir.Mem, value: int, at: int = 0) -> Emitted | None:
         return None
     where, relocated = built
     try:
-        return _assemble(Instruction.create_mem_i32(code, where, value), at, relocated)
+        return _assemble(Instruction.create_mem_i32(code, where, _immediate(value, cell.width)), at, relocated)
     except (ValueError, OverflowError):
         return None
 

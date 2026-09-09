@@ -28,6 +28,15 @@ def test_load_accepts_unsigned_dword_bit_pattern():
     assert emitted.code == bytes.fromhex("66bef9ffffbf")
 from qbopt.declen import BITNESS
 
+
+def test_store_accepts_unsigned_dword_bit_pattern():
+    """CHAIN refused its whole 0xc1747c23 initializer at 0x48 instead of emitting it."""
+    from qbopt.module import Addr, Space
+    cell = ir.Mem(Addr(Space.FRAME, -4), 4)
+    emitted = select.store_imm(cell, 0xc1747c23)
+    assert emitted is not None
+    assert emitted.code == bytes.fromhex("66c746fc237c74c1")
+
 ROOTS = (Register.EAX, Register.ECX, Register.EDX, Register.EBX, Register.ESI, Register.EDI)
 HALVES = (Register.AX, Register.CX, Register.DX, Register.BX, Register.SI, Register.DI)
 
