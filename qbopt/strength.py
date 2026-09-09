@@ -175,23 +175,28 @@ def _woven(block, ahead: list, behind: list, replacements: dict[int, Op]) -> lis
     changed them.
     """
     kept = [replacements.get(id(op), op) for op in block.ops]
-    if ahead:
+    if ahead or behind:
         cut = len(kept)
         while cut and kept[cut - 1].kind in (mir.Kind.JUMP, mir.Kind.BRANCH):
             cut -= 1
-        kept = kept[:cut] + ahead + kept[cut:]
-    if behind:
-        cut = len(kept)
-        while cut and kept[cut - 1].kind in (mir.Kind.JUMP, mir.Kind.BRANCH):
-            cut -= 1
-        kept = kept[:cut] + behind + kept[cut:]
+        if cut < len(kept):
+            at = kept[cut].covers[0] if kept[cut].covers else kept[cut].at
+            boundary = at
+        elif kept:
+            at = kept[-1].at
+            boundary = kept[-1].covers[1] if kept[-1].covers else at
+        else:
+            at = block.at
+            boundary = at
+        inserted = [replace(op, at=at, covers=(boundary, boundary)) for op in (*ahead, *behind)]
+        kept = kept[:cut] + inserted + kept[cut:]
     return kept
 
 
 def _made(kind, name: str, into, args: tuple, at: int, beside: Op) -> Op:
     """One operation this pass invented, claiming none of BC's bytes."""
     return Op(
-        at=beside.at,
+        at=at,
         op=beside.op,
         name=name,
         defines=(into,),
@@ -200,7 +205,7 @@ def _made(kind, name: str, into, args: tuple, at: int, beside: Op) -> Op:
         stores=(),
         node=None,
         made=None,
-        covers=(beside.covers[0], beside.covers[0]) if beside.covers else None,
+        covers=(at, at),
         kind=kind,
         args=args,
         results=(mir.Held(into, _widest(args)),),

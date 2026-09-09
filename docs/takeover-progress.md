@@ -55,6 +55,17 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+Insertion-location checkpoint: setup/update operations now use their insertion
+sites instead of the old product address. Tail updates retain the predecessor's
+last operation address with zero-width ownership at its end, so a branch to the
+next block skips the update. Stage evidence is in
+`/tmp/qbopt-matrix-reducer.IRijKE/{baseline,reduced,anchored-tail}`.
+Original experimental emission put setup inside loops; corrected entry jumps
+now skip latch updates (0x4d -> 0x7d and 0x8f -> 0xa3).
+44 focused checks pass; the old reducer fails the insertion-location regression.
+Still not safe to enable: setup `zero * 20` emits `imul bx,bx` after loading 20;
+trace two-address/coalescing next. The cost regression was not pure pressure.
+
 Current-iteration checkpoint: reduction now replaces a product with a semantic
 copy into its original result instead of deleting that definition and replacing
 all consumers. Exit phis therefore retain the pre-increment result. This removes

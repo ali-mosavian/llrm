@@ -303,3 +303,27 @@ def test_reduced_product_keeps_the_current_iteration_on_exit() -> None:
     assert preserved.args == (mir.Held(phi.result, 2),)
     assert result.blocks[2].phis[0].incoming[1] == answer
     assert preserved.args[0].value != phi.incoming[1]
+
+
+def test_inserted_counter_operations_own_their_insertion_location() -> None:
+    built, _loop = body()
+    header = built.blocks[1]
+    counter = header.phis[0].result
+    product = replace(header.ops[1], uses=(counter,), args=(mir.Held(counter, 2), mir.Const(3, 2)), covers=(2, 4))
+    answer = product.defines[0]
+    consume = mir.Op(
+        4, ir.Operation.PUSH, "", (), (answer,), kind=mir.Kind.ARG, args=(mir.Held(answer, 2),), covers=(4, 6)
+    )
+    built = replace(
+        built,
+        blocks=(
+            built.blocks[0],
+            replace(header, ops=(replace(header.ops[0], covers=(1, 2)), product, consume)),
+            built.blocks[2],
+        ),
+    )
+    result = strength.reduced(built)
+    setup = result.blocks[0].ops[0]
+    update = result.blocks[1].ops[-1]
+    assert setup.at == 0 and setup.covers == (0, 0)
+    assert update.at == 4 and update.covers == (6, 6)
