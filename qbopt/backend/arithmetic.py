@@ -15,6 +15,18 @@ def validate(cpu: str) -> None:
         raise ValueError(f"unknown CPU target: {cpu}")
 
 
+def immediate_multiply(cpu: str, number: int) -> int:
+    """Core clocks for audited positive imm8; other forms still use the old estimate.
+
+    Intel 80386 Programmer's Reference Manual, IMUL: for positive m,
+    max(ceil(log2(m)), 3) + 6. Restrict to positive imm8 so the value
+    is identical in both word and dword forms. See docs/timing-audit.md.
+    """
+    if cpu == "386" and 0 <= number <= 127:
+        return max((number - 1).bit_length() if number else 0, 3) + 6
+    return cost(cpu, "imul_r32")
+
+
 def scale(number: int, cpu: str) -> tuple[tuple[str, int], ...] | None:
     """Binary and signed-digit chains, including destructive-operand copies."""
     validate(cpu)
@@ -42,4 +54,4 @@ def scale(number: int, cpu: str) -> tuple[tuple[str, int], ...] | None:
         return cost(cpu, "mov_rr") + sum(cost(cpu, "shift_ri" if name == "shl" else "alu_rr")
                                          for name, _ in parts)
     best = min((chain(False), chain(True)), key=clocks)
-    return best if clocks(best) < cost(cpu, "imul_r32") else None
+    return best if clocks(best) < immediate_multiply(cpu, number) else None

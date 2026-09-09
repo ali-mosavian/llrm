@@ -31,6 +31,16 @@ def test_unknown_cpu_is_not_silently_defaulted():
         arithmetic.scale(20, "unknown")
 
 
+def test_386_small_immediate_multiply_is_not_costed_as_unknown_dword():
+    """The selector expanded x*85 using a 22-clock guess; its immediate multiply costs 13."""
+    assert arithmetic.scale(85, "386") is None
+
+
+@pytest.mark.parametrize("number,clocks", [(0, 9), (1, 9), (8, 9), (9, 10), (20, 11), (85, 13), (127, 13)])
+def test_386_positive_immediate_early_out(number, clocks):
+    assert arithmetic.immediate_multiply("386", number) == clocks
+
+
 @pytest.mark.parametrize("cpu,multiplies", [("386", 1), ("486", 1), ("P5", 1), ("P6", 2)])
 def test_hotlpx_emission_obeys_selected_cpu(cpu, multiplies):
     """HOTLPX's factor twenty should not become a slower chain on a fast multiplier."""
