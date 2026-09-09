@@ -118,6 +118,9 @@ CALLED = {
     "B$DVI4": 120,
     "B$RMI4": 120,
     "B$CPI4": 40,
+    # Full straight-line bodies, including waits and stack traffic; see docs/float-integer-values.md.
+    "B$FIST": 106,
+    "B$FIS2": 100,
 }
 CALL = 20
 

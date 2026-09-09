@@ -1,5 +1,11 @@
 # Target coverage and the next floating-point gap
 
+Latest FPDEEP update: explicit float-to-integer values and corrected helper
+body accounting give PDS 13489 (12.42x), QB 12555 (11.56x), VBDOS 13419
+(12.36x). Under the corrected accounting the preceding revision costs
+14481, 14699 and 14411 respectively. See `docs/float-integer-values.md`;
+the earlier scores below undercounted B$FIST and are historical.
+
 FPDEEP update 2026-09-10: its complete ordinary-build reference is now
 1086 units, independently derived from its exact source expressions and
 printing sequence in `docs/targets.md`. After finite-array reuse and stack

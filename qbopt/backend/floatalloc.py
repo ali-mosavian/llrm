@@ -49,6 +49,19 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
         insns = []
         for one in block.insns:
             what = one.what
+            converted_result = None
+            if (what is not None and what.op is ir.Operation.FLOAT_STORE and what.name == "fistp"
+                and len(what.sources) == len(what.dests) == 1
+                and isinstance(what.dests[0], ir.Held) and what.dests[0].width in (2, 4)):
+                if frame is None:
+                    raise Unlowered("floating-to-integer conversion requires an owned frame")
+                converted_result = what.dests[0]
+                converted_cell = frame.cell(("integer-conversion", converted_result.value), converted_result.width)
+                insns.append(lir.Insn(one.at, (one.at, one.at),
+                    ir.Semantics(ir.Operation.NOTHING, "wait", (), ()), (), ()))
+                one = replace(one, what=replace(what, dests=(converted_cell,)),
+                    defines=tuple(value for value in one.defines if value != converted_result.value))
+                what = one.what
             if (what is not None and what.op is ir.Operation.FLOAT_LOAD and what.name == "fild"
                 and len(what.sources) == len(what.dests) == 1
                 and isinstance(what.sources[0], (ir.Held, ir.Imm))
@@ -239,6 +252,12 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
                 uses=tuple(value for value in one.uses if value not in floating),
                 defines=tuple(value for value in one.defines if value not in floating),
                 widths=tuple((value, width) for value, width in one.widths if value not in floating)))
+            if converted_result is not None:
+                insns.append(lir.Insn(one.at, (one.at, one.at),
+                    ir.Semantics(ir.Operation.NOTHING, "wait", (), ()), (), ()))
+                insns.append(lir.Insn(one.at, (one.at, one.at),
+                    ir.Semantics(ir.Operation.MOVE, "mov", (converted_result,), (converted_cell,)),
+                    (converted_result.value,), (), widths=((converted_result.value, converted_result.width),)))
         if stack and index not in continues:
             raise Unlowered("floating stack live-out requires cross-block allocation")
         if index not in continues:

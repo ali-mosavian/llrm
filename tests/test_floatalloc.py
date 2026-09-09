@@ -35,6 +35,25 @@ def test_square_keeps_the_next_used_operand_on_top():
     assert all(select.emit(one.what) is not None for one in result.insns)
 
 
+@pytest.mark.parametrize("width", [2, 4])
+def test_integer_result_waits_before_reading_owned_conversion_storage(width):
+    """B$FIST/B$FIS2 wait on both sides of conversion before returning the integer."""
+    from qbopt.backend import frame
+    value, result = ir.Held(1, 10), ir.Held(2, width)
+    cell = ir.Mem(Addr(Space.FRAME, -8), 8)
+    body = _body([
+        ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (value,), (cell,)),
+        ir.Semantics(ir.Operation.FLOAT_STORE, "fistp", (result,), (value,)),
+    ])
+    allocated = floatalloc.allocated(body, frame.Frame(-8))
+    assert [one.what.name for one in allocated.insns] == ["fld", "wait", "fistp", "wait", "mov"]
+    store, load = allocated.insns[2].what, allocated.insns[4].what
+    assert store.dests == load.sources
+    assert store.dests[0].width == width
+    assert store.dests[0].addr.disp < -8
+    assert load.dests == (result,)
+
+
 def test_ninth_float_uses_an_owned_extended_precision_spill():
     """Nine live FP values previously refused allocation instead of preserving 80 bits."""
     from qbopt.backend import frame

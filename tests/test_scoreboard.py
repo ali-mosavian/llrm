@@ -62,6 +62,12 @@ def test_fpdeep_has_a_source_derived_reference(capsys):
     assert "NO TARGET" not in report and "PROVISIONAL" not in report
 
 
+@pytest.mark.parametrize("name,body_cost", [("B$FIST", 86), ("B$FIS2", 80)])
+def test_float_conversion_helpers_are_not_priced_as_empty_calls(name, body_cost):
+    """Inlining FPDEEP's conversion appeared costlier because its callee body was free."""
+    assert opportunity.CALLED[name] == opportunity.CALL + body_cost
+
+
 @pytest.mark.parametrize("tag", ["p-evt", "q-evt", "v-evt"])
 def test_event_build_does_not_use_a_plain_program_target(tag, tmp_path, capsys):
     """BOOLS /V/W was scored against a reference with no event checks (QB read as 4.57x)."""

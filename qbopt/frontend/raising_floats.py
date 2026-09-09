@@ -27,6 +27,11 @@ def semantics(op: mir.Op) -> Semantics | None:
                 return None
             return Semantics((source,), Format.EXTENDED80, Precision.EXACT, Rounding.NONE)
         case ir.Operation.FLOAT_STORE:
+            if (op.name == "fistp" and not op.stores and not op.loads and len(op.results) == 1
+                and isinstance(op.results[0], mir.Held)):
+                target = _format(op.results[0].width, True)
+                if target is not None:
+                    return Semantics((Format.EXTENDED80,), target, Precision.DESTINATION, Rounding.DYNAMIC)
             if op.name not in ("fstp", "fistp") or len(op.stores) != 1 or op.loads:
                 return None
             target = _format(op.stores[0].width, op.name == "fistp")

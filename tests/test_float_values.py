@@ -12,6 +12,48 @@ from qbopt.frontend import raising_float_values
 from qbopt import wholeseg
 
 
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_fpdeep_integer_results_are_explicit_values(tag):
+    """FPDEEP's CLNG results were opaque calls, disconnecting FP values from PRINT arguments."""
+    from qbopt.model.floating import Format
+    path = Path(f"fixtures/omf/fpdeep-{tag}.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    conversions = [op for block in body.blocks for op in block.ops
+                   if op.floating is not None and op.floating.result is Format.SIGNED32]
+    assert len(conversions) == 5
+    assert all(isinstance(op.args[0], mir.Held) and op.args[0].width == 10 for op in conversions)
+    assert all(isinstance(op.results[0], mir.Held) and op.results[0].width == 4 for op in conversions)
+    emitted = wholeseg.emitted(path.read_bytes())
+    assert emitted.outcome is wholeseg.Emission.LIR, emitted.reason
+    from qbopt.objectfile import module, omf
+    assert "B$FIST" not in module.of(omf.parse(emitted.data)).calls.values()
+
+
+@pytest.mark.parametrize("guard", ["contract", "writes", "error", "flags"])
+def test_float_integer_recognition_requires_the_full_helper_contract(guard, monkeypatch):
+    from qbopt.abi import runtime
+    from qbopt.frontend import raising_float_results
+    path = Path("fixtures/omf/fpdeep-p-g2.obj")
+    found = corpus.loaded(path)
+    rules = runtime.for_module(found)
+    recognize = raising_float_results.raised
+    monkeypatch.setattr(raising_float_results, "raised", lambda body, *args: body)
+    body = mir.bodies(found, corpus.partitioned(path), rules)[0][1]
+    call = next(op for block in body.blocks for op in block.ops if found.calls.get(op.at) == "B$FIST")
+    if guard == "flags":
+        flag = next(value for value in call.defines if value.flags)
+        body = replace(body, blocks=tuple(replace(block, ops=tuple(
+            replace(op, uses=(*op.uses, flag)) if op.at == call.covers[1] else op for op in block.ops
+        )) for block in body.blocks))
+    else:
+        changes = {"contract": {"established": False}, "writes": {"writes": runtime.Memory.ANY},
+                   "error": {"raises_error": True}}
+        rules = {**rules, call.at: replace(rules[call.at], **changes[guard])}
+    result = recognize(body, found, rules)
+    assert next(op for block in result.blocks for op in block.ops if op.id == call.id).kind is mir.Kind.CALL
+
+
 def _allocated(body, path):
     from qbopt.backend import floatalloc, lower
     from qbopt.abi import runtime
