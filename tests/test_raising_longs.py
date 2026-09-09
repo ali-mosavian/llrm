@@ -6,7 +6,7 @@ from pathlib import Path
 import corpus
 import pytest
 
-from qbopt import ir, mir, raising_longs
+from qbopt import ir, mir, raising_longs, transform
 
 
 @pytest.fixture
@@ -26,13 +26,31 @@ def test_position_arithmetic_is_scalar_before_optimization(nbody):
     done = recognize(body)
     ops = [op for block in done.blocks for op in block.ops]
     load = next(op for op in ops if op.at == 0x11d)
-    subtract = next(op for op in ops if op.at == 0x12d)
+    subtract = next(op for op in ops if op.at == 0x12d and op.kind is mir.Kind.SUB)
+    current = next(op for op in ops if op.at == 0x12d and op.kind is mir.Kind.LOAD)
     store = next(op for op in ops if op.at == 0x135)
     assert load.kind is mir.Kind.LOAD and load.results[0].width == 4
     assert subtract.kind is mir.Kind.SUB and subtract.args[0] == load.results[0]
-    assert subtract.loads[0].width == 4
+    assert current.loads[0].width == 4
+    assert subtract.args[1] == current.results[0] and not subtract.loads
     assert store.kind is mir.Kind.STORE and store.args == subtract.results
     assert store.stores[0].width == 4
+
+
+def test_nbody_whole_position_loads_leave_the_inner_loop():
+    """Nbody recomputed invariant position reads; hoisting four halves had increased spill cost."""
+    path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
+    found = corpus.loaded(path)
+    blocks = corpus.partitioned(path)
+    body = mir.bodies(found, blocks)[0][1]
+    sites = [op for block in body.blocks for op in block.ops if op.at in (0x12d, 0x144) and op.loads]
+    assert len(sites) == 2
+    done = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
+    for site in sites:
+        block, load = next((block, op) for block in done.blocks for op in block.ops if op.id == site.id)
+        assert block.at == 0xf0
+        assert load.kind is mir.Kind.LOAD and load.results[0].width == 4
+        assert load.loads[0].addr == site.loads[0].addr
 
 
 @pytest.mark.parametrize("producer", [0x12d, 0x131])

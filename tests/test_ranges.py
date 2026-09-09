@@ -13,13 +13,15 @@ def test_nbody_scaled_index_is_bounded_only_inside_its_loop() -> None:
     found = corpus.loaded(path)
     blocks = corpus.partitioned(path)
     body = mir.bodies(found, blocks)[0][1]
+    current_id = next(op.id for block in body.blocks for op in block.ops if op.at == 0x12d and op.loads)
+    other_id = next(op.id for block in body.blocks for op in block.ops if op.at == 0x11d and op.loads)
     body = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
     known = ranges.bounded(body)
-    index = next(op for block in body.blocks for op in block.ops if op.at == 0x11B).results[0].value
+    index = next(op for block in body.blocks for op in block.ops if op.id == other_id).loads[0].base
     assert known[0x117][index] == ranges.Interval(0, 20, 2)
-    current = next(op for block in body.blocks for op in block.ops if op.at == 0x12d).loads[0].base
+    access = next(op for block in body.blocks for op in block.ops if op.id == current_id).loads[0]
+    current = access.base
     assert known[0x117][current] == ranges.Interval(0, 20, 2)
-    access = next(op for block in body.blocks for op in block.ops if op.at == 0x12d).loads[0]
     stored = next(op for block in body.blocks for op in block.ops if op.at == 0x135).stores[0]
     assert mir.overlapping(access, stored, found.dgroup)
     assert not mir.overlapping(access, stored, found.dgroup, known=known[0x117])

@@ -77,6 +77,15 @@ def scalar(body: mir.MirBody) -> mir.MirBody:
                               loads=() if stores else (ref,), stores=(ref,) if stores else (),
                               merges={}, made=None, raised=None,
                               covers=(min(low.covers[0], high.covers[0]), max(low.covers[1], high.covers[1])))
+            if pair.kind is pairs.Kind.ALU:
+                loaded = fresh(low.at)
+                ops.append(replace(widened, op=ir.Operation.MOVE, name="mov", kind=mir.Kind.LOAD,
+                                   args=(mir.Cell(ref),), results=(loaded,), defines=(loaded.value,),
+                                   uses=tuple(value for value in (ref.base, ref.segment) if value is not None),
+                                   symbol=True))
+                widened = replace(widened, args=(args[0], loaded), uses=(args[0].value, loaded.value),
+                                  loads=(), node=None, id=None, symbol=False,
+                                  covers=(low.at, low.at), extra_covers=())
             ops.append(widened)
             if not stores:
                 whole[(high.results[0], low.results[0])] = results[0]

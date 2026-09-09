@@ -1079,3 +1079,22 @@ compilers across two bounded runs. Latest artifacts:
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-long-guards-ypyxvyud`.
 Invariant position memory operands are still inside the scalar subtracts;
 exposing those as whole loads is the next step toward LICM.
+
+## Whole invariant position loads leave the inner loop
+
+Early scalar arithmetic now separates its memory operand into a whole LOAD
+and a pure value operation. The LOAD retains relocation identity and byte
+ownership; the arithmetic has neither a machine node nor a relocated operand.
+LICM moves both current-body position loads to the 0xf0 preheader in round
+three, after the scaled-index range becomes available. The subtracts remain
+inside the inner loop and consume the hoisted whole values.
+
+The integration regression fails with load separation disabled. The range
+test now follows source identities rather than requiring optimized operations
+to retain their original addresses; its interval and alias assertions remain.
+PDS nbody modeled cost is 788,837, down from 792,437. Dumps are in
+`/tmp/qbopt-scalar-licm`; nbody, HARR and CHAIN pass strict LIR for PDS, QB and
+VBDOS in `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-scalar-licm-z36i1_nd`.
+This closes the specific invariant-position-load opportunity, not the overall
+nbody target. Register pressure, accumulator halves and remaining arithmetic
+round trips still limit the emitted loop.
