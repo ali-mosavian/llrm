@@ -154,6 +154,8 @@ def _carried(one: "lir.Insn") -> mir.Op:
     # it: a copy constrain.py puts behind it carries the same op, and read
     # as the idiom too it emitted the whole `push/pop/pop` again and the
     # copy never appeared at all.
+    if one.op is None:
+        return mir.Op(one.at, one.what.op, one.what.name, (), (), made=one.what, covers=one.covers)
     idiom = isinstance(one.op.node, ir.Restore) and getattr(one.what, "op", None) is ir.Operation.RESTORE
     inserted = not idiom and one.covers is not None and one.covers[0] == one.covers[1]
     # Owning the relocated operand is not owning the bytes. An instruction

@@ -451,3 +451,22 @@ constant carry from the known ADD into ADC so the whole invariant chain folds,
 instead of replacing only its first instruction with a non-hoistable copy.
 The trial was removed; production remains at 566 and no runtime or speedup is
 claimed for this experiment.
+# Explicit extraction reaches lowering
+
+Runtime high-part handbacks now raise as EXTRACT(source, bit offset) with an
+explicit result width. The backend implements the current 32-to-high-16 shape
+with a balanced push/pop/pop expansion over abstract values. It preserves
+flags and leaves register assignment to allocation. Unsupported shapes refuse.
+The object writer now accepts expansion instructions with no original MIR op;
+these carry generated semantics and own no original bytes.
+
+Validation: the lowering regression failed before expansion was implemented;
+13 focused extraction/division/condition tests pass. LNGMIX and HOTLPX pass
+strict LIR execution on PDS `/G2`, QB `/O`, and VBDOS `/G3` (six runs).
+Artifacts: `/tmp/qbopt-extract-lowered` and
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-extract-lower-2duh528o`.
+
+This is a boundary migration, not a speedup: LNGMIX currently costs 594 versus
+566 before it. Next fold explicit extraction plus known carry-dependent
+arithmetic together; replacing only extraction with a constant previously
+stranded its dependent chain inside the loop.

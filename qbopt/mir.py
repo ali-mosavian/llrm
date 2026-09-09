@@ -411,6 +411,7 @@ class Kind(StrEnum):
     ARG = "arg"  # a call argument still written as a push -- step 3
     RESULT = "result"  # and its pop
     JOIN = "join"  # two halves of a wide value made one -- step 4
+    EXTRACT = "extract"  # a bit range of a value; args[1] is the bit offset
     OPAQUE = "opaque"  # nothing is claimed; see ir.Operation.BARRIER
     NOTHING = "nothing"
 
@@ -1317,10 +1318,8 @@ def _handing_back(at: int, node: "ir.Node", now: "Value", was: "Value", answer: 
     once; what this emits is four bytes that stand for no original ones,
     which is a different fact and the one `covers` is not for.
 
-    No operands, the way no restore here has any: the idiom is three
-    instructions behind one node, and an operand list has the lowering
-    build semantics for it and emit something else entirely. What it reads
-    and what it defines are still said, which is what a pass needs.
+    The bit range is explicit, so optimization sees a value extraction.
+    Lowering chooses the instructions; the old node retains provenance only.
     """
     return Op(
         at,
@@ -1331,7 +1330,9 @@ def _handing_back(at: int, node: "ir.Node", now: "Value", was: "Value", answer: 
         (),
         (),
         ir.Restore(at=at, end=at, pair=0, effects=ir.RESTORE_EFFECTS[0]),
-        kind=Kind.JOIN,
+        kind=Kind.EXTRACT,
+        args=(Held(answer, 4), Const(16, 4)),
+        results=(Held(now, 2),),
         covers=(at, at),
         # `was` is the previous contents of the place the half lands in,
         # not an input. Said here because nothing else can say it: read as
@@ -2169,7 +2170,7 @@ def _folded(body: MirBody, found: Module, blocks: list[Block]) -> dict:
             # address, and everything here is keyed on the address. Without
             # this it is recorded as an absorbed site of its own, claiming
             # the same bytes twice and emitting the same sequence again.
-            if op.op is Synth.HALF_TO_LOW and op.kind is Kind.JOIN:
+            if op.op is Synth.HALF_TO_LOW:
                 continue
             # The flags go with it. Which flags something reads after the
             # site decides what the sequence may be -- a comparison wraps

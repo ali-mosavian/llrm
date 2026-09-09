@@ -414,9 +414,20 @@ def _branch_condition(block: mir.MirBlock, readers: Counter[mir.Value]) -> tuple
 
 
 # A kind whose one operation is more than one instruction, and what it
-# becomes. Empty: every operation today is one instruction, and the entry
-# an intrinsic needs goes here rather than into `expand` itself.
-_EXPANDS: dict = {}
+# becomes. Intrinsic expansions belong here rather than in `expand` itself.
+def _extract(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]:
+    match op.args, op.results:
+        case (mir.Held(value=source, width=4), mir.Const(n=16)), (mir.Held(value=result, width=2),):
+            discarded = ir.Held(lowering.fresh(), 2)
+            return (
+                ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Held(source.id, 4),)),
+                ir.Semantics(ir.Operation.POP, "pop", (discarded,), ()),
+                ir.Semantics(ir.Operation.POP, "pop", (ir.Held(result.id, 2),), ()),
+            )
+    raise Unlowered(f"unsupported extraction at {op.at:#x}")
+
+
+_EXPANDS: dict = {mir.Kind.EXTRACT: _extract}
 
 
 class Lowering:
