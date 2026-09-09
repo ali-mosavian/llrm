@@ -24,6 +24,14 @@ entry candidates, not a claim that every symbol is a function. Unreferenced
 private routines cannot be discovered without additional entry-point information.
 Input file hashes identify the precise library version behind the report.
 
+Local byte constants and equality tests can exclude impossible branch edges.
+The JSON records each exclusion in `excluded_edges`. At joins, only agreeing
+facts survive; calls discard constants, and relocated fields are never treated
+as literal values. This is not yet context-sensitive propagation into callees.
+For example, VBDOS B$ETS2 sets DL=2 before testing it against zero, so its
+B$RDTRIG call is excluded. Its SI=0 argument to B$EVNT_SET is not yet used to
+specialize that callee, and its error path remains part of the contract.
+
 `preserved` is an entry-value proof across all modeled returning paths.
 `restored` is the subset written during execution and proven to regain its
 entry value. `clobbers` means **may clobber**, not necessarily changed on every

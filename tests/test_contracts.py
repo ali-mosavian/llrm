@@ -118,6 +118,61 @@ def test_code_roots_exclude_data_symbols() -> None:
     assert found.code_entries({"CODE"}) == [(0, 1, 0)]
 
 
+def test_constant_branch_excludes_unreachable_call() -> None:
+    """Like ETS2's DL=2: JNE skips a helper that cannot run at this entry."""
+    found = library("b202 80fa00 7503 e80100 c3 31c0 c3")
+    graph = found.graph((0, 1, 0))
+    assert len(graph) == 1
+    assert not graph[0, 1, 0].calls
+
+
+def test_real_ets2_excludes_trigger_read() -> None:
+    """ETS2's constant DL=2 excludes RDTRIG; the old report listed it as a dependency."""
+    path = LIBS["vbdos"]
+    if not path.is_file():
+        pytest.skip("VBDOS runtime library unavailable")
+    found = Library(modules(path.read_bytes()))
+    (root,) = found.symbols["B$ETS2"]
+    routine = found.decode(root)
+    assert 0x42 not in routine.calls
+    assert 0x49 in routine.calls  # EVNT_SET is still called.
+
+
+def test_join_discards_conflicting_byte_constants() -> None:
+    """Unknown incoming ZF selects DL=0 or DL=2; neither later edge is impossible."""
+    found = library("7404 b200 eb02 b202 80fa00 7503 e80100 c3 c3")
+    routine = found.decode((0, 1, 0))
+    assert 13 in routine.calls
+
+
+def test_call_discards_known_register_values() -> None:
+    found = library("b202 e80900 80fa00 7503 e80100 c3 c3")
+    routine = found.decode((0, 1, 0))
+    assert 10 in routine.calls
+
+
+def test_relocated_immediate_is_not_a_literal(monkeypatch: pytest.MonkeyPatch) -> None:
+    import contracts
+
+    original = contracts.constant_paths
+    monkeypatch.setattr(contracts, "constant_paths", lambda routine, relocated: routine)
+    found = library("b202 80fa00 7503 e80100 c3 c3")
+    changed = original(found.decode((0, 1, 0)), {0})
+    assert 7 in changed.calls
+
+
+def test_partial_write_invalidates_only_its_own_byte() -> None:
+    # DL remains two even though DH is overwritten from unknown AH.
+    found = library("b202 8af4 80fa00 7503 e80100 c3 c3")
+    assert not found.decode((0, 1, 0)).calls
+
+
+def test_branch_to_next_instruction_keeps_the_return() -> None:
+    result = contract("31c0 7400 c3")
+    assert result.cleanup == 0
+    assert not result.unknown
+
+
 def test_budget_is_unknown() -> None:
     found = library("e80100 c3 31c0 c3")
     found.functions = 1

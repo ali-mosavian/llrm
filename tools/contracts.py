@@ -13,6 +13,7 @@ from pathlib import Path
 from hashlib import sha256
 from dataclasses import field
 from dataclasses import asdict
+from dataclasses import replace
 from dataclasses import dataclass
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -64,6 +65,7 @@ class Routine:
     successors: dict = field(default_factory=dict)
     calls: dict = field(default_factory=dict)
     unknown: list[str] = field(default_factory=list)
+    excluded_edges: dict[int, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -192,7 +194,12 @@ class Library:
                     routine.unknown.append(f"{at:04x}: unsupported control transfer")
             routine.successors[at] = successors
             pending.extend(successors)
-        return routine
+        relocated = {
+            insn.ip
+            for insn in routine.instructions.values()
+            if any(fix.seg == seg and insn.ip <= fix.offset < insn.next_ip for fix in self.relocations[index])
+        }
+        return constant_paths(routine, relocated)
 
     def graph(self, root: Address) -> dict[Address, Routine]:
         return self.graph_from([root])
@@ -223,6 +230,109 @@ class Library:
             routine = graph[address] = self.decode(address)
             pending.extend(target for target, _ in routine.calls.values() if target is not None and target not in graph)
         return graph
+
+
+def constant_paths(routine: Routine, relocated: set[int]) -> Routine:
+    """Meet byte facts at joins; only exclude a path when its ZF is established.
+
+    Calls invalidate all facts here. Context-sensitive callee analysis is a
+    separate obligation, not an assumed ABI. Relocated immediates are unknown.
+    """
+    entry = routine.address[2]
+    incoming: dict[int, dict[str, int]] = {entry: {}}
+    pending = [entry]
+    edges = {}
+    calls = {}
+    excluded = {}
+    steps = 0
+    while pending:
+        steps += 1
+        if steps > max(1, len(routine.instructions)) * 100:
+            return routine
+        at = pending.pop()
+        insn = routine.instructions.get(at)
+        if insn is None:
+            continue
+        before = incoming[at]
+        facts = constant_step(insn, before, at in relocated)
+        successors = routine.successors.get(at, [])
+        taken = None
+        if "zero" in before and insn.mnemonic in (Mnemonic.JE, Mnemonic.JNE):
+            taken = bool(before["zero"]) == (insn.mnemonic == Mnemonic.JE)
+            if at in routine.calls or any(target != insn.next_ip for target in successors):
+                successors = [target for target in successors if (target != insn.next_ip) == taken]
+            excluded[at] = f"ZF={before['zero']}; branch {'taken' if taken else 'not taken'}"
+        else:
+            excluded.pop(at, None)
+        calls.pop(at, None)
+        if at in routine.calls and taken is not False:
+            calls[at] = routine.calls[at]
+            facts = {}
+        edges[at] = successors
+        for target in successors:
+            old = incoming.get(target)
+            merged = (
+                facts.copy()
+                if old is None
+                else {name: value for name, value in old.items() if facts.get(name) == value}
+            )
+            if old is None or old != merged:
+                incoming[target] = merged
+                pending.append(target)
+    return replace(
+        routine,
+        instructions={at: insn for at, insn in routine.instructions.items() if at in incoming},
+        successors=edges,
+        calls=calls,
+        excluded_edges=excluded,
+    )
+
+
+def constant_step(insn, before: dict[str, int], relocated: bool) -> dict[str, int]:
+    facts = before.copy()
+    for used in INFO.info(insn).used_registers():
+        if used.access in WRITES:
+            for part in register_parts(used.register):
+                facts.pop(part, None)
+    if insn.rflags_modified:
+        facts.pop("zero", None)
+    if relocated:
+        return facts
+    destination = register_parts(insn.op0_register) if insn.op0_kind == OpKind.REGISTER else ()
+    if not destination or insn.op_count != 2:
+        return facts
+    left = (
+        sum(before[part] << (8 * byte) for byte, part in enumerate(destination))
+        if all(part in before for part in destination)
+        else None
+    )
+    right = None
+    if insn.op1_kind == OpKind.REGISTER:
+        source = register_parts(insn.op1_register)
+        if source and all(part in before for part in source):
+            right = sum(before[part] << (8 * byte) for byte, part in enumerate(source))
+    elif insn.op1_kind in (
+        OpKind.IMMEDIATE8,
+        OpKind.IMMEDIATE16,
+        OpKind.IMMEDIATE32,
+        OpKind.IMMEDIATE8TO16,
+        OpKind.IMMEDIATE8TO32,
+    ):
+        right = insn.immediate(1) & ((1 << (len(destination) * 8)) - 1)
+    answer = None
+    match insn.mnemonic:
+        case Mnemonic.MOV:
+            answer = right
+        case Mnemonic.XOR | Mnemonic.SUB if insn.op1_kind == OpKind.REGISTER and insn.op0_register == insn.op1_register:
+            answer = 0
+            facts["zero"] = 1
+        case Mnemonic.CMP if left is not None and right is not None:
+            facts["zero"] = int(left == right)
+        case Mnemonic.TEST if left is not None and right is not None:
+            facts["zero"] = int((left & right) == 0)
+    if answer is not None:
+        facts.update({part: (answer >> (8 * byte)) & 255 for byte, part in enumerate(destination)})
+    return facts
 
 
 def analyze(routine: Routine, contracts: dict[Address, Contract], budget: int = 10000) -> Contract:
@@ -496,6 +606,7 @@ def main() -> int:
                     f"{at:04x}": library.label(target) if target else reason
                     for at, (target, reason) in routine.calls.items()
                 },
+                "excluded_edges": {f"{at:04x}": evidence for at, evidence in routine.excluded_edges.items()},
                 "disassembly": [
                     f"{at:04x}: {library.codes[address[:2]][at : insn.next_ip].hex():<16} {FORMAT.format(insn)}"
                     for at, insn in sorted(routine.instructions.items())
