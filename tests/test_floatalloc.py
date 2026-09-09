@@ -15,6 +15,24 @@ def _body(operations):
     return lir.LirBody("floating", 0, (lir.LirBlock(0, insns),), {}, {})
 
 
+@pytest.mark.parametrize("width", [2, 4])
+def test_integer_conversion_materializes_a_frame_operand(width):
+    """FPCALC's computed integer must reach FILD through an owned, correctly sized slot."""
+    from qbopt.backend import frame
+    integer, floating = ir.Held(1, width), ir.Held(2, 10)
+    output = ir.Mem(Addr(Space.FRAME, -8), 8)
+    body = _body([ir.Semantics(ir.Operation.FLOAT_LOAD, "fild", (floating,), (integer,)),
+                  ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (output,), (floating,))])
+    slots = frame.Frame(-8)
+    result = floatalloc.allocated(body, slots)
+    store, load, _ = result.insns
+    assert slots.size == width
+    assert store.what.sources == (integer,)
+    assert store.what.dests == load.what.sources == (slots.cell(2, width),)
+    assert store.uses == (1,) and load.uses == ()
+    assert store.covers == (0, 0)
+
+
 @pytest.mark.parametrize("operation", ["fsub", "fchs", "fstp", "fsubp"])
 def test_buried_float_operand_is_exchanged_not_reloaded(operation):
     """A second live value must not prevent using the first, or reverse subtraction."""

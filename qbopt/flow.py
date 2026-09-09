@@ -53,7 +53,7 @@ def machine(pinned: dict, frame=None, calls: dict | None = None) -> list[LIRTran
     """Every phase between lowering and emission, in order."""
     from qbopt.backend import floatalloc
     return [
-        floatalloc.FloatAlloc(),
+        floatalloc.FloatAlloc(frame),
         phielim.PhiElimination(),
         twoaddr.TwoAddress(),
         coalesce.Coalescer(),

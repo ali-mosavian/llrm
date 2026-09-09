@@ -15,6 +15,11 @@ def _format(width: int, integer: bool) -> Format | None:
 def semantics(op: mir.Op) -> Semantics | None:
     match op.op:
         case ir.Operation.FLOAT_LOAD:
+            if (op.name == "fild" and not op.loads and not op.stores and len(op.args) == 1
+                and isinstance(op.args[0], (mir.Held, mir.Const))):
+                source = _format(op.args[0].width, True)
+                if source is not None:
+                    return Semantics((source,), Format.EXTENDED80, Precision.EXACT, Rounding.NONE)
             if op.name not in ("fld", "fild") or len(op.loads) != 1 or op.stores:
                 return None
             source = _format(op.loads[0].width, op.name == "fild")

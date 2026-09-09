@@ -7,7 +7,7 @@ from qbopt.model import ir, lir
 from qbopt.model.passes import LIRTransform
 
 
-def allocated(body: lir.LirBody) -> lir.LirBody:
+def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
     from qbopt.backend.lower import Unlowered
 
     floating = {arg.value for block in body.blocks for one in block.insns if one.what
@@ -26,6 +26,20 @@ def allocated(body: lir.LirBody) -> lir.LirBody:
         insns = []
         for one in block.insns:
             what = one.what
+            if (what is not None and what.op is ir.Operation.FLOAT_LOAD and what.name == "fild"
+                and len(what.sources) == len(what.dests) == 1
+                and isinstance(what.sources[0], (ir.Held, ir.Imm))
+                and what.sources[0].width in (2, 4) and isinstance(what.dests[0], ir.Held)):
+                if frame is None:
+                    raise Unlowered("integer-to-floating conversion requires an owned frame")
+                value = what.sources[0]
+                cell = frame.cell(what.dests[0].value, value.width)
+                uses = (value.value,) if isinstance(value, ir.Held) else ()
+                insns.append(lir.Insn(one.at, (one.at, one.at),
+                    ir.Semantics(ir.Operation.MOVE, "mov", (cell,), (value,)), (), uses))
+                one = replace(one, what=replace(what, sources=(cell,)),
+                              uses=tuple(arg for arg in one.uses if arg not in uses))
+                what = one.what
             if what is None or not any(isinstance(arg, ir.Held) and arg.width == 10
                                       for arg in (*what.sources, *what.dests)):
                 if floating.intersection((*one.uses, *one.defines)):
@@ -122,5 +136,8 @@ def allocated(body: lir.LirBody) -> lir.LirBody:
 class FloatAlloc(LIRTransform):
     name = "floatalloc"
 
+    def __init__(self, frame=None):
+        self.frame = frame
+
     def transform(self, body):
-        return allocated(body)
+        return allocated(body, self.frame)

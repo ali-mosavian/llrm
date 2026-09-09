@@ -234,6 +234,10 @@ def fpicse() -> list[str]:
     return [f"VALUE={seq(value, value)}" for value in (-32768, 123, 32767)] + ["DONE"]
 
 
+def fpcalc() -> list[str]:
+    return [f"VALUE={seq(value + 1, value + 1)}" for value in (-32768, 123, 32766)] + ["DONE"]
+
+
 def lngmxx() -> list[str]:
     return lngmix()
 
@@ -504,6 +508,7 @@ PROGRAMS = {
     "fpcsex": fpcsex,
     "fpicse": fpicse,
     "fpi2cs": fpicse,
+    "fpcalc": fpcalc,
     "lngmxx": lngmxx,
     "fpemu": fpemu,
     "fpdeep": fpdeep,

@@ -34,6 +34,21 @@ def test_integer_helper_with_a_live_clobbered_result_is_not_removed(monkeypatch)
     assert next(op for one in raised.blocks for op in one.ops if op.id == call.id).kind is mir.Kind.CALL
 
 
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_computed_runtime_integer_uses_one_conversion(tag):
+    """FPCALC recomputed input+1 and called B$FIL2 twice instead of sharing its converted value."""
+    from qbopt import wholeseg
+    from qbopt.objectfile import module, omf
+    path = Path(f"fixtures/regressions/fpcalc-{tag}.obj")
+    result = wholeseg.emitted(path.read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    found = module.of(omf.parse(result.data))
+    assert "B$FIL2" not in found.calls.values()
+    instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
+    assert sum(one.startswith("fild ") for one in instructions) == 1
+    assert sum(one.startswith("fstp ") for one in instructions) == 2
+
+
 @pytest.mark.parametrize("change", ["unknown", "writes", "control", "inputs"])
 def test_helper_conversion_respects_its_effect_contract(change):
     from qbopt.abi import runtime

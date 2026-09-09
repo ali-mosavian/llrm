@@ -224,3 +224,51 @@ Objects in `fixtures/regressions/fpi2cs-*.obj` came from `suite/fpi2cs.bas`
 through e2e/configs in run `qbopt-fil2-final-agr4msen`. The first attempted
 name exceeded the harness's six-character limit once its output prefixes
 were added; that run proved nothing. Stage dumps: `/tmp/qbopt-fil2-final-stages`.
+
+## Computed integer inputs
+
+Conversion recognition no longer requires a memory producer. A computed
+INTEGER, or a LONG whose halves come from one scalar value, is an ordinary
+input to the typed conversion. The unchanged-memory case still uses its
+original cell directly. Otherwise floating allocation materializes the
+integer into a slot owned by the shared backend frame before FILD; the
+normal prologue reserves it. No register or frame choice enters MIR passes.
+
+FPCALC converts `inputValue + 1` twice. Its hot sequence changes from:
+
+```asm
+; before, argument setup abbreviated
+inc ax
+call B$FIL2
+fstp qword [firstValue]
+; reconstruct inputValue + 1
+call B$FIL2
+fstp qword [secondValue]
+
+; after
+inc ax
+mov [bp-2],ax
+fild word [bp-2]
+fld st0
+fstp qword [firstValue]
+fstp qword [secondValue]
+```
+
+The frame and surrounding allocation costs are included, not hidden:
+
+| Compiler | Modeled cost before -> after | Code bytes before -> after |
+| --- | --- | --- |
+| PDS /G2 | 3840 -> 3800 | 183 -> 176 |
+| QB /O | 3862 -> 3822 | 185 -> 178 |
+| VBDOS /G3 | 3850 -> 3810 | 185 -> 178 |
+
+This is about a 1% modeled improvement, not the 19% of the simpler LONG
+example. It also removes 18 object bytes from PDS/VBDOS FPEMU. The 154-object
+audit changes only those FPEMU variants and the new FPCALC fixtures, all LIR,
+with no new refusals. Focused analysis/allocation tests: 55 pass, including
+2/4-byte temporary slots and fail-first emitted helper checks. Runtime:
+FPCALC on three compilers (9 cases), changed FPEMU on PDS/VBDOS (24 cases).
+All 33 pass. Fixtures were compiled from `suite/fpcalc.bas` with the named
+e2e/configs configurations in `qbopt-fpcalc-frame-26gr7dl1`; FPEMU validation
+is in `qbopt-fpvalue-runtime-a6t2iz_t`. Stage dump:
+`/tmp/qbopt-fpcalc-frame-stages`.
