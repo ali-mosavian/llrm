@@ -55,6 +55,17 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 
 ## Next implementation priorities
 
+Dead-phi checkpoint: dead-code elimination now removes unused phi cycles,
+retaining externally demanded values and all real argument/address readers.
+Dependencies propagate through live phis; obsolete preservation-only references
+are removed with dead phis. Matrix's unused high-product phis no longer block
+projection, and its final assembly contains immediate `imul` forms. PDS modeled
+cost falls 12,334 -> 11,916 (1.92x); pressx falls 820 -> 782. HARR remains
+11,094. Seventy-two focused checks and 15 strict LIR runtime cases pass
+(matrix/pressx/HARR/nots/lngmix across PDS /G2, QB /O, VBDOS /G3). Disabling
+phi pruning fails the real-matrix regression. Dumps and emitted assembly:
+`/tmp/qbopt-matrix-dead-phis`. Full validation remains outstanding.
+
 Algebraic checkpoint: a machine-independent pass now simplifies integer
 identities and projects a two-result word multiply to its low result when
 the high answer, flags and preserved upper bits are unobserved. Actual reads

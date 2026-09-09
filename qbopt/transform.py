@@ -52,6 +52,7 @@ from qbopt import loops as loopy
 from qbopt.passes import MIRTransform
 from qbopt import liveness as alive_at
 from qbopt.ssa import provider as _provider
+from qbopt.ssa import pruned_phis as _pruned_phis
 from qbopt.ssa import substituted as _substituted
 
 
@@ -1527,6 +1528,7 @@ def dead(body: MirBody) -> MirBody:
     if any(one.barrier or one.kind is mir.Kind.OPAQUE for block in body.blocks for one in block.ops):
         return body
 
+    body = _pruned_phis(body, live(body))
     alive = live(body)
     out = []
     changed = False

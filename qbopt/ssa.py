@@ -1,10 +1,54 @@
 from dataclasses import replace
 from collections.abc import Iterator
 
-from qbopt import mir
 from qbopt import ir
+from qbopt import mir
 from qbopt.mir import Op
 from qbopt.mir import MirBody
+
+
+def pruned_phis(body: MirBody, roots: set[mir.Value]) -> MirBody:
+    needed = (
+        roots
+        | {value for block in body.blocks for op in block.ops for value in op.uses if value not in op.merges}
+        | {arg.value for block in body.blocks for op in block.ops for arg in op.args if isinstance(arg, mir.Held)}
+    )
+    needed |= {
+        value
+        for block in body.blocks
+        for op in block.ops
+        for ref in (*op.loads, *op.stores)
+        for value in (ref.base, ref.segment)
+        if value is not None
+    }
+    phis = {phi.result: phi for block in body.blocks for phi in block.phis}
+    pending = list(needed & phis.keys())
+    while pending:
+        phi = phis[pending.pop()]
+        incoming = set(phi.incoming.values()) - needed
+        needed.update(incoming)
+        pending.extend(incoming & phis.keys())
+    removed = phis.keys() - needed
+    if not removed:
+        return body
+    return replace(
+        body,
+        blocks=tuple(
+            replace(
+                block,
+                phis=tuple(phi for phi in block.phis if phi.result not in removed),
+                ops=tuple(
+                    replace(
+                        op,
+                        uses=tuple(value for value in op.uses if value not in removed),
+                        merges={source: target for source, target in op.merges.items() if source not in removed},
+                    )
+                    for op in block.ops
+                ),
+            )
+            for block in body.blocks
+        ),
+    )
 
 
 def provider(value: mir.Value, swap: dict[int, mir.Value]) -> mir.Value:

@@ -104,3 +104,15 @@ def test_product_projection_retains_observed_outputs(observed: str) -> None:
         assert changed.uses == (source,)
     else:
         assert changed == op
+
+
+def test_dead_phis_do_not_keep_matrix_product_halves() -> None:
+    """Matrix retained widening multiplies solely for unused loop phi results."""
+    obj = Path("fixtures/omf/matrix-p-g2.obj")
+    found = corpus.loaded(obj)
+    assert found is not None
+    blocks = corpus.partitioned(obj)
+    body = mir.bodies(found, blocks)[0][1]
+    after = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
+    products = [op for block in after.blocks for op in block.ops if op.kind is mir.Kind.MUL]
+    assert products and all(len(op.results) == 1 for op in products)
