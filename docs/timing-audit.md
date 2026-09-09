@@ -17,6 +17,16 @@ positions and velocities, so the older statement in `numbers.md` that it
 prints only ticks no longer describes the current source. Future timings
 must compare those answers and require genuine optimized emission.
 
+The `0x045d` refusal was traced to the object reader discarding external
+OFFSET16 identities: `B$SEG` became literal address zero. External cells
+now retain their EXTDEF identity and emit a relocatable displacement;
+different external names remain potentially aliasing. The fresh object
+now emits through LIR and both versions link successfully. A 100-step
+correctness smoke run completed for BASE, but OPT did not complete within
+30 seconds and its redirected output was empty. This is an unresolved
+execution failure, not a timing result. The unmodified BC object is kept
+in `fixtures/bench/nbody-v-g3.obj` for reproduction.
+
 The CPU selector introduced in 9887b1c was not supported by a sufficiently
 precise timing model. Reciprocal division was held uncommitted during the
 initial audit. Correct runtime answers do not validate speed predictions.

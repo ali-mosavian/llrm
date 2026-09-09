@@ -190,7 +190,7 @@ def operand_of(what: ir.Mem) -> tuple[MemoryOperand, bool] | None:
             return MemoryOperand(base=what.through, displ=what.offset, displ_size=wide), False
         return None
     match addr.space:
-        case Space.SEGMENT:
+        case Space.SEGMENT | Space.EXTERNAL:
             # `addr.base` is the register BC wrote the element through, and
             # it is the answer only while nothing has recomputed the offset.
             # Once a pass makes a value of it the allocation places it, and

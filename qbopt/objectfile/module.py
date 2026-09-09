@@ -31,6 +31,7 @@ DGROUP = "DGROUP"
 
 class Space(StrEnum):
     SEGMENT = "seg"  # relocated: an offset into the segment `index` names
+    EXTERNAL = "external"  # relocated against EXTDEF; distinct symbols may alias
     FRAME = "bp"  # bp-relative, so the displacement really is in the code
     LITERAL = "abs"  # a displacement in the code that no fixup claims
     # relocated against a GRPDEF rather than a SEGDEF -- a different index
@@ -96,7 +97,7 @@ class Addr:
             seg = SEGMENT_NAMES.get(self.segment, f"r{self.segment}")
             base = INDEX_NAMES.get(self.base, f"r{self.base}")
             return f"[{seg}:{base}{self.disp:+#x}]"
-        where = f"{self.space}:{self.index}" if self.space is Space.SEGMENT else self.space
+        where = f"{self.space}:{self.index}" if self.space in (Space.SEGMENT, Space.EXTERNAL) else self.space
         indexed = f"+{INDEX_NAMES.get(self.base, f'r{self.base}')}" if self.base != Register.NONE else ""
         return f"[{where}{indexed}{self.disp:+#x}]"
 
@@ -444,10 +445,11 @@ def of(records: list[omf.Record]) -> Module | None:
     code = omf.segment_image(records, seg, size)
     fixups = [fixup for fixup in omf.fixups(records) if fixup.seg == seg]
 
+    spaces = {"segment": Space.SEGMENT, "group": Space.GROUP, "external": Space.EXTERNAL}
     operands = {
-        fixup.offset: Addr(Space.SEGMENT if fixup.target == "segment" else Space.GROUP, fixup.disp, fixup.index)
+        fixup.offset: Addr(spaces[fixup.target], fixup.disp, fixup.index)
         for fixup in fixups
-        if fixup.loc == omf.LOC_OFF16 and fixup.target in ("segment", "group")
+        if fixup.loc == omf.LOC_OFF16 and fixup.target in spaces
     }
     calls = {
         fixup.offset - 1: omf.externals(records)[fixup.index]
