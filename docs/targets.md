@@ -339,6 +339,48 @@ assume DF=0 at entry or after every call, and do not teach an MIR pass about
 MOVSW. General copy promotion remains incomplete until unknown contracts and
 overlap retain their original behavior. The 1086 denominator stays provisional.
 
+### Exact DOUBLE-store follow-up
+
+The print routine's source reaches device-dependent output/flush vectors, and
+its numeric-conversion header contradicts other register-clobber evidence.
+It does not establish a universal DF/DS return fact. Copy recognition stays
+conservative; no new runtime guarantee was invented.
+
+QB already raises d=12 and e=6 as exact facts. Its separate blocker was that
+`floatfold.stored` accepted only binary32. It now accepts exact binary64 too,
+retaining the pending-exception check and one whole-width semantic STORE.
+Lowering alone splits that store into two immediate dword stores. Inexact
+conversion still uses floating instructions. QB's actual tail changes from:
+
+```asm
+fld qword [literal12]
+fst qword [d]
+fld st0
+fadd st0
+fld st1
+fxch
+fdivp
+fmulp
+fstp qword [e]
+wait
+```
+
+to:
+
+```asm
+wait
+mov dword [d],0
+mov dword [d+4],040280000h   ; binary64 12
+mov dword [e],0
+mov dword [e+4],040180000h   ; binary64 6
+```
+
+Printing and the checks after printing calls remain. QB FPDEEP now has no
+floating arithmetic; modeled cost falls **1570 → 1317**, while its fixture
+object grows **1727 → 1742 bytes**. All eleven runtime answers pass on QB,
+PDS and VBDOS. PDS/VBDOS retain their opaque copy and are not claimed improved.
+This does not validate the old numerical-only denominator.
+
 ## NOTS and NEGNOT — constant expressions across output statements
 
 These ordinary, unchecked, event-free programs initialize two unescaped

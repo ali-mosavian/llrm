@@ -25,6 +25,20 @@ def test_original_wait_is_an_explicit_checkpoint_with_encoding_provenance():
     assert lower.current(check).name == "wait"
 
 
+def test_fpdeep_exact_double_stores_do_not_execute_floating_arithmetic():
+    """QB FPDEEP still computed d=12 and e=6 on x87 after proving both exact."""
+    from pathlib import Path
+    import corpus
+    from qbopt import wholeseg
+    from iced_x86 import Mnemonic
+    result = wholeseg.emitted(Path("fixtures/omf/fpdeep-q-O.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    instructions = [one.insn for block in corpus.partitioned(result.data) for one in block.insns]
+    assert not any(one.mnemonic in {Mnemonic.FLD, Mnemonic.FMUL, Mnemonic.FMULP,
+                                    Mnemonic.FDIV, Mnemonic.FDIVP} for one in instructions)
+    assert any(one.mnemonic == Mnemonic.WAIT for one in instructions)
+
+
 @pytest.mark.parametrize("interruption", [mir.Kind.COPY, mir.Kind.STORE, mir.Kind.CALL, mir.Kind.OPAQUE, mir.Kind.FLOAD])
 def test_repeated_checkpoint_needs_no_new_floating_effect(interruption):
     """Unrolled FPCSE kept checkpoints between constant stores although no FP work remained."""
@@ -82,20 +96,24 @@ def test_loop_cannot_prove_its_first_fp_observation_redundant():
     assert floatfold.checks(body) == body
 
 
-@pytest.mark.parametrize("number,expected", [(144, 0x43100000), (-6, 0xc0c00000),
-                                            (16777217, None), ("1/3", None)])
-def test_single_storage_requires_exact_bits(number, expected):
-    """FPDEEP may store 144 directly; an inexact SINGLE checkpoint must still round."""
+@pytest.mark.parametrize("format,width,number,expected", [
+    (Format.BINARY32, 4, 144, 0x43100000), (Format.BINARY32, 4, -6, 0xc0c00000),
+    (Format.BINARY32, 4, 16777217, None), (Format.BINARY32, 4, "1/3", None),
+    (Format.BINARY64, 8, 12, 0x4028000000000000), (Format.BINARY64, 8, -6, 0xc018000000000000),
+    (Format.BINARY64, 8, 9007199254740993, None), (Format.BINARY64, 8, "1/3", None),
+])
+def test_storage_requires_exact_bits(format, width, number, expected):
+    """FPDEEP may store exact 144/12; inexact SINGLE/DOUBLE checkpoints must still round."""
     from fractions import Fraction
     from qbopt.analysis import floatfacts
     source = mir.Value(1, 0)
-    cell = mir.MemRef(Addr(Space.SEGMENT, 0, 5), 4)
+    cell = mir.MemRef(Addr(Space.SEGMENT, 0, 5), width)
     load = mir.Op(0, ir.Operation.FLOAT_LOAD, "fld", (source,), (), kind=mir.Kind.FLOAD,
         args=(mir.Cell(replace(cell, width=8)),), results=(mir.Held(source, 10),),
         floating=Semantics((Format.BINARY64,), Format.EXTENDED80, Precision.EXACT, Rounding.NONE))
     store = mir.Op(4, ir.Operation.FLOAT_STORE, "fstp", (), (source,), kind=mir.Kind.FSTORE,
         args=(mir.Held(source, 10),), results=(mir.Cell(cell),), stores=(cell,),
-        floating=Semantics((Format.EXTENDED80,), Format.BINARY32, Precision.DESTINATION, Rounding.DYNAMIC))
+        floating=Semantics((Format.EXTENDED80,), format, Precision.DESTINATION, Rounding.DYNAMIC))
     body = mir.MirBody(0, (mir.MirBlock(0, (), (load, store), ()),))
     changed = floatfold.stored(body, {source: floatfacts.Finite(Fraction(number))})
     if expected is None:
@@ -103,7 +121,7 @@ def test_single_storage_requires_exact_bits(number, expected):
         return
     assert [op.kind for op in changed.blocks[0].ops] == [mir.Kind.FCHECK, mir.Kind.FCHECK, mir.Kind.STORE]
     result = changed.blocks[0].ops[-1]
-    assert result.args == (mir.Const(expected, 4),)
+    assert result.args == (mir.Const(expected, width),)
     assert result.stores == (cell,) and result.results == (mir.Cell(cell),)
 
 

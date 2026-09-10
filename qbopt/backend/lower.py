@@ -637,7 +637,18 @@ def _pointer_access(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...
     )
 
 
-_EXPANDS: dict = {mir.Kind.EXTRACT: _extract, mir.Kind.DIVMOD: _word_division, mir.Kind.CONCAT: _concat,
+def _constant_store(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...] | None:
+    match op.args, op.results:
+        case (mir.Const(n=bits, width=8),), (mir.Cell(ref=ref),) if ref.width == 8:
+            if ref.base is not None or ref.segment is not None or ref.addr is None:
+                raise Unlowered("wide constant store needs a static address")
+            return tuple(ir.Semantics(ir.Operation.MOVE, "mov",
+                         (_addressed(replace(ref, width=4, addr=replace(ref.addr, disp=ref.addr.disp + offset))),),
+                         (ir.Imm((bits >> (offset * 8)) & 0xffffffff, 4),)) for offset in (0, 4))
+    return _pointer_access(op, lowering)
+
+
+_EXPANDS: dict = {mir.Kind.STORE: _constant_store, mir.Kind.EXTRACT: _extract, mir.Kind.DIVMOD: _word_division, mir.Kind.CONCAT: _concat,
                  mir.Kind.SMULHI: _signed_high_product, mir.Kind.PTR_OFFSET: _pointer_offset}
 
 

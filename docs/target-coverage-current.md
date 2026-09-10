@@ -2,6 +2,13 @@
 
 ## Latest focused check
 
+Exact DOUBLE-store follow-up: QB FPDEEP now costs **1317**, down from 1570.
+Its fixture object grows 1727 → 1742 bytes; arithmetic is replaced by four
+immediate dword stores, with exception checks and printing retained. All eleven
+runtime answers pass on each of QB/PDS/VBDOS. PDS/VBDOS still have the opaque
+initialization copy and are not claimed improved. FPDEEP's reference remains
+provisional; this focused result does not replace the snapshot below.
+
 Compiler **b088ccb**, 2026-09-10: 19 configurations checked after CFG cleanup,
 store packing and load PRE. This is not a replacement for the full scan below.
 

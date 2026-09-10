@@ -69,7 +69,7 @@ def checks(body: mir.MirBody) -> mir.MirBody:
 
 
 def stored(body: mir.MirBody, facts: dict) -> mir.MirBody:
-    """Write exact SINGLE bits and retain checks for the now-unused computation."""
+    """Write exact storage bits and retain checks for the now-unused computation."""
     if not facts:
         return body
     blocks = []
@@ -77,15 +77,17 @@ def stored(body: mir.MirBody, facts: dict) -> mir.MirBody:
         ops = []
         for op in block.ops:
             if (op.kind is mir.Kind.FSTORE and op.floating is not None
-                and op.floating.result is Format.BINARY32 and not op.barrier
+                and op.floating.result in {Format.BINARY32, Format.BINARY64} and not op.barrier
                 and len(op.stores) == len(op.args) == 1 and not op.defines
                 and isinstance(op.args[0], mir.Held) and op.args[0].value in facts):
                 ref = op.stores[0]
                 value = floatfacts.evaluated(op.kind, op.floating, (facts[op.args[0].value],))
-                bits = floatfacts.encoded(value, Format.BINARY32) if value is not None else None
-                if bits is not None and ref.width == 4 and ref.base is None and ref.segment is None and ref.addr is not None:
+                format = op.floating.result
+                width = 4 if format is Format.BINARY32 else 8
+                bits = floatfacts.encoded(value, format) if value is not None else None
+                if bits is not None and ref.width == width and ref.base is None and ref.segment is None and ref.addr is not None:
                     ops.append(_checked(op))
-                    ops.append(replace(op, kind=mir.Kind.STORE, name="", args=(mir.Const(bits, 4),),
+                    ops.append(replace(op, kind=mir.Kind.STORE, name="", args=(mir.Const(bits, width),),
                         results=(mir.Cell(ref),), uses=(), loads=(), merges={},
                         node=None, made=None, raised=None, floating=None, floating_origin=None,
                         stack=None, covers=(op.at, op.at), extra_covers=(), symbol=True))
