@@ -332,6 +332,22 @@ VARIANTS[("B$POW8", "vbdos")] = replace(
               + VARIANTS[("B$POW4", "vbdos")].evidence),
 )
 
+for _name in ("B$STR4", "B$STR8"):
+    VARIANTS[(_name, "vbdos")] = replace(
+        worst(_name),
+        inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
+        evidence=(
+            "VBDCL10E stringfp.asm entries 0000/001e pass AL=4/8 and "
+            "BX=BP+6 to string.asm 001e (STR_COMMON). FOUTBX at ifout.asm "
+            "0000 overwrites arithmetic flags with CMP at 0003 before "
+            "dispatching to floating formatting. Retain all GP inputs. "
+            "Wrappers end POP BP / RETF 4 or 8, but the dependency graph "
+            "through FOUTBX and StrAlcTmpCopy has unproved stack paths: "
+            "cleanup remains unknown, as do all memory/control/error effects. "
+            "No preservation or arithmetic replacement is claimed."
+        ),
+    )
+
 for _name in ("B$INT4", "B$INT8"):
     VARIANTS[(_name, "vbdos")] = replace(
         worst(_name),

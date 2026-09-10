@@ -25,6 +25,32 @@ the oracle**. This establishes no observed optimizer regression, not a
 passing face check. The full correctness gate remains open. Dedicated-check
 screenshots are black and are not used as rendered-scene evidence.
 
+## Next module — H_BENCH interface audit
+
+VBDOS STR4/STR8 now have a conservative GP input bound. Actual library
+wrappers pass AL=4/8 and BX=BP+6 to STR_COMMON; FOUTBX overwrites incoming
+arithmetic flags before dispatch. The dependency audit reaches floating
+formatting and temporary-string allocation with unproved paths, so cleanup,
+memory, preservation and control effects remain unknown. Audit artifact:
+`/tmp/qbopt-str4-contract.json`. No string conversion is replaced.
+
+Both real-object regressions failed first at 01b1/0239; these and two
+conservative-contract checks pass (four focused tests, 31.67 seconds).
+With the previously audited SCR_SCREENSHOT interface, native emission next
+refuses HOST_BENCH_REPORT at 077a, SYS_RDTSC_HZ. Stage files are in
+`/tmp/qbopt-h-bench-native`. No new executable or FPS measurement: H_BENCH
+remains original, and the whole-module before/after assembly is unchanged.
+The dumper displays emulator operations as x87 equivalents:
+
+```asm
+; before                      ; after (atomic refusal)
+sub sp,4                      sub sp,4
+mov bx,sp                     mov bx,sp
+fstp dword [bx]               fstp dword [bx]
+wait                          wait
+call far B$STR4               call far B$STR4
+```
+
 ## Previous gate — ten modules, native x87
 
 QGLDIFF is now accepted on top of the nine-module build. Candidate
