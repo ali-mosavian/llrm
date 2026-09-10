@@ -1,5 +1,29 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: allocate straight-line floating regions by CFG, not list adjacency
+
+The remaining FPCSE initial stores are deliberately protected by FCHECK:
+an incoming pending exception can observe the earlier state. The existing
+dead-store analysis already propagates across blocks; deleting that barrier
+would be a correctness regression, not the missing cross-block optimization.
+
+The floating allocator had a separate representation-dependent restriction:
+it carried a shared value across a unique straight-line edge only if the
+two blocks were adjacent in the body tuple. Reversed or separated storage
+order refused the same valid CFG. Allocation now schedules those regions
+using unique predecessor/successor edges and restores the original block
+order afterward. It changes neither control flow nor floating evaluation,
+conversion, or exception ordering. Forks, joins, entry backedges, floating
+phis and unknown-call crossings retain their existing restrictions.
+
+Before: the reordered shared-product/quotient reproducer refused allocation.
+After: the first block uses `fld; fld st(0); fmul; fstp`, retaining the shared
+value for the successor's `fdiv; fstp`. Both new ordering cases failed first;
+the floating allocator module passes 43 tests. FPCSE, FPDEEP and FPCSEX
+outputs are byte-identical before/after across the three primary compilers.
+This is an allocator capability improvement, not a measured suite speedup.
+General floating phi/loop allocation and justified strict-FP reuse remain open.
+
 ## 2026-09-10: lay removed-loop bodies out in execution order
 
 Refreshed the full target ranking once. FPCSE PDS/VBDOS remained 167/98;

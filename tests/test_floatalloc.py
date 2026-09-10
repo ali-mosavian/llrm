@@ -146,7 +146,7 @@ def test_live_store_uses_nonpopping_encoding_when_available(width):
     assert all(select.emit(one.what) is not None for one in result.insns)
 
 
-@pytest.mark.parametrize("boundary", ["linear", "fork", "join", "entry"])
+@pytest.mark.parametrize("boundary", ["linear", "reversed", "separated", "fork", "join", "entry"])
 def test_shared_float_crosses_only_a_unique_straight_line_edge(boundary):
     """A shared sum was refused at a block edge despite one unchanged stack path."""
     from qbopt.backend.lower import Unlowered
@@ -164,15 +164,21 @@ def test_shared_float_crosses_only_a_unique_straight_line_edge(boundary):
     blocks = (first, second)
     if boundary in {"fork", "join"}:
         blocks += (lir.LirBlock(80, (), (24,) if boundary == "join" else ()),)
+    if boundary == "reversed":
+        blocks = blocks[::-1]
+    if boundary == "separated":
+        blocks = (first, lir.LirBlock(80, (), ()), second)
     body = replace(body, entry=24 if boundary == "entry" else 0, blocks=blocks)
-    if boundary != "linear":
+    if boundary in {"fork", "join", "entry"}:
         with pytest.raises(Unlowered):
             floatalloc.allocated(body)
         return
     allocated = floatalloc.allocated(body)
-    assert [one.what.name for one in allocated.blocks[0].insns] == ["fld", "fld", "fmul", "fstp"]
-    assert [one.what.name for one in allocated.blocks[1].insns] == ["fdiv", "fstp"]
-    assert allocated.blocks[1].insns[0].what.sources == (ir.St(0), cell)
+    assert [block.at for block in allocated.blocks] == [block.at for block in body.blocks]
+    by_at = {block.at: block for block in allocated.blocks}
+    assert [one.what.name for one in by_at[0].insns] == ["fld", "fld", "fmul", "fstp"]
+    assert [one.what.name for one in by_at[24].insns] == ["fdiv", "fstp"]
+    assert by_at[24].insns[0].what.sources == (ir.St(0), cell)
     assert all(select.emit(one.what) is not None for one in allocated.insns)
 
 

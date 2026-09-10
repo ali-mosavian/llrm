@@ -28,10 +28,24 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
         for successor in block.succ:
             if successor in predecessors:
                 predecessors[successor].add(block.at)
+    order = tuple(block.at for block in body.blocks)
+    next_blocks = {block.at: block.succ[0] for block in body.blocks
+                   if len(block.succ) == 1 and block.succ[0] != body.entry
+                   and predecessors.get(block.succ[0]) == {block.at}}
+    at_of = {block.at: block for block in body.blocks}
+    destinations = set(next_blocks.values())
+    roots = [at for at in order if at not in destinations]
+    scheduled, seen = [], set()
+    for root in (*roots, *order):
+        at = root
+        while at is not None and at not in seen:
+            scheduled.append(at_of[at])
+            seen.add(at)
+            at = next_blocks.get(at)
+    body = replace(body, blocks=tuple(scheduled))
     continues = {
         index for index, (block, following) in enumerate(zip(body.blocks, body.blocks[1:]))
-        if block.succ == (following.at,) and predecessors[following.at] == {block.at}
-        and following.at != body.entry
+        if next_blocks.get(block.at) == following.at
     }
     blocks = []
     stack: list[int] = []
@@ -272,7 +286,8 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
         if index not in continues:
             spilled.clear()
         blocks.append(replace(block, insns=tuple(insns)))
-    return replace(body, blocks=tuple(blocks))
+    allocated_blocks = {block.at: block for block in blocks}
+    return replace(body, blocks=tuple(allocated_blocks[at] for at in order))
 
 
 class FloatAlloc(LIRTransform):
