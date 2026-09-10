@@ -124,6 +124,16 @@ With the same external interfaces, the module now passes its first four
 REDIM calls and reaches `B$FREF` at 0a23. The object still refuses atomically;
 before/after assembly at 09d4 is the unchanged `call far B$RDIM`.
 
+VBDOS `B$FREF` now has cleanup 0 (the complete NextFDB/PpvWalkHeap graph
+also agrees), and `B$LDFS` cleanup 6 from its shared normal-return epilogue.
+Both retain every GP input and unknown effects. In particular LDFS's
+allocator graph is incomplete; no memory or preservation claim follows.
+Further audits found variable-count cleanup in `B$CLOS` and stack relocation
+in `B$PEOS`; neither may be assigned a fixed cleanup from its bare RETF.
+The same camera-module probe now reaches `B$OPEN` at 0a4b. Before/after
+assembly remains byte-identical on atomic refusal, including
+`call far B$FREF` at 0a23 and `call far B$LDFS` at 0a3f.
+
 VBDCL10E.LIB, `rtenexit.asm`, B$ENRA:
 
 ```asm

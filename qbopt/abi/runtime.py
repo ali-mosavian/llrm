@@ -338,6 +338,25 @@ VARIANTS[("B$CHOU", "vbdos")] = replace(
     ),
 )
 
+for _name, _cleanup, _evidence in (
+    ("B$FREF", 0,
+     "dvstmt.asm 0031..0051 walks B$NextFDB, restores SI/BP and RETF. "
+     "NextFDB saves AX/BX/CX/DX and calls PpvWalkHeap with two words; "
+     "lwalk.asm PpvWalkHeap returns RETF 4 at 0039. No caller arguments."),
+    ("B$LDFS", 6,
+     "string.asm 0030..005b loads [bp+6/+8/+0a], optionally calls B$AlcTmpSH "
+     "and copies bytes; both zero-length and copying paths restore DS/DI/SI/BP "
+     "then RETF 6. Allocator and error dependencies remain unproved."),
+):
+    VARIANTS[(_name, "vbdos")] = replace(
+        worst(_name),
+        inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
+        cleanup=_cleanup,
+        evidence=("VBDCL10E.LIB: " + _evidence +
+                  " Only normal-return cleanup established; all GP inputs and unknown effects retained. "
+                  "SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301."),
+    )
+
 for _name, _cleanup in (("B$PCR4", 4), ("B$PSR4", 4),
                         ("B$PCR8", 8), ("B$PSR8", 8), ("B$PER8", 8)):
     VARIANTS[(_name, "vbdos")] = replace(
