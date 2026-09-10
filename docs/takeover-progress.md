@@ -1,5 +1,43 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: select immediate arguments without temporary registers
+
+Lowering folds an adjacent single-use immediate definition into its push.
+The combined instruction retains the definition's relocation owner and
+claims both original byte spans. Other readers (including phi inputs),
+implicit requirements, width mismatches and separated byte ownership keep
+the original sequence. This is backend instruction selection, not a
+machine-specific MIR optimization.
+
+QB FPCSE before/after, applied to both printed string descriptors:
+
+```asm
+; before                       ; after
+mov ax,offset descriptor       push offset descriptor
+push ax
+call B$PSSD                    call B$PSSD
+```
+
+Removing the last AX definition also exposed an already-dead inserted
+spill/copy chain. Allocation now removes unused inserted copies and owned
+reloads before physical identity-copy deletion loses their virtual use
+graph. Opaque instructions stop this cleanup; source loads, live values,
+original byte-owning instructions and relocation owners are retained.
+
+QB FPCSE cost **151 -> 147**, exactly **1.50x** the 98-cost reference;
+object **819 -> 817 bytes**. PDS/VBDOS FPCSE remain **167/167** and outside
+target. PROCS shrinks by **6/20/3 bytes** on PDS/QB/VBDOS; QB LNGMIX by
+four bytes. No full-goal completion is claimed.
+
+The emitted QB argument regression failed first. The focused combined
+run passed 123 tests; the final explicit opaque-use guard also passed
+(12 argument tests). FPCSE, PROCS and LNGMIX run identically to originals
+on all three compilers, with successful links. Final outputs were compared
+byte-for-byte to these runtime-validated artifacts after adding the
+conservative opaque-instruction guard, avoiding unchanged DOS reruns.
+Stage dumps and runtime output:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-direct-args-final-mr0mwvmt`.
+
 ## 2026-09-10: combine adjacent constant argument pushes
 
 The backend now combines adjacent unrelocated word-immediate pushes into

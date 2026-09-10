@@ -567,6 +567,7 @@ def applied(body: lir.LirBody, got: Assignment) -> lir.LirBody:
             f"same twelve every round, thirty-six instructions added each time. Their ranges cross calls "
             f"that clobber every register, so no register can hold them and the reload cannot either"
         )
+    body = _dead_insertions(body)
     held = got.where
     # An identity copy is dropped here, which is what LLVM's
     # VirtRegRewriter does: `mov ax,ax` is what a split or a phi's copy
@@ -597,6 +598,31 @@ def applied(body: lir.LirBody, got: Assignment) -> lir.LirBody:
         pins=body.pins,
         ordered=body.ordered,
     )
+
+
+def _dead_insertions(body: lir.LirBody) -> lir.LirBody:
+    """Delete unused allocator copies before physical identity loses their use graph."""
+    if any(one.what is None or one.what.op is ir.Operation.BARRIER for one in body.insns):
+        return body
+    while True:
+        used = {value for one in body.insns for value in one.uses}
+        used.update(held.value for one in body.insns for held, _ in one.requires)
+        used.update(value for block in body.blocks for phi in block.phis for _, value in phi.incoming)
+        dead = set()
+        for one in body.insns:
+            if (not one.covers or one.covers[0] != one.covers[1] or one.spread
+                or one.clobbers or one.requires or one.delivers or one.symbol is True):
+                continue
+            match one.what:
+                case ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(value, _),), (source,)):
+                    if (one.defines == (value,) and value not in used
+                        and (isinstance(source, (ir.Held, ir.Imm))
+                             or isinstance(source, ir.Mem) and one.spill_reload)):
+                        dead.add(id(one))
+        if not dead:
+            return body
+        body = replace(body, blocks=tuple(replace(block, insns=tuple(
+            one for one in block.insns if id(one) not in dead)) for block in body.blocks))
 
 
 def _identity_anchor(one: lir.Insn) -> lir.Insn:

@@ -20,6 +20,17 @@ def test_fpcse_pushes_constant_single_as_one_dword():
     assert "push 43F3h" not in instructions
 
 
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_fpcse_passes_literal_addresses_without_register_shuffles(tag):
+    """FPCSE materialized both PRINT literal addresses in AX solely to push them."""
+    import corpus
+    from qbopt import wholeseg
+    result = wholeseg.emitted(Path(f"fixtures/omf/fpcse-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
+    assert "push ax" not in instructions
+
+
 @pytest.mark.parametrize("high,low", [(0x43f3, 0xc000), (-1, -2), (0, 0), (0x8000, 0x7fff)])
 def test_constant_push_pair_preserves_stack_bytes(high, low):
     from qbopt.backend import select

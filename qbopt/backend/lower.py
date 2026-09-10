@@ -393,6 +393,11 @@ def lowered(
         made[block.at] = tuple(
             one for op in scheduled[block.at] for one in making.expand(op, preserve_flags=id(op) in preserve)
         )
+    uses = Counter(value for insns in made.values() for one in insns for value in one.uses)
+    uses.update(held.value for insns in made.values() for one in insns
+                for held, _ in one.requires if held.value not in one.uses)
+    uses.update(value.id for block in body.blocks for phi in block.phis for value in phi.incoming.values())
+    made = {at: _immediate_arguments(insns, uses) for at, insns in made.items()}
     live = _phis_worth_keeping(body, made)
     return lir.LirBody(
         name=name,
@@ -427,6 +432,33 @@ def _check_inserted_conditions(ops: tuple[mir.Op, ...], leaving: frozenset[mir.V
             raise Unlowered(f"inserted {op.kind} at {op.at:#x} crosses a live condition")
         alive.difference_update(op.defines)
         alive.update(value for value in op.uses if value.flags)
+
+
+def _immediate_arguments(insns, uses):
+    """Select a direct push for an adjacent, single-use immediate definition."""
+    from qbopt.model import lir
+
+    out = []
+    index = 0
+    while index < len(insns):
+        pair = insns[index:index + 2]
+        if len(pair) == 2 and all(not (one.clobbers or one.requires or one.delivers or one.spread) for one in pair):
+            copy, push = pair
+            match copy.what, push.what:
+                case (ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(value, width),), (ir.Imm() as immediate,)),
+                      ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Held(pushed, pushed_width),))):
+                    if (value == pushed and width == pushed_width == immediate.width
+                        and width in (2, 4) and uses[value] == 1 and not copy.uses
+                        and copy.defines == (value,) and push.uses == (value,) and not push.defines):
+                        combined = replace(copy, what=replace(push.what, sources=(immediate,)), defines=(), uses=())
+                        folded = lir.without((combined, push), lambda one: one is push)
+                        if len(folded) == 1:
+                            out.extend(folded)
+                            index += 2
+                            continue
+        out.append(insns[index])
+        index += 1
+    return tuple(out)
 
 
 def _branch_condition(block: mir.MirBlock, readers: Counter[mir.Value]) -> tuple[mir.Op, ...]:
