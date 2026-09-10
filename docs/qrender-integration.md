@@ -261,6 +261,29 @@ FMID (00ca), not EXTS (008a). The whole object is still refused unchanged:
 00ca  call far B$FMID             00ca  call far B$FMID
 ```
 
+### Substring interface
+
+`B$FMID` normal return consumes six argument bytes (VBDOS
+`farstr/strfcn.asm` 00f6..0112). Its first dependency, RefString, replaces
+incoming arithmetic flags before branching and returns without stack
+adjustment. The substring wrapper consumes its two internal words with
+RET 4. Allocation/freeing and error paths remain unknown: this is not a
+pure substring operation. The fail-first regression and nine neighboring
+interface tests pass. `/tmp/qbopt-common-fmid-fixed` advances to ASSN at
+00e7, with the entire object still unchanged:
+
+```asm
+; before                         ; after (atomic refusal)
+00ca  call far B$FMID             00ca  call far B$FMID
+; ...                            ; ...
+00e7  call far B$ASSN             00e7  call far B$ASSN
+```
+
+A direct call-site inventory also finds unresolved ENRA, ERS1, LNIN,
+SCMP, SCPF and SYS_ERROR interfaces in `common`. Audit these before
+expecting whole-module emission; the list is not proof that no backend
+blockers remain.
+
 ### Two-module runtime check
 
 Relinking with rewritten `view` and `d_turb` succeeded. The isolated build in

@@ -365,6 +365,14 @@ VARIANTS[("B$CHOU", "vbdos")] = replace(
 )
 
 for _name, _cleanup, _evidence in (
+    ("B$FMID", 6,
+     "farstr/strfcn.asm 00f6..0112 reads descriptor/start/count at [bp+0a/08/06]. "
+     "First dependency RefString (strutil.asm 0013) overwrites incoming flags "
+     "with OR AX,AX at 0016 before branching; it has no dependencies or stack "
+     "adjustments and returns near. The substring wrapper 0113..011c consumes "
+     "two internal words with RET 4; public normal return is POP BP / RETF 6. "
+     "Invalid ranges tail ERR_FC and allocation/freeing remain unknown effects; "
+     "no purity, preservation or error-path guarantee."),
     ("B$FLEN", 2,
      "farstr/stcore.asm 02b9 reads a far-string descriptor at [bp+6]; OR AX,AX "
      "at 02c1 kills incoming arithmetic flags before any branch/dependency. "
