@@ -13,11 +13,28 @@ def _empty(op):
             and op.floating_origin is None)
 
 
+def _owns_interval(blocks, start, end):
+    """Layout cannot compact a body's chain across bytes owned by another body."""
+    spans = sorted(span for block in blocks for op in block.ops
+                   for span in (*((op.covers,) if op.covers is not None else ()), *op.extra_covers)
+                   if span[0] < span[1])
+    covered = start
+    for low, high in spans:
+        if high <= covered:
+            continue
+        if low > covered:
+            break
+        covered = high
+        if covered >= end:
+            return True
+    return False
+
+
 def merged(body: mir.MirBody) -> mir.MirBody:
     """Merge forward single-entry chains, retaining every original byte owner.
 
     Unreachable ownership-only blocks between the endpoints move with them.
-    Other intervening blocks retain their placement. Floating sequence and
+    Other intervening blocks and unowned gaps retain their placement. Floating sequence and
     unrolling provenance still require their original block boundaries.
     """
     from qbopt.optimize.transform import _empty_operation
@@ -37,6 +54,8 @@ def merged(body: mir.MirBody) -> mir.MirBody:
             if set(predecessors[target]) != {first.at}:
                 continue
             between = ordered[index + 1:positions[target]]
+            if not _owns_interval((first, *between), first.at, target):
+                continue
             if any(block.at == body.entry or block.at in repeated or block.phis or block.succ or predecessors[block.at]
                    or any(not _empty(op) for op in block.ops) for block in between):
                 continue

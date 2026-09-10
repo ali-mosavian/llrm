@@ -636,6 +636,12 @@ one documented target without materially regressing another.
   identical final assembly. Reference: local LLVM `BasicBlockUtils.cpp`,
   `MergeBlockIntoPredecessor`. General block placement, floating-sequence
   migration and consolidation into a separate pass remain open.
+  Unowned source intervals also retain the jump: a procedure may be physically
+  interleaved between two main-body blocks without appearing in that body's CFG.
+  LOCALP exposed a deleted main-to-termination jump across its SUB. All three
+  compiled variants now retain reachable termination and execute correctly.
+  This ownership restriction remains necessary until layout can place merged
+  semantic bodies independently of the original interleaving.
 
 ### Loop profitability and specialization
 

@@ -72,3 +72,29 @@ This proves critical-edge capability, not universal profitability. Three
 runtime cases pass on each compiler. The first PDS attempt was refused because
 lowering failed to select the inserted operand-free MIR jump; the emitted-path
 regression also requires successful LIR emission, never unchanged fallback.
+
+`localp-{q-O,p-g2,v-g3}.obj` are real compiler output from `localp.bas`,
+compiled through `tools/e2e.py`. The procedure-local loop prints 28, then main
+prints DONE. Before frame-promotion work began, PDS's optimized program produced
+no output before the timeout while BC printed both lines. CFG merging removed
+main's jump across the physically interleaved SUB; termination remained in the
+object but was unreachable. PDS before/after (only the affected control flow):
+
+```asm
+; broken                     ; repaired
+call B$PESD                  call B$PESD
+nop                          nop
+; falls into ACCUMULATE       jmp termination
+ACCUMULATE:                  ACCUMULATE:
+; procedure body             ; procedure body
+retf 2                       retf 2
+termination:                 termination:
+call B$CENP                  call B$CENP
+```
+
+An unowned gap is not an empty path: merging one body's blocks cannot erase a
+jump over another body while layout still retains its physical position.
+The original failure and repaired output were checked with per-stage dumps;
+all three compilers' linked executables now print 28 and DONE. Frame-field
+promotion is still unimplemented; this fixture uncovered a correctness defect
+before any change to promotion.
