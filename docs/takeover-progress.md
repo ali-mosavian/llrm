@@ -4162,3 +4162,32 @@ availability and dominance. Precise call mod/ref remains pending.
 Twelve focused graph/query tests cover these cases; the three initial query
 tests failed before implementation. No pass consumes this analysis yet, so
 before/after emitted assembly remains unchanged.
+
+### First MemorySSA forwarding consumer
+
+`avail.forwardable` now consults MemorySSA when its existing forward lattice
+loses a store fact at a loop header. A unique reaching store may supply the
+read only when it dominates the use, writes exactly the requested bytes and
+does not cross the block-local stack boundary. Unrelated backedge stores
+are skipped; aliasing writes and calls prevent the replacement. The existing
+forward transform replaces the memory operand with an SSA value, leaving
+allocation to the backend.
+
+The preheader-store regression failed before the change. Four focused cases
+cover successful replacement, aliasing backedges, calls and a bypass entry;
+41 memory, forwarding and boundary checks pass. HARR VBDOS assembly is
+identical with the consumer disabled/enabled (1038 object bytes); there is
+no measured HARR speedup from this increment. All stages and both assembly
+listings are in `/tmp/qbopt-memoryssa-harr-before` and
+`/tmp/qbopt-memoryssa-harr`. For example, both retain:
+
+```asm
+mov es,[bx+2]
+mov dx,2Ch
+add dx,[bx+0Ah]
+mov bx,dx
+```
+
+A broader transform check encountered the existing LNGMIX hoist assertion
+`the fixture must actually move invariant work`; the exact test also fails
+with the MemorySSA consumer disabled. Its investigation remains pending.
