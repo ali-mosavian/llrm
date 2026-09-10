@@ -33,6 +33,7 @@ from iced_x86 import FlowControl
 from iced_x86 import FormatterSyntax
 
 from qbopt.objectfile import omf
+from qbopt.frontend import declen
 from qbopt.frontend.declen import INFO
 from qbopt.frontend.declen import READS
 from qbopt.frontend.declen import WRITES
@@ -91,10 +92,12 @@ def opaque(reason: str) -> Contract:
 
 
 class Library:
-    def __init__(self, objects: list[Module], limit: int = 2000, functions: int | None = 256) -> None:
+    def __init__(self, objects: list[Module], limit: int = 2000, functions: int | None = 256,
+                 *, fp_emulation: bool = False) -> None:
         self.objects = objects
         self.limit = limit
         self.functions = functions
+        self.fp_emulation = fp_emulation
         self.symbols: dict[str, list[Address]] = {}
         self.names = {}
         self.codes = {}
@@ -170,6 +173,12 @@ class Library:
                 routine.unknown.append("instruction budget exceeded")
                 break
             insn = Decoder(16, code[at:], ip=at).decode()
+            if self.fp_emulation and code[at:at + 1] == b"\xcd" and at + 1 < len(code):
+                if code[at + 1] in declen.STANDS_IN and (site := declen.emulated(code, at)):
+                    insn = site.insn.copy()
+                    insn.len = site.length
+                    insn.ip = at
+                    routine.unknown.append(f"{at:04x}: FP emulator effects are not established")
             if insn.is_invalid or not set(range(at, insn.next_ip)) <= self.covered.get(key, set()):
                 routine.unknown.append(f"{at:04x}: invalid or missing code")
                 continue
@@ -598,6 +607,8 @@ def main() -> int:
         "--lib", type=Path, action="append", required=True, help="OMF .lib or .obj; repeat for dependencies"
     )
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--fp-emulation", action="store_true",
+                        help="follow BASIC /FPi sites; emulator effects remain unknown")
     parser.add_argument("--dump", type=Path, help="write reachable disassembly and contracts to JSON")
     parser.add_argument("--instructions", type=int, default=2000)
     parser.add_argument("--functions", type=int, help="default 256 for one symbol; unlimited for --all")
@@ -611,6 +622,7 @@ def main() -> int:
         [module for _, data in inputs for module in modules(data)],
         args.instructions,
         args.functions if args.functions is not None else (None if args.all else 256),
+        fp_emulation=args.fp_emulation,
     )
     roots = (
         library.code_entries({name.upper() for name in args.code_class or ["CODE"]})
@@ -625,6 +637,7 @@ def main() -> int:
     contracts = summarize(graph)
     report = {
         "schema_version": 3,
+        "fp_emulation": args.fp_emulation,
         "scope": "8/16/32-bit overlapping GP registers, data segments and decoder-modeled flag bits; "
         "reads include saves; x87 unproved; "
         "SP described by cleanup only; conditional on normal return with immutable code, "

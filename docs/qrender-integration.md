@@ -75,6 +75,24 @@ objects/libraries, retain their hashes in the audit evidence, and retain
 unknown effects conservatively. Analysis-tool JSON is not automatically an
 ABI contract. Unspecified symbols retain their existing unknown behavior.
 
+For BASIC `/FPi` objects, use `tools/contracts.py --fp-emulation` explicitly.
+It follows the three emulator byte shapes using the frontend decoder, but
+keeps their effects unknown and suppresses preservation proofs. Without it,
+`PL_MOVE` inspection stopped at the first floating-point interrupt; with it,
+the audit reaches 306 instructions, 18 dependencies and `12d9: retf 22h`.
+This changes the audit's visibility, not emitted code:
+
+```asm
+; before and after: original object bytes unchanged
+12d9  retf 22h
+```
+
+`CP_ADVANCE` in baseline `main.obj` starts at 1937 with a BX=0 runtime entry,
+and ends with `B$EXSA` at 1da4 and `retf 0Ch` at 1da9. Supplying an external
+contract that retains every GP input and all unknown effects, with cleanup
+12, moves the camera's refusal to `PL_MOVE` at 08ad. These are audit facts,
+not globally installed project-symbol contracts.
+
 VBDCL10E.LIB, `rtenexit.asm`, B$ENRA:
 
 ```asm

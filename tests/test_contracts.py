@@ -36,6 +36,20 @@ def test_wide_segment_descriptor_does_not_imply_wide_code():
     assert "USE32 segment is not supported" in found.graph((0, 1, 0))[(0, 1, 0)].unknown
 
 
+@pytest.mark.parametrize("site", ["cd3546c8", "cd3cd946c8", "cd3d"])
+def test_explicit_fp_emulation_reaches_return_without_proving_preservation(site):
+    """Qrender PL_MOVE's audit stopped before its return at an /FPi interrupt."""
+    original = library(site + " ca2000")
+    enabled = Library(original.objects, fp_emulation=True)
+    routine = enabled.graph((0, 1, 0))[(0, 1, 0)]
+    return_at = len(bytes.fromhex(site))
+    assert routine.instructions[return_at].immediate16 == 32
+    result = summarize({(0, 1, 0): routine})[(0, 1, 0)]
+    assert result.unknown
+    assert not result.preserved
+    assert return_at not in original.graph((0, 1, 0))[(0, 1, 0)].instructions
+
+
 def test_save_restore_across_dependency() -> None:
     """A caller saving AX around a clobbering helper must retain its original AX."""
     found = library("50 e80200 58 c3 31c0 c3")
