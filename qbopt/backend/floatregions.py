@@ -69,8 +69,12 @@ def bridged(body: lir.LirBody, regions: dict[int, int], frame) -> lir.LirBody:
     blocks = []
     for block in body.blocks:
         insns = []
+        resident = {}
         for one in block.insns:
             what = one.what
+            if (what is None or what.op in (ir.Operation.CALL, ir.Operation.BARRIER)
+                or any(isinstance(arg, ir.St) for arg in (*what.sources, *what.dests))):
+                resident.clear()
             explicit = set() if what is None else {
                 arg.value for arg in (*what.sources, *what.dests)
                 if isinstance(arg, ir.Held) and arg.width == 10}
@@ -84,12 +88,15 @@ def bridged(body: lir.LirBody, regions: dict[int, int], frame) -> lir.LirBody:
             renamed = {}
             for arg in what.sources:
                 if isinstance(arg, ir.Held) and arg.value in crossing and arg.value not in renamed:
-                    local = ir.Held(fresh, 10)
-                    fresh += 1
+                    local = resident.get(arg.value)
+                    if local is None:
+                        local = ir.Held(fresh, 10)
+                        fresh += 1
+                        resident[arg.value] = local
+                        insns.append(lir.Insn(one.at, (one.at, one.at),
+                            ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (local,), (cells[arg.value],)),
+                            (local.value,), ()))
                     renamed[arg.value] = local
-                    insns.append(lir.Insn(one.at, (one.at, one.at),
-                        ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (local,), (cells[arg.value],)),
-                        (local.value,), ()))
             insns.append(replace(one, what=replace(what, sources=tuple(
                 renamed.get(arg.value, arg) if isinstance(arg, ir.Held) else arg for arg in what.sources)),
                 uses=tuple(renamed[value].value if value in renamed else value for value in one.uses),

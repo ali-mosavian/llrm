@@ -4349,3 +4349,21 @@ PDS and VBDOS retain their three-load/two-stack-copy assertions. This replaces
 the obsolete QB load count with numerical evidence, not a blanket allowance
 for missing loads. Production assembly before/after this test-only correction
 is unchanged; the optimization was already present.
+
+### Reuse owned floating reloads within a consumer block
+
+Cross-region floating allocation now shares an owned extended-precision reload
+between uses in one block. Calls, barriers, unknown instructions and explicit
+stack operands end reuse. The allocator still preserves each destination's
+rounded store and handles any increased register pressure with its existing
+spill machinery. No MIR floating arithmetic is removed or reassociated.
+
+The forked shared-value regression failed first with two reloads. The focused
+allocation file passes 55 tests, including call/barrier boundaries. Its consumer
+changes from `fld tword [owned]; fstp dword [out]; fld tword [owned]; fstp dword [out]`
+to `fld tword [owned]; fst dword [out]; fstp dword [out]`. Both rounded stores
+remain; the retained stack value is extended precision, not the rounded output.
+
+FPCSEX PDS before/after assembly is identical. This closes an allocation gap
+for shared values but does not yet improve that target. Complete stage dumps:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-float-reload-mpt9c8qd`.

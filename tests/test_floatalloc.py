@@ -16,6 +16,38 @@ def _body(operations):
     return lir.LirBody("floating", 0, (lir.LirBlock(0, insns),), {}, {})
 
 
+@pytest.mark.parametrize("boundary", [None, ir.Operation.CALL, ir.Operation.BARRIER])
+def test_region_value_reuses_one_reload_until_an_unknown_effect(boundary):
+    """A shared floating result crossing a fork reloaded its owned slot for every store."""
+    from qbopt.backend import frame
+
+    value = ir.Held(1, 10)
+    cell = ir.Mem(Addr(Space.FRAME, -4), 4)
+    operations = [
+        ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (value,), (cell,)),
+        ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cell,), (value,)),
+    ]
+    if boundary is not None:
+        operations.append(ir.Semantics(boundary, "call" if boundary is ir.Operation.CALL else "", (), ()))
+    operations.append(ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cell,), (value,)))
+    body = _body(operations)
+    body = replace(body, blocks=(
+        lir.LirBlock(0, body.insns[:1], (8, 80)),
+        lir.LirBlock(8, body.insns[1:], ()),
+        lir.LirBlock(80, (), ()),
+    ))
+    result = floatalloc.allocated(body, frame.Frame(-8))
+    consumer = next(block for block in result.blocks if block.at == 8)
+    reloads = [one for one in consumer.insns if one.what.op is ir.Operation.FLOAT_LOAD
+               and any(isinstance(arg, ir.Mem) and arg.width == 10 for arg in one.what.sources)]
+    assert len(reloads) == (1 if boundary is None else 2)
+    stores = [one.what for one in consumer.insns if one.what.op is ir.Operation.FLOAT_STORE]
+    assert [one.name for one in stores] == (["fst", "fstp"] if boundary is None else ["fstp", "fstp"])
+    assert all(one.dests == (cell,) and one.sources == (ir.St(0),) for one in stores)
+    if boundary is None:
+        assert all(select.emit(one.what) is not None for one in consumer.insns)
+
+
 def test_square_keeps_the_next_used_operand_on_top():
     """FPDEEP shuffled p back to the top immediately after forming p*p."""
     value, square, total, answer = (ir.Held(index, 10) for index in range(1, 5))
