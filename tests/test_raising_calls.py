@@ -11,6 +11,37 @@ from qbopt.frontend import pairs, raising_calls
 from qbopt.optimize import transform
 from qbopt import wholeseg
 from qbopt.legacy import calls
+from qbopt.abi import runtime
+
+
+def test_nbody_timer_does_not_keep_arithmetic_scratch_values_live():
+    """NBODY kept Y damping's DVI4 because PITSNAP invented register arguments."""
+    path = Path("fixtures/bench/nbody-v-g3.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    ops = [op for block in body.blocks for op in block.ops]
+    timers = [op for op in ops if op.kind is mir.Kind.CALL and found.calls.get(op.at) == "PITSNAP"]
+    assert len(timers) == 2
+    assert all(not op.uses and op.defines for op in timers)
+    assert any(op.at == 0x26e and op.kind is mir.Kind.DIVMOD for op in ops)
+    emitted = wholeseg.emitted(path.read_bytes())
+    assert emitted.outcome is wholeseg.Emission.LIR, emitted.reason
+    rewritten = module.of(omf.parse(emitted.data))
+    assert calls.DIVIDE not in rewritten.calls.values()
+    assert list(rewritten.calls.values()).count(calls.MULTIPLY) == 1  # Timer conversion only.
+
+
+@pytest.mark.parametrize("inputs", [None, frozenset(), frozenset({runtime.Reg.CX})])
+def test_known_call_inputs_do_not_establish_unknown_call_effects(inputs):
+    """Fixing NBODY's phantom timer inputs must not invent preserved registers."""
+    contract = replace(runtime.worst("unresolved"), inputs=inputs)
+    touched = mir._call_touches("unresolved", contract)
+    if inputs is None:
+        assert touched is None
+    else:
+        defines, uses = touched
+        assert defines == frozenset(mir.TRACKED) | {mir.FLAGS}
+        assert uses == frozenset(mir.FROM_CONTRACT[one] for one in inputs)
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])

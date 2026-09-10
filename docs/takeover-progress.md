@@ -3614,3 +3614,34 @@ The NBODY assembly inspected this round still contains unabsorbed arithmetic
 helpers in initialization and velocity damping, plus allocator spill traffic.
 That is a concrete remaining code-generation gap, unlike HARR's already
 strength-reduced address stride.
+# Per-site call inputs reach SSA construction
+
+NBODY's Y damping retained B$DVI4 although X damping became native. The
+raise's arithmetic matcher accepted both; the Y call's scratch values fed
+loop phis that reached PITSNAP. Its per-site contract already establishes
+stack arguments and no register inputs, but SSA construction looked up a
+generic name-only contract instead. Phi placement and renaming now use the
+same per-site contracts as call operands and lowering. Unknown side effects
+remain unknown; known inputs do not imply preserved registers or memory.
+
+Before: push 16, push velocity, call B$DVI4, split-word subtract/negate/store.
+After: native MIR division followed by signed power-of-two lowering and a
+whole-value subtraction/store. Both initialization multiplies are native as
+well; only PITSNAP's own multiply remains a helper. VBDOS NBODY object size
+is **4469 -> 4231 bytes**. All 24 position/velocity outputs match BC's
+original; timing output is deliberately excluded from equality. PROCS
+original/optimized output also matches on QB, PDS and VBDOS.
+
+The real NBODY regression failed first. Arithmetic raising passes 22 tests;
+six targeted input/contract checks pass. A broader MIR run passed 3216 and
+stopped on two failures reproduced with HEAD's original functions:
+`test_absorbed_multiply_defines_its_returned_high_half` and the ADDRM PDS
+event `test_resolving_a_body_that_has_not_moved_changes_nothing` case.
+
+Before/after pass dumps and runtime output are under
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-site-contracts-wzq4x7x1`.
+No modeled NBODY speedup is claimed: opportunity.counted returned 6386 for
+both objects because re-raising either optimized object returns only the
+PITSNAP body, silently dropping main. The next measurement fix must cost
+all decoded reachable bodies or reject incomplete coverage, not accept a
+partial score. Raw assembly and object bytes establish this change instead.

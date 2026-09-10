@@ -950,7 +950,7 @@ def _call_args(routine: "runtime.Contract | None", holds: dict, at: int = 0) -> 
     return tuple(made), True
 
 
-def _call_touches(name: str | None) -> tuple[frozenset[Register_], frozenset[Register_]] | None:
+def _call_touches(name: str | None, routine: "runtime.Contract | None" = None) -> tuple[frozenset[Register_], frozenset[Register_]] | None:
     """What a call really disturbs, where runtime.py has established it.
 
     ir.Effects answers "any register" for every call, which is the right
@@ -961,8 +961,8 @@ def _call_touches(name: str | None) -> tuple[frozenset[Register_], frozenset[Reg
     exactly this, and a routine with no entry there still comes back
     worst-case, so nothing is assumed by using it.
     """
-    routine = runtime.contract(name)
-    if not routine.established:
+    routine = routine if routine is not None else runtime.contract(name)
+    if not routine.established and not runtime.established_inputs(routine):
         return None
     kept = {FROM_CONTRACT[one] for one in runtime.preserves(routine) if one in FROM_CONTRACT}
     disturbed = frozenset(one for one in TRACKED if one not in kept) | {FLAGS}
@@ -1029,7 +1029,8 @@ def _restore_touches(node: ir.Node) -> tuple[frozenset[Register_], frozenset[Reg
     return frozenset({into}), frozenset({source, into})
 
 
-def _touched(node: ir.Node, calls: dict[int, str] | None = None) -> tuple[frozenset[Register_], frozenset[Register_]]:
+def _touched(node: ir.Node, calls: dict[int, str] | None = None,
+             contracts: "dict[int, runtime.Contract] | None" = None) -> tuple[frozenset[Register_], frozenset[Register_]]:
     """(defines, uses) as tracked variables, flags included as FLAGS.
 
     Reads ir.Effects rather than ir.Semantics, deliberately: Effects is
@@ -1042,7 +1043,9 @@ def _touched(node: ir.Node, calls: dict[int, str] | None = None) -> tuple[frozen
         # On its fallthrough path INTO only observes OF. The exceptional
         # path remains a memory/control barrier, not fictitious GP results.
         return frozenset(), frozenset({FLAGS})
-    if calls is not None and isinstance(node, ir.Call) and (known := _call_touches(calls.get(node.insn.at))):
+    if calls is not None and isinstance(node, ir.Call) and (known := _call_touches(
+        calls.get(node.insn.at), contracts.get(node.insn.at) if contracts is not None else None
+    )):
         return known
     if (halves := _restore_touches(node)) is not None:
         return halves
@@ -1223,6 +1226,7 @@ def _placed(
     nodes: dict[int, ir.Node],
     entry: int | None = None,
     calls: dict[int, str] | None = None,
+    contracts: "dict[int, runtime.Contract] | None" = None,
 ) -> dict[int, frozenset[Register_]]:
     """Which variables need a phi in which block.
 
@@ -1238,7 +1242,7 @@ def _placed(
             node = nodes.get(insn.at)
             if node is None:
                 continue
-            for one in _touched(node, calls)[0]:
+            for one in _touched(node, calls, contracts)[0]:
                 defines.setdefault(one, set()).add(block.at)
 
     needed: dict[int, set[Register_]] = {block.at: set() for block in blocks}
@@ -1455,7 +1459,7 @@ def raise_body(
         if parent is not None:
             children[parent].append(block.at)
 
-    needed = _placed(blocks, nodes, start, calls)
+    needed = _placed(blocks, nodes, start, calls, chosen)
     namer = _Namer()
     phis: dict[int, dict[Register_, Phi]] = {block.at: {} for block in blocks}
     ops: dict[int, list[Op]] = {block.at: [] for block in blocks}
@@ -1498,7 +1502,7 @@ def raise_body(
                 offset, _slot = _stack_slot(node, offset, None)
                 continue
             offset, slot = _stack_slot(node, offset, calls.get(insn.at) if calls else None)
-            defines, uses = _touched(node, calls)
+            defines, uses = _touched(node, calls, chosen)
             used = tuple(namer.current(one, start) for one in sorted(uses, key=lambda o: (o is not FLAGS, o)))
             where = _object_of(node)
             keeps = unreached if _narrowed(calls, insn.at) else None
