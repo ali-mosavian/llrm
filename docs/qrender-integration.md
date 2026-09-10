@@ -397,6 +397,35 @@ unknown in the call-site inventory of `common`.
 0645  call far SYS_ERROR          0645  call far SYS_ERROR
 ```
 
+### Common emission and three-module run attempt
+
+SYS_ERROR was inspected in the linked `sys.obj` (SHA256
+`359c02ee944e792e9181333c5acec5ba104d40a5c38512150cb562536e0aad53`).
+Entry 0927 sets CX/BX then calls ENRA; the normal epilogue at 09b1 is
+RETF 2. Source calls shutdown, SLEEP and END, so ordinary return must not
+be assumed. An explicit external contract retains all GP inputs and
+unknown control/memory/clobber/error effects, recording only normal cleanup.
+No global SYS_ERROR entry was added.
+
+With that interface, `common` emits 15,158 -> 14,468 object bytes.
+`/tmp/qbopt-common-project-interface` has all stages. One backend effect:
+
+```asm
+; before                         ; after
+push word 0                      push dword 31h
+push word 31h
+push word 1                      push dword 10101h
+push word 101h
+```
+
+The isolated `/tmp/qbopt-qrender-common-20260910` build links rewritten
+common/view/d_turb. Its first 60-tick run exits with code 0 but produces
+no fresh BENCH files or load traces. Copied benchmark files were renamed
+before launch. This is **not a passing runtime check**. Emulator session
+2131, debug port 2197, remains available; inspect execution against the
+last working executable before diagnosing a common miscompile. No source
+fix has been claimed; any discovered defect must gain a fail-first test.
+
 ### Two-module runtime check
 
 Relinking with rewritten `view` and `d_turb` succeeded. The isolated build in
