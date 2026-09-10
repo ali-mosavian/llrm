@@ -69,11 +69,13 @@ reachable dependencies when establishing its interface.
 4. In preserve mode, derive the accessed range from the induction variable,
    step and actual loop trip count. Account for wraparound, negative steps,
    zero trips, conditional accesses and descriptor mutation.
-5. Exact error timing needs loop versioning: a pre-loop guard selects an
-   unchecked loop only when every executed access is safe. Otherwise execute
-   the original checked loop. Raising an error directly from that guard can
-   skip earlier writes/output and requires the user's explicit acceptance of
-   early errors. That question is currently open.
+5. The user explicitly permits bounds errors to be raised before the loop,
+   even when this skips earlier iterations' writes/output. A failed pre-loop
+   check may therefore report the BASIC error directly; a checked slow-loop
+   version is not required merely to preserve error timing. Guard the check
+   with loop entry so zero-trip loops do not introduce errors. Early reporting
+   does not authorize checking conditional accesses that would never execute,
+   or treating mutable bounds as invariant.
 
 For inputs compiled without checks, the flag cannot simply recover missing
 checks from a helper call: the access may already be inline machine code.
