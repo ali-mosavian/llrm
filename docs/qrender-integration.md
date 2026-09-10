@@ -186,6 +186,23 @@ The next emission refusal is `fidiv` at 035c, whose indirect address still
 contains an unplaced value after register allocation. The view object remains
 unchanged atomically; runtime validation awaits a fully emitted module.
 
+The FIDIV base failure came from constraint splitting: it inserted a copy
+into SI and renamed the use list, but left the memory operand referring to
+the old value. Splitting now renames nested memory bases too. The fail-first
+regression runs allocation and checks exact emitted bytes `DE 34`:
+
+```asm
+; before: stale abstract base      ; after: assigned base
+mov si,ax                          mov si,ax
+fidiv word [v398] ; unencodable     fidiv word [si]
+```
+
+This fixes operand binding in the backend; no machine detail is introduced
+into MIR optimization.
+The full-module dump confirms FIDIV is resolved. Emission next refuses at
+0941: a `mov` is carrying one fixup but has no encoded relocation field.
+The object is still unchanged; inspect fixup ownership before runtime testing.
+
 VBDCL10E.LIB, `rtenexit.asm`, B$ENRA:
 
 ```asm

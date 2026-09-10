@@ -143,12 +143,18 @@ def constrained(
                 swap[value] = held.value
                 fresh += 1
             insns += before
+            def address(operand):
+                if not isinstance(operand, ir.Mem):
+                    return operand
+                return ir.mapped(operand, lambda value: ir.Held(swap.get(value.value, value.value), value.width))
+
             insns.append(
                 replace(
                     one,
                     what=what
                     if what is None
-                    else ir.Semantics(what.op, what.name, tuple(dests), tuple(sources), what.target),
+                    else ir.Semantics(what.op, what.name, tuple(map(address, dests)),
+                                      tuple(map(address, sources)), what.target),
                     defines=tuple(defines),
                     uses=tuple(uses),
                     # Rewritten onto the fresh values rather than

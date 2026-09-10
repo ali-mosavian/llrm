@@ -35,6 +35,25 @@ def test_runtime_requirement_renames_its_explicit_source():
     assert result.what.sources[0].value == result.uses[0]
 
 
+def test_fixed_address_requirement_renames_memory_base():
+    """Qrender FIDIV 035c retained unplaced v398 after its SI input became v1036."""
+    from dataclasses import replace
+    from qbopt.objectfile.module import Addr, Space
+    value = ir.Held(20, 2)
+    cell = ir.Mem(Addr(Space.LITERAL, 0), 2, base=value)
+    instruction = replace(_insn(ir.Semantics(ir.Operation.FLOAT_ARITH, "fidiv",
+        (ir.St(0),), (ir.St(0), cell)), (), (20,)), requires=((value, Register.SI),))
+    got, pins = constrain.constrained(_body(instruction))
+    result = got.insns[-1]
+    assert result.what.sources[-1].base.value == result.uses[0]
+    assert pins[result.uses[0]] == Register.SI
+    from qbopt.backend import allocate, select
+    placed = allocate.applied(got, allocate.allocate(got, pins))
+    emitted = select.emit(placed.insns[-1].what)
+    assert emitted is not None
+    assert emitted.code == bytes.fromhex("de34")  # fidiv word [si]
+
+
 def _shift(count: int) -> lir.Insn:
     what = ir.Semantics(ir.Operation.BINARY, "shl", (ir.Held(9, 2),), (ir.Held(9, 2), ir.Held(count, 2)))
     return _insn(what, (9,), (9, count))
