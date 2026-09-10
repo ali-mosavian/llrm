@@ -551,6 +551,11 @@ one documented target without materially regressing another.
   bases and constant byte offsets to exclude disjoint writes. Exact dominating
   stores supply constants or SSA values; unknown roots and unbounded offsets
   remain conservative. Facts are rebuilt after MIR changes.
+  At raise time, forward must-facts retain fixed array extents and equal
+  pointer offsets across unknown branches. Accesses are annotated per
+  occurrence only after every incoming path agrees. Calls, descriptor
+  writes, allocation generations and value widths constrain the proof;
+  symbolic variable-index ranges remain unfinished.
 
 ### High-impact MIR passes
 

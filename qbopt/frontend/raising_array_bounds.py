@@ -9,6 +9,7 @@ control flow; it is not a substitute for general symbolic range analysis.
 from dataclasses import dataclass, replace
 
 from qbopt.analysis import consts
+from qbopt.frontend import arrayfacts
 from qbopt.model import ir, mir
 from qbopt.objectfile.module import Addr, Space
 
@@ -19,6 +20,7 @@ class Pointer:
 
 
 def proven(body: mir.MirBody, *, limit: int = 10000) -> mir.MirBody:
+    body = arrayfacts.proven(body, limit=limit)
     allocations = [op for block in body.blocks for op in block.ops if op.array]
     if len(allocations) != 1 or allocations[0].array.replaces or not allocations[0].memory_values:
         return body

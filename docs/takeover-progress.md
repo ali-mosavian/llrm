@@ -1,5 +1,64 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: keep array facts across unknown branches
+
+`frontend/arrayfacts.py` meets known values, memory cells and allocation
+extents across CFG predecessors. Unlike the exact-path proof, it need not
+choose an unknown branch. Allocation lifetime and value width are explicit;
+unknown calls, descriptor writes and cyclic allocations cannot establish
+unsafe ownership. The existing finite-loop proof remains available.
+
+ARRPHI uses two dynamic arrays and READ-supplied branch conditions. All six
+constant-offset accesses are now proven within their allocations. Existing
+CSE shares the computed pointer through a phi, removing the join's repeated
+descriptor loads and huge-pointer arithmetic. The element load remains.
+
+PDS first join, abbreviated only where marked:
+
+```asm
+; before
+mov ax,[firstValues.lowerBound]
+movsx eax,ax
+mov ebx,2
+sub ebx,eax
+lea eax,[ebx+ebx]
+mov ebx,[firstValues.pointer]
+; normalize the huge pointer (shift/add sequence)
+push es
+push ebx
+pop bx
+pop es
+mov ax,[es:bx]
+pop es
+add ax,3
+
+; after: EBX carries the pointer computed on either branch
+push es
+push ebx
+pop bx
+pop es
+mov ax,[es:bx]
+pop es
+add ax,3
+```
+
+Optimized object bytes (previous pipeline -> new pipeline): PDS
+**1764 -> 1580**, QB **1744 -> 1560**, VBDOS **1896 -> 1712**.
+These include relocation/debug records, not just instructions; no cycle
+ratio is inferred. Baseline and optimized executions on all three compilers
+print **10; 9; DONE**. The fixtures were compiled with the usual configuration
+switches plus `/AH`. Final output bytes match the runtime-verified artifacts.
+
+The scoped array/bounds/memory-join checks pass **47 tests**. Stage dumps:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-arrphi-stages-khvix8rz`
+(`before/s43-asm-emitted.txt`, `after/s59-asm-emitted.txt`). Runtime artifacts:
+`qbopt-arrphi-p-g2-n7u06p3o`, `qbopt-arrphi-q-O-final-js725ryt`, and
+`qbopt-arrphi-v-g3-ixz5z4ef` under the same temporary parent.
+
+Next: translate pointer phis for memory-load reuse, then generalize constant
+offset proofs to induction ranges. The broader target and architecture goal
+remains open.
+
 ## 2026-09-10: reuse memory values across joins; repair READ escape facts
 
 `optimize/loadjoins.py` replaces a whole scalar load with a phi of the values
