@@ -329,6 +329,41 @@ idiv ecx                     ; remainder by 1 could then fold to 0
 Refreshing fixtures and tracing facts change no optimizer instructions; this
 listing is the measured remaining work, not an implemented before/after win.
 
+### Main-frame geometry verified from the shipped runtimes
+
+`runtime/inc/addr.inc` places `SZ_FRAME` at header offset 0x22. CHAIN records
+24 local bytes on all three compilers. The fixed part below BP is **not**
+uniform: the shipped `rtutil.asm` `B$FRAMESETUP` success path gives:
+
+| Runtime | Establish BP | Fixed pushes after BP | Allocate locals | CHAIN entry SP relative to BP |
+| --- | --- | ---: | --- | ---: |
+| QB 4.5 | 0x41–0x42 | 5 words, 0x44–0x4b | `sub sp,cx` at 0x4c | -34 |
+| PDS 7.1 | 0x9c–0x9d | 9 words, 0x9f–0xaa | `sub sp,cx` at 0xab | -42 |
+| VBDOS | 0xb4–0xb5 | 10 words, 0xb7–0xc9 | `sub sp,cx` at 0xca | -44 |
+
+QB reads the header through ES directly. PDS/VBDOS fetch it through their
+module-address helper: CL=0x22 becomes a signed byte offset, added to the
+module offset before `lodsw`. `_main` calls FRAMESETUP and then transfers to
+header+0x30 by a balanced push-segment/push-offset/RETF sequence. The routine's
+failure arms do not establish this successful-entry geometry. These are local
+routine offsets, not linked executable addresses or a complete callee contract.
+
+Library SHA-256 identities for this inspection:
+
+```text
+BCOM45.LIB   5b1c7a6fbb102e3e47acaa38349efa9bf1dae674e57f4d86d170e920086c8996
+BCL71ENR.LIB 873fde67aa6fcf27961ec76d9f57ea8a621f6d16ea064da3312aa8d9e3a8c117
+VBDCL10E.LIB 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301
+```
+
+Frontend implementation must track subsequent SP/BP/SS changes and callee
+cleanup, prove argument ranges disjoint from reserved locals, and separately
+prove a call cannot reach a local through an escaped address. Entry geometry
+alone does not justify preserving frame facts across arbitrary calls. Do not
+change the global STACK/FRAME alias rule or reuse QB's 10-byte fixed layout
+for the other two runtimes. No optimizer change or cost reduction is claimed
+by this inspection.
+
 ## FPDEEP — exact constant floating expressions
 
 **The same audit limitation applies here:** 1086 prices the numerical/printing
