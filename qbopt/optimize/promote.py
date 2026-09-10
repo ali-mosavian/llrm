@@ -7,7 +7,7 @@ register allocator can keep that value across statements. Unlike LLVM's
 local allocas, these cells can be visible outside this body: every store
 stays in place. Removing stores needs a separate proof of observability.
 
-**Which cells.** A fixed address in the program's own data, with reusable reads at one width.
+**Which cells.** A fixed data or frame address, with reusable reads at one width.
 A read reuses the stored value only when it is available along every
 incoming path. Any possibly aliasing write invalidates that availability;
 a later direct store establishes it again. Constant initializers can establish
@@ -52,6 +52,8 @@ READS = frozenset(
     }
 )
 
+CELLS = frozenset({Space.SEGMENT, Space.FRAME})
+
 
 class Promote(MIRTransform):
     name = "promote"
@@ -75,7 +77,7 @@ def promotable(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict
     seen: Counter = Counter()
     widths: dict = {}
     for one in every:
-        if one.addr is None or one.base is not None or one.addr.space is not Space.SEGMENT:
+        if one.addr is None or one.base is not None or one.addr.space not in CELLS:
             continue
         seen[one.addr] += 1
     for block in body.blocks:
@@ -112,7 +114,7 @@ def _initializers(body: MirBody, cells: dict, dgroup: frozenset[int], bounds: di
         for index, op in enumerate(block.ops):
             cell = _cell(op)
             if (op.kind is not mir.Kind.STORE or op.barrier or cell is None or cell.addr is None
-                or cell.segment is not None or cell.addr.space is not Space.SEGMENT):
+                or cell.segment is not None or cell.addr.space not in CELLS):
                 continue
             after = consts._kills(memory.get((block.at, index), {}), op, {}, dgroup, calls)
             initialized[id(op)] = {

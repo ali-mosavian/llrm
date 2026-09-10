@@ -580,6 +580,12 @@ one documented target without materially regressing another.
   UDT fields, frame temporaries and independently addressable array metadata.
 - [ ] Feed SROA results into promotion so scalar values survive across BC
   statement boundaries.
+  Write-through promotion now also accepts fixed procedure-frame fields, not
+  only module-data fields. Complete constant initializers can seed smaller
+  fields; unknown or overlapping writes still invalidate availability.
+  LOCALP retains its two accumulator words across iterations, letting existing
+  store sinking move their writes to the exit. QB/PDS modeled cost falls
+  772 → 584; VBDOS 764 → 580. General aggregate decomposition remains open.
 - [ ] Implement global value numbering with partial redundancy elimination
   (`GVN-PRE`) for scalar and memory expressions.
   Scalar full redundancy at joins is implemented: when every incoming edge

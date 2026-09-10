@@ -98,3 +98,24 @@ The original failure and repaired output were checked with per-stage dumps;
 all three compilers' linked executables now print 28 and DONE. Frame-field
 promotion is still unimplemented; this fixture uncovered a correctness defect
 before any change to promotion.
+
+The subsequent promotion change admits fixed frame fields to the same
+write-through analysis as module globals. It establishes the accumulator words
+from the full-width zero initializer; existing store sinking then moves the
+two writes to the exit. PDS's loop arithmetic changes as follows (counter
+extension, increment and termination comparison omitted):
+
+```asm
+; before                         ; after
+mov dx,bx                        add dx,bx
+add dx,[bp-16h]                  adc di,cx
+adc cx,[bp-14h]                  mov cx,di
+mov [bp-16h],dx                  ; stores now at the loop exit
+mov [bp-14h],cx
+```
+
+QB/PDS modeled whole-program cost: **772 → 584**; VBDOS: **764 → 580**.
+Object sizes: QB 1089 → 1090, PDS 1116 → 1117, VBDOS 1253 → 1257.
+All three linked programs still print 28 and DONE. Unknown calls and
+overlapping frame writes invalidate reuse; disjoint field writes do not.
+This is scalar frame-field promotion, not a completed SROA implementation.

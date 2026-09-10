@@ -13,6 +13,40 @@ from qbopt.optimize import promote
 from qbopt import wholeseg
 
 
+def test_procedure_frame_fields_reuse_stored_values():
+    """LOCALP reread the frame accumulator words on every addition despite known stores."""
+    from qbopt.objectfile.module import Space
+    path = Path("fixtures/regressions/localp-p-g2.obj")
+    found = module.of(omf.parse(path.read_bytes()))
+    body = next(body for name, body in mir.bodies(found, blocks.partition(found, blocks.code_map(found)))
+                if body.entry != 0x30)
+    before = next(op for block in body.blocks for op in block.ops
+                  if op.kind is mir.Kind.ADD and op.loads and op.loads[0].addr.space is Space.FRAME)
+    result = promote.promoted(body, found.dgroup, module.landmarks(found), loop_only=True)
+    after = next(op for block in result.blocks for op in block.ops if op.id == before.id)
+    assert not after.loads
+    assert all(not isinstance(arg, mir.Cell) for arg in after.args)
+
+
+@pytest.mark.parametrize("clobber,reused", [(None, False), (-8, False), (-6, True)])
+def test_frame_promotion_respects_unknown_and_overlapping_writes(clobber, reused):
+    """LOCALP's held frame field must not survive an unknown call or a write to that field."""
+    from qbopt.model import ir
+    from qbopt.objectfile.module import Addr, Space
+    cell = mir.MemRef(Addr(Space.FRAME, -8), 2)
+    changed = mir.MemRef(None, 0) if clobber is None else mir.MemRef(Addr(Space.FRAME, clobber), 2)
+    value = mir.Value(1, 4, variable=1, version=1)
+    store = mir.Op(0, ir.Operation.MOVE, "", (), (), kind=mir.Kind.STORE,
+                   args=(mir.Const(7, 2),), results=(mir.Cell(cell),), stores=(cell,))
+    write = mir.Op(2, ir.Operation.CALL, "", (), (), kind=mir.Kind.CALL, stores=(changed,))
+    load = mir.Op(4, ir.Operation.MOVE, "", (value,), (), kind=mir.Kind.LOAD,
+                  args=(mir.Cell(cell),), results=(mir.Held(value, 2),), loads=(cell,))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (store, write, load), ()),))
+    result = promote.promoted(body)
+    after = next(op for block in result.blocks for op in block.ops if op.at == 4)
+    assert bool(after.loads) is not reused
+
+
 def test_unpromotable_memory_update_does_not_cancel_other_cells() -> None:
     """SEGLD rose from 25002 to 28202 when its memory sum canceled counter promotion."""
     from qbopt.optimize import transform
