@@ -9,6 +9,49 @@ from qbopt.model import ir, lir
 from qbopt.backend import peephole
 
 
+def test_nbody_header_uses_the_register_both_predecessors_just_stored():
+    """NBODY reloaded its spilled counter immediately after both paths stored the same register."""
+    from qbopt import wholeseg
+    states = []
+    def watch(stage, name, body):
+        if stage == "peephole" and body.entry == 0x30:
+            states.append(body)
+    result = wholeseg.emitted(Path("fixtures/bench/nbody-v-g3.obj").read_bytes(), watch=watch)
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    header = next(block for block in states[0].blocks if block.at == 0x2f0)
+    assert not any(one.spill_reload and one.what.dests == (ir.Reg(Register.EAX, 4),)
+                   for one in header.insns if one.what is not None)
+
+
+@pytest.mark.parametrize("mismatch", ["none", "register", "slot", "width", "clobber", "missing", "unowned", "entry"])
+def test_entry_reload_requires_agreement_on_every_edge(mismatch):
+    """NBODY's header reload is redundant only when all paths carry the exact stored bits."""
+    from qbopt.backend import spillforward
+    from qbopt.objectfile.module import Addr, Space
+    register = ir.Reg(Register.EAX, 4)
+    cell = ir.Mem(Addr(Space.FRAME, -4), 4, through=Register.BP)
+    store = lir.Insn(1, (1, 1), ir.Semantics(ir.Operation.MOVE, "mov", (cell,), (register,)), (), ())
+    other = store
+    match mismatch:
+        case "register":
+            other = replace(store, what=replace(store.what, sources=(ir.Reg(Register.ECX, 4),)))
+        case "slot":
+            other = replace(store, what=replace(store.what, dests=(replace(cell, addr=cell.addr.plus(-4)),)))
+        case "width":
+            other = replace(store, what=replace(store.what, dests=(replace(cell, width=2),)))
+        case "clobber":
+            other = replace(store, clobbers=frozenset({Register.EAX}))
+        case "missing":
+            other = replace(store, what=None)
+    reload = lir.Insn(3, (3, 3), ir.Semantics(ir.Operation.MOVE, "mov", (register,), (cell,)), (), (),
+                      spill_reload=mismatch != "unowned")
+    body = lir.LirBody("join", 3 if mismatch == "entry" else 0, (
+        lir.LirBlock(0, (), (1, 2)), lir.LirBlock(1, (store,), (3,)),
+        lir.LirBlock(2, (other,), (3,)), lir.LirBlock(3, (reload,), ())), {}, {})
+    done = spillforward.forwarded(body)
+    assert any(one.spill_reload or one.what == reload.what for one in done.blocks[-1].insns) == (mismatch != "none")
+
+
 def test_nbody_accumulator_does_not_copy_its_addend_over_its_running_sum():
     """NBODY copied ECX to ESI and EAX to ECX before ADD ECX,ESI on every force pair."""
     import corpus

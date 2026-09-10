@@ -16,6 +16,8 @@ class Peephole(LIRTransform):
         self.frame = frame
 
     def transform(self, body: lir.LirBody) -> lir.LirBody:
+        from qbopt.backend import spillforward
+        body = spillforward.forwarded(body)
         return self._frame(waits(zeroes(addresses(overwritten(commuted(constants(pushes(body))))))))
 
     def _frame(self, body):

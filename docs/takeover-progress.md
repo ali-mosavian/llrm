@@ -3911,3 +3911,25 @@ spill, reload for comparison. Before this change it reconstructed two halves
 and wrote the global counter every iteration. MIR now has one recurrence
 without those global accesses; keeping it allocated profitably across the
 nested loops remains a backend opportunity.
+
+### Remove the counter reload already supplied by every incoming edge
+
+The post-allocation peephole now removes a block-entry allocator-owned reload
+only when every immediate predecessor ends by storing the exact same physical
+register into the exact same slot. Only empty instructions and direct branches
+may follow that store. The entry block is excluded; differing slots, widths,
+registers, missing stores, clobbers and ordinary source-program loads retain
+the reload. This is a machine-assignment cleanup after allocation, not a new
+LIR optimization tier or an optimization-pass register preference.
+
+NBODY's preheader and backedge both end with `mov [bp-24h],eax`. Before,
+the header immediately did `mov eax,[bp-24h]`; after, it directly loads the
+bound and compares EAX. The inner-loop spill remains necessary under the
+current allocation; no claim is made that the counter stays in a register
+through those loops.
+
+The real emitted-LIR regression failed first. All 127 peephole checks pass.
+VBDOS NBODY is 4209 -> 4205 bytes, modeled cost 363812 -> 363752; PDS is
+2892 -> 2888, cost 360647 -> 360587. Both runtime outputs match. QB LNGMXX
+matches at unchanged 838 bytes / 246 modeled cost. Dumps and output:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-edge-reload-c2reus8k`.
