@@ -21,6 +21,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 import opportunity
 
 
+def test_flags_reference_preserves_states_at_each_output_call():
+    """FLAGS lacked a target after its branches folded; observable numeric stores still cost work."""
+    states = [(65535, 61680, 61680), (-65536, -65536, -65536), (0, 0, 0), (65536, 1, 65535)]
+    assert [a & b for a, b, _ in states[:3]] == [r for _, _, r in states[:3]]
+    assert states[-1][0] - states[-1][1] == states[-1][2]
+    stores = len(states) * 3 * (2 + opportunity.TOUCH)
+    outputs = 6 * (2 + opportunity.TOUCH + opportunity.CALL)
+    assert opportunity.TARGETS.get("FLAGS") == stores + outputs + opportunity.CALL == 248
+    assert "FLAGS" not in opportunity.PROVISIONAL_TARGETS
+
+
 def test_nbody_cost_includes_main_when_optimized_code_cannot_be_raised(tmp_path):
     """NBODY scored only PITSNAP's 6386 units, omitting its entire optimized simulation."""
     from collections import Counter

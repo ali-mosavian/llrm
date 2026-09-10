@@ -562,6 +562,7 @@ TARGETS = {
     "NOTS": 306,
     "NEGNOT": 254,
     "ARITH": 592,
+    "FLAGS": 248,  # Complete constant-branch reference retaining states at every output call.
     "FPDEEP": 1086,
 }
 

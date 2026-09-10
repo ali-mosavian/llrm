@@ -31,6 +31,54 @@ The fail-first instrument regressions cover renamed objects from QB, PDS
 and VBDOS, plus a below-target cost that must still fail completion. No
 denominator was increased or inferred from current output.
 
+## FLAGS — constant branches with observable stores retained
+
+For event-free builds, evaluate the source's integer expressions exactly:
+65535 AND 61680 is 61680 (both SPLIT and FUSED are nonzero);
+-65536 AND -65536 is -65536 (MIRROR is nonzero); 0 AND 0 is zero;
+65536 - 1 is 65535 (SIGN is positive). None overflows or faults.
+There is no input or error handler. Six fixed strings are printed, including
+DONE. The runtime calls remain in source order, and every numeric assignment
+is retained at its original position relative to those calls. No assumption
+that a runtime call cannot observe the numeric globals is needed.
+
+The complete hand-derived listing is:
+
+```asm
+mov dword [a],65535
+mov dword [b],61680
+mov dword [r],61680
+push word splitNonzero
+call far B$PESD
+push word fusedNonzero
+call far B$PESD
+mov dword [a],-65536
+mov dword [b],-65536
+mov dword [r],-65536
+push word mirrorNonzero
+call far B$PESD
+mov dword [a],0
+mov dword [b],0
+mov dword [r],0
+push word bothZero
+call far B$PESD
+mov dword [a],65536
+mov dword [b],1
+mov dword [r],65535
+push word signPositive
+call far B$PESD
+push word done
+call far B$PESD
+call far B$CENP
+```
+
+Using the same whole-program cost model on both sides: twelve stores cost
+12*(2+4)=72; six descriptor pushes and print calls cost 6*(6+20)=156;
+termination costs 20. **Target: 248.** It is derived from the source's four
+observable three-value states and six output calls, not by scaling current
+output. It makes no claim about hardware execution time. Event-enabled builds
+still require a separate reference and remain provisional.
+
 ## FPCSE — exact numerical reference, whole-program equivalence unverified
 
 **Audit correction, 2026-09-10:** the 98-unit listing below proves the

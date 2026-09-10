@@ -3951,3 +3951,17 @@ outputs match originals. NBODY changes 4205 -> 4165 bytes on VBDOS and
 2888 -> 2872 on PDS; modeled costs change 363752 -> 361952 and
 360587 -> 359867 respectively. These are estimates, not hardware timings.
 Artifacts: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-signed-recombine-dbv_q48f`.
+
+### Target-coverage checkpoint: FLAGS
+
+A full `opportunity.py --targets` inventory finished with nonzero status:
+missing references and provisional floating/event references still prevent
+completion. It was one measurement run, not repeated runtime/test suites.
+FLAGS was among the programs with no denominator despite constant-folded
+branches. Its new complete hand listing in `docs/targets.md` keeps all twelve
+numeric stores, six print calls and termination, costing 72+156+20=248.
+The source values and store/output cost regression failed first without the
+target. A focused three-compiler report now gives PDS 248/248=1.00x,
+QB 296/248=1.19x and VBDOS 248/248=1.00x. Event-enabled variants remain
+provisional under the existing policy. This changes measurement coverage,
+not emitted code, and is not a claim that the overall goal is complete.
