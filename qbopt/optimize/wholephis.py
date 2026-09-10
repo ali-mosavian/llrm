@@ -27,7 +27,7 @@ def joined(body: mir.MirBody) -> mir.MirBody:
     values = tuple(ssa.values(body))
     serial = max((value.id for value in values), default=0)
     variable = max((value.variable for value in values), default=0)
-    additions, replacements, new_phis = {}, {}, {}
+    additions, replacements, new_phis, extracts, removed = {}, {}, {}, {}, set()
 
     def fresh(at):
         nonlocal serial
@@ -77,6 +77,13 @@ def joined(body: mir.MirBody) -> mir.MirBody:
                     covers=(position, position)))
             result = fresh(block.at)
             new_phis.setdefault(block.at, []).append(mir.Phi(result, incoming))
+            for phi, offset in ((high, 16), (low, 0)):
+                removed.add(phi.result)
+                phis.pop(phi.result, None)
+                extracts.setdefault(block.at, []).append(mir.Op(
+                    block.at, mir.Synth.HALF_TO_LOW, "extract", (phi.result,), (result,),
+                    kind=mir.Kind.EXTRACT, args=(mir.Held(result, 4), mir.Const(offset, 4)),
+                    results=(mir.Held(phi.result, 2),), covers=(block.at, block.at)))
             replacements[id(op)] = replace(op, kind=mir.Kind.COPY, args=(mir.Held(result, 4),),
                                             uses=(result,), merges={}, node=None, made=None, raised=None)
     if not replacements:
@@ -87,6 +94,8 @@ def joined(body: mir.MirBody) -> mir.MirBody:
         position = len(ops) - int(bool(ops) and ops[-1].kind in
                                   (mir.Kind.BRANCH, mir.Kind.JUMP, mir.Kind.RETURN))
         ops[position:position] = additions.get(block.at, ())
+        ops[:0] = extracts.get(block.at, ())
         changed.append(replace(block, ops=tuple(ops),
-                               phis=(*block.phis, *new_phis.get(block.at, ()))))
+                               phis=(*(phi for phi in block.phis if phi.result not in removed),
+                                     *new_phis.get(block.at, ()))))
     return replace(body, blocks=tuple(changed))

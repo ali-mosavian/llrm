@@ -25,6 +25,8 @@ def test_nbody_counter_comparison_joins_whole_values_before_the_loop():
     added = [phi for block in done.blocks for phi in block.phis if phi.result.variable not in existing]
     assert added
     assert all(phi.result.variable == value.variable for phi in added for value in phi.incoming.values())
+    header = next(block for block in done.blocks if block.at == 0x2f0)
+    assert not any(phi.result.variable in (1, 3) for phi in header.phis)
     resolved = mir.resolved(done)
     assert isinstance(resolved, mir.MirBody), resolved
 

@@ -3862,3 +3862,26 @@ behavior was an observation, not a diagnosis. Unintended memory writes can
 appear to work under one layout/core and fail under another. The single-phi
 extension can now be retried with this emitter correction, rather than
 working around the corrupted output in MIR.
+
+### Single whole counter phi verified after the emitter fix
+
+The word-phi replacement is now enabled: both former word results are local
+EXTRACTs of the whole phi, so only one counter value crosses the incoming
+edges. Its regression failed first while the two old phis remained. Eleven
+focused phi/recombination/raw-emission checks pass. The legacy restore test
+selected alongside the emitter regression still fails because it finds no
+Restore nodes before emission; loading the pre-fix assembler reproduces that
+same assertion. It was not weakened.
+
+Fresh default-core runs match all NBODY values on VBDOS and PDS, with timing
+calls enabled. QB CMPORD also matches. Against the prior whole-phi checkpoint,
+NBODY is 4225 -> 4213 bytes on VBDOS and 2913 -> 2896 on PDS; CMPORD stays
+3873. The VBDOS total includes six bytes removed by correcting raw emission.
+Artifacts: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-single-phi-fixed-9p427sjp`.
+
+Before MIR: two word phis plus a separately reconstructed whole comparison.
+After MIR: one whole phi; word stores extract from it; comparison uses it
+directly. Emitted code still extracts twice with push/pop to store the low
+and high words, then reloads the whole counter on the backedge. Combining
+those adjacent stores and preserving the whole value through the loop is
+the next remaining work, not something this checkpoint claims to have done.
