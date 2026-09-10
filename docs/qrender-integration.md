@@ -43,6 +43,34 @@ this is not the full-project correctness gate.
 
 ### Next: QGLDIFF and shared rounding interfaces
 
+QGLDIFF native emission succeeds (9,663-byte OBJ), but its dedicated gate
+**fails to complete**. Candidate `/tmp/qbopt-qrender-native-diff-20260911`
+passes the ordinary benchmark at 9.50285 FPS with identical correctness
+fields and BMP; screenshot `diff-live-010.png`. That benchmark does not
+exercise QGLDIFF and is insufficient to accept it. The nine-module reference
+finishes `-qgldiff` with RESULT PASS (2,701-byte QGLDIFF.LOG); the candidate
+repeatedly stays in B$FCompactMove/B$MoveFreeBlockBX with an empty log.
+Guest port 2207 is paused for inspection; no optimized QGLDIFF acceptance.
+
+The live caller is QGL_DIFF_TRI's B$ENRA. Stage dumps in
+`/tmp/qbopt-qgldiff-native` show two zero inputs CSE'd to one value; lowering
+correctly requires it in BX and CX, but constrained/allocation output supplies
+only CX. `constrain._wanted` keys requirements by value, silently overwriting
+one register requirement. The next fix must split distinct input occurrences,
+not disable CSE or weaken the runtime contract. Before/after evidence:
+
+```asm
+; original entry at 00e2: both runtime inputs are zero
+mov cx,0
+mov bx,0
+call far B$ENRA
+
+; candidate entry at 00d5: BX setup lost (invalid)
+mov ax,0
+mov cx,0
+call far B$ENRA
+```
+
 VBDOS INT4/INT8 share `87bint.asm:0016`. The dispatcher at emulator
 segment 2 offset 002a kills incoming arithmetic flags with CMP; BX=6
 selects the relocated table entry 001c -> 0637. Hardware uses FRNDINT
