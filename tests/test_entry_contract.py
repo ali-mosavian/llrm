@@ -87,3 +87,21 @@ def test_vbdos_output_channel_keeps_unknown_effects():
     assert contract.writes is runtime.Memory.ANY
     assert contract.control is runtime.Control.UNKNOWN
     assert contract.raises_error
+
+
+@pytest.mark.parametrize("name,cleanup", [
+    ("B$PCR4", 4), ("B$PSR4", 4),
+    ("B$PCR8", 8), ("B$PSR8", 8), ("B$PER8", 8),
+])
+def test_vbdos_float_print_interfaces(name, cleanup):
+    """Qrender camera refused PRINT's comma-separated SINGLE at 0x8ea."""
+    contract = runtime.per_call({0: name}, "vbdos")[0]
+    assert contract.cleanup == cleanup
+    assert contract.inputs == frozenset(
+        {runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX, runtime.Reg.DX, runtime.Reg.SI, runtime.Reg.DI}
+    )
+    assert contract.clobbers == runtime.EVERY
+    assert contract.reads is runtime.Memory.ANY
+    assert contract.writes is runtime.Memory.ANY
+    assert contract.control is runtime.Control.UNKNOWN
+    assert contract.raises_error

@@ -96,10 +96,22 @@ not globally installed project-symbol contracts.
 With PL_MOVE's conservative external interface (cleanup 34) supplied too,
 the camera reaches its PRINT calls. VBDOS `B$CHOU` now has an audited minimal
 interface: all GP inputs retained, every effect unknown, `retf 2` at 0062.
-The next refusal is `B$PCR4` at 08ea. Its shared `B$PRINT` body has three
-different returns (`retf 8`, `retf 2`, `retf 4`) selected from runtime state
-after indirect calls. Do not infer a uniform cleanup from the first return.
-The camera object still refuses atomically, so before/after ASM is unchanged.
+The float PRINT entries are now covered conservatively as well. Their shared
+`B$PRINT` body has three different returns (`retf 8`, `retf 2`, `retf 4`),
+but `rt/prnvalfp.asm` defines each scalar argument's width; the VBDOS stubs
+set AL=4 for R4 or AL=8 for R8. PRINT saves that type at 003d and reloads it
+at 0087 before selecting cleanup. Comma/semicolon R4 and comma/semicolon/EOL
+R8 now retain all GP inputs and unknown effects, with cleanup 4 or 8.
+
+With the three audited project interfaces supplied, `V_UPDATE_CAMERA`
+passes its interface checks. The next refusal is in `V_OPEN_SCRIPT`:
+`B$RDIM` at 09d4. The entire `view.obj` still refuses atomically, so actual
+before/after ASM remains identical, including the camera's print call:
+
+```asm
+; before                         ; after (atomic refusal)
+call far B$PCR4                   call far B$PCR4
+```
 
 VBDCL10E.LIB, `rtenexit.asm`, B$ENRA:
 

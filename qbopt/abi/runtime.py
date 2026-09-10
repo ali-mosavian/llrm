@@ -338,6 +338,24 @@ VARIANTS[("B$CHOU", "vbdos")] = replace(
     ),
 )
 
+for _name, _cleanup in (("B$PCR4", 4), ("B$PSR4", 4),
+                        ("B$PCR8", 8), ("B$PSR8", 8), ("B$PER8", 8)):
+    VARIANTS[(_name, "vbdos")] = replace(
+        worst(_name),
+        inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
+        cleanup=_cleanup,
+        evidence=(
+            "rt/prnvalfp.asm: scalar argument pushed by value; entry sets "
+            "AL=VT_R4 (4) or VT_R8 (8), AH=terminator, then tails B$PRINT. "
+            "VBDCL10E.LIB prnvalfp.asm entries 0000/0006/0012/0018/001e "
+            "match; prnval.asm 003d saves the type and 0087 reloads it. "
+            "Normal exits select RETF 4 at 009a or RETF 8 at 0094. "
+            "Source PRINTX documents the same argument-width cleanup. "
+            "Device dispatch and error effects remain unknown; all GP inputs retained. "
+            "Library SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301."
+        ),
+    )
+
 VARIANTS[("B$EXSA", "vbdos")] = replace(
     worst("B$EXSA"),
     inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
