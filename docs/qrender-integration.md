@@ -139,10 +139,21 @@ cleanup 8 and 2 respectively. Their alternate root branches enter named
 error handlers, not different normal-return epilogues. The camera-module
 probe advances to `B$PEOS` at 0aa2. This is a different kind of blocker:
 PEOS relocates the stack for terminal INPUT (`b$FInput=0`), but skips that
-path for disk input. Prove the input mode before assigning a site contract;
-do not interpret its final bare RETF as universally zero cleanup.
+path for disk input. Do not interpret its final bare RETF as universally
+zero cleanup.
 The object remains unchanged: before/after calls at 0a4b and 0a5a are still
 `call far B$OPEN` and `call far B$DSKI` because refusal is atomic.
+
+The PEOS refusal itself only requires a register-input bound, not a cleanup
+claim. Its VBDOS entry kills incoming arithmetic flags before any branch or
+dependency, so all six GP inputs can be retained conservatively while
+cleanup stays unknown. This does not infer an input mode. Frame-depth
+analysis already rejects unknown cleanup (`raising_frame.py`); lowering
+can retain the original call with constrained GP inputs. All other effects
+remain unknown. The regression explicitly forbids a fixed cleanup claim.
+The renderer probe now passes both PEOS calls and stops at `B$FEOF` (0b0b).
+Actual before/after ASM at 0aa2 remains `call far B$PEOS`, byte-identical
+because the whole object still refuses atomically.
 
 VBDCL10E.LIB, `rtenexit.asm`, B$ENRA:
 

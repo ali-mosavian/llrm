@@ -325,6 +325,18 @@ for _name in ("B$SIN4", "B$SIN8", "B$COS4", "B$COS8"):
         ),
     )
 
+VARIANTS[("B$PEOS", "vbdos")] = replace(
+    worst("B$PEOS"),
+    inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
+    evidence=(
+        "VBDCL10E.LIB prnval.asm 018f: establishes BP, saves ES/SI, loads FInput "
+        "and OR AL,AL at 0197 kills incoming arithmetic flags before any branch/call. "
+        "All GP inputs retained; BP/SP, segments and direction are runtime environment. "
+        "Terminal input relocates the frame at 019d..01b7; disk/print paths skip it. "
+        "Cleanup remains unknown, as do all memory, clobber, control and error effects."
+    ),
+)
+
 VARIANTS[("B$CHOU", "vbdos")] = replace(
     worst("B$CHOU"),
     inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),

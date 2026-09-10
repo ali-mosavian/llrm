@@ -5,6 +5,17 @@ import pytest
 from qbopt.abi import runtime
 
 
+def test_peos_register_interface_does_not_claim_fixed_stack_cleanup():
+    """Qrender INPUT epilogue at 0aa2 refused; terminal INPUT can relocate SP."""
+    contract = runtime.per_call({0: "B$PEOS"}, "vbdos")[0]
+    assert contract.inputs == frozenset({runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX,
+                                         runtime.Reg.DX, runtime.Reg.SI, runtime.Reg.DI})
+    assert contract.cleanup is None
+    assert contract.clobbers == runtime.EVERY
+    assert contract.control is runtime.Control.UNKNOWN
+    assert contract.writes is runtime.Memory.ANY
+
+
 @pytest.mark.parametrize("name,cleanup", [
     ("B$FREF", 0), ("B$LDFS", 6), ("B$OPEN", 8), ("B$DSKI", 2),
 ])
