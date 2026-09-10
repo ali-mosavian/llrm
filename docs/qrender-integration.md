@@ -4,7 +4,43 @@ New optimization passes are paused until the optimized renderer builds and
 runs correctly. Target: `qb-qrender/.claude/worktrees/qgl-poly-draw`, source
 commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
-## Latest gate — seven modules, 2026-09-10
+## Latest gate — eight modules, native x87, 2026-09-11
+
+`/tmp/qbopt-qrender-native-es-20260911` passes the 60-tick scene: identical
+BENCH.BMP (SHA-1 `d6e4096b3610249ff4d53b6829f1ab18ec108c7a`) and all
+non-timing/non-memory report fields match baseline, including `plat_zofs -288`.
+Mean FPS **9.40866**, frame **106.28508 ms**, best/worst **9.80198/7.5**;
+baseline 9.43334, previous eight-module emulator-protocol run 9.34942.
+This is within observed short-run variation, not evidence of a speedup.
+Live rendered screenshot `live-028.png` and DOS `completion.png` are saved;
+the rendered screenshot was visually inspected. LINK reported no errors and
+the program exited with code 0. Thirteen BASIC modules remain unrewritten.
+
+The native platform mismatch below was the lost ES prefix, confirmed from
+the live emulator-patched bytes, not inferred from FPS or the matching frame.
+VBDOS/FIDRQQ's INT 3Ch becomes `90 26 <ESC> <operand>` in VBDCL10E.
+The module-aware frontend now restores ES before building MIR; generic
+byte-only decoding does not guess other runtime dialects. Emulator rewrapping
+also preserves the recovered ES form and adjusts relocation-field offsets.
+
+```asm
+; before: VBDOS object, original ent offsets
+0729: cd 3c d9 07       ; emulator-prefixed fld es:[bx]
+0744: cd 3c d9 1f       ; emulator-prefixed fstp es:[bx]
+; after: native output (allocator chose SI for the load)
+07a7: fld  dword [es:si]
+07aa: fchs
+; ... destination address and ES loaded ...
+07c1: fstp dword [es:bx]
+07c4: wait
+```
+
+The regression first failed because the decoded load had no segment prefix;
+it now checks both affected real-object accesses and their native encodings,
+plus lossless emulator rewrapping. Seven focused checks pass. Every MIR stage
+and emitted assembly is retained under each module's `*-stages` directory.
+The first changed stage now has a concrete far-memory load/store at
+0x729/0x744 instead of `[?]`; no optimizer pass gained machine-specific logic.
 
 ### Entity conversion fix and native-FPU transition — 2026-09-11
 
@@ -53,7 +89,7 @@ rendered frame; do not label those as visual rendering proof. The fresh
 BENCH.BMP is the frame evidence. Investigate segmented emulator conversion:
 the decoder removes INT 3Ch without recovering its segment override, while
 the native emission path can select the resulting unprefixed operation.
-This is a hypothesis, not yet a proved cause of the platform mismatch.
+This was the initial hypothesis; the corrected native gate above proves it.
 
 Added `qglarr`; fourteen BASIC modules remain. Build directory:
 `/tmp/qbopt-qrender-array-20260910`. The same 60-tick scene linked and

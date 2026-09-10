@@ -113,14 +113,9 @@ class Insn:
         common -- 11,150 instructions, always `es:[bx]` or `es:[bx+2]`
         (module.Space.FAR's own comment has the full breakdown).
 
-        Blind to one shape by construction: `emulated()`'s own SEGMENTED
-        stand-in (`stood_in_for()`, above) strips a real `es:`/etc. prefix
-        out of the bytes it hands the decoder before this ever sees them, so
-        an FP-emulator site carrying an override reads as though it had
-        none. Not exercised by anything measured so far -- the corpus's own
-        int 3Ch sites are all plain, unprefixed ESC opcodes -- but a
-        genuinely overridden emulated instruction would silently pass this
-        check rather than fail it.
+        INT 3Ch does not identify its segment without a runtime dialect.
+        This byte-only decoder leaves it unknown; blocks.decoded_instruction
+        restores VBDOS's verified ES protocol before building the value IR.
         """
         return self.insn.segment_prefix
 

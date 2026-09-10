@@ -28,6 +28,7 @@ from qbopt.frontend.declen import decode
 from qbopt.objectfile.module import Module
 from qbopt.objectfile.module import family, defines
 from qbopt.objectfile.module import Space
+from qbopt.objectfile import omf
 
 # Runtime routines that do not return to the byte after the call, because their
 # arguments are sitting there.
@@ -423,12 +424,27 @@ def code_map(module: Module) -> CodeMap | str:
     return f"no entry point explains the whole segment: {why}"
 
 
+def decoded_instruction(module: Module, at: int) -> Insn | None:
+    """Decode with the compiler's FP-emulator segment protocol restored."""
+    insn = decode(module.code, at)
+    if (insn is not None and module.code[at:at + 2] == b"\xcd\x3c"
+            and insn.insn.code != Code.INT_IMM8
+            and family(module.records) == "vbdos"
+            and "FIDRQQ" in omf.externals(module.records)):
+        # VBDCL10E patches CD 3C D9 07 into 90 26 D9 07: ES, not DS.
+        # Keep file offsets and length; only the virtual instruction changes.
+        native = insn.insn.copy()
+        native.segment_prefix = Register.ES
+        return replace(insn, insn=native)
+    return insn
+
+
 def instructions(module: Module) -> list[Insn] | str:
     """Every instruction the module actually reaches, in address order."""
     mapped = code_map(module)
     if isinstance(mapped, str):
         return mapped
-    return [insn for at in sorted(mapped.starts) if (insn := decode(module.code, at)) is not None]
+    return [insn for at in sorted(mapped.starts) if (insn := decoded_instruction(module, at)) is not None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -447,7 +463,7 @@ class Block:
 
 def partition(module: Module, mapped: CodeMap) -> list[Block]:
     """The reached instructions cut into basic blocks, with their successors."""
-    reached = {at: insn for at in mapped.starts if (insn := decode(module.code, at)) is not None}
+    reached = {at: insn for at in mapped.starts if (insn := decoded_instruction(module, at)) is not None}
     out: list[Block] = []
     run: list[Insn] = []
 

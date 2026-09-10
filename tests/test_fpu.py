@@ -24,19 +24,41 @@ FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 WAIT = 0x9B
 
 
+def test_vbdos_platform_float_access_keeps_the_emulators_es_override() -> None:
+    """Native qrender printed plat_zofs 0 for -288 after losing INT 3Ch's ES override."""
+    from iced_x86 import Register, Encoder
+    from qbopt.frontend.blocks import code_map, partition
+
+    found = corpus.loaded(Path("fixtures/regressions/qrender-ent-v-g3.obj"))
+    decoded = {one.at: one for block in partition(found, code_map(found)) for one in block.insns}
+    for at in (0x729, 0x744):
+        insn = decoded[at]
+        assert insn.segment_override == Register.ES
+        encoder = Encoder(16)
+        encoder.encode(insn.insn, 0)
+        code = encoder.take_buffer()
+        assert code[0] == 0x26
+        from qbopt.backend.select import Emitted
+        wrapped = fpu.wrapped(Emitted(code), Stands.SEGMENTED)
+        assert wrapped.code == found.code[at:insn.end]
+
+
 @pytest.mark.parametrize("native,protocol,wanted,shift", [
     ("d9860000", 0x35, "cd35860000", 1),
     ("dd860000", 0x39, "cd39860000", 1),
     ("d9860000", 0x3c, "cd3cd9860000", 2),
+    ("26d9860000", 0x3c, "cd3cd9860000", 1),
 ])
-def test_emulator_reencoding_moves_relocation_fields(native, protocol, wanted, shift) -> None:
+def test_emulator_reencoding_moves_relocation_fields(native: str, protocol: int, wanted: str, shift: int) -> None:
     """nbody's FLD must follow allocation without changing its emulator protocol."""
     from qbopt.backend.select import Emitted
 
-    made = fpu.wrapped(Emitted(bytes.fromhex(native), displacement_at=2, fields=(2,)), protocol)
+    displacement = len(bytes.fromhex(native)) - 2
+    made = fpu.wrapped(Emitted(bytes.fromhex(native), displacement_at=displacement,
+                               fields=(displacement,)), protocol)
     assert made.code == bytes.fromhex(wanted)
-    assert made.displacement_at == 2 + shift
-    assert made.fields == (2 + shift,)
+    assert made.displacement_at == displacement + shift
+    assert made.fields == (displacement + shift,)
 
 
 def test_emulator_wait_remains_an_emulator_wait() -> None:
@@ -44,6 +66,18 @@ def test_emulator_wait_remains_an_emulator_wait() -> None:
 
     assert fpu.wrapped(Emitted(b"\x9b"), 0x3d).code == b"\xcd\x3d"
     assert fpu.wrapped(Emitted(b"\x67\xd9\x00"), 0x35) is None
+    assert fpu.wrapped(Emitted(b"\x36\xd9\x07"), 0x3c) is None
+
+
+def test_unknown_compiler_does_not_inherit_vbdos_emulator_segment() -> None:
+    """The qrender ES fix must not invent a segment for another runtime dialect."""
+    from dataclasses import replace
+    from iced_x86 import Register
+    from qbopt.frontend.blocks import decoded_instruction
+
+    found = corpus.loaded(Path("fixtures/regressions/qrender-ent-v-g3.obj"))
+    unknown = replace(found, records=[record for record in found.records if record.type != 0x88])
+    assert decoded_instruction(unknown, 0x729).segment_override == Register.NONE
 
 
 def sites(obj: Path) -> tuple:

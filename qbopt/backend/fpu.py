@@ -17,12 +17,10 @@ shrink by one. It is the interrupt: each of these traps into the emulator,
 which decodes the inline operand and does the arithmetic in software. On a
 machine with a 387 the same work is one instruction.
 
-**int 3Ch is refused, and has to be.** It stands in for a segment override
-whose segment the emulator patches at run time, so the object does not say
-which one it is -- declen.py decodes the site as though there were no
-override at all (its own docstring says so). Emitting a native instruction
-there would mean choosing a segment on no evidence. In qb-qrender that is
-201 sites of 2,130; the other 1,929 convert.
+The byte-only native() helper refuses int 3Ch: its segment depends on the
+runtime dialect. The module-aware frontend recovers VBDOS/FIDRQQ's verified
+ES override, so ordinary instruction selection can emit that native access.
+wrapped() also restores that known ES form when retaining emulator support.
 """
 
 from typing import TYPE_CHECKING
@@ -50,9 +48,12 @@ def wrapped(made: "Emitted", protocol: int) -> "Emitted | None":
             return None
         prefix, tail, shift = bytes([INTERRUPT, Stands.FWAIT]), b"", 1
     elif protocol == Stands.SEGMENTED:
-        if code[0] not in ESC:
+        if code[0] == 0x26 and len(code) > 1 and code[1] in ESC:
+            prefix, tail, shift = bytes([INTERRUPT, Stands.SEGMENTED]), code[1:], 1
+        elif code[0] in ESC:
+            prefix, tail, shift = bytes([INTERRUPT, Stands.SEGMENTED]), code, 2
+        else:
             return None
-        prefix, tail, shift = bytes([INTERRUPT, Stands.SEGMENTED]), code, 2
     elif protocol in EMULATED and code[0] in ESC:
         prefix, tail, shift = bytes([INTERRUPT, EMULATED.start + code[0] - ESC.start]), code[1:], 1
     else:
