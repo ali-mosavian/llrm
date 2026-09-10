@@ -49,7 +49,7 @@ def _descriptor_values(request: mir.ArrayRequest | None, arguments: list, family
     if descriptor.space is not Space.SEGMENT or not 0 <= start <= 65536 - (14 + 4 * len(request.bounds)):
         return ()
     # dynamic.asm consumes the stack backwards: last dimension comes first.
-    fields = [(8, len(request.bounds), 1), (12, request.element_width, 2)]
+    fields = [(8, len(request.bounds), 1), (9, attributes, 1), (12, request.element_width, 2)]
     for dimension, (lower, upper) in enumerate(reversed(request.bounds)):
         fields.extend(((14 + 4 * dimension, upper - lower + 1, 2), (16 + 4 * dimension, lower, 2)))
     return tuple(

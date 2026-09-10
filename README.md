@@ -10,11 +10,11 @@ and [the MIR boundary](docs/split.md) for the architectural rules.
 ## Numeric behavior
 
 Array checking is independent: `--bounds-checks` retains emitted BASIC array
-checks. Without it, supported static numeric `B$HARY` accesses become unchecked
-MIR address arithmetic. Dynamic/huge/string helper forms currently refuse
+checks. Without it, supported static and dynamic non-huge FAR numeric `B$HARY`
+accesses become unchecked MIR address arithmetic. Other huge/string helper forms currently refuse
 unchecked lowering explicitly; their checked calls are not counted as success.
 This flag cannot recreate checks absent from the input. Checked loop preguards
-and dynamic-array native lowering are still pending; see [bounds checking](docs/bounds-checks.md).
+and huge-array native lowering are still pending; see [bounds checking](docs/bounds-checks.md).
 
 Native arithmetic is the default. Use `uv run python -m qbopt.rewrite
 input.obj -o output.obj --basic-semantics` to retain BASIC's numeric runtime

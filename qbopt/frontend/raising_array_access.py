@@ -1,7 +1,7 @@
-"""Expose numeric static-array helper addressing as scalar MIR arithmetic.
+"""Expose numeric single-segment array addressing as scalar MIR arithmetic.
 
-Only descriptors with a relocated, segment-contained static allocation are
-recognized here. Dynamic/huge/string layouts remain calls, not guessed pointers.
+Static allocations and established non-huge far allocations are recognized.
+Huge/string layouts remain unsupported, not guessed pointers.
 """
 
 from dataclasses import dataclass, replace
@@ -18,10 +18,10 @@ from qbopt.objectfile.module import Addr, Space
 
 @dataclass(frozen=True)
 class Descriptor:
-    data: mir.Symbol
+    data: mir.Symbol | mir.MemRef
     selector: mir.MemRef
     width: int
-    dimensions: tuple[tuple[int, int], ...]
+    dimensions: tuple[tuple[int | mir.MemRef, int | mir.MemRef], ...]
 
 
 def descriptor(found, symbol):
@@ -62,6 +62,31 @@ def descriptor(found, symbol):
                       mir.MemRef(Addr(Space.SEGMENT, start + 2, symbol.index), 2), width, dimensions)
 
 
+def dynamic(body, symbol):
+    if not isinstance(symbol, mir.Symbol):
+        return None
+    allocations = [op for block in body.blocks for op in block.ops
+                   if op.array and op.array.descriptor == symbol]
+    if len(allocations) != 1 or allocations[0].array.replaces:
+        return None
+    allocation = allocations[0]
+    start = symbol.offset + symbol.addend
+
+    def field(offset, width=2):
+        return mir.MemRef(Addr(symbol.space, start + offset, symbol.index), width)
+
+    # All three DDIM implementations zero the base offset for numeric FAR
+    # arrays and reject sizes above 64K. Unlike HUGE, a valid access never
+    # needs selector carry. Load mutable fields at each access; do not turn
+    # allocation-time bounds or a movable heap address into eternal constants.
+    if dict(allocation.memory_values).get(field(9, 1)) != mir.Const(1, 1):
+        return None
+    request = allocation.array
+    return Descriptor(field(0), field(2), request.element_width,
+                      tuple((field(14 + 4 * index), field(16 + 4 * index))
+                            for index in range(len(request.bounds))))
+
+
 def native(body, found, *, bounds_checks=False):
     if bounds_checks:
         return body
@@ -92,7 +117,7 @@ def native(body, found, *, bounds_checks=False):
             elif op.kind is mir.Kind.CALL and calls.get(op.at) == "B$HARY":
                 source = definitions.get(op.args[0].value) if len(op.args) == 1 and isinstance(op.args[0], mir.Held) else None
                 symbol = source.args[0] if source and source.kind is mir.Kind.COPY and len(source.args) == 1 else None
-                shape = descriptor(found, symbol)
+                shape = descriptor(found, symbol) or dynamic(body, symbol)
                 outputs = [value for value in op.defines if not value.flags]
                 rank = ops[arguments[-1]].args[0] if arguments else None
                 if isinstance(rank, mir.Held) and (fact := known.get(rank.value)) and fact.width >= 2:
@@ -115,6 +140,15 @@ def native(body, found, *, bounds_checks=False):
                     ops[arguments[-1]] = _discarded(ops[arguments[-1]])
                     expanded = []
 
+                    def loaded(source):
+                        if not isinstance(source, mir.MemRef):
+                            return mir.Const(source, 2) if isinstance(source, int) else source
+                        result = fresh(op.at)
+                        expanded.append(mir.Op(op.at, ir.Operation.MOVE, "mov", (result.value,), (),
+                            kind=mir.Kind.LOAD, args=(mir.Cell(source),), results=(result,),
+                            loads=(source,), covers=(op.at, op.at), symbol=True))
+                        return result
+
                     def arithmetic(kind, left, right, result=None):
                         result = result or fresh(op.at)
                         uses = tuple(arg.value for arg in (left, right) if isinstance(arg, mir.Held))
@@ -125,11 +159,11 @@ def native(body, found, *, bounds_checks=False):
 
                     offset = None
                     for index, (count, lower) in zip(reversed(indices), shape.dimensions):
-                        adjusted = arithmetic(mir.Kind.SUB, index, mir.Const(lower, 2))
+                        adjusted = arithmetic(mir.Kind.SUB, index, loaded(lower))
                         offset = adjusted if offset is None else arithmetic(mir.Kind.ADD,
-                            arithmetic(mir.Kind.MUL, offset, mir.Const(count, 2)), adjusted)
+                            arithmetic(mir.Kind.MUL, offset, loaded(count)), adjusted)
                     offset = arithmetic(mir.Kind.MUL, offset, mir.Const(shape.width, 2))
-                    arithmetic(mir.Kind.ADD, offset, shape.data, mir.Held(outputs[0], 2))
+                    arithmetic(mir.Kind.ADD, offset, loaded(shape.data), mir.Held(outputs[0], 2))
                     expanded.append(mir.Op(op.at, ir.Operation.MOVE, "mov", (), (),
                         kind=mir.Kind.LOAD, args=(mir.Cell(shape.selector),),
                         results=(mir.Opaque(ir.Reg(Register.ES, 2), "es"),), loads=(shape.selector,),

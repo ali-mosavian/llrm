@@ -8,9 +8,39 @@ configuration markers. Bench and stage-dump tools accept the same policy.
 segment-contained allocation become ordinary scalar MIR subtract/multiply/add
 operations and a selector load at the raise boundary. No optimization pass
 recognizes the helper or its register convention. With checks enabled, the
-original checked helper remains. Dynamic/huge/string forms are not lowered yet;
+original checked helper remains. Huge/string forms are not lowered yet;
 unchecked emission refuses them explicitly rather than silently retaining checks.
 Loop preguards are also pending.
+
+**Dynamic FAR arrays:** a recognized numeric DDIM with allocation features 1
+also exposes HARY address arithmetic. Rank/type come from the allocation
+request; lower bounds, dimension counts, base offset and selector are explicit
+memory loads at each access. The optimization passes may prove reuse or
+invariance; the frontend does not freeze mutable descriptor memory.
+
+The three shipped DDIM bodies establish the allocation distinction: QB
+dynamic.asm 0x6c, PDS 0x51 and VBDOS 0xdf zero the base offset, then test
+feature bit 2 and reject non-huge sizes above 64K before far allocation.
+Thus valid non-huge FAR accesses need no selector carry. This does **not**
+justify dropping the high offset for HUGE allocations. No hard-coded
+`b$HugeShift` or machine encoding was introduced into a MIR pass.
+
+HARR's two calls now become the following value computation:
+
+```text
+before: push row; push column; push 2; descriptor argument; call B$HARY
+after:  offset = ((column - load(lowerColumn)) * load(rowCount)
+                 + row - load(lowerRow)) * elementSize + load(base)
+```
+
+Its `/D` builds print the same answer before/after on all three compilers.
+Artifacts and complete PDS stage dumps:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-harr-native-jbt83893`.
+`fixtures/regressions/harr-bounds-{p-g2,q-O,v-g3}.obj` are unchanged compiler
+output from `suite/harr.bas` with the named configuration plus `/D`.
+An additional focused expression check uses unequal dimensions and negative
+lower bounds, because HARR's square zero-based allocation cannot detect a
+swapped dimension formula. Unestablished allocation layouts stay refused.
 
 For a zero-based INTEGER array the address computation changes from:
 

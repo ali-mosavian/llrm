@@ -35,6 +35,7 @@ def test_descriptor_dimensions_follow_stack_order() -> None:
     fields = raising_arrays._descriptor_values(request, arguments, "qb45")
     assert [(ref.addr.disp, value.n) for ref, value in fields] == [
         (14, 2),
+        (15, 0),
         (18, 2),
         (20, 11),
         (22, 4),
