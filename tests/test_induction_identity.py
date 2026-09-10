@@ -15,6 +15,22 @@ from qbopt.objectfile.module import Space
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_native_array_helper_does_not_block_frame_forwarding(tag):
+    """HUGELP retained frame reloads because removed HARY addresses still looked like calls."""
+    from qbopt import wholeseg
+    states = []
+    def watch(stage, name, state):
+        if stage == "mir-widen":
+            states.append(state)
+    result = wholeseg.emitted(Path(f"fixtures/regressions/hugelp-{tag}.obj").read_bytes(), watch=watch)
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    body = states[0]
+    loop = loops.loops(body.blocks, body.entry)[0]
+    assert not any(ref.addr is not None and ref.addr.space is Space.FRAME
+                   for block in body.blocks if block.at in loop.body for op in block.ops for ref in op.loads)
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_huge_loop_byte_offsets_are_induction_variables(tag):
     """HUGELP recomputed 32-bit array strides after every narrow index extension."""
     from qbopt import wholeseg

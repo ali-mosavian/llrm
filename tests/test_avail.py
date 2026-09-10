@@ -27,6 +27,19 @@ from qbopt.objectfile.module import Space
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
 
+@pytest.mark.parametrize("real_call", [False, True])
+@pytest.mark.parametrize("metadata", [False, True])
+def test_current_mir_decides_whether_a_call_invalidates_memory(real_call, metadata):
+    """Removed HARY sites killed frame facts; real unknown calls must still invalidate them."""
+    ref = mir.MemRef(Addr(Space.FRAME, -20), 2)
+    value = mir.Value(1, 0)
+    op = mir.Op(10, ir.Operation.CALL if real_call else ir.Operation.NOTHING, "", (), (),
+                kind=mir.Kind.CALL if real_call else mir.Kind.NOTHING)
+    held = {ref: value}
+    calls = {10: "B$HARY"} if metadata else {}
+    assert avail._after(op, held, frozenset(), calls) == ({} if real_call else held)
+
+
 def bodies_of(found: module.Module, found_blocks: list) -> list[mir.MirBody]:
     result = ir.decode_module(found)
     if isinstance(result, str):

@@ -187,7 +187,7 @@ def _after(
     """The map across one op."""
     if op.barrier:
         return {}
-    if op.at in calls:
+    if op.kind is Kind.CALL:
         # Even a call runtime.py proves memory-clean uses the stack: it is
         # entered by a push of the return address and the callee pops its
         # own arguments off. "Writes no caller memory" is a claim about the
@@ -316,10 +316,10 @@ def _dead_in(block, overwritten: dict, dgroup: frozenset[int], calls: dict[int, 
             # store, since sp comes back where it started and nothing
             # outside the idiom reads the cells it passed through.
             continue
-        if op.floating is not None or op.kind is Kind.FCHECK or op.barrier or (op.at in calls and not _clean(op, calls)):
+        if op.floating is not None or op.kind is Kind.FCHECK or op.barrier or (op.kind is Kind.CALL and not _clean(op, calls)):
             overwritten = {}
             continue
-        if op.at in calls:
+        if op.kind is Kind.CALL:
             # A clean call still carries mir.py's own MemRef(addr=None) in
             # both loads and stores -- the default that aliases everything
             # -- so falling through to the clearing below wiped the map for
@@ -472,7 +472,7 @@ def redundant(
             # proved clean, which is right and is exactly what makes this
             # separate bookkeeping necessary: the cell is still that value
             # and the register is not.
-            if op.at in calls or op.barrier:
+            if op.kind is Kind.CALL or op.barrier:
                 inside = {}
                 continue
             got = loaded_into(op)

@@ -148,3 +148,27 @@ code size, not a cycle measurement; initialization has moved outside the loop.
 All three original/native pairs still print `456 457 789 790` and `DONE`.
 The backend still emits general pointer-advance arithmetic and selector
 save/restore sequences. Those costs remain open optimization opportunities.
+
+Available-value analysis now tests the current MIR operation for CALL,
+not whether its source address used to name a call. Removed HARY sites
+otherwise erased the facts established by preceding frame stores. Actual
+unknown calls still invalidate the facts, including calls without metadata.
+For example, PDS HUGELP's loop changes from:
+
+```asm
+mov [bp-14h],dx
+mov dx,[bp-14h]
+push es
+```
+
+to:
+
+```asm
+mov [bp-14h],dx
+push es
+```
+
+Both frame reloads disappear, reducing the loop from 158 to 152 bytes.
+The stores remain; forwarding is not evidence that their eventual contents
+are unobservable. HUGELP, HARR and MATRIX each match their original outputs
+on QB, PDS and VBDOS after this change.
