@@ -226,6 +226,17 @@ def _walk(body: mir.MirBody, allocation: mir.Op, extent: int, limit: int) -> set
                     for value in op.defines:
                         if value.flags:
                             comparisons[value] = (*args, width)
+                elif (
+                    op.kind in (mir.Kind.AND, mir.Kind.OR, mir.Kind.XOR)
+                    and type(result) is int
+                    and any(value.flags for value in op.defines)
+                ):
+                    width = op.args[0].width
+                    if width != 2 or any(arg.width != width for arg in op.args):
+                        raise ValueError
+                    for value in op.defines:
+                        if value.flags:
+                            comparisons[value] = (consts.masked(result, width), 0, width)
                 for index, output in enumerate(op.results):
                     if isinstance(output, mir.Held):
                         if output.width not in (1, 2, 4):

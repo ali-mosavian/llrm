@@ -1,5 +1,27 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: prove multidimensional loops with logical zero tests
+
+NDARR's inner loop uses a logical-result zero test rather than COMPARE.
+The exact frontend path interpreter now records known 16-bit AND/OR/XOR
+flags as comparison with zero. Unknown results and unsupported widths still
+prove nothing; flag-free native address arithmetic does not require this rule.
+The resulting checked element-store extent preserves descriptor facts across
+the loop. Adjacent raise/fold dumps show the nine-dimensional descriptor
+loads becoming constants and their address arithmetic simplifying.
+
+Object bytes, previous/current: PDS **3256 -> 2446**, QB **3250 -> 2438**,
+VBDOS **3384 -> 2592**. These are sizes, not execution-time measurements.
+NDMAX stays unchanged at 4317/4308/4451 bytes. Both programs match original
+runtime output on all three compilers: NDARR 1,12,2 and NDMAX 11,22, then DONE.
+The three extent regressions failed before the fix. The two focused array
+modules passed 54 tests; the added unknown-logical-condition rejection and
+three positive cases then passed together (4 tests).
+Stage dumps and runtime evidence:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-ndarr-extent-xezymida`.
+This bounded concrete proof is not general symbolic range analysis; that
+remains necessary for variable-trip loops and broader induction optimization.
+
 ## 2026-09-10: preserve constants after a runtime call becomes native MIR
 
 `consts._kills` used the original call-address map without checking the

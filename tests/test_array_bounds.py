@@ -3,6 +3,7 @@
 from dataclasses import replace
 from pathlib import Path
 
+
 import pytest
 import corpus
 
@@ -10,6 +11,38 @@ from qbopt.analysis import consts
 from qbopt.model import mir
 from qbopt.frontend import raising_array_bounds
 from qbopt.objectfile.module import Addr, Space
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_nine_dimensional_loop_proves_its_element_store_extent(tag):
+    """NDARR's OR-based zero test defeated the extent proof despite valid 1,12,2 output."""
+    path = Path(f"fixtures/regressions/ndarr-{tag}.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    stores = [ref for block in body.blocks for op in block.ops for ref in op.stores if ref.pointer]
+    assert stores
+    assert all(ref.allocation is not None for ref in stores)
+
+
+def test_unknown_logical_loop_condition_proves_no_array_extent(monkeypatch):
+    """NDARR's 1,12,2 result cannot justify an extent when its loop test is unknown."""
+    with monkeypatch.context() as context:
+        context.setattr(raising_array_bounds, "proven", lambda body: body)
+        path = Path("fixtures/regressions/ndarr-p-g2.obj")
+        body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
+
+    def change(op):
+        if op.kind is mir.Kind.OR and any(value.flags for value in op.defines):
+            unknown = mir.Held(mir.Value(900, 0), 2)
+            return replace(op, args=(unknown, unknown))
+        return op
+
+    changed = replace(body, blocks=tuple(replace(block, ops=tuple(map(change, block.ops)))
+                                         for block in body.blocks))
+    assert changed != body
+    result = raising_array_bounds.proven(changed)
+    assert not any(ref.allocation for block in result.blocks for op in block.ops
+                   for ref in (*op.loads, *op.stores))
 
 
 def raw_huge(tag, monkeypatch):
