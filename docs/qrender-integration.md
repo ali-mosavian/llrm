@@ -27,6 +27,36 @@ screenshots are black and are not used as rendered-scene evidence.
 
 ## Next module — H_BENCH interface audit
 
+The combined project-input audit now emits H_BENCH (29,337 -> 28,281
+bytes), but its twelve-module runtime candidate **fails report correctness**.
+Build `/tmp/qbopt-qrender-native-bench.m7sMnr`, port 2212, linked without
+errors and returned to the DOS prompt. BENCH.BMP matches baseline exactly;
+fresh `bench-native-030.png` shows the scene. Nevertheless BENCH.TXT says
+`fps_mean 137438953472`, `ft_mean 1.#INF`, `ft_n 0` and
+`mtri_per_frame -6.25274070120563D-07` instead of 105.777777777778.
+The reported FPS is invalid, not a performance result. Eleven-module
+evidence remains the latest accepted benchmark; do not promote this build.
+
+All project summaries are scoped to hash-checked pinned objects in
+`/tmp/qbopt-h-bench-audit.py`. BASIC entries reach the audited ENRA before
+reading incoming flags; profiling stubs XOR AX/DX and RETF. Only GP input
+bounds were added, retaining unknown cleanup and side effects (except the
+previously audited SCR_SCREENSHOT and QGLMEMAVAIL cleanup).
+
+Complete dumps: `/tmp/qbopt-h-bench-project-native`. The report's frame-count
+pointer is saved at original 01f1 to BP-56h, then used by FIDIV at 0224.
+MIR retains that dependency; allocated code instead saves BX after CHOU
+where the original consumes SI. This is the next discrepancy to trace,
+not yet a proven root cause or fixed regression:
+
+```asm
+; original pointer save         ; failing candidate (extra spills omitted)
+mov bx,si                       mov [bp-116h],bx ; after CHOU
+; ...                           ; ...
+mov dx,bx                       mov ax,[bp-116h]
+mov [bp-56h],dx                 mov [bp-56h],ax
+```
+
 VBDOS STR4/STR8 now have a conservative GP input bound. Actual library
 wrappers pass AL=4/8 and BX=BP+6 to STR_COMMON; FOUTBX overwrites incoming
 arithmetic flags before dispatch. The dependency audit reaches floating
