@@ -6,6 +6,16 @@ commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
 ## Latest gate — six modules, 2026-09-10
 
+Screenshot-evidence repeat: preserved the previous BENCH files as
+`BENCH.BMP.pre-screenshot` / `BENCH.TXT.pre-screenshot`, then reran the
+same six-module executable and scene. Live captures were saved and visually
+inspected: `/tmp/qbopt-qrender-check-20260910/live-render.png` shows the
+textured scene, and `live-complete.png` shows return to DOS. Fresh BMP and
+non-timing/non-memory fields still match baseline. Mean FPS **9.56811**,
+frame time **104.51389 ms**, best/worst **9.95757/7.67721**. The same build
+previously measured 9.41860 FPS: do not attribute that difference to a code
+change. Capture live rendering and completion evidence on subsequent runs.
+
 Added `qglchk` to the five-module build below, using explicit audited
 project contracts. `/tmp/qbopt-qrender-check-20260910` linked successfully
 and completed the same scene: BMP and all non-timing/non-memory fields
