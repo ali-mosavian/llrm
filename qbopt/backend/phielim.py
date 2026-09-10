@@ -64,6 +64,12 @@ def eliminated(body: lir.LirBody) -> lir.LirBody:
             if len(edges) != len(phi.incoming):
                 stays.append(phi)  # an edge from outside this body
                 continue
+            # A one-input phi computes its input. Unify the identities before
+            # allocation instead of creating a copy that can perturb register
+            # assignment or force an otherwise empty edge block.
+            if len(edges) == 1:
+                rename[phi.result] = edges[0][1]
+                continue
             if any(successors.get(where, 0) > 1 for where, _ in edges):
                 # A critical edge. A copy at the end of that predecessor
                 # would run on both its paths and not only the one the phi
@@ -93,7 +99,15 @@ def eliminated(body: lir.LirBody) -> lir.LirBody:
                         )
                 continue
             for where, value in edges:
-                copies.setdefault(where, []).append(_copy(at_of[where], phi.result, value, edge_group(where, block.at), widths[phi.result]))
+                copies.setdefault(where, []).append(
+                    _copy(
+                        at_of[where],
+                        phi.result,
+                        value,
+                        edge_group(where, block.at),
+                        widths[phi.result],
+                    )
+                )
         kept[block.at] = tuple(stays)
 
     if not copies and not rename and not split:
@@ -135,8 +149,6 @@ def _renamed(one: lir.Insn, rename: dict[int, int]) -> lir.Insn:
     """One instruction defining the phi's result where it defined its own."""
     if not rename:
         return one
-    if not any(v in rename for v in (*one.defines, *one.uses)):
-        return one
     what = one.what
     if what is not None:
         what = ir.Semantics(
@@ -149,9 +161,29 @@ def _renamed(one: lir.Insn, rename: dict[int, int]) -> lir.Insn:
     return replace(
         one,
         what=what,
-        defines=tuple(rename.get(v, v) for v in one.defines),
-        uses=tuple(rename.get(v, v) for v in one.uses),
+        defines=tuple(_name(v, rename) for v in one.defines),
+        uses=tuple(_name(v, rename) for v in one.uses),
+        requires=tuple(
+            (ir.Held(_name(held.value, rename), held.width), register)
+            for held, register in one.requires
+        ),
+        delivers=tuple(
+            (ir.Held(_name(held.value, rename), held.width), register)
+            for held, register in one.delivers
+        ),
+        widths=tuple((_name(value, rename), width) for value, width in one.widths),
     )
+
+
+def _name(value: int, rename: dict[int, int]) -> int:
+    """The final identity after chained trivial phis are unified."""
+    seen = set()
+    while value in rename and rename[value] != value:
+        if value in seen:
+            raise ValueError("cyclic phi rename")
+        seen.add(value)
+        value = rename[value]
+    return value
 
 
 def _settled(where, rename: dict[int, int]):
@@ -162,7 +194,7 @@ def _settled(where, rename: dict[int, int]):
     second place to forget it. This one looked in `Mem.through`, which has
     been a register since lowering stopped putting values there.
     """
-    return ir.mapped(where, lambda one: ir.Held(rename.get(one.value, one.value), one.width))
+    return ir.mapped(where, lambda one: ir.Held(_name(one.value, rename), one.width))
 
 
 def _widths(body: lir.LirBody) -> dict[int, int]:

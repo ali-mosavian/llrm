@@ -43,6 +43,45 @@ def test_phi_elimination_copies_the_whole_scalar(critical):
     assert all(arg.width == 4 for op in copies for arg in (*op.what.dests, *op.what.sources))
 
 
+def test_phi_on_a_single_predecessor_exit_does_not_split_the_edge() -> None:
+    """HARR gained an empty jump trampoline after LCSSA closed its loop exit."""
+    branch = lir.Insn(
+        at=0,
+        covers=(0, 2),
+        defines=(),
+        uses=(),
+        what=ir.Semantics(ir.Operation.BRANCH, "jz", (), (), 2),
+    )
+    use = lir.Insn(
+        at=2,
+        covers=(2, 3),
+        defines=(),
+        uses=(3,),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (), (ir.Held(3, 2),)),
+        widths=((3, 2),),
+    )
+    body = lir.LirBody(
+        name="exit",
+        entry=0,
+        blocks=(
+            lir.LirBlock(at=0, insns=(branch,), succ=(1, 2)),
+            lir.LirBlock(at=1, insns=(), succ=()),
+            lir.LirBlock(at=2, insns=(use,), succ=(), phis=(lir.Phi(3, ((0, 1),)),)),
+        ),
+        origin={},
+        pins={},
+    )
+
+    done = phielim.eliminated(body)
+
+    assert len(done.blocks) == len(body.blocks)
+    exit_block = next(block for block in done.blocks if block.at == 2)
+    assert exit_block.phis == ()
+    assert all(insn.group is None for block in done.blocks for insn in block.insns)
+    assert exit_block.insns[0].uses == (1,)
+    assert exit_block.insns[0].widths == ((1, 2),)
+
+
 @pytest.mark.parametrize("incoming_width,expected", [(2, 2), (4, None)])
 def test_phi_width_meets_incoming_definitions(incoming_width: int, expected: int | None) -> None:
     """LNGMIX copied its counter at the header because the phi had no known width."""

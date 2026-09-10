@@ -218,8 +218,10 @@ it has no location. Blocks carry phis and successors. Memory references retain
 symbolic object and addressing facts so alias analysis can be conservative
 without collapsing all memory into one cell.
 
-The production pass order comes directly from `transform.pipeline()`. The whole
-sequence repeats until the body is unchanged, with a hard limit of 16 rounds.
+The production pass order comes directly from `transform.pipeline()`. The
+optimizing sequence repeats until the body is unchanged, with a hard limit of
+16 rounds. LCSSA then closes loop exits once: it is a canonical form for later
+loop work, not another reason to re-run passes that do not consume it yet.
 
 ```mermaid
 flowchart LR
@@ -231,8 +233,9 @@ flowchart LR
     Algebraic --> Dead["dead"] --> Place["place"] --> Unroll["unroll"]
     Unroll --> Changed{"body changed?"}
     Changed -->|"yes, round < 16"| Fold
-    Changed -->|"no"| Wide["temporary post-pass widening seam"]
+    Changed -->|"no"| LCSSA["lcssa"]
     Changed -->|"still changing at 16"| Error["hard convergence error"]
+    LCSSA --> Wide["temporary post-pass widening seam"]
     Wide --> Out["optimized MirBody"]
 ```
 
@@ -242,7 +245,7 @@ Pass responsibilities are intentionally narrow:
 | --- | --- | --- |
 | Scalar simplification | `fold`, `decide`, `algebraic`, `dead` | What value or control edge is already determined? |
 | Memory/value reuse | `segments`, `forward`, `drop_loads`, `drop_stores`, `cse`, `promote` | Can existing data replace work here? |
-| Loop optimization | `hoist`, `strength`, `unroll` | What can leave, stride through, or duplicate around a loop? |
+| Loop optimization | `hoist`, `strength`, `unroll`, `lcssa` | What can leave, stride through, duplicate around, or cross the exit of a loop? |
 | Placement in program order | `place` | Where may a surviving definition execute without changing meaning? |
 | Division reuse | `reuse` | Can an existing quotient/remainder serve another use? |
 
@@ -522,15 +525,17 @@ suites run after the implementation has a concrete reason to pass.
 
 ## Optimization roadmap checklist
 
-Implement these in dependency order. A checked item means the pass is integrated
-into production, preserves real-program results, and improves at least one
-documented target without materially regressing another.
+Implement these in dependency order. A checked item means a foundation is
+integrated and verified, or an optimizing pass additionally improves at least
+one documented target without materially regressing another.
 
 ### Foundation
 
 - [ ] Canonicalize loops with dedicated preheaders, latches and exits
   (`LoopSimplify`).
-- [ ] Preserve loop-exit SSA explicitly (`LCSSA`).
+- [x] Preserve loop-exit SSA explicitly (`LCSSA`). Single-edge dedicated exits
+  are closed after the optimization fixed point; unsupported exit shapes remain
+  unchanged until `LoopSimplify` supplies their canonical CFG.
 - [ ] Canonicalize primary counters and derived recurrences
   (`IndVarSimplify`).
 - [ ] Build `MemorySSA`: one def-use graph for loads, stores and call effects.

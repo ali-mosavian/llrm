@@ -4112,3 +4112,24 @@ PDS 1356 -> 1274 object bytes and modeled cost 869 -> 682; QB 1336 -> 1254
 and 869 -> 682; VBDOS 1687 -> 1613 and 819 -> 642. These are ranking costs,
 not hardware timings. Full before/after stage dumps and runtime output:
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-numeric-escape-fz312fjx`.
+
+### Close supported loop exits in SSA without machine overhead
+
+LCSSA now inserts an exit phi for every loop-defined value read after a
+single-edge dedicated exit. It runs once after the optimizing fixed point so
+the existing induction passes are not constrained by a form they do not yet
+consume. Multi-exit and shared-exit loops remain unchanged pending
+`LoopSimplify`; flags are never closed as data values.
+
+The first HARR comparison exposed an over-split edge: phi elimination emitted
+a copy and trampoline for a one-input exit phi. Such a phi is an identity, so
+lowering now unifies its result with its input across semantics, uses,
+definitions, fixed-register constraints and widths before allocation.
+
+Before and after HARR VBDOS `/G3` assembly are identical: 40 instructions and
+1038 object bytes. In particular, the loop exit remains `cmp ax,0Ah; jle
+0060h; mov word ptr ds:[0],0Bh`, rather than the rejected intermediate
+`jle 0060h; jmp trampoline; ...; trampoline: jmp exit`. Four LCSSA tests and
+16 focused phi/induction integration checks pass. HARR and matrix on PDS, QB
+and VBDOS, plus VBDOS NBODY, are byte-identical with LCSSA on and off. Stage
+evidence: `/tmp/qbopt-lcssa-final.pQtDdG`.

@@ -46,6 +46,7 @@ from qbopt.optimize import strength
 from qbopt.optimize import algebraic
 from qbopt.optimize import loopmotion
 from qbopt.optimize import unroll
+from qbopt.optimize import lcssa
 from qbopt.model.mir import MirBody
 from qbopt.objectfile.module import Space
 from qbopt.model.passes import Where
@@ -2460,6 +2461,9 @@ def pipeline(where: Where, **wanted) -> list[MIRTransform]:
         Dead(),
         Place(where),
         unroll.Unroll(where),
+        # Existing loop transforms still discover exits from direct uses.
+        # Close SSA after them until IndVarSimplify consumes LCSSA itself.
+        lcssa.LoopClosedSSA(),
     ]
     return [one for one in every if wanted.get(one.name, True)]
 
@@ -2484,6 +2488,7 @@ def applied(
     blocks: list | None = None,
     found=None,
     fold: bool = True,
+    lcssa_: bool = True,
     decide: bool = True,
     dead: bool = True,
     segments_: bool = True,
@@ -2516,6 +2521,7 @@ def applied(
         # Every pass can be turned off, which is how a miscompile is
         # bisected: a variant that skips one and still allocates and emits
         # is the only kind that measures anything.
+        "lcssa": lcssa_,
         "fold": fold,
         "decide": decide,
         "dead": dead,
@@ -2537,7 +2543,12 @@ def applied(
         blocks=blocks,
         found=found,
     )
-    passes = [one for one in pipeline(where, **wanted) if only is None or one.name == only]
+    selected = pipeline(where, **wanted)
+    closure = next((one for one in selected if one.name == "lcssa"), None)
+    passes = [
+        one for one in selected
+        if one.name != "lcssa" and (only is None or one.name == only)
+    ]
     if found is not None:
         body = replace(
             body,
@@ -2554,12 +2565,24 @@ def applied(
                 for block in body.blocks
             ),
         )
+    if only == "lcssa":
+        body = closure.transform(body) if closure is not None else body
+        if watch is not None:
+            watch("r01-lcssa", body)
+        return body
+
     for iteration in range(16):
         before = body
         for one in passes:
             body = one.transform(body)
             if watch is not None:
                 watch(f"r{iteration + 1:02d}-{one.name}", body)
-        if only is not None or body == before:
+        if only is not None:
+            return body
+        if body == before:
+            if closure is not None:
+                body = closure.transform(body)
+                if watch is not None:
+                    watch(f"r{iteration + 1:02d}-lcssa", body)
             return body
     raise RuntimeError("MIR optimization did not converge after 16 rounds")
