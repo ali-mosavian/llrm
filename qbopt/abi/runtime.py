@@ -325,6 +325,25 @@ VARIANTS[("B$POW4", "vbdos")] = replace(
     ),
 )
 
+for _name in ("B$INT4", "B$INT8"):
+    VARIANTS[(_name, "vbdos")] = replace(
+        worst(_name),
+        inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
+        cleanup=0,
+        evidence=(
+            "VBDCL10E 87bint.asm: INT4/INT8 share 0016, saving BP/SI/DI; "
+            "BX=6 and AX=0400h call emulator.asm segment 2 entry 002a. "
+            "CMP BX,0Ch overwrites incoming arithmetic flags. The relocated "
+            "table base is 0010; index 6 selects word 001c -> 0637. "
+            "Hardware path changes rounding control, FRNDINT, restores control "
+            "and RET at 0660. Software path calls 1be3 and 06e2; exception "
+            "dispatch includes indirect calls, INT 21h and IRET, so all "
+            "control/error/memory/x87 effects remain unknown. Normal wrapper "
+            "return restores SI/DI, MOV SP,BP / POP BP / RETF at 0028..002b: "
+            "zero caller argument cleanup. No replacement or preservation claim."
+        ),
+    )
+
 VARIANTS[("B$PEOS", "vbdos")] = replace(
     worst("B$PEOS"),
     inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),

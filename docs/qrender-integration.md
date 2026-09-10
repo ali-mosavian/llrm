@@ -41,6 +41,26 @@ Full before/after and pass dumps: `/tmp/qbopt-sys-fistp-native`.
 The remaining original modules still need incremental native integration;
 this is not the full-project correctness gate.
 
+### Next: QGLDIFF and shared rounding interfaces
+
+VBDOS INT4/INT8 share `87bint.asm:0016`. The dispatcher at emulator
+segment 2 offset 002a kills incoming arithmetic flags with CMP; BX=6
+selects the relocated table entry 001c -> 0637. Hardware uses FRNDINT
+with saved/restored control; software exception dispatch remains unknown.
+The wrapper restores SP/BP and RETF with zero argument cleanup. Only this
+interface is established; effects remain conservative and no rounding
+operation is substituted. Three fail-first checks pass, including lowering
+the real QGLDIFF INT4 call at 0700. Before/after at this call is intentionally
+`call far B$INT4` in both cases; the difference is that lowering now accepts it.
+
+Remaining original modules: main, h_bench, h_frame, qgldiff, qglface,
+d_mdl, d_surf, mod_tex, model, r_bsp, screen, pl_move. INT4/INT8 appear
+across eight of these. QGLDIFF is the next bounded integration candidate:
+its surface interfaces were audited for QGLCHK; additional project calls
+are QGLCLRECT, QGLDRFILL and QGLRSPOLY. Raw objects show normal RETF
+cleanup 8/14/16 respectively; drawing dependencies still require checking
+before those summaries are used. No new module run or FPS is claimed here.
+
 ### SYS interface audit history
 
 The six remaining VBDOS input interfaces (CSCN, WIDT, SLEP, TIMR,
