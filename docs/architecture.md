@@ -620,6 +620,30 @@ one documented target without materially regressing another.
   at unknown changes or conflicting joins. Escaped frame addresses, procedure
   entries and event/error modules retain conservative behavior. CHAIN's six
   remaining divisions fold away: QB/PDS 962 → 530, VBDOS 882 → 530 modeled cost.
+  IVARG distinguishes a fixed procedure argument slot from the pointer it
+  contains. The slot aliases no local store; LICM now moves its load even when
+  the result is loop-carried, provided a finite nonempty trip count is proven.
+  Zero-trip carried values retain their original path. The indirect read still
+  may alias locals and stays inside: no fresh-frame/byref disjointness assumption
+  was added. IVARG passes on all three compilers, with modeled costs QB unchanged
+  at 1144, PDS 1178 → 1144 and VBDOS 1180 → 1146.
+  The same rule improves SEGLD (PDS 7054 → 6942); its nested-loop answer
+  remains correct on all three compilers. PRESSX, HOTLOP, HARR, NESTED and
+  MATRIX's PDS objects are unchanged by this rule.
+
+  ```asm
+  ; before: each iteration
+  mov si,[bp+6]
+  mov edx,[si]
+
+  ; after: preheader
+  mov di,[bp+6]
+  ; each iteration: indirect read remains; allocation retains exit value
+  mov edx,[di]
+  ; ... work ...
+  mov si,di
+  ```
+
   Counted-loop ranges also use signed comparison facts on dominating,
   dedicated branch edges. Derived offsets are recomputed in that scope;
   a bound from one arm is not exported through its join. This enables

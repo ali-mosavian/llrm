@@ -1155,6 +1155,7 @@ def _invariant_run(
     starts: set | None = None,
     readable: set | None = None,
     intervals: dict | None = None,
+    nonempty: bool = False,
 ) -> list[Op]:
     """The ops in this loop whose result never changes, in order.
 
@@ -1241,6 +1242,8 @@ def _invariant_run(
             # load is consumed where it stands. What is unsafe is the pair --
             # a value a phi carries whose register the loop goes on to
             # change, which is segld's inner counter and 1030 for 1050.
+            # A stable load can replace its carried initial value only after
+            # proving that at least one iteration executes.
             if any(
                 value in begins and value in twice and (readable is None or value in readable)
                 for value in one.defines
@@ -1248,7 +1251,7 @@ def _invariant_run(
             ) and not (
                 one.kind is mir.Kind.COPY and not one.merges
                 and len(one.args) == 1 and isinstance(one.args[0], mir.Symbol)
-            ) and not _whole_shift(one, readable):
+            ) and not _whole_shift(one, readable) and not (nonempty and one.loads and not one.merges):
                 continue
             # An operand nothing writes down used to end the run here.
             # hotlop hoisted `mov ax,[n] / imul word [k]`, the recolour
@@ -2243,7 +2246,9 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
         stores = [ref for one in ops for ref in one.stores]
         carried = {phi.result for at in loop.body for phi in at_of[at].phis}
         phis = [phi for at in loop.body for phi in at_of[at].phis]
-        run = _invariant_run(ops, carried, stores, dgroup, calls, phis, bounds, _starts(phis), readable, intervals)
+        from qbopt.analysis import induction
+        run = _invariant_run(ops, carried, stores, dgroup, calls, phis, bounds, _starts(phis), readable, intervals,
+                             nonempty=induction.nonempty(body, loop))
         # Track operations, not source addresses: hoisted definitions share
         # their anchor's address with other computations and the jump. HARR
         # lost all of those when its descriptor moved a second time.
