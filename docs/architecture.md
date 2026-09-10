@@ -760,12 +760,14 @@ one documented target without materially regressing another.
 - [ ] Implement loop versioning/unswitching for invariant bounds, alias and
   numeric-environment conditions.
   Invariant-branch specialization now runs after the scalar fixed point for
-  single-body modules. It simplifies a bounded candidate on MIR and accepts it
+  each body. It simplifies a bounded candidate on MIR and accepts it
   only if the loop count falls without increasing semantic operation count.
   Pure conditions use dominating invariant values; memory-reading conditions
   and unsupported CFG/live-out shapes remain unchanged. This is an initial
-  structural profitability rule, not a target-cost model. Multi-body modules
-  await mixed ordered/legacy backend layout support.
+  structural profitability rule, not a target-cost model. Backend layout keeps
+  each cloned body's sequence together while retaining legacy ordering for the
+  other bodies. Carried tables/padding follow their original byte owner, not a
+  count of source addresses (which put zero padding inside IVPROC's VBDOS path).
   IVARM and IVWORD now simplify both loop versions away.
   Store sinking reconstructs a directly stored counter's last executed value
   only with an exact, nonempty, non-wrapping trip proof and an unconditional
@@ -778,6 +780,11 @@ one documented target without materially regressing another.
   three compilers. The 32 PDS suite objects remain byte-identical to the pipeline
   without unswitching; these improvements are in the regression fixtures.
   General bounds/alias versioning and target-aware profitability remain open.
+  IVPROC adds an unchanged ANNOUNCE procedure beside the specialized main loop:
+  QB 632 → 358, PDS 612 → 358, VBDOS 604 → 350 modeled cost, with runtime output
+  verified on all three. Its final stores replace the loop exactly as below;
+  the call to ANNOUNCE and its body remain. Procedure-local loops whose argument
+  loads still lack frame-disjointness proofs need alias refinement separately.
 
   ```asm
   ; before: one selected store on every iteration

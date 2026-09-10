@@ -348,6 +348,7 @@ def rebuild(
     native_fpu: bool = False,
     assignment: dict | None = None,
     ordered: bool = False,
+    ordered_entries: frozenset[int] = frozenset(),
 ) -> Laid | str:
     """Every body in the module, laid out one after another.
 
@@ -382,8 +383,8 @@ def rebuild(
     # downstream can be told has already happened. `allocated()` below is
     # the same work, and `wholeseg.py` calls it before this -- which is
     # what let objwrite.py stop being allocated over a second time.
-    if ordered:
-        bodies = [(name, _fallthroughs(body)) for name, body in bodies]
+    sequenced = frozenset(body.entry for _, body in bodies) if ordered else ordered_entries
+    bodies = [(name, _fallthroughs(body) if body.entry in sequenced else body) for name, body in bodies]
     held = asm._held(assignment)
     bodies = [(name, _grounded(body, held)) for name, body in bodies]
 
@@ -398,13 +399,18 @@ def rebuild(
     # though it is the honest answer to where an operation's bytes are.
     # A caller with an authoritative emission sequence opts into `ordered`.
     # Keep the legacy default until every caller's input ordering is proven.
-    ops = []
+    groups = []
     for _, body in bodies:
         end = max((op.covers[1] for block in body.blocks for op in block.ops if op.covers), default=body.entry)
         embedded = any(start < end and stop > body.entry for start, stop in tables)
-        ops.extend(_ordered(body, linear=ordered and not embedded))
+        sequence = _ordered(body, linear=body.entry in sequenced and not embedded)
+        if ordered or body.entry in sequenced:
+            groups.append((body.entry, sequence))
+        else:
+            groups.extend((op.at, [op]) for op in sequence)
     if not ordered:
-        ops.sort(key=lambda one: one.at)
+        groups.sort(key=lambda group: group[0])
+    ops = [op for _, sequence in groups for op in sequence]
     if not ops:
         return "no bodies to rebuild"
     if any(asm._length_of(one, found) is None for one in ops):
@@ -474,7 +480,7 @@ def rebuild(
     for _name, body in bodies:
         origin.update(body.origin)
     labels = {label: target for _, body in bodies for label, target in _labels(body).items()}
-    anchors = {label: op for _, body in bodies for label, op in _anchors(body).items()} if ordered else None
+    anchors = {label: op for _, body in bodies for label, op in _anchors(body).items()} if sequenced else None
     return asm.assemble(_interleaved(ops, inside), lowest, found, fields, native_fpu, assignment, origin, labels, anchors)
 
 
@@ -493,10 +499,14 @@ def _starts_at(op: mir.Op) -> int:
 def _interleaved(ops: list, inside: list) -> list:
     """`ops` in their own order, with each carried run back where it sat.
 
-    A table or a padding run is not in any body and has only an address to
-    place it by, so it goes before the first op that stood after it.
+    A table follows the operation owning its preceding original bytes, even
+    when that operation moved. Clones own no bytes and cannot become anchors.
     """
     rank = {id(one): (index, 1) for index, one in enumerate(ops)}
     for one in inside:
-        rank[id(one)] = (sum(1 for op in ops if op.at < one.lo), 0)
+        preceding = [(high, index) for index, op in enumerate(ops)
+                     for low, high in (*((op.covers,) if op.covers is not None else ()), *op.extra_covers)
+                     if low < high <= one.lo]
+        index = max(preceding)[1] + 1 if preceding else 0
+        rank[id(one)] = (index, 0)
     return sorted([*ops, *inside], key=lambda one: rank[id(one)])

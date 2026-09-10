@@ -48,10 +48,10 @@ def written(
     `ordered` preserves each block's instruction sequence rather than sorting
     instructions by source address. It is opt-in while legacy producers still
     depend on that sort; cloning requires it but also needs distinct labels.
+    Individual ordered bodies keep their sequence without changing the legacy
+    ordering of other bodies in the same module.
     """
-    if any(body.ordered for body in bodies):
-        if not all(body.ordered for body in bodies):
-            return "mixed ordered and legacy body layout requires per-body ordering"
+    if bodies and all(body.ordered for body in bodies):
         ordered = True
     laid = layout.rebuild(
         found,
@@ -62,6 +62,7 @@ def written(
         native_fpu,
         assignment=assignment or None,
         ordered=ordered,
+        ordered_entries=frozenset(body.entry for body in bodies if body.ordered),
     )
     if isinstance(laid, str):
         return laid

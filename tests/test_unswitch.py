@@ -26,6 +26,22 @@ def test_production_ivarm_has_no_loop_and_stores_last_value(tag):
     assert sum(one.startswith("mov word ptr ") and one.endswith(",22h") for one in instructions) == 2
 
 
+@pytest.mark.parametrize("tag", ["q-O", "p-g2", "v-g3"])
+def test_specialized_main_and_legacy_procedure_emit_together(tag):
+    """IVPROC refused mixed body layouts instead of removing IVARM's loop beside ANNOUNCE."""
+    from qbopt import wholeseg
+    import corpus
+
+    states = []
+    def watch(stage, name, body):
+        if stage == "mir-widen":
+            states.append(body)
+    result = wholeseg.emitted(Path(f"fixtures/regressions/ivproc-{tag}.obj").read_bytes(), watch=watch)
+    assert any(body.cloned for body in states) and any(not body.cloned for body in states)
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    assert not loops.loops(corpus.partitioned(result.data))
+
+
 def original(tag):
     found = module.load(Path(f"fixtures/regressions/ivarm-{tag}.obj"))
     body = mir.bodies(found, blocks.partition(found, blocks.code_map(found)))[0][1]

@@ -45,15 +45,24 @@ def test_ordered_body_selects_ordered_object_layout(monkeypatch):
     from qbopt.objectfile import objwrite
     requested = []
     def rebuild(*args, **kwargs):
-        requested.append(kwargs["ordered"])
+        requested.append((kwargs["ordered"], kwargs["ordered_entries"]))
         return "captured"
     monkeypatch.setattr(layout, "rebuild", rebuild)
     body = lir.LirBody("cloned", 0, (), {}, {}, ordered=True)
     assert objwrite.written(None, [body], [], {}) == "captured"
-    assert requested == [True]
-    legacy = replace(body, ordered=False)
-    assert "mixed ordered" in objwrite.written(None, [body, legacy], [], {})
-    assert requested == [True]
+    assert requested == [(True, frozenset({0}))]
+    legacy = replace(body, entry=10, ordered=False)
+    assert objwrite.written(None, [body, legacy], [], {}) == "captured"
+    assert requested[-1] == (False, frozenset({0}))
+
+
+def test_carried_padding_follows_its_original_byte_owner():
+    """IVPROC VBDOS put zero padding between a specialized store and its jump."""
+    owner = mir.Op(100, ir.Operation.NOTHING, "", (), (), covers=(100, 105))
+    clone = mir.Op(30, ir.Operation.NOTHING, "", (), (), covers=(30, 30))
+    earlier = mir.Op(10, ir.Operation.NOTHING, "", (), (), covers=(10, 15))
+    padding = layout.Table(105, 107)
+    assert layout._interleaved([owner, clone, earlier], [padding]) == [owner, padding, clone, earlier]
 
 
 def test_explicit_emission_order_does_not_group_clones_by_source_address():
