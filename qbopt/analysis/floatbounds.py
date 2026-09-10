@@ -90,7 +90,9 @@ def exact(body: mir.MirBody, constants: dict, dgroup: frozenset[int] = frozenset
     """Operation identities proven numerically exact; pending checks remain separate.
 
     These bounds do not assert the sign of zero or any particular value.
-    No memory contents or floating environment are assumed across calls.
+    SSA value bounds survive control flow and calls; memory contents and
+    the floating environment do not. Cyclic phis without independently
+    bounded inputs remain unknown.
     """
     if not any(op.floating is not None for block in body.blocks for op in block.ops):
         return set()
@@ -103,14 +105,21 @@ def exact(body: mir.MirBody, constants: dict, dgroup: frozenset[int] = frozenset
     memory = floatfacts.cells(shadow, dgroup, {})
     scoped = ranges.bounded(body)
     definitions = {value: op for block in body.blocks for op in block.ops for value in op.defines}
-    for block in body.blocks:
-        values = {}
-        for index, op in enumerate(block.ops):
-            if op.barrier or op.kind in (mir.Kind.CALL, mir.Kind.OPAQUE):
-                values.clear()
+    values: dict[mir.Value, Bounds] = {}
+    pending = [(block.at, index, op) for block in body.blocks for index, op in enumerate(block.ops)
+               if op.floating is not None and not op.barrier and op.kind not in (mir.Kind.CALL, mir.Kind.OPAQUE)]
+    phis = [phi for block in body.blocks for phi in block.phis if not phi.result.flags]
+    changed = True
+    while changed:
+        changed = False
+        for phi in phis:
+            if phi.result in values or not phi.incoming or not all(value in values for value in phi.incoming.values()):
                 continue
-            if op.floating is None:
-                continue
+            bounds = [values[value] for value in phi.incoming.values()]
+            values[phi.result] = min(low for low, _ in bounds), max(high for _, high in bounds)
+            changed = True
+        remaining = []
+        for at, index, op in pending:
             inputs = []
             for arg, format in zip(op.args, op.floating.inputs):
                 if format in _SIGNED:
@@ -122,16 +131,19 @@ def exact(body: mir.MirBody, constants: dict, dgroup: frozenset[int] = frozenset
                     if fact is not None and fact.value.denominator == 1:
                         bounds = int(fact.value), int(fact.value)
                 else:
-                    bounds = _memory(arg, format, memory.get((block.at, index), {}),
-                                     scoped.get(block.at, {}), definitions)
+                    bounds = _memory(arg, format, memory.get((at, index), {}),
+                                     scoped.get(at, {}), definitions)
                 if bounds is None:
                     break
                 inputs.append(bounds)
             result = evaluated(op.kind, op.floating, tuple(inputs))
             if result is None:
+                remaining.append((at, index, op))
                 continue
             safe.add(id(op))
             for arg in op.results:
                 if isinstance(arg, mir.Held):
                     values[arg.value] = result
+            changed = True
+        pending = remaining
     return safe

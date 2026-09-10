@@ -4299,3 +4299,24 @@ stage evidence is in `/tmp/qbopt-fp-path-before` and `/tmp/qbopt-fp-path-after`.
 Runtime integer-derived floating bounds are still propagated only within a
 block, which limits the new path to computations with available exact facts.
 Extending that analysis over SSA is the next dependency for broader reuse.
+
+### Propagate exact floating bounds over SSA
+
+Floating integer bounds now follow definitions across blocks to a fixed point,
+independent of block listing order. A phi joins bounds only after all incoming
+values are bounded; cyclic recurrences without an independent proof stay
+unknown. Calls do not mutate existing SSA values, but memory-load facts remain
+specific to the load site and no floating-environment assumption crosses a call.
+This enables exact cross-block CSE for runtime INTEGER-derived arithmetic.
+
+The runtime-input and reversed-block-order tests failed before implementation.
+All 32 focused SSA-path and architecture checks pass, including unknown phi
+inputs and a growing cyclic recurrence. FPI2CS PDS assembly is identical with
+the previous/current bounds analysis (1418 object bytes, three FILDs); dumps:
+`/tmp/qbopt-fp-ssa-bounds-before` and `/tmp/qbopt-fp-ssa-bounds-after`.
+
+The broader floatbounds file reports ten count-assertion failures. Two
+representatives were reproduced with the previous bounds analysis: FPCALC PDS
+has three conversions where the test expects one; QB FPDEEP has no indexed
+loads where it expects three. Assertions remain unchanged. Other configurations
+still need classification; no full floating regression-gate success is claimed.
