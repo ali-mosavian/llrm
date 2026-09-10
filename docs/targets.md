@@ -23,13 +23,54 @@ as complete even if their cost happens to be below a plain target.
 Before: optimized QB BOOLS with event checks was reported as
 `576 / 126 = 4.57x`. After: its cost remains **576**, but its ratio is
 unverified until a complete event-preserving reference is derived. Plain
-QB BOOLS remains **172 / 126 = 1.37x**. This changes no emitted assembly.
+QB BOOLS at that audit was **172 / 126 = 1.37x**. That instrument correction
+changed no emitted assembly; the newer plain BOOLS reference is below.
 Emission refusals remain UNMEASURED, not provisional successes or optimized
 fallbacks. Event semantics and unsupported event paths still need work.
 
 The fail-first instrument regressions cover renamed objects from QB, PDS
 and VBDOS, plus a below-target cost that must still fail completion. No
 denominator was increased or inferred from current output.
+
+## BOOLS — constant evaluation with final stores retained
+
+For event-free builds, `a=3`, `b=7`, `c=2`, `d=9`; BASIC's true value is
+`-1`, so `x=-1` and `t=0-1+1+2=2`. No input, exception or runtime call
+observes the intermediate assignments. Retain all six final INTEGER values
+before the first print call, and retain the three printing calls and termination.
+The adjacent pairs have the following little-endian representation:
+
+```asm
+mov dword [a], 00070003h       ; a=3, b=7
+mov dword [c], 00090002h       ; c=2, d=9
+mov dword [x], 0002FFFFh       ; x=-1, t=2
+push offset textT
+call B$PSSD
+push 2
+call B$PEI2
+push offset textDone
+call B$PESD
+call B$CENP
+```
+
+Target: **116 modeled units** = three stores × (2+4), three immediate pushes
+× (2+4 for the stack write), and four calls × 20. This replaces the older
+126 reference, which retained an extra word store and a memory-reading push.
+It is a ranking-model target, not measured processor clocks or DOSBox time.
+Event-enabled builds remain provisional.
+
+After CFG cleanup, backend store packing changes only:
+
+```asm
+; before                      ; after
+mov word [x], -1               mov dword [x], 0002FFFFh
+mov word [t], 2
+```
+
+Across QB/PDS/VBDOS plain fixtures: **122 → 116** modeled units. QB's emitted
+code shrinks by three bytes; its object shrinks 736 → 726 bytes, including
+the removed relocation record. Fail-first emitted-instruction regressions and
+actual output checks cover all three compilers.
 
 ## FLAGS — constant branches with observable stores retained
 

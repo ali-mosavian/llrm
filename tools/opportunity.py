@@ -575,7 +575,7 @@ TARGETS = {
     "SPLIT": 276,
     "ADDRM": 754,
     "ROTATE": 294,
-    "BOOLS": 126,
+    "BOOLS": 116,
     "SEGLD": 6704,
     "HARR": 1834,
     "HG": 304,

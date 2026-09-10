@@ -16,10 +16,11 @@ class Peephole(LIRTransform):
         self.frame = frame
 
     def transform(self, body: lir.LirBody) -> lir.LirBody:
-        from qbopt.backend import copyprop, spillforward
+        from qbopt.backend import copyprop, spillforward, storecombine
         body = copyprop.forwarded(body)
         body = spillforward.forwarded(body)
         body = reloads(body)
+        body = storecombine.combined(body)
         return self._frame(waits(zeroes(addresses(overwritten(commuted(constants(pushes(body))))))))
 
     def _frame(self, body):
