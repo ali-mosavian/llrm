@@ -31,6 +31,38 @@ The fail-first instrument regressions cover renamed objects from QB, PDS
 and VBDOS, plus a below-target cost that must still fail completion. No
 denominator was increased or inferred from current output.
 
+## FPCSE — exact constant-output reference
+
+For the ordinary, event-free constant-input program, `a=2`, `b=4`, `c=8`:
+each iteration computes `p=48`, `q=3/4`, then `(s+48)+3/4` in that order.
+After iteration i, `s=195*i/4`, ending at **487.5**. Every intermediate is
+a dyadic rational whose reduced numerator fits within 24 bits. Each SINGLE
+store and each arithmetic result is therefore exact, including at x87's
+lowest supported precision, independently of rounding mode. No reassociation,
+overflow, underflow or division-by-zero assumption is needed. This proof does
+not apply to FPCSEX's runtime inputs.
+
+The complete reference retains the four actual runtime calls (verified in
+QB, PDS and VBDOS object EXTDEF call sites):
+
+```asm
+push word descriptorS       ; 6
+call far B$PSSD             ; 20
+push dword 043F3C000h       ; 6: binary32 487.5, passed by value
+call far B$PER4             ; 20: retain SINGLE formatting
+push word descriptorDone    ; 6
+call far B$PESD             ; 20
+call far B$CENP             ; 20
+```
+
+Target: **3*(6+20)+20 = 98**, hand-derived independently of emitted output.
+There are no runtime inputs, escaping numeric variables or remaining
+arithmetic in this reference. Startup/runtime FP state is not changed.
+The old 1340 denominator described a reassociated loop and is retired for
+FPCSE; FPCSEX remains provisional until it has its own valid full listing.
+At `4db5c4d`, primary PDS/QB/VBDOS costs are **173/190/167**, hence
+**1.77x/1.94x/1.70x**. These are newly visible gaps, not performance regressions.
+
 ## FPDEEP — exact constant floating expressions
 
 For ordinary unchecked, event-free builds, the three array elements are

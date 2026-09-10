@@ -1,5 +1,29 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: full ranking refresh and exact FPCSE reference
+
+At `4db5c4d`, a complete default-object target run finishes with the expected
+failing gate: FPDEEP is the only non-event case above 1.5x among then-established
+targets (1.62–1.80x). Event references remain provisional, several programs
+lack targets, and jumptable remains an emission refusal. This is not a
+completion audit or a correctness run.
+
+FPCSE's old provisional 1340 target is now replaced by an independently
+derived complete 98-unit listing. Every original intermediate is exact at
+SINGLE precision: p=48, q=3/4, s_i=195*i/4 with the two additions kept in
+source order. Print binary32 487.5 by value using the original B$PER4 entry;
+keep S=, DONE and B$CENP. Actual call identities were checked on all three
+primary objects. FPCSEX still needs its own runtime-input reference.
+
+The stronger denominator exposes primary PDS/QB/VBDOS ratios of
+173/98=1.77x, 190/98=1.94x, 167/98=1.70x. Nothing got slower. Ten focused
+target checks pass; the new reference test failed against the old value.
+QB's emitted dump already passes 487.5 as immediate words but retains
+initializer stores, collapsed-loop control and stack work. Full stages:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-fpcse-reference-rtam_arc`.
+Next substantive work: eliminate that residual work with proper memory and
+exception-observation proofs, without weakening the target or FP semantics.
+
 ## 2026-09-10: remove overwritten allocation shuffles
 
 The final physical-register peephole now removes register/immediate moves

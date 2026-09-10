@@ -209,13 +209,30 @@ def test_missing_target_cannot_verify_completion(monkeypatch, capsys):
     assert "NO TARGET" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("program", ["fpcse", "fpcsex"])
+@pytest.mark.parametrize("program", ["fpcsex"])
 def test_provisional_target_cannot_verify_completion(program, monkeypatch, capsys):
     """Runtime-input twins inherited constant-source targets; FP references changed rounding and sums."""
     from collections import Counter
     monkeypatch.setattr(opportunity, "counted", lambda *args: Counter(cost=1))
     assert opportunity.against_targets([Path(f"{program}-p-g2.obj")]) != 0
     assert "PROVISIONAL" in capsys.readouterr().out
+
+
+def test_fpcse_target_preserves_each_single_rounding_without_reassociation():
+    """FPCSE's provisional 1340 hid its exact 487.5 constant-output reference."""
+    from fractions import Fraction
+    total = Fraction(0)
+    for _ in range(10):
+        product = (Fraction(2) + 4) * 8
+        quotient = (Fraction(2) + 4) / 8
+        subtotal = total + product
+        total = subtotal + quotient
+        for value in (product, quotient, subtotal, total):
+            assert value.denominator & (value.denominator - 1) == 0
+            assert abs(value.numerator).bit_length() <= 24
+    assert total == Fraction(975, 2)
+    assert opportunity.TARGETS["FPCSE"] == 3 * (6 + 20) + 20 == 98
+    assert "FPCSE" not in opportunity.PROVISIONAL_TARGETS
 
 
 def test_hotlpx_target_accounts_for_the_complete_runtime_input_reference():

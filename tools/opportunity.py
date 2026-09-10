@@ -496,7 +496,7 @@ TARGETS = {
     "SEGLD": 6704,
     "HARR": 1834,
     "HG": 304,
-    "FPCSE": 1340,
+    "FPCSE": 98,  # Exact constant-output reference, preserving every SINGLE rounding.
     "FX": 1038,
     "HOTLPX": 217,  # Complete runtime-input reference in docs/targets.md.
     # Runtime-input references are derived independently in docs/targets.md.
@@ -511,7 +511,6 @@ TARGETS = {
 
 
 PROVISIONAL_TARGETS = {
-    "FPCSE": "reference reassociates the sum and omits SINGLE rounding",
     "FPCSEX": "reference reassociates the sum and omits SINGLE rounding",
 }
 
