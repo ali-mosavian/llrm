@@ -68,6 +68,26 @@ def test_square_keeps_the_next_used_operand_on_top():
 
 
 @pytest.mark.parametrize("width", [2, 4])
+def test_runtime_stack_integer_result_uses_memory_without_named_float_values(width):
+    """SYS_INIT_TABLES at 08fa refused FISTP EBX after POW4 returned in physical ST0."""
+    from qbopt.backend import frame
+    result = ir.Held(2, width)
+    cell = ir.Mem(Addr(Space.FRAME, -8), width)
+    body = _body([
+        ir.Semantics(ir.Operation.FLOAT_STORE, "fistp", (result,), (ir.St(0),)),
+        ir.Semantics(ir.Operation.MOVE, "mov", (cell,), (result,)),
+    ])
+    allocated = floatalloc.allocated(body, frame.Frame(-8))
+    assert [one.what.name for one in allocated.insns] == ["wait", "fistp", "wait", "mov", "mov"]
+    store, load = allocated.insns[1].what, allocated.insns[3].what
+    assert isinstance(store.dests[0], ir.Mem)
+    assert store.dests == load.sources
+    assert store.dests[0].width == width
+    assert load.dests == (result,)
+    assert select.emit(store) is not None
+
+
+@pytest.mark.parametrize("width", [2, 4])
 def test_integer_result_waits_before_reading_owned_conversion_storage(width):
     """B$FIST/B$FIS2 wait on both sides of conversion before returning the integer."""
     from qbopt.backend import frame

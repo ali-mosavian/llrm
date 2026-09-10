@@ -4,9 +4,44 @@ New optimization passes are paused until the optimized renderer builds and
 runs correctly. Target: `qb-qrender/.claude/worktrees/qgl-poly-draw`, source
 commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
-## Latest gate — eight modules, native x87, 2026-09-11
+## Latest gate — nine modules, native x87, 2026-09-11
 
-### Next module: SYS argument parsing
+SYS now emits and links, adding it to the eight accepted native modules.
+Build: `/tmp/qbopt-qrender-native-sys-20260911`; SYS OBJ 20,947 -> 20,449
+bytes. The same pinned normal-core benchmark completes 13 frames at
+**9.50285 FPS**, versus baseline **9.43334 FPS**. This difference is within
+observed variation, not evidence of a speedup. All non-timing/non-memory
+report fields match; BENCH.BMP is byte-identical (SHA1
+`d6e4096b3610249ff4d53b6829f1ab18ec108c7a`). Screenshot `sys-live-005.png`
+shows the rendered scene; the debugger subsequently observes the DOS prompt.
+The first watcher launch lost its process before attachment; a terminal-owned
+launch provided the successful measured run. No FPS was inferred from that failure.
+
+The FISTP defect was in floatalloc: its early return for bodies without
+named 80-bit values bypassed conversion of runtime-produced physical ST0.
+Integer stores now obtain owned frame storage before named-stack allocation.
+Two fail-first physical-ST0 regressions and all 59 floatalloc tests pass.
+An additional FP selection check has 11 passes and one pre-existing q-O
+dead-conversion assertion failure, reproduced with the committed old allocator.
+
+```asm
+; before, SYS_INIT_TABLES
+call far B$POW4
+call far B$FIST
+
+; after, native SYS (the power helper remains)
+call far B$POW4
+mov [bp-24h],ax
+fistp dword [bp-1Eh]
+wait
+mov ebx,[bp-1Eh]
+```
+
+Full before/after and pass dumps: `/tmp/qbopt-sys-fistp-native`.
+The remaining original modules still need incremental native integration;
+this is not the full-project correctness gate.
+
+### SYS interface audit history
 
 The six remaining VBDOS input interfaces (CSCN, WIDT, SLEP, TIMR,
 FRI2, STI4) are now bounded from runtime disassembly and their dependencies.

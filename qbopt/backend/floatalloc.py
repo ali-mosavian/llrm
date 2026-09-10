@@ -35,15 +35,10 @@ def _integer_loads(body: lir.LirBody, frame) -> lir.LirBody:
     return replace(body, blocks=tuple(blocks))
 
 
-def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
+def _integer_stores(body: lir.LirBody, frame) -> lir.LirBody:
+    """Materialize integer conversions, including runtime results in physical ST0."""
     from qbopt.backend.lower import Unlowered
 
-    body = _integer_loads(body, frame)
-    floating = {arg.value for block in body.blocks for one in block.insns if one.what
-                for arg in (*one.what.sources, *one.what.dests)
-                if isinstance(arg, ir.Held) and arg.width == 10}
-    if not floating:
-        return body
     integer_readers = set(body.pins)
     for block in body.blocks:
         integer_readers.update(value for phi in block.phis for _, value in phi.incoming)
@@ -52,6 +47,42 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
             if one.what is not None:
                 integer_readers.update(arg.value for arg in one.what.sources if isinstance(arg, ir.Held))
     unknown_readers = any(one.what is None or one.what.op is ir.Operation.BARRIER for one in body.insns)
+    blocks = []
+    for block in body.blocks:
+        insns = []
+        for one in block.insns:
+            what = one.what
+            if (what is None or what.op is not ir.Operation.FLOAT_STORE or what.name != "fistp"
+                or len(what.sources) != 1 or len(what.dests) != 1
+                or not isinstance(what.dests[0], ir.Held) or what.dests[0].width not in (2, 4)):
+                insns.append(one)
+                continue
+            if frame is None:
+                raise Unlowered("floating-to-integer conversion requires an owned frame")
+            result = what.dests[0]
+            cell = frame.cell(("integer-conversion", result.value), result.width)
+            wait = lir.Insn(one.at, (one.at, one.at),
+                ir.Semantics(ir.Operation.NOTHING, "wait", (), ()), (), ())
+            insns.extend((wait, replace(one, what=replace(what, dests=(cell,)),
+                defines=tuple(value for value in one.defines if value != result.value),
+                widths=tuple((value, width) for value, width in one.widths if value != result.value)), wait))
+            if unknown_readers or result.value in integer_readers:
+                insns.append(lir.Insn(one.at, (one.at, one.at),
+                    ir.Semantics(ir.Operation.MOVE, "mov", (result,), (cell,)),
+                    (result.value,), (), widths=((result.value, result.width),)))
+        blocks.append(replace(block, insns=tuple(insns)))
+    return replace(body, blocks=tuple(blocks))
+
+
+def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
+    from qbopt.backend.lower import Unlowered
+
+    body = _integer_stores(_integer_loads(body, frame), frame)
+    floating = {arg.value for block in body.blocks for one in block.insns if one.what
+                for arg in (*one.what.sources, *one.what.dests)
+                if isinstance(arg, ir.Held) and arg.width == 10}
+    if not floating:
+        return body
     predecessors = {block.at: set() for block in body.blocks}
     for block in body.blocks:
         for successor in block.succ:
@@ -112,19 +143,6 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
         insns = []
         for one in block.insns:
             what = one.what
-            converted_result = None
-            if (what is not None and what.op is ir.Operation.FLOAT_STORE and what.name == "fistp"
-                and len(what.sources) == len(what.dests) == 1
-                and isinstance(what.dests[0], ir.Held) and what.dests[0].width in (2, 4)):
-                if frame is None:
-                    raise Unlowered("floating-to-integer conversion requires an owned frame")
-                converted_result = what.dests[0]
-                converted_cell = frame.cell(("integer-conversion", converted_result.value), converted_result.width)
-                insns.append(lir.Insn(one.at, (one.at, one.at),
-                    ir.Semantics(ir.Operation.NOTHING, "wait", (), ()), (), ()))
-                one = replace(one, what=replace(what, dests=(converted_cell,)),
-                    defines=tuple(value for value in one.defines if value != converted_result.value))
-                what = one.what
             if what is None or not any(isinstance(arg, ir.Held) and arg.width == 10
                                       for arg in (*what.sources, *what.dests)):
                 if floating.intersection((*one.uses, *one.defines)):
@@ -301,13 +319,6 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
                 uses=tuple(value for value in one.uses if value not in floating),
                 defines=tuple(value for value in one.defines if value not in floating),
                 widths=tuple((value, width) for value, width in one.widths if value not in floating)))
-            if converted_result is not None:
-                insns.append(lir.Insn(one.at, (one.at, one.at),
-                    ir.Semantics(ir.Operation.NOTHING, "wait", (), ()), (), ()))
-                if unknown_readers or converted_result.value in integer_readers:
-                    insns.append(lir.Insn(one.at, (one.at, one.at),
-                        ir.Semantics(ir.Operation.MOVE, "mov", (converted_result,), (converted_cell,)),
-                        (converted_result.value,), (), widths=((converted_result.value, converted_result.width),)))
         if stack and index not in continues:
             raise Unlowered("floating stack live-out requires cross-block allocation")
         if index not in continues:
