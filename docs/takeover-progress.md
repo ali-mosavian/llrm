@@ -3645,3 +3645,26 @@ both objects because re-raising either optimized object returns only the
 PITSNAP body, silently dropping main. The next measurement fix must cost
 all decoded reachable bodies or reject incomplete coverage, not accept a
 partial score. Raw assembly and object bytes establish this change instead.
+
+## Cost all decoded bodies independently of MIR recognition
+
+The scorekeeper now partitions decoded instructions into procedure bodies
+and costs each CFG directly. It no longer uses successful MIR raises as
+the inventory of executable code. Body coverage must be complete and
+nonoverlapping; otherwise measurement fails. MIR-based opportunity counters
+remain separate, with an explicit count of unavailable code blocks.
+
+The NBODY regression failed first: 6386 (only PITSNAP) versus 83642 from
+all decoded bodies. Corrected before/after costs for commit 3c42800 are
+**92310 -> 83642**, a **9.4%** reduction in this weighted instruction model.
+Original BC output scores 1206863. These use the same default ten-trip
+nesting weights and helper cost table, not measured CPU time or the actual
+NBODY trip counts; no optimal-target ratio is claimed. Both optimized
+objects have 25 blocks unavailable to MIR opportunity analysis, but their
+instructions are fully costed now.
+
+Four focused checks pass: actual optimized NBODY, complete absence of MIR
+recognition, incomplete decoded coverage, and duplicate decoded coverage.
+The initial scoreboard run passed 43 tests with only its previously known
+NOTS exact-string failure (expects 1.43x, current result 1.31x). No compiler
+output changes in this measurement commit; runtime evidence is unchanged.

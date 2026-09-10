@@ -291,17 +291,21 @@ def _cost(body, module_, found: Counter, trips: int = 10) -> None:
     loop outranks a hundred straight-line moves, which is what BC's output
     actually costs.
     """
-    depth = loopy.depth(list(body.blocks), body.entry)
     mapped = code_map(module_)
     if isinstance(mapped, str):
         raise Unmeasured(mapped)
     physical = {block.at: block for block in split.partition(module_, mapped)}
+    if any(block.at not in physical for block in body.blocks):
+        raise Unmeasured("a costed block has no decoded instructions")
+    _weighted_cost([physical[block.at] for block in body.blocks], body.entry, module_, found, trips)
+
+
+def _weighted_cost(blocks, entry, module_, found: Counter, trips: int) -> None:
+    depth = loopy.depth(blocks, entry)
     formatter = iced_x86.Formatter(iced_x86.FormatterSyntax.NASM)
-    for block in body.blocks:
+    for block in blocks:
         weight = trips ** min(depth.get(block.at, 0), 3)
-        if block.at not in physical:
-            raise Unmeasured(f"no decoded block at {block.at:#x}")
-        for one in physical[block.at].insns:
+        for one in block.insns:
             if one.at in module_.calls:
                 found["cost"] += CALLED.get((module_.calls[one.at] or "").upper(), CALL) * weight
                 continue
@@ -317,6 +321,25 @@ def _cost(body, module_, found: Counter, trips: int = 10) -> None:
             # and spill slots still access memory after register allocation.
             cycles += TOUCH * touches
             found["cost"] += cycles * weight
+
+
+def _module_cost(module_, blocks, found: Counter, trips: int) -> None:
+    decoded = ir.decode_module(module_)
+    if isinstance(decoded, str):
+        raise Unmeasured(decoded)
+    covered = set()
+    for decoded_body in decoded:
+        body = decoded_body.body
+        mine = [block for block in blocks if any(lo <= block.at < hi for lo, hi in body.ranges)]
+        if not mine or body.seed not in {block.at for block in mine}:
+            raise Unmeasured(f"no decoded entry for {body.name}")
+        starts = {block.at for block in mine}
+        if covered & starts:
+            raise Unmeasured("decoded bodies overlap")
+        covered |= starts
+        _weighted_cost(mine, body.seed, module_, found, trips)
+    if covered != {block.at for block in blocks}:
+        raise Unmeasured("decoded bodies do not cover every code block")
 
 
 def _registers(body, module_, found: Counter) -> None:
@@ -415,9 +438,11 @@ def counted(paths: list[Path], raw: bool = False) -> Counter:
         mapped = code_map(module_)
         if isinstance(mapped, str):
             raise Unmeasured(f"{path}: {mapped}")
-        bodies = mir.bodies(module_, split.partition(module_, mapped))
-        if not bodies:
-            raise Unmeasured(f"{path}: no raised bodies")
+        physical = split.partition(module_, mapped)
+        _module_cost(module_, physical, found, TRIPS.get(_program(path, module_.records), 10))
+        bodies = mir.bodies(module_, physical)
+        raised = {block.at for _, body in bodies for block in body.blocks}
+        found["code blocks unavailable to MIR opportunity analysis"] += len({block.at for block in physical} - raised)
         for _name, body in bodies:
             blocks = {block.at: block for block in body.blocks}
             preds: dict[int, list[int]] = {at: [] for at in blocks}
@@ -448,7 +473,6 @@ def counted(paths: list[Path], raw: bool = False) -> Counter:
 
             _invariant(body, module_, found)
             _registers(body, module_, found)
-            _cost(body, module_, found, TRIPS.get(_program(path, module_.records), 10))
             _reloads(body, module_, found)
 
             for at in sorted(blocks):

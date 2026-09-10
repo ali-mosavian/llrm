@@ -21,6 +21,54 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 import opportunity
 
 
+def test_nbody_cost_includes_main_when_optimized_code_cannot_be_raised(tmp_path):
+    """NBODY scored only PITSNAP's 6386 units, omitting its entire optimized simulation."""
+    from collections import Counter
+    from types import SimpleNamespace
+    from qbopt import wholeseg
+    from qbopt.model import ir
+    from qbopt.frontend import blocks
+
+    source = Path("fixtures/bench/nbody-v-g3.obj")
+    emitted = wholeseg.emitted(source.read_bytes())
+    assert emitted.outcome is wholeseg.Emission.LIR
+    path = tmp_path / source.name
+    path.write_bytes(emitted.data)
+    module = opportunity._measured(path, True)
+    partition = blocks.partition(module, blocks.code_map(module))
+    expected = Counter()
+    for decoded in ir.decode_module(module):
+        body = SimpleNamespace(entry=decoded.body.seed, blocks=tuple(
+            block for block in partition
+            if any(lo <= block.at < hi for lo, hi in decoded.body.ranges)))
+        opportunity._cost(body, module, expected)
+    assert expected["cost"] > 6386
+    assert opportunity.counted([path], raw=True)["cost"] == expected["cost"]
+
+
+def test_instruction_cost_does_not_require_mir_recognition(monkeypatch):
+    """Unrecognized optimized code must retain its cost, not disappear with its MIR body."""
+    path = Path("fixtures/omf/procs-p-g2.obj")
+    expected = opportunity.counted([path], raw=True)["cost"]
+    monkeypatch.setattr(opportunity.mir, "bodies", lambda *args, **kwargs: [])
+    measured = opportunity.counted([path], raw=True)
+    assert measured["cost"] == expected
+    assert measured["code blocks unavailable to MIR opportunity analysis"] > 0
+
+
+@pytest.mark.parametrize("duplicate", [False, True])
+def test_cost_refuses_incomplete_or_overlapping_body_partitions(monkeypatch, duplicate):
+    """NBODY's omitted main exposed that partial body coverage was accepted as a full score."""
+    decode = opportunity.ir.decode_module
+    def broken(module):
+        bodies = decode(module)
+        assert len(bodies) > 1
+        return (*bodies, bodies[0]) if duplicate else bodies[1:]
+    monkeypatch.setattr(opportunity.ir, "decode_module", broken)
+    with pytest.raises(opportunity.Unmeasured, match="overlap|cover every"):
+        opportunity.counted([Path("fixtures/omf/procs-p-g2.obj")], raw=True)
+
+
 @pytest.mark.parametrize("filename", ["ARRIDXQ.OBJ", "hotlop-p-g2.obj", "renamed.obj"])
 def test_object_identity_not_temporary_filename_selects_weight_and_target(filename, tmp_path, capsys):
     """ARRIDX falsely fell from 504 to 312 when its temporary name selected ten rather than twenty trips."""
