@@ -564,8 +564,10 @@ one documented target without materially regressing another.
   has a dominating provider, a phi replaces the repeated computation; input
   phis are translated separately on each incoming edge. Missing scalar
   providers can be inserted on dedicated unconditional edges after CSE
-  stabilizes. Critical-edge splitting, memory PRE, target profitability and
-  strict floating reuse remain open.
+  stabilizes. MemorySSA-backed value phis also eliminate whole scalar loads
+  already supplied on every incoming path by loads or stores. Missing-path
+  load insertion, critical-edge splitting, target profitability and strict
+  floating reuse remain open.
 - [ ] Replace the separate load/store cleanup rules with MemorySSA-based load
   elimination and dead-store elimination.
 - [ ] Implement sparse conditional constant propagation (`SCCP`) over values

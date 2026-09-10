@@ -15,11 +15,9 @@ a use and extends that value's lifetime; allocation preserves or spills it
 as needed. Requiring it to be live already would retain BC's statement-local
 lifetimes instead of optimizing them.
 
-**It intersects at joins rather than placing a phi.** Where predecessors
-disagree about which value a cell holds, the fact is dropped. A phi would
-be the stronger answer, and mir.py already has the machinery -- but a phi
-for a memory cell is a new value with no defining instruction, which
-lowering has no way to emit. Conservative here is the honest floor.
+This lattice intersects at joins. Where predecessor values differ,
+`optimize/loadjoins.py` can form a value phi using MemorySSA's per-edge
+availability proof. Lowering and allocation handle that phi normally.
 """
 
 from dataclasses import dataclass, replace

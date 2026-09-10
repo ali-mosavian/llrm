@@ -9,6 +9,13 @@ from qbopt.objectfile import module
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_read_destination_escapes_across_segment_setup(tag):
+    """MEMPHI printed 10 twice instead of 10,9: READ's address crossed PUSH DS/POP ES before PUSH BX."""
+    found = corpus.loaded(Path(f"fixtures/regressions/memphi-{tag}.obj"))
+    assert {(found.program_data, 6), (found.program_data, 8)} <= module.escaped(found)
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_long_arithmetic_values_do_not_escape_chain_inputs(tag):
     """CHAIN retained seven IDIVs because nested numeric arguments made a and b appear escaped."""
     from qbopt import wholeseg

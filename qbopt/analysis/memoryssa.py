@@ -13,6 +13,11 @@ from qbopt.analysis import loops, pointerfacts
 from qbopt.model import mir
 
 
+def _unknown_write(op: mir.Op) -> bool:
+    return (op.barrier or op.floating is not None or op.kind is mir.Kind.FCHECK
+            or (op.kind is mir.Kind.CALL and not op.stores))
+
+
 class Kind(StrEnum):
     LIVE = "live-on-entry"
     USE = "use"
@@ -77,6 +82,7 @@ class MemorySSA:
 
     def _frontier(
         self, site: Site, memory: mir.MemRef, dgroup: frozenset[int], boundary: int | None = None,
+        edge: int | None = None,
     ) -> frozenset[int]:
         accesses = {access.id: access for access in self.accesses}
         pending = [self.at(site).defining]
@@ -95,10 +101,11 @@ class MemorySSA:
                 case Kind.LIVE:
                     found.add(current)
                 case Kind.PHI:
-                    pending.extend(value for _, value in access.incoming)
+                    pending.extend(value for parent, value in access.incoming
+                                   if edge is None or access.block != site.block or parent == edge)
                 case Kind.DEF:
                     op = self.operations[access.site]
-                    if op.barrier or (op.kind is mir.Kind.CALL and not op.stores) or any(
+                    if _unknown_write(op) or any(
                         mir.overlapping(memory, store, dgroup) and not self.pointers.disjoint(memory, store)
                         for store in op.stores
                     ):
@@ -108,6 +115,20 @@ class MemorySSA:
                 case Kind.USE:
                     pending.append(access.defining)
         return frozenset(found)
+
+    def available_on_edge(
+        self, earlier: Site, later: Site, predecessor: int, memory: mir.MemRef,
+        dgroup: frozenset[int] = frozenset(),
+    ) -> bool:
+        """An earlier load/store still supplies these bytes on one incoming edge.
+
+        The caller proves equal addresses and that the scalar provider dominates
+        the predecessor. Only the destination's memory phi is edge-selected;
+        other intervening joins still require agreement along every path.
+        """
+        source = self.at(earlier)
+        boundary = source.id if source.kind is Kind.DEF else source.defining
+        return boundary is not None and self._frontier(later, memory, dgroup, boundary, predecessor) == frozenset({boundary})
 
 
 def built(body: mir.MirBody) -> MemorySSA:
@@ -124,7 +145,7 @@ memory versions. Entry blocks with backedges retain an invocation input.
     for block in body.blocks:
         current = entries[block.at]
         for index, op in enumerate(block.ops):
-            defines = bool(op.stores or op.barrier or op.kind is mir.Kind.CALL)
+            defines = bool(op.stores or _unknown_write(op) or op.kind is mir.Kind.CALL)
             if not (op.loads or defines):
                 continue
             kind = Kind.DEF if defines else Kind.USE

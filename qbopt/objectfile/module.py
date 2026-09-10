@@ -246,8 +246,8 @@ def escaped(found: "Module") -> frozenset[tuple[int, int]]:
     image. So the only way it reaches a program's variable is a pointer the
     program gave it, and this is where those are given.
 
-    A relocated immediate inside a `push`, a register `mov` immediately
-    pushed, or a `lea` is what handing one
+    A relocated immediate inside a `push`, a register `mov` subsequently
+    pushed without being overwritten, or a `lea` is what handing one
     over looks like. `Operation.ADDRESS` is not: BC pushes `offset X`,
     which is an immediate the linker fills in, and testing for `lea` found
     none of the corpus's -- so a whole-body test read every program as
@@ -264,8 +264,8 @@ def escaped(found: "Module") -> frozenset[tuple[int, int]]:
         return frozenset()
     out = set()
     values = _numeric_arguments(found)
-    for at, end, text in _pushes(found):
-        if at in values or (text.startswith("mov") and end in values):
+    for at, end, pushed in _pushes(found):
+        if at in values or pushed in values:
             continue
         for one in fields:
             if at <= one.offset < end:
@@ -317,7 +317,7 @@ def _numeric_arguments(found: "Module") -> frozenset[int]:
 
 
 def _pushes(found: "Module"):
-    """Every instruction that could hand an address over, as (at, end, text)."""
+    """Address-bearing spans and the push consuming a materialized address."""
     from iced_x86 import Mnemonic, OpKind
     from qbopt.frontend import declen
 
@@ -336,14 +336,30 @@ def _pushes(found: "Module"):
         materialized = (insn.insn.mnemonic == Mnemonic.MOV
                         and insn.insn.op0_kind == OpKind.REGISTER
                         and insn.insn.op1_kind in (OpKind.IMMEDIATE16, OpKind.IMMEDIATE32))
-        if materialized:
-            following = declen.decode(found.code, insn.end) if insn.end < found.end else None
-            materialized = (following is not None and following.insn.mnemonic == Mnemonic.PUSH
-                            and following.insn.op0_kind == OpKind.REGISTER
-                            and following.insn.op0_register == insn.insn.op0_register)
+        pushed = _pushed_before_write(found, insn.end, insn.insn.op0_register) if materialized else None
+        materialized = pushed is not None
         if text.startswith(("push", "lea")) or materialized:
-            yield at, insn.end, text
+            yield at, insn.end, pushed
         at = insn.end
+
+
+def _pushed_before_write(found: "Module", at: int, register: Register_) -> int | None:
+    from iced_x86 import FlowControl, Mnemonic, OpKind, RegisterExt
+    from qbopt.frontend import declen
+
+    root = RegisterExt.full_register32(register)
+    while at < found.end:
+        one = declen.decode(found.code, at)
+        if one is None or one.insn.flow_control != FlowControl.NEXT:
+            return None
+        if (one.insn.mnemonic == Mnemonic.PUSH and one.insn.op0_kind == OpKind.REGISTER
+            and RegisterExt.full_register32(one.insn.op0_register) == root):
+            return at
+        if any(access.access in declen.WRITES and RegisterExt.full_register32(access.register) == root
+               for access in declen.INFO.info(one.insn).used_registers()):
+            return None
+        at = one.end
+    return None
 
 
 def landmarks(found: "Module") -> dict[tuple[Space, int], tuple[int, ...]]:

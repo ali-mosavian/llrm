@@ -8,6 +8,19 @@ from qbopt.objectfile.module import Addr, Space
 CELL = mir.MemRef(Addr(Space.SEGMENT, 0x20, 1), 2)
 
 
+def test_each_join_edge_retains_its_own_stored_value():
+    body = mir.MirBody(0, (
+        mir.MirBlock(0, (), (), (1, 2)),
+        mir.MirBlock(1, (), (operation(1, stores=(CELL,)),), (3,)),
+        mir.MirBlock(2, (), (operation(2, stores=(CELL,)),), (3,)),
+        mir.MirBlock(3, (), (operation(3, loads=(CELL,)),), ()),
+    ))
+    graph = memoryssa.built(body)
+    for parent in (1, 2):
+        assert graph.available_on_edge(memoryssa.Site(parent, 0), memoryssa.Site(3, 0), parent, CELL)
+        assert not graph.available_on_edge(memoryssa.Site(3 - parent, 0), memoryssa.Site(3, 0), parent, CELL)
+
+
 def operation(
     at: int, *, loads: tuple[mir.MemRef, ...] = (),
     stores: tuple[mir.MemRef, ...] = (), barrier: bool = False,

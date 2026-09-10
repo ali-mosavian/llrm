@@ -2447,10 +2447,10 @@ class Cse(MIRTransform):
         self.where = where
 
     def transform(self, body: MirBody) -> MirBody:
-        from qbopt.optimize import floatfold, gvn
+        from qbopt.optimize import floatfold, gvn, loadjoins
         canonical = subexpressions(body, self.where.dgroup)
         # Finish exposing existing providers before making a supposedly missing one.
-        return floatfold.checks(gvn.joined(canonical, insert=canonical == body))
+        return floatfold.checks(loadjoins.reused(gvn.joined(canonical, insert=canonical == body), self.where.dgroup))
 
 
 class Place(MIRTransform):

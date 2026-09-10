@@ -1,5 +1,58 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: reuse memory values across joins; repair READ escape facts
+
+`optimize/loadjoins.py` replaces a whole scalar load with a phi of the values
+already loaded or stored on every predecessor. MemorySSA checks each edge's
+memory version, including aliasing writes in the join prefix. No loads are
+inserted. Partial values, stack-relative cells, floating operations and
+providers requiring an unrepresented loop-exit phi are excluded.
+
+MEMPHI exercises both branches with values supplied by READ. Each branch
+stores a different integer to an array element; the next statement reloads
+that element. After the pass, the branch result stays in AX:
+
+```asm
+; before, either branch has stored AX into the array
+mov ax,[firstValues+2]
+add ax,3
+mov [answer],ax
+; after
+add ax,3
+mov [answer],ax
+```
+
+Two array reloads disappear: PDS object **1280 -> 1264 bytes**, including
+removed fixups; emitted instructions lose six bytes. Baseline and optimized
+QB/PDS/VBDOS executions print **10; 9; DONE**. The read-destination checks
+count memory reads, not MOV alone: VBDOS tests the variable directly with CMP.
+
+The fixture also exposed a pre-existing miscompile: QB/PDS printed **10;10**
+even with the new pass disabled. Forwarding reused the first branch condition
+after a second READ. Escape analysis had only recognized an immediately
+pushed address; BC inserts PUSH DS / POP ES / PUSH ES between MOV OFFSET and
+PUSH register. It now follows that register until the push, a write to any
+overlapping register part, or control transfer. Numeric-value argument
+exclusions still refer to the actual consuming push.
+
+MemorySSA also now treats strict floating operations and FCHECK as unknown
+memory definitions: an observable exception must not preserve caller-memory
+facts across a potential handler. These safety checks have fail-first tests.
+
+The final memory/escape checks pass **53/53**. A 24-object comparison leaves
+21 byte-identical; PRESSX grows eight object bytes in each compiler because
+PRINT can no longer be assumed disjoint from all program data. It reloads
+the result for the following numeric PRINT instead of carrying it across
+the preceding call. All three PRESSX executions pass, and its verified model
+cost remains within target: **627 / 508 = 1.23x**.
+
+Stages: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-memphi-fixed-p-g2-h5p97qgu`.
+Remaining array blocker: `raising_array_bounds.proven` currently requires one
+allocation and known branch outcomes. Unknown branches lose allocation
+disjointness, so dynamic-array descriptor/address reloads still prevent this
+reuse. Long huge-array consumers also retain unsupported HARY sites in the
+exploratory example. Neither limitation is counted as optimized or complete.
+
 ## 2026-09-10: scalar partial redundancy on dedicated incoming edges
 
 GVN can now supply a missing scalar computation on an unconditional incoming
