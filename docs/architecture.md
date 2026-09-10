@@ -587,6 +587,12 @@ one documented target without materially regressing another.
   16-bit loads/copies. Wide or unknown readers, phi/merge propagation and
   body-exit values retain it. IVWORD covers the INTEGER-branch dependency
   that previously kept QB/PDS's redundant loop counters alive.
+  Exact trip counts now survive canonical `counter != bound` tests (and
+  equivalent equality exit branches). The signed progression must reach the
+  bound exactly in its direction of travel without wrapping. Zero-trip,
+  overshooting and wrap-dependent progressions retain no finite-count proof.
+  IVARM's `7, 10, ..., 34` recurrence therefore retains its ten-iteration count
+  after the original counter is removed.
 - [x] Build `MemorySSA`: one def-use graph for loads, stores and call effects.
   `analysis/memoryssa.py` provides live-on-entry, memory uses/definitions and
   join/backedge phis. Calls conservatively define memory. This is an analysis
@@ -778,6 +784,14 @@ one documented target without materially regressing another.
   add ax,3
   jmp residualHeader
   ```
+
+  Full peeling plus simplification was also executed on IVARM, using the proven
+  ten-iteration count: all three compiler variants pass. Modeled costs fall
+  QB 556 → 518, PDS 536 → 498, VBDOS 528 → 490, but PDS object size grows
+  1128 → 1455 bytes. The candidate repeats the invariant branch ten times and
+  replaces the counter updates with stores of 7, 10, ..., 34. It remains off:
+  invariant-branch specialization should expose one selected accumulator loop,
+  allowing promotion and loop deletion instead of duplicating both arms ten times.
 - [ ] Delete provably unobservable loops and retain required final stores,
   synchronization and exceptional behavior.
 

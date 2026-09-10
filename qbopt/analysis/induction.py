@@ -278,7 +278,8 @@ def _last_counter(body: mir.MirBody, loop, counter: Affine, facts: dict, width: 
     test = branch.test
     if branch.target not in inside:
         test = {mir.Kind.LE: mir.Kind.GT, mir.Kind.LT: mir.Kind.GE,
-                mir.Kind.GE: mir.Kind.LT, mir.Kind.GT: mir.Kind.LE}.get(test)
+                mir.Kind.GE: mir.Kind.LT, mir.Kind.GT: mir.Kind.LE,
+                mir.Kind.EQ: mir.Kind.NE, mir.Kind.NE: mir.Kind.EQ}.get(test)
     comparisons = [bound for op in header.ops[:-1]
                    if (bound := _counter_bound(op, branch, counter, width)) is not None]
     if len(comparisons) != 1:
@@ -294,6 +295,8 @@ def _last_counter(body: mir.MirBody, loop, counter: Affine, facts: dict, width: 
     elif step < 0 and test in (mir.Kind.GE, mir.Kind.GT):
         limit = bound + (test is mir.Kind.GT)
         distance = start - limit
+    elif test is mir.Kind.NE and (bound - start) * step > 0 and (bound - start) % step == 0:
+        distance = abs(bound - start) - abs(step)
     else:
         return None
     if distance < 0:
