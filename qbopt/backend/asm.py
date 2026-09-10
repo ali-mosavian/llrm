@@ -145,6 +145,11 @@ def _stands_for(op, found: Module) -> tuple[int, int] | None:
     return (min(lo for lo, _ in ranges), max(hi for _, hi in ranges)) if ranges else None
 
 
+def _raw_span(op: mir.Op) -> tuple[int, int] | None:
+    """The original instruction bytes, independent of replaced-byte ownership."""
+    return ir.span(op.node) if op.node is not None and not op.inserted else None
+
+
 def _length_of(op: mir.Op, found: Module) -> int | None:
     """How many bytes the op occupied in the image it came from.
 
@@ -621,7 +626,8 @@ def assemble(
             lengths.append(len(made.code))
             continue
         if what is None or emulated and found.code[op.at + 1] not in STANDS_IN:
-            lengths.append(_length_of(op, found) or 0)
+            span = _raw_span(op)
+            lengths.append(span[1] - span[0] if span else 0)
             continue
         made = select.emit(
             what,
@@ -719,14 +725,14 @@ def assemble(
             and op.node is not None  # an inserted instruction has no original bytes
             and found.code[op.at : op.at + 1] == bytes([0xCD])
             and (_semantics(op) is None or found.code[op.at + 1] not in STANDS_IN)
-            and (length := _length_of(op, found))
+            and (span := _raw_span(op))
         ):
             # Copied, so any fixup inside it keeps its place within the
             # instruction and only the instruction itself has moved.
             field = _field_in(found, op, fields)
             if field is not None:
-                relocations.append((len(out) + (field - op.at), field))
-            out += found.code[op.at : op.at + length]
+                relocations.append((len(out) + (field - span[0]), field))
+            out += found.code[span[0] : span[1]]
             continue
         # Before the carry below, which is the order the length pass asks
         # in. A restore has no semantics -- it stands for three
@@ -744,14 +750,14 @@ def assemble(
         # its own bytes are the only right answer. Carried, unless it names
         # a branch target: that would move, and keeping the old number
         # would point it at whatever now sits there.
-        if _semantics(op) is None and (length := _length_of(op, found)):
+        if _semantics(op) is None and (span := _raw_span(op)):
             found_insn = getattr(op.node, "insn", None)
             if found_insn is not None and found_insn.insn.op0_kind == OpKind.NEAR_BRANCH16:
                 return f"{op.at:#06x}: a branch this cannot model would keep a stale target"
             field = _field_in(found, op, fields)
             if field is not None:
-                relocations.append((len(out) + (field - op.at), field))
-            out += found.code[op.at : op.at + length]
+                relocations.append((len(out) + (field - span[0]), field))
+            out += found.code[span[0] : span[1]]
             continue
         folded = _folded_site(op, found)
         chosen = _selected_divide(op, found, assignment, origin, fields)

@@ -3837,3 +3837,28 @@ are in `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-whole-phi-single-
 That failure is not the earlier dynamic-core timeout. Locate its first wrong
 stage before removing the remaining word consumers; do not claim the loop
 now carries only one value or that the induction optimization is complete.
+
+### Root cause: raw emission confused coverage with instruction length
+
+The phi-removal failure was not evidence against the value rewrite. Bypassing
+only the two PITSNAP calls in its existing executable restored all 24 physics
+results. The timer's first `IN AL,DX` at original 0x435 owned coverage
+0x432..0x436 after the preceding port-number load was removed. The emitter
+used that four-byte ownership length but copied starting at 0x435, emitting
+`EC 30 E4 89`: IN, the following XOR, and the next instruction's first byte.
+The subsequent selected `AND AX,255` then decoded with that stray 89 as
+`mov [di],sp; inc word [bx+si]`, corrupting memory. LIR still showed IN then
+AND; the first wrong representation was the final byte stream.
+
+Raw emission now uses the original node's exact span for both length and
+copying. Coverage still accounts for deleted/replaced bytes, independently.
+The real NBODY emitted-instruction regression fails before the fix and passes
+after it. NBODY now matches on **both normal and dynamic cores**, at 4219
+bytes versus 4225 before this fix, with the timing calls intact.
+Artifacts: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-opaque-span-kmtbcugt`.
+
+This supersedes the earlier suggestion of an emulator defect: core-dependent
+behavior was an observation, not a diagnosis. Unintended memory writes can
+appear to work under one layout/core and fail under another. The single-phi
+extension can now be retried with this emitter correction, rather than
+working around the corrupted output in MIR.
