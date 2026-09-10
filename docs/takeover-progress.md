@@ -3693,3 +3693,23 @@ The real-fixture output-loop regression failed first with depth two rather
 than one. The unknown-control variant retains depth two, proving no return
 behavior is inferred without a contract. Twelve focused cost/coverage
 checks pass. Emitted bytes and runtime outputs are unchanged.
+
+## Commute an allocated accumulator instead of copying over it
+
+NBODY's force loop emitted `mov esi,ecx; mov ecx,eax; add ecx,esi`.
+Peephole now retains the saved accumulator and emits
+`mov esi,ecx; add ecx,eax`. This preserves ESI as well as the sum and
+arithmetic flags; it does not need a claim that the saved register is dead.
+The same rewrite applies to AND/OR/XOR, not subtraction or carry-dependent
+operations. It is restricted to matching full-width register triples with
+no groups, clobbers or fixed-register interfaces. MIR remains unchanged.
+
+The real emitted-code regression failed first. All 118 peephole checks
+pass, including word/dword result and saved-register equivalence checks.
+VBDOS NBODY **4231 -> 4225 bytes**, modeled **367327 -> 365127**;
+PDS NBODY **2912 -> 2906 bytes**, modeled **363522 -> 361322**.
+Two copies disappear in each object. Both original/optimized NBODY outputs
+match, excluding only the benchmark's TICKS line. QB LNGMXX stays byte-
+and cost-identical (838 bytes, 246 units), with matching runtime output.
+All-stage before/after dumps and runtime files:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-commuted-accumulator-7gjcwoyy`.

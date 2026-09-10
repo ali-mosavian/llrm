@@ -9,6 +9,54 @@ from qbopt.model import ir, lir
 from qbopt.backend import peephole
 
 
+def test_nbody_accumulator_does_not_copy_its_addend_over_its_running_sum():
+    """NBODY copied ECX to ESI and EAX to ECX before ADD ECX,ESI on every force pair."""
+    import corpus
+    from qbopt import wholeseg
+    result = wholeseg.emitted(Path("fixtures/bench/nbody-v-g3.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
+    assert not any(instructions[index:index + 3] == ["mov esi,ecx", "mov ecx,eax", "add ecx,esi"]
+                   for index in range(len(instructions) - 2))
+
+
+@pytest.mark.parametrize("name", ["add", "and", "or", "xor", "sub", "adc"])
+@pytest.mark.parametrize("width", [2, 4])
+def test_commuted_accumulator_keeps_the_saved_value(name, width):
+    """NBODY's saved accumulator must remain valid even when a later instruction reads it."""
+    registers = (Register.CX, Register.SI, Register.AX) if width == 2 else (Register.ECX, Register.ESI, Register.EAX)
+    accumulator, temporary, term = (ir.Reg(register, width) for register in registers)
+    semantics = (
+        ir.Semantics(ir.Operation.MOVE, "mov", (temporary,), (accumulator,)),
+        ir.Semantics(ir.Operation.MOVE, "mov", (accumulator,), (term,)),
+        ir.Semantics(ir.Operation.BINARY, name, (accumulator,), (accumulator, temporary)),
+    )
+    insns = tuple(lir.Insn(index, (index, index + 1), what, (), ()) for index, what in enumerate(semantics))
+    body = lir.LirBody("accumulator", 0, (lir.LirBlock(0, insns, ()),), {}, {})
+    result = peephole.commuted(body)
+    if name in {"sub", "adc"}:
+        assert result == body
+        return
+    assert len(result.insns) == 2
+    assert result.insns[0].what == semantics[0]
+    assert result.insns[1].what.sources == (accumulator, term)
+    for seed, addend in ((0, 0), (1, 2), (0x7fff, 1), (0xffffffff, 1)):
+        mask = (1 << (width * 8)) - 1
+        def execute(operations):
+            values = {accumulator: seed & mask, temporary: 42, term: addend & mask}
+            for one in operations:
+                operands = [values[arg] for arg in one.what.sources]
+                match one.what.name:
+                    case "mov": value = operands[0]
+                    case "add": value = sum(operands)
+                    case "and": value = operands[0] & operands[1]
+                    case "or": value = operands[0] | operands[1]
+                    case "xor": value = operands[0] ^ operands[1]
+                values[one.what.dests[0]] = value & mask
+            return values
+        assert execute(insns) == execute(result.insns)
+
+
 def test_fpcse_pushes_constant_single_as_one_dword():
     """QB FPCSE pushed 487.5 as 43F3h then C000h instead of one dword."""
     import corpus

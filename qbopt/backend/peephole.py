@@ -16,7 +16,7 @@ class Peephole(LIRTransform):
         self.frame = frame
 
     def transform(self, body: lir.LirBody) -> lir.LirBody:
-        return self._frame(waits(zeroes(addresses(overwritten(constants(pushes(body)))))))
+        return self._frame(waits(zeroes(addresses(overwritten(commuted(constants(pushes(body))))))))
 
     def _frame(self, body):
         """Drop only synthetic reservations when no added stack storage remains."""
@@ -75,6 +75,36 @@ def _lanes(register):
         return set()
     start = int(register in {Register.AH, Register.BH, Register.CH, Register.DH})
     return {(full, byte) for byte in range(start, start + RegisterExt.size(register))}
+
+
+def commuted(body: lir.LirBody) -> lir.LirBody:
+    """Use a saved accumulator in place for commutative two-address operations."""
+    blocks = []
+    for block in body.blocks:
+        insns = list(block.insns)
+        removed = set()
+        for index in range(2, len(insns)):
+            saved, copied, combined = insns[index - 2:index + 1]
+            if any(id(one) in removed or one.clobbers or one.requires or one.delivers
+                   or one.spread or one.group is not None
+                   for one in (saved, copied, combined)):
+                continue
+            if copied.symbol is True or combined.symbol is True:
+                continue
+            match saved.what, copied.what, combined.what:
+                case (ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg() as temporary,), (ir.Reg() as accumulator,)),
+                      ir.Semantics(ir.Operation.MOVE, "mov", (destination,), (ir.Reg() as term,)),
+                      ir.Semantics(ir.Operation.BINARY, name, (result,), (left, right))):
+                    if (name not in {"add", "and", "or", "xor"}
+                        or not accumulator == destination == result == left or right != temporary
+                        or not accumulator.width == temporary.width == term.width
+                        or accumulator.width not in (2, 4)
+                        or _lanes(accumulator.register) & _lanes(temporary.register)):
+                        continue
+                    insns[index] = replace(combined, what=replace(combined.what, sources=(accumulator, term)))
+                    removed.add(id(copied))
+        blocks.append(replace(block, insns=tuple(lir.without(insns, lambda one: id(one) in removed))))
+    return replace(body, blocks=tuple(blocks))
 
 
 def _register_effects(one):
