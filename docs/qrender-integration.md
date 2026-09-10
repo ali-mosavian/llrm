@@ -17,7 +17,22 @@ All 21 BASIC modules were checked through `wholeseg.emitted`. None completed
 LIR emission. Nineteen refused; `pl_move` and `screen` initially failed MIR
 convergence. Commit `000860a` fixes the repeated LCSSA exit phis; those two
 now finish optimization and refuse on call contracts too. Original objects
-remain intact. No optimized renderer runtime result exists yet.
+remain intact. The subsequent VBDOS sine-interface audit allows `d_turb`
+to emit through LIR; the other 20 modules remain blocked.
+
+With only `d_turb.obj` replaced, the renderer relinks and exits successfully
+after the same 60-tick run. Its saved BMP is byte-identical to the baseline
+(SHA-1 `d6e4096b3610249ff4d53b6829f1ab18ec108c7a`); frame, polygon, triangle,
+entity and player-state outputs agree. Timing fields differ, and available
+memory is 32 bytes lower. This is a partial correctness check, not completion
+of the integration gate or evidence of a speedup.
+
+`fixtures/regressions/qrender-dturb-v-g3.obj` is the real `d_turb.obj` from
+the source revision and compiler flags above. Its fail-first regression
+requires LIR emission. The audited `B$SIN4`/`B$SIN8` VBDOS interface retains
+all six GP inputs and unknown clobbers, memory and control effects; only
+zero argument cleanup is established. Hardware and emulator return paths
+restore the local stack frame. The sine call itself is not optimized away.
 
 ## Remaining blockers
 
@@ -27,7 +42,7 @@ remain intact. No optimized renderer runtime result exists yet.
   BX=0 contract does not cover this path. Do not infer register preservation,
   memory purity or pointer stability from its fast path.
 - **Other runtime contracts:** first refusals include `B$FLEN`, `B$EXTS`,
-  `B$SIN8`, `B$FREF`, `B$ASSN`, and `B$RDIM`.
+  `B$COS4`, `B$FREF`, `B$ASSN`, and `B$RDIM`.
 - **Cross-module interfaces:** BASIC, C and assembly callees need verified
   contracts; examples are `R_POINT_LEAF`, `IN_HANDLE_TOGGLES`, `QGLSFNEW`
   and `QGLSFPSET`. A name alone does not establish an ABI.

@@ -308,6 +308,20 @@ def _entry(family: str) -> None:
 for _one in ("pds71", "qb45"):
     _entry(_one)
 
+for _name in ("B$SIN4", "B$SIN8"):
+    VARIANTS[(_name, "vbdos")] = replace(
+        worst(_name),
+        inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
+        cleanup=0,
+        evidence=(
+            "VBDCL10E.LIB 87btrig.asm SIN4/SIN8 share 005a: ST0 operand, "
+            "local BP frame, hardware exits 0093..0096 and 00c3..00c6 restore SP/BP and RETF; "
+            "emulator tail B$EMSIN (embtrig.asm 0065) exits 00c8..00cb identically. "
+            "All GP inputs are conservatively retained; no preservation, purity, x87 "
+            "optimization or error-path guarantee is inferred. Error tails remain unknown."
+        ),
+    )
+
 VARIANTS[("B$EXSA", "vbdos")] = replace(
     worst("B$EXSA"),
     inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
