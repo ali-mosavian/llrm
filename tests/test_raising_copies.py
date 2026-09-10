@@ -144,7 +144,8 @@ def test_proven_copy_unlocks_strict_floating_cse():
     path = Path("fixtures/omf/fpdeep-p-g2.obj")
     original = mir.bodies(found, corpus.partitioned(path))[0][1]
     floating = tuple(op for block in original.blocks for op in block.ops if 0x158 <= op.at <= 0x174)
-    floating = tuple(replace(op, floating_origin=replace(op.floating_origin, block=body.entry))
+    sequence = tuple(op.floating_origin.at for op in floating if op.floating_origin)
+    floating = tuple(replace(op, floating_origin=replace(op.floating_origin, block=body.entry, sequence=sequence))
                      if op.floating_origin else op for op in floating)
     block = body.blocks[0]
     body = replace(body, blocks=(replace(block, ops=(*block.ops, *floating)),))

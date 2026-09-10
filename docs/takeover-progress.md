@@ -1,5 +1,21 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: repair the sliced floating-copy regression
+
+The strict-copy/CSE regression constructed a six-operation floating slice
+but kept the original eleven-operation provenance sequence. Its failure was
+the verifier correctly rejecting that invalid input, not a compiler regression.
+The fixture now describes its actual sliced sequence. The assertions remain:
+one shared FLOAD and a lowered `fld st(0)`; the production verifier is unchanged.
+All 16 copy tests pass. Disabling scalar copy recognition makes the repaired
+test fail at its FLOAD-count assertion, confirming it still detects the feature.
+
+A renewed PDS B$PEI4 library check found the same indirect PRINT dispatch
+already recorded in `docs/contracts.md`; it supplies no DF/DS proof. Do not
+repeat that tool query expecting a different contract. A contextual dispatch
+analysis or a separately established runtime ABI is required. This round
+changes no generated program bytes or target ratios.
+
 ## 2026-09-10: retain explicit copy environment across CFG edges
 
 The copy frontend now propagates proven direction, DS identity and DS/ES
