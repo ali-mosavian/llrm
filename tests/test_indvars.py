@@ -9,9 +9,10 @@ from qbopt import wholeseg
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
-def test_internal_branch_reuses_the_value_recurrence(tag):
+@pytest.mark.parametrize("program", ["ivarm", "ivword"])
+def test_internal_branch_reuses_the_value_recurrence(tag, program):
     """IVARM kept a second counter solely for ten trips around a conditional store."""
-    result = wholeseg.emitted(Path(f"fixtures/regressions/ivarm-{tag}.obj").read_bytes())
+    result = wholeseg.emitted(Path(f"fixtures/regressions/{program}-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
     assert not any(one.startswith("inc ") for one in instructions)

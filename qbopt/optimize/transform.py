@@ -1367,69 +1367,9 @@ _OBSERVED = frozenset(
 
 
 def _leaving(body: MirBody) -> set:
-    """The value each register holds where control leaves the body.
+    from qbopt.frontend.raising_words import leaving
 
-    What the caller reads is not a fact this body holds, so everything that
-    reaches an exit counts as read. Reaching definitions forward, meeting by
-    union: two definitions of one register arriving at a join are both still
-    readable there, and claiming otherwise would kill a live one.
-
-    This is the one place the liveness looks at `origin`. It has to: "what
-    the caller sees" is a statement about registers, and there is nothing
-    else in a MirBody that says which value ends up where.
-    """
-    preds = {block.at: [one.at for one in body.blocks if block.at in one.succ] for block in body.blocks}
-    arriving: dict = {}
-    for value in alive_at.entry_values(body):
-        register = body.origin.get(value)
-        if register is not None:
-            arriving.setdefault(ir.ROOT.get(register, register), set()).add(value)
-
-    outof: dict[int, dict] = {block.at: {} for block in body.blocks}
-    changing = True
-    while changing:
-        changing = False
-        for block in body.blocks:
-            here: dict = {}
-            coming = [outof[one] for one in preds[block.at]]
-            if block.at == body.entry:
-                coming.append(arriving)
-            for one in coming:
-                for register, values in one.items():
-                    here.setdefault(register, set()).update(values)
-            for phi in block.phis:
-                # Flags the same way as below: what a caller reads is a
-                # register, and the flags are not one of them. Skipped for
-                # an operation's own defines and not for a phi's result,
-                # the flag phi at a loop header reached the exit as though
-                # it were a register value -- nothing overwrites that key,
-                # since every operation skips it -- and was live with
-                # nothing reading it. That kept the flags of every
-                # operation feeding it alive too, and reuse refuses a
-                # divide whose other answer is still wanted.
-                if phi.result.flags:
-                    continue
-                register = body.origin.get(phi.result)
-                if register is not None:
-                    here[ir.ROOT.get(register, register)] = {phi.result}
-            for op in block.ops:
-                for value in op.defines:
-                    if value.flags:
-                        continue
-                    register = body.origin.get(value)
-                    if register is not None:
-                        here[ir.ROOT.get(register, register)] = {value}
-            if here != outof[block.at]:
-                outof[block.at] = here
-                changing = True
-
-    out: set = set()
-    for block in body.blocks:
-        if block.succ:
-            continue
-        for values in outof[block.at].values():
-            out |= values
-    return out
+    return leaving(body)
 
 
 # A value is a 32-bit register and this machine's code is 16-bit, so the

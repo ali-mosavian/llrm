@@ -546,6 +546,10 @@ one documented target without materially regressing another.
   exit, complete non-wrapping trip count and unobserved counter are still
   required; final counter stores are reconstructed at the exit. IVARM
   exercises the conditional-store shape on all three compilers.
+  Raise-time word normalization removes unused upper-word preservation from
+  16-bit loads/copies. Wide or unknown readers, phi/merge propagation and
+  body-exit values retain it. IVWORD covers the INTEGER-branch dependency
+  that previously kept QB/PDS's redundant loop counters alive.
 - [x] Build `MemorySSA`: one def-use graph for loads, stores and call effects.
   `analysis/memoryssa.py` provides live-on-entry, memory uses/definitions and
   join/backedge phis. Calls conservatively define memory. This is an analysis

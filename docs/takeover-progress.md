@@ -1,5 +1,42 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: remove unobserved word-preservation dependencies in raise
+
+The INTEGER version of IVARM kept QB/PDS's loop counter alive solely because
+a narrow branch-condition load preserved an unused upper word. The raise now
+removes these dependencies from 16-bit loads/copies only after tracing wide
+and unknown reads, phi/merge edges and body-exit values. Actual low-word
+operands remain uses. No optimizer is allowed to ignore a real dependency.
+
+The existing exit-register observation analysis moved unchanged into the
+frontend module; legacy optimization liveness delegates to that same source.
+This is not complete elimination of partial-write MIR: observed upper bits
+and other operations still retain their existing representation.
+
+PDS IVWORD now has the same recurrence-controlled tail as IVARM:
+
+```asm
+; before                  ; after
+add ax,3                  add ax,3
+inc bx
+cmp bx,10                 cmp ax,37
+jle loopBody              jne loopBody
+```
+
+The counter initializer disappears and its exit store becomes constant 11;
+the PDS object remains 1121 bytes. QB gains the same elimination; VBDOS
+already eliminated this counter. IVWORD prints `34 0 11 37` plus DONE in
+all three linked baseline/optimized runs. HARR, PRESSX and LNGMIX also pass
+on all three compilers. The two newly improved compiler cases and direct
+normalization test fail with normalization disabled; 35 focused tests pass.
+
+Before/after stage dumps:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-ivword-stages-g200nme1`.
+Runtime artifacts under the same temporary parent: `qbopt-ivword-p-g2-sqn4jp6q`,
+`qbopt-ivword-q-O-p5a2tbgx`, `qbopt-ivword-v-g3-g7l19eju`, and
+`qbopt-words-gate-p-g2-jdjpzu56`, `qbopt-words-gate-q-O-4fx45at8`,
+`qbopt-words-gate-v-g3-hht51ofi`.
+
 ## 2026-09-10: reuse induction variables across internal branches
 
 Removed IndVarSimplify's two-block-only restriction. The existing proof

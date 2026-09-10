@@ -2237,6 +2237,8 @@ def bodies(
             built = raising_floats.annotated(built)
             from qbopt.frontend import raising_float_values
             built = raising_float_values.raised(built)
+            from qbopt.frontend import raising_words
+            built = raising_words.scalar(built)
             if body.body.kind == "main":
                 from qbopt.frontend import raising_literals
                 built = raising_literals.initialized(built, found)
