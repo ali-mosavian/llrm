@@ -1,5 +1,34 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: remove dead allocator reloads after physical assignment
+
+The spiller now marks its own reloads in LIR. The physical dead-move
+peephole may remove these when all destination byte lanes are overwritten
+before use. Unmarked memory reads remain observable; merely using a frame
+address is not proof that a load belongs to the allocator.
+
+QB FPCSE before/after (descriptor relocation shown symbolically):
+
+```asm
+; before                       ; after
+call B$PER4                    call B$PER4
+mov ax,[bp-2]
+mov ax,descriptorDone           mov ax,descriptorDone
+push ax                        push ax
+```
+
+Modeled cost **165 -> 159**, object **825 -> 822 bytes**. PDS and VBDOS
+FPCSE objects are byte-identical. The unused two-byte frame reservation
+still remains; removing it requires recomputing frame use, not guessing
+from this one load. FPCSE remains above the 98-cost reference target.
+
+The emitted-code regression failed before the fix. All 93 peephole tests
+pass, including ownership and live-read guards. QB original and optimized
+DOS runs both print `S= 487.5` and `DONE`; linking succeeds. All pass dumps
+and runtime artifacts are under
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-dead-reload-i79b8ssf`.
+Adjacent prologue/peephole dumps show exactly the one reload removed.
+
 ## 2026-09-10: fix noreturn being mistaken for restricted memory access
 
 Investigating terminal dead stores exposed an unsound frontend assumption:

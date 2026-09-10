@@ -9,6 +9,31 @@ from qbopt.model import ir, lir
 from qbopt.backend import peephole
 
 
+def test_fpcse_drops_unused_allocator_reload():
+    """QB FPCSE printed 487.5 correctly but restored AX only to overwrite it."""
+    import corpus
+    from qbopt import wholeseg
+    result = wholeseg.emitted(Path("fixtures/omf/fpcse-q-O.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
+    assert "mov ax,[bp-2]" not in instructions
+
+
+@pytest.mark.parametrize("owned", [False, True])
+@pytest.mark.parametrize("read", [False, True])
+def test_dead_reload_requires_allocator_ownership_and_no_read(owned, read):
+    """FPCSE's dead spill is removable, but source loads and live spills are not."""
+    from qbopt.backend.frame import Frame
+    ax = ir.Reg(Register.AX, 2)
+    load = lir.Insn(0, (0, 0), ir.Semantics(ir.Operation.MOVE, "mov", (ax,), (Frame(0).cell(1, 2),)),
+                    (), (), spill_reload=owned)
+    use = lir.Insn(1, (1, 1), ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.BX, 2),), (ax,)), (), ())
+    write = lir.Insn(2, (2, 2), ir.Semantics(ir.Operation.MOVE, "mov", (ax,), (ir.Imm(4, 2),)), (), ())
+    insns = (load, use, write) if read else (load, write)
+    body = lir.LirBody("reload", 0, (lir.LirBlock(0, insns, ()),), {}, {})
+    assert (load not in peephole.overwritten(body).insns) == (owned and not read)
+
+
 @pytest.mark.parametrize("middle,removed", [(Register.CX, True), (Register.AL, False), (Register.AH, False)])
 def test_overwritten_register_copy_respects_byte_reads(middle, removed):
     """FPDEEP retains AX/SI allocation shuffles overwritten before any use."""

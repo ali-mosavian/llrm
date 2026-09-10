@@ -59,7 +59,7 @@ def _register_effects(one):
 
 
 def overwritten(body: lir.LirBody) -> lir.LirBody:
-    """Remove register-only moves whose byte lanes are overwritten before use."""
+    """Remove dead register moves and allocator-owned spill reloads."""
     blocks = []
     for block in body.blocks:
         dead, redundant = set(), set()
@@ -69,11 +69,13 @@ def overwritten(body: lir.LirBody) -> lir.LirBody:
                 dead.clear()
                 continue
             match one.what:
-                case ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg() as dest,), (ir.Reg() | ir.Imm() as source,)):
+                case ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg() as dest,), (ir.Reg() | ir.Imm() | ir.Mem() as source,)):
                     lanes = _lanes(dest.register)
                     if (lanes and lanes <= dead and dest.width == source.width
                         and not one.requires and not one.delivers
-                        and (isinstance(source, ir.Reg) or source.address is None)):
+                        and (isinstance(source, ir.Reg)
+                             or isinstance(source, ir.Imm) and source.address is None
+                             or isinstance(source, ir.Mem) and one.spill_reload)):
                         redundant.add(id(one))
                         continue
             reads, writes = effects

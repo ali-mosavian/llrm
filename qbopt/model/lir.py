@@ -116,6 +116,9 @@ class Insn:
     # does -- which bytes the operation stands for and where it stands are
     # still the operation's own.
     symbol: "bool | None" = None
+    # Allocator-owned stack reads can be deleted when their result is dead;
+    # an arbitrary source-program memory read may have observable faults.
+    spill_reload: bool = False
 
 
 @dataclass(frozen=True, slots=True)

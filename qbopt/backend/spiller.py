@@ -187,7 +187,8 @@ def _width(one: lir.Insn, value: int) -> int:
 
 def _reload(beside: lir.Insn, into: int, cell: ir.Mem) -> lir.Insn:
     """The load that puts a spilled value back for one instruction."""
-    return _inserted(beside, ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(into, cell.width),), (cell,)), (into,), ())
+    return replace(_inserted(beside, ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(into, cell.width),), (cell,)), (into,), ()),
+                   spill_reload=True)
 
 
 def _store(beside: lir.Insn, out_of: int, cell: ir.Mem) -> lir.Insn:
