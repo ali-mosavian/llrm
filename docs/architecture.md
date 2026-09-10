@@ -755,6 +755,12 @@ one documented target without materially regressing another.
   on QB/PDS/VBDOS. This is not enabled in production: bounded unrolling still
   needs candidate simplification, profitability and branching-layout support.
   No emitted assembly or performance change is claimed for the cloning primitive.
+  A peeled IVARM emission probe exposed an operandless-branch lowering defect:
+  cloned semantic conditions now select conditional jumps without depending on
+  an original instruction snapshot. The next probe reaches emission but fails
+  code-map coverage: a cloned latch physically falls into its own header rather
+  than its new successor. Explicit fallthrough repair is required before enabling
+  these candidates; a successful object write alone is not acceptance evidence.
 - [ ] Delete provably unobservable loops and retain required final stores,
   synchronization and exceptional behavior.
 

@@ -68,6 +68,14 @@ _MACHINE: dict[mir.Kind, tuple[ir.Operation, str]] = {
 }
 
 
+_BRANCHES = {
+    mir.Kind.EQ: "je", mir.Kind.NE: "jne",
+    mir.Kind.LT: "jl", mir.Kind.LE: "jle", mir.Kind.GT: "jg", mir.Kind.GE: "jge",
+    mir.Kind.BELOW: "jb", mir.Kind.BELOW_EQ: "jbe",
+    mir.Kind.ABOVE: "ja", mir.Kind.ABOVE_EQ: "jae",
+}
+
+
 def semantics(op: mir.Op, was: ir.Semantics | None = None, place=None) -> ir.Semantics | None:
     """What this operation computes, in machine form, or None for verbatim.
 
@@ -94,7 +102,7 @@ def semantics(op: mir.Op, was: ir.Semantics | None = None, place=None) -> ir.Sem
         return ir.Semantics(ir.Operation.NOTHING, "wait", (), ())
     if op.kind is mir.Kind.JUMP and op.target is not None:
         return ir.Semantics(ir.Operation.JUMP, "jmp", (), (), op.target)
-    if not op.args and not op.results and op.raised is None:
+    if not op.args and not op.results and op.raised is None and op.kind is not mir.Kind.BRANCH:
         return None  # nothing to build one from
     # A value resolves to the register the original instruction had in the
     # same position where there is one. Emitting ir.Held instead hands the
@@ -104,8 +112,8 @@ def semantics(op: mir.Op, was: ir.Semantics | None = None, place=None) -> ir.Sem
     # deleted. Where there is no such operand -- an operation a pass
     # invented -- ir.Held is the only honest answer and select resolves it.
     was_op, name = _MACHINE.get(op.kind, (op.op, op.name))
-    if op.kind is mir.Kind.BRANCH and not name and op.test in (mir.Kind.EQ, mir.Kind.NE):
-        was_op, name = ir.Operation.BRANCH, "je" if op.test is mir.Kind.EQ else "jne"
+    if op.kind is mir.Kind.BRANCH and not name and op.test in _BRANCHES:
+        was_op, name = ir.Operation.BRANCH, _BRANCHES[op.test]
     if op.kind is mir.Kind.NOTHING and op.op is not ir.Operation.NOTHING:
         was_op, name = ir.Operation.NOTHING, "nop"
     args = op.args

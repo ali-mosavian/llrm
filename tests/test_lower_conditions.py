@@ -94,3 +94,16 @@ def test_condition_scheduling_does_not_move_effects_or_other_results(reason: str
     built = replace(built, blocks=(replace(built.blocks[0], ops=(compare, increment, branch)),))
     with pytest.raises(lower.Unlowered, match="crosses a live condition"):
         lower.lowered("loop", built, {}, (), {})
+
+
+@pytest.mark.parametrize("test,name", [(mir.Kind.EQ, "je"), (mir.Kind.NE, "jne"),
+                                      (mir.Kind.LT, "jl"), (mir.Kind.LE, "jle"),
+                                      (mir.Kind.GT, "jg"), (mir.Kind.GE, "jge"),
+                                      (mir.Kind.BELOW, "jb"), (mir.Kind.BELOW_EQ, "jbe"),
+                                      (mir.Kind.ABOVE, "ja"), (mir.Kind.ABOVE_EQ, "jae")])
+def test_cloned_operandless_branch_selects_its_semantic_condition(test, name):
+    """Peeled IVARM refused at 0x73: its cloned conditional jump was carried without semantics."""
+    branch = mir.Op(0x73, ir.Operation.BRANCH, "", (), (), kind=mir.Kind.BRANCH,
+                    test=test, target=0x3100000001, covers=(0x73, 0x73), raised=None)
+    expected = ir.Semantics(ir.Operation.BRANCH, name, (), (), branch.target)
+    assert lower.semantics(branch, place=lower.as_a_value) == expected
