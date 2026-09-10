@@ -341,6 +341,14 @@ for _name, _evidence in {
               "overwrites arithmetic flags before validation and local 00a4 dispatch.",
     "B$SACT": "farstr stcore.asm entry 01b6 loads the descriptor at BP+0Ah and "
               "CMP word [DI],0 at 01bf overwrites arithmetic flags before string allocation/copy.",
+    "B$DSG0": "rtinit.asm 00de consists only of MOV DS:[relocated global],DS / RETF; "
+              "it consumes no GP register or arithmetic flags and has no dependencies.",
+    "B$PUT3": "dvgetput.asm 005d sets AL=5 and joins GET3 at 0048, calling local "
+              "00a4; LocateFDB (dvcore.asm 00e2) kills arithmetic flags with XOR SI,SI at 00e6.",
+    "B$SMID": "farstr mid.asm 0000 first calls strutil.asm 0013 with BX=[BP+0Ah]; "
+              "OR AX,AX at 0016 kills arithmetic flags before any branch or further call.",
+    "B$SPAC": "farstr strfcn.asm 0182 passes AL=20h and CX=[BP+6] to local 0191; "
+              "OR CX,CX there kills arithmetic flags before allocation or an error tail.",
 }.items():
     VARIANTS[(_name, "vbdos")] = replace(
         worst(_name),

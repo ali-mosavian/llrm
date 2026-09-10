@@ -87,16 +87,20 @@ def test_vbdos_file_setup_retains_unknown_effects(name, cleanup):
 
 
 @pytest.fixture(scope="module")
-def model_calls():
-    path = Path("fixtures/regressions/qrender-d-mdl-v-g3.obj")
+def model_calls(request):
+    path = Path(f"fixtures/regressions/qrender-{request.param}-v-g3.obj")
     found = corpus.loaded(path)
     rules = runtime.for_module(found)
     return found, rules, list(mir.bodies(found, corpus.partitioned(path), rules))
 
 
-@pytest.mark.parametrize("symbol", ["B$FLOF", "B$GET3", "B$GET4", "B$SACT"])
+@pytest.mark.parametrize("model_calls,symbol", [
+    ("d-mdl", symbol) for symbol in ("B$FLOF", "B$GET3", "B$GET4", "B$SACT")
+] + [
+    ("d-surf", symbol) for symbol in ("B$DSG0", "B$PUT3", "B$SMID", "B$SPAC")
+], indirect=["model_calls"])
 def test_model_file_calls_lower_without_replacement(model_calls, symbol):
-    """D_MDL could not emit an optimized OBJ: these real call interfaces were unknown."""
+    """D_MDL/D_SURF emitted no optimized OBJ: these real call interfaces were unknown."""
     found, rules, bodies = model_calls
     seen = 0
     for name, body in bodies:

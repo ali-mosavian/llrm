@@ -4,6 +4,33 @@ New optimization passes are paused until the optimized renderer builds and
 runs correctly. Target: `qb-qrender/.claude/worktrees/qgl-poly-draw`, source
 commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
+## D_SURF interface audit — integration pending
+
+Four real D_SURF calls failed lowering before their VBDOS input contracts
+were established: DSG0 at 211c, PUT3 at 2ceb, SMID at 2d5d and SPAC at 2d11.
+DSG0 only stores DS and returns. PUT3 enters GET3's shared file path;
+LocateFDB kills incoming arithmetic flags. SMID first enters strutil 0013,
+whose OR AX,AX kills them; SPAC enters strfcn 0191, whose OR CX,CX does so.
+All GP inputs remain conservative, as do cleanup, memory, clobbers and
+control/error effects. No runtime operation is replaced.
+
+All four real-object regressions failed first. The eight selected D_MDL and
+D_SURF call checks pass (131.91 seconds); no broad suite was run. Native-x87
+emission is being checked using `/tmp/qbopt-d-surf-audit.py`, with complete
+stage output requested in `/tmp/qbopt-d-surf-native`. Project bindings are
+hash-scoped. This is **not yet an accepted fifteenth module**; the latest
+verified FPS and screenshot remain the fourteen-module evidence below.
+
+Before/after this interface-only change (call instruction retained; final
+relocated address is not yet established):
+
+```asm
+; before                         ; after
+call far B$PUT3                   call far B$PUT3
+call far B$SMID                   call far B$SMID
+call far B$SPAC                   call far B$SPAC
+```
+
 ## Latest benchmark — fourteen modules, native x87, 2026-09-11
 
 D_MDL now passes the pinned benchmark on top of the thirteen-module build.
