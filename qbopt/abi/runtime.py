@@ -365,6 +365,25 @@ VARIANTS[("B$CHOU", "vbdos")] = replace(
 )
 
 for _name, _cleanup, _evidence in (
+    ("B$ASSN", 12,
+     "farstr/string.asm 005e..00b3 reads six stack words. OR AX,AX at 0075 "
+     "replaces incoming arithmetic flags before branches/dependencies. Fixed "
+     "copy/padding, LDFS -> SAS1, and LSET paths join POP DI/SI/BP / RETF 12. "
+     "LDFS consumes 6 internal bytes, SAS1 4, LSET 8. Allocation, alias writes "
+     "and error paths remain unknown; string direction is runtime environment."),
+    ("B$SCMP", 4,
+     "farstr/stcore.asm 0280..02b8 reads two descriptors; first RefString "
+     "dependency replaces incoming arithmetic flags (strutil.asm 0016 OR AX,AX). "
+     "RefStringArgLast is the same reader with [bp+6]. DelStrTemp calls "
+     "DelString -> FreeDataPpv for temporaries; near returns are stack neutral. "
+     "Comparison saves/reinstates its flags around deletion, then restores "
+     "DS/DI/SI/BP and RETF 4. Heap effects and all clobbers remain conservative."),
+    ("B$SCPF", 2,
+     "farstr/string.asm 01aa..01c0 calls SCPY (0164, RETF 2) then STDL "
+     "(0171, RETF 2), each with one internal argument; POP AX/BP / RETF 2 "
+     "returns to caller. SCPY -> StrAlcTmpCopySH -> RefString overwrites "
+     "incoming flags before conditional work; STDL -> DelString -> FreeDataPpv. "
+     "Allocation/freeing and errors remain unknown, not a pure copy."),
     ("B$FMID", 6,
      "farstr/strfcn.asm 00f6..0112 reads descriptor/start/count at [bp+0a/08/06]. "
      "First dependency RefString (strutil.asm 0013) overwrites incoming flags "

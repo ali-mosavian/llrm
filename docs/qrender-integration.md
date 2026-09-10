@@ -284,6 +284,28 @@ SCMP, SCPF and SYS_ERROR interfaces in `common`. Audit these before
 expecting whole-module emission; the list is not proof that no backend
 blockers remain.
 
+### Assignment, comparison and copy/free interfaces
+
+Audited VBDOS ASSN, SCMP and SCPF together. Normal argument cleanup is
+12, 4 and 2 bytes respectively. ASSN's copy/padding and helper paths join
+one epilogue. SCMP reads both strings, preserves its comparison flags
+across temporary deletion and then returns. SCPF calls SCPY and STDL,
+each consuming one internal argument. Incoming arithmetic flags are
+replaced before conditional work, directly or by RefString. All GP inputs
+and unknown effects remain; in particular SCMP is not pure because it
+may free temporary strings. Three fail-first regressions pass alongside
+ten neighboring interface tests.
+
+`/tmp/qbopt-common-strings-fixed` passes COM_TOKENIZE's missing interfaces
+and reaches COM_PARSE_CONFIG's nonzero-selector ENRA at 022b. The object
+still refuses atomically; the assembly remains identical, for example:
+
+```asm
+; before                         ; after (unchanged object)
+00e7  call far B$ASSN             00e7  call far B$ASSN
+015b  call far B$SCMP             015b  call far B$SCMP
+```
+
 ### Two-module runtime check
 
 Relinking with rewritten `view` and `d_turb` succeeded. The isolated build in
