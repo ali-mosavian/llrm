@@ -521,6 +521,43 @@ call far B$FASC                  call far B$FASC
 call far B$FCHR                  call far B$FCHR
 ```
 
+### Input module: four-module runtime check
+
+Explicit project interfaces for QGLKBDINIT (cleanup 4), QGLMOUSEINIT (8),
+SCR_SCREENSHOT (8) and SYS_ERROR (2) let `in_main` emit 9,070 -> 8,692
+object bytes. All six GP inputs and unknown effects remain. The initializers
+install interrupt handlers; screenshot performs file I/O. Their source and
+object prologues/epilogues were inspected, including code after interrupts
+where the contract tool stops. These are not global runtime contracts.
+Audited object SHA256 values:
+
+| Object | SHA256 |
+|---|---|
+| kbd | 677360877e2f813fd7f5a37ef40766ef37dc48a735a6d8f9d420a7b5b2fffcdc |
+| mouse | 596ad6d94989933eaccd2f9e14799bbc76b2a75d01e9f5f58e9aa28af9a77806 |
+| screen | 598494eae3e667d6ca043c089d873c133e23b61445dffc4975ec3a7f7641c779 |
+
+`/tmp/qbopt-input-interfaces` contains all stages. Example address argument:
+
+```asm
+; before                         ; after
+mov ax,[bp+6]                    mov ax,[bp+6]
+add ax,112Ah                     add ax,112Ah
+mov bx,ax
+push ds                          push ds
+pop es                           pop es
+push es                          push es
+push bx                          push ax
+```
+
+Fresh build `/tmp/qbopt-qrender-input-20260910` links common/view/d_turb/
+in_main rewritten. Port 2199 (exec session 73683) returned to the DOS
+prompt and produced new BENCH files. At 60 ticks: 13 frames, 266 polygons,
+820 triangles; every non-timing/non-memory benchmark field matches baseline.
+BMP SHA1 is again `d6e4096b3610249ff4d53b6829f1ab18ec108c7a`.
+This validates the scene, not interactive keyboard or screenshot coverage.
+Seventeen BASIC modules remain; no new source defect was fixed in this step.
+
 ### Two-module runtime check
 
 Relinking with rewritten `view` and `d_turb` succeeded. The isolated build in
