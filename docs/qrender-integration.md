@@ -4,7 +4,37 @@ New optimization passes are paused until the optimized renderer builds and
 runs correctly. Target: `qb-qrender/.claude/worktrees/qgl-poly-draw`, source
 commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
-## Latest gate — nine modules, native x87, 2026-09-11
+## Latest gate — ten modules, native x87, 2026-09-11
+
+QGLDIFF is now accepted on top of the nine-module build. Candidate
+`/tmp/qbopt-qrender-native-forward-20260911` runs on port 2210; its
+dedicated QGLDIFF.LOG is byte-identical to the 2,701-byte reference and
+ends RESULT PASS. The ordinary benchmark completes at **9.50707 FPS**
+versus baseline 9.43334; all checked correctness fields and BENCH.BMP
+match. No speedup claimed within this variation. Render evidence:
+`diff-live-019.png`; dedicated-check completion: `qgldiff-check.png`.
+
+The second defect was load-provider classification: after constant
+folding, ADD of a constant and memory had no non-address SSA input,
+so forwarding treated its result as the memory contents. At original
+048c it replaced the array base with base+20; the plane computation
+subtracted a coordinate from itself. Only a MIR LOAD may now provide
+loaded bytes. The real-fixture regression fails before the fix and passes
+after; four focused forwarding checks pass. A mistakenly broad test
+selection was interrupted after 515 passes, not treated as a completed gate.
+Full stages: `/tmp/qbopt-qgldiff-forward-native`; OBJ 9,699 bytes.
+
+```asm
+; faulty candidate             ; corrected candidate
+fld dword [es:si]              fld dword [es:si]
+fsub dword [es:si]             xor si,si
+                              add si,[bx+0Ah]
+                              fsub dword [es:si]
+```
+
+Eleven original modules remain. Prior failed candidates below are diagnostic
+history, not accepted results. A stale-config launch and a debugger-port
+conflict were excluded; unwatched artifacts were preserved separately.
 
 SYS now emits and links, adding it to the eight accepted native modules.
 Build: `/tmp/qbopt-qrender-native-sys-20260911`; SYS OBJ 20,947 -> 20,449

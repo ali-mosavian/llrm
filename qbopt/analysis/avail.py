@@ -65,15 +65,16 @@ def _real(values: tuple[Value, ...]) -> list[Value]:
 def loaded_into(op: Op) -> tuple[MemRef, Value] | None:
     """The cell this op purely loads, and the value it lands in.
 
-    Purely: one read, no write, one value defined, nothing read as data, and
+    Purely: a LOAD, one read, no write, one value defined, nothing read as data, and
     an address something can name, either a symbolic cell or a whole SSA
     pointer. An anonymous memory effect is neither and cannot supply data.
     `and cx,[x]` fails the last test -- it uses cx as data as well as
     defining it, so the bytes it leaves in cx are not the cell's. Treating
     it as a load is the bug tools/matrix.py caught in forward.py, and the
-    same shape has to be refused here.
+    same shape has to be refused here. Constants are not SSA uses: after
+    folding, `20 + [base]` can have only address uses yet is still not a load.
     """
-    if (op.floating is not None or len(op.loads) != 1 or op.stores or op.barrier
+    if (op.kind is not Kind.LOAD or op.floating is not None or len(op.loads) != 1 or op.stores or op.barrier
         or op.loads[0].addr is None and not op.loads[0].pointer):
         return None
     defines = _real(op.defines)
