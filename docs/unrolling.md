@@ -26,6 +26,16 @@ Every pass and emitted assembly, before and after:
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-pipeline-unroll-stages-jhhx_l1m`.
 These checks do not provide elapsed-time measurements.
 
+The post-allocation constant peephole now retains register knowledge across
+empty byte-ownership markers. FPDEEP previously emitted `mov ax,0` twice
+because the removed instruction between them cleared that knowledge. It now
+emits one move, reducing the PDS object from 1925 to 1922 bytes. Markers with
+definitions or clobbers, unknown instructions and calls remain boundaries.
+This changes no MIR semantics and adds no LIR optimization tier. The focused
+regression failed first; 81 peephole tests and 33 FPDEEP output checks pass.
+New stage dumps and runtime artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-marker-constant-4ljmnufn`.
+
 Subsequent exact-store folding reduces expanded FPDEEP to roughly 2.0x
 target (PDS 2166, QB 2201, VBDOS 2162). The earlier comparison below records
 the integration baseline, not today's folded result. See

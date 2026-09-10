@@ -251,6 +251,18 @@ def test_partial_write_invalidates_constant():
     assert len(peephole.constants(body).blocks[0].insns) == 3
 
 
+@pytest.mark.parametrize("clobbers", [frozenset(), frozenset({Register.AX})])
+def test_empty_ownership_marker_preserves_register_knowledge(clobbers):
+    """Expanded FPDEEP emitted MOV AX,0 twice, separated only by a removed instruction's marker."""
+    what = ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.AX, 2),), (ir.Imm(0, 2),))
+    first = lir.Insn(0, (0, 3), what, (), ())
+    marker = lir.Insn(3, (3, 5), ir.Semantics(ir.Operation.NOTHING, "", (), ()), (), (), clobbers=clobbers)
+    last = replace(first, at=5, covers=(5, 8))
+    body = lir.LirBody("marker", 0, (lir.LirBlock(0, (first, marker, last), ()),), {}, {})
+    result = peephole.constants(body)
+    assert sum(one.what == what for one in result.insns) == (2 if clobbers else 1)
+
+
 @pytest.mark.parametrize("interruption", ["none", "extend", "extend_write", "extend_clobber", "call", "clobber", "unknown", "relocation", "block"])
 def test_constant_knowledge_is_local_and_invalidated(interruption):
     from qbopt.objectfile.module import Addr, Space

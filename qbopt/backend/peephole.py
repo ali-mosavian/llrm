@@ -198,6 +198,10 @@ def constants(body: lir.LirBody) -> lir.LirBody:
         redundant = set()
         for one in block.insns:
             what = one.what
+            if (what is not None and what.op is ir.Operation.NOTHING
+                and what.name in (None, "") and not what.dests and not what.sources
+                and what.target is None and not one.clobbers and not one.defines):
+                continue
             move = what is not None and what.op is ir.Operation.MOVE and what.name == "mov"
             extend = (what is not None and what.op is ir.Operation.EXTEND
                       and what.name in {"cwd", "cdq", "movsx"}
