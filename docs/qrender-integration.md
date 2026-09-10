@@ -4,7 +4,61 @@ New optimization passes are paused until the optimized renderer builds and
 runs correctly. Target: `qb-qrender/.claude/worktrees/qgl-poly-draw`, source
 commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
-## Latest gate — six modules, 2026-09-10
+## Latest gate — seven modules, 2026-09-10
+
+Added `qglarr`; fourteen BASIC modules remain. Build directory:
+`/tmp/qbopt-qrender-array-20260910`. The same 60-tick scene linked and
+completed with identical BMP and all non-timing/non-memory fields.
+Mean FPS **9.41860**, frame time **106.17285 ms**, best/worst
+**9.80198/7.55725 FPS**; last six-module repeat 9.56811, baseline 9.43334.
+The short-run difference is within the variation already observed on the
+unchanged six-module build; no speed claim. Live render and DOS completion
+captures were saved and inspected as `live-render.png` / `live-complete.png`.
+
+The scene does not exercise the array checker. Both optimized and original
+executables therefore also ran `dm3ish.bsp -qglarr` on port 2202.
+`QGLARR-OPT.LOG` and `QGLARR.LOG` are byte-identical: seven probes below the
+window, nine at/above, zero mismatches for hand-filled and qglArLoad paths;
+last record 3820 checked, final `RESULT PASS`. Live completion captures:
+`array-check.png` / `array-baseline-check.png`. A prompt screenshot proves
+return to DOS, not the verdict; the logs carry the verdict.
+
+Explicit external contracts retain all six GP inputs and all unknown
+effects. Normal cleanup (QGL prefix omitted): ARFREE/ARHANDLE/ARPAGES/
+ARPERPG 4, ARLOADBAS 12, ARMAP/ARNEW 10, FILECLOSE/FILEOPENBAS/FILESIZE 2,
+FILEREAD 10, GEMMAP 6. Frame allocation or the initial slot-validation
+dependency overwrites arithmetic flags before other work. AR's validator
+at 0000 and FILE's at 004c use DEC/CMP before branching. GEMMAP starts with
+CMP; its EMS-interrupt continuation and FILECLOSE's DOS-interrupt
+continuation were also checked in `src/qgl/{gem,file}.asm`, since the
+decoder stops at those interrupts. No dependency preservation is inferred.
+
+Hash-checked harness `/tmp/qbopt-qglarr-audit.py`; dumps
+`/tmp/qbopt-qglarr-audited`; original `/tmp/qbopt-qglarr-before.asm`.
+Object SHA-256 identities (GEM is recorded below):
+
+```
+ar    09fd7e9c41a37d9375ddbbdbe1449ab162c26455351c70dafbc58c3c8e68eb7e
+file  111b78e083dc2a2ec8dcf7f64daa05019000bbe77c87d6ffaca3eb2ffbcd9412
+```
+
+```asm
+; before: signed file size > 0
+push dword [bp-1Ah]
+push dword 0
+call far B$CPI4
+jg ...
+; after
+mov eax,[bp-1Ah]
+test eax,eax
+jg ...
+```
+
+Local call elimination does not offset all allocation/layout overhead:
+code grows 4312→5122 bytes; OBJ shrinks 14166→13181, not an instruction-cost
+measure. No new compiler fix or optimization pass was introduced this round.
+
+## Six-module gate — 2026-09-10
 
 Screenshot-evidence repeat: preserved the previous BENCH files as
 `BENCH.BMP.pre-screenshot` / `BENCH.TXT.pre-screenshot`, then reran the
