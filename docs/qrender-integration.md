@@ -368,6 +368,35 @@ observed failing before the move and now also checks shared family entries.
 All 283 runtime tests pass, including event-handler discovery. This is a
 data-ownership correction: no contract fields or emitted assembly change.
 
+### Whole-library report and line-input interfaces
+
+Reuse `/tmp/qbopt-vbdos-all-contracts.json` for subsequent audits. It contains
+2,717 routines from 2,254 public roots, zero unvisited roots and zero
+unvisited resolved dependencies. Unknown indirect effects and decoder
+limitations remain explicit; coverage is not a proof of every contract.
+Reproduce with:
+
+```sh
+uv run python tools/contracts.py --all --fp-emulation \
+  --lib /Users/alim/work/other/d32x/toolchains/vbdos/lib/VBDCL10E.LIB \
+  --dump /tmp/qbopt-vbdos-all-contracts.json > /tmp/qbopt-vbdos-all-contracts.log
+```
+
+LNIN's audited normal return is RETF 10; its final InpReset is not PEOS's
+frame-relocating epilogue. Device/input effects remain unknown. ERS1's
+empty and heap-freeing paths join RETF 2; FreePpv and DeLink were checked.
+Both retain conservative GP inputs and effects. Two fail-first regressions
+and thirteen neighboring tests pass. `/tmp/qbopt-common-line-fixed` now
+reaches the project-local SYS_ERROR at 0645; no runtime interface remains
+unknown in the call-site inventory of `common`.
+
+```asm
+; before                         ; after (whole object still refused)
+0271  call far B$LNIN             0271  call far B$LNIN
+; ...                            ; ...
+0645  call far SYS_ERROR          0645  call far SYS_ERROR
+```
+
 ### Two-module runtime check
 
 Relinking with rewritten `view` and `d_turb` succeeded. The isolated build in

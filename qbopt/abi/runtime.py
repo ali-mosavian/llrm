@@ -350,6 +350,19 @@ VARIANTS[("B$CHOU", "vbdos")] = replace(
 )
 
 for _name, _cleanup, _evidence in (
+    ("B$LNIN", 10,
+     "rt/lininp.asm 0000..006e: initial CMP at 0004 overwrites arithmetic "
+     "flags before terminal/disk dispatch. Both normal paths join string "
+     "assignment (six internal words, ASSN RETF 12), InpReset, POP SI/BP "
+     "and RETF 10. InpReset is a near reset, not PEOS's frame-relocating "
+     "epilogue. FillBuf has indirect device calls; input, alias, control and "
+     "error effects remain unknown. Cleanup describes only normal return."),
+    ("B$ERS1", 2,
+     "rt/recarray.asm 014b..016e reads descriptor [bp+6], XOR CX,CX at "
+     "0152 overwrites incoming arithmetic flags. Empty and nonempty paths "
+     "join POP SI/BP / RETF 2. Nonempty calls FreePpv with two words "
+     "(RETF 4 at lmove.asm 01da), then stack-neutral DeLink at 0075..008f. "
+     "FreePpv -> FreeHandle mutates heap state; no alias/preservation claim."),
     ("B$ASSN", 12,
      "farstr/string.asm 005e..00b3 reads six stack words. OR AX,AX at 0075 "
      "replaces incoming arithmetic flags before branches/dependencies. Fixed "

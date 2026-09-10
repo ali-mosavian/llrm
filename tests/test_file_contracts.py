@@ -20,6 +20,7 @@ def test_peos_register_interface_does_not_claim_fixed_stack_cleanup():
     ("B$FREF", 0), ("B$LDFS", 6), ("B$OPEN", 8), ("B$DSKI", 2),
     ("B$FEOF", 2), ("B$CLOS", None), ("B$ERAS", 2), ("B$FLEN", 2),
     ("B$FMID", 6), ("B$ASSN", 12), ("B$SCMP", 4), ("B$SCPF", 2),
+    ("B$LNIN", 10), ("B$ERS1", 2),
 ])
 def test_vbdos_file_setup_retains_unknown_effects(name, cleanup):
     """Qrender refused string/file calls, including ASSN at 00e7; CLOSE varies in arity."""
