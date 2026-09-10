@@ -29,6 +29,16 @@ built in the test. Milliseconds, no dependencies.
 rewrites the object, LINK links it, the program runs, and its output is
 compared. Needs `dosbox-x` and the three DOS toolchains; skips without them.
 
+## What belongs in the suite
+
+Tests assert program behavior, representation invariants, or a named regression.
+Exact corpus totals and coverage shares are measurements; keep those in the
+reporting tools and documentation, not as assertions that fail when fixtures or
+the pipeline change. The legacy machine arm remains tested while it ships, but
+tests must not feed raised MIR directly to its layout/allocator and call that the
+production path. Current integration tests go through MIR optimization, lowering,
+LIR allocation, and object writing.
+
 ## What the toolchains are, and where
 
 | tag | compiler | expected at |

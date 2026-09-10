@@ -718,7 +718,6 @@ REFUSED: set[int] = {Code.MOVSW_M16_M16}
 
 def test_the_corpus_is_modelled_except_for_exactly_the_refused_encodings(fixtures: Path) -> None:
     unmodelled: set[int] = set()
-    modelled = total = 0
     for path in sorted(fixtures.glob("*.obj")):
         found = corpus.loaded(path)
         assert found is not None
@@ -727,14 +726,9 @@ def test_the_corpus_is_modelled_except_for_exactly_the_refused_encodings(fixture
             continue
         for body_ir in result:
             for node in body_ir.nodes:
-                total += 1
-                if ir.modelled(node.semantics):
-                    modelled += 1
-                elif isinstance(node, ir.Opaque | ir.Long | ir.Call):
+                if not ir.modelled(node.semantics) and isinstance(node, ir.Opaque | ir.Long | ir.Call):
                     unmodelled.add(node.insn.code)
     assert unmodelled == REFUSED
-    # and the refusal is 44 instructions, not a share that could drift
-    assert total - modelled == 44
 
 
 def test_a_restore_and_a_table_carry_their_own_operations() -> None:

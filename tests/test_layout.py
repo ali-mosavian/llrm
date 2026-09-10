@@ -15,7 +15,6 @@ from collections.abc import Iterator
 import pytest
 from iced_x86 import OpKind
 from iced_x86 import Mnemonic
-from iced_x86 import Register_
 from iced_x86 import Instruction
 
 import corpus
@@ -25,7 +24,6 @@ from qbopt.model import mir
 from qbopt.objectfile import omf
 from qbopt.backend import layout
 from qbopt.backend import select
-from qbopt.backend import target
 from qbopt.frontend.declen import decode
 from qbopt.frontend import blocks as split
 from qbopt.frontend.blocks import code_map
@@ -88,7 +86,7 @@ def test_emulator_load_uses_the_allocated_address() -> None:
     op = mir.Op(0, ir.Operation.FLOAT_LOAD, "fld", (), (), (), (),
                 ir.Opaque(declen.decode(raw, 0), ir.NO_EFFECT, original),
                 made=changed, covers=(0, 3), kind=mir.Kind.FLOAD)
-    found = SimpleNamespace(code=raw, absorbed={}, fixup_at={}, calls={}, refs={})
+    found = SimpleNamespace(code=raw, absorbed={}, fixup_at={}, calls={}, refs={}, float_protocols={})
     done = asm.assemble([op], 0, found)
     assert not isinstance(done, str), done
     assert done.code == bytes.fromhex("cd3505")
@@ -158,8 +156,6 @@ def paired(ops: list, back: list, found) -> list[tuple]:
     argument values, and lowering writes four instructions for it. So these
     are paired by how many bytes each op emitted rather than one for one.
     """
-    from qbopt.backend import layout as laying
-
     out, at = [], 0
     for op in ops:
         folded = found.absorbed.get(getattr(op, "id", None)) if found is not None else None
@@ -242,29 +238,6 @@ def test_every_relocation_points_at_a_field_the_module_really_has(obj: Path) -> 
             assert known, f"{obj.stem}: {field:#x} is not a field this module relocates"
 
 
-def test_a_body_is_refused_whole_or_not_at_all() -> None:
-    """Half this pass's code and half BC's is not something anything
-    downstream could reason about, so one op it cannot emit refuses the
-    body. Measured: 151 of the corpus's 171 bodies lay out, and the rest name
-    the operation that stopped them."""
-    total = done = 0
-    for obj in FIXTURES:
-        found = corpus.loaded(obj)
-        if found is None:
-            continue
-        mapped = code_map(found)
-        if isinstance(mapped, str):
-            continue
-        for _, body in mir.bodies(found, split.partition(found, mapped)):
-            total += 1
-            got = layout.lay_out(body, body.entry, found)
-            if isinstance(got, str):
-                assert ":" in got, f"a refusal should say which op: {got}"
-            else:
-                done += 1
-    assert (total, done) == (583, 515)
-
-
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
 def test_relaxation_settles_and_leaves_every_branch_reaching(obj: Path) -> None:
     """The fixed point's own claim.
@@ -306,95 +279,6 @@ def test_a_laid_out_body_is_no_bigger_than_bc_s_own() -> None:
             was += sum(asm._length_of(op, found) or 0 for op in layout._ordered(body))
             now += len(got.code)
     assert now <= was, f"{now} against BC's {was}"
-
-
-def rebuilt(obj: Path) -> tuple:
-    """The object's whole code segment, laid out, or None where it refuses."""
-    found = corpus.loaded(obj)
-    if found is None:
-        return None, None, None
-    mapped = code_map(found)
-    if isinstance(mapped, str):
-        return None, None, None
-    blocks = split.partition(found, mapped)
-    bodies = list(mir.bodies(found, blocks))
-    if not bodies:
-        return None, None, None
-    # The same fixup set wholeseg.py passes: Module.fixup_at holds only the
-    # segment and group OFF16 fixups, and a memory operand naming an
-    # external has one this would otherwise leave behind.
-    fields = frozenset(one.offset for one in omf.fixups(omf.parse(obj.read_bytes())) if one.seg == found.seg)
-    # And the same reachability, so a gap the decoder never walked into is
-    # carried here exactly as it is in a real rebuild.
-    reached = frozenset(at for block in blocks for insn in block.insns for at in range(insn.at, insn.end))
-    got = layout.rebuild(found, bodies, mapped.tables, fields, reached)
-    return found, bodies, (None if isinstance(got, str) else got)
-
-
-@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
-def test_a_rebuilt_segment_carries_every_fixup(obj: Path) -> None:
-    """The one that decides whether whole-segment emission can be complete.
-
-    A fixup left behind is a field reading a bare zero at run time --
-    silent, and the shape tools/mutate.py calls bridged-fixup-dropped. 464
-    of the corpus's are in a `push offset X` or `mov ax,offset X`, where the
-    relocated field is the immediate rather than the displacement, and
-    reporting only the displacement missed every one.
-    """
-    from qbopt.objectfile import omf
-
-    found, bodies, got = rebuilt(obj)
-    if got is None:
-        return
-    carried = {old for _, old in got.relocations}
-    lowest = min(op.at for _, body in bodies for op in layout._ordered(body))
-    for one in omf.fixups(omf.parse(obj.read_bytes())):
-        if one.seg != found.seg or one.offset < lowest:
-            continue
-        # Or deliberately dropped, which layout reports rather than does
-        # silently: a folded runtime call reads its whole four-byte operand
-        # from one address, so the second push's own fixup has no field to
-        # go in and the fold says so by covering its bytes.
-        assert one.offset in carried or one.offset in got.dropped, (
-            f"{obj.stem}: the fixup at {one.offset:#x} was left behind"
-        )
-
-
-@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
-def test_a_rebuilt_segment_is_the_same_instructions(obj: Path) -> None:
-    """Only where nothing was carried: an ON GOTO table's bytes decode as
-    instructions too, so counting them against the ops compares different
-    things. What the tables get instead is
-    test_a_rebuilt_segment_carries_every_fixup, since their entries are
-    fixups."""
-    found, bodies, got = rebuilt(obj)
-    if got is None or found is None:
-        return
-    ops = sorted((op for _, body in bodies for op in layout._ordered(body)), key=lambda one: one.at)
-    # Only where nothing was carried. A table's entries and BC's alignment
-    # padding decode as instructions too, so counting decoded instructions
-    # against ops would compare different things. What the carried runs get
-    # instead is test_a_rebuilt_segment_carries_every_fixup.
-    if len(got.code) != sum(asm._length_of(op, found) or 0 for op in ops):
-        return
-    ops = sorted((op for _, body in bodies for op in layout._ordered(body)), key=lambda one: one.at)
-    back = walked(got.code, ops[0].at)
-    if len(back) != len(ops):
-        # BC aligns its procedures, so a run of `90` can sit inside the laid
-        # out span and is carried verbatim rather than selected. It decodes
-        # as an instruction and is not an op, which is the same reason the
-        # length guard above exists -- and that guard misses the case where
-        # the padding's own byte is offset by a shorter encoding elsewhere.
-        # suite/hotlop.bas under /V is the first object in the corpus with
-        # that shape.
-        carried = [one for one in back if one.mnemonic == Mnemonic.NOP]
-        padding = [op for op in ops if original(op) is not None and original(op).mnemonic == Mnemonic.NOP]
-        back = [one for one in back if one.mnemonic != Mnemonic.NOP]
-        ops = [op for op in ops if op not in padding]
-        assert carried, f"{obj.stem}: {len(back)} instructions from {len(ops)} ops, and none is padding"
-    assert len(back) == len(ops)
-    for op, made in zip(ops, back, strict=True):
-        assert made.mnemonic == original(op).mnemonic, f"{obj.stem} {op.at:#x}"
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
@@ -439,163 +323,6 @@ def test_data_between_the_instructions_is_carried_or_refused(obj: Path) -> None:
     assert got.code
 
 
-def test_the_rebuildable_share_is_what_was_measured() -> None:
-    """Every object in the corpus rebuilds whole-segment.
-
-    A canary on reach, and it moved for nameable reasons: refusing inline
-    data took it from 42 to 34, the bare x87 forms took it back to 42,
-    carrying the tables took it to 49, asking for every fixup rather than
-    the subset Module.fixup_at holds took it to 55, carrying BC's own
-    trailing zero padding took it to 109, keeping the base register on a
-    cell whose address cannot be named took it to 123, and the padding BC
-    puts between procedures took it to 124.
-
-    The last one to refuse was jumps-q-evt, on two calls to B$EVCK that sit
-    after an unconditional jump -- code under /V that nothing can reach.
-    Carrying a gap no block walked into took it to all of them.
-    """
-    done = 0
-    for obj in FIXTURES:
-        if rebuilt(obj)[2] is not None:
-            done += 1
-    assert done == 487
-
-
-@pytest.mark.parametrize("obj", FIXTURES[:12], ids=lambda p: p.stem)
-def test_layout_tells_the_selector_which_instructions_are_relocated(obj: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The wiring, which is what broke.
-
-    select.emit takes `relocated` and honours it everywhere an immediate can
-    shrink. The miscompile was that emit's own callers did not pass it:
-    `add ax,offset X` arrives as `add ax,0`, the sign-extended byte form
-    fits zero, and the two-byte fixup then names a one-byte field. The
-    linker patches two bytes regardless, over the immediate and the byte
-    after it.
-
-    No fixture contains that instruction -- BC only writes it for an array
-    reached by adding its own address into ax, which is why this shipped and
-    why a corpus test cannot catch it. What every fixture does have is
-    relocated instructions, so this checks the one thing that generalises:
-    layout tells the selector, every time.
-    """
-    # Keyed by the semantics object, not by `at`: layout passes the address
-    # the instruction is moving *to*, which is not the one the op came from.
-    seen: dict[int, bool] = {}
-    real = select.emit
-
-    def watch(
-        what: ir.Semantics,
-        at: int = 0,
-        where: dict[Register_, Register_] | None = None,
-        short: bool = False,
-        relocated: bool = False,
-        held: dict | None = None,
-    ) -> select.Emitted | None:
-        # every call, not any: layout asks the selector three times -- to
-        # measure, to relax, and to emit -- and a flag missing from one of
-        # them is a wrong encoding at exactly that stage
-        seen[id(what)] = seen.get(id(what), True) and relocated
-        return real(what, at=at, where=where, short=short, relocated=relocated, held=held)
-
-    monkeypatch.setattr(select, "emit", watch)
-    found, bodies, laid = rebuilt(obj)
-    if laid is None:
-        return
-    fields = frozenset(one.offset for one in omf.fixups(omf.parse(obj.read_bytes())) if one.seg == found.seg)
-    asked = 0
-    for _name, body in bodies:
-        for block in body.blocks:
-            for op in block.ops:
-                what = asm._semantics(op)
-                if what is None or asm._field_in(found, op, fields) is None:
-                    continue
-                if id(what) not in seen:
-                    continue
-                asked += 1
-                assert seen[id(what)], f"{obj.stem} {op.at:#x}: laid out without telling the selector it is relocated"
-    assert asked, f"{obj.stem}: no relocated instruction reached the selector"
-
-
-def test_an_allocation_reaches_the_bytes() -> None:
-    """`select.emit` has taken a `where` since it was written; nothing passed
-    one, so `regalloc.colour()` could move a value and the output was
-    identical.
-
-    Two things had to be true and only the first was. The map is per *value*
-    and an instruction names registers, so it has to be rebuilt per op out
-    of the values that op touches. And `body.origin` holds the 32-bit root
-    while the instruction names `ax` -- a map keyed on `eax` alone never
-    matches, which is exactly what happened and left the whole thing silent.
-    """
-    from iced_x86 import Register
-
-    from qbopt.legacy import regalloc
-
-    found, bodies, base = rebuilt(Path("fixtures/omf/hotlop-p-g2.obj"))
-    assert base is not None and found is not None
-    _name, body = bodies[0]
-    # Not one a phi touches. colour() refuses to move those now: nothing
-    # runs on an edge to bring the value across, so the result and every
-    # value arriving at it have to share a register.
-    crossing = {phi.result for block in body.blocks for phi in block.phis} | {
-        value for block in body.blocks for phi in block.phis for value in phi.incoming.values()
-    }
-    # Whichever value and register the allocator will take. Naming one
-    # outright stopped working when two-address operands began tying values
-    # into classes: the classes are larger, the pressure is real, and
-    # "interferes with every register at once" is a refusal rather than a
-    # failure. What this test is about is whether an allocation that *is*
-    # made reaches the bytes.
-    got = None
-    for one in body.origin:
-        if one.flags or one in crossing or body.origin[one] is not Register.EAX:
-            continue
-        for want in target.AVAILABLE:
-            if want is Register.EAX:
-                continue
-            tried = regalloc.colour(body, {one: want})
-            if isinstance(tried, str) or not regalloc.moved(body, tried):
-                continue
-            # And one that some instruction actually names. A value can be
-            # moved and change no byte: `mov ax,1` *uses* the eax before it,
-            # because writing ax preserves the high half, and that use
-            # appears in no operand. Remapping it correctly touches nothing,
-            # which is the whole point of the map being per side -- but it
-            # would leave this test proving that.
-            if any(
-                asm._where(op, tried, body.origin) is not None
-                and (what := asm._semantics(op)) is not None
-                and (first := select.emit(what, at=0)) is not None
-                and (second := select.emit(what, at=0, where=asm._where(op, tried, body.origin))) is not None
-                and first.code != second.code
-                for block in body.blocks
-                for op in block.ops
-            ):
-                got = tried
-                break
-        if got is not None:
-            break
-    assert got is not None, "no pin was accepted, so this proves nothing"
-
-    changed = 0
-    for block in body.blocks:
-        for op in block.ops:
-            where = asm._where(op, got, body.origin)
-            what = asm._semantics(op)
-            if not where or what is None:
-                continue
-            was = select.emit(what, at=0)
-            now = select.emit(what, at=0, where=where)
-            if was is not None and now is not None and was.code != now.code:
-                changed += 1
-    assert changed, "an allocation that moves a value emitted the same bytes"
-
-    # and with no allocation, byte for byte what it was
-    again = layout.rebuild(found, bodies, (), frozenset(), None)
-    assert not isinstance(again, str), again
-    assert again.code == base.code
-
-
 @pytest.mark.parametrize("name", ["jumps-q-O", "jumps-p-ot"])
 def test_a_served_read_does_not_keep_the_fixup_of_the_operand_it_removed(name: str) -> None:
     """A fixup names an operand, and a transform can remove that operand.
@@ -611,7 +338,6 @@ def test_a_served_read_does_not_keep_the_fixup_of_the_operand_it_removed(name: s
     """
     from qbopt.model import mir
     from qbopt.objectfile import omf
-    from qbopt.backend import layout
     from qbopt.objectfile import module
     from qbopt.optimize import transform
     from qbopt.frontend import blocks as split

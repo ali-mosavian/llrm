@@ -237,14 +237,6 @@ def test_the_code_block_comes_after_every_extdef(obj: Path) -> None:
         assert min(code_at) > max(externals), f"{obj.stem}: code fixups precede an EXTDEF"
 
 
-def test_the_rebuildable_share_is_what_was_measured() -> None:
-    """124 of the corpus's 125 objects. The one that refuses has bytes
-    between the ops that reachability never reached, so nothing here can
-    say whether they are code."""
-    done = sum(1 for obj in FIXTURES if wholeseg.rebuilt(obj.read_bytes())[1] == wholeseg.REBUILT)
-    assert done == 487
-
-
 def test_a_refused_body_is_laid_out_widened_and_only_that_body_is_widened() -> None:
     """Two things at once, because they are the same arrangement.
 

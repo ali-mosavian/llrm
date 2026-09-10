@@ -187,47 +187,6 @@ def test_everything_selected_decodes_to_what_was_asked_for(obj: Path) -> None:
         assert same, f"{obj.stem} {op.at:#x}: {back} != {want}"
 
 
-def test_the_covered_share_of_the_corpus_is_what_was_measured() -> None:
-    """A canary on progress, not on correctness.
-
-    Every operation in the corpus, and every one of the 46,535 emitted
-    across the corpus and qb-qrender together decodes to what it was asked
-    for. A canary: if this stops being all of them, something narrowed.
-    """
-    from qbopt.model import ir
-    from qbopt.model import mir
-    from qbopt.frontend import blocks as split
-    from qbopt.frontend.blocks import code_map
-
-    total = emitted = 0
-    for obj in FIXTURES:
-        found = corpus.loaded(obj)
-        if found is None:
-            continue
-        mapped = code_map(found)
-        if isinstance(mapped, str):
-            continue
-        for _, body in mir.bodies(found, split.partition(found, mapped)):
-            for block in body.blocks:
-                for op in block.ops:
-                    total += 1
-                    what = getattr(op.node, "semantics", None)
-                    if what is None or what.op is ir.Operation.BARRIER:
-                        continue
-                    if select.emit(what, at=op.at) is not None:
-                        emitted += 1
-    # The 44 that do not come back are the movsw of suite/fpdeep.bas, the one
-    # encoding this deliberately refuses -- see REFUSED in tests/test_ir.py.
-    # Every other operation in the corpus selects.
-    #
-    # 37,927 before the raise folded absorbable calls. An operation is not
-    # an instruction any more: a folded call stands for its whole push run,
-    # so 3,646 operations became 1,037 -- and select.emit is not what
-    # writes them, select.absorbed is.
-    assert (total, emitted) == (34281, 34237)
-    assert total - emitted == 44
-
-
 def test_a_wide_push_is_not_a_narrow_one() -> None:
     """`push 3` puts two bytes on the stack and `pushd 3` puts four.
 
@@ -1393,7 +1352,6 @@ def test_a_divide_whose_site_is_gone_is_refused_and_not_carried_verbatim() -> No
     emitted from its own operands. It is when neither is left that there
     is no answer, and then it must refuse.
     """
-    from qbopt.backend import asm
     from qbopt.model import mir
     from qbopt.objectfile import omf
     from qbopt.backend import layout
