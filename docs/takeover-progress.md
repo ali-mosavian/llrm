@@ -1,5 +1,42 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: eliminate scalar redundancy across joins
+
+`optimize/gvn.py` extends CSE beyond a single dominating provider. If each
+incoming edge already computes the same scalar expression, a fresh phi joins
+those values and replaces the repeated operation. Keys use semantic kinds,
+operands and widths, not instruction names. The pass inserts no arithmetic,
+does not read register origins, preserves byte ownership and leaves floating,
+memory, live flags and loop-exit crossings requiring LCSSA unchanged.
+
+The real GVNJN fixture reads inputs, computes a square in either branch,
+adjusts the branch answer, and asks for the square again at the join. Both
+branches are exercised. Static multiplies fall **3 -> 2**, and executed
+multiplies **2 -> 1 per iteration**; allocation coalesces the phi without
+adding join moves. PDS optimized object size is **1171 -> 1166 bytes**.
+
+```asm
+; before, after either branch computed its adjusted answer
+join:
+    imul eax,eax
+    mov [square],eax
+
+; after, both branches keep the original square in EAX
+join:
+    mov [square],eax
+```
+
+The MIR and three emitted-code regressions failed first; 39 focused CSE/GVN
+checks pass. All three compilers build/link successfully and print
+**35,36; 37,36; DONE**. Twenty-one existing BOOLS, FLAGS, NOTS, ARITH, NEGNOT,
+PRESSX and FPCSEX objects emit byte-identical output with the new step.
+Stages: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-gvnjn-stages-dhpr1e8y`.
+
+This is full redundancy elimination at joins, not complete PRE: missing-edge
+insertion, phi translation, memory expressions and profitability remain.
+FPCSEX remains at 4462 model units on PDS with an invalid provisional
+denominator; this integer optimization does not establish floating progress.
+
 ## 2026-09-10: forward values through whole-pointer memory
 
 MemorySSA now skips writes at disjoint constant offsets from a shared pointer

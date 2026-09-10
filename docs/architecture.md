@@ -560,6 +560,9 @@ one documented target without materially regressing another.
   statement boundaries.
 - [ ] Implement global value numbering with partial redundancy elimination
   (`GVN-PRE`) for scalar and memory expressions.
+  Scalar full redundancy at joins is implemented: when every incoming edge
+  has a dominating provider, a phi replaces the repeated computation. No
+  speculative insertion, memory PRE, or strict floating reuse is implied.
 - [ ] Replace the separate load/store cleanup rules with MemorySSA-based load
   elimination and dead-store elimination.
 - [ ] Implement sparse conditional constant propagation (`SCCP`) over values

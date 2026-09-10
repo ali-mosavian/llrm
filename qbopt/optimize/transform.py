@@ -2447,8 +2447,8 @@ class Cse(MIRTransform):
         self.where = where
 
     def transform(self, body: MirBody) -> MirBody:
-        from qbopt.optimize import floatfold
-        return floatfold.checks(subexpressions(body, self.where.dgroup))
+        from qbopt.optimize import floatfold, gvn
+        return floatfold.checks(gvn.joined(subexpressions(body, self.where.dgroup)))
 
 
 class Place(MIRTransform):
