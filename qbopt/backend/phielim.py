@@ -20,10 +20,9 @@ there to be found.
 **Critical edges.** A copy goes at the end of the predecessor, which is only
 correct where that block goes nowhere else -- otherwise the copy runs on a
 path the phi does not describe. LLVM splits the edge and puts the copy in
-the new block. Splitting an edge means inventing a block and a branch, and
-this refuses instead: a phi on a critical edge is left alone and the pass
-says which, so the allocator sees the values still joined rather than a
-program that is wrong.
+the new block. Synthetic labels keep those blocks distinct from original
+addresses, and retained phis name the new predecessor. Floating allocation
+uses the same placement for its selected extended-precision transfers.
 """
 
 from dataclasses import replace
@@ -243,7 +242,24 @@ def _leaves(one: lir.Insn) -> bool:
     return one.what is not None and one.what.op in (ir.Operation.JUMP, ir.Operation.BRANCH, ir.Operation.RETURN)
 
 
-def _split_edges(body, split: dict, copies: dict, rename: dict, kept: dict, widths: dict) -> lir.LirBody:
+def placed_on_edges(body: lir.LirBody, transfers: dict[tuple[int, int], list[lir.Insn]]) -> lir.LirBody:
+    """Place already selected parallel transfers on their exact CFG edges."""
+    at_of = {block.at: block for block in body.blocks}
+    copies, split = {}, {}
+    for (where, into), insns in transfers.items():
+        if len(at_of[where].succ) > 1:
+            split[where, into] = insns
+        else:
+            copies.setdefault(where, []).extend(insns)
+    if not split:
+        return replace(body, blocks=tuple(replace(block, insns=_before_the_terminator(
+            block, copies.get(block.at, []))) for block in body.blocks))
+    return _split_edges(body, split, copies, {}, {block.at: block.phis for block in body.blocks}, {},
+                        selected=True)
+
+
+def _split_edges(body, split: dict, copies: dict, rename: dict, kept: dict, widths: dict,
+                 *, selected=False) -> lir.LirBody:
     """A block of its own on each critical edge, holding that edge's copies.
 
     The copies cannot go at the end of the predecessor -- it has another
@@ -260,10 +276,10 @@ def _split_edges(body, split: dict, copies: dict, rename: dict, kept: dict, widt
     made: dict[tuple[int, int], lir.LirBlock] = {}
     landing: dict[tuple[int, int], int] = {}
     for number, ((where, into), pairs) in enumerate(sorted(split.items()), 1):
-        at = ((body.entry + 1) << 32) + number
+        at = max((body.entry + 1) << 32, max(at_of)) + number
         landing[(where, into)] = at
         beside = at_of[where].insns[-1]
-        insns = [
+        insns = [replace(one, at=at, covers=(at, at)) for one in pairs] if selected else [
             replace(
                 _made(
                     beside, at, ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(a, widths[a]),), (ir.Held(b, widths[a]),)), (a,), (b,)
@@ -279,13 +295,16 @@ def _split_edges(body, split: dict, copies: dict, rename: dict, kept: dict, widt
     for block in body.blocks:
         succ = tuple(landing.get((block.at, one), one) for one in block.succ)
         insns = [_retargeted(one, landing, block.at) for one in _before_the_terminator(block, copies.get(block.at, []))]
-        last = block.insns[-1]
-        if last.what is not None and last.what.op is ir.Operation.BRANCH:
+        last = block.insns[-1] if block.insns else None
+        if last is not None and last.what is not None and last.what.op is ir.Operation.BRANCH:
             fallthrough = next((into for into in block.succ if into != last.what.target), None)
             if (edge := landing.get((block.at, fallthrough))) is not None:
                 insns.append(_made(last, last.at, ir.Semantics(ir.Operation.JUMP, "jmp", (), (), edge), (), ()))
         blocks.append(
-            replace(block, insns=tuple(_renamed(one, rename) for one in insns), succ=succ, phis=kept[block.at])
+            replace(block, insns=tuple(_renamed(one, rename) for one in insns), succ=succ,
+                    phis=tuple(replace(phi, incoming=tuple(
+                        (landing.get((where, block.at), where), value) for where, value in phi.incoming))
+                        for phi in kept[block.at]))
         )
     return replace(body, blocks=tuple([*blocks, *made.values()]))
 

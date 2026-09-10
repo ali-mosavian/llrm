@@ -47,9 +47,6 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
         index for index, (block, following) in enumerate(zip(body.blocks, body.blocks[1:]))
         if next_blocks.get(block.at) == following.at
     }
-    if any(phi.result in floating or any(value in floating for _, value in phi.incoming)
-           for block in body.blocks for phi in block.phis):
-        raise Unlowered("floating phi requires cross-block allocation")
     from qbopt.backend.floatregions import bridged
     regions, region = {}, 0
     for index, block in enumerate(body.blocks):
@@ -57,6 +54,11 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
             region += 1
         regions[block.at] = region
     body = bridged(body, regions, frame)
+    if len(body.blocks) != len(order):
+        # Splitting critical edges changes the regions and their stack lifetimes.
+        by_at = {block.at: block for block in body.blocks}
+        return allocated(replace(body, blocks=tuple(by_at[at] for at in order)
+            + tuple(block for block in body.blocks if block.at not in order)), frame)
     floating = {arg.value for block in body.blocks for one in block.insns if one.what
                 for arg in (*one.what.sources, *one.what.dests)
                 if isinstance(arg, ir.Held) and arg.width == 10}

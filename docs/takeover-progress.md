@@ -3468,3 +3468,37 @@ Stage dumps: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-float-regio
 This is a spill-based allocation baseline, not optimal cross-edge register
 placement. Floating phis remain refused: they need parallel edge transfers,
 including cycles and critical edges. They are the next allocation gap.
+## 2026-09-10: floating phi transfers, including critical-edge cycles
+
+Floating phi results and incoming values now use the same owned 80-bit
+storage as other cross-region values. Each edge loads all its incoming
+values before storing any result, so a loop-carried swap remains a swap.
+The shared phi edge-placement code handles taken and fallthrough edges,
+updates retained integer phi predecessors, and avoids label collisions
+when another allocation phase splits an already-split body.
+
+Before: the two-value floating swap loop was refused at its phi.
+After, its backedge is selected as parallel snapshots:
+
+```
+fld tword [right slot]
+fld tword [left slot]
+; stack allocation exchanges as needed
+fstp tword [left slot]
+fstp tword [right slot]
+```
+
+The regression executes the selected stack operations along two iterations
+and observes `1, 2, 2, 1`, not the serial-copy corruption `1, 2, 2, 2`.
+It failed against the old allocator, covers both branch-edge directions,
+and checks that subsequent integer phi elimination uses the split edge.
+Inputs must have a unique dominating definition and every phi predecessor
+must be covered; mixed integer/floating identities remain refused.
+
+Floating, SSA-phi, phi-width and emission-order tests pass 71/71. The
+parallel-copy module additionally has 11 passes and two pre-existing
+fallback-expectation failures, reproduced on the preceding commit without
+changing those tests. Nine FPCSE/FPDEEP/FPCSEX objects remain byte-identical
+across QB, PDS and VBDOS. No benchmark speedup is claimed for this allocator
+capability: MIR still needs to expose more cross-statement/loop reuse.
+Stage dumps: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-floating-phis-4795iz9n`.

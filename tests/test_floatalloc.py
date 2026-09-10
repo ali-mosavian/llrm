@@ -202,6 +202,64 @@ def test_floating_bridge_never_reads_an_unestablished_slot(defect):
         floatalloc.allocated(replace(body, blocks=blocks), frame.Frame(-10))
 
 
+@pytest.mark.parametrize("target", [16, 48])
+def test_floating_loop_phis_swap_in_parallel_on_the_critical_backedge(target):
+    """Floating loop phis were refused; serial slot copies would turn (1,2) into (2,2)."""
+    from qbopt.backend import frame
+    first, second, left, right = (ir.Held(index, 10) for index in range(1, 5))
+    cells = [ir.Mem(Addr(Space.FRAME, -10 * index), 10) for index in (1, 2, 3)]
+    body = _body([
+        ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (first,), (cells[0],)),
+        ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (second,), (cells[1],)),
+        ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cells[2],), (left,)),
+        ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cells[2],), (right,)),
+        ir.Semantics(ir.Operation.BRANCH, "jne", (), (), target),
+    ])
+    body = replace(body, blocks=(
+        lir.LirBlock(0, body.insns[:2], (16,)),
+        lir.LirBlock(16, body.insns[2:], (16, 48), (
+            lir.Phi(3, ((0, 1), (16, 4))), lir.Phi(4, ((0, 2), (16, 3))),
+            lir.Phi(93, ((0, 91), (16, 92))),
+        )), lir.LirBlock(48, ()),
+    ))
+    result = floatalloc.allocated(body, frame.Frame(-30))
+    by_at = {block.at: block for block in result.blocks}
+    edge = next(at for at in by_at[16].succ if at != 48)
+    assert edge not in (0, 16, 48) and by_at[edge].succ == (16,)
+    assert by_at[16].phis == (lir.Phi(93, ((0, 91), (edge, 92))),)
+    assert by_at[16].insns[-1].what.target == edge
+    memory = {cells[0].addr.disp: 1, cells[1].addr.disp: 2}
+    stack, answers = [], []
+    for at in (0, 16, edge, 16, 48):
+        for one in by_at[at].insns:
+            what = one.what
+            match what.name:
+                case "fld":
+                    source = what.sources[0]
+                    stack.insert(0, stack[source.index] if isinstance(source, ir.St)
+                                 else memory[source.addr.disp])
+                case "fxch":
+                    index = what.sources[1].index
+                    stack[0], stack[index] = stack[index], stack[0]
+                case "fstp":
+                    destination = what.dests[0]
+                    value = stack.pop(0)
+                    assert destination.width == 10
+                    memory[destination.addr.disp] = value
+                    if destination.addr == cells[2].addr:
+                        answers.append(value)
+                case "jmp" | "jne": continue
+                case _: pytest.fail(f"Unexpected allocation instruction: {what}")
+            assert select.emit(what) is not None
+        assert not stack
+    assert answers == [1, 2, 2, 1]
+    from qbopt.backend import phielim
+    integer_result = phielim.eliminated(result)
+    assert not any(block.phis for block in integer_result.blocks)
+    edge_copies = next(block for block in integer_result.blocks if block.at == edge).insns
+    assert any(one.defines == (93,) and one.uses == (92,) for one in edge_copies)
+
+
 @pytest.mark.parametrize("width", [4, 8, 10])
 def test_live_store_uses_nonpopping_encoding_when_available(width):
     """Exact-store reuse duplicated ST0 solely to pop the duplicate into memory."""
