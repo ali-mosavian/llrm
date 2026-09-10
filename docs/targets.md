@@ -399,6 +399,12 @@ stores still remain, so this is not claimed to reach the exact reference.
 Fail-first tests retain the emitted-MIR division symptom; negative cases cover
 pointer escapes and unknown/conflicting depth. Actual CHAIN (seven results),
 PRESSX and FPDEEP (eleven results) executions pass on all three compilers.
+The exclusion belongs only to a PUSH's implicit stack write or a POP's implicit
+stack read. Their explicit memory operand retains its original alias facts:
+`push [local]` reads that local, and `pop [local]` writes it. A follow-up
+fail-first regression caught those explicit accesses incorrectly excluding
+their own frame range. Fixing the metadata changes no instruction by itself;
+it prevents later passes from treating the explicit access as disjoint.
 
 ## FPDEEP — exact constant floating expressions
 

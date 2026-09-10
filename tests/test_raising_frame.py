@@ -88,3 +88,25 @@ def test_event_and_error_modules_keep_their_original_alias_facts(fixture):
     found = module.load(Path(fixture))
     body = SimpleNamespace(entry=0x30)
     assert raising_frame.annotated(body, found, [], runtime.for_module(found)) is body
+
+
+@pytest.mark.parametrize("pushing", [True, False])
+def test_push_pop_frame_operand_is_not_its_implicit_stack_access(pushing):
+    """PUSH [local] / POP [local] must not claim the explicit local access excludes itself."""
+    found = module.load(Path("fixtures/omf/chain-p-g2.obj"))
+    block = _block("ff76e6" if pushing else "50 8f46e6")
+    at = block.insns[-1].at
+    local = mir.MemRef(module.Addr(module.Space.FRAME, -26), 2, space=module.Space.STACK)
+    stack = mir.MemRef(module.Addr(module.Space.STACK, -2), 2, space=module.Space.STACK)
+    loads, stores = ((local,), (stack,)) if pushing else ((stack,), (local,))
+    from qbopt.model import ir
+    op = mir.Op(at, ir.Operation.PUSH if pushing else ir.Operation.POP, "", (), (),
+                kind=mir.Kind.ARG if pushing else mir.Kind.COPY,
+                loads=loads, stores=stores, args=(mir.Cell(loads[0]),), results=(mir.Cell(stores[0]),))
+    body = mir.MirBody(0x30, (mir.MirBlock(0x30, (), (op,), ()),), {})
+    result = raising_frame.annotated(body, found, [block], {}).blocks[0].ops[0]
+    explicit = result.loads[0] if pushing else result.stores[0]
+    implicit = result.stores[0] if pushing else result.loads[0]
+    assert not explicit.excludes
+    assert mir.overlapping(explicit, local, found.dgroup)
+    assert implicit.excludes

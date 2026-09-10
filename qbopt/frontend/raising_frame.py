@@ -130,9 +130,13 @@ def annotated(body, found, blocks, contracts):
         if not stack and not own:
             return op
 
+        implicit = op.stores if insn.mnemonic == Mnemonic.PUSH else op.loads if stack else ()
+        implicit = frozenset(ref for ref in implicit
+                             if ref.base is None and ref.segment is None
+                             and (ref.addr is None or ref.addr.space is module.Space.STACK))
+
         def reference(ref):
-            in_stack = ref.space is module.Space.STACK or (ref.addr and ref.addr.space is module.Space.STACK)
-            if (stack and in_stack) or (own and ref.addr is None):
+            if ref in implicit or (own and ref.addr is None):
                 return replace(ref, excludes=tuple(dict.fromkeys((*ref.excludes, exclusion))))
             return ref
 
