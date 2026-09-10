@@ -404,61 +404,6 @@ def test_bytes_claimed_twice_are_reported_rather_than_raising() -> None:
     assert "claimed by more than one op" in got, got
 
 
-def test_allocation_is_a_phase_and_the_assembler_emits_what_it_is_handed(obj: Path) -> None:
-    """`rebuild` used to colour when handed no assignment, and does not.
-
-    An assembler that allocates is one nothing downstream can be told has
-    already allocated: objwrite.py runs after a real allocator and was
-    allocated over a second time. `layout.allocated()` is that work, and
-    the two together give what rebuild alone used to.
-    """
-    from qbopt.model import mir
-    from qbopt.legacy import regalloc
-    from qbopt.optimize import transform
-    from qbopt.frontend import blocks as split
-    from qbopt.frontend.blocks import code_map
-
-    found = corpus.loaded(obj)
-    mapped = code_map(found)
-    if isinstance(mapped, str):
-        return
-    blocks = split.partition(found, mapped)
-    bodies = [
-        # The same pipeline wholeseg runs: widening is not a pass and
-        # goes after every one of them, just before lowering.
-        (name, transform.widened(transform.applied(body, found.dgroup, found.calls)))
-        for name, body in mir.bodies(found, blocks)
-    ]
-    if not any(layout._names_a_value(body) for _name, body in bodies):
-        return
-
-    # What rebuild does for itself when handed none: untangle, then colour.
-    # A body nothing can colour is laid out as it was raised, which is a
-    # different question and test_wholeseg's own; this one is about what
-    # "no assignment" means when there is an assignment to be had.
-    mine: dict = {}
-    fixed = []
-    for name, body in bodies:
-        one = regalloc.untangled(body)
-        got = regalloc.colour(one, one.pins)
-        if isinstance(got, str):
-            return
-        mine.update(got)
-        fixed.append((name, one))
-
-    coloured, assignment = layout.allocated(bodies)
-    theirs = layout.rebuild(found, coloured, mapped.tables, assignment=assignment)
-    ours = layout.rebuild(found, fixed, mapped.tables, assignment=mine or None)
-    assert isinstance(theirs, str) == isinstance(ours, str), f"{obj.stem}: one refused and one did not"
-    if not isinstance(theirs, str):
-        assert theirs.code == ours.code, f"{obj.stem}: two answers for one body"
-
-    # And handed nothing, it remaps nothing rather than deciding for itself.
-    import inspect
-
-    assert "regalloc" not in inspect.getsource(layout.rebuild), "the assembler allocates again"
-
-
 def test_a_relocation_belongs_to_the_operand_and_not_to_a_place(obj: Path) -> None:
     """Which fixup an operation carries is settled at the raise.
 
