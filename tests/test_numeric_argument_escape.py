@@ -22,9 +22,9 @@ def test_local_copy_address_is_not_a_call_argument(tag):
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
-@pytest.mark.parametrize("program", ["arith", "nots"])
+@pytest.mark.parametrize("program", ["arith", "nots", "fpcse"])
 def test_numeric_prints_do_not_escape_program_variables(tag, program):
-    """ARITH/NOTS lost constants because PUSH [r] was interpreted as PUSH OFFSET r."""
+    """ARITH/NOTS/FPCSE lost constants because PUSH [r] was interpreted as PUSH OFFSET r."""
     found = corpus.loaded(Path(f"fixtures/omf/{program}-{tag}.obj"))
     assert not any(segment == found.program_data for segment, _ in module.escaped(found))
 

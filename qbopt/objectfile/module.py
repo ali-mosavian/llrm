@@ -274,7 +274,7 @@ def escaped(found: "Module") -> frozenset[tuple[int, int]]:
 
 
 def _numeric_arguments(found: "Module") -> frozenset[int]:
-    """Complete adjacent push groups consumed by known by-value integer PRINTs."""
+    """Complete adjacent push groups consumed by known by-value numeric PRINTs."""
     from iced_x86 import Mnemonic
     from qbopt.abi import runtime
     from qbopt.frontend import declen
@@ -290,7 +290,7 @@ def _numeric_arguments(found: "Module") -> frozenset[int]:
         if insn.insn.mnemonic == Mnemonic.PUSH:
             pending.append(insn)
         else:
-            width = runtime.integer_print_argument(found.calls.get(at, ""))
+            width = runtime.numeric_print_argument(found.calls.get(at, ""))
             if width is not None and pending and sum(-one.insn.stack_pointer_increment for one in pending) == width:
                 values.update(one.at for one in pending)
             pending = []

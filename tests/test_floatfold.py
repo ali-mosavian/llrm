@@ -12,6 +12,32 @@ from qbopt.objectfile.module import Addr, Space
 from qbopt.optimize import floatfold, transform
 
 
+def test_original_wait_is_an_explicit_checkpoint_with_encoding_provenance():
+    """FPCSE's WAIT was called NOTHING in MIR, hiding an observation boundary from passes."""
+    from pathlib import Path
+    import corpus
+    path = Path("fixtures/omf/fpcse-p-g2.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    check = next(op for block in body.blocks for op in block.ops if op.at == 0x7a)
+    assert check.kind is mir.Kind.FCHECK
+    assert check.name == "" and check.node is not None and check.covers == (0x7a, 0x7c)
+    assert lower.current(check).name == "wait"
+
+
+@pytest.mark.parametrize("interruption", [mir.Kind.COPY, mir.Kind.STORE, mir.Kind.CALL, mir.Kind.OPAQUE, mir.Kind.FLOAD])
+def test_repeated_checkpoint_needs_no_new_floating_effect(interruption):
+    """Unrolled FPCSE kept checkpoints between constant stores although no FP work remained."""
+    check = mir.Op(0, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.FCHECK)
+    middle = mir.Op(1, ir.Operation.MOVE, "", (), (), kind=interruption)
+    again = replace(check, at=2)
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (check, middle, again), ()),))
+    changed = floatfold.checks(body)
+    assert changed.blocks[0].ops[0] == check
+    assert changed.blocks[0].ops[-1].kind is (
+        mir.Kind.NOTHING if interruption in (mir.Kind.COPY, mir.Kind.STORE) else mir.Kind.FCHECK)
+
+
 def test_qb_fpcse_preserves_entry_when_first_load_disappears():
     """QB FPCSE falsely reported five overlapping bytes when entry 0x30 became source 0x35."""
     from pathlib import Path

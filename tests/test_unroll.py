@@ -11,6 +11,23 @@ from qbopt.backend import lower, lower_floats
 from qbopt.optimize import transform, unroll
 
 
+@pytest.mark.parametrize("checkpoint", [False, True])
+def test_dead_inserted_store_needs_no_neighbor_to_take_its_bytes(checkpoint):
+    """FPCSE retained dead unrolled stores because a zero-byte clone could not donate bytes to its neighbor."""
+    from qbopt.model import ir
+    from qbopt.objectfile.module import Addr, Space
+    cell = mir.MemRef(Addr(Space.SEGMENT, 0, 5), 4)
+    def store(at, value):
+        return mir.Op(at, ir.Operation.MOVE, "", (), (), kind=mir.Kind.STORE,
+                      args=(mir.Const(value, 4),), results=(mir.Cell(cell),),
+                      stores=(cell,), covers=(at, at))
+    first, last = store(10, 1), store(20, 2)
+    middle = (mir.Op(15, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.FCHECK),) if checkpoint else ()
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (first, *middle, last), ()),))
+    changed = transform.without_dead_stores(body, frozenset({5}), {})
+    assert changed.blocks[0].ops == ((first, *middle, last) if checkpoint else (last,))
+
+
 def body():
     path = Path("fixtures/omf/fpdeep-p-g2.obj")
     found = corpus.loaded(path)
@@ -105,7 +122,8 @@ def test_fpdeep_exact_integer_arguments_keep_floating_checkpoints(monkeypatch):
     floating = lambda body: [op for block in body.blocks for op in block.ops if op.floating]
     removed_addresses = {0x97, 0x9c, 0xdf, 0xe4}
     assert floating(folded) == [op for op in floating(expanded) if op.at not in removed_addresses]
-    checkpoints = [op for block in folded.blocks for op in block.ops if op.kind is mir.Kind.FCHECK]
+    checkpoints = [op for block in folded.blocks for op in block.ops
+                   if op.kind is mir.Kind.FCHECK and op.floating_origin is not None]
     assert len(checkpoints) == 12
     assert {op.at for op in checkpoints} == removed_addresses
     lower_floats.checked(folded)
@@ -131,7 +149,8 @@ def test_fpdeep_exact_stores_remove_their_arithmetic_chains():
               if op.kind is mir.Kind.STORE and op.at in (0x77, 0xbf, 0x107)]
     assert values == [144, 6, Fraction(1, 2), 784, 14, Fraction(3, 4), 3600, 30, Fraction(7, 8)]
     assert sum(bool(op.floating) for block in folded.blocks for op in block.ops) == 20
-    assert sum(op.kind is mir.Kind.FCHECK for block in folded.blocks for op in block.ops) == 51
+    assert sum(op.kind is mir.Kind.FCHECK and op.floating_origin is not None
+               for block in folded.blocks for op in block.ops) == 51
     calls = lambda body: [op for block in body.blocks for op in block.ops if op.kind is mir.Kind.CALL]
     assert calls(expanded) == calls(folded)
     lower_floats.checked(folded)

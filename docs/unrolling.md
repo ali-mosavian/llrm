@@ -2,6 +2,35 @@
 
 ## Current state
 
+The follow-up checkpoint/ownership change reduces FPCSE's static costs from
+324/359/314 to **173/182/167** (PDS/QB/VBDOS). SINGLE PRINT is a four-byte
+by-value argument, verified in prnval.asm's PRINTX path; its source address
+does not escape. The emitted call now pushes the bits of 487.5 directly,
+instead of reloading the two words of `s` after printing the label.
+
+Original WAIT instructions now raise as semantic FCHECK operations, retaining
+their input encoding provenance for lowering. CSE may remove a repeated
+checkpoint only across modeled integer work: calls, opaque operations,
+barriers and floating/stack operations invalidate the proof. A surviving
+checkpoint blocks dead-store deletion across its possible exception
+observation. The regression explicitly checks that boundary.
+
+Dead zero-byte inserted operations need no neighbor to inherit bytes, because
+they own none. Fixing that ownership rule lets DSE actually delete the
+overwritten unrolled stores it already identifies. Floating-origin markers
+remain for sequence validation. Before, ten iterations retained stores and
+waits; after, one checkpoint and final stores remain. The source constants
+and loop-counter stores are still not minimal. The provisional target is
+unchanged and these are not elapsed-time measurements.
+
+74 focused tests pass. The 96-primary-object differential changes FPCSE,
+FPDEEP, ROTATE and SPLIT on all three compilers, with no emission-status
+changes; all changed programs passed their focused runtime checks. FPCSEX
+and FPEMU also passed. Final FPCSE stage dumps and runtime artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-observation-guard-a9mtvkyx`.
+The earlier before listing is under
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-exact-loop-42yop23c/after`.
+
 Bounded unrolling now runs after placement in the normal MIR pipeline.
 The next fixed-point iteration folds the exposed computations; callers can
 disable expansion with `unroll_=False`. The existing two-to-four-trip and

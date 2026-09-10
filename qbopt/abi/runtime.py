@@ -453,9 +453,9 @@ def barrier(routine: Contract) -> bool:
 _PRINT_CLOBBERS = EVERY - {Reg.BP, Reg.SI, Reg.SP}
 
 
-def integer_print_argument(name: str) -> int | None:
-    """Bytes consumed as a by-value integer by prnval.asm's PRINTX path."""
-    if name not in {"B$PEI2", "B$PSI2", "B$PEI4", "B$PSI4"}:
+def numeric_print_argument(name: str) -> int | None:
+    """Bytes consumed by value by prnval.asm's PRINTX path, not a descriptor pointer."""
+    if name not in {"B$PEI2", "B$PSI2", "B$PEI4", "B$PSI4", "B$PER4"}:
         return None
     routine = contract(name)
     return routine.cleanup if routine.established else None

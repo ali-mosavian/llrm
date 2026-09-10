@@ -63,6 +63,11 @@ def semantics(op: mir.Op) -> Semantics | None:
 
 
 def annotated(body: mir.MirBody) -> mir.MirBody:
+    def annotated_op(op):
+        if (op.op is ir.Operation.NOTHING and op.name in ("wait", "fwait")
+            and not op.defines and not op.uses and not op.loads and not op.stores):
+            return replace(op, kind=mir.Kind.FCHECK, name="")
+        return replace(op, floating=semantics(op))
     return replace(body, blocks=tuple(replace(block, ops=tuple(
-        replace(op, floating=semantics(op)) for op in block.ops
+        annotated_op(op) for op in block.ops
     )) for block in body.blocks))

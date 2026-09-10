@@ -83,6 +83,9 @@ def _without(ops: list[Op], drop) -> list[Op]:
     out: list[Op] = []
     for op in ops:
         if drop(op):
+            if (op.covers is not None and op.covers[0] == op.covers[1]
+                and not op.extra_covers and op.floating_origin is None):
+                continue
             # The bytes go to the op immediately before, and only if that op
             # is adjacent and gets its length from select.py. Anything
             # further back would span the survivors in between and count
@@ -2361,7 +2364,8 @@ class Cse(MIRTransform):
         self.where = where
 
     def transform(self, body: MirBody) -> MirBody:
-        return subexpressions(body, self.where.dgroup)
+        from qbopt.optimize import floatfold
+        return floatfold.checks(subexpressions(body, self.where.dgroup))
 
 
 class Place(MIRTransform):

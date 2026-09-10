@@ -20,6 +20,29 @@ def _reads(body):
     return reads
 
 
+def checks(body: mir.MirBody) -> mir.MirBody:
+    """A completed observation stays satisfied until floating or unknown work."""
+    transparent = {mir.Kind.NOTHING, mir.Kind.COPY, mir.Kind.LOAD, mir.Kind.STORE,
+                   mir.Kind.ARG, mir.Kind.ADD, mir.Kind.SUB, mir.Kind.INCREMENT}
+    blocks = []
+    for block in body.blocks:
+        observed = False
+        ops = []
+        for op in block.ops:
+            if (op.barrier or op.floating is not None or op.stack is not None
+                or any(isinstance(arg, mir.Held) and arg.width == 10 for arg in (*op.args, *op.results))):
+                observed = False
+            elif op.kind is mir.Kind.FCHECK:
+                if observed:
+                    op = replace(op, kind=mir.Kind.NOTHING, node=None, made=None, raised=None, symbol=False)
+                observed = True
+            elif op.kind not in transparent:
+                observed = False
+            ops.append(op)
+        blocks.append(replace(block, ops=tuple(ops)))
+    return replace(body, blocks=tuple(blocks))
+
+
 def stored(body: mir.MirBody, facts: dict) -> mir.MirBody:
     """Write exact SINGLE bits and retain checks for the now-unused computation."""
     if not facts:

@@ -316,7 +316,7 @@ def _dead_in(block, overwritten: dict, dgroup: frozenset[int], calls: dict[int, 
             # store, since sp comes back where it started and nothing
             # outside the idiom reads the cells it passed through.
             continue
-        if op.floating is not None or op.barrier or (op.at in calls and not _clean(op, calls)):
+        if op.floating is not None or op.kind is Kind.FCHECK or op.barrier or (op.at in calls and not _clean(op, calls)):
             overwritten = {}
             continue
         if op.at in calls:
