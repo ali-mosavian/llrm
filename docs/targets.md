@@ -364,6 +364,42 @@ change the global STACK/FRAME alias rule or reuse QB's 10-byte fixed layout
 for the other two runtimes. No optimizer change or cost reduction is claimed
 by this inspection.
 
+### Implemented stack/frame exclusions
+
+The raise now tracks entry-relative stack depth through instructions and
+established callee cleanup. Conflicting CFG inputs, unbalanced loops, unknown
+calls, interrupts and SP/BP/SS replacements lose the fact. A push/pop gets an
+exclusion only when its whole range stays below the reserved local area.
+Known OWN-effect calls can exclude those locals only when no frame/stack
+address escapes in the body and their explicit register inputs do not include
+SP/BP. Procedure entries, event-enabled modules and error-handler modules
+remain unchanged. MIR passes consume byte-range exclusions, not registers or
+runtime frame sizes.
+
+Existing constant propagation then removes all six remaining divisions in
+the current seven-row CHAIN program. Representative PDS CONST2 computation:
+
+```asm
+; before
+mov ebx,[bp-22h]
+mov ecx,100003
+mov eax,ebx
+cdq
+idiv ecx
+mov eax,edx
+mov [r],eax
+; after
+mov dword [r],13106
+```
+
+The numeric assignments and output calls stay in source order. Modeled cost
+falls **962 → 530** on QB/PDS and **882 → 530** on VBDOS, **1.10×** the 482
+target on all three. PDS's object shrinks **1694 → 1524 bytes**. Compiler frame
+stores still remain, so this is not claimed to reach the exact reference.
+Fail-first tests retain the emitted-MIR division symptom; negative cases cover
+pointer escapes and unknown/conflicting depth. Actual CHAIN (seven results),
+PRESSX and FPDEEP (eleven results) executions pass on all three compilers.
+
 ## FPDEEP — exact constant floating expressions
 
 **The same audit limitation applies here:** 1086 prices the numerical/printing

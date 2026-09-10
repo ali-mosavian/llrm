@@ -608,6 +608,12 @@ one documented target without materially regressing another.
   occurrence only when every incoming path proves ownership. Calls, descriptor
   writes, allocation generations and value widths constrain the proof;
   general symbolic ranges remain unfinished.
+  Main-frame locals now carry per-access disjointness proofs against argument
+  pushes/pops and qualified OWN-effect calls. The raise uses the actual runtime
+  frame layout, tracks stack depth through established cleanup, and drops facts
+  at unknown changes or conflicting joins. Escaped frame addresses, procedure
+  entries and event/error modules retain conservative behavior. CHAIN's six
+  remaining divisions fold away: QB/PDS 962 → 530, VBDOS 882 → 530 modeled cost.
   Counted-loop ranges also use signed comparison facts on dominating,
   dedicated branch edges. Derived offsets are recomputed in that scope;
   a bound from one arm is not exported through its join. This enables

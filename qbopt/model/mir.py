@@ -2218,6 +2218,8 @@ def bodies(
             contracts,
         )
         if not isinstance(built, str):
+            from qbopt.frontend import raising_frame
+            built = raising_frame.annotated(built, found, mine, contracts)
             if not basic_semantics:
                 from qbopt.frontend import raising_numeric_policy
                 built = raising_numeric_policy.native(built)
