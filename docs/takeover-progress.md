@@ -1,5 +1,32 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: select TEST for flag-only AND results
+
+Lowering now emits a destination-free TEST for 16/32-bit register ANDs when
+their scalar result has no reader and is not visible at the body exit.
+Memory forms, partial writes and observed results retain AND. MIR remains
+unchanged; instruction choice belongs to the backend.
+
+The extra copy left by the preceding LICM improvement disappears:
+
+```asm
+; before              ; after
+mov cx,bx             test bx,bx
+and cx,bx             je otherArm
+je otherArm
+```
+
+PDS IVWORD shrinks 1123 -> 1121 object bytes and removes one register copy
+per iteration. The invariant load stays outside the loop. Both new width
+tests fail before the change; 32 distinct lowering/induction checks pass,
+including read-result, exit-visible and partial-write safeguards. IVWORD
+still prints `34 0 11 37` plus DONE on all three linked compiler builds.
+
+Before/after stages: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-test-lowering-stages-tbnbvm8x`.
+Runtime artifacts under the same temporary parent:
+`qbopt-test-lowering-p-g2-kp6j8dtk`, `qbopt-test-lowering-q-O-sj5o8r7e`,
+`qbopt-test-lowering-v-g3-ikyw3m5n`.
+
 ## 2026-09-10: retain branch tests without rejecting their invariant inputs
 
 LICM previously rejected its entire invariant candidate sequence when a

@@ -9,6 +9,39 @@ from qbopt.model import mir
 from qbopt.backend import lower
 
 
+@pytest.mark.parametrize("width", [2, 4])
+def test_dead_and_result_uses_test_without_a_destination(width):
+    """IVWORD emitted mov cx,bx / and cx,bx although only the condition was consumed."""
+    source, result = mir.Value(1, 0), mir.Value(2, 0)
+    condition = mir.Value(3, 0, flags=True)
+    op = mir.Op(0, ir.Operation.BINARY, "and", (result, condition), (source,),
+                kind=mir.Kind.AND, args=(mir.Held(source, width),) * 2,
+                results=(mir.Held(result, width),))
+    built = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),))
+    emitted = lower.Lowering(built, {source.id, condition.id}, {}, (), {}).expand(op)
+    assert len(emitted) == 1
+    assert emitted[0].what == ir.Semantics(ir.Operation.COMPARE, "test", (),
+                                         (ir.Held(source.id, width),) * 2)
+    assert emitted[0].defines == ()
+
+
+@pytest.mark.parametrize("observation", ["read", "exit", "merge"])
+def test_and_keeps_an_observed_or_partial_result(observation):
+    from iced_x86 import Register
+
+    source, result = mir.Value(1, 0), mir.Value(2, 0)
+    condition = mir.Value(3, 0, flags=True)
+    op = mir.Op(0, ir.Operation.BINARY, "and", (result, condition), (source,),
+                kind=mir.Kind.AND, args=(mir.Held(source, 2),) * 2,
+                results=(mir.Held(result, 2),),
+                merges={source: result} if observation == "merge" else {})
+    built = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),),
+                        origin={result: Register.EAX} if observation == "exit" else {})
+    emitted = lower.Lowering(built, {result.id} if observation == "read" else set(), {}, (), {}).expand(op)
+    assert emitted[0].what.name == "and"
+    assert emitted[0].defines == (result.id,)
+
+
 def body() -> mir.MirBody:
     value = mir.Value(1, 0)
     condition = mir.Value(2, 0, flags=True)

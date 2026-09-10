@@ -788,6 +788,8 @@ class Lowering:
         self.cpu = cpu
         self.pointer_model = pointer_model
         self._read = read
+        from qbopt.frontend.raising_words import leaving
+        self._exposed = {value.id for value in leaving(body)}
         self._coverage = coverage or {}
         self._origin = body.origin
         self._calls = calls
@@ -825,6 +827,7 @@ class Lowering:
 
         made = _EXPANDS.get(op.kind)
         parts = made(op, self) if made is not None else _pointer_access(op, self)
+        parts = _flag_test(op, self) or parts
         if op.kind is mir.Kind.CONVERT and not preserve_flags:
             parts = _sign_word(op) or parts
         if op.kind is mir.Kind.MUL and not preserve_flags:
@@ -891,6 +894,20 @@ class Lowering:
             ),
             *(_follows(op, one) for one in parts[1:]),
         )
+
+
+def _flag_test(op: mir.Op, context: Lowering) -> tuple[ir.Semantics, ...] | None:
+    """A dead AND destination needs flags, not a two-address temporary."""
+    if (op.kind is not mir.Kind.AND or op.loads or op.stores or op.merges or op.barrier
+        or len(op.results) != 1 or len(op.args) != 2
+        or not isinstance(op.results[0], mir.Held)):
+        return None
+    result = op.results[0]
+    if (result.value.id in context._read | context._exposed or result.width not in (2, 4)
+        or any(not isinstance(arg, mir.Held) or arg.width != result.width for arg in op.args)
+        or any(value != result.value and not value.flags for value in op.defines)):
+        return None
+    return (ir.Semantics(ir.Operation.COMPARE, "test", (), tuple(map(operand, op.args))),)
 
 
 def _scaled(op: mir.Op, context: Lowering) -> tuple[ir.Semantics, ...] | None:
