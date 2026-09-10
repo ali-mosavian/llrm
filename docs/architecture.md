@@ -556,6 +556,12 @@ one documented target without materially regressing another.
   foundation; optimization consumers and precise clobber queries remain below.
 - [ ] Refine alias, object-identity, escape and per-argument mod/ref facts used
   by `MemorySSA`.
+  Promotion and constant-memory facts now share MemorySSA's conservative rule
+  for unspecified call writes and opaque barriers. Promotion previously kept
+  a value when an effect had no explicit store range; partial constant stores
+  could also resurrect pre-barrier high-word facts. PRESS-derived MIR cases
+  reproduce both defects. Known runtime contracts still refine constant facts;
+  precise readonly attributes for promotion remain future work.
   Whole-pointer accesses proven inside one allocation now use shared SSA
   bases and constant byte offsets to exclude disjoint writes. Exact dominating
   stores supply constants or SSA values; unknown roots and unbounded offsets

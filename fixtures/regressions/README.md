@@ -1,5 +1,27 @@
 # Focused regression objects
 
+Promotion clobber regressions in `tests/test_promote.py` use PRESS-derived MIR
+with explicit, unspecified and barrier effects, placed before/between/after a
+store and read. Only an intervening clobber should prevent reuse. Unspecified
+calls and barriers previously failed that check. A separate partial-store case
+shows why clearing held values alone is insufficient: a low-word store after
+a barrier must not revive constant high-word facts from before it.
+
+Schematic assembly consequence of that partial-store defect (not a captured
+whole-program miscompile):
+
+```asm
+; both versions first store 11223344h, then encounter an unknown effect
+; before                         ; after
+mov word [cell],7                mov word [cell],7
+mov eax,11220007h                mov eax,[cell]
+```
+
+Forty-three selected promotion/MemorySSA checks pass, including fail-first
+reproductions; the three existing ADDRM representation tests were excluded.
+PRESS executes correctly on QB/PDS/VBDOS. UDTFIX costs remain 260/260/236;
+no new target speedup is claimed for this safety fix.
+
 `udtfix-{q-O,p-g2,v-g3}.obj` are the fixed-record counterpart of UDTACC,
 compiled from `udtfix.bas`. All three baseline/optimized pairs print 21, -35
 and DONE. **This records an existing capability, not a new optimization.**

@@ -145,6 +145,9 @@ def _kills(
     here: Cells, op: mir.Op, known: dict[mir.Value, Known], dgroup: frozenset[int], calls: dict[int, str]
 ) -> Cells:
     """The cell facts still standing after this operation."""
+    from qbopt.analysis import effects
+    if effects.unmodeled_write(op) and (op.barrier or op.at not in calls):
+        here = {}
     if op.kind is mir.Kind.CALL and op.at in calls:
         contract = runtime.contract(calls[op.at])
         if runtime.barrier(contract) or (runtime.writes_caller_memory(contract) and not op.stores):

@@ -33,6 +33,7 @@ from qbopt.model import mir
 from qbopt.analysis import ssa
 from qbopt.analysis import loops
 from qbopt.analysis import consts
+from qbopt.analysis import effects
 from qbopt.model.mir import Op
 from qbopt.model.mir import MirBody
 from qbopt.objectfile.module import Space
@@ -140,6 +141,9 @@ def _available(body: MirBody, cells: dict, dgroup: frozenset[int], bounds: dict 
 
     def through(block: mir.MirBlock, available: set, reads: set[int] | None = None) -> set:
         for op in block.ops:
+            if effects.unmodeled_write(op):
+                available.clear()
+                continue
             cell = _cell(op)
             if (reads is not None and op.loads and cell is not None and cell.addr in available
                 and cell.width == cells[cell.addr]):

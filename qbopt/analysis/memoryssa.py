@@ -9,13 +9,12 @@ Calls without write metadata and barriers remain conservative.
 from dataclasses import dataclass
 from enum import StrEnum
 
-from qbopt.analysis import loops, pointerfacts
+from qbopt.analysis import effects, loops, pointerfacts
 from qbopt.model import mir
 
 
 def _unknown_write(op: mir.Op) -> bool:
-    return (op.barrier or op.floating is not None or op.kind is mir.Kind.FCHECK
-            or (op.kind is mir.Kind.CALL and not op.stores))
+    return effects.unmodeled_write(op) or op.floating is not None or op.kind is mir.Kind.FCHECK
 
 
 class Kind(StrEnum):

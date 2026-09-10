@@ -48,6 +48,27 @@ def test_frame_promotion_respects_unknown_and_overlapping_writes(clobber, reused
     assert bool(after.loads) is not reused
 
 
+@pytest.mark.parametrize("effect", ["call", "barrier"])
+def test_partial_store_does_not_restore_constants_from_before_unknown_effect(effect):
+    """A post-clobber low-word store must not resurrect an old high word as a promoted LONG."""
+    from qbopt.model import ir
+    from qbopt.objectfile.module import Addr, Space
+    cell = mir.MemRef(Addr(Space.FRAME, -8), 4)
+    word = replace(cell, width=2)
+    value = mir.Value(1, 6, variable=1, version=1)
+    initial = mir.Op(0, ir.Operation.MOVE, "", (), (), kind=mir.Kind.STORE,
+        args=(mir.Const(0x11223344, 4),), results=(mir.Cell(cell),), stores=(cell,))
+    clobber = mir.Op(2, ir.Operation.CALL if effect == "call" else ir.Operation.BARRIER, "", (), (),
+        kind=mir.Kind.CALL if effect == "call" else mir.Kind.OPAQUE)
+    partial = mir.Op(4, ir.Operation.MOVE, "", (), (), kind=mir.Kind.STORE,
+        args=(mir.Const(7, 2),), results=(mir.Cell(word),), stores=(word,))
+    load = mir.Op(6, ir.Operation.MOVE, "", (value,), (), kind=mir.Kind.LOAD,
+        args=(mir.Cell(cell),), results=(mir.Held(value, 4),), loads=(cell,))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (initial, clobber, partial, load), ()),))
+    result = promote.promoted(body)
+    assert next(op for op in result.blocks[0].ops if op.at == 6).loads == (cell,)
+
+
 def test_unpromotable_memory_update_does_not_cancel_other_cells() -> None:
     """SEGLD rose from 25002 to 28202 when its memory sum canceled counter promotion."""
     from qbopt.optimize import transform
@@ -171,7 +192,8 @@ def test_production_press_keeps_the_loop_counter_in_a_value() -> None:
 
 
 @pytest.mark.parametrize(("position", "reused"), [(0, True), (1, False), (2, True)])
-def test_only_an_intervening_call_invalidates_a_stored_value(position: int, reused: bool) -> None:
+@pytest.mark.parametrize("effect", ["explicit", "unspecified", "barrier"])
+def test_only_an_intervening_call_invalidates_a_stored_value(position: int, reused: bool, effect: str) -> None:
     """A later call cannot invalidate an earlier read; an intervening call must."""
     found = module.of(omf.parse(Path("fixtures/omf/press-p-g2.obj").read_bytes()))
     body = mir.bodies(found, blocks.partition(found, blocks.code_map(found)))[0][1]
@@ -179,6 +201,11 @@ def test_only_an_intervening_call_invalidates_a_stored_value(position: int, reus
     load = next(op for op in ops if op.at == 0x94)
     store = next(op for op in ops if op.at == 0x98)
     call = replace(ops[-1], stores=(mir.MemRef(None, 0),))
+    if effect != "explicit":
+        call = replace(call, stores=())
+    if effect == "barrier":
+        from qbopt.model import ir
+        call = replace(call, op=ir.Operation.BARRIER, kind=mir.Kind.OPAQUE)
     sequence = [store, load]
     sequence.insert(position, call)
     body = replace(body, entry=0, blocks=(mir.MirBlock(0, (), tuple(sequence), ()),))
