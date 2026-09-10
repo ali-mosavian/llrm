@@ -2,7 +2,7 @@
 
 from dataclasses import replace
 
-from iced_x86 import Register, RegisterExt
+from iced_x86 import Decoder, FlowControl, OpAccess, Register, RegisterExt
 
 from qbopt.model import ir, lir
 from qbopt.backend import target
@@ -13,7 +13,73 @@ class Peephole(LIRTransform):
     name = "peephole"
 
     def transform(self, body: lir.LirBody) -> lir.LirBody:
-        return waits(zeroes(addresses(constants(body))))
+        return waits(zeroes(addresses(overwritten(constants(body)))))
+
+
+def _lanes(register):
+    full = RegisterExt.full_register32(register)
+    if full not in {Register.EAX, Register.EBX, Register.ECX, Register.EDX, Register.ESI, Register.EDI, Register.EBP}:
+        return set()
+    start = int(register in {Register.AH, Register.BH, Register.CH, Register.DH})
+    return {(full, byte) for byte in range(start, start + RegisterExt.size(register))}
+
+
+def _register_effects(one):
+    from qbopt.backend import select
+    from qbopt.frontend.declen import INFO, READS
+
+    if one.clobbers or one.symbol is True:
+        return None
+    if one.what is None or one.what.op is ir.Operation.BARRIER:
+        node = getattr(one.op, "node", None)
+        decoded = getattr(node, "insn", None)
+        if not isinstance(node, ir.Opaque) or decoded is None:
+            return None
+        instructions = (decoded.insn,)
+    else:
+        if one.what.op is ir.Operation.NOTHING and not one.what.name:
+            return set(), set()
+        encoded = select.emit(one.what)
+        if encoded is None:
+            return None
+        instructions = tuple(Decoder(16, encoded.code))
+    reads = {lane for _, register in one.requires for lane in _lanes(register)}
+    writes = set()
+    for insn in instructions:
+        if insn.is_invalid or insn.flow_control != FlowControl.NEXT:
+            return None
+        for access in INFO.info(insn).used_registers():
+            lanes = _lanes(access.register)
+            if access.access in READS:
+                reads.update(lanes - writes)
+        for access in INFO.info(insn).used_registers():
+            if access.access in (OpAccess.WRITE, OpAccess.READ_WRITE):
+                writes.update(_lanes(access.register))
+    return reads, writes
+
+
+def overwritten(body: lir.LirBody) -> lir.LirBody:
+    """Remove register-only moves whose byte lanes are overwritten before use."""
+    blocks = []
+    for block in body.blocks:
+        dead, redundant = set(), set()
+        for one in reversed(block.insns):
+            effects = _register_effects(one)
+            if effects is None:
+                dead.clear()
+                continue
+            match one.what:
+                case ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg() as dest,), (ir.Reg() | ir.Imm() as source,)):
+                    lanes = _lanes(dest.register)
+                    if (lanes and lanes <= dead and dest.width == source.width
+                        and not one.requires and not one.delivers
+                        and (isinstance(source, ir.Reg) or source.address is None)):
+                        redundant.add(id(one))
+                        continue
+            reads, writes = effects
+            dead = (dead | writes) - reads
+        blocks.append(replace(block, insns=tuple(lir.without(block.insns, lambda one: id(one) in redundant))))
+    return replace(body, blocks=tuple(blocks))
 
 
 def _scaled_address(parts: tuple[lir.Insn, ...], *, flags_dead: bool = False) -> lir.Insn | None:

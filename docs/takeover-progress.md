@@ -1,5 +1,47 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: remove overwritten allocation shuffles
+
+The final physical-register peephole now removes register/immediate moves
+whose complete byte lanes are overwritten before a read in the same block.
+It decodes the selected instructions (or an unchanged opaque instruction),
+accounts for AL/AH/AX/EAX overlap and implicit register reads, and does not
+infer unconditional writes from conditional-write operands. Calls, branches,
+unknown effects and block exits retain conservative live state. Memory loads,
+relocated immediates and mandatory interface moves are not removed.
+
+FPDEEP's original four-copy sequence included three pairs of `mov ax,si` /
+`mov bx,di`. After eliminating reverse identity copies, five of those six
+allocation shuffles have no reader:
+
+```asm
+; before                     ; after
+movsw                        movsw
+mov ax,si                    movsw
+mov bx,di                    movsw
+movsw                        mov bx,di
+mov ax,si                    movsw
+mov bx,di
+movsw
+mov ax,si
+mov bx,di
+movsw
+```
+
+The last BX result is conservatively retained. The copy's direction and
+memory semantics are unchanged; this needs no new runtime DF/DS contract.
+Two other overwritten register definitions disappear as well. FPDEEP ranking
+cost: PDS/VBDOS **1829 -> 1815**, QB **1755 unchanged**, against target 1086.
+This is not a cycle measurement and does not close the target gap.
+
+88 focused peephole tests pass. Both emitted-code regressions fail with the
+new peephole disabled (six shuffles instead of one); byte-read and partial-write
+guards pass. Original/optimized FPDEEP output matches and reaches DONE on
+PDS and VBDOS after the final change, with clean linker output. QB output
+also matched in the preliminary run; its final ranking is unchanged.
+Stage dumps and final runtime artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-overwritten-final-26xdf2u0`.
+
 ## 2026-09-10: repair the sliced floating-copy regression
 
 The strict-copy/CSE regression constructed a six-operation floating slice

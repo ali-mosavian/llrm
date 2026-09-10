@@ -9,6 +9,41 @@ from qbopt.model import ir, lir
 from qbopt.backend import peephole
 
 
+@pytest.mark.parametrize("middle,removed", [(Register.CX, True), (Register.AL, False), (Register.AH, False)])
+def test_overwritten_register_copy_respects_byte_reads(middle, removed):
+    """FPDEEP retains AX/SI allocation shuffles overwritten before any use."""
+    ax, si = ir.Reg(Register.AX, 2), ir.Reg(Register.SI, 2)
+    copy = lir.Insn(0, (0, 0), ir.Semantics(ir.Operation.MOVE, "mov", (ax,), (si,)), (), ())
+    width = 1 if middle in (Register.AL, Register.AH) else 2
+    read = lir.Insn(1, (1, 1), ir.Semantics(ir.Operation.MOVE, "mov",
+        (ir.Reg(Register.BL if width == 1 else Register.BX, width),), (ir.Reg(middle, width),)), (), ())
+    overwrite = lir.Insn(2, (2, 2), ir.Semantics(ir.Operation.MOVE, "mov", (ax,), (ir.Imm(4, 2),)), (), ())
+    body = lir.LirBody("copies", 0, (lir.LirBlock(0, (copy, read, overwrite), ()),), {}, {})
+    result = peephole.overwritten(body)
+    assert (copy not in result.insns) is removed
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "v-g3"])
+def test_fpdeep_discards_overwritten_copy_shuffles(tag):
+    """FPDEEP emitted six AX/SI and BX/DI shuffles around its four MOVSWs."""
+    import corpus
+    from qbopt import wholeseg
+    result = wholeseg.emitted(Path(f"fixtures/omf/fpdeep-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
+    assert instructions.count("mov ax,si") + instructions.count("mov bx,di") <= 1
+
+
+@pytest.mark.parametrize("dest", [Register.AL, Register.AH])
+def test_word_copy_survives_partial_overwrite(dest):
+    """Writing AL or AH alone cannot make a prior AX definition dead."""
+    ax, si = ir.Reg(Register.AX, 2), ir.Reg(Register.SI, 2)
+    copy = lir.Insn(0, (0, 0), ir.Semantics(ir.Operation.MOVE, "mov", (ax,), (si,)), (), ())
+    write = lir.Insn(1, (1, 1), ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(dest, 1),), (ir.Imm(0, 1),)), (), ())
+    body = lir.LirBody("partial", 0, (lir.LirBlock(0, (copy, write), ()),), {}, {})
+    assert peephole.overwritten(body) == body
+
+
 def test_addrm_index_scale_uses_one_lea():
     """ADDRM QB copied and shifted SI on every iteration instead of one LEA."""
     import corpus
