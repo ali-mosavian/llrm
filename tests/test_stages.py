@@ -9,6 +9,7 @@ mattered and diff clean.
 
 import sys
 from pathlib import Path
+import pytest
 
 from iced_x86 import Register
 
@@ -19,6 +20,26 @@ import stages
 from qbopt.model import ir
 from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
+
+
+def test_failed_optimization_keeps_observed_mir(tmp_path, monkeypatch):
+    """Qrender PL_MOVE failed convergence and left only the initial dump, hiding all 16 rounds."""
+    path = Path("fixtures/omf/addrm-q-O.obj")
+    _, bodies, _ = stages._bodies(path.read_bytes())
+
+    def fail(data, *, watch, **kwargs):
+        for name, body in bodies:
+            watch("mir-r01-fold", name, body)
+        raise RuntimeError("MIR optimization did not converge")
+
+    monkeypatch.setattr(stages.wholeseg, "emitted", fail)
+    with pytest.raises(RuntimeError, match="did not converge"):
+        stages.main([str(path), "--dump", str(tmp_path), "--quiet"])
+    files = list(tmp_path.glob("*-mir-r01-fold.txt"))
+    assert len(files) == 1
+    assert "main (main)" in files[0].read_text()
+    assert "--- mir" in files[0].read_text()
+    assert not list(tmp_path.glob("*-asm-emitted.txt"))
 
 
 def test_nbody_has_one_complete_file_per_machine_stage(tmp_path):

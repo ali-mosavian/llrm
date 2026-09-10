@@ -643,10 +643,12 @@ def main(argv: list[str] | None = None, view=None) -> int:
             return
         stages.setdefault(stage, []).append((name, low))
 
-    got = wholeseg.emitted(data, only=args.only, watch=watch, cpu=args.cpu,
-                           basic_semantics=args.basic_semantics, bounds_checks=args.bounds_checks)
-    for name, bodies in mir_stages.items():
-        was = dump(next(step), name, name, bodies, was, debug, found)
+    try:
+        got = wholeseg.emitted(data, only=args.only, watch=watch, cpu=args.cpu,
+                               basic_semantics=args.basic_semantics, bounds_checks=args.bounds_checks)
+    finally:
+        for name, bodies in mir_stages.items():
+            was = dump(next(step), name, name, bodies, was, debug, found)
     lowered(next(step), stages.items(), got.data, got.reason, route)
     return 0
 
