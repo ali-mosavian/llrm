@@ -3,7 +3,7 @@
 from dataclasses import dataclass, replace
 
 from qbopt.analysis import consts, induction, loops
-from qbopt.model import mir
+from qbopt.model import ir, mir
 from qbopt.objectfile.module import Space
 
 
@@ -12,6 +12,70 @@ class Interval:
     low: int
     high: int
     width: int
+
+
+def on_edge(block, successor, known, facts=None):
+    """Signed comparison facts on one CFG edge; None means that edge is impossible.
+
+    The flags must come from an explicit comparison in this block. Facts are
+    about the operand's own width, never an implicit extension of that value.
+    """
+    if successor not in block.succ:
+        raise ValueError("not a successor")
+    result = dict(known)
+    if not block.ops or len(block.succ) != 2:
+        return result
+    branch = block.ops[-1]
+    flags = [value for value in branch.uses if value.flags]
+    if branch.kind is not mir.Kind.BRANCH or branch.target not in block.succ or len(flags) != 1:
+        return result
+    compare = next((op for op in reversed(block.ops[:-1]) if flags[0] in op.defines), None)
+    if (compare is None or compare.op is not ir.Operation.COMPARE or len(compare.args) != 2
+        or compare.kind is not mir.Kind.SUB or compare.defines != (flags[0],)
+        or compare.results or compare.loads or compare.stores or compare.merges
+        or compare.barrier or compare.floating is not None):
+        return result
+    left, right = compare.args
+    if not all(isinstance(arg, (mir.Held, mir.Const)) for arg in (left, right)):
+        return result
+    if left.width not in (2, 4) or right.width != left.width:
+        return result
+    kind = branch.test
+    if successor != branch.target:
+        kind = {mir.Kind.LE: mir.Kind.GT, mir.Kind.LT: mir.Kind.GE,
+                mir.Kind.GE: mir.Kind.LT, mir.Kind.GT: mir.Kind.LE,
+                mir.Kind.EQ: mir.Kind.NE, mir.Kind.NE: mir.Kind.EQ}.get(kind)
+    sign = 1 << (left.width * 8 - 1)
+    full = Interval(-sign, sign - 1, left.width)
+    first = _operand(left, known, facts or {}) or full
+    second = _operand(right, known, facts or {}) or full
+    if kind in (mir.Kind.GE, mir.Kind.GT):
+        left, right, first, second = right, left, second, first
+        kind = mir.Kind.LE if kind is mir.Kind.GE else mir.Kind.LT
+    match kind:
+        case mir.Kind.LE | mir.Kind.LT:
+            strict = int(kind is mir.Kind.LT)
+            spans = ((first.low, min(first.high, second.high - strict)),
+                     (max(second.low, first.low + strict), second.high))
+        case mir.Kind.EQ:
+            shared = max(first.low, second.low), min(first.high, second.high)
+            spans = shared, shared
+        case mir.Kind.NE:
+            def excluding(interval, other):
+                low, high = interval.low, interval.high
+                if other.low == other.high:
+                    low += int(low == other.low)
+                    high -= int(high == other.low)
+                return low, high
+            spans = excluding(first, second), excluding(second, first)
+        case _:
+            return result
+    for arg, (low, high) in zip((left, right), spans):
+        if low > high:
+            return None
+        if isinstance(arg, mir.Held):
+            result[arg.value] = Interval(low, high, arg.width)
+    return result
 
 
 def covering(ref: mir.MemRef, known: dict[mir.Value, Interval]) -> mir.MemRef:
@@ -103,6 +167,8 @@ def _recurrence_span(start: int, step: int, advances: int, width: int) -> Interv
 def bounded(body: mir.MirBody) -> dict[int, dict[mir.Value, Interval]]:
     facts = consts.known(body)
     result = {}
+    predecessors = loops.predecessors(body.blocks)
+    dominators = loops.dominators(body.blocks, body.entry)
     for loop in loops.loops(body.blocks, body.entry):
         inside = set(loop.body) - {loop.header}
         known = {}
@@ -142,8 +208,31 @@ def bounded(body: mir.MirBody) -> dict[int, dict[mir.Value, Interval]]:
             if len(known) == before:
                 break
         for at in inside:
+            scoped = dict(known)
+            for block in body.blocks:
+                for successor in block.succ:
+                    if predecessors[successor] == {block.at} and successor in dominators.get(at, ()):
+                        narrowed = on_edge(block, successor, scoped, facts)
+                        if narrowed is not None:
+                            scoped = narrowed
+            while True:
+                before = dict(scoped)
+                for op in operations:
+                    interval = _computed(op, scoped, facts)
+                    if interval is None:
+                        continue
+                    value = op.results[0].value
+                    previous = scoped.get(value)
+                    if previous is not None and previous.width == interval.width:
+                        low, high = max(previous.low, interval.low), min(previous.high, interval.high)
+                        if low > high:
+                            continue
+                        interval = Interval(low, high, interval.width)
+                    scoped[value] = interval
+                if scoped == before:
+                    break
             destination = result.setdefault(at, {})
-            for value, interval in known.items():
+            for value, interval in scoped.items():
                 previous = destination.get(value)
                 if previous is None:
                     destination[value] = interval

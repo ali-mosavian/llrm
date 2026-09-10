@@ -1,5 +1,52 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: branch-scoped subscript ranges
+
+`analysis/ranges.py` now refines signed integer intervals on comparison
+edges and propagates tighter bounds through derived arithmetic. A bound
+applies only where its dedicated successor dominates the use, not through
+a join reachable from the other arm. Arithmetic TEST flags, partial flag
+effects and unsupported comparisons do not establish subtraction bounds.
+
+RNGARM iterates INDEX from 0 to 9 but writes a four-element word array only
+under `index < 4`. Its offset is therefore 0..6 on that arm, not 0..18.
+The array store cannot overwrite INDEX, allowing existing exit-store motion
+to defer INDEX's write. PDS assembly:
+
+```asm
+; before: loop test, reached eleven times
+mov [index],ax
+cmp ax,9
+jle body
+
+; after: one write, with the final value 10
+cmp ax,9
+jle body
+mov [index],ax
+```
+
+Object size stays **1060/1053/1195 bytes** for PDS/QB/VBDOS. This removes ten
+executed counter stores, not static instruction bytes. All three baseline
+and optimized runs print **28,7,10; DONE**. The guarded-loop and three real
+fixture tests fail when edge refinement is disabled. The TEST-flags hazard
+also failed before its guard was added.
+
+The final edge-range/loop-motion/array-fact selection passes **60 tests**.
+An earlier range/IndVar selection passed 55 and hit three existing FPDEEP
+failures: unrolling removes the indexed accesses those tests expect.
+All three also fail with edge refinement disabled; they were not weakened.
+
+Stage dumps:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-rngarm-stages-d9pn5yw6`
+(`before/s59-asm-emitted.txt`, `after/s75-asm-emitted.txt`). Runtime folders
+under the same parent: `qbopt-rngarm-p-g2-4_495kzy`,
+`qbopt-rngarm-q-O-vn84g4c9`, `qbopt-rngarm-v-g3-kgao5ak6`.
+
+Dynamic-array induction remains a separate blocker: an unproven heap store
+can clobber the counter reload, preventing recurrence recognition. The
+solution needs an inductive allocation/range invariant, not an assumption
+that the very access being proved is already in bounds.
+
 ## 2026-09-10: reuse element values through pointer phis
 
 `loadjoins` now translates a whole-pointer phi separately on each incoming

@@ -556,6 +556,11 @@ one documented target without materially regressing another.
   occurrence only after every incoming path agrees. Calls, descriptor
   writes, allocation generations and value widths constrain the proof;
   symbolic variable-index ranges remain unfinished.
+  Counted-loop ranges also use signed comparison facts on dominating,
+  dedicated branch edges. Derived offsets are recomputed in that scope;
+  a bound from one arm is not exported through its join. This enables
+  alias-sensitive motion around guarded static-array accesses. General
+  dynamic-array induction proofs still need allocation-lifetime invariants.
 
 ### High-impact MIR passes
 
