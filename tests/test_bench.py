@@ -9,6 +9,33 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import bench
 
 
+@pytest.mark.parametrize("compile_log,link_log,finished,accepted", [
+    ("1 Severe Error(s)", "Microsoft (R) Segmented Executable Linker\n" * 2, True, False),
+    ("", "Microsoft (R) Segmented Executable Linker\n" * 2, True, False),
+    ("0 Severe Error(s)", "Microsoft (R) Segmented Executable Linker\nerror L2029: unresolved external", True, False),
+    ("0 Severe Error(s)", "", True, False),
+    ("0 Severe Error(s)", "Microsoft (R) Segmented Executable Linker\n" * 2, False, False),
+    ("    0 Severe  Error(s)\r\n", "Microsoft (R) Segmented Executable Linker\n" * 2, True, True),
+])
+def test_failed_build_artifacts_are_not_benchmarked(monkeypatch, tmp_path, compile_log, link_log, finished, accepted):
+    """BC can emit an OBJ after severe errors; LINK can emit an EXE with unresolved calls."""
+    monkeypatch.setattr(bench, "BUILD", tmp_path)
+    monkeypatch.setattr(bench, "CONFIGS", {"test": SimpleNamespace(
+        available=True, mount=tmp_path, bc="BC", link="LINK", runtime="RUNTIME")})
+    monkeypatch.setattr(bench, "switches_for", lambda *args: "")
+    def launch(work, *args, **kwargs):
+        for name in ("NBODY.OBJ", "BASE.EXE", "OPT.EXE"):
+            (work / name).write_bytes(b"artifact despite error")
+        return SimpleNamespace(finished=finished, timed_out=not finished)
+    monkeypatch.setattr(bench, "launch", launch)
+    monkeypatch.setattr(bench, "read_dos", lambda work, name: compile_log if name == "BC.OUT" else link_log)
+    if accepted:
+        assert all(path.is_file() for path in bench.build("test", transform=lambda data: data))
+    else:
+        with pytest.raises(SystemExit):
+            bench.build("test", transform=lambda data: data)
+
+
 @pytest.mark.parametrize("output", ["PX0= 1\nTICKS= 0\nDONE", "PX0= 1\nTICKS= 10"])
 def test_invalid_timer_or_incomplete_answer_is_not_timed(monkeypatch, output):
     """Optimized NBODY printed TICKS=0 after its timer's high-byte clear was miscompiled."""

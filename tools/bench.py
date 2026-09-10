@@ -14,6 +14,7 @@ import shutil
 import hashlib
 import argparse
 import statistics
+import re
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -69,19 +70,22 @@ def build(tag: str, prog: str = "nbody", native_fpu: bool = False, transform=Non
     work.mkdir(parents=True)
     shutil.copy(BENCH / f"{prog}.bas", work / f"{name}.BAS")
 
-    launch(
+    compilation = launch(
         work,
         cfg.mount,
         [f"{cfg.bc} {switches_for(cfg, prog)} {name}.BAS, {name}.OBJ; >> BC.OUT"],
         env={"LIB": r"V:\LIB"},
     )
+    severe = re.findall(r"(\d+)\s+Severe\s+Error\(s\)", read_dos(work, "BC.OUT"), re.IGNORECASE)
+    if not compilation.finished or compilation.timed_out or severe != ["0"]:
+        raise SystemExit(f"BC did not complete with zero severe errors; see {work / 'BC.OUT'}")
     obj = work / f"{name}.OBJ"
     if not obj.is_file():
         raise SystemExit(f"BC did not produce {name}.OBJ; see {work / 'BC.OUT'}")
     change = transform or (lambda data: optimized(data, native_fpu, cpu))
     (work / f"{name}Q.OBJ").write_bytes(change(obj.read_bytes()))
 
-    launch(
+    linking = launch(
         work,
         cfg.mount,
         [
@@ -90,6 +94,11 @@ def build(tag: str, prog: str = "nbody", native_fpu: bool = False, transform=Non
         ],
         env={"LIB": r"V:\LIB"},
     )
+    report = read_dos(work, "LINK.OUT")
+    if (not linking.finished or linking.timed_out
+        or report.count("Microsoft (R) Segmented Executable Linker") != 2
+        or re.search(r"unresolved external|error\s+L\d+", report, re.IGNORECASE)):
+        raise SystemExit(f"LINK did not complete both builds without errors; see {work / 'LINK.OUT'}")
     base, opt = work / "BASE.EXE", work / "OPT.EXE"
     if not base.is_file() or not opt.is_file():
         raise SystemExit(f"LINK did not produce both .EXEs; see {work / 'LINK.OUT'}")

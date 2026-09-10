@@ -3,6 +3,22 @@
 Every row carries what produced it. See `docs/measurement.md` for what each
 kind of number does and does not mean.
 
+The timing harness now requires a completed compiler invocation with an
+explicit zero severe-error count, and two completed linker invocations with
+no linker errors. Artifact existence alone is insufficient: BC and LINK can
+leave output files after errors. Five fail-first cases cover rejected builds;
+the actual compiler's padded zero-error report is accepted. This change does
+not alter optimized assembly or retroactively validate old timings.
+
+At `c78106e`, a fresh FPBENCH run through this checked harness confirms
+**7,768.941 ms baseline → 5,725.080 ms optimized (1.3570x)**, unchanged
+from the previous result. Three runs, 50,000 steps, VBDOS v-g3, tuning 386,
+native-FPU replacement off, pinned DOSBox configuration. Baseline PIT ticks:
+`9269762, 9269760, 9269760`; optimized: `6831062, 6831062, 6831060`.
+All printed answers and DONE matched. This is not real-CPU latency evidence
+or an FPDEEP timing. Artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-timing-validated-z_t27opg`.
+
 ## Runtime refresh — 2026-09-10, revision b040b61
 
 Subsequent invariant-index hoisting lowers FPBENCH to **5,725.080 ms**;
