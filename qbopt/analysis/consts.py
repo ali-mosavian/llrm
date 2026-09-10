@@ -400,6 +400,42 @@ def _carry(op: mir.Op, facts: dict, here: Cells) -> int | None:
     return int(sum(masked(fact.n, width) for fact in operands) >= 1 << (width * 8))
 
 
+def _pointer_stores(body: mir.MirBody, dgroup: frozenset[int]) -> dict[mir.Value, mir.Arg]:
+    """Dominating, exact stores supplying whole-pointer loads outside the static-cell lattice."""
+    from qbopt.analysis import loops, memoryssa
+
+    candidates = [(memoryssa.Site(block.at, index), op)
+                  for block in body.blocks for index, op in enumerate(block.ops)
+                  if op.kind is mir.Kind.LOAD and not op.barrier and not op.floating and not op.stores
+                  and len(op.loads) == len(op.args) == len(op.results) == 1
+                  and op.loads[0].pointer and op.args == (mir.Cell(op.loads[0]),)
+                  and isinstance(op.results[0], mir.Held) and op.results[0].width == op.loads[0].width]
+    if not candidates:
+        return {}
+    graph = memoryssa.built(body)
+    accesses = {access.id: access for access in graph.accesses}
+    dominators = loops.dominators(body.blocks, body.entry)
+    providers = {}
+    for site, op in candidates:
+        clobbers = graph.clobbers(site, op.loads[0], dgroup)
+        access = accesses[next(iter(clobbers))] if len(clobbers) == 1 else None
+        if access is None or access.kind is not memoryssa.Kind.DEF or access.site is None:
+            continue
+        source = access.site
+        if (source.block not in dominators[site.block]
+            or source.block == site.block and source.index >= site.index):
+            continue
+        store = graph.operations[source]
+        if (store.kind is mir.Kind.STORE and not store.barrier and not store.floating
+            and not store.loads and not store.defines and not store.merges
+            and len(store.stores) == len(store.args) == 1
+            and graph.pointers.same_bytes(op.loads[0], store.stores[0])
+            and isinstance(arg := store.args[0], (mir.Const, mir.Held))
+            and arg.width == op.loads[0].width):
+            providers[op.results[0].value] = arg
+    return providers
+
+
 def known(
     body: mir.MirBody,
     dgroup: frozenset[int] | None = None,
@@ -416,6 +452,7 @@ def known(
     facts: dict[mir.Value, Known] = {}
     carries: dict[mir.Value, int] = {}
     held: dict[tuple[int, int], Cells] = {}
+    pointer_stores = _pointer_stores(body, dgroup) if dgroup is not None and calls is not None else {}
     changing = True
     while changing:
         changing = False
@@ -454,6 +491,8 @@ def known(
                 if target is None or target in facts:
                     continue
                 found = _result(op, facts, None, here, carries)
+                if found is None and (source := pointer_stores.get(target)) is not None:
+                    found = _operand(op, source, facts)
                 if found is not None:
                     facts[target] = found
                     changing = True

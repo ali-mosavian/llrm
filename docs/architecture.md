@@ -547,6 +547,10 @@ one documented target without materially regressing another.
   foundation; optimization consumers and precise clobber queries remain below.
 - [ ] Refine alias, object-identity, escape and per-argument mod/ref facts used
   by `MemorySSA`.
+  Whole-pointer accesses proven inside one allocation now use shared SSA
+  bases and constant byte offsets to exclude disjoint writes. Exact dominating
+  stores supply constants or SSA values; unknown roots and unbounded offsets
+  remain conservative. Facts are rebuilt after MIR changes.
 
 ### High-impact MIR passes
 

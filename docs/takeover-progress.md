@@ -1,5 +1,44 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: forward values through whole-pointer memory
+
+MemorySSA now skips writes at disjoint constant offsets from a shared pointer
+base when both accesses are proven inside the same allocation. The new
+`analysis/pointerfacts.py` derives relations from current SSA copies and
+PTR_OFFSET operations; no machine encodings or stale address annotations
+enter MIR. Partial overlap, unrelated roots, missing ownership, partial copies
+and unknown calls remain conservative.
+
+Constant propagation consults exact dominating stores for pointer loads.
+The existing forwarding consumer now also accepts whole-pointer loads/stores
+and forwards nonconstant SSA values. Static-cell propagation remains intact.
+
+NDMAX's first PRINT no longer reloads 11 after storing 22 six bytes away:
+
+```asm
+; before
+push es
+push eax
+pop bx
+pop es
+mov ax,[es:bx]
+pop es
+push ax
+call B$PEI2
+
+; after
+push 0Bh
+call B$PEI2
+```
+
+PDS optimized object size: **1244 -> 1233 bytes**. The constant, nonconstant
+and three real-object regressions failed first. Pointer/MemorySSA focused
+tests pass 43 cases. All three `/AH` DOS builds print **11, 22, DONE**; final
+objects are byte-identical to those runtime-validated outputs.
+Stage dumps: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-pointer-constant-stages-kmw2de4b`.
+This extends the shared alias/MemorySSA foundation; it is not full GVN-PRE
+or a verified target-ratio result.
+
 ## 2026-09-10: reuse allocation proofs during checked-array recognition
 
 Checked recognition now runs to a fixed point on the same body, with each

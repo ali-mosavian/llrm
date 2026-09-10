@@ -68,15 +68,15 @@ def loaded_into(op: Op) -> tuple[MemRef, Value] | None:
     """The cell this op purely loads, and the value it lands in.
 
     Purely: one read, no write, one value defined, nothing read as data, and
-    an address something can name -- a MemRef whose addr is None aliases
-    everything, so it can never be matched by same_bytes and would sit in
-    the map as an entry no lookup can use and every store has to step over.
+    an address something can name, either a symbolic cell or a whole SSA
+    pointer. An anonymous memory effect is neither and cannot supply data.
     `and cx,[x]` fails the last test -- it uses cx as data as well as
     defining it, so the bytes it leaves in cx are not the cell's. Treating
     it as a load is the bug tools/matrix.py caught in forward.py, and the
     same shape has to be refused here.
     """
-    if op.floating is not None or len(op.loads) != 1 or op.stores or op.barrier or op.loads[0].addr is None:
+    if (op.floating is not None or len(op.loads) != 1 or op.stores or op.barrier
+        or op.loads[0].addr is None and not op.loads[0].pointer):
         return None
     defines = _real(op.defines)
     if len(defines) != 1:
@@ -115,7 +115,8 @@ def _preserved(op: Op) -> set[Value]:
 
 def stored_from(op: Op) -> tuple[MemRef, Value] | None:
     """The cell this op purely stores, and the value it wrote there."""
-    if op.floating is not None or len(op.stores) != 1 or op.loads or op.barrier or op.stores[0].addr is None:
+    if (op.floating is not None or len(op.stores) != 1 or op.loads or op.barrier
+        or op.stores[0].addr is None and not op.stores[0].pointer):
         return None
     if _real(op.defines):
         return None
@@ -546,11 +547,11 @@ def _memory_providers(
             stored = stored_from(graph.operations[access.site])
             if stored is not None:
                 cell, value = stored
-                if available(access.site, site, cell, value) and mir.same_bytes(cell, op.loads[0]):
+                if available(access.site, site, cell, value) and graph.pointers.same_bytes(cell, op.loads[0]):
                     found.append(Forward(op.at, value, op))
                     continue
         for source, (cell, value) in loads:
-            if (available(source, site, cell, value) and mir.same_bytes(cell, op.loads[0])
+            if (available(source, site, cell, value) and graph.pointers.same_bytes(cell, op.loads[0])
                 and graph.unchanged(source, site, cell, dgroup)):
                 found.append(Forward(op.at, value, op))
                 break

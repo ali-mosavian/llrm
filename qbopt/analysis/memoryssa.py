@@ -9,7 +9,7 @@ Calls without write metadata and barriers remain conservative.
 from dataclasses import dataclass
 from enum import StrEnum
 
-from qbopt.analysis import loops
+from qbopt.analysis import loops, pointerfacts
 from qbopt.model import mir
 
 
@@ -44,6 +44,7 @@ class MemorySSA:
     sites: dict[Site, Access]
     phis: dict[int, Access]
     operations: dict[Site, mir.Op]
+    pointers: pointerfacts.Offsets
 
     def at(self, site: Site) -> Access:
         return self.sites[site]
@@ -98,7 +99,8 @@ class MemorySSA:
                 case Kind.DEF:
                     op = self.operations[access.site]
                     if op.barrier or (op.kind is mir.Kind.CALL and not op.stores) or any(
-                        mir.overlapping(memory, store, dgroup) for store in op.stores
+                        mir.overlapping(memory, store, dgroup) and not self.pointers.disjoint(memory, store)
+                        for store in op.stores
                     ):
                         found.add(current)
                     else:
@@ -174,4 +176,4 @@ memory versions. Entry blocks with backedges retain an invocation input.
         for block in body.blocks for index, op in enumerate(block.ops)
         if Site(block.at, index) in sites
     }
-    return MemorySSA(live, accesses, sites, phis, operations)
+    return MemorySSA(live, accesses, sites, phis, operations, pointerfacts.offsets(body))
