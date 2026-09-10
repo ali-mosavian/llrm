@@ -329,6 +329,13 @@ accepted yet:
 0271  call far B$LNIN             0271  call far B$LNIN
 ```
 
+The broader runtime-contract test file reports 280 passes and two failures:
+VBDOS EVTRAP emits but `handler_entries` finds no handler, and the table
+inventory omits programmatically added HARY/LINA contracts. Both failures
+reproduce with the new VBDOS ENRA variant removed in-process, so neither
+is introduced by this change. Do not dismiss the event failure as stale:
+inspect stage dumps and emitted registration before accepting more modules.
+
 ### Two-module runtime check
 
 Relinking with rewritten `view` and `d_turb` succeeded. The isolated build in
