@@ -4,7 +4,39 @@ New optimization passes are paused until the optimized renderer builds and
 runs correctly. Target: `qb-qrender/.claude/worktrees/qgl-poly-draw`, source
 commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
-## Latest benchmark — twelve modules, native x87, 2026-09-11
+## Latest benchmark — thirteen modules, native x87, 2026-09-11
+
+H_FRAME passes the same pinned benchmark on top of the twelve-module build.
+`/tmp/qbopt-qrender-native-hframe.NlH7qn` (port 2214) reports **9.50707 FPS**
+versus baseline **9.43334**. All checked non-timing/non-memory fields match;
+BENCH.BMP is byte-identical. Fresh `bench-native-030.png` shows the scene,
+and the debugger subsequently observes the DOS prompt. No speedup claimed.
+
+All 25 previously unresolved project calls were located in pinned objects
+and scoped by hashes in `/tmp/qbopt-h-frame-audit.py`. BASIC entry prologues
+reach the audited ENRA before consuming incoming flags; C/assembly entries
+overwrite arithmetic flags in their stack adjustment before dispatch.
+The supplied contracts retain all GP inputs and leave cleanup, memory,
+preservation and transitive control effects unknown. They are not global
+contracts for arbitrary same-named functions. No compiler defect was fixed
+in this round and no new host-test loop was run.
+
+H_FRAME shrinks from 21,516 to 20,411 bytes. Complete stage dumps:
+`/tmp/qbopt-h-frame-native`. HOST_ADVANCE's actual instruction bytes:
+
+```asm
+; before: /FPi protocol                ; after: native x87
+db 0CDh,35h,04h    ; fld dword [si]     fld dword [si]       ; D9 04
+db 0CDh,34h,46h,20h ; fadd [bp+20h]    fadd dword [bp+20h]  ; D8 46 20
+db 0CDh,35h,1Ch    ; fstp dword [si]    fstp dword [si]      ; D9 1C
+db 0CDh,3Dh        ; wait              wait                 ; 9B
+```
+
+Eight BASIC modules remain original: main, d_mdl, d_surf, mod_tex, model,
+r_bsp, screen, pl_move. This single scene does not establish every input
+path, and the separate face-oracle failure remains open.
+
+## Previous benchmark — twelve modules, native x87
 
 H_BENCH now passes the pinned benchmark on top of the eleven-module build.
 `/tmp/qbopt-qrender-native-benchfix.DyrmCf` (port 2213) completes 13 frames,
