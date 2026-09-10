@@ -11,6 +11,22 @@ from qbopt.backend import select
 from qbopt.optimize import transform
 
 
+def test_dead_store_alone_in_a_block_keeps_only_byte_ownership():
+    """BOOLS retained t=0 before t=2 because its block had no surviving neighbor."""
+    from qbopt.objectfile.module import Addr, Space
+    ref = mir.MemRef(Addr(Space.SEGMENT, 16, 5), 2)
+    first = mir.Op(0, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.STORE,
+                   args=(mir.Const(0, 2),), results=(mir.Cell(ref),), stores=(ref,), covers=(0, 6))
+    second = replace(first, at=10, covers=(10, 16), args=(mir.Const(2, 2),))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (first,), (10,)), mir.MirBlock(10, (), (second,), ())))
+    result = transform.without_dead_stores(body, frozenset({5}), {})
+    marker = result.blocks[0].ops[0]
+    assert marker.kind is mir.Kind.NOTHING and not marker.stores
+    assert marker.covers == first.covers
+    assert select.emit(lower.current(marker)).code == b""
+    assert result.blocks[1].ops == (second,)
+
+
 def test_dead_sibling_emits_no_bytes_and_keeps_its_ranges() -> None:
     """LNGMIX retained dead constant copies sharing a live operation's address."""
     value = mir.Value(1, 10)

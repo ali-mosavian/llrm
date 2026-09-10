@@ -819,6 +819,13 @@ def _may_pass(one: Op, run: list[Op], dgroup: frozenset[int], calls: dict[int, s
     return True
 
 
+def _empty_operation(op: Op) -> Op:
+    """Keep provenance and owned byte ranges, but no computation or memory effect."""
+    return replace(op, op=ir.Operation.NOTHING, name="", kind=mir.Kind.NOTHING,
+                   defines=(), uses=(), args=(), results=(), loads=(), stores=(), merges={},
+                   node=None, made=None, raised=None, symbol=False)
+
+
 def without_dead_stores(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
     """Every store overwritten before anything read it, removed."""
     gone = {id(op) for op in avail.dead_stores(body, dgroup, calls)}
@@ -826,7 +833,9 @@ def without_dead_stores(body: MirBody, dgroup: frozenset[int], calls: dict[int, 
         return body
     return replace(
         body,
-        blocks=tuple(replace(one, ops=tuple(_without(list(one.ops), lambda op: id(op) in gone))) for one in body.blocks),
+        blocks=tuple(replace(one, ops=tuple(_empty_operation(op) if id(op) in gone else op
+                                           for op in _without(list(one.ops), lambda op: id(op) in gone)))
+                     for one in body.blocks),
     )
 
 
@@ -1776,22 +1785,7 @@ def dead(body: MirBody) -> MirBody:
             out.append(block)
             continue
         ops = [
-            replace(
-                op,
-                op=ir.Operation.NOTHING,
-                name="",
-                kind=mir.Kind.NOTHING,
-                defines=(),
-                uses=(),
-                args=(),
-                results=(),
-                loads=(),
-                merges={},
-                node=None,
-                made=None,
-                raised=None,
-                symbol=False,
-            )
+            _empty_operation(op)
             if id(op) in gone
             else op
             for op in block.ops

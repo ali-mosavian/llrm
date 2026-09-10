@@ -110,6 +110,27 @@ the near-target ratio proves ideal code. BOOLS, HOTLOP, IVCHAN and PRESSX pass
 execution on QB/PDS/VBDOS; live-condition and loop-counter guards have focused
 tests. The full integration snapshot above has not been rerun.
 
+The dead-store follow-up removes that zero store by retaining an empty byte-
+ownership marker when a block has no surviving neighbor. BOOLS falls again:
+**128 → 122** on all three compilers; QB object **749 → 736 bytes**.
+
+```asm
+; before                 ; after
+mov word [t],0           mov word [t],2
+mov word [t],2
+```
+
+The measurement blind spot is identified, not repaired: re-raising merges the
+preceding word stores into a dword, but the scorer compares starting addresses
+and misses the later high-word overwrite. The source-derived BOOLS reference
+also needs review: 122 beats its 126, and the final adjacent x/t stores may
+still be combinable. Do not describe 126 as a proved minimum.
+
+Three direct `floatloop.specialized` tests in `test_float_loop_exit.py` fail
+on the unchanged pre-marker baseline too (QB/PDS/VBDOS). They remain open;
+their original expectations were not weakened. Full-pipeline FPCSE execution
+is checked separately from those pass-local expectations.
+
 ## Missing references
 
 | Source program | Configurations without targets |
