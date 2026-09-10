@@ -1,5 +1,34 @@
 # Current target coverage
 
+## Latest focused check
+
+Compiler **b088ccb**, 2026-09-10: 19 configurations checked after CFG cleanup,
+store packing and load PRE. This is not a replacement for the full scan below.
+
+| Program | QB `/O` | PDS `/G2` | VBDOS `/G3` | Target / status |
+|---|---:|---:|---:|---|
+| IVCHAN | 756 | 756 | 756 | 560; 1.35x |
+| NESTED | 1022 | 1022 | 1022 | 768; 1.33x |
+| BOOLS | 116 | 116 | 116 | Revised hand-derived 116; 1.00x |
+| HARR | 2024 | 1994 | 1994 | 1834; 1.10x / 1.09x / 1.09x |
+| FPDEEP | 1570 | 1777 | 1777 | Provisional; checkpoint/store proof incomplete |
+| FPCSEX | 4461 | 4456 | 4446 | Provisional; old reference changes rounding/order |
+| NBODY benchmark | — | — | 352102 | No registered target; outside the 487-object scan |
+
+The first six rows use `fixtures/omf`; NBODY uses `fixtures/bench/nbody-v-g3.obj`.
+All 19 emitted through LIR and were measurable. No comparable row in this
+selection regressed or exceeds 1.5x. This does not establish whole-corpus
+correctness or validate the remaining references. FPCSEX improves by six model
+units per configuration against the prior focused costs; FPDEEP, HARR and the
+largest comparable gaps are unchanged. Load PRE's demonstrated improvement is
+the dedicated LDPRE regression, not a claimed NBODY/HARR speedup.
+
+Next implementation gap: PRE still cannot complete a value on a critical edge.
+Splitting such edges must preserve physical fallthroughs, phi inputs and byte
+ownership; the FPDEEP regression showed why a CFG-only redirection is insufficient.
+
+## Full-corpus baseline
+
 Measured **2026-09-10**, compiler revision **8e951b5**, with
 `uv run python tools/opportunity.py --targets` over all **487 objects** in
 `fixtures/omf` (**34 source programs**). These are model-weighted instruction
