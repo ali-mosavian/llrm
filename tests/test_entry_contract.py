@@ -25,6 +25,31 @@ def test_zero_selector_entry_has_both_fixed_inputs() -> None:
         assert contracts[at].writes is runtime.Memory.ANY
 
 
+def test_explicit_external_contract_is_shared_by_call_sites():
+    """Qrender cross-module calls had no route for supplying an audited interface."""
+    found = loaded()
+    name = "PROJECT_HELPER"
+    found = replace(found, calls={0x40: name, 0x50: name, 0x60: "UNKNOWN"})
+    audited = replace(runtime.worst(name), inputs=frozenset(), cleanup=4,
+                      evidence="audited linked object")
+    contracts = runtime.for_module(found, external={name: audited})
+    assert contracts[0x40] is audited
+    assert contracts[0x50] is audited
+    assert contracts[0x60].inputs is None
+    assert runtime.for_module(found)[0x40].inputs is None
+
+
+def test_external_contract_cannot_be_applied_under_another_name():
+    with pytest.raises(ValueError, match="name"):
+        runtime.for_module(loaded(), external={"WRONG": runtime.worst("RIGHT")})
+
+
+def test_emitter_validates_supplied_external_interfaces():
+    with pytest.raises(ValueError, match="name"):
+        wholeseg.emitted(Path("fixtures/omf/procs-v-g3.obj").read_bytes(),
+                         external_contracts={"WRONG": runtime.worst("RIGHT")})
+
+
 @pytest.mark.parametrize("variant", ["nonzero", "relocated", "entry_at_call"])
 def test_unknown_entry_path_keeps_unknown_contract(variant: str) -> None:
     found = loaded()

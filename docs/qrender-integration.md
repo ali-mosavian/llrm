@@ -44,6 +44,14 @@ state before measuring speed or resuming the optimization checklist.
 
 ## Entry-helper evidence
 
+Audited project interfaces can be supplied through
+`wholeseg.emitted(data, external_contracts={symbol: contract})`. One per-site
+map feeds both raising and lowering; nothing is installed globally. This is
+a trusted API: the caller must verify contracts against the exact linked
+objects/libraries, retain their hashes in the audit evidence, and retain
+unknown effects conservatively. Analysis-tool JSON is not automatically an
+ABI contract. Unspecified symbols retain their existing unknown behavior.
+
 VBDCL10E.LIB, `rtenexit.asm`, B$ENRA:
 
 ```asm

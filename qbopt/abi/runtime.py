@@ -358,7 +358,7 @@ VARIANTS[("B$EXSA", "qb45")] = replace(
 )
 
 
-def for_module(found) -> "dict[int, Contract]":
+def for_module(found, *, external: dict[str, Contract] | None = None) -> "dict[int, Contract]":
     """The per-site map for a whole module, from the object itself.
 
     One place, because the raise and the lowering must be handed the same
@@ -376,6 +376,12 @@ def for_module(found) -> "dict[int, Contract]":
     contracts.update(events.contracts(found))
     if family == "vbdos":
         _zero_entry_sites(found, contracts)
+    for name, routine in (external or {}).items():
+        if routine.name != name:
+            raise ValueError(f"external contract name mismatch: {name!r} != {routine.name!r}")
+        for at, called in found.calls.items():
+            if called == name:
+                contracts[at] = routine
     return contracts
 
 

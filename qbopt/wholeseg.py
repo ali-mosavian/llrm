@@ -69,6 +69,7 @@ def emitted(
     cpu: str = "386",
     basic_semantics: bool = False,
     bounds_checks: bool = False,
+    *, external_contracts: dict[str, runtime.Contract] | None = None,
 ) -> Emitted:
     """The object rewritten, and which emitter did it.
 
@@ -80,7 +81,8 @@ def emitted(
     """
     if basic_semantics and native_fpu:
         raise ValueError("--basic-semantics cannot be combined with --native-fpu")
-    out, why, _ = _rebuilt(data, optimise, native_fpu, only, watch, cpu, basic_semantics, bounds_checks)
+    out, why, _ = _rebuilt(data, optimise, native_fpu, only, watch, cpu, basic_semantics, bounds_checks,
+                         external_contracts=external_contracts)
     if why != REBUILT:
         return Emitted(out, Emission.REFUSED, why)
     return Emitted(out, Emission.LIR, why)
@@ -107,6 +109,7 @@ def _rebuilt(
     cpu: str = "386",
     basic_semantics: bool = False,
     bounds_checks: bool = False,
+    *, external_contracts: dict[str, runtime.Contract] | None = None,
 ) -> tuple[bytes, str, str | None]:
     """The object with its code segment rewritten, and what happened.
 
@@ -124,7 +127,7 @@ def _rebuilt(
     blocks = split.partition(found, mapped)
     # One map for the whole module, and the same object reaches the raise
     # and the lowering: a contract chosen twice can be chosen differently.
-    contracts = runtime.for_module(found)
+    contracts = runtime.for_module(found, external=external_contracts)
     bodies = list(mir.bodies(found, blocks, contracts, basic_semantics=basic_semantics,
                             bounds_checks=bounds_checks))
     if not bodies:
