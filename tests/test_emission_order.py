@@ -3,11 +3,40 @@
 from types import SimpleNamespace
 from dataclasses import replace
 
+import pytest
 from iced_x86 import Register
 
 from qbopt.backend import layout
 from qbopt.model import ir, mir
 from qbopt.backend import asm
+
+
+@pytest.mark.parametrize("successors,expected", [
+    (((20,), (), (10,)), [0, 20, 10]),
+    (((20,), (), (0,)), [0, 10, 20]),
+    (((10, 20), (), (10,)), [0, 10, 20]),
+    (((10,), (), ()), [0, 10, 20]),
+    (((30,), (), (10,)), [0, 10, 20]),
+])
+def test_linear_placement_requires_one_complete_acyclic_chain(successors, expected):
+    blocks = tuple(mir.MirBlock(at, (), (mir.Op(at, ir.Operation.NOTHING, "", (), ()),), succ)
+                   for at, succ in zip((0, 10, 20), successors))
+    body = mir.MirBody(0, blocks)
+    assert [op.at for op in layout._ordered(body, linear=True)] == expected
+    assert [op.at for op in layout._ordered(body)] == [0, 10, 20]
+
+
+def test_removed_floating_loop_is_emitted_in_execution_order():
+    """FPCSE's removed loop still took three unconditional jumps through its old block layout."""
+    from pathlib import Path
+    from iced_x86 import Mnemonic
+    import corpus
+    from qbopt import wholeseg
+    for tag in ("p-g2", "q-O", "v-g3"):
+        result = wholeseg.emitted(Path(f"fixtures/omf/fpcse-{tag}.obj").read_bytes())
+        assert result.outcome is wholeseg.Emission.LIR, result.reason
+        assert not any(one.insn.mnemonic == Mnemonic.JMP
+                       for block in corpus.partitioned(result.data) for one in block.insns), tag
 
 
 def test_ordered_body_selects_ordered_object_layout(monkeypatch):

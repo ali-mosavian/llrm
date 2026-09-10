@@ -1,5 +1,31 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: lay removed-loop bodies out in execution order
+
+Refreshed the full target ranking once. FPCSE PDS/VBDOS remained 167/98;
+FPDEEP PDS/VBDOS remained 1803/1086, while QB FPDEEP was already 1604/1086.
+Provisional event/input references and missing targets still prevent a
+completion claim. This is a model ranking, not a runtime timing suite.
+
+The emitter retained source-address block order after removing FPCSE's loop:
+entry jumped to the old header, which jumped back to the old body, which
+jumped forward to printing. Authoritative ordered bodies now place a complete
+acyclic single-successor chain in execution order. The assembler removes the
+resulting fallthrough jumps. Branching, cycles, disconnected/external edges,
+legacy ordering and embedded data keep their previous placement. Trailing
+data outside a body's instruction footprint does not prevent placement.
+
+Before: `mov ax,1; jmp header; ... header: mov [i],ax; jmp body`.
+After: `mov ax,1; mov [i],ax; wait; ...` with the same executed effects.
+FPCSE PDS/VBDOS cost **167 -> 161**; QB remains **147**.
+FPDEEP PDS/QB/VBDOS **1803/1604/1803 -> 1797/1598/1797**.
+All six runtime outputs match originals. FPCSE's real-object no-JMP
+regression failed first. Layout/emission tests: 4400 passed, 18 failures
+also reproduced with unmodified HEAD's layout; five extra placement guards
+pass. No test was weakened. Dumps and DOS evidence:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-linear-layout-0p5kai7p`.
+The remaining floating-point gaps are not closed by this placement change.
+
 ## 2026-09-10: propagate pointer displacement constants and remove zero steps
 
 Constant operand propagation omitted PTR_OFFSET. NDMAX retained a known-zero

@@ -45,7 +45,7 @@ Table = asm.Table
 selectable = mir.rewritable
 
 
-def _ordered(body: MirBody) -> list[mir.Op]:
+def _ordered(body: MirBody, *, linear: bool = False) -> list[mir.Op]:
     """Every op, in the order they are emitted.
 
     Blocks in address order, and within a block the order the block lists
@@ -54,11 +54,27 @@ def _ordered(body: MirBody) -> list[mir.Op]:
     the same rule: a transform that moves a definition within its block
     changes the list and must not have layout put it back.
 
-    Blocks themselves are laid out where they already were rather than
-    reordered: a different block order is a different program's control
-    flow, and nothing here is asking for one.
+    An authoritative sequence may lay an entire acyclic single-successor
+    body out in execution order. Branching, cycles and disconnected blocks
+    retain their original placement; their fallthroughs need a fuller planner.
     """
-    return [op for block in sorted(body.blocks, key=lambda one: one.at) for op in block.ops]
+    blocks = sorted(body.blocks, key=lambda one: one.at)
+    if linear:
+        at_of = {block.at: block for block in blocks}
+        chain, seen = [], set()
+        at = body.entry
+        while at in at_of and at not in seen:
+            block = at_of[at]
+            if len(block.succ) > 1:
+                break
+            chain.append(block)
+            seen.add(at)
+            if not block.succ:
+                if len(chain) == len(blocks):
+                    blocks = chain
+                break
+            at = block.succ[0]
+    return [op for block in blocks for op in block.ops]
 
 
 # A root at each width an instruction can name it. ir.ROOT goes the other
@@ -354,7 +370,11 @@ def rebuild(
     # though it is the honest answer to where an operation's bytes are.
     # A caller with an authoritative emission sequence opts into `ordered`.
     # Keep the legacy default until every caller's input ordering is proven.
-    ops = [op for _, body in bodies for op in _ordered(body)]
+    ops = []
+    for _, body in bodies:
+        end = max((op.covers[1] for block in body.blocks for op in block.ops if op.covers), default=body.entry)
+        embedded = any(start < end and stop > body.entry for start, stop in tables)
+        ops.extend(_ordered(body, linear=ordered and not embedded))
     if not ordered:
         ops.sort(key=lambda one: one.at)
     if not ops:
