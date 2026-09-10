@@ -1,5 +1,30 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: correct packed-pointer carries without rebuilding both halves
+
+Backend pointer lowering now computes a direct packed addition, then corrects
+its unit selector carry to the runtime selector stride. If `pages` is the
+carry from low-word-plus-displacement, the correction is
+`((pages << huge_shift) - pages) << 16`. This removes one arithmetic operation
+and reduces the temporary register/move pressure without assuming DOS's shift
+or dropping boundary normalization. MIR remains unchanged.
+
+NDARR object bytes PDS/QB/VBDOS: **2607/2599/2740 -> 2518/2510/2650**.
+HUGELP: **1801/1794/1937 -> 1735/1727/1872**. Weighted cost estimates:
+NDARR 117239/117257/117251 -> 106346/106364/106348;
+HUGELP 2457/2363/2457 -> 2365/2263/2365. These are ranking-model values,
+not hardware timing measurements. Both programs' actual DOS outputs match
+their originals on all three compilers.
+
+The nine-operation regression failed before the change. Focused pointer,
+huge-array and induction tests: 111 passed. An additional independent
+selector/offset oracle covers all 16 supported shifts, wrap and borrow
+boundaries; the final pointer module passes 40 tests.
+All stage dumps and runtime evidence:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-pointer-correction-7qw_x23l`.
+Remaining: avoid normalization only when allocation/range facts prove no
+boundary crossing, and reduce segment materialization around accesses.
+
 ## 2026-09-10: carry multidimensional loop pointers across iterations
 
 Induction analysis now recognizes `i OR i` and `i AND i` as zero tests,

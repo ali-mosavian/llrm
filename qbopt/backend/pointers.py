@@ -23,7 +23,12 @@ class Model:
             raise ValueError("unsupported huge-pointer selector shift")
 
     def offset(self, pointer, displacement, result, fresh):
-        """Lower one whole pointer addition to arithmetic over abstract variables."""
+        """Correct a packed addition's unit selector carry to the ABI's stride.
+
+        Adding directly already advances the high word by `pages`; the ABI
+        needs `pages << huge_shift` instead. Their difference, shifted into
+        the high word, also accounts for borrows modulo the pointer width.
+        """
         if any(not isinstance(arg, (ir.Held, ir.Imm)) or arg.width != 4
                for arg in (pointer, displacement)) or not isinstance(result, ir.Held) or result.width != 4:
             raise ValueError("pointer offset requires a pointer, displacement and result at width 4")
@@ -43,9 +48,8 @@ class Model:
         else:
             shift = ir.Imm(self.huge_shift, 1)
         delta = binary("shl", pages, shift)
-        selector = binary("shr", pointer, ir.Imm(16, 1))
-        advanced = binary("add", selector, delta)
-        high = binary("shl", advanced, ir.Imm(16, 1))
-        low = binary("and", total, ir.Imm(0xffff, 4))
-        binary("or", high, low, result)
+        correction = binary("sub", delta, pages)
+        high = binary("shl", correction, ir.Imm(16, 1))
+        advanced = binary("add", pointer, displacement)
+        binary("add", advanced, high, result)
         return tuple(parts)

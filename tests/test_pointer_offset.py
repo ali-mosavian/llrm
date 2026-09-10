@@ -26,12 +26,31 @@ def execute(parts, pointer, offset, memory=None):
         match part.name:
             case "and": answer = left & right
             case "add": answer = left + right
+            case "sub": answer = left - right
             case "shr": answer = left >> right
             case "shl": answer = left << right
             case "or": answer = left | right
             case _: raise AssertionError(part)
         values[part.dests[0].value] = answer & 0xffffffff
     return values[3]
+
+
+def test_huge_pointer_advance_does_not_rebuild_both_halves():
+    """NDARR's pointer stride expanded to nine arithmetic operations on every iteration."""
+    parts = pointers.Model(12).offset(ir.Held(1, 4), ir.Held(2, 4), ir.Held(3, 4), count(10).__next__)
+    assert len(parts) <= 8
+    assert execute(parts, 0x2000fffe, 2) == 0x30000000
+
+
+@pytest.mark.parametrize("shift", range(16))
+def test_packed_correction_matches_independent_selector_and_offset_arithmetic(shift):
+    """NDARR/HUGELP strides must retain carries and borrows for every supported selector ABI."""
+    parts = pointers.Model(shift).offset(ir.Held(1, 4), ir.Held(2, 4), ir.Held(3, 4), count(10).__next__)
+    for pointer in (0, 0xffff, 0x1234fffe, 0xffff0000, 0xffffffff):
+        for displacement in (0, 1, 2, 65535, 65536, 0x7fffffff, 0x80000000, 0xfffffffe, 0xffffffff):
+            pages, offset = divmod((pointer & 0xffff) + displacement, 65536)
+            selector = ((pointer >> 16) + pages * (1 << shift)) & 0xffff
+            assert execute(parts, pointer, displacement) == (selector << 16) | offset
 
 
 @pytest.mark.parametrize("pointer,offset,expected", [
