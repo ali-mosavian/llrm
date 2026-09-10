@@ -351,6 +351,24 @@ VARIANTS[("B$CHOU", "vbdos")] = replace(
 )
 
 for _name, _cleanup, _evidence in (
+    ("B$RDIM", None,
+     "erase.asm 0000 establishes BP and reads descriptor [bp+6]; OR BL,BL "
+     "at 0009 kills incoming flags before branches or dependencies. All GP "
+     "inputs retained. DIM_COMMON consumes rank-dependent stack arguments, "
+     "so cleanup stays unknown unless separately proven at the call site."),
+    ("B$FEOF", 2,
+     "dvstmt.asm 0073 reads file word [bp+6]; OR BX,BX kills incoming flags. "
+     "File and DOS console paths join POP BP / RETF 2 at 0097..009a; "
+     "invalid console mode tails ERR_IFN. DOS/device/error effects remain unknown."),
+    ("B$CLOS", None,
+     "dvcore.asm 01b4 reads a stack count and file words; JCXZ selects CLOSF "
+     "or LocateFDB. CLOSF's CMP at 019f and LocateFDB's XOR SI,SI at 00e6 "
+     "kill incoming flags before dependencies. Return restores SP from the advanced "
+     "argument cursor at 01e3, so cleanup stays unknown, not zero."),
+    ("B$ERAS", 2,
+     "erase.asm 0020 reads descriptor [bp+6]; empty arrays go directly to epilogue; "
+     "other paths test descriptor flags before dependencies. All normal paths join "
+     "POP DI/SI/BP / RETF 2 at 00bf..00c4. Heap, alias and error effects remain unknown."),
     ("B$OPEN", 8,
      "dkutil.asm 00c0..00f4 reads four stack words, calls DOS3CHECK and OPENIT, "
      "and restores BP then RETF 8 at 00f1. Other branches tail ERR_AFE or ERR_IFN; "
@@ -373,7 +391,7 @@ for _name, _cleanup, _evidence in (
         inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
         cleanup=_cleanup,
         evidence=("VBDCL10E.LIB: " + _evidence +
-                  " Only normal-return cleanup established; all GP inputs and unknown effects retained. "
+                  " All GP inputs and unknown effects retained; cleanup only where stated. "
                   "SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301."),
     )
 

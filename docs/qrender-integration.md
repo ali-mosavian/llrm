@@ -155,6 +155,20 @@ The renderer probe now passes both PEOS calls and stops at `B$FEOF` (0b0b).
 Actual before/after ASM at 0aa2 remains `call far B$PEOS`, byte-identical
 because the whole object still refuses atomically.
 
+File-loop interfaces now include FEOF (normal cleanup 2), CLOSE (cleanup
+unknown because its argument count varies), and ERASE (normal cleanup 2),
+all with six retained GP inputs and otherwise unknown effects. The loader
+passes these calls and reaches V_BEZIER's local-descriptor REDIM at 0bc4.
+That call computes the descriptor between pushes; rather than add another
+rank-recognition pattern, REDIM now also has a conservative base register
+interface with unknown cleanup. The existing per-site rank proof can still
+refine cleanup where justified. No register or alias preservation is inferred.
+With the same three external interfaces, the full view-module probe now
+reaches code emission and refuses `0x0335: fild is not one select.py can emit`.
+This replaces the call-interface blocker with an instruction-selection
+blocker. The output remains byte-identical; no optimized assembly or runtime
+result is claimed for view yet.
+
 VBDCL10E.LIB, `rtenexit.asm`, B$ENRA:
 
 ```asm

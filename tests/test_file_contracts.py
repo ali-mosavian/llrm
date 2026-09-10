@@ -18,9 +18,10 @@ def test_peos_register_interface_does_not_claim_fixed_stack_cleanup():
 
 @pytest.mark.parametrize("name,cleanup", [
     ("B$FREF", 0), ("B$LDFS", 6), ("B$OPEN", 8), ("B$DSKI", 2),
+    ("B$FEOF", 2), ("B$CLOS", None), ("B$ERAS", 2),
 ])
 def test_vbdos_file_setup_retains_unknown_effects(name, cleanup):
-    """Script loading stopped at OPEN 0a4b and disk INPUT setup 0a5a."""
+    """Script loading refused file calls; CLOSE's argument count varies at runtime."""
     contract = runtime.per_call({0: name}, "vbdos")[0]
     assert contract.cleanup == cleanup
     assert contract.inputs == frozenset({runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX,

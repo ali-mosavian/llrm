@@ -13,6 +13,14 @@ def loaded():
     return module.of(omf.parse(Path("fixtures/regressions/qrender-view-v-g3.obj").read_bytes()))
 
 
+def test_redim_local_descriptor_keeps_inputs_without_guessing_cleanup():
+    """V_BEZIER at 0bc4 computes its local descriptor between the argument pushes."""
+    contract = runtime.for_module(loaded())[0xbc4]
+    assert contract.inputs is not None
+    assert contract.cleanup is None
+    assert contract.clobbers == runtime.EVERY
+
+
 @pytest.mark.parametrize("rank", [1, 2, 3])
 def test_redim_cleanup_uses_rank_not_type_flags(rank):
     found = loaded()
