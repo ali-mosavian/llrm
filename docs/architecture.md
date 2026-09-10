@@ -531,6 +531,11 @@ one documented target without materially regressing another.
 
 - [ ] Canonicalize loops with dedicated preheaders, latches and exits
   (`LoopSimplify`).
+  Raw-MIR inventory (2026-09-10): 489 objects, 587 bodies, 465 natural
+  loops across `fixtures/omf` and `fixtures/bench`. Every loop already has
+  a dedicated preheader and exits; only VBDOS PITSNAP in FPBENCH and NBODY
+  has multiple latches. General canonicalization remains required, but is
+  not the current arithmetic-kernel optimization blocker.
 - [x] Preserve loop-exit SSA explicitly (`LCSSA`). Single-edge dedicated exits
   are closed before loop transforms in each fixed-point round; unsupported exit shapes remain
   unchanged until `LoopSimplify` supplies their canonical CFG.
