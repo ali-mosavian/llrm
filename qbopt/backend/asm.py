@@ -469,8 +469,8 @@ def _field_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -
     # A far call and a far jmp put their four relocated bytes right after a
     # one-byte opcode. Neither is a displacement, so neither is where a
     # general search would look.
-    if found.code[op.at : op.at + 1] in (b"\x9a", b"\xea") and op.at + 1 in known:
-        return op.at + 1
+    if found.code[lo : lo + 1] in (b"\x9a", b"\xea") and lo + 1 in known:
+        return lo + 1
     # An operation with nothing but registers has no field to put one in. A
     # transform that serves a read from a register leaves the instruction
     # standing where a memory operand was, and the fixup that named that

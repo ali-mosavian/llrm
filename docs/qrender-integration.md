@@ -203,6 +203,27 @@ The full-module dump confirms FIDIV is resolved. Emission next refuses at
 0941: a `mov` is carrying one fixup but has no encoded relocation field.
 The object is still unchanged; inspect fixup ownership before runtime testing.
 
+The 0941 relocation failure is fixed: fallback far-call recognition looked
+at an operation's new placement instead of its original node span. Hoisting
+the frame load from 0946 to 0941 therefore attached PER4's call relocation
+to a `mov`. The emitter now consults the original span. A fail-first real
+fixture regression checks both the load's lack of a relocation and the
+call's retained target; 14 relocation/emission-order tests pass.
+
+```asm
+; before: bad relocation ownership
+call far B$PER4
+mov cx,[bp+18h]  ; incorrectly claimed PER4 target relocation
+; after: only the call owns that relocation
+call far B$PER4
+mov cx,[bp+18h]
+```
+
+The full view module now emits through LIR: 15,470 -> 14,717 object bytes,
+using the three separately audited project interfaces. Dumps are in
+`/tmp/qbopt-view-reloc-fixed`. This is an emission result only; relinking and
+fixed-tick frame/state comparison are still required before calling it correct.
+
 VBDCL10E.LIB, `rtenexit.asm`, B$ENRA:
 
 ```asm
