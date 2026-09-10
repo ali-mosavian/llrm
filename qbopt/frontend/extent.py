@@ -82,6 +82,8 @@ class BodyKind(StrEnum):
     PROCEDURE = "procedure"
     EVENT_STUB = "event-stub"
     EVENT_HANDLER = "event-handler"
+    ERROR_HANDLER = "error-handler"
+    RESUME_ENTRY = "resume-entry"
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,7 +175,7 @@ def _merge(spans: list[tuple[int, int]]) -> tuple[tuple[int, int], ...]:
 def _ranges(mapped: CodeMap, blocks_by_at: dict[int, Block], owned: frozenset[int]) -> tuple[tuple[int, int], ...]:
     spans = [(blocks_by_at[at].at, blocks_by_at[at].end) for at in owned]
     for lo, hi in mapped.tables:
-        owner = next((b for b in blocks_by_at.values() if b.ends is Ends.TABLE and b.end == lo), None)
+        owner = next((b for b in blocks_by_at.values() if b.end == lo), None)
         if owner is not None and owner.at in owned:
             spans.append((lo, hi))
     return _merge(spans)
@@ -188,6 +190,9 @@ def partition(module: Module) -> Partition | str:
         return mapped
 
     all_blocks = block_partition(module, mapped)
+    from qbopt.abi import runtime
+    from qbopt.frontend import raising_control
+    all_blocks = raising_control.terminal_edges(all_blocks, runtime.for_module(module))
     blocks_by_at = {blk.at: blk for blk in all_blocks}
     names = omf.pubdef_names(module.records, module.seg)
 
@@ -198,9 +203,20 @@ def partition(module: Module) -> Partition | str:
     from qbopt.abi.events import handler_entries
     seeds += [(BodyKind.EVENT_HANDLER, at, "timer handler")
               for at in sorted(handler_entries(module) - module.publics)]
+    from qbopt.abi.handlers import error_entries
+    handlers = error_entries(module)
+    occupied = {seed for _, seed, _ in seeds}
+    seeds += [(BodyKind.ERROR_HANDLER, at, "error handler")
+              for at in sorted(handlers - occupied)]
 
     seed_offsets = frozenset(seed for _, seed, _ in seeds)
     reached = {seed: _reachable(seed, seed_offsets - {seed}, blocks_by_at, module, mapped) for _, seed, _ in seeds}
+    if handlers:
+        owned = frozenset(at for group in reached.values() for at in group)
+        resumable = (frozenset(module.targets) & blocks_by_at.keys()) - owned
+        for seed in sorted(resumable):
+            seeds.append((BodyKind.RESUME_ENTRY, seed, "resume entry"))
+            reached[seed] = _reachable(seed, owned | (resumable - {seed}), blocks_by_at, module, mapped)
 
     owners: dict[int, int] = {}
     for _, seed, _ in seeds:

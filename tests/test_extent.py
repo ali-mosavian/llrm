@@ -14,6 +14,35 @@ from qbopt.frontend.extent import Partition
 from qbopt.frontend.extent import partition
 
 
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3", "p-evt", "q-evt", "v-evt"])
+def test_registered_error_handler_has_independent_entry_and_emits(tag):
+    """DIVMOD refused emission after END lost its false edge to the registered error handler."""
+    from qbopt import wholeseg
+    found = module.load(Path(f"fixtures/omf/divmod-{tag}.obj"))
+    result = partition(found)
+    assert not isinstance(result, str) and result.complete
+    assert any(str(body.kind) == "error-handler" for body in result.bodies)
+    emitted = wholeseg.emitted(Path(f"fixtures/omf/divmod-{tag}.obj").read_bytes())
+    assert emitted.outcome is wholeseg.Emission.LIR, emitted.reason
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3", "p-evt", "q-evt", "v-evt"])
+def test_error_resume_fixture_keeps_registered_entry(tag):
+    """ERRENT must print 11 then DONE through ON ERROR / RESUME NEXT, not lose its handler."""
+    from qbopt import wholeseg
+    from qbopt.abi.handlers import error_entries
+    from qbopt.objectfile import omf
+    path = Path(f"fixtures/regressions/errent-{tag}.obj")
+    emitted = wholeseg.emitted(path.read_bytes(), basic_semantics=True)
+    assert emitted.outcome is wholeseg.Emission.LIR, emitted.reason
+    found = module.of(omf.parse(emitted.data))
+    result = partition(found)
+    assert not isinstance(result, str) and result.complete
+    assert error_entries(found) == frozenset(body.seed for body in result.bodies
+                                           if body.kind is BodyKind.ERROR_HANDLER)
+    assert error_entries(found)
+
+
 @pytest.mark.parametrize("tag,entry", [("p-evt", 0xFA), ("v-evt", 0xF0)])
 def test_timer_handler_has_its_own_entry(tag, entry):
     """EVTRAP's handler was assigned main's SSA by falling through END."""
@@ -140,7 +169,7 @@ def test_the_resume_map_fallthrough_does_not_leak_module_targets(fixtures: Path)
     # (B$CENP, the program's own implicit END) happens to end, and gets
     # classified as a TABLE block the same way an ON GOTO table would -- but
     # Block.succ for it is every fixup target in the module, not real control
-    # flow. Trusting that blindly would make this single-body module's main
+    # flow. Trusting that blindly would make the module's main
     # body "reach" its own procedure seeds in a module that had any; here,
     # with none, the regression this guards is simpler: the two trailing
     # bytes right after the map are still claimed, not left unexplained.
@@ -150,8 +179,10 @@ def test_the_resume_map_fallthrough_does_not_leak_module_targets(fixtures: Path)
     found_partition = corpus.extents(fixtures / "divmod-v-g3.obj")
     assert not isinstance(found_partition, str)
     assert found_partition.complete
-    (main,) = found_partition.bodies
-    assert main.ranges[-1][1] == found.end
+    (main,) = _body(found_partition, BodyKind.MAIN)
+    (handler,) = _body(found_partition, BodyKind.ERROR_HANDLER)
+    assert main.ranges[-1][1] == handler.seed
+    assert handler.ranges[-1][1] == found.end
 
 
 def test_a_module_with_no_header_is_refused_not_guessed(fixtures: Path) -> None:

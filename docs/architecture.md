@@ -163,6 +163,43 @@ The main ownership split is:
 | Idiom recognition | `qbopt/frontend/raising_*.py`, coordinated by `model/mir.py` |
 | Pure analyses used by passes | `qbopt/analysis/` |
 
+Established terminal calls lose their false return edges before body ownership
+and SSA construction. Registered `B$OEGA` error handlers are independent entries,
+as are otherwise detached relocated RESUME destinations. Neither inherits the
+main body's SSA state by falling through `END`. Inline statement tables remain
+owned by their preceding block even when that block is terminal.
+
+ERRENT exercises an actual division error and `RESUME NEXT` with
+`--basic-semantics`: baseline and optimized programs print `11` then `DONE` on
+QB, PDS and VBDOS, both ordinary and event configurations. Its PDS assembly is:
+
+```asm
+; BC registration and handler (relocations shown symbolically)
+0048  mov ax,0084h
+004b  push cs
+004c  push ax
+004d  call far B$OEGA
+; ...
+007f  call far B$CEND
+0084  call far B$FERR       ; independent runtime entry, not END fallthrough
+0089  mov [caught],ax
+008c  call far B$RESN
+
+; optimized
+0046  push cs
+0047  push 0081h
+004a  call far B$OEGA
+; ...
+007c  call far B$CEND
+0081  call far B$FERR
+0086  mov [caught],ax
+0089  call far B$RESN
+```
+
+The repair restores emission for all 15 DIVMOD variants; it is correctness
+coverage, not a claimed speedup. Recognition also accepts the lowered immediate
+push form so an emitted object's handler remains discoverable.
+
 ### Runtime contracts
 
 A call is not a generic barrier when its contract is known. Contracts are

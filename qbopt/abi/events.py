@@ -14,26 +14,8 @@ if TYPE_CHECKING:
 
 def handler_entries(found: module.Module) -> frozenset[int]:
     """Handlers passed by the established TIMER registration sequence."""
-    if module.family(found.records) not in ("pds71", "vbdos"):
-        return frozenset()
-    if "B$ONTA" in module.defines(found.records, found.seg):
-        return frozenset()
-    entries = set()
-    for at, name in found.calls.items():
-        if name != "B$ONTA" or at < 5:
-            continue
-        match found.code[at - 5:at]:
-            case b"\xb8\x00\x00\x0e\x50":
-                field = at - 4
-            case b"\x0e\xb8\x00\x00\x50":
-                field = at - 3
-            case _:
-                continue
-        ref = found.operands.get(field)
-        if (ref is not None and ref.space is module.Space.SEGMENT
-                and ref.index == found.seg and found.start <= ref.disp < found.end):
-            entries.add(ref.disp)
-    return frozenset(entries)
+    from qbopt.abi.handlers import registered
+    return registered(found, "B$ONTA", ("pds71", "vbdos"))
 
 
 def contracts(found: module.Module) -> "dict[int, Contract]":
