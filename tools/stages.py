@@ -55,7 +55,7 @@ from qbopt.frontend import blocks as split
 from qbopt.frontend.blocks import code_map
 
 
-def _bodies(data: bytes, basic_semantics: bool = False):
+def _bodies(data: bytes, basic_semantics: bool = False, bounds_checks: bool = False):
     """Every MIR body in this object, or nothing if it does not map."""
     found = module.of(omf.parse(data))
     if found is None:
@@ -70,7 +70,7 @@ def _bodies(data: bytes, basic_semantics: bool = False):
     # they can differ, which is what wholeseg.py takes care not to do.
     contracts = runtime.for_module(found)
     return found, list(mir.bodies(found, split.partition(found, mapped), contracts,
-                                  basic_semantics=basic_semantics)), contracts
+                                  basic_semantics=basic_semantics, bounds_checks=bounds_checks)), contracts
 
 
 def _shape(body) -> str:
@@ -538,6 +538,7 @@ def main(argv: list[str] | None = None, view=None) -> int:
     ap.add_argument("--cpu", choices=("386", *ARCHS), default="386", help="CPU used for arithmetic selection")
     ap.add_argument("--only", help="one pass by name, instead of each in turn")
     ap.add_argument("--basic-semantics", action="store_true")
+    ap.add_argument("--bounds-checks", action="store_true")
     ap.add_argument("--asm", action="store_true", help="disassemble what came out, after the last stage")
     ap.add_argument("--quiet", action="store_true", help="shape only, no per-op detail")
     ap.add_argument(
@@ -619,7 +620,7 @@ def main(argv: list[str] | None = None, view=None) -> int:
             print(f"  --- {route}")
             _asm(out)
 
-    found, raised, contracts = _bodies(data, args.basic_semantics)
+    found, raised, contracts = _bodies(data, args.basic_semantics, args.bounds_checks)
     debug = cvinfo.parse(omf.parse(data))
     if found is None or not raised:
         print("  nothing to raise")
@@ -645,7 +646,7 @@ def main(argv: list[str] | None = None, view=None) -> int:
         stages[-1][1].append((name, low))
 
     got = wholeseg.emitted(data, only=args.only, watch=watch, cpu=args.cpu,
-                           basic_semantics=args.basic_semantics)
+                           basic_semantics=args.basic_semantics, bounds_checks=args.bounds_checks)
     for name, bodies in mir_stages.items():
         was = dump(next(step), name, name, bodies, was, debug, found)
     lowered(next(step), stages, got.data, got.reason, route)

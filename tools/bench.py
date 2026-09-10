@@ -41,8 +41,10 @@ def ticks(text: str) -> int | None:
     return None
 
 
-def optimized(data: bytes, native_fpu: bool, cpu: str, basic_semantics: bool = False) -> bytes:
-    result = wholeseg.emitted(data, native_fpu=native_fpu, cpu=cpu, basic_semantics=basic_semantics)
+def optimized(data: bytes, native_fpu: bool, cpu: str, basic_semantics: bool = False,
+              bounds_checks: bool = False) -> bytes:
+    result = wholeseg.emitted(data, native_fpu=native_fpu, cpu=cpu, basic_semantics=basic_semantics,
+                              bounds_checks=bounds_checks)
     if result.outcome is not wholeseg.Emission.LIR:
         raise SystemExit(f"benchmark optimization refused: {result.reason}")
     return result.data
@@ -60,7 +62,7 @@ def output_name(exe: Path, repetition: int) -> str:
 
 
 def build(tag: str, prog: str = "nbody", native_fpu: bool = False, transform=None, cpu: str = "386",
-          basic_semantics: bool = False) -> tuple[Path, Path]:
+          basic_semantics: bool = False, bounds_checks: bool = False) -> tuple[Path, Path]:
     cfg = CONFIGS[tag]
     if not cfg.available:
         raise SystemExit(f"no toolchain at {cfg.mount}; see docs/testing.md")
@@ -83,7 +85,7 @@ def build(tag: str, prog: str = "nbody", native_fpu: bool = False, transform=Non
     obj = work / f"{name}.OBJ"
     if not obj.is_file():
         raise SystemExit(f"BC did not produce {name}.OBJ; see {work / 'BC.OUT'}")
-    change = transform or (lambda data: optimized(data, native_fpu, cpu, basic_semantics))
+    change = transform or (lambda data: optimized(data, native_fpu, cpu, basic_semantics, bounds_checks))
     (work / f"{name}Q.OBJ").write_bytes(change(obj.read_bytes()))
 
     linking = launch(
@@ -146,6 +148,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--cpu", choices=("386", *ARCHS), default="386")
     ap.add_argument("--native-fpu", action="store_true")
     ap.add_argument("--basic-semantics", action="store_true")
+    ap.add_argument("--bounds-checks", action="store_true")
     ap.add_argument("--steps", type=int, default=2000)
     ap.add_argument("--reps", type=int, default=5)
     args = ap.parse_args(argv)
@@ -156,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
 
     cfg = CONFIGS[args.config]
     base_exe, opt_exe = build(args.config, args.prog, args.native_fpu, cpu=args.cpu,
-                              basic_semantics=args.basic_semantics)
+                              basic_semantics=args.basic_semantics, bounds_checks=args.bounds_checks)
     base_ticks = run(args.config, base_exe, args.steps, args.reps, args.prog)
     expected = answers(read_dos(BUILD / args.config / args.prog, output_name(base_exe, 0)))
     opt_ticks = run(args.config, opt_exe, args.steps, args.reps, args.prog, expected=expected)
@@ -177,6 +180,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  config: {args.config}, steps: {args.steps}, reps: {args.reps}")
     print(f"  tuning CPU: {args.cpu} (does not change DOSBox timing model)")
     print(f"  numeric semantics: {'basic' if args.basic_semantics else 'native'}")
+    print(f"  bounds checks: {args.bounds_checks}")
     print(f"  BC.EXE sha256: {sha256(host_path(cfg.mount, cfg.bc))}")
     print(f"  LINK.EXE sha256: {sha256(host_path(cfg.mount, cfg.link))}")
     print(f"  runtime sha256: {sha256(host_path(cfg.mount, cfg.runtime))}")

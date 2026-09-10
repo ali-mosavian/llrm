@@ -1,9 +1,39 @@
 # Bounds-check policy and lowering
 
-Requested behavior: native mode omits bounds checks; `--basic-semantics`
-preserves them, with loop checks outside the hot path. **Not implemented yet.**
-The numeric compatibility flag currently controls arithmetic/conversion helper
-replacement, not array helper replacement.
+Bounds checking has its own `--bounds-checks` flag, default off, independent of
+`--basic-semantics`. Both flags are recorded separately in manifests and output
+configuration markers. Bench and stage-dump tools accept the same policy.
+
+**Implemented first slice:** static numeric `B$HARY` accesses with a relocated,
+segment-contained allocation become ordinary scalar MIR subtract/multiply/add
+operations and a selector load at the raise boundary. No optimization pass
+recognizes the helper or its register convention. With checks enabled, the
+original checked helper remains. Dynamic/huge/string forms are not lowered yet;
+unchecked emission refuses them explicitly rather than silently retaining checks.
+Loop preguards are also pending.
+
+For a zero-based INTEGER array the address computation changes from:
+
+```text
+before: push index; push rank; descriptor argument; call B$HARY
+MIR:    adjusted = index - 0; bytes = adjusted * 2; address = base + bytes
+after:  mov bx,[index]; shl bx,1; add bx,array; mov es,[selector]
+```
+
+The assembly excerpt is PDS ARRIDX's first access; `array` and `selector` stand
+for relocated operands, not hard-coded addresses. `/D` tracing calls remain
+barriers, so this is exposure of address arithmetic, not yet a claim that every
+address has become a loop-carried induction value.
+
+Regression fixtures `fixtures/regressions/arridx-bounds-{p-g2,q-O,v-g3}.obj`
+are unchanged BC output from `suite/arridx.bas`, using each named configuration
+plus `/D`. All three execute with output 1260, with checks both enabled and
+disabled (six runs). This also exposed an independent INTO normal-path SSA bug:
+invented register results made ARRIDX print 630/0. INTO now observes flags
+without redefining registers; its exceptional memory/control barrier remains.
+
+Runtime evidence: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-array-into-fixed-0o53uveo`.
+Per-pass dumps: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-array-native-stages-l5_dgmvk`.
 
 ## Actual compiler output
 
@@ -19,10 +49,9 @@ checking bounds. Deleting the calls would delete the address calculation.
 They also emit `B$LINA` calls at statement boundaries; do not remove those
 as bounds checks, because they implement tracing and Ctrl-Break handling.
 
-PDS ARRIDX currently refuses emission at its first `B$LINA` (0x36), whose
-interface is not established. This is a real backend refusal, not an
-optimized unchecked result. No production source has been changed to pretend
-otherwise.
+PDS ARRIDX initially refused emission at its first `B$LINA` (0x36).
+Its normal stack interface is now established from the shipped libraries;
+trace/break handling retains conservative clobbers and memory/control effects.
 
 ## Runtime evidence
 

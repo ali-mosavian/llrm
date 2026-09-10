@@ -65,6 +65,7 @@ from dataclasses import field
 from dataclasses import replace
 from dataclasses import dataclass
 
+from iced_x86 import Code
 from iced_x86 import Register
 from iced_x86 import Register_
 from iced_x86 import RegisterExt
@@ -1034,6 +1035,10 @@ def _touched(node: ir.Node, calls: dict[int, str] | None = None) -> tuple[frozen
     call, an interrupt, a barrier -- and becomes every tracked variable on
     both sides, which is what pins a barrier in place.
     """
+    if isinstance(node, ir.Opaque) and node.insn.insn.code == Code.INTO:
+        # On its fallthrough path INTO only observes OF. The exceptional
+        # path remains a memory/control barrier, not fictitious GP results.
+        return frozenset(), frozenset({FLAGS})
     if calls is not None and isinstance(node, ir.Call) and (known := _call_touches(calls.get(node.insn.at))):
         return known
     if (halves := _restore_touches(node)) is not None:
@@ -2137,7 +2142,7 @@ def extracted_whole(high, low, definitions):
 
 def bodies(
     found: Module, blocks: list[Block], contracts: "dict[int, runtime.Contract] | None" = None,
-    *, basic_semantics: bool = False,
+    *, basic_semantics: bool = False, bounds_checks: bool = False,
 ) -> list[tuple[str, MirBody]]:
     """Every body in the module, raised, labelled, and skipping what will not.
 
@@ -2190,6 +2195,8 @@ def bodies(
             defined = module.defines(found.records, found.seg)
             array_calls = {at: name for at, name in found.calls.items() if name not in defined}
             built = raising_arrays.annotated(built, array_calls, family=module.family(found.records))
+            from qbopt.frontend import raising_array_access
+            built = raising_array_access.native(built, found, bounds_checks=bounds_checks)
             from qbopt.frontend import raising_addresses
             built = raising_addresses.loaded(built)
             from qbopt.frontend import raising_float_calls

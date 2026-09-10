@@ -43,6 +43,7 @@ def rewrite(
     absorb_calls: bool = True,
     cpu: str = "386",
     basic_semantics: bool = False,
+    bounds_checks: bool = False,
 ) -> tuple[bytes, list[Region]]:
     """Optimize one raised body, lower once, and preserve the input on refusal.
 
@@ -75,7 +76,7 @@ def rewrite(
     # for 2,764 lines whose every matcher is an address and an adjacency --
     # which is what stops any pass above from moving anything. The suite
     # links and runs on the MIR arm alone.
-    made_by = _configuration(whole_segment, native_fpu, absorb_calls, cpu, basic_semantics)
+    made_by = _configuration(whole_segment, native_fpu, absorb_calls, cpu, basic_semantics, bounds_checks)
     was = omf.finalised_at(omf.parse(data))
     if was is not None:
         # Already emitted by this pass. What came out is a program -- a
@@ -88,7 +89,7 @@ def rewrite(
             raise Finalised(f"this object was written by {was!r}, and this run is {made_by!r}")
         return data, regions
 
-    out, terminal = _written(data, whole_segment, native_fpu, absorb_calls, cpu, basic_semantics)
+    out, terminal = _written(data, whole_segment, native_fpu, absorb_calls, cpu, basic_semantics, bounds_checks)
     if terminal:
         return b"".join(one.emit() for one in omf.finalised(omf.parse(out), made_by)), regions
     # A backend refusal leaves the input intact. Machine output is never
@@ -101,7 +102,7 @@ class Finalised(Exception):
 
 
 def _configuration(whole_segment: bool, native_fpu: bool, absorb_calls: bool, cpu: str = "386",
-                   basic_semantics: bool = False) -> str:
+                   basic_semantics: bool = False, bounds_checks: bool = False) -> str:
     """Every option that can change what the emitter writes, as one string.
 
     The marker holds it so a second run can tell "already done" from
@@ -111,17 +112,21 @@ def _configuration(whole_segment: bool, native_fpu: bool, absorb_calls: bool, cp
     """
     return "1;" + ",".join(
         name for name, on in (("whole", whole_segment), ("fpu", native_fpu), ("absorb", absorb_calls)) if on
-    ) + (f",cpu={cpu}" if cpu != "386" else "") + (",basic-semantics" if basic_semantics else "")
+    ) + (f",cpu={cpu}" if cpu != "386" else "") + (",basic-semantics" if basic_semantics else "") + (",bounds-checks" if bounds_checks else "")
 
 
 def _written(
     data: bytes, whole_segment: bool, native_fpu: bool = False, absorb_calls: bool = True, cpu: str = "386",
     basic_semantics: bool = False,
+    bounds_checks: bool = False,
 ) -> tuple[bytes, bool]:
     """Lower and emit once; report whether the allocating backend completed."""
     if not whole_segment:
         return data, False
-    got = wholeseg.emitted(data, native_fpu=native_fpu, cpu=cpu, basic_semantics=basic_semantics)
+    got = wholeseg.emitted(data, native_fpu=native_fpu, cpu=cpu, basic_semantics=basic_semantics,
+                           bounds_checks=bounds_checks)
+    if not bounds_checks and got.reason.startswith("unchecked array lowering unsupported"):
+        raise ValueError(got.reason + "; use --bounds-checks to retain the checked helper")
     return got.data, got.outcome is wholeseg.Emission.LIR
 
 
@@ -158,6 +163,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--report", action="store_true")
     ap.add_argument("--basic-semantics", action="store_true",
                     help="preserve BASIC numeric runtime errors, conversions and floating behavior")
+    ap.add_argument("--bounds-checks", action="store_true", help="retain BASIC array bounds checks (independent of numeric semantics)")
     ap.add_argument(
         "--native-fpu",
         action="store_true",
@@ -179,17 +185,21 @@ def main(argv: list[str] | None = None) -> int:
 
     data = args.input.read_bytes()
     take = {int(x) for x in args.take.split(",")} if args.take else None
-    out, found = rewrite(
-        data,
-        dry_run=args.dry_run,
-        take=take,
-        max_regions=args.max_regions,
-        native_fpu=args.native_fpu,
-        whole_segment=not args.no_whole_segment,
-        absorb_calls=not args.no_absorb_calls,
-        cpu=args.cpu,
-        basic_semantics=args.basic_semantics,
-    )
+    try:
+        out, found = rewrite(
+            data,
+            dry_run=args.dry_run,
+            take=take,
+            max_regions=args.max_regions,
+            native_fpu=args.native_fpu,
+            whole_segment=not args.no_whole_segment,
+            absorb_calls=not args.no_absorb_calls,
+            cpu=args.cpu,
+            basic_semantics=args.basic_semantics,
+            bounds_checks=args.bounds_checks,
+        )
+    except ValueError as error:
+        ap.error(str(error))
 
     if args.output:
         args.output.write_bytes(out)
@@ -201,6 +211,7 @@ def main(argv: list[str] | None = None) -> int:
         "dry_run": args.dry_run,
         "cpu": args.cpu,
         "semantics": "basic" if args.basic_semantics else "native",
+        "bounds_checks": args.bounds_checks,
         "regions": [asdict(r) for r in found],
         "taken": sum(1 for r in found if r.taken),
     }
