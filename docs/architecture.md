@@ -748,6 +748,13 @@ one documented target without materially regressing another.
   numeric-environment conditions.
 - [ ] Add loop rotation only where it improves the canonical form or emitted
   branch structure.
+  `optimize/loopclone.py` now supplies CFG-preserving peeling candidates:
+  fresh SSA values, cloned branch joins and early-exit phis, followed by the
+  residual loop. It requires loop-closed live-outs and rejects opaque dispatch
+  terminators. Two peeled iterations of real IVARM produce valid SSA/phi edges
+  on QB/PDS/VBDOS. This is not enabled in production: bounded unrolling still
+  needs candidate simplification, profitability and branching-layout support.
+  No emitted assembly or performance change is claimed for the cloning primitive.
 - [ ] Delete provably unobservable loops and retain required final stores,
   synchronization and exceptional behavior.
 
