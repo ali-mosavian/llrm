@@ -973,6 +973,12 @@ floor.
 
 ## fpcse -- float is just as bad the moment a value crosses a statement
 
+The investigation below is historical. Literal FPCSE now has the complete
+[entry-observation and final-store reference](#fpcse--complete-reference-with-entry-observation-and-final-stores)
+above; FPCSEX's runtime-input reference remains provisional. Current measured
+costs belong in [the target snapshot](target-coverage-current.md), not the
+dated intermediate totals below.
+
 ### Literal FPCSE and runtime-input FPCSEX need different references
 
 The actual literal fixture initializes `a=2`, `b=4`, `c=8`, `s=0`, then

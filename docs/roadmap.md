@@ -33,7 +33,10 @@ longs, floats, array addressing, loops -- judged against a hand-derived
 optimal listing (`docs/targets.md`), not against BC.
 
 Done means **every suite program within 1.5x**, scored by
-`tools/opportunity.py --targets`. Today: 1.3x to 8.8x, median above 4x.
+`tools/opportunity.py --targets`, with a verified reference for every case.
+See [current target coverage](target-coverage-current.md) for measured ratios,
+missing/provisional references and remaining gaps. The historical baseline
+spread is not the current optimizer's result.
 
 Making a `LONG` cost what an `INTEGER` costs -- the README's number, and
 where this began -- is one case of that goal rather than the goal itself.

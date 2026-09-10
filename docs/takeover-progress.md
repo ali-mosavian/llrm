@@ -1,5 +1,20 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: full scoreboard checkpoint
+
+At b126fb4, all 487 `fixtures/omf` objects were measured once: 289 comparable
+rows within 1.5x, none above it, 102 provisional and 96 without targets.
+No row was unmeasured. Worst comparable ratio is IVCHAN's 1.36x. The gate
+still returns 1; regression fixtures outside that directory and unfinished
+architecture requirements are not included in these coverage totals.
+
+[Current coverage](target-coverage-current.md) now replaces the stale status
+summary, with historical evidence retained separately. FPCSEX costs
+4462/4467/4452 and FPDEEP 1777/1572/1777 for PDS/QB/VBDOS, both still
+provisional. Next priorities are validated floating/event references and the
+eight uncovered source programs, alongside remaining compiler work.
+No code changed in this checkpoint: before/after assembly is identical.
+
 ## 2026-09-10: inductive dynamic-array extent proofs
 
 `frontend/arrayfacts.py` now joins numeric intervals, widens growing bounds
