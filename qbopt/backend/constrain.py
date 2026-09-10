@@ -120,6 +120,7 @@ def constrained(
                 insns.append(one)
                 continue
             before, after, swap = [], [], {}
+            input_values, output_values = {}, {}
             what = one.what
             dests: "list[object]" = list(what.dests) if what is not None else []
             sources: "list[object]" = list(what.sources) if what is not None else []
@@ -136,6 +137,7 @@ def constrained(
                     pins[fresh] = register
                     uses = [held.value if v == value else v for v in uses]
                     swap[value] = held.value
+                    input_values[value] = held.value
                     fresh += 1
                     continue
                 pins[fresh] = register
@@ -148,9 +150,11 @@ def constrained(
                     if side == "dest":
                         dests[index] = held
                         defines = [held.value if v == value else v for v in defines]
+                        output_values[value] = held.value
                     else:
                         sources[index] = held
                         uses = [held.value if v == value else v for v in uses]
+                        input_values[value] = held.value
                 fresh += 1
             for value, register in sorted(given.items()):
                 # Behind the instruction, not in front of it: the value is
@@ -161,6 +165,7 @@ def constrained(
                 pins[fresh] = register
                 defines = [held.value if v == value else v for v in defines]
                 swap[value] = held.value
+                output_values[value] = held.value
                 fresh += 1
             insns += before
             def address(operand):
@@ -186,8 +191,10 @@ def constrained(
                     # spiller replaces that value between rounds. Dropped,
                     # the restore's reload arrived with no pin at all and
                     # the idiom pushed whatever eax held.
-                    requires=(),
-                    delivers=(),
+                    requires=tuple((ir.Held(input_values.get(held.value, held.value), held.width), register)
+                                   for held, register in one.requires),
+                    delivers=tuple((ir.Held(output_values.get(held.value, held.value), held.width), register)
+                                   for held, register in one.delivers),
                 )
             )
             insns += after

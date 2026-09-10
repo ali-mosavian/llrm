@@ -24,6 +24,27 @@ def _insn(what, defines, uses, at=0x100) -> lir.Insn:
     return lir.Insn(at=at, covers=(at, at + 2), what=what, defines=defines, uses=uses, op=None)
 
 
+def test_call_result_spill_keeps_its_register_after_input_split():
+    """H_BENCH printed ft_n=0 and infinite ft_mean: SI's result was spilled from BX."""
+    from dataclasses import replace
+    from qbopt.backend import allocate, spiller
+    from qbopt.backend import frame as frames
+
+    argument, result = ir.Held(1, 2), ir.Held(2, 2)
+    source = _insn(ir.Semantics(ir.Operation.MOVE, "mov", (argument,), (ir.Imm(7, 2),)), (1,), ())
+    call = replace(_insn(ir.Semantics(ir.Operation.CALL, "call", (), ()), (2,), (1,), at=0x108),
+                   requires=((argument, Register.AX),), delivers=((result, Register.SI),))
+    use = _insn(ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(3, 2),), (result,)), (3,), (2,), at=0x110)
+    split, pins = constrain.constrained(_body(source, call, use), {2: Register.SI})
+    spilled, _ = spiller.spilled(split, frozenset({2}), frames.Frame(0))
+    assignment = allocate.allocate(spilled, {**pins, **constrain.required(spilled)})
+    placed = allocate.applied(spilled, assignment)
+    call_index = next(i for i, one in enumerate(placed.insns) if one.what.op is ir.Operation.CALL)
+    store = placed.insns[call_index + 1]
+    assert isinstance(store.what.dests[0], ir.Mem)
+    assert store.what.sources == (ir.Reg(Register.SI, 2),)
+
+
 def test_runtime_requirement_renames_its_explicit_source():
     """JUMPS refused emission: ON GOTO read old v20 while its required input became v143."""
     from dataclasses import replace
@@ -198,11 +219,10 @@ def test_a_value_a_call_reads_in_a_register_it_names_nowhere() -> None:
     assert pins == {fresh: Register.CX}, f"pinned {pins}"
     assert 2 not in pins, "the argument itself was pinned"
     assert after.uses == (fresh,), f"the call still reads {after.uses}"
-    assert after.requires == (), "the requirement was not consumed"
+    assert after.requires == ((ir.Held(fresh, 2), Register.CX),), "a later spill must retain the ABI slot"
 
-    # Asking again changes nothing: a consumed requirement does not split
-    # the split, which is what an unterminating constrain loop looks like.
-    again, more = constrain.constrained(got)
+    # The returned pin map makes a retained requirement already satisfied.
+    again, more = constrain.constrained(got, pins)
     assert again == got and not more, "constraining twice is not constraining once"
 
 

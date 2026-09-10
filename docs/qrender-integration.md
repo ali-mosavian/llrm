@@ -4,7 +4,37 @@ New optimization passes are paused until the optimized renderer builds and
 runs correctly. Target: `qb-qrender/.claude/worktrees/qgl-poly-draw`, source
 commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
-## Latest candidate — eleven modules, native x87, 2026-09-11
+## Latest benchmark — twelve modules, native x87, 2026-09-11
+
+H_BENCH now passes the pinned benchmark on top of the eleven-module build.
+`/tmp/qbopt-qrender-native-benchfix.DyrmCf` (port 2213) completes 13 frames,
+9 timed samples, and reports **9.40866 FPS**, versus baseline **9.43334**.
+All non-timing/non-memory fields match, including 105.777777777778
+triangles/frame; BENCH.BMP is byte-identical. Fresh screenshot
+`bench-native-027.png` shows the rendered scene; the debugger observes the
+DOS prompt afterwards. No speedup claimed within this variation.
+
+The constraint splitter discarded both input and output requirements when
+it inserted an ABI copy. A later spill then lost the register a call's
+result actually arrives in. Requirements now remain attached to their
+rewritten input/output values, allowing allocation to recover them each
+round. The focused regression reproduces a call-input split followed by a
+result spill and fails on the emitted store's source before the fix.
+All 14 constraint tests and two pinned-return coalescing tests pass.
+
+```asm
+; failing candidate             ; corrected candidate
+call far B$CHOU                 call far B$CHOU
+mov [bp-116h],bx                mov [bp-116h],si
+mov [bp-118h],ax                mov [bp-118h],di
+```
+
+Stage dumps: `/tmp/qbopt-h-bench-fixed-native`; H_BENCH OBJ is 28,281 bytes
+versus 29,337 original. Nine BASIC modules remain original: main, h_frame,
+d_mdl, d_surf, mod_tex, model, r_bsp, screen, pl_move. The separate face
+oracle failure below remains unresolved; the full project goal is not met.
+
+## Previous candidate — eleven modules, native x87
 
 QGLFACE now lowers with native x87 in addition to the ten modules below.
 VBDOS POW8 and POW4 are aliases of the same runtime entry; POW8 inherits
