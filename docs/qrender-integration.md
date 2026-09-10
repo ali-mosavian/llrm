@@ -224,6 +224,26 @@ using the three separately audited project interfaces. Dumps are in
 `/tmp/qbopt-view-reloc-fixed`. This is an emission result only; relinking and
 fixed-tick frame/state comparison followed as recorded below.
 
+### Far-string length interface
+
+`common.obj` next refused COM_TOKENIZE at 007e, `B$FLEN`. This is
+far-string length, not file length: VBDCL10E's `farstr/stcore.asm`
+02b9..02f9 reads the descriptor and may free a temporary through
+FreeDataPpv -> FreeHandle. All paths restore BP and return with two bytes
+of caller arguments removed. Incoming arithmetic flags are overwritten
+before branches or dependencies. The interface now records only that
+cleanup and conservatively retains all GP inputs and unknown effects.
+The contract regression failed first; all nine focused file/string
+interface tests pass. Stage dumps in `/tmp/qbopt-common-next` and
+`/tmp/qbopt-common-flen-fixed` move the refusal to EXTS at 008a.
+
+```asm
+; before and after: atomic refusal preserves the original object
+007e  call far B$FLEN   ; now has an audited interface, not absorbed
+; ...
+008a  call far B$EXTS   ; next missing interface
+```
+
 ### Two-module runtime check
 
 Relinking with rewritten `view` and `d_turb` succeeded. The isolated build in

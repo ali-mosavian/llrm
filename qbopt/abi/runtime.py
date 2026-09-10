@@ -351,6 +351,13 @@ VARIANTS[("B$CHOU", "vbdos")] = replace(
 )
 
 for _name, _cleanup, _evidence in (
+    ("B$FLEN", 2,
+     "farstr/stcore.asm 02b9 reads a far-string descriptor at [bp+6]; OR AX,AX "
+     "at 02c1 kills incoming arithmetic flags before any branch/dependency. "
+     "Empty and nonempty paths join POP BP / RETF 2 at 02f6..02f9. "
+     "Temporary strings call FreeDataPpv with two words (RETF 4 at 01da), "
+     "which calls FreeHandle (RET at 010c). Freeing may mutate aliased heap "
+     "state; no memory or register preservation is claimed."),
     ("B$RDIM", None,
      "erase.asm 0000 establishes BP and reads descriptor [bp+6]; OR BL,BL "
      "at 0009 kills incoming flags before branches or dependencies. All GP "
