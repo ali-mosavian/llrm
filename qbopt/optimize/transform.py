@@ -304,9 +304,9 @@ def subexpressions(body: MirBody, dgroup: frozenset[int] = frozenset()) -> MirBo
                 candidates.append((order[block.at], index, op))
                 continue
             at, where, earlier = first
-            if op.floating is not None and (at != order[block.at] or not all(
-                (id(one) in bounded or _exact_floating(one, exact)) for one in block.ops[where:index + 1]
-            )):
+            if op.floating is not None and not _exact_float_path(
+                body, body.blocks[at].at, where, block.at, index, exact, bounded
+            ):
                 candidates.append((order[block.at], index, op))
                 continue
             if op.loads and (at != order[block.at] or not _undisturbed(op, earlier, block.ops[where + 1:index], dgroup)):
@@ -340,6 +340,38 @@ def subexpressions(body: MirBody, dgroup: frozenset[int] = frozenset()) -> MirBo
             for block in body.blocks
         ),
     )
+
+
+def _exact_float_path(
+    body: MirBody, source: int, first: int, destination: int, last: int, facts: dict, bounded: set[int],
+) -> bool:
+    """All operations between dominating FP candidates are exception-free.
+
+    Acyclic paths may cross diamonds; cycles need a separate environment
+    invariant proof. Loads still require the independent memory guard.
+    """
+    blocks = {block.at: block for block in body.blocks}
+    predecessors = loopy.predecessors(body.blocks)
+    active: set[int] = set()
+    checked: dict[int, bool] = {}
+
+    def visit(at: int) -> bool:
+        if at in active:
+            return False
+        if at in checked:
+            return checked[at]
+        active.add(at)
+        ops = blocks[at].ops
+        start = first if at == source else 0
+        end = last + 1 if at == destination else len(ops)
+        exact = all(id(op) in bounded or _exact_floating(op, facts) for op in ops[start:end])
+        parents = predecessors[at]
+        result = exact and (at == source or (bool(parents) and all(visit(parent) for parent in parents)))
+        active.remove(at)
+        checked[at] = result
+        return result
+
+    return visit(destination)
 
 
 def _exact_stored_load(op: Op, facts: dict) -> Op | None:

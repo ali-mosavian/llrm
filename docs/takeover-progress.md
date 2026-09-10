@@ -4282,3 +4282,20 @@ checkpoint: before/after arithmetic remains the listing in
 exception-free reuse, or reduce backend overhead without changing those
 observable operations. Repeating optimizations on the six passing integer
 targets does not address this remaining gap.
+
+### Exact floating CSE across acyclic paths
+
+Floating CSE can now reuse a dominating exact computation across a diamond
+when every intervening operation on every path is proven exception-free.
+Opaque operations and cycles still prevent reuse; memory reads retain their
+independent alias guard. The current strict rounding and exception contract
+is unchanged. This extends the existing proof rather than granting general
+floating reassociation or speculative motion.
+
+The new diamond regression fails with the former block-local restriction
+and passes with the path proof. All 29 focused CSE and architecture checks
+pass. FPDEEP VBDOS before/after assembly is identical at 1924 object bytes;
+stage evidence is in `/tmp/qbopt-fp-path-before` and `/tmp/qbopt-fp-path-after`.
+Runtime integer-derived floating bounds are still propagated only within a
+block, which limits the new path to computations with available exact facts.
+Extending that analysis over SSA is the next dependency for broader reuse.
