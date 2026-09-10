@@ -42,7 +42,7 @@ restore the local stack frame. The sine call itself is not optimized away.
   BX=0 contract does not cover this path. Do not infer register preservation,
   memory purity or pointer stability from its fast path.
 - **Other runtime contracts:** first refusals include `B$FLEN`, `B$EXTS`,
-  `B$COS4`, `B$FREF`, `B$ASSN`, and `B$RDIM`.
+  `B$FREF`, `B$ASSN`, and `B$RDIM`.
 - **Cross-module interfaces:** BASIC, C and assembly callees need verified
   contracts; examples are `R_POINT_LEAF`, `IN_HANDLE_TOGGLES`, `QGLSFNEW`
   and `QGLSFPSET`. A name alone does not establish an ABI.
@@ -50,6 +50,14 @@ restore the local stack frame. The sine call itself is not optimized away.
   by an unused flags phi. Lowering now prunes dead flag merges before
   checking lifetimes, retaining consumed conditions. The module reaches
   its next blocker, `QGLMOUSEPOS` at 0x280; output is still unchanged.
+
+The VBDOS cosine interface is now audited with the same conservative effects
+as sine. `COS4` and `COS8` share entry 0007; hardware returns at 0043 or
+00c6, and the `B$EMCOS` emulator tail restores SP/BP and returns at 0064.
+With the separately audited `QGLMOUSEPOS` interface supplied, `view` advances
+past cosine at 0370 to unknown `CP_ADVANCE` at 069a. The entire object remains
+byte-identical on refusal; before/after ASM at the cosine site is therefore
+the same `call far B$COS4`. No native cosine substitution is claimed.
 
 Fix each issue with a fail-first regression. Keep code generation refusal
 atomic; a byte-identical fallback is not successful optimization. Relink

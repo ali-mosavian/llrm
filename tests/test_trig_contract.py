@@ -2,12 +2,16 @@
 
 from pathlib import Path
 
+import pytest
+
 from qbopt import wholeseg
 from qbopt.abi import runtime
 
 
-def test_vbdos_sine_retains_conservative_register_and_memory_effects():
-    routine = runtime.per_call({0: "B$SIN8"}, "vbdos")[0]
+@pytest.mark.parametrize("name", ["B$SIN4", "B$SIN8", "B$COS4", "B$COS8"])
+def test_vbdos_trig_retains_conservative_register_and_memory_effects(name):
+    """Qrender refused sine at 0x97 and camera cosine at 0x370 as unknown inputs."""
+    routine = runtime.per_call({0: name}, "vbdos")[0]
     assert routine.inputs == frozenset({runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX,
                                        runtime.Reg.DX, runtime.Reg.SI, runtime.Reg.DI})
     assert routine.cleanup == 0
