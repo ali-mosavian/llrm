@@ -8,6 +8,43 @@ import pytest
 from qbopt.objectfile import module
 
 
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_long_arithmetic_values_do_not_escape_chain_inputs(tag):
+    """CHAIN retained seven IDIVs because nested numeric arguments made a and b appear escaped."""
+    from qbopt import wholeseg
+    from qbopt.model import mir
+    path = Path(f"fixtures/omf/chain-{tag}.obj")
+    found = corpus.loaded(path)
+    assert not any(segment == found.program_data for segment, _ in module.escaped(found))
+    states = []
+    def watch(stage, name, body):
+        if stage == "mir-widen":
+            states.append(body)
+    result = wholeseg.emitted(path.read_bytes(), watch=watch)
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    # Frame temporaries still lose facts across PRINT independently of this
+    # global-address escape bug; their four divisions remain for now.
+    assert sum(op.kind is mir.Kind.DIVMOD for body in states for block in body.blocks for op in block.ops) <= 4
+
+
+@pytest.mark.parametrize("kind", ["unknown", "local", "unestablished"])
+def test_arithmetic_argument_proof_requires_the_established_external_helper(kind, monkeypatch):
+    """A same-named local helper or unknown callee cannot inherit the runtime's numeric ABI."""
+    from dataclasses import replace
+    from qbopt.abi import runtime
+    found = corpus.loaded(Path("fixtures/omf/chain-p-g2.obj"))
+    names = {"B$MUI4", "B$DVI4", "B$RMI4", "B$CPI4"}
+    if kind == "unknown":
+        found = replace(found, calls={at: "UNKNOWN" if name in names else name for at, name in found.calls.items()})
+    elif kind == "local":
+        monkeypatch.setattr(module, "defines", lambda *args: names)
+    else:
+        original = runtime.contract
+        monkeypatch.setattr(runtime, "contract", lambda name: replace(original(name), established=False)
+                            if name in names else original(name))
+    assert any(segment == found.program_data for segment, _ in module.escaped(found))
+
+
 def test_qb_register_materialized_descriptor_addresses_escape():
     """QB FPDEEP reported no escapes although MOV AX,OFFSET descriptor; PUSH AX passes seven strings."""
     found = corpus.loaded(Path("fixtures/omf/fpdeep-q-O.obj"))

@@ -274,11 +274,13 @@ def escaped(found: "Module") -> frozenset[tuple[int, int]]:
 
 
 def _numeric_arguments(found: "Module") -> frozenset[int]:
-    """Complete adjacent push groups consumed by known by-value numeric PRINTs."""
+    """Numeric argument pushes, including nested long-arithmetic call frames."""
     from iced_x86 import Mnemonic
     from qbopt.abi import runtime
     from qbopt.frontend import declen
 
+    local = defines(found.records, found.seg)
+    calls = {at: name for at, name in found.calls.items() if name not in local}
     pending, values = [], set()
     at = found.start
     while at < found.end:
@@ -290,11 +292,27 @@ def _numeric_arguments(found: "Module") -> frozenset[int]:
         if insn.insn.mnemonic == Mnemonic.PUSH:
             pending.append(insn)
         else:
-            width = runtime.numeric_print_argument(found.calls.get(at, ""))
-            if width is not None and pending and sum(-one.insn.stack_pointer_increment for one in pending) == width:
-                values.update(one.at for one in pending)
+            width = runtime.numeric_stack_arguments(calls.get(at, ""))
+            if width is not None:
+                consumed, total = [], 0
+                for one in reversed(pending):
+                    total -= one.insn.stack_pointer_increment
+                    consumed.append(one.at)
+                    if total >= width:
+                        if total == width:
+                            values.update(consumed)
+                        break
             pending = []
         at = insn.end
+    from qbopt.frontend import blocks, stack
+
+    def long_arity(name):
+        return 2 if runtime.numeric_stack_arguments(name) == 8 else None
+
+    if any(long_arity(name) is not None for name in calls.values()):
+        for block in blocks.partition(found, blocks.code_map(found)):
+            for frame in stack.frames(block, calls, long_arity):
+                values.update(one.at for one in frame.pushed)
     return frozenset(values)
 
 

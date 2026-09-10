@@ -4084,3 +4084,31 @@ Future work here must account for the original counter's non-address uses,
 not simply enable every shift candidate or put machine-cost rules into MIR.
 Before/forced objects and every stage:
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-shift-induction-96_jonay`.
+
+### Numeric arithmetic arguments are not escaping addresses
+
+CHAIN's seven remaining divisions led back to escape recognition, not
+division selection. `push word [a]` carries a relocation identifying the
+load's source; it does not pass a's address to B$DVI4/B$RMI4. Only numeric
+PRINT arguments were previously excluded from the escape set. Consequently
+later print calls appeared able to overwrite a/b, losing their constants.
+
+The ABI now identifies the four established eight-byte long arithmetic
+argument lists, alongside existing numeric PRINT arguments. Recognition
+consumes the exact adjacent stack suffix and reuses the existing block-local
+stack-frame tracker for nested calls and intervening non-stack instructions.
+An outer argument below a nested call is not mistaken for that call's input.
+Locally defined replacements, unknown callees and unestablished contracts
+receive no numeric-argument exemption. No optimization pass gains ABI details.
+
+Three CHAIN divisions fold away, e.g. `-1073741831 / 39678839` becomes
+quotient -27 and remainder -2413178 instead of loads/CDQ/IDIV. Four divisions
+remain because frame-temporary constants are independently invalidated by
+print calls. The frame-memory guard has not been relaxed.
+
+The three real-fixture regressions failed first. All 32 focused escape and
+constant-call-memory checks pass. Runtime outputs match BC on all compilers:
+PDS 1356 -> 1274 object bytes and modeled cost 869 -> 682; QB 1336 -> 1254
+and 869 -> 682; VBDOS 1687 -> 1613 and 819 -> 642. These are ranking costs,
+not hardware timings. Full before/after stage dumps and runtime output:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-numeric-escape-fz312fjx`.

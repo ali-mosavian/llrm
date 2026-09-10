@@ -490,6 +490,14 @@ def numeric_print_argument(name: str) -> int | None:
     routine = contract(name)
     return routine.cleanup if routine.established else None
 
+
+def numeric_stack_arguments(name: str) -> int | None:
+    """Known scalar stack arguments, whose bits are values rather than caller pointers."""
+    if name in {"B$MUI4", "B$DVI4", "B$RMI4", "B$CPI4"}:
+        routine = contract(name)
+        return 8 if routine.established and routine.cleanup == 8 else None
+    return numeric_print_argument(name)
+
 _PRINT_EVIDENCE = (
     "rt/prnval.asm: the entry point is `MOV AX,<term> SHL 8 + <type>` then `JMP SHORT B$PRINT` (B$PESD falls "
     "straight in). `cProc B$PRINT,<PUBLIC,FAR>,<SI>` saves si and the epilogue restores si and bp before "
