@@ -88,6 +88,28 @@ done:
 
 `[t]` names the relocated `seg:5+0x10` operand in the emitted listing.
 
+The next memory-folding change reduces all three ordinary BOOLS variants from
+**156 to 128** (**1.02x** against 126). Exact scalar memory updates now carry
+constant facts through the store; folding retains a constant store when its
+condition results are unused. QB's object shrinks **772 → 749 bytes**.
+
+```asm
+; before                     ; after
+mov word [t],0               mov word [t],0
+add word [t],0FFFFh           mov word [t],2
+inc word [t]
+add word [t],2
+; after printing the label   ; after printing the label
+push word [t]                push 2
+call B$PEI2                  call B$PEI2
+```
+
+The remaining overwritten zero store is visible in the emitted bytes even
+though the scorer reports zero recognized redundancy. Neither that zero nor
+the near-target ratio proves ideal code. BOOLS, HOTLOP, IVCHAN and PRESSX pass
+execution on QB/PDS/VBDOS; live-condition and loop-counter guards have focused
+tests. The full integration snapshot above has not been rerun.
+
 ## Missing references
 
 | Source program | Configurations without targets |

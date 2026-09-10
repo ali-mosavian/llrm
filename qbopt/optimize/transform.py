@@ -1934,7 +1934,8 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
                 ops.extend(replacements)
                 changed |= replacements != (op,)
                 continue
-            made = _constant_operands(_folded_op(op, facts, wanted),
+            updated = _constant_update(op, facts, memory.get((block.at, index), {}), wanted)
+            made = _constant_operands(_folded_op(updated, facts, wanted),
                                       argument_facts if op.kind is mir.Kind.ARG else facts,
                                       memory.get((block.at, index), {}))
             changed = changed or made is not op
@@ -1942,6 +1943,18 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
         out.append(replace(block, ops=tuple(ops)))
     from qbopt.optimize import floatfold
     return floatfold.stored(floatfold.discarded(replace(body, blocks=tuple(out)) if changed else body, conversions), floating_facts)
+
+
+def _constant_update(op: Op, facts: dict, memory: dict, wanted: set) -> Op:
+    if any(value in wanted for value in op.defines):
+        return op
+    fact = consts.updated(op, facts, memory)
+    if fact is None:
+        return op
+    address_values = {value for ref in op.stores for value in (ref.base, ref.segment) if value is not None}
+    return replace(op, op=ir.Operation.MOVE, kind=mir.Kind.STORE, name="mov", defines=(),
+                   uses=tuple(value for value in op.uses if value in address_values), loads=(),
+                   args=(mir.Const(fact.n, fact.width),), node=None, made=None, raised=None, symbol=False)
 
 
 def _constant_operands(op: Op, facts: dict, memory: dict | None = None) -> Op:

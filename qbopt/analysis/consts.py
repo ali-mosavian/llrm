@@ -111,6 +111,31 @@ def initialized(op: mir.Op, ref: mir.MemRef) -> Known | None:
     return _cell({(written.addr, written.width): fact}, ref) if fact is not None else None
 
 
+def updated(op: mir.Op, known: dict, here: Cells) -> Known | None:
+    """The value of an exact scalar read-modify-write, before its store kills the facts."""
+    if (op.barrier or op.floating or op.merges or len(op.stores) != 1
+        or op.loads != op.stores or op.results != (mir.Cell(op.stores[0]),)
+        or any(not value.flags for value in op.defines)):
+        return None
+    width = op.stores[0].width
+    if width not in (2, 4):
+        return None
+    parts = [_operand(op, arg, known, here) for arg in op.args]
+    if not parts or any(fact is None or fact.width < width for fact in parts):
+        return None
+    if op.kind in ARITH and len(parts) == 2:
+        result = ARITH[op.kind](parts[0].n, parts[1].n)
+    elif op.kind in UNARY and len(parts) == 1:
+        result = UNARY[op.kind](parts[0].n)
+    elif len(parts) == 1 and (step := mir.stepping(replace(op, loads=(), stores=()))) is not None:
+        if not isinstance(step[1], mir.Const):
+            return None
+        result = parts[0].n + step[1].n
+    else:
+        return None
+    return Known(masked(result, width), width)
+
+
 def _fragments(ref: mir.MemRef, fact: Known) -> Cells:
     return {(ref.addr.plus(offset), 1): Known((fact.n >> (offset * 8)) & 255, 1)
             for offset in range(min(ref.width, fact.width))}
@@ -124,6 +149,7 @@ def _kills(
         contract = runtime.contract(calls[op.at])
         if runtime.barrier(contract) or (runtime.writes_caller_memory(contract) and not op.stores):
             here = {}
+    put = _put(op, known) if op.kind is mir.Kind.STORE else updated(op, known, here)
     for ref in op.stores:
         ref = _addressed(ref, known)
         here = {
@@ -131,7 +157,6 @@ def _kills(
             for where, fact in here.items()
             if not mir.overlapping(mir.MemRef(where[0], where[1], None, None), ref, dgroup)
         }
-        put = _put(op, known)
         if put is not None and ref.addr is not None and ref.base is None and ref.segment is None:
             here.update(_fragments(ref, put))
     if op.kind is mir.Kind.CALL and op.memory_values:
