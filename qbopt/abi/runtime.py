@@ -325,6 +325,19 @@ for _name in ("B$SIN4", "B$SIN8", "B$COS4", "B$COS8"):
         ),
     )
 
+VARIANTS[("B$CHOU", "vbdos")] = replace(
+    worst("B$CHOU"),
+    inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
+    cleanup=2,
+    evidence=(
+        "VBDCL10E.LIB pr0a.asm 0055: PUSH BP / MOV BP,SP; reads channel at [bp+6], "
+        "calls B$ChkFNUM and B$SetFNum, POP BP / RETF 2 at 0061..0064. "
+        "All GP inputs and unknown clobber/memory/control/error effects retained; "
+        "only the normal-return argument cleanup is established. Library SHA256 "
+        "59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301."
+    ),
+)
+
 VARIANTS[("B$EXSA", "vbdos")] = replace(
     worst("B$EXSA"),
     inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),

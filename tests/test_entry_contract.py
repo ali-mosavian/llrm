@@ -73,3 +73,17 @@ def test_vbdos_exit_keeps_every_possible_general_input() -> None:
     assert contract.clobbers == runtime.EVERY
     assert contract.writes is runtime.Memory.ANY
     assert contract.control is runtime.Control.UNKNOWN
+
+
+def test_vbdos_output_channel_keeps_unknown_effects():
+    """Qrender camera refused its PRINT channel selection at 0x8da (B$CHOU)."""
+    contract = runtime.per_call({0: "B$CHOU"}, "vbdos")[0]
+    assert contract.inputs == frozenset(
+        {runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX, runtime.Reg.DX, runtime.Reg.SI, runtime.Reg.DI}
+    )
+    assert contract.cleanup == 2
+    assert contract.clobbers == runtime.EVERY
+    assert contract.reads is runtime.Memory.ANY
+    assert contract.writes is runtime.Memory.ANY
+    assert contract.control is runtime.Control.UNKNOWN
+    assert contract.raises_error

@@ -93,6 +93,14 @@ contract that retains every GP input and all unknown effects, with cleanup
 12, moves the camera's refusal to `PL_MOVE` at 08ad. These are audit facts,
 not globally installed project-symbol contracts.
 
+With PL_MOVE's conservative external interface (cleanup 34) supplied too,
+the camera reaches its PRINT calls. VBDOS `B$CHOU` now has an audited minimal
+interface: all GP inputs retained, every effect unknown, `retf 2` at 0062.
+The next refusal is `B$PCR4` at 08ea. Its shared `B$PRINT` body has three
+different returns (`retf 8`, `retf 2`, `retf 4`) selected from runtime state
+after indirect calls. Do not infer a uniform cleanup from the first return.
+The camera object still refuses atomically, so before/after ASM is unchanged.
+
 VBDCL10E.LIB, `rtenexit.asm`, B$ENRA:
 
 ```asm
