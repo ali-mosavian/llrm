@@ -595,16 +595,18 @@ one documented target without materially regressing another.
   floating reuse remain open.
 - [ ] Replace the separate load/store cleanup rules with MemorySSA-based load
   elimination and dead-store elimination.
-- [ ] Implement sparse conditional constant propagation (`SCCP`) over values
+- [x] Implement sparse conditional constant propagation (`SCCP`) over values
   and executable CFG edges.
-  `analysis/constant_cycles.py` now supplies the sparse value lattice:
-  pending, constant, and overdefined, with consumer re-evaluation. It proves
-  unchanged cyclic values constant and invalidates changing/runtime-dependent
-  recurrences. All CFG edges still participate; `decide` removes known-dead
-  edges between optimization rounds. This is not yet SCCP.
-  The solver must distinguish not-yet-known values from overdefined values,
-  revisit consumers when values or executable edges change, and merge only
-  feasible phi inputs. Unresolved conditions must not silently delete edges.
+  `analysis/constant_cycles.py` combines its sparse value worklist with
+  executable-edge discovery, feeding feasible phi inputs back into branch
+  evaluation. New backedges invalidate optimistic constants; pending reachable
+  values become overdefined before completion, and unresolved conditions keep
+  every successor. A looped entry also retains its unknown initial caller input.
+  `decide` uses this solver with the existing semantic comparison evaluator and
+  byte-owning unreachable cleanup. Memory facts are conservative seeds from the
+  existing all-path analysis, not speculative conditional-memory facts.
+  Conditional-phi branch resolution is verified in one round. BOOLS QB's final
+  before/after assembly is identical; no suite speedup is claimed for this change.
   Reference: local LLVM revision `338e0c94943a6fb917c276bbbd9ff4b6cd6dd71e`,
   `llvm/lib/Transforms/Utils/SCCPSolver.cpp:1426` and the solver header's
   `resolvedUndefsIn` contract. LLVM undef semantics are not permission to

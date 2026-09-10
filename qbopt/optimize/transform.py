@@ -1495,12 +1495,9 @@ def _signed(fact) -> int:
     return fact.n - (top << 1) if fact.n & top else fact.n
 
 
-def _outcome(block, op: Op, facts: dict, held: dict) -> bool | None:
-    """Whether this branch is taken, where both its operands are numbers."""
-    if op.kind is not mir.Kind.BRANCH:
-        return None
-    decide = _TAKEN.get(op.test)
-    if decide is None:
+def _comparison(block, op: Op):
+    """The modeled comparison supplying this branch's condition value."""
+    if op.kind is not mir.Kind.BRANCH or op.test not in _TAKEN:
         return None
     reads = [one for one in op.uses if one.flags]
     if len(reads) != 1:
@@ -1520,11 +1517,39 @@ def _outcome(block, op: Op, facts: dict, held: dict) -> bool | None:
     # matching ir.Operation.COMPARE and reading ir.Loc operands out of it.
     if compare.kind is not mir.Kind.SUB or len(compare.args) != 2 or compare.results:
         return None
+    return index, compare
+
+
+def _outcome(block, op: Op, facts: dict, held: dict) -> bool | None:
+    """Whether this branch is taken, where both its operands are numbers."""
+    comparison = _comparison(block, op)
+    if comparison is None:
+        return None
+    index, compare = comparison
     parts = [consts._operand(compare, one, facts, held.get((block.at, index))) for one in compare.args]
     if any(one is None for one in parts):
         return None
     left, right = parts
-    return decide(_signed(left), _signed(right), lambda n: n & 0xFFFFFFFF)
+    return _TAKEN[op.test](_signed(left), _signed(right), lambda n: n & 0xFFFFFFFF)
+
+
+def _executable_successors(block, facts, states, held):
+    from qbopt.analysis.constant_cycles import State
+
+    if not block.ops or len(block.succ) != 2:
+        return block.succ
+    last = block.ops[-1]
+    if last.target not in block.succ:
+        return block.succ
+    answer = _outcome(block, last, facts, held)
+    if answer is not None:
+        return (last.target,) if answer else tuple(at for at in block.succ if at != last.target)
+    comparison = _comparison(block, last)
+    if comparison is not None:
+        _, compare = comparison
+        if any(isinstance(arg, mir.Held) and states.get(arg.value) is State.PENDING for arg in compare.args):
+            return None
+    return block.succ
 
 
 def _threaded(body: MirBody) -> MirBody:
@@ -1578,9 +1603,11 @@ def decided(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
     """
     body = _threaded(body)
     facts = consts.known(body, dgroup, calls)
-    if not facts:
-        return body
     held = consts.cells(body, dgroup, calls, facts)
+    from qbopt.analysis import constant_cycles
+    facts = constant_cycles.propagated(
+        body, facts, lambda block, values, states: _executable_successors(block, values, states, held)
+    )
 
     out = []
     changed = False
