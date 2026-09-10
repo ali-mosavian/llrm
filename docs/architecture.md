@@ -606,6 +606,12 @@ one documented target without materially regressing another.
   overlapping ranges remain conservative. Existing LICM then hoists UDTRNG's
   index/address calculations and step loads: QB 1064 → 705, PDS 1140 → 809,
   VBDOS 689 → 673. Indexed accumulator loads/stores remain inside the loop.
+  Bounded field address chains are now normalized in raising to a shared index
+  plus field displacement. Write-through promotion keys these cells by address
+  SSA identity; address redefinitions and possible clobbers invalidate them.
+  UDTRNG no longer reloads either accumulator inside the loop: QB 705 → 615,
+  PDS 809 → 643, VBDOS 673 → 557. Stores still execute each iteration; indexed
+  store sinking and broader aggregate decomposition remain open.
 - [ ] Feed SROA results into promotion so scalar values survive across BC
   statement boundaries.
   Write-through promotion now also accepts fixed procedure-frame fields, not

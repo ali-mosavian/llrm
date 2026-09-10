@@ -52,6 +52,27 @@ mov [si],eax                      mov edi,[si]
 
 The stepX spill remains; this is address/invariant motion, not complete SROA.
 
+Indexed promotion then removes both accumulator reloads. Raising names the
+bounded second field as the shared index plus its displacement; promotion
+uses address SSA identity, not a register or a source-variable name. Unknown
+aliasing writes and re-executed address definitions invalidate availability.
+The existing frame/data separation also applies to these proven data accesses.
+PDS loop excerpts, before → after:
+
+```asm
+; before                          ; after
+mov edi,[points+bx]               add edi,eax
+add edi,[bp-18h]                  mov [points+bx],edi
+mov [points+bx],edi               add esi,ecx
+mov edi,[si]                      mov [points+bx+4],esi
+add edi,ecx
+mov [si],edi
+```
+
+Costs: QB 705 → 615, PDS 809 → 643, VBDOS 673 → 557. The regression checks
+that no indexed LONG load remains in the loop and fails with indexed promotion
+disabled. UDTRNG runs correctly on all three compilers. Repeated stores remain.
+
 Promotion clobber regressions in `tests/test_promote.py` use PRESS-derived MIR
 with explicit, unspecified and barrier effects, placed before/between/after a
 store and read. Only an intervening clobber should prevent reuse. Unspecified

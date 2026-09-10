@@ -328,7 +328,7 @@ def proven(body: mir.MirBody, *, limit: int = 10000) -> mir.MirBody:
     statics = {(ref.addr, ref.width) for ref in references
                if ref.base is None and ref.segment is None and ref.addr is not None
                and ref.addr == Addr(ref.addr.space, ref.addr.disp, ref.addr.index)
-               and ref.addr.space is Space.SEGMENT and ref.width > 0}
+               and ref.addr.space in (Space.SEGMENT, Space.FRAME) and ref.width > 0}
     predecessors = loops.predecessors(body.blocks)
     by_at = {block.at: block for block in body.blocks}
     def revisited(block):

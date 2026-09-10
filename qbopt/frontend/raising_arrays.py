@@ -8,8 +8,8 @@ from qbopt.objectfile.module import Addr, Space
 def annotated(body: mir.MirBody, calls: dict[int, str], *, family: str = "") -> mir.MirBody:
     sites = {at: name for at, name in calls.items() if name in ("B$DDIM", "B$RDIM")}
     if not sites:
-        from qbopt.frontend import arrayfacts
-        return arrayfacts.proven(body)
+        from qbopt.frontend import arrayfacts, raising_fields
+        return raising_fields.named(arrayfacts.proven(body))
     known = consts.known(body)
     symbols: dict[mir.Value, mir.Symbol] = {}
     blocks = []

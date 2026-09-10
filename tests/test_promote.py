@@ -13,6 +13,22 @@ from qbopt.optimize import promote
 from qbopt import wholeseg
 
 
+@pytest.mark.parametrize("tag", ["q-O", "p-g2", "v-g3"])
+def test_guarded_indexed_accumulators_do_not_reload_in_loop(tag):
+    """UDTRNG reloaded both LONG record fields on each of seven accumulator updates."""
+    from qbopt.analysis import loops
+    states = []
+    def watch(stage, name, body):
+        if isinstance(body, mir.MirBody):
+            states.append(body)
+    result = wholeseg.emitted(Path(f"fixtures/regressions/udtrng-{tag}.obj").read_bytes(), watch=watch)
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    body = states[-1]
+    hot = {at for loop in loops.loops(body.blocks, body.entry) for at in loop.body}
+    assert not [(op.at, ref) for block in body.blocks if block.at in hot for op in block.ops
+                for ref in op.loads if ref.base is not None and ref.width == 4]
+
+
 def test_procedure_frame_fields_reuse_stored_values():
     """LOCALP reread its frame accumulator on every addition despite known stores."""
     from qbopt.objectfile.module import Space

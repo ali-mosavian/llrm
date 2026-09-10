@@ -7,9 +7,11 @@ register allocator can keep that value across statements. Unlike LLVM's
 local allocas, these cells can be visible outside this body: every store
 stays in place. Removing stores needs a separate proof of observability.
 
-**Which cells.** A fixed data or frame address, with reusable reads at one width.
+**Which cells.** A fixed data/frame address or a proven indexed data cell,
+identified by its address SSA value, with reusable reads at one width.
 A read reuses the stored value only when it is available along every
 incoming path. Any possibly aliasing write invalidates that availability;
+re-executing an address definition invalidates its indexed cells as well.
 a later direct store establishes it again. Constant initializers can establish
 each fully covered field, including across split stores, without changing the stores.
 Runtime calls use the same
@@ -56,6 +58,25 @@ READS = frozenset(
 CELLS = frozenset({Space.SEGMENT, Space.FRAME})
 
 
+def _key(ref):
+    if ref.addr is None or ref.segment is not None or ref.addr.space not in CELLS:
+        return None
+    if ref.base is None:
+        return ref.addr
+    if ref.addr.space is Space.SEGMENT and ref.excludes:
+        return replace(ref, width=0, excludes=())
+    return None
+
+
+def _reference(key, width):
+    return replace(key, width=width) if isinstance(key, mir.MemRef) else mir.MemRef(key, width)
+
+
+def _order(key):
+    ref = _reference(key, 0)
+    return ref.addr.index, ref.addr.disp, -1 if ref.base is None else ref.base.id
+
+
 class Promote(MIRTransform):
     name = "promote"
 
@@ -78,13 +99,14 @@ def promotable(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict
     seen: Counter = Counter()
     widths: dict = {}
     for one in every:
-        if one.addr is None or one.base is not None or one.addr.space not in CELLS:
+        key = _key(one)
+        if key is None:
             continue
-        seen[one.addr] += 1
+        seen[key] += 1
     for block in body.blocks:
         for op in block.ops:
             if op.loads and (ref := _cell(op)) is not None:
-                widths.setdefault(ref.addr, set()).add(ref.width)
+                widths.setdefault(_key(ref), set()).add(ref.width)
 
     candidates = {
         addr: next(iter(widths[addr]))
@@ -92,7 +114,7 @@ def promotable(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict
         if times > 1 and addr in widths and len(widths[addr]) == 1
     }
     usable = _available(body, candidates, dgroup, bounds)
-    used = {ref.addr for block in body.blocks for op in block.ops if id(op) in usable for ref in op.loads}
+    used = {_key(ref) for block in body.blocks for op in block.ops if id(op) in usable for ref in op.loads}
     return {addr: width for addr, width in candidates.items() if addr in used}
 
 
@@ -100,9 +122,9 @@ def _cell(op: Op) -> mir.MemRef | None:
     """The whole access this pass can replace, never part of an operation."""
     match op.kind, op.loads, op.stores:
         case kind, (ref,), () if kind in READS:
-            return ref if ref.base is None else None
+            return ref if _key(ref) is not None else None
         case mir.Kind.STORE, (), (ref,):
-            return ref if ref.base is None else None
+            return ref if _key(ref) is not None else None
     return None
 
 
@@ -115,12 +137,12 @@ def _initializers(body: MirBody, cells: dict, dgroup: frozenset[int], bounds: di
         for index, op in enumerate(block.ops):
             cell = _cell(op)
             if (op.kind is not mir.Kind.STORE or op.barrier or cell is None or cell.addr is None
-                or cell.segment is not None or cell.addr.space not in CELLS):
+                or cell.base is not None or cell.segment is not None or cell.addr.space not in CELLS):
                 continue
             after = consts._kills(memory.get((block.at, index), {}), op, {}, dgroup, calls)
             initialized[id(op)] = {
                 addr: fact for addr, width in cells.items()
-                if (addr, width) != (cell.addr, cell.width)
+                if not isinstance(addr, mir.MemRef) and (addr, width) != (cell.addr, cell.width)
                 and mir.overlapping(mir.MemRef(addr, width), cell, dgroup, bounds)
                 and (fact := consts._cell(after, mir.MemRef(addr, width))) is not None
             }
@@ -132,7 +154,7 @@ def _available(body: MirBody, cells: dict, dgroup: frozenset[int], bounds: dict 
     reachable = {at for at, doms in loops.dominators(body.blocks, body.entry).items() if doms}
     predecessors = loops.predecessors(body.blocks)
     leaving = {at: set(cells) for at in reachable}
-    refs = {addr: mir.MemRef(addr, width) for addr, width in cells.items()}
+    refs = {addr: _reference(addr, width) for addr, width in cells.items()}
     initializers = _initializers(body, cells, dgroup, bounds)
 
     def entering(at: int) -> set:
@@ -140,22 +162,28 @@ def _available(body: MirBody, cells: dict, dgroup: frozenset[int], bounds: dict 
         return set.intersection(*(leaving[parent] for parent in parents)) if parents and at != body.entry else set()
 
     def through(block: mir.MirBlock, available: set, reads: set[int] | None = None) -> set:
+        def redefined(values):
+            available.difference_update(key for key, ref in refs.items()
+                                        if ref.base in values or ref.segment in values)
+        redefined({phi.result for phi in block.phis})
         for op in block.ops:
             if effects.unmodeled_write(op):
                 available.clear()
                 continue
             cell = _cell(op)
-            if (reads is not None and op.loads and cell is not None and cell.addr in available
-                and cell.width == cells[cell.addr]):
+            key = _key(cell) if cell is not None else None
+            if (reads is not None and op.loads and cell is not None and key in available
+                and cell.width == cells[key]):
                 reads.add(id(op))
+            redefined(set(op.defines))
             available.difference_update(
                 addr
                 for addr, ref in refs.items()
                 if any(mir.overlapping(ref, written, dgroup, bounds) for written in op.stores)
             )
-            if (op.kind is mir.Kind.STORE and cell is not None and cell.addr in cells
-                and cell.width == cells[cell.addr]):
-                available.add(cell.addr)
+            if (op.kind is mir.Kind.STORE and cell is not None and key in cells
+                and cell.width == cells[key]):
+                available.add(key)
             available.update(initializers.get(id(op), {}))
         return available
 
@@ -191,7 +219,7 @@ def promoted(
     found = promotable(body, dgroup, bounds)
     if loop_only:
         hot = {at for loop in loops.loops(body.blocks, body.entry) for at in loop.body}
-        read = {ref.addr for block in body.blocks if block.at in hot for op in block.ops for ref in op.loads}
+        read = {_key(ref) for block in body.blocks if block.at in hot for op in block.ops for ref in op.loads}
         found = {addr: width for addr, width in found.items() if addr in read}
     if not found:
         return original
@@ -207,7 +235,7 @@ def promoted(
     taken = max((one.variable for one in ssa.values(body)), default=0)
     fresh = _next(body)
     holds = {}
-    for number, addr in enumerate(sorted(found, key=lambda one: (one.index, one.disp)), 1):
+    for number, addr in enumerate(sorted(found, key=_order), 1):
         holds[addr] = taken + number
 
     changed = False
@@ -307,9 +335,9 @@ def _instead(op: Op, holds: dict, found: dict, fresh: int) -> "Op | None":
     and a half-rewritten body reads stale memory.
     """
     cell = _cell(op)
-    if cell is None or cell.addr not in holds or cell.width != found[cell.addr]:
+    addr = _key(cell) if cell is not None else None
+    if cell is None or addr not in holds or cell.width != found[addr]:
         return None
-    addr = cell.addr
     width = found[addr]
     variable = holds[addr]
 
@@ -324,6 +352,7 @@ def _instead(op: Op, holds: dict, found: dict, fresh: int) -> "Op | None":
             stores=(),
             results=(mir.Held(into, width),),
             args=tuple(one for one in op.args if not isinstance(one, mir.Cell)),
+            uses=tuple(one.value for one in op.args if isinstance(one, mir.Held)),
         )
 
     if op.loads:
@@ -333,7 +362,8 @@ def _instead(op: Op, holds: dict, found: dict, fresh: int) -> "Op | None":
         return replace(
             op,
             kind=mir.Kind.COPY if op.kind is mir.Kind.LOAD else op.kind,
-            uses=op.uses + (holding,),
+            uses=tuple(dict.fromkeys([one.value for one in op.args if isinstance(one, mir.Held)]
+                                    + [one for one in op.uses if one.flags] + [holding])),
             loads=(),
             args=tuple(mir.Held(holding, width) if isinstance(one, mir.Cell) else one for one in op.args),
         )
