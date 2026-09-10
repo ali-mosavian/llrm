@@ -597,8 +597,11 @@ one documented target without materially regressing another.
   elimination and dead-store elimination.
 - [ ] Implement sparse conditional constant propagation (`SCCP`) over values
   and executable CFG edges.
-  Current `consts.known` requires agreement from all phi inputs; `decide`
-  removes known-dead edges between optimization rounds. This is not SCCP.
+  `analysis/constant_cycles.py` now supplies the sparse value lattice:
+  pending, constant, and overdefined, with consumer re-evaluation. It proves
+  unchanged cyclic values constant and invalidates changing/runtime-dependent
+  recurrences. All CFG edges still participate; `decide` removes known-dead
+  edges between optimization rounds. This is not yet SCCP.
   The solver must distinguish not-yet-known values from overdefined values,
   revisit consumers when values or executable edges change, and merge only
   feasible phi inputs. Unresolved conditions must not silently delete edges.

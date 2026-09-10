@@ -496,4 +496,5 @@ def known(
                 if found is not None:
                     facts[target] = found
                     changing = True
-    return facts
+    from qbopt.analysis import constant_cycles
+    return constant_cycles.propagated(body, facts)
