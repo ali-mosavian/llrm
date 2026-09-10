@@ -101,7 +101,7 @@ class Library:
         self.covered = {}
         self.relocations = {}
         for index, module in enumerate(objects):
-            if any(record.type in omf.WIDE for record in module.records):
+            if any(record.type in omf.WIDE - {omf.SEGDEF + 1} for record in module.records):
                 raise ValueError(f"{module.name}: 32-bit OMF records are not supported")
             for name, (seg, offset) in module.defines().items():
                 address = (index, seg, offset)
@@ -157,7 +157,7 @@ class Library:
         key = index, seg
         code = self.codes.setdefault(key, code_of(self.objects[index], seg))
         routine = Routine(address, self.label(address))
-        segments = [record for record in self.objects[index].records if record.type == omf.SEGDEF]
+        segments = [record for record in self.objects[index].records if record.type & 0xFE == omf.SEGDEF]
         if 0 < seg <= len(segments) and segments[seg - 1].body[0] & 1:
             routine.unknown.append("USE32 segment is not supported")
             return routine
@@ -217,10 +217,10 @@ class Library:
             names = omf.names(module.records)
             segment = 0
             for record in module.records:
-                if record.type != omf.SEGDEF:
+                if record.type & 0xFE != omf.SEGDEF:
                     continue
                 segment += 1
-                at = 3 + (3 if record.body[0] >> 5 == 0 else 0)
+                at = 1 + (4 if record.type & 1 else 2) + (3 if record.body[0] >> 5 == 0 else 0)
                 _, at = omf._index(record.body, at)
                 kind, _ = omf._index(record.body, at)
                 if kind < len(names) and names[kind].upper() in classes:

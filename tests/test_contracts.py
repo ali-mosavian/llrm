@@ -22,6 +22,20 @@ def contract(code: str) -> Contract:
     return summarize(found.graph((0, 1, 0)))[0, 1, 0]
 
 
+def test_wide_segment_descriptor_does_not_imply_wide_code():
+    """Qrender mouse.obj could not be audited because CodeView uses SEGDEF32."""
+    records = [
+        omf.Record(omf.SEGDEF + 1, bytes.fromhex("2100000000010101")),
+        omf.Record(omf.SEGDEF, bytes.fromhex("200100010101")),
+        omf.Record(omf.LEDATA, bytes.fromhex("020000c3")),
+    ]
+    found = Library([Module("mouse", records)])
+    result = summarize(found.graph((0, 2, 0)))[0, 2, 0]
+    assert not result.unknown
+    assert result.cleanup == 0
+    assert "USE32 segment is not supported" in found.graph((0, 1, 0))[(0, 1, 0)].unknown
+
+
 def test_save_restore_across_dependency() -> None:
     """A caller saving AX around a clobbering helper must retain its original AX."""
     found = library("50 e80200 58 c3 31c0 c3")
