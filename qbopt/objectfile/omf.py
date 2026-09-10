@@ -528,6 +528,17 @@ def extdef_record(entries: "list[tuple[bytes, bytes]]") -> Record:
     return Record(EXTDEF, bytes(body))
 
 
+def with_external(records: list[Record], name: str) -> tuple[list[Record], int]:
+    """Add a linker dependency without renumbering any existing external."""
+    names = externals(records)
+    if name in names:
+        return records, names.index(name)
+    position = max((index + 1 for index, record in enumerate(records)
+                    if record.type & 0xFE == EXTDEF), default=1)
+    added = extdef_record([(name.encode("latin1"), b"\x00")])
+    return [*records[:position], added, *records[position:]], len(names)
+
+
 # A comment class no tool in this toolchain writes: BC's own are 0x00, 0x9f
 # and 0xa1. The attribute byte sets NOPURGE and NOLIST, so LINK drops the
 # record from what it produces and never prints it.

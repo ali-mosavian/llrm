@@ -6,6 +6,7 @@ import pytest
 
 from qbopt.backend import lower, pointers
 from qbopt.model import ir, mir
+from qbopt.objectfile.module import Addr, Space
 
 
 def operation():
@@ -15,9 +16,12 @@ def operation():
                   results=(mir.Held(result, 4),))
 
 
-def execute(parts, pointer, offset):
+def execute(parts, pointer, offset, memory=None):
     values = {1: pointer, 2: offset}
     for part in parts:
+        if part.op is ir.Operation.MOVE:
+            values[part.dests[0].value] = memory[part.sources[0].addr]
+            continue
         left, right = [arg.value if isinstance(arg, ir.Imm) else values[arg.value] for arg in part.sources]
         match part.name:
             case "and": answer = left & right
@@ -65,3 +69,12 @@ def test_pointer_lowering_cannot_destroy_an_unrelated_live_condition():
 def test_unknown_selector_models_are_rejected(shift):
     with pytest.raises(ValueError, match="selector shift"):
         pointers.Model(shift)
+
+
+@pytest.mark.parametrize("shift,expected", [(12, 0x30000000), (3, 0x20080000)])
+def test_runtime_pointer_abi_controls_crossing(shift, expected):
+    """Byte 65536 uses the runtime selector stride, not a CPU-derived DOS constant."""
+    address = Addr(Space.EXTERNAL, 0, 7)
+    model = pointers.Model(ir.Mem(address, 1, disp_width=2))
+    parts = model.offset(ir.Held(1, 4), ir.Held(2, 4), ir.Held(3, 4), count(10).__next__)
+    assert execute(parts, 0x2000fffe, 2, {address: shift}) == expected

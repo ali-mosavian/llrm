@@ -13,10 +13,13 @@ from qbopt.model import ir
 
 @dataclass(frozen=True, slots=True)
 class Model:
-    huge_shift: int
+    huge_shift: int | ir.Mem
 
     def __post_init__(self):
-        if not 0 <= self.huge_shift < 16:
+        if isinstance(self.huge_shift, ir.Mem):
+            if self.huge_shift.width != 1:
+                raise ValueError("huge-pointer selector shift must be a byte")
+        elif not 0 <= self.huge_shift < 16:
             raise ValueError("unsupported huge-pointer selector shift")
 
     def offset(self, pointer, displacement, result, fresh):
@@ -34,7 +37,12 @@ class Model:
         low = binary("and", pointer, ir.Imm(0xffff, 4))
         total = binary("add", low, displacement)
         pages = binary("shr", total, ir.Imm(16, 1))
-        delta = binary("shl", pages, ir.Imm(self.huge_shift, 1))
+        if isinstance(self.huge_shift, ir.Mem):
+            shift = ir.Held(fresh(), 1)
+            parts.append(ir.Semantics(ir.Operation.MOVE, "mov", (shift,), (self.huge_shift,)))
+        else:
+            shift = ir.Imm(self.huge_shift, 1)
+        delta = binary("shl", pages, shift)
         selector = binary("shr", pointer, ir.Imm(16, 1))
         advanced = binary("add", selector, delta)
         high = binary("shl", advanced, ir.Imm(16, 1))

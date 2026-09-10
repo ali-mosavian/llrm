@@ -213,6 +213,14 @@ def _through_lir(
     from qbopt.backend import allocate
     from qbopt.objectfile import objwrite
     from qbopt.backend import frame as frames
+    from qbopt.backend import pointers
+    from qbopt.model import ir
+    from qbopt.objectfile.module import Addr, Space
+
+    pointer_model = None
+    if any(op.kind is mir.Kind.PTR_OFFSET for _, body in bodies for block in body.blocks for op in block.ops):
+        records, index = omf.with_external(records, "b$HugeShift")
+        pointer_model = pointers.Model(ir.Mem(Addr(Space.EXTERNAL, 0, index), 1, disp_width=2))
 
     done = []
     for name, body in bodies:
@@ -225,6 +233,7 @@ def _through_lir(
                 contracts,
                 found.coverage,
                 cpu,
+                pointer_model=pointer_model,
             )
             if watch is not None:
                 watch("lowered", name, low)

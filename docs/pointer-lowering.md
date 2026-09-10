@@ -7,9 +7,11 @@ model. CPU arithmetic tuning does not establish an operating-system ABI.
 
 The runtime source `runtime/rt/gwini.asm` documents `b$HugeShift`: each 64K
 crossing advances the selector by `1 << b$HugeShift`. `nhinit.asm` initializes
-12 for DOS. The backend supports a supplied shift, but the production
-pipeline does **not yet select one automatically**. Calling pointer lowering
-without an established model fails explicitly.
+12 for DOS. All three shipped libraries export `b$HugeShift`; the production
+pipeline adds that external dependency when a body contains PTR_OFFSET and
+loads its initialized byte below MIR. It does not infer the ABI from CPU
+tuning. Direct backend callers can supply an established constant shift;
+calling pointer lowering without a model fails explicitly.
 
 ```text
 MIR:     result = ptr_offset(base, bytes)
@@ -55,6 +57,12 @@ disjoint memory. Other pointer memory operations are explicitly unsupported.
 This is a backend foundation, not a claim that huge-array programs already
 use it. The frontend must accumulate a full-width byte displacement, raise
 the descriptor pointer as a whole value, and use PTR_OFFSET. The production
-pipeline must establish and supply the runtime
-pointer ABI. Actual emitted-code and DOS cross-64K regression cases are then
+pipeline now supplies the runtime pointer ABI. Actual emitted-code and DOS
+cross-64K regression cases are still
 required before removing the existing huge-array refusal.
+
+`fixtures/regressions/huge2.bas` is compiled with `/AH` on QB 4.5, PDS 7.1
+and VBDOS. Its 201-by-201 INTEGER array accesses byte offsets 0, 65534 and
+65536. The original program and a copy with the new external dependency
+both print `123 456 789` followed by `DONE` on all three runtimes. This
+establishes the probe and linker dependency, not native huge-array lowering.
