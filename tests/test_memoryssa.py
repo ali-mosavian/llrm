@@ -118,3 +118,56 @@ def test_read_only_loop_needs_no_memory_phi() -> None:
     graph = memoryssa.built(body)
     assert not graph.phis
     assert graph.at(memoryssa.Site(1, 0)).defining == graph.live.id
+
+
+def test_clobber_skips_a_disjoint_store() -> None:
+    other = mir.MemRef(Addr(Space.SEGMENT, 0x30, 1), 2)
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (
+        operation(0, stores=(CELL,)), operation(1, stores=(other,)),
+        operation(2, loads=(CELL,)),
+    ), ()),))
+    graph = memoryssa.built(body)
+    assert graph.clobbers(memoryssa.Site(0, 2), CELL) == frozenset({graph.at(memoryssa.Site(0, 0)).id})
+
+
+def test_clobber_walks_a_disjoint_loop_backedge() -> None:
+    other = mir.MemRef(Addr(Space.SEGMENT, 0x30, 1), 2)
+    body = mir.MirBody(0, (
+        mir.MirBlock(0, (), (operation(0, stores=(CELL,)),), (1,)),
+        mir.MirBlock(1, (), (operation(1, loads=(CELL,)),), (2,)),
+        mir.MirBlock(2, (), (operation(2, stores=(other,)),), (1,)),
+    ))
+    graph = memoryssa.built(body)
+    assert graph.clobbers(memoryssa.Site(1, 0), CELL) == frozenset({graph.at(memoryssa.Site(0, 0)).id})
+
+
+def test_clobber_keeps_both_aliasing_join_definitions() -> None:
+    body = mir.MirBody(0, (
+        mir.MirBlock(0, (), (), (1, 2)),
+        mir.MirBlock(1, (), (operation(1, stores=(CELL,)),), (3,)),
+        mir.MirBlock(2, (), (operation(2, barrier=True),), (3,)),
+        mir.MirBlock(3, (), (operation(3, loads=(CELL,)),), ()),
+    ))
+    graph = memoryssa.built(body)
+    assert graph.clobbers(memoryssa.Site(3, 0), CELL) == frozenset({
+        graph.at(memoryssa.Site(1, 0)).id, graph.at(memoryssa.Site(2, 0)).id,
+    })
+
+
+def test_clobber_preserves_partial_and_unknown_writes_and_calls() -> None:
+    # A word write at +1 changes one byte of the word being loaded.
+    partial = mir.MemRef(Addr(Space.SEGMENT, 0x21, 1), 2)
+    call = mir.Op(0, ir.Operation.CALL, "", (), (), kind=mir.Kind.CALL)
+    for write in (operation(0, stores=(partial,)), operation(0, stores=(mir.MemRef(None, 2),)), call):
+        body = mir.MirBody(0, (mir.MirBlock(0, (), (write, operation(1, loads=(CELL,))), ()),))
+        graph = memoryssa.built(body)
+        assert graph.clobbers(memoryssa.Site(0, 1), CELL) == frozenset({graph.at(memoryssa.Site(0, 0)).id})
+
+
+def test_disjoint_writes_leave_live_on_entry_as_the_clobber() -> None:
+    other = mir.MemRef(Addr(Space.SEGMENT, 0x30, 1), 2)
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (
+        operation(0, stores=(other,)), operation(1, loads=(CELL,)),
+    ), ()),))
+    graph = memoryssa.built(body)
+    assert graph.clobbers(memoryssa.Site(0, 1), CELL) == frozenset({graph.live.id})

@@ -1,8 +1,8 @@
 """Conservative memory SSA over MIR, rebuilt after a body changes.
 
 Stores, calls and barriers define a single memory state; loads use that state.
-No alias or call-purity assumptions are made here. A later clobber walker
-may skip definitions only with independent alias/mod-ref evidence.
+The clobber walker skips stores proven disjoint by MIR alias analysis.
+Calls and barriers remain conservative until mod/ref facts are supplied.
 """
 
 from dataclasses import dataclass
@@ -42,9 +42,48 @@ class MemorySSA:
     accesses: tuple[Access, ...]
     sites: dict[Site, Access]
     phis: dict[int, Access]
+    operations: dict[Site, mir.Op]
 
     def at(self, site: Site) -> Access:
         return self.sites[site]
+
+    def clobbers(
+        self, site: Site, memory: mir.MemRef, dgroup: frozenset[int] = frozenset(),
+    ) -> frozenset[int]:
+        """Possible nearest writes before a site, including live-on-entry.
+
+        Walk every phi input. A visited set closes cycles without treating
+        the backedge as evidence that memory is unchanged. An empty result
+        means no reachable source was found, not a reusable memory value.
+        This identifies memory states, not a dominating scalar definition;
+        forwarding consumers must establish value availability separately.
+        """
+        accesses = {access.id: access for access in self.accesses}
+        pending = [self.at(site).defining]
+        seen: set[int] = set()
+        found: set[int] = set()
+        while pending:
+            current = pending.pop()
+            if current is None or current in seen:
+                continue
+            seen.add(current)
+            access = accesses[current]
+            match access.kind:
+                case Kind.LIVE:
+                    found.add(current)
+                case Kind.PHI:
+                    pending.extend(value for _, value in access.incoming)
+                case Kind.DEF:
+                    op = self.operations[access.site]
+                    if op.barrier or op.kind is mir.Kind.CALL or any(
+                        mir.overlapping(memory, store, dgroup) for store in op.stores
+                    ):
+                        found.add(current)
+                    else:
+                        pending.append(access.defining)
+                case Kind.USE:
+                    pending.append(access.defining)
+        return frozenset(found)
 
 
 def built(body: mir.MirBody) -> MemorySSA:
@@ -108,4 +147,9 @@ memory versions. Entry blocks with backedges retain an invocation input.
         for site, access in sites.items()
     }
     accesses = tuple(sorted((live, *phis.values(), *sites.values()), key=lambda access: access.id))
-    return MemorySSA(live, accesses, sites, phis)
+    operations = {
+        Site(block.at, index): op
+        for block in body.blocks for index, op in enumerate(block.ops)
+        if Site(block.at, index) in sites
+    }
+    return MemorySSA(live, accesses, sites, phis, operations)

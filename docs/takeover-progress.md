@@ -4149,3 +4149,16 @@ calls without named cells, entry backedges and read-only loops. The missing
 call dependency was observed failing before correction. Assembly before/after:
 unchanged, because this increment adds an analysis with no pipeline consumer
 and makes no transformation or emission change.
+
+### MemorySSA clobber queries
+
+The graph can now find the nearest possible writes to a queried memory cell,
+walking every phi input and terminating on cyclic backedges. MIR alias facts
+allow unrelated stores to be skipped. Partial overlaps, unknown writes, calls
+and barriers remain clobbers; joins retain all possible definitions. A result
+identifies memory state only: a forwarding pass must also prove scalar
+availability and dominance. Precise call mod/ref remains pending.
+
+Twelve focused graph/query tests cover these cases; the three initial query
+tests failed before implementation. No pass consumes this analysis yet, so
+before/after emitted assembly remains unchanged.
