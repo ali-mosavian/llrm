@@ -1,5 +1,24 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: exclude unreachable edges from loop analysis
+
+Dominators previously intersected unreachable predecessors into live joins;
+a dead edge erased real dominance, while disconnected cycles retained all
+blocks as dominators. Loop discovery could miss a live loop or invent dead
+ones, and dominance frontiers invented phi sites. No runtime miscompile was
+demonstrated from this defect.
+
+Dominance now starts from entry reachability. Natural-loop reverse walks,
+irreducibility and dominance frontiers use only reachable edges, while
+unreachable blocks retain empty analysis results. No machine-specific fact
+was added to MIR analysis.
+
+Four regressions failed against the original analysis. Fourteen focused CFG
+checks and 59 LCSSA/loop-motion/GVN consumer checks pass. All stage files for
+PDS RNGARM compare identically before/after, including the 1060-byte emitted
+object listing: this fixes analysis correctness, not a claimed speedup.
+Stage evidence: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-dominance-stages-vzhl0hoj`.
+
 ## 2026-09-10: register CMPORD's complete reference
 
 The source's four LONG pairs are all strictly ascending. Each yields the

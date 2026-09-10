@@ -79,6 +79,37 @@ def test_an_unreachable_block_dominates_nothing() -> None:
     assert loops.dominators(chain)[9] == frozenset()
 
 
+def test_dead_predecessor_does_not_erase_live_dominance() -> None:
+    """A dead branch into a live join erased its entry dominator; no runtime miscompile observed."""
+    chain = [block(0, (1,)), block(1, (2,)), block(2, ()), block(9, (2,))]
+    assert loops.dominators(chain) == {
+        0: frozenset({0}), 1: frozenset({0, 1}),
+        2: frozenset({0, 1, 2}), 9: frozenset(),
+    }
+
+
+def test_dead_predecessor_has_no_dominance_frontier() -> None:
+    """A dead edge into a live join invented a frontier and unnecessary phi sites."""
+    chain = [block(0, (1,)), block(1, (2,)), block(2, ()), block(9, (2,))]
+    assert loops.frontiers(chain) == dict.fromkeys((0, 1, 2, 9), frozenset())
+
+
+def test_disconnected_cycle_has_no_dominators_or_natural_loops() -> None:
+    """An unreachable cycle retained every block as a dominator and invented natural loops."""
+    chain = [block(0, (1,)), block(1, ()), block(8, (9,)), block(9, (8,))]
+    assert loops.dominators(chain)[8] == frozenset()
+    assert loops.dominators(chain)[9] == frozenset()
+    assert loops.loops(chain) == []
+    assert loops.irreducible(chain) == frozenset()
+
+
+def test_dead_edge_into_latch_is_not_part_of_live_loop() -> None:
+    """A dead edge hid a live loop; its dead source must not enter the recovered body."""
+    chain = [block(0, (1,)), block(1, (2, 3)), block(2, (1,)),
+             block(3, ()), block(9, (2,))]
+    assert loops.loops(chain) == [loops.Loop(1, frozenset({2}), frozenset({1, 2}))]
+
+
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
 def test_every_fixture_is_reducible(obj: Path) -> None:
     """Measured across the corpus: BC never emits an irreducible graph.

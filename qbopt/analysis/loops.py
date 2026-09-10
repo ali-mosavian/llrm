@@ -98,27 +98,33 @@ def dominators(blocks: Sequence[Node], entry: int | None = None) -> dict[int, fr
     if not blocks:
         return {}
     start = entry if entry is not None else blocks[0].at
-    every = frozenset(block.at for block in blocks)
-    preds = predecessors(blocks)
+    indexed = {block.at: block for block in blocks}
+    reachable: set[int] = set()
+    pending = [start]
+    while pending:
+        at = pending.pop()
+        if at not in indexed or at in reachable:
+            continue
+        reachable.add(at)
+        pending.extend(indexed[at].succ)
+    every = frozenset(reachable)
+    preds = predecessors([block for block in blocks if block.at in reachable])
 
-    doms = {block.at: every for block in blocks}
-    doms[start] = frozenset({start})
+    doms = {block.at: every if block.at in reachable else frozenset() for block in blocks}
+    if start in indexed:
+        doms[start] = frozenset({start})
 
     changing = True
     while changing:
         changing = False
         for block in blocks:
-            if block.at == start:
+            if block.at == start or block.at not in reachable:
                 continue
             reaching = [doms[one] for one in preds[block.at] if one in doms]
             now = (frozenset.intersection(*reaching) if reaching else frozenset()) | {block.at}
             if now != doms[block.at]:
                 doms[block.at] = now
                 changing = True
-    # a block no path reaches dominates nothing, itself included
-    for block in blocks:
-        if block.at != start and not preds[block.at]:
-            doms[block.at] = frozenset()
     return doms
 
 
@@ -181,7 +187,7 @@ def loops(blocks: Sequence[Node], entry: int | None = None) -> list[Loop]:
     theirs -- see Loop's own note on why they are not several.
     """
     doms = dominators(blocks, entry)
-    preds = predecessors(blocks)
+    preds = predecessors([block for block in blocks if doms[block.at]])
 
     latches: dict[int, set[int]] = {}
     bodies: dict[int, set[int]] = {}
@@ -215,9 +221,12 @@ def irreducible(blocks: Sequence[Node], entry: int | None = None) -> frozenset[i
     object's own control flow is, and this pass does not do that anywhere.
     """
     doms = dominators(blocks, entry)
-    known = {block.at for block in blocks}
+    known = {block.at for block in blocks if doms[block.at]}
     cut = set(back_edges(blocks, doms))
-    forward = {block.at: [s for s in block.succ if s in known and (block.at, s) not in cut] for block in blocks}
+    forward = {
+        block.at: [s for s in block.succ if s in known and (block.at, s) not in cut]
+        for block in blocks if block.at in known
+    }
 
     # three-colour DFS: grey is the current stack, so an edge into it closes
     # a cycle that survived the cut
@@ -291,10 +300,12 @@ def frontiers(blocks: Sequence[Node], entry: int | None = None) -> dict[int, fro
     join's predecessors to its immediate dominator, so a block with one
     predecessor can never be on anyone's frontier.
     """
-    idom = immediate_dominators(blocks, entry)
-    preds = predecessors(blocks)
+    doms = dominators(blocks, entry)
+    live = [block for block in blocks if doms[block.at]]
+    idom = immediate_dominators(live, entry)
+    preds = predecessors(live)
     found: dict[int, set[int]] = {block.at: set() for block in blocks}
-    for block in blocks:
+    for block in live:
         if len(preds[block.at]) < 2:
             continue
         for one in preds[block.at]:
