@@ -188,10 +188,11 @@ def constructed(body: MirBody, variables: frozenset[int]) -> MirBody:
         for block in repaired.blocks
         if block.at in probes
     }
+    repaired_by_at = {block.at: block for block in repaired.blocks}
     return replace(
         body,
         blocks=tuple(
-            replace(
+            block if fixed is None else replace(
                 block,
                 phis=tuple(
                     replace(
@@ -207,7 +208,8 @@ def constructed(body: MirBody, variables: frozenset[int]) -> MirBody:
                     merge(op, changed) for op, changed in zip(block.ops, fixed.ops[: len(block.ops)], strict=True)
                 ),
             )
-            for block, fixed in zip(body.blocks, repaired.blocks, strict=True)
+            for block in body.blocks
+            for fixed in (repaired_by_at.get(block.at),)
         ),
     )
 
