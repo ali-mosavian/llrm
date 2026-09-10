@@ -119,3 +119,24 @@ Object sizes: QB 1089 → 1090, PDS 1116 → 1117, VBDOS 1253 → 1257.
 All three linked programs still print 28 and DONE. Unknown calls and
 overlapping frame writes invalidate reuse; disjoint field writes do not.
 This is scalar frame-field promotion, not a completed SROA implementation.
+
+Exposing sign extension before LONG-pair recognition removes the remaining
+half-word arithmetic. PDS's next before/after, omitting loop control:
+
+```asm
+; before                      ; after
+movsx edi,bx                  movsx edx,cx
+push edi                      add edx,eax
+pop di                        mov eax,edx
+pop di
+add dx,bx
+adc di,cx
+mov cx,di
+```
+
+MIR now receives one LONG addition and one LONG store. The existing allocator
+and frame promotion can keep the whole accumulator instead of its halves.
+Modeled costs fall again: QB/PDS **584 → 380**, VBDOS **580 → 368**.
+Object sizes: QB 1090 → 1087, PDS 1117 → 1114, VBDOS 1257 → 1249.
+All three linked outputs remain 28 and DONE. The raise-time regression was
+observed failing on all three objects before moving sign-fill recognition.

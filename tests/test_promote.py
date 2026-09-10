@@ -14,14 +14,15 @@ from qbopt import wholeseg
 
 
 def test_procedure_frame_fields_reuse_stored_values():
-    """LOCALP reread the frame accumulator words on every addition despite known stores."""
+    """LOCALP reread its frame accumulator on every addition despite known stores."""
     from qbopt.objectfile.module import Space
     path = Path("fixtures/regressions/localp-p-g2.obj")
     found = module.of(omf.parse(path.read_bytes()))
     body = next(body for name, body in mir.bodies(found, blocks.partition(found, blocks.code_map(found)))
                 if body.entry != 0x30)
     before = next(op for block in body.blocks for op in block.ops
-                  if op.kind is mir.Kind.ADD and op.loads and op.loads[0].addr.space is Space.FRAME)
+                  if op.kind is mir.Kind.LOAD and op.loads and op.loads[0].width == 4
+                  and op.loads[0].addr.space is Space.FRAME)
     result = promote.promoted(body, found.dgroup, module.landmarks(found), loop_only=True)
     after = next(op for block in result.blocks for op in block.ops if op.id == before.id)
     assert not after.loads

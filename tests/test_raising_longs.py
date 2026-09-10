@@ -218,3 +218,14 @@ def test_same_machine_address_with_different_ssa_base_is_not_a_pair(nbody):
     done = recognize(body)
     load = next(op for block in done.blocks for op in block.ops if op.at == 0x11d)
     assert load.results[0].width == 2
+@pytest.mark.parametrize("tag", ["q-O", "p-g2", "v-g3"])
+def test_localp_signed_index_addition_is_a_whole_long(tag):
+    """LOCALP kept ADD/ADC halves because sign extension was exposed after pair recognition."""
+    from qbopt.objectfile import module, omf
+    from qbopt.frontend import blocks
+    found = module.of(omf.parse(Path(f"fixtures/regressions/localp-{tag}.obj").read_bytes()))
+    bodies = mir.bodies(found, blocks.partition(found, blocks.code_map(found)))
+    ops = [op for _, body in bodies for block in body.blocks for op in block.ops]
+    assert any(op.kind is mir.Kind.ADD and len(op.results) == 1
+               and isinstance(op.results[0], mir.Held) and op.results[0].width == 4 for op in ops)
+    assert not any(op.kind is mir.Kind.ADD_CARRY for op in ops)

@@ -586,6 +586,10 @@ one documented target without materially regressing another.
   LOCALP retains its two accumulator words across iterations, letting existing
   store sinking move their writes to the exit. QB/PDS modeled cost falls
   772 → 584; VBDOS 764 → 580. General aggregate decomposition remains open.
+  A subsequent raise-order fix exposes sign extension before recognizing LONG
+  pairs. LOCALP's signed INTEGER addition now enters MIR as one LONG addition
+  and store, and promotion keeps the whole accumulator. Costs fall further to
+  QB/PDS 380 and VBDOS 368; no machine-pair recognition was added to a pass.
 - [ ] Implement global value numbering with partial redundancy elimination
   (`GVN-PRE`) for scalar and memory expressions.
   Scalar full redundancy at joins is implemented: when every incoming edge
