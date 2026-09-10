@@ -3570,3 +3570,17 @@ were re-costed under identical canonical filenames in separate directories;
 the table uses those results. Do not reuse the earlier 312 figure.
 Some objects grow a few bytes because immediate stores use longer encodings;
 the gain is fewer executed register moves, not uniformly smaller objects.
+## 2026-09-10: benchmark identity survives output-file renaming
+
+The ARRIDX naming error from the previous round is now prevented by the
+instrument. Both loop weighting and target selection use the OMF THEADR
+source name, normalized for DOS paths. The fixture filename convention is
+only a fallback for headerless objects or report-only names.
+
+Before, identical optimized bytes named ARRIDXQ.OBJ cost 312 while those
+named arridx-p-g2.obj cost 502. After, both cost 502 and select ARRIDX's
+target. A misleading HOTLOP filename also cannot select HOTLOP's denominator.
+These three real-object cases failed first. Eleven focused identity,
+provisional/missing-target and event checks pass; the larger scoreboard
+run has only its known stale NOTS 1.43x expectation (current code is 1.31x).
+No compiler output changed, and no runtime rerun was needed.

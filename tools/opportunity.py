@@ -38,14 +38,23 @@ from qbopt.frontend import blocks as split
 from qbopt.frontend.blocks import code_map
 
 
-def _program(path: Path) -> str:
-    """The program's own name, out of a fixture's `name-config` stem.
+def _program(path: Path, records=None) -> str:
+    """Use the object's source identity, independent of output-file naming.
 
-    `TARGETS` and `TRIPS` are per program and the corpus names an object
-    after the configuration that built it, so keying on the stem missed
-    every one of them -- silently, reporting no target and weighting a loop
-    at ten per level.
+    Headerless objects and report-only names retain the fixture convention.
+    DOS source paths are normalized without depending on the host platform.
     """
+    if records is None and path.is_file():
+        records = omf.parse(path.read_bytes())
+    for record in records or ():
+        if record.type != omf.THEADR or not record.body:
+            continue
+        length = record.body[0]
+        if length and len(record.body) >= length + 1:
+            source = record.body[1:length + 1].decode("latin-1").replace("\\", "/")
+            name = Path(source).stem
+            if name:
+                return name.upper()
     return path.stem.split("-")[0].upper()
 
 
@@ -439,7 +448,7 @@ def counted(paths: list[Path], raw: bool = False) -> Counter:
 
             _invariant(body, module_, found)
             _registers(body, module_, found)
-            _cost(body, module_, found, TRIPS.get(_program(path), 10))
+            _cost(body, module_, found, TRIPS.get(_program(path, module_.records), 10))
             _reloads(body, module_, found)
 
             for at in sorted(blocks):

@@ -21,6 +21,30 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 import opportunity
 
 
+@pytest.mark.parametrize("filename", ["ARRIDXQ.OBJ", "hotlop-p-g2.obj", "renamed.obj"])
+def test_object_identity_not_temporary_filename_selects_weight_and_target(filename, tmp_path, capsys):
+    """ARRIDX falsely fell from 504 to 312 when its temporary name selected ten rather than twenty trips."""
+    original = Path("fixtures/omf/arridx-p-g2.obj")
+    renamed = tmp_path / filename
+    renamed.write_bytes(original.read_bytes())
+    before = opportunity.counted([original], raw=True)
+    after = opportunity.counted([renamed], raw=True)
+    assert after == before
+    assert opportunity._program(renamed) == "ARRIDX"
+    opportunity.against_targets([renamed], raw=True)
+    report = capsys.readouterr().out
+    assert "NO TARGET" not in report
+    assert str(opportunity.TARGETS["ARRIDX"]) in report
+
+
+def test_program_identity_accepts_dos_source_paths_and_retains_headerless_fallback():
+    from qbopt.objectfile import omf
+    source = b"C:\\BUILD\\ArrIdx.BAS"
+    header = omf.Record(omf.THEADR, bytes([len(source)]) + source)
+    assert opportunity._program(Path("renamed.obj"), [header]) == "ARRIDX"
+    assert opportunity._program(Path("arridx-p-g2.obj"), []) == "ARRIDX"
+
+
 def test_cost_does_not_count_synthetic_raising_operations():
     """NOTS acquired extra cost from MIR extracts even though its emitted bytes were unchanged."""
     from collections import Counter
