@@ -492,6 +492,16 @@ common/view/d_turb rewritten, exec session 81371, debug port 2198. Its
 copied benchmark outputs were renamed before launch. Runtime validation
 is pending; retain the original hung guest on port 2197 as evidence.
 
+### Three-module runtime check passed
+
+The rebuilt guest returned to the DOS prompt and wrote fresh BENCH files
+at 23:33. common/view/d_turb completed 60 ticks: 13 frames, 266 polygons,
+820 triangles, with matching entity records. The BMP is byte-identical to
+baseline (SHA1 `d6e4096b3610249ff4d53b6829f1ab18ec108c7a`). Timing and
+memory telemetry differ; no performance improvement is claimed. This
+clears the observed FindFrame hang for this scene, not every renderer
+path or the other eighteen BASIC modules.
+
 ### Two-module runtime check
 
 Relinking with rewritten `view` and `d_turb` succeeded. The isolated build in
