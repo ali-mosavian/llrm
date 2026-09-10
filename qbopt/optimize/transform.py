@@ -45,6 +45,7 @@ from qbopt.optimize import promote
 from qbopt.optimize import strength
 from qbopt.optimize import algebraic
 from qbopt.optimize import loopmotion
+from qbopt.optimize import unroll
 from qbopt.model.mir import MirBody
 from qbopt.objectfile.module import Space
 from qbopt.model.passes import Where
@@ -2404,6 +2405,7 @@ def pipeline(where: Where, **wanted) -> list[MIRTransform]:
         Algebraic(),
         Dead(),
         Place(where),
+        unroll.Unroll(where),
     ]
     return [one for one in every if wanted.get(one.name, True)]
 
@@ -2437,6 +2439,7 @@ def applied(
     drop_stores: bool = True,
     promote_: bool = True,
     strength_: bool = True,
+    unroll_: bool = True,
     only: str | None = None,
     watch=None,
 ) -> MirBody:
@@ -2471,6 +2474,7 @@ def applied(
         # loops. Shift-only and outer-loop formulas need pressure costing.
         "promote": promote_,
         "strength": strength_,
+        "unroll": unroll_,
     }
     where = Where(
         dgroup=dgroup,

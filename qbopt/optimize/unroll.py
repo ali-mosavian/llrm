@@ -1,4 +1,4 @@
-"""Experimental bounded unrolling; not enabled by default pending profitability.
+"""Bounded full unrolling of small constant-trip floating loops.
 
 The MIR sequence is expanded in execution order. Reusing input provenance
 does not give the emitter permission to sort it or discard cloned relocations.
@@ -8,6 +8,17 @@ from dataclasses import replace
 
 from qbopt.analysis import consts, induction, loops, ssa
 from qbopt.model import mir
+from qbopt.model.passes import MIRTransform, Where
+
+
+class Unroll(MIRTransform):
+    name = "unroll"
+
+    def __init__(self, where: Where):
+        self.where = where
+
+    def transform(self, body):
+        return expanded(body, self.where.dgroup, self.where.calls)
 
 
 def expanded(body: mir.MirBody, dgroup: frozenset[int], calls: dict) -> mir.MirBody:

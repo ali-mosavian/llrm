@@ -15,8 +15,19 @@ def body():
     path = Path("fixtures/omf/fpdeep-p-g2.obj")
     found = corpus.loaded(path)
     original = mir.bodies(found, corpus.partitioned(path))[0][1]
-    optimized = transform.applied(original, found.dgroup, found.calls, found=found)
+    optimized = transform.applied(original, found.dgroup, found.calls, found=found, unroll_=False)
     return found, optimized
+
+
+def test_normal_pipeline_expands_and_folds_fpdeep_to_a_fixed_point():
+    """FPDEEP's improvements previously required an out-of-band unroll wrapper."""
+    found, original = body()
+    changed = transform.applied(original, found.dgroup, found.calls, found=found)
+    assert changed.repetitions == ((0x66, 3),)
+    assert not loops.loops(changed.blocks, changed.entry)
+    assert sum(bool(op.floating) for block in changed.blocks for op in block.ops) == 20
+    assert transform.applied(changed, found.dgroup, found.calls, found=found) == changed
+    assert not transform.applied(original, found.dgroup, found.calls, found=found, unroll_=False).repetitions
 
 
 def test_fpdeep_unroll_preserves_order_and_fresh_definitions():

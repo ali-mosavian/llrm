@@ -1,6 +1,30 @@
-# Bounded unrolling: integrated emission, default still off
+# Bounded unrolling in the fixed-point pipeline
 
 ## Current state
+
+Bounded unrolling now runs after placement in the normal MIR pipeline.
+The next fixed-point iteration folds the exposed computations; callers can
+disable expansion with `unroll_=False`. The existing two-to-four-trip and
+256-operation bounds remain. No CPU timing or register decisions enter MIR.
+
+The normal pipeline passes all 33 FPDEEP output checks across PDS, QB and
+VBDOS, with no experimental wrapper. The 26 focused unrolling and exact-store
+tests pass; disabling the pass makes the pipeline regression fail. Reapplying
+the pipeline leaves the resulting body unchanged.
+
+A one-off differential emission check over all 487 fixture objects took
+61 seconds: only 12 FPDEEP variants changed bytes, all retaining LIR emission.
+No emission outcome changed. This is a byte/outcome comparison, not 487
+runtime executions.
+
+PDS FPDEEP's object changes from 1497 to 1925 bytes. This trades code size
+for removal of repeated arithmetic, not a claim of smaller code. The first
+square changes from `fld; fmul; fstp` to `mov dword [scratch],43100000h`
+(144), preserving floating exception checkpoints. Runtime output artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-default-unroll-8vopmthi`.
+Every pass and emitted assembly, before and after:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-pipeline-unroll-stages-jhhx_l1m`.
+These checks do not provide elapsed-time measurements.
 
 Subsequent exact-store folding reduces expanded FPDEEP to roughly 2.0x
 target (PDS 2166, QB 2201, VBDOS 2162). The earlier comparison below records
@@ -30,15 +54,15 @@ iterations gives the following static estimates, **not runtime timings**:
 | QB | 4372 | 4209 | 1086 |
 | VBDOS | 4168 | 4045 | 1086 |
 
-The reduction is only about 3–4%, while PDS's object grows from 1497 to
-2176 bytes. Expansion therefore remains off by default: the next gain must
+The reduction was only about 3–4%, while PDS's object grew from 1497 to
+2176 bytes. Expansion therefore remained off at that point: the next gain had to
 come from eliminating the now-known computations, not from merely copying
 them. Exact facts and argument propagation are implemented; see
 [constant-index.md](constant-index.md).
 
 ## Earlier prototype history
 
-`optimize/unroll.py` is deliberately **not in the pipeline**. It expands
+The original `optimize/unroll.py` prototype was **not in the pipeline**. It expands
 small, proven constant-trip straight-line floating loops, preserving each
 call and floating operation in iteration order. FPDEEP has three iterations
 and prints three records per iteration; numeric loop deletion is not a
