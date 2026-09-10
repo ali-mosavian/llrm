@@ -244,6 +244,23 @@ interface tests pass. Stage dumps in `/tmp/qbopt-common-next` and
 008a  call far B$EXTS   ; next missing interface
 ```
 
+### Statement-exit interface
+
+VBDOS `B$EXTS` at `rtenexit.asm` 012e..0149 has no dependencies or stack
+adjustments. Its initial CMP replaces incoming arithmetic flags; two
+branches and the global/frame-state clearing path join RETF. The audited
+interface records zero argument cleanup, keeping conservative GP inputs
+and unknown side effects. The new regression failed first; 15 focused
+entry-interface tests pass. `/tmp/qbopt-common-exts-fixed` now stops at
+FMID (00ca), not EXTS (008a). The whole object is still refused unchanged:
+
+```asm
+; before                         ; after (same bytes, no fallback success)
+008a  call far B$EXTS             008a  call far B$EXTS
+; ...                            ; ...
+00ca  call far B$FMID             00ca  call far B$FMID
+```
+
 ### Two-module runtime check
 
 Relinking with rewritten `view` and `d_turb` succeeded. The isolated build in

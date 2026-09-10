@@ -89,6 +89,21 @@ def test_vbdos_output_channel_keeps_unknown_effects():
     assert contract.raises_error
 
 
+def test_vbdos_statement_exit_has_stack_neutral_interface():
+    """Qrender COM_TOKENIZE refused B$EXTS at 008a after its string-length call."""
+    contract = runtime.per_call({0: "B$EXTS"}, "vbdos")[0]
+    assert contract.inputs == frozenset(
+        {runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX,
+         runtime.Reg.DX, runtime.Reg.SI, runtime.Reg.DI}
+    )
+    assert contract.cleanup == 0
+    assert contract.clobbers == runtime.EVERY
+    assert contract.reads is runtime.Memory.ANY
+    assert contract.writes is runtime.Memory.ANY
+    assert contract.control is runtime.Control.UNKNOWN
+    assert contract.raises_error
+
+
 @pytest.mark.parametrize("name,cleanup", [
     ("B$PCR4", 4), ("B$PSR4", 4),
     ("B$PCR8", 8), ("B$PSR8", 8), ("B$PER8", 8),
