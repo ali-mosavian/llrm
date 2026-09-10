@@ -4191,3 +4191,14 @@ mov bx,dx
 A broader transform check encountered the existing LNGMIX hoist assertion
 `the fixture must actually move invariant work`; the exact test also fails
 with the MemorySSA consumer disabled. Its investigation remains pending.
+
+### Restore the hoist regression's active input
+
+LNGMIX's divide/remainder already fold to 14285 and 5 before LICM; its only
+hoist candidates are empty operations. The test therefore failed its setup
+assertion, not phi preservation. It now uses HARR's descriptor work, which
+actually moves, while retaining the cross-variable phi and movement assertions.
+Injecting the original defect (reconstructing SSA after hoisting) fails with
+`hoisting discarded the existing accumulator phi`; production code passes.
+LNGMIX stage evidence: `/tmp/qbopt-lngmix-hoist`. This changes a test fixture
+only; production assembly before/after is unchanged.

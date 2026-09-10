@@ -87,10 +87,14 @@ def test_hoisted_variables_do_not_collide_with_promoted_cells() -> None:
 
 
 def test_hoisting_preserves_cross_variable_accumulator_edges() -> None:
-    """LNGMIX's constant-divide experiment lost its accumulator phi and folded it to zero."""
+    """LNGMIX once lost its accumulator phi and folded it to zero.
+
+    Its divide now folds before LICM. HARR still hoists descriptor work,
+    exercising the same cross-variable phi preservation after real movement.
+    """
     from qbopt.abi import runtime
 
-    path = Path("fixtures/omf/lngmix-p-g2.obj")
+    path = Path("fixtures/omf/harr-p-g2.obj")
     found = corpus.loaded(path)
     partition = corpus.partitioned(path)
     body = mir.bodies(found, partition, runtime.for_module(found))[0][1]
