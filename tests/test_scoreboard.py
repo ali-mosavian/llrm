@@ -56,6 +56,31 @@ def test_instruction_cost_does_not_require_mir_recognition(monkeypatch):
     assert measured["code blocks unavailable to MIR opportunity analysis"] > 0
 
 
+@pytest.mark.parametrize("proven", [True, False])
+def test_nbody_output_loop_is_outside_the_completed_simulation(tmp_path, proven):
+    """NBODY's output was priced at 100 trips because CEND fell into appended phi edges."""
+    from qbopt import wholeseg
+    from qbopt.frontend import blocks
+    from qbopt.analysis import loops
+    from qbopt.abi import runtime
+    from dataclasses import replace
+    source = Path("fixtures/bench/nbody-v-g3.obj")
+    path = tmp_path / source.name
+    path.write_bytes(wholeseg.emitted(source.read_bytes()).data)
+    module = opportunity._measured(path, True)
+    decoded = opportunity.ir.decode_module(module)[0].body
+    physical = blocks.partition(module, blocks.code_map(module))
+    mine = [block for block in physical if any(lo <= block.at < hi for lo, hi in decoded.ranges)]
+    contracts = runtime.for_module(module)
+    if not proven:
+        contracts = {at: replace(contract, control=runtime.Control.UNKNOWN)
+                     for at, contract in contracts.items()}
+    execution = opportunity._execution_blocks(mine, decoded.seed, contracts)
+    output = next(block for block in execution
+                  if any(module.calls.get(insn.at) == "B$STI2" for insn in block.insns))
+    assert loops.depth(execution, decoded.seed)[output.at] == (1 if proven else 2)
+
+
 @pytest.mark.parametrize("duplicate", [False, True])
 def test_cost_refuses_incomplete_or_overlapping_body_partitions(monkeypatch, duplicate):
     """NBODY's omitted main exposed that partial body coverage was accepted as a full score."""

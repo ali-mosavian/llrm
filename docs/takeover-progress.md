@@ -3668,3 +3668,28 @@ recognition, incomplete decoded coverage, and duplicate decoded coverage.
 The initial scoreboard run passed 43 tests with only its previously known
 NOTS exact-string failure (expects 1.43x, current result 1.31x). No compiler
 output changes in this measurement commit; runtime evidence is unchanged.
+
+## Remove false post-termination edges from execution costing
+
+The decoded inventory deliberately includes bytes after calls, but that is
+not an execution graph. In optimized NBODY, CEND's nominal fallthrough
+reached CENP and then allocator-appended phi edges. This both put the final
+output loop inside the simulation and introduced a false second entrance
+to its inner loops. The earlier full-inventory numbers therefore still
+had incorrect loop weights.
+
+Costing now trims each block at its first established non-returning call,
+then follows only reachable normal successors from that procedure's entry.
+All decoded bytes still undergo the complete/nonoverlapping inventory
+check. Call effects stay unchanged: CENP may enter user error handling and
+has ANY memory effects; NEVER only removes its normal return edge.
+
+This **supersedes the 92310 -> 83642 estimate above**. For the same two
+objects, the corrected model is **403607 -> 367327 (9.0% lower)**. BC's
+original scores 1206841. These remain default-ten-trip weighted estimates,
+not hardware timings or a valid optimal-reference ratio for NBODY.
+
+The real-fixture output-loop regression failed first with depth two rather
+than one. The unknown-control variant retains depth two, proving no return
+behavior is inferred without a contract. Twelve focused cost/coverage
+checks pass. Emitted bytes and runtime outputs are unchanged.

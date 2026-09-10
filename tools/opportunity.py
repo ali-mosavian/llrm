@@ -22,6 +22,7 @@ import sys
 import argparse
 from pathlib import Path
 from collections import Counter
+from dataclasses import replace
 
 import iced_x86
 
@@ -36,6 +37,7 @@ from qbopt.objectfile.module import Space
 from qbopt.analysis import loops as loopy
 from qbopt.frontend import blocks as split
 from qbopt.frontend.blocks import code_map
+from qbopt.abi import runtime
 
 
 def _program(path: Path, records=None) -> str:
@@ -300,7 +302,28 @@ def _cost(body, module_, found: Counter, trips: int = 10) -> None:
     _weighted_cost([physical[block.at] for block in body.blocks], body.entry, module_, found, trips)
 
 
+def _execution_blocks(blocks, entry, contracts):
+    trimmed = {}
+    for block in blocks:
+        for index, insn in enumerate(block.insns):
+            contract = contracts.get(insn.at)
+            if contract is not None and contract.established and contract.control is runtime.Control.NEVER:
+                block = replace(block, insns=block.insns[:index + 1], end=insn.end,
+                                ends=split.Ends.LEAVES, succ=())
+                break
+        trimmed[block.at] = block
+    reached, pending = set(), [entry]
+    while pending:
+        at = pending.pop()
+        if at in reached or at not in trimmed:
+            continue
+        reached.add(at)
+        pending.extend(trimmed[at].succ)
+    return [block for at, block in trimmed.items() if at in reached]
+
+
 def _weighted_cost(blocks, entry, module_, found: Counter, trips: int) -> None:
+    blocks = _execution_blocks(blocks, entry, runtime.for_module(module_))
     depth = loopy.depth(blocks, entry)
     formatter = iced_x86.Formatter(iced_x86.FormatterSyntax.NASM)
     for block in blocks:
