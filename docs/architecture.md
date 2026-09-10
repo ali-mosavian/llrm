@@ -570,7 +570,10 @@ one documented target without materially regressing another.
   phis are translated separately on each incoming edge. Missing scalar
   providers can be inserted on dedicated unconditional edges after CSE
   stabilizes. MemorySSA-backed value phis also eliminate whole scalar loads
-  already supplied on every incoming path by loads or stores. Missing-path
+  already supplied on every incoming path by loads or stores.
+  Whole-pointer phis are translated per incoming edge for provider matching;
+  clobber checks retain the original address inside the join and use the
+  translated address on the incoming path. Missing-path
   load insertion, critical-edge splitting, target profitability and strict
   floating reuse remain open.
 - [ ] Replace the separate load/store cleanup rules with MemorySSA-based load

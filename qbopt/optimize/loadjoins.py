@@ -7,6 +7,16 @@ from qbopt.model import mir
 from qbopt.objectfile.module import Space
 
 
+def _on_edge(ref, phis, predecessor):
+    if not ref.pointer:
+        return ref
+    for phi in phis:
+        if phi.result == ref.base:
+            value = phi.incoming.get(predecessor)
+            return replace(ref, base=value) if value is not None else None
+    return ref
+
+
 def _value(op):
     if op.barrier or op.floating is not None or op.stack is not None or op.merges:
         return None
@@ -47,12 +57,15 @@ def reused(body: mir.MirBody, dgroup: frozenset[int] = frozenset()) -> mir.MirBo
                 ref, result = loaded
                 site = memoryssa.Site(block.at, index)
                 for parent in sorted(parents):
+                    translated = _on_edge(ref, block.phis, parent)
+                    if translated is None:
+                        break
                     candidates = [(source, value) for source, (cell, value) in providers
                                   if source.block != block.at and source.block in dominators[parent]
                                   and block.at not in dominators[source.block]
-                                  and value.width == result.width and graph.pointers.same_bytes(cell, ref)
+                                  and value.width == result.width and graph.pointers.same_bytes(cell, translated)
                                   and all(source.block not in loop.body or block.at in loop.body for loop in natural_loops)
-                                  and graph.available_on_edge(source, site, parent, ref, dgroup)]
+                                  and graph.available_on_edge(source, site, parent, ref, dgroup, edge_memory=translated)]
                     if not candidates:
                         break
                     _, value = max(candidates, key=lambda item: (len(dominators[item[0].block]), item[0].index))

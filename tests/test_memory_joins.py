@@ -25,6 +25,63 @@ def diamond():
                            mir.MirBlock(30, (), (read,), ())))
 
 
+def pointer_diamond():
+    body = diamond()
+    left, right, joined = (mir.Value(index, at) for index, at in [(5, 10), (6, 20), (7, 30)])
+    blocks = []
+    for block, pointer in zip(body.blocks[1:3], (left, right)):
+        write = block.ops[-1]
+        ref = replace(write.stores[0], base=pointer)
+        blocks.append(replace(block, ops=(*block.ops[:-1], replace(write, stores=(ref,), results=(mir.Cell(ref),)))))
+    join = body.blocks[-1]
+    read = join.ops[0]
+    ref = replace(read.loads[0], base=joined)
+    join = replace(join, phis=(mir.Phi(joined, {10: left, 20: right}),),
+                   ops=(replace(read, loads=(ref,), args=(mir.Cell(ref),)),))
+    return replace(body, blocks=(body.blocks[0], *blocks, join))
+
+
+def test_pointer_phi_selects_the_matching_store_on_each_edge():
+    """ARRPHI still reloaded both elements after sharing their addresses across branches."""
+    after = loadjoins.reused(pointer_diamond())
+    assert not after.blocks[-1].ops[-1].loads
+
+
+def test_crossed_pointer_phi_does_not_reuse_the_other_branches_store():
+    body = pointer_diamond()
+    join = body.blocks[-1]
+    phi = join.phis[0]
+    join = replace(join, phis=(replace(phi, incoming={10: phi.incoming[20], 20: phi.incoming[10]}),))
+    body = replace(body, blocks=(*body.blocks[:-1], join))
+    assert loadjoins.reused(body) == body
+
+
+def test_join_prefix_write_through_the_pointer_phi_blocks_reuse():
+    body = pointer_diamond()
+    join = body.blocks[-1]
+    cell = join.ops[0].loads[0]
+    write = mir.Op(30, ir.Operation.MOVE, "", (), (cell.base,), kind=mir.Kind.STORE,
+                   args=(mir.Const(99, 4),), results=(mir.Cell(cell),), stores=(cell,))
+    body = replace(body, blocks=(*body.blocks[:-1], replace(join, ops=(write, *join.ops))))
+    assert loadjoins.reused(body) == body
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_arrphi_keeps_the_stored_element_value_across_each_join(tag):
+    """ARRPHI's 10,9 result reused addresses but unnecessarily reread both stored values."""
+    from pathlib import Path
+    from qbopt import wholeseg
+    states = []
+    def watch(stage, name, state):
+        if stage == "mir-widen":
+            states.append(state)
+    result = wholeseg.emitted(Path(f"fixtures/regressions/arrphi-{tag}.obj").read_bytes(), watch=watch)
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    assert states
+    assert sum(ref.pointer for body in states for block in body.blocks for op in block.ops for ref in op.stores) == 4
+    assert not any(ref.pointer for body in states for block in body.blocks for op in block.ops for ref in op.loads)
+
+
 @pytest.mark.parametrize("reverse", [False, True])
 def test_join_load_uses_each_predecessors_stored_value(reverse):
     body = diamond()

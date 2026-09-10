@@ -1,5 +1,44 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: reuse element values through pointer phis
+
+`loadjoins` now translates a whole-pointer phi separately on each incoming
+edge before selecting the supplying load/store. MemorySSA checks the join
+prefix against the original address and the incoming path against its
+translated address. Unknown effects, overwritten memory and mismatched
+pointer inputs still prevent reuse. No reads are inserted.
+
+ARRPHI now keeps each branch's stored value across the join. PDS first join:
+
+```asm
+; before
+push es
+push ebx
+pop bx
+pop es
+mov ax,[es:bx]
+pop es
+add ax,3
+
+; after: AX already contains the value stored by either branch
+add ax,3
+```
+
+Both element reloads disappear. Optimized object sizes: PDS **1580 -> 1562**,
+QB **1560 -> 1539**, VBDOS **1712 -> 1694**. The prior array-fact regression
+now checks the raised body, before optimization deliberately removes two of
+its six accesses; separate emitted-body tests require all four stores and
+zero element loads. Those three tests fail with phi translation disabled.
+
+All three baseline/optimized executions print **10; 9; DONE**; **67 focused
+tests pass**. Stage dumps are in
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-arrphi-value-stages-4r8gb9cu`
+(`before/s59-asm-emitted.txt`, `after/s75-asm-emitted.txt`). Runtime artifacts
+under the same temporary parent: `qbopt-arrphi-value-p-g2-y5s_7ao0`,
+`qbopt-arrphi-value-q-O-agcmui5w`, `qbopt-arrphi-value-v-g3-ifdtxepb`.
+No full-suite run or new timing ratio is claimed. General symbolic index
+ranges, missing-path load insertion and the remaining roadmap stay open.
+
 ## 2026-09-10: keep array facts across unknown branches
 
 `frontend/arrayfacts.py` meets known values, memory cells and allocation

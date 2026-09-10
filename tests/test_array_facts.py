@@ -91,13 +91,9 @@ def test_new_allocation_does_not_revive_a_stale_pointer():
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_arrphi_proves_both_unknown_branches_and_the_join(tag):
     """ARRPHI prints 10,9; its six bounded accesses used to lose all allocation facts."""
-    from qbopt import wholeseg
-    states = []
-    def watch(stage, name, state):
-        if stage == "mir-widen":
-            states.append(state)
-    result = wholeseg.emitted(Path(f"fixtures/regressions/arrphi-{tag}.obj").read_bytes(), watch=watch)
-    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    import corpus
+    path = Path(f"fixtures/regressions/arrphi-{tag}.obj")
+    states = [body for _, body in mir.bodies(corpus.loaded(path), corpus.partitioned(path))]
     pointers = [ref for body in states for block in body.blocks for op in block.ops
                 for ref in (*op.loads, *op.stores) if ref.pointer]
     assert len(pointers) == 6

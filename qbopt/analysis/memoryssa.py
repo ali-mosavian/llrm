@@ -83,6 +83,7 @@ class MemorySSA:
     def _frontier(
         self, site: Site, memory: mir.MemRef, dgroup: frozenset[int], boundary: int | None = None,
         edge: int | None = None,
+        edge_memory: mir.MemRef | None = None,
     ) -> frozenset[int]:
         accesses = {access.id: access for access in self.accesses}
         pending = [self.at(site).defining]
@@ -105,8 +106,9 @@ class MemorySSA:
                                    if edge is None or access.block != site.block or parent == edge)
                 case Kind.DEF:
                     op = self.operations[access.site]
+                    queried = edge_memory if edge_memory is not None and access.block != site.block else memory
                     if _unknown_write(op) or any(
-                        mir.overlapping(memory, store, dgroup) and not self.pointers.disjoint(memory, store)
+                        mir.overlapping(queried, store, dgroup) and not self.pointers.disjoint(queried, store)
                         for store in op.stores
                     ):
                         found.add(current)
@@ -119,16 +121,19 @@ class MemorySSA:
     def available_on_edge(
         self, earlier: Site, later: Site, predecessor: int, memory: mir.MemRef,
         dgroup: frozenset[int] = frozenset(),
+        *, edge_memory: mir.MemRef | None = None,
     ) -> bool:
         """An earlier load/store still supplies these bytes on one incoming edge.
 
         The caller proves equal addresses and that the scalar provider dominates
         the predecessor. Only the destination's memory phi is edge-selected;
         other intervening joins still require agreement along every path.
+        A translated address applies outside the destination; its prefix must
+        still be checked against the original phi-based address.
         """
         source = self.at(earlier)
         boundary = source.id if source.kind is Kind.DEF else source.defining
-        return boundary is not None and self._frontier(later, memory, dgroup, boundary, predecessor) == frozenset({boundary})
+        return boundary is not None and self._frontier(later, memory, dgroup, boundary, predecessor, edge_memory) == frozenset({boundary})
 
 
 def built(body: mir.MirBody) -> MemorySSA:
