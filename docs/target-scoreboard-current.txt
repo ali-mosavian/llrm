@@ -1,0 +1,492 @@
+Measured 2026-09-10 at compiler revision 8e951b5 (documentation-only HEAD c0e8cb1).
+Command: uv run python tools/opportunity.py --targets
+Exit status: 1. Provisional and missing targets are not successes.
+
+  program       cost  target  ratio   redundancy left
+  addrm-p-evt    5092     754     --   6  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  addrm-p-g2-zd     886     754  1.18x   0
+  addrm-p-g2     886     754  1.18x   0
+  addrm-p-noO     886     754  1.18x   0
+  addrm-p-ot     886     754  1.18x   0
+  addrm-q-O-zd     886     754  1.18x   0
+  addrm-q-O      886     754  1.18x   0
+  addrm-q-evt    4664     754     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  addrm-q-noO     886     754  1.18x   0
+  addrm-v-evt    5022     754     --   6  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  addrm-v-g2     886     754  1.18x   0
+  addrm-v-g3-zd     886     754  1.18x   0
+  addrm-v-g3     886     754  1.18x   0
+  addrm-v-noO     886     754  1.18x   0
+  addrm-v-plain     886     754  1.18x   0
+  arith-p-evt    1244     592     --   16  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  arith-p-g2-zd     646     592  1.09x   2
+  arith-p-g2     646     592  1.09x   2
+  arith-p-noO     646     592  1.09x   2
+  arith-p-ot     646     592  1.09x   2
+  arith-q-O-zd     646     592  1.09x   2
+  arith-q-O      646     592  1.09x   2
+  arith-q-evt    1374     592     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  arith-q-noO     646     592  1.09x   2
+  arith-v-evt    1228     592     --   16  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  arith-v-g2     646     592  1.09x   2
+  arith-v-g3-zd     646     592  1.09x   2
+  arith-v-g3     646     592  1.09x   2
+  arith-v-noO     646     592  1.09x   2
+  arith-v-plain     646     592  1.09x   2
+  arridx-p-evt    2268     660     --   7  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  arridx-p-g2-zd     502     660  0.76x   0
+  arridx-p-g2-zi     502     660  0.76x   0
+  arridx-p-g2     502     660  0.76x   0
+  arridx-p-noO     502     660  0.76x   0
+  arridx-p-ot     502     660  0.76x   0
+  arridx-q-O-zd     502     660  0.76x   0
+  arridx-q-O     502     660  0.76x   0
+  arridx-q-evt    3152     660     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  arridx-q-noO     502     660  0.76x   0
+  arridx-v-evt    2268     660     --   7  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  arridx-v-g2     502     660  0.76x   0
+  arridx-v-g3-zd     502     660  0.76x   0
+  arridx-v-g3     502     660  0.76x   0
+  arridx-v-noO     502     660  0.76x   0
+  arridx-v-plain     502     660  0.76x   0
+  bools-p-evt     350     126     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  bools-p-g2-zd     156     126  1.24x   6
+  bools-p-g2     156     126  1.24x   6
+  bools-p-noO     156     126  1.24x   6
+  bools-p-ot     156     126  1.24x   6
+  bools-q-O-zd     164     126  1.30x   6
+  bools-q-O      164     126  1.30x   6
+  bools-q-evt     614     126     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  bools-q-noO     164     126  1.30x   6
+  bools-v-evt     350     126     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  bools-v-g2     156     126  1.24x   6
+  bools-v-g3-zd     156     126  1.24x   6
+  bools-v-g3     156     126  1.24x   6
+  bools-v-noO     156     126  1.24x   6
+  bools-v-plain     156     126  1.24x   6
+  chain-p-evt    1579      --     --   3  NO TARGET
+  chain-p-g2-zd     682      --     --   0  NO TARGET
+  chain-p-g2     682      --     --   0  NO TARGET
+  chain-p-noO     682      --     --   0  NO TARGET
+  chain-p-ot     682      --     --   0  NO TARGET
+  chain-q-O-zd     682      --     --   0  NO TARGET
+  chain-q-O      682      --     --   0  NO TARGET
+  chain-q-evt    1424      --     --   0  NO TARGET
+  chain-q-noO     682      --     --   0  NO TARGET
+  chain-v-evt    1529      --     --   3  NO TARGET
+  chain-v-g2     682      --     --   0  NO TARGET
+  chain-v-g3-zd     630      --     --   0  NO TARGET
+  chain-v-g3     630      --     --   0  NO TARGET
+  chain-v-noO     630      --     --   0  NO TARGET
+  chain-v-plain     682      --     --   0  NO TARGET
+  cmpord-p-evt    3732    1966     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  cmpord-p-g2-zd    1966    1966  1.00x   0
+  cmpord-p-g2    1966    1966  1.00x   0
+  cmpord-p-noO    1966    1966  1.00x   0
+  cmpord-p-ot    1966    1966  1.00x   0
+  cmpord-q-O-zd    1966    1966  1.00x   0
+  cmpord-q-O    1966    1966  1.00x   0
+  cmpord-q-evt    4490    1966     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  cmpord-q-noO    1966    1966  1.00x   0
+  cmpord-v-evt    3732    1966     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  cmpord-v-g2    1966    1966  1.00x   0
+  cmpord-v-g3-zd    1966    1966  1.00x   0
+  cmpord-v-g3    1966    1966  1.00x   0
+  cmpord-v-noO    1966    1966  1.00x   0
+  cmpord-v-plain    1966    1966  1.00x   0
+  divmod-p-evt    1686      --     --   2  NO TARGET
+  divmod-p-g2-zd     770      --     --   0  NO TARGET
+  divmod-p-g2     770      --     --   0  NO TARGET
+  divmod-p-noO     770      --     --   0  NO TARGET
+  divmod-p-ot     770      --     --   0  NO TARGET
+  divmod-q-O-zd     770      --     --   0  NO TARGET
+  divmod-q-O     770      --     --   0  NO TARGET
+  divmod-q-evt    2018      --     --   0  NO TARGET
+  divmod-q-noO     770      --     --   0  NO TARGET
+  divmod-v-evt    1664      --     --   2  NO TARGET
+  divmod-v-g2     768      --     --   0  NO TARGET
+  divmod-v-g3-zd     768      --     --   0  NO TARGET
+  divmod-v-g3     768      --     --   0  NO TARGET
+  divmod-v-noO     768      --     --   0  NO TARGET
+  divmod-v-plain     768      --     --   0  NO TARGET
+  flags-p-evt    1092     248     --   18  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  flags-p-g2-zd     248     248  1.00x   0
+  flags-p-g2     248     248  1.00x   0
+  flags-p-noO     248     248  1.00x   0
+  flags-p-ot     248     248  1.00x   0
+  flags-q-O-zd     248     248  1.00x   0
+  flags-q-O      248     248  1.00x   0
+  flags-q-evt    1232     248     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  flags-q-noO     248     248  1.00x   0
+  flags-v-evt    1092     248     --   18  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  flags-v-g2     248     248  1.00x   0
+  flags-v-g3-zd     248     248  1.00x   0
+  flags-v-g3     248     248  1.00x   0
+  flags-v-noO     248     248  1.00x   0
+  flags-v-plain     248     248  1.00x   0
+  fpcse-p-evt    4812     157     --   14  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  fpcse-p-g2-zd     157     157  1.00x   2
+  fpcse-p-g2     157     157  1.00x   2
+  fpcse-p-noO     157     157  1.00x   2
+  fpcse-p-ot     157     157  1.00x   2
+  fpcse-q-O-zd     145     145  1.00x   0
+  fpcse-q-O      145     145  1.00x   0
+  fpcse-q-evt    5728     145     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  fpcse-q-noO     145     145  1.00x   0
+  fpcse-v-evt    4802     157     --   14  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  fpcse-v-g2     157     157  1.00x   2
+  fpcse-v-g3-zd     157     157  1.00x   2
+  fpcse-v-g3     157     157  1.00x   2
+  fpcse-v-noO     157     157  1.00x   2
+  fpcse-v-plain     157     157  1.00x   2
+  fpcsex-p-evt    4928    1340     --   14  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  fpcsex-p-g2-zd    4462    1340     --   13  PROVISIONAL: reference reassociates the sum and omits SINGLE rounding
+  fpcsex-p-g2    4462    1340     --   13  PROVISIONAL: reference reassociates the sum and omits SINGLE rounding
+  fpcsex-p-noO    4462    1340     --   13  PROVISIONAL: reference reassociates the sum and omits SINGLE rounding
+  fpcsex-p-ot    4462    1340     --   13  PROVISIONAL: reference reassociates the sum and omits SINGLE rounding
+  fpcsex-q-O-zd    4467    1340     --   13  PROVISIONAL: reference reassociates the sum and omits SINGLE rounding
+  fpcsex-q-O    4467    1340     --   13  PROVISIONAL: reference reassociates the sum and omits SINGLE rounding
+  fpcsex-q-evt    5674    1340     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  fpcsex-q-noO    4467    1340     --   13  PROVISIONAL: reference reassociates the sum and omits SINGLE rounding
+  fpcsex-v-evt    4918    1340     --   14  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  fpcsex-v-g2    4462    1340     --   13  PROVISIONAL: reference reassociates the sum and omits SINGLE rounding
+  fpcsex-v-g3-zd    4452    1340     --   13  PROVISIONAL: reference reassociates the sum and omits SINGLE rounding
+  fpcsex-v-g3    4452    1340     --   13  PROVISIONAL: reference reassociates the sum and omits SINGLE rounding
+  fpcsex-v-noO    4452    1340     --   13  PROVISIONAL: reference reassociates the sum and omits SINGLE rounding
+  fpcsex-v-plain    4462    1340     --   13  PROVISIONAL: reference reassociates the sum and omits SINGLE rounding
+  fpdeep-p-evt   13017    1086     --   16  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  fpdeep-p-g2-zd    1777    1086     --   6  PROVISIONAL: numeric reference omits checkpoints/stores without a whole-program observability proof
+  fpdeep-p-g2    1777    1086     --   6  PROVISIONAL: numeric reference omits checkpoints/stores without a whole-program observability proof
+  fpdeep-p-noO    1777    1086     --   6  PROVISIONAL: numeric reference omits checkpoints/stores without a whole-program observability proof
+  fpdeep-p-ot    1777    1086     --   6  PROVISIONAL: numeric reference omits checkpoints/stores without a whole-program observability proof
+  fpdeep-q-O-zd    1652    1086     --   3  PROVISIONAL: numeric reference omits checkpoints/stores without a whole-program observability proof
+  fpdeep-q-O    1652    1086     --   3  PROVISIONAL: numeric reference omits checkpoints/stores without a whole-program observability proof
+  fpdeep-q-evt   14543    1086     --   11  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  fpdeep-q-noO    1652    1086     --   3  PROVISIONAL: numeric reference omits checkpoints/stores without a whole-program observability proof
+  fpdeep-v-evt   12907    1086     --   16  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  fpdeep-v-g2    1777    1086     --   6  PROVISIONAL: numeric reference omits checkpoints/stores without a whole-program observability proof
+  fpdeep-v-g3-zd    1777    1086     --   6  PROVISIONAL: numeric reference omits checkpoints/stores without a whole-program observability proof
+  fpdeep-v-g3    1777    1086     --   6  PROVISIONAL: numeric reference omits checkpoints/stores without a whole-program observability proof
+  fpdeep-v-noO    1777    1086     --   6  PROVISIONAL: numeric reference omits checkpoints/stores without a whole-program observability proof
+  fpdeep-v-plain    1857    1086     --   9  PROVISIONAL: numeric reference omits checkpoints/stores without a whole-program observability proof
+  fpemu-p-evt    2944      --     --   0  NO TARGET
+  fpemu-p-g2-zd    1414      --     --   0  NO TARGET
+  fpemu-p-g2    1414      --     --   0  NO TARGET
+  fpemu-p-noO    1414      --     --   0  NO TARGET
+  fpemu-p-ot    1414      --     --   0  NO TARGET
+  fpemu-q-O-zd    1408      --     --   0  NO TARGET
+  fpemu-q-O     1408      --     --   0  NO TARGET
+  fpemu-q-evt    3012      --     --   0  NO TARGET
+  fpemu-q-noO    1408      --     --   0  NO TARGET
+  fpemu-v-evt    2874      --     --   0  NO TARGET
+  fpemu-v-g2    1414      --     --   0  NO TARGET
+  fpemu-v-g3-zd    1414      --     --   0  NO TARGET
+  fpemu-v-g3    1414      --     --   0  NO TARGET
+  fpemu-v-noO    1414      --     --   0  NO TARGET
+  fpemu-v-plain    1414      --     --   0  NO TARGET
+  harr-p-evt   20164    1834     --   18  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  harr-p-g2-zd    1994    1834  1.09x   0
+  harr-p-g2     1994    1834  1.09x   0
+  harr-p-noO    1994    1834  1.09x   0
+  harr-p-ot     1994    1834  1.09x   0
+  harr-q-O-zd    2030    1834  1.11x   2
+  harr-q-O      2030    1834  1.11x   2
+  harr-q-evt   23964    1834     --   2  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  harr-q-noO    2030    1834  1.11x   2
+  harr-v-evt   20158    1834     --   18  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  harr-v-g2     1994    1834  1.09x   0
+  harr-v-g3-zd    1994    1834  1.09x   0
+  harr-v-g3     1994    1834  1.09x   0
+  harr-v-noO    1994    1834  1.09x   0
+  harr-v-plain    2030    1834  1.11x   2
+  hotlop-p-evt    1790     312     --   6  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  hotlop-p-g2-zd     116     312  0.37x   0
+  hotlop-p-g2     116     312  0.37x   0
+  hotlop-p-noO     116     312  0.37x   0
+  hotlop-p-ot     116     312  0.37x   0
+  hotlop-q-O-zd     116     312  0.37x   0
+  hotlop-q-O     116     312  0.37x   0
+  hotlop-q-evt    2464     312     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  hotlop-q-noO     116     312  0.37x   0
+  hotlop-v-evt    1790     312     --   6  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  hotlop-v-g2     116     312  0.37x   0
+  hotlop-v-g3-zd     116     312  0.37x   0
+  hotlop-v-g3     116     312  0.37x   0
+  hotlop-v-noO     116     312  0.37x   0
+  hotlop-v-plain     116     312  0.37x   0
+  hotlpx-p-evt    1872     217     --   6  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  hotlpx-p-g2-zd     249     217  1.15x   0
+  hotlpx-p-g2     249     217  1.15x   0
+  hotlpx-p-noO     249     217  1.15x   0
+  hotlpx-p-ot     249     217  1.15x   0
+  hotlpx-q-O-zd     249     217  1.15x   0
+  hotlpx-q-O     249     217  1.15x   0
+  hotlpx-q-evt    2546     217     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  hotlpx-q-noO     249     217  1.15x   0
+  hotlpx-v-evt    1872     217     --   6  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  hotlpx-v-g2     249     217  1.15x   0
+  hotlpx-v-g3-zd     249     217  1.15x   0
+  hotlpx-v-g3     249     217  1.15x   0
+  hotlpx-v-noO     249     217  1.15x   0
+  hotlpx-v-plain     249     217  1.15x   0
+  ivchan-p-evt    3171     560     --   9  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  ivchan-p-g2-zd     756     560  1.35x   0
+  ivchan-p-g2     756     560  1.35x   0
+  ivchan-p-noO     756     560  1.35x   0
+  ivchan-p-ot     756     560  1.35x   0
+  ivchan-q-O-zd     756     560  1.35x   0
+  ivchan-q-O     756     560  1.35x   0
+  ivchan-q-evt    4724     560     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  ivchan-q-noO     756     560  1.35x   0
+  ivchan-v-evt    3171     560     --   9  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  ivchan-v-g2     756     560  1.35x   0
+  ivchan-v-g3-zd     756     560  1.35x   0
+  ivchan-v-g3     756     560  1.35x   0
+  ivchan-v-noO     756     560  1.35x   0
+  ivchan-v-plain     756     560  1.35x   0
+  jumps-p-evt    9658      --     --   9  NO TARGET
+  jumps-p-g2-zd    4310      --     --   5  NO TARGET
+  jumps-p-g2    4310      --     --   5  NO TARGET
+  jumps-p-noO    4310      --     --   5  NO TARGET
+  jumps-p-ot    4310      --     --   5  NO TARGET
+  jumps-q-O-zd    4370      --     --   5  NO TARGET
+  jumps-q-O     4370      --     --   5  NO TARGET
+  jumps-q-evt    9464      --     --   2  NO TARGET
+  jumps-q-noO    4370      --     --   5  NO TARGET
+  jumps-v-evt    9078      --     --   9  NO TARGET
+  jumps-v-g2    4310      --     --   5  NO TARGET
+  jumps-v-g3-zd    4090      --     --   5  NO TARGET
+  jumps-v-g3    4090      --     --   5  NO TARGET
+  jumps-v-noO    4090      --     --   5  NO TARGET
+  jumps-v-plain    4330      --     --   5  NO TARGET
+  jumptable      166      --     --   3  NO TARGET
+  lngmix-p-evt    2918     210     --   1  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  lngmix-p-g2-zd     128     210  0.61x   1
+  lngmix-p-g2     128     210  0.61x   1
+  lngmix-p-noO     128     210  0.61x   1
+  lngmix-p-ot     128     210  0.61x   1
+  lngmix-q-O-zd     128     210  0.61x   1
+  lngmix-q-O     128     210  0.61x   1
+  lngmix-q-evt    1698     210     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  lngmix-q-noO     128     210  0.61x   1
+  lngmix-v-evt    2768     210     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  lngmix-v-g2     128     210  0.61x   1
+  lngmix-v-g3-zd     128     210  0.61x   1
+  lngmix-v-g3     128     210  0.61x   1
+  lngmix-v-noO     128     210  0.61x   1
+  lngmix-v-plain     128     210  0.61x   1
+  lngmxx-p-evt    2966     208     --   1  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  lngmxx-p-g2-zd     246     208  1.18x   0
+  lngmxx-p-g2     246     208  1.18x   0
+  lngmxx-p-noO     246     208  1.18x   0
+  lngmxx-p-ot     246     208  1.18x   0
+  lngmxx-q-O-zd     244     208  1.17x   0
+  lngmxx-q-O     244     208  1.17x   0
+  lngmxx-q-evt    1760     208     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  lngmxx-q-noO     244     208  1.17x   0
+  lngmxx-v-evt    2816     208     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  lngmxx-v-g2     246     208  1.18x   0
+  lngmxx-v-g3-zd     230     208  1.11x   0
+  lngmxx-v-g3     230     208  1.11x   0
+  lngmxx-v-noO     230     208  1.11x   0
+  lngmxx-v-plain     244     208  1.17x   0
+  matrix-p-evt   38288    6210     --   13  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  matrix-p-g2-zd    6382    6210  1.03x   0
+  matrix-p-g2    6382    6210  1.03x   0
+  matrix-p-noO    6382    6210  1.03x   0
+  matrix-p-ot    6382    6210  1.03x   0
+  matrix-q-O-zd    6382    6210  1.03x   0
+  matrix-q-O    6382    6210  1.03x   0
+  matrix-q-evt   50474    6210     --   6  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  matrix-q-noO    6382    6210  1.03x   0
+  matrix-v-evt   38288    6210     --   13  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  matrix-v-g2    6382    6210  1.03x   0
+  matrix-v-g3-zd    6382    6210  1.03x   0
+  matrix-v-g3    6382    6210  1.03x   0
+  matrix-v-noO    6382    6210  1.03x   0
+  matrix-v-plain    6382    6210  1.03x   0
+  negnot-p-evt     398     254     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  negnot-p-g2-zd     280     254  1.10x   0
+  negnot-p-g2     280     254  1.10x   0
+  negnot-p-noO     280     254  1.10x   0
+  negnot-p-ot     280     254  1.10x   0
+  negnot-q-O-zd     280     254  1.10x   0
+  negnot-q-O     280     254  1.10x   0
+  negnot-q-evt     526     254     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  negnot-q-noO     280     254  1.10x   0
+  negnot-v-evt     398     254     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  negnot-v-g2     280     254  1.10x   0
+  negnot-v-g3-zd     280     254  1.10x   0
+  negnot-v-g3     280     254  1.10x   0
+  negnot-v-noO     280     254  1.10x   0
+  negnot-v-plain     280     254  1.10x   0
+  nested-p-evt    7212     768     --   20  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  nested-p-g2-zd    1022     768  1.33x   2
+  nested-p-g2    1022     768  1.33x   2
+  nested-p-noO    1022     768  1.33x   2
+  nested-p-ot    1022     768  1.33x   2
+  nested-q-O-zd    1022     768  1.33x   2
+  nested-q-O    1022     768  1.33x   2
+  nested-q-evt    8666     768     --   1  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  nested-q-noO    1022     768  1.33x   2
+  nested-v-evt    7212     768     --   20  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  nested-v-g2    1022     768  1.33x   2
+  nested-v-g3-zd    1022     768  1.33x   2
+  nested-v-g3    1022     768  1.33x   2
+  nested-v-noO    1022     768  1.33x   2
+  nested-v-plain    1022     768  1.33x   2
+  nots-p-evt     912     306     --   6  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  nots-p-g2-zd     402     306  1.31x   0
+  nots-p-g2      402     306  1.31x   0
+  nots-p-noO     402     306  1.31x   0
+  nots-p-ot      402     306  1.31x   0
+  nots-q-O-zd     402     306  1.31x   0
+  nots-q-O       402     306  1.31x   0
+  nots-q-evt     810     306     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  nots-q-noO     402     306  1.31x   0
+  nots-v-evt     862     306     --   6  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  nots-v-g2      402     306  1.31x   0
+  nots-v-g3-zd     374     306  1.22x   0
+  nots-v-g3      374     306  1.22x   0
+  nots-v-noO     374     306  1.22x   0
+  nots-v-plain     402     306  1.31x   0
+  pds-g2          70      --     --   1  NO TARGET
+  press-p-evt    2022     308     --   11  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  press-p-g2-zd     134     308  0.44x   0
+  press-p-g2     134     308  0.44x   0
+  press-p-noO     134     308  0.44x   0
+  press-p-ot     134     308  0.44x   0
+  press-q-O-zd     134     308  0.44x   0
+  press-q-O      134     308  0.44x   0
+  press-q-evt    2480     308     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  press-q-noO     134     308  0.44x   0
+  press-v-evt    2022     308     --   11  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  press-v-g2     134     308  0.44x   0
+  press-v-g3-zd     134     308  0.44x   0
+  press-v-g3     134     308  0.44x   0
+  press-v-noO     134     308  0.44x   0
+  press-v-plain     134     308  0.44x   0
+  pressx-p-evt    2308     508     --   11  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  pressx-p-g2-zd     625     508  1.23x   0
+  pressx-p-g2     625     508  1.23x   0
+  pressx-p-noO     625     508  1.23x   0
+  pressx-p-ot     625     508  1.23x   0
+  pressx-q-O-zd     625     508  1.23x   0
+  pressx-q-O     625     508  1.23x   0
+  pressx-q-evt    2682     508     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  pressx-q-noO     625     508  1.23x   0
+  pressx-v-evt    2308     508     --   11  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  pressx-v-g2     625     508  1.23x   0
+  pressx-v-g3-zd     625     508  1.23x   0
+  pressx-v-g3     625     508  1.23x   0
+  pressx-v-noO     625     508  1.23x   0
+  pressx-v-plain     625     508  1.23x   0
+  procs-p-evt    1008      --     --   6  NO TARGET
+  procs-p-g2-zd     758      --     --   1  NO TARGET
+  procs-p-g2-zi     758      --     --   1  NO TARGET
+  procs-p-g2     758      --     --   1  NO TARGET
+  procs-p-noO     758      --     --   1  NO TARGET
+  procs-p-ot     720      --     --   1  NO TARGET
+  procs-q-O-zd     860      --     --   5  NO TARGET
+  procs-q-O      860      --     --   5  NO TARGET
+  procs-q-evt    1280      --     --   4  NO TARGET
+  procs-q-noO     860      --     --   5  NO TARGET
+  procs-v-evt    1012      --     --   7  NO TARGET
+  procs-v-g2     778      --     --   2  NO TARGET
+  procs-v-g3-zd     768      --     --   2  NO TARGET
+  procs-v-g3     768      --     --   2  NO TARGET
+  procs-v-noO     768      --     --   2  NO TARGET
+  procs-v-plain     884      --     --   6  NO TARGET
+  qb45            70      --     --   1  NO TARGET
+  rotate-p-evt    1790     294     --   17  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  rotate-p-g2-zd     274     294  0.93x   2
+  rotate-p-g2     274     294  0.93x   2
+  rotate-p-noO     274     294  0.93x   2
+  rotate-p-ot     274     294  0.93x   2
+  rotate-q-O-zd     274     294  0.93x   2
+  rotate-q-O     274     294  0.93x   2
+  rotate-q-evt    2874     294     --   4  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  rotate-q-noO     274     294  0.93x   2
+  rotate-v-evt    1790     294     --   17  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  rotate-v-g2     274     294  0.93x   2
+  rotate-v-g3-zd     274     294  0.93x   2
+  rotate-v-g3     274     294  0.93x   2
+  rotate-v-noO     274     294  0.93x   2
+  rotate-v-plain     274     294  0.93x   2
+  segld-p-evt   42898    6704     --   3  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  segld-p-g2-zd    7054    6704  1.05x   0
+  segld-p-g2    7054    6704  1.05x   0
+  segld-p-noO    7054    6704  1.05x   0
+  segld-p-ot    7054    6704  1.05x   0
+  segld-q-O-zd    7206    6704  1.07x   3
+  segld-q-O     7206    6704  1.07x   3
+  segld-q-evt   62778    6704     --   1  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  segld-q-noO    7206    6704  1.07x   3
+  segld-v-evt   42892    6704     --   3  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  segld-v-g2    7054    6704  1.05x   0
+  segld-v-g3-zd    7054    6704  1.05x   0
+  segld-v-g3    7054    6704  1.05x   0
+  segld-v-noO    7054    6704  1.05x   0
+  segld-v-plain    7206    6704  1.07x   3
+  spill-p-evt    9068    1122     --   9  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  spill-p-g2-zd     446    1122  0.40x   3
+  spill-p-g2     446    1122  0.40x   3
+  spill-p-noO     446    1122  0.40x   3
+  spill-p-ot     446    1122  0.40x   3
+  spill-q-O-zd     446    1122  0.40x   3
+  spill-q-O      446    1122  0.40x   3
+  spill-q-evt   12598    1122     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  spill-q-noO     446    1122  0.40x   3
+  spill-v-evt    9068    1122     --   9  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  spill-v-g2     446    1122  0.40x   3
+  spill-v-g3-zd     446    1122  0.40x   3
+  spill-v-g3     446    1122  0.40x   3
+  spill-v-noO     446    1122  0.40x   3
+  spill-v-plain     446    1122  0.40x   3
+  split-p-evt    1640     276     --   11  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  split-p-g2-zd     128     276  0.46x   1
+  split-p-g2     128     276  0.46x   1
+  split-p-noO     128     276  0.46x   1
+  split-p-ot     128     276  0.46x   1
+  split-q-O-zd     128     276  0.46x   1
+  split-q-O      128     276  0.46x   1
+  split-q-evt    2600     276     --   4  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  split-q-noO     128     276  0.46x   1
+  split-v-evt    1640     276     --   11  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  split-v-g2     128     276  0.46x   1
+  split-v-g3-zd     128     276  0.46x   1
+  split-v-g3     128     276  0.46x   1
+  split-v-noO     128     276  0.46x   1
+  split-v-plain     128     276  0.46x   1
+  stride-p-evt    3108     602     --   7  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  stride-p-g2-zd     458     602  0.76x   0
+  stride-p-g2     458     602  0.76x   0
+  stride-p-noO     458     602  0.76x   0
+  stride-p-ot     458     602  0.76x   0
+  stride-q-O-zd     458     602  0.76x   0
+  stride-q-O     458     602  0.76x   0
+  stride-q-evt    3779     602     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  stride-q-noO     458     602  0.76x   0
+  stride-v-evt    3108     602     --   7  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  stride-v-g2     458     602  0.76x   0
+  stride-v-g3-zd     458     602  0.76x   0
+  stride-v-g3     458     602  0.76x   0
+  stride-v-noO     458     602  0.76x   0
+  stride-v-plain     458     602  0.76x   0
+  subexp-p-evt     305     162     --   4  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  subexp-p-g2-zd     168     162  1.04x   0
+  subexp-p-g2     168     162  1.04x   0
+  subexp-p-noO     168     162  1.04x   0
+  subexp-p-ot     168     162  1.04x   0
+  subexp-q-O-zd     168     162  1.04x   0
+  subexp-q-O     168     162  1.04x   0
+  subexp-q-evt     413     162     --   0  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  subexp-q-noO     168     162  1.04x   0
+  subexp-v-evt     305     162     --   4  PROVISIONAL: event-enabled build requires a reference retaining event checks; the plain-program target is not comparable
+  subexp-v-g2     168     162  1.04x   0
+  subexp-v-g3-zd     168     162  1.04x   0
+  subexp-v-g3     168     162  1.04x   0
+  subexp-v-noO     168     162  1.04x   0
+  subexp-v-plain     168     162  1.04x   0
+  vbdos-g2        70      --     --   1  NO TARGET
+  vbdos-g3        70      --     --   1  NO TARGET

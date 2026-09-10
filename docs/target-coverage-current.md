@@ -1,13 +1,13 @@
 # Current target coverage
 
-Measured **2026-09-10**, compiler revision **b126fb4**, with
+Measured **2026-09-10**, compiler revision **8e951b5**, with
 `uv run python tools/opportunity.py --targets` over all **487 objects** in
 `fixtures/omf` (**34 source programs**). These are model-weighted instruction
 costs, including configured helper costs—not hardware timings. Default loop
 weighting is ten iterations per nesting level, capped at three levels.
-Updated afterward by rescoring all 15 CMPORD objects against its independently
-derived 1966-unit reference; compiler output was unchanged. The other rows
-retain the full-scan measurements above.
+All rows were rescored in one integration run after the recent raise, loop
+and lowering changes. [Raw results](target-scoreboard-current.txt) retain
+every configuration, including provisional and missing references.
 
 | Status | Configurations |
 |---|---:|
@@ -28,8 +28,8 @@ default scan and are not implied covered by these totals.
 
 ## Largest comparable gap
 
-IVCHAN is worst at **1.36x**: QB and VBDOS plain cost 762 against 560.
-Other ordinary IVCHAN variants cost 756 (**1.35x**). NESTED reaches
+IVCHAN is worst at **1.35x**: all ordinary variants cost 756 against 560
+(QB and VBDOS plain previously cost 762). NESTED reaches
 1022/768 (**1.33x**). No comparable row exceeds the requested threshold.
 
 ## Floating-point cases
@@ -38,10 +38,35 @@ Other ordinary IVCHAN variants cost 756 (**1.35x**). NESTED reaches
 |---|---:|---:|---:|---|
 | FPCSE | 157 | 145 | 157 | Complete; all three are 1.00x |
 | FPCSEX | 4462 | 4467 | 4452 | Provisional: 1340 reassociates additions and omits SINGLE rounding |
-| FPDEEP | 1777 | 1572 | 1777 | Provisional: 1086 lacks a complete checkpoint/store observability proof |
+| FPDEEP | 1777 | 1652 | 1777 | Provisional: 1086 lacks a complete checkpoint/store observability proof |
 
 These rows use `p-g2`, `q-O`, and `v-g3`. Do not divide by the provisional
 numbers to claim success or justify relaxing floating-point behavior.
+
+**Follow-up fix:** QB FPDEEP rose from 1572 to 1652 when upper-word
+normalization enabled CSE of PRINT addresses. Lowering now rematerializes
+those constants at pushes instead of spilling them across calls: **1652 →
+1570**, with all three spill slots removed. The table and raw file retain
+the integration baseline above; this is a focused follow-up, not another
+487-row scan. PDS/VBDOS FPDEEP and all three FPCSE costs are unchanged.
+Both programs pass actual execution on all three compilers. FPDEEP remains
+provisional because its reference proof is still incomplete.
+
+One address, before and after (the zero operand receives the same relocation):
+
+```asm
+; before                         ; after
+mov ax,0 ; seg:9+0x10             push 0 ; seg:9+0x10
+mov [bp-2],ax                    call B$PSSD
+mov ax,[bp-2]
+push ax
+call B$PSSD
+; later: reload slot and push    ; later: push the same immediate address
+```
+
+The fix stays in instruction selection. MIR still shares one symbolic value;
+other readers and observable exit values retain their definitions. Full stage
+dumps locate the change at lowering, not in any MIR optimization pass.
 
 ## Missing references
 
@@ -70,6 +95,6 @@ references; their plain-program denominator is not comparable.
    Runtime-sized array extents, precise call effects, remaining GVN-PRE,
    loop transforms and backend work are not declared done by this scan.
 
-This refresh changes no emitted assembly: **before = after**. It replaces
-stale status claims, not compiler behavior. Earlier measurements and detailed
+The integration snapshot itself changes no emitted assembly; the follow-up
+compiler change is shown above. Earlier measurements and detailed
 investigations remain in [the historical record](target-coverage-history.md).

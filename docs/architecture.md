@@ -646,6 +646,10 @@ one documented target without materially regressing another.
 - [ ] Add branch folding and tail merging after final block placement.
 - [ ] Extend rematerialization, spill folding, spill-slot reuse and live-range
   splitting using measured interval costs.
+  Lowering rematerializes shared immediate PRINT arguments, including relocated
+  addresses, without extending their register lifetimes across calls. QB FPDEEP
+  removes three spill slots and falls from 1652 to 1570 modeled cost; general
+  allocator rematerialization and the other items remain open.
 - [ ] Add instruction scheduling for 486/P5/P6 only after their latency,
   dependency and pairing models are validated against primary sources.
 

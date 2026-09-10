@@ -398,6 +398,7 @@ def lowered(
                 for held, _ in one.requires if held.value not in one.uses)
     uses.update(value.id for block in body.blocks for phi in block.phis for value in phi.incoming.values())
     made = {at: _immediate_arguments(insns, uses) for at, insns in made.items()}
+    made = {at: _rematerialized_arguments(insns, uses, making._exposed) for at, insns in made.items()}
     live = _phis_worth_keeping(body, made)
     return lir.LirBody(
         name=name,
@@ -432,6 +433,36 @@ def _check_inserted_conditions(ops: tuple[mir.Op, ...], leaving: frozenset[mir.V
             raise Unlowered(f"inserted {op.kind} at {op.at:#x} crosses a live condition")
         alive.difference_update(op.defines)
         alive.update(value for value in op.uses if value.flags)
+
+
+def _rematerialized_arguments(insns, uses, exposed):
+    """Select immediate pushes without keeping literal addresses live across calls."""
+    from qbopt.model import lir
+
+    literals = {}
+    consumed = Counter()
+    out = []
+    for one in insns:
+        match one.what:
+            case ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Held(value, width),)):
+                if (value in literals and not (one.clobbers or one.requires or one.delivers or one.spread)
+                    and not one.defines and one.uses == (value,)):
+                    definition, immediate = literals[value]
+                    if width == immediate.width:
+                        one = replace(one, what=replace(one.what, sources=(immediate,)), uses=(),
+                                      op=definition.op, symbol=True if immediate.address is not None else False)
+                        consumed[value] += 1
+        for value in one.defines:
+            literals.pop(value, None)
+        match one.what:
+            case ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(value, width),), (ir.Imm() as immediate,)):
+                if (width == immediate.width and width in (2, 4) and one.defines == (value,)
+                    and not (one.uses or one.clobbers or one.requires or one.delivers or one.spread)):
+                    literals[value] = (one, immediate)
+        out.append(one)
+    dead = {id(definition) for value, (definition, _) in literals.items()
+            if consumed[value] == uses[value] and consumed[value] and value not in exposed}
+    return tuple(lir.without(out, lambda one: id(one) in dead))
 
 
 def _immediate_arguments(insns, uses):
