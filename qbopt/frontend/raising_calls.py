@@ -38,7 +38,7 @@ def _whole_memory(group):
     return replace(lower, width=4)
 
 
-def arithmetic(body: mir.MirBody, found, blocks) -> mir.MirBody:
+def arithmetic(body: mir.MirBody, found, blocks, *, basic_semantics: bool = False) -> mir.MirBody:
     reached = [insn for block in blocks for insn in block.insns]
     sites = calls.sites(found, reached, blocks)
     sites = [replace(site, consume=tuple(insn for insn in reached
@@ -50,6 +50,7 @@ def arithmetic(body: mir.MirBody, found, blocks) -> mir.MirBody:
         for site in sites
         if site.consume
         and site.name in (*calls.DIVIDES, calls.MULTIPLY)
+        and not (basic_semantics and site.name in calls.DIVIDES)
         and not isinstance(calls.absorb(site, mir._flags_after(blocks, live_flags, site.start, site.end)), str)
     }
     if not candidates:

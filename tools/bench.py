@@ -41,8 +41,8 @@ def ticks(text: str) -> int | None:
     return None
 
 
-def optimized(data: bytes, native_fpu: bool, cpu: str) -> bytes:
-    result = wholeseg.emitted(data, native_fpu=native_fpu, cpu=cpu)
+def optimized(data: bytes, native_fpu: bool, cpu: str, basic_semantics: bool = False) -> bytes:
+    result = wholeseg.emitted(data, native_fpu=native_fpu, cpu=cpu, basic_semantics=basic_semantics)
     if result.outcome is not wholeseg.Emission.LIR:
         raise SystemExit(f"benchmark optimization refused: {result.reason}")
     return result.data
@@ -59,7 +59,8 @@ def output_name(exe: Path, repetition: int) -> str:
     return f"{exe.stem[:4]}{repetition}.TXT"
 
 
-def build(tag: str, prog: str = "nbody", native_fpu: bool = False, transform=None, cpu: str = "386") -> tuple[Path, Path]:
+def build(tag: str, prog: str = "nbody", native_fpu: bool = False, transform=None, cpu: str = "386",
+          basic_semantics: bool = False) -> tuple[Path, Path]:
     cfg = CONFIGS[tag]
     if not cfg.available:
         raise SystemExit(f"no toolchain at {cfg.mount}; see docs/testing.md")
@@ -82,7 +83,7 @@ def build(tag: str, prog: str = "nbody", native_fpu: bool = False, transform=Non
     obj = work / f"{name}.OBJ"
     if not obj.is_file():
         raise SystemExit(f"BC did not produce {name}.OBJ; see {work / 'BC.OUT'}")
-    change = transform or (lambda data: optimized(data, native_fpu, cpu))
+    change = transform or (lambda data: optimized(data, native_fpu, cpu, basic_semantics))
     (work / f"{name}Q.OBJ").write_bytes(change(obj.read_bytes()))
 
     linking = launch(
@@ -144,14 +145,18 @@ def main(argv: list[str] | None = None) -> int:
     from qbopt.cycles.timings import ARCHS
     ap.add_argument("--cpu", choices=("386", *ARCHS), default="386")
     ap.add_argument("--native-fpu", action="store_true")
+    ap.add_argument("--basic-semantics", action="store_true")
     ap.add_argument("--steps", type=int, default=2000)
     ap.add_argument("--reps", type=int, default=5)
     args = ap.parse_args(argv)
     if args.steps <= 0 or args.reps <= 0:
         ap.error("steps and reps must be positive")
+    if args.basic_semantics and args.native_fpu:
+        ap.error("--basic-semantics cannot be combined with --native-fpu")
 
     cfg = CONFIGS[args.config]
-    base_exe, opt_exe = build(args.config, args.prog, args.native_fpu, cpu=args.cpu)
+    base_exe, opt_exe = build(args.config, args.prog, args.native_fpu, cpu=args.cpu,
+                              basic_semantics=args.basic_semantics)
     base_ticks = run(args.config, base_exe, args.steps, args.reps, args.prog)
     expected = answers(read_dos(BUILD / args.config / args.prog, output_name(base_exe, 0)))
     opt_ticks = run(args.config, opt_exe, args.steps, args.reps, args.prog, expected=expected)
@@ -171,6 +176,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  conf sha256: {sha256(PINNED)}")
     print(f"  config: {args.config}, steps: {args.steps}, reps: {args.reps}")
     print(f"  tuning CPU: {args.cpu} (does not change DOSBox timing model)")
+    print(f"  numeric semantics: {'basic' if args.basic_semantics else 'native'}")
     print(f"  BC.EXE sha256: {sha256(host_path(cfg.mount, cfg.bc))}")
     print(f"  LINK.EXE sha256: {sha256(host_path(cfg.mount, cfg.link))}")
     print(f"  runtime sha256: {sha256(host_path(cfg.mount, cfg.runtime))}")

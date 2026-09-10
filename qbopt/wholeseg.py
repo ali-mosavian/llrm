@@ -67,6 +67,7 @@ def emitted(
     only: str | None = None,
     watch: Watch | None = None,
     cpu: str = "386",
+    basic_semantics: bool = False,
 ) -> Emitted:
     """The object rewritten, and which emitter did it.
 
@@ -76,7 +77,9 @@ def emitted(
     phases to get them dumps a different program: its allocation is not the
     one that produced the object, so the first bad transition is not in it.
     """
-    out, why, _ = _rebuilt(data, optimise, native_fpu, only, watch, cpu)
+    if basic_semantics and native_fpu:
+        raise ValueError("--basic-semantics cannot be combined with --native-fpu")
+    out, why, _ = _rebuilt(data, optimise, native_fpu, only, watch, cpu, basic_semantics)
     if why != REBUILT:
         return Emitted(out, Emission.REFUSED, why)
     return Emitted(out, Emission.LIR, why)
@@ -87,9 +90,10 @@ def rebuilt(
     optimise: bool = True,
     native_fpu: bool = False,
     only: str | None = None,
+    *, basic_semantics: bool = False,
 ) -> tuple[bytes, str]:
     """`emitted`, as every caller already reads it."""
-    got = emitted(data, optimise, native_fpu, only)
+    got = emitted(data, optimise, native_fpu, only, basic_semantics=basic_semantics)
     return got.data, got.reason
 
 
@@ -100,6 +104,7 @@ def _rebuilt(
     only: str | None = None,
     watch: Watch | None = None,
     cpu: str = "386",
+    basic_semantics: bool = False,
 ) -> tuple[bytes, str, str | None]:
     """The object with its code segment rewritten, and what happened.
 
@@ -118,7 +123,7 @@ def _rebuilt(
     # One map for the whole module, and the same object reaches the raise
     # and the lowering: a contract chosen twice can be chosen differently.
     contracts = runtime.for_module(found)
-    bodies = list(mir.bodies(found, blocks, contracts))
+    bodies = list(mir.bodies(found, blocks, contracts, basic_semantics=basic_semantics))
     if not bodies:
         return data, "no bodies were raised", None
 

@@ -566,6 +566,14 @@ class Lowering:
         register the raise saw it in, which for these is always BC's own
         because the idiom is BC's own.
         """
+        if op.kind is mir.Kind.CALL:
+            widths = dict(self._widths(op))
+            return tuple(
+                (ir.Held(value.id, widths.get(value.id, 2)),
+                 target.named(self._origin[value], widths.get(value.id, 2)))
+                for value in op.defines
+                if not value.flags and value.id in self._read and value in self._origin
+            )
         if op.kind is mir.Kind.OPAQUE and not isinstance(op.node, ir.Restore):
             return self._implicit_values(op, op.defines)
         if op.kind is mir.Kind.DIVMOD:

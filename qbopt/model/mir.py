@@ -2136,7 +2136,8 @@ def extracted_whole(high, low, definitions):
 
 
 def bodies(
-    found: Module, blocks: list[Block], contracts: "dict[int, runtime.Contract] | None" = None
+    found: Module, blocks: list[Block], contracts: "dict[int, runtime.Contract] | None" = None,
+    *, basic_semantics: bool = False,
 ) -> list[tuple[str, MirBody]]:
     """Every body in the module, raised, labelled, and skipping what will not.
 
@@ -2175,7 +2176,7 @@ def bodies(
             from qbopt.frontend import raising_calls
 
             built = raising_division.scalar(built)
-            built = raising_calls.arithmetic(built, found, mine)
+            built = raising_calls.arithmetic(built, found, mine, basic_semantics=basic_semantics)
             from qbopt.frontend import raising_bytes
             built = raising_bytes.scalar(built)
             from qbopt.frontend import raising_longs
@@ -2192,9 +2193,11 @@ def bodies(
             from qbopt.frontend import raising_addresses
             built = raising_addresses.loaded(built)
             from qbopt.frontend import raising_float_calls
-            built = raising_float_calls.raised(built, found, contracts)
+            if not basic_semantics:
+                built = raising_float_calls.raised(built, found, contracts)
             from qbopt.frontend import raising_float_results
-            built = raising_float_results.raised(built, found, contracts)
+            if not basic_semantics:
+                built = raising_float_results.raised(built, found, contracts)
             built = raising_longs.arguments(built)
             from qbopt.frontend import raising_floats
             built = raising_floats.annotated(built)

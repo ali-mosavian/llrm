@@ -7,6 +7,38 @@ against a hand-derived optimal listing rather than against BC.
 See [the source layout](docs/source-layout.md) for package responsibilities
 and [the MIR boundary](docs/split.md) for the architectural rules.
 
+## Numeric behavior
+
+Native arithmetic is the default. Use `uv run python -m qbopt.rewrite
+input.obj -o output.obj --basic-semantics` to retain BASIC's numeric runtime
+behavior. Compatibility mode keeps division/remainder and floating conversion
+helpers, including their error handling, instead of substituting bare machine
+instructions. Existing floating storage rounding, evaluation order, and
+exception checkpoints remain observable. It preserves the behavior of the
+input compiler and switches; it cannot restore checks BC never emitted.
+
+For example, native LONG division uses `cdq; idiv`, whereas compatibility mode
+keeps `call B$DVI4`: division by zero still reaches BASIC's error handler,
+and the runtime still decides what happens for the minimum LONG divided by -1.
+Wrapping LONG multiplication remains eligible for replacement in both modes.
+
+Native does **not** mean fast-math: no permission to reassociate floating sums,
+discard signed zeros/NaNs, or ignore storage precision. Nor does it promise
+that every runtime helper has a native replacement yet. `--native-fpu` is a
+separate hardware choice and cannot be combined with `--basic-semantics`,
+which preserves the original emulator protocol. The semantic mode is recorded
+in the output marker and manifest; changing it requires the original OBJ.
+
+The same flag is accepted by `tools/bench.py` and `tools/stages.py`.
+Compatibility was checked with LNGMXX and FPDEEP on QB 4.5, PDS 7.1 and
+VBDOS (36 output assertions). Retaining calls exposed a missing backend
+constraint: the dividend helper's high result must arrive in DX, not an
+allocator-selected BX. Lowering now declares live call results' ABI locations;
+the 49 native program/configuration pairs whose bytes changed also pass their
+runtime checks. These checks are not exhaustive coverage of every exceptional
+numeric input; preservation rests on keeping the original runtime operations
+and strict floating semantics, rather than reimplementing their edge cases.
+
 The first case of that, and the one furthest along, is making a `LONG` cost
 what an `INTEGER` costs.
 
