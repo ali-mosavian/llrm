@@ -350,6 +350,29 @@ VARIANTS[("B$CHOU", "vbdos")] = replace(
 )
 
 for _name, _cleanup, _evidence in (
+    ("B$FMKI", 2,
+     "rt/strnum.asm 005e..0070: SI addresses the word argument at BP+6, "
+     "CX=2; StrAlcTmpCopy at strutil.asm 01f5 calls AlcTmpSH, whose CMP "
+     "at 0103 overwrites incoming arithmetic flags before dependencies. "
+     "Copy returns near; POP SI/BP / RETF 2. Allocation, aliases and errors "
+     "remain unknown; no register preservation inferred from local saves."),
+    ("B$FMKL", 4,
+     "rt/strnum.asm 0073..0085: SI addresses the dword argument at BP+6, "
+     "CX=4; StrAlcTmpCopy -> AlcTmpSH overwrites incoming arithmetic flags "
+     "at strutil.asm 0103. Near copy return followed by POP SI/BP / RETF 4. "
+     "Heap writes, aliases, errors and register clobbers remain unknown."),
+    ("B$FCVI", 2,
+     "rt/strnum.asm 0024..0041: XOR CH,CH at 0029 replaces incoming "
+     "arithmetic flags. PUSH CS / near CALL 0000 balances the local RETF. "
+     "Helper reads the string through RefString, checks length, copies two "
+     "bytes and calls DelTempSH, or tails ERR_FC. Normal POP DI/BP / RETF 2; "
+     "temporary deletion, memory writes and errors remain unknown."),
+    ("B$FCVS", 2,
+     "rt/strnum.asm 0044..005b: XOR CH,CH at 0049 replaces incoming "
+     "arithmetic flags. PUSH CS / near CALL 0000 balances the local RETF. "
+     "Shared conversion helper checks length and copies four bytes, with "
+     "RefString and DelTempSH dependencies or ERR_FC. POP DI/BP / RETF 2; "
+     "no purity, preservation or error-path guarantee."),
     ("B$LEFT", 4,
      "farstr/strfcn.asm 00dd..00f3: descriptor/count at BP+8/+6; first "
      "dependency RefString (strutil.asm 0013) overwrites arithmetic flags "

@@ -23,6 +23,7 @@ def test_peos_register_interface_does_not_claim_fixed_stack_cleanup():
     ("B$LNIN", 10), ("B$ERS1", 2),
     ("B$RTRM", 2), ("B$FASC", 2), ("B$FCHR", 2),
     ("B$LEFT", 4), ("B$RGHT", 4),
+    ("B$FMKI", 2), ("B$FMKL", 4), ("B$FCVI", 2), ("B$FCVS", 2),
 ])
 def test_vbdos_file_setup_retains_unknown_effects(name, cleanup):
     """Qrender refused string/file calls, including LEFT/RIGHT; CLOSE varies in arity."""
