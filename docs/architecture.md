@@ -618,7 +618,13 @@ one documented target without materially regressing another.
   converging branch arms become an unconditional edge. Dead blocks retain byte
   ownership. BOOLS has no empty transit blocks on its live path across all three
   compilers; final assembly remains unchanged (the emitter already removed jumps).
-  Linear-block merging and consolidation into a separate pass remain open.
+  Forward single-predecessor chains now merge, substitute single-entry phis and
+  rename outgoing phi edges. Ownership-only dead blocks move with the chain;
+  alternate entries, intervening live code and floating/unrolling provenance
+  retain their boundaries. BOOLS becomes one block on all three compilers with
+  identical final assembly. Reference: local LLVM `BasicBlockUtils.cpp`,
+  `MergeBlockIntoPredecessor`. General block placement, floating-sequence
+  migration and consolidation into a separate pass remain open.
 
 ### Loop profitability and specialization
 

@@ -2366,7 +2366,8 @@ class Decide(MIRTransform):
         self.where = where
 
     def transform(self, body: MirBody) -> MirBody:
-        return decided(body, self.where.dgroup, self.where.named)
+        from qbopt.optimize import cfg
+        return cfg.merged(decided(body, self.where.dgroup, self.where.named))
 
 
 class Dead(MIRTransform):
