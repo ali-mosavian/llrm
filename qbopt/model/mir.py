@@ -898,6 +898,8 @@ class MirBody:
     # Explicit whole-block repetition established by bounded loop expansion.
     # Provenance for lowering; transformations still operate on ordinary values.
     repetitions: tuple[tuple[int, int], ...] = ()
+    # Cloned CFGs retain source provenance but have a new semantic sequence.
+    cloned: bool = False
 
     def block(self, at: int) -> MirBlock | None:
         return next((one for one in self.blocks if one.at == at), None)
@@ -1889,6 +1891,8 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
         dict(namer.origin),
         {again.get(one, one): where for one, where in body.pins.items()},
         body.initial,
+        body.repetitions,
+        body.cloned,
     )
 
 

@@ -430,7 +430,7 @@ def lowered(
             for block in body.blocks
         ),
         origin=dict(body.origin),
-        ordered=bool(body.repetitions),
+        ordered=bool(body.repetitions) or body.cloned,
         pins={**body.pins, **{value: Register.ES for value in body.values if body.origin.get(value) == Register.ES}},
     )
 

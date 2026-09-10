@@ -62,27 +62,22 @@ def test_empty_reordered_block_gets_its_own_jump_anchor():
 @pytest.mark.parametrize("tag", ["q-O", "p-g2", "v-g3"])
 def test_peeled_ivarm_emission_keeps_every_iteration_reachable(monkeypatch, tag):
     """PDS's peeled latch reentered itself, leaving emitted bytes 0x57..0x70 unreachable."""
-    from dataclasses import replace
     from qbopt import wholeseg
     from qbopt.analysis import loops
-    from qbopt.backend import lower
     from qbopt.objectfile import module
     from qbopt.optimize import lcssa, loopclone, transform
 
-    original, lowered = transform.applied, lower.lowered
+    original = transform.applied
 
     def candidate(body, *args, **kwargs):
+        kwargs["unswitch_"] = False
         body = lcssa.closed(original(body, *args, **kwargs))
         loop, = loops.loops(body.blocks, body.entry)
         changed = loopclone.peeled(body, loop, 2)
         assert changed is not None
         return changed
 
-    def ordered(*args, **kwargs):
-        return replace(lowered(*args, **kwargs), ordered=True)
-
     monkeypatch.setattr(transform, "applied", candidate)
-    monkeypatch.setattr(lower, "lowered", ordered)
     result = wholeseg.emitted(Path(f"fixtures/regressions/ivarm-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))

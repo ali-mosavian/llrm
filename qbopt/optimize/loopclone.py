@@ -117,5 +117,5 @@ def peeled(body: mir.MirBody, loop: loops.Loop, count: int) -> mir.MirBody | Non
     def metadata(original):
         return {**original, **{value(old, iteration): location for old, location in original.items()
                               if old in defined for iteration in range(count)}}
-    return replace(body, blocks=(*changed, *cloned),
+    return replace(body, blocks=(*changed, *cloned), cloned=True,
                    origin=metadata(body.origin), pins=metadata(body.pins))

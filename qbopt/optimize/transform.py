@@ -2545,6 +2545,7 @@ def applied(
     promote_: bool = True,
     strength_: bool = True,
     unroll_: bool = True,
+    unswitch_: bool = False,
     only: str | None = None,
     watch=None,
 ) -> MirBody:
@@ -2613,5 +2614,8 @@ def applied(
             if watch is not None:
                 watch(f"r{iteration + 1:02d}-{one.name}", body)
         if only is not None or body == before:
+            if only is None and unswitch_:
+                from qbopt.optimize import unswitch
+                return unswitch.optimized(body, dgroup, calls, watch=watch)
             return body
     raise RuntimeError("MIR optimization did not converge after 16 rounds")

@@ -10,8 +10,10 @@ from qbopt.analysis import loops
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O"])
-def test_invariant_branch_load_moves_out_but_its_test_stays(tag):
+def test_invariant_branch_load_moves_out_but_its_test_stays(tag, monkeypatch):
     """IVWORD reloaded unchanged branchChoice every trip because its test prevented LICM."""
+    from qbopt.optimize import unswitch
+    monkeypatch.setattr(unswitch, "optimized", lambda body, *args, **kwargs: body)
     result = wholeseg.emitted(Path(f"fixtures/regressions/ivword-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     blocks = corpus.partitioned(result.data)
@@ -24,8 +26,10 @@ def test_invariant_branch_load_moves_out_but_its_test_stays(tag):
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 @pytest.mark.parametrize("program", ["ivarm", "ivword"])
-def test_internal_branch_reuses_the_value_recurrence(tag, program):
+def test_internal_branch_reuses_the_value_recurrence(tag, program, monkeypatch):
     """IVARM kept a second counter solely for ten trips around a conditional store."""
+    from qbopt.optimize import unswitch
+    monkeypatch.setattr(unswitch, "optimized", lambda body, *args, **kwargs: body)
     result = wholeseg.emitted(Path(f"fixtures/regressions/{program}-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]

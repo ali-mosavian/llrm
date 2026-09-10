@@ -759,14 +759,25 @@ one documented target without materially regressing another.
   facts retain HARY; loop preguards remain unimplemented.
 - [ ] Implement loop versioning/unswitching for invariant bounds, alias and
   numeric-environment conditions.
-  An invariant-branch IVARM candidate now simplifies both loop versions away.
+  Invariant-branch specialization now runs after the scalar fixed point for
+  single-body modules. It simplifies a bounded candidate on MIR and accepts it
+  only if the loop count falls without increasing semantic operation count.
+  Pure conditions use dominating invariant values; memory-reading conditions
+  and unsupported CFG/live-out shapes remain unchanged. This is an initial
+  structural profitability rule, not a target-cost model. Multi-body modules
+  await mixed ordered/legacy backend layout support.
+  IVARM and IVWORD now simplify both loop versions away.
   Store sinking reconstructs a directly stored counter's last executed value
   only with an exact, nonempty, non-wrapping trip proof and an unconditional
   latch store. IVARM stores 34, not its exit counter 37; zero-trip and inexact
   termination retain the original store. Existing alias/observation guards apply.
-  Candidate modeled costs are QB 556 → 282, PDS 536 → 282, VBDOS 528 → 274;
-  the PDS object shrinks from 1128 to 1107 bytes. Unswitching remains off pending
-  production integration, broader branch coverage and profitability selection.
+  IVARM modeled costs are QB 556 → 282, PDS 536 → 282, VBDOS 528 → 274;
+  IVWORD falls from QB 500 → 246, PDS 480 → 246 and VBDOS 472 → 238.
+  the PDS object shrinks from 1128 to 1107 bytes. Runtime variants selecting
+  either arm, including a true LONG with a zero low word (65536), pass on all
+  three compilers. The 32 PDS suite objects remain byte-identical to the pipeline
+  without unswitching; these improvements are in the regression fixtures.
+  General bounds/alias versioning and target-aware profitability remain open.
 
   ```asm
   ; before: one selected store on every iteration

@@ -161,6 +161,7 @@ def _rebuilt(
                 blocks=blocks,
                 found=found,
                 only=only,
+                unswitch_=len(bodies) == 1,
                 watch=(lambda stage, state: watch(f"mir-{stage}", name, state)) if watch is not None else None,
             )
             if only is None:
