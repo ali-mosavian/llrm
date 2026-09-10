@@ -79,7 +79,8 @@ def spilled(
                 fresh += 1
             if remade:
                 one = _renamed(one, remade)
-            direct = _source(one, stored, frame) or _in_place(one, stored, frame) or _tied(one, stored, frame)
+            one = _source(one, stored, frame) or one
+            direct = _in_place(one, stored, frame) or _tied(one, stored, frame)
             if direct is not None:
                 insns.append(direct)
                 continue
@@ -116,23 +117,26 @@ def spilled(
 
 
 def _source(one, values, frame):
-    """Fold one untied spill source into an encodable two-address operation."""
+    """Fold one untied spill source into arithmetic or a comparison."""
     if one.group is not None or one.requires or one.delivers or one.clobbers:
         return None
     match one.what:
         case ir.Semantics(ir.Operation.BINARY, name, (ir.Held() as dest,),
                           (ir.Held() as left, ir.Held() as right)):
-            if (name not in {"add", "sub", "and", "or", "xor"} or dest != left
-                or dest.width not in (2, 4) or right.width != dest.width
-                or right.value not in values or dest.value in values
-                or right.value in one.defines
-                or any(value in values and value != right.value for value in one.uses)):
+            if name not in {"add", "sub", "and", "or", "xor"} or dest != left:
                 return None
-            cell = frame.cell(right.value, right.width)
-            return replace(one, what=replace(one.what, sources=(left, cell)),
-                           uses=tuple(value for value in one.uses if value != right.value))
+        case ir.Semantics(ir.Operation.COMPARE, "cmp", (), (ir.Held() as left, ir.Held() as right)):
+            pass
         case _:
             return None
+    if (left.width not in (2, 4) or right.width != left.width
+        or right.value not in values or left.value == right.value
+        or right.value in one.defines
+        or any(value in values and value not in {left.value, right.value} for value in one.uses)):
+        return None
+    cell = frame.cell(right.value, right.width)
+    return replace(one, what=replace(one.what, sources=(left, cell)), symbol=False,
+                   uses=tuple(value for value in one.uses if value != right.value))
 
 
 def _constants(body: lir.LirBody, values: frozenset[int]) -> dict[int, ir.Imm]:

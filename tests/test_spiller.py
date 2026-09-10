@@ -52,6 +52,20 @@ def test_nbody_reads_spilled_position_directly_in_subtraction():
                and isinstance(one.what.sources[-1], ir.Mem) for one in states[0].insns)
 
 
+def test_nbody_compares_spilled_bound_without_scratch_reload():
+    """NBODY reloaded its saved step bound into EBX solely for the outer-loop CMP."""
+    from qbopt import wholeseg
+    states = []
+    def watch(stage, name, body):
+        if stage == "peephole" and body.entry == 0x30:
+            states.append(body)
+    result = wholeseg.emitted(Path("fixtures/bench/nbody-v-g3.obj").read_bytes(), watch=watch)
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    header = next(block for block in states[0].blocks if block.at == 0x2f0)
+    assert any(one.what is not None and one.what.name == "cmp" and isinstance(one.what.sources[-1], ir.Mem)
+               for one in header.insns)
+
+
 @pytest.mark.parametrize("width", [2, 4])
 @pytest.mark.parametrize("name", ["add", "sub", "and", "or", "xor"])
 def test_untied_spill_source_is_read_directly_by_arithmetic(name, width):
@@ -101,14 +115,56 @@ def test_repeated_operand_reloads_a_spill_only_once() -> None:
     assert product.what.sources[:2] == reload.what.dests * 2
 
 
-def test_two_spilled_add_operands_keep_the_accumulator_reload() -> None:
+@pytest.mark.parametrize("name, expected", [("add", 15000), ("sub", 9000), ("and", 12000 & 3000),
+                                          ("or", 12000 | 3000), ("xor", 12000 ^ 3000)])
+def test_two_spilled_operands_keep_the_accumulator_value(name, expected) -> None:
     """LNGMXX printed 169330 instead of 142900 after a tied spill discarded its loaded accumulator."""
+    from dataclasses import replace
+    frame = frames.Frame(0)
+    op = _add(1, 2)
+    op = replace(op, what=replace(op.what, name=name))
+    body, _ = spiller.spilled(_body(op), frozenset({1, 2}), frame)
+    values = {frame.cell(1, 2): 12000, frame.cell(2, 2): 3000}
+    for one in body.insns:
+        args = [values[arg] for arg in one.what.sources]
+        match one.what.name:
+            case "mov": result = args[0]
+            case "add": result = args[0] + args[1]
+            case "sub": result = args[0] - args[1]
+            case "and": result = args[0] & args[1]
+            case "or": result = args[0] | args[1]
+            case "xor": result = args[0] ^ args[1]
+            case _: pytest.fail(str(one.what))
+        values[one.what.dests[0]] = result & 0xffff
+    assert values[frame.cell(1, 2)] == expected
+    assert values[frame.cell(2, 2)] == 3000
+
+
+def test_two_spilled_operands_do_not_need_two_scratch_registers():
+    """LNGMXX's two spilled operands must retain the accumulator but need only one scratch."""
     result = _out(_body(_add(1, 2)), {1, 2})
-    first, second, add, store = result
-    assert add.what.sources == (*first.what.dests, *second.what.dests)
-    assert add.what.dests == first.what.dests
-    assert store.what.sources == add.what.dests
-    assert store.what.dests == first.what.sources
+    assert len(result) == 2
+    assert isinstance(result[-1].what.dests[0], ir.Mem)
+
+
+@pytest.mark.parametrize("width", [2, 4])
+@pytest.mark.parametrize("both", [False, True])
+def test_spilled_compare_preserves_order_flags_and_frame_address(width, both):
+    """NBODY's spilled bound must not swap CMP operands or inherit its old global relocation."""
+    op = lir.Insn(0, (0, 3), ir.Semantics(ir.Operation.COMPARE, "cmp", (),
+                                        (ir.Held(1, width), ir.Held(2, width))), (3,), (1, 2))
+    result = _out(_body(op), {1, 2} if both else {2})
+    assert len(result) == (2 if both else 1)
+    comparison = result[-1]
+    assert comparison.defines == (3,)
+    assert comparison.symbol is False
+    assert isinstance(comparison.what.sources[0], ir.Held)
+    assert isinstance(comparison.what.sources[1], ir.Mem)
+    if both:
+        assert comparison.what.sources[0] == result[0].what.dests[0]
+        assert comparison.what.sources[1] != result[0].what.sources[0]
+    else:
+        assert comparison.what.sources[0] == ir.Held(1, width)
 
 
 def test_spilled_constant_is_rematerialized_without_a_frame_slot() -> None:

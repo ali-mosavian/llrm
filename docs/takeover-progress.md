@@ -4014,3 +4014,29 @@ timer readings are excluded from output equality. QB LNGMXX remains correct
 at 838 bytes / 246 modeled units. These are estimates, not hardware timings.
 Complete dumps, objects and runtime outputs:
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-fold-spill-m06buebr`.
+
+### Fold comparison spill sources and compose with accumulator spills
+
+The spill-source fold now includes CMP without swapping operands or changing
+its flag definition. A folded frame operand explicitly drops the original
+instruction's relocation metadata: NBODY's promoted comparison at 0x106
+otherwise tried to bind its former global fixup to a frame displacement and
+refused emission. The real NBODY test failed before the comparison fold and
+caught that refusal during implementation; both are now resolved.
+
+Before the outer-loop test: `mov ebx,[bp-20h]; cmp eax,ebx`.
+After: `cmp eax,[bp-20h]`. The inner body/other comparison similarly reads
+its spilled index directly. VBDOS is 4156 -> 4151 object bytes and modeled
+cost 357352 -> 355332; PDS is 2863 -> 2858 and 355267 -> 353247. Both runtime
+outputs match BC. QB LNGMXX remains correct at 838 bytes / 246 units.
+
+Folding also composes with the existing accumulator-spill path: when both
+arithmetic operands are spilled, load the untied source and update the
+accumulator slot in place, rather than loading both and storing one back.
+No benefit from that case was observed in the selected pressure fixtures;
+the measured gain above comes from comparisons. The old four-instruction
+shape assertion is replaced by execution of the emitted spill operations,
+checking accumulator value and unchanged source across five operations.
+Forty spiller checks passed, followed by eleven focused checks including
+word/dword comparisons with one or both operands spilled.
+Artifacts: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-compare-spill-vx0gut06`.
