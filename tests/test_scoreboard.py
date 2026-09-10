@@ -45,11 +45,20 @@ def test_chain_reference_preserves_signed_remainders_and_output_states():
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
-def test_chain_legacy_objects_cannot_pass_a_seven_row_reference(tag, capsys):
+def test_chain_legacy_objects_cannot_pass_a_seven_row_reference(tag, capsys, tmp_path):
     """Five-row CHAIN fixtures must not look cheaper by omitting CONST and CONST2 output."""
-    assert opportunity.against_targets([Path(f"fixtures/omf/chain-{tag}.obj")]) == 1
+    path = tmp_path / f"chain-{tag}.obj"
+    path.write_bytes(Path(f"fixtures/regressions/chain5-{tag}.obj").read_bytes())
+    assert opportunity.against_targets([path]) == 1
     report = capsys.readouterr().out
     assert "PROVISIONAL" in report and "seven-row" in report
+
+
+@pytest.mark.parametrize("path", sorted(Path("fixtures/omf").glob("chain-*.obj")))
+def test_chain_fixtures_cover_current_seven_result_source(path):
+    """Legacy CHAIN objects omitted CONST and CONST2, hiding two output/arithmetic paths."""
+    from qbopt.objectfile import module
+    assert sum(name == "B$PEI4" for name in module.load(path).calls.values()) == 7
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])

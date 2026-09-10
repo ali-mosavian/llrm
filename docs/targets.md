@@ -299,13 +299,35 @@ Registering the target changes no emitted assembly. The checked-in CHAIN objects
 contain only five result rows, while the current source has seven. Their costs
 (QB/PDS 682, VBDOS 630) must not be divided by this denominator. The scoreboard
 requires seven `B$PEI4` output sites or reports PROVISIONAL. Fresh builds of the
-current source execute all seven rows correctly on QB, PDS and VBDOS; refreshing
-the legacy fixture matrix remains necessary before its comparisons are valid.
+current source execute all seven rows correctly on QB, PDS and VBDOS. All 15
+CHAIN fixtures have now been regenerated from that source with zero severe
+compiler errors and updated manifest hashes. Three historical five-row objects
+remain as `fixtures/regressions/chain5-*.obj` solely to test stale-reference
+rejection; their original source is unavailable, so they are not runtime goldens.
 Those fresh optimized objects cost **962 on QB/PDS (2.00×)** and **882 on
 VBDOS (1.83×)**. This exposes a real above-target case hidden by the stale
 five-row fixtures. The remaining constant arithmetic crosses output calls and
-compiler-generated frame temporaries; stage dumps, not a larger denominator,
-will determine the next optimization.
+compiler-generated frame temporaries. A fresh PDS trace locates the first loss
+at the label-argument push, **before** the print call: the write to `[sp-2]`
+invalidates known `[bp-1a]`/adjacent frame bytes because stack/frame disjointness
+has not been proved. The later load of the outer divisor consequently remains
+unknown. The required work is a sound frontend stack/frame-region proof,
+including unknown stack depth and escaped locals, not blanket call preservation.
+
+```asm
+; Current PDS, symbolic frame temporary shown
+mov word [outerDivisor],1
+mov word [outerDivisor+2],0
+push labelONE                ; current alias facts forget outerDivisor here
+call far B$PSSD
+; ... first result output ...
+mov ecx,[outerDivisor]        ; should still be known 1 if regions are disjoint
+; ... inner remainder ...
+idiv ecx                     ; remainder by 1 could then fold to 0
+```
+
+Refreshing fixtures and tracing facts change no optimizer instructions; this
+listing is the measured remaining work, not an implemented before/after win.
 
 ## FPDEEP — exact constant floating expressions
 

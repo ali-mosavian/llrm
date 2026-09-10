@@ -1,5 +1,12 @@
 # Focused regression objects
 
+`chain5-{p-g2,q-O,v-g3}.obj` preserve the historical five-row CHAIN objects
+formerly in `fixtures/omf`. They retain the original numeric-argument escape
+regression and its four-remaining-divisions assertion. Their original source
+is unavailable; do not compare them to today's seven-row CHAIN runtime golden.
+The scoreboard tests also use them to reject a stale object/reference pairing.
+All 15 main CHAIN fixtures now compile the current seven-row source.
+
 `udtrng-p-g2.obj` is real PDS output for a runtime-selected record guarded by
 `0 <= slot <= 2`. END arms now have no MIR return edge when the runtime contract
 is established; scalar condition reads become explicit values. Both focused

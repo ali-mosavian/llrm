@@ -20,7 +20,7 @@ def test_long_arithmetic_values_do_not_escape_chain_inputs(tag):
     """CHAIN retained seven IDIVs because nested numeric arguments made a and b appear escaped."""
     from qbopt import wholeseg
     from qbopt.model import mir
-    path = Path(f"fixtures/omf/chain-{tag}.obj")
+    path = Path(f"fixtures/regressions/chain5-{tag}.obj")
     found = corpus.loaded(path)
     assert not any(segment == found.program_data for segment, _ in module.escaped(found))
     states = []
