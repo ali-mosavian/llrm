@@ -6,6 +6,55 @@ commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
 ## Latest gate — seven modules, 2026-09-10
 
+### Entity conversion fix and native-FPU transition — 2026-09-11
+
+Commit `75db48d` fixes `ent` refusing `ENT_CHECK_TELEPORT` at 0xae9.
+Adjacent dumps in `/tmp/qbopt-ent-audited` showed recognition of B$FIS2
+creating `fstore signed16` followed by EXTRACT(word, 0). Lowering supports
+extracting halves of a long, not extracting a word from the same word.
+The raise now uses COPY for the whole signed16 value; long results still
+use two extractions. Actual `ent.obj` is retained as
+`fixtures/regressions/qrender-ent-v-g3.obj`. Its regression failed at the
+observed unsupported extraction before the fix and now lowers to word
+FISTP without a FIS2 call. Three existing long-conversion emission tests
+also pass. Full corrected `ent` emission succeeds (17843 OBJ bytes), with
+dumps in `/tmp/qbopt-ent-word-fixed`.
+
+```asm
+; before, original 0xae9
+call far B$FIS2
+push ax
+; after, conversion site in the emitted listing
+fistp word [bp-32h]
+; allocation supplies the converted value to its later use
+```
+
+The subsequent user instruction switches optimized builds to native x87:
+`native_fpu=True`, without `basic_semantics`. Re-emit selected modules from
+the original objects, not from previously optimized output. The remaining
+unrewritten modules keep their original FPi code; unresolved segmented
+emulator protocols must not be described as proven native conversions.
+`/tmp/qbopt-native-eight.py` batches the eight selected modules with stage
+dumps and hash-checked, explicit project contracts. Native runtime results
+are a separate comparison from the earlier emulator-protocol runs.
+
+All eight native emissions succeeded in `/tmp/qbopt-qrender-native-20260911`:
+d_turb, view, common, in_main, vid, qglchk, qglarr, ent. Mapped output code
+has no remaining INT 34h..3Dh sites. Linking and the 60-tick scene complete,
+but **the native build is not accepted**: `plat_zofs` is 0 versus baseline
+-288. All other non-timing/non-memory fields and the BMP agree. The earlier
+eight-module emulator-protocol run retained -288, so investigate native
+conversion rather than accepting the matching screenshot as correctness.
+Native mean FPS 9.52402 (frame 104.99767 ms, best/worst 9.90121/7.63376);
+eight-module emulator-protocol mean 9.34942; baseline 9.43334. These are not
+valid optimization gains while state differs. Live native captures caught
+startup black (`live-render.png`) and completion (`live-scene.png`), not a
+rendered frame; do not label those as visual rendering proof. The fresh
+BENCH.BMP is the frame evidence. Investigate segmented emulator conversion:
+the decoder removes INT 3Ch without recovering its segment override, while
+the native emission path can select the resulting unprefixed operation.
+This is a hypothesis, not yet a proved cause of the platform mismatch.
+
 Added `qglarr`; fourteen BASIC modules remain. Build directory:
 `/tmp/qbopt-qrender-array-20260910`. The same 60-tick scene linked and
 completed with identical BMP and all non-timing/non-memory fields.
