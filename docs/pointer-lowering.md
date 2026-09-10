@@ -54,7 +54,7 @@ preserves flags and balances the stack. Focused encoding tests check both
 load and store bytes. Distinct pointer values are not treated as proof of
 disjoint memory. Other pointer memory operations are explicitly unsupported.
 
-Numeric HUGE accesses with a proved immediate integer memory consumer now
+Numeric HUGE accesses with a proved local integer memory consumer now
 use this path. The frontend sign-extends indices and lower bounds, zero-extends
 counts, accumulates the byte displacement at width 4, loads the descriptor's
 whole pointer and emits PTR_OFFSET. CSE can number that pure computation.
@@ -81,3 +81,19 @@ register class, preventing allocation to nonexistent byte halves of SI/DI.
 Remaining work includes generalized consumers and loop optimization, plus
 loop-entry bounds guards when checking is requested. Checked mode still uses
 the runtime helper; no bounds checks are silently retained in native output.
+
+`hugelp.bas` adds a loop over both boundary-crossing pairs. Its six helper
+sites (two in the loop and four reads after it) all become native MIR on
+QB, PDS and VBDOS. Each original/native pair prints `456 457 789 790` and
+`DONE`. Recognition permits stack-independent index calculations between
+argument pushes and scalar preparation before the memory consumer. A CFG
+walk checks every continuation, including loop exits, for an observation
+of the old selector before an established overwrite. Unknown paths refuse.
+Dead word-merge dependencies are removed only after checking transitive
+high-half uses; this prevents an unused offset from surviving in a loop phi.
+
+The production non-debug HARR case already has induction variables: the
+inner loop stores the current sum, accumulates it, increments that sum and
+advances the pointer by 42 bytes. The huge-loop path still needs comparable
+descriptor reuse and address induction; helper removal alone is not that
+performance result.

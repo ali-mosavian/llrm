@@ -96,24 +96,76 @@ def dynamic(body, symbol):
 
 def _overwrites_offset(body, op, value):
     if (op.kind is not mir.Kind.COPY or len(op.args) != 1 or len(op.results) != 1
-        or not isinstance(op.args[0], mir.Symbol) or op.args[0].width != 2
+        or not isinstance(op.args[0], (mir.Symbol, mir.Const, mir.Held)) or op.args[0].width != 2
+        or isinstance(op.args[0], mir.Held) and op.args[0].value == value
         or not isinstance(op.results[0], mir.Held) or op.results[0].width != 2
         or op.merges != {value: op.results[0].value}):
         return False
-    result = op.results[0].value
-    if any(result in phi.incoming.values() for block in body.blocks for phi in block.phis):
-        return False
-    return not any(
-        any(isinstance(arg, mir.Held) and arg.value == result and arg.width > 2 for arg in later.args)
-        or any(ref.base == result and ref.base_width > 2 for ref in (*later.loads, *later.stores))
-        for block in body.blocks for later in block.ops)
+    pending, visited = [op.results[0].value], set()
+    while pending:
+        result = pending.pop()
+        if result in visited:
+            continue
+        visited.add(result)
+        for block in body.blocks:
+            if any(result in phi.incoming.values() for phi in block.phis):
+                return False
+            for later in block.ops:
+                if (any(isinstance(arg, mir.Held) and arg.value == result and arg.width > 2 for arg in later.args)
+                    or any(ref.base == result and ref.base_width > 2 for ref in (*later.loads, *later.stores))):
+                    return False
+                if result in later.merges:
+                    pending.append(later.merges[result])
+    return True
+
+
+def _selector_dead(body, block, position, contracts):
+    blocks = {one.at: one for one in body.blocks}
+    pending, visited = [(block.at, position)], set()
+    while pending:
+        at, start = pending.pop()
+        if (at, start) in visited:
+            continue
+        visited.add((at, start))
+        current = blocks.get(at)
+        if current is None:
+            return False
+        for later in current.ops[start:]:
+            if later.kind is mir.Kind.NOTHING:
+                continue
+            if later.kind is mir.Kind.CALL:
+                contract = contracts.get(later.at)
+                if contract is None or contract.inputs is None or runtime.Reg.ES in contract.inputs:
+                    return False
+                if runtime.Reg.ES in contract.clobbers:
+                    break
+            else:
+                effects = getattr(later.node, "effects", None)
+                if effects is None or effects.uses is None or Register.ES in effects.uses:
+                    return False
+                if effects.defs is not None and Register.ES in effects.defs:
+                    break
+        else:
+            if not current.succ:
+                return False
+            pending.extend((successor, 0) for successor in current.succ)
+    return True
 
 
 def _whole_consumer(body, block, position, value, contracts):
-    """Prove the helper's machine outputs are only one immediate memory address."""
-    if position + 1 >= len(block.ops):
+    """Prove the helper's machine outputs are only one local memory address."""
+    consumer_position = position + 1
+    for consumer_position in range(position + 1, len(block.ops)):
+        candidate = block.ops[consumer_position]
+        if value in candidate.uses:
+            break
+        effects = getattr(candidate.node, "effects", None)
+        if (candidate.kind is mir.Kind.CALL or effects is None or effects.uses is None
+            or effects.defs is None or Register.ES in effects.uses | effects.defs):
+            return None
+    else:
         return None
-    consumer = block.ops[position + 1]
+    consumer = block.ops[consumer_position]
     if consumer.kind not in (mir.Kind.LOAD, mir.Kind.STORE, mir.Kind.ARG):
         return None
     refs = consumer.loads if consumer.kind is not mir.Kind.STORE else consumer.stores
@@ -131,20 +183,7 @@ def _whole_consumer(body, block, position, value, contracts):
         return None
     if any(value in phi.incoming.values() for other in body.blocks for phi in other.phis):
         return None
-    for later in block.ops[position + 2:]:
-        if later.kind is mir.Kind.CALL:
-            contract = contracts.get(later.at)
-            if contract is None or contract.inputs is None or runtime.Reg.ES in contract.inputs:
-                return None
-            if runtime.Reg.ES in contract.clobbers:
-                return consumer
-        else:
-            effects = getattr(later.node, "effects", None)
-            if effects is None or effects.uses is None or Register.ES in effects.uses:
-                return None
-            if effects.defs is not None and Register.ES in effects.defs:
-                return consumer
-    return None
+    return (consumer_position, consumer) if _selector_dead(body, block, consumer_position + 1, contracts) else None
 
 
 def native(body, found, *, bounds_checks=False):
@@ -152,6 +191,18 @@ def native(body, found, *, bounds_checks=False):
         return body
     local = module.defines(found.records, found.seg)
     calls = {at: name for at, name in found.calls.items() if name not in local}
+    if not any(op.kind is mir.Kind.CALL and calls.get(op.at) == "B$HARY"
+               for block in body.blocks for op in block.ops):
+        return body
+
+    def overwritten(op):
+        if len(op.merges) == 1:
+            value = next(iter(op.merges))
+            if _overwrites_offset(body, op, value):
+                return replace(op, merges={}, uses=tuple(one for one in op.uses if one != value))
+        return op
+    body = replace(body, blocks=tuple(replace(block, ops=tuple(map(overwritten, block.ops))) for block in body.blocks))
+    body = ssa.pruned_phis(body, {value for block in body.blocks for op in block.ops for value in op.uses})
     contracts = runtime.for_module(found)
     known = consts.known(body)
     definitions = {value: op for block in body.blocks for op in block.ops for value in op.defines}
@@ -198,6 +249,8 @@ def native(body, found, *, bounds_checks=False):
                          and not any(value.flags and value in read for value in op.defines))
                 consumer = _whole_consumer(body, block, position, outputs[0], contracts) if valid and shape.huge else None
                 valid = valid and (not shape.huge or consumer is not None)
+                if consumer is not None:
+                    consumer_position, consumer = consumer
                 if valid:
                     indices = []
                     for index in arguments[:-1]:
@@ -264,9 +317,9 @@ def native(body, found, *, bounds_checks=False):
                             load = replace(changed, kind=mir.Kind.LOAD, defines=(value.value,),
                                 results=(value,), stores=(), covers=(consumer.at, consumer.at), id=None, raised=None)
                             argument = replace(consumer, args=(value,), uses=(value.value,), loads=())
-                            replacements[position + 1] = (load, argument)
+                            replacements[consumer_position] = (load, argument)
                         else:
-                            replacements[position + 1] = changed
+                            replacements[consumer_position] = changed
                     else:
                         arithmetic(mir.Kind.ADD, offset, loaded(shape.data), mir.Held(outputs[0], 2))
                         expanded.append(mir.Op(op.at, ir.Operation.MOVE, "mov", (), (),
@@ -278,7 +331,14 @@ def native(body, found, *, bounds_checks=False):
                     arguments.clear()
                     continue
                 arguments.clear()
-            elif op.kind not in (mir.Kind.COPY, mir.Kind.NOTHING):
+            elif op.kind not in (mir.Kind.COPY, mir.Kind.NOTHING) and not (
+                op.op in (ir.Operation.MOVE, ir.Operation.BINARY, ir.Operation.UNARY, ir.Operation.EXTEND)
+                and not op.stores and not op.barrier
+                and all(ref.addr is not None and ref.space is not Space.STACK for ref in op.loads)
+                and (effects := getattr(op.node, "effects", None)) is not None
+                and effects.uses is not None and effects.defs is not None
+                and Register.ESP not in effects.uses | effects.defs
+            ):
                 arguments.clear()
             ops.append(op)
         blocks.append(replace(block, ops=tuple(ops)))
