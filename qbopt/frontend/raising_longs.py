@@ -6,6 +6,40 @@ from qbopt.model import ir, mir
 from qbopt.frontend import pairs
 
 
+def sign_fills(body: mir.MirBody) -> mir.MirBody:
+    """Expose the sign word as an extraction from a signed whole value."""
+    values = set(body.origin)
+    for block in body.blocks:
+        values.update(value for op in block.ops for value in (*op.uses, *op.defines))
+        values.update(phi.result for phi in block.phis)
+        values.update(value for phi in block.phis for value in phi.incoming.values())
+    serial = max((value.id for value in values), default=0)
+    variable = max((value.variable for value in values), default=0)
+    blocks = []
+    for block in body.blocks:
+        ops = []
+        for op in block.ops:
+            if (op.kind is not mir.Kind.CONVERT or op.op is not ir.Operation.EXTEND
+                or op.name != "cwd" or op.loads or op.stores or op.barrier
+                or len(op.args) != 1 or len(op.results) != 1
+                or not isinstance(op.args[0], mir.Held) or op.args[0].width != 2
+                or not isinstance(op.results[0], mir.Held) or op.results[0].width != 2
+                or op.defines != (op.results[0].value,)):
+                ops.append(op)
+                continue
+            serial += 1
+            variable += 1
+            whole = mir.Held(mir.Value(serial, op.at, variable=variable, version=1), 4)
+            ops.append(mir.Op(op.at, ir.Operation.EXTEND, "sign_extend", (whole.value,),
+                              (op.args[0].value,), kind=mir.Kind.SIGN_EXTEND,
+                              args=op.args, results=(whole,), covers=(op.at, op.at)))
+            ops.append(replace(op, kind=mir.Kind.EXTRACT, op=mir.Synth.HALF_TO_LOW,
+                               name="extract", args=(whole, mir.Const(16, 4)),
+                               uses=(whole.value,), merges={}, node=None, made=None, raised=None))
+        blocks.append(replace(block, ops=tuple(ops)))
+    return replace(body, blocks=tuple(blocks))
+
+
 def arguments(body: mir.MirBody) -> mir.MirBody:
     """Rejoin high/low argument words extracted from the same whole value."""
     definitions = {value: op for block in body.blocks for op in block.ops for value in op.defines}

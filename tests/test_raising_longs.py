@@ -11,6 +11,22 @@ from qbopt.frontend import raising_longs
 from qbopt.optimize import transform
 
 
+@pytest.mark.parametrize("seed,expected", [(0, 0), (1, 0), (0x7fff, 0), (0x8000, 0xffff), (-1, 0xffff)])
+def test_nbody_counter_seed_has_a_known_high_word(seed, expected):
+    """NBODY's initial long 1 had an opaque high word, blocking whole-value loop phis."""
+    from qbopt.analysis import consts
+    path = Path("fixtures/bench/nbody-v-g3.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    body = replace(body, blocks=tuple(replace(block, ops=tuple(
+        replace(op, args=(mir.Const(seed, 2),)) if op.at == 0xe0 and op.kind is mir.Kind.COPY else op
+        for op in block.ops)) for block in body.blocks))
+    facts = consts.known(body, found.dgroup, found.calls)
+    high = next(op for block in body.blocks for op in block.ops
+                if op.at == 0xe3 and op.results and op.results[0].width == 2)
+    assert facts.get(high.results[0].value) == consts.Known(expected, 2)
+
+
 @pytest.mark.parametrize("mismatch", ["none", "carry", "constant", "width", "source"])
 def test_whole_negation_requires_exact_carry_chain(mismatch, monkeypatch):
     """NBODY damping paid for split negation; unrelated carry or halves are not a long negation."""
@@ -64,6 +80,7 @@ def test_signed_store_requires_the_matching_sign_word(mismatch, monkeypatch):
     recognize = raising_longs.scalar
     with monkeypatch.context() as patch:
         patch.setattr(raising_longs, "scalar", lambda body: body)
+        patch.setattr(raising_longs, "sign_fills", lambda body: body)
         path = Path("fixtures/omf/addrm-p-g2.obj")
         body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
     extension = next(op for block in body.blocks for op in block.ops if op.at == 0x5c)

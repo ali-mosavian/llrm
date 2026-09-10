@@ -2224,6 +2224,7 @@ def bodies(
                 built = raising_float_results.raised(built, found, contracts)
             built = raising_longs.arguments(built)
             from qbopt.frontend import raising_floats
+            built = raising_longs.sign_fills(built)
             built = raising_floats.annotated(built)
             from qbopt.frontend import raising_float_values
             built = raising_float_values.raised(built)

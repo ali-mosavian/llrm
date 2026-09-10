@@ -3782,3 +3782,31 @@ executable independently timed out after 15 seconds with empty output:
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-seed-linked-recheck-w2r1_veh`.
 Next diagnosis must inspect the linked execution/remaining layout-dependent
 state, not repeat the constant-folding argument or enable this normalization.
+
+### Residual sign fills raised; runtime failure is core-dependent
+
+The identical failing linked executable completes with all 24 expected values
+and DONE under DOSBox-X `core=normal`. The full normalization experiment also
+passes there. Neither test relinks or changes executable bytes. Outside the
+module's code, the linked images are byte-identical; their relocation-table
+changes match the two-byte shift. This establishes core dependence, not the
+precise emulator defect. Do not call the dynamic-core timeout a proven compiler
+miscompile, or treat a timeout as a passing result. The harness default remains
+unchanged; these explicit correctness runs use the normal core.
+
+`raising_longs.sign_fills` now exposes residual CWD as SIGN_EXTEND followed by
+EXTRACT of the high word. Recognition stays in the raise; optimization sees
+only values. The original word result and covered instruction survive, while
+the artificial old-high partial-write dependency does not. The NBODY seed
+regression failed first with an unknown high word; it also checks positive,
+negative and signed-word boundary seeds.
+
+Before: `mov bx,ax; sar bx,15`. After folding the seed: `mov bx,0`.
+This is a whole-value prerequisite, not yet a size win: full normalization
+changes VBDOS NBODY 4211 -> 4223 bytes and PDS NBODY 2896 -> 2900 bytes;
+QB CMPORD remains 3873. Fresh emitted NBODY on VBDOS and PDS and CMPORD on QB
+match original outputs under the normal core, excluding only NBODY TICKS.
+Every-pass dumps and linked results:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-sign-fill-verified-m2uzbzwp`.
+The remaining optimization is still combining the paired loop phis into one
+whole value; normalizing the seed alone does not accomplish it.
