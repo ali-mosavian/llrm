@@ -245,9 +245,8 @@ class MemRef:
     # a pointer to, and nothing else. Carried as what it *can* reach
     # rather than what it cannot, because the second is not enumerable.
     #
-    # Per cell, not per body. Asked per body -- does this body hand out an
-    # address at all -- all 32 of the corpus's programs do, and the
-    # guarantee is worth nothing.
+    # Origins have no recorded extent. If any pointer into this segment
+    # escapes, disjoint fields require the explicit `excludes` ranges below.
     beyond: "tuple[int, frozenset] | None" = None
     symbolic: "Symbol | None" = None  # proven effective address; original operands remain for lowering
     allocation: "Symbol | None" = None  # proven in-bounds access to this dynamic allocation
@@ -2076,7 +2075,11 @@ def _out_of_reach(blind: MemRef, named: MemRef) -> bool:
     owner, reaches = blind.beyond
     if named.addr.space is not Space.SEGMENT or named.addr.index != owner:
         return False  # not the program's own data; this says nothing about it
-    return (named.addr.index, named.addr.disp) not in reaches
+    # Escapes name pointer origins, not allocation bounds. An origin at
+    # offset N can reach fields at N+2 (or an adjusted pointer at N-2).
+    # Only an empty escape set for this segment proves disjointness;
+    # narrower claims require explicit byte-range exclusions above.
+    return not any(segment == owner for segment, _ in reaches)
 
 
 def _may_reach(one: "Space | None", other: "Space | None") -> bool:

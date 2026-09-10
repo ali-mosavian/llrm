@@ -4220,3 +4220,20 @@ passes already cover its cases, so no CHAIN speedup is claimed. Full stages
 and assembly: `/tmp/qbopt-memoryssa-call-before` and
 `/tmp/qbopt-memoryssa-call-after`. Both retain the initializer
 `mov dword [0],40000007h` and the same four remaining frame divisions.
+
+### Escaped pointer origins are not object extents
+
+The shared MIR alias rule incorrectly treated a pointer escaping at one offset
+as unable to reach another offset in the same object. A fail-first regression
+demonstrated the resulting wrong transformation: a loop call receiving an
+escaped origin at 0x1e allowed the word read at 0x20 to be forwarded from a
+preheader store. That load now remains. Without extents, a nonempty escape set
+for the segment cannot prove disjointness; explicit byte-range exclusions can.
+The same rule now protects all consumers, removing constant propagation's
+private workaround. Empty per-segment escape sets retain their precision.
+
+42 focused alias, call-memory, numeric-escape and forwarding tests pass.
+CHAIN PDS before/after assembly remains identical at 1274 object bytes;
+stages are in `/tmp/qbopt-escape-extents-after`, compared with
+`/tmp/qbopt-memoryssa-call-after`. Its four remaining frame divisions need
+a separate frame-object escape proof; no frame preservation was assumed.

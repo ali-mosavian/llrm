@@ -76,3 +76,14 @@ def test_call_exclusion_must_cover_the_entire_read() -> None:
         replace(block, ops=(call,)) if block.at == 2 else block for block in body.blocks
     ))
     assert transform.forwarded(body, frozenset(), {}).blocks[1].ops[0].loads
+
+
+def test_escaped_object_origin_does_not_exclude_an_interior_read() -> None:
+    """An escaped pointer at 0x1e may write the word at 0x20 inside its object."""
+    body = loop_body()
+    effect = mir.MemRef(None, 0, beyond=(1, frozenset({(1, 0x1e)})))
+    call = mir.Op(2, ir.Operation.CALL, "", (), (), kind=mir.Kind.CALL, stores=(effect,))
+    body = replace(body, blocks=tuple(
+        replace(block, ops=(call,)) if block.at == 2 else block for block in body.blocks
+    ))
+    assert transform.forwarded(body, frozenset(), {}).blocks[1].ops[0].loads
