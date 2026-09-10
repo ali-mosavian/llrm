@@ -1,5 +1,24 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: fix noreturn being mistaken for restricted memory access
+
+Investigating terminal dead stores exposed an unsound frontend assumption:
+`mir._narrowed` narrowed ANY memory effects solely because a runtime call
+never returned. Nonreturning calls may still read memory or invoke user
+handlers before exit. B$CENP specifically enters No RESUME handling when an
+ON ERROR is active, and its existing contract explicitly says reads/writes
+ANY. That effect must not become an exclusion for caller numeric data.
+
+Removed the noreturn exception. Calls now require independently restricted
+read and write contracts to receive the exclusion; B$CEND's established OWN
+contract still qualifies. The regression checks the actual raised B$CENP
+load effect against a caller store and fails with the old shortcut restored.
+36 focused literal tests pass (the previously documented raw QB loop-exit
+proof assertion remains excluded). FPCSE emitted objects are byte-identical
+on all three primary compilers, so no unchanged DOS runs were repeated.
+This prevents an invalid foundation for future terminal-store removal;
+it is not a performance gain. A valid body/data lifetime proof is still needed.
+
 ## 2026-09-10: thread empty collapsed-loop blocks
 
 MIR branch cleanup bypasses blocks containing only ownership markers and an

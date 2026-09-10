@@ -2105,13 +2105,6 @@ def _narrowed(calls: dict | None, at: int) -> bool:
     if calls is None or at not in calls:
         return False
     contract = runtime.contract(calls[at])
-    # One that never comes back writes nothing anybody can observe. LLVM
-    # and GCC both say this with `noreturn`, and it matters here because
-    # B$CENP ends every program: its own contract is ANY, it stands in
-    # every body, and taken at face value it aliases every variable in
-    # every one of them.
-    if contract.control is runtime.Control.NEVER:
-        return True
     return contract.writes is not runtime.Memory.ANY and contract.reads is not runtime.Memory.ANY
 
 

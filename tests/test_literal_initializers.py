@@ -12,6 +12,24 @@ from qbopt.objectfile import omf
 from qbopt.objectfile.module import Addr, Space
 
 
+def test_nonreturning_call_does_not_justify_narrowing_unknown_memory_reads():
+    """B$CENP may enter a No RESUME handler before exit; noreturn does not mean no reads."""
+    from qbopt.abi import runtime
+    routine = runtime.contract("B$CENP")
+    assert routine.control is runtime.Control.NEVER
+    assert routine.reads is runtime.Memory.ANY
+    path = Path("fixtures/omf/fpcse-q-O.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    terminal = next(op for block in body.blocks for op in block.ops
+                    if op.kind is mir.Kind.CALL and found.calls.get(op.at) == "B$CENP")
+    stored = next(ref for block in body.blocks for op in block.ops for ref in op.stores
+                  if ref.addr is not None and ref.addr.space is Space.SEGMENT)
+    assert any(mir.overlapping(ref, stored, found.dgroup) for ref in terminal.loads)
+    assert not mir._narrowed({0x30: "B$CENP"}, 0x30)
+    assert mir._narrowed({0x30: "B$CEND"}, 0x30)
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_fpdeep_mix_outputs_fold_across_string_prints(tag):
     """FPDEEP kept CLNG(q*1024) because PRINT invalidated the unrelated numeric literal."""
