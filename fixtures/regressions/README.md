@@ -1,5 +1,29 @@
 # Focused regression objects
 
+`udtrng-p-g2.obj` is real PDS output for a runtime-selected record guarded by
+`0 <= slot <= 2`. END arms now have no MIR return edge when the runtime contract
+is established; scalar condition reads become explicit values. Both focused
+regressions fail with their fix disabled. QB/PDS/VBDOS baseline and optimized
+executions print 21, -35 and DONE. PDS modeled cost falls 1148 → 1140.
+The emitted guard changes as below (relocations named for readability):
+
+```asm
+; before                          ; after
+cmp word [slot],0                  mov bx,[slot]
+jge lower_ok                      test bx,bx
+call B$CEND                       jge lower_ok
+lower_ok:                         call B$CEND
+cmp word [slot],2                  lower_ok:
+jle upper_ok                      cmp bx,2
+call B$CEND                       jle upper_ok
+upper_ok:                         call B$CEND
+mov bx,[slot]                     upper_ok:
+shl bx,3                          shl bx,3
+```
+
+This reuses the guard read; indexed field loads/stores inside the loop remain.
+Interior terminal calls still require byte-owning block splitting.
+
 Promotion clobber regressions in `tests/test_promote.py` use PRESS-derived MIR
 with explicit, unspecified and barrier effects, placed before/between/after a
 store and read. Only an intervening clobber should prevent reuse. Unspecified

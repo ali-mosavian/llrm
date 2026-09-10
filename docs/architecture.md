@@ -596,6 +596,10 @@ one documented target without materially regressing another.
   symbol-plus-offset chain. Next establish bounded element/field identities
   in the raise and alias analysis, then extend promotion; do not infer an
   in-bounds index from the fixture's DATA or declared array size.
+  UDTRNG adds explicit lower/upper guards. Established terminal calls at block
+  ends now remove false return edges before SSA construction, and scalar memory
+  comparisons expose their loads as values. Existing reuse shares the guard
+  read (PDS 1148 → 1140); indexed field promotion is still unfinished.
 - [ ] Feed SROA results into promotion so scalar values survive across BC
   statement boundaries.
   Write-through promotion now also accepts fixed procedure-frame fields, not

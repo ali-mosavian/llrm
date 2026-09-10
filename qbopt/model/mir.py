@@ -2195,6 +2195,8 @@ def bodies(
     out: list[tuple[str, MirBody]] = []
     for body in result:
         mine = [one for one in blocks if any(lo <= one.at < hi for lo, hi in body.body.ranges)]
+        from qbopt.frontend import raising_control
+        mine = raising_control.terminal_edges(mine, contracts)
         if not mine:
             continue
         built = raise_body(
@@ -2227,6 +2229,8 @@ def bodies(
             built = raising_longs.arguments(built)
             from qbopt.frontend import raising_copies
             built = raising_copies.scalar(built, found)
+            from qbopt.frontend import raising_conditions
+            built = raising_conditions.loaded(built)
             defined = module.defines(found.records, found.seg)
             array_calls = {at: name for at, name in found.calls.items() if name not in defined}
             built = raising_arrays.annotated(built, array_calls, family=module.family(found.records))

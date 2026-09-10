@@ -9,6 +9,51 @@ from qbopt.model import ir, mir
 from qbopt.optimize import cfg
 
 
+def test_end_guards_have_no_return_edge_in_raised_control_flow():
+    """UDTRNG's END arms falsely rejoined the guarded array accesses in MIR."""
+    from qbopt.frontend import blocks
+    from qbopt.objectfile import module, omf
+    path = Path("fixtures/regressions/udtrng-p-g2.obj")
+    found = module.of(omf.parse(path.read_bytes()))
+    body = mir.bodies(found, blocks.partition(found, blocks.code_map(found)))[0][1]
+    exits = [block for block in body.blocks if block.ops and found.calls.get(block.ops[-1].at) == "B$CEND"]
+    assert len(exits) == 2
+    assert all(not block.succ for block in exits)
+    parents = {at: {block.at for block in body.blocks if at in block.succ} for at in (0x60, 0x6c)}
+    assert parents == {0x60: {0x30}, 0x6c: {0x60}}
+
+
+def test_udtrng_bounds_compare_explicit_values():
+    """UDTRNG's bounds guards hid their read inside CMP, leaving range analysis no SSA value to constrain."""
+    from qbopt.frontend import blocks
+    from qbopt.objectfile import module, omf
+    found = module.of(omf.parse(Path("fixtures/regressions/udtrng-p-g2.obj").read_bytes()))
+    body = mir.bodies(found, blocks.partition(found, blocks.code_map(found)))[0][1]
+    guards = [op for block in body.blocks for op in block.ops
+              if op.at in (0x54, 0x60) and op.op is ir.Operation.COMPARE]
+    assert len(guards) == 2
+    assert all(not op.loads and isinstance(op.args[0], mir.Held) for op in guards)
+
+
+@pytest.mark.parametrize("known,terminal", [(False, True), (True, False)])
+def test_only_established_terminal_contracts_remove_return_edges(known, terminal):
+    """An unknown or returning END-shaped call must not erase a reachable path."""
+    from qbopt.abi import runtime
+    from qbopt.frontend import blocks, raising_control
+    from qbopt.objectfile import module, omf
+    found = module.of(omf.parse(Path("fixtures/regressions/udtrng-p-g2.obj").read_bytes()))
+    mapped = blocks.code_map(found)
+    assert not isinstance(mapped, str)
+    contracts = runtime.for_module(found)
+    original = [block for block in blocks.partition(found, mapped)
+                if block.insns and found.calls.get(block.insns[-1].at) == "B$CEND"]
+    assert original
+    changed = {at: replace(contract, established=known,
+               control=runtime.Control.NEVER if terminal else runtime.Control.RETURNS)
+               for at, contract in contracts.items()}
+    assert raising_control.terminal_edges(original, changed) == original
+
+
 @pytest.mark.parametrize("tag", ["q-O", "p-g2", "v-g3"])
 def test_bools_constant_program_is_one_live_block(tag):
     """BOOLS still split four constant stores and PRINT across four live blocks."""
