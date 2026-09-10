@@ -3885,3 +3885,29 @@ directly. Emitted code still extracts twice with push/pop to store the low
 and high words, then reloads the whole counter on the backedge. Combining
 those adjacent stores and preserving the whole value through the loop is
 the next remaining work, not something this checkpoint claims to have done.
+
+### Whole stores enable counter promotion
+
+Algebraic now combines consecutive word stores when their addresses are
+adjacent and their values are exact low/high extracts of the same whole
+value. It requires matching memory-reference attributes, no intervening
+operation, no extra definitions/loads and no barrier. Coverage of both old
+stores is retained separately from the selected whole store's bytes.
+This is value/memory reasoning; no machine register or encoding is consulted.
+
+The real NBODY regression failed first with two stores. After combination,
+existing promotion and store elimination remove stepNo memory traffic from
+the whole outer loop and retain one exit store. Fourteen focused checks pass,
+including mismatched addresses, unrelated halves and non-store rejection.
+Fresh NBODY runtime outputs match on VBDOS/PDS; QB CMPORD is unchanged and
+matches. Every-pass dumps and linked output:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-whole-stores-3c2fucaq`.
+
+VBDOS NBODY: 4213 -> 4209 bytes, modeled cost 364154 -> 363812.
+PDS NBODY: 2896 -> 2892 bytes, modeled cost 360989 -> 360647.
+These are the existing loop-weighted estimates, not measured CPU timings.
+The remaining generated counter is allocated to a stack slot: load, increment,
+spill, reload for comparison. Before this change it reconstructed two halves
+and wrote the global counter every iteration. MIR now has one recurrence
+without those global accesses; keeping it allocated profitably across the
+nested loops remains a backend opportunity.

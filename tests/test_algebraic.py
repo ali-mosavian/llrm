@@ -31,6 +31,47 @@ def test_nbody_counter_comparison_joins_whole_values_before_the_loop():
     assert isinstance(resolved, mir.MirBody), resolved
 
 
+def test_nbody_counter_is_stored_as_one_whole_value():
+    """NBODY split its whole counter into two stores and reloaded it on every backedge."""
+    path = Path("fixtures/bench/nbody-v-g3.obj")
+    body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
+    done = algebraic.simplified(body, set(), set())
+    stores = [op for block in done.blocks for op in block.ops
+              if op.at in (0x2f0, 0x2f3) and op.stores]
+    assert len(stores) == 1
+    assert stores[0].stores[0].width == stores[0].args[0].width == 4
+    from qbopt.analysis import loops
+    found = corpus.loaded(path)
+    final = transform.applied(body, found.dgroup, found.calls, blocks=corpus.partitioned(path), found=found)
+    counter = stores[0].stores[0].addr
+    loop = next(loop for loop in loops.loops(final.blocks, final.entry) if loop.header == 0x2f0)
+    assert not any(ref.addr == counter for block in final.blocks if block.at in loop.body
+                   for op in block.ops for ref in (*op.loads, *op.stores))
+
+
+@pytest.mark.parametrize("mismatch", ["address", "value", "barrier"])
+def test_whole_store_requires_adjacent_matching_word_writes(mismatch):
+    """NBODY's counter store is not permission to combine unrelated or observable writes."""
+    from qbopt.optimize import wholephis, wholestores
+    path = Path("fixtures/bench/nbody-v-g3.obj")
+    body = wholephis.joined(mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1])
+    header = next(block for block in body.blocks if block.at == 0x2f0)
+    low = next(op for op in header.ops if op.at == 0x2f0 and op.stores)
+    high = next(op for op in header.ops if op.at == 0x2f3 and op.stores)
+    match mismatch:
+        case "address":
+            ref = high.stores[0]
+            changed = replace(high, stores=(replace(ref, addr=ref.addr.plus(2)),))
+        case "value":
+            changed = replace(high, args=low.args)
+        case "barrier":
+            changed = replace(high, kind=mir.Kind.CALL)
+    body = replace(body, blocks=tuple(replace(block, ops=tuple(changed if op is high else op for op in block.ops))
+                                     for block in body.blocks))
+    done = wholestores.joined(body)
+    assert sum(bool(op.stores) for block in done.blocks for op in block.ops if op.at in (0x2f0, 0x2f3)) == 2
+
+
 @pytest.mark.parametrize("mismatch", ["edge", "half", "unknown"])
 def test_whole_counter_phi_requires_every_matching_edge(mismatch):
     """NBODY's comparison must not combine unrelated words or guess a missing incoming value."""
