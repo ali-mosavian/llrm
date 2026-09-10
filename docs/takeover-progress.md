@@ -1,5 +1,34 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: reprioritize from current emitted targets
+
+After `b241ad5`, ran `tools/opportunity.py --targets` against the default
+OMF corpus once. Ordinary HARR is **2094–2126 / 1834 = 1.14–1.16x**;
+further HUGELP tuning is useful but is not the next reason the documented
+target gate fails. Ordinary FPDEEP is **2123–2267 / 1086 = 1.95–2.09x**.
+The gate remains incomplete: event references are provisional, some fixtures
+have no target, and `jumptable.obj` is unmeasured because emission refuses.
+This is a prioritization checkpoint, not a completion claim or cycle timing.
+
+FPDEEP's adjacent MIR/assembly dumps identify two remaining causes:
+
+- Each unrolled MIX expression still multiplies by the literal 1024 and
+  converts to LONG at runtime. The SINGLE operand is already known exactly
+  as 1/2, 3/4 or 7/8. Its multiplier's BC_CN entry fact is lost across PRINT:
+  the pool also contains escaped string descriptors, and the current call
+  memory model cannot distinguish their mutable fields from literal bytes.
+- The final DOUBLE initializer is four opaque MOVSW operations. The existing
+  frontend copy recognizer requires established direction and data-selector
+  state locally; neither survives to this post-loop block in its analysis.
+  The opaque writes then discard the facts needed to fold DSQ and DRATIO.
+
+Next implementation should improve those proofs at the raise/runtime-contract
+boundary. Do not mark all BC_CN memory immutable: string compaction really
+updates descriptors. Do not assume DF is clear merely because BC emitted a
+forward copy: establish the applicable entry/call contract or retain a safe
+representation. Keep runtime effects and aliasing explicit, and leave machine
+recognition out of the optimization passes. The reference remains 1086.
+
 ## Complete PRESSX and LNGMXX integer references
 
 PRESSX now uses its own **508** target (256 input + 150 arithmetic/final
