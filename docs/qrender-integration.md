@@ -471,6 +471,27 @@ module and rerun before claiming the renderer hang fixed. Runtime-specific
 frame metadata sizes also still need checking against the VBDOS prologue;
 the inherited FR_SIZE=10 comes from QB's source.
 
+### VBDOS frame-header size
+
+VBDCL10E ENRA pushes ten words below BP at 0024..0036 before SUB SP,CX:
+previous frame, SI, DI, CX, runtime word, and five zero words. Its header
+is twenty bytes, not QB's ten. Emission now passes compiler family to the
+backend frame builder. The regression fails with the inherited size and
+passes with twenty; ten focused frame/prologue tests pass.
+
+The final common dumps `/tmp/qbopt-common-frame-final` emit 14,468 bytes:
+
+```asm
+; original faulty allocation      ; frame fixes applied
+call far B$ENRA                  call far B$ENRA
+mov [bp-2],ax                    mov [bp-22h],ax
+```
+
+Fresh linked build `/tmp/qbopt-qrender-frame-20260910` is running with
+common/view/d_turb rewritten, exec session 81371, debug port 2198. Its
+copied benchmark outputs were renamed before launch. Runtime validation
+is pending; retain the original hung guest on port 2197 as evidence.
+
 ### Two-module runtime check
 
 Relinking with rewritten `view` and `d_turb` succeeded. The isolated build in

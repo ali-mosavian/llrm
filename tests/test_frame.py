@@ -25,6 +25,10 @@ def test_entry_frame_size_comes_from_cx_not_call_arity(registers):
     owned = frame.of(body, {3: "B$ENRA"})
     assert owned.floor == -22
     assert owned.slot(200, 2) == -24
+    # VBDOS pushes ten words below BP before subtracting CX, not five.
+    vbdos = frame.of(body, {3: "B$ENRA"}, family="vbdos")
+    assert vbdos.floor == -32
+    assert vbdos.slot(200, 2) == -34
     address = replace(init, at=8, what=ir.Semantics(ir.Operation.MOVE, "lea",
         (ir.Held(101, 2),), (ir.Address(ir.Addr(ir.Space.FRAME, -32), 0),)))
     addressed = replace(body, blocks=(replace(body.blocks[0], insns=(init, call, address)),))

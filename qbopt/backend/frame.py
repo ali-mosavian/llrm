@@ -58,9 +58,11 @@ class Frame:
         return ir.Mem(ir.Addr(Space.FRAME, self.slot(value, width)), width, Register.BP, 0, 2)
 
 
-def of(body: lir.LirBody, calls: dict | None = None) -> Frame:
+def of(body: lir.LirBody, calls: dict | None = None, *, family: str = "") -> Frame:
     """A frame for this body, starting below everything it already reaches."""
     floor = 0
+    # VBDCL10E rtenexit 0024..0036 pushes ten words before SUB SP,CX.
+    runtime_size = 20 if family == "vbdos" else RUNTIME_SIZE
     constants = {}
     for block in body.blocks:
         for one in block.insns:
@@ -75,7 +77,7 @@ def of(body: lir.LirBody, calls: dict | None = None) -> Frame:
                     sizes = [held.value for held, reg in one.requires if reg == Register.CX]
                     if len(sizes) != 1 or sizes[0] not in constants:
                         raise Refused("runtime frame size is not a known constant")
-                    floor = min(floor, -RUNTIME_SIZE - constants[sizes[0]])
+                    floor = min(floor, -runtime_size - constants[sizes[0]])
             for where in (*one.what.dests, *one.what.sources):
                 if isinstance(where, (ir.Mem, ir.Address)) and where.addr is not None and where.addr.space is Space.FRAME:
                     floor = min(floor, where.addr.disp)
