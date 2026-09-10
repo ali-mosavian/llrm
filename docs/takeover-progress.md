@@ -4335,3 +4335,17 @@ QB FPDEEP is separately classified: r01-unroll expands five indexed loads
 to fifteen; r02-cse has zero after constant-index folding. Its existing
 count assertion remains unchanged pending an output-based replacement;
 the absence of loads alone is not proof of correct numerical output.
+
+### Validate QB FPDEEP constant-index folding
+
+The QB FPDEEP baseline and optimized executables produce byte-identical
+output, matching all eleven numeric golden results. The one-program `q-O`
+end-to-end run passed; BC reported zero severe errors. Artifacts are in
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-fpdeep-output-8d_nepjg`.
+
+The regression now checks all eleven constant numeric print arguments for
+QB, requires LIR emission, and verifies that indexed floating loads are gone.
+PDS and VBDOS retain their three-load/two-stack-copy assertions. This replaces
+the obsolete QB load count with numerical evidence, not a blanket allowance
+for missing loads. Production assembly before/after this test-only correction
+is unchanged; the optimization was already present.

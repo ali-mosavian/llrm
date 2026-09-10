@@ -34,13 +34,23 @@ def test_fpdeep_reuses_proven_finite_array_loads(tag):
                              found.calls, blocks=partition, found=found)
     loads = [op for block in body.blocks for op in block.ops
              if op.kind is mir.Kind.FLOAD and op.loads and op.loads[0].base is not None]
-    assert len(loads) == 3
+    if tag == "q-O":
+        # Unrolling exposes constant indices; verify every printed numeric
+        # result, not merely the absence of the original memory reads.
+        assert not loads
+        printed = [op.args[0].n for block in body.blocks for op in block.ops
+                   if op.kind is mir.Kind.ARG and len(op.args) == 1
+                   and isinstance(op.args[0], mir.Const) and op.args[0].width == 4]
+        assert printed == [144, 6, 512, 784, 14, 768, 3600, 30, 896, 144, 6]
+    else:
+        assert len(loads) == 3
     from qbopt import wholeseg
     emitted = wholeseg.emitted(path.read_bytes())
     assert emitted.outcome is wholeseg.Emission.LIR, emitted.reason
     instructions = [str(one.insn) for block in corpus.partitioned(emitted.data) for one in block.insns]
-    assert instructions.count("fld dword ptr [si]") == 3
-    assert instructions.count("fld st(0)") == 2
+    assert instructions.count("fld dword ptr [si]") == (0 if tag == "q-O" else 3)
+    if tag != "q-O":
+        assert instructions.count("fld st(0)") == 2
     assert not any(one.startswith(("fmul dword ptr [si]", "fadd dword ptr [si]")) for one in instructions)
 
 
