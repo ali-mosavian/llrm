@@ -109,7 +109,7 @@ def _closed_loop(body: mir.MirBody, loop: loops.Loop) -> mir.MirBody:
         phis.append(mir.Phi(result, {source: value}))
 
     def rewritten(block: mir.MirBlock) -> mir.MirBlock:
-        if block.at in loop.body or exit_at not in dominators.get(block.at, frozenset()):
+        if block.at in loop.body:
             return block
         existing = block.phis
         if block.at != exit_at:
@@ -128,7 +128,8 @@ def _closed_loop(body: mir.MirBody, loop: loops.Loop) -> mir.MirBody:
         return replace(
             block,
             phis=existing + (tuple(phis) if block.at == exit_at else ()),
-            ops=tuple(ssa.substituted(op, swap) for op in block.ops),
+            ops=(tuple(ssa.substituted(op, swap) for op in block.ops)
+                 if exit_at in dominators.get(block.at, frozenset()) else block.ops),
         )
 
     return replace(body, blocks=tuple(rewritten(block) for block in body.blocks))

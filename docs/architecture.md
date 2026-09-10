@@ -576,6 +576,11 @@ one documented target without materially regressing another.
 - [x] Preserve loop-exit SSA explicitly (`LCSSA`). Single-edge dedicated exits
   are closed before loop transforms in each fixed-point round; unsupported exit shapes remain
   unchanged until `LoopSimplify` supplies their canonical CFG.
+  Exit values reaching a bypass join are rewritten on the incoming edge,
+  even when the exit does not dominate the join. This fixes qrender's
+  `MDL_FIRE` repeatedly adding six phis until the 16-round limit;
+  `pl_move` and `screen` now finish MIR optimization but still refuse
+  emission on unestablished call contracts. No optimized runtime claim yet.
 - [ ] Canonicalize primary counters and derived recurrences
   (`IndVarSimplify`).
   Existing recurrences can replace redundant termination counters across

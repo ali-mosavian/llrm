@@ -1,5 +1,7 @@
 """Loop-closed SSA keeps every loop result behind an exit phi."""
 
+from dataclasses import replace
+
 from qbopt.model import ir, mir
 from qbopt.optimize import lcssa
 
@@ -87,6 +89,23 @@ def test_loop_closed_ssa_is_idempotent() -> None:
     body, _, _ = loop_with_exit_use()
     once = lcssa.closed(body)
     assert lcssa.closed(once) == once
+
+
+def test_exit_edge_into_a_bypass_join_is_closed_once() -> None:
+    """Qrender MDL_FIRE added six exit phis per round and aborted after 16 rounds."""
+    body, carried, _ = loop_with_exit_use()
+    seed = body.blocks[0].ops[0].defines[0]
+    answer = mir.Value(9, 4, variable=1, version=4)
+    body = replace(body, blocks=(
+        replace(body.blocks[0], succ=(1, 4)),
+        body.blocks[1], body.blocks[2],
+        mir.MirBlock(3, (), (), (4,)),
+        mir.MirBlock(4, (mir.Phi(answer, {0: seed, 3: carried}),), (), ()),
+    ))
+    result = lcssa.closed(body)
+    exit_value = result.block(3).phis[0].result
+    assert result.block(4).phis[0].incoming == {0: seed, 3: exit_value}
+    assert lcssa.closed(result) == result
 
 
 def test_a_value_already_consumed_by_an_exit_phi_is_closed() -> None:
