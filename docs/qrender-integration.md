@@ -31,8 +31,10 @@ remain intact. No optimized renderer runtime result exists yet.
 - **Cross-module interfaces:** BASIC, C and assembly callees need verified
   contracts; examples are `R_POINT_LEAF`, `IN_HANDLE_TOGGLES`, `QGLSFNEW`
   and `QGLSFPSET`. A name alone does not establish an ABI.
-- **Backend correctness:** `view` refuses an inserted add at 0x243 that
-  crosses a live condition. Locate it using adjacent stage dumps.
+- **Resolved backend refusal:** `view`'s inserted add at 0x243 was blocked
+  by an unused flags phi. Lowering now prunes dead flag merges before
+  checking lifetimes, retaining consumed conditions. The module reaches
+  its next blocker, `QGLMOUSEPOS` at 0x280; output is still unchanged.
 
 Fix each issue with a fail-first regression. Keep code generation refusal
 atomic; a byte-identical fallback is not successful optimization. Relink

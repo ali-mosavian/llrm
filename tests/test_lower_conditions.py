@@ -77,6 +77,26 @@ def test_inserted_stride_cannot_replace_the_branch_condition() -> None:
     assert [one.at for one in built.blocks[0].ops] == [0, 3, 6]
 
 
+@pytest.mark.parametrize("consumed", [False, True])
+def test_dead_exit_condition_does_not_block_inserted_arithmetic(consumed):
+    """Qrender V_UPDATE_CAMERA refused an address add because an unused flags phi looked live."""
+    built = body()
+    compare, increment, branch = built.blocks[0].ops
+    condition = compare.defines[0]
+    merged = mir.Value(9, 10, flags=True)
+    exit_ops = (replace(branch, at=10, uses=(merged,)),) if consumed else ()
+    built = replace(built, blocks=(
+        replace(built.blocks[0], ops=(compare, increment), succ=(10,)),
+        mir.MirBlock(10, (mir.Phi(merged, {0: condition}),), exit_ops, ()),
+    ))
+    if consumed:
+        with pytest.raises(lower.Unlowered, match="live condition"):
+            lower.lowered("loop", built, {}, (), {})
+    else:
+        result = lower.lowered("loop", built, {}, (), {})
+        assert any(one.what and one.what.name == "add" for one in result.blocks[0].insns)
+
+
 @pytest.mark.parametrize("reason", ["memory", "second_reader", "data_result"])
 def test_condition_scheduling_does_not_move_effects_or_other_results(reason: str) -> None:
     built = body()

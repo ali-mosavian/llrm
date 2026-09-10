@@ -365,8 +365,12 @@ def lowered(
     """
     from qbopt.model import lir
     from qbopt.backend import lower_floats
+    from qbopt.analysis import ssa
 
     lower_floats.checked(body)
+    body = ssa.pruned_phis(body, {
+        phi.result for block in body.blocks for phi in block.phis if not phi.result.flags
+    })
 
     # An absorbed call site is emitted by select.absorbed, seventeen bytes
     # of mov and idiv, and not from any semantics this could give it.
