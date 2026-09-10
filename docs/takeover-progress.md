@@ -3584,3 +3584,33 @@ These three real-object cases failed first. Eleven focused identity,
 provisional/missing-target and event checks pass; the larger scoreboard
 run has only its known stale NOTS 1.43x expectation (current code is 1.31x).
 No compiler output changed, and no runtime rerun was needed.
+## 2026-09-10: sink literal invariant stores out of nonempty loops
+
+HARR's inner loop already uses pointer increments. Its outer latch still
+wrote the final column value `11` on every row. Constant propagation had
+made that value literal, but store sinking accepted only invariant Held
+values. The invariant-value rule now also accepts Const, under the same
+proved-nonempty, single-latch, single-exit and no-observer/alias conditions.
+The write is retained exactly once; zero-trip proof failure leaves it inside.
+
+```
+before outer latch:            after outer latch:
+    mov word [c],11                inc row
+    inc row                        advance row pointer
+    advance row pointer        after outer exit:
+                                   mov word [c],11
+```
+
+The three real HARR cases failed first with the constant store still in
+the loop; their three nonempty-proof guard cases stayed unchanged. All 33
+store-motion tests pass. Original and optimized HARR/LNGMXX outputs match
+on QB, PDS and VBDOS. HARR's rankings fall 2048→1994 on PDS/VBDOS and
+2084→2030 on QB, exactly nine fewer six-unit stores with the instrument's
+ten-iteration weight. Object sizes are unchanged. LNGMXX is unchanged.
+Artifacts and all stage dumps:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-constant-loop-stores-fvks_2bi`.
+
+The NBODY assembly inspected this round still contains unabsorbed arithmetic
+helpers in initialization and velocity damping, plus allocator spill traffic.
+That is a concrete remaining code-generation gap, unlike HARR's already
+strength-reduced address stride.

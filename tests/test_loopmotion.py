@@ -12,6 +12,31 @@ from qbopt.optimize import promote
 from qbopt.abi import runtime
 
 
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+@pytest.mark.parametrize("nonempty", [False, True])
+def test_harr_constant_column_exit_is_stored_once_only_after_a_nonempty_loop(tag, nonempty, monkeypatch):
+    """HARR wrote c=11 once per row after its inner counter became a constant."""
+    from qbopt.optimize import transform
+    path = Path(f"fixtures/omf/harr-{tag}.obj")
+    found = corpus.loaded(path)
+    partition = corpus.partitioned(path)
+    body = mir.bodies(found, partition)[0][1]
+    with monkeypatch.context() as patch:
+        patch.setattr(loopmotion, "_invariant_value", lambda *args: None, raising=False)
+        body = transform.applied(body, found.dgroup, found.calls, blocks=partition, found=found)
+    hot = {at for loop in loops.loops(body.blocks, body.entry) for at in loop.body}
+    stores = [op for block in body.blocks if block.at in hot for op in block.ops
+              if op.kind is mir.Kind.STORE and op.args == (mir.Const(11, 2),)]
+    assert len(stores) == 1
+    if not nonempty:
+        monkeypatch.setattr(loopmotion.induction, "nonempty", lambda *args: False)
+    result = loopmotion.sunk_stores(body, found.dgroup, module.landmarks(found))
+    remaining = [op for block in result.blocks if block.at in hot for op in block.ops
+                 if op.id == stores[0].id]
+    assert bool(remaining) is not nonempty
+    assert sum(op.id == stores[0].id for block in result.blocks for op in block.ops) == 1
+
+
 @pytest.mark.parametrize("proof", ["complete", "no_seed", "no_bounds"])
 def test_nbody_conditional_accumulator_stores_sink(monkeypatch, proof):
     """Nbody's promoted accumulators still wrote memory on every other-body update."""

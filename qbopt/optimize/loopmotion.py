@@ -41,19 +41,19 @@ def sunk_stores(body: mir.MirBody, dgroup: frozenset[int], bounds: dict | None =
             outside = predecessors[source] - loop.body
             if len(outside) == 1 and latch != source and blocks[latch].succ == (source,):
                 entry = next(iter(outside))
-                invariant = induction.invariant(body, set(loop.body)) if induction.nonempty(body, loop) else set()
+                nonempty = induction.nonempty(body, loop)
+                invariant = induction.invariant(body, set(loop.body)) if nonempty else set()
                 for op in operations:
                     if id(op) not in relocated and _unobserved(op, operations, dgroup, bounds, intervals):
                         value = _exit_value(op, blocks[source], blocks[entry], latch, body, dgroup, bounds)
-                        if value is None and any(op is one for one in blocks[latch].ops) and len(op.args) == 1 and isinstance(op.args[0], mir.Held):
-                            if op.args[0].value.id in invariant:
-                                value = op.args[0]
+                        if value is None and any(op is one for one in blocks[latch].ops):
+                            value = _invariant_value(op, invariant, nonempty)
                         if value is not None:
                             moved.append(op)
                             relocated[id(op)] = replace(
                                 op,
                                 args=tuple(value if isinstance(arg, mir.Held) else arg for arg in op.args),
-                                uses=(value.value,),
+                                uses=(value.value,) if isinstance(value, mir.Held) else (),
                             )
         if not moved:
             continue
@@ -70,6 +70,17 @@ def sunk_stores(body: mir.MirBody, dgroup: frozenset[int], bounds: dict | None =
         }
         body = replace(body, blocks=tuple(updates.get(block.at, block) for block in body.blocks))
     return body
+
+
+def _invariant_value(op: mir.Op, invariant: set[int], nonempty: bool) -> mir.Arg | None:
+    if not nonempty or len(op.args) != 1:
+        return None
+    match op.args[0]:
+        case mir.Const() as value:
+            return value
+        case mir.Held(value=value) as arg if value.id in invariant:
+            return arg
+    return None
 
 
 def _exit_value(
