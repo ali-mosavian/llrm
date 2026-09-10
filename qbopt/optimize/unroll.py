@@ -36,7 +36,8 @@ def expanded(body: mir.MirBody, dgroup: frozenset[int], calls: dict) -> mir.MirB
             continue
         entry, = outside
         exit_at, = exits
-        if set(predecessors[exit_at]) != {header.at} or blocks[exit_at].phis:
+        if (set(predecessors[exit_at]) != {header.at}
+            or any(set(phi.incoming) != {header.at} for phi in blocks[exit_at].phis)):
             continue
         bridges = [blocks[at] for at in loop.body if at not in (header.at, latch.at)]
         if any(block.phis or len(block.succ) != 1 or any(
@@ -135,9 +136,16 @@ def _expanded(body, loop, header, latch, exit_at, entry, count):
         elif block.at not in loop.body:
             # Only dominated exits read the final iteration's definitions.
             if exit_at in dominators.get(block.at, ()):
-                block = replace(block, ops=tuple(ssa.substituted(op, swap) for op in block.ops),
-                                phis=tuple(replace(phi, incoming={at: ssa.provider(value, swap)
-                                           for at, value in phi.incoming.items()}) for phi in block.phis))
+                phis = tuple(replace(phi, incoming={at: ssa.provider(value, swap)
+                              for at, value in phi.incoming.items()}) for phi in block.phis)
+                if block.at == exit_at:
+                    # The entry test still owns its exit edge until branch folding.
+                    # The expanded latch reaches the exit with the final iteration.
+                    phis = tuple(replace(phi, incoming={
+                        header.at: ssa.provider(phi.incoming[header.at], initial),
+                        latch.at: ssa.provider(phi.incoming[header.at], swap),
+                    }) for phi in block.phis)
+                block = replace(block, ops=tuple(ssa.substituted(op, swap) for op in block.ops), phis=phis)
         changed.append(block)
     return replace(body, blocks=tuple(changed), origin=origin, pins=pins,
                    repetitions=(*body.repetitions, (latch.at, count)))

@@ -4367,3 +4367,45 @@ remain; the retained stack value is extended precision, not the rounded output.
 FPCSEX PDS before/after assembly is identical. This closes an allocation gap
 for shared values but does not yet improve that target. Complete stage dumps:
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-float-reload-mpt9c8qd`.
+
+### Unroll through LCSSA exit phis
+
+The refreshed target report covered 78 existing p-g2/q-O/v-g3 configurations:
+69 non-provisional results are within 1.5x; nine floating results remain
+provisional. This is not the event/flag matrix or coverage of missing references.
+FPDEEP exposed a concrete integration defect: PDS/VBDOS have two LCSSA exit
+phis and the unroller rejected every exit phi. QB has none and already unrolled.
+
+Unrolling now supplies final-iteration values on the new latch-to-exit edge,
+while retaining initial values on the entry-test edge until branch folding
+removes it. Phi inputs remain keyed to actual CFG predecessors. Recognition
+and floating semantics are unchanged; the existing exact folding pass can
+now see constant array indices on PDS/VBDOS too.
+
+| FPDEEP | Modeled cost before | After | Object bytes before | After |
+| --- | ---: | ---: | ---: | ---: |
+| PDS /G2 | 12371 | 1777 | 1472 | 1838 |
+| VBDOS /G3 | 12351 | 1777 | 1924 | 2291 |
+
+Code grows from unrolling while modeled execution cost falls. The denominator
+is still provisional; no target-completion or hardware timing claim is made.
+For the first printed square, the emitted conversion changes as follows
+(relocations named, intervening string output omitted):
+
+```asm
+; before                       ; after
+fld dword [q]                  wait
+fistp dword [bp-4]              push dword 144
+wait                           call far B$PEI4
+mov eax,[bp-4]
+push eax
+call far B$PEI4
+```
+
+Both production-shaped regressions failed before the fix. Six focused
+unroll/FPDEEP checks pass, including FPCSEX refusing unprofitable expansion.
+PDS and VBDOS end-to-end FPDEEP each pass all eleven numeric golden cases.
+Before stages: `qbopt-fpdeep-unroll-9m59iys4`; after stages:
+`qbopt-fpdeep-lcssa-after-cpfq2fn9`; execution artifacts:
+`qbopt-fpdeep-p-g2-_s_c0hhf` and `qbopt-fpdeep-v-g3-dis9k6o7`, all beneath
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T`.

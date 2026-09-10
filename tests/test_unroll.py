@@ -36,6 +36,26 @@ def body():
     return found, optimized
 
 
+@pytest.mark.parametrize("tag", ["p-g2", "v-g3"])
+def test_production_fpdeep_unrolls_through_lcssa_exits(tag):
+    """PDS/VBDOS FPDEEP retained three iterations because its LCSSA exit phis blocked unrolling."""
+    from tools.stages import _bodies
+    found, bodies, _ = _bodies(Path(f"fixtures/omf/fpdeep-{tag}.obj").read_bytes())
+    partition = corpus.partitioned(Path(f"fixtures/omf/fpdeep-{tag}.obj"))
+    original = transform.applied(bodies[0][1], found.dgroup, found.calls,
+                                 blocks=partition, found=found, unroll_=False)
+    loop, = loops.loops(original.blocks, original.entry)
+    exit_at, = set(original.block(loop.header).succ) - loop.body
+    assert original.block(exit_at).phis
+    changed = unroll.expanded(original, found.dgroup, found.calls)
+    assert changed is not original
+    assert not loops.loops(changed.blocks, changed.entry)
+    predecessors = loops.predecessors(changed.blocks)
+    for block in changed.blocks:
+        for phi in block.phis:
+            assert set(phi.incoming) == set(predecessors[block.at])
+
+
 def test_normal_pipeline_expands_and_folds_fpdeep_to_a_fixed_point():
     """FPDEEP's improvements previously required an out-of-band unroll wrapper."""
     found, original = body()
