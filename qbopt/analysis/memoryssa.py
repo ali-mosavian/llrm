@@ -59,6 +59,24 @@ class MemorySSA:
         This identifies memory states, not a dominating scalar definition;
         forwarding consumers must establish value availability separately.
         """
+        return self._frontier(site, memory, dgroup)
+
+    def unchanged(
+        self, earlier: Site, later: Site, memory: mir.MemRef,
+        dgroup: frozenset[int] = frozenset(),
+    ) -> bool:
+        """Whether a dominating earlier read's memory state still applies.
+
+        The caller must establish dominance and equal addresses. Stop at
+        the earlier memory version, rejecting any possibly aliasing write
+        on the way, including writes carried by loop backedges.
+        """
+        boundary = self.at(earlier).defining
+        return boundary is not None and self._frontier(later, memory, dgroup, boundary) == frozenset({boundary})
+
+    def _frontier(
+        self, site: Site, memory: mir.MemRef, dgroup: frozenset[int], boundary: int | None = None,
+    ) -> frozenset[int]:
         accesses = {access.id: access for access in self.accesses}
         pending = [self.at(site).defining]
         seen: set[int] = set()
@@ -68,6 +86,9 @@ class MemorySSA:
             if current is None or current in seen:
                 continue
             seen.add(current)
+            if current == boundary:
+                found.add(current)
+                continue
             access = accesses[current]
             match access.kind:
                 case Kind.LIVE:

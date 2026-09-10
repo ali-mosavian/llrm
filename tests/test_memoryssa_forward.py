@@ -87,3 +87,30 @@ def test_escaped_object_origin_does_not_exclude_an_interior_read() -> None:
         replace(block, ops=(call,)) if block.at == 2 else block for block in body.blocks
     ))
     assert transform.forwarded(body, frozenset(), {}).blocks[1].ops[0].loads
+
+
+def loaded_loop(alias: bool = False) -> mir.MirBody:
+    body = loop_body(alias)
+    cell = body.blocks[0].ops[0].stores[0]
+    value = mir.Value(3, 0)
+    load = mir.Op(0, ir.Operation.MOVE, "", (value,), (), loads=(cell,), kind=mir.Kind.LOAD,
+                  args=(mir.Cell(cell),), results=(mir.Held(value, 2),))
+    return replace(body, blocks=(replace(body.blocks[0], ops=(load,)), *body.blocks[1:]))
+
+
+def test_preheader_load_serves_loop_reads_across_disjoint_writes() -> None:
+    body = loaded_loop()
+    after = transform.forwarded(body, frozenset(), {})
+    assert not after.blocks[1].ops[0].loads
+    assert after.blocks[1].ops[0].args == (body.blocks[0].ops[0].results[0],)
+
+
+def test_preheader_load_cannot_survive_an_aliasing_backedge() -> None:
+    body = loaded_loop(alias=True)
+    assert transform.forwarded(body, frozenset(), {}).blocks[1].ops[0].loads
+
+
+def test_load_on_only_one_entry_path_is_not_available() -> None:
+    body = loaded_loop()
+    body = replace(body, entry=4, blocks=body.blocks + (mir.MirBlock(4, (), (), (0, 1)),))
+    assert transform.forwarded(body, frozenset(), {}).blocks[1].ops[0].loads

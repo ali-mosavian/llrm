@@ -4237,3 +4237,20 @@ CHAIN PDS before/after assembly remains identical at 1274 object bytes;
 stages are in `/tmp/qbopt-escape-extents-after`, compared with
 `/tmp/qbopt-memoryssa-call-after`. Its four remaining frame divisions need
 a separate frame-object escape proof; no frame preservation was assumed.
+
+### Reuse dominating loads through MemorySSA
+
+Forwarding now also recovers a prior load when the forward lattice loses it
+at a loop header. The provider must dominate the read and name the same bytes;
+the memory walk must reach its earlier state without crossing an aliasing
+write on any path. Backedges are traversed explicitly. Block-local stack
+addresses are still confined to their block. This extends value lifetimes
+without choosing registers or introducing another optimization tier.
+
+The preheader-load regression failed first. It now removes the loop memory
+operand; aliasing writes, bypass entries and intervening loop stores retain
+it. The focused gate passed 46 checks, followed by 13 graph checks including
+the additional intervening-store case. HARR VBDOS assembly is identical with
+this consumer disabled/enabled (1038 object bytes), so no HARR speedup is
+claimed. Stage and assembly files: `/tmp/qbopt-load-reuse-before` and
+`/tmp/qbopt-load-reuse-after`.

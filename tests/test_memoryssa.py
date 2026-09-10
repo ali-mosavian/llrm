@@ -171,3 +171,15 @@ def test_disjoint_writes_leave_live_on_entry_as_the_clobber() -> None:
     ), ()),))
     graph = memoryssa.built(body)
     assert graph.clobbers(memoryssa.Site(0, 1), CELL) == frozenset({graph.live.id})
+
+
+def test_loop_backedge_write_prevents_read_reuse() -> None:
+    """A loop write invalidates a dominating read made before entering the loop."""
+    body = mir.MirBody(0, (
+        mir.MirBlock(0, (), (), (1,)),
+        mir.MirBlock(1, (), (operation(1, stores=(CELL,)),), (2,)),
+        mir.MirBlock(2, (), (operation(2, loads=(CELL,)),), (3,)),
+        mir.MirBlock(3, (), (operation(3, stores=(CELL,)), operation(4, loads=(CELL,))), (3,)),
+    ))
+    graph = memoryssa.built(body)
+    assert not graph.unchanged(memoryssa.Site(2, 0), memoryssa.Site(3, 1), CELL)

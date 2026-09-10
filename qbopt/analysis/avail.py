@@ -525,31 +525,33 @@ def forwardable(
 def _memory_providers(
     body: MirBody, dgroup: frozenset[int], missing: list[tuple[memoryssa.Site, Op]],
 ) -> list[Forward]:
-    """Recover a dominating store fact lost by the forward lattice at loops."""
+    """Recover dominating memory values lost by the forward lattice at loops."""
     graph = memoryssa.built(body)
     accesses = {access.id: access for access in graph.accesses}
     dominators = loops.dominators(body.blocks, body.entry)
+    loads = [(site, loaded) for site, op in graph.operations.items() if (loaded := loaded_into(op)) is not None]
     found: list[Forward] = []
+
+    def available(source: memoryssa.Site, site: memoryssa.Site, cell: MemRef, value: Value) -> bool:
+        return (source.block in dominators[site.block]
+                and (source.block != site.block or source.index < site.index)
+                and (source.block == site.block or bool(_local({cell: value}))))
+
     for site, op in missing:
         if len(op.loads) != 1 or op.barrier or op.kind is Kind.CALL:
             continue
         clobbers = graph.clobbers(site, op.loads[0], dgroup)
-        if len(clobbers) != 1:
-            continue
-        access = accesses[next(iter(clobbers))]
-        if access.kind is not memoryssa.Kind.DEF or access.site is None:
-            continue
-        source = access.site
-        if source.block not in dominators[site.block]:
-            continue
-        if source.block == site.block and source.index >= site.index:
-            continue
-        stored = stored_from(graph.operations[source])
-        if stored is None:
-            continue
-        cell, value = stored
-        if source.block != site.block and not _local({cell: value}):
-            continue
-        if mir.same_bytes(cell, op.loads[0]):
-            found.append(Forward(op.at, value, op))
+        access = accesses[next(iter(clobbers))] if len(clobbers) == 1 else None
+        if access is not None and access.kind is memoryssa.Kind.DEF and access.site is not None:
+            stored = stored_from(graph.operations[access.site])
+            if stored is not None:
+                cell, value = stored
+                if available(access.site, site, cell, value) and mir.same_bytes(cell, op.loads[0]):
+                    found.append(Forward(op.at, value, op))
+                    continue
+        for source, (cell, value) in loads:
+            if (available(source, site, cell, value) and mir.same_bytes(cell, op.loads[0])
+                and graph.unchanged(source, site, cell, dgroup)):
+                found.append(Forward(op.at, value, op))
+                break
     return found
