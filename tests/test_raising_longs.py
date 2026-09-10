@@ -11,6 +11,18 @@ from qbopt.frontend import raising_longs
 from qbopt.optimize import transform
 
 
+def test_nbody_timing_helper_stores_the_signed_whole_value():
+    """PITSNAP split its signed byte into two stores and reloaded it, raising NBODY cost by 20."""
+    path = Path("fixtures/bench/nbody-v-g3.obj")
+    body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[1][1]
+    stores = [op for block in body.blocks for op in block.ops
+              if op.at in (0x47b, 0x47e) and op.stores]
+    assert len(stores) == 1
+    assert stores[0].stores[0].width == 4
+    assert stores[0].stores[0].addr.disp == -0x22
+    assert stores[0].args[0].width == 4
+
+
 @pytest.mark.parametrize("seed,expected", [(0, 0), (1, 0), (0x7fff, 0), (0x8000, 0xffff), (-1, 0xffff)])
 def test_nbody_counter_seed_has_a_known_high_word(seed, expected):
     """NBODY's initial long 1 had an opaque high word, blocking whole-value loop phis."""

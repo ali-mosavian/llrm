@@ -2131,25 +2131,33 @@ def _unreached(found: Module) -> "tuple[int, frozenset] | None":
     return (found.program_data, module.escaped(found))
 
 
+def _copied_word(arg, definitions):
+    """Follow only exact word copies to their common source."""
+    seen = set()
+    while isinstance(arg, Held) and arg.width == 2 and arg.value not in seen:
+        seen.add(arg.value)
+        copy = definitions.get(arg.value)
+        if (copy is None or copy.kind is not Kind.COPY or copy.loads or copy.stores or copy.barrier
+            or copy.results != (arg,) or len(copy.args) != 1
+            or not isinstance(copy.args[0], Held) or copy.args[0].width != arg.width):
+            break
+        arg = copy.args[0]
+    return arg
+
+
 def extracted_whole(high, low, definitions):
     """The scalar whose exact high and low words are these operands."""
     original = None
     for arg, offset in ((high, 16), (low, 0)):
-        seen = set()
-        while isinstance(arg, Held) and arg.width == 2 and arg.value not in seen:
-            seen.add(arg.value)
-            copy = definitions.get(arg.value)
-            if (copy is None or copy.kind is not Kind.COPY or copy.loads or copy.stores or copy.barrier
-                or copy.results != (arg,) or len(copy.args) != 1
-                or not isinstance(copy.args[0], Held) or copy.args[0].width != arg.width):
-                break
-            arg = copy.args[0]
+        arg = _copied_word(arg, definitions)
         if not isinstance(arg, Held) or arg.width != 2:
             return None
         if offset == 0 and original is not None:
             extension = definitions.get(original.value)
             if (extension is not None and extension.kind is Kind.SIGN_EXTEND
-                and extension.args == (arg,) and extension.results == (original,)
+                and len(extension.args) == 1
+                and _copied_word(extension.args[0], definitions) == arg
+                and extension.results == (original,)
                 and not extension.loads and not extension.stores and not extension.barrier):
                 return original
         op = definitions.get(arg.value)

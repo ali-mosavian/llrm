@@ -2,6 +2,36 @@
 
 ## Latest focused check
 
+Signed-store follow-up: NBODY now costs **351822**, down from 352122
+(and below the older 352102). The fixture object shrinks **4114 → 4103 bytes**.
+Whole-value recognition followed copies on the low word but compared that root
+against an unnormalized sign-extension input. Comparing both copy sources
+recovers the signed whole store at PITSNAP's original 0x47b/0x47e, without
+machine-specific logic in an optimization pass.
+
+```asm
+; before                         ; after
+movsx ebx,ax                     movsx ebx,ax
+push ebx
+pop bx
+pop bx
+; intervening byte input         ; intervening byte input
+mov [bp-20h],bx                  mov [bp-22h],ebx
+mov [bp-22h],ax
+movsx eax,cx                     movsx eax,ax
+shl eax,8                       shl eax,8
+mov ebx,[bp-22h]
+add eax,ebx                     add eax,ebx
+```
+
+The next byte uses CX before the change and AX afterwards. All 31 raising-long
+tests and 15 selected recombination tests pass; the real PITSNAP regression
+failed before the fix. A VBDOS benchmark run at ten steps finishes with matching
+24 physics outputs and DONE. **No timing comparison is valid:** the unoptimized
+run reported TICKS=-32778, while the optimized run reported 2646. The negative
+baseline exposes an unresolved timing-instrument issue, not a compiler speedup.
+The arithmetic-output comparison does not independently validate PIT readings.
+
 Compiler **b4341b4**, 2026-09-10: refreshed the same 19 configurations with
 `opportunity.against_targets`, including its source-specific loop weights.
 Every configuration emitted through LIR. IVCHAN, NESTED, BOOLS, HARR and

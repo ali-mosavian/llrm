@@ -339,6 +339,29 @@ def test_recombination_follows_only_exact_word_copies(mode):
     assert answer == (mir.Held(source, 4) if mode == "copy" else None)
 
 
+@pytest.mark.parametrize("mode", ["same", "sibling", "different", "width_change", "barrier"])
+def test_signed_recombination_compares_copy_sources_symmetrically(mode):
+    """PITSNAP's low word was a copy also used by sign extension; chasing only one lost the whole."""
+    root, copied, sibling, whole, high = (mir.Value(index, 0) for index in range(1, 6))
+    definitions = {}
+    for value in (copied, sibling):
+        definitions[value] = mir.Op(0, ir.Operation.MOVE, "mov", (value,), (root,), kind=mir.Kind.COPY,
+            args=(mir.Held(root, 2),), results=(mir.Held(value, 2),))
+    if mode == "width_change":
+        definitions[copied] = replace(definitions[copied], args=(mir.Held(root, 4),))
+    if mode == "barrier":
+        definitions[copied] = replace(definitions[copied], op=ir.Operation.BARRIER)
+    definitions[whole] = mir.Op(1, ir.Operation.EXTEND, "sign_extend", (whole,), (copied,),
+        kind=mir.Kind.SIGN_EXTEND, args=(mir.Held(copied, 2),), results=(mir.Held(whole, 4),))
+    definitions[high] = mir.Op(1, mir.Synth.HALF_TO_LOW, "extract", (high,), (whole,),
+        kind=mir.Kind.EXTRACT, args=(mir.Held(whole, 4), mir.Const(16, 4)), results=(mir.Held(high, 2),))
+    low = copied if mode == "same" else sibling
+    if mode == "different":
+        low = mir.Value(99, 0)
+    answer = mir.extracted_whole(mir.Held(high, 2), mir.Held(low, 2), definitions)
+    assert answer == (mir.Held(whole, 4) if mode in {"same", "sibling"} else None)
+
+
 def test_nbody_address_shifts_combine_without_an_extra_counter() -> None:
     """Nbody computed other*4 with two shifts; an extra induction counter increased spill cost."""
     path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
