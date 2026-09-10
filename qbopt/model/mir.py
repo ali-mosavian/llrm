@@ -2176,6 +2176,9 @@ def bodies(
             contracts,
         )
         if not isinstance(built, str):
+            if not basic_semantics:
+                from qbopt.frontend import raising_numeric_policy
+                built = raising_numeric_policy.native(built)
             from qbopt.frontend import raising_arrays
             from qbopt.frontend import raising_division
             from qbopt.frontend import raising_calls

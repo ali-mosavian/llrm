@@ -16,7 +16,7 @@ def test_overflow_observation_has_no_normal_path_register_results():
     """/D ARRIDX printed 630 instead of 1260: INTO invented a new AX result allocated to BX."""
     path = Path("fixtures/regressions/arridx-bounds-p-g2.obj")
     found = corpus.loaded(path)
-    body = mir.bodies(found, corpus.partitioned(path), bounds_checks=True)[0][1]
+    body = mir.bodies(found, corpus.partitioned(path), basic_semantics=True, bounds_checks=True)[0][1]
     checks = [op for block in body.blocks for op in block.ops if found.code[op.at:op.at + 1] == b"\xce"]
     assert checks
     assert all(not op.defines for op in checks)

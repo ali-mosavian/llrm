@@ -16,6 +16,26 @@ from iced_x86 import Register
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+@pytest.mark.parametrize("bounds_checks", [False, True])
+@pytest.mark.parametrize("program", ["arridx-bounds", "ovfpol"])
+def test_explicit_integer_overflow_traps_follow_numeric_policy(tag, bounds_checks, program):
+    """OVFPOL's 32767+1 printed ERR 6 in native mode; it must wrap to -32768 without INTO."""
+    from iced_x86 import Code, Decoder
+    path = Path(f"fixtures/regressions/{program}-{tag}.obj")
+    for basic in (False, True):
+        result = wholeseg.emitted(path.read_bytes(), basic_semantics=basic, bounds_checks=bounds_checks)
+        assert result.outcome is wholeseg.Emission.LIR, result.reason
+        found = module.of(omf.parse(result.data))
+        from qbopt.frontend.blocks import code_map
+        mapped = code_map(found)
+        assert not isinstance(mapped, str)
+        # Decode at reachable instruction boundaries, not by counting CE bytes
+        # inside immediates or displacements.
+        traps = [at for at in mapped.starts if Decoder(16, found.code[at:]).decode().code == Code.INTO]
+        assert bool(traps) is basic
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 @pytest.mark.parametrize("program,names", [
     ("lngmxx", {"B$DVI4", "B$RMI4"}),
     ("fpdeep", {"B$FIS2", "B$FIST"}),

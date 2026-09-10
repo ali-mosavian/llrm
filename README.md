@@ -29,6 +29,11 @@ keeps `call B$DVI4`: division by zero still reaches BASIC's error handler,
 and the runtime still decides what happens for the minimum LONG divided by -1.
 Wrapping LONG multiplication remains eligible for replacement in both modes.
 
+Explicit `/D` INTEGER overflow traps (`INTO`) likewise remain only with
+`--basic-semantics`. Native mode keeps the arithmetic without that BASIC trap;
+`--bounds-checks` does not enable numeric overflow checking. Trace and break
+polling calls are not removed by either policy.
+
 Native does **not** mean fast-math: no permission to reassociate floating sums,
 discard signed zeros/NaNs, or ignore storage precision. Nor does it promise
 that every runtime helper has a native replacement yet. `--native-fpu` is a
