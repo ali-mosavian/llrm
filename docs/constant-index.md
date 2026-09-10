@@ -65,3 +65,24 @@ remain. The missing mix facts were traced to the memory operand at MIR
 address `0x12c`, not to the division: its left input is proven exactly
 1/2, 3/4, 7/8, but the constant-pool operand is unknown at that point.
 Do not replace this missing memory proof with blanket pool immutability.
+
+### Where the pool fact disappears
+
+At the current PDS MIR boundary, the entry fact for segment 9 offset 0x1e
+is `0x44800000` (SINGLE 1024). It is still present before the expanded
+latch's first operations. It disappears across the `B$PSSD` call at 0x81,
+before the argument at 0x86, not across a floating instruction.
+
+That call has an OWN-memory runtime contract, but its `beyond` summary
+identifies program-data segment 5 only. `_out_of_reach` deliberately cannot
+prove anything about segment 9. The escaped addresses include segment-9
+string descriptors at 0, 6, 12, 22, 42, 50 and 62. They are pointer origins,
+not proven byte extents. The literal occupies bytes 30 through 33.
+
+The runtime printing contract permits string compaction to update live
+descriptors, so this is not a justification for making BC_CN immutable or
+pretending PRINT writes no memory. Preserving the literal across this call
+requires bounded reachable-object effects established by the raise/runtime
+contract, rather than interpreting absent escaped origins as disjoint bytes.
+The six independently proven square/ratio conversions do not depend on
+solving that additional memory-summary problem.
