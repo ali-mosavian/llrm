@@ -24,7 +24,7 @@ Useful options:
 # Keep BASIC numeric runtime behavior, including its conversion/error paths.
 uv run python -m qbopt.rewrite PROGRAM.OBJ -o PROGRAMQ.OBJ --basic-semantics
 
-# Retain existing BASIC array checks. Independent of numeric semantics.
+# Preserve array checking; omit checks proven unnecessary. Independent of numeric semantics.
 uv run python -m qbopt.rewrite PROGRAM.OBJ -o PROGRAMQ.OBJ --bounds-checks
 
 # Use real x87 instead of BC's emulator interrupt protocol.

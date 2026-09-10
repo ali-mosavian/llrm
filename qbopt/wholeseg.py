@@ -218,7 +218,8 @@ def _through_lir(
     from qbopt.objectfile.module import Addr, Space
 
     pointer_model = None
-    if any(op.kind is mir.Kind.PTR_OFFSET for _, body in bodies for block in body.blocks for op in block.ops):
+    if any(op.kind is mir.Kind.PTR_OFFSET or any(ref.pointer for ref in (*op.loads, *op.stores))
+           for _, body in bodies for block in body.blocks for op in block.ops):
         records, index = omf.with_external(records, "b$HugeShift")
         pointer_model = pointers.Model(ir.Mem(Addr(Space.EXTERNAL, 0, index), 1, disp_width=2))
 

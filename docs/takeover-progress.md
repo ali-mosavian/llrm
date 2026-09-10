@@ -1,5 +1,50 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: eliminate proven checked dynamic-array accesses
+
+With `--bounds-checks`, raising now replaces HARY only when every captured
+index is within its dimension's current bounds and rank, element width and
+descriptor features agree. A flattened offset inside the allocation is not
+enough: an individual dimension can still be out of range. Unknown facts
+retain the call. This is check elimination, not loop-check hoisting.
+
+NDMAX's first access checks sixty constant zero indices unnecessarily. PDS
+optimized object size drops **1481 -> 1388 bytes**, with HARY calls **4 -> 3**.
+The three remaining calls are not proven safe. Relevant emitted assembly:
+
+```asm
+; before: sixty zero indices pushed, then
+push 3Ch
+mov ax,descriptor
+mov bx,ax
+call B$HARY
+mov word [es:bx],0Bh
+
+; after: the zero offset folds away
+mov eax,[descriptor]
+push es
+push eax
+pop bx
+pop es
+mov word [es:bx],0Bh
+pop es
+```
+
+This exposed a backend refusal: pointer ABI setup depended on PTR_OFFSET
+surviving optimization. Whole-pointer memory accesses now request it too.
+The three zero-only emission regressions failed before that correction.
+The original array module passed 47 tests; the expanded focused checked
+cases pass 15. All three `/AH` compiler builds link and produce the original
+**11, 22, DONE** with checks enabled. `/AH` is necessary for this fixture;
+without it BC itself rejects the expression. The golden includes BASIC's
+leading sign space; existing run artifacts were rejudged, not rerun.
+
+All-stage before/after dumps:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-checked-ndmax-stages-agg67_cw`
+(`before` and `fixed`). Runtime artifacts are under
+`qbopt-checked-native-{p-g2-i9f9e89y,q-O-ihs67yxo,v-g3-kivd3c6x}` in the same
+temporary root. No hardware timing or target-ratio improvement is claimed.
+
 ## 2026-09-10: allocate straight-line floating regions by CFG, not list adjacency
 
 The remaining FPCSE initial stores are deliberately protected by FCHECK:

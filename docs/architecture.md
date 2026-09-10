@@ -568,6 +568,9 @@ one documented target without materially regressing another.
 - [ ] Add register-pressure and target-cost formula selection to induction
   strength reduction; never create a recurrence merely because one is legal.
 - [ ] Hoist invariant bounds checks into loop preguards when checks are enabled.
+  Checked dynamic accesses already become native arithmetic when every index
+  is proven within the live descriptor's bounds. Unknown indices or descriptor
+  facts retain HARY; loop preguards remain unimplemented.
 - [ ] Implement loop versioning/unswitching for invariant bounds, alias and
   numeric-environment conditions.
 - [ ] Add loop rotation only where it improves the canonical form or emitted

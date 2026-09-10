@@ -189,9 +189,33 @@ def _whole_consumer(body, block, position, value, contracts):
     return (consumer_position, consumer) if _selector_dead(body, block, consumer_position + 1, contracts) else None
 
 
+def _checked(shape, symbol, indices, memory):
+    """Every subscript fits the descriptor currently in memory, not just its total extent."""
+    if shape is None or not isinstance(shape.data, mir.MemRef) or not isinstance(symbol, mir.Symbol):
+        return False
+
+    def field(offset, width):
+        return consts._cell(memory, mir.MemRef(Addr(symbol.space, symbol.offset + symbol.addend + offset,
+                                                 symbol.index), width))
+
+    if (field(8, 1) != consts.Known(len(shape.dimensions), 1)
+        or field(12, 2) != consts.Known(shape.width, 2)
+        or field(9, 1) not in tuple(consts.Known(feature, 1) for feature in ((2, 3) if shape.huge else (1,)))):
+        return False
+    if len(indices) != len(shape.dimensions):
+        return False
+    for index, (count, lower) in zip(reversed(indices), shape.dimensions):
+        count = consts._cell(memory, count)
+        lower = consts._cell(memory, lower)
+        if any(fact is None or fact.width < 2 for fact in (index, count, lower)):
+            return False
+        signed = lambda number: ((number & 0xffff) ^ 0x8000) - 0x8000
+        if not 0 <= signed(index.n) - signed(lower.n) < (count.n & 0xffff):
+            return False
+    return True
+
+
 def native(body, found, *, bounds_checks=False):
-    if bounds_checks:
-        return body
     local = module.defines(found.records, found.seg)
     calls = {at: name for at, name in found.calls.items() if name not in local}
     if not any(op.kind is mir.Kind.CALL and calls.get(op.at) == "B$HARY"
@@ -208,6 +232,10 @@ def native(body, found, *, bounds_checks=False):
     body = ssa.pruned_phis(body, {value for block in body.blocks for op in block.ops for value in op.uses})
     contracts = runtime.for_module(found)
     known = consts.known(body)
+    memory = consts.cells(body, found.dgroup, calls, known) if bounds_checks else {}
+    argument_facts = {id(op): consts._operand(op, op.args[0], known, memory.get((block.at, index), {}))
+                      for block in body.blocks for index, op in enumerate(block.ops)
+                      if bounds_checks and op.kind is mir.Kind.ARG and len(op.args) == 1}
     definitions = {value: op for block in body.blocks for op in block.ops for value in op.defines}
     read = {value for block in body.blocks for op in block.ops for value in op.uses}
     read.update(value for block in body.blocks for phi in block.phis for value in phi.incoming.values())
@@ -250,6 +278,10 @@ def native(body, found, *, bounds_checks=False):
                          and len(arguments) == len(shape.dimensions) + 1
                          and len(outputs) == 1 and body.origin.get(outputs[0]) == Register.EBX
                          and not any(value.flags and value in read for value in op.defines))
+                if bounds_checks:
+                    valid = (valid and rank == mir.Const(len(shape.dimensions), 2)
+                             and _checked(shape, symbol, [argument_facts.get(id(ops[index])) for index in arguments[:-1]],
+                                          memory.get((block.at, position), {})))
                 consumer = _whole_consumer(body, block, position, outputs[0], contracts) if valid and shape.huge else None
                 valid = valid and (not shape.huge or consumer is not None)
                 if consumer is not None:

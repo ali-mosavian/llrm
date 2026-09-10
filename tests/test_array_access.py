@@ -13,6 +13,54 @@ from qbopt.rewrite import Finalised, main, rewrite
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+@pytest.mark.parametrize("zero_only", [False, True])
+def test_checked_constant_indices_can_use_native_addressing(tag, zero_only, monkeypatch):
+    """NDMAX's zero-index access retained sixty checks; folding its offset also refused emission."""
+    if zero_only:
+        from qbopt.frontend import raising_array_access
+        checked = raising_array_access._checked
+        monkeypatch.setattr(raising_array_access, "_checked",
+                            lambda shape, symbol, indices, memory:
+                            checked(shape, symbol, indices, memory) and all(index.n == 0 for index in indices))
+    path = Path(f"fixtures/regressions/ndmax-{tag}.obj")
+    found = corpus.loaded(path)
+    first = min(at for at, name in found.calls.items() if name == "B$HARY")
+    body = mir.bodies(found, corpus.partitioned(path), bounds_checks=True)[0][1]
+    assert not any(op.at == first and op.kind is mir.Kind.CALL
+                   for block in body.blocks for op in block.ops)
+    emitted = wholeseg.emitted(path.read_bytes(), bounds_checks=True)
+    assert emitted.outcome is wholeseg.Emission.LIR, emitted.reason
+    assert list(module.of(omf.parse(emitted.data)).calls.values()).count("B$HARY") < list(found.calls.values()).count("B$HARY")
+
+
+@pytest.mark.parametrize("hazard", ["none", "below", "above", "unknown-index", "rank", "features", "width", "unknown-bound"])
+def test_checked_proof_requires_each_live_dimension(hazard):
+    """An out-of-range dimension can flatten into a valid allocation offset; that is still a bounds error."""
+    from qbopt.analysis import consts
+    from qbopt.frontend import raising_array_access
+    from qbopt.objectfile.module import Addr, Space
+    symbol = mir.Symbol(Space.SEGMENT, 5, 0, 2)
+    field = lambda offset, width=2: mir.MemRef(Addr(Space.SEGMENT, offset, 5), width)
+    shape = raising_array_access.Descriptor(field(0), field(2), 2,
+                                           ((field(14), field(16)), (field(18), field(20))))
+    memory = {}
+    for offset, width, number in ((8, 1, 2), (9, 1, 1), (12, 2, 2), (14, 2, 2), (16, 2, 0xffff), (18, 2, 3), (20, 2, 2)):
+        if hazard == "unknown-bound" and offset == 18:
+            continue
+        if offset == {"rank": 8, "features": 9, "width": 12}.get(hazard):
+            number = 0
+        memory.update(consts._fragments(field(offset, width), consts.Known(number, width)))
+    indices = [consts.Known(3, 2), consts.Known(0xffff, 2)]
+    if hazard == "below":
+        indices[1] = consts.Known(0xfffe, 2)
+    if hazard == "above":
+        indices[1] = consts.Known(1, 2)
+    if hazard == "unknown-index":
+        indices[1] = None
+    assert raising_array_access._checked(shape, symbol, indices, memory) == (hazard == "none")
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 @pytest.mark.parametrize("program", ["ndarr", "ndmax"])
 def test_hary_supports_nine_and_sixty_dimensions(tag, program):
     """NDARR (1,12,2) and NDMAX (11,22) were refused by an invented eight-dimension cap."""
