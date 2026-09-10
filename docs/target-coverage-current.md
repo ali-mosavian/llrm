@@ -68,6 +68,26 @@ The fix stays in instruction selection. MIR still shares one symbolic value;
 other readers and observable exit values retain their definitions. Full stage
 dumps locate the change at lowering, not in any MIR optimization pass.
 
+## Constant-condition follow-up
+
+Follow-up constant-condition folding also reduces QB BOOLS from **164 to 156**
+(target 126; **1.30x → 1.24x**), matching PDS/VBDOS. Its constant AND and two
+jumps disappear; the object shrinks from 782 to 772 bytes. BOOLS and IVCHAN
+execute correctly on all three compilers. These focused results do not replace
+the integration snapshot.
+
+```asm
+; before                 ; after
+mov ax,0FFFFh            add word [t],2
+and ax,0FFFFh
+jne taken
+jmp done
+taken: add word [t],2
+done:
+```
+
+`[t]` names the relocated `seg:5+0x10` operand in the emitted listing.
+
 ## Missing references
 
 | Source program | Configurations without targets |

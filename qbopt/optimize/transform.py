@@ -1515,9 +1515,16 @@ def _comparison(block, op: Op):
     # A comparison in MIR's own terms: it subtracts and keeps only the
     # flags, so its two operands are its args. Asking the instruction meant
     # matching ir.Operation.COMPARE and reading ir.Loc operands out of it.
-    if compare.kind is not mir.Kind.SUB or len(compare.args) != 2 or compare.results:
-        return None
-    return index, compare
+    if compare.kind is mir.Kind.SUB and len(compare.args) == 2 and not compare.results:
+        return index, compare
+    if (compare.kind in (mir.Kind.AND, mir.Kind.OR, mir.Kind.XOR)
+        and op.test in (mir.Kind.EQ, mir.Kind.NE) and not compare.barrier
+        and len(compare.args) == 2 and len(compare.results) == 1
+        and isinstance(result := compare.results[0], mir.Held)
+        and result.width in (2, 4)
+        and all(isinstance(arg, (mir.Held, mir.Const)) and arg.width == result.width for arg in compare.args)):
+        return index, compare
+    return None
 
 
 def _outcome(block, op: Op, facts: dict, held: dict) -> bool | None:
@@ -1526,6 +1533,12 @@ def _outcome(block, op: Op, facts: dict, held: dict) -> bool | None:
     if comparison is None:
         return None
     index, compare = comparison
+    if compare.kind is not mir.Kind.SUB:
+        result = consts._result(compare, facts)
+        if result is None or result.width < compare.results[0].width:
+            return None
+        zero = consts.masked(result.n, compare.results[0].width) == 0
+        return zero if op.test is mir.Kind.EQ else not zero
     parts = [consts._operand(compare, one, facts, held.get((block.at, index))) for one in compare.args]
     if any(one is None for one in parts):
         return None
