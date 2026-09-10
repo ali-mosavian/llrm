@@ -16,7 +16,8 @@ class Peephole(LIRTransform):
         self.frame = frame
 
     def transform(self, body: lir.LirBody) -> lir.LirBody:
-        from qbopt.backend import spillforward
+        from qbopt.backend import copyprop, spillforward
+        body = copyprop.forwarded(body)
         body = spillforward.forwarded(body)
         body = reloads(body)
         return self._frame(waits(zeroes(addresses(overwritten(commuted(constants(pushes(body))))))))
@@ -110,7 +111,7 @@ def commuted(body: lir.LirBody) -> lir.LirBody:
     return replace(body, blocks=tuple(blocks))
 
 
-def _register_effects(one):
+def _register_effects(one, *, may_write=False):
     from qbopt.backend import select
     from qbopt.frontend.declen import INFO, READS
 
@@ -139,7 +140,8 @@ def _register_effects(one):
             if access.access in READS:
                 reads.update(lanes - writes)
         for access in INFO.info(insn).used_registers():
-            if access.access in (OpAccess.WRITE, OpAccess.READ_WRITE):
+            if (access.access in (OpAccess.WRITE, OpAccess.READ_WRITE)
+                or may_write and access.access in (OpAccess.COND_WRITE, OpAccess.READ_COND_WRITE)):
                 writes.update(_lanes(access.register))
     return reads, writes
 

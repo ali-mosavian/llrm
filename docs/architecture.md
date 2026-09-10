@@ -589,6 +589,9 @@ one documented target without materially regressing another.
 ### Machine backend
 
 - [ ] Add global machine copy propagation after allocation.
+  `backend/copyprop.py` eliminates equal-register copies using byte-level
+  agreement over all reachable incoming edges. Operand substitution and
+  demonstrated target improvement remain open.
 - [ ] Add machine CSE and dead-machine-instruction elimination over allocated
   LIR.
 - [ ] Add branch folding and tail merging after final block placement.

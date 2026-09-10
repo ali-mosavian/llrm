@@ -4427,3 +4427,24 @@ builds remain provisional. Compiler selection reads COMENT, not the filename.
 FPCSEX, FPDEEP, missing references and the broader architecture checklist
 remain unfinished. The final DOUBLE copy still needs the previously recorded
 runtime DF/segment proof; its unresolved indirect-call analysis was not rerun.
+
+### Global physical-copy elimination
+
+The post-allocation peephole now intersects byte-level register equalities
+over reachable CFG predecessors to a fixed point. A copy disappears only
+when its source and destination already agree on every path. Partial writes
+invalidate only affected lanes; conditional writes invalidate possibly changed
+lanes. Unknown effects and calls discard the proof. The entry has no assumed
+equalities, including when a loop returns to it. No machine fact enters MIR.
+
+Before a diamond join: `mov ax,bx; je right; ...; join: mov ax,bx`.
+After: the join's second MOV is absent when both arms preserve AX/BX.
+Writing AH on either arm retains it; an AL=BL copy can still disappear.
+Three fail-first cases now pass, with hazards and reversed block order covered.
+The scoped backend run passes 151 tests; the remaining ADDRM LEA-shape failure
+also fails with this pass disabled and was not weakened.
+
+NBODY VBDOS before/after assembly is identical; no target improvement claimed.
+Dumps are in
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-global-copies-sri89wqu`.
+General operand substitution remains unfinished, so the roadmap item stays open.
