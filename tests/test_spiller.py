@@ -66,6 +66,21 @@ def test_nbody_compares_spilled_bound_without_scratch_reload():
                for one in header.insns)
 
 
+def test_nbody_loop_initializers_do_not_reload_a_spilled_zero():
+    """NBODY stored zero at [BP-1Ch] and read it for five separate loop initializers."""
+    from qbopt import wholeseg
+    states = []
+    def watch(stage, name, body):
+        if stage == "peephole" and body.entry == 0x30:
+            states.append(body)
+    result = wholeseg.emitted(Path("fixtures/bench/nbody-v-g3.obj").read_bytes(), watch=watch)
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    initializer = next(block for block in states[0].blocks if block.at == 0x5f)
+    assert not any(one.at == 0x5f and one.what is not None
+                   and any(isinstance(dest, ir.Mem) for dest in one.what.dests)
+                   for one in initializer.insns)
+
+
 @pytest.mark.parametrize("width", [2, 4])
 @pytest.mark.parametrize("name", ["add", "sub", "and", "or", "xor"])
 def test_untied_spill_source_is_read_directly_by_arithmetic(name, width):
@@ -182,6 +197,32 @@ def test_spilled_constant_is_rematerialized_without_a_frame_slot() -> None:
     )
     assert result[-2].what.sources == (ir.Imm(20, 2),)
     assert result[-1].what.sources[1].value == result[-2].defines[0]
+
+
+@pytest.mark.parametrize("destination_spilled", [False, True])
+def test_grouped_constant_rematerializes_without_splitting_parallel_copy(destination_spilled):
+    """NBODY's literal zero was spilled because its loop initializers belonged to parallel copies."""
+    constant = lir.Insn(0, (0, 0), ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),),
+                                              (ir.Imm(0, 2),)), (1,), ())
+    body = _body(constant, _move(2, 1, group=7), _move(3, 4, group=7))
+    frame = frames.Frame(0)
+    done, _ = spiller.spilled(body, frozenset({1, 2} if destination_spilled else {1}), frame)
+    group = [one for one in done.insns if one.group == 7]
+    assert len(group) == 2
+    assert group[0].what.sources == (ir.Imm(0, 2),)
+    assert group[0].uses == ()
+    assert isinstance(group[0].what.dests[0], ir.Mem) == destination_spilled
+    positions = [index for index, one in enumerate(done.insns) if one.group == 7]
+    assert positions[1] == positions[0] + 1
+    assert not any(one.spill_reload for one in done.insns)
+
+
+def test_parallel_copy_destination_is_not_mistaken_for_a_constant():
+    """A grouped assignment to the same value invalidates a literal seed."""
+    constant = lir.Insn(0, (0, 0), ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),),
+                                              (ir.Imm(0, 2),)), (1,), ())
+    body = _body(constant, _move(1, 4, group=7), _move(2, 1, group=7))
+    assert spiller._constants(body, frozenset({1})) == {}
 
 
 @pytest.mark.parametrize("redefined", [False, True])

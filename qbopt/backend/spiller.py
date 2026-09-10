@@ -61,6 +61,10 @@ def spilled(
     for block in body.blocks:
         insns: list[lir.Insn] = []
         for one in block.insns:
+            source = _group_source(one)
+            if source is not None and source.value in constants:
+                one = replace(one, what=replace(one.what, sources=(constants[source.value],)),
+                              uses=(), symbol=False)
             remade = {}
             for value in one.uses:
                 if value not in constants or value in remade:
@@ -139,6 +143,17 @@ def _source(one, values, frame):
                    uses=tuple(value for value in one.uses if value != right.value))
 
 
+def _group_source(one):
+    """An unconstrained full-width parallel copy can take a literal in place."""
+    if one.group is None or one.clobbers or one.requires or one.delivers:
+        return None
+    match one.what:
+        case ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held() as dest,), (ir.Held() as source,)):
+            if dest.width == source.width and one.uses == (source.value,) and one.defines == (dest.value,):
+                return source
+    return None
+
+
 def _constants(body: lir.LirBody, values: frozenset[int]) -> dict[int, ir.Imm]:
     """Literal values, including full-width copies with one unambiguous definition."""
     definitions: dict[int, list[lir.Insn]] = {}
@@ -150,7 +165,9 @@ def _constants(body: lir.LirBody, values: frozenset[int]) -> dict[int, ir.Imm]:
         for value in one.uses:
             widths[value] = max(widths.get(value, 0), _width(one, value))
         if one.group is not None:
-            excluded.update((*one.uses, *one.defines))
+            excluded.update(one.defines)
+            if _group_source(one) is None:
+                excluded.update(one.uses)
     sources = {}
     for value in definitions.keys() - excluded:
         defining = definitions.get(value, [])

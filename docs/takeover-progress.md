@@ -4040,3 +4040,24 @@ checking accumulator value and unchanged source across five operations.
 Forty spiller checks passed, followed by eleven focused checks including
 word/dword comparisons with one or both operands spilled.
 Artifacts: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-compare-spill-vx0gut06`.
+
+### Rematerialize constants inside parallel copies
+
+NBODY's zero value #70 had a single literal definition and five uses, all in
+loop-initialization parallel copies. The spiller excluded every grouped use
+from constant recognition, storing zero in a slot despite already knowing it.
+It now excludes grouped destinations and unsupported grouped uses, but allows
+an unconstrained, full-width scalar copy to take a known literal directly.
+No instruction is inserted inside the group. A destination assigned by a
+parallel copy is still excluded from constant recognition.
+
+Before: `mov ax,0; mov [bp-1ch],ax`, later `mov bx,[bp-1ch]` and a
+`push [bp-1ch]; pop [bp-26h]` frame copy. After: `mov bx,0` and
+`mov word [bp-24h],0`; the source slot and its initialization disappear.
+NBODY's synthetic frame reservation falls from 34 to 32 bytes. The initial
+real-fixture regression failed first; 57 focused spiller/parallel-copy checks
+pass. VBDOS NBODY is 4151 -> 4143 bytes and modeled cost 355332 -> 354726;
+PDS is 2858 -> 2850 and 353247 -> 352641. Both runtime outputs match BC.
+QB PRESSX remains correct at 1031 bytes / 627 modeled units.
+Full before/after stage dumps and runtime output:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-group-remat-x_52mdd7`.
