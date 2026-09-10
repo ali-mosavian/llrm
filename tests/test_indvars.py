@@ -9,6 +9,19 @@ from qbopt import wholeseg
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_internal_branch_reuses_the_value_recurrence(tag):
+    """IVARM kept a second counter solely for ten trips around a conditional store."""
+    result = wholeseg.emitted(Path(f"fixtures/regressions/ivarm-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
+    assert not any(one.startswith("inc ") for one in instructions)
+    comparisons = [index for index, one in enumerate(instructions)
+                   if one.startswith("cmp ") and one.endswith(",25h")]
+    assert len(comparisons) == 1
+    assert instructions[comparisons[0] + 1].startswith("jne ")
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 @pytest.mark.parametrize("program,branches", [("harr", 1), ("matrix", 2), ("nested", 1)])
 def test_harr_reuses_an_existing_recurrence_for_termination(tag, program, branches):
     """HARR advanced both c and r+c on each inner iteration; one recurrence suffices."""

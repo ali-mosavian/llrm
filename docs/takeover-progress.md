@@ -1,5 +1,42 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: reuse induction variables across internal branches
+
+Removed IndVarSimplify's two-block-only restriction. The existing proof
+already requires a single unconditional latch, header-only exit, known
+non-wrapping trip count, a usable recurrence with sufficient modular period,
+and no intermediate observation of the removed counter. Internal branches
+do not invalidate that proof.
+
+IVARM, genuine QB/PDS/VBDOS output, conditionally stores a value that advances
+by three over ten iterations. PDS's loop tail changes as follows:
+
+```asm
+; before                     ; after
+add ax,3                     add ax,3
+inc bx
+cmp bx,10                    cmp ax,37
+jle loopBody                 jne loopBody
+; exit: store bx             ; exit: store constant 11
+```
+
+One increment per iteration and the redundant counter initialization are
+removed. The final counter store becomes immediate; the complete PDS object
+remains 1127 bytes. All three linked baseline/optimized programs print
+`34 0 11 37` and DONE. Three emitted-code regressions fail against the old
+pass; all 18 induction-simplification tests pass, including observed-counter,
+zero-trip, wrapping-exit and short-period safeguards.
+
+The first stage difference is `s28-mir-r02-strength.txt`; full before/after
+dumps are in `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-ivarm-stages-xl1hmqai`.
+Runtime artifacts have the same temporary parent and names
+`qbopt-ivarm-runtime-p-g2-1u4y1yd3`, `qbopt-ivarm-runtime-q-O-bk07y47p`,
+and `qbopt-ivarm-runtime-v-g3-l4oiu248`.
+
+An INTEGER branch condition instead retains a partial-write merge dependency
+on the counter in raised MIR and is still refused. That is a remaining raise
+normalization issue, not permission to ignore uses inside IndVarSimplify.
+
 ## 2026-09-10: exclude unreachable edges from loop analysis
 
 Dominators previously intersected unreachable predecessors into live joins;

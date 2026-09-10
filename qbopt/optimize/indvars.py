@@ -15,7 +15,7 @@ def simplified(body: mir.MirBody) -> mir.MirBody:
     dominators = loops.dominators(body.blocks, body.entry)
     predecessors = loops.predecessors(body.blocks)
     for loop in loops.loops(body.blocks, body.entry):
-        if len(loop.body) != 2 or len(loop.latches) != 1:
+        if len(loop.latches) != 1:
             continue
         preheader = transform._preheader(body, loop)
         if preheader is None or blocks[preheader].succ != (loop.header,):

@@ -541,6 +541,11 @@ one documented target without materially regressing another.
   unchanged until `LoopSimplify` supplies their canonical CFG.
 - [ ] Canonicalize primary counters and derived recurrences
   (`IndVarSimplify`).
+  Existing recurrences can replace redundant termination counters across
+  internal branches, not just two-block loops. A single latch, header-only
+  exit, complete non-wrapping trip count and unobserved counter are still
+  required; final counter stores are reconstructed at the exit. IVARM
+  exercises the conditional-store shape on all three compilers.
 - [x] Build `MemorySSA`: one def-use graph for loads, stores and call effects.
   `analysis/memoryssa.py` provides live-on-entry, memory uses/definitions and
   join/backedge phis. Calls conservatively define memory. This is an analysis
