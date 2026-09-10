@@ -12,6 +12,74 @@ from qbopt.objectfile import omf
 from qbopt.objectfile.module import Addr, Space
 
 
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_fpdeep_mix_outputs_fold_across_string_prints(tag):
+    """FPDEEP kept CLNG(q*1024) because PRINT invalidated the unrelated numeric literal."""
+    from qbopt import wholeseg
+    states = []
+    def watch(stage, name, state):
+        if stage == "mir-widen":
+            states.append(state)
+    result = wholeseg.emitted(Path(f"fixtures/omf/fpdeep-{tag}.obj").read_bytes(), watch=watch)
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    printed = {arg.n for body in states for block in body.blocks for op in block.ops
+               if op.kind is mir.Kind.ARG for arg in op.args if isinstance(arg, mir.Const) and arg.width == 4}
+    assert {512, 768, 896} <= printed
+    for body in states:
+        literal = next(ref for ref, value in body.initial if value.n == 0x44800000 and value.width == 4)
+        assert not any(op.kind is mir.Kind.FMUL and any(ref.addr == literal.addr for ref in op.loads)
+                       for block in body.blocks for op in block.ops)
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "v-g3"])
+@pytest.mark.parametrize("fault", ["escape", "payload", "addend", "overlap"])
+def test_unknown_literal_pool_layout_does_not_exclude_call_writes(tag, fault, monkeypatch):
+    """A malformed or overlapping descriptor must not protect numeric bytes from PRINT writes."""
+    from qbopt.frontend import raising_literals
+    from qbopt.objectfile import module
+    path = Path(f"fixtures/omf/fpdeep-{tag}.obj")
+    found = corpus.loaded(path)
+    built = mir.bodies(found, corpus.partitioned(path))[0][1]
+    literal = built.initial[0][0]
+    # Exercise the layout proof with actual BC records, changing one premise.
+    if fault == "escape":
+        escapes = module.escaped(found) | {(literal.addr.index, literal.addr.disp)}
+        monkeypatch.setattr(module, "escaped", lambda found: escapes)
+    elif fault == "overlap":
+        original = omf.fixups(found.records)
+        field = next(item for item in original if item.seg == literal.addr.index and item.loc == omf.LOC_OFF16)
+        monkeypatch.setattr(omf, "fixups", lambda records: [*original, replace(field, offset=field.offset + 1)])
+    else:
+        chunks = list(omf.ledata(found.records))
+        # First near descriptor pointer / first far descriptor pointer.
+        at = 2
+        if fault == "payload":
+            # Remove every payload byte, so even a valid relocation has no known object extent.
+            chunks = [item for item in chunks if item[1] != (16 if tag == "v-g3" else 9)]
+        else:
+            changed = []
+            for record, segment, start, payload in chunks:
+                if segment == 9 and start <= at < start + len(payload):
+                    payload = payload[:at-start] + b'\x01' + payload[at-start+1:]
+                changed.append((record, segment, start, payload))
+            chunks = changed
+        monkeypatch.setattr(omf, "ledata", lambda records: iter(chunks))
+    # Remove old annotations before re-running recognition on the changed object.
+    built = replace(built, blocks=tuple(replace(block, ops=tuple(replace(op,
+        stores=tuple(replace(ref, excludes=()) for ref in op.stores)) for op in block.ops)) for block in built.blocks))
+    result = raising_literals.initialized(built, found)
+    assert not any(ref.excludes for block in result.blocks for op in block.ops for ref in op.stores)
+
+
+@pytest.mark.parametrize("offset,width,disjoint", [(0, 1, True), (3, 1, True), (0, 4, True), (-1, 2, False), (3, 2, False)])
+def test_call_exclusion_requires_whole_byte_range(offset, width, disjoint):
+    """A protected literal does not protect adjacent descriptor bytes or a straddling write."""
+    start = Addr(Space.SEGMENT, 30, 9)
+    effect = mir.MemRef(None, 0, excludes=((start, 4),))
+    access = mir.MemRef(start.plus(offset), width)
+    assert mir.overlapping(effect, access, frozenset()) is not disjoint
+
+
 @pytest.mark.parametrize("width", [1, 2, 4, 8])
 def test_literal_bytes_are_available_to_scalar_loads(width):
     """FPDEEP's copied DOUBLE needs integer literal reads, not only x87 reads."""

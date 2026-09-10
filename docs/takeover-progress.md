@@ -2,6 +2,46 @@
 
 ## 2026-09-10: reprioritize from current emitted targets
 
+### Numeric pool facts now survive validated string-runtime effects
+
+FPDEEP MIX's multiplier remains known across PRINT. The frontend validates
+every escaped pool object as a near string descriptor plus payload, or as
+VBDOS's two-word indirect descriptor through its selector and FSL_CONST
+relocations. Missing/overlapping relocations, nonzero encoded addends,
+unknown escapes and unavailable payload bytes refuse the exclusion. Only
+complete numeric literal byte ranges outside those objects are excluded from
+established OWN runtime write effects. Ordinary writes and unknown calls keep
+their normal alias effects; this does not make BC_CN globally immutable.
+
+Exact conversion removal now handles a multiply/conversion chain rather than
+requiring an adjacent load/conversion pair. Unused exact producers disappear
+through the existing dead-value walk; FCHECK observation points remain.
+
+Before each MIX print (representative PDS sequence):
+
+```asm
+fld dword [q]
+fmul dword [literal1024]
+fistp dword [temporary]
+wait
+mov eax,[temporary]
+push eax
+```
+
+After: `wait; push dword 512` (then 768 and 896 for the other iterations).
+Measured ranking costs fall from **2123/2217/2123 to 1829/1755/1829** for
+PDS/QB/VBDOS, or **1.68x/1.62x/1.68x** against the unchanged 1086 reference.
+Original/native FPDEEP outputs match on all three runtimes. FPCSE was also
+run on all three after the memory-proof change and prints 487.5 on both sides.
+The opaque final DOUBLE initializer remains a blocker to the target.
+
+Focused checks: 65 literal/floating-fact cases and 55 literal/floatfold/alias
+cases passed in separate scoped runs. The pre-existing raw
+`test_quickbasic_literal_initializers_prove_the_same_floating_exit` assertion
+still fails (zero loop-exit proofs); it also fails with HEAD's old initializer
+substituted back, and is not weakened or marked as passing. Runtime FPCSE
+continues to match. This diagnostic assertion still needs reconciliation.
+
 After `b241ad5`, ran `tools/opportunity.py --targets` against the default
 OMF corpus once. Ordinary HARR is **2094–2126 / 1834 = 1.14–1.16x**;
 further HUGELP tuning is useful but is not the next reason the documented

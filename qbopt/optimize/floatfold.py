@@ -98,8 +98,7 @@ def discarded(body: mir.MirBody, converted: dict) -> mir.MirBody:
     blocks = []
     for block in body.blocks:
         ops = list(block.ops)
-        for index in range(1, len(ops)):
-            load, conversion = ops[index - 1:index + 1]
+        for index, conversion in enumerate(ops):
             if (conversion.kind is not mir.Kind.FSTORE or conversion.stores or conversion.barrier
                 or len(conversion.results) != 1 or len(conversion.args) != 1):
                 continue
@@ -107,13 +106,13 @@ def discarded(body: mir.MirBody, converted: dict) -> mir.MirBody:
             if (not isinstance(result, mir.Held) or result.value not in converted or reads[result.value]
                 or not isinstance(source, mir.Held) or source.width != 10 or reads[source.value] != 1):
                 continue
-            if (load.kind is not mir.Kind.FLOAD or load.barrier or load.stores
-                or load.results != (source,) or len(load.args) != 1
-                or not isinstance(load.args[0], mir.Cell)
-                or any(reads[value] for value in conversion.defines if value != result.value)
-                or any(reads[value] for value in load.defines if value != source.value)):
+            if any(reads[value] for value in conversion.defines if value != result.value):
                 continue
-            for position in (index - 1, index):
-                ops[position] = _checked(ops[position])
+            ops[index] = _checked(conversion)
+            load = ops[index - 1] if index else None
+            if (load is not None and load.kind is mir.Kind.FLOAD and not load.barrier and not load.stores
+                and load.results == (source,) and len(load.args) == 1 and isinstance(load.args[0], mir.Cell)
+                and not any(reads[value] for value in load.defines if value != source.value)):
+                ops[index - 1] = _checked(load)
         blocks.append(replace(block, ops=tuple(ops)))
     return replace(body, blocks=tuple(blocks))
