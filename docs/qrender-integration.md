@@ -222,7 +222,25 @@ mov cx,[bp+18h]
 The full view module now emits through LIR: 15,470 -> 14,717 object bytes,
 using the three separately audited project interfaces. Dumps are in
 `/tmp/qbopt-view-reloc-fixed`. This is an emission result only; relinking and
-fixed-tick frame/state comparison are still required before calling it correct.
+fixed-tick frame/state comparison followed as recorded below.
+
+### Two-module runtime check
+
+Relinking with rewritten `view` and `d_turb` succeeded. The isolated build in
+`/tmp/qbopt-qrender-view-20260910` completed the same `dm3ish.bsp` scene
+(`-lm -nostats -yaw 183 -bench 40 -ticks 60`) with exit code 0.
+Fresh output matched the baseline: 60 ticks, 13 frames, 266 polygons,
+820 triangles, player state and all eight entity records. Both frame BMPs
+have SHA1 `d6e4096b3610249ff4d53b6829f1ab18ec108c7a`.
+The text differences are timing fields and a constant 208-byte reduction
+in reported free memory; this is not a speed or memory improvement claim.
+
+Only two of 21 BASIC modules are rewritten in this run. The three project
+interfaces remain explicit, separately audited inputs, not global contracts.
+Scripted camera input and mouse movement are not established by this scene.
+Keep additional optimization passes postponed while bringing the remaining
+modules through emission and validating their actual execution. Every defect
+fixed along this path has a fail-first regression in the same commit.
 
 VBDCL10E.LIB, `rtenexit.asm`, B$ENRA:
 
