@@ -746,8 +746,8 @@ one documented target without materially regressing another.
   the same body; genuinely unowned gaps still prevent merging. IVARM unswitching
   candidates shrink from three blocks per loop to two. Before/after emitted ASM
   is identical (`mov [field],ax; add ax,3; cmp ax,37; jne loop`): this exposes a
-  canonical loop, not a speedup. Sinking the pre-increment value's last store is
-  still needed before those specialized loops can disappear.
+  canonical loop, not a speedup. The subsequent last-counter store sinking
+  described below lets those specialized loops disappear.
 
 ### Loop profitability and specialization
 
@@ -759,6 +759,30 @@ one documented target without materially regressing another.
   facts retain HARY; loop preguards remain unimplemented.
 - [ ] Implement loop versioning/unswitching for invariant bounds, alias and
   numeric-environment conditions.
+  An invariant-branch IVARM candidate now simplifies both loop versions away.
+  Store sinking reconstructs a directly stored counter's last executed value
+  only with an exact, nonempty, non-wrapping trip proof and an unconditional
+  latch store. IVARM stores 34, not its exit counter 37; zero-trip and inexact
+  termination retain the original store. Existing alias/observation guards apply.
+  Candidate modeled costs are QB 556 → 282, PDS 536 → 282, VBDOS 528 → 274;
+  the PDS object shrinks from 1128 to 1107 bytes. Unswitching remains off pending
+  production integration, broader branch coverage and profitability selection.
+
+  ```asm
+  ; before: one selected store on every iteration
+  mov [field],ax
+  add ax,3
+  cmp ax,37
+  jne loop
+
+  ; after candidate specialization: branch once, then one store
+  or ax,bx                   ; branchChoice halves
+  je otherField
+  ; ... selected edge ...
+  mov word [field],34
+  jmp commonExit
+  ; commonExit stores stepCount=11 and currentValue=37
+  ```
 - [ ] Add loop rotation only where it improves the canonical form or emitted
   branch structure.
   `optimize/loopclone.py` now supplies CFG-preserving peeling candidates:

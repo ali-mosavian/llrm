@@ -54,6 +54,8 @@ def sunk_stores(body: mir.MirBody, dgroup: frozenset[int], bounds: dict | None =
                         value = _exit_value(op, blocks[source], blocks[entry], latch, body, dgroup, bounds)
                         if value is None and any(op is one for one in blocks[latch].ops):
                             value = _invariant_value(op, invariant, nonempty)
+                            if value is None:
+                                value = _last_counter_value(op, body, loop)
                         if value is not None:
                             moved.append(op)
                             relocated[id(op)] = replace(
@@ -77,6 +79,17 @@ def sunk_stores(body: mir.MirBody, dgroup: frozenset[int], bounds: dict | None =
         }
         body = replace(body, blocks=tuple(updates.get(block.at, block) for block in body.blocks))
     return body
+
+
+def _last_counter_value(op: mir.Op, body: mir.MirBody, loop) -> mir.Const | None:
+    if len(op.args) != 1 or not isinstance(op.args[0], mir.Held):
+        return None
+    stored = op.args[0]
+    counter = induction.basics(body, loop).get(stored.value.id)
+    if counter is None or counter.start.width != stored.width or op.stores[0].width != stored.width:
+        return None
+    last = induction._last_counter(body, loop, counter, consts.known(body), stored.width)
+    return mir.Const(consts.masked(last, stored.width), stored.width) if last is not None else None
 
 
 def _invariant_value(op: mir.Op, invariant: set[int], nonempty: bool) -> mir.Arg | None:
