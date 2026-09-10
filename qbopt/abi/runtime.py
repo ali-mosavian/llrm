@@ -350,6 +350,21 @@ VARIANTS[("B$CHOU", "vbdos")] = replace(
 )
 
 for _name, _cleanup, _evidence in (
+    ("B$RTRM", 2,
+     "farstr/strfcn.asm 0215..0253: RefStringArgLast overwrites arithmetic "
+     "flags before branching; reverse space scan uses STD then CLD. Substring "
+     "helper 011d returns near; normal exit POP DI/BP / RETF 2. Allocation, "
+     "temporary deletion, aliases and errors remain unknown."),
+    ("B$FASC", 2,
+     "farstr/strfcn.asm 004e..0062: RefStringArgLast first, then a byte read "
+     "or ERR_FC for empty strings. DelTempSH -> DelString -> FreeDataPpv can "
+     "delete a temporary. Normal return POP BP / RETF 2; RefString's OR AX,AX "
+     "replaces incoming flags. No purity or heap preservation claim."),
+    ("B$FCHR", 2,
+     "farstr/stcore.asm 0264..027c: AlcTmpSH first (strutil.asm 00fe; CMP BX "
+     "at 0103 overwrites flags before dependencies), then writes the byte or "
+     "tails ERR_FC for a nonzero high byte. Normal POP DI/BP / RETF 2. "
+     "Allocation/error dependencies stay unknown; all GP inputs retained."),
     ("B$LNIN", 10,
      "rt/lininp.asm 0000..006e: initial CMP at 0004 overwrites arithmetic "
      "flags before terminal/disk dispatch. Both normal paths join string "

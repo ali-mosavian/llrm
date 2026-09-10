@@ -502,6 +502,25 @@ memory telemetry differ; no performance improvement is claimed. This
 clears the observed FindFrame hang for this scene, not every renderer
 path or the other eighteen BASIC modules.
 
+### Batched string-interface audit
+
+The saved whole-library report was reused for RTRM/FASC/FCHR and their
+RefString, substring, temporary-deletion and allocation dependencies.
+Each normal public return consumes two bytes. All GP inputs and unknown
+effects remain; ASC may delete a temporary, CHR allocates, and RTRIM uses
+the substring allocator. Three fail-first regressions and fifteen adjacent
+tests pass. The baseline objects contain 10 RTRM, 18 FASC and 26 FCHR call
+sites across seven modules. This establishes interfaces, not their complete
+contracts or successful module emission. No assembly is rewritten by the
+interface declarations themselves:
+
+```asm
+; before                         ; after
+call far B$RTRM                  call far B$RTRM
+call far B$FASC                  call far B$FASC
+call far B$FCHR                  call far B$FCHR
+```
+
 ### Two-module runtime check
 
 Relinking with rewritten `view` and `d_turb` succeeded. The isolated build in
