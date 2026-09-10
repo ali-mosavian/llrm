@@ -1323,6 +1323,7 @@ _OBSERVED = frozenset(
         mir.Kind.FNEG,
         mir.Kind.FABS,
         mir.Kind.FCOMPARE,
+        mir.Kind.FCHECK,
     }
 )
 
@@ -1847,7 +1848,8 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
 
     edges = floatfacts.exit_cells(body, dgroup, calls)
     facts = consts.known(body, dgroup, calls, edges=edges)
-    argument_facts = facts | floatfacts.converted(body, dgroup, calls)
+    conversions = floatfacts.converted(body, dgroup, calls)
+    argument_facts = facts | conversions
     memory = (
         consts.cells(body, dgroup, calls, facts, edges=edges)
         if any(op.loads or op.kind is mir.Kind.DIVMOD for block in body.blocks for op in block.ops)
@@ -1876,7 +1878,8 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
             changed = changed or made is not op
             ops.append(made)
         out.append(replace(block, ops=tuple(ops)))
-    return replace(body, blocks=tuple(out)) if changed else body
+    from qbopt.optimize import floatfold
+    return floatfold.discarded(replace(body, blocks=tuple(out)) if changed else body, conversions)
 
 
 def _constant_operands(op: Op, facts: dict, memory: dict | None = None) -> Op:

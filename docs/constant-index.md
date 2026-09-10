@@ -108,3 +108,43 @@ any opaque instruction or barrier conservatively retains all such reloads.
 Ordinary PDS fixture bytes and emission outcomes are unchanged. This does
 not yet claim a suite speedup: unread results must survive the upstream
 pipeline in a body whose readers are fully modeled to benefit.
+
+## Exact load/conversion pairs become floating checks
+
+`floatfold.discarded` now replaces an adjacent, exact load/conversion pair
+with two `FCHECK` operations when neither its integer result nor its floating
+intermediate has another reader. A live result, shared input, memory store,
+barrier or absent exact proof keeps the pair. `FCHECK` observes pending
+floating exceptions without computing a value; lowering selects `wait`.
+The existing backend combines adjacent redundant waits.
+
+This follows the distinction in local LLVM
+`llvm/lib/Analysis/ConstantFolding.cpp:mayFoldConstrained`: exact evaluation
+with `opOK` permits folding; a strict operation that changes exception status
+must stay. qbopt additionally retains the observation point explicitly.
+The MIR transformation does not name a register or machine instruction.
+
+Actual PDS emitted before/after at the first square print:
+
+```asm
+; Before                         ; After
+fld dword [scratch]              wait
+fistp dword [bp-4]               push 90h
+wait                            call B$PEI4
+mov eax,[bp-4]
+push 90h
+call B$PEI4
+```
+
+All six exact pairs disappear across the expanded iterations. Temporary
+stack space decreases from 48 to 24 bytes; PDS's object shrinks from 2176
+to 2078 bytes. Static cost decreases from 4047 to 3663 (QB 4209 to 3861,
+VBDOS 4045 to 3661). Both sides are expanded, so neither uses the erroneous
+ten-trip estimate. These are cost estimates, not measured execution times.
+
+All 33 FPDEEP output checks pass across the three compilers with experimental
+expansion selected and no checker/emitter bypass. The fixture regression
+fails with pair deletion disabled; focused guards cover shared/live values,
+memory effects and retained checks. Stage dumps and execution artifacts:
+
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-exact-checkpoints-k47dqj3q`

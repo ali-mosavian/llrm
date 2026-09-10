@@ -8,7 +8,7 @@ from qbopt.model import mir
 def _removed(op: mir.Op) -> bool:
     from qbopt.backend.lower import Unlowered
 
-    if op.kind is not mir.Kind.NOTHING:
+    if op.kind not in (mir.Kind.NOTHING, mir.Kind.FCHECK):
         return False
     if (op.args or op.results or op.uses or op.defines or op.loads or op.stores
         or op.floating is not None or op.stack is not None or op.node is not None

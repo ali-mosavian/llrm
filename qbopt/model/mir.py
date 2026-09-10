@@ -413,6 +413,7 @@ class Kind(StrEnum):
     FLOAD = "fload"
     FSTORE = "fstore"
     FCOMPARE = "fcompare"
+    FCHECK = "fcheck"  # Observe pending floating exceptions without computing a value.
 
     # what has no MIR form yet, each with the step that removes it
     ARG = "arg"  # a call argument still written as a push -- step 3

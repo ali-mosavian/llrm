@@ -56,7 +56,7 @@ def test_fpdeep_expansion_exposes_exact_array_arithmetic():
         assert [value.value for value in values] == expected
 
 
-def test_fpdeep_exact_integer_arguments_keep_floating_effects():
+def test_fpdeep_exact_integer_arguments_keep_floating_checkpoints():
     """FPDEEP kept reading converted square/ratio temporaries instead of known answers."""
     found, original = body()
     expanded = unroll.expanded(original, found.dgroup, found.calls)
@@ -64,7 +64,12 @@ def test_fpdeep_exact_integer_arguments_keep_floating_effects():
     assert sorted(value.n for value in converted.values()) == [6, 14, 30, 144, 784, 3600]
     folded = transform.folded(expanded, found.dgroup, found.calls)
     floating = lambda body: [op for block in body.blocks for op in block.ops if op.floating]
-    assert floating(folded) == floating(expanded)
+    removed_addresses = {0x97, 0x9c, 0xdf, 0xe4}
+    assert floating(folded) == [op for op in floating(expanded) if op.at not in removed_addresses]
+    checkpoints = [op for block in folded.blocks for op in block.ops if op.kind is mir.Kind.FCHECK]
+    assert len(checkpoints) == 12
+    assert {op.at for op in checkpoints} == removed_addresses
+    lower_floats.checked(folded)
     arguments = [op.args[0].n for block in folded.blocks for op in block.ops
                  if op.kind is mir.Kind.ARG and op.at in (0xa1, 0xe9)
                  and isinstance(op.args[0], mir.Const)]

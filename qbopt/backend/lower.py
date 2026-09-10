@@ -90,6 +90,8 @@ def semantics(op: mir.Op, was: ir.Semantics | None = None, place=None) -> ir.Sem
         return None
     if op.kind is mir.Kind.NOTHING and op.name == "":
         return ir.Semantics(ir.Operation.NOTHING, "", (), ())
+    if op.kind is mir.Kind.FCHECK:
+        return ir.Semantics(ir.Operation.NOTHING, "wait", (), ())
     if not op.args and not op.results and op.raised is None:
         return None  # nothing to build one from
     # A value resolves to the register the original instruction had in the
