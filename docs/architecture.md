@@ -597,6 +597,15 @@ one documented target without materially regressing another.
   elimination and dead-store elimination.
 - [ ] Implement sparse conditional constant propagation (`SCCP`) over values
   and executable CFG edges.
+  Current `consts.known` requires agreement from all phi inputs; `decide`
+  removes known-dead edges between optimization rounds. This is not SCCP.
+  The solver must distinguish not-yet-known values from overdefined values,
+  revisit consumers when values or executable edges change, and merge only
+  feasible phi inputs. Unresolved conditions must not silently delete edges.
+  Reference: local LLVM revision `338e0c94943a6fb917c276bbbd9ff4b6cd6dd71e`,
+  `llvm/lib/Transforms/Utils/SCCPSolver.cpp:1426` and the solver header's
+  `resolvedUndefsIn` contract. LLVM undef semantics are not permission to
+  treat unknown BASIC inputs or unsupported machine effects as unreachable.
 - [ ] Consolidate branch folding, empty-block removal, jump threading and
   unreachable cleanup into `SimplifyCFG`.
 
