@@ -3984,3 +3984,33 @@ passed, followed by ten checks including the additional frame-base guard.
 VBDOS NBODY is 4165 -> 4162 object bytes; PDS is 2872 -> 2869. Both outputs
 match BC with timing calls intact. QB ADDRM matches at unchanged 857 bytes.
 Artifacts: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-reload-reuse-q57jswm5`.
+
+### Fold untied spill sources while allocating
+
+NBODY's signed division biases cannot be discarded merely because its source
+describes squared distances: fixed-width squares and their sum can wrap, and
+observed simulation ranges do not prove otherwise. Those corrections remain.
+
+The allocator's spiller instead now folds one spilled, untied source into
+ADD/SUB/AND/OR/XOR, at matching word or dword width. The destination must remain
+in a register; groups, fixed requirements, clobbers and a second spilled
+operand retain the existing reload path. This implements a spill decision
+without creating a scratch interval. LLVM's local `InlineSpiller.cpp`,
+`foldMemoryOperand` (around line 1034), likewise selects explicit untied uses.
+It is not a new LIR optimization tier and adds no machine detail to MIR.
+
+Before, at NBODY's first delta: `mov eax,[bp-2ch]; sub esi,eax`.
+After: `sub esi,[bp-2ch]`. The Y delta receives the same change.
+The real NBODY and five arithmetic-form regressions failed first. All 34
+spiller checks pass; the preceding combined run also passed all 137 peephole
+checks. An old test requiring a reload for ADD was replaced by the equivalent
+reload assertion for the unhandled ADC form, with direct-source ADD covered
+explicitly rather than preserving its old inefficient instruction shape.
+
+VBDOS NBODY: 4162 -> 4156 object bytes; modeled cost 361352 -> 357352.
+PDS NBODY: 2869 -> 2863 bytes; modeled cost 359267 -> 355267.
+Both runtime outputs match BC, including all simulation coordinates and DONE;
+timer readings are excluded from output equality. QB LNGMXX remains correct
+at 838 bytes / 246 modeled units. These are estimates, not hardware timings.
+Complete dumps, objects and runtime outputs:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-fold-spill-m06buebr`.

@@ -11,9 +11,10 @@ that one instruction. LLVM calls the fresh value the reload's, and it is
 what makes the spilled value's live range vanish: nothing is live between
 the store and the load, so the register the value wanted is free.
 
-**Not folded.** LLVM tries to fold the reload into the instruction that
-reads it -- `add ax,[bp-12h]` rather than a load and then an add -- which
-is a peephole over the result and belongs after this rather than inside it.
+Like LLVM's InlineSpiller, an untied arithmetic source may read its slot
+directly. This avoids inventing a short reload interval and another register
+requirement while implementing an allocation decision, not an optimization
+over LIR values.
 """
 
 from dataclasses import replace
@@ -78,7 +79,7 @@ def spilled(
                 fresh += 1
             if remade:
                 one = _renamed(one, remade)
-            direct = _in_place(one, stored, frame) or _tied(one, stored, frame)
+            direct = _source(one, stored, frame) or _in_place(one, stored, frame) or _tied(one, stored, frame)
             if direct is not None:
                 insns.append(direct)
                 continue
@@ -112,6 +113,26 @@ def spilled(
             made.update(rename.values())
         blocks.append(replace(block, insns=tuple(insns)))
     return replace(body, blocks=tuple(blocks)), frozenset(made)
+
+
+def _source(one, values, frame):
+    """Fold one untied spill source into an encodable two-address operation."""
+    if one.group is not None or one.requires or one.delivers or one.clobbers:
+        return None
+    match one.what:
+        case ir.Semantics(ir.Operation.BINARY, name, (ir.Held() as dest,),
+                          (ir.Held() as left, ir.Held() as right)):
+            if (name not in {"add", "sub", "and", "or", "xor"} or dest != left
+                or dest.width not in (2, 4) or right.width != dest.width
+                or right.value not in values or dest.value in values
+                or right.value in one.defines
+                or any(value in values and value != right.value for value in one.uses)):
+                return None
+            cell = frame.cell(right.value, right.width)
+            return replace(one, what=replace(one.what, sources=(left, cell)),
+                           uses=tuple(value for value in one.uses if value != right.value))
+        case _:
+            return None
 
 
 def _constants(body: lir.LirBody, values: frozenset[int]) -> dict[int, ir.Imm]:

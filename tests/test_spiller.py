@@ -8,6 +8,8 @@ once, and parcopy.py then sees two runs instead of one. pressx-v-evt
 emitted `r24 <- [bp-8]` and then `r27 <- r24`, and R came out 6460 for 7500.
 """
 
+from pathlib import Path
+
 import pytest
 
 from qbopt.model import ir
@@ -35,6 +37,35 @@ def _body(*insns) -> lir.LirBody:
 def _out(body, values):
     got, _made = spiller.spilled(body, frozenset(values), frames.Frame(0))
     return [one for block in got.blocks for one in block.insns]
+
+
+def test_nbody_reads_spilled_position_directly_in_subtraction():
+    """NBODY loaded [BP-2Ch] into EAX solely for SUB ESI,EAX on every force pair."""
+    from qbopt import wholeseg
+    states = []
+    def watch(stage, name, body):
+        if stage == "peephole" and body.entry == 0x30:
+            states.append(body)
+    result = wholeseg.emitted(Path("fixtures/bench/nbody-v-g3.obj").read_bytes(), watch=watch)
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    assert any(one.at == 0x122 and one.what is not None and one.what.name == "sub"
+               and isinstance(one.what.sources[-1], ir.Mem) for one in states[0].insns)
+
+
+@pytest.mark.parametrize("width", [2, 4])
+@pytest.mark.parametrize("name", ["add", "sub", "and", "or", "xor"])
+def test_untied_spill_source_is_read_directly_by_arithmetic(name, width):
+    """NBODY reloaded spilled position/acceleration operands into scratch registers before arithmetic."""
+    from dataclasses import replace
+    op = _add(1, 2)
+    op = replace(op, what=replace(op.what, name=name, dests=(ir.Held(1, width),),
+                                 sources=(ir.Held(1, width), ir.Held(2, width))))
+    result = _out(_body(op), {2})
+    assert len(result) == 1
+    assert result[0].what.sources[0] == ir.Held(1, width)
+    assert isinstance(result[0].what.sources[1], ir.Mem)
+    assert result[0].what.sources[1].width == width
+    assert result[0].uses == (1,)
 
 
 @pytest.mark.parametrize("name", ["xor", "add", "and", "sub"])
@@ -203,13 +234,14 @@ def test_a_grouped_move_with_both_ends_spilled_stays_grouped() -> None:
     assert got[0].defines == got[0].uses == ()
 
 
-def test_an_ordinary_instruction_still_spills_the_way_it_did() -> None:
-    """Only a move in a parallel copy is rewritten in place. Anything else
-    keeps the reload before and the store after."""
-    got = _out(_body(_add(1, 2)), {2})
+def test_an_unhandled_arithmetic_form_keeps_its_reload() -> None:
+    """Carry-dependent arithmetic is outside the explicit spill-source folding forms."""
+    from dataclasses import replace
+    add = _add(1, 2)
+    got = _out(_body(replace(add, what=replace(add.what, name="adc"))), {2})
     assert len(got) == 2, [one.what.name for one in got]
     assert got[0].what.name == "mov" and isinstance(got[0].what.sources[0], ir.Mem)
-    assert got[1].what.name == "add"
+    assert got[1].what.name == "adc"
 
 
 def test_the_group_comes_out_one_contiguous_run() -> None:
