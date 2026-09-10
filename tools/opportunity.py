@@ -512,6 +512,8 @@ TARGETS = {
 
 PROVISIONAL_TARGETS = {
     "FPCSEX": "reference reassociates the sum and omits SINGLE rounding",
+    "FPCSE": "numeric reference omits checkpoints/stores without a whole-program observability proof",
+    "FPDEEP": "numeric reference omits checkpoints/stores without a whole-program observability proof",
 }
 
 

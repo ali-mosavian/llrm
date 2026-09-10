@@ -3502,3 +3502,27 @@ changing those tests. Nine FPCSE/FPDEEP/FPCSEX objects remain byte-identical
 across QB, PDS and VBDOS. No benchmark speedup is claimed for this allocator
 capability: MIR still needs to expose more cross-statement/loop reuse.
 Stage dumps: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-floating-phis-4795iz9n`.
+## 2026-09-10: distinguish exact numeric FP targets from verified full programs
+
+A scan of primary PDS fixtures found no cross-block floating CSE candidate
+in the current pipeline. Rather than add an unused transformation, the
+target report was refreshed and FPCSE's remaining instructions inspected.
+PDS/VBDOS retain initial `s=0` and counter stores before WAIT; QB's WAIT
+precedes initialization. The existing checkpoint regression requires that
+initial state to remain visible to a pending exception.
+
+The 98-unit FPCSE and 1086-unit FPDEEP listings prove numeric results and
+price the retained print calls, but omit synchronization and numeric stores
+without the necessary whole-program observation proof. They are now
+provisional, with unchanged denominators and measured costs. This does not
+improve any score or declare either program complete; it prevents an
+unverified comparison from passing completion even at an arbitrarily low
+cost. The two new cases failed first because the report returned success.
+
+Seven focused target/checkpoint checks pass. Seven unrelated failures in
+the broader two modules reproduce on the preceding code: NOTS's stale
+1.43x expectation (now 1.33x) and six older FPCSE loop-shape expectations.
+Those tests and all emitted code are unchanged. Next evidence needed is a
+versioned startup/environment and observer contract, or a complete independent
+target that retains the required observations—not a denominator inferred
+from current output.

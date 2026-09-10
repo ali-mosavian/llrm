@@ -31,7 +31,22 @@ The fail-first instrument regressions cover renamed objects from QB, PDS
 and VBDOS, plus a below-target cost that must still fail completion. No
 denominator was increased or inferred from current output.
 
-## FPCSE — exact constant-output reference
+## FPCSE — exact numerical reference, whole-program equivalence unverified
+
+**Audit correction, 2026-09-10:** the 98-unit listing below proves the
+numeric/printing destination, not whole-program equivalence. It omits
+pending-exception synchronization and all numeric stores. The current
+strict contract retains those observation points; in particular,
+`tests/test_float_loop_exit.py::test_checkpoint_keeps_initial_memory_and_counter_stores`
+requires a pending exception to see `s=0` and the initial counter. PDS and
+VBDOS emit these before WAIT; QB's WAIT precedes initialization. A numeric
+exactness proof alone does not permit deleting either compiler's WAIT.
+
+No denominator is increased. The scoreboard retains 98 as a provisional
+reference, suppresses its ratio and cannot certify completion from it.
+Closing this requires either an independently derived reference preserving
+these observations, or a verified startup/runtime and whole-program escape
+proof that permits their removal. Neither is established by the listing.
 
 For the ordinary, event-free constant-input program, `a=2`, `b=4`, `c=8`:
 each iteration computes `p=48`, `q=3/4`, then `(s+48)+3/4` in that order.
@@ -42,7 +57,7 @@ lowest supported precision, independently of rounding mode. No reassociation,
 overflow, underflow or division-by-zero assumption is needed. This proof does
 not apply to FPCSEX's runtime inputs.
 
-The complete reference retains the four actual runtime calls (verified in
+The numerical reference retains the four actual runtime calls (verified in
 QB, PDS and VBDOS object EXTDEF call sites):
 
 ```asm
@@ -56,14 +71,21 @@ call far B$CENP             ; 20
 ```
 
 Target: **3*(6+20)+20 = 98**, hand-derived independently of emitted output.
-There are no runtime inputs, escaping numeric variables or remaining
-arithmetic in this reference. Startup/runtime FP state is not changed.
+There are no runtime inputs or remaining arithmetic in this reference.
+The absence of escaping numeric addresses alone is not an observation proof
+for runtime/error handlers; removal of synchronization is still unverified.
 The old 1340 denominator described a reassociated loop and is retired for
 FPCSE; FPCSEX remains provisional until it has its own valid full listing.
 At `4db5c4d`, primary PDS/QB/VBDOS costs are **173/190/167**, hence
 **1.77x/1.94x/1.70x**. These are newly visible gaps, not performance regressions.
 
 ## FPDEEP — exact constant floating expressions
+
+**The same audit limitation applies here:** 1086 prices the numerical/printing
+listing, which omits synchronization and numeric stores. Exact arithmetic
+does not establish their unobservability across the retained runtime calls.
+This denominator remains unchanged but provisional until a whole-program
+proof or an observation-preserving independent listing is available.
 
 For ordinary unchecked, event-free builds, the three array elements are
 12, 28 and 60, `k=4`, and `d=12`; no numeric address escapes. Expand the
@@ -107,10 +129,11 @@ call far B$PESD                ; 20
 call far B$CEND                ; 20
 ```
 
-Complete target: **9×104 + 2×52 + 46 = 1086**. This is the same static
+Numerical reference: **9×104 + 2×52 + 46 = 1086**. This is the same static
 ranking used by the scoreboard, not elapsed time or a hardware-cycle claim.
-The optimized program has not reached this form: opaque scalar copies and
-missing array/value facts still block its floating constant propagation.
+The optimized program has not reached this form. Constant propagation now
+computes the listed answers, but removing the remaining synchronization,
+stores and opaque scalar copies needs separate proofs.
 Event-enabled builds remain provisional because their event observations
 cannot be discarded by this reference.
 

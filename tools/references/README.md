@@ -92,5 +92,8 @@ Consequently, do not adopt this reference's operation reuse as proof for
 trap-enabled BASIC. Reuse needs an exception-free operation proof or a verified
 masked-exception region with no intervening environment observation/change.
 Cross-block allocation must separately retain conversion and synchronization
-semantics. Neither changing the global strict contract nor accepting the old
-1340 denominator follows from this experiment.
+semantics. The allocator now supports owned 80-bit cross-region storage and
+parallel floating phi transfers, including critical edges. That removes the
+allocation refusal, not the need to prove reuse legality. Neither changing
+the global strict contract nor accepting the old 1340 denominator follows
+from this experiment.

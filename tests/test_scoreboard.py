@@ -55,11 +55,11 @@ def test_qb_nots_meets_the_corrected_reference(capsys):
 
 
 def test_fpdeep_has_a_source_derived_reference(capsys):
-    """FPDEEP's missing denominator hid its constant floating-expression gap."""
+    """FPDEEP has a numerical denominator, not yet a complete observability proof."""
     assert opportunity.TARGETS["FPDEEP"] == 9 * (4 * (6 + 20)) + 2 * 52 + 46
     assert opportunity.against_targets([Path("fixtures/omf/fpdeep-p-g2.obj")]) == 1
     report = capsys.readouterr().out
-    assert "NO TARGET" not in report and "PROVISIONAL" not in report
+    assert "NO TARGET" not in report and "PROVISIONAL" in report
 
 
 @pytest.mark.parametrize("name,body_cost", [("B$FIST", 86), ("B$FIS2", 80)])
@@ -209,9 +209,9 @@ def test_missing_target_cannot_verify_completion(monkeypatch, capsys):
     assert "NO TARGET" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("program", ["fpcsex"])
+@pytest.mark.parametrize("program", ["fpcsex", "fpcse", "fpdeep"])
 def test_provisional_target_cannot_verify_completion(program, monkeypatch, capsys):
-    """Runtime-input twins inherited constant-source targets; FP references changed rounding and sums."""
+    """Numerical FP references omitted observable checkpoints/stores yet could certify completion."""
     from collections import Counter
     monkeypatch.setattr(opportunity, "counted", lambda *args: Counter(cost=1))
     assert opportunity.against_targets([Path(f"{program}-p-g2.obj")]) != 0
@@ -232,7 +232,8 @@ def test_fpcse_target_preserves_each_single_rounding_without_reassociation():
             assert abs(value.numerator).bit_length() <= 24
     assert total == Fraction(975, 2)
     assert opportunity.TARGETS["FPCSE"] == 3 * (6 + 20) + 20 == 98
-    assert "FPCSE" not in opportunity.PROVISIONAL_TARGETS
+    # Numeric exactness does not prove that synchronization and stores are unobservable.
+    assert "FPCSE" in opportunity.PROVISIONAL_TARGETS
 
 
 def test_hotlpx_target_accounts_for_the_complete_runtime_input_reference():
