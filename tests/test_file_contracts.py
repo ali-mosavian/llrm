@@ -5,6 +5,33 @@ import pytest
 from qbopt.abi import runtime
 
 
+def test_qrender_argument_parser_lowers_lowercase_call() -> None:
+    """SYS_PARSE_ARGS refused at 012f (LCAS), so its optimized object could not link."""
+    from dataclasses import replace
+    from pathlib import Path
+    import corpus
+    from qbopt.model import mir
+    from qbopt.backend import lower
+
+    path = Path("fixtures/regressions/qrender-sys-v-g3.obj")
+    found = corpus.loaded(path)
+    external = {name: replace(runtime.worst(name), cleanup=cleanup,
+                inputs=frozenset({runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX,
+                                  runtime.Reg.DX, runtime.Reg.SI, runtime.Reg.DI}))
+                for name, cleanup in (("HOST_SHUTDOWN", 0), ("COM_TOKENIZE", 8))}
+    rules = runtime.for_module(found, external=external)
+    name, body = next((name, body) for name, body in mir.bodies(found, corpus.partitioned(path), rules)
+                      if name == "procedure SYS_PARSE_ARGS")
+    block = next(block for block in body.blocks if any(op.at == 0x12f for op in block.ops))
+    body = replace(body, entry=block.at, blocks=(block,))
+    lowered = lower.lowered(name, body, found.calls, found.absorbed, rules)
+    assert any(one.at == 0x12f for one in lowered.insns)
+    contract = rules[0x12f]
+    assert contract.cleanup == 2
+    assert contract.reads is runtime.Memory.ANY and contract.writes is runtime.Memory.ANY
+    assert contract.clobbers == runtime.EVERY and contract.raises_error
+
+
 def test_peos_register_interface_does_not_claim_fixed_stack_cleanup():
     """Qrender INPUT epilogue at 0aa2 refused; terminal INPUT can relocate SP."""
     contract = runtime.per_call({0: "B$PEOS"}, "vbdos")[0]

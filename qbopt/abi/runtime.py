@@ -390,6 +390,15 @@ for _name, _cleanup, _evidence in (
      "flags before branching; reverse space scan uses STD then CLD. Substring "
      "helper 011d returns near; normal exit POP DI/BP / RETF 2. Allocation, "
      "temporary deletion, aliases and errors remain unknown."),
+    ("B$LCAS", 2,
+     "VBDCL10E farstr/strfcn.asm 01e8..0213: descriptor at BP+6 via "
+     "RefStringArgLast; RefString OR AX,AX at strutil.asm 0016 replaces "
+     "incoming arithmetic flags. Empty path pops saved DX and joins 0208; "
+     "nonempty path copies/allocates through helper 0000 and converts bytes. "
+     "The indirect CALL BX is fixed by the 01e9 relocation to B$ToLower "
+     "(gwini.asm 00a7..00e0, RETF), balanced by PUSH CS / near CALL. "
+     "Both normal paths restore DS/DI/SI/BP then RETF 2 at 020c. "
+     "Allocation, aliases, register preservation and error effects remain unknown."),
     ("B$FASC", 2,
      "farstr/strfcn.asm 004e..0062: RefStringArgLast first, then a byte read "
      "or ERR_FC for empty strings. DelTempSH -> DelString -> FreeDataPpv can "

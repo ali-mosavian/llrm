@@ -6,6 +6,42 @@ commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
 ## Latest gate — eight modules, native x87, 2026-09-11
 
+### Next module: SYS argument parsing
+
+`sys.obj` initially refused HOST_SHUTDOWN at 00c2. Explicit project-interface
+audit (`/tmp/qbopt-sys-audit.py`) established normal-return cleanup from the
+original callees: HOST_SHUTDOWN 0 (MAIN 1801; normally terminates via CEND),
+COM_TOKENIZE 8 (COMMON 021f), COM_PARSE_CONFIG 4 (COMMON 0830), KBD/MOUSE/
+TMR/VGA/MEM shutdown 0 (00b8/016f/011d/00ef/0270), TMRINIT 2 (00cf),
+TMRTICKS/TMRCYCLES 0 (00dd/00f1), MEMAVAIL 2 (01ff/0208). Interrupt
+continuations were read directly; MEMAVAIL's indirect dependency remains
+unknown. All six GP inputs and unknown register/memory/control/error effects
+are retained. These are hash-checked project inputs, not global ABI rules.
+
+Next was LCAS at 012f. The VBDCL10E implementation passes its descriptor to
+RefStringArgLast; RefString overwrites arithmetic flags before branching.
+The indirect character-conversion target is **B$ToLower**, proved by the
+01e9 relocation, and PUSH CS / near CALL pairs with its RETF. Both empty
+and nonempty paths restore their local stack then RETF 2. Only this bounded
+interface is added; no string allocation, alias or preservation claims.
+
+`fixtures/regressions/qrender-sys-v-g3.obj` is the original BC output.
+Its actual argument-parser block failed strict lowering at 012f without
+the contract and passes with it (one focused regression). Full native SYS
+emission now reaches **FDR1 at 0823**, still refused atomically. Dumps:
+`/tmp/qbopt-sys-contracts-native` before, `/tmp/qbopt-sys-lcas-native` after.
+No new executable/scene run, FPS or screenshot is claimed for SYS.
+
+```asm
+; before                         ; after (whole-module refusal, unchanged)
+012b push bx                     ; push bx
+012c mov [bp-36h],ax              ; mov [bp-36h],ax
+012f call far B$LCAS              ; call far B$LCAS
+0134 push ax                     ; push ax
+```
+
+### Accepted eight-module scene
+
 `/tmp/qbopt-qrender-native-es-20260911` passes the 60-tick scene: identical
 BENCH.BMP (SHA-1 `d6e4096b3610249ff4d53b6829f1ab18ec108c7a`) and all
 non-timing/non-memory report fields match baseline, including `plat_zofs -288`.
