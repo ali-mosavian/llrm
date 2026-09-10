@@ -334,6 +334,7 @@ def lowered(
     contracts: "dict[int, object]",
     coverage: "dict[int, tuple] | None" = None,
     cpu: str = "386",
+    *, pointer_model=None,
 ) -> "lir.LirBody":
     """One MIR body as machine instructions, and nothing else.
 
@@ -367,7 +368,7 @@ def lowered(
     read = {one.id for block in body.blocks for op in block.ops for one in op.uses}
     read |= {value.id for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
     calls = calls or {}
-    making = Lowering(body, read, calls, absorbed or (), contracts, coverage, cpu)
+    making = Lowering(body, read, calls, absorbed or (), contracts, coverage, cpu, pointer_model=pointer_model)
     # Once: expanding twice would build two of every instruction, and the
     # question below is about the ones this body will actually hold.
     readers = Counter(value for block in body.blocks for op in block.ops for value in op.uses)
@@ -418,7 +419,7 @@ def _check_inserted_conditions(ops: tuple[mir.Op, ...], leaving: frozenset[mir.V
     alive = {value for value in leaving if value.flags}
     for op in reversed(ops):
         preserved = alive - set(op.defines)
-        if op.node is None and op.kind in (mir.Kind.ADD, mir.Kind.MUL, mir.Kind.SMULHI) and preserved:
+        if op.node is None and op.kind in (mir.Kind.ADD, mir.Kind.MUL, mir.Kind.SMULHI, mir.Kind.PTR_OFFSET) and preserved:
             raise Unlowered(f"inserted {op.kind} at {op.at:#x} crosses a live condition")
         alive.difference_update(op.defines)
         alive.update(value for value in op.uses if value.flags)
@@ -522,8 +523,19 @@ def _signed_high_product(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics
     return (*setup, ir.Semantics(ir.Operation.MULTIPLY, "imul", (low, operand(result)), tuple(sources)))
 
 
+def _pointer_offset(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]:
+    if lowering.pointer_model is None:
+        raise Unlowered(f"pointer offset at {op.at:#x} needs an established pointer ABI")
+    if len(op.args) != 2 or len(op.results) != 1:
+        raise Unlowered(f"unsupported pointer offset at {op.at:#x}")
+    try:
+        return lowering.pointer_model.offset(*map(operand, op.args), operand(op.results[0]), lowering.fresh)
+    except ValueError as error:
+        raise Unlowered(str(error)) from error
+
+
 _EXPANDS: dict = {mir.Kind.EXTRACT: _extract, mir.Kind.DIVMOD: _word_division, mir.Kind.CONCAT: _concat,
-                 mir.Kind.SMULHI: _signed_high_product}
+                 mir.Kind.SMULHI: _signed_high_product, mir.Kind.PTR_OFFSET: _pointer_offset}
 
 
 class Lowering:
@@ -700,9 +712,11 @@ class Lowering:
             if (register := registers.get(self._origin.get(value))) is not None
         )
 
-    def __init__(self, body: "mir.MirBody", read: set, calls: dict, absorbed, contracts=None, coverage=None, cpu="386") -> None:
+    def __init__(self, body: "mir.MirBody", read: set, calls: dict, absorbed, contracts=None, coverage=None, cpu="386",
+                 *, pointer_model=None) -> None:
         arithmetic.validate(cpu)
         self.cpu = cpu
+        self.pointer_model = pointer_model
         self._read = read
         self._coverage = coverage or {}
         self._origin = body.origin

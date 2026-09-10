@@ -396,6 +396,7 @@ class Kind(StrEnum):
     CONVERT = "convert"  # c := a, at another width or signedness
     SIGN_EXTEND = "sign_extend"
     ADDRESS = "address"  # c := the number an address is
+    PTR_OFFSET = "ptr_offset"  # c := pointer a advanced by a byte displacement
 
     # control
     CALL = "call"
