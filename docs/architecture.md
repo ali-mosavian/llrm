@@ -613,6 +613,12 @@ one documented target without materially regressing another.
   treat unknown BASIC inputs or unsupported machine effects as unreachable.
 - [ ] Consolidate branch folding, empty-block removal, jump threading and
   unreachable cleanup into `SimplifyCFG`.
+  `decide` now bypasses empty fallthrough blocks as well as jump-only blocks,
+  including implicit incoming edges. Phi destinations and cycles are preserved;
+  converging branch arms become an unconditional edge. Dead blocks retain byte
+  ownership. BOOLS has no empty transit blocks on its live path across all three
+  compilers; final assembly remains unchanged (the emitter already removed jumps).
+  Linear-block merging and consolidation into a separate pass remain open.
 
 ### Loop profitability and specialization
 

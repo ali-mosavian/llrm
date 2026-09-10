@@ -1575,39 +1575,48 @@ def _executable_successors(block, facts, states, held):
 
 
 def _threaded(body: MirBody) -> MirBody:
-    """Bypass empty jump blocks without changing any incoming phi value."""
+    """Bypass empty control-flow blocks without changing any incoming phi value."""
     known = {block.at: block for block in body.blocks}
     redirects = {}
     for block in body.blocks:
-        if block.phis or len(block.succ) != 1 or not block.ops:
+        if block.phis or len(block.succ) != 1:
             continue
-        last = block.ops[-1]
-        if last.kind is not mir.Kind.JUMP or last.target != block.succ[0]:
-            continue
+        ops = block.ops
+        if ops and ops[-1].kind is mir.Kind.JUMP and ops[-1].target == block.succ[0]:
+            ops = ops[:-1]
         if any(op.kind is not mir.Kind.NOTHING or op.defines or op.uses or op.loads or op.stores
-               or op.barrier or op.floating is not None or op.stack is not None for op in block.ops[:-1]):
+               or op.args or op.results or op.merges or op.barrier
+               or op.floating is not None or op.stack is not None for op in ops):
             continue
-        successor = known.get(last.target)
+        successor = known.get(block.succ[0])
         if successor is not None and not successor.phis:
             redirects[block.at] = successor.at
-    blocks = []
-    changed = False
-    for block in body.blocks:
-        if not block.ops or block.ops[-1].kind not in {mir.Kind.JUMP, mir.Kind.BRANCH}:
-            blocks.append(block)
-            continue
-        last = block.ops[-1]
-        target = last.target
-        seen = {block.at}
+
+    def destination(start, source):
+        target, seen = start, {source}
         while target in redirects and target not in seen:
             seen.add(target)
             target = redirects[target]
-        if target == last.target or target in seen:
+        return start if target in seen else target
+
+    blocks = []
+    changed = False
+    for block in body.blocks:
+        successors = tuple(dict.fromkeys(destination(at, block.at) for at in block.succ))
+        if successors == block.succ:
             blocks.append(block)
             continue
         changed = True
-        successors = tuple(dict.fromkeys(target if at == last.target else at for at in block.succ))
-        blocks.append(replace(block, ops=(*block.ops[:-1], replace(last, target=target)), succ=successors))
+        ops = block.ops
+        if ops and ops[-1].kind in {mir.Kind.JUMP, mir.Kind.BRANCH}:
+            last = ops[-1]
+            last = replace(last, target=destination(last.target, block.at))
+            if last.kind is mir.Kind.BRANCH and len(successors) == 1:
+                last = replace(last, op=ir.Operation.JUMP, kind=mir.Kind.JUMP, name="jmp",
+                               uses=(), args=(), results=(), test=None, made=None,
+                               target=successors[0], covers=last.covers or _span_of(last))
+            ops = (*ops[:-1], last)
+        blocks.append(replace(block, ops=ops, succ=successors))
     return _unreachable(replace(body, blocks=tuple(blocks))) if changed else body
 
 
