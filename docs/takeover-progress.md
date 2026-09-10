@@ -1,5 +1,30 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: carry completed FP checks across integer-only edges
+
+The MIR check simplifier now uses a conservative CFG must-analysis, rather
+than resetting a completed observation at every block. Every predecessor
+must have completed a check; floating operations, calls, opaque effects,
+stack-bearing operations and unrecognized kinds invalidate the fact.
+Integer comparisons and branches do not create pending FP exceptions.
+Entry remains unproved even when a backedge has a check. No machine state
+or register names enter the optimization.
+
+QB FPCSE before: entry WAIT, s=0, i=1, an initial counter store, then a
+second WAIT in the collapsed loop before final constant stores. After:
+entry WAIT remains; the second WAIT disappears, allowing existing dead-store
+and dead-value passes to remove the initial s and counter work. The printed
+487.5 constant, final stores and calls are unchanged.
+Ranking cost **190 -> 171**, object **857 -> 831 bytes**. Target stays 98
+(1.74x, still not complete). PDS and VBDOS output objects are byte-identical
+to the previous implementation.
+
+21 focused tests pass, including fail-first agreeing-edge coverage and
+negative call/FP-path and first-loop-iteration guards. QB original/optimized
+DOS output matches `S= 487.5` and DONE; the run finished normally and both
+links were clean. Full stage and runtime artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-fp-check-edges-kqwojnk2`.
+
 ## 2026-09-10: full ranking refresh and exact FPCSE reference
 
 At `4db5c4d`, a complete default-object target run finishes with the expected

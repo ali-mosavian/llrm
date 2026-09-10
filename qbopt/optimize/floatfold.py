@@ -20,24 +20,49 @@ def _reads(body):
     return reads
 
 
+def _observed_after(op, observed):
+    if (op.barrier or op.floating is not None or op.stack is not None
+        or any(isinstance(arg, mir.Held) and arg.width == 10 for arg in (*op.args, *op.results))):
+        return False
+    if op.kind is mir.Kind.FCHECK:
+        return True
+    transparent = {mir.Kind.NOTHING, mir.Kind.COPY, mir.Kind.LOAD, mir.Kind.STORE,
+                   mir.Kind.ARG, mir.Kind.ADD, mir.Kind.SUB, mir.Kind.INCREMENT,
+                   mir.Kind.BRANCH, mir.Kind.JUMP, mir.Kind.LT, mir.Kind.LE,
+                   mir.Kind.GT, mir.Kind.GE, mir.Kind.EQ, mir.Kind.NE}
+    return observed and op.kind in transparent
+
+
 def checks(body: mir.MirBody) -> mir.MirBody:
     """A completed observation stays satisfied until floating or unknown work."""
-    transparent = {mir.Kind.NOTHING, mir.Kind.COPY, mir.Kind.LOAD, mir.Kind.STORE,
-                   mir.Kind.ARG, mir.Kind.ADD, mir.Kind.SUB, mir.Kind.INCREMENT}
+    predecessors = {block.at: [] for block in body.blocks}
+    for block in body.blocks:
+        for successor in block.succ:
+            if successor in predecessors:
+                predecessors[successor].append(block.at)
+    entries = dict.fromkeys(predecessors, False)
+    exits = dict(entries)
+    changed = True
+    while changed:
+        changed = False
+        for block in body.blocks:
+            parents = predecessors[block.at]
+            observed = bool(parents) and block.at != body.entry and all(exits[at] for at in parents)
+            entries[block.at] = observed
+            for op in block.ops:
+                observed = _observed_after(op, observed)
+            if exits[block.at] != observed:
+                exits[block.at] = observed
+                changed = True
     blocks = []
     for block in body.blocks:
-        observed = False
+        observed = entries[block.at]
         ops = []
         for op in block.ops:
-            if (op.barrier or op.floating is not None or op.stack is not None
-                or any(isinstance(arg, mir.Held) and arg.width == 10 for arg in (*op.args, *op.results))):
-                observed = False
-            elif op.kind is mir.Kind.FCHECK:
-                if observed:
-                    op = replace(op, kind=mir.Kind.NOTHING, node=None, made=None, raised=None, symbol=False)
-                observed = True
-            elif op.kind not in transparent:
-                observed = False
+            after = _observed_after(op, observed)
+            if op.kind is mir.Kind.FCHECK and observed and after:
+                op = replace(op, kind=mir.Kind.NOTHING, node=None, made=None, raised=None, symbol=False)
+            observed = after
             ops.append(op)
         blocks.append(replace(block, ops=tuple(ops)))
     return replace(body, blocks=tuple(blocks))

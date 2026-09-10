@@ -46,6 +46,30 @@ def test_qb_fpcse_preserves_entry_when_first_load_disappears():
     assert result.outcome is wholeseg.Emission.LIR, result.reason
 
 
+@pytest.mark.parametrize("interruption", [mir.Kind.COPY, mir.Kind.CALL, mir.Kind.FLOAD])
+def test_completed_fp_observation_crosses_only_proven_edges(interruption):
+    """Collapsed FPCSE kept a second WAIT after integer-only control flow."""
+    check = mir.Op(0, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.FCHECK)
+    middle = replace(check, at=1, kind=interruption)
+    body = mir.MirBody(0, (
+        mir.MirBlock(0, (), (check,), (1, 2)),
+        mir.MirBlock(1, (), (middle,), (3,)),
+        mir.MirBlock(2, (), (), (3,)),
+        mir.MirBlock(3, (), (replace(check, at=3),), ()),
+    ))
+    result = floatfold.checks(body)
+    assert result.blocks[0].ops[0].kind is mir.Kind.FCHECK
+    assert result.blocks[-1].ops[0].kind is (
+        mir.Kind.NOTHING if interruption is mir.Kind.COPY else mir.Kind.FCHECK)
+
+
+def test_loop_cannot_prove_its_first_fp_observation_redundant():
+    """A check on the backedge cannot stand in for the first iteration's check."""
+    check = mir.Op(1, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.FCHECK)
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (), (1,)), mir.MirBlock(1, (), (check,), (1,))))
+    assert floatfold.checks(body) == body
+
+
 @pytest.mark.parametrize("number,expected", [(144, 0x43100000), (-6, 0xc0c00000),
                                             (16777217, None), ("1/3", None)])
 def test_single_storage_requires_exact_bits(number, expected):
