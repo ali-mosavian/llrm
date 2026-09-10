@@ -35,6 +35,24 @@ def test_runtime_requirement_renames_its_explicit_source():
     assert result.what.sources[0].value == result.uses[0]
 
 
+@pytest.mark.parametrize("registers", [(Register.BX, Register.CX),
+                                     (Register.AX, Register.BX, Register.CX)])
+def test_shared_zero_is_supplied_to_every_runtime_input(registers):
+    """QGLDIFF hung in heap compaction: ENRA lost BX=0 after CSE joined its CX=0."""
+    from dataclasses import replace
+    from qbopt.backend import allocate
+    value = ir.Held(1, 2)
+    constant = _insn(ir.Semantics(ir.Operation.MOVE, "mov", (value,), (ir.Imm(0, 2),)), (1,), ())
+    call = replace(_insn(ir.Semantics(ir.Operation.CALL, "call", (), ()), (), (1,), at=0x108),
+                   requires=tuple((value, register) for register in registers))
+    body, pins = constrain.constrained(_body(constant, call))
+    placed = allocate.applied(body, allocate.allocate(body, pins))
+    zeros = {one.what.dests[0].register for one in placed.insns
+             if one.what.name == "mov" and one.what.sources == (ir.Imm(0, 2),)}
+    assert set(registers) <= zeros
+    assert {pins[value] for value in body.insns[-1].uses} == set(registers)
+
+
 def test_fixed_address_requirement_renames_memory_base():
     """Qrender FIDIV 035c retained unplaced v398 after its SI input became v1036."""
     from dataclasses import replace

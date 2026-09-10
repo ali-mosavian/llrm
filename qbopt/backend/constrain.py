@@ -78,6 +78,26 @@ def constrained(
     for block in body.blocks:
         insns: list[lir.Insn] = []
         for one in block.insns:
+            # CSE may feed several ABI slots from one value. Give each
+            # additional slot an independent lifetime before keying by value.
+            inputs, slots, extra = [], {}, []
+            for held, register in one.requires:
+                key = (held.value, held.width, register)
+                if key in slots:
+                    inputs.append((slots[key], register))
+                    continue
+                if any(value == held.value for value, _width, _register in slots):
+                    distinct = ir.Held(fresh, held.width)
+                    insns.append(_move(one, distinct, source(held.value, held.width)))
+                    pins[fresh] = pinned[fresh] = register
+                    extra.append(fresh)
+                    fresh += 1
+                else:
+                    distinct = held
+                slots[key] = distinct
+                inputs.append((distinct, register))
+            if extra:
+                one = replace(one, requires=tuple(inputs), uses=(*one.uses, *extra))
             # The declared width first. An operation that names no operand
             # has none for `_width` to read, so the requirement's own is
             # the only statement of how wide the value is: asked at a word
@@ -218,7 +238,11 @@ def _wanted(one: lir.Insn) -> dict:
     what = one.what
     # A value read in a register the instruction names nowhere: a runtime
     # routine's arguments. No occurrence to split, so no places.
-    out: dict[int, tuple[object, list]] = {held.value: (register, []) for held, register in one.requires}
+    out: dict[int, tuple[object, list]] = {}
+    for held, register in one.requires:
+        if held.value in out and out[held.value][0] != register:
+            raise Impossible(f"{one.at:#06x}: unsplit input value#{held.value} requires two registers")
+        out[held.value] = (register, [])
     if what is None:
         return out
     for index, operand in enumerate(what.sources):

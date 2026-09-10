@@ -43,6 +43,29 @@ this is not the full-project correctness gate.
 
 ### Next: QGLDIFF and shared rounding interfaces
 
+The duplicate-input fix now gives additional ABI slots independent live
+ranges before constraints are keyed by value. Two fail-first BX/CX and
+AX/BX/CX regressions pass; all 13 constrain tests and two nearby call-mask/
+coalescing checks pass. QGL_DIFF_TRI now emits:
+
+```asm
+mov ax,0
+mov cx,0
+mov bx,0                 ; restored; was missing
+call far B$ENRA
+```
+
+Candidate `/tmp/qbopt-qrender-native-inputs-20260911` (port 2208) completes
+the dedicated check instead of hanging, but reports **RESULT FAIL**:
+off-exact is 32 for all six checked cases, versus reference 1/1/1/1/8/4.
+Drawn counts and every logged pixel sample match. Next investigate the
+QGL_DIFF_WANT/QGL_DIFF_DEV numerical path, comparing each stage; do not
+change the oracle or count this module as accepted. Native stage dumps:
+`/tmp/qbopt-qgldiff-inputs-native`; OBJ 9,666 bytes. Ordinary benchmark
+is 9.40866 FPS, all correctness fields and BMP match baseline. Evidence:
+`diff-live-005.png` (rendered scene), `qgldiff-check.png` (returned prompt),
+and QGLDIFF.LOG (2,707 bytes versus reference 2,701).
+
 QGLDIFF native emission succeeds (9,663-byte OBJ), but its dedicated gate
 **fails to complete**. Candidate `/tmp/qbopt-qrender-native-diff-20260911`
 passes the ordinary benchmark at 9.50285 FPS with identical correctness
