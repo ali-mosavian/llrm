@@ -56,6 +56,41 @@ def test_fpdeep_expansion_exposes_exact_array_arithmetic():
         assert [value.value for value in values] == expected
 
 
+def test_fpdeep_exact_integer_arguments_keep_floating_effects():
+    """FPDEEP kept reading converted square/ratio temporaries instead of known answers."""
+    found, original = body()
+    expanded = unroll.expanded(original, found.dgroup, found.calls)
+    converted = floatfacts.converted(expanded, found.dgroup, found.calls)
+    assert sorted(value.n for value in converted.values()) == [6, 14, 30, 144, 784, 3600]
+    folded = transform.folded(expanded, found.dgroup, found.calls)
+    floating = lambda body: [op for block in body.blocks for op in block.ops if op.floating]
+    assert floating(folded) == floating(expanded)
+    arguments = [op.args[0].n for block in folded.blocks for op in block.ops
+                 if op.kind is mir.Kind.ARG and op.at in (0xa1, 0xe9)
+                 and isinstance(op.args[0], mir.Const)]
+    assert arguments == [144, 6, 784, 14, 3600, 30]
+    for block in folded.blocks:
+        for op in block.ops:
+            if op.kind is mir.Kind.ARG:
+                assert not any(isinstance(arg, mir.Held) and arg.value in converted for arg in op.args)
+
+
+@pytest.mark.parametrize("number,expected", [(-6, 0xfffffffa), (2147483647, 2147483647),
+                                             (2147483648, None), ("1/3", None)])
+def test_integer_conversion_facts_require_exact_in_range_values(monkeypatch, number, expected):
+    """FPDEEP's conversion facts must not invent a rounded or overflowing print argument."""
+    from dataclasses import replace
+    from fractions import Fraction
+    found, original = body()
+    op = next(op for block in original.blocks for op in block.ops
+              if op.kind is mir.Kind.FSTORE and op.at == 0x9c)
+    isolated = replace(original, blocks=(mir.MirBlock(original.entry, (), (op,), ()),))
+    monkeypatch.setattr(floatfacts, "known", lambda *args, **kwargs:
+                        {op.args[0].value: floatfacts.Finite(Fraction(number))})
+    facts = floatfacts.converted(isolated, found.dgroup, found.calls)
+    assert (facts[op.results[0].value].n if facts else None) == expected
+
+
 def test_emission_must_not_accept_unrolled_provenance_yet():
     """FPDEEP timed out when repeated input addresses interleaved its calls and lost fixups."""
     found, original = body()

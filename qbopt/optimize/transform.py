@@ -1847,12 +1847,13 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
 
     edges = floatfacts.exit_cells(body, dgroup, calls)
     facts = consts.known(body, dgroup, calls, edges=edges)
+    argument_facts = facts | floatfacts.converted(body, dgroup, calls)
     memory = (
         consts.cells(body, dgroup, calls, facts, edges=edges)
         if any(op.loads or op.kind is mir.Kind.DIVMOD for block in body.blocks for op in block.ops)
         else {}
     )
-    if not facts and not memory:
+    if not facts and not memory and not argument_facts:
         return body
 
     # Live, not merely mentioned: see live()'s own note on hotlop's dx.
@@ -1869,7 +1870,9 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
                 ops.extend(replacements)
                 changed |= replacements != (op,)
                 continue
-            made = _constant_operands(_folded_op(op, facts, wanted), facts, memory.get((block.at, index), {}))
+            made = _constant_operands(_folded_op(op, facts, wanted),
+                                      argument_facts if op.kind is mir.Kind.ARG else facts,
+                                      memory.get((block.at, index), {}))
             changed = changed or made is not op
             ops.append(made)
         out.append(replace(block, ops=tuple(ops)))

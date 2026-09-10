@@ -265,6 +265,28 @@ def known(body: mir.MirBody, dgroup: frozenset[int], calls: dict[int, str], *, i
     return _analyzed(body, dgroup, calls, initial)[0]
 
 
+def converted(body: mir.MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> dict[mir.Value, consts.Known]:
+    """Exact integer conversion results, without permission to remove FP effects."""
+    if not any(op.kind is mir.Kind.FSTORE and op.results and not op.stores
+               for block in body.blocks for op in block.ops):
+        return {}
+    facts = known(body, dgroup, calls)
+    results = {}
+    for block in body.blocks:
+        for op in block.ops:
+            if (op.kind is not mir.Kind.FSTORE or op.floating is None or op.stores
+                or op.floating.result not in _INTEGER or len(op.args) != 1 or len(op.results) != 1):
+                continue
+            source, target = op.args[0], op.results[0]
+            if (not isinstance(source, mir.Held) or source.value not in facts
+                or not isinstance(target, mir.Held) or target.width * 8 != _INTEGER[op.floating.result]):
+                continue
+            value = evaluated(op.kind, op.floating, (facts[source.value],))
+            if value is not None:
+                results[target.value] = consts.Known(consts.masked(int(value.value), target.width), target.width)
+    return results
+
+
 def cells(body: mir.MirBody, dgroup: frozenset[int], calls: dict) -> dict:
     """Memory facts including exact floating storage conversions."""
     return _analyzed(body, dgroup, calls, None)[1]
