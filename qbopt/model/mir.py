@@ -252,6 +252,7 @@ class MemRef:
     symbolic: "Symbol | None" = None  # proven effective address; original operands remain for lowering
     allocation: "Symbol | None" = None  # proven in-bounds access to this dynamic allocation
     base_width: int = 4  # width of the address value, independently of the memory data width
+    pointer: bool = False  # base is a whole pointer, not a numerical index or offset
 
     @property
     def where(self) -> "Space | None":
@@ -1979,6 +1980,10 @@ def same_bytes(one: MemRef, other: MemRef) -> bool:
     this the load I already did"), and its negation is not a disjointness
     proof. `may_alias` still answers that one.
     """
+    if one.pointer or other.pointer:
+        return (one.pointer and other.pointer and one.base is not None and one.base == other.base
+                and one.width == other.width and one.addr is None and other.addr is None
+                and one.segment is None and other.segment is None and one.base_width == other.base_width)
     one, other = _symbolic_ref(one), _symbolic_ref(other)
     if one.addr is None or other.addr is None:
         return False  # nothing this can name is never known to be anything
@@ -2008,6 +2013,8 @@ def overlapping(
     identity rather than by the caller having promised the register was not
     written in between.
     """
+    if one.pointer or other.pointer:
+        return True  # Distinct pointer values are not evidence of distinct allocations.
     if known or other_known:
         from qbopt.analysis import ranges
         one, other = ranges.covering(one, known or {}), ranges.covering(other, other_known or {})

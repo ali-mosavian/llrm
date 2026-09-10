@@ -33,10 +33,28 @@ integer addition makes four of the five DOS arithmetic cases fail.
 
 ## Remaining integration
 
+Whole-pointer integer loads and stores now survive SSA substitution and
+lower to a local pointer materialization. For a word load, one possible
+allocation is:
+
+```text
+MIR:     value = load(pointer)
+backend: push es
+         push eax       ; whole pointer
+         pop bx         ; offset
+         pop es         ; selector
+         mov cx, es:[bx]
+         pop es         ; restore the surrounding address-space resource
+```
+
+The allocator chooses the general registers; MIR names none. The expansion
+preserves flags and balances the stack. Focused encoding tests check both
+load and store bytes. Distinct pointer values are not treated as proof of
+disjoint memory. Other pointer memory operations are explicitly unsupported.
+
 This is a backend foundation, not a claim that huge-array programs already
 use it. The frontend must accumulate a full-width byte displacement, raise
-the descriptor pointer as a whole value, and use PTR_OFFSET. Memory operands
-must consume that whole pointer without exposing encoding-specific splits to
-MIR passes. The production pipeline must establish and supply the runtime
+the descriptor pointer as a whole value, and use PTR_OFFSET. The production
+pipeline must establish and supply the runtime
 pointer ABI. Actual emitted-code and DOS cross-64K regression cases are then
 required before removing the existing huge-array refusal.

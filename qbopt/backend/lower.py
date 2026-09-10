@@ -271,6 +271,8 @@ def _located(what: "ir.Semantics | None", was: "ir.Semantics | None") -> "ir.Sem
 def _machine(one, had: tuple, index: int):
     if not isinstance(one, mir.MemRef):
         return one
+    if one.pointer:
+        raise Unlowered("whole-pointer memory operand escaped pointer materialization")
     before = had[index] if index < len(had) else None
     if not isinstance(before, ir.Mem):
         before = next((x for x in had if isinstance(x, ir.Mem)), None)
@@ -534,6 +536,40 @@ def _pointer_offset(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...
         raise Unlowered(str(error)) from error
 
 
+def _pointer_access(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...] | None:
+    references = {arg.ref for arg in (*op.args, *op.results) if isinstance(arg, mir.Cell) and arg.ref.pointer}
+    if not references:
+        return None
+    if lowering.pointer_model is None:
+        raise Unlowered(f"pointer access at {op.at:#x} needs an established pointer ABI")
+    if len(references) != 1 or op.kind not in (mir.Kind.LOAD, mir.Kind.STORE):
+        raise Unlowered(f"unsupported whole-pointer memory operation at {op.at:#x}")
+    ref = next(iter(references))
+    if ref.base is None or ref.base_width != 4 or ref.addr is not None or ref.segment is not None:
+        raise Unlowered(f"whole-pointer access has an unnormalized address at {op.at:#x}")
+    from qbopt.objectfile.module import Space
+    offset = ir.Held(lowering.fresh(), 2)
+    selector = ir.Reg(Register.ES, 2)
+    cell = ir.Mem(Addr(Space.FAR, 0, segment=Register.ES), ref.width, base=offset)
+
+    def place(arg, had, index):
+        return cell if isinstance(arg, mir.Cell) and arg.ref == ref else as_a_value(arg, had, index)
+
+    access = current(op, place)
+    if access is None:
+        raise Unlowered(f"whole-pointer access has no operation at {op.at:#x}")
+    # Materialization is local to the memory instruction. Restore the segment
+    # resource so other MIR addresses retain their address-space identity.
+    return (
+        ir.Semantics(ir.Operation.PUSH, "push", (), (selector,)),
+        ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Held(ref.base.id, 4),)),
+        ir.Semantics(ir.Operation.POP, "pop", (offset,), ()),
+        ir.Semantics(ir.Operation.POP, "pop", (selector,), ()),
+        access,
+        ir.Semantics(ir.Operation.POP, "pop", (selector,), ()),
+    )
+
+
 _EXPANDS: dict = {mir.Kind.EXTRACT: _extract, mir.Kind.DIVMOD: _word_division, mir.Kind.CONCAT: _concat,
                  mir.Kind.SMULHI: _signed_high_product, mir.Kind.PTR_OFFSET: _pointer_offset}
 
@@ -754,7 +790,7 @@ class Lowering:
         from qbopt.model import lir
 
         made = _EXPANDS.get(op.kind)
-        parts = made(op, self) if made is not None else None
+        parts = made(op, self) if made is not None else _pointer_access(op, self)
         if op.kind is mir.Kind.CONVERT and not preserve_flags:
             parts = _sign_word(op) or parts
         if op.kind is mir.Kind.MUL and not preserve_flags:
