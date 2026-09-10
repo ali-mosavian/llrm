@@ -42,6 +42,18 @@ An additional focused expression check uses unequal dimensions and negative
 lower bounds, because HARR's square zero-based allocation cannot detect a
 swapped dimension formula. Unestablished allocation layouts stay refused.
 
+Runtime-sized DIM no longer loses its known rank/type merely because its
+extents are unknown. Allocation header facts are derived separately from the
+optional constant-bound allocation request. Dynamic address recognition uses
+those header facts; it still loads the actual bounds and base at each access.
+`fixtures/regressions/dynsz.bas` reads unequal upper bounds at runtime and
+uses negative/nonzero lower bounds. Its three `dynsz-*.obj` files are real
+compiler output with the named primary flags plus `/D`. All three original
+and optimized executables print `123 456` and `DONE`; the emitted objects
+contain no HARY calls. Before this change they refused unchecked lowering.
+Compiler/linker logs and every stage are under:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-dynamic-shape-o_7c7vz5`.
+
 For a zero-based INTEGER array the address computation changes from:
 
 ```text

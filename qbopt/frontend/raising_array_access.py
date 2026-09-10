@@ -65,26 +65,29 @@ def descriptor(found, symbol):
 def dynamic(body, symbol):
     if not isinstance(symbol, mir.Symbol):
         return None
-    allocations = [op for block in body.blocks for op in block.ops
-                   if op.array and op.array.descriptor == symbol]
-    if len(allocations) != 1 or allocations[0].array.replaces:
-        return None
-    allocation = allocations[0]
     start = symbol.offset + symbol.addend
 
     def field(offset, width=2):
         return mir.MemRef(Addr(symbol.space, start + offset, symbol.index), width)
 
+    allocations = [op for block in body.blocks for op in block.ops
+                   if op.kind is mir.Kind.CALL and field(9, 1) in dict(op.memory_values)]
+    if len(allocations) != 1:
+        return None
+    facts = dict(allocations[0].memory_values)
+
     # All three DDIM implementations zero the base offset for numeric FAR
     # arrays and reject sizes above 64K. Unlike HUGE, a valid access never
     # needs selector carry. Load mutable fields at each access; do not turn
     # allocation-time bounds or a movable heap address into eternal constants.
-    if dict(allocation.memory_values).get(field(9, 1)) != mir.Const(1, 1):
+    rank, width = facts.get(field(8, 1)), facts.get(field(12))
+    if (facts.get(field(9, 1)) != mir.Const(1, 1)
+        or not isinstance(rank, mir.Const) or not isinstance(width, mir.Const)
+        or not 1 <= rank.n <= 8 or width.n not in (1, 2, 4, 8)):
         return None
-    request = allocation.array
-    return Descriptor(field(0), field(2), request.element_width,
+    return Descriptor(field(0), field(2), width.n,
                       tuple((field(14 + 4 * index), field(16 + 4 * index))
-                            for index in range(len(request.bounds))))
+                            for index in range(rank.n)))
 
 
 def native(body, found, *, bounds_checks=False):

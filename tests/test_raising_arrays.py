@@ -31,7 +31,7 @@ def test_dim_normal_return_supplies_descriptor_constants(tag: str) -> None:
 def test_descriptor_dimensions_follow_stack_order() -> None:
     """Unequal dimensions must not be swapped: the last pushed bound lives at descriptor +14."""
     request = mir.ArrayRequest(mir.Symbol(Space.SEGMENT, 5, 6, 2), 2, ((-3, 2), (4, 14)))
-    arguments = [mir.Const(2, 2), mir.Const(2, 2), request.descriptor]
+    arguments = [mir.Const(number, 2) for number in (-3, 2, 4, 14, 2, 2)] + [request.descriptor]
     fields = raising_arrays._descriptor_values(request, arguments, "qb45")
     assert [(ref.addr.disp, value.n) for ref, value in fields] == [
         (14, 2),
@@ -45,6 +45,15 @@ def test_descriptor_dimensions_follow_stack_order() -> None:
     assert raising_arrays._descriptor_values(request, arguments, "unknown") == ()
     arguments[-2] = mir.Const(0x8002, 2)
     assert raising_arrays._descriptor_values(request, arguments, "vbdos") == ()
+
+
+def test_unknown_bounds_still_establish_descriptor_shape():
+    """Runtime-sized DIM still establishes rank, numeric allocation kind and element width."""
+    descriptor = mir.Symbol(Space.SEGMENT, 5, 6, 2)
+    arguments = [None, None, None, None, mir.Const(2, 2), mir.Const(0x102, 2), descriptor]
+    assert raising_arrays._request(arguments, False) is None
+    fields = raising_arrays._descriptor_values(None, arguments, "pds71")
+    assert [(ref.addr.disp, value.n) for ref, value in fields] == [(14, 2), (15, 1), (18, 2)]
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])

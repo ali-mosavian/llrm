@@ -70,9 +70,10 @@ def test_unsupported_checked_helper_is_not_unchecked_success():
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
-def test_dynamic_far_address_arithmetic_is_native(tag):
+@pytest.mark.parametrize("program", ["harr-bounds", "dynsz"])
+def test_dynamic_far_address_arithmetic_is_native(tag, program):
     """HARR computes both addresses via HARY each iteration; they must be MIR, not retained calls."""
-    path = Path(f"fixtures/regressions/harr-bounds-{tag}.obj")
+    path = Path(f"fixtures/regressions/{program}-{tag}.obj")
     found = corpus.loaded(path)
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
     assert not any(op.kind is mir.Kind.CALL and found.calls.get(op.at) == "B$HARY"
@@ -81,6 +82,8 @@ def test_dynamic_far_address_arithmetic_is_native(tag):
     result = wholeseg.emitted(path.read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     assert "B$HARY" not in module.of(omf.parse(result.data)).calls.values()
+    if program == "dynsz":
+        assert not any(op.array for block in body.blocks for op in block.ops)
 
 
 def test_dynamic_shape_does_not_freeze_descriptor_fields():

@@ -39,18 +39,18 @@ def annotated(body: mir.MirBody, calls: dict[int, str], *, family: str = "") -> 
 
 def _descriptor_values(request: mir.ArrayRequest | None, arguments: list, family: str) -> tuple:
     """Normal-return facts for the numeric DDIM layout verified in the three shipped libraries."""
-    if request is None or family not in ("qb45", "pds71", "vbdos"):
+    shape = _shape(arguments)
+    if shape is None or family not in ("qb45", "pds71", "vbdos"):
         return ()
-    attributes = arguments[-2].n >> 8
+    descriptor, element_width, rank, attributes = shape
     if attributes not in (0, 1, 2, 3):
         return ()
-    descriptor = request.descriptor
     start = descriptor.offset + descriptor.addend
-    if descriptor.space is not Space.SEGMENT or not 0 <= start <= 65536 - (14 + 4 * len(request.bounds)):
+    if descriptor.space is not Space.SEGMENT or not 0 <= start <= 65536 - (14 + 4 * rank):
         return ()
     # dynamic.asm consumes the stack backwards: last dimension comes first.
-    fields = [(8, len(request.bounds), 1), (9, attributes, 1), (12, request.element_width, 2)]
-    for dimension, (lower, upper) in enumerate(reversed(request.bounds)):
+    fields = [(8, rank, 1), (9, attributes, 1), (12, element_width, 2)]
+    for dimension, (lower, upper) in enumerate(reversed(request.bounds if request else ())):
         fields.extend(((14 + 4 * dimension, upper - lower + 1, 2), (16 + 4 * dimension, lower, 2)))
     return tuple(
         (mir.MemRef(Addr(Space.SEGMENT, start + offset, descriptor.index), width), mir.Const(number, width))
@@ -112,7 +112,7 @@ def _argument(
     return mir.Const(number if number < 0x8000 else number - 0x10000, 2)
 
 
-def _request(arguments: list[mir.Const | mir.Symbol | None], replaces: bool) -> mir.ArrayRequest | None:
+def _shape(arguments):
     # runtime/rt/dynamic.asm: lo1, hi1, ..., loN, hiN, element size,
     # dimension count plus attributes, descriptor. ADIM does not allocate.
     if len(arguments) < 5:
@@ -127,10 +127,18 @@ def _request(arguments: list[mir.Const | mir.Symbol | None], replaces: bool) -> 
     count = dimensions.n & 0xFF
     if count == 0 or width.n <= 0 or len(arguments) != 2 * count + 3:
         return None
+    return descriptor, width.n, count, dimensions.n >> 8
+
+
+def _request(arguments: list[mir.Const | mir.Symbol | None], replaces: bool) -> mir.ArrayRequest | None:
+    shape = _shape(arguments)
+    if shape is None:
+        return None
+    descriptor, width, count, _attributes = shape
     bounds = []
     for index in range(count):
         lower, upper = arguments[index * 2 : index * 2 + 2]
         if not isinstance(lower, mir.Const) or not isinstance(upper, mir.Const) or upper.n < lower.n:
             return None
         bounds.append((lower.n, upper.n))
-    return mir.ArrayRequest(descriptor, width.n, tuple(bounds), replaces)
+    return mir.ArrayRequest(descriptor, width, tuple(bounds), replaces)
