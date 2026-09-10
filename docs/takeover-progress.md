@@ -3439,3 +3439,32 @@ the exact prologue-to-peephole diff: `/tmp/qbopt-waits-final`.
 Runtime artifacts: `qbopt-waits-runtime-u8nzjbmj` in the system temporary
 directory. The major remaining FP opportunity is general value reuse across
 statements, not further WAIT cleanup.
+## 2026-09-10: carry dominating floating values across CFG regions
+
+Floating allocation now gives a cross-region SSA value an owned 80-bit
+frame slot, stores its definition once, and reloads local values at uses.
+This supports forks, joins and loop-invariant values without rereading the
+source cell or narrowing an extended value. Straight-line regions retain
+their existing stack allocation. Recognition and MIR passes are unchanged.
+
+Before: an extended value used on either arm and again after the join
+was refused with `floating stack input is unavailable` (or live-out refusal).
+After, the representative allocation is:
+
+```
+definition: fld tword [source]; fstp tword [owned slot]
+each use:   fld tword [owned slot]; fstp tword [destination]
+```
+
+The three path regressions failed against the preceding allocator. They
+execute both arms and a repeated loop path, overwrite the source between
+blocks, and retain a value distinguishable only at extended precision.
+Separate checks reject bypassed, pinned and multiply-defined inputs.
+The focused floating/allocation-order tests pass 60/60. Existing FPCSE,
+FPDEEP and FPCSEX objects are byte-identical across all three compilers;
+no runtime rerun or performance improvement is claimed for those objects.
+Stage dumps: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-float-regions-3hto6b7l`.
+
+This is a spill-based allocation baseline, not optimal cross-edge register
+placement. Floating phis remain refused: they need parallel edge transfers,
+including cycles and critical edges. They are the next allocation gap.

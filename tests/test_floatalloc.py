@@ -130,6 +130,78 @@ def test_ninth_float_uses_an_owned_extended_precision_spill():
     assert answers == list(range(1, 10)) and not stack
 
 
+@pytest.mark.parametrize("path", [(0, 16, 48), (0, 32, 48), (0, 16, 16, 48)])
+def test_float_survives_fork_join_and_loop_without_rereading_source(path):
+    """A dominating extended value was refused at forks, joins and loop boundaries."""
+    from fractions import Fraction
+    from qbopt.backend import frame
+    value = ir.Held(1, 10)
+    cell = ir.Mem(Addr(Space.FRAME, -20), 10)
+    source = ir.Mem(Addr(Space.FRAME, -10), 10)
+    original = _body([
+        ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (value,), (source,)),
+        ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cell,), (value,)),
+    ])
+    load, store = original.insns
+    body = replace(original, blocks=(
+        lir.LirBlock(48, (replace(store, at=48, covers=(48, 56)),)),
+        lir.LirBlock(0, (load,), (16, 32)),
+        lir.LirBlock(16, (replace(store, at=16, covers=(16, 24)),), (16, 48)),
+        lir.LirBlock(32, (replace(store, at=32, covers=(32, 40)),), (48,)),
+    ))
+    slots = frame.Frame(-20)
+    result = floatalloc.allocated(body, slots)
+    assert [block.at for block in result.blocks] == [block.at for block in body.blocks]
+    precise = Fraction(1) + Fraction(1, 2**63)
+    memory, stack, answers = {source.addr.disp: precise}, [], []
+    by_at = {block.at: block for block in result.blocks}
+    for at in path:
+        for one in by_at[at].insns:
+            what = one.what
+            assert select.emit(what) is not None
+            match what.name:
+                case "fld":
+                    stack.insert(0, memory[what.sources[0].addr.disp])
+                case "fstp":
+                    destination = what.dests[0]
+                    answer = stack.pop(0)
+                    if destination.addr == cell.addr:
+                        answers.append(answer)
+                    else:
+                        assert destination.width == 10
+                    memory[destination.addr.disp] = answer
+                case _: pytest.fail(f"Unexpected allocation instruction: {what}")
+        assert not stack
+        memory[source.addr.disp] = -99
+    assert answers == [precise] * (len(path) - 1)
+    assert slots.size == 10
+
+
+@pytest.mark.parametrize("defect", ["entry", "bypass", "pinned", "duplicate"])
+def test_floating_bridge_never_reads_an_unestablished_slot(defect):
+    """Cross-block allocation must not turn a missing definition into a frame read."""
+    from qbopt.backend import frame
+    from qbopt.backend.lower import Unlowered
+    value = ir.Held(1, 10)
+    cell = ir.Mem(Addr(Space.FRAME, -10), 10)
+    body = _body([
+        ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (value,), (cell,)),
+        ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cell,), (value,)),
+    ])
+    load, store = body.insns
+    blocks = (lir.LirBlock(0, (load,), (16, 32)),
+              lir.LirBlock(16, (store,)), lir.LirBlock(32, (), (16,)))
+    match defect:
+        case "entry": body = replace(body, entry=16)
+        case "bypass":
+            body = replace(body, entry=48)
+            blocks += (lir.LirBlock(48, (), (0, 16)),)
+        case "pinned": body = replace(body, pins={1: 0})
+        case "duplicate": blocks = (replace(blocks[0], insns=(load, load)), *blocks[1:])
+    with pytest.raises(Unlowered):
+        floatalloc.allocated(replace(body, blocks=blocks), frame.Frame(-10))
+
+
 @pytest.mark.parametrize("width", [4, 8, 10])
 def test_live_store_uses_nonpopping_encoding_when_available(width):
     """Exact-store reuse duplicated ST0 solely to pop the duplicate into memory."""

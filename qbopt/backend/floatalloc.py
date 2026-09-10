@@ -47,15 +47,25 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
         index for index, (block, following) in enumerate(zip(body.blocks, body.blocks[1:]))
         if next_blocks.get(block.at) == following.at
     }
+    if any(phi.result in floating or any(value in floating for _, value in phi.incoming)
+           for block in body.blocks for phi in block.phis):
+        raise Unlowered("floating phi requires cross-block allocation")
+    from qbopt.backend.floatregions import bridged
+    regions, region = {}, 0
+    for index, block in enumerate(body.blocks):
+        if index - 1 not in continues:
+            region += 1
+        regions[block.at] = region
+    body = bridged(body, regions, frame)
+    floating = {arg.value for block in body.blocks for one in block.insns if one.what
+                for arg in (*one.what.sources, *one.what.dests)
+                if isinstance(arg, ir.Held) and arg.width == 10}
     blocks = []
     stack: list[int] = []
     spilled: dict[int, ir.Mem] = {}
     remaining = Counter()
     next_uses = defaultdict(deque)
     for index, block in enumerate(body.blocks):
-        if any(phi.result in floating or any(value in floating for _, value in phi.incoming)
-               for phi in block.phis):
-            raise Unlowered("floating phi requires cross-block allocation")
         if index - 1 not in continues:
             end = index
             while end in continues:
