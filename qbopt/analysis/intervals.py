@@ -156,10 +156,15 @@ def _ranges(body: lir.LirBody, index: Indexes) -> dict[int, Interval]:
 
 
 def _merged(runs: list[Segment]) -> list[Segment]:
-    """Overlapping or touching segments joined, in order."""
+    """Join overlapping segments, retaining touching definition boundaries.
+
+    A coalesced id may be read and redefined by a call. Its input ends
+    where its output starts; merging them claims it survives the call's
+    register mask, even though the output is a new value.
+    """
     out: list[Segment] = []
     for one in sorted(runs, key=lambda x: (x.start, x.end)):
-        if out and one.start <= out[-1].end:
+        if out and one.start < out[-1].end:
             out[-1] = Segment(out[-1].start, max(out[-1].end, one.end))
             continue
         out.append(one)

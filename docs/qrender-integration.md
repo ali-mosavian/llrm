@@ -8,6 +8,29 @@ commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
 ### Next module: SYS argument parsing
 
+The allocator refusal is fixed: interval construction merged touching
+segments on opposite sides of a definition. At HOST_SHUTDOWN (00c2), a
+coalesced SI id was both consumed and newly defined; merging its two
+lifetimes made the call's register mask look like a forbidden clobber of
+a surviving value. Retaining the touching definition boundary lets it
+allocate. A genuinely surviving value is still rejected from a clobbered
+register. The focused fail-first regression and two neighboring mask/
+coalescing checks pass. Captured allocator input and per-round evidence:
+`/tmp/qbopt-sys-allocation`; new full dumps:
+`/tmp/qbopt-sys-intervals-native`.
+
+SYS_PARSE_ARGS now allocates (1072 LIR instructions); the call at 00c2
+receives AX/BX/CX/DX/SI/DI without the failing reload/store around SI.
+Native whole-module emission advances to **SYS_INIT_TABLES, POW4 at 08f5**.
+No new scene run: the object still refuses atomically, so its actual ASM
+before/after remains identical:
+
+```asm
+; before                         ; after (atomic whole-module refusal)
+00bd call far B$PESD              ; call far B$PESD
+00c2 call far HOST_SHUTDOWN        ; call far HOST_SHUTDOWN
+```
+
 FDR1 at 0823 is now bounded too. VBDCL10E `dkdir.asm` sets the DOS DTA,
 tests search mode, then calls RefStringArgLast, GET_PATHNAME, DelTempSH,
 DOS find-first/find-next, GetZStrLen and StrAlcTmpCopy. The shared exit
