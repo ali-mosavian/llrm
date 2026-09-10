@@ -34,7 +34,8 @@ def procedure() -> lir.LirBody:
 
     insns = (
         instruction(0, ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),), (ir.Imm(6, 2),))),
-        instruction(1, ir.Semantics(ir.Operation.CALL, "call", (), (ir.Held(1, 2),))),
+        replace(instruction(1, ir.Semantics(ir.Operation.CALL, "call", (), (ir.Held(1, 2),))),
+                requires=((ir.Held(1, 2), Register.CX),)),
         instruction(2, ir.Semantics(ir.Operation.CALL, "call", (), ())),
         instruction(3, ir.Semantics(ir.Operation.RETURN, "retf", (), ())),
     )

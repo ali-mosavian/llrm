@@ -69,13 +69,14 @@ def of(body: lir.LirBody, calls: dict | None = None) -> Frame:
             match one.what:
                 case ir.Semantics(op=ir.Operation.MOVE, dests=(ir.Held(value, _),), sources=(ir.Imm(count, _),)):
                     constants[value] = count
-                case ir.Semantics(op=ir.Operation.CALL, sources=(ir.Held(value, _),)) if (calls or {}).get(
+                case ir.Semantics(op=ir.Operation.CALL) if (calls or {}).get(
                     one.at
                 ) == ENTER:
-                    if value not in constants:
+                    sizes = [held.value for held, reg in one.requires if reg == Register.CX]
+                    if len(sizes) != 1 or sizes[0] not in constants:
                         raise Refused("runtime frame size is not a known constant")
-                    floor = min(floor, -RUNTIME_SIZE - constants[value])
+                    floor = min(floor, -RUNTIME_SIZE - constants[sizes[0]])
             for where in (*one.what.dests, *one.what.sources):
-                if isinstance(where, ir.Mem) and where.addr is not None and where.addr.space is Space.FRAME:
+                if isinstance(where, (ir.Mem, ir.Address)) and where.addr is not None and where.addr.space is Space.FRAME:
                     floor = min(floor, where.addr.disp)
     return Frame(floor=floor)

@@ -447,6 +447,30 @@ Observed AX=a910, BP=a902, SP=a8f8; the chain reaches BX=0 and does not
 terminate. Inspect frame-link corruption and allocated stack slots using
 the saved common stages. No before/after fix or successful run is claimed.
 
+### Frame ownership fixes
+
+The common stage dumps expose two concrete frame-layout defects. The
+frame builder matched ENRA only when it had one operand; conservative
+two/six-input interfaces bypassed that match. It now reads the size value
+from LIR's fixed CX requirement and refuses an unknown size. Separately,
+LEA-only frame locals were absent from the floor calculation; Address
+operands now count alongside direct memory accesses. Both defects have
+fail-first regression coverage; ten focused frame/prologue tests pass.
+
+```asm
+; COM_CHECK_ARGS before           ; after the CX-requirement fix
+call far B$ENRA                  call far B$ENRA
+mov [bp-2],ax                    mov [bp-18h],ax
+```
+
+The intermediate dump `/tmp/qbopt-common-frame-fixed` exposed that BP-18h
+itself names an address-taken string local. The subsequent Address-floor
+fix puts new slots below those locals; its focused test changes a spill
+from BP-18h to BP-22h with a BP-20h address-taken local. Regenerate the full
+module and rerun before claiming the renderer hang fixed. Runtime-specific
+frame metadata sizes also still need checking against the VBDOS prologue;
+the inherited FR_SIZE=10 comes from QB's source.
+
 ### Two-module runtime check
 
 Relinking with rewritten `view` and `d_turb` succeeded. The isolated build in
