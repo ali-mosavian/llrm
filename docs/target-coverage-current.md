@@ -2,6 +2,43 @@
 
 ## Latest focused check
 
+Compiler **b4341b4**, 2026-09-10: refreshed the same 19 configurations with
+`opportunity.against_targets`, including its source-specific loop weights.
+Every configuration emitted through LIR. IVCHAN, NESTED, BOOLS, HARR and
+FPCSEX retain the costs in the table below; FPDEEP is now 1317/1777/1777
+for QB/PDS/VBDOS. The gate still fails on provisional or missing references.
+This was a cost/emission check, not another runtime or full-corpus test run.
+
+NBODY increases **352102 → 352122**. A fresh run of compiler b088ccb against
+the same fixture reproduces the old cost. Per-body scoring isolates the delta:
+the main body is unchanged at **347536**, while the PITSNAP timing helper
+changes **4566 → 4586**. Disabling the new copy-affinity heuristic or CFG
+interval-ownership guard independently leaves the current total unchanged.
+All-stage dumps and a value-number-normalized initial MIR diff expose changed
+signed-value recognition in PITSNAP. One former whole store now remains split;
+the emitted sequence includes an extra reload:
+
+```asm
+; before                         ; current
+movsx ebx,ax                     movsx ebx,ax
+                                 push ebx
+                                 pop bx
+                                 pop bx
+; intervening byte input         ; intervening byte input
+movsx eax,ax                     mov [bp-20h],bx
+mov [bp-22h],ebx                 mov [bp-22h],ax
+movsx eax,cx                     movsx eax,cx
+shl eax,8                       shl eax,8
+                                 mov ebx,[bp-22h]
+add eax,ebx                     add eax,ebx
+```
+
+Other PITSNAP instructions improve, so this snippet alone is not the net cost.
+The next raising check is to recover the whole signed store without reverting
+whole-value recognition or teaching a MIR pass about register pairs. NBODY
+still has no independently derived target; an unchanged physics loop does not
+establish completion or runtime correctness of the timing helper.
+
 Exact DOUBLE-store follow-up: QB FPDEEP now costs **1317**, down from 1570.
 Its fixture object grows 1727 → 1742 bytes; arithmetic is replaced by four
 immediate dword stores, with exception checks and printing retained. All eleven
