@@ -112,7 +112,11 @@ def test_dynamic_unestablished_layout_is_not_assumed_far(features):
     body = replace(body, blocks=tuple(replace(block, ops=tuple(
         replace(op, memory_values=fields) if op is allocation else op for op in block.ops))
         for block in body.blocks))
-    assert raising_array_access.dynamic(body, request.descriptor) is None
+    shape = raising_array_access.dynamic(body, request.descriptor)
+    if features in (2, 3):
+        assert shape.huge and shape.data.width == 4
+    else:
+        assert shape is None
 
 
 def test_dynamic_address_uses_runtime_lower_bounds_and_correct_stride():

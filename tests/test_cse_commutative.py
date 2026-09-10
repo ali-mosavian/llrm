@@ -15,6 +15,7 @@ from qbopt.optimize import transform
     (mir.Kind.NE, "ne", True), (mir.Kind.SUB, "sub", False),
     (mir.Kind.DIV, "idiv", False), (mir.Kind.SHL, "shl", False),
     (mir.Kind.LT, "lt", False),
+    (mir.Kind.PTR_OFFSET, "ptr_offset", False),
 ])
 def test_value_numbering_recognizes_only_commutative_integer_expressions(kind, name, commutes):
     """Reversed operands unnecessarily retained a second integer computation."""

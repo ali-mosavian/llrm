@@ -6,8 +6,8 @@ import pytest
 from iced_x86 import Decoder, Register
 
 from qbopt.analysis import ssa
-from qbopt.backend import lower, pointers, select
-from qbopt.model import ir, mir
+from qbopt.backend import allocate, lower, pointers, select
+from qbopt.model import ir, mir, lir
 
 
 def access(store=False):
@@ -77,3 +77,11 @@ def test_pointer_memory_requires_an_established_abi():
     body = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),))
     with pytest.raises(lower.Unlowered, match="pointer ABI"):
         lower.Lowering(body, {1, 2}, {}, ()).expand(op)
+
+
+def test_generated_byte_value_cannot_be_allocated_to_edi():
+    """HUGE2 refused emission when the runtime shift byte was allocated to nonexistent DIL."""
+    what = ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 1),), (ir.Imm(12, 1),))
+    insn = lir.Insn(0, (0, 0), what, (1,), ())
+    body = lir.LirBody("byte", 0, (lir.LirBlock(0, (insn,)),), {}, {})
+    assert allocate.classes(body)[1] == frozenset({Register.AX, Register.BX, Register.CX, Register.DX})

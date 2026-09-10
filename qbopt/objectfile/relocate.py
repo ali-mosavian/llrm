@@ -400,6 +400,7 @@ def as_records(
     moved: dict[int, int],
     relocations: dict[int, int | tuple[int, ...]],
     dropped: frozenset[int] = frozenset(),
+    added: tuple[tuple[int, omf.Fixup], ...] = (),
 ) -> list[omf.Record] | str:
     """Every record, with the code segment replaced by `image`.
 
@@ -444,7 +445,8 @@ def as_records(
             return f"the fixup at {one.offset:#x} has nowhere to go in the rebuilt segment"
         for destination in landed if isinstance(landed, tuple) else (landed,):
             placed.append((destination, one))
-    placed.sort()
+    placed.extend(added)
+    placed.sort(key=lambda pair: pair[0])
 
     last = None
     for n, record in enumerate(records):

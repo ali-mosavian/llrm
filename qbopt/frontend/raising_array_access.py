@@ -1,7 +1,7 @@
-"""Expose numeric single-segment array addressing as scalar MIR arithmetic.
+"""Expose numeric array addressing as scalar MIR arithmetic.
 
 Static allocations and established non-huge far allocations are recognized.
-Huge/string layouts remain unsupported, not guessed pointers.
+Huge numeric accesses use whole pointers; string layouts remain unsupported.
 """
 
 from dataclasses import dataclass, replace
@@ -10,6 +10,7 @@ from math import prod
 from iced_x86 import Register
 
 from qbopt.analysis import consts, ssa
+from qbopt.abi import runtime
 from qbopt.frontend.raising_calls import _capture, _discarded
 from qbopt.model import ir, mir
 from qbopt.objectfile import module, omf
@@ -22,6 +23,7 @@ class Descriptor:
     selector: mir.MemRef
     width: int
     dimensions: tuple[tuple[int | mir.MemRef, int | mir.MemRef], ...]
+    huge: bool = False
 
 
 def descriptor(found, symbol):
@@ -81,13 +83,68 @@ def dynamic(body, symbol):
     # needs selector carry. Load mutable fields at each access; do not turn
     # allocation-time bounds or a movable heap address into eternal constants.
     rank, width = facts.get(field(8, 1)), facts.get(field(12))
-    if (facts.get(field(9, 1)) != mir.Const(1, 1)
+    features = facts.get(field(9, 1))
+    if (features not in (mir.Const(1, 1), mir.Const(2, 1), mir.Const(3, 1))
         or not isinstance(rank, mir.Const) or not isinstance(width, mir.Const)
         or not 1 <= rank.n <= 8 or width.n not in (1, 2, 4, 8)):
         return None
-    return Descriptor(field(0), field(2), width.n,
+    huge = bool(features.n & 2)
+    return Descriptor(field(0, 4 if huge else 2), field(2), width.n,
                       tuple((field(14 + 4 * index), field(16 + 4 * index))
-                            for index in range(rank.n)))
+                            for index in range(rank.n)), huge)
+
+
+def _overwrites_offset(body, op, value):
+    if (op.kind is not mir.Kind.COPY or len(op.args) != 1 or len(op.results) != 1
+        or not isinstance(op.args[0], mir.Symbol) or op.args[0].width != 2
+        or not isinstance(op.results[0], mir.Held) or op.results[0].width != 2
+        or op.merges != {value: op.results[0].value}):
+        return False
+    result = op.results[0].value
+    if any(result in phi.incoming.values() for block in body.blocks for phi in block.phis):
+        return False
+    return not any(
+        any(isinstance(arg, mir.Held) and arg.value == result and arg.width > 2 for arg in later.args)
+        or any(ref.base == result and ref.base_width > 2 for ref in (*later.loads, *later.stores))
+        for block in body.blocks for later in block.ops)
+
+
+def _whole_consumer(body, block, position, value, contracts):
+    """Prove the helper's machine outputs are only one immediate memory address."""
+    if position + 1 >= len(block.ops):
+        return None
+    consumer = block.ops[position + 1]
+    if consumer.kind not in (mir.Kind.LOAD, mir.Kind.STORE, mir.Kind.ARG):
+        return None
+    refs = consumer.loads if consumer.kind is not mir.Kind.STORE else consumer.stores
+    if len(refs) != 1:
+        return None
+    ref = refs[0]
+    if (ref.base != value or ref.width not in (1, 2, 4) or ref.addr is None
+        or ref.addr.space is not Space.FAR or ref.addr.segment != Register.ES
+        or ref.addr.disp != 0 or ref.segment is not None
+        or any(isinstance(arg, mir.Held) and arg.value == value for arg in consumer.args)):
+        return None
+    if any(value in op.uses and op is not consumer
+           and not (other is block and _overwrites_offset(body, op, value))
+           for other in body.blocks for op in other.ops):
+        return None
+    if any(value in phi.incoming.values() for other in body.blocks for phi in other.phis):
+        return None
+    for later in block.ops[position + 2:]:
+        if later.kind is mir.Kind.CALL:
+            contract = contracts.get(later.at)
+            if contract is None or contract.inputs is None or runtime.Reg.ES in contract.inputs:
+                return None
+            if runtime.Reg.ES in contract.clobbers:
+                return consumer
+        else:
+            effects = getattr(later.node, "effects", None)
+            if effects is None or effects.uses is None or Register.ES in effects.uses:
+                return None
+            if effects.defs is not None and Register.ES in effects.defs:
+                return consumer
+    return None
 
 
 def native(body, found, *, bounds_checks=False):
@@ -95,6 +152,7 @@ def native(body, found, *, bounds_checks=False):
         return body
     local = module.defines(found.records, found.seg)
     calls = {at: name for at, name in found.calls.items() if name not in local}
+    contracts = runtime.for_module(found)
     known = consts.known(body)
     definitions = {value: op for block in body.blocks for op in block.ops for value in op.defines}
     read = {value for block in body.blocks for op in block.ops for value in op.uses}
@@ -103,16 +161,21 @@ def native(body, found, *, bounds_checks=False):
     serial = max((value.id for value in values), default=0)
     variable = max((value.variable for value in values), default=0)
 
-    def fresh(at):
+    def fresh(at, width=2):
         nonlocal serial, variable
         serial += 1
         variable += 1
-        return mir.Held(mir.Value(serial, at, variable=variable, version=1), 2)
+        return mir.Held(mir.Value(serial, at, variable=variable, version=1), width)
 
     blocks = []
     for block in body.blocks:
         arguments, ops = [], []
-        for op in block.ops:
+        replacements = {}
+        for position, original in enumerate(block.ops):
+            op = replacements.get(position, original)
+            if isinstance(op, tuple):
+                load, op = op
+                ops.append(load)
             if (op.kind is mir.Kind.ARG and len(op.args) == 1
                 and (op.args[0].ref.width if isinstance(op.args[0], mir.Cell)
                      else getattr(op.args[0], "width", 0)) == 2):
@@ -133,6 +196,8 @@ def native(body, found, *, bounds_checks=False):
                          and len(arguments) == len(shape.dimensions) + 1
                          and len(outputs) == 1 and body.origin.get(outputs[0]) == Register.EBX
                          and not any(value.flags and value in read for value in op.defines))
+                consumer = _whole_consumer(body, block, position, outputs[0], contracts) if valid and shape.huge else None
+                valid = valid and (not shape.huge or consumer is not None)
                 if valid:
                     indices = []
                     for index in arguments[:-1]:
@@ -142,35 +207,72 @@ def native(body, found, *, bounds_checks=False):
                         indices.append(held)
                     ops[arguments[-1]] = _discarded(ops[arguments[-1]])
                     expanded = []
+                    width = 4 if shape.huge else 2
 
                     def loaded(source):
                         if not isinstance(source, mir.MemRef):
                             return mir.Const(source, 2) if isinstance(source, int) else source
-                        result = fresh(op.at)
+                        result = fresh(op.at, source.width)
                         expanded.append(mir.Op(op.at, ir.Operation.MOVE, "mov", (result.value,), (),
                             kind=mir.Kind.LOAD, args=(mir.Cell(source),), results=(result,),
                             loads=(source,), covers=(op.at, op.at), symbol=True))
                         return result
 
                     def arithmetic(kind, left, right, result=None):
-                        result = result or fresh(op.at)
+                        result = result or fresh(op.at, width)
                         uses = tuple(arg.value for arg in (left, right) if isinstance(arg, mir.Held))
                         expanded.append(mir.Op(op.at, ir.Operation.BINARY, kind.value,
                             (result.value,), uses, kind=kind, args=(left, right), results=(result,),
                             covers=(op.at, op.at), symbol=isinstance(right, mir.Symbol)))
                         return result
 
+                    def extended(source, unsigned=False):
+                        source = loaded(source)
+                        if width == 2:
+                            return source
+                        if isinstance(source, mir.Const):
+                            return mir.Const(source.n & 0xffff if unsigned else source.n, 4)
+                        result = fresh(op.at, 4)
+                        expanded.append(mir.Op(op.at, ir.Operation.EXTEND, "sign_extend",
+                            (result.value,), (source.value,), kind=mir.Kind.SIGN_EXTEND,
+                            args=(source,), results=(result,), covers=(op.at, op.at)))
+                        return arithmetic(mir.Kind.AND, result, mir.Const(0xffff, 4)) if unsigned else result
+
                     offset = None
                     for index, (count, lower) in zip(reversed(indices), shape.dimensions):
-                        adjusted = arithmetic(mir.Kind.SUB, index, loaded(lower))
+                        adjusted = arithmetic(mir.Kind.SUB, extended(index), extended(lower))
                         offset = adjusted if offset is None else arithmetic(mir.Kind.ADD,
-                            arithmetic(mir.Kind.MUL, offset, loaded(count)), adjusted)
-                    offset = arithmetic(mir.Kind.MUL, offset, mir.Const(shape.width, 2))
-                    arithmetic(mir.Kind.ADD, offset, loaded(shape.data), mir.Held(outputs[0], 2))
-                    expanded.append(mir.Op(op.at, ir.Operation.MOVE, "mov", (), (),
-                        kind=mir.Kind.LOAD, args=(mir.Cell(shape.selector),),
-                        results=(mir.Opaque(ir.Reg(Register.ES, 2), "es"),), loads=(shape.selector,),
-                        covers=(op.at, op.at), symbol=True))
+                            arithmetic(mir.Kind.MUL, offset, extended(count, unsigned=True)), adjusted)
+                    offset = arithmetic(mir.Kind.MUL, offset, mir.Const(shape.width, width))
+                    if shape.huge:
+                        pointer = arithmetic(mir.Kind.PTR_OFFSET, loaded(shape.data), offset)
+                        for following, later in enumerate(block.ops[position + 2:], position + 2):
+                            if outputs[0] in later.uses and _overwrites_offset(body, later, outputs[0]):
+                                replacements[following] = replace(later, merges={},
+                                    uses=tuple(value for value in later.uses if value != outputs[0]))
+                        ref = mir.MemRef(None, (consumer.loads or consumer.stores)[0].width,
+                                         base=pointer.value, pointer=True)
+                        def cell(arg):
+                            return mir.Cell(ref) if isinstance(arg, mir.Cell) else arg
+                        changed = replace(consumer, node=None, name="mov", op=ir.Operation.MOVE,
+                            args=tuple(map(cell, consumer.args)), results=tuple(map(cell, consumer.results)),
+                            uses=tuple(pointer.value if value == outputs[0] else value for value in consumer.uses),
+                            loads=(ref,) if consumer.loads else (), stores=(ref,) if consumer.kind is mir.Kind.STORE else (),
+                            merges={}, symbol=True)
+                        if consumer.kind is mir.Kind.ARG:
+                            value = fresh(consumer.at, ref.width)
+                            load = replace(changed, kind=mir.Kind.LOAD, defines=(value.value,),
+                                results=(value,), stores=(), covers=(consumer.at, consumer.at), id=None, raised=None)
+                            argument = replace(consumer, args=(value,), uses=(value.value,), loads=())
+                            replacements[position + 1] = (load, argument)
+                        else:
+                            replacements[position + 1] = changed
+                    else:
+                        arithmetic(mir.Kind.ADD, offset, loaded(shape.data), mir.Held(outputs[0], 2))
+                        expanded.append(mir.Op(op.at, ir.Operation.MOVE, "mov", (), (),
+                            kind=mir.Kind.LOAD, args=(mir.Cell(shape.selector),),
+                            results=(mir.Opaque(ir.Reg(Register.ES, 2), "es"),), loads=(shape.selector,),
+                            covers=(op.at, op.at), symbol=True))
                     expanded[0] = replace(expanded[0], covers=op.covers, extra_covers=op.extra_covers)
                     ops.extend(expanded)
                     arguments.clear()

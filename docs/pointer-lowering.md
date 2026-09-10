@@ -33,7 +33,7 @@ multi-page offsets, selector wrapping, alternate ABI, missing ABI and the
 live-condition guard. Replacing the implementation with ordinary packed
 integer addition makes four of the five DOS arithmetic cases fail.
 
-## Remaining integration
+## Whole-pointer memory
 
 Whole-pointer integer loads and stores now survive SSA substitution and
 lower to a local pointer materialization. For a word load, one possible
@@ -54,15 +54,30 @@ preserves flags and balances the stack. Focused encoding tests check both
 load and store bytes. Distinct pointer values are not treated as proof of
 disjoint memory. Other pointer memory operations are explicitly unsupported.
 
-This is a backend foundation, not a claim that huge-array programs already
-use it. The frontend must accumulate a full-width byte displacement, raise
-the descriptor pointer as a whole value, and use PTR_OFFSET. The production
-pipeline now supplies the runtime pointer ABI. Actual emitted-code and DOS
-cross-64K regression cases are still
-required before removing the existing huge-array refusal.
+Numeric HUGE accesses with a proved immediate integer memory consumer now
+use this path. The frontend sign-extends indices and lower bounds, zero-extends
+counts, accumulates the byte displacement at width 4, loads the descriptor's
+whole pointer and emits PTR_OFFSET. CSE can number that pure computation.
+No selector extraction is added to MIR. The frontend also proves that the
+helper's old selector result is dead before removing it. Unproved consumers,
+string indirection, floating accesses and other layouts still refuse explicitly.
 
 `fixtures/regressions/huge2.bas` is compiled with `/AH` on QB 4.5, PDS 7.1
-and VBDOS. Its 201-by-201 INTEGER array accesses byte offsets 0, 65534 and
-65536. The original program and a copy with the new external dependency
-both print `123 456 789` followed by `DONE` on all three runtimes. This
-establishes the probe and linker dependency, not native huge-array lowering.
+and VBDOS. Its 201-by-201 INTEGER array includes two transposed pairs of
+accesses: `(4,161)/(5,161)` cross byte 65536 under QB/PDS, while
+`(163,2)/(163,3)` do so under VBDOS's reversed dimension order.
+Original and native programs print `123 456 789 111 222`, then `DONE`, on
+all three runtimes. All ten HARY calls disappear from the native objects.
+
+This probe caught a real emission defect: new descriptor loads encoded
+zero displacements without relocation records. VBDOS printed `123 789 789`
+on the first three-access version; the matching QB/PDS outputs were accidental.
+The assembler now carries newly introduced symbolic memory references through
+layout, and object writing creates their DGROUP-framed offset relocations.
+The regression checks the emitted descriptor fields and runtime external,
+and fails when those records are removed. Byte temporaries also carry their
+register class, preventing allocation to nonexistent byte halves of SI/DI.
+
+Remaining work includes generalized consumers and loop optimization, plus
+loop-entry bounds guards when checking is requested. Checked mode still uses
+the runtime helper; no bounds checks are silently retained in native output.

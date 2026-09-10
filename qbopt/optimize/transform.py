@@ -211,6 +211,7 @@ _PURE = frozenset(
         mir.Kind.SUB,
         mir.Kind.MUL,
         mir.Kind.SMULHI,
+        mir.Kind.PTR_OFFSET,
         mir.Kind.DIV,
         mir.Kind.REM,
         mir.Kind.AND,

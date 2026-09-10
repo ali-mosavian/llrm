@@ -25,7 +25,7 @@ from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.objectfile import omf
 from qbopt.objectfile import relocate
-from qbopt.objectfile.module import Module
+from qbopt.objectfile.module import Module, Space
 
 
 def written(
@@ -74,6 +74,17 @@ def written(
     relocations = {}
     for new, old in laid.relocations:
         relocations.setdefault(old, []).append(kept + new)
+    groups = list(omf.groups(records))
+    if laid.symbols and "DGROUP" not in groups:
+        return "generated data references require an established DGROUP frame"
+    added = []
+    for offset, address in laid.symbols:
+        if address.space is Space.SEGMENT and address.index not in found.dgroup:
+            return "generated data reference is outside DGROUP"
+        fixup = omf.offset_fixup(found.seg, kept + offset,
+            "segment" if address.space is Space.SEGMENT else "external",
+            address.index, address.disp, groups.index("DGROUP") + 1)
+        added.append((kept + offset, fixup))
     made = relocate.as_records(
         records,
         found.seg,
@@ -82,6 +93,7 @@ def written(
         {**laid.covered, **laid.moved},
         {old: tuple(dict.fromkeys(destinations)) for old, destinations in relocations.items()},
         laid.dropped,
+        tuple(added),
     )
     if isinstance(made, str):
         return made

@@ -660,6 +660,15 @@ def renumbered(record: Record, mapping: dict[int, int]) -> Record:
     return record if not changed else Record(record.type, bytes(out))
 
 
+def offset_fixup(seg: int, offset: int, target: str, index: int, disp: int, group: int) -> Fixup:
+    """A new absolute offset16 relocation, framed relative to a data group."""
+    method = {"segment": 0, "external": 2}[target]
+    raw = bytes((0xC4, 0, 0x10 | method)) + as_index(group) + as_index(index) + struct.pack("<H", disp)
+    record = fixupp_record([raw])
+    return Fixup(seg, offset, LOC_OFF16, False, target, index, disp,
+                 group, record, 0, len(raw), len(raw) - 2, frame_method=1)
+
+
 def reemit(fixup: Fixup, offset: int | None = None, disp: int | None = None) -> bytes:
     """This fixup's own bytes, with the fields given replaced. None leaves one alone.
 

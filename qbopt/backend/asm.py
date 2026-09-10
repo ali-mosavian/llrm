@@ -39,7 +39,7 @@ from qbopt.backend import lower
 from qbopt.backend import select
 from qbopt.backend import target
 from qbopt.backend import fpu
-from qbopt.objectfile.module import Module
+from qbopt.objectfile.module import Module, Addr, Space
 from qbopt.frontend.declen import STANDS_IN
 
 
@@ -69,6 +69,7 @@ class Laid:
     # branch target may never resolve through this, and cannot, since a
     # target starts a block and nothing here folds a block's first op.
     covered: dict[int, int] = field(default_factory=dict)
+    symbols: tuple[tuple[int, Addr], ...] = ()
 
     @property
     def grew(self) -> int:
@@ -696,6 +697,7 @@ def assemble(
     # The bytes, at the addresses the fixed point settled on.
     out = bytearray()
     relocations: list[tuple[int, int]] = []
+    symbols = []
     for index, op in enumerate(ops):
         if index in fallthrough:
             continue
@@ -799,6 +801,14 @@ def assemble(
                 return f"{op.at:#06x}: {op.name} has {len(wanted)} fixups and {len(landed)} fields to put them in"
             for where, field in zip(landed, wanted, strict=False):
                 relocations.append((len(out) + where, field))
+        else:
+            addresses = [arg.addr for arg in (*what.dests, *what.sources)
+                         if isinstance(arg, ir.Mem) and arg.addr is not None
+                         and arg.addr.space in (Space.SEGMENT, Space.EXTERNAL)]
+            if addresses:
+                if len(addresses) != 1 or len(made.places) != 1:
+                    return f"{op.at:#06x}: cannot bind a generated symbolic memory operand"
+                symbols.append((len(out) + made.places[0], addresses[0]))
         out += made.code
     # Every fixup inside a surviving op's `covers` but outside its own
     # node's span belonged to something a transform folded away. One
@@ -816,7 +826,7 @@ def assemble(
             explained.update(one for one in known if lo <= one < hi)
             if landed is not None:
                 folded.update({one: landed for one in range(lo, hi) if one not in moved})
-    return Laid(bytes(out), moved, tuple(relocations), frozenset(explained - kept_fields), folded)
+    return Laid(bytes(out), moved, tuple(relocations), frozenset(explained - kept_fields), folded, tuple(symbols))
 
 
 def _semantics(op: mir.Op) -> ir.Semantics | None:

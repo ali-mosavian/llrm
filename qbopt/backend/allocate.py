@@ -18,7 +18,7 @@ from enum import IntEnum
 from dataclasses import replace
 from dataclasses import dataclass
 
-from iced_x86 import Register_
+from iced_x86 import Register_, Register
 
 from qbopt.model import ir
 from qbopt.model import lir
@@ -202,12 +202,17 @@ def classes(body: lir.LirBody) -> dict[int, frozenset]:
     encoding -- so a value some instruction reaches a cell by is confined
     to that class, and an allocator that does not know it hands out dx.
 
-    Only the addressing class today. The fixed requirements -- `imul`'s
+    Byte operands additionally require one of AX/BX/CX/DX's byte aliases.
+    Intersect requirements when a value occurs in more than one class.
+    The fixed requirements -- `imul`'s
     dx:ax, `cwd`'s eax, a shift's cl -- arrive as pins from the raise;
     `target.reads()` and `target.writes()` are what would answer them here
     when they do not.
     """
     out: dict[int, frozenset] = {}
+    def restrict(value, choices):
+        out[value] = out.get(value, choices) & choices
+
     for block in body.blocks:
         for one in block.insns:
             if one.what is None:
@@ -219,7 +224,9 @@ def classes(body: lir.LirBody) -> dict[int, frozenset]:
                 # reaches memory through bx, bp, si and di and nothing
                 # else, so the value is confined to those.
                 if isinstance(where, ir.Mem) and where.base is not None:
-                    out[where.base.value] = target.ADDRESSING
+                    restrict(where.base.value, target.ADDRESSING)
+                if isinstance(where, ir.Held) and where.width == 1:
+                    restrict(where.value, frozenset({Register.AX, Register.BX, Register.CX, Register.DX}))
     return out
 
 

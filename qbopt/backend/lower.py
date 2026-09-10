@@ -228,6 +228,8 @@ def current(op, place=None) -> "ir.Semantics | None":
     MIR's own operands, and so told twenty callers the fold had not
     happened.
     """
+    if place is None and op.made is None and any(ref.pointer for ref in (*op.loads, *op.stores)):
+        return None
     return rewritten(op, place) or getattr(op.node, "semantics", None)
 
 

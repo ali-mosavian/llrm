@@ -2350,6 +2350,10 @@ def instruction(op: "Op") -> bool:
     lower.py directly is a MIR pass calling a machine one, which is the
     thing rule 5 forbids.
     """
+    if op.kind is Kind.PTR_OFFSET:
+        return True
+    if any(ref.pointer for ref in (*op.loads, *op.stores)):
+        return op.kind in (Kind.LOAD, Kind.STORE)
     if op.floating_origin is not None:
         return op.kind is not Kind.NOTHING
     from qbopt.backend import lower
@@ -2370,6 +2374,10 @@ def rewritable(op: "Op") -> bool:
     qb-qrender's SCREEN.OBJ, the only object in either corpus with the
     shape.
     """
+    if op.kind is Kind.PTR_OFFSET:
+        return True
+    if any(ref.pointer for ref in (*op.loads, *op.stores)):
+        return op.kind in (Kind.LOAD, Kind.STORE)
     if op.floating_origin is not None:
         return op.kind is not Kind.NOTHING
     from qbopt.backend import lower
