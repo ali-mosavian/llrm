@@ -332,6 +332,24 @@ VARIANTS[("B$POW8", "vbdos")] = replace(
               + VARIANTS[("B$POW4", "vbdos")].evidence),
 )
 
+for _name, _evidence in {
+    "B$FLOF": "loclof.asm 0049 enters 0035 and calls LocateFDB (dvcore.asm 00e2); "
+              "XOR SI,SI at 00e6 overwrites arithmetic flags before lookup/dispatch.",
+    "B$GET3": "dvgetput.asm 0043 enters local 00a4 with stacked position words; "
+              "its first call is LocateFDB, which overwrites arithmetic flags before lookup.",
+    "B$GET4": "dvgetput.asm 0064 reads the record position and OR CX,CX at 006c "
+              "overwrites arithmetic flags before validation and local 00a4 dispatch.",
+    "B$SACT": "farstr stcore.asm entry 01b6 loads the descriptor at BP+0Ah and "
+              "CMP word [DI],0 at 01bf overwrites arithmetic flags before string allocation/copy.",
+}.items():
+    VARIANTS[(_name, "vbdos")] = replace(
+        worst(_name),
+        inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
+        evidence=("VBDCL10E.LIB: " + _evidence + " All GP inputs retained; "
+                  "cleanup, memory, preservation and transitive control/error effects "
+                  "remain unknown. No file or string operation is replaced."),
+    )
+
 for _name in ("B$STR4", "B$STR8"):
     VARIANTS[(_name, "vbdos")] = replace(
         worst(_name),

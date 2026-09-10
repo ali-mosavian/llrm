@@ -1,5 +1,12 @@
 """Qrender script loading refused FREEFILE (0a23) and fixed-string load (0a3f)."""
 
+from dataclasses import replace
+from pathlib import Path
+
+import corpus
+from qbopt.backend import lower
+from qbopt.model import mir
+
 import pytest
 
 from qbopt.abi import runtime
@@ -77,3 +84,36 @@ def test_vbdos_file_setup_retains_unknown_effects(name, cleanup):
     assert contract.writes is runtime.Memory.ANY
     assert contract.control is runtime.Control.UNKNOWN
     assert contract.raises_error
+
+
+@pytest.fixture(scope="module")
+def model_calls():
+    path = Path("fixtures/regressions/qrender-d-mdl-v-g3.obj")
+    found = corpus.loaded(path)
+    rules = runtime.for_module(found)
+    return found, rules, list(mir.bodies(found, corpus.partitioned(path), rules))
+
+
+@pytest.mark.parametrize("symbol", ["B$FLOF", "B$GET3", "B$GET4", "B$SACT"])
+def test_model_file_calls_lower_without_replacement(model_calls, symbol):
+    """D_MDL could not emit an optimized OBJ: these real call interfaces were unknown."""
+    found, rules, bodies = model_calls
+    seen = 0
+    for name, body in bodies:
+        for block in body.blocks:
+            for op in block.ops:
+                if found.calls.get(op.at) != symbol:
+                    continue
+                isolated = replace(body, entry=block.at,
+                    blocks=(replace(block, phis=(), ops=(op,), succ=()),))
+                result = lower.lowered(name, isolated, found.calls, found.absorbed, rules)
+                assert any(one.at == op.at and one.what.name == "call" for one in result.insns)
+                seen += 1
+    assert seen > 0
+    rule = runtime.per_call({0: symbol}, "vbdos")[0]
+    assert rule.inputs == frozenset({runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX,
+                                    runtime.Reg.DX, runtime.Reg.SI, runtime.Reg.DI})
+    assert rule.cleanup is None and rule.clobbers == runtime.EVERY
+    assert rule.reads is runtime.Memory.ANY and rule.writes is runtime.Memory.ANY
+    assert rule.control is runtime.Control.UNKNOWN and rule.raises_error
+    assert runtime.per_call({0: symbol}, "qb45")[0].inputs is None

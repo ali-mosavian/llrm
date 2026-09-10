@@ -4,7 +4,43 @@ New optimization passes are paused until the optimized renderer builds and
 runs correctly. Target: `qb-qrender/.claude/worktrees/qgl-poly-draw`, source
 commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
-## Latest benchmark — thirteen modules, native x87, 2026-09-11
+## Latest benchmark — fourteen modules, native x87, 2026-09-11
+
+D_MDL now passes the pinned benchmark on top of the thirteen-module build.
+`/tmp/qbopt-qrender-native-dmdl.yOiEO3` (port 2215) reports **9.49864 FPS**
+versus baseline **9.43334**. All checked non-timing/non-memory fields match,
+BENCH.BMP is byte-identical, and fresh `bench-native-025.png` shows the
+scene. The debugger observes the DOS prompt after completion. No speedup
+claimed within the observed variation.
+
+FLOF, GET3, GET4 and SACT were the remaining unaudited runtime interfaces.
+Actual VBDCL10E entries establish where incoming arithmetic flags are first
+overwritten: FLOF and GET3 enter LocateFDB (XOR SI,SI); GET4 starts record
+validation with OR CX,CX; SACT starts with a descriptor-length CMP. All GP
+inputs remain live; cleanup, memory, preservation and transitive control/error
+effects remain unknown. No file or string operation is replaced. Four real
+D_MDL call regressions fail before the fix; all 34 selected file-contract
+checks pass in 3.44 seconds, including existing conservative-effect checks.
+
+The project bindings in `/tmp/qbopt-d-mdl-audit.py` are hash-scoped, not
+global declarations. D_MDL shrinks from 15,539 to 15,134 bytes. Full dumps:
+`/tmp/qbopt-d-mdl-native`. Existing long-comparison absorption can now emit
+the file-length comparison (allocator saves omitted; DX:AX is copied into
+BX:SI before the shown native packing):
+
+```asm
+; original                      ; emitted comparison
+push dx                         push bx
+push ax                         push si
+push dword 30h                  pop ebx
+call far B$CPI4                 cmp ebx,30h
+jge enough                      jge enough
+```
+
+Seven BASIC modules remain original: main, d_surf, mod_tex, model, r_bsp,
+screen, pl_move. The single-scene limitation and face-oracle failure remain.
+
+## Previous benchmark — thirteen modules, native x87
 
 H_FRAME passes the same pinned benchmark on top of the twelve-module build.
 `/tmp/qbopt-qrender-native-hframe.NlH7qn` (port 2214) reports **9.50707 FPS**
