@@ -325,6 +325,13 @@ VARIANTS[("B$POW4", "vbdos")] = replace(
     ),
 )
 
+VARIANTS[("B$POW8", "vbdos")] = replace(
+    VARIANTS[("B$POW4", "vbdos")], name="B$POW8",
+    evidence=("VBDCL10E 87btran.asm PUBDEFs POW4 and POW8 both resolve to "
+              "segment 1 offset 00e2: identical entry and dependency graph. "
+              + VARIANTS[("B$POW4", "vbdos")].evidence),
+)
+
 for _name in ("B$INT4", "B$INT8"):
     VARIANTS[(_name, "vbdos")] = replace(
         worst(_name),

@@ -23,16 +23,17 @@ def test_vbdos_rounding_keeps_unknown_effects(symbol):
     assert runtime.per_call({0: symbol}, "qb45")[0].inputs is None
 
 
-def test_qgldiff_rounding_calls_lower_without_replacement():
-    """Real QGLDIFF INT4 calls refused lowering; no optimized object was possible."""
-    path = Path("fixtures/regressions/qrender-qgldiff-v-g3.obj")
+@pytest.mark.parametrize("module,symbol", [("qgldiff", "B$INT4"), ("qglface", "B$POW8")])
+def test_qrender_math_calls_lower_without_replacement(module, symbol):
+    """Real QGLDIFF INT4 and QGLFACE POW8 calls refused lowering; no optimized OBJ."""
+    path = Path(f"fixtures/regressions/qrender-{module}-v-g3.obj")
     found = corpus.loaded(path)
     rules = runtime.for_module(found)
     seen = 0
     for name, body in mir.bodies(found, corpus.partitioned(path), rules):
         for block in body.blocks:
             for op in block.ops:
-                if found.calls.get(op.at) != "B$INT4":
+                if found.calls.get(op.at) != symbol:
                     continue
                 isolated = replace(body, entry=block.at,
                     blocks=(replace(block, phis=(), ops=(op,), succ=()),))

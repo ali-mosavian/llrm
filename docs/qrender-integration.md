@@ -4,7 +4,28 @@ New optimization passes are paused until the optimized renderer builds and
 runs correctly. Target: `qb-qrender/.claude/worktrees/qgl-poly-draw`, source
 commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
-## Latest gate — ten modules, native x87, 2026-09-11
+## Latest candidate — eleven modules, native x87, 2026-09-11
+
+QGLFACE now lowers with native x87 in addition to the ten modules below.
+VBDOS POW8 and POW4 are aliases of the same runtime entry; POW8 inherits
+the audited interface, retaining unknown effects and the original call.
+Before: lowering refused POW8's unestablished interface. After: the call
+remains, followed by native `fistp dword [bp-1Eh]`, `wait`, and a GP load.
+The real-object regression failed before the change; four focused tests pass.
+
+Candidate `/tmp/qbopt-qrender-native-face-20260911` completes at **9.50707
+FPS** versus baseline **9.43334**, with identical correctness fields and
+BENCH.BMP. No speedup claimed. Fresh screenshot `diff-live-009.png` shows
+the rendered scene; copied screenshots are not evidence of this run.
+Full stage dumps: `/tmp/qbopt-qglface-native`; rewritten OBJ: 12,928 bytes.
+
+The dedicated `-bench 1 -qglface` check is byte-identical to the ten-module
+reference's 1,263-byte log, but **both report FAIL: coverage differs from
+the oracle**. This establishes no observed optimizer regression, not a
+passing face check. The full correctness gate remains open. Dedicated-check
+screenshots are black and are not used as rendered-scene evidence.
+
+## Previous gate — ten modules, native x87
 
 QGLDIFF is now accepted on top of the nine-module build. Candidate
 `/tmp/qbopt-qrender-native-forward-20260911` runs on port 2210; its
