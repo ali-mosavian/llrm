@@ -365,6 +365,48 @@ VARIANTS[("B$CHOU", "vbdos")] = replace(
 )
 
 for _name, _cleanup, _evidence in (
+    ("B$CSCN", None,
+     "VBDCL10E gwscreen.asm 0000 calls ScSetup (locate.asm 001c): "
+     "POP BX saves the near return, then BP/ES/SI are saved; SHL AX,1 "
+     "at 0027 kills incoming arithmetic flags. ScCleanUpParms 000f "
+     "restores these saves, pops the far return and count, and advances "
+     "SP by twice the count before RETF. Cleanup is variable, not zero. "
+     "SCRSTT calls indirect screen handlers; display, alias and error "
+     "effects remain unknown."),
+    ("B$WIDT", 4,
+     "VBDCL10E ioscrn.asm 002b establishes BP and calls EnsureFI, whose "
+     "CMP at gwini.asm 0000 kills incoming arithmetic flags. Arguments "
+     "at BP+8/+6 feed SWIDTH; normal exit POP BP / RETF 4 at 006d. "
+     "Invalid width tails ERR_FC; BIOS/display and error effects unknown."),
+    ("B$SLEP", 4,
+     "VBDCL10E evtkey.asm 00b3 establishes BP; local 0157 CMP kills "
+     "incoming flags. SetKybdInt saves/restores DS/DX/AX/BX/ES across "
+     "BIOS/DOS interrupts and RETF at llcevt.asm 005b. SetClockInt "
+     "restores its saves and RET at llaevt.asm 00c4. SleepInit 0101 "
+     "calls stack-balanced tick conversion 00c9..0100. Event wait "
+     "joins POP BP / RETF 4 at 00e6; interrupt/control effects unknown."),
+    ("B$TIMR", 0,
+     "VBDCL10E ostimer.asm 0000 saves BP/SI, obtains DOS time via INT 21h "
+     "and MUL CH at 000a kills incoming arithmetic flags. Both relocated "
+     "integer-to-float calls target member 299 entry 0000: PUSH BX / "
+     "FILD word [BX] / POP BX / RET. Local arithmetic helper 0043..0063 "
+     "balances DX/AX saves. POP SI/BP / RETF at 0040 returns a pointer "
+     "to the stored float in AX; time, memory, x87 and errors remain unknown."),
+    ("B$FRI2", 2,
+     "VBDCL10E stfree.asm 004d saves BP/SI; XOR CX,CX at 0053 kills "
+     "incoming flags. FRE selectors join POP SI/BP / RETF 2 at 00b0. "
+     "FHCompact/FHByteSize return near; CbCompactHeap (lmem segment 5 "
+     "0066..00aa) and GAFC (getactiv 0000..0097) consume their two "
+     "internal argument words with RETF 4. Alternate entries 009d/009e "
+     "are INC BX, not extra pushes. Heap compaction, aliases and errors "
+     "remain unknown; no register preservation inferred."),
+    ("B$STI4", 4,
+     "VBDCL10E farstr/string.asm 000f reads the long at BP+6 through "
+     "STR_COMMON 001e. FOUTBX (ifout.asm 0000) kills incoming flags "
+     "with CMP at 0003; integer path returns near at 0050. Common "
+     "copy via StrAlcTmpCopy (strutil.asm 01f5..0209) balances its "
+     "local saves; public POP BP / RETF 4 at 001a. Formatting, heap "
+     "allocation, aliases and errors remain unknown."),
     ("B$FMKI", 2,
      "rt/strnum.asm 005e..0070: SI addresses the word argument at BP+6, "
      "CX=2; StrAlcTmpCopy at strutil.asm 01f5 calls AlcTmpSH, whose CMP "

@@ -8,6 +8,22 @@ commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
 ### Next module: SYS argument parsing
 
+The six remaining VBDOS input interfaces (CSCN, WIDT, SLEP, TIMR,
+FRI2, STI4) are now bounded from runtime disassembly and their dependencies.
+CSCN has count-dependent cleanup; the other normal-return cleanups are
+4, 4, 0, 2, 4 bytes respectively. All memory, clobber and error effects
+remain conservative. Real SYS blocks pass lowering; six independent
+contract checks fail with these variants removed and pass with them restored.
+
+The next native-emission blocker is **08fa: FISTP to a GP register**:
+the final LIR says `ebx := fistp st(0)`, an impossible x87 encoding.
+Full stage dumps: `/tmp/qbopt-sys-runtime-native`. Compare the raised
+floating store with each subsequent stage to locate where the required
+memory destination was lost. SYS is refused atomically: before/after OBJ
+assembly is unchanged, and no new runtime run or FPS measurement is claimed.
+
+Earlier interface audit:
+
 POW4 at 08f5 is now bounded: VBDCL10E `87btran.asm` establishes a BP
 frame, examines the x87 operands, and overwrites arithmetic flags at 00f3
 before dispatch. Normal exits at 0089/0098/00b3/00d8 restore BP and RETF

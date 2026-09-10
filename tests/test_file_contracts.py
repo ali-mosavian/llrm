@@ -8,9 +8,12 @@ from qbopt.abi import runtime
 @pytest.mark.parametrize("procedure,at,cleanup", [
     ("SYS_PARSE_ARGS", 0x12f, 2), ("SYS_PARSE_ARGS", 0x823, None),
     ("SYS_INIT_TABLES", 0x8f5, 0),
+    ("SYS_ERROR", 0x980, None), ("SYS_ERROR", 0x989, 4),
+    ("SYS_ERROR", 0x9a2, 4), ("SYS_TIME_INIT", 0x9ca, 0),
+    ("SYS_MEM_MARK", 0xdc3, 2), ("SYS_MEM_MARK", 0xe22, 4),
 ])
 def test_qrender_sys_lowers_runtime_calls(procedure: str, at: int, cleanup: int | None) -> None:
-    """SYS refused LCAS at 012f, FDR1 at 0823, then POW4 at 08f5; no optimized OBJ."""
+    """SYS emitted no optimized OBJ: string, power, screen, clock and heap calls refused."""
     from dataclasses import replace
     from pathlib import Path
     import corpus
@@ -22,7 +25,12 @@ def test_qrender_sys_lowers_runtime_calls(procedure: str, at: int, cleanup: int 
     external = {name: replace(runtime.worst(name), cleanup=cleanup,
                 inputs=frozenset({runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX,
                                   runtime.Reg.DX, runtime.Reg.SI, runtime.Reg.DI}))
-                for name, cleanup in (("HOST_SHUTDOWN", 0), ("COM_TOKENIZE", 8))}
+                for name, cleanup in (("HOST_SHUTDOWN", 0), ("COM_TOKENIZE", 8),
+                                      ("QGLMEMAVAIL", 2), ("QGLTMRINIT", 2),
+                                      ("QGLTMRTICKS", 0), ("QGLTMRCYCLES", 0),
+                                      ("QGLKBDSHUTDOWN", 0), ("QGLMOUSESHUTDOWN", 0),
+                                      ("QGLTMRSHUTDOWN", 0), ("QGLVGASHUTDOWN", 0),
+                                      ("QGLMEMSHUTDOWN", 0))}
     rules = runtime.for_module(found, external=external)
     name, body = next((name, body) for name, body in mir.bodies(found, corpus.partitioned(path), rules)
                       if name == f"procedure {procedure}")
@@ -55,6 +63,8 @@ def test_peos_register_interface_does_not_claim_fixed_stack_cleanup():
     ("B$RTRM", 2), ("B$FASC", 2), ("B$FCHR", 2),
     ("B$LEFT", 4), ("B$RGHT", 4),
     ("B$FMKI", 2), ("B$FMKL", 4), ("B$FCVI", 2), ("B$FCVS", 2),
+    ("B$CSCN", None), ("B$WIDT", 4), ("B$SLEP", 4),
+    ("B$TIMR", 0), ("B$FRI2", 2), ("B$STI4", 4),
 ])
 def test_vbdos_file_setup_retains_unknown_effects(name, cleanup):
     """Qrender refused string/file calls, including LEFT/RIGHT; CLOSE varies in arity."""
