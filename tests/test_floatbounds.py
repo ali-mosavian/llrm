@@ -12,6 +12,18 @@ from qbopt.model.floating import Format, Precision, Rounding, Semantics
 from qbopt.optimize import transform
 
 
+def _assert_shared_conversions(found, instructions):
+    """One conversion per runtime input, whether the input loop is unrolled or not."""
+    reads = sorted(at for at, name in found.calls.items() if name in ("B$RDI2", "B$RDI4"))
+    assert reads, "the fixture must still consume runtime inputs"
+    for index, start in enumerate(reads):
+        end = reads[index + 1] if index + 1 < len(reads) else float("inf")
+        region = [str(one.insn) for one in instructions if start < one.at < end]
+        assert sum(one.startswith("fild ") for one in region) == 1
+        assert sum(one.startswith("fst ") for one in region) == 1
+        assert sum(one.startswith("fstp ") for one in region) == 1
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_fpdeep_reuses_proven_finite_array_loads(tag):
     """FPDEEP loaded p(i) five times despite its three initialized finite elements."""
@@ -108,10 +120,8 @@ def test_computed_runtime_integer_uses_one_conversion(tag):
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     assert "B$FIL2" not in found.calls.values()
-    instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
-    assert sum(one.startswith("fild ") for one in instructions) == 1
-    assert sum(one.startswith("fst ") for one in instructions) == 1
-    assert sum(one.startswith("fstp ") for one in instructions) == 1
+    instructions = [one for block in corpus.partitioned(result.data) for one in block.insns]
+    _assert_shared_conversions(found, instructions)
 
 
 @pytest.mark.parametrize("change", ["unknown", "writes", "control", "inputs"])
@@ -141,9 +151,7 @@ def test_runtime_integer_conversion_is_shared_in_emitted_code(tag, program, help
     found = module.of(omf.parse(result.data))
     assert helper not in found.calls.values()
     instructions = [one for block in corpus.partitioned(result.data) for one in block.insns]
-    assert sum(str(one.insn).startswith("fild ") for one in instructions) == 1
-    assert sum(str(one.insn).startswith("fst ") for one in instructions) == 1
-    assert sum(str(one.insn).startswith("fstp ") for one in instructions) == 1
+    _assert_shared_conversions(found, instructions)
     load = next(one for one in instructions if str(one.insn).startswith("fild "))
     assert found.code[load.at] == 0xcd  # Keep the object's software-FP protocol.
     body = mir.bodies(found, corpus.partitioned(result.data))[0][1]

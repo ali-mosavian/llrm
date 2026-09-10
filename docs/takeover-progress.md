@@ -4320,3 +4320,18 @@ representatives were reproduced with the previous bounds analysis: FPCALC PDS
 has three conversions where the test expects one; QB FPDEEP has no indexed
 loads where it expects three. Assertions remain unchanged. Other configurations
 still need classification; no full floating regression-gate success is claimed.
+
+### Conversion regressions count per runtime input
+
+The nine FPICSE/FPI2CS/FPCALC conversion failures were stale static counts:
+unrolling makes three READ sites, with one shared conversion per site. The
+tests now require one FILD, one retained FST and one FSTP in each emitted
+READ region. All nine configurations pass. Disabling CSE makes the PDS
+FPI2CS case fail at two FILDs in one region, verifying that the test still
+detects duplicate conversion work. Production assembly is unchanged:
+FPI2CS PDS retains FILD at 0x004f, 0x00a2 and 0x00f0, one per READ.
+
+QB FPDEEP is separately classified: r01-unroll expands five indexed loads
+to fifteen; r02-cse has zero after constant-index folding. Its existing
+count assertion remains unchanged pending an output-based replacement;
+the absence of loads alone is not proof of correct numerical output.
