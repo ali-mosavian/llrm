@@ -122,6 +122,31 @@ def test_single_entry_phi_is_replaced_and_jump_bytes_are_retained():
     assert cfg.merged(result) == result
 
 
+def test_cloned_chain_without_source_bytes_merges():
+    """IVARM's cloned store and increment remained separate, blocking loop evaluation."""
+    body = chain()
+    body = replace(body, blocks=tuple(replace(block, ops=tuple(
+        replace(op, covers=(op.at, op.at), extra_covers=()) for op in block.ops))
+        for block in body.blocks))
+    result = cfg.merged(body)
+    assert len(result.blocks) == 1
+    assert result.blocks[0].ops[-1].args == (mir.Held(mir.Value(1, 0), 2),)
+
+
+def test_transferred_byte_ownership_does_not_block_chain_merge():
+    """IVARM's removed load donated its bytes outside the store/increment chain."""
+    body = chain()
+    first = body.blocks[0]
+    owner = mir.Op(-1, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.NOTHING,
+                   covers=(5, 10))
+    body = replace(body, blocks=(mir.MirBlock(-1, (), (owner,), ()),
+        replace(first, ops=(first.ops[0], replace(first.ops[1], extra_covers=()))), body.blocks[1]))
+    result = cfg.merged(body)
+    assert len(result.blocks) == 2
+    assert result.block(0).ops[-1].args == (mir.Held(mir.Value(1, 0), 2),)
+    assert result.block(-1).ops == (owner,)
+
+
 @pytest.mark.parametrize("guard", ["entry", "other_predecessor", "repetition", "intervening", "unowned_gap"])
 def test_merge_preserves_alternate_entries_and_layout(guard):
     body = chain()

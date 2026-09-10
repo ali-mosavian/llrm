@@ -54,7 +54,10 @@ def merged(body: mir.MirBody) -> mir.MirBody:
             if set(predecessors[target]) != {first.at}:
                 continue
             between = ordered[index + 1:positions[target]]
-            if not _owns_interval((first, *between), first.at, target):
+            inserted = all(op.covers is not None and op.covers[0] == op.covers[1]
+                           and all(low == high for low, high in op.extra_covers)
+                           for block in (first, *between, second) for op in block.ops)
+            if not inserted and not _owns_interval(body.blocks, first.at, target):
                 continue
             if any(block.at == body.entry or block.at in repeated or block.phis or block.succ or predecessors[block.at]
                    or any(not _empty(op) for op in block.ops) for block in between):

@@ -741,6 +741,13 @@ one documented target without materially regressing another.
   compiled variants now retain reachable termination and execute correctly.
   This ownership restriction remains necessary until layout can place merged
   semantic bodies independently of the original interleaving.
+  Zero-byte cloned chains now merge without claiming synthetic label intervals
+  as original bytes. Original chains also accept coverage donated elsewhere in
+  the same body; genuinely unowned gaps still prevent merging. IVARM unswitching
+  candidates shrink from three blocks per loop to two. Before/after emitted ASM
+  is identical (`mov [field],ax; add ax,3; cmp ax,37; jne loop`): this exposes a
+  canonical loop, not a speedup. Sinking the pre-increment value's last store is
+  still needed before those specialized loops can disappear.
 
 ### Loop profitability and specialization
 
