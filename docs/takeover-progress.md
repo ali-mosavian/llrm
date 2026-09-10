@@ -1,5 +1,30 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: thread empty collapsed-loop blocks
+
+MIR branch cleanup bypasses blocks containing only ownership markers and an
+unconditional jump. It refuses phi-bearing intermediates or destinations,
+real operations and cyclic redirections; explicit successor edges and branch
+targets change together. Unreachable blocks retain their byte ranges but now
+clear the obsolete instruction name: an old jump name otherwise lowered to
+a one-byte NOP and prevented the emitter's existing fallthrough removal.
+
+QB FPCSE before: entry jumps forward to an empty header, header jumps back
+to the constant-result block, and that block jumps over the empty header to
+PRINT. After: the same stores and calls in straight-line order, **no jumps**.
+Ranking **171 -> 165**; PDS/VBDOS remain 173/167. Against 98, more work remains.
+No register or encoding knowledge is needed in the MIR cleanup.
+
+The emitted-code regression failed first. Five focused tests pass, including
+phi, store and cycle guards. The broader floatfold/transform run had 64 passes,
+two existing xfails and nine failures; all nine reproduce with the old
+unreachable transform restored and threading disabled (42 passes, two xfails
+in the baseline transform-only run). They were not weakened or reclassified.
+FPCSE and BOOLS match original DOS output on all three primary compilers:
+487.5 and T=2, respectively, then DONE; all runs finished normally.
+Stage and runtime artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-threaded-final-8d_44awd`.
+
 ## 2026-09-10: carry completed FP checks across integer-only edges
 
 The MIR check simplifier now uses a conservative CFG must-analysis, rather

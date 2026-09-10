@@ -1550,6 +1550,43 @@ def _outcome(block, op: Op, facts: dict, held: dict) -> bool | None:
     return decide(_signed(left), _signed(right), lambda n: n & 0xFFFFFFFF)
 
 
+def _threaded(body: MirBody) -> MirBody:
+    """Bypass empty jump blocks without changing any incoming phi value."""
+    known = {block.at: block for block in body.blocks}
+    redirects = {}
+    for block in body.blocks:
+        if block.phis or len(block.succ) != 1 or not block.ops:
+            continue
+        last = block.ops[-1]
+        if last.kind is not mir.Kind.JUMP or last.target != block.succ[0]:
+            continue
+        if any(op.kind is not mir.Kind.NOTHING or op.defines or op.uses or op.loads or op.stores
+               or op.barrier or op.floating is not None or op.stack is not None for op in block.ops[:-1]):
+            continue
+        successor = known.get(last.target)
+        if successor is not None and not successor.phis:
+            redirects[block.at] = successor.at
+    blocks = []
+    changed = False
+    for block in body.blocks:
+        if not block.ops or block.ops[-1].kind not in {mir.Kind.JUMP, mir.Kind.BRANCH}:
+            blocks.append(block)
+            continue
+        last = block.ops[-1]
+        target = last.target
+        seen = {block.at}
+        while target in redirects and target not in seen:
+            seen.add(target)
+            target = redirects[target]
+        if target == last.target or target in seen:
+            blocks.append(block)
+            continue
+        changed = True
+        successors = tuple(dict.fromkeys(target if at == last.target else at for at in block.succ))
+        blocks.append(replace(block, ops=(*block.ops[:-1], replace(last, target=target)), succ=successors))
+    return _unreachable(replace(body, blocks=tuple(blocks))) if changed else body
+
+
 def decided(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
     """A branch on two numbers, resolved.
 
@@ -1562,6 +1599,7 @@ def decided(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
     bytes handed to the operation before it. What becomes unreachable is
     dropped by resolving the body afterwards rather than here.
     """
+    body = _threaded(body)
     facts = consts.known(body, dgroup, calls)
     if not facts:
         return body
@@ -1630,6 +1668,7 @@ def _unreachable(body: MirBody) -> MirBody:
                     replace(
                         op,
                         kind=mir.Kind.NOTHING,
+                        name="",
                         defines=(),
                         uses=(),
                         loads=(),

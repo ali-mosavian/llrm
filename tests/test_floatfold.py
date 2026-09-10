@@ -46,6 +46,18 @@ def test_qb_fpcse_preserves_entry_when_first_load_disappears():
     assert result.outcome is wholeseg.Emission.LIR, result.reason
 
 
+def test_collapsed_fpcse_has_no_empty_jump_trampoline():
+    """QB FPCSE's constant result still ran three jumps through its empty loop header."""
+    from pathlib import Path
+    import corpus
+    from iced_x86 import Mnemonic
+    from qbopt import wholeseg
+    result = wholeseg.emitted(Path("fixtures/omf/fpcse-q-O.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    assert not any(one.insn.mnemonic == Mnemonic.JMP
+                   for block in corpus.partitioned(result.data) for one in block.insns)
+
+
 @pytest.mark.parametrize("interruption", [mir.Kind.COPY, mir.Kind.CALL, mir.Kind.FLOAD])
 def test_completed_fp_observation_crosses_only_proven_edges(interruption):
     """Collapsed FPCSE kept a second WAIT after integer-only control flow."""

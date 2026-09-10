@@ -21,6 +21,34 @@ from qbopt import rewrite
 from qbopt.optimize import transform
 
 
+@pytest.mark.parametrize("guard", ["none", "phi", "store", "cycle"])
+def test_empty_jump_threading_preserves_phi_inputs_and_effects(guard):
+    """Collapsed FPCSE's trampoline is removable; a phi edge or store is not."""
+    from dataclasses import replace
+    def jump(at, target):
+        return mir.Op(at, ir.Operation.JUMP, "jmp", (), (), kind=mir.Kind.JUMP, target=target)
+    entry = mir.MirBlock(0, (), (jump(0, 1),), (1,))
+    middle = mir.MirBlock(1, (), (jump(1, 2),), (2,))
+    end = mir.MirBlock(2, (), (), ())
+    if guard == "phi":
+        value = mir.Value(1, 2)
+        end = replace(end, phis=(mir.Phi(value, {1: mir.Value(2, 1)}),))
+    elif guard == "store":
+        store = mir.Op(1, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.STORE)
+        middle = replace(middle, ops=(store, *middle.ops))
+    elif guard == "cycle":
+        middle = replace(middle, ops=(jump(1, 1),), succ=(1,))
+    body = mir.MirBody(0, (entry, middle, end))
+    result = transform._threaded(body)
+    if guard == "none":
+        assert result.blocks[0].succ == (2,)
+        assert result.blocks[0].ops[-1].target == 2
+        assert result.blocks[1].ops[-1].kind is mir.Kind.NOTHING
+        assert result.blocks[1].ops[-1].name == ""
+    else:
+        assert result == body
+
+
 def test_pipeline_reaches_a_fixed_point_without_emission() -> None:
     """lngmix still changed on a second optimization of the same MIR body."""
     from qbopt.frontend import blocks
