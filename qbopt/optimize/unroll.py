@@ -6,7 +6,7 @@ does not give the emitter permission to sort it or discard cloned relocations.
 
 from dataclasses import replace
 
-from qbopt.analysis import consts, induction, loops, ssa
+from qbopt.analysis import consts, floatfacts, induction, loops, ssa
 from qbopt.model import mir
 from qbopt.model.passes import MIRTransform, Where
 
@@ -68,11 +68,18 @@ def expanded(body: mir.MirBody, dgroup: frozenset[int], calls: dict) -> mir.MirB
         if len(counts) != 1:
             continue
         count, = counts
-        if not 2 <= count <= 4 or count * (len(latch.ops) + len(header.ops)) > 256:
+        if count < 2 or count * (len(latch.ops) + len(header.ops)) > 256:
             continue
         if any(set(phi.incoming) != {entry, latch.at} for phi in header.phis):
             continue
-        return _expanded(body, loop, header, latch, exit_at, entry, count)
+        candidate = _expanded(body, loop, header, latch, exit_at, entry, count)
+        if count > 4:
+            exact = floatfacts.known(candidate, dgroup, calls)
+            results = [arg.value for op in candidate.block(latch.at).ops if op.floating
+                       for arg in op.results if isinstance(arg, mir.Held) and arg.width == 10]
+            if not results or any(value not in exact for value in results):
+                continue
+        return candidate
     return body
 
 

@@ -118,7 +118,8 @@ def checked(body: mir.MirBody) -> None:
 
     repetitions = dict(body.repetitions)
     if (len(repetitions) != len(body.repetitions)
-        or any(body.block(at) is None or not 2 <= count <= 4 for at, count in body.repetitions)):
+        or any(body.block(at) is None or not 2 <= count <= len(body.block(at).ops)
+               for at, count in body.repetitions)):
         raise Unlowered("invalid block repetition provenance")
 
     floating = {arg.value.variable for block in body.blocks for op in block.ops if op.floating_origin is not None

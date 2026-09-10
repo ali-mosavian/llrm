@@ -5,7 +5,30 @@
 Bounded unrolling now runs after placement in the normal MIR pipeline.
 The next fixed-point iteration folds the exposed computations; callers can
 disable expansion with `unroll_=False`. The existing two-to-four-trip and
-256-operation bounds remain. No CPU timing or register decisions enter MIR.
+256-operation bound remains. No CPU timing or register decisions enter MIR.
+
+Larger-than-four-trip loops may now expand within that same operation budget
+when every extended floating result in the expanded loop is proven exact.
+FPCSE's ten ordered iterations satisfy this; FPCSEX's runtime-input loop does
+not. The lowerer checks actual repetition provenance and sequence length,
+not the optimizer's former four-trip profitability policy.
+
+FPCSE's `s = s + p + q` is evaluated in source order with each SINGLE store
+checked for exact representation. All floating arithmetic disappears and
+the final store holds `43f3c000h` (487.5). Before, each iteration emitted
+`fld [s]; fadd [p]; fadd [q]; fstp [s]`; after, it uses exact constant stores
+and retained exception checkpoints. Some counter stores and checkpoints
+remain, so this is not yet the minimal program.
+
+Static costs change PDS 1690→324, QB 1719→359, VBDOS 1680→314. Objects grow
+878→977, 889→1002, 1054→1153 bytes respectively. These are not timings, and
+the old provisional target is not validated by these improvements.
+All six FPCSE/FPCSEX output checks pass on the three compilers, along with
+28 focused tests. A differential comparison of 96 primary objects changes
+only the three FPCSE objects, with no emission-status changes. The new
+FPCSE regression failed before the expansion change. Dumps of every stage,
+before/after assembly and runtime artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-exact-loop-42yop23c`.
 
 The normal pipeline passes all 33 FPDEEP output checks across PDS, QB and
 VBDOS, with no experimental wrapper. The 26 focused unrolling and exact-store

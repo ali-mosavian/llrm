@@ -30,6 +30,32 @@ def test_normal_pipeline_expands_and_folds_fpdeep_to_a_fixed_point():
     assert not transform.applied(original, found.dgroup, found.calls, found=found, unroll_=False).repetitions
 
 
+def test_fpcse_exact_ten_iteration_sum_folds_in_source_order():
+    """FPCSE computed its exact 487.5 sum ten times despite fitting the bounded expansion budget."""
+    path = Path("fixtures/omf/fpcse-p-g2.obj")
+    found = corpus.loaded(path)
+    original = mir.bodies(found, corpus.partitioned(path))[0][1]
+    changed = transform.applied(original, found.dgroup, found.calls, found=found)
+    assert changed.repetitions == ((0x66, 10),)
+    assert not loops.loops(changed.blocks, changed.entry)
+    assert not any(op.floating for block in changed.blocks for op in block.ops)
+    import struct
+    bits = int.from_bytes(struct.pack("<f", 487.5), "little")
+    assert any(op.kind is mir.Kind.STORE and op.at == 0xa1 and op.args == (mir.Const(bits, 4),)
+               for block in changed.blocks for op in block.ops)
+    lower_floats.checked(changed)
+
+
+def test_runtime_input_loop_is_not_expanded_without_exact_folding():
+    """FPCSEX's ten runtime-input iterations grew into ten copies without eliminating their arithmetic."""
+    path = Path("fixtures/omf/fpcsex-p-g2.obj")
+    found = corpus.loaded(path)
+    original = mir.bodies(found, corpus.partitioned(path))[0][1]
+    changed = transform.applied(original, found.dgroup, found.calls, found=found)
+    assert not changed.repetitions
+    assert loops.loops(changed.blocks, changed.entry)
+
+
 def test_fpdeep_unroll_preserves_order_and_fresh_definitions():
     found, original = body()
     loop, = loops.loops(original.blocks, original.entry)
