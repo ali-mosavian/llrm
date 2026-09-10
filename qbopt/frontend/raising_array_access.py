@@ -342,4 +342,5 @@ def native(body, found, *, bounds_checks=False):
                 arguments.clear()
             ops.append(op)
         blocks.append(replace(block, ops=tuple(ops)))
-    return replace(body, blocks=tuple(blocks))
+    from qbopt.frontend import raising_array_bounds
+    return raising_array_bounds.proven(replace(body, blocks=tuple(blocks)))

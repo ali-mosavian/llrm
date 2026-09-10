@@ -2014,7 +2014,9 @@ def overlapping(
     written in between.
     """
     if one.pointer or other.pointer:
-        return True  # Distinct pointer values are not evidence of distinct allocations.
+        if _allocation_disjoint(one, other) or _allocation_disjoint(other, one):
+            return False
+        return True  # Distinct pointer values alone do not establish disjoint allocations.
     if known or other_known:
         from qbopt.analysis import ranges
         one, other = ranges.covering(one, known or {}), ranges.covering(other, other_known or {})

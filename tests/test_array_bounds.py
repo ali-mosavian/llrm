@@ -12,6 +12,58 @@ from qbopt.frontend import raising_array_bounds
 from qbopt.objectfile.module import Addr, Space
 
 
+def raw_huge(tag, monkeypatch):
+    with monkeypatch.context() as context:
+        context.setattr(raising_array_bounds, "proven", lambda body: body)
+        path = Path(f"fixtures/regressions/hugelp-{tag}.obj")
+        found = corpus.loaded(path)
+        body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    return found, body
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_huge_loop_descriptor_loads_leave_the_loop(tag, monkeypatch):
+    """HUGELP reloaded bounds and pointer twice per iteration despite bounded heap stores."""
+    from qbopt import wholeseg
+    from qbopt.analysis import loops as loopy
+    found, body = raw_huge(tag, monkeypatch)
+    proven = raising_array_bounds.proven(body)
+    loop = loopy.loops(list(proven.blocks), proven.entry)[0]
+    stores = [ref for block in proven.blocks if block.at in loop.body for op in block.ops
+              for ref in op.stores if ref.pointer]
+    assert len(stores) == 2 and all(ref.allocation is not None for ref in stores)
+    states = []
+    def watch(stage, name, state):
+        if stage == "mir-widen":
+            states.append(state)
+    result = wholeseg.emitted(Path(f"fixtures/regressions/hugelp-{tag}.obj").read_bytes(), watch=watch)
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    after = states[0]
+    loop = loopy.loops(list(after.blocks), after.entry)[0]
+    assert not any(ref.addr is not None and ref.addr.space is Space.SEGMENT
+                   and ref.addr.index == found.program_data and 6 <= ref.addr.disp < 28
+                   for block in after.blocks if block.at in loop.body for op in block.ops for ref in op.loads)
+
+
+@pytest.mark.parametrize("failure", ["budget", "out_of_bounds", "descriptor_write", "unknown_call"])
+def test_huge_proof_does_not_assume_its_own_disjointness(failure, monkeypatch):
+    from qbopt.model import ir
+    found, body = raw_huge("p-g2", monkeypatch)
+    def change(op):
+        if failure == "out_of_bounds" and op.kind is mir.Kind.PTR_OFFSET:
+            return replace(op, args=(op.args[0], mir.Const(80802, 4)))
+        if op.kind is mir.Kind.STORE and any(ref.pointer for ref in op.stores):
+            if failure == "descriptor_write":
+                ref = mir.MemRef(Addr(Space.SEGMENT, 24, found.program_data), 2)
+                return replace(op, stores=(ref,), results=(mir.Cell(ref),))
+            if failure == "unknown_call":
+                return mir.Op(op.at, ir.Operation.CALL, "call", (), (), kind=mir.Kind.CALL)
+        return op
+    changed = replace(body, blocks=tuple(replace(block, ops=tuple(map(change, block.ops))) for block in body.blocks))
+    result = raising_array_bounds.proven(changed, limit=1 if failure == "budget" else 10000)
+    assert not any(ref.allocation for block in result.blocks for op in block.ops for ref in (*op.loads, *op.stores))
+
+
 def raw(name, tag, monkeypatch):
     with monkeypatch.context() as context:
         context.setattr(raising_array_bounds, "proven", lambda body: body)

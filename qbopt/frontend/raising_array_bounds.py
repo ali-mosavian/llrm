@@ -24,12 +24,13 @@ def proven(body: mir.MirBody, *, limit: int = 10000) -> mir.MirBody:
         return body
     allocation = allocations[0]
     request = allocation.array
-    if any(low != 0 for low, _ in request.bounds):
+    whole = any(ref.pointer for block in body.blocks for op in block.ops for ref in (*op.loads, *op.stores))
+    if not whole and any(low != 0 for low, _ in request.bounds):
         return body
     extent = request.element_width
     for low, high in request.bounds:
         extent *= high - low + 1
-    if not 0 < extent < 32768:
+    if not 0 < extent < (1 << 31 if whole else 32768):
         return body
     checked = _walk(body, allocation, extent, limit)
     if not checked:
@@ -75,28 +76,36 @@ def _walk(body: mir.MirBody, allocation: mir.Op, extent: int, limit: int) -> set
     descriptor_end = base + 14 + 4 * len(allocation.array.bounds)
     previous, current = None, body.entry
 
-    def no_more_elements(at):
-        pending, seen = [at], set()
+    def no_revisited_accesses(at, start):
+        pending, seen = [(at, start)], set()
         while pending:
-            at = pending.pop()
-            if at in seen:
+            at, start = pending.pop()
+            if (at, start) in seen:
                 continue
-            seen.add(at)
+            seen.add((at, start))
             if at not in blocks:
                 return False
             block = blocks[at]
-            if any(ref.addr and ref.addr.space is Space.FAR for op in block.ops for ref in op.loads + op.stores):
+            if any(ref in checked for op in block.ops[start:] for ref in op.loads + op.stores):
                 return False
-            pending.extend(block.succ)
+            pending.extend((successor, 0) for successor in block.succ)
         return True
 
     def address(ref: mir.MemRef):
+        if ref.pointer and active:
+            pointer = values.get(ref.base)
+            if isinstance(pointer, Pointer) and 0 <= pointer.offset <= extent - ref.width:
+                checked.add(ref)
+                return ("element", pointer.offset)
+            raise ValueError
         resolved = mir._symbolic_ref(ref)
         if resolved.addr is None:
             raise ValueError
-        if resolved.base is None and resolved.segment is None and resolved.addr.space is Space.SEGMENT:
+        if resolved.base is None and resolved.segment is None and resolved.addr.space in (Space.SEGMENT, Space.FRAME):
             return resolved.addr
-        if ref.addr.space is Space.FAR and active and segments.get(ref.addr.segment) is True:
+        if ref.addr.space is Space.FAR and active and (
+            values.get(ref.segment) is True if ref.segment is not None else segments.get(ref.addr.segment) is True
+        ):
             pointer = values.get(ref.base)
             if isinstance(pointer, Pointer) and 0 <= pointer.offset + ref.addr.disp <= extent - ref.width:
                 checked.add(ref)
@@ -108,12 +117,12 @@ def _walk(body: mir.MirBody, allocation: mir.Op, extent: int, limit: int) -> set
             case mir.Const(n=number, width=width):
                 return consts.masked(number, width)
             case mir.Held(value=value, width=width):
-                if width != 2:
+                if width not in (1, 2, 4):
                     raise ValueError
                 result = values.get(value)
                 return consts.masked(result, width) if isinstance(result, int) else result
             case mir.Cell(ref=ref):
-                if ref.width != 2:
+                if ref.width not in (1, 2, 4):
                     raise ValueError
                 return memory.get((address(ref), ref.width))
         return None
@@ -124,7 +133,7 @@ def _walk(body: mir.MirBody, allocation: mir.Op, extent: int, limit: int) -> set
             incoming = {phi.result: values.get(phi.incoming.get(previous)) for phi in block.phis}
             values.update(incoming)
             following = block.succ[0] if len(block.succ) == 1 else None
-            for op in block.ops:
+            for position, op in enumerate(block.ops):
                 limit -= 1
                 if limit < 0:
                     raise ValueError
@@ -132,13 +141,14 @@ def _walk(body: mir.MirBody, allocation: mir.Op, extent: int, limit: int) -> set
                     if op is allocation and not active:
                         active = True
                         memory = {(ref.addr, ref.width): value.n for ref, value in op.memory_values}
+                        memory[(Addr(Space.SEGMENT, base, descriptor.index), 4)] = Pointer(0)
                         memory[(Addr(Space.SEGMENT, base + 10, descriptor.index), 2)] = Pointer(0)
                         memory[(Addr(Space.SEGMENT, base + 2, descriptor.index), 2)] = True
                         values.clear()
                         segments.clear()
                         continue
-                    # A terminal block may print results, but cannot revisit an access.
-                    if no_more_elements(block.at):
+                    # Keep only prefix references which no future execution can revisit.
+                    if no_revisited_accesses(block.at, position + 1):
                         return checked
                     raise ValueError
                 if op.kind in (mir.Kind.ARG, mir.Kind.JUMP, mir.Kind.NOTHING):
@@ -150,6 +160,8 @@ def _walk(body: mir.MirBody, allocation: mir.Op, extent: int, limit: int) -> set
                     mir.Kind.STORE,
                     mir.Kind.INCREMENT,
                     mir.Kind.BRANCH,
+                    mir.Kind.PTR_OFFSET,
+                    mir.Kind.SIGN_EXTEND,
                 }:
                     raise ValueError
                 if op.kind is mir.Kind.BRANCH:
@@ -183,8 +195,16 @@ def _walk(body: mir.MirBody, allocation: mir.Op, extent: int, limit: int) -> set
                 for ref in op.loads:
                     address(ref)
                 result = None
-                if op.kind in (mir.Kind.COPY, mir.Kind.LOAD, mir.Kind.STORE) and len(args) == 1:
+                if op.kind is mir.Kind.XOR and len(op.args) == 2 and op.args[0] == op.args[1]:
+                    result = 0
+                elif op.kind in (mir.Kind.COPY, mir.Kind.LOAD, mir.Kind.STORE) and len(args) == 1:
                     result = args[0]
+                elif op.kind is mir.Kind.PTR_OFFSET and len(args) == 2 and isinstance(args[0], Pointer) and type(args[1]) is int:
+                    displacement = (args[1] ^ 0x80000000) - 0x80000000
+                    result = Pointer(args[0].offset + displacement)
+                elif op.kind is mir.Kind.SIGN_EXTEND and len(args) == 1 and type(args[0]) is int:
+                    sign = 1 << (op.args[0].width * 8 - 1)
+                    result = (args[0] ^ sign) - sign
                 elif (
                     op.kind is mir.Kind.ADD
                     and len(args) == 2
@@ -208,7 +228,7 @@ def _walk(body: mir.MirBody, allocation: mir.Op, extent: int, limit: int) -> set
                             comparisons[value] = (*args, width)
                 for index, output in enumerate(op.results):
                     if isinstance(output, mir.Held):
-                        if output.width != 2:
+                        if output.width not in (1, 2, 4):
                             raise ValueError
                         values[output.value] = consts.masked(result, output.width) if type(result) is int else result
                         if index and op.kind is mir.Kind.MUL:
@@ -217,7 +237,8 @@ def _walk(body: mir.MirBody, allocation: mir.Op, extent: int, limit: int) -> set
                         segments[output.what.register] = result
                 for ref in op.stores:
                     target = address(ref)
-                    if ref.width != 2 or isinstance(target, Addr) and target.index != descriptor.index:
+                    if ref.width not in (1, 2, 4) or (isinstance(target, Addr)
+                        and target.space is Space.SEGMENT and target.index != descriptor.index):
                         raise ValueError
                     if (
                         isinstance(target, Addr)
@@ -230,7 +251,7 @@ def _walk(body: mir.MirBody, allocation: mir.Op, extent: int, limit: int) -> set
                         location, width = key
                         if isinstance(target, Addr) and isinstance(location, Addr):
                             overlaps = (
-                                location.index == target.index
+                                location.space is target.space and location.index == target.index
                                 and location.disp < target.disp + ref.width
                                 and target.disp < location.disp + width
                             )

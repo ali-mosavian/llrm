@@ -430,6 +430,7 @@ def arith_imm(name: str, dest: Register_, value: int, at: int = 0, relocated: bo
     if width is None:
         return None
     shapes: list[tuple[str, int]] = []
+    value = _immediate(value, width)
     if fits_in_a_byte(value) and not relocated:
         shapes.append((f"{name.upper()}_RM{width * 8}_IMM8", 8))
     if dest is ACCUMULATOR.get(width):
@@ -1293,6 +1294,7 @@ def arith_into_imm(name: str, cell: ir.Mem, value: int, at: int = 0, relocated: 
     built = operand_of(cell)
     if name not in TWO_OPERAND or built is None or cell.width not in (2, 4):
         return None
+    value = _immediate(value, cell.width)
     for bits in (8, cell.width * 8) if fits_in_a_byte(value) and not relocated else (cell.width * 8,):
         code = _code(f"{name.upper()}_RM{cell.width * 8}_IMM{bits}")
         if code is None:

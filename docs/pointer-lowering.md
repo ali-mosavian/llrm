@@ -95,5 +95,23 @@ high-half uses; this prevents an unused offset from surviving in a loop phi.
 The production non-debug HARR case already has induction variables: the
 inner loop stores the current sum, accumulates it, increments that sum and
 advances the pointer by 42 bytes. The huge-loop path still needs comparable
-descriptor reuse and address induction; helper removal alone is not that
-performance result.
+address induction; helper removal alone is not that performance result.
+
+HUGELP now proves its finite loop accesses stay within the allocation before
+claiming that element stores cannot overwrite descriptor memory. Unknown
+branches, out-of-range accesses, descriptor writes and proof-budget exhaustion
+discard the proof. An unknown call ends it; only references that no future
+path can revisit retain the established result. This is an exact bounded
+proof, not general symbolic range analysis or a runtime bounds check.
+
+Before, both loop accesses loaded descriptor metadata and the base pointer.
+After, dimension metadata folds to constants and the whole base pointer is
+loaded once before the loop; no descriptor loads remain inside it. The
+32-bit address calculations and PTR_OFFSET operations still remain per access.
+Original/native HUGELP outputs remain `456 457 789 790`, then `DONE`, on
+QB, PDS and VBDOS. Tests also preserve the existing HARR dimension proof.
+
+Folding exposed an encoding refusal: `sub reg, 0xfffffffe` was rejected
+instead of encoded as subtraction of -2. Immediate selection now normalizes
+the value to its operand width for both register and memory arithmetic.
+Regression cases compare the emitted bytes of signed and unsigned spellings.
