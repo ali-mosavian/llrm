@@ -43,6 +43,20 @@ def test_flags_reference_preserves_states_at_each_output_call():
     assert "FLAGS" not in opportunity.PROVISIONAL_TARGETS
 
 
+@pytest.mark.parametrize("tag,stores", [("p-g2", 9), ("q-O", 7), ("v-g3", 9)])
+def test_fpcse_complete_reference_uses_object_compiler_identity(tag, stores, tmp_path, monkeypatch, capsys):
+    """The old 98-unit FPCSE target omitted entry synchronization and observable numeric stores."""
+    from collections import Counter
+    path = tmp_path / "renamed.obj"
+    path.write_bytes(Path(f"fixtures/omf/fpcse-{tag}.obj").read_bytes())
+    target = stores * (2 + opportunity.TOUCH) + opportunity.FLOAT["wait"] + 3 * (6 + opportunity.CALL) + opportunity.CALL
+    monkeypatch.setattr(opportunity, "counted", lambda *args: Counter(cost=target))
+    assert opportunity.against_targets([path]) == 0
+    report = capsys.readouterr().out
+    assert "PROVISIONAL" not in report
+    assert "1.00x" in report
+
+
 def test_nbody_cost_includes_main_when_optimized_code_cannot_be_raised(tmp_path):
     """NBODY scored only PITSNAP's 6386 units, omitting its entire optimized simulation."""
     from collections import Counter
@@ -330,7 +344,7 @@ def test_missing_target_cannot_verify_completion(monkeypatch, capsys):
 
 @pytest.mark.parametrize("program", ["fpcsex", "fpcse", "fpdeep"])
 def test_provisional_target_cannot_verify_completion(program, monkeypatch, capsys):
-    """Numerical FP references omitted observable checkpoints/stores yet could certify completion."""
+    """Unverified floating references or unknown compiler identities cannot certify completion."""
     from collections import Counter
     monkeypatch.setattr(opportunity, "counted", lambda *args: Counter(cost=1))
     assert opportunity.against_targets([Path(f"{program}-p-g2.obj")]) != 0
@@ -350,9 +364,10 @@ def test_fpcse_target_preserves_each_single_rounding_without_reassociation():
             assert value.denominator & (value.denominator - 1) == 0
             assert abs(value.numerator).bit_length() <= 24
     assert total == Fraction(975, 2)
-    assert opportunity.TARGETS["FPCSE"] == 3 * (6 + 20) + 20 == 98
-    # Numeric exactness does not prove that synchronization and stores are unobservable.
-    assert "FPCSE" in opportunity.PROVISIONAL_TARGETS
+    # PDS/VBDOS preserve five stores before the pending-exception checkpoint,
+    # then four final stores. The output-only 98-unit subtotal is not a target.
+    assert opportunity.TARGETS["FPCSE"] == 9 * (2 + opportunity.TOUCH) + 5 + 3 * (6 + 20) + 20 == 157
+    assert "FPCSE" not in opportunity.PROVISIONAL_TARGETS
 
 
 def test_hotlpx_target_accounts_for_the_complete_runtime_input_reference():

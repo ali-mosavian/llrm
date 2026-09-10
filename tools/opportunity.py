@@ -552,7 +552,7 @@ TARGETS = {
     "SEGLD": 6704,
     "HARR": 1834,
     "HG": 304,
-    "FPCSE": 98,  # Exact constant-output reference, preserving every SINGLE rounding.
+    "FPCSE": 157,  # PDS/VBDOS: nine stores, entry checkpoint and complete output.
     "FX": 1038,
     "HOTLPX": 217,  # Complete runtime-input reference in docs/targets.md.
     # Runtime-input references are derived independently in docs/targets.md.
@@ -569,7 +569,6 @@ TARGETS = {
 
 PROVISIONAL_TARGETS = {
     "FPCSEX": "reference reassociates the sum and omits SINGLE rounding",
-    "FPCSE": "numeric reference omits checkpoints/stores without a whole-program observability proof",
     "FPDEEP": "numeric reference omits checkpoints/stores without a whole-program observability proof",
 }
 
@@ -599,6 +598,12 @@ def against_targets(paths: list[Path], raw: bool = False) -> int:
             print(f"  {path.stem:10s} {cost:7d} {'--':>7s} {'--':>6s}   {left}  NO TARGET")
             continue
         reason = PROVISIONAL_TARGETS.get(program)
+        if program == "FPCSE":
+            family = module.family(omf.parse(path.read_bytes())) if path.is_file() else module.Family.UNKNOWN
+            if family is module.Family.QUICKBASIC:
+                want = 145  # Entry checkpoint precedes initialization: seven final stores.
+            elif family not in (module.Family.PDS, module.Family.VBDOS):
+                reason = "FPCSE requires an identified compiler for its entry-checkpoint reference"
         if found.get("event-enabled configuration"):
             reason = "event-enabled build requires a reference retaining event checks; the plain-program target is not comparable"
         if reason:

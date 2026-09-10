@@ -4409,3 +4409,21 @@ Before stages: `qbopt-fpdeep-unroll-9m59iys4`; after stages:
 `qbopt-fpdeep-lcssa-after-cpfq2fn9`; execution artifacts:
 `qbopt-fpdeep-p-g2-_s_c0hhf` and `qbopt-fpdeep-v-g3-dis9k6o7`, all beneath
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T`.
+
+### Complete FPCSE's observable reference
+
+The 98-unit output-only subtotal is no longer used as a complete FPCSE
+reference. `docs/targets.md` derives the full source states: PDS/VBDOS require
+five initial stores before the first FP checkpoint and four final stores;
+QB checks before initialization and needs seven final stores. Exact dyadic
+arithmetic cannot introduce subsequent FP exceptions, and no call occurs
+inside the loop. All final globals and output calls remain observable.
+The resulting independent costs are 157/145/157. Current emitted costs match
+all three at 1.00x; no generated assembly changes in this instrument update.
+
+Three renamed-object tests failed before implementation and now pass.
+Eleven focused reference/event checks pass; unknown compiler and event-enabled
+builds remain provisional. Compiler selection reads COMENT, not the filename.
+FPCSEX, FPDEEP, missing references and the broader architecture checklist
+remain unfinished. The final DOUBLE copy still needs the previously recorded
+runtime DF/segment proof; its unresolved indirect-call analysis was not rerun.

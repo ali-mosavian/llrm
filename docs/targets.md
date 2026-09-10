@@ -79,22 +79,15 @@ observable three-value states and six output calls, not by scaling current
 output. It makes no claim about hardware execution time. Event-enabled builds
 still require a separate reference and remain provisional.
 
-## FPCSE — exact numerical reference, whole-program equivalence unverified
+## FPCSE — complete reference with entry observation and final stores
 
-**Audit correction, 2026-09-10:** the 98-unit listing below proves the
-numeric/printing destination, not whole-program equivalence. It omits
-pending-exception synchronization and all numeric stores. The current
-strict contract retains those observation points; in particular,
-`tests/test_float_loop_exit.py::test_checkpoint_keeps_initial_memory_and_counter_stores`
-requires a pending exception to see `s=0` and the initial counter. PDS and
-VBDOS emit these before WAIT; QB's WAIT precedes initialization. A numeric
-exactness proof alone does not permit deleting either compiler's WAIT.
-
-No denominator is increased. The scoreboard retains 98 as a provisional
-reference, suppresses its ratio and cannot certify completion from it.
-Closing this requires either an independently derived reference preserving
-these observations, or a verified startup/runtime and whole-program escape
-proof that permits their removal. Neither is established by the listing.
+The old 98-unit output-only reference omitted observable memory and pending
+floating exceptions. It is replaced by a complete, source-derived listing,
+not scaled from optimized output. Compiler identity matters: the raw PDS and
+VBDOS objects initialize a, b, c, s and i before their first floating load;
+QB starts with a floating load before any initialization. The first load's
+pending-exception observation must remain in that position. Existing
+`test_checkpoint_keeps_initial_memory_and_counter_stores` covers this distinction.
 
 For the ordinary, event-free constant-input program, `a=2`, `b=4`, `c=8`:
 each iteration computes `p=48`, `q=3/4`, then `(s+48)+3/4` in that order.
@@ -105,8 +98,36 @@ lowest supported precision, independently of rounding mode. No reassociation,
 overflow, underflow or division-by-zero assumption is needed. This proof does
 not apply to FPCSEX's runtime inputs.
 
-The numerical reference retains the four actual runtime calls (verified in
-QB, PDS and VBDOS object EXTDEF call sites):
+There are no calls or other observers inside the loop. After the first
+checkpoint returns, the exact normal finite arithmetic cannot create another
+floating exception. Consequently later checkpoints are redundant, but the
+first one is not. All final numeric globals remain stored before the first
+PRINT: this does not assume printing cannot observe them. For supported
+event-free, non-resumable-error configurations, intermediate loop stores have
+no observer. No relaxation of rounding, reassociation or runtime-entry DF/DS
+is required. As throughout the optimizer, this is a language/FP-effect contract,
+not preservation of debugger-visible instruction addresses or FPU bookkeeping.
+
+PDS/VBDOS reference (binary32 values written as their exact bits):
+
+```asm
+mov dword [a],040000000h     ; 2
+mov dword [b],040800000h     ; 4
+mov dword [c],041000000h     ; 8
+mov dword [s],0
+mov word  [i],1
+wait                       ; pending exception sees these five stores
+mov dword [p],042400000h     ; 48
+mov dword [q],03F400000h     ; 3/4
+mov dword [s],043F3C000h     ; 487.5
+mov word  [i],11
+```
+
+QB reference starts with `wait`, before any store, then writes only the final
+seven globals: a=2, b=4, c=8, p=48, q=3/4, s=487.5 and i=11. Initial s=0
+and i=1 have no observer between this checkpoint and their final assignments.
+Both references finish with the same four runtime calls (verified in all
+three objects' EXTDEF call sites):
 
 ```asm
 push word descriptorS       ; 6
@@ -118,14 +139,13 @@ call far B$PESD             ; 20
 call far B$CENP             ; 20
 ```
 
-Target: **3*(6+20)+20 = 98**, hand-derived independently of emitted output.
-There are no runtime inputs or remaining arithmetic in this reference.
-The absence of escaping numeric addresses alone is not an observation proof
-for runtime/error handlers; removal of synchronization is still unverified.
-The old 1340 denominator described a reassociated loop and is retired for
-FPCSE; FPCSEX remains provisional until it has its own valid full listing.
-At `4db5c4d`, primary PDS/QB/VBDOS costs are **173/190/167**, hence
-**1.77x/1.94x/1.70x**. These are newly visible gaps, not performance regressions.
+The output subtotal is **3*(6+20)+20 = 98**. Each immediate store costs
+2+4=6 and WAIT costs 5 in the common ranking model. Thus the complete targets
+are **PDS/VBDOS: 9*6+5+98=157; QB: 7*6+5+98=145**. These are modeled costs,
+not hardware timings. The report selects the reference from the object's
+compiler COMENT record, never its filename. Unknown compiler identities and
+event-enabled configurations remain provisional. FPCSEX still needs its own
+reference; this constant-input proof does not apply to it.
 
 ## FPDEEP — exact constant floating expressions
 
