@@ -45,6 +45,32 @@ Table = asm.Table
 selectable = mir.rewritable
 
 
+def _fallthroughs(body: MirBody) -> MirBody:
+    """Make implicit CFG edges explicit when address-order placement breaks them."""
+    ordered = sorted(body.blocks, key=lambda block: block.at)
+    following = {block.at: after.at for block, after in zip(ordered, ordered[1:])}
+    changed = []
+    for block in body.blocks:
+        last = lower.current(block.ops[-1]) if block.ops else None
+        destination = None
+        if len(block.succ) == 1 and (last is None or last.op not in (
+            ir.Operation.JUMP, ir.Operation.BRANCH, ir.Operation.RETURN
+        )):
+            destination, = block.succ
+        elif len(block.succ) == 2 and last is not None and last.op is ir.Operation.BRANCH:
+            if last.target in block.succ:
+                destination = next(at for at in block.succ if at != last.target)
+        if destination is not None and destination != following.get(block.at):
+            anchor = block.ops[-1].at if block.ops else block.at
+            jump = mir.Op(anchor, ir.Operation.JUMP, "jmp", (), (),
+                          kind=mir.Kind.JUMP, target=destination,
+                          made=ir.Semantics(ir.Operation.JUMP, "jmp", target=destination),
+                          covers=(anchor, anchor), symbol=False)
+            block = replace(block, ops=(*block.ops, jump))
+        changed.append(block)
+    return replace(body, blocks=tuple(changed))
+
+
 def _ordered(body: MirBody, *, linear: bool = False) -> list[mir.Op]:
     """Every op, in the order they are emitted.
 
@@ -356,6 +382,8 @@ def rebuild(
     # downstream can be told has already happened. `allocated()` below is
     # the same work, and `wholeseg.py` calls it before this -- which is
     # what let objwrite.py stop being allocated over a second time.
+    if ordered:
+        bodies = [(name, _fallthroughs(body)) for name, body in bodies]
     held = asm._held(assignment)
     bodies = [(name, _grounded(body, held)) for name, body in bodies]
 

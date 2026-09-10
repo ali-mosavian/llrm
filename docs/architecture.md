@@ -757,10 +757,27 @@ one documented target without materially regressing another.
   No emitted assembly or performance change is claimed for the cloning primitive.
   A peeled IVARM emission probe exposed an operandless-branch lowering defect:
   cloned semantic conditions now select conditional jumps without depending on
-  an original instruction snapshot. The next probe reaches emission but fails
-  code-map coverage: a cloned latch physically falls into its own header rather
-  than its new successor. Explicit fallthrough repair is required before enabling
-  these candidates; a successful object write alone is not acceptance evidence.
+  an original instruction snapshot. Ordered backend layout also materializes
+  nonadjacent fallthrough edges. The candidate previously reentered its first
+  peeled iteration and left the residual loop unreachable; now all three
+  compiler outputs map and execute IVARM's expected answer. This is correctness
+  of the candidate, not a profitability result or production enablement.
+
+  PDS candidate latch, before and after fallthrough repair:
+
+  ```asm
+  ; before: accidentally repeats the first peeled iteration
+  add ax,3
+  cmp ax,25h
+  jne firstPeeledBody
+
+  ; after: advances to the next copy, then the residual loop
+  add ax,3
+  jmp secondPeeledHeader
+  ; ... second peeled body ...
+  add ax,3
+  jmp residualHeader
+  ```
 - [ ] Delete provably unobservable loops and retain required final stores,
   synchronization and exceptional behavior.
 

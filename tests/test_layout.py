@@ -31,6 +31,65 @@ from qbopt.frontend.blocks import code_map
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
 
+@pytest.mark.parametrize("conditional", [False, True])
+def test_reordered_block_materializes_its_cfg_fallthrough(conditional):
+    """Peeled IVARM's latch fell into its own header instead of the next iteration."""
+    what = ir.Semantics(ir.Operation.BRANCH, "jne", target=30) if conditional else ir.Semantics(
+        ir.Operation.NOTHING, "nop")
+    op = mir.Op(10, what.op, what.name, (), (), made=what, covers=(10, 11))
+    body = mir.MirBody(10, (
+        mir.MirBlock(10, (), (op,), (30, 40) if conditional else (40,)),
+        mir.MirBlock(20, (), (), ()),
+        mir.MirBlock(30, (), (), ()),
+        mir.MirBlock(40, (), (), ()),
+    ))
+    changed = layout._fallthroughs(body)
+    jump = changed.block(10).ops[-1]
+    assert jump.made == ir.Semantics(ir.Operation.JUMP, "jmp", target=40)
+    assert jump.covers == (10, 10)
+    assert jump.node is None and jump.symbol is False
+    assert layout._fallthroughs(changed) == changed
+
+
+def test_empty_reordered_block_gets_its_own_jump_anchor():
+    body = mir.MirBody(10, (mir.MirBlock(10, (), (), (30,)),
+                            mir.MirBlock(20, (), (), ()), mir.MirBlock(30, (), (), ())))
+    changed = layout._fallthroughs(body)
+    assert layout._anchors(changed)[10] is changed.block(10).ops[0]
+    assert changed.block(10).ops[0].made.target == 30
+
+
+@pytest.mark.parametrize("tag", ["q-O", "p-g2", "v-g3"])
+def test_peeled_ivarm_emission_keeps_every_iteration_reachable(monkeypatch, tag):
+    """PDS's peeled latch reentered itself, leaving emitted bytes 0x57..0x70 unreachable."""
+    from dataclasses import replace
+    from qbopt import wholeseg
+    from qbopt.analysis import loops
+    from qbopt.backend import lower
+    from qbopt.objectfile import module
+    from qbopt.optimize import lcssa, loopclone, transform
+
+    original, lowered = transform.applied, lower.lowered
+
+    def candidate(body, *args, **kwargs):
+        body = lcssa.closed(original(body, *args, **kwargs))
+        loop, = loops.loops(body.blocks, body.entry)
+        changed = loopclone.peeled(body, loop, 2)
+        assert changed is not None
+        return changed
+
+    def ordered(*args, **kwargs):
+        return replace(lowered(*args, **kwargs), ordered=True)
+
+    monkeypatch.setattr(transform, "applied", candidate)
+    monkeypatch.setattr(lower, "lowered", ordered)
+    result = wholeseg.emitted(Path(f"fixtures/regressions/ivarm-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    found = module.of(omf.parse(result.data))
+    mapped = code_map(found)
+    assert not isinstance(mapped, str), mapped
+
+
 def test_pressx_has_no_jump_to_the_following_instruction():
     """PRESSX retained an unconditional jump to its exit immediately after loop elimination."""
     from qbopt import wholeseg
