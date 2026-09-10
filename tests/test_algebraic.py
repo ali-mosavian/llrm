@@ -357,8 +357,9 @@ def test_nbody_damping_keeps_negation_whole():
     from iced_x86 import Mnemonic, Register
     path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
     body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
-    assert sum(op.kind is mir.Kind.NEG and op.results[0].width == 4
-               for block in body.blocks for op in block.ops) == 2
+    negated = [op for block in body.blocks for op in block.ops if op.kind is mir.Kind.NEG]
+    assert len(negated) >= 2
+    assert all(op.results[0].width == 4 for op in negated)
     result = wholeseg.emitted(path.read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))

@@ -18,7 +18,7 @@ def test_inserted_instruction_never_reads_original_interrupt_bytes():
     """VBDOS nbody crashed emission when a synthetic instruction's address exceeded BC's bytes."""
     op = mir.Op(100, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY, covers=(100, 100),
                 made=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.AX, 2),), (ir.Imm(1, 2),)))
-    found = SimpleNamespace(code=b"\x90", absorbed={}, fixup_at={}, calls={}, refs={})
+    found = SimpleNamespace(code=b"\x90", absorbed={}, fixup_at={}, calls={}, refs={}, float_protocols={})
     done = asm.assemble([op], 0, found)
     assert not isinstance(done, str), done
     assert done.code == bytes.fromhex("b80100")
