@@ -532,11 +532,14 @@ one documented target without materially regressing another.
 - [ ] Canonicalize loops with dedicated preheaders, latches and exits
   (`LoopSimplify`).
 - [x] Preserve loop-exit SSA explicitly (`LCSSA`). Single-edge dedicated exits
-  are closed after the optimization fixed point; unsupported exit shapes remain
+  are closed before loop transforms in each fixed-point round; unsupported exit shapes remain
   unchanged until `LoopSimplify` supplies their canonical CFG.
 - [ ] Canonicalize primary counters and derived recurrences
   (`IndVarSimplify`).
-- [ ] Build `MemorySSA`: one def-use graph for loads, stores and call effects.
+- [x] Build `MemorySSA`: one def-use graph for loads, stores and call effects.
+  `analysis/memoryssa.py` provides live-on-entry, memory uses/definitions and
+  join/backedge phis. Calls conservatively define memory. This is an analysis
+  foundation; optimization consumers and precise clobber queries remain below.
 - [ ] Refine alias, object-identity, escape and per-argument mod/ref facts used
   by `MemorySSA`.
 

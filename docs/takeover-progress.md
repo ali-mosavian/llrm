@@ -4134,3 +4134,18 @@ Before and after HARR VBDOS `/G3` assembly are identical: 40 instructions and
 46 focused architecture, phi, induction and stage-dump checks pass. HARR and matrix on PDS, QB
 and VBDOS, plus VBDOS NBODY, are byte-identical with LCSSA on and off. Stage
 evidence: `/tmp/qbopt-lcssa-canonical.zC31cP`.
+
+### MemorySSA foundation
+
+`analysis/memoryssa.py` builds a conservative memory def-use graph directly
+from MIR. Loads use the preceding state; stores, calls and barriers define
+it. Join and loop phis connect states across control flow, including a loop
+backedge to the procedure entry. Identity phis disappear. The graph must be
+rebuilt after MIR changes; alias-aware clobber queries and pass consumers
+are still pending.
+
+Seven focused cases cover straight lines, diamonds, loop backedges, barriers,
+calls without named cells, entry backedges and read-only loops. The missing
+call dependency was observed failing before correction. Assembly before/after:
+unchanged, because this increment adds an analysis with no pipeline consumer
+and makes no transformation or emission change.
