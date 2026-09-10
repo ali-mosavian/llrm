@@ -482,6 +482,15 @@ for _name, _cleanup, _evidence in (
      "inpdsk.asm 0016..0060 reads [bp+6], calls ChkFNUM/LocateFDB/EnsureFI, "
      "sets input state, restores SI/BP and RETF 2 at 005e. Other branches tail "
      "ERR_IFN, ERR_RPE or ERR_BFM; no device or error-path guarantees."),
+    ("B$FDR1", None,
+     "VBDCL10E rt/dkdir.asm 0003 sets search mode, establishes BP, and "
+     "sets DOS DTA (AH=1Ah, DS:DX); TEST at 0014 replaces arithmetic flags "
+     "before search dispatch. RefStringArgLast reads BP+6; GET_PATHNAME, "
+     "DelTempSH, DOS find-first/find-next, GetZStrLen and StrAlcTmpCopy "
+     "perform path, directory and heap work. Shared exit restores DI/SI/BP "
+     "then mode-selects RETF or RETF 2 (007e/007f); cleanup remains unknown "
+     "rather than assuming the shared mode survives every dependency. "
+     "All GP inputs retained; memory, aliases, control and errors unknown."),
     ("B$FREF", 0,
      "dvstmt.asm 0031..0051 walks B$NextFDB, restores SI/BP and RETF. "
      "NextFDB saves AX/BX/CX/DX and calls PpvWalkHeap with two words; "

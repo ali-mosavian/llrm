@@ -5,8 +5,9 @@ import pytest
 from qbopt.abi import runtime
 
 
-def test_qrender_argument_parser_lowers_lowercase_call() -> None:
-    """SYS_PARSE_ARGS refused at 012f (LCAS), so its optimized object could not link."""
+@pytest.mark.parametrize("at,cleanup", [(0x12f, 2), (0x823, None)])
+def test_qrender_argument_parser_lowers_string_calls(at: int, cleanup: int | None) -> None:
+    """SYS_PARSE_ARGS refused at 012f (LCAS), then 0823 (FDR1); no optimized OBJ."""
     from dataclasses import replace
     from pathlib import Path
     import corpus
@@ -22,12 +23,12 @@ def test_qrender_argument_parser_lowers_lowercase_call() -> None:
     rules = runtime.for_module(found, external=external)
     name, body = next((name, body) for name, body in mir.bodies(found, corpus.partitioned(path), rules)
                       if name == "procedure SYS_PARSE_ARGS")
-    block = next(block for block in body.blocks if any(op.at == 0x12f for op in block.ops))
+    block = next(block for block in body.blocks if any(op.at == at for op in block.ops))
     body = replace(body, entry=block.at, blocks=(block,))
     lowered = lower.lowered(name, body, found.calls, found.absorbed, rules)
-    assert any(one.at == 0x12f for one in lowered.insns)
-    contract = rules[0x12f]
-    assert contract.cleanup == 2
+    assert any(one.at == at for one in lowered.insns)
+    contract = rules[at]
+    assert contract.cleanup == cleanup
     assert contract.reads is runtime.Memory.ANY and contract.writes is runtime.Memory.ANY
     assert contract.clobbers == runtime.EVERY and contract.raises_error
 

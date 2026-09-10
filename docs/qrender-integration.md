@@ -8,6 +8,28 @@ commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
 ### Next module: SYS argument parsing
 
+FDR1 at 0823 is now bounded too. VBDCL10E `dkdir.asm` sets the DOS DTA,
+tests search mode, then calls RefStringArgLast, GET_PATHNAME, DelTempSH,
+DOS find-first/find-next, GetZStrLen and StrAlcTmpCopy. The shared exit
+restores DI/SI/BP and selects RETF versus RETF 2 using saved mode. Cleanup
+remains unknown; neither helper side effects nor fixed mode across every
+dependency are assumed. Register inputs are conservatively all six GP
+registers. The real parser-block regression failed at 0823 before this
+interface and passes now; both LCAS and FDR1 checks pass.
+
+Full native emission in `/tmp/qbopt-sys-fdr1-native` now reaches allocation:
+`Unplaced: value#1591 cannot be spilled and no register is free for it`.
+That is the next blocker. Atomic refusal still preserves SYS exactly:
+
+```asm
+; before                         ; after (atomic refusal)
+0822 push ax                     ; push ax
+0823 call far B$FDR1              ; call far B$FDR1
+```
+
+No new scene was run; the accepted eight-module FPS/screenshot below remain
+the latest runtime evidence, not evidence for optimized SYS.
+
 `sys.obj` initially refused HOST_SHUTDOWN at 00c2. Explicit project-interface
 audit (`/tmp/qbopt-sys-audit.py`) established normal-return cleanup from the
 original callees: HOST_SHUTDOWN 0 (MAIN 1801; normally terminates via CEND),
