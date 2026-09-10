@@ -10,6 +10,49 @@ from qbopt.optimize import algebraic
 from qbopt.optimize import transform
 
 
+def test_nbody_counter_comparison_joins_whole_values_before_the_loop():
+    """NBODY rebuilt its long counter from two word phis for every loop comparison."""
+    path = Path("fixtures/bench/nbody-v-g3.obj")
+    body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
+    done = algebraic.simplified(body, set(), set())
+    assert not any(op.at == 0x2fe and op.kind is mir.Kind.CONCAT
+                   for block in done.blocks for op in block.ops)
+    assert any(op.at == 0x2fe and op.kind is mir.Kind.COPY
+               and isinstance(op.args[0], mir.Held) and op.args[0].width == 4
+               for block in done.blocks for op in block.ops)
+    from qbopt.analysis import ssa
+    existing = {value.variable for value in ssa.values(body)}
+    added = [phi for block in done.blocks for phi in block.phis if phi.result.variable not in existing]
+    assert added
+    assert all(phi.result.variable == value.variable for phi in added for value in phi.incoming.values())
+    resolved = mir.resolved(done)
+    assert isinstance(resolved, mir.MirBody), resolved
+
+
+@pytest.mark.parametrize("mismatch", ["edge", "half", "unknown"])
+def test_whole_counter_phi_requires_every_matching_edge(mismatch):
+    """NBODY's comparison must not combine unrelated words or guess a missing incoming value."""
+    from qbopt.optimize import wholephis
+    path = Path("fixtures/bench/nbody-v-g3.obj")
+    body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
+    header = next(block for block in body.blocks if block.at == 0x2f0)
+    low = next(phi for phi in header.phis if phi.result.variable == 1)
+    high = next(phi for phi in header.phis if phi.result.variable == 3)
+    incoming = dict(high.incoming)
+    match mismatch:
+        case "edge":
+            incoming.pop(0x2e3)
+        case "half":
+            incoming[0x2e3] = low.incoming[0x2e3]
+        case "unknown":
+            incoming[0xc7] = mir.Value(999999, 0xc7, variable=999999)
+    header = replace(header, phis=tuple(replace(phi, incoming=incoming) if phi is high else phi
+                                       for phi in header.phis))
+    body = replace(body, blocks=tuple(header if block.at == header.at else block for block in body.blocks))
+    done = wholephis.joined(body)
+    assert any(op.at == 0x2fe and op.kind is mir.Kind.CONCAT for block in done.blocks for op in block.ops)
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_sixty_dimensional_zero_offset_needs_no_pointer_arithmetic(tag):
     """NDMAX printed 11,22 correctly but normalized a pointer advanced by zero bytes."""

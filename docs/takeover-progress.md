@@ -3810,3 +3810,30 @@ Every-pass dumps and linked results:
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-sign-fill-verified-m2uzbzwp`.
 The remaining optimization is still combining the paired loop phis into one
 whole value; normalizing the seed alone does not accomplish it.
+
+### Whole-value comparison phi, with word consumers retained
+
+`wholephis.joined`, called by algebraic, now distributes a CONCAT over two
+corresponding word phis when every incoming edge proves either exact extracts
+of one whole value or two known word constants. Width-preserving copies are
+followed. New predecessor copies share a fresh abstract variable, and the
+comparison consumes its whole-value phi. No register, encoding or runtime
+idiom is consulted. Missing edges, unrelated halves and unknown seeds refuse
+the rewrite. The real NBODY regression failed first; focused checks also
+verify fresh-variable identity and SSA resolution.
+
+Before the header comparison: `concat highPhi, lowPhi`.
+After: `wholePhi = phi(entry: 1, backedge: nextWhole)`, consumed directly.
+The old word phis remain for their independent stores. This is not yet an
+overall code-size win: VBDOS NBODY 4223 -> 4225 bytes, PDS 2900 -> 2913.
+Both match all original results under the normal core; QB CMPORD remains
+3873 bytes and matches. Dumps and output:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-whole-phi-checkpoint-qpize_ny`.
+
+An extension replacing those old word phis with local EXTRACTs of the whole
+phi was withdrawn: VBDOS emitted 4219 bytes but printed an unprintable runtime
+error at 0825:0377 under the normal core. Its every-pass dumps and executable
+are in `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-whole-phi-single-egodhrtz`.
+That failure is not the earlier dynamic-core timeout. Locate its first wrong
+stage before removing the remaining word consumers; do not claim the loop
+now carries only one value or that the induction optimization is complete.

@@ -6,6 +6,8 @@ from qbopt.model import ir, mir
 
 
 def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) -> mir.MirBody:
+    from qbopt.optimize import wholephis
+    body = wholephis.joined(body)
     body = _divisions(body)
     mentioned = {value for block in body.blocks for op in block.ops for value in op.uses if value not in op.merges} | {
         value for block in body.blocks for phi in block.phis for value in phi.incoming.values()
