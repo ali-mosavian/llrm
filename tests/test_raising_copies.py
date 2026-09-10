@@ -87,6 +87,27 @@ def test_forward_copy_propagates_the_double_literal():
     assert [known[op.args[0].value].n for op in stores] == [0, 0, 0, 0x4028]
 
 
+@pytest.mark.parametrize("conflict", [b"", b"\xfd", b"\x1f", bytes.fromhex("9a00000000")])
+def test_copy_environment_survives_only_agreeing_predecessors(conflict):
+    """FPDEEP's d=12 copy must not become unknown just because setup crosses an edge.
+
+    A backwards incoming path must still prevent folding it to binary64 12.
+    """
+    found, body = _copy()
+    entry = body.blocks[0]
+    setup, copying = entry.ops[:5], entry.ops[5:]
+    left = mir.MirBlock(0x180, (), (), (0x200,))
+    right = mir.MirBlock(0x190, (), (_instruction(conflict),) if conflict else (), (0x200,))
+    join = mir.MirBlock(0x200, (), copying, ())
+    body = replace(body, blocks=(replace(entry, ops=setup, succ=(left.at, right.at)), left, right, join))
+    raised = raising_copies.scalar(body, found)
+    stores = [op for op in raised.blocks[-1].ops if op.kind is mir.Kind.STORE]
+    assert len(stores) == (0 if conflict else 4)
+    reordered = replace(body, blocks=(join, right, left, body.blocks[0]))
+    raised = raising_copies.scalar(reordered, found)
+    assert sum(op.kind is mir.Kind.STORE for op in raised.blocks[0].ops) == len(stores)
+
+
 def test_copy_selects_without_clobbering_arithmetic_flags():
     """MOVSW preserves arithmetic flags even though its pointer offsets change."""
     from qbopt import flow

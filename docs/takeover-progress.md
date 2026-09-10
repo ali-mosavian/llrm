@@ -1,5 +1,30 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: retain explicit copy environment across CFG edges
+
+The copy frontend now propagates proven direction, DS identity and DS/ES
+equality across blocks. A join retains only facts shared by every incoming
+edge; unknown calls and selector writes keep their conservative kills.
+PUSH DS / POP ES recognition still requires local adjacency. No default
+direction flag or runtime preservation contract was invented.
+
+Before: splitting explicit CLD/segment setup from FPDEEP's four MOVSWs
+left all four opaque. After: four ordered MIR LOAD/STORE pairs; conflicting
+direction, changed DS, and unknown-call paths still refuse scalarization.
+The agreeing-edge test failed before the fix. Both block orders are tested.
+Focused copy/literal checks: 50 pass, one pre-existing failure in
+`test_proven_copy_unlocks_strict_floating_cse` (the test extracts a partial
+floating sequence but retains its full original sequence metadata). Restoring
+the old block-entry state reproduces that failure. The separately documented
+QuickBASIC raw loop-proof assertion was excluded from this focused run.
+
+FPDEEP output objects remain byte-identical on PDS, QB and VBDOS: this fixes
+the CFG limitation but does not yet establish the runtime-entry DF/DS facts
+needed by that program. No speedup claimed and no unchanged DOS run repeated.
+Full stage dumps: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-copy-edges-2i3_2qg1`.
+Next: establish narrowly scoped runtime environment facts for the actual
+FPDEEP call path, then scalarize its DOUBLE initializer and measure again.
+
 ## 2026-09-10: reprioritize from current emitted targets
 
 ### Numeric pool facts now survive validated string-runtime effects

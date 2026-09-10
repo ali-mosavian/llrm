@@ -15,6 +15,54 @@ from qbopt.objectfile import omf
 from qbopt.objectfile.module import Addr, Space
 
 
+def _after(op, state, pushed_data):
+    direction, same_segment, data_segment = state
+    node = op.node
+    decoded = getattr(node, "insn", None)
+    if decoded is None:
+        return (None, False, False), False
+    insn = decoded.insn
+    if insn.mnemonic in (Mnemonic.CLD, Mnemonic.STD):
+        direction = 1 if insn.mnemonic == Mnemonic.CLD else -1
+    elif decoded.flow in ir.CLOBBERS or insn.rflags_modified & RflagsBits.DF:
+        direction = None
+    if node.effects.defs is None or Register.DS in node.effects.defs:
+        data_segment = False
+    if insn.mnemonic == Mnemonic.POP and insn.op0_register == Register.ES and pushed_data:
+        same_segment = True
+    elif node.effects.defs is None or Register.DS in node.effects.defs or Register.ES in node.effects.defs:
+        same_segment = False
+    return (direction, same_segment, data_segment), insn.mnemonic == Mnemonic.PUSH and insn.op0_register == Register.DS
+
+
+def _entries(body):
+    unknown = (None, False, False)
+    predecessors = {block.at: [] for block in body.blocks}
+    for block in body.blocks:
+        for successor in block.succ:
+            if successor in predecessors:
+                predecessors[successor].append(block.at)
+    entries = dict.fromkeys(predecessors, unknown)
+    exits = dict(entries)
+    changed = True
+    while changed:
+        changed = False
+        for block in body.blocks:
+            incoming = [exits[at] for at in predecessors[block.at]]
+            if block.at == body.entry:
+                incoming.append((None, False, True))
+            state = tuple(first if all(one[index] == first for one in incoming) else unknown[index]
+                          for index, first in enumerate(incoming[0])) if incoming else unknown
+            entries[block.at] = state
+            pushed_data = False
+            for op in block.ops:
+                state, pushed_data = _after(op, state, pushed_data)
+            if exits[block.at] != state:
+                exits[block.at] = state
+                changed = True
+    return entries
+
+
 def scalar(body: mir.MirBody, found) -> mir.MirBody:
     extents = {index: segment[1] for index, segment in enumerate(omf.segments(found.records)) if segment}
     symbols = {op.results[0].value: op.args[0]
@@ -28,9 +76,10 @@ def scalar(body: mir.MirBody, found) -> mir.MirBody:
     definitions = {value: op for block in body.blocks for op in block.ops for value in op.defines}
     candidates, ancestors = set(), {}
     blocks = []
+    entries = _entries(body)
     for block in body.blocks:
-        direction, same_segment, pushed_data = None, False, False
-        data_segment = block.at == body.entry
+        direction, same_segment, data_segment = entries[block.at]
+        pushed_data = False
         ops = []
         for op in block.ops:
             node = op.node
@@ -74,18 +123,8 @@ def scalar(body: mir.MirBody, found) -> mir.MirBody:
                                           merges={before: after}, covers=(op.at, op.at), id=identity))
                     pushed_data = False
                     continue
-            if insn.mnemonic in (Mnemonic.CLD, Mnemonic.STD):
-                direction = 1 if insn.mnemonic == Mnemonic.CLD else -1
-            elif decoded.flow in ir.CLOBBERS or insn.rflags_modified & RflagsBits.DF:
-                direction = None
-            if node.effects.defs is None or Register.DS in node.effects.defs:
-                data_segment = False
-            if (insn.mnemonic == Mnemonic.POP and insn.op0_register == Register.ES and pushed_data):
-                same_segment = True
-            elif (node.effects.defs is None or Register.DS in node.effects.defs
-                  or Register.ES in node.effects.defs):
-                same_segment = False
-            pushed_data = insn.mnemonic == Mnemonic.PUSH and insn.op0_register == Register.DS
+            state, pushed_data = _after(op, (direction, same_segment, data_segment), pushed_data)
+            direction, same_segment, data_segment = state
             ops.append(op)
         blocks.append(replace(block, ops=tuple(ops)))
     return _observed(replace(body, blocks=tuple(blocks)), candidates)
