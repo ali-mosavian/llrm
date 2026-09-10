@@ -1,171 +1,134 @@
 # qbopt
 
-Recompile BC's output into what a modern optimising compiler would have
-produced -- integers, longs, floats, array addressing, loops -- measured
-against a hand-derived optimal listing rather than against BC.
+`qbopt` rewrites the OMF `.OBJ` that QuickBASIC, PDS, or VBDOS produces before
+it is linked. It raises BC's 8086 code into SSA-based MIR, optimizes whole
+functions, then lowers and allocates it for a 386-or-later target.
 
-See [the source layout](docs/source-layout.md) for package responsibilities
-and [the MIR boundary](docs/split.md) for the architectural rules.
+The goal is output within 1.5× a hand-derived modern-compiler listing for
+every suite program. See [targets](docs/targets.md) for the evidence and
+current gaps.
 
-## Numeric behavior
+## Use
 
-Array checking is independent: `--bounds-checks` retains emitted BASIC array
-checks. Without it, supported static and dynamic non-huge FAR numeric `B$HARY`
-accesses become unchecked MIR address arithmetic. Other huge/string helper forms currently refuse
-unchecked lowering explicitly; their checked calls are not counted as success.
-This flag cannot recreate checks absent from the input. Checked loop preguards
-and huge-array native lowering are still pending; see [bounds checking](docs/bounds-checks.md).
+Python 3.13+ and [uv](https://docs.astral.sh/uv/) are required.
 
-Native arithmetic is the default. Use `uv run python -m qbopt.rewrite
-input.obj -o output.obj --basic-semantics` to retain BASIC's numeric runtime
-behavior. Compatibility mode keeps division/remainder and floating conversion
-helpers, including their error handling, instead of substituting bare machine
-instructions. Existing floating storage rounding, evaluation order, and
-exception checkpoints remain observable. It preserves the behavior of the
-input compiler and switches; it cannot restore checks BC never emitted.
+```sh
+uv sync
+uv run python -m qbopt.rewrite PROGRAM.OBJ -o PROGRAMQ.OBJ --cpu 386
+LINK PROGRAMQ.OBJ
+```
 
-For example, native LONG division uses `cdq; idiv`, whereas compatibility mode
-keeps `call B$DVI4`: division by zero still reaches BASIC's error handler,
-and the runtime still decides what happens for the minimum LONG divided by -1.
-Wrapping LONG multiplication remains eligible for replacement in both modes.
+Useful options:
 
-Explicit `/D` INTEGER overflow traps (`INTO`) likewise remain only with
-`--basic-semantics`. Native mode keeps the arithmetic without that BASIC trap;
-`--bounds-checks` does not enable numeric overflow checking. Trace and break
-polling calls are not removed by either policy.
+```sh
+# Keep BASIC numeric runtime behavior, including its conversion/error paths.
+uv run python -m qbopt.rewrite PROGRAM.OBJ -o PROGRAMQ.OBJ --basic-semantics
 
-Native does **not** mean fast-math: no permission to reassociate floating sums,
-discard signed zeros/NaNs, or ignore storage precision. Nor does it promise
-that every runtime helper has a native replacement yet. `--native-fpu` is a
-separate hardware choice and cannot be combined with `--basic-semantics`,
-which preserves the original emulator protocol. The semantic mode is recorded
-in the output marker and manifest; changing it requires the original OBJ.
+# Retain existing BASIC array checks. Independent of numeric semantics.
+uv run python -m qbopt.rewrite PROGRAM.OBJ -o PROGRAMQ.OBJ --bounds-checks
 
-The same flag is accepted by `tools/bench.py` and `tools/stages.py`.
-Compatibility was checked with LNGMXX and FPDEEP on QB 4.5, PDS 7.1 and
-VBDOS (36 output assertions). Retaining calls exposed a missing backend
-constraint: the dividend helper's high result must arrive in DX, not an
-allocator-selected BX. Lowering now declares live call results' ABI locations;
-the 49 native program/configuration pairs whose bytes changed also pass their
-runtime checks. These checks are not exhaustive coverage of every exceptional
-numeric input; preservation rests on keeping the original runtime operations
-and strict floating semantics, rather than reimplementing their edge cases.
+# Use real x87 instead of BC's emulator interrupt protocol.
+# Requires a coprocessor; incompatible with --basic-semantics.
+uv run python -m qbopt.rewrite PROGRAM.OBJ -o PROGRAMQ.OBJ --native-fpu
 
-The first case of that, and the one furthest along, is making a `LONG` cost
-what an `INTEGER` costs.
+# Inspect a rewrite or dump every pipeline stage.
+uv run python -m qbopt.rewrite PROGRAM.OBJ --report
+uv run python tools/stages.py PROGRAM.OBJ --dump build/stages/PROGRAM
+```
 
-BC compiles every 32-bit operation as two 16-bit ones, because it targets an
-8086. On anything from a 386 up that is exactly twice the work, so longs are
-avoided in the code that would most benefit from them -- and the avoidance,
-not the arithmetic, is the thing worth removing.
+Native arithmetic is the default, but it is not fast-math: floating-point
+reassociation and observable storage rounding are not discarded. Native LONG
+division uses machine/C behavior; `--basic-semantics` retains `B$DVI4` instead.
 
-    long / integer      BC      today    goal
-    bitwise, additive   1.96     1.37     1.0
-    multiply, divide    5.62     3.26     1.0
+## Optimizations
 
-The "today" column is a runtime pass that lives in uGL and rewrites the
-program's own code as it loads. It works, on QB 4.5, PDS 7.1 and VBDOS
-across twelve switch combinations, and it is where every measurement here
-comes from. It has also run out of room, which is why this repository
-exists.
+```text
+OMF -> decode -> raise -> MIR passes -> lower -> register allocation -> peephole -> OMF
+```
 
-## Why a post-compilation pass
+The raise recognizes BC-specific LONG pairs, runtime arithmetic calls, and
+supported numeric array descriptors. MIR passes are machine-independent;
+only lowering, allocation, and peephole work with registers or instructions.
+See [the MIR boundary](docs/split.md).
 
-The runtime pass rewrites code in place, and cannot move it. That single
-constraint bounds everything:
+Current work includes:
 
-  * A region's widened form must fit in the bytes the original occupied.
-    Anything larger is refused, however much better it would be.
-  * Bytes a region saves become slack inside that region, jumped over. They
-    cannot be lent to a neighbour, so running the pass twice buys nothing --
-    measured: the second pass takes 0 regions and leaves *more* basic blocks
-    than it found, because the jump over the slack is itself a terminator.
-  * It costs about 16K of the program it is speeding up, competing with the
-    46K BC has to compile in.
-  * A call site has to be recognised by comparing a relocated segment and
-    offset, and every test runs through DOSBox.
+- LONG widening; constant folding/propagation; branch and dead-code removal;
+- CSE, load/store forwarding, promotion, and proven runtime-call memory facts;
+- LICM, induction variables, affine address recurrences, and strength reduction;
+- native static, dynamic FAR, and HUGE numeric array addressing, 1–60 dimensions;
+- spill folding, constant rematerialization, reload removal, and post-allocation cleanup.
 
-Working on the `.OBJ` between BC and LINK removes all of it. A call site
-comes from a FIXUPP naming an EXTDEF, so "is this `B$CPI4`" is a lookup.
-Relocations are records to edit rather than a hazard to avoid. Nothing
-ships. Tests run on the host in milliseconds.
+Unsupported array layouts refuse unchecked lowering. Checked loop preguards
+and broader strict-FP optimization are still unfinished.
 
-And code may be moved -- which had to be established rather than assumed,
-because an intra-segment offset baked in without a relocation would be
-invisible to a rewriter and would break silently. It is not: `ON k GOTO L1,
-L2, L3` emits its three labels as three consecutive `offset16` fixups into
-the module's own code segment. `tests/test_omf.py` asserts it.
+## HARR: before and after
 
-## What it does
+`suite/harr.bas` stores and immediately rereads a two-dimensional INTEGER
+array element. The helper is `B$HARY`; `harr` is the benchmark name.
 
-Measured over 110 objects of real BC output, across three compilers and twelve
-switch combinations:
+Before, BC performs the address calculation twice per inner iteration:
 
-    1237 of 1332 regions taken, 24009 bytes -> 15321
+```asm
+push column
+push row
+push 2
+push descriptor
+call B$HARY                 ; returns ES:BX
+mov  [es:bx],value
 
-Two kinds of rewrite. A **region** of long arithmetic becomes 386 code: one
-32-bit operation where BC did two 16-bit ones, with the high half put back
-through the stack in four bytes. A **runtime call** is absorbed: a long
-comparison is fifteen or twenty-one bytes and eleven instructions behind a far
-call, and becomes `mov eax,[a]` / `cmp eax,[b]` in nine. Multiply likewise.
+push column
+push row
+push 2
+push descriptor
+call B$HARY                 ; recomputes the same address
+mov  ax,[es:bx]
+add  [total],ax
+```
 
-Divide and remainder are absorbed as C compiles them, `mov eax,[a]` /
-`mov ecx,[b]` / `cdq` / `idiv ecx`, with no test of the divisor because C makes
-none. That is the one deliberate behaviour change: `x \ 0` and
-`-2147483648 \ -1` fault, where BC's runtime raised error 11 for the first and
-returned silently from the second. `B$MUI4` wraps on overflow, which is what
-`imul` does, so multiply needed no such choice.
+Its effective offset is:
 
-Everything is checked by building, linking and running the program: twelve
-configurations, seven suite programs, compared line by line against a golden
-authored from what the program means rather than captured from a compiler.
+```text
+((column - lowerColumn) * rowCount + row - lowerRow) * elementSize + base
+```
 
-## What is here
+After CSE, LICM, forwarding and induction lowering, descriptor setup is
+outside both loops:
 
-    qbopt/objectfile/omf.py       read and write OMF; round trips byte-exact
-    qbopt/objectfile/module.py    a module as the analysis sees it, addresses and all
-    qbopt/frontend/declen.py    instructions, via iced-x86
-    qbopt/frontend/blocks.py    which bytes are code, found by reachability
-    qbopt/analysis/flags.py     which flags are live
-    qbopt/legacy/lift.py      decoded code as 32-bit values, and back to bytes
-    qbopt/legacy/calls.py     the runtime calls, and what replaces them
-    qbopt/objectfile/relocate.py  what has to change when code moves
-    qbopt/rewrite.py   the driver: an .OBJ in, an .OBJ out
-    qbopt/price.py     cycle costs per part, 486 through Core
-    fixtures/omf/      real BC output, with a manifest saying what made it
-    suite/             the programs the differential runs
-    tools/             the DOSBox harness, the corpus generator, the mutations
+```asm
+mov  bx,[descriptor]
+mov  es,[bx+2]              ; selector loaded once
+mov  dx,44
+add  dx,[bx+10]
+mov  bx,dx                  ; outer pointer
+```
 
-Start with `docs/testing.md`.
+The hot inner loop has no helper, multiply, descriptor load, selector reload,
+or array reread:
 
-## What BC actually emits
+```asm
+inner:
+mov  [es:di],si             ; matrix(row,column) = row + column
+add  cx,si                  ; reuse the just-stored value
+add  si,1                   ; column/value induction
+add  di,42                  ; 21 INTEGERs * 2 bytes
+cmp  si,dx
+jne  inner
+```
 
-Established by measurement, not from the manuals, and it is what any of this
-has to handle. See `docs/inherited-plan.md` for the full matrix.
+The outer latch uses `add bx,2`. `di` and `bx` are the inner and outer address
+recurrences; `si` is the `row + column` recurrence.
 
-  * A long lives in a register pair, `ax:dx` or `cx:bx`, and every operation
-    is done twice.
-  * `*`, `\`, `MOD` and every comparison are calls into the runtime.
-    Comparison pushes its left operand first; multiply and divide push it
-    second. Uniform across all four configurations, opposite between the two
-    routines -- and getting it backwards is silently a different answer.
-  * `/G3` (VBDOS only) pushes a long argument as one dword; everything else
-    pushes two words, high first.
-  * A constant is split across the halves, each encoded as short as it fits:
-    `sub ax,1234h` then `sbb dx,10h`.
-  * The flags left behind are the *high half's*. One 32-bit operation leaves
-    the whole result's: ZF differs on 18.7 per cent of cases, PF on 37.2, AF
-    on 12.4. CF, SF, OF and the values never differ.
+## Validate
 
-## Running
+```sh
+uv run pytest -m "not e2e"
+uv run pytest tests/test_array_access.py
+uv run python tools/e2e.py p-g2 --prog harr
+uv run python -m qbopt.price PROGRAM.OBJ
+```
 
-    uv run pytest                                  everything, DOSBox included
-    uv run pytest -m "not e2e"                     host only, seconds
-    uv run python tools/census.py                  what the pass makes of the corpus
-    uv run python -m qbopt.rewrite F.OBJ -o G.OBJ  the pass itself
-
-`docs/testing.md` has the tiers and what each needs.
-
-[Runtime contract inspection](docs/contracts.md) follows functions through OMF
-`.lib`/`.obj` dependencies and reports proven preservation, possible clobbers,
-stack cleanup, and unresolved calls.
+For every failure, dump every stage and diff the first changed pair. Every fix
+needs a regression that fails before the fix. Testing details are in
+[docs/testing.md](docs/testing.md); current measured progress is in
+[docs/takeover-progress.md](docs/takeover-progress.md).
