@@ -15,6 +15,51 @@ from qbopt.objectfile.module import Space
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_huge_loop_byte_offsets_are_induction_variables(tag):
+    """HUGELP recomputed 32-bit array strides after every narrow index extension."""
+    from qbopt import wholeseg
+    states = []
+    def watch(stage, name, state):
+        if stage == "mir-widen":
+            states.append(state)
+    result = wholeseg.emitted(Path(f"fixtures/regressions/hugelp-{tag}.obj").read_bytes(), watch=watch)
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    body = states[0]
+    loop = loops.loops(body.blocks, body.entry)[0]
+    carried = {phi.result for block in body.blocks for phi in block.phis}
+    offsets = [op.args[1] for block in body.blocks if block.at in loop.body
+               for op in block.ops if op.kind is mir.Kind.PTR_OFFSET]
+    assert len(offsets) == 2
+    assert all(isinstance(arg, mir.Held) and arg.value in carried for arg in offsets)
+
+
+@pytest.mark.parametrize("offset, accepted", [(4, True), (-2, True), (32767, False), (-32769, False)])
+def test_sign_extended_recurrence_requires_no_narrow_wrap(offset, accepted, monkeypatch):
+    """A 16-bit index crossing 32767 must not become a steadily increasing 32-bit stride."""
+    from qbopt import wholeseg
+    from qbopt.analysis import consts
+    monkeypatch.setattr(strength, "reduced", lambda body, *args: body)
+    states = []
+    def watch(stage, name, state):
+        if stage == "mir-widen":
+            states.append(state)
+    wholeseg.emitted(Path("fixtures/regressions/hugelp-p-g2.obj").read_bytes(), watch=watch)
+    built = states[0]
+    loop = loops.loops(built.blocks, built.entry)[0]
+    counters = induction.basics(built, loop)
+    counter = next(iter(counters.values()))
+    facts = consts.known(built)
+    assert induction._last_counter(built, loop, counter, facts, 2) == 1
+    source, result = mir.Value(9000, 0), mir.Value(9001, 0)
+    extension = mir.Op(0, ir.Operation.EXTEND, "", (result,), (source,), kind=mir.Kind.SIGN_EXTEND,
+                       args=(mir.Held(source, 2),), results=(mir.Held(result, 4),))
+    form = (counter, 1, ((mir.Const(offset, 2), 1),))
+    # -32769 has the valid 16-bit spelling 32767 and crosses the upper bound too.
+    got = induction._extended(built, loop, extension, {source.id: form}, facts)
+    assert (got is not None) == accepted
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_matrix_reduced_stride_keeps_its_multiplier_address(tag):
     """MATRIX printed T=190 instead of T=380 after its stride read DS:0 instead of w."""
     from qbopt import wholeseg

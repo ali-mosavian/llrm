@@ -202,7 +202,7 @@ def _starts(into: mir.Value, one: induction.Derived, preheader: int) -> list[Op]
                     mir.Kind.MUL,
                     "imul",
                     product,
-                    (offset, mir.Const(coefficient & 0xFFFF, width)),
+                    (offset, mir.Const(coefficient & ((1 << (width * 8)) - 1), width)),
                     preheader,
                     one.op,
                 )

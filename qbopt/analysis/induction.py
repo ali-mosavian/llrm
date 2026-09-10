@@ -233,7 +233,7 @@ def derived(
                 continue
             out.append(Derived(op, found[counter[0].value.id], _multiplier(op, by)))
     combined = {id(one.op): one for one in out}
-    combined.update({id(one.op): one for one in _composed(body, inside, found, made, settled)})
+    combined.update({id(one.op): one for one in _composed(body, loop, found, made, settled)})
     combined.update({id(one.op): one for one in _quotients(body, loop, found)})
     return list(combined.values())
 
@@ -337,14 +337,15 @@ def nonempty(body: mir.MirBody, loop) -> bool:
 
 
 def _composed(
-    body: mir.MirBody, inside: set[int], found: dict[int, Affine], made: dict[int, mir.Op], settled
+    body: mir.MirBody, loop, found: dict[int, Affine], made: dict[int, mir.Op], settled
 ) -> list[Derived]:
+    inside = set(loop.body)
     known = consts.known(body)
     still = invariant(body, inside)
     forms = {
         value: (one, 1, ())
         for value, one in found.items()
-        if isinstance(one.start, (mir.Held, mir.Const)) and one.start.width == 2
+        if isinstance(one.start, (mir.Held, mir.Const)) and one.start.width in (2, 4)
     }
     out: dict[int, Derived] = {}
     changed = True
@@ -354,27 +355,36 @@ def _composed(
             if block.at not in inside:
                 continue
             for op in block.ops:
+                if (block.at != loop.header and op.kind is mir.Kind.SIGN_EXTEND
+                    and op.results and isinstance(op.results[0], mir.Held) and op.results[0].value.id not in forms):
+                    extended = _extended(body, loop, op, forms, known)
+                    if extended is not None:
+                        forms[op.results[0].value.id] = extended
+                        changed = True
                 if op.stores or op.barrier or len(op.args) != 2 or not op.results:
                     continue
                 if set(op.loads) != {arg.ref for arg in op.args if isinstance(arg, mir.Cell)}:
                     continue
                 result = op.results[0]
-                if not isinstance(result, mir.Held) or result.width != 2 or result.value.id in forms:
+                if not isinstance(result, mir.Held) or result.width not in (2, 4) or result.value.id in forms:
                     continue
+                width = result.width
                 args = tuple(_copied(arg, made) if isinstance(arg, mir.Held) else arg for arg in op.args)
                 args = tuple(
-                    mir.Const(fact.n & 0xFFFF, 2)
+                    mir.Const(consts.masked(fact.n, width), width)
                     if isinstance(arg, mir.Held)
-                    and arg.width == 2
+                    and arg.width == width
                     and arg.value.id not in forms
                     and (fact := known.get(arg.value)) is not None
-                    and fact.width >= 2
+                    and fact.width >= width
                     else arg
                     for arg in args
                 )
                 left, right = args
-                first = forms.get(left.value.id) if isinstance(left, mir.Held) and left.width == 2 else None
-                second = forms.get(right.value.id) if isinstance(right, mir.Held) and right.width == 2 else None
+                first = forms.get(left.value.id) if isinstance(left, mir.Held) and left.width == width else None
+                second = forms.get(right.value.id) if isinstance(right, mir.Held) and right.width == width else None
+                if any(form is not None and form[0].start.width != width for form in (first, second)):
+                    continue
                 if op.kind in (mir.Kind.ADD, mir.Kind.SUB) and first is not None and second is not None:
                     if first[0] != second[0]:
                         continue
@@ -382,7 +392,8 @@ def _composed(
                     scale = first[1] + second[1] if op.kind is mir.Kind.ADD else first[1] - second[1]
                     sign = 1 if op.kind is mir.Kind.ADD else -1
                     offsets = first[2] + tuple((arg, coefficient * sign) for arg, coefficient in second[2])
-                elif op.kind is mir.Kind.ADD and (first is not None or second is not None):
+                elif (op.kind is mir.Kind.ADD and (first is not None or second is not None)
+                      or op.kind is mir.Kind.SUB and first is not None and second is None):
                     recurrence, offset = (first, right) if first is not None else (second, left)
                     if isinstance(offset, mir.Cell):
                         ref = offset.ref
@@ -390,39 +401,67 @@ def _composed(
                             ref.addr is None
                             or ref.base is not None and ref.base.id not in still
                             or ref.segment is not None
-                            or ref.width != 2
+                            or ref.width != width
                             or not settled(ref)
                         ):
                             continue
                     elif not (
                         isinstance(offset, (mir.Const, mir.Held))
-                        and offset.width == 2
+                        and offset.width == width
                         and (isinstance(offset, mir.Const) or offset.value.id in still)
                     ):
                         continue
                     base, scale, offsets = recurrence
-                    offsets = (*offsets, (offset, 1))
+                    offsets = (*offsets, (offset, -1 if op.kind is mir.Kind.SUB else 1))
                 elif op.kind is mir.Kind.MUL:
-                    if first is not None and isinstance(right, mir.Const) and right.width == 2:
+                    if first is not None and isinstance(right, mir.Const) and right.width == width:
                         base, scale = first[0], first[1] * right.n
                         offsets = tuple((arg, coefficient * right.n) for arg, coefficient in first[2])
-                    elif second is not None and isinstance(left, mir.Const) and left.width == 2:
+                    elif second is not None and isinstance(left, mir.Const) and left.width == width:
                         base, scale = second[0], second[1] * left.n
                         offsets = tuple((arg, coefficient * left.n) for arg, coefficient in second[2])
                     else:
                         continue
                 elif (
-                    op.kind is mir.Kind.SHL and first is not None and isinstance(right, mir.Const) and 0 <= right.n < 16
+                    op.kind is mir.Kind.SHL and first is not None and isinstance(right, mir.Const) and 0 <= right.n < width * 8
                 ):
                     base, scale = first[0], first[1] << right.n
                     offsets = tuple((arg, coefficient << right.n) for arg, coefficient in first[2])
                 else:
                     continue
-                scale &= 0xFFFF
+                scale = consts.masked(scale, width)
                 forms[result.value.id] = base, scale, offsets
-                out[id(op)] = Derived(op, base, mir.Const(scale, 2), offsets)
+                out[id(op)] = Derived(op, base, mir.Const(scale, width), offsets)
                 changed = True
     return list(out.values())
+
+
+def _extended(body, loop, op, forms, facts):
+    """Sign extension preserves a recurrence only across a proven non-wrapping range."""
+    if len(op.args) != 1 or len(op.results) != 1 or op.loads or op.stores or op.barrier or op.merges:
+        return None
+    source, result = op.args[0], op.results[0]
+    if not isinstance(source, mir.Held) or not isinstance(result, mir.Held) or source.width >= result.width:
+        return None
+    form = forms.get(source.value.id)
+    if form is None:
+        return None
+    counter, scale, offsets = form
+    width = source.width
+    if counter.start.width != width:
+        return None
+    start = _signed(counter.start, facts, width)
+    step = _signed(counter.step, facts, width)
+    last = _last_counter(body, loop, counter, facts, width)
+    constants = tuple((_signed(arg, facts, width), coefficient) for arg, coefficient in offsets)
+    if start is None or step is None or last is None or any(value is None for value, _ in constants):
+        return None
+    offset = sum(value * coefficient for value, coefficient in constants)
+    sign = 1 << (width * 8 - 1)
+    if not all(-sign <= value * scale + offset < sign for value in (start, last)):
+        return None
+    widened = Affine(counter.value, mir.Const(start, result.width), mir.Const(step, result.width), loop.header)
+    return widened, scale, tuple((mir.Const(value, result.width), coefficient) for value, coefficient in constants)
 
 
 def _multiplier(op: "mir.Op", by: "mir.Arg") -> "mir.Arg":

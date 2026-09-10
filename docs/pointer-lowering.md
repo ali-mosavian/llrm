@@ -115,3 +115,24 @@ Folding exposed an encoding refusal: `sub reg, 0xfffffffe` was rejected
 instead of encoded as subtraction of -2. Immediate selection now normalizes
 the value to its operand width for both register and memory arithmetic.
 Regression cases compare the emitted bytes of signed and unsigned spellings.
+
+Byte-offset induction now also works across the narrow index's sign extension.
+Affine composition follows operand widths instead of assuming 16 bits. A
+sign-extended recurrence is admitted only when the canonical loop has a
+proven finite non-wrapping counter range and the entire narrow expression
+stays in its signed range. Extensions in the loop header are excluded because
+that header also executes for the terminating counter. Unknown ranges remain
+unreduced.
+
+For PDS HUGELP, before this reduction the loop recomputed
+`(sign_extend(i + 4) + 32763) * 2` and
+`((sign_extend(i + 2) + 2) * 201 + 163) * 2`.
+After, the byte offsets start at 65534 and 1934 before the loop and advance
+by 2 and 402. The emitted loop contains `add ecx,2` and `add ebx,192h`,
+with no address multiply or sign extension. All three compilers' native
+programs still print `456 457 789 790` and `DONE`.
+
+This is byte-offset induction, not yet whole-pointer induction. The backend
+still converts the base plus each offset into a segmented pointer per access,
+and the generated loop still has spills and selector save/restore sequences.
+Those costs remain visible rather than being counted as a completed target.
