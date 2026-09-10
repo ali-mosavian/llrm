@@ -1,5 +1,41 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: reuse allocation proofs during checked-array recognition
+
+Checked recognition now runs to a fixed point on the same body, with each
+additional round required to remove a HARY call. The existing exact path
+proof establishes that a native store targets array data, not its descriptor;
+feeding that fact into the next round preserves the descriptor constants.
+No new alias assumption is introduced.
+
+NDMAX drops from **3 -> 1 HARY calls**, and the PDS optimized object shrinks
+**1388 -> 1244 bytes**. The final access remains checked because the preceding
+print call invalidates the descriptor facts. All three real-object regressions
+failed first; 18 focused checked cases pass. PDS, QB and VBDOS `/AH` DOS runs
+all print **11, 22, DONE**, with successful compilation and linking.
+
+```asm
+; before: sixty indices and rank pushed for the first PRINT
+call B$HARY
+push word [es:bx]
+call B$PEI2
+
+; after: EAX still holds the allocation's whole pointer
+push es
+push eax
+pop bx
+pop es
+mov ax,[es:bx]
+pop es
+push ax
+call B$PEI2
+```
+
+The second store uses native huge-pointer offset arithmetic (+6 bytes).
+The remaining load should eventually forward the first store's constant;
+that is a separate memory-optimization opportunity, not a completed result.
+All-stage dumps: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-checked-fixedpoint-stages-rx3gy39p`.
+
 ## 2026-09-10: eliminate proven checked dynamic-array accesses
 
 With `--bounds-checks`, raising now replaces HARY only when every captured

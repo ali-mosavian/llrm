@@ -216,6 +216,22 @@ def _checked(shape, symbol, indices, memory):
 
 
 def native(body, found, *, bounds_checks=False):
+    """Expose accesses until newly proven allocation identities unlock no further checks."""
+    def remaining(body):
+        return sum(op.kind is mir.Kind.CALL and found.calls.get(op.at) == "B$HARY"
+                   for block in body.blocks for op in block.ops)
+
+    pending = remaining(body)
+    while pending:
+        body = _native(body, found, bounds_checks=bounds_checks)
+        following = remaining(body)
+        if not bounds_checks or following >= pending:
+            break
+        pending = following
+    return body
+
+
+def _native(body, found, *, bounds_checks):
     local = module.defines(found.records, found.seg)
     calls = {at: name for at, name in found.calls.items() if name not in local}
     if not any(op.kind is mir.Kind.CALL and calls.get(op.at) == "B$HARY"

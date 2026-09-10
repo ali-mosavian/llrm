@@ -61,6 +61,21 @@ def test_checked_proof_requires_each_live_dimension(hazard):
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_checked_access_proofs_reach_fixed_point(tag):
+    """NDMAX retained three HARY checks after its first proven store; two also have constant valid indices."""
+    path = Path(f"fixtures/regressions/ndmax-{tag}.obj")
+    found = corpus.loaded(path)
+    sites = sorted(at for at, name in found.calls.items() if name == "B$HARY")
+    body = mir.bodies(found, corpus.partitioned(path), bounds_checks=True)[0][1]
+    retained = [op.at for block in body.blocks for op in block.ops
+                if op.kind is mir.Kind.CALL and found.calls.get(op.at) == "B$HARY"]
+    assert retained == sites[-1:]
+    emitted = wholeseg.emitted(path.read_bytes(), bounds_checks=True)
+    assert emitted.outcome is wholeseg.Emission.LIR, emitted.reason
+    assert list(module.of(omf.parse(emitted.data)).calls.values()).count("B$HARY") == 1
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 @pytest.mark.parametrize("program", ["ndarr", "ndmax"])
 def test_hary_supports_nine_and_sixty_dimensions(tag, program):
     """NDARR (1,12,2) and NDMAX (11,22) were refused by an invented eight-dimension cap."""
