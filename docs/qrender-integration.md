@@ -134,6 +134,16 @@ The same camera-module probe now reaches `B$OPEN` at 0a4b. Before/after
 assembly remains byte-identical on atomic refusal, including
 `call far B$FREF` at 0a23 and `call far B$LDFS` at 0a3f.
 
+`B$OPEN` and `B$DSKI` now retain unknown effects with audited normal-return
+cleanup 8 and 2 respectively. Their alternate root branches enter named
+error handlers, not different normal-return epilogues. The camera-module
+probe advances to `B$PEOS` at 0aa2. This is a different kind of blocker:
+PEOS relocates the stack for terminal INPUT (`b$FInput=0`), but skips that
+path for disk input. Prove the input mode before assigning a site contract;
+do not interpret its final bare RETF as universally zero cleanup.
+The object remains unchanged: before/after calls at 0a4b and 0a5a are still
+`call far B$OPEN` and `call far B$DSKI` because refusal is atomic.
+
 VBDCL10E.LIB, `rtenexit.asm`, B$ENRA:
 
 ```asm

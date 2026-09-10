@@ -339,6 +339,14 @@ VARIANTS[("B$CHOU", "vbdos")] = replace(
 )
 
 for _name, _cleanup, _evidence in (
+    ("B$OPEN", 8,
+     "dkutil.asm 00c0..00f4 reads four stack words, calls DOS3CHECK and OPENIT, "
+     "and restores BP then RETF 8 at 00f1. Other branches tail ERR_AFE or ERR_IFN; "
+     "device, allocation and error effects are not established."),
+    ("B$DSKI", 2,
+     "inpdsk.asm 0016..0060 reads [bp+6], calls ChkFNUM/LocateFDB/EnsureFI, "
+     "sets input state, restores SI/BP and RETF 2 at 005e. Other branches tail "
+     "ERR_IFN, ERR_RPE or ERR_BFM; no device or error-path guarantees."),
     ("B$FREF", 0,
      "dvstmt.asm 0031..0051 walks B$NextFDB, restores SI/BP and RETF. "
      "NextFDB saves AX/BX/CX/DX and calls PpvWalkHeap with two words; "
