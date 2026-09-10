@@ -308,6 +308,21 @@ def _entry(family: str) -> None:
 for _one in ("pds71", "qb45"):
     _entry(_one)
 
+VARIANTS[("B$ENRA", "vbdos")] = replace(
+    worst("B$ENRA"),
+    inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
+    evidence=(
+        "VBDCL10E.LIB rtenexit.asm 0017..0062: saves the far return address, "
+        "XOR AX,AX at 001f overwrites incoming arithmetic flags, builds the frame "
+        "using CX, then OR BX,BX selects HFirstAllocBlock. Retain all GP inputs "
+        "without claiming allocator preservation, cleanup, termination or error "
+        "behavior. HFirstAllocBlock -> HandleAlloc reaches allocation/compaction "
+        "dependencies whose effects remain unknown. BP/SP, segments and direction "
+        "are runtime environment. Only a separately proven BX=0 site narrows this. "
+        "Library SHA256 59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301."
+    ),
+)
+
 for _name in ("B$SIN4", "B$SIN8", "B$COS4", "B$COS8"):
     VARIANTS[(_name, "vbdos")] = replace(
         worst(_name),

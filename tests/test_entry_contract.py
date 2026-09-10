@@ -51,7 +51,8 @@ def test_emitter_validates_supplied_external_interfaces():
 
 
 @pytest.mark.parametrize("variant", ["nonzero", "relocated", "entry_at_call"])
-def test_unknown_entry_path_keeps_unknown_contract(variant: str) -> None:
+def test_unknown_entry_path_keeps_conservative_contract(variant: str) -> None:
+    """COM_PARSE_CONFIG refused ENRA at 022b; only proven BX=0 narrows its inputs."""
     found = loaded()
     if variant == "nonzero":
         found = replace(found, code=found.code[:0xEE] + b"\x01" + found.code[0xEF:])
@@ -59,7 +60,15 @@ def test_unknown_entry_path_keeps_unknown_contract(variant: str) -> None:
         found = replace(found, fixup_at={**found.fixup_at, 0xEE: next(iter(found.fixup_at.values()))})
     else:
         found = replace(found, publics=found.publics | {0xF0})
-    assert runtime.for_module(found)[0xF0].inputs is None
+    contract = runtime.for_module(found)[0xF0]
+    assert contract.inputs == frozenset(
+        {runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX,
+         runtime.Reg.DX, runtime.Reg.SI, runtime.Reg.DI}
+    )
+    assert contract.cleanup is None
+    assert contract.clobbers == runtime.EVERY
+    assert contract.writes is runtime.Memory.ANY
+    assert contract.control is runtime.Control.UNKNOWN
 
 
 def test_vbdos_exit_keeps_every_possible_general_input() -> None:

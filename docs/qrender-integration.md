@@ -306,6 +306,29 @@ still refuses atomically; the assembly remains identical, for example:
 015b  call far B$SCMP             015b  call far B$SCMP
 ```
 
+### Nonzero-selector entry interface
+
+VBDOS ENRA's nonzero selector no longer requires an unknown register
+interface. Its initial XOR overwrites incoming arithmetic flags before
+frame construction or allocation; retaining all six GP inputs is safe
+without proving allocator preservation. Cleanup, memory, clobber, control
+and error effects remain unknown. The proven BX=0 specialization stays
+narrower. HFirstAllocBlock and HandleAlloc were inspected; this change
+does not claim their allocation/compaction graph is fully understood.
+
+The three fail-first entry cases (nonzero, relocated selector and an entry
+at the call) now check conservative inputs and unknown effects rather than
+requiring an unknown interface. All 15 entry tests pass. Stage dumps in
+`/tmp/qbopt-common-entry-fixed` reach LNIN at 0271. No rewritten object is
+accepted yet:
+
+```asm
+; before                         ; after (atomic refusal, identical bytes)
+022b  call far B$ENRA             022b  call far B$ENRA
+; ...                            ; ...
+0271  call far B$LNIN             0271  call far B$LNIN
+```
+
 ### Two-module runtime check
 
 Relinking with rewritten `view` and `d_turb` succeeded. The isolated build in
