@@ -131,6 +131,18 @@ on the unchanged pre-marker baseline too (QB/PDS/VBDOS). They remain open;
 their original expectations were not weakened. Full-pipeline FPCSE execution
 is checked separately from those pass-local expectations.
 
+The scorer follow-up repairs that partial-overwrite blind spot. Re-measuring
+compiler `98943e1` BOOLS QB still gives cost **128**, but now reports **one
+partial overwrite of unread stored bytes**, previously zero. Access facts carry
+width and address identity; overlapping reads invalidate unread-store evidence,
+and indexed addresses cannot establish a fixed-cell redundancy. Partial writes
+discard the old whole-cell fact conservatively rather than claiming its remaining
+bytes dead. Full-overwrite counts identify prior stores, so one dword overwrite
+can account for two prior word stores.
+
+This is measurement-only: before/after assembly is identical. The full 487-row
+snapshot has not been rerun; its redundancy counts use the older instrument.
+
 ## Missing references
 
 | Source program | Configurations without targets |

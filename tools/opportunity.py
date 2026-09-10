@@ -35,6 +35,7 @@ from qbopt.objectfile import module
 from qbopt import rewrite
 from qbopt.objectfile.module import Space
 from qbopt.analysis import loops as loopy
+from qbopt.analysis import avail
 from qbopt.frontend import blocks as split
 from qbopt.frontend.blocks import code_map
 from qbopt.abi import runtime
@@ -66,7 +67,21 @@ def named(ref) -> bool:
     return ref.addr is not None and ref.addr.space is not Space.STACK
 
 
-def _through(block, module_, entering: dict[str, int], seen: set[str], found: Counter | None):
+def _precise(ref):
+    ref = mir._symbolic_ref(ref)
+    return ref if named(ref) and ref.base is None and ref.segment is None and ref.width > 0 else None
+
+
+def _overlap_known(first, second, dgroup):
+    start = max(first.addr.disp, second.addr.disp)
+    end = min(first.addr.disp + first.width, second.addr.disp + second.width)
+    if start >= end:
+        return False
+    shared = replace(first, addr=first.addr.plus(start - first.addr.disp), width=end - start)
+    return avail._covered_by(shared, second, dgroup)
+
+
+def _through(block, module_, entering: dict, seen: set, found: Counter | None):
     """One block, forward, from what its predecessors agreed on.
 
     Returns what is known on the way out. `found` is None on the rounds that
@@ -81,20 +96,32 @@ def _through(block, module_, entering: dict[str, int], seen: set[str], found: Co
             written.clear()
             read.clear()
             continue
-        for ref in (one for one in op.loads if named(one)):
-            cell = str(ref.addr)
-            if found is not None:
-                if cell in written:
+        for ref in op.loads:
+            if ref.space is Space.STACK or ref.addr is not None and ref.addr.space is Space.STACK:
+                continue
+            cell = _precise(ref)
+            if found is not None and cell is not None:
+                if any(avail._covered_by(cell, one, module_.dgroup) for one in written):
                     found["load of a cell just written"] += 1
-                elif cell in read:
+                elif any(avail._covered_by(cell, one, module_.dgroup) for one in read):
                     found["load of a cell already loaded"] += 1
-            read.add(cell)
-        for ref in (one for one in op.stores if named(one)):
-            cell = str(ref.addr)
-            if found is not None and cell in written:
-                found["store over a store nothing read"] += 1
-            written[cell] = op.at
-            read.discard(cell)
+            written = {one: at for one, at in written.items() if not mir.overlapping(one, ref, module_.dgroup)}
+            if cell is not None:
+                read.add(cell)
+        for ref in op.stores:
+            if ref.space is Space.STACK or ref.addr is not None and ref.addr.space is Space.STACK:
+                continue
+            cell = _precise(ref)
+            if found is not None and cell is not None:
+                for previous in written:
+                    if avail._covered_by(previous, cell, module_.dgroup):
+                        found["store over a store nothing read"] += 1
+                    elif _overlap_known(previous, cell, module_.dgroup):
+                        found["partial overwrite of unread stored bytes"] += 1
+            written = {one: at for one, at in written.items() if not mir.overlapping(one, ref, module_.dgroup)}
+            read = {one for one in read if not mir.overlapping(one, ref, module_.dgroup)}
+            if cell is not None:
+                written[cell] = op.at
     return written, read
 
 
@@ -473,13 +500,13 @@ def counted(paths: list[Path], raw: bool = False) -> Counter:
                 for successor in block.succ:
                     if successor in preds:
                         preds[successor].append(block.at)
-            exits: dict[int, tuple[dict[str, int], set[str]]] = {at: ({}, set()) for at in blocks}
+            exits: dict[int, tuple[dict[mir.MemRef, int], set[mir.MemRef]]] = {at: ({}, set()) for at in blocks}
 
             for _round in range(len(blocks) + 2):
                 changing = False
                 for at in sorted(blocks):
-                    entering: dict[str, int] | None = None
-                    seen: set[str] | None = None
+                    entering: dict[mir.MemRef, int] | None = None
+                    seen: set[mir.MemRef] | None = None
                     for previous in preds[at]:
                         was, had = exits[previous]
                         if entering is None or seen is None:
