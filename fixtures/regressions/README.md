@@ -73,6 +73,31 @@ Costs: QB 705 → 615, PDS 809 → 643, VBDOS 673 → 557. The regression checks
 that no indexed LONG load remains in the loop and fails with indexed promotion
 disabled. UDTRNG runs correctly on all three compilers. Repeated stores remain.
 
+The indexed-store-sinking follow-up removes those repeated stores, after proving
+the address dominates the loop and is invariant. Existing exit-value checks
+retain zero-trip initialization and observable final stores. This exposes the
+closed-form accumulators and deletes the entire seven-iteration loop:
+
+```asm
+; before: seven iterations        ; after: once (PDS)
+add edi,eax                       mov edx,[stepX]
+mov [points+bx],edi               mov edi,[stepY]
+add esi,ecx                       mov ecx,edi
+mov [points+bx+4],esi             shl ecx,3
+inc dx                           sub ecx,edi
+cmp dx,7                         mov edi,edx
+jle loop                         shl edi,3
+                                 sub edi,edx
+                                 mov [points+bx],edi
+                                 mov word [iteration],8
+                                 mov [points+bx+4],ecx
+```
+
+QB 615 → 375, PDS 643 → 377, VBDOS 557 → 339 modeled cost. All three
+executions still print 21, -35, DONE; UDTACC, UDTFIX and LOCALP also pass.
+The no-repeated-stores regression failed first on all three compilers. Changing
+and undefined address values must remain inside the loop.
+
 Promotion clobber regressions in `tests/test_promote.py` use PRESS-derived MIR
 with explicit, unspecified and barrier effects, placed before/between/after a
 store and read. Only an intervening clobber should prevent reuse. Unspecified

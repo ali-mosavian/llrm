@@ -13,6 +13,53 @@ from qbopt.abi import runtime
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_indexed_record_accumulators_store_only_after_loop(tag):
+    """UDTRNG wrote both promoted record accumulators on every iteration instead of once at exit."""
+    from qbopt import wholeseg
+    states = []
+    def watch(stage, name, body):
+        if isinstance(body, mir.MirBody):
+            states.append(body)
+    result = wholeseg.emitted(Path(f"fixtures/regressions/udtrng-{tag}.obj").read_bytes(), watch=watch)
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    body = states[-1]
+    hot = {at for loop in loops.loops(body.blocks, body.entry) for at in loop.body}
+    assert not [(op.at, ref) for block in body.blocks if block.at in hot for op in block.ops
+                for ref in op.stores if ref.base is not None and ref.width == 4]
+
+
+@pytest.mark.parametrize("address", ["invariant", "counter", "undefined"])
+def test_indexed_exit_store_requires_a_dominating_invariant_address(monkeypatch, address):
+    """UDTRNG's final store may use its pre-loop address, never a changing or uncomputed index."""
+    from qbopt import wholeseg
+    states = []
+    def watch(stage, name, body):
+        if isinstance(body, mir.MirBody):
+            states.append(body)
+    with monkeypatch.context() as context:
+        context.setattr(loopmotion, "sunk_stores", lambda body, *args: body)
+        result = wholeseg.emitted(Path("fixtures/regressions/udtrng-p-g2.obj").read_bytes(), watch=watch)
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    body = states[-1]
+    loop, = loops.loops(body.blocks, body.entry)
+    store = [op for block in body.blocks if block.at in loop.body for op in block.ops
+             if op.stores and op.stores[0].base is not None and op.stores[0].width == 4][-1]
+    reference = store.stores[0]
+    if address != "invariant":
+        base = body.block(loop.header).phis[0].result if address == "counter" else mir.Value(99999, 0)
+        altered = replace(reference, base=base)
+        changed = replace(store, stores=(altered,), results=(mir.Cell(altered),),
+                          uses=tuple(base if value == reference.base else value for value in store.uses))
+        body = replace(body, blocks=tuple(replace(block, ops=tuple(changed if op is store else op for op in block.ops))
+                                         for block in body.blocks))
+    found = corpus.loaded(Path("fixtures/regressions/udtrng-p-g2.obj"))
+    after = loopmotion.sunk_stores(body, found.dgroup, module.landmarks(found))
+    remaining = [op for block in after.blocks if block.at in loop.body for op in block.ops
+                 if op.at == store.at and op.stores]
+    assert bool(remaining) is (address != "invariant")
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 @pytest.mark.parametrize("nonempty", [False, True])
 def test_harr_constant_column_exit_is_stored_once_only_after_a_nonempty_loop(tag, nonempty, monkeypatch):
     """HARR wrote c=11 once per row after its inner counter became a constant."""
@@ -56,6 +103,14 @@ def test_nbody_conditional_accumulator_stores_sink(monkeypatch, proof):
         )) for block in body.blocks))
     if proof == "no_bounds":
         monkeypatch.setattr(loopmotion.ranges, "bounded", lambda body: {})
+        # Raising now supplies an independent bounded-address proof as well.
+        def strip(op):
+            def argument(arg):
+                return mir.Cell(replace(arg.ref, excludes=())) if isinstance(arg, mir.Cell) else arg
+            return replace(op, loads=tuple(replace(ref, excludes=()) for ref in op.loads),
+                           stores=tuple(replace(ref, excludes=()) for ref in op.stores),
+                           args=tuple(map(argument, op.args)), results=tuple(map(argument, op.results)))
+        body = replace(body, blocks=tuple(replace(block, ops=tuple(map(strip, block.ops))) for block in body.blocks))
     result = loopmotion.sunk_stores(body, found.dgroup, None if proof == "no_bounds" else module.landmarks(found))
     for store in stores:
         owners = [block.at for block in result.blocks for op in block.ops if op.id == store.id]

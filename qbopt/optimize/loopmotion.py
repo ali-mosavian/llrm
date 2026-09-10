@@ -34,7 +34,13 @@ def sunk_stores(body: mir.MirBody, dgroup: frozenset[int], bounds: dict | None =
         exit_block = blocks[destination]
         if not exit_block.ops:
             continue
-        moved = [op for op in blocks[source].ops if _unobserved(op, operations, dgroup, bounds, intervals)]
+        dominators = loops.dominators(body.blocks, body.entry)
+        address_values = {value for block in body.blocks
+                          if block.at not in loop.body and block.at in dominators.get(loop.header, ())
+                          for value in (*[phi.result for phi in block.phis],
+                                        *[value for op in block.ops for value in op.defines])}
+        moved = [op for op in blocks[source].ops
+                 if _unobserved(op, operations, dgroup, bounds, intervals, address_values)]
         relocated = {id(op): op for op in moved}
         if len(loop.latches) == 1 and source == loop.header:
             latch = next(iter(loop.latches))
@@ -44,7 +50,7 @@ def sunk_stores(body: mir.MirBody, dgroup: frozenset[int], bounds: dict | None =
                 nonempty = induction.nonempty(body, loop)
                 invariant = induction.invariant(body, set(loop.body)) if nonempty else set()
                 for op in operations:
-                    if id(op) not in relocated and _unobserved(op, operations, dgroup, bounds, intervals):
+                    if id(op) not in relocated and _unobserved(op, operations, dgroup, bounds, intervals, address_values):
                         value = _exit_value(op, blocks[source], blocks[entry], latch, body, dgroup, bounds)
                         if value is None and any(op is one for one in blocks[latch].ops):
                             value = _invariant_value(op, invariant, nonempty)
@@ -53,7 +59,8 @@ def sunk_stores(body: mir.MirBody, dgroup: frozenset[int], bounds: dict | None =
                             relocated[id(op)] = replace(
                                 op,
                                 args=tuple(value if isinstance(arg, mir.Held) else arg for arg in op.args),
-                                uses=(value.value,) if isinstance(value, mir.Held) else (),
+                                uses=tuple(dict.fromkeys(([value.value] if isinstance(value, mir.Held) else [])
+                                    + [part for ref in op.stores for part in (ref.base, ref.segment) if part is not None])),
                             )
         if not moved:
             continue
@@ -179,11 +186,14 @@ def _exit_value(
     return None
 
 
-def _unobserved(op: mir.Op, operations: list[mir.Op], dgroup: frozenset[int], bounds: dict | None, intervals: dict | None = None) -> bool:
+def _unobserved(op: mir.Op, operations: list[mir.Op], dgroup: frozenset[int], bounds: dict | None,
+                intervals: dict | None = None, address_values: set | frozenset = frozenset()) -> bool:
     if op.kind is not mir.Kind.STORE or op.loads or op.defines or len(op.stores) != 1:
         return False
     ref = op.stores[0]
-    if ref.addr is None or ref.addr.space not in (Space.SEGMENT, Space.FRAME) or ref.base is not None or ref.segment is not None:
+    if ref.addr is None or ref.addr.space not in (Space.SEGMENT, Space.FRAME) or ref.segment is not None:
+        return False
+    if ref.base is not None and (ref.base not in address_values or not ref.excludes):
         return False
     return not any(
         mir.overlapping(ref, other, dgroup, bounds, other_known=(intervals or {}).get(id(one)))

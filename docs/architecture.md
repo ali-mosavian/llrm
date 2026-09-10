@@ -612,6 +612,12 @@ one documented target without materially regressing another.
   UDTRNG no longer reloads either accumulator inside the loop: QB 705 → 615,
   PDS 809 → 643, VBDOS 673 → 557. Stores still execute each iteration; indexed
   store sinking and broader aggregate decomposition remain open.
+  Indexed stores can now sink when their proven address is defined outside the
+  loop and dominates its header. Existing observation and zero-trip/exit-value
+  checks still apply, and the moved store retains its address SSA use. This
+  lets recurrence elimination remove UDTRNG's loop entirely: each field receives
+  `step * 7` once, and the final counter remains 8. Costs fall to QB 375,
+  PDS 377 and VBDOS 339. General aggregate decomposition remains unfinished.
 - [ ] Feed SROA results into promotion so scalar values survive across BC
   statement boundaries.
   Write-through promotion now also accepts fixed procedure-frame fields, not
