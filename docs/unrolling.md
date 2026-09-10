@@ -1,4 +1,37 @@
-# Bounded unrolling: MIR prototype, emission not ready
+# Bounded unrolling: integrated emission, default still off
+
+## Current state
+
+Expanded bodies now carry explicit `(block, iteration-count)` provenance.
+The floating checker requires the exact original sequence repeated that
+many times; absent provenance, duplicate entries, incorrect counts, missing
+operations and reordered operations are rejected. Existing operand and
+semantic checks remain. Lowering carries an ordered-layout requirement
+through allocation to object emission automatically. Mixed legacy/ordered
+bodies are refused until per-body ordering is supported.
+
+With only the experimental MIR transform selected, **no checker or writer
+monkeypatch**, FPDEEP passes all 33 output checks across PDS, QB and VBDOS.
+58 focused expansion, emission and floating-allocation tests pass.
+Artifacts: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-clone-integrated-warr3ky_`.
+
+The generic cost model's ten-trip assumption exaggerates this improvement:
+FPDEEP actually runs three iterations. Re-costing both sides with three
+iterations gives the following static estimates, **not runtime timings**:
+
+| Compiler | Normal optimized | Expanded + folded | Target |
+|---|---:|---:|---:|
+| PDS | 4174 | 4047 | 1086 |
+| QB | 4372 | 4209 | 1086 |
+| VBDOS | 4168 | 4045 | 1086 |
+
+The reduction is only about 3–4%, while PDS's object grows from 1497 to
+2176 bytes. Expansion therefore remains off by default: the next gain must
+come from eliminating the now-known computations, not from merely copying
+them. Exact facts and argument propagation are implemented; see
+[constant-index.md](constant-index.md).
+
+## Earlier prototype history
 
 `optimize/unroll.py` is deliberately **not in the pipeline**. It expands
 small, proven constant-trip straight-line floating loops, preserving each
@@ -12,7 +45,7 @@ iteration, each iteration receives fresh definitions, and latch values seed
 the next. Final definitions replace dominated live-out uses. No instruction
 timings or register choices belong to this transformation.
 
-## Observed emission blocker
+### Original emission blocker (fixed)
 
 Experimentally allowing repeated floating provenance through the old
 sequence guard produced a PDS FPDEEP timeout. The emitted-stage dump showed
@@ -46,7 +79,7 @@ removed. Default optimization is unchanged. The regression explicitly
 requires lowering to refuse this prototype until clone-aware emission exists.
 The failed execution is evidence of a miscompile, not successful unrolling.
 
-## Next implementation boundary
+### Earlier implementation boundaries (historical)
 
 Block-entry occurrences are now anchored independently in the opt-in ordered
 emitter. Branch relaxation recomputes those positions on every layout round;

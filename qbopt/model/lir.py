@@ -159,6 +159,7 @@ class LirBody:
     # answer, and the fallback for an operand it could not place.
     origin: dict
     pins: dict
+    ordered: bool = False
 
     @property
     def insns(self) -> "tuple[Insn, ...]":

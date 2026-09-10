@@ -49,6 +49,10 @@ def written(
     instructions by source address. It is opt-in while legacy producers still
     depend on that sort; cloning requires it but also needs distinct labels.
     """
+    if any(body.ordered for body in bodies):
+        if not all(body.ordered for body in bodies):
+            return "mixed ordered and legacy body layout requires per-body ordering"
+        ordered = True
     laid = layout.rebuild(
         found,
         [(one.name, _as_mir(one)) for one in bodies],

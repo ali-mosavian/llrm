@@ -116,6 +116,11 @@ def _forwarded_inputs(op):
 def checked(body: mir.MirBody) -> None:
     from qbopt.backend.lower import Unlowered
 
+    repetitions = dict(body.repetitions)
+    if (len(repetitions) != len(body.repetitions)
+        or any(body.block(at) is None or not 2 <= count <= 4 for at, count in body.repetitions)):
+        raise Unlowered("invalid block repetition provenance")
+
     floating = {arg.value.variable for block in body.blocks for op in block.ops if op.floating_origin is not None
                 for arg in (*op.args, *op.results)
                 if isinstance(arg, mir.Held) and arg.width == 10}
@@ -131,7 +136,7 @@ def checked(body: mir.MirBody) -> None:
             continue
         baseline = typed[0].floating_origin
         sequence = tuple(op.floating_origin.at for op in typed)
-        if block.at != baseline.block or sequence != baseline.sequence:
+        if block.at != baseline.block or sequence != baseline.sequence * repetitions.get(block.at, 1):
             raise Unlowered("floating sequence changed before stack allocation is implemented")
         for op in typed:
             if _removed(op):

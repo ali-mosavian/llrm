@@ -1,4 +1,4 @@
-"""Experimental bounded unrolling; not enabled until emission supports clones.
+"""Experimental bounded unrolling; not enabled by default pending profitability.
 
 The MIR sequence is expanded in execution order. Reusing input provenance
 does not give the emitter permission to sort it or discard cloned relocations.
@@ -121,4 +121,5 @@ def _expanded(body, loop, header, latch, exit_at, entry, count):
                                 phis=tuple(replace(phi, incoming={at: ssa.provider(value, swap)
                                            for at, value in phi.incoming.items()}) for phi in block.phis))
         changed.append(block)
-    return replace(body, blocks=tuple(changed), origin=origin, pins=pins)
+    return replace(body, blocks=tuple(changed), origin=origin, pins=pins,
+                   repetitions=(*body.repetitions, (latch.at, count)))

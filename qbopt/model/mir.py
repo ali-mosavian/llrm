@@ -886,6 +886,9 @@ class MirBody:
     # Loader-established literal bytes, valid on entry only. They are not
     # immutable: ordinary alias and call effects invalidate these facts.
     initial: tuple[tuple[MemRef, Const], ...] = ()
+    # Explicit whole-block repetition established by bounded loop expansion.
+    # Provenance for lowering; transformations still operate on ordinary values.
+    repetitions: tuple[tuple[int, int], ...] = ()
 
     def block(self, at: int) -> MirBlock | None:
         return next((one for one in self.blocks if one.at == at), None)

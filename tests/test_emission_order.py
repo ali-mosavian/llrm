@@ -10,6 +10,23 @@ from qbopt.model import ir, mir
 from qbopt.backend import asm
 
 
+def test_ordered_body_selects_ordered_object_layout(monkeypatch):
+    """FPDEEP clones must not require a caller to remember the ordered-layout switch."""
+    from qbopt.model import lir
+    from qbopt.objectfile import objwrite
+    requested = []
+    def rebuild(*args, **kwargs):
+        requested.append(kwargs["ordered"])
+        return "captured"
+    monkeypatch.setattr(layout, "rebuild", rebuild)
+    body = lir.LirBody("cloned", 0, (), {}, {}, ordered=True)
+    assert objwrite.written(None, [body], [], {}) == "captured"
+    assert requested == [True]
+    legacy = replace(body, ordered=False)
+    assert "mixed ordered" in objwrite.written(None, [body, legacy], [], {})
+    assert requested == [True]
+
+
 def test_explicit_emission_order_does_not_group_clones_by_source_address():
     """FPDEEP's three iterations were interleaved by source address and timed out."""
     def move(at, number, covers):

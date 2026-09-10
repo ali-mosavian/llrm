@@ -588,6 +588,7 @@ def applied(body: lir.LirBody, got: Assignment) -> lir.LirBody:
         ),
         origin=body.origin,
         pins=body.pins,
+        ordered=body.ordered,
     )
 
 

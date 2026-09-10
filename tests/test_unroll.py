@@ -91,9 +91,33 @@ def test_integer_conversion_facts_require_exact_in_range_values(monkeypatch, num
     assert (facts[op.results[0].value].n if facts else None) == expected
 
 
-def test_emission_must_not_accept_unrolled_provenance_yet():
+def test_emission_requires_explicit_unrolled_provenance():
     """FPDEEP timed out when repeated input addresses interleaved its calls and lost fixups."""
     found, original = body()
     changed = unroll.expanded(original, found.dgroup, found.calls)
+    from dataclasses import replace
     with pytest.raises(lower.Unlowered, match="floating sequence changed"):
+        lower_floats.checked(replace(changed, repetitions=()))
+    lower_floats.checked(changed)
+
+
+@pytest.mark.parametrize("damage", ["count", "missing", "reordered", "duplicate"])
+def test_expansion_provenance_does_not_allow_arbitrary_float_sequences(damage):
+    from dataclasses import replace
+    found, original = body()
+    changed = unroll.expanded(original, found.dgroup, found.calls)
+    at, count = changed.repetitions[0]
+    block = changed.block(at)
+    positions = [index for index, op in enumerate(block.ops) if op.floating]
+    match damage:
+        case "count": changed = replace(changed, repetitions=((at, count - 1),))
+        case "duplicate": changed = replace(changed, repetitions=changed.repetitions * 2)
+        case _:
+            ops = list(block.ops)
+            first, second = positions[:2]
+            if damage == "missing": del ops[first]
+            else: ops[first], ops[second] = ops[second], ops[first]
+            changed = replace(changed, blocks=tuple(replace(one, ops=tuple(ops)) if one.at == at else one
+                                                   for one in changed.blocks))
+    with pytest.raises(lower.Unlowered):
         lower_floats.checked(changed)
