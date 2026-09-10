@@ -50,7 +50,8 @@ def specialized(body: mir.MirBody, dgroup: frozenset[int], calls: dict) -> mir.M
                for read in checkpoint.loads for written, _ in proof.stores):
             continue
         update = phi.incoming[latch.at]
-        if any(op.floating is None and (update not in op.defines or op.loads or op.stores)
+        if any(op.floating is None and not floatfacts.checkpoint(op)
+               and (update not in op.defines or op.loads or op.stores)
                for op in active[1:]):
             continue
         if any(phi.result in op.uses for op in active if op.floating is not None):

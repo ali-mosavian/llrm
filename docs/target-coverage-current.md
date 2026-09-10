@@ -131,6 +131,16 @@ on the unchanged pre-marker baseline too (QB/PDS/VBDOS). They remain open;
 their original expectations were not weakened. Full-pipeline FPCSE execution
 is checked separately from those pass-local expectations.
 
+Those pass-local failures are now repaired: explicit `FCHECK` nodes were
+missing from the exact-repetition evaluator's supported operations. Pure checks
+are accepted numerically and retained, in order, by final-iteration
+specialization. Checks with other effects remain unsupported. The direct test
+still requires the 438.75 pre-final seed and the complete checked final
+iteration. The emission test now checks the final 487.5 store, its relocation,
+and PRINT argument instead of requiring an intermediate seed that later folding
+eliminates. All 16 focused cases pass; FPCSE/FPDEEP execute correctly on all
+three compilers. Full-pipeline FPCSE QB assembly is unchanged by this repair.
+
 The scorer follow-up repairs that partial-overwrite blind spot. Re-measuring
 compiler `98943e1` BOOLS QB still gives cost **128**, but now reports **one
 partial overwrite of unread stored bytes**, previously zero. Access facts carry

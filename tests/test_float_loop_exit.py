@@ -10,8 +10,23 @@ from qbopt.analysis import floatfacts, loops
 from qbopt.model import mir
 
 
+@pytest.mark.parametrize("effect", ["value", "memory", "barrier"])
+def test_checkpoint_with_additional_effects_is_not_ignored(effect):
+    from qbopt.model import ir
+    op = mir.Op(0, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.FCHECK)
+    match effect:
+        case "value":
+            op = replace(op, defines=(mir.Value(1, 0),))
+        case "memory":
+            op = replace(op, stores=(mir.MemRef(None, 2),))
+        case "barrier":
+            op = replace(op, op=ir.Operation.BARRIER)
+    assert not floatfacts.checkpoint(op)
+    assert floatfacts.repeated((op,), 1, {}, frozenset()) is None
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
-def test_emitted_seed_and_final_store_share_the_correct_symbol(tag):
+def test_emitted_final_answer_has_the_correct_symbol(tag):
     """FPCSE printed 48.75 instead of 487.5 when its new seed lost its relocation."""
     from qbopt import wholeseg
     path = Path(f"fixtures/omf/fpcse-{tag}.obj")
@@ -25,9 +40,9 @@ def test_emitted_seed_and_final_store_share_the_correct_symbol(tag):
     emitted = corpus.loaded(result.data)
     bodies = mir.bodies(emitted, corpus.partitioned(result.data))
     ops = [op for _, body in bodies for block in body.blocks for op in block.ops]
-    seed, = [op for op in ops if op.kind is mir.Kind.STORE and op.args == (mir.Const(0x43db6000, 4),)]
-    assert seed.stores[0].addr == accumulator.addr
-    assert next(op for op in reversed(ops) if op.kind is mir.Kind.FSTORE).stores[0].addr == accumulator.addr
+    final, = [op for op in ops if op.kind is mir.Kind.STORE and op.args == (mir.Const(0x43f3c000, 4),)]
+    assert final.stores[0].addr == accumulator.addr
+    assert any(op.kind is mir.Kind.ARG and op.args == (mir.Const(0x43f3c000, 4),) for op in ops)
     final_counter, = [op for op in ops if op.kind is mir.Kind.STORE and op.args == (mir.Const(11, 2),)]
     assert final_counter.stores[0].addr == counter.addr
     assert all(not loops.loops(body.blocks, body.entry) for _, body in bodies)
@@ -47,6 +62,8 @@ def test_exact_loop_retains_checkpoint_and_final_iteration(tag):
     emitted = next(block for block in changed.blocks if block.at == latch.at)
     original = tuple(op for op in latch.ops if op.floating)
     assert tuple(op for op in emitted.ops if op.floating) == original
+    assert tuple(op for op in emitted.ops if op.floating or op.kind is mir.Kind.FCHECK) == tuple(
+        op for op in latch.ops if op.floating or op.kind is mir.Kind.FCHECK)
     assert emitted.ops[0] == original[0]
     accumulator = next(op.stores[0] for op in reversed(latch.ops) if op.kind is mir.Kind.FSTORE)
     seed = next(op for op in emitted.ops if op.kind is mir.Kind.STORE and accumulator in op.stores)

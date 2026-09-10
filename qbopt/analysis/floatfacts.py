@@ -130,6 +130,13 @@ def _inputs(op, integers, memory, facts):
     return tuple(inputs)
 
 
+def checkpoint(op: mir.Op) -> bool:
+    """An explicit FP exception check with no additional value or memory effect."""
+    return (op.kind is mir.Kind.FCHECK and not op.barrier and op.floating is None
+            and not (op.defines or op.uses or op.loads or op.stores or op.merges)
+            and op.stack is None)
+
+
 def repeated(ops: tuple[mir.Op, ...], count: int, initial: consts.Cells,
              dgroup: frozenset[int], known: dict | None = None) -> consts.Cells | None:
     """Exact memory facts after a caller-proven repetition of a straight-line body.
@@ -149,6 +156,8 @@ def repeated(ops: tuple[mir.Op, ...], count: int, initial: consts.Cells,
         integers = dict(invariant)
         floating = {}
         for op in ops:
+            if checkpoint(op):
+                continue  # exact operations add no pending exception; the check is retained by specialization
             if op.barrier or op.merges:
                 return None
             if op.floating is None:
