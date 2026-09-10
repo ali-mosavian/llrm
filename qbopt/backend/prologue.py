@@ -115,6 +115,7 @@ def _adjust(beside: lir.Insn, by: int) -> lir.Insn:
         defines=(),
         uses=(),
         op=beside.op,
+        frame_adjust=True,
     )
 
 

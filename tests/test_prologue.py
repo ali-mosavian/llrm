@@ -6,6 +6,26 @@ from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.backend import frame
 from qbopt.backend import prologue
+from qbopt.backend import peephole
+from iced_x86 import Register
+import pytest
+
+
+@pytest.mark.parametrize("use", ["none", "load", "address", "opaque"])
+def test_empty_spill_reservation_is_removed_only_without_remaining_uses(use):
+    """QB FPCSE retained SUB SP,2 after its final dead spill reload vanished."""
+    slots = frame.Frame(-16)
+    cell = slots.cell(1, 2)
+    body = procedure()
+    if use != "none":
+        what = None if use == "opaque" else ir.Semantics(ir.Operation.MOVE, "mov",
+            (ir.Reg(Register.AX, 2),),
+            (cell if use == "load" else ir.Imm(0, 2, cell.addr),))
+        one = lir.Insn(4, (4, 4), what, (), ())
+        body = replace(body, blocks=(replace(body.blocks[0], insns=body.blocks[0].insns + (one,)),))
+    reserved = prologue.reserved(body, slots, {1: "B$ENRA", 2: "B$EXSA"})
+    result = peephole.Peephole(slots)._frame(reserved)
+    assert sum(one.frame_adjust for one in result.insns) == (0 if use == "none" else 2)
 
 
 def procedure() -> lir.LirBody:

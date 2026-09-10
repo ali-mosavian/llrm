@@ -64,7 +64,7 @@ def machine(pinned: dict, frame=None, calls: dict | None = None) -> list[LIRTran
         # is nothing to ask.
         parcopy.ParallelCopy(),
         prologue.Prologue(frame, calls) if frame is not None else prologue.Prologue(frames.Frame(0), calls),
-        peephole.Peephole(),
+        peephole.Peephole(frame),
     ]
 
 

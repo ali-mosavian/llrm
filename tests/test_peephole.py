@@ -17,6 +17,7 @@ def test_fpcse_drops_unused_allocator_reload():
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
     assert "mov ax,[bp-2]" not in instructions
+    assert "sub sp,2" not in instructions
 
 
 @pytest.mark.parametrize("owned", [False, True])

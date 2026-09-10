@@ -119,6 +119,7 @@ class Insn:
     # Allocator-owned stack reads can be deleted when their result is dead;
     # an arbitrary source-program memory read may have observable faults.
     spill_reload: bool = False
+    frame_adjust: bool = False
 
 
 @dataclass(frozen=True, slots=True)

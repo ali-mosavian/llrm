@@ -1,5 +1,24 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: release empty allocator frame reservations
+
+The backend tags its synthetic prologue/epilogue adjustments and removes
+them together after peephole cleanup if no added frame storage remains.
+Original stack adjustments are not tagged or removed. Live frame cells,
+materialized frame addresses, unknown addressing and opaque instructions
+keep the reservation; this does not compact partially used frames.
+
+QB FPCSE before: `sub sp,2 / wait / ...`; after: `wait / ...`.
+The spill reload was already removed in the preceding commit. Modeled
+cost **159 -> 157**, object **822 -> 819 bytes**. PDS and VBDOS FPCSE
+remain byte-identical. The emitted regression failed first on `sub sp,2`.
+The focused peephole/prologue checks pass; original and optimized QB DOS
+outputs both remain `S= 487.5` and `DONE`, with successful links.
+Stage dumps and runtime artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-empty-frame-28n57_c5`.
+FPCSE is still **1.60x**, not within the target; removing unread program
+stores needs a real visibility/lifetime proof, not a noreturn assumption.
+
 ## 2026-09-10: remove dead allocator reloads after physical assignment
 
 The spiller now marks its own reloads in LIR. The physical dead-move

@@ -12,8 +12,34 @@ from qbopt.model.passes import LIRTransform
 class Peephole(LIRTransform):
     name = "peephole"
 
+    def __init__(self, frame=None):
+        self.frame = frame
+
     def transform(self, body: lir.LirBody) -> lir.LirBody:
-        return waits(zeroes(addresses(overwritten(constants(body)))))
+        return self._frame(waits(zeroes(addresses(overwritten(constants(body))))))
+
+    def _frame(self, body):
+        """Drop only synthetic reservations when no added stack storage remains."""
+        from qbopt.objectfile.module import Space
+
+        if self.frame is None or not self.frame.size:
+            return body
+        for one in body.insns:
+            if one.what is None or one.what.op is ir.Operation.BARRIER:
+                return body
+            for arg in (*one.what.sources, *one.what.dests):
+                if isinstance(arg, (ir.Mem, ir.Address, ir.Imm)):
+                    address = arg.address if isinstance(arg, ir.Imm) else arg.addr
+                    if address is None and not isinstance(arg, ir.Imm):
+                        return body
+                    if (isinstance(arg, (ir.Mem, ir.Address))
+                        and arg.through in (Register.BP, Register.EBP, Register.SP, Register.ESP)
+                        and (address is None or address.space is not Space.FRAME)):
+                        return body
+                    if address is not None and address.space is Space.FRAME and address.disp < self.frame.floor:
+                        return body
+        return replace(body, blocks=tuple(replace(block, insns=tuple(
+            lir.without(block.insns, lambda one: one.frame_adjust))) for block in body.blocks))
 
 
 def _lanes(register):
