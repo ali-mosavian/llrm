@@ -426,6 +426,27 @@ before launch. This is **not a passing runtime check**. Emulator session
 last working executable before diagnosing a common miscompile. No source
 fix has been claimed; any discovered defect must gain a fail-first test.
 
+### Three-module run: live frame-walk hang
+
+Direct register and symbol inspection corrects the preceding exit report:
+qrender is still executing B$FindFrame (2fc3:5e64..5e6b), repeatedly following
+`BX = [BX-2]`. The socket's `hasLastExit` was stale and its shell-ready/frozen
+fields did not establish guest termination. A queued GOOD.EXE comparison
+has **not** been consumed; do not launch it a second time or claim it ran.
+The live process is 99047, exec session 2131, port 2197.
+
+```asm
+; observed runtime loop (no fix yet)
+cmp ax,bx
+jb  done
+mov bx,[bx-2]
+jmp loop
+```
+
+Observed AX=a910, BP=a902, SP=a8f8; the chain reaches BX=0 and does not
+terminate. Inspect frame-link corruption and allocated stack slots using
+the saved common stages. No before/after fix or successful run is claimed.
+
 ### Two-module runtime check
 
 Relinking with rewritten `view` and `d_turb` succeeded. The isolated build in
