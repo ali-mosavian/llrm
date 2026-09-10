@@ -1,5 +1,36 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: retain branch tests without rejecting their invariant inputs
+
+LICM previously rejected its entire invariant candidate sequence when a
+flag result was needed inside the loop. It now retains those producers and
+their dependent candidates, repeating until no flag crosses the loop edge;
+independent input loads can still move. The original crossing check remains.
+
+IVWORD's QB/PDS branch-condition load now executes once instead of ten times.
+VBDOS uses a combined memory compare and is unchanged. Actual PDS assembly:
+
+```asm
+; before, inside loop       ; after, before loop
+mov bx,[branchChoice]       mov bx,[branchChoice]
+and bx,bx                   ; after, inside loop
+je otherArm                 mov cx,bx
+                            and cx,bx
+                            je otherArm
+```
+
+This replaces a per-trip memory load with a register copy; it does not yet
+produce the ideal TEST-only sequence. The PDS object grows 1121 -> 1123 bytes.
+The extra copy is a remaining lowering opportunity, not omitted from the
+reported result. The 56 focused induction/loop-motion checks pass, and all
+three linked baseline/optimized IVWORD runs retain `34 0 11 37` plus DONE.
+Both improved compiler cases fail their regression against the old pass.
+
+Stage dumps: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-licm-condition-stages-xy1bi73n`.
+Runtime artifacts under the same temporary parent:
+`qbopt-licm-condition-p-g2-c0bahk04`, `qbopt-licm-condition-q-O-b5huwj6x`,
+`qbopt-licm-condition-v-g3-ou7pdnl8`.
+
 ## 2026-09-10: remove unobserved word-preservation dependencies in raise
 
 The INTEGER version of IVARM kept QB/PDS's loop counter alive solely because

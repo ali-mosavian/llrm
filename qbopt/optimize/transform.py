@@ -1313,6 +1313,13 @@ def _crossing(run: list, rest: list, phis: list | None = None, wanted: set | Non
     non-flag values here is what let hotlop's compare move out from under
     the branch that reads it.
     """
+    crossing = _crossed_values(run, rest, phis, wanted)
+    if not crossing or any(value.flags for value in crossing):
+        return None
+    return frozenset(crossing)
+
+
+def _crossed_values(run: list, rest: list, phis: list | None, wanted: set | None) -> set:
     # A phi carries a value out of the run as surely as an instruction
     # reads one, and `rest` holds no phis: hotlop's high half reached the
     # next iteration that way, seen by nothing here.
@@ -1321,10 +1328,7 @@ def _crossing(run: list, rest: list, phis: list | None = None, wanted: set | Non
     }
     if wanted is not None:
         taken &= wanted
-    crossing = {value for one in run for value in one.defines if value in taken}
-    if not crossing or any(value.flags for value in crossing):
-        return None
-    return frozenset(crossing)
+    return {value for one in run for value in one.defines if value in taken}
 
 
 def _span_of(op: Op) -> tuple[int, int] | None:
@@ -2182,6 +2186,12 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
         # their anchor's address with other computations and the jump. HARR
         # lost all of those when its descriptor moved a second time.
         run = [one for one in run if identities[id(one)] not in gone]
+        while run:
+            rest = [one for one in ops if one not in run]
+            retained = {value for value in _crossed_values(run, rest, phis, effective) if value.flags}
+            if not retained:
+                break
+            run = _pruned(run, retained)
         if not run:
             continue
 

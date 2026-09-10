@@ -6,6 +6,20 @@ import pytest
 import corpus
 
 from qbopt import wholeseg
+from qbopt.analysis import loops
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O"])
+def test_invariant_branch_load_moves_out_but_its_test_stays(tag):
+    """IVWORD reloaded unchanged branchChoice every trip because its test prevented LICM."""
+    result = wholeseg.emitted(Path(f"fixtures/regressions/ivword-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    blocks = corpus.partitioned(result.data)
+    inside = set().union(*(loop.body for loop in loops.loops(blocks)))
+    assert inside
+    instructions = [str(one.insn) for block in blocks if block.at in inside for one in block.insns]
+    assert not any(one.startswith("mov ") and "[" in one.split(",", 1)[-1] for one in instructions)
+    assert any(one.startswith(("and ", "test ", "or ")) for one in instructions)
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
