@@ -53,12 +53,14 @@ class Derived:
 
     `offsets` are invariant terms with integer coefficients, added to the
     scaled counter. They affect initialization, never the recurrence step.
+    `pointer` denotes an invariant pointer advanced by that byte recurrence.
     """
 
     op: "mir.Op"
     of: Affine
     by: "mir.Arg"
     offsets: tuple[tuple[mir.Arg, int], ...] = ()
+    pointer: mir.Arg | None = None
 
 
 def invariant(body: mir.MirBody, inside: set[int]) -> set[int]:
@@ -212,6 +214,15 @@ def derived(
     out = []
     for at in inside:
         for op in at_of[at].ops:
+            if (op.kind is mir.Kind.PTR_OFFSET and len(op.args) == 2 and len(op.results) == 1
+                and isinstance(op.results[0], mir.Held) and op.results[0].width == 4
+                and not op.loads and not op.stores and not op.barrier and not op.merges):
+                pointer, offset = op.args
+                if (isinstance(pointer, mir.Held) and pointer.value.id in still
+                    and isinstance(offset, mir.Held) and offset.value.id in found
+                    and pointer.width == offset.width == found[offset.value.id].start.width == 4):
+                    out.append(Derived(op, found[offset.value.id], mir.Const(1, 4), pointer=pointer))
+                continue
             # It may load: the multiplier is a Cell and `imul word [w]`
             # reads it. Excluding anything that touches memory excluded
             # every one of the 23 sites this pass exists for.

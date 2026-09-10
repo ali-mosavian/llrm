@@ -132,7 +132,19 @@ by 2 and 402. The emitted loop contains `add ecx,2` and `add ebx,192h`,
 with no address multiply or sign extension. All three compilers' native
 programs still print `456 457 789 790` and `DONE`.
 
-This is byte-offset induction, not yet whole-pointer induction. The backend
-still converts the base plus each offset into a segmented pointer per access,
-and the generated loop still has spills and selector save/restore sequences.
-Those costs remain visible rather than being counted as a completed target.
+Whole-pointer induction follows the byte-offset reduction: an invariant
+pointer plus a byte recurrence becomes a pointer initialized in the preheader
+and advanced by that recurrence's stride at the latch. MIR uses PTR_OFFSET
+for both operations and names no representation. Backend contract tests check
+that repeated advancement matches recomputation across carries, borrows and
+32-bit byte-offset wrap for selector shifts 0, 3 and 12.
+
+In PDS HUGELP, before this second reduction the loop occupied 225 bytes
+(0x6c through the branch ending at 0x14d), with base/offset spill traffic.
+After, it occupies 158 bytes (0xd7 through the branch ending at 0x175),
+with two whole pointers carried in registers and no allocator-generated loop
+spills; BC's frame temporary stores/reloads still remain. This is
+code size, not a cycle measurement; initialization has moved outside the loop.
+All three original/native pairs still print `456 457 789 790` and `DONE`.
+The backend still emits general pointer-advance arithmetic and selector
+save/restore sequences. Those costs remain open optimization opportunities.

@@ -73,6 +73,7 @@ def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | 
             if _answer(body, one.op) is not None
             and (
                 _multiplies(one, derived)
+                or one.pointer is not None
                 or one.op.kind is mir.Kind.DIVMOD
                 or one.offsets
                 and one.op.kind is mir.Kind.SHL
@@ -112,8 +113,8 @@ def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | 
             taken += len(one.offsets) * 2
             behind.setdefault(latches[0], []).append(
                 _made(
-                    mir.Kind.ADD,
-                    "add",
+                    mir.Kind.PTR_OFFSET if one.pointer is not None else mir.Kind.ADD,
+                    "" if one.pointer is not None else "add",
                     step,
                     (mir.Held(start, width), stride),
                     latches[0],
@@ -185,6 +186,8 @@ def _start(into, one, preheader: int) -> Op:
 
 def _starts(into: mir.Value, one: induction.Derived, preheader: int) -> list[Op]:
     """Initialize scale * start plus invariant offsets once, before the loop."""
+    if one.pointer is not None:
+        return [_made(mir.Kind.PTR_OFFSET, "", into, (one.pointer, one.of.start), preheader, one.op)]
     if not one.offsets:
         return [_start(into, one, preheader)]
     width = _width(one.op)

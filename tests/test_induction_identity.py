@@ -26,11 +26,29 @@ def test_huge_loop_byte_offsets_are_induction_variables(tag):
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     body = states[0]
     loop = loops.loops(body.blocks, body.entry)[0]
-    carried = {phi.result for block in body.blocks for phi in block.phis}
     offsets = [op.args[1] for block in body.blocks if block.at in loop.body
                for op in block.ops if op.kind is mir.Kind.PTR_OFFSET]
     assert len(offsets) == 2
-    assert all(isinstance(arg, mir.Held) and arg.value in carried for arg in offsets)
+    assert not any(op.kind in (mir.Kind.MUL, mir.Kind.SIGN_EXTEND)
+                   for block in body.blocks if block.at in loop.body for op in block.ops)
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_huge_loop_carries_whole_pointers(tag):
+    """HUGELP rebuilt two pointers from a spilled base and byte offsets on every iteration."""
+    from qbopt import wholeseg
+    states = []
+    def watch(stage, name, state):
+        if stage == "mir-widen":
+            states.append(state)
+    result = wholeseg.emitted(Path(f"fixtures/regressions/hugelp-{tag}.obj").read_bytes(), watch=watch)
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    body = states[0]
+    loop = loops.loops(body.blocks, body.entry)[0]
+    carried = {phi.result for block in body.blocks for phi in block.phis}
+    stores = [ref for block in body.blocks if block.at in loop.body for op in block.ops
+              for ref in op.stores if ref.pointer]
+    assert len(stores) == 2 and all(ref.base in carried for ref in stores)
 
 
 @pytest.mark.parametrize("offset, accepted", [(4, True), (-2, True), (32767, False), (-32769, False)])

@@ -78,3 +78,15 @@ def test_runtime_pointer_abi_controls_crossing(shift, expected):
     model = pointers.Model(ir.Mem(address, 1, disp_width=2))
     parts = model.offset(ir.Held(1, 4), ir.Held(2, 4), ir.Held(3, 4), count(10).__next__)
     assert execute(parts, 0x2000fffe, 2, {address: shift}) == expected
+
+
+@pytest.mark.parametrize("shift", [0, 3, 12])
+@pytest.mark.parametrize("start,stride", [(65534, 2), (1934, 402), (2, -4), (0xfffffffe, 4)])
+def test_pointer_recurrence_matches_recomputed_offsets(shift, start, stride):
+    """Huge-loop pointer induction must preserve carries, borrows and wrapped byte offsets."""
+    parts = pointers.Model(shift).offset(ir.Held(1, 4), ir.Held(2, 4), ir.Held(3, 4), count(10).__next__)
+    base = 0xf000fffe
+    current = execute(parts, base, start)
+    for iteration in range(5):
+        assert current == execute(parts, base, (start + iteration * stride) & 0xffffffff)
+        current = execute(parts, current, stride & 0xffffffff)
