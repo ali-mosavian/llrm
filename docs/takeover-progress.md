@@ -4061,3 +4061,26 @@ PDS is 2858 -> 2850 and 353247 -> 352641. Both runtime outputs match BC.
 QB PRESSX remains correct at 1031 bytes / 627 modeled units.
 Full before/after stage dumps and runtime output:
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-group-remat-x_52mdd7`.
+
+### Reject blindly strength-reducing NBODY's index shifts
+
+At `2cc5159`, the remaining `other << 2` is deliberately excluded by
+`strength._multiplies`: a cheap shift alone is not enough reason to introduce
+another recurrence. A process-local experiment allowed just original address
+0x110; no source rule or compiler default was changed. Full stage dumps show
+the shift removed, but both the original index and the new offset remain:
+the `other <> body` condition still observes the unscaled index.
+
+Before latch: `inc bx` (plus the unchanged accumulator stores).
+Forced after: `mov dx,[bp-30h]; inc dx; add bx,4; mov [bp-30h],dx`.
+The extra recurrence displaces the original index into a spill slot and grows
+the synthetic frame from 32 to 34 bytes. VBDOS NBODY grows 4143 -> 4159 bytes
+and modeled cost 354726 -> 376926. This is a failed optimization experiment,
+not a correctness-validated build and not hardware timing evidence.
+
+Forcing only initialization's shift at 0x7e yields 4150 bytes / 354718 units:
+seven extra bytes for eight modeled units. Neither experiment is adopted.
+Future work here must account for the original counter's non-address uses,
+not simply enable every shift candidate or put machine-cost rules into MIR.
+Before/forced objects and every stage:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-shift-induction-96_jonay`.
