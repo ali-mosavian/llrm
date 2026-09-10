@@ -520,6 +520,81 @@ The full test suite is a release gate, not the inner development loop. Work on a
 failure begins with the smallest real reproducer and adjacent stage dumps; broad
 suites run after the implementation has a concrete reason to pass.
 
+## Optimization roadmap checklist
+
+Implement these in dependency order. A checked item means the pass is integrated
+into production, preserves real-program results, and improves at least one
+documented target without materially regressing another.
+
+### Foundation
+
+- [ ] Canonicalize loops with dedicated preheaders, latches and exits
+  (`LoopSimplify`).
+- [ ] Preserve loop-exit SSA explicitly (`LCSSA`).
+- [ ] Canonicalize primary counters and derived recurrences
+  (`IndVarSimplify`).
+- [ ] Build `MemorySSA`: one def-use graph for loads, stores and call effects.
+- [ ] Refine alias, object-identity, escape and per-argument mod/ref facts used
+  by `MemorySSA`.
+
+### High-impact MIR passes
+
+- [ ] Implement scalar replacement of aggregates (`SROA`) for descriptors,
+  UDT fields, frame temporaries and independently addressable array metadata.
+- [ ] Feed SROA results into promotion so scalar values survive across BC
+  statement boundaries.
+- [ ] Implement global value numbering with partial redundancy elimination
+  (`GVN-PRE`) for scalar and memory expressions.
+- [ ] Replace the separate load/store cleanup rules with MemorySSA-based load
+  elimination and dead-store elimination.
+- [ ] Implement sparse conditional constant propagation (`SCCP`) over values
+  and executable CFG edges.
+- [ ] Consolidate branch folding, empty-block removal, jump threading and
+  unreachable cleanup into `SimplifyCFG`.
+
+### Loop profitability and specialization
+
+- [ ] Add register-pressure and target-cost formula selection to induction
+  strength reduction; never create a recurrence merely because one is legal.
+- [ ] Hoist invariant bounds checks into loop preguards when checks are enabled.
+- [ ] Implement loop versioning/unswitching for invariant bounds, alias and
+  numeric-environment conditions.
+- [ ] Add loop rotation only where it improves the canonical form or emitted
+  branch structure.
+- [ ] Delete provably unobservable loops and retain required final stores,
+  synchronization and exceptional behavior.
+
+### Interprocedural optimization
+
+- [ ] Infer user-procedure attributes: `readonly`, `writeonly`, `nocapture`,
+  `noreturn`, argument constants and precise mod/ref effects.
+- [ ] Propagate constants and effects across procedure boundaries (`IPSCCP`).
+- [ ] Inline selectively when doing so exposes a measured optimization; keep
+  runtime-idiom recognition in the raise rather than implementing it as
+  generic inlining.
+- [ ] Remove unreachable procedures and unused public/internal definitions
+  where OMF linkage permits it (`GlobalDCE`).
+
+### Machine backend
+
+- [ ] Add global machine copy propagation after allocation.
+- [ ] Add machine CSE and dead-machine-instruction elimination over allocated
+  LIR.
+- [ ] Add branch folding and tail merging after final block placement.
+- [ ] Extend rematerialization, spill folding, spill-slot reuse and live-range
+  splitting using measured interval costs.
+- [ ] Add instruction scheduling for 486/P5/P6 only after their latency,
+  dependency and pairing models are validated against primary sources.
+
+### Deliberately deferred
+
+- [ ] Reconsider loop/SLP vectorization only if a supported target gains a
+  vector register model; it is not useful for the current 386/x87 baseline.
+- [ ] Reconsider aggressive floating reassociation only under an explicit
+  semantics mode that permits it.
+- [ ] Reconsider broad inlining, tail-call elimination and PGO only after the
+  memory, loop and scalar pipelines above stop dominating the remaining gaps.
+
 ## Known architecture debt
 
 These are boundary defects with an owner, not permission to add more cross-layer
