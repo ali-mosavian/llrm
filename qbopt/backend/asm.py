@@ -114,6 +114,8 @@ def _ranges_of(op, found: Module) -> tuple[tuple[int, int], ...]:
             else:
                 ranges.append((lo, hi))
         return tuple(ranges)
+    if op.inserted:
+        return (op.covers,)  # Explicitly inserted; its id names operands, not owned bytes.
     full = found.coverage.get(op.id) if op.id is not None else None
     if full is not None:
         return full
@@ -157,6 +159,8 @@ def _length_of(op: mir.Op, found: Module) -> int | None:
     apart from its call stands for both runs, and `covers` alone would
     only ever name one of them.
     """
+    if op.inserted:
+        return 0
     if op.extra_covers:
         return sum(hi - lo for lo, hi in _ranges_of(op, found))
     full = found.coverage.get(op.id) if op.id is not None else None

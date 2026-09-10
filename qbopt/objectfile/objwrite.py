@@ -69,7 +69,7 @@ def written(
     # Whatever sits before the first instruction is BC's own module header,
     # 48 bytes of name and padding, and the only thing in these code
     # segments that is not in a body. Kept, and the layout starts after it.
-    kept = min(one.at for body in bodies for one in body.insns)
+    kept = min(body.entry for body in bodies)
     image = found.code[:kept] + laid.code
     relocations = {}
     for new, old in laid.relocations:

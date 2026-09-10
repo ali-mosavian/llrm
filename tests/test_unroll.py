@@ -56,9 +56,11 @@ def test_fpdeep_expansion_exposes_exact_array_arithmetic():
         assert [value.value for value in values] == expected
 
 
-def test_fpdeep_exact_integer_arguments_keep_floating_checkpoints():
+def test_fpdeep_exact_integer_arguments_keep_floating_checkpoints(monkeypatch):
     """FPDEEP kept reading converted square/ratio temporaries instead of known answers."""
     found, original = body()
+    from qbopt.optimize import floatfold
+    monkeypatch.setattr(floatfold, "stored", lambda body, facts: body)
     expanded = unroll.expanded(original, found.dgroup, found.calls)
     converted = floatfacts.converted(expanded, found.dgroup, found.calls)
     assert sorted(value.n for value in converted.values()) == [6, 14, 30, 144, 784, 3600]
@@ -78,6 +80,24 @@ def test_fpdeep_exact_integer_arguments_keep_floating_checkpoints():
         for op in block.ops:
             if op.kind is mir.Kind.ARG:
                 assert not any(isinstance(arg, mir.Held) and arg.value in converted for arg in op.args)
+
+
+def test_fpdeep_exact_stores_remove_their_arithmetic_chains():
+    """FPDEEP recomputed exact squares/ratios/mixes even after all inputs were proven."""
+    from fractions import Fraction
+    from qbopt.model.floating import Format
+    found, original = body()
+    expanded = unroll.expanded(original, found.dgroup, found.calls)
+    folded = transform.folded(expanded, found.dgroup, found.calls)
+    values = [floatfacts.decoded(op.args[0].n, Format.BINARY32).value
+              for block in folded.blocks for op in block.ops
+              if op.kind is mir.Kind.STORE and op.at in (0x77, 0xbf, 0x107)]
+    assert values == [144, 6, Fraction(1, 2), 784, 14, Fraction(3, 4), 3600, 30, Fraction(7, 8)]
+    assert sum(bool(op.floating) for block in folded.blocks for op in block.ops) == 20
+    assert sum(op.kind is mir.Kind.FCHECK for block in folded.blocks for op in block.ops) == 51
+    calls = lambda body: [op for block in body.blocks for op in block.ops if op.kind is mir.Kind.CALL]
+    assert calls(expanded) == calls(folded)
+    lower_floats.checked(folded)
 
 
 @pytest.mark.parametrize("number,expected", [(-6, 0xfffffffa), (2147483647, 2147483647),

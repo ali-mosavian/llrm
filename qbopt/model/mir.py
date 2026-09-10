@@ -855,6 +855,11 @@ class Op:
     def barrier(self) -> bool:
         return self.op is ir.Operation.BARRIER
 
+    @property
+    def inserted(self) -> bool:
+        """An explicit zero-byte occurrence, even if its operands retain source identity."""
+        return self.node is None and not self.extra_covers and self.covers is not None and self.covers[0] == self.covers[1]
+
 
 @dataclass(frozen=True, slots=True)
 class Phi:

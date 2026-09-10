@@ -2,6 +2,11 @@
 
 ## Current state
 
+Subsequent exact-store folding reduces expanded FPDEEP to roughly 2.0x
+target (PDS 2166, QB 2201, VBDOS 2162). The earlier comparison below records
+the integration baseline, not today's folded result. See
+[the emitted before/after and runtime checks](constant-index.md).
+
 Expanded bodies now carry explicit `(block, iteration-count)` provenance.
 The floating checker requires the exact original sequence repeated that
 many times; absent provenance, duplicate entries, incorrect counts, missing

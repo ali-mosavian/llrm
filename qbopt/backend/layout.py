@@ -362,7 +362,7 @@ def rebuild(
     if any(asm._length_of(one, found) is None for one in ops):
         return f"{ops[0].at:#06x}: an op with no instruction behind it"
 
-    lowest = min(one.at for one in ops)
+    lowest = min(body.entry for _, body in bodies)
     highest = max(
         (span[1] for one in ops if (span := asm._stands_for(one, found)) and span[0] < span[1]),
         default=lowest,

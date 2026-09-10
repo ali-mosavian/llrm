@@ -53,7 +53,9 @@ def test_cloned_far_call_keeps_its_relocation_without_claiming_input_bytes():
                       covers=(0, 5), id=7, symbol=True)
     clone = replace(original, covers=(0, 0))
     found = SimpleNamespace(code=bytes.fromhex("9a00000000"), end=5,
-                            coverage={}, refs={}, calls={0: "B$PSSD"}, absorbed={}, fixup_at={}, float_protocols={})
+                            coverage={7: ((0, 5),)}, refs={}, calls={0: "B$PSSD"}, absorbed={}, fixup_at={}, float_protocols={})
+    assert asm._ranges_of(clone, found) == ((0, 0),)
+    assert asm._length_of(clone, found) == 0
     emitted = asm.assemble([original, clone], 0, found, fields=frozenset({1}))
     assert not isinstance(emitted, str), emitted
     assert emitted.relocations == ((1, 1), (6, 1))

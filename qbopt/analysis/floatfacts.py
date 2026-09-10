@@ -265,12 +265,12 @@ def known(body: mir.MirBody, dgroup: frozenset[int], calls: dict[int, str], *, i
     return _analyzed(body, dgroup, calls, initial)[0]
 
 
-def converted(body: mir.MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> dict[mir.Value, consts.Known]:
+def converted(body: mir.MirBody, dgroup: frozenset[int], calls: dict[int, str], *, facts=None) -> dict[mir.Value, consts.Known]:
     """Exact integer conversion results, without permission to remove FP effects."""
     if not any(op.kind is mir.Kind.FSTORE and op.results and not op.stores
                for block in body.blocks for op in block.ops):
         return {}
-    facts = known(body, dgroup, calls)
+    facts = known(body, dgroup, calls) if facts is None else facts
     results = {}
     for block in body.blocks:
         for op in block.ops:

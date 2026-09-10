@@ -12,6 +12,39 @@ from qbopt.objectfile.module import Addr, Space
 from qbopt.optimize import floatfold, transform
 
 
+def test_qb_fpcse_preserves_entry_when_first_load_disappears():
+    """QB FPCSE falsely reported five overlapping bytes when entry 0x30 became source 0x35."""
+    from pathlib import Path
+    from qbopt import wholeseg
+    result = wholeseg.emitted(Path("fixtures/omf/fpcse-q-O.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+
+
+@pytest.mark.parametrize("number,expected", [(144, 0x43100000), (-6, 0xc0c00000),
+                                            (16777217, None), ("1/3", None)])
+def test_single_storage_requires_exact_bits(number, expected):
+    """FPDEEP may store 144 directly; an inexact SINGLE checkpoint must still round."""
+    from fractions import Fraction
+    from qbopt.analysis import floatfacts
+    source = mir.Value(1, 0)
+    cell = mir.MemRef(Addr(Space.SEGMENT, 0, 5), 4)
+    load = mir.Op(0, ir.Operation.FLOAT_LOAD, "fld", (source,), (), kind=mir.Kind.FLOAD,
+        args=(mir.Cell(replace(cell, width=8)),), results=(mir.Held(source, 10),),
+        floating=Semantics((Format.BINARY64,), Format.EXTENDED80, Precision.EXACT, Rounding.NONE))
+    store = mir.Op(4, ir.Operation.FLOAT_STORE, "fstp", (), (source,), kind=mir.Kind.FSTORE,
+        args=(mir.Held(source, 10),), results=(mir.Cell(cell),), stores=(cell,),
+        floating=Semantics((Format.EXTENDED80,), Format.BINARY32, Precision.DESTINATION, Rounding.DYNAMIC))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (load, store), ()),))
+    changed = floatfold.stored(body, {source: floatfacts.Finite(Fraction(number))})
+    if expected is None:
+        assert changed == body
+        return
+    assert [op.kind for op in changed.blocks[0].ops] == [mir.Kind.FCHECK, mir.Kind.FCHECK, mir.Kind.STORE]
+    result = changed.blocks[0].ops[-1]
+    assert result.args == (mir.Const(expected, 4),)
+    assert result.stores == (cell,) and result.results == (mir.Cell(cell),)
+
+
 @pytest.mark.parametrize("guard", ["none", "live", "shared", "memory", "unknown", "barrier"])
 def test_exact_pair_keeps_checks_and_refuses_observable_results(guard):
     source, result = mir.Value(1, 0), mir.Value(2, 1)

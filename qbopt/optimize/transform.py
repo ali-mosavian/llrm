@@ -1848,7 +1848,8 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
 
     edges = floatfacts.exit_cells(body, dgroup, calls)
     facts = consts.known(body, dgroup, calls, edges=edges)
-    conversions = floatfacts.converted(body, dgroup, calls)
+    floating_facts = floatfacts.known(body, dgroup, calls) if any(op.floating for block in body.blocks for op in block.ops) else {}
+    conversions = floatfacts.converted(body, dgroup, calls, facts=floating_facts)
     argument_facts = facts | conversions
     memory = (
         consts.cells(body, dgroup, calls, facts, edges=edges)
@@ -1879,7 +1880,7 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
             ops.append(made)
         out.append(replace(block, ops=tuple(ops)))
     from qbopt.optimize import floatfold
-    return floatfold.discarded(replace(body, blocks=tuple(out)) if changed else body, conversions)
+    return floatfold.stored(floatfold.discarded(replace(body, blocks=tuple(out)) if changed else body, conversions), floating_facts)
 
 
 def _constant_operands(op: Op, facts: dict, memory: dict | None = None) -> Op:

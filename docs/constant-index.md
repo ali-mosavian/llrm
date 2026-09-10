@@ -148,3 +148,51 @@ fails with pair deletion disabled; focused guards cover shared/live values,
 memory effects and retained checks. Stage dumps and execution artifacts:
 
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-exact-checkpoints-k47dqj3q`
+
+## Exact SINGLE stores and unused arithmetic
+
+Exact SINGLE stores now write their proven bit patterns directly, retaining
+a floating check. Their unused, exact floating producer chains similarly
+become checks, which the backend can combine when adjacent. Inexact stores
+remain floating conversions; neither rounding nor exceptions are ignored.
+
+Actual first-square code in expanded PDS FPDEEP:
+
+```asm
+; Before                         ; After
+fld dword [p+si]                 wait
+fmul st0                         mov dword [scratch],43100000h
+fstp dword [scratch]             wait
+wait
+```
+
+`43100000h` is SINGLE 144. The nine stores across three iterations become
+144/6/0.5, 784/14/0.75, and 3600/30/0.875. Floating operations fall from
+71 to 20. PDS's object shrinks from 2078 to 1927 bytes. Static costs:
+
+| Compiler | Before | After | After / target 1086 |
+|---|---:|---:|---:|
+| PDS | 3663 | 2166 | 1.99x |
+| QB | 3861 | 2201 | 2.03x |
+| VBDOS | 3661 | 2162 | 1.99x |
+
+All 33 FPDEEP output checks pass with experimental expansion selected.
+The default FPCSE path also benefits, passing output checks on all three
+compilers: object sizes are PDS 922→878, QB 953→889, VBDOS 1098→1054.
+No elapsed-time speedup is claimed.
+
+QB FPCSE exposed an entry-accounting bug. The diagnostic claimed five bytes
+overlapped, but the raw ranges showed no overlap: removing the first load
+left source address 0x35 as the first survivor, owning bytes from entry 0x30.
+Layout and object writing now use the explicit procedure entry rather than
+the minimum surviving source address. A separate ownership regression ensures
+inserted occurrences retain relocation identity without inheriting source
+byte coverage. Both the actual QB emission refusal and chain-elimination
+regression were observed failing before their fixes.
+
+The targeted layout/relocation run had 4416 passes and 28 failures. All 28
+also fail with the previous folding/layout/assembly functions restored in
+process; they are not treated as passing or as newly introduced failures.
+Stage dumps and runtime artifacts:
+
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-exact-stores-s9k235ua`
