@@ -1,5 +1,31 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: register CMPORD's complete reference
+
+The source's four LONG pairs are all strictly ascending. Each yields the
+same six forward/reverse Boolean pairs; all eight initial numeric stores
+remain before printing. The required 24 three-call rows, DONE and termination
+give **8*6 + 24*3*(6+20) + 26 + 20 = 1966** ranking units. The derivation
+and abstract assembly listing are in `docs/targets.md`.
+
+QB/PDS/VBDOS independently emit those eight constants and the expected call
+counts; none of the eight numeric addresses escapes. Each linked baseline
+and optimized executable passes all 24 golden rows. Three fail-first target
+tests plus three event-reference safeguards pass. No compiler code changed:
+before and after both retain the same initial stores and constant-argument
+printing sequence; no assembly-size or speedup claim is made.
+
+The 15 CMPORD rows were rescored, not the full corpus again: twelve ordinary
+builds are 1.00x; three event builds remain provisional. Combined with the
+preceding complete snapshot, coverage is **301 comparable/passing, 105
+provisional, 81 without targets**. FPCSEX and FPDEEP remain provisional;
+their exception/observability obligations were not relaxed.
+
+Runtime artifacts under `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T`:
+`qbopt-cmpord-reference-p-g2-jp_tsoey`,
+`qbopt-cmpord-reference-q-O-vw_9s607`,
+`qbopt-cmpord-reference-v-g3-wvwjjj81`.
+
 ## 2026-09-10: full scoreboard checkpoint
 
 At b126fb4, all 487 `fixtures/omf` objects were measured once: 289 comparable

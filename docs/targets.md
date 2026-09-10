@@ -147,6 +147,58 @@ compiler COMENT record, never its filename. Unknown compiler identities and
 event-enabled configurations remain provisional. FPCSEX still needs its own
 reference; this constant-input proof does not apply to it.
 
+## CMPORD — constant signed comparisons with observable initial stores
+
+For ordinary event-free configurations, the source defines four ordered
+LONG pairs: (-1,1), (-2147483648,2147483647), (65535,65536), and
+(0x12340000,0x1234ffff). In every pair the first value is strictly smaller.
+For each pair, the six printed comparisons therefore have these two
+results, in source order:
+
+| Relation | Forward | Reverse |
+|---|---:|---:|
+| `<` | -1 | 0 |
+| `<=` | -1 | 0 |
+| `>` | 0 | -1 |
+| `>=` | 0 | -1 |
+| `=` | 0 | 0 |
+| `<>` | -1 | -1 |
+
+Keep all eight initial LONG stores before printing; no argument assumes
+that output cannot observe them. No numeric address escapes to printing,
+so its subsequent calls do not invalidate these scalar constants. There
+is no intervening assignment, unknown user call, floating operation or
+event poll in this source/configuration. Signed comparison does not trap.
+
+The independent listing consists of the eight immediate dword stores and
+this sequence for each of the 24 rows, with the table's literal answers:
+
+```asm
+push word labelDescriptor
+call far B$PSSD
+push word forwardAnswer
+call far B$PSI2
+push word reverseAnswer
+call far B$PEI2
+; after all 24 rows
+push word doneDescriptor
+call far B$PESD
+call far B$CENP
+```
+
+In the scoreboard model, each initial store costs 2+4=6; each push costs
+2+4=6; each retained output/termination call costs 20. Thus the complete
+reference is **8*6 + 24*3*(6+20) + (6+20) + 20 = 1966** units. No B$CPI4
+call, compare, conditional branch or intermediate Boolean store remains.
+This derives the denominator from source states and required output—not
+from the optimizer's measured total or a percentage of BC's cost.
+
+The QB/PDS/VBDOS emitted listings independently match these eight store
+values and the 24 PSSD, 24 PSI2, 24 PEI2, one PESD and one CENP calls.
+All three linked baseline/optimized executions match all 24 golden rows.
+Event-enabled variants still need event-preserving references and remain
+provisional. Registering this target changes no emitted instruction.
+
 ## FPDEEP — exact constant floating expressions
 
 **The same audit limitation applies here:** 1086 prices the numerical/printing

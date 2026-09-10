@@ -5,21 +5,24 @@ Measured **2026-09-10**, compiler revision **b126fb4**, with
 `fixtures/omf` (**34 source programs**). These are model-weighted instruction
 costs, including configured helper costs—not hardware timings. Default loop
 weighting is ten iterations per nesting level, capped at three levels.
+Updated afterward by rescoring all 15 CMPORD objects against its independently
+derived 1966-unit reference; compiler output was unchanged. The other rows
+retain the full-scan measurements above.
 
 | Status | Configurations |
 |---|---:|
-| Comparable and within 1.5x | 289 |
+| Comparable and within 1.5x | 301 |
 | Comparable and above 1.5x | 0 |
-| Provisional reference | 102 |
-| No target | 96 |
+| Provisional reference | 105 |
+| No target | 81 |
 | Unmeasured / refused emission | 0 |
 
-**The goal is not complete.** The gate returns 1. Only 289/487 rows currently
+**The goal is not complete.** The gate remains failing. Only 301/487 rows currently
 have comparable references; this is coverage, not a project-completion
 percentage. The architecture checklist remains independently binding.
 Comparability here is the scorer's classification, not a new independent
-audit of every registered reference. The 102 provisional rows comprise
-78 event builds, 12 ordinary FPCSEX builds and 12 ordinary FPDEEP builds.
+audit of every registered reference. The 105 provisional rows comprise
+81 event builds, 12 ordinary FPCSEX builds and 12 ordinary FPDEEP builds.
 Recent regression fixtures in `fixtures/regressions` are outside this
 default scan and are not implied covered by these totals.
 
@@ -45,7 +48,6 @@ numbers to claim success or justify relaxing floating-point behavior.
 | Source program | Configurations without targets |
 |---|---:|
 | CHAIN | 15 |
-| CMPORD | 15 |
 | DIVMOD | 15 |
 | FPEMU | 15 |
 | JUMPS | 15 |
@@ -61,7 +63,7 @@ references; their plain-program denominator is not comparable.
 
 1. Derive and validate strict FPCSEX and complete FPDEEP reference listings;
    retain source-order rounding, pending exceptions and observable stores.
-2. Add independently derived references for the eight uncovered programs
+2. Add independently derived references for the seven uncovered programs
    and event-enabled configurations. Do not scale targets from emitted costs.
 3. Use those validated gaps to prioritize implementation alongside the
    [architecture checklist](architecture.md#high-impact-mir-passes).

@@ -21,6 +21,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 import opportunity
 
 
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_cmpord_has_a_complete_source_derived_reference(tag, capsys):
+    """CMPORD's 24 signed-comparison rows had no reference despite constant answers."""
+    assert opportunity.against_targets([Path(f"fixtures/omf/cmpord-{tag}.obj")]) == 0
+    report = capsys.readouterr().out
+    assert "1966" in report and "1.00x" in report
+    assert opportunity.TARGETS["CMPORD"] == 8 * (2 + 4) + 24 * 3 * (6 + 20) + (6 + 20) + 20
+
+
 def test_subexp_reference_includes_all_stores_and_output_calls():
     """SUBEXP's old listing showed only arithmetic, leaving its 162-unit full target unauditable."""
     first = 11 | (5 << 16)

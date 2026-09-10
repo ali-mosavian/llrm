@@ -563,6 +563,7 @@ TARGETS = {
     "NEGNOT": 254,
     "ARITH": 592,
     "FLAGS": 248,  # Complete constant-branch reference retaining states at every output call.
+    "CMPORD": 1966,  # Eight initial stores, 24 three-call rows, DONE and termination.
     "FPDEEP": 1086,
 }
 
