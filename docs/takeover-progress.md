@@ -1,5 +1,30 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: translate GVN expressions through input phis
+
+GVN now matches each join expression using that edge's incoming phi values.
+Translation is simultaneous, so swapped loop inputs are not recursively
+substituted. The pass still inserts no arithmetic and stays machine-independent.
+
+GVNPHI reads inputs and squares `inputValue + 1` on one branch and
+`inputValue + 2` on the other, then squares the selected value again at the
+join. Both paths retain their own square:
+
+```asm
+; before, at the join
+imul eax,eax
+mov [square],eax
+; after
+mov [square],eax
+```
+
+Static multiplies **3 -> 2**, executed multiplies **2 -> 1 per iteration**;
+PDS object **1200 -> 1195 bytes**. Both paths print **48,49; 37,36; DONE**
+under QB, PDS and VBDOS. MIR and all three emitted-code regressions failed
+without phi translation. Stage dumps:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-gvnphi-stages-vj75d8jt`.
+Missing-edge insertion, memory PRE and profitability remain open.
+
 ## 2026-09-10: eliminate scalar redundancy across joins
 
 `optimize/gvn.py` extends CSE beyond a single dominating provider. If each
@@ -33,7 +58,8 @@ PRESSX and FPCSEX objects emit byte-identical output with the new step.
 Stages: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-gvnjn-stages-dhpr1e8y`.
 
 This is full redundancy elimination at joins, not complete PRE: missing-edge
-insertion, phi translation, memory expressions and profitability remain.
+insertion, memory expressions and profitability remain. Phi translation was
+added in the follow-up above.
 FPCSEX remains at 4462 model units on PDS with an invalid provisional
 denominator; this integer optimization does not establish floating progress.
 

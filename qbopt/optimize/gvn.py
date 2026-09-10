@@ -6,6 +6,20 @@ from qbopt.analysis import loops, ssa
 from qbopt.model import ir, mir
 
 
+def _on_edge(op: mir.Op, phis: tuple[mir.Phi, ...], predecessor: int) -> mir.Op | None:
+    """Translate simultaneously: an incoming phi value belongs to the prior edge, not another substitution."""
+    incoming = {phi.result: phi.incoming.get(predecessor) for phi in phis}
+    args = []
+    for arg in op.args:
+        if isinstance(arg, mir.Held) and arg.value in incoming:
+            value = incoming[arg.value]
+            if value is None:
+                return None
+            arg = replace(arg, value=value)
+        args.append(arg)
+    return replace(op, args=tuple(args))
+
+
 def joined(body: mir.MirBody) -> mir.MirBody:
     """Eliminate full redundancy at joins without inserting or speculating work.
 
@@ -58,7 +72,9 @@ def joined(body: mir.MirBody) -> mir.MirBody:
             incoming = {}
             if expression is not None and not any(value.flags and value in live for value in op.defines):
                 for parent in sorted(parents):
-                    candidates = [(at, index, value) for at, index, value in expressions[expression]
+                    translated = _on_edge(ssa.substituted(op, replacements), tuple(phis), parent)
+                    edge_expression = key(translated) if translated is not None else None
+                    candidates = [(at, index, value) for at, index, value in expressions.get(edge_expression, ())
                                   if at != block.at and at in dominators[parent]
                                   and block.at not in dominators[at]
                                   and all(at not in loop.body or block.at in loop.body for loop in natural_loops)]

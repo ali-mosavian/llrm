@@ -561,7 +561,8 @@ one documented target without materially regressing another.
 - [ ] Implement global value numbering with partial redundancy elimination
   (`GVN-PRE`) for scalar and memory expressions.
   Scalar full redundancy at joins is implemented: when every incoming edge
-  has a dominating provider, a phi replaces the repeated computation. No
+  has a dominating provider, a phi replaces the repeated computation; input
+  phis are translated separately on each incoming edge. No
   speculative insertion, memory PRE, or strict floating reuse is implied.
 - [ ] Replace the separate load/store cleanup rules with MemorySSA-based load
   elimination and dead-store elimination.

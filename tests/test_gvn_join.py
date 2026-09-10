@@ -66,16 +66,44 @@ def test_read_flags_keep_the_join_computation():
     assert gvn.joined(body) == body
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+def test_join_translates_phi_inputs_on_each_edge(reverse):
+    body = diamond()
+    entry, left, right, join = body.blocks
+    other, selected = mir.Value(2, 1), mir.Value(3, 30)
+    define = replace(entry.ops[0], at=1, defines=(other,), results=(mir.Held(other, 4),))
+    right_product = replace(right.ops[0], args=(mir.Held(other, 4), mir.Const(7, 4)), uses=(other,))
+    joined_product = replace(join.ops[0], args=(mir.Held(selected, 4), mir.Const(7, 4)), uses=(selected,))
+    phi = mir.Phi(selected, {10: entry.ops[0].defines[0], 20: other})
+    blocks = (replace(entry, ops=(*entry.ops, define)), left, replace(right, ops=(right_product,)),
+              replace(join, phis=(phi,), ops=(joined_product, join.ops[1])))
+    body = replace(body, blocks=tuple(reversed(blocks)) if reverse else blocks)
+    after = gvn.joined(body)
+    joined = next(block for block in after.blocks if block.at == 30)
+    assert not any(op.kind is mir.Kind.MUL for op in joined.ops)
+    assert joined.phis[-1].incoming == {10: left.ops[0].results[0].value, 20: right_product.results[0].value}
+
+
+def test_phi_translation_is_simultaneous_not_recursive():
+    first, second = mir.Value(1, 10), mir.Value(2, 10)
+    op = replace(diamond().blocks[-1].ops[0], args=(mir.Held(first, 4), mir.Held(second, 4)))
+    phis = (mir.Phi(first, {20: second}), mir.Phi(second, {20: first}))
+    translated = gvn._on_edge(op, phis, 20)
+    assert translated.args == (mir.Held(second, 4), mir.Held(first, 4))
+    assert gvn._on_edge(op, phis, 30) is None
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
-def test_real_diamond_emits_one_fewer_multiply(tag, monkeypatch):
-    """GVNJN prints 35,36 and 37,36; both branches used to multiply again at the join."""
+@pytest.mark.parametrize("program", ["gvnjn", "gvnphi"])
+def test_real_diamond_emits_one_fewer_multiply(tag, program, monkeypatch):
+    """GVNJN prints 35,36/37,36; GVNPHI 48,49/37,36. Both repeated the square at the join."""
     from pathlib import Path
     from iced_x86 import Mnemonic
     from qbopt import wholeseg
     from qbopt.frontend import blocks
     from qbopt.objectfile import module, omf
 
-    data = Path(f"fixtures/regressions/gvnjn-{tag}.obj").read_bytes()
+    data = Path(f"fixtures/regressions/{program}-{tag}.obj").read_bytes()
     with monkeypatch.context() as before:
         before.setattr(gvn, "joined", lambda body: body)
         old = wholeseg.emitted(data)
