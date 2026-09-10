@@ -10,6 +10,39 @@ from qbopt.optimize import algebraic
 from qbopt.optimize import transform
 
 
+def test_nbody_reuses_the_whole_signed_initialization_value():
+    """NBODY sign-extended initialization values, extracted their high words, then rebuilt the same longs."""
+    path = Path("fixtures/bench/nbody-v-g3.obj")
+    body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
+    done = algebraic.simplified(body, set(), set())
+    for at in (0x75, 0x9c):
+        assert not any(op.at == at and op.kind is mir.Kind.CONCAT for block in done.blocks for op in block.ops)
+
+
+@pytest.mark.parametrize("mismatch", ["source", "width", "kind", "offset"])
+def test_signed_recombination_requires_the_exact_extension(mismatch):
+    """Reusing NBODY's signed value must not join a sign word to an unrelated low word."""
+    path = Path("fixtures/bench/nbody-v-g3.obj")
+    body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
+    ops = [op for block in body.blocks for op in block.ops]
+    definitions = {value: op for op in ops for value in op.defines}
+    extension = next(op for op in ops if op.at == 0x72 and op.kind is mir.Kind.SIGN_EXTEND)
+    extract = next(op for op in ops if op.at == 0x72 and op.kind is mir.Kind.EXTRACT)
+    concat = next(op for op in ops if op.at == 0x75 and op.kind is mir.Kind.CONCAT)
+    match mismatch:
+        case "source":
+            extension = replace(extension, args=(mir.Held(mir.Value(999999, 0), 2),))
+        case "width":
+            extension = replace(extension, results=(replace(extension.results[0], width=2),))
+        case "kind":
+            extension = replace(extension, kind=mir.Kind.COPY)
+        case "offset":
+            extract = replace(extract, args=(extract.args[0], mir.Const(0, 4)))
+    definitions[extension.defines[0]] = extension
+    definitions[extract.defines[0]] = extract
+    assert algebraic._recombined(concat, definitions).kind is mir.Kind.CONCAT
+
+
 def test_nbody_counter_comparison_joins_whole_values_before_the_loop():
     """NBODY rebuilt its long counter from two word phis for every loop comparison."""
     path = Path("fixtures/bench/nbody-v-g3.obj")

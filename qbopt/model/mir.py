@@ -2129,7 +2129,7 @@ def _unreached(found: Module) -> "tuple[int, frozenset] | None":
 
 
 def extracted_whole(high, low, definitions):
-    """The scalar whose exact high and low word extractions are these operands."""
+    """The scalar whose exact high and low words are these operands."""
     original = None
     for arg, offset in ((high, 16), (low, 0)):
         seen = set()
@@ -2143,6 +2143,12 @@ def extracted_whole(high, low, definitions):
             arg = copy.args[0]
         if not isinstance(arg, Held) or arg.width != 2:
             return None
+        if offset == 0 and original is not None:
+            extension = definitions.get(original.value)
+            if (extension is not None and extension.kind is Kind.SIGN_EXTEND
+                and extension.args == (arg,) and extension.results == (original,)
+                and not extension.loads and not extension.stores and not extension.barrier):
+                return original
         op = definitions.get(arg.value)
         if (op is None or op.kind is not Kind.EXTRACT or op.results != (arg,) or len(op.args) != 2
             or not isinstance(op.args[0], Held) or op.args[0].width != 4

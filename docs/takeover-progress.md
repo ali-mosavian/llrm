@@ -3933,3 +3933,21 @@ VBDOS NBODY is 4209 -> 4205 bytes, modeled cost 363812 -> 363752; PDS is
 2892 -> 2888, cost 360647 -> 360587. Both runtime outputs match. QB LNGMXX
 matches at unchanged 838 bytes / 246 modeled cost. Dumps and output:
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-edge-reload-c2reus8k`.
+
+### Reuse signed whole values instead of extracting and rebuilding them
+
+The exact-word reconstruction proof now also recognizes
+`concat(extract(sign_extend(x),16), x)` as the already available signed whole
+value, following the existing width-preserving copies. The extension must
+consume that exact low word and produce the exact four-byte value; a different
+source, result width, operation kind or extraction offset is rejected.
+This is a MIR value identity, with no machine-specific cost or register rule.
+
+Before NBODY initialization: MOVSX, PUSH/POP/POP to obtain the high word,
+PUSH/PUSH/POP to reconstruct the long, then SHL. After: MOVSX then SHL.
+The real fixture regression failed first; 54 raising/initialization checks
+and 11 focused recombination checks pass. Fresh VBDOS/PDS NBODY and QB ADDRM
+outputs match originals. NBODY changes 4205 -> 4165 bytes on VBDOS and
+2888 -> 2872 on PDS; modeled costs change 363752 -> 361952 and
+360587 -> 359867 respectively. These are estimates, not hardware timings.
+Artifacts: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-signed-recombine-dbv_q48f`.
