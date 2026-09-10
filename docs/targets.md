@@ -469,6 +469,34 @@ numeric globals; adding another generic call-preservation rule is not the
 missing optimization. Next expose dispatch semantics in the raise and enable
 bounded CFG unrolling, allowing SCCP to resolve each cloned iteration's arms.
 
+### Dispatch recognition contract
+
+The shipped runtimes do **not** implement an unrestricted switch default.
+Manual disassembly of `gosub.asm` in all three libraries establishes:
+
+| Selector (unsigned INTEGER) | Control |
+| --- | --- |
+| 1 through the table count | Corresponding entry, in table order |
+| 0, or greater than count but at most 255 | Byte immediately after the table |
+| 256 through 65535 (including negative signed INTEGERs) | `B$FrameFC` |
+
+The rejecting test is `or bh,bh / jne`: QB at 0054/0056, PDS at
+005B/005D, VBDOS at 005F/0061. Its target is a relocated near jump to
+`B$FrameFC`, independently resolved through FIXUPP/EXTDEF at QB 008F,
+PDS 009B and VBDOS 009F. The default returns are QB 008B, PDS 0097 and
+VBDOS 009B. Decode these branch roots separately: PDS/VBDOS's linear
+listing overlaps their `push es / push dx` with a preceding `cmp` encoding.
+
+Recognition must therefore prove the selector is in 0..255 or preserve the
+exceptional behavior explicitly; mapping every non-case value to the default
+is wrong even when ordinary JUMPS output passes. Keep ordered cases separate
+from the deduplicated successor set, since repeated destinations are legal.
+Replacing the call also needs a proof that its outgoing clobbered values are
+unobserved, or explicit semantic replacements for observed results. The existing
+OWN memory contract alone proves neither fact. JUMPS's three iterations satisfy
+the selector range, but general dispatch recognition cannot assume that range.
+This contract audit changes no emitted assembly.
+
 ## FPDEEP — exact constant floating expressions
 
 **The same audit limitation applies here:** 1086 prices the numerical/printing
