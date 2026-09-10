@@ -16,7 +16,7 @@ class Peephole(LIRTransform):
         self.frame = frame
 
     def transform(self, body: lir.LirBody) -> lir.LirBody:
-        return self._frame(waits(zeroes(addresses(overwritten(constants(body))))))
+        return self._frame(waits(zeroes(addresses(overwritten(constants(pushes(body)))))))
 
     def _frame(self, body):
         """Drop only synthetic reservations when no added stack storage remains."""
@@ -40,6 +40,33 @@ class Peephole(LIRTransform):
                         return body
         return replace(body, blocks=tuple(replace(block, insns=tuple(
             lir.without(block.insns, lambda one: one.frame_adjust))) for block in body.blocks))
+
+
+def pushes(body: lir.LirBody) -> lir.LirBody:
+    """Two adjacent immediate word pushes have one dword's stack layout."""
+    blocks = []
+    for block in body.blocks:
+        out = []
+        index = 0
+        while index < len(block.insns):
+            pair = block.insns[index:index + 2]
+            if len(pair) == 2 and all(not (one.clobbers or one.requires or one.delivers or one.defines
+                                           or one.uses or one.symbol is True or one.spread) for one in pair):
+                match pair[0].what, pair[1].what:
+                    case (ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Imm(high, 2, None),)),
+                          ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Imm(low, 2, None),))):
+                        what = ir.Semantics(ir.Operation.PUSH, "push", (),
+                                            (ir.Imm(((high & 0xffff) << 16) | (low & 0xffff), 4),))
+                        combined = replace(pair[0], what=what)
+                        folded = lir.without((combined, pair[1]), lambda one: one is pair[1])
+                        if len(folded) == 1:
+                            out.extend(folded)
+                            index += 2
+                            continue
+            out.append(block.insns[index])
+            index += 1
+        blocks.append(replace(block, insns=tuple(out)))
+    return replace(body, blocks=tuple(blocks))
 
 
 def _lanes(register):

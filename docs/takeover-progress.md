@@ -1,5 +1,35 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: combine adjacent constant argument pushes
+
+The backend now combines adjacent unrelocated word-immediate pushes into
+one dword-immediate push. The second word occupies the low half, so stack
+bytes and the total four-byte adjustment are unchanged. MIR remains
+machine-independent. Relocations, instruction/block boundaries, nonadjacent
+byte ownership and implicit operand requirements prevent fusion.
+
+FPCSE before/after:
+
+```asm
+; before                       ; after
+push 43F3h                     pushd 43F3C000h
+push C000h
+call B$PER4                    call B$PER4
+```
+
+PDS modeled cost **173 -> 167**, QB **157 -> 151**, VBDOS unchanged at
+167 (already a wide push). Object sizes are unchanged: six encoded bytes
+in either form. These remain above the 98-cost reference; no completion
+claim. Current FPDEEP costs are PDS/QB/VBDOS **1803/1720/1803** and are
+unchanged by push fusion.
+
+The emitted-code regression failed before fusion. All 102 peephole tests
+pass, including byte-order, signed constants, four-byte stack adjustment
+and boundary guards. FPCSE and all eleven FPDEEP answers match original
+DOS executions on each of the three compilers; links succeeded.
+All stage dumps and runtime artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-push-pairs-tr0joga6`.
+
 ## 2026-09-10: release empty allocator frame reservations
 
 The backend tags its synthetic prologue/epilogue adjustments and removes

@@ -9,6 +9,50 @@ from qbopt.model import ir, lir
 from qbopt.backend import peephole
 
 
+def test_fpcse_pushes_constant_single_as_one_dword():
+    """QB FPCSE pushed 487.5 as 43F3h then C000h instead of one dword."""
+    import corpus
+    from qbopt import wholeseg
+    result = wholeseg.emitted(Path("fixtures/omf/fpcse-q-O.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
+    assert "pushd 43F3C000h" in instructions
+    assert "push 43F3h" not in instructions
+
+
+@pytest.mark.parametrize("high,low", [(0x43f3, 0xc000), (-1, -2), (0, 0), (0x8000, 0x7fff)])
+def test_constant_push_pair_preserves_stack_bytes(high, low):
+    from qbopt.backend import select
+    from iced_x86 import Decoder
+    def push(at, number):
+        return lir.Insn(at, (at, at + 3), ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Imm(number, 2),)), (), ())
+    pair = (push(0, high), push(3, low))
+    body = lir.LirBody("arguments", 0, (lir.LirBlock(0, pair, ()),), {}, {})
+    result = peephole.pushes(body).insns
+    assert len(result) == 1 and result[0].covers == (0, 6)
+    operand = result[0].what.sources[0]
+    assert operand.value.to_bytes(4, "little") == (low & 0xffff).to_bytes(2, "little") + (high & 0xffff).to_bytes(2, "little")
+    assert next(iter(Decoder(16, select.emit(result[0].what).code))).stack_pointer_increment == -4
+
+
+@pytest.mark.parametrize("barrier", ["relocation", "gap", "block", "instruction"])
+def test_constant_push_fusion_stops_at_boundaries(barrier):
+    from qbopt.objectfile.module import Addr, Space
+    first = lir.Insn(0, (0, 3), ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Imm(1, 2),)), (), ())
+    second = replace(first, at=3, covers=(3, 6))
+    match barrier:
+        case "relocation":
+            first = replace(first, what=replace(first.what, sources=(ir.Imm(1, 2, Addr(Space.SEGMENT, 0, 5)),)))
+        case "gap":
+            second = replace(second, at=4, covers=(4, 7))
+    insns = ((first, lir.Insn(3, (3, 3), None, (), ()), second)
+             if barrier == "instruction" else (first, second))
+    blocks = ((lir.LirBlock(0, (first,), (3,)), lir.LirBlock(3, (second,), ()))
+              if barrier == "block" else (lir.LirBlock(0, insns, ()),))
+    body = lir.LirBody("boundary", 0, blocks, {}, {})
+    assert peephole.pushes(body) == body
+
+
 def test_fpcse_drops_unused_allocator_reload():
     """QB FPCSE printed 487.5 correctly but restored AX only to overwrite it."""
     import corpus
