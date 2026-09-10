@@ -42,6 +42,7 @@ def tied(body: lir.LirBody) -> lir.LirBody:
     changed = False
     from qbopt.backend import allocate
     _, leaving = allocate.live(body)
+    copies = _copy_destinations(body)
     blocks = []
     for block in body.blocks:
         alive = set(leaving[block.at])
@@ -52,7 +53,7 @@ def tied(body: lir.LirBody) -> lir.LirBody:
             alive.update(one.uses)
         insns: list[lir.Insn] = []
         for one in block.insns:
-            chosen = _commuted(one, live_after[id(one)])
+            chosen = _commuted(one, live_after[id(one)], copies)
             changed |= chosen is not one
             one = chosen
             fix = _untied(one)
@@ -65,7 +66,21 @@ def tied(body: lir.LirBody) -> lir.LirBody:
     return replace(body, blocks=tuple(blocks)) if changed else body
 
 
-def _commuted(one: lir.Insn, alive: frozenset[int]) -> lir.Insn:
+def _copy_destinations(body: lir.LirBody) -> dict[int, set[int]]:
+    """Copy affinities are hints; liveness and allocation still decide legality."""
+    targets = {}
+    for block in body.blocks:
+        for one in block.insns:
+            what = one.what
+            if (what is not None and what.op is ir.Operation.MOVE
+                and len(what.dests) == len(what.sources) == 1
+                and isinstance(what.dests[0], ir.Held) and isinstance(what.sources[0], ir.Held)
+                and what.dests[0].width == what.sources[0].width):
+                targets.setdefault(what.sources[0].value, set()).add(what.dests[0].value)
+    return targets
+
+
+def _commuted(one: lir.Insn, alive: frozenset[int], copies=None) -> lir.Insn:
     what = one.what
     if (what is None or what.op is not ir.Operation.BINARY or what.name not in {"add", "and", "or", "xor"}
         or len(what.dests) != 1 or len(what.sources) != 2 or one.group is not None
@@ -75,7 +90,11 @@ def _commuted(one: lir.Insn, alive: frozenset[int]) -> lir.Insn:
     if (not all(isinstance(arg, ir.Held) for arg in (into, first, second))
         or not into.width == first.width == second.width or into.value == first.value):
         return one
-    if second.value == into.value or first.value in alive and second.value not in alive:
+    targets = (copies or {}).get(into.value, ())
+    reusable = (first.value not in alive and second.value not in alive
+                and second.value in targets and first.value not in targets)
+    if (second.value == into.value or first.value in alive and second.value not in alive
+        or reusable):
         return replace(one, what=replace(what, sources=(second, first)))
     return one
 

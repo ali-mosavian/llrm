@@ -140,3 +140,22 @@ Modeled costs fall again: QB/PDS **584 → 380**, VBDOS **580 → 368**.
 Object sizes: QB 1090 → 1087, PDS 1117 → 1114, VBDOS 1257 → 1249.
 All three linked outputs remain 28 and DONE. The raise-time regression was
 observed failing on all three objects before moving sign-fill recognition.
+
+Two-address selection now uses result-copy affinity to break ties between dead
+commutative operands. Choosing the accumulator lets ordinary coalescing remove
+the backedge copy; live operands, constrained instructions and noncommutative
+operations retain their existing rules. PDS before/after:
+
+```asm
+; before                      ; after
+movsx edx,cx                  movsx edx,cx
+add edx,eax                   add eax,edx
+inc cx                        inc cx
+mov eax,edx                   cmp cx,bx
+cmp cx,bx                     jle loop
+jle loop
+```
+
+QB/PDS modeled cost **380 → 360**, VBDOS **368 → 348**; all objects shrink
+three bytes. All three linked outputs remain 28 and DONE. This is a backend
+operand-selection change: MIR's arithmetic and value identities are unchanged.

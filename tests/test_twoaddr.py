@@ -4,7 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from iced_x86 import Mnemonic, OpKind
+from iced_x86 import Mnemonic, OpKind, RegisterExt
 
 from qbopt.frontend import blocks
 from qbopt.model import ir, lir
@@ -45,6 +45,15 @@ def test_live_operands_and_grouped_operations_keep_their_order():
     assert twoaddr._commuted(grouped, frozenset({1, 3})) is grouped
 
 
+@pytest.mark.parametrize("alive,swapped", [(frozenset({3}), True), (frozenset({2, 3}), False),
+                                          (frozenset({1, 2, 3}), False)])
+def test_result_copy_affinity_does_not_override_liveness(alive, swapped):
+    """LOCALP's backedge copy favors its accumulator only when its old value can be overwritten."""
+    one = addition()
+    chosen = twoaddr._commuted(one, alive, {3: {2}})
+    assert chosen.what.sources == (tuple(reversed(one.what.sources)) if swapped else one.what.sources)
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_lngmxx_loop_has_no_accumulator_copy_roundtrip(tag):
     """LNGMXX emitted MOV temp,sum / ADD temp,invariant / MOV sum,temp on each of ten iterations."""
@@ -57,3 +66,20 @@ def test_lngmxx_loop_has_no_accumulator_copy_roundtrip(tag):
     for branch in backedges:
         assert not any(one.mnemonic == Mnemonic.MOV and one.op0_kind == one.op1_kind == OpKind.REGISTER
                        for one in reached if branch.near_branch_target <= one.ip < branch.ip)
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_localp_updates_the_accumulator_without_a_loop_copy(tag):
+    """LOCALP copied every LONG sum back because ADD tied to the temporary index."""
+    result = wholeseg.emitted(Path(f"fixtures/regressions/localp-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    found = module.of(omf.parse(result.data))
+    mapped = blocks.code_map(found)
+    assert not isinstance(mapped, str), mapped
+    insns = [one for block in blocks.partition(found, mapped) for one in block.insns]
+    backedge, = [one for one in insns if one.insn.mnemonic == Mnemonic.JLE
+                 and one.insn.near_branch_target < one.at]
+    loop = [one.insn for one in insns if backedge.insn.near_branch_target <= one.at < backedge.at]
+    assert any(one.mnemonic == Mnemonic.ADD for one in loop)
+    assert not any(one.mnemonic == Mnemonic.MOV and one.op0_kind == one.op1_kind == OpKind.REGISTER
+                   and RegisterExt.size(one.op0_register) == 4 for one in loop)

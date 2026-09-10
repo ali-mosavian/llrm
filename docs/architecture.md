@@ -694,6 +694,10 @@ one documented target without materially regressing another.
   addresses, without extending their register lifetimes across calls. QB FPDEEP
   removes three spill slots and falls from 1652 to 1570 modeled cost; general
   allocator rematerialization and the other items remain open.
+  Two-address selection uses result-copy affinity as a tie-breaker between dead
+  commutative inputs, allowing coalescing to remove LOCALP's accumulator copy.
+  Its loop loses one MOV (20 modeled units at the standard ten-iteration weight)
+  on each compiler. Liveness and fixed/grouped operand constraints take priority.
 - [ ] Add instruction scheduling for 486/P5/P6 only after their latency,
   dependency and pairing models are validated against primary sources.
 
