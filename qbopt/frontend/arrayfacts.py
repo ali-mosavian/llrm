@@ -13,6 +13,7 @@ from math import prod
 from qbopt.analysis import consts, loops, ranges
 from qbopt.model import mir
 from qbopt.objectfile.module import Addr, Space
+from qbopt.frontend.addressfacts import Region, region
 
 
 @dataclass(frozen=True)
@@ -29,7 +30,7 @@ class Allocation:
     generation: tuple[int, int]
 
 
-type Fact = int | ranges.Interval | Pointer
+type Fact = int | ranges.Interval | Pointer | Region
 
 
 @dataclass
@@ -68,6 +69,8 @@ def _fitted(fact, width):
         if -sign <= fact.low <= fact.high < sign:
             return consts.masked(fact.low, width) if fact.low == fact.high else replace(fact, width=width)
         return None
+    if isinstance(fact, Region) and width == 2:
+        return fact
     return fact if isinstance(fact, Pointer) and width == 4 else None
 
 
@@ -119,6 +122,13 @@ def _address(ref, state):
             return pointer
         return None
     ref = mir._symbolic_ref(ref)
+    if ref.base is not None and ref.base_width == 2 and ref.segment is None and ref.addr is not None:
+        base = _read(mir.Held(ref.base, 2), state)
+        if ref.addr.space is Space.SEGMENT and (span := _span(base, 2)) is not None:
+            return region(Addr(Space.SEGMENT, ref.addr.disp, ref.addr.index), span, ref.width)
+        if ref.addr.space is Space.LITERAL and isinstance(base, Region):
+            shifted = base.shifted(ranges.Interval(ref.addr.disp, ref.addr.disp, 2))
+            return region(shifted.anchor, shifted.offset, ref.width) if shifted is not None else None
     return (ref.addr if ref.addr is not None and ref.addr.space in (Space.SEGMENT, Space.FRAME)
             and ref.base is None and ref.segment is None
             and ref.addr == Addr(ref.addr.space, ref.addr.disp, ref.addr.index) else None)
@@ -126,6 +136,9 @@ def _address(ref, state):
 
 def _read(arg, state):
     match arg:
+        case mir.Symbol(space=Space.SEGMENT, width=2) as symbol:
+            return region(Addr(symbol.space, symbol.offset + symbol.addend, symbol.index),
+                          ranges.Interval(0, 0, 2), 1)
         case mir.Const(n=number, width=width):
             return consts.masked(number, width)
         case mir.Held(value=value, width=width):
@@ -136,6 +149,8 @@ def _read(arg, state):
             return _fitted(fact, width)
         case mir.Cell(ref=ref):
             address = _address(ref, state)
+            if isinstance(address, Region):
+                return None
             if isinstance(address, Pointer) and isinstance(address.offset, ranges.Interval):
                 return None
             return state.memory.get((address, ref.width))
@@ -149,6 +164,12 @@ def _result(op, args):
     if op.kind is mir.Kind.XOR and len(op.args) == 2 and op.args[0] == op.args[1]:
         return 0
     match op.kind, args:
+        case mir.Kind.ADD, [Region() as base, delta] | [delta, Region() as base] if (
+            all(getattr(arg, "width", None) == 2 for arg in (*op.args, *op.results))
+            and len(op.results) == 1 and isinstance(op.results[0], mir.Held)
+        ):
+            span = _span(delta, 2)
+            return base.shifted(span) if span is not None else None
         case (mir.Kind.COPY | mir.Kind.LOAD | mir.Kind.STORE), [value]:
             return value
         case mir.Kind.PTR_OFFSET, [Pointer(offset=offset) as pointer, (int() | ranges.Interval()) as delta]:
@@ -178,6 +199,10 @@ def _result(op, args):
 
 def _overlap(left, width, right, size):
     match left, right:
+        case Region(), (Addr() | Region()):
+            return left.overlaps(width, right, size)
+        case Addr(), Region():
+            return right.overlaps(size, left, width)
         case Addr(), Addr():
             return (left.space is right.space and left.index == right.index
                     and left.disp < right.disp + size and right.disp < left.disp + width)
@@ -220,16 +245,28 @@ def _transfer(block, arriving, cyclic):
             fitted = _fitted(result, value.width)
             if fitted is not None:
                 state.values[value.value] = fitted, value.width
+        if (op.kind is mir.Kind.LOAD and len(held) == 1 and len(op.loads) == 1
+            and not op.stores and op.args == (mir.Cell(op.loads[0]),)):
+            ref = op.loads[0]
+            address = _address(ref, state)
+            if isinstance(address, Addr) and ref.width in (2, 4) and held[0].width == ref.width:
+                key = address, ref.width
+                if key not in state.memory:
+                    sign = 1 << (8 * ref.width - 1)
+                    state.memory[key] = ranges.Interval(-sign, sign - 1, ref.width)
+                state.bindings[key] = held[0].value
         for ref in (*op.loads, *op.stores):
             address = _address(ref, state)
             if ref.pointer and isinstance(address, Pointer):
                 checked[index, ref] = address.allocation
+            elif isinstance(address, Region):
+                checked[index, ref] = address
         for ref in op.stores:
             address = _address(ref, state)
             if address is None:
                 state.forget_memory()
                 continue
-            if isinstance(address, Addr):
+            if isinstance(address, (Addr, Region)):
                 for descriptor in list(state.allocations):
                     base = Addr(descriptor.space, descriptor.offset + descriptor.addend, descriptor.index)
                     if _overlap(address, ref.width, base, state.allocations[descriptor].descriptor_size):
@@ -241,7 +278,8 @@ def _transfer(block, arriving, cyclic):
             state.bindings = {key: value for key, value in state.bindings.items()
                               if not _overlap(address, ref.width, *key)}
             fitted = _fitted(result, ref.width)
-            if fitted is not None and not (isinstance(address, Pointer) and isinstance(address.offset, ranges.Interval)):
+            if (fitted is not None and not isinstance(address, Region)
+                and not (isinstance(address, Pointer) and isinstance(address.offset, ranges.Interval))):
                 state.memory[address, ref.width] = fitted
                 if op.kind is mir.Kind.STORE and len(op.args) == 1 and isinstance(op.args[0], mir.Held):
                     state.bindings[address, ref.width] = op.args[0].value
@@ -284,8 +322,13 @@ def _widen(previous, current):
 
 
 def proven(body: mir.MirBody, *, limit: int = 10000) -> mir.MirBody:
-    if not any(ref.pointer for block in body.blocks for op in block.ops for ref in (*op.loads, *op.stores)):
+    references = [ref for block in body.blocks for op in block.ops for ref in (*op.loads, *op.stores)]
+    if not any(ref.pointer or ref.base is not None for ref in references):
         return body
+    statics = {(ref.addr, ref.width) for ref in references
+               if ref.base is None and ref.segment is None and ref.addr is not None
+               and ref.addr == Addr(ref.addr.space, ref.addr.disp, ref.addr.index)
+               and ref.addr.space is Space.SEGMENT and ref.width > 0}
     predecessors = loops.predecessors(body.blocks)
     by_at = {block.at: block for block in body.blocks}
     def revisited(block):
@@ -347,6 +390,10 @@ def proven(body: mir.MirBody, *, limit: int = 10000) -> mir.MirBody:
         for index, op in enumerate(block.ops):
             def reference(ref):
                 allocation = checked.get((index, ref))
+                if isinstance(allocation, Region):
+                    excludes = tuple(sorted((key for key in statics
+                        if not allocation.overlaps(ref.width, *key)), key=lambda key: (key[0].index, key[0].disp, key[1])))
+                    return replace(ref, excludes=excludes)
                 return replace(ref, allocation=allocation) if allocation is not None else ref
             def argument(arg):
                 return mir.Cell(reference(arg.ref)) if isinstance(arg, mir.Cell) else arg

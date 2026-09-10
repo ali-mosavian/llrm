@@ -24,6 +24,34 @@ shl bx,3                          shl bx,3
 This reuses the guard read; indexed field loads/stores inside the loop remain.
 Interior terminal calls still require byte-owning block splitting.
 
+The subsequent bounded-address proof is covered by all three UDTRNG objects.
+It carries guard intervals through unchanged scalar cells and uses the proven
+near-address range to exclude disjoint statics. Unknown calls, missing bounds,
+overlapping ranges and wrapping addresses do not establish disjointness.
+Existing LICM now moves address calculations and step loads out of the loop:
+QB 1064 → 705, PDS 1140 → 809, VBDOS 689 → 673 modeled cost.
+UDTRNG, unguarded UDTACC and fixed-field UDTFIX match their golden outputs on
+all three compilers. PDS loop excerpts (relocations named; unrelated ops omitted):
+
+```asm
+; before, inside loop             ; after, before loop
+mov bx,[slot]                     shl bx,3
+shl bx,3                          ; derive si = points + bx + 4
+mov eax,[points+bx]               mov ecx,[stepX]
+mov ecx,[stepX]                   mov [bp-18h],ecx
+add eax,ecx                       mov ecx,[stepY]
+mov [points+bx],eax
+; derive si = points + bx + 4      ; after, inside loop
+mov eax,[si]                      mov edi,[points+bx]
+mov ecx,[stepY]                   add edi,[bp-18h]
+add eax,ecx                       mov [points+bx],edi
+mov [si],eax                      mov edi,[si]
+                                 add edi,ecx
+                                 mov [si],edi
+```
+
+The stepX spill remains; this is address/invariant motion, not complete SROA.
+
 Promotion clobber regressions in `tests/test_promote.py` use PRESS-derived MIR
 with explicit, unspecified and barrier effects, placed before/between/after a
 store and read. Only an intervening clobber should prevent reuse. Unspecified

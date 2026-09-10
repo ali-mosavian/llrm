@@ -2027,6 +2027,8 @@ def overlapping(
     one, other = _symbolic_ref(one), _symbolic_ref(other)
     if _allocation_disjoint(one, other) or _allocation_disjoint(other, one):
         return False
+    if _excluded(one, other) or _excluded(other, one):
+        return False
     if one.addr is None or other.addr is None:
         # Neither names the byte, but each may name the object. LLVM's
         # PseudoSourceValue rule: two different kinds never alias, and one
@@ -2062,14 +2064,21 @@ def _allocation_disjoint(allocated: MemRef, static: MemRef) -> bool:
     )
 
 
-def _out_of_reach(blind: MemRef, named: MemRef) -> bool:
-    """Whether `blind` says it cannot reach the cell `named` is in."""
+def _excluded(blind: MemRef, named: MemRef) -> bool:
+    """An occurrence-specific proof excludes all bytes of this static access."""
     if (named.addr is not None and named.addr.base == Register.NONE
         and named.base is None and named.segment is None and named.width > 0):
         if any(named.addr.space is addr.space and named.addr.index == addr.index
                and addr.disp <= named.addr.disp and named.addr.disp + named.width <= addr.disp + width
                for addr, width in blind.excludes):
             return True
+    return False
+
+
+def _out_of_reach(blind: MemRef, named: MemRef) -> bool:
+    """Whether `blind` says it cannot reach the cell `named` is in."""
+    if _excluded(blind, named):
+        return True
     if blind.beyond is None or named.addr is None:
         return False
     owner, reaches = blind.beyond

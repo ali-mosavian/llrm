@@ -600,6 +600,12 @@ one documented target without materially regressing another.
   ends now remove false return edges before SSA construction, and scalar memory
   comparisons expose their loads as values. Existing reuse shares the guard
   read (PDS 1148 → 1140); indexed field promotion is still unfinished.
+  The forward proof now carries guarded scalar-load intervals through unchanged
+  memory and recognizes bounded symbolic near-address ranges. Each proven
+  access excludes only disjoint static byte ranges; wrapping, unknown and
+  overlapping ranges remain conservative. Existing LICM then hoists UDTRNG's
+  index/address calculations and step loads: QB 1064 → 705, PDS 1140 → 809,
+  VBDOS 689 → 673. Indexed accumulator loads/stores remain inside the loop.
 - [ ] Feed SROA results into promotion so scalar values survive across BC
   statement boundaries.
   Write-through promotion now also accepts fixed procedure-frame fields, not

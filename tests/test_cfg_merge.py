@@ -35,6 +35,21 @@ def test_udtrng_bounds_compare_explicit_values():
     assert all(not op.loads and isinstance(op.args[0], mir.Held) for op in guards)
 
 
+def test_udtrng_guards_constrain_subsequent_reads_of_slot():
+    """UDTRNG lost both slot bounds when the next statement reloaded the same cell."""
+    from qbopt.frontend import arrayfacts, blocks
+    from qbopt.analysis.ranges import Interval
+    from qbopt.objectfile import module, omf
+    found = module.of(omf.parse(Path("fixtures/regressions/udtrng-p-g2.obj").read_bytes()))
+    body = mir.bodies(found, blocks.partition(found, blocks.code_map(found)))[0][1]
+    state, _ = arrayfacts._transfer(body.block(0x30), arrayfacts.State(), False)
+    state = arrayfacts._edge(state, body.block(0x30), 0x60)
+    state, _ = arrayfacts._transfer(body.block(0x60), state, False)
+    state = arrayfacts._edge(state, body.block(0x60), 0x6c)
+    cell = body.block(0x6c).ops[0].args[0]
+    assert arrayfacts._read(cell, state) == Interval(0, 2, 2)
+
+
 @pytest.mark.parametrize("known,terminal", [(False, True), (True, False)])
 def test_only_established_terminal_contracts_remove_return_edges(known, terminal):
     """An unknown or returning END-shaped call must not erase a reachable path."""

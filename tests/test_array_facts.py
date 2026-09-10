@@ -10,6 +10,43 @@ from qbopt.model import ir, mir
 from qbopt.objectfile.module import Addr, Space
 
 
+@pytest.mark.parametrize("case", ["bounded", "unbounded", "overlap", "clobber"])
+def test_guarded_record_stores_only_exclude_proven_disjoint_statics(monkeypatch, case):
+    """UDTRNG recomputed SLOT*8 and reloaded both steps on every record update."""
+    from qbopt.frontend import blocks
+    from qbopt.objectfile import module, omf
+    with monkeypatch.context() as context:
+        context.setattr(arrayfacts, "proven", lambda body: body)
+        found = module.of(omf.parse(Path("fixtures/regressions/udtrng-p-g2.obj").read_bytes()))
+        body = mir.bodies(found, blocks.partition(found, blocks.code_map(found)))[0][1]
+    if case in ("unbounded", "overlap"):
+        updated = []
+        for block in body.blocks:
+            ops = tuple(replace(op, args=(op.args[0], mir.Const(10, 2)))
+                        if case == "overlap" and op.at == 0x60 and op.op is ir.Operation.COMPARE else op
+                        for op in block.ops)
+            if case == "unbounded" and block.at == 0x60:
+                ops = tuple(replace(op, kind=mir.Kind.NOTHING) if op.kind is mir.Kind.BRANCH else op for op in ops)
+            updated.append(replace(block, ops=ops))
+        body = replace(body, blocks=tuple(updated))
+    if case == "clobber":
+        block = body.block(0x9a)
+        barrier = mir.Op(0x9a, ir.Operation.CALL, "", (), (), kind=mir.Kind.CALL)
+        body = replace(body, blocks=tuple(replace(item, ops=(barrier, *item.ops))
+                       if item.at == block.at else item for item in body.blocks))
+    result = arrayfacts.proven(body)
+    store = next(op.stores[0] for op in result.block(0x9a).ops if op.at == 0xdd)
+    slot = next(op.loads[0] for op in result.block(0x9a).ops if op.at == 0x9a and op.loads)
+    assert mir.overlapping(store, slot, frozenset({5})) is (case != "bounded")
+
+
+@pytest.mark.parametrize("low,high,width", [(-7, 0, 4), (0, 65530, 4), (0, 2, 0)])
+def test_near_region_requires_nonwrapping_complete_access(low, high, width):
+    from qbopt.frontend.addressfacts import region
+    from qbopt.analysis.ranges import Interval
+    assert region(Addr(Space.SEGMENT, 6, 5), Interval(low, high, 2), width) is None
+
+
 def diamond():
     descriptor = mir.Symbol(Space.SEGMENT, 5, 16, 2)
     header = mir.MemRef(Addr(Space.SEGMENT, 16, 5), 4)
