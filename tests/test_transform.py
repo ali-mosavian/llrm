@@ -740,15 +740,6 @@ def test_an_invariant_multiply_leaves_a_loop_it_cannot_be_folded_out_of() -> Non
     )
 
 
-@pytest.mark.xfail(
-    reason="the hoist miscompiles. Measured through the LIR path, which does not "
-    "fall back: `hoist` alone gives hotlop and nested the wrong answers, nested "
-    "printing T= 0 for 675. The reason here was 'waiting for a live-range split on "
-    "LIR' and that was wrong twice -- the split exists now and these still fail. "
-    "The pass is what is broken, and nothing noticed because a body the allocator "
-    "refuses is emitted as it was raised, so the hoist's work was always discarded.",
-    strict=True,
-)
 def test_a_dead_second_result_does_not_pin_its_operation_in_the_loop() -> None:
     """A widening `imul` defines dx:ax, and a join raises a phi per register.
 
