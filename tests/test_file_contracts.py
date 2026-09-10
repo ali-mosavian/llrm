@@ -22,9 +22,10 @@ def test_peos_register_interface_does_not_claim_fixed_stack_cleanup():
     ("B$FMID", 6), ("B$ASSN", 12), ("B$SCMP", 4), ("B$SCPF", 2),
     ("B$LNIN", 10), ("B$ERS1", 2),
     ("B$RTRM", 2), ("B$FASC", 2), ("B$FCHR", 2),
+    ("B$LEFT", 4), ("B$RGHT", 4),
 ])
 def test_vbdos_file_setup_retains_unknown_effects(name, cleanup):
-    """Qrender refused string/file calls, including ASSN at 00e7; CLOSE varies in arity."""
+    """Qrender refused string/file calls, including LEFT/RIGHT; CLOSE varies in arity."""
     contract = runtime.per_call({0: name}, "vbdos")[0]
     assert contract.cleanup == cleanup
     assert contract.inputs == frozenset({runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX,

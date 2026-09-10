@@ -350,6 +350,18 @@ VARIANTS[("B$CHOU", "vbdos")] = replace(
 )
 
 for _name, _cleanup, _evidence in (
+    ("B$LEFT", 4,
+     "farstr/strfcn.asm 00dd..00f3: descriptor/count at BP+8/+6; first "
+     "dependency RefString (strutil.asm 0013) overwrites arithmetic flags "
+     "at 0016 before branching. Two internal words passed to substring "
+     "wrapper 0113, whose RET 4 balances them; POP BP / RETF 4 at 00f2. "
+     "Allocation, temporary deletion and errors remain unknown."),
+    ("B$RGHT", 4,
+     "farstr/strfcn.asm 00c9: RefString first overwrites incoming arithmetic "
+     "flags. Reads count at BP+6, computes start from length, then joins "
+     "LEFT at 00e9 or 00eb. Substring wrapper 0113 consumes two internal "
+     "words with RET 4; shared normal exit is POP BP / RETF 4 at 00f2. "
+     "Allocation, temporary deletion and errors remain unknown."),
     ("B$RTRM", 2,
      "farstr/strfcn.asm 0215..0253: RefStringArgLast overwrites arithmetic "
      "flags before branching; reverse space scan uses STD then CLD. Substring "
