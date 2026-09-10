@@ -9,6 +9,30 @@ from qbopt.model import mir
 from qbopt.backend import lower
 
 
+@pytest.mark.parametrize("kind,mnemonic", [
+    (mir.Kind.SHL, "SHL"), (mir.Kind.SHR, "SHR"), (mir.Kind.SAR, "SAR"),
+])
+@pytest.mark.parametrize("width", [2, 4])
+def test_unnamed_mir_shift_emits_machine_instruction(kind, mnemonic, width):
+    """D_SURF refused 183a: hoisted cidx << 2 reached selection with an empty mnemonic."""
+    from iced_x86 import Decoder, Mnemonic, Register
+    from qbopt.backend import select
+
+    value = mir.Value(1, 0x183a)
+    op = mir.Op(0x183a, ir.Operation.BINARY, "", (value,), (value,),
+                kind=kind, args=(mir.Held(value, width), mir.Const(2, 1)),
+                results=(mir.Held(value, width),))
+    what = lower.semantics(op, place=lower.as_a_value)
+    register = Register.AX if width == 2 else Register.EAX
+    emitted = select.emit(what, held={value.id: register})
+    assert emitted is not None
+    decoded = list(Decoder(16, emitted.code))
+    assert len(decoded) == 1
+    assert decoded[0].mnemonic == getattr(Mnemonic, mnemonic)
+    assert decoded[0].op0_register == register
+    assert decoded[0].immediate(1) == 2
+
+
 @pytest.mark.parametrize("width", [2, 4])
 def test_dead_and_result_uses_test_without_a_destination(width):
     """IVWORD emitted mov cx,bx / and cx,bx although only the condition was consumed."""

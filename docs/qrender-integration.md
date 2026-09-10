@@ -16,9 +16,14 @@ control/error effects. No runtime operation is replaced.
 
 All four real-object regressions failed first. The eight selected D_MDL and
 D_SURF call checks pass (131.91 seconds); no broad suite was run. Native-x87
-emission is being checked using `/tmp/qbopt-d-surf-audit.py`, with complete
-stage output requested in `/tmp/qbopt-d-surf-native`. Project bindings are
-hash-scoped. This is **not yet an accepted fifteenth module**; the latest
+emission using `/tmp/qbopt-d-surf-audit.py` refused atomically; the 39,734-byte
+object was unchanged. Complete dumps s00..s107 in `/tmp/qbopt-d-surf-native`
+pinpoint the next defect: a hoisted `cidx << 2` at 183a is valid MIR but
+lowering gives it an empty mnemonic. The adjacent lowered view shows the
+valid increment at the same address, followed by this unnamed shift.
+Lowering now maps SHL/SHR/SAR explicitly; six fail-first regressions decode
+the emitted 16/32-bit instructions and check their operands. Project bindings
+remain hash-scoped. This is **not yet an accepted fifteenth module**; the latest
 verified FPS and screenshot remain the fourteen-module evidence below.
 
 Before/after this interface-only change (call instruction retained; final
@@ -29,6 +34,14 @@ relocated address is not yet established):
 call far B$PUT3                   call far B$PUT3
 call far B$SMID                   call far B$SMID
 call far B$SPAC                   call far B$SPAC
+```
+
+The shift fix's focused emitted-code check (EAX is the test allocation, not
+a claim about the renderer's final assignment):
+
+```asm
+; before: emission refused       ; after: C1 E0 02, prefixed 66 for EAX
+; unnamed cidx << 2              shl eax,2
 ```
 
 ## Latest benchmark — fourteen modules, native x87, 2026-09-11

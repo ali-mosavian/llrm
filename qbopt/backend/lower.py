@@ -65,6 +65,9 @@ _MACHINE: dict[mir.Kind, tuple[ir.Operation, str]] = {
     # an operation MIR invented defines one value.
     mir.Kind.MUL: (ir.Operation.MULTIPLY, "imul"),
     mir.Kind.ADD: (ir.Operation.BINARY, "add"),
+    mir.Kind.SHL: (ir.Operation.BINARY, "shl"),
+    mir.Kind.SHR: (ir.Operation.BINARY, "shr"),
+    mir.Kind.SAR: (ir.Operation.BINARY, "sar"),
 }
 
 
