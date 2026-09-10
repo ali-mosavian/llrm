@@ -93,3 +93,49 @@ def test_inserted_address_uses_the_missing_edges_pointer():
     assert result.block(20).ops[-1].loads[0].base == right
     assert result.block(20).ops[-1].uses == (right,)
     assert not result.block(30).ops[0].loads
+
+
+def test_missing_explicit_critical_edge_gets_its_own_load_block():
+    """The unrelated arm must not acquire a read that could fault or observe memory."""
+    body = diamond()
+    condition = mir.Op(20, ir.Operation.BRANCH, "", (), (), kind=mir.Kind.BRANCH,
+                       target=30, test=mir.Kind.EQ, covers=(20, 22))
+    body = replace(body, blocks=tuple(replace(block, ops=(condition,), succ=(30, 40))
+                                     if block.at == 20 else block for block in body.blocks)
+                   + (mir.MirBlock(40, (), (), ()),))
+    result = loadjoins.reused(body, insert=True)
+    assert not result.block(30).ops[0].loads
+    parent = result.block(20)
+    assert len(parent.ops) == 1 and 40 in parent.succ
+    bridge = result.block(parent.ops[-1].target)
+    assert bridge.at not in {block.at for block in body.blocks}
+    assert bridge.ops[0].loads == body.block(30).ops[0].loads
+    assert bridge.ops[-1].kind is mir.Kind.JUMP and bridge.ops[-1].target == 30
+    assert bridge.at in result.block(30).phis[0].incoming
+    assert 20 not in result.block(30).phis[0].incoming
+    assert all(op.inserted for op in bridge.ops)
+    assert loadjoins.reused(result, insert=True) == result
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "v-g3"])
+def test_ldcrit_load_runs_only_on_the_missing_conditional_edge(tag):
+    """LDCRIT reread x on true iterations (35 and -28) after already storing it."""
+    from iced_x86 import FlowControl
+    from qbopt import wholeseg
+    from qbopt.frontend import blocks, declen
+    from qbopt.objectfile import module, omf
+    result = wholeseg.emitted(Path(f"fixtures/regressions/ldcrit-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    found = module.of(omf.parse(result.data))
+    mapped = blocks.code_map(found)
+    assert not isinstance(mapped, str), mapped
+    instructions = [one for block in blocks.partition(found, mapped) for one in block.insns]
+    fields = {fix.offset: fix for fix in omf.fixups(found.records) if fix.seg == found.seg}
+    read, = [one for one in instructions if one.disp_at in fields
+             and any(access.access in declen.READS for access in declen.INFO.info(one.insn).used_memory())
+             and fields[one.disp_at].index == found.program_data and fields[one.disp_at].disp == 10]
+    jump, = [one for one in instructions if one.at == read.end]
+    assert jump.insn.flow_control == FlowControl.UNCONDITIONAL_BRANCH
+    assert jump.insn.near_branch_target < read.at
+    assert any(one.insn.flow_control == FlowControl.CONDITIONAL_BRANCH
+               and one.insn.near_branch_target == read.at for one in instructions)

@@ -595,7 +595,13 @@ one documented target without materially regressing another.
   Address definitions must dominate that edge; loop-boundary crossings and
   observable/trapping join prefixes are refused. LDPRE skips the `x` load on
   its already-supplied arm on all three compilers (three runtime cases each).
-  Critical-edge splitting, target profitability and strict floating reuse remain open.
+  Explicit conditional edges can now be split into load-and-jump blocks without
+  executing the load on the other arm. Destination phi inputs move to the new
+  edge; inserted jumps are selected by lowering, not encoded in MIR. LDCRIT
+  verifies the emitted path and all three compilers' runtime answers. PDS/VBDOS
+  save a read on the supplying arm but add a jump on the missing arm; QB is
+  unchanged. Implicit critical edges, target profitability and strict floating
+  reuse remain open.
 - [ ] Replace the separate load/store cleanup rules with MemorySSA-based load
   elimination and dead-store elimination.
 - [x] Implement sparse conditional constant propagation (`SCCP`) over values

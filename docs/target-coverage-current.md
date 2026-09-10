@@ -23,9 +23,14 @@ units per configuration against the prior focused costs; FPDEEP, HARR and the
 largest comparable gaps are unchanged. Load PRE's demonstrated improvement is
 the dedicated LDPRE regression, not a claimed NBODY/HARR speedup.
 
-Next implementation gap: PRE still cannot complete a value on a critical edge.
-Splitting such edges must preserve physical fallthroughs, phi inputs and byte
-ownership; the FPDEEP regression showed why a CFG-only redirection is insufficient.
+Follow-up: PRE now completes missing loads on explicit conditional critical
+edges. LDCRIT demonstrates the emitted path on PDS/VBDOS and runs correctly on
+all three compilers; its supplying arm saves a read, while its missing arm adds
+a jump. The 19 configurations above remain measurable with unchanged modeled
+costs in a before/after comparison with critical-edge insertion disabled/enabled.
+This is not another full integration scan. Implicit critical edges and profitable
+placement remain open; splitting must preserve physical fallthroughs, phi inputs
+and byte ownership, not just redirect the graph.
 
 ## Full-corpus baseline
 

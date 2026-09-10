@@ -5,6 +5,7 @@ from dataclasses import replace
 from qbopt.analysis import loops, memoryssa, ssa
 from qbopt.model import ir, mir
 from qbopt.objectfile.module import Space
+from qbopt.optimize import edges
 
 
 def _on_edge(ref, phis, predecessor):
@@ -35,7 +36,8 @@ def _value(op):
 
 
 def _insertion(parent, join, index, translated, op, definitions, dominators, natural_loops):
-    if (parent.succ != (join.at,) or join.at in dominators[parent.at]
+    critical = edges.explicit(parent, join.at)
+    if ((parent.succ != (join.at,) and not critical) or join.at in dominators[parent.at]
         or any((parent.at in loop.body) != (join.at in loop.body) for loop in natural_loops)):
         return None
     for prior in join.ops[:index]:
@@ -48,9 +50,11 @@ def _insertion(parent, join, index, translated, op, definitions, dominators, nat
     address_uses = tuple(value for value in (translated.base, translated.segment) if isinstance(value, mir.Value))
     uses = tuple(dict.fromkeys((*uses, *address_uses)))
     cut = len(parent.ops)
-    if cut and parent.ops[-1].kind is mir.Kind.JUMP:
+    if cut and parent.ops[-1].kind in {mir.Kind.JUMP, mir.Kind.BRANCH}:
         cut -= 1
-    if any(prior.kind in {mir.Kind.BRANCH, mir.Kind.RETURN, mir.Kind.ESCAPE} for prior in parent.ops):
+    if any(prior.kind in {mir.Kind.BRANCH, mir.Kind.RETURN, mir.Kind.ESCAPE} for prior in parent.ops[:cut]):
+        return None
+    if parent.ops and parent.ops[-1].kind in {mir.Kind.RETURN, mir.Kind.ESCAPE}:
         return None
     for value in uses:
         if value is None or value.flags or value not in definitions:
@@ -75,6 +79,8 @@ def reused(body: mir.MirBody, dgroup: frozenset[int] = frozenset(), *, insert: b
                    for index, op in enumerate(block.ops) for value in op.defines}
     definitions.update({phi.result: (block.at, -1) for block in body.blocks for phi in block.phis})
     insertions = {}
+    bridges = {}
+    label = edges.fresh(body)
     blocks = []
     for block in body.blocks:
         parents = predecessors[block.at]
@@ -114,12 +120,22 @@ def reused(body: mir.MirBody, dgroup: frozenset[int] = frozenset(), *, insert: b
             for parent, (cut, uses, translated) in missing.items():
                 predecessor = by_at[parent]
                 at = predecessor.ops[min(cut, len(predecessor.ops) - 1)].at if predecessor.ops else parent
+                critical = edges.explicit(predecessor, block.at)
+                if critical:
+                    edge = parent, block.at
+                    if edge not in bridges:
+                        bridges[edge] = label, []
+                        label += 1
+                    at = bridges[edge][0]
                 value = mir.Value(fresh, at)
                 fresh += 1
                 load = mir.Op(at, ir.Operation.MOVE, "", (value,), uses, kind=mir.Kind.LOAD,
                               args=(mir.Cell(translated),), results=(mir.Held(value, result.width),),
                               loads=(translated,), covers=(at, at), symbol=False)
-                insertions.setdefault(parent, []).append((cut, load))
+                if critical:
+                    bridges[edge][1].append(load)
+                else:
+                    insertions.setdefault(parent, []).append((cut, load))
                 incoming[parent] = value
             value = mir.Value(fresh, block.at)
             fresh += 1
@@ -132,4 +148,7 @@ def reused(body: mir.MirBody, dgroup: frozenset[int] = frozenset(), *, insert: b
         for cut, load in sorted(insertions.get(block.at, ()), key=lambda item: item[0], reverse=True):
             ops.insert(cut, load)
         blocks[index] = replace(block, ops=tuple(ops))
-    return replace(body, blocks=tuple(blocks))
+    result = replace(body, blocks=tuple(blocks))
+    for (parent, target), (label, loads) in bridges.items():
+        result = edges.split(result, parent, target, label, tuple(loads))
+    return result
