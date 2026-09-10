@@ -4,6 +4,93 @@ New optimization passes are paused until the optimized renderer builds and
 runs correctly. Target: `qb-qrender/.claude/worktrees/qgl-poly-draw`, source
 commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
+## Latest gate — five modules, 2026-09-10
+
+`common`, `view`, `d_turb`, `in_main` and now `vid` emit through LIR, link
+and complete the baseline scene together. Sixteen BASIC modules remain.
+Build: `/tmp/qbopt-qrender-video-20260910`; original inputs remain in the
+baseline directory. LINK.OUT has no linker errors. The live guest on port
+2200 was observed in `R_PORTAL_DRAW`, then back at the DOS prompt. Copied
+BENCH files were renamed before launch; the new files are from this run.
+
+| Metric | Baseline | Four modules | Five modules |
+|---|---:|---:|---:|
+| Mean FPS | 9.43334 | 9.56811 | 9.56811 |
+| Mean frame time (ms) | 106.00695 | 104.51389 | 104.51389 |
+| Best / worst FPS | 9.81732 / 7.56908 | 9.95757 / 7.67721 | 9.95757 / 7.67721 |
+
+Same normal core, 75000 cycles and scene arguments as baseline: 60 ticks,
+13 frames, nine timed samples. Five-module FPS is +1.43% against baseline
+and unchanged against four modules; no measurable speed gain from `vid`.
+BMP SHA-1 remains `d6e4096b3610249ff4d53b6829f1ab18ec108c7a`.
+All fields excluding `ft_*`, `fps_*`, `pt_*`, `mem`, `rdtsc_hz`, `tick_hz`
+match baseline exactly. This short scene does not verify all video modes,
+error paths or the full renderer.
+
+### Video project-call audit
+
+These are explicit external contracts, not global ABI entries. All six GP
+inputs and unknown clobber, memory, control and error effects are retained.
+Cleanup applies only to normal return. Audited entry/exit offsets:
+
+| Object | Symbol | Entry | Normal RETF cleanup |
+|---|---|---:|---:|
+| dr | QGLDRBLITSCL | 048d | 16 at 06a4 |
+| dr | QGLDRFILL | 0097 | 14 at 0108 |
+| vga | QGLVGAINIT | 0000 | 0 |
+| vga | QGLVGASCREEN | 00f0 | 0 at 00fa |
+| sf | QGLSFNEW | 0054 | 6 at 009a/00a9 |
+| screen | SCR_PAL_INSTALL | 1901 | 0 at 1a31 |
+| screen | SCR_SBAR_LOAD | 1a37 | 0 at 1d11 |
+| sys | SYS_ERROR | 0927 | 2 at 09b1 |
+
+DR and SF entries overwrite arithmetic flags with their frame allocation
+before calls. VGAINIT starts with CMP; its decoder stops at BIOS interrupts,
+so the continuation was checked against `src/qgl/vga.asm`. VGASCREEN calls
+VgaShape, whose first dependency SfInit starts with XOR SI,SI before its
+indirect driver calls. BASIC entries start with the previously audited
+ENRA. None of this establishes driver preservation or ordinary return from
+SYS_ERROR. Object SHA-256 identities (baseline build):
+
+```
+dr      6ffd10d26f0a48e60cac1bce96240c8c227b44f5a1828780dd9ad468edf75d1d
+vga     201a348a8f4cdc9f8ac904582ed22cd52182fc7985fe74d1d68c0e331dd16d3c
+sf      38cd797456f8ec113ec3582a2fe2884d7716322128c0096bee0dc0f02e7ba2c4
+screen  598494eae3e667d6ca043c089d873c133e23b61445dffc4975ec3a7f7641c779
+sys     359c02ee944e792e9181333c5acec5ba104d40a5c38512150cb562536e0aad53
+```
+
+Audit/emission harness: `/tmp/qbopt-vid-audit.py` checks these hashes before
+passing the contracts to `wholeseg.emitted`. Stage dumps:
+`/tmp/qbopt-vid-audited`; emitted object `/tmp/qbopt-vid-audited.obj`.
+Original ASM: `/tmp/qbopt-vid-before.asm`. Example before/after:
+
+```asm
+; before: test the stored function result
+mov [bp-16h],ax
+cmp word [bp-16h],0
+jne ...
+; after: test the value already held
+mov [bp-16h],ax
+test ax,ax
+jne ...
+
+; before: address argument through a temporary
+mov ax,[bp+6]
+add ax,1126h
+mov si,ax
+push dword [si]
+; after
+add bx,1126h             ; BX already holds [bp+6]
+push dword [bx]
+```
+
+These local improvements are not a net code-size win: the code segment
+grows from 763 to 858 bytes, including allocation moves, a spill and layout
+changes. The whole OBJ shrinks from 9461 to 9034 bytes; object size is not
+an instruction-cost measurement. No new compiler defect was fixed in this
+round; this is an integration/audit milestone, not a new optimization pass.
+
 ## Baseline — 2026-09-10
 
 Fresh build: `/tmp/qbopt-qrender-baseline-20260910`, with default VBDOS
