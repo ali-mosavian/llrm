@@ -292,11 +292,52 @@ call far B$CEND                ; 20
 
 Numerical reference: **9×104 + 2×52 + 46 = 1086**. This is the same static
 ranking used by the scoreboard, not elapsed time or a hardware-cycle claim.
-The optimized program has not reached this form. Constant propagation now
-computes the listed answers, but removing the remaining synchronization,
-stores and opaque scalar copies needs separate proofs.
+The optimized program has not reached this form. Constant propagation computes
+the indexed SINGLE answers, but the DOUBLE tail still contains floating
+arithmetic. Removing its initialization barrier and the remaining synchronization
+and stores needs separate proofs.
 Event-enabled builds remain provisional because their event observations
 cannot be discarded by this reference.
+
+### Current DOUBLE-tail blocker (2026-09-10, compiler 70ee58b)
+
+Fresh per-pass dumps of QB `/O` and PDS `/G2` distinguish the source-level
+constant from what the raise actually knows. PDS initializes `d=12` using four
+`MOVSW` instructions at original offsets 0x154–0x157. All four remain OPAQUE
+in the initial MIR; its subsequent binary64 load at 0x158 has no constant fact.
+This is not a missed arithmetic identity in CSE. `frontend/raising_copies.py`
+already scalarizes explicit-direction, proven-selector copies, but its dataflow
+forgets traversal direction across calls. No local CLD establishes it here.
+
+Current PDS emitted tail (relocations named; setup and printing omitted):
+
+```asm
+; d = 12 is copied from the literal pool
+movsw
+movsw
+movsw
+movsw
+fld qword [d]
+fld qword [d]
+fadd qword [d]
+fdivp
+fmul qword [d]
+fstp qword [e]
+wait
+```
+
+The independent numerical destination is `d=12`, `e=6`, DSQ=144 and
+DRATIO=6. An observation-preserving listing must place d/e stores and checks
+relative to the retained output calls, not merely push those two answers.
+Neither the target nor emitted code was changed by this audit. PDS's current
+object is 1838 bytes; the modeled cost remains 1777 (QB 1570).
+
+Next: verify the returning runtime's direction/selector contract from its
+implementation, represent that fact at the ABI/raise boundary, and let the
+existing copy scalarizer expose ordinary scalar memory operations. Do not
+assume DF=0 at entry or after every call, and do not teach an MIR pass about
+MOVSW. General copy promotion remains incomplete until unknown contracts and
+overlap retain their original behavior. The 1086 denominator stays provisional.
 
 ## NOTS and NEGNOT — constant expressions across output statements
 
