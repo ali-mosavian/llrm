@@ -1931,6 +1931,15 @@ def _constant_operands(op: Op, facts: dict, memory: dict | None = None) -> Op:
     """Propagate width-proven constants without reversing ordered operands."""
     if op.kind is mir.Kind.ARG:
         return _constant_argument(op, facts, memory or {})
+    if (op.kind is mir.Kind.STORE and len(op.args) == len(op.stores) == 1
+        and not op.defines and not op.merges and not op.loads and not op.barrier
+        and op.floating is None and isinstance(arg := op.args[0], mir.Held)
+        and arg.width == op.stores[0].width
+        and (fact := facts.get(arg.value)) is not None and fact.width >= arg.width):
+        address_values = {value for ref in op.stores for value in (ref.base, ref.segment) if value is not None}
+        return replace(op, args=(mir.Const(consts.masked(fact.n, arg.width), arg.width),),
+            uses=tuple(value for value in op.uses if value != arg.value or value in address_values),
+            node=None, made=None, raised=None, symbol=False)
     if (
         op.kind not in (
             mir.Kind.ADD, mir.Kind.ADD_CARRY, mir.Kind.AND, mir.Kind.OR, mir.Kind.XOR,

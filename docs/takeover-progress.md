@@ -3526,3 +3526,47 @@ Those tests and all emitted code are unchanged. Next evidence needed is a
 versioned startup/environment and observer contract, or a complete independent
 target that retains the required observations—not a denominator inferred
 from current output.
+## 2026-09-10: propagate proven constants into ordinary MIR stores
+
+The runtime-entry investigation was bounded at a real missing contract.
+`runtime/crt/fpreset.asm` requests reset (BX=1) and control word 1332h
+(BX=4); QB/PDS's shipped wrappers first test the nullable `_fpinit` vector.
+VBDOS calls `__fpmath` directly, whose dispatch remains unresolved by the
+bounded dependency analysis. `runtime/rt/rtinit.asm` chooses the first BASIC
+module through link order and runs component initializers. None of this
+establishes reset state at an arbitrary object module's entry. No new
+startup or floating-environment assumption was enabled.
+
+Instead, the inspected FPCSE code exposed a missing classic MIR rule:
+constant operands were propagated into arithmetic and ARG, but not STORE.
+The fold now substitutes a width-proven scalar constant while retaining
+the store, its address dependencies, and every synchronization point.
+No machine-specific pass was added. Before/after at the initial counter:
+
+```
+mov ax,1           -> mov word [i],1
+mov [i],ax            wait
+wait
+```
+
+The real PDS/VBDOS regression failed first. Width and address-use guards
+are tested independently. 113 constant-store/peephole tests pass; original
+and optimized FPCSE, FPDEEP and ARRIDX outputs match on QB, PDS and VBDOS.
+Every stage is dumped under
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-constant-stores-slm_wbdf`.
+
+Verified ranking changes, not hardware timings:
+
+| Program | PDS | QB | VBDOS |
+| --- | --- | --- | --- |
+| FPCSE | 161 → 157 | 147 → 145 | 161 → 157 |
+| FPDEEP | 1797 → 1797 | 1598 → 1592 | 1797 → 1797 |
+| ARRIDX | 504 → 502 | 504 → 502 | 504 → 502 |
+
+ARRIDX initially appeared to fall to 312, contradicted by its unchanged
+loop and one removed exit move. The temporary optimized filename ARRIDXQ
+selected the default loop weight rather than ARRIDX's weight. Both sides
+were re-costed under identical canonical filenames in separate directories;
+the table uses those results. Do not reuse the earlier 312 figure.
+Some objects grow a few bytes because immediate stores use longer encodings;
+the gain is fewer executed register moves, not uniformly smaller objects.
