@@ -362,6 +362,23 @@ def test_integer_conversion_materializes_a_frame_operand(width):
     assert store.covers == (0, 0)
 
 
+@pytest.mark.parametrize("width", [2, 4])
+def test_integer_conversion_into_physical_x87_stack_materializes_memory(width):
+    """Qrender camera 0335 emitted impossible FILD BX after integer promotion."""
+    from qbopt.backend import frame
+    integer = ir.Held(1, width)
+    body = _body([ir.Semantics(ir.Operation.FLOAT_LOAD, "fild", (ir.St(0),), (integer,))])
+    slots = frame.Frame(-8)
+    result = floatalloc.allocated(body, slots)
+    assert len(result.insns) == 2
+    store, load = result.insns
+    assert store.what.sources == (integer,)
+    assert isinstance(load.what.sources[0], ir.Mem)
+    assert store.what.dests == load.what.sources
+    assert load.what.dests == (ir.St(0),)
+    assert select.emit(load.what) is not None
+
+
 @pytest.mark.parametrize("operation", ["fsub", "fchs", "fstp", "fsubp"])
 def test_buried_float_operand_is_exchanged_not_reloaded(operation):
     """A second live value must not prevent using the first, or reverse subtraction."""

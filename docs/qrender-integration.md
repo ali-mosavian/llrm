@@ -169,6 +169,23 @@ This replaces the call-interface blocker with an instruction-selection
 blocker. The output remains byte-identical; no optimized assembly or runtime
 result is claimed for view yet.
 
+The FILD refusal is fixed: integer promotion left a GP value feeding a
+physical `st(0)` destination, while float allocation only materialized
+integer operands for named floating destinations. The backend now performs
+that bridge before either x87 representation is allocated. Two fail-first
+regressions cover word and dword inputs; 57 float-allocation tests pass.
+Stage dumps show the concrete correction (not final object output):
+
+```asm
+; before: impossible operand       ; after: owned frame slot
+fild bx                            mov [bp-70h],bx
+                                   fild word [bp-70h]
+```
+
+The next emission refusal is `fidiv` at 035c, whose indirect address still
+contains an unplaced value after register allocation. The view object remains
+unchanged atomically; runtime validation awaits a fully emitted module.
+
 VBDCL10E.LIB, `rtenexit.asm`, B$ENRA:
 
 ```asm
