@@ -488,7 +488,7 @@ def as_records(
     return _resized(out, seg, len(image))
 
 
-def _boundaries(image: bytes, moved: dict[int, int], kept: int) -> list[int]:
+def _boundaries(image: bytes, moved: dict[int, int], kept: int, protected: tuple = ()) -> list[int]:
     """Where the code may be cut into records.
 
     Not every 1024 bytes: a fixup patches two or four bytes and cannot be
@@ -497,9 +497,10 @@ def _boundaries(image: bytes, moved: dict[int, int], kept: int) -> list[int]:
     to 0x401, and LINK rejects the object outright -- `invalid object
     module`, the same unhelpful line an out-of-order EXTDEF gives.
 
-    So the cuts go on instruction boundaries, which layout knows and which
-    no field ever straddles. The largest one that still fits in a record,
-    each time.
+    Prefer the largest known instruction boundary that fits. A single
+    expanded operation may be larger than a record, so its interior can
+    also be cut provided no relocation field straddles the cut. OMF records
+    do not otherwise constrain instruction boundaries.
     """
     starts = sorted({kept, *moved.values()})
     cuts = [0]
@@ -508,12 +509,18 @@ def _boundaries(image: bytes, moved: dict[int, int], kept: int) -> list[int]:
         if limit >= len(image):
             cuts.append(len(image))
             break
-        fits = [one for one in starts if cuts[-1] < one <= limit]
+        fits = [one for one in starts if cuts[-1] < one <= limit
+                and not any(low < one < high for low, high in protected)]
         if not fits:
-            # No instruction starts in reach, so nothing here can be cut
-            # safely; the caller finds out rather than a wrong object being
-            # written.
-            return []
+            # Expanded operations can exceed one record. OMF permits a
+            # split inside an instruction (BC does this too), but never
+            # inside the field a FIXUPP patches.
+            boundary = limit
+            while overlaps := [low for low, high in protected if low < boundary < high]:
+                boundary = min(overlaps)
+            if boundary <= cuts[-1]:
+                return []
+            fits = [boundary]
         cuts.append(fits[-1])
     return cuts
 
@@ -526,9 +533,13 @@ def _code_block(
     kept: int,
 ) -> list[omf.Record] | str:
     """The whole image as LEDATA records, each followed by its own fixups."""
-    cuts = _boundaries(image, moved, kept)
+    widths = {0: 1, 1: 2, 2: 2, 3: 4, 4: 1, 5: 2, 9: 4, 11: 6, 13: 4}
+    if any(fixup.loc not in widths for _, fixup in placed):
+        return "unsupported relocation field width"
+    protected = tuple((offset, offset + widths[fixup.loc]) for offset, fixup in placed)
+    cuts = _boundaries(image, moved, kept, protected)
     if not cuts:
-        return "the image cannot be cut into records on instruction boundaries"
+        return "the image cannot be cut into records without splitting relocation fields"
     out: list[omf.Record] = []
     for start, end in zip(cuts, cuts[1:], strict=False):
         out.append(omf.ledata_record(seg, start, image[start:end]))

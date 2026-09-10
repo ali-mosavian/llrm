@@ -4,6 +4,17 @@ The shift map, and the branches that have no record to lean on.
 
 from pathlib import Path
 
+
+def test_expanded_operation_can_cross_records_without_splitting_fixups():
+    """NDMAX's 60-dimensional HARY expansion exceeded one LEDATA and was refused."""
+    from qbopt.objectfile.relocate import _boundaries, LEDATA_LIMIT
+    size = LEDATA_LIMIT * 3
+    fields = ((LEDATA_LIMIT - 1, LEDATA_LIMIT + 3), (2 * LEDATA_LIMIT - 2, 2 * LEDATA_LIMIT + 4))
+    cuts = _boundaries(bytes(size), {}, 0, fields)
+    assert cuts[0] == 0 and cuts[-1] == size
+    assert all(0 < right - left <= LEDATA_LIMIT for left, right in zip(cuts, cuts[1:]))
+    assert not any(low < cut < high for cut in cuts for low, high in fields)
+
 import pytest
 
 import corpus

@@ -16,6 +16,9 @@ from qbopt.model import ir, mir
 from qbopt.objectfile import module, omf
 from qbopt.objectfile.module import Addr, Space
 
+# qb/ir/prsid.asm: MAXDIM, shared with BASCOM; validated with all three BCs.
+MAX_DIMENSIONS = 60
+
 
 @dataclass(frozen=True)
 class Descriptor:
@@ -38,7 +41,7 @@ def descriptor(found, symbol):
         return None
     data = omf.segment_image(found.records, symbol.index, size)
     rank, features = data[start + 8:start + 10]
-    if not 1 <= rank <= 8 or features != 0x40 or start + 14 + 4 * rank > size:
+    if not 1 <= rank <= MAX_DIMENSIONS or features != 0x40 or start + 14 + 4 * rank > size:
         return None
     fixups = [one for one in omf.fixups(found.records) if one.seg == symbol.index]
     pointer = [one for one in fixups if one.offset == start and one.loc == omf.LOC_PTR32
@@ -86,7 +89,7 @@ def dynamic(body, symbol):
     features = facts.get(field(9, 1))
     if (features not in (mir.Const(1, 1), mir.Const(2, 1), mir.Const(3, 1))
         or not isinstance(rank, mir.Const) or not isinstance(width, mir.Const)
-        or not 1 <= rank.n <= 8 or width.n not in (1, 2, 4, 8)):
+        or not 1 <= rank.n <= MAX_DIMENSIONS or width.n not in (1, 2, 4, 8)):
         return None
     huge = bool(features.n & 2)
     return Descriptor(field(0, 4 if huge else 2), field(2), width.n,

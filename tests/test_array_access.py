@@ -12,6 +12,21 @@ from qbopt.objectfile import module, omf
 from qbopt.rewrite import Finalised, main, rewrite
 
 
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+@pytest.mark.parametrize("program", ["ndarr", "ndmax"])
+def test_hary_supports_nine_and_sixty_dimensions(tag, program):
+    """NDARR (1,12,2) and NDMAX (11,22) were refused by an invented eight-dimension cap."""
+    path = Path(f"fixtures/regressions/{program}-{tag}.obj")
+    found = corpus.loaded(path)
+    assert "B$HARY" in found.calls.values()
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    assert not any(op.kind is mir.Kind.CALL and found.calls.get(op.at) == "B$HARY"
+                   for block in body.blocks for op in block.ops)
+    result = wholeseg.emitted(path.read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    assert "B$HARY" not in module.of(omf.parse(result.data)).calls.values()
+
+
 def test_overflow_observation_has_no_normal_path_register_results():
     """/D ARRIDX printed 630 instead of 1260: INTO invented a new AX result allocated to BX."""
     path = Path("fixtures/regressions/arridx-bounds-p-g2.obj")

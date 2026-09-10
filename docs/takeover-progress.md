@@ -1,5 +1,39 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: remove the invented eight-dimension array limit
+
+Microsoft's `work/ms/msdos_60/45/qb/ir/prsid.asm` defines `MAXDIM EQU 60d`
+as the BASCOM-shared limit. `runtime/rt/dynamic.asm` processes HARY's
+indices from last to first without an eight-dimensional restriction.
+Both native descriptor readers now accept 1–60 dimensions.
+
+New real compiler fixtures, built with each primary configuration plus
+`/AH`: NDARR uses nine dimensions, unequal extents and nonzero/negative
+lower bounds in nested loops; NDMAX exercises 60 dimensions. All six
+fixtures compiled with zero severe errors. Without `/AH`, the older
+compilers report expression complexity errors for these shapes; those
+failed compilation outputs are not fixtures.
+
+Before: both programs retained HARY and unchecked emission was refused.
+After: every HARY site raises to scalar address arithmetic and whole
+pointers. All three compilers' original/native DOS results agree: NDARR
+prints **1, 12, 2**; NDMAX prints **11, 22**; both finish with DONE.
+
+The 60-dimensional expansion exposed an independent OMF writer defect:
+one expanded original operation exceeded a LEDATA record, but only original
+instruction locations were candidates for splitting. Records may split
+instructions (BC already does); they may not split a FIXUPP field. The
+writer now falls back to a byte boundary outside every relocation field.
+The regression first failed at raising for all six fixtures, then at
+record emission for all three NDMAX fixtures, before the respective fixes.
+The focused array/relocation modules pass **2492 tests in 20 seconds**.
+
+This is a support/correctness milestone, not good final code quality:
+NDARR objects grow from roughly 1.4 KB to 3.3 KB; NDMAX from 1.4–1.9 KB
+to roughly 9.7 KB. Known singleton dimensions should simplify far more.
+Stage dumps and successful linked runs are under
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-ndarrays-native-tcshx93d`.
+
 ## 2026-09-10: select immediate arguments without temporary registers
 
 Lowering folds an adjacent single-use immediate definition into its push.
