@@ -4,7 +4,67 @@ New optimization passes are paused until the optimized renderer builds and
 runs correctly. Target: `qb-qrender/.claude/worktrees/qgl-poly-draw`, source
 commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
-## Latest gate — five modules, 2026-09-10
+## Latest gate — six modules, 2026-09-10
+
+Added `qglchk` to the five-module build below, using explicit audited
+project contracts. `/tmp/qbopt-qrender-check-20260910` linked successfully
+and completed the same scene: BMP and all non-timing/non-memory fields
+match baseline. Mean FPS **9.41860**, mean frame **106.17285 ms**, best/worst
+**9.80198/7.55725 FPS**; previous run 9.56811, baseline 9.43334.
+This is -1.56% against the previous run and -0.16% against baseline; nine
+timed samples do not establish a performance regression or gain.
+
+The scene does not call `qglCheckAll`. Therefore both this executable and
+the untouched baseline were also run with `dm3ish.bsp -qglcheck` on port
+2201, observing return to the DOS prompt. Their fresh logs are identical:
+
+```
+   ok   cmem surface round trip
+   ok   ems  surface round trip
+RESULT PASS
+```
+
+Use the map argument: the parser treats the first token as the map name,
+so `qrender.exe -qglcheck` alone does not select the check. Artifacts:
+`QGLCHK-OPT.LOG` (optimized) and `QGLCHK.LOG` (baseline) in the check build.
+Six modules now have runtime evidence; fifteen remain.
+
+External interfaces retain all six GP inputs and every unknown effect.
+Normal-return cleanup: GEMFRAME 0, MEMAVAIL 2, SFINIT 0, SFFREE 4,
+SFNEW 6, SFPGET 8, SFPSET 10, SFRDROW 6 (all names prefixed `QGL`).
+GEMFRAME is MOV/RETF with no incoming-flag use; the others overwrite
+arithmetic flags before dependent work. SFRDROW delegates to ACCESSRD in
+qgldc, whose CMP at 0013 precedes indirect driver dispatch. Indirect calls
+do not establish preservation. Entrypoint audits: gem 0050; mem 01ea;
+sf code segment 1: 0054/0128/0157/0454/04c4, segment 3: 0008.
+Hash-checked harness `/tmp/qbopt-qglchk-audit.py`, dumps
+`/tmp/qbopt-qglchk-audited`, original ASM `/tmp/qbopt-qglchk-before.asm`.
+Additional object SHA-256 identities (SF is listed below):
+
+```
+gem    e1bc70f97466c0ea2bbc5552042824dcc375f9fc4b03b60415cb696516d8b97c
+mem    c18eeeb883dcb9ef480b166d5048f27fe4244189e19f717d65187e4205ccd7f8
+qgldc  c970873e01f4186daf70eb172ffded78a5ae1f712767d5fb98d503e6190ff07b
+```
+
+```asm
+; before: arguments to QGLSFNEW
+push 40h
+push 8
+push word [bp+0Ah]
+call far QGLSFNEW
+; after: identical argument bytes, one combined push
+push dword 00400008h
+push word [bp+0Ah]
+call far QGLSFNEW
+```
+
+This example reduces instruction count, not encoded size (combined push
+is six bytes versus four). Allocation/spill overhead remains: code grows
+1000→1268 bytes; whole OBJ shrinks 5086→4711. No compiler fix or new pass
+was needed in this round; do not count the OBJ shrink as an optimization.
+
+## Five-module gate — 2026-09-10
 
 `common`, `view`, `d_turb`, `in_main` and now `vid` emit through LIR, link
 and complete the baseline scene together. Sixteen BASIC modules remain.
