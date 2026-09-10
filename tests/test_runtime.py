@@ -437,11 +437,14 @@ def test_the_measured_routines_are_narrowed() -> None:
 
 
 def test_every_row_in_the_table_is_loaded() -> None:
-    """The contracts are data now. Nothing is transcribed on the way in."""
+    """HARY/LINA were appended in Python, leaving the declarative inventory incomplete."""
     import tomllib
 
     rows = tomllib.loads(runtime.TABLE.read_text())
     assert set(rows) == set(runtime.CONTRACTS), "the table and what loaded disagree"
+    for name in ("B$HARY", "B$LINA"):
+        for family in ("qb45", "pds71", "vbdos"):
+            assert runtime.VARIANTS[name, family] is runtime.CONTRACTS[name]
     for name, row in rows.items():
         one = runtime.CONTRACTS[name]
         assert one.writes.name == row["writes"]

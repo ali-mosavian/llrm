@@ -198,36 +198,6 @@ SLOTS: tuple[Reg, ...] = tuple(Reg)
 # VBDOS stays at the worst case.
 VARIANTS: "dict[tuple[str, str], Contract]" = {}
 
-for _family in ("qb45", "pds71", "vbdos"):
-    VARIANTS[("B$LINA", _family)] = replace(
-        worst("B$LINA"), cleanup=0, established=True,
-        inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
-        evidence=(
-            "Shipped dbtrace.asm 1:0000..002b in BCOM45/BCL71ENR/VBDCL10E: "
-            "both ordinary exits POP BP; RETF without stack arguments. "
-            "Bound GP inputs conservatively by all six registers. The /D keyboard "
-            "poll installed by DBINI clears arithmetic flags before dispatch; "
-            "LINA tests its own trace flag after BREAK_CHK. Trace output, break "
-            "handling and indirect dependencies retain worst-case effects."
-        ),
-    )
-    VARIANTS[("B$HARY", _family)] = Contract(
-        name="B$HARY", cleanup=None, control=Control.RETURNS,
-        enters_user_code=False, raises_error=True, error_handling=False,
-        writes=Memory.OWN, reads=Memory.ANY,
-        clobbers=frozenset({Reg.BX, Reg.ES, Reg.FLAGS}), established=True,
-        inputs=frozenset({Reg.BX}),
-        evidence=(
-            "Shipped dynamic.asm 1:00dc (QB) / hugearr.asm 1:0004 (PDS/VBDOS): "
-            "BX descriptor and stack indices/rank; returns ES:BX. Entry pushes "
-            "BP,AX,CX,DX,SI,DI and the normal exit restores them. XOR SI,SI kills "
-            "incoming flags. Bounds/rank/unallocated failures enter ERR_BS. "
-            "CleanStack removes 2*(rank+1) bytes through runtime scratch; cleanup "
-            "is deliberately unknown until the call site's rank is established. "
-            "Descriptor reads and error handling are not pure."
-        ),
-    )
-
 for _family in ("pds71", "vbdos"):
     VARIANTS[("B$RETA", _family)] = replace(
         worst("B$RETA"),
@@ -838,8 +808,9 @@ def _contracts(path: Path | None = None) -> dict[str, Contract]:
 
 
 CONTRACTS = _contracts()
-CONTRACTS["B$HARY"] = VARIANTS[("B$HARY", "qb45")]
-CONTRACTS["B$LINA"] = VARIANTS[("B$LINA", "qb45")]
+for _family in ("qb45", "pds71", "vbdos"):
+    for _name in ("B$HARY", "B$LINA"):
+        VARIANTS[(_name, _family)] = CONTRACTS[_name]
 
 for _family, _library, _offset in (
     ("pds71", "BCL71ENR.LIB", "0103"),

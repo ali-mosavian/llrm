@@ -359,6 +359,15 @@ with the fix; mismatched relocations are rejected. Both existing PDS and
 VBDOS handler-entry regressions also pass. This is structural evidence,
 not a new emulator run or proof of all event behavior.
 
+### Contract inventory correction
+
+HARY/LINA were appended to the global contract map in Python after loading
+TOML. Their unchanged fields now live in `runtime.toml`; all three compiler
+family entries share those loaded contracts. The inventory regression was
+observed failing before the move and now also checks shared family entries.
+All 283 runtime tests pass, including event-handler discovery. This is a
+data-ownership correction: no contract fields or emitted assembly change.
+
 ### Two-module runtime check
 
 Relinking with rewritten `view` and `d_turb` succeeded. The isolated build in
