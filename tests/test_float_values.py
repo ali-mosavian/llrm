@@ -12,6 +12,27 @@ from qbopt.frontend import raising_float_values
 from qbopt import wholeseg
 
 
+def test_qrender_word_conversion_lowers_without_extracting_a_word_from_a_word():
+    """ENT_CHECK_TELEPORT refused FIS2 at 0xae9: a 16-bit result was treated as a long pair."""
+    from qbopt.abi import runtime
+    from qbopt.backend import lower
+    from qbopt.model import ir
+
+    path = Path("fixtures/regressions/qrender-ent-v-g3.obj")
+    found = corpus.loaded(path)
+    rules = runtime.for_module(found, external={
+        "QGLMOUSEPOS": replace(runtime.worst("QGLMOUSEPOS"), cleanup=4,
+            inputs=frozenset({runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX,
+                              runtime.Reg.DX, runtime.Reg.SI, runtime.Reg.DI})),
+    })
+    name, body = next((name, body) for name, body in mir.bodies(found, corpus.partitioned(path), rules)
+                      if name == "procedure ENT_CHECK_TELEPORT")
+    result = lower.lowered(name, body, found.calls, found.absorbed, rules)
+    conversion = [one.what for one in result.insns if one.at == 0xae9 and one.what]
+    assert any(one.name == "fistp" and one.dests[0].width == 2 for one in conversion)
+    assert not any(one.op is ir.Operation.CALL for one in conversion)
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_fpdeep_integer_results_are_explicit_values(tag):
     """FPDEEP's CLNG results were opaque calls, disconnecting FP values from PRINT arguments."""

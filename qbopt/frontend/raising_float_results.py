@@ -46,8 +46,10 @@ def raised(body, found, contracts):
             found.float_protocols[op.id] = 0x34
             for shift, register in enumerate(registers):
                 target = outputs[register]
-                ops.append(mir.Op(op.at, ir.Operation.MOVE, "", (target,), (result.value,),
-                    kind=mir.Kind.EXTRACT, args=(result, mir.Const(16 * shift, 4)),
+                ops.append(mir.Op(op.at, ir.Operation.MOVE, "mov" if width == 2 else "",
+                    (target,), (result.value,),
+                    kind=mir.Kind.COPY if width == 2 else mir.Kind.EXTRACT,
+                    args=(result,) if width == 2 else (result, mir.Const(16 * shift, 4)),
                     results=(mir.Held(target, 2),), covers=(op.at, op.at), symbol=False))
         blocks.append(replace(block, ops=tuple(ops)))
     return replace(body, blocks=tuple(blocks))
