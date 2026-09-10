@@ -3965,3 +3965,22 @@ target. A focused three-compiler report now gives PDS 248/248=1.00x,
 QB 296/248=1.19x and VBDOS 248/248=1.00x. Event-enabled variants remain
 provisional under the existing policy. This changes measurement coverage,
 not emitted code, and is not a claim that the overall goal is complete.
+
+### Reuse an unchanged allocator spill reload
+
+Complete machine-stage dumps now group every procedure into each phase file.
+They exposed NBODY's repeated `mov si,[bp-28h]` at original address 0x23a:
+SI still held the reload from 0x22a. The post-allocation peephole remembers
+only allocator-owned frame reloads, within one basic block. Memory stores,
+unknown effects, calls and constraints clear the proof; overlapping register
+writes invalidate it, including partial registers and frame-base changes.
+Loading the frame base itself never establishes a reusable address.
+
+Before the update store: `mov si,[bp-28h]; mov [si+5ah],eax`.
+After: `mov [si+5ah],eax`, using the unchanged SI. This is physical spill
+cleanup, not a machine-dependent MIR optimization or a new LIR tier.
+The real NBODY regression failed first. The 136 focused peephole checks
+passed, followed by ten checks including the additional frame-base guard.
+VBDOS NBODY is 4165 -> 4162 object bytes; PDS is 2872 -> 2869. Both outputs
+match BC with timing calls intact. QB ADDRM matches at unchanged 857 bytes.
+Artifacts: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-reload-reuse-q57jswm5`.

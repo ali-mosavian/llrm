@@ -18,6 +18,7 @@ class Peephole(LIRTransform):
     def transform(self, body: lir.LirBody) -> lir.LirBody:
         from qbopt.backend import spillforward
         body = spillforward.forwarded(body)
+        body = reloads(body)
         return self._frame(waits(zeroes(addresses(overwritten(commuted(constants(pushes(body))))))))
 
     def _frame(self, body):
@@ -141,6 +142,43 @@ def _register_effects(one):
             if access.access in (OpAccess.WRITE, OpAccess.READ_WRITE):
                 writes.update(_lanes(access.register))
     return reads, writes
+
+
+def reloads(body: lir.LirBody) -> lir.LirBody:
+    """Reuse allocator-owned frame reloads until either the register or memory changes."""
+    from qbopt.objectfile.module import Space
+
+    blocks = []
+    for block in body.blocks:
+        held, redundant = {}, set()
+        for one in block.insns:
+            what = one.what
+            effects = _register_effects(one)
+            if (effects is None or what is None or one.requires or one.delivers
+                or what.op not in {ir.Operation.MOVE, ir.Operation.BINARY, ir.Operation.UNARY,
+                                   ir.Operation.COMPARE, ir.Operation.EXTEND, ir.Operation.NOTHING}
+                or any(not isinstance(dest, ir.Reg) or not _lanes(dest.register) for dest in what.dests)):
+                held.clear()
+                continue
+            writes = effects[1]
+            if writes & _lanes(Register.EBP):
+                held.clear()
+            match what:
+                case ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg() as register,), (ir.Mem() as cell,)):
+                    owned = (one.spill_reload and cell.addr is not None and cell.addr.space is Space.FRAME
+                             and cell.through == Register.BP and cell.base is None
+                             and register.width == cell.width and not writes & _lanes(Register.EBP))
+                    if owned and held.get(register) == cell:
+                        redundant.add(id(one))
+                        continue
+                case _:
+                    owned = False
+            held = {register: cell for register, cell in held.items()
+                    if not _lanes(register.register) & writes}
+            if owned:
+                held[what.dests[0]] = what.sources[0]
+        blocks.append(replace(block, insns=tuple(lir.without(block.insns, lambda one: id(one) in redundant))))
+    return replace(body, blocks=tuple(blocks))
 
 
 def overwritten(body: lir.LirBody) -> lir.LirBody:
