@@ -2463,7 +2463,8 @@ class Cse(MIRTransform):
         from qbopt.optimize import floatfold, gvn, loadjoins
         canonical = subexpressions(body, self.where.dgroup)
         # Finish exposing existing providers before making a supposedly missing one.
-        return floatfold.checks(loadjoins.reused(gvn.joined(canonical, insert=canonical == body), self.where.dgroup))
+        joined = gvn.joined(canonical, insert=canonical == body)
+        return floatfold.checks(loadjoins.reused(joined, self.where.dgroup, insert=joined == body))
 
 
 class Place(MIRTransform):

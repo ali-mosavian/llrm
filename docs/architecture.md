@@ -590,9 +590,12 @@ one documented target without materially regressing another.
   already supplied on every incoming path by loads or stores.
   Whole-pointer phis are translated per incoming edge for provider matching;
   clobber checks retain the original address inside the join and use the
-  translated address on the incoming path. Missing-path
-  load insertion, critical-edge splitting, target profitability and strict
-  floating reuse remain open.
+  translated address on the incoming path. Missing-path scalar loads can now
+  be inserted on dedicated unconditional edges once existing providers stabilize.
+  Address definitions must dominate that edge; loop-boundary crossings and
+  observable/trapping join prefixes are refused. LDPRE skips the `x` load on
+  its already-supplied arm on all three compilers (three runtime cases each).
+  Critical-edge splitting, target profitability and strict floating reuse remain open.
 - [ ] Replace the separate load/store cleanup rules with MemorySSA-based load
   elimination and dead-store elimination.
 - [x] Implement sparse conditional constant propagation (`SCCP`) over values
