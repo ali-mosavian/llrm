@@ -85,3 +85,16 @@ def test_converged_branch_keeps_its_destination_even_when_condition_is_false():
     assert result.blocks[0].succ == (30,)
     assert result.blocks[0].ops[-1].kind is mir.Kind.JUMP
     assert not result.blocks[0].ops[-1].uses
+
+
+def test_implicit_edge_keeps_the_jump_that_changes_physical_flow():
+    """FPDEEP skipped its entire calculation when a fallthrough trampoline lost its jump."""
+    jump = mir.Op(10, ir.Operation.JUMP, "jmp", (), (), kind=mir.Kind.JUMP, target=30, covers=(10, 12))
+    effect = mir.Op(20, ir.Operation.PUSH, "push", (), (), kind=mir.Kind.ARG, args=(mir.Const(7, 2),))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (), (10,)),
+                          mir.MirBlock(10, (), (jump,), (30,)),
+                          mir.MirBlock(20, (), (effect,), ()),
+                          mir.MirBlock(30, (), (), (20, 40)), mir.MirBlock(40, (), (), ())))
+    result = transform._threaded(body)
+    assert result.block(0).succ == (10,)
+    assert result.block(10).ops[-1] == jump

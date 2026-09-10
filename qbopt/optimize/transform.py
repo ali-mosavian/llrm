@@ -1578,11 +1578,13 @@ def _threaded(body: MirBody) -> MirBody:
     """Bypass empty control-flow blocks without changing any incoming phi value."""
     known = {block.at: block for block in body.blocks}
     redirects = {}
+    explicit_jumps = set()
     for block in body.blocks:
         if block.phis or len(block.succ) != 1:
             continue
         ops = block.ops
         if ops and ops[-1].kind is mir.Kind.JUMP and ops[-1].target == block.succ[0]:
+            explicit_jumps.add(block.at)
             ops = ops[:-1]
         if any(op.kind is not mir.Kind.NOTHING or op.defines or op.uses or op.loads or op.stores
                or op.args or op.results or op.merges or op.barrier
@@ -1592,9 +1594,11 @@ def _threaded(body: MirBody) -> MirBody:
         if successor is not None and not successor.phis:
             redirects[block.at] = successor.at
 
-    def destination(start, source):
+    def destination(start, source, *, implicit=False):
         target, seen = start, {source}
         while target in redirects and target not in seen:
+            if implicit and target in explicit_jumps:
+                break
             seen.add(target)
             target = redirects[target]
         return start if target in seen else target
@@ -1602,7 +1606,9 @@ def _threaded(body: MirBody) -> MirBody:
     blocks = []
     changed = False
     for block in body.blocks:
-        successors = tuple(dict.fromkeys(destination(at, block.at) for at in block.succ))
+        last = block.ops[-1] if block.ops else None
+        explicit = last.target if last is not None and last.kind in {mir.Kind.JUMP, mir.Kind.BRANCH} else None
+        successors = tuple(dict.fromkeys(destination(at, block.at, implicit=at != explicit) for at in block.succ))
         if successors == block.succ:
             blocks.append(block)
             continue

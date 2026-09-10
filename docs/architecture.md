@@ -614,7 +614,9 @@ one documented target without materially regressing another.
 - [ ] Consolidate branch folding, empty-block removal, jump threading and
   unreachable cleanup into `SimplifyCFG`.
   `decide` now bypasses empty fallthrough blocks as well as jump-only blocks,
-  including implicit incoming edges. Phi destinations and cycles are preserved;
+  including implicit incoming edges through fallthrough-only paths. An implicit
+  edge retains a trampoline's physical jump; bypassing it without materializing
+  another jump made FPDEEP skip its calculation. Phi destinations and cycles are preserved;
   converging branch arms become an unconditional edge. Dead blocks retain byte
   ownership. BOOLS has no empty transit blocks on its live path across all three
   compilers; final assembly remains unchanged (the emitter already removed jumps).
