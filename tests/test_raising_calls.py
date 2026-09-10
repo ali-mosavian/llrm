@@ -209,3 +209,29 @@ def test_nested_multiply_consumes_values_without_stealing_outer_arguments() -> N
     assert divisor.kind is mir.Kind.CONCAT
     assert [definitions[arg.value].at for arg in divisor.args] == [0x1be, 0x1c0]
     assert all(definitions[arg.value].kind is mir.Kind.COPY for arg in divisor.args)
+def test_nbody_computed_loop_limit_is_a_native_comparison():
+    """NBODY pushed its updated step counter into CPI4 instead of comparing its whole value."""
+    path = Path("fixtures/bench/nbody-v-g3.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    comparison = next(op for block in body.blocks for op in block.ops
+                      if op.at == 0x2fe and op.op is ir.Operation.COMPARE)
+    assert comparison.op is ir.Operation.COMPARE
+    assert len(comparison.args) == 2 and all(arg.width == 4 for arg in comparison.args)
+    assert comparison.defines and all(value.flags for value in comparison.defines)
+    definitions = {value: op for block in body.blocks for op in block.ops for value in op.defines}
+    assert definitions[comparison.args[0].value].kind is mir.Kind.CONCAT
+    assert definitions[comparison.args[1].value].at == 0x2f9
+    emitted = wholeseg.emitted(path.read_bytes())
+    assert emitted.outcome is wholeseg.Emission.LIR, emitted.reason
+    assert calls.COMPARE not in module.of(omf.parse(emitted.data)).calls.values()
+
+
+@pytest.mark.parametrize("flag", [ir.Flag.CF, ir.Flag.PF, ir.Flag.AF])
+def test_captured_comparison_retains_runtime_synthesized_flags(monkeypatch, flag):
+    """CPI4's CF/PF/AF are not a native CMP's; capturing operands does not change that contract."""
+    original = mir._flags_after
+    monkeypatch.setattr(mir, "_flags_after", lambda *args: original(*args) | flag)
+    path = Path("fixtures/bench/nbody-v-g3.obj")
+    body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
+    assert any(op.at == 0x2fe and op.kind is mir.Kind.CALL for block in body.blocks for op in block.ops)

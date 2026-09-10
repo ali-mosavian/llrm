@@ -43,13 +43,13 @@ def arithmetic(body: mir.MirBody, found, blocks, *, basic_semantics: bool = Fals
     sites = calls.sites(found, reached, blocks)
     sites = [replace(site, consume=tuple(insn for insn in reached
                                        if site.start <= insn.at < site.at and insn.code in calls.PUSH_BYTES))
-             if site.name in (*calls.DIVIDES, calls.MULTIPLY) and not site.consume else site for site in sites]
+             if site.name in (*calls.DIVIDES, calls.MULTIPLY, calls.COMPARE) and not site.consume else site for site in sites]
     live_flags = flags.live_in(blocks)
     candidates = {
         site.at: site
         for site in sites
         if site.consume
-        and site.name in (*calls.DIVIDES, calls.MULTIPLY)
+        and site.name in (*calls.DIVIDES, calls.MULTIPLY, calls.COMPARE)
         and not (basic_semantics and site.name in calls.DIVIDES)
         and not isinstance(calls.absorb(site, mir._flags_after(blocks, live_flags, site.start, site.end)), str)
     }
@@ -94,7 +94,10 @@ def arithmetic(body: mir.MirBody, found, blocks, *, basic_semantics: bool = Fals
             ):
                 continue
             returns = {body.origin.get(value): value for value in call.defines if not value.flags}
-            if Register.EAX not in returns or Register.EDX not in returns:
+            compare = site.name == calls.COMPARE
+            if compare and (returns or len(call.defines) != 1):
+                continue
+            if not compare and (Register.EAX not in returns or Register.EDX not in returns):
                 continue
             if any(
                 value in readers for register, value in returns.items() if register not in (Register.EAX, Register.EDX)
@@ -148,6 +151,16 @@ def arithmetic(body: mir.MirBody, found, blocks, *, basic_semantics: bool = Fals
                 else:
                     break
             if len(arguments) != 2:
+                continue
+            if compare:
+                # CPI4 pushes left first, unlike multiply and divide.
+                comparison = mir.Op(
+                    call.at, ir.Operation.COMPARE, "cmp", call.defines,
+                    tuple(arg.value for arg in arguments), kind=mir.Kind.SUB,
+                    args=tuple(arguments), covers=call.covers, id=call.id,
+                )
+                replacements.update(pending)
+                replacements[id(call)] = (*setup, comparison)
                 continue
             quotient, remainder = fresh(call.at), fresh(call.at)
             multiply = site.name == calls.MULTIPLY

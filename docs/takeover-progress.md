@@ -3713,3 +3713,28 @@ match, excluding only the benchmark's TICKS line. QB LNGMXX stays byte-
 and cost-identical (838 bytes, 246 units), with matching runtime output.
 All-stage before/after dumps and runtime files:
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-commuted-accumulator-7gjcwoyy`.
+
+## Raise captured long comparisons as ordinary MIR
+
+NBODY's computed step counter reached B$CPI4 through two word pushes,
+followed by a dword memory argument. The stack matcher knew this call,
+but arithmetic raising only accepted multiply/divide/remainder. Computed
+comparisons now share their argument-capture machinery and become a
+flag-producing MIR comparison. Unlike multiply/divide, CPI4 pushes the
+left operand first; this order is asserted in the regression. The existing
+runtime-vs-native CF/PF/AF refusal still gates the transformation.
+
+Before: `push high; push low; push dword [limit]; call B$CPI4`.
+After: compare captured whole values with `cmp eax,ebx`; NBODY's timer
+comparisons also become native immediate comparisons. Remaining pair
+assembly around the main comparison is an allocation/whole-value gap,
+not a reason to leave the comparison opaque to MIR.
+
+VBDOS NBODY **4225 -> 4211 bytes**, modeled **365127 -> 364019**.
+PDS NBODY **2906 -> 2896 bytes**, modeled **361322 -> 360874**.
+Both runtime outputs match the originals (excluding only TICKS). CMPORD
+matches original output and retains identical emitted bytes on QB, PDS,
+and VBDOS. All 26 arithmetic-raising checks pass; the real NBODY regression
+failed first and three flag-safety cases retain the helper.
+Before/after stage dumps and runtime artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-captured-comparison-4t2vcg63`.
