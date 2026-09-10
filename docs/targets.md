@@ -406,6 +406,69 @@ fail-first regression caught those explicit accesses incorrectly excluding
 their own frame range. Fixing the metadata changes no instruction by itself;
 it prevents later passes from treating the explicit access as disjoint.
 
+## JUMPS — constant-trip dispatch and conditional branches
+
+`FOR k=1 TO 3` executes three iterations, not the scorer's former fallback
+of ten. Both inputs are constant (`a=305419896`, `b=252645135`). Expand the
+three iterations and select each ON/CASE arm using that iteration's k:
+
+| k | ON expression | ON result | CASE expression | CASE result |
+| ---: | --- | ---: | --- | ---: |
+| 1 | a AND b | 33818120 | a + b | 558065031 |
+| 2 | a OR b | 524246911 | a - b | 52774761 |
+| 3 | a XOR b | 490428791 | -a | -305419896 |
+
+No arithmetic overflows. Retain a/b initialization, each source assignment to
+r and k, k=4 after the loop, and every print call in source order. Compiler
+SELECT temporaries have no source-level observer or escaping address.
+This complete symbolic listing uses `row` only as an assembly macro:
+
+```asm
+mov dword [a],305419896
+mov dword [b],252645135
+; row label,index,value expands to:
+;   mov dword [r],value
+;   push word label
+;   call far B$PSSD
+;   push word index
+;   call far B$PSI2
+;   push word equalsDescriptor
+;   call far B$PSSD
+;   push dword value
+;   call far B$PEI4
+mov word [k],1
+row ON,1,33818120
+row CASE,1,558065031
+mov word [k],2
+row ON,2,524246911
+row CASE,2,52774761
+mov word [k],3
+row ON,3,490428791
+row CASE,3,-305419896
+mov word [k],4
+push word DONE
+call far B$PESD
+call far B$CENP
+```
+
+Target: **742 modeled units** = twelve stores × 6 + six rows × four
+(push + call) pairs × 26 + DONE's pair 26 + termination 20. This derives
+from the source, not a scaling of current output. Event variants remain
+provisional. The model sums instructions in alternative branch blocks; it
+is a static ranking, not a measured execution time or path-frequency profile.
+
+Correcting the trip count changes **PDS 4070 → 1270 modeled units**, with no
+emitted assembly change. Current QB/PDS/VBDOS costs are **1288/1270/1204**,
+or **1.74×/1.71×/1.62×**. All remain above the goal after fixing the instrument.
+
+The pass dumps identify two representation limits: B$OGTA remains a CALL
+with multiple successors rather than a semantic multiway branch, and the
+unroller accepts only a linear floating loop body, not this branched integer
+body. Its existing OWN memory contract already excludes unescaped module
+numeric globals; adding another generic call-preservation rule is not the
+missing optimization. Next expose dispatch semantics in the raise and enable
+bounded CFG unrolling, allowing SCCP to resolve each cloned iteration's arms.
+
 ## FPDEEP — exact constant floating expressions
 
 **The same audit limitation applies here:** 1086 prices the numerical/printing

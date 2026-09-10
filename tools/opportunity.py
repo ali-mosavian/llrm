@@ -308,6 +308,7 @@ TRIPS = {
     "PRESSX": 10,
     "FPCSEX": 10,
     "LNGMXX": 10,
+    "JUMPS": 3,
 }
 
 
@@ -592,6 +593,7 @@ TARGETS = {
     "FLAGS": 248,  # Complete constant-branch reference retaining states at every output call.
     "CMPORD": 1966,  # Eight initial stores, 24 three-call rows, DONE and termination.
     "CHAIN": 482,  # Twelve numeric stores, seven label/result rows, DONE and termination.
+    "JUMPS": 742,  # Three expanded iterations, twelve stores and six four-call output rows.
     "FPDEEP": 1086,
 }
 

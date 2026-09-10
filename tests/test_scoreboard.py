@@ -21,6 +21,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 import opportunity
 
 
+def test_jumps_reference_uses_three_iterations_and_all_six_output_rows():
+    """JUMPS was priced as ten iterations although FOR k=1 TO 3 prints six rows."""
+    left, right = 305419896, 252645135
+    on = [left & right, left | right, left ^ right]
+    cases = [left + right, left - right, -left]
+    expected = [line for index, (one, case) in enumerate(zip(on, cases), 1)
+                for line in (f"ON {index} ={one: d}", f"CASE {index} ={case: d}")] + ["DONE"]
+    assert Path("suite/golden/jumps.txt").read_text().splitlines() == expected
+    assert opportunity.TRIPS.get("JUMPS") == 3
+    stores = (2 + 4 + 6) * (2 + opportunity.TOUCH)
+    output = (6 * 4 + 1) * (6 + opportunity.CALL) + opportunity.CALL
+    assert opportunity.TARGETS.get("JUMPS") == stores + output == 742
+
+
 def test_chain_reference_preserves_signed_remainders_and_output_states():
     """CHAIN's seven nested divide/remainder rows had no complete reference target."""
     def quotient(left, right):
