@@ -219,23 +219,21 @@ symbolic object and addressing facts so alias analysis can be conservative
 without collapsing all memory into one cell.
 
 The production pass order comes directly from `transform.pipeline()`. The
-optimizing sequence repeats until the body is unchanged, with a hard limit of
-16 rounds. LCSSA then closes loop exits once: it is a canonical form for later
-loop work, not another reason to re-run passes that do not consume it yet.
+sequence repeats until the body is unchanged, with a hard limit of 16 rounds.
+LCSSA precedes the loop transforms, which consume its explicit exit values.
 
 ```mermaid
 flowchart LR
     In["raised MirBody"] --> Fold["fold"] --> Decide["decide"] --> Segments["segments"]
-    Segments --> Hoist["hoist<br/>+ sink stores"] --> Forward["forward"]
+    Segments --> LCSSA["lcssa"] --> Hoist["hoist<br/>+ sink stores"] --> Forward["forward"]
     Forward --> DL["drop_loads"] --> DS["drop_stores"] --> Reuse["reuse"]
     Reuse --> CSE["cse<br/>+ FP check folding"] --> Promote["promote"]
     Promote --> Strength["strength"] --> Algebraic["algebraic"]
     Algebraic --> Dead["dead"] --> Place["place"] --> Unroll["unroll"]
     Unroll --> Changed{"body changed?"}
     Changed -->|"yes, round < 16"| Fold
-    Changed -->|"no"| LCSSA["lcssa"]
+    Changed -->|"no"| Wide["temporary post-pass widening seam"]
     Changed -->|"still changing at 16"| Error["hard convergence error"]
-    LCSSA --> Wide["temporary post-pass widening seam"]
     Wide --> Out["optimized MirBody"]
 ```
 

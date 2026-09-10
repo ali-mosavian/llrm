@@ -27,6 +27,30 @@ def test_harr_initializes_the_reused_counter_before_its_exit_bound():
     assert instructions.index("mov si,ax") < instructions.index("mov dx,si")
 
 
+def test_indvar_simplify_reads_through_an_lcssa_exit(monkeypatch) -> None:
+    """LCSSA made HARR's redundant loop counter look externally observed."""
+    from qbopt.model import mir
+    from qbopt.optimize import indvars, lcssa, transform
+
+    path = Path("fixtures/omf/harr-v-g3.obj")
+    found = corpus.loaded(path)
+    partition = corpus.partitioned(path)
+    with monkeypatch.context() as context:
+        context.setattr(indvars, "simplified", lambda body: body)
+        body = transform.applied(
+            mir.bodies(found, partition)[0][1],
+            found.dgroup,
+            found.calls,
+            blocks=partition,
+            found=found,
+            lcssa_=False,
+        )
+    closed = lcssa.closed(body)
+
+    assert closed != body
+    assert indvars.simplified(closed) != closed
+
+
 @pytest.mark.parametrize("hazard", ["observed-counter", "zero-trip", "wrapping-exit", "short-period"])
 def test_counter_elimination_requires_a_complete_trip_count_and_no_body_use(monkeypatch, hazard):
     from dataclasses import replace

@@ -4116,9 +4116,10 @@ not hardware timings. Full before/after stage dumps and runtime output:
 ### Close supported loop exits in SSA without machine overhead
 
 LCSSA now inserts an exit phi for every loop-defined value read after a
-single-edge dedicated exit. It runs once after the optimizing fixed point so
-the existing induction passes are not constrained by a form they do not yet
-consume. Multi-exit and shared-exit loops remain unchanged pending
+single-edge dedicated exit. It runs before the loop transforms in each fixed-
+point round, and IndVarSimplify follows the closure when replacing a redundant
+counter and removes the obsolete exit phi. Multi-exit and shared-exit loops
+remain unchanged pending
 `LoopSimplify`; flags are never closed as data values.
 
 The first HARR comparison exposed an over-split edge: phi elimination emitted
@@ -4130,6 +4131,6 @@ Before and after HARR VBDOS `/G3` assembly are identical: 40 instructions and
 1038 object bytes. In particular, the loop exit remains `cmp ax,0Ah; jle
 0060h; mov word ptr ds:[0],0Bh`, rather than the rejected intermediate
 `jle 0060h; jmp trampoline; ...; trampoline: jmp exit`. Four LCSSA tests and
-16 focused phi/induction integration checks pass. HARR and matrix on PDS, QB
+46 focused architecture, phi, induction and stage-dump checks pass. HARR and matrix on PDS, QB
 and VBDOS, plus VBDOS NBODY, are byte-identical with LCSSA on and off. Stage
-evidence: `/tmp/qbopt-lcssa-final.pQtDdG`.
+evidence: `/tmp/qbopt-lcssa-canonical.zC31cP`.

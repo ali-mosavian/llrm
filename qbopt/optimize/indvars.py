@@ -38,6 +38,13 @@ def simplified(body: mir.MirBody) -> mir.MirBody:
             exit_at, = [at for at in header.succ if at not in loop.body]
             if set(predecessors.get(exit_at, ())) != {header.at} or not blocks[exit_at].ops:
                 continue
+            closed = {
+                value: other
+                for other in blocks[exit_at].phis
+                if len(other.incoming) == 1
+                for predecessor, value in other.incoming.items()
+                if predecessor in loop.body
+            }
             following = {at for at in blocks if exit_at in dominators.get(at, ())}
             if any(value in transform._leaving(body) for value in (phi.result, update)):
                 continue
@@ -46,7 +53,8 @@ def simplified(body: mir.MirBody) -> mir.MirBody:
                 continue
             if any(update in op.uses for block in body.blocks for op in block.ops):
                 continue
-            if any((phi.result in other.incoming.values() or update in other.incoming.values()) and other is not phi
+            if any((phi.result in other.incoming.values() or update in other.incoming.values())
+                   and other is not phi and other not in closed.values()
                    for block in body.blocks for other in block.phis):
                 continue
             if any(set(compare.defines) & set(op.uses) and op is not branch
@@ -75,7 +83,22 @@ def simplified(body: mir.MirBody) -> mir.MirBody:
                     seed_at, blocks[preheader].ops[-1])
                 finish = strength._made(mir.Kind.COPY, "", final,
                     (mir.Const(consts.masked(last + step, width), width),), exit_at, blocks[exit_at].ops[0])
-                changed = loopexit._substituted_exits(body, exit_at, following, [finish], {counter.value: final})
+                swap = {counter.value: final}
+                removed = {
+                    other.result
+                    for value, other in closed.items()
+                    if value in (phi.result, update)
+                }
+                swap.update({value.id: final for value in removed})
+                changed = loopexit._substituted_exits(body, exit_at, following, [finish], swap)
+                if removed:
+                    changed = replace(
+                        changed,
+                        blocks=tuple(
+                            replace(block, phis=tuple(other for other in block.phis if other.result not in removed))
+                            for block in changed.blocks
+                        ),
+                    )
                 out = []
                 for block in changed.blocks:
                     ops = []

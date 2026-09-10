@@ -2449,6 +2449,7 @@ def pipeline(where: Where, **wanted) -> list[MIRTransform]:
         Fold(where),
         Decide(where),
         Segments(where),
+        lcssa.LoopClosedSSA(),
         Hoist(where),
         Forward(where),
         DropLoads(where),
@@ -2461,9 +2462,6 @@ def pipeline(where: Where, **wanted) -> list[MIRTransform]:
         Dead(),
         Place(where),
         unroll.Unroll(where),
-        # Existing loop transforms still discover exits from direct uses.
-        # Close SSA after them until IndVarSimplify consumes LCSSA itself.
-        lcssa.LoopClosedSSA(),
     ]
     return [one for one in every if wanted.get(one.name, True)]
 
@@ -2543,12 +2541,7 @@ def applied(
         blocks=blocks,
         found=found,
     )
-    selected = pipeline(where, **wanted)
-    closure = next((one for one in selected if one.name == "lcssa"), None)
-    passes = [
-        one for one in selected
-        if one.name != "lcssa" and (only is None or one.name == only)
-    ]
+    passes = [one for one in pipeline(where, **wanted) if only is None or one.name == only]
     if found is not None:
         body = replace(
             body,
@@ -2565,24 +2558,12 @@ def applied(
                 for block in body.blocks
             ),
         )
-    if only == "lcssa":
-        body = closure.transform(body) if closure is not None else body
-        if watch is not None:
-            watch("r01-lcssa", body)
-        return body
-
     for iteration in range(16):
         before = body
         for one in passes:
             body = one.transform(body)
             if watch is not None:
                 watch(f"r{iteration + 1:02d}-{one.name}", body)
-        if only is not None:
-            return body
-        if body == before:
-            if closure is not None:
-                body = closure.transform(body)
-                if watch is not None:
-                    watch(f"r{iteration + 1:02d}-lcssa", body)
+        if only is not None or body == before:
             return body
     raise RuntimeError("MIR optimization did not converge after 16 rounds")
