@@ -1,5 +1,31 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: propagate pointer displacement constants and remove zero steps
+
+Constant operand propagation omitted PTR_OFFSET. NDMAX retained a known-zero
+displacement as a Held value and lowered it through full huge-pointer
+normalization. PTR_OFFSET now accepts width-proven displacement constants
+without swapping operands or treating a pointer as an integer displacement.
+The machine-independent identity `ptr_offset(p, 0) = p` then becomes COPY.
+NDMAX's first fold dump shows `v604 := ptr_offset v603, 0`; the algebraic
+dump shows `v604 := v603` instead.
+
+Object bytes PDS/QB/VBDOS after this change:
+NDMAX **4211/4202/4345** (PDS was 4292 immediately before);
+NDARR **2518/2510/2650 -> 2417/2409/2543**;
+HUGELP **1735/1727/1872 -> 1734/1719/1871**.
+All nine optimized runtime outputs match their originals. The three real
+zero-displacement regressions failed first. Focused algebraic/constants/
+pointer tests: 1156 passed; four failures (three ADDRM shape counts and one
+NBODY negation count) also reproduce with the unmodified baseline functions.
+No assertions were weakened. Stage and DOS artifacts:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-pointer-constants-uok9o47h`.
+
+Do not infer a zero base offset from a small allocation: Microsoft's
+`runtime/rt/dynamic.asm` initializes FHD_oData to sizeof(AHD), while huge
+allocations of at least 64K use 64K modulo element size. Allocation bounds
+alone therefore do not establish the backend's no-segment-crossing proof.
+
 ## 2026-09-10: correct packed-pointer carries without rebuilding both halves
 
 Backend pointer lowering now computes a direct packed addition, then corrects

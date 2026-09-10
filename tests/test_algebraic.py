@@ -11,6 +11,25 @@ from qbopt.optimize import transform
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_sixty_dimensional_zero_offset_needs_no_pointer_arithmetic(tag):
+    """NDMAX printed 11,22 correctly but normalized a pointer advanced by zero bytes."""
+    from qbopt import wholeseg
+    from qbopt.analysis import consts
+    states = []
+    def watch(stage, name, state):
+        if stage == "mir-widen":
+            states.append(state)
+    result = wholeseg.emitted(Path(f"fixtures/regressions/ndmax-{tag}.obj").read_bytes(), watch=watch)
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    facts = consts.known(states[0])
+    offsets = [op.args[1] for block in states[0].blocks for op in block.ops if op.kind is mir.Kind.PTR_OFFSET]
+    assert offsets
+    for arg in offsets:
+        value = arg if isinstance(arg, mir.Const) else facts.get(arg.value)
+        assert value is None or value.n != 0
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_hotlpx_scales_by_twenty_without_a_second_multiply(tag):
     """HOTLPX's closed-form sum still used IMUL for the constant factor twenty."""
     from qbopt import wholeseg

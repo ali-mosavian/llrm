@@ -14,6 +14,19 @@ from qbopt.backend import lower
 from qbopt.analysis import consts
 from qbopt.optimize import transform
 
+
+@pytest.mark.parametrize("width", [2, 4])
+def test_pointer_displacement_constants_preserve_order_and_width(width):
+    """NDMAX's zero displacement should fold without interpreting its base as an integer offset."""
+    pointer, displacement, result = (mir.Value(index, 0) for index in (990, 991, 992))
+    args = (mir.Held(pointer, 4), mir.Held(displacement, 4))
+    op = mir.Op(0, ir.Operation.NOTHING, "", (result,), (pointer, displacement),
+                kind=mir.Kind.PTR_OFFSET, args=args, results=(mir.Held(result, 4),))
+    changed = transform._constant_operands(op, {
+        pointer: consts.Known(0x12340000, 4), displacement: consts.Known(0, width)})
+    assert changed.args == (args[0], mir.Const(0, 4) if width == 4 else args[1])
+    assert pointer in changed.uses
+
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
 

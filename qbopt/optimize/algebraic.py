@@ -333,7 +333,7 @@ def _simplified(op: mir.Op, wanted: set[mir.Value], wide: set[mir.Value]) -> mir
     mask = (1 << (result.width * 8)) - 1
     number = right.n & ((1 << (right.width * 8)) - 1)
     match op.kind, number:
-        case mir.Kind.ADD | mir.Kind.SUB | mir.Kind.OR | mir.Kind.XOR | mir.Kind.SHL | mir.Kind.SHR | mir.Kind.SAR, 0:
+        case mir.Kind.ADD | mir.Kind.SUB | mir.Kind.OR | mir.Kind.XOR | mir.Kind.SHL | mir.Kind.SHR | mir.Kind.SAR | mir.Kind.PTR_OFFSET, 0:
             answer = left
         case mir.Kind.MUL, 1:
             answer = left
