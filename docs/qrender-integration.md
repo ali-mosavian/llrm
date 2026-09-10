@@ -8,6 +8,29 @@ commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
 ### Next module: SYS argument parsing
 
+POW4 at 08f5 is now bounded: VBDCL10E `87btran.asm` establishes a BP
+frame, examines the x87 operands, and overwrites arithmetic flags at 00f3
+before dispatch. Normal exits at 0089/0098/00b3/00d8 restore BP and RETF
+without consuming caller stack arguments. Error paths tail RUNERR. The
+runtime call and all conservative effects remain; this does not replace
+power with an algebraic approximation. The actual SYS_INIT_TABLES block
+failed strict lowering at 08f5 before the contract and passes now.
+
+Native emission now reaches **SYS_ERROR: CSCN at 0980**. Full dumps are in
+`/tmp/qbopt-sys-pow-native`. A complete missing-input inventory of SYS now
+contains six names: CSCN, FRI2, SLEP, STI4, TIMR, WIDT. Initial dependency
+inspection locates CSCN -> ScSetup/EnsureFI/SCRSTT/ScCleanUpParms; FRI2 ->
+heap compaction (decoder reports overlapping instructions, requiring raw
+inspection); SLEP -> keyboard/clock interrupt setup; STI4 -> STR_COMMON;
+TIMR -> DOS time; WIDT -> EnsureFI/SWIDTH. These are audit leads, not
+established contracts. No new executable was accepted or benchmarked.
+
+```asm
+; before                         ; after (atomic whole-module refusal)
+08f5 call far B$POW4              ; call far B$POW4
+08fa call far B$FIST              ; call far B$FIST
+```
+
 The allocator refusal is fixed: interval construction merged touching
 segments on opposite sides of a definition. At HOST_SHUTDOWN (00c2), a
 coalesced SI id was both consumed and newly defined; merging its two

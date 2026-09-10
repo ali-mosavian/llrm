@@ -5,9 +5,12 @@ import pytest
 from qbopt.abi import runtime
 
 
-@pytest.mark.parametrize("at,cleanup", [(0x12f, 2), (0x823, None)])
-def test_qrender_argument_parser_lowers_string_calls(at: int, cleanup: int | None) -> None:
-    """SYS_PARSE_ARGS refused at 012f (LCAS), then 0823 (FDR1); no optimized OBJ."""
+@pytest.mark.parametrize("procedure,at,cleanup", [
+    ("SYS_PARSE_ARGS", 0x12f, 2), ("SYS_PARSE_ARGS", 0x823, None),
+    ("SYS_INIT_TABLES", 0x8f5, 0),
+])
+def test_qrender_sys_lowers_runtime_calls(procedure: str, at: int, cleanup: int | None) -> None:
+    """SYS refused LCAS at 012f, FDR1 at 0823, then POW4 at 08f5; no optimized OBJ."""
     from dataclasses import replace
     from pathlib import Path
     import corpus
@@ -22,7 +25,7 @@ def test_qrender_argument_parser_lowers_string_calls(at: int, cleanup: int | Non
                 for name, cleanup in (("HOST_SHUTDOWN", 0), ("COM_TOKENIZE", 8))}
     rules = runtime.for_module(found, external=external)
     name, body = next((name, body) for name, body in mir.bodies(found, corpus.partitioned(path), rules)
-                      if name == "procedure SYS_PARSE_ARGS")
+                      if name == f"procedure {procedure}")
     block = next(block for block in body.blocks if any(op.at == at for op in block.ops))
     body = replace(body, entry=block.at, blocks=(block,))
     lowered = lower.lowered(name, body, found.calls, found.absorbed, rules)

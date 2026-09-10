@@ -310,6 +310,21 @@ for _name in ("B$SIN4", "B$SIN8", "B$COS4", "B$COS8"):
         ),
     )
 
+VARIANTS[("B$POW4", "vbdos")] = replace(
+    worst("B$POW4"),
+    inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
+    cleanup=0,
+    evidence=(
+        "VBDCL10E 87btran.asm 00e2: x87 operands, PUSH BP / MOV BP,SP. "
+        "FXAM/FNSTSW then AND AL,47h at 00f3 overwrites arithmetic flags "
+        "before dispatch. Normal paths join POP BP / RETF at 0089, 0098, "
+        "00b3 or 00d8; logarithm/exponential kernel reached by relocated "
+        "near jump 010b -> 0038 uses the same frame. Other paths tail "
+        "B$RUNERR (overflow/domain); all GP, memory, x87 and error effects "
+        "remain conservative. No algebraic replacement or purity claim."
+    ),
+)
+
 VARIANTS[("B$PEOS", "vbdos")] = replace(
     worst("B$PEOS"),
     inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
