@@ -591,6 +591,7 @@ TARGETS = {
     "ARITH": 592,
     "FLAGS": 248,  # Complete constant-branch reference retaining states at every output call.
     "CMPORD": 1966,  # Eight initial stores, 24 three-call rows, DONE and termination.
+    "CHAIN": 482,  # Twelve numeric stores, seven label/result rows, DONE and termination.
     "FPDEEP": 1086,
 }
 
@@ -626,6 +627,10 @@ def against_targets(paths: list[Path], raw: bool = False) -> int:
             print(f"  {path.stem:10s} {cost:7d} {'--':>7s} {'--':>6s}   {left}  NO TARGET")
             continue
         reason = PROVISIONAL_TARGETS.get(program)
+        if program == "CHAIN":
+            reference_module = module.load(path)
+            if sum(name == "B$PEI4" for name in reference_module.calls.values()) != 7:
+                reason = "CHAIN reference requires the current seven-row source; this object has different output coverage"
         if program == "FPCSE":
             family = module.family(omf.parse(path.read_bytes())) if path.is_file() else module.Family.UNKNOWN
             if family is module.Family.QUICKBASIC:

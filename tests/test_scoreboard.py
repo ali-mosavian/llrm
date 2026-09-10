@@ -21,6 +21,37 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 import opportunity
 
 
+def test_chain_reference_preserves_signed_remainders_and_output_states():
+    """CHAIN's seven nested divide/remainder rows had no complete reference target."""
+    def quotient(left, right):
+        magnitude = abs(left) // abs(right)
+        return -magnitude if (left < 0) != (right < 0) else magnitude
+
+    def remainder(left, right):
+        return left - quotient(left, right) * right
+
+    numerator, divisor, outer = 1073741831, 39678839, 100003
+    positive = remainder(remainder(numerator, divisor), outer)
+    negative = remainder(remainder(-numerator, divisor), outer)
+    results = [0, 0, positive, positive, quotient(quotient(numerator, divisor), 3),
+               negative, quotient(quotient(-numerator, divisor), 3)]
+    assert results == [0, 0, 13106, 13106, 9, -13106, -9]
+    labels = ["ONE", "CONST", "CONST2", "MODMOD", "DIVDIV", "NEGMOD", "NEGDIV"]
+    expected = [f"{label}={value: d}" for label, value in zip(labels, results)] + ["DONE"]
+    assert Path("suite/golden/chain.txt").read_text().splitlines() == expected
+    stores = (4 + 7 + 1) * (2 + opportunity.TOUCH)
+    output = (7 * 2 + 1) * (6 + opportunity.CALL) + opportunity.CALL
+    assert opportunity.TARGETS.get("CHAIN") == stores + output == 482
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_chain_legacy_objects_cannot_pass_a_seven_row_reference(tag, capsys):
+    """Five-row CHAIN fixtures must not look cheaper by omitting CONST and CONST2 output."""
+    assert opportunity.against_targets([Path(f"fixtures/omf/chain-{tag}.obj")]) == 1
+    report = capsys.readouterr().out
+    assert "PROVISIONAL" in report and "seven-row" in report
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_cmpord_has_a_complete_source_derived_reference(tag, capsys):
     """CMPORD's 24 signed-comparison rows had no reference despite constant answers."""

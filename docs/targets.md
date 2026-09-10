@@ -240,6 +240,73 @@ All three linked baseline/optimized executions match all 24 golden rows.
 Event-enabled variants still need event-preserving references and remain
 provisional. Registering this target changes no emitted instruction.
 
+## CHAIN — nested integer division and remainder
+
+Ordinary event-free builds have constant source inputs and no error handler.
+Use signed division truncated toward zero, not Python's negative floor division:
+`1073741831 = 27 * 39678839 + 2413178`, and
+`2413178 = 24 * 100003 + 13106`. The inner XOR-derived divisor is 1 for
+the first two remainders and 3 for the quotient rows. Negative remainders
+retain the dividend's sign. No divisor is zero and no quotient overflows.
+
+| Output row | r | a at the output call |
+| --- | ---: | ---: |
+| ONE | 0 | 1073741831 |
+| CONST | 0 | 1073741831 |
+| CONST2 | 13106 | 1073741831 |
+| MODMOD | 13106 | 1073741831 |
+| DIVDIV | 9 | 1073741831 |
+| NEGMOD | -13106 | -1073741831 |
+| NEGDIV | -9 | -1073741831 |
+
+Retain all numeric assignments at their original positions relative to output
+calls. A complete symbolic reference is the following straight-line expansion;
+`row` is an assembly macro expanded seven times, not a runtime helper:
+
+```asm
+mov dword [a],1073741831
+mov dword [b],39678839
+mov dword [c],-1049330653
+mov dword [d],100003
+
+; row label,value expands to:
+;   mov dword [r],value
+;   push word label
+;   call far B$PSSD
+;   push dword value
+;   call far B$PEI4
+row ONE,0
+row CONST,0
+row CONST2,13106
+row MODMOD,13106
+row DIVDIV,9
+mov dword [a],-1073741831
+row NEGMOD,-13106
+row NEGDIV,-9
+push word DONE
+call far B$PESD
+call far B$CEND
+```
+
+Target: **482 modeled units** = twelve stores × 6 + fifteen
+(immediate push + output call) pairs × 26 + termination 20. Each DWORD
+argument can use a 386 operand-size prefix on all three compiler configurations.
+The hand-derived seven answers match the checked-in golden file. This is a
+source-level reference, not a claim that unknown machine calls may be ignored
+by MIR analysis. Event variants still require their own reference.
+
+Registering the target changes no emitted assembly. The checked-in CHAIN objects
+contain only five result rows, while the current source has seven. Their costs
+(QB/PDS 682, VBDOS 630) must not be divided by this denominator. The scoreboard
+requires seven `B$PEI4` output sites or reports PROVISIONAL. Fresh builds of the
+current source execute all seven rows correctly on QB, PDS and VBDOS; refreshing
+the legacy fixture matrix remains necessary before its comparisons are valid.
+Those fresh optimized objects cost **962 on QB/PDS (2.00×)** and **882 on
+VBDOS (1.83×)**. This exposes a real above-target case hidden by the stale
+five-row fixtures. The remaining constant arithmetic crosses output calls and
+compiler-generated frame temporaries; stage dumps, not a larger denominator,
+will determine the next optimization.
+
 ## FPDEEP — exact constant floating expressions
 
 **The same audit limitation applies here:** 1086 prices the numerical/printing
