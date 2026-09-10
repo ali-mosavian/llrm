@@ -3738,3 +3738,21 @@ and VBDOS. All 26 arithmetic-raising checks pass; the real NBODY regression
 failed first and three flag-safety cases retain the helper.
 Before/after stage dumps and runtime artifacts:
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-captured-comparison-4t2vcg63`.
+
+## Next whole-value boundary: loop phis and sign-fill recognition
+
+NBODY's final MIR at 0x2f0 has separate high/low phis. The 0x2e3
+backedge supplies EXTRACT(whole step+1,16/0), but the 0xc7 entry supplies
+the low constant 1 and an opaque CONVERT named `cwd`. `consts.known`
+therefore knows low=1 and does not know high=0. At 0x2fe the newly raised
+comparison CONCATs those two phis again.
+
+`algebraic._recombined` already removes straight-line exact extraction
+round trips; adding another such rule would not fix this case. The missing
+pieces are (1) normalize the remaining sign-fill conversions in the raise
+without changing flags, and (2) combine matching word phis into a whole
+value when every incoming edge proves its full value. The latter must stay
+machine-independent; recognizing `cwd` in an optimization pass would
+violate the MIR boundary. Lowering EXTRACT currently uses push/pop and
+SIGN_EXTEND uses MOVSX, so those existing value operations preserve flags.
+No change to generated code is claimed for this investigation.
