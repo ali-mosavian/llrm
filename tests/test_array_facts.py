@@ -67,6 +67,18 @@ def test_budget_exhaustion_adds_no_facts():
     assert arrayfacts.proven(body, limit=1) is body
 
 
+def test_interval_cannot_acquire_unwritten_high_bits():
+    from qbopt.analysis.ranges import Interval
+    assert arrayfacts._fitted(Interval(-1, 0, 2), 4) is None
+
+
+def test_copy_does_not_implicitly_extend_an_offset():
+    source, target = mir.Value(50, 0), mir.Value(51, 1)
+    op = mir.Op(1, ir.Operation.MOVE, "", (target,), (source,), kind=mir.Kind.COPY,
+                args=(mir.Held(source, 2),), results=(mir.Held(target, 4),))
+    assert arrayfacts._result(op, [65535]) is None
+
+
 def test_narrow_constant_does_not_prove_a_wider_offset():
     """A low word of 2 does not bound an offset whose high word is unknown."""
     body = diamond()
@@ -98,3 +110,52 @@ def test_arrphi_proves_both_unknown_branches_and_the_join(tag):
                 for ref in (*op.loads, *op.stores) if ref.pointer]
     assert len(pointers) == 6
     assert all(ref.allocation is not None for ref in pointers)
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_hugerg_has_an_inductive_extent_proof_with_a_small_budget(tag, monkeypatch):
+    """HUGERG's 456,457,789,790 output needs 197 iterations; exact walking exhausted 10,000 operations."""
+    import corpus
+    from qbopt.frontend import raising_array_bounds
+    with monkeypatch.context() as context:
+        context.setattr(raising_array_bounds, "proven", lambda body: body)
+        path = Path(f"fixtures/regressions/hugerg-{tag}.obj")
+        body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
+    after = arrayfacts.proven(body, limit=1000)
+    stores = [ref for block in after.blocks for op in block.ops for ref in op.stores if ref.pointer]
+    assert len(stores) == 2 and all(ref.allocation is not None for ref in stores)
+    from qbopt import wholeseg
+    from qbopt.analysis import loops
+    states = []
+    def watch(stage, name, state):
+        if stage == "mir-widen":
+            states.append(state)
+    result = wholeseg.emitted(path.read_bytes(), watch=watch)
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    optimized, = states
+    inside = {at for loop in loops.loops(optimized.blocks, optimized.entry) for at in loop.body}
+    assert inside
+    assert not any(ref.addr is not None and ref.addr.space is Space.SEGMENT
+                   and ref.addr.index == corpus.loaded(path).program_data and 6 <= ref.addr.disp < 28
+                   for block in optimized.blocks if block.at in inside for op in block.ops for ref in op.loads)
+
+
+@pytest.mark.parametrize("failure", ["out_of_bounds", "unknown_guard", "call"])
+def test_inductive_proof_must_preserve_its_own_preconditions(failure, monkeypatch):
+    import corpus
+    from qbopt.frontend import raising_array_bounds
+    with monkeypatch.context() as context:
+        context.setattr(raising_array_bounds, "proven", lambda body: body)
+        path = Path("fixtures/regressions/hugerg-p-g2.obj")
+        body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
+    def changed(op):
+        if op.kind is mir.Kind.PTR_OFFSET and failure == "out_of_bounds":
+            return replace(op, args=(op.args[0], mir.Const(80802, 4)))
+        if op.kind is mir.Kind.BRANCH and failure == "unknown_guard":
+            return replace(op, uses=(mir.Value(9999, 0, flags=True),))
+        if op.kind is mir.Kind.STORE and any(ref.pointer for ref in op.stores) and failure == "call":
+            return mir.Op(op.at, ir.Operation.CALL, "", (), (), kind=mir.Kind.CALL)
+        return op
+    body = replace(body, blocks=tuple(replace(block, ops=tuple(map(changed, block.ops))) for block in body.blocks))
+    after = arrayfacts.proven(body)
+    assert not any(ref.allocation for block in after.blocks for op in block.ops for ref in op.stores)

@@ -551,16 +551,19 @@ one documented target without materially regressing another.
   bases and constant byte offsets to exclude disjoint writes. Exact dominating
   stores supply constants or SSA values; unknown roots and unbounded offsets
   remain conservative. Facts are rebuilt after MIR changes.
-  At raise time, forward must-facts retain fixed array extents and equal
+  At raise time, forward must-facts retain fixed array extents and bounded
   pointer offsets across unknown branches. Accesses are annotated per
-  occurrence only after every incoming path agrees. Calls, descriptor
+  occurrence only when every incoming path proves ownership. Calls, descriptor
   writes, allocation generations and value widths constrain the proof;
-  symbolic variable-index ranges remain unfinished.
+  general symbolic ranges remain unfinished.
   Counted-loop ranges also use signed comparison facts on dominating,
   dedicated branch edges. Derived offsets are recomputed in that scope;
   a bound from one arm is not exported through its join. This enables
-  alias-sensitive motion around guarded static-array accesses. General
-  dynamic-array induction proofs still need allocation-lifetime invariants.
+  alias-sensitive motion around guarded static-array accesses.
+  Constant-extent dynamic arrays now also use an inductive forward proof:
+  numeric range joins, loop-header widening, guard refinement and checked
+  stores preserve allocation/counter facts without enumerating iterations.
+  Runtime-sized extents and broader lifetime/mod-ref precision remain open.
 
 ### High-impact MIR passes
 

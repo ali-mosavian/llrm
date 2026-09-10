@@ -1,5 +1,63 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: inductive dynamic-array extent proofs
+
+`frontend/arrayfacts.py` now joins numeric intervals, widens growing bounds
+at loop headers, and refines them on comparison edges. A direct store's SSA
+binding lets the same guard refine its memory copy. Each array store must
+first fit its active allocation; only then can it preserve descriptor and
+counter facts for the next iteration. Annotations use converged states, not
+the optimistic first iteration. Exhaustion still adds no facts.
+
+HUGERG extends the two-dimensional huge-array example to **197 iterations**.
+The old exact walker exhausted its 10,000-operation budget. The inductive
+proof succeeds within **1,000 operations** on QB, PDS and VBDOS, enabling
+descriptor hoisting and two address recurrences. PDS excerpts:
+
+```asm
+; before, inside the loop: reconstruct index and address
+mov dx,[items.dimensionCount]
+movsx edx,dx
+and edx,0FFFFh
+imul ebx,edx
+add ebx,ecx
+shl ebx,1
+mov edx,[items.pointer]
+; huge-pointer normalization follows
+
+; after: descriptor setup precedes the loop; EBX is the first address
+push es
+push ebx
+pop si
+pop es
+mov [es:si],dx
+pop es
+; at the latch, after calculating the huge-pointer carry correction
+add ebx,2
+add ebx,ecx
+; the second address advances by 402 bytes, with its own carry correction
+```
+
+Object sizes: PDS **1856 -> 1750**, QB **1867 -> 1743**, VBDOS
+**1993 -> 1887**. Huge-pointer carry adjustment remains; no flat-pointer or
+cycle-equivalence claim is made. All three baseline/optimized runs print
+**456,457,789,790; DONE**. Final bytes match those runtime-verified objects.
+The fixture uses the usual compiler switches plus `/AH`.
+
+The focused array/extent/memory-join selection passes **61 tests**. Turning
+range joins back into equality-only joins fails all three new proof cases.
+Tests also reject unknown loop guards, out-of-allocation offsets, calls,
+stale allocations and implicit width extension. Emitted-body checks require
+descriptor loads to be absent from the loop.
+
+Stages:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-hugerg-stages-zht1_3om`
+(`before/s43-asm-emitted.txt`, `after/s75-asm-emitted.txt`). Runtime folders
+under the same parent: `qbopt-hugerg-p-g2-bna872no`,
+`qbopt-hugerg-q-O-2ffa9y41`, `qbopt-hugerg-v-g3-8dla5_j2`.
+Runtime-sized extents, more precise call/lifetime effects, backend carry
+costs and the rest of the architecture/target checklist remain unfinished.
+
 ## 2026-09-10: branch-scoped subscript ranges
 
 `analysis/ranges.py` now refines signed integer intervals on comparison
