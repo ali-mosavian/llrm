@@ -93,6 +93,23 @@ def test_registered_handler_does_not_land_in_a_phi_edge(tag):
     assert found.calls.get(second.at) == "B$ETT1" or found.calls.get(third.at) == "B$ETT1"
 
 
+def test_handler_discovery_accepts_lowered_push_only_with_matching_relocations():
+    """EVTRAP VBDOS emitted a valid handler at 0136, but discovery reported none."""
+    from qbopt import wholeseg
+    from qbopt.objectfile import module, omf
+    from qbopt.abi.events import handler_entries
+
+    result = wholeseg.emitted(Path("fixtures/regressions/evtrap-v-evt.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    found = module.of(omf.parse(result.data))
+    call, = (at for at, name in found.calls.items() if name == "B$ONTA")
+    assert found.code[call - 7:call] == bytes.fromhex("0e b80000 680000")
+    target = found.operands[call - 2]
+    assert handler_entries(found) == frozenset({target.disp})
+    mismatched = {**found.operands, call - 5: replace(target, disp=target.disp + 1)}
+    assert not handler_entries(replace(found, operands=mismatched))
+
+
 @pytest.mark.parametrize("tag", ["p-evt", "v-evt"])
 def test_event_stub_near_call_has_no_register_arguments(tag: str) -> None:
     """ADDRM /V refused at 0048 before its first statement could execute."""

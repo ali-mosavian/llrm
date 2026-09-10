@@ -336,6 +336,29 @@ reproduce with the new VBDOS ENRA variant removed in-process, so neither
 is introduced by this change. Do not dismiss the event failure as stale:
 inspect stage dumps and emitted registration before accepting more modules.
 
+### Event-handler discovery correction
+
+EVTRAP's missing handler was a discovery defect, not a lost registration.
+`/tmp/qbopt-evtrap-current` shows the MIR retains the handler address and
+lowering substitutes a relocated immediate PUSH while retaining MOV AX.
+Both relocations in the emitted sequence name handler 0136, whose entry
+still reaches ETT1. Discovery now accepts that sequence only when its two
+relocations agree and the target is inside the current code segment.
+
+```asm
+; BC registration                ; emitted registration
+push cs                          push cs
+mov ax,handler                   mov ax,handler
+push ax                          push word handler
+call far B$ONTA                  call far B$ONTA
+```
+
+The discovery fix itself changes no emitted bytes. The new real-fixture
+regression fails with the previous discovery implementation and passes
+with the fix; mismatched relocations are rejected. Both existing PDS and
+VBDOS handler-entry regressions also pass. This is structural evidence,
+not a new emulator run or proof of all event behavior.
+
 ### Two-module runtime check
 
 Relinking with rewritten `view` and `d_turb` succeeded. The isolated build in
