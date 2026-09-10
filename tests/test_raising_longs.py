@@ -11,6 +11,15 @@ from qbopt.frontend import raising_longs
 from qbopt.optimize import transform
 
 
+def test_udtacc_second_field_is_a_whole_long():
+    """UDTACC emitted two-word loads and ADD/ADC for y because its zero-offset access was unnamed."""
+    path = Path("fixtures/regressions/udtacc-p-g2.obj")
+    body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
+    load = next(op for block in body.blocks for op in block.ops if op.at == 0xb1 and op.loads)
+    assert load.loads[0].width == 4
+    assert not any(op.kind is mir.Kind.ADD_CARRY for block in body.blocks for op in block.ops)
+
+
 def test_nbody_timing_helper_stores_the_signed_whole_value():
     """PITSNAP split its signed byte into two stores and reloaded it, raising NBODY cost by 20."""
     path = Path("fixtures/bench/nbody-v-g3.obj")

@@ -253,7 +253,8 @@ def operand(insn: Insn, resolve: Resolver) -> Addr | None:
     if override == Register.DS and insn.memory_base not in REDUNDANT_DS:
         return None
     if insn.disp_at is None:
-        return None
+        return (Addr(Space.LITERAL, 0, base=insn.memory_base)
+                if insn.memory_base in (Register.SI, Register.DI) else None)
     match insn.memory_base:
         case Register.NONE:
             resolved = resolve(insn.disp_at, insn.insn.memory_displacement)

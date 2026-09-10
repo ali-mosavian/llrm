@@ -1,5 +1,32 @@
 # Focused regression objects
 
+`udtacc-{q-O,p-g2,v-g3}.obj` are real compiler output from `udtacc.bas`.
+Two LONG fields of an input-selected record accumulate 3 and -5 seven times;
+all three baseline/optimized pairs print 21, -35 and DONE. PDS exposed an
+address-decoding gap: `[si]` was unnamed while `[si+2]` was recognized, leaving
+the second field split. An absent displacement is now literal zero with its
+base retained; no relocation is invented. The existing segment/index refusals
+are unchanged.
+
+PDS before/after (STEPY names its relocation):
+
+```asm
+; before                     ; after
+mov ax,[si]                  mov eax,[si]
+mov cx,[si+2]                mov ecx,[STEPY]
+add ax,[STEPY]               add eax,ecx
+adc cx,[STEPY+2]
+mov [bp-14h],bx              mov [bp-14h],bx
+mov [si],ax                  mov [si],eax
+mov [si+2],cx
+```
+
+PDS modeled cost falls **1258 → 1092**, object **1299 → 1288 bytes**.
+Five focused regressions failed before the fix; 182 lift/whole-value tests
+pass afterwards. This establishes whole-field recognition, not SROA or
+cross-iteration promotion: the loop still loads and stores both fields.
+There is no registered optimal target for this focused fixture.
+
 `chain-stack-q-O.obj` is real QuickBASIC 4.5 `/O` output from
 `suite/chain.bas`, captured during the stack-argument recovery work. Its
 constant-divisor remainder feeds another remainder and is reused later.

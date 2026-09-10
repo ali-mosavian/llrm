@@ -545,6 +545,16 @@ def test_a_frame_address_also_indexed_is_refused() -> None:
     assert classify_code(hx("8B 42 08")) is None
 
 
+@pytest.mark.parametrize("code,base", [("8B 04", Register.SI), ("8B 05", Register.DI),
+                                      ("89 04", Register.SI), ("89 05", Register.DI)])
+def test_implicit_zero_displacement_keeps_the_base(code, base):
+    """UDTACC's second LONG field stayed split because [si] was unknown but [si+2] was named."""
+    insn = decode(hx(code), 0)
+    def no_field(offset, literal):
+        pytest.fail("an absent displacement cannot have a relocation")
+    assert operand(insn, no_field) == Addr(Space.LITERAL, 0, base=base)
+
+
 def test_an_indexed_literal_operand_keeps_its_index_register_too() -> None:
     # The same hazard as the SEGMENT case, but for an address no fixup claims
     # -- a `byval as long` parameter dereferenced through si, the shape

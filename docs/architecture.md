@@ -578,6 +578,10 @@ one documented target without materially regressing another.
 
 - [ ] Implement scalar replacement of aggregates (`SROA`) for descriptors,
   UDT fields, frame temporaries and independently addressable array metadata.
+  UDTACC now raises its second LONG field as a whole value: implicit-zero
+  indexed accesses no longer become unknown memory while adjacent words are
+  named. PDS cost falls 1258 → 1092; both fields still load/store in the loop.
+  This removes a recognition prerequisite, not aggregate decomposition itself.
 - [ ] Feed SROA results into promotion so scalar values survive across BC
   statement boundaries.
   Write-through promotion now also accepts fixed procedure-frame fields, not
