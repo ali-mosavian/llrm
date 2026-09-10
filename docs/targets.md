@@ -569,6 +569,44 @@ reading its output -- the miss here is that all four values are constants.
 **10 instructions and 34 bytes, against 4 and 24.** Wanted: constant
 propagation with a consumer that emits from it.
 
+### Complete event-free SUBEXP reference
+
+The arithmetic comparison above is not the whole-program denominator.
+The fixed source values are x=11, y=5, p=32, q=48, all representable as
+INTEGER without overflow. In these fixtures x/y and p/q occupy consecutive
+word locations. A good backend can encode each adjacent pair as one dword
+store; this is a backend storage-layout choice, not machine-specific MIR
+arithmetic. All four numeric globals are established before the first output
+call, just as in the source. No store is moved across a call.
+
+The established print contracts write runtime/string-owned memory, not these
+numeric cells, and do not enter user code in this event-free program. The
+numeric arguments therefore remain constants across the descriptor-print
+calls. All calls, including their possible I/O errors, remain in source order.
+
+```asm
+mov dword [x],0005000Bh       ; x=11, y=5: 6
+mov dword [p],00300020h       ; p=32, q=48: 6
+push word labelP             ; 6
+call far B$PSSD               ; 20
+push word 32                 ; 6
+call far B$PEI2               ; 20
+push word labelQ             ; 6
+call far B$PSSD               ; 20
+push word 48                 ; 6
+call far B$PEI2               ; 20
+push word labelDone          ; 6
+call far B$PESD               ; 20
+call far B$CENP               ; 20
+```
+
+Two stores, five push/call pairs and termination give
+**2*6 + 5*(6+20) + 20 = 162** independently of BC's measured cost. This
+confirms the existing target without ratio-based rescaling. At `473262d`,
+PDS /G2, QB /O and VBDOS /G3 each cost 168 (1.04x): their output combines
+x/y but still stores p/q separately. No generated code or denominator is
+changed by this accounting. Event-enabled variants remain provisional.
+
 ## ivchan -- a chain of derived induction variables
 
 `p = i*12`, `q = p+5`, `a(q) = i`, `t = t + a(q)`. Four affine functions of

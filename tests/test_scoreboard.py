@@ -21,6 +21,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 import opportunity
 
 
+def test_subexp_reference_includes_all_stores_and_output_calls():
+    """SUBEXP's old listing showed only arithmetic, leaving its 162-unit full target unauditable."""
+    first = 11 | (5 << 16)
+    second = ((11 + 5) * 2) | (((11 + 5) * 3) << 16)
+    assert first.to_bytes(4, "little") == bytes.fromhex("0b000500")
+    assert second.to_bytes(4, "little") == bytes.fromhex("20003000")
+    stores = 2 * (2 + opportunity.TOUCH)
+    output = 5 * (2 + opportunity.TOUCH + opportunity.CALL)
+    assert opportunity.TARGETS["SUBEXP"] == stores + output + opportunity.CALL == 162
+
+
 def test_flags_reference_preserves_states_at_each_output_call():
     """FLAGS lacked a target after its branches folded; observable numeric stores still cost work."""
     states = [(65535, 61680, 61680), (-65536, -65536, -65536), (0, 0, 0), (65536, 1, 65535)]
