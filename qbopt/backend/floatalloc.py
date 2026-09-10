@@ -15,6 +15,14 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
                 if isinstance(arg, ir.Held) and arg.width == 10}
     if not floating:
         return body
+    integer_readers = set(body.pins)
+    for block in body.blocks:
+        integer_readers.update(value for phi in block.phis for _, value in phi.incoming)
+        for one in block.insns:
+            integer_readers.update(one.uses)
+            if one.what is not None:
+                integer_readers.update(arg.value for arg in one.what.sources if isinstance(arg, ir.Held))
+    unknown_readers = any(one.what is None or one.what.op is ir.Operation.BARRIER for one in body.insns)
     predecessors = {block.at: set() for block in body.blocks}
     for block in body.blocks:
         for successor in block.succ:
@@ -255,9 +263,10 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
             if converted_result is not None:
                 insns.append(lir.Insn(one.at, (one.at, one.at),
                     ir.Semantics(ir.Operation.NOTHING, "wait", (), ()), (), ()))
-                insns.append(lir.Insn(one.at, (one.at, one.at),
-                    ir.Semantics(ir.Operation.MOVE, "mov", (converted_result,), (converted_cell,)),
-                    (converted_result.value,), (), widths=((converted_result.value, converted_result.width),)))
+                if unknown_readers or converted_result.value in integer_readers:
+                    insns.append(lir.Insn(one.at, (one.at, one.at),
+                        ir.Semantics(ir.Operation.MOVE, "mov", (converted_result,), (converted_cell,)),
+                        (converted_result.value,), (), widths=((converted_result.value, converted_result.width),)))
         if stack and index not in continues:
             raise Unlowered("floating stack live-out requires cross-block allocation")
         if index not in continues:

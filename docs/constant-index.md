@@ -86,3 +86,25 @@ requires bounded reachable-object effects established by the raise/runtime
 contract, rather than interpreting absent escaped origins as disjoint bytes.
 The six independently proven square/ratio conversions do not depend on
 solving that additional memory-summary problem.
+
+## Do not materialize an unread conversion result
+
+Floating allocation now creates the integer reload only when the result
+has a reader. This is allocation of a result, not a new LIR optimization
+pass: the conversion and its synchronization remain unchanged.
+
+```asm
+; Before                         ; After, if the result is unused
+wait                             wait
+fistp dword [ownedTemporary]      fistp dword [ownedTemporary]
+wait                             wait
+mov eax,[ownedTemporary]
+```
+
+The before/after sequence is covered for both word and dword conversions.
+Pinned results, phi inputs, explicit uses and operands retain the reload;
+any opaque instruction or barrier conservatively retains all such reloads.
+41 focused allocation tests pass, including two fail-first regressions.
+Ordinary PDS fixture bytes and emission outcomes are unchanged. This does
+not yet claim a suite speedup: unread results must survive the upstream
+pipeline in a body whose readers are fully modeled to benefit.

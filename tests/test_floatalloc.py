@@ -44,14 +44,53 @@ def test_integer_result_waits_before_reading_owned_conversion_storage(width):
     body = _body([
         ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (value,), (cell,)),
         ir.Semantics(ir.Operation.FLOAT_STORE, "fistp", (result,), (value,)),
+        ir.Semantics(ir.Operation.MOVE, "mov", (cell,), (result,)),
     ])
     allocated = floatalloc.allocated(body, frame.Frame(-8))
-    assert [one.what.name for one in allocated.insns] == ["fld", "wait", "fistp", "wait", "mov"]
+    assert [one.what.name for one in allocated.insns] == ["fld", "wait", "fistp", "wait", "mov", "mov"]
     store, load = allocated.insns[2].what, allocated.insns[4].what
     assert store.dests == load.sources
     assert store.dests[0].width == width
     assert store.dests[0].addr.disp < -8
     assert load.dests == (result,)
+
+
+@pytest.mark.parametrize("width", [2, 4])
+def test_unused_integer_conversion_keeps_checkpoints_without_materializing_result(width):
+    """Constant print arguments can leave an unused conversion result; both waits must survive."""
+    from qbopt.backend import frame
+    value, result = ir.Held(1, 10), ir.Held(2, width)
+    cell = ir.Mem(Addr(Space.FRAME, -8), 8)
+    body = _body([
+        ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (value,), (cell,)),
+        ir.Semantics(ir.Operation.FLOAT_STORE, "fistp", (result,), (value,)),
+    ])
+    allocated = floatalloc.allocated(body, frame.Frame(-8))
+    assert [one.what.name for one in allocated.insns] == ["fld", "wait", "fistp", "wait"]
+    assert allocated.insns[2].what.dests[0].width == width
+
+
+@pytest.mark.parametrize("reader", ["opaque", "barrier", "pinned", "phi", "uses"])
+def test_conversion_result_is_kept_for_non_operand_readers(reader):
+    """An invisible reader must not lose the integer returned by B$FIST."""
+    from qbopt.backend import frame
+    value, result = ir.Held(1, 10), ir.Held(2, 4)
+    cell = ir.Mem(Addr(Space.FRAME, -8), 8)
+    body = _body([
+        ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (value,), (cell,)),
+        ir.Semantics(ir.Operation.FLOAT_STORE, "fistp", (result,), (value,)),
+    ])
+    block = body.blocks[0]
+    match reader:
+        case "pinned": body = replace(body, pins={2: None})
+        case "phi": body = replace(body, blocks=(block, lir.LirBlock(32, (), phis=(lir.Phi(3, ((0, 2),)),))))
+        case _:
+            what = None if reader == "opaque" else ir.Semantics(
+                ir.Operation.BARRIER if reader == "barrier" else ir.Operation.NOTHING, "", (), ())
+            extra = lir.Insn(24, (24, 24), what, (), (2,) if reader == "uses" else ())
+            body = replace(body, blocks=(replace(block, insns=(*block.insns, extra)),))
+    allocated = floatalloc.allocated(body, frame.Frame(-8))
+    assert any(one.what and one.what.name == "mov" and one.what.dests == (result,) for one in allocated.insns)
 
 
 def test_ninth_float_uses_an_owned_extended_precision_spill():
