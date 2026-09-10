@@ -27,6 +27,24 @@ def test_hary_supports_nine_and_sixty_dimensions(tag, program):
     assert "B$HARY" not in module.of(omf.parse(result.data)).calls.values()
 
 
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_native_array_arithmetic_keeps_allocation_dimension_constants(tag):
+    """NDMAX grew to 9.7 KB because each native op was mistaken for the removed HARY call."""
+    from qbopt.analysis import consts
+    path = Path(f"fixtures/regressions/ndmax-{tag}.obj")
+    found = corpus.loaded(path)
+    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    facts = consts.known(body, found.dgroup, found.calls)
+    initialized = {ref: value for block in body.blocks for op in block.ops for ref, value in op.memory_values}
+    first = min(at for at, name in found.calls.items() if name == "B$HARY")
+    loads = [op for block in body.blocks for op in block.ops
+             if op.at == first and op.kind is mir.Kind.LOAD and op.loads[0] in initialized]
+    assert len(loads) >= 60
+    for op in loads:
+        expected = initialized[op.loads[0]]
+        assert facts.get(op.results[0].value) == consts.Known(expected.n, expected.width)
+
+
 def test_overflow_observation_has_no_normal_path_register_results():
     """/D ARRIDX printed 630 instead of 1260: INTO invented a new AX result allocated to BX."""
     path = Path("fixtures/regressions/arridx-bounds-p-g2.obj")

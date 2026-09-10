@@ -1,5 +1,33 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: preserve constants after a runtime call becomes native MIR
+
+`consts._kills` used the original call-address map without checking the
+current operation. Every scalar operation expanded at HARY's old address
+therefore discarded the allocation's dimension facts again. It now applies
+call invalidation only to a current CALL. Real calls and aliasing stores
+still invalidate facts through the existing rules.
+
+The first fold dump at NDMAX's old HARY site changes, for example:
+
+```text
+before: v68 := lower-bound load; v69 := sign_extend v68; v70 := 0 - v69
+after:  v68 := 0;                v69 := 0;               v70 := 0
+before: v75 := dimension load;   ...;                    v78 := v70 * v77
+after:  v75 := 1;                ...;                    v78 := 0
+```
+
+NDMAX object bytes PDS/QB/VBDOS: **9692/9683/9826 -> 4317/4308/4451**,
+5375 bytes removed in each. NDARR is unchanged; its loop-carried memory
+facts are a separate remaining opportunity. These are object sizes, not
+hardware timings or target ratios.
+
+All three real-object fact regressions failed before the fix. The focused
+array, constant-call and constant-cell modules pass **62 tests**. NDARR and
+NDMAX match original DOS output on all three compilers (1,12,2 and 11,22),
+with successful links. Dumps and runtime output:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-ndarrays-facts-1hb839sh`.
+
 ## 2026-09-10: remove the invented eight-dimension array limit
 
 Microsoft's `work/ms/msdos_60/45/qb/ir/prsid.asm` defines `MAXDIM EQU 60d`

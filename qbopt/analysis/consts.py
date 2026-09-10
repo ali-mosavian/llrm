@@ -120,7 +120,7 @@ def _kills(
     here: Cells, op: mir.Op, known: dict[mir.Value, Known], dgroup: frozenset[int], calls: dict[int, str]
 ) -> Cells:
     """The cell facts still standing after this operation."""
-    if op.at in calls:
+    if op.kind is mir.Kind.CALL and op.at in calls:
         contract = runtime.contract(calls[op.at])
         if runtime.barrier(contract) or (runtime.writes_caller_memory(contract) and not op.stores):
             here = {}
