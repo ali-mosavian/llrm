@@ -630,7 +630,7 @@ def main(argv: list[str] | None = None, view=None) -> int:
 
     # Observe the actual optimization run; never rebuild or re-resolve it for a dump.
     mir_stages: dict[str, list] = {}
-    stages: list[tuple[str, list]] = []
+    stages: dict[str, list] = {}
     route = "the route was not reported"
 
     def watch(stage: str, name, low) -> None:
@@ -641,15 +641,13 @@ def main(argv: list[str] | None = None, view=None) -> int:
         if stage == "route":
             route = low
             return
-        if not stages or stages[-1][0] != stage:
-            stages.append((stage, []))
-        stages[-1][1].append((name, low))
+        stages.setdefault(stage, []).append((name, low))
 
     got = wholeseg.emitted(data, only=args.only, watch=watch, cpu=args.cpu,
                            basic_semantics=args.basic_semantics, bounds_checks=args.bounds_checks)
     for name, bodies in mir_stages.items():
         was = dump(next(step), name, name, bodies, was, debug, found)
-    lowered(next(step), stages, got.data, got.reason, route)
+    lowered(next(step), stages.items(), got.data, got.reason, route)
     return 0
 
 

@@ -21,6 +21,21 @@ from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
 
 
+def test_nbody_has_one_complete_file_per_machine_stage(tmp_path):
+    """NBODY's last LIR stage file showed only PITSNAP, hiding the simulation body."""
+    argv = ["fixtures/bench/nbody-v-g3.obj", "--dump", str(tmp_path), "--quiet"]
+    assert stages.main(argv) == 0
+    files = sorted(tmp_path.glob("*-lir-lowered.txt"))
+    assert len(files) == 1, "bodies must share one file per phase for adjacent-stage diffs"
+    text = files[0].read_text()
+    assert text.count(" instructions\n") == 2
+    assert "block 0x0030" in text
+    for path in tmp_path.glob("*-lir-*.txt"):
+        assert path.read_text().count(" instructions\n") == 2, path.name
+    assert stages.main(argv) == 0
+    assert files[0].read_text() == text, "a repeated dump must not append stale bodies"
+
+
 def test_asm_names_relocations_instead_of_indistinguishable_zeroes(capsys):
     """ADDRM's distinct array operands and runtime calls all displayed as zero."""
     stages._asm(Path("fixtures/omf/addrm-q-O.obj").read_bytes())
