@@ -117,6 +117,10 @@ def test_nbody_output_loop_is_outside_the_completed_simulation(tmp_path, proven)
     physical = blocks.partition(module, blocks.code_map(module))
     mine = [block for block in physical if any(lo <= block.at < hi for lo, hi in decoded.ranges)]
     contracts = runtime.for_module(module)
+    # Recreate the former appended-edge hazard independently of today's allocator layout.
+    mine = [replace(block, succ=(decoded.seed,)) if any(
+        contracts.get(insn.at) is not None and contracts[insn.at].control is runtime.Control.NEVER
+        for insn in block.insns) else block for block in mine]
     if not proven:
         contracts = {at: replace(contract, control=runtime.Control.UNKNOWN)
                      for at, contract in contracts.items()}
