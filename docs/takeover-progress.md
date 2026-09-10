@@ -4202,3 +4202,21 @@ Injecting the original defect (reconstructing SSA after hoisting) fails with
 `hoisting discarded the existing accumulator phi`; production code passes.
 LNGMIX stage evidence: `/tmp/qbopt-lngmix-hoist`. This changes a test fixture
 only; production assembly before/after is unchanged.
+
+### Preserve raised call effects in MemorySSA
+
+The clobber walker now uses a call's explicit MIR write effects, including
+proven byte-range exclusions. A call without write metadata remains an
+unknown clobber, and barriers still stop the walk. Runtime recognition stays
+in the raise; the analysis introduces no helper-name or machine-specific rules.
+
+A preheader value now survives a loop call whose write effects exclude the
+entire cell. The regression failed before the change; a one-byte exclusion
+for a two-byte read still prevents forwarding. All 42 focused MemorySSA and
+boundary checks and 32 existing call-memory/escape checks pass.
+
+CHAIN PDS before/after assembly is identical at 1274 object bytes: existing
+passes already cover its cases, so no CHAIN speedup is claimed. Full stages
+and assembly: `/tmp/qbopt-memoryssa-call-before` and
+`/tmp/qbopt-memoryssa-call-after`. Both retain the initializer
+`mov dword [0],40000007h` and the same four remaining frame divisions.

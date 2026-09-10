@@ -2,7 +2,8 @@
 
 Stores, calls and barriers define a single memory state; loads use that state.
 The clobber walker skips stores proven disjoint by MIR alias analysis.
-Calls and barriers remain conservative until mod/ref facts are supplied.
+Raised call write effects participate in the same alias queries as stores.
+Calls without write metadata and barriers remain conservative.
 """
 
 from dataclasses import dataclass
@@ -75,7 +76,7 @@ class MemorySSA:
                     pending.extend(value for _, value in access.incoming)
                 case Kind.DEF:
                     op = self.operations[access.site]
-                    if op.barrier or op.kind is mir.Kind.CALL or any(
+                    if op.barrier or (op.kind is mir.Kind.CALL and not op.stores) or any(
                         mir.overlapping(memory, store, dgroup) for store in op.stores
                     ):
                         found.add(current)

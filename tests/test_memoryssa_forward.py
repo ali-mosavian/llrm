@@ -52,3 +52,27 @@ def test_call_on_backedge_invalidates_the_preheader_store() -> None:
         replace(block, ops=(call,)) if block.at == 2 else block for block in body.blocks
     ))
     assert not avail.forwardable(body, frozenset(), {}, frozenset({1}))
+
+
+def test_call_with_proven_disjoint_writes_preserves_the_loop_value() -> None:
+    """A runtime call's raised write exclusions must survive MemorySSA queries."""
+    body = loop_body()
+    cell = body.blocks[0].ops[0].stores[0]
+    effect = mir.MemRef(None, 0, excludes=((cell.addr, cell.width),))
+    call = mir.Op(2, ir.Operation.CALL, "", (), (), kind=mir.Kind.CALL, stores=(effect,))
+    body = replace(body, blocks=tuple(
+        replace(block, ops=(call,)) if block.at == 2 else block for block in body.blocks
+    ))
+    after = transform.forwarded(body, frozenset(), {})
+    assert not after.blocks[1].ops[0].loads
+
+
+def test_call_exclusion_must_cover_the_entire_read() -> None:
+    body = loop_body()
+    cell = body.blocks[0].ops[0].stores[0]
+    effect = mir.MemRef(None, 0, excludes=((cell.addr, 1),))
+    call = mir.Op(2, ir.Operation.CALL, "", (), (), kind=mir.Kind.CALL, stores=(effect,))
+    body = replace(body, blocks=tuple(
+        replace(block, ops=(call,)) if block.at == 2 else block for block in body.blocks
+    ))
+    assert transform.forwarded(body, frozenset(), {}).blocks[1].ops[0].loads
