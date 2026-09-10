@@ -1,5 +1,47 @@
 # Focused regression objects
 
+`udtfix-{q-O,p-g2,v-g3}.obj` are the fixed-record counterpart of UDTACC,
+compiled from `udtfix.bas`. All three baseline/optimized pairs print 21, -35
+and DONE. **This records an existing capability, not a new optimization.**
+The fixed fields already promote and their loop becomes closed-form arithmetic.
+PDS modeled BC/current cost is **1188 → 260**; current QB is 260 and VBDOS 236.
+These are instruction-model costs, not elapsed timings or independent targets.
+
+PDS's original loop updates x with word arithmetic (relocations named):
+
+```asm
+loop:
+mov cx,[stepX]
+mov bx,[stepX+2]
+add cx,[position.x]
+adc bx,[position.x+2]
+mov dx,bx
+mov ax,cx
+mov [position.x],ax
+mov [position.x+2],dx
+; update y, increment iteration, and branch back
+```
+
+Current output computes both fields once, without a backward branch:
+
+```asm
+mov eax,[stepX]
+mov ebx,[stepY]
+mov ecx,eax
+shl ecx,3
+sub ecx,eax
+mov eax,ebx
+shl eax,3
+sub eax,ebx
+mov word [iteration],8
+mov [position.x],ecx
+mov [position.y],eax
+```
+
+The contrast with UDTACC isolates the remaining indexed-address/extent proof;
+it is not evidence that general SROA is implemented. READ inputs remain unknown
+to optimization, and this fixture's initializers and trip count are explicit.
+
 `udtacc-{q-O,p-g2,v-g3}.obj` are real compiler output from `udtacc.bas`.
 Two LONG fields of an input-selected record accumulate 3 and -5 seven times;
 all three baseline/optimized pairs print 21, -35 and DONE. PDS exposed an

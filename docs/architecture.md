@@ -582,6 +582,14 @@ one documented target without materially regressing another.
   indexed accesses no longer become unknown memory while adjacent words are
   named. PDS cost falls 1258 → 1092; both fields still load/store in the loop.
   This removes a recognition prerequisite, not aggregate decomposition itself.
+  Fixed, independently addressed UDT fields already use the scalar pipeline:
+  UDTFIX's two seven-iteration accumulators become two closed-form multiplies,
+  with no remaining loop on QB/PDS/VBDOS. A new pass for that case would duplicate
+  existing promotion/loop-exit work. UDTACC differs because its READ-supplied
+  index has no proven bounds and its second-field address is an integer
+  symbol-plus-offset chain. Next establish bounded element/field identities
+  in the raise and alias analysis, then extend promotion; do not infer an
+  in-bounds index from the fixture's DATA or declared array size.
 - [ ] Feed SROA results into promotion so scalar values survive across BC
   statement boundaries.
   Write-through promotion now also accepts fixed procedure-frame fields, not
