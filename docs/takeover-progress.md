@@ -3756,3 +3756,29 @@ machine-independent; recognizing `cwd` in an optimization pass would
 violate the MIR boundary. Lowering EXTRACT currently uses push/pop and
 SIGN_EXTEND uses MOVSX, so those existing value operations preserve flags.
 No change to generated code is claimed for this investigation.
+
+### Sign-fill isolation: equivalent value, failing emitted program
+
+An experimental raise of residual CWD to SIGN_EXTEND plus EXTRACT exposed
+the constant high word, but is **not retained**: normalizing only NBODY's
+counter seed at original 0xe3 made VBDOS NBODY time out without output.
+Normalizing only the initialization conversions at 0x72 and 0x99 completed
+with all 24 expected values. Host checks alone did not catch the failure.
+
+A fresh linked-executable experiment replaced the working seed sequence
+`mov ax,1; mov bx,ax; sar bx,15` with
+`mov ax,1; mov bx,0; nop; nop`, preserving its length. Both executables
+finished with identical 24 values and DONE (excluding TICKS).
+Artifacts: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-seed-equal-length-smywdk_l`.
+This rules out the zero seed alone as sufficient to explain the failure;
+it does not yet establish a relocation defect.
+
+The failing seed-only object differs in decoded instructions only by that
+replacement without padding and the corresponding two-byte target shifts.
+All 164 fixups retain their targets with the expected offset adjustments;
+the code-header self-reference also moves by two. LINK maps place RTCODE
+at the same 0x590 in both executables. A fresh run of the failing linked
+executable independently timed out after 15 seconds with empty output:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-seed-linked-recheck-w2r1_veh`.
+Next diagnosis must inspect the linked execution/remaining layout-dependent
+state, not repeat the constant-folding argument or enable this normalization.
