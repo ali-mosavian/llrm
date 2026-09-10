@@ -1,5 +1,34 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: carry multidimensional loop pointers across iterations
+
+Induction analysis now recognizes `i OR i` and `i AND i` as zero tests,
+and preserves the recurrence through their unchanged value result (QB uses
+that result where PDS/VBDOS use the input). XOR and masking by another
+operand are not equivalent. Counter substitution shares the bound recognizer
+instead of assuming every accepted test was SUB. Its existing use checks
+also protect a logical operation's separately observed value result.
+
+NDARR's inner MIR previously extended the row index, subtracted its lower
+bound, added the enclosing-loop offset, multiplied by two and rebuilt the
+pointer. It now stores through a loop-carried pointer and advances it by two;
+the enclosing loops advance pointers by four and twelve respectively.
+All three real-fixture pointer regressions failed before the change.
+NDARR and HUGELP outputs match their originals on all three compilers.
+
+This is not yet ideal machine code: huge-pointer advancement still performs
+segment normalization. NDARR object bytes grow from 2446/2438/2592 to
+2607/2599/2740 (PDS/QB/VBDOS). The existing weighted model decreases from
+129133/129151/146577 to 117239/117257/117251; these are model rankings,
+not actual trip-count timing measurements. Assembly confirms less inner-loop
+address recomputation but repeated normalization remains a backend gap.
+
+Focused induction/range run: 104 passed; three FPDEEP range tests also fail
+on unmodified HEAD because their expected indexed loads have already gone.
+Those tests were not weakened. Five logical-bound acceptance/rejection
+cases pass separately. Stage and DOS evidence:
+`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-ndarr-induction-vljjjibp`.
+
 ## 2026-09-10: prove multidimensional loops with logical zero tests
 
 NDARR's inner loop uses a logical-result zero test rather than COMPARE.

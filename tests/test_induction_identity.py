@@ -14,6 +14,39 @@ from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
 
 
+@pytest.mark.parametrize("kind,same,accepted", [
+    (mir.Kind.OR, True, True), (mir.Kind.AND, True, True),
+    (mir.Kind.XOR, True, False), (mir.Kind.OR, False, False),
+    (mir.Kind.AND, False, False),
+])
+def test_counter_zero_test_requires_an_unchanged_counter(kind, same, accepted):
+    """NDARR's zero-test bound applies to i OR i, not i XOR i or masked i."""
+    value, result = mir.Value(900, 0), mir.Value(901, 0)
+    flags = mir.Value(902, 0, flags=True)
+    source = mir.Held(value, 2)
+    op = mir.Op(0, ir.Operation.BINARY, "", (result, flags), (value,), kind=kind,
+                args=(source, source if same else mir.Const(1, 2)), results=(mir.Held(result, 2),))
+    branch = mir.Op(1, ir.Operation.BRANCH, "", (), (flags,), kind=mir.Kind.BRANCH)
+    counter = induction.Affine(value.id, mir.Const(-1, 2), mir.Const(1, 2), 0)
+    assert induction._counter_bound(op, branch, counter, 2) == (mir.Const(0, 2) if accepted else None)
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_nine_dimensional_loop_carries_its_pointer(tag):
+    """NDARR printed 1,12,2 correctly but rebuilt its nine-dimensional pointer each iteration."""
+    from qbopt import wholeseg
+    states = []
+    def watch(stage, name, state):
+        if stage == "mir-widen":
+            states.append(state)
+    result = wholeseg.emitted(Path(f"fixtures/regressions/ndarr-{tag}.obj").read_bytes(), watch=watch)
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    body = states[0]
+    carried = {phi.result for block in body.blocks for phi in block.phis}
+    stores = [ref for block in body.blocks for op in block.ops for ref in op.stores if ref.pointer]
+    assert stores and all(ref.base in carried for ref in stores)
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_native_array_helper_does_not_block_frame_forwarding(tag):
     """HUGELP retained frame reloads because removed HARY addresses still looked like calls."""

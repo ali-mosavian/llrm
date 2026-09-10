@@ -279,17 +279,12 @@ def _last_counter(body: mir.MirBody, loop, counter: Affine, facts: dict, width: 
     if branch.target not in inside:
         test = {mir.Kind.LE: mir.Kind.GT, mir.Kind.LT: mir.Kind.GE,
                 mir.Kind.GE: mir.Kind.LT, mir.Kind.GT: mir.Kind.LE}.get(test)
-    comparisons = [
-        op for op in header.ops[:-1]
-        if op.kind is mir.Kind.SUB and len(op.args) == 2 and not op.results
-        and len(op.defines) == 1 and op.defines[0].flags and op.defines[0] in branch.uses
-        and isinstance(op.args[0], mir.Held) and op.args[0].value.id == counter.value
-        and op.args[0].width == width
-    ]
+    comparisons = [bound for op in header.ops[:-1]
+                   if (bound := _counter_bound(op, branch, counter, width)) is not None]
     if len(comparisons) != 1:
         return None
     start, step, bound = (
-        _signed(arg, facts, width) for arg in (counter.start, counter.step, comparisons[0].args[1])
+        _signed(arg, facts, width) for arg in (counter.start, counter.step, comparisons[0])
     )
     if start is None or step is None or bound is None or step == 0:
         return None
@@ -306,6 +301,21 @@ def _last_counter(body: mir.MirBody, loop, counter: Affine, facts: dict, width: 
     last = start + (distance // abs(step)) * step
     sign = 1 << (width * 8 - 1)
     return last if -sign <= last + step < sign else None
+
+
+def _counter_bound(op, branch, counter, width):
+    if (len(op.args) != 2 or op.loads or op.stores or op.barrier or op.merges
+        or not isinstance(op.args[0], mir.Held) or op.args[0].value.id != counter.value
+        or op.args[0].width != width):
+        return None
+    flags = [value for value in op.defines if value.flags]
+    if len(flags) != 1 or flags[0] not in branch.uses:
+        return None
+    if op.kind is mir.Kind.SUB and not op.results and len(op.defines) == 1:
+        return op.args[1]
+    if op.kind in (mir.Kind.AND, mir.Kind.OR) and op.args[0] == op.args[1]:
+        return mir.Const(0, width)
+    return None
 
 
 def _quotients(body: mir.MirBody, loop, found: dict[int, Affine]) -> list[Derived]:
@@ -395,6 +405,10 @@ def _composed(
                 first = forms.get(left.value.id) if isinstance(left, mir.Held) and left.width == width else None
                 second = forms.get(right.value.id) if isinstance(right, mir.Held) and right.width == width else None
                 if any(form is not None and form[0].start.width != width for form in (first, second)):
+                    continue
+                if op.kind in (mir.Kind.AND, mir.Kind.OR) and left == right and first is not None:
+                    forms[result.value.id] = first
+                    changed = True
                     continue
                 if op.kind in (mir.Kind.ADD, mir.Kind.SUB) and first is not None and second is not None:
                     if first[0] != second[0]:

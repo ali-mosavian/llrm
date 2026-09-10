@@ -32,11 +32,9 @@ def simplified(body: mir.MirBody) -> mir.MirBody:
             count = (last - start) // step + 1
             phi = next(phi for phi in header.phis if phi.result.id == counter.value)
             update = phi.incoming[next(iter(loop.latches))]
-            compare = next(op for op in header.ops if op.kind is mir.Kind.SUB and not op.results
-                           and op.args and isinstance(op.args[0], mir.Held)
-                           and op.args[0].value == phi.result and len(op.defines) == 1
-                           and op.defines[0].flags and op.defines[0] in header.ops[-1].uses)
             branch = header.ops[-1]
+            compare = next(op for op in header.ops[:-1]
+                           if induction._counter_bound(op, branch, counter, width) is not None)
             exit_at, = [at for at in header.succ if at not in loop.body]
             if set(predecessors.get(exit_at, ())) != {header.at} or not blocks[exit_at].ops:
                 continue
@@ -84,6 +82,8 @@ def simplified(body: mir.MirBody) -> mir.MirBody:
                     for op in block.ops:
                         if op is compare:
                             op = replace(op, args=(mir.Held(value, width), mir.Held(bound, width)),
+                                         kind=mir.Kind.SUB, results=(),
+                                         defines=tuple(value for value in op.defines if value.flags),
                                          uses=(value, bound), loads=(), node=None, made=None, raised=None)
                         elif op is branch:
                             op = replace(op, test=mir.Kind.NE if branch.target in loop.body else mir.Kind.EQ,
