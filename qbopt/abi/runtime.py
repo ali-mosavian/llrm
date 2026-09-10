@@ -424,6 +424,7 @@ def for_module(found, *, external: dict[str, Contract] | None = None) -> "dict[i
     contracts.update(events.contracts(found))
     if family == "vbdos":
         _zero_entry_sites(found, contracts)
+        _redim_sites(found, contracts)
     for name, routine in (external or {}).items():
         if routine.name != name:
             raise ValueError(f"external contract name mismatch: {name!r} != {routine.name!r}")
@@ -431,6 +432,41 @@ def for_module(found, *, external: dict[str, Contract] | None = None) -> "dict[i
             if called == name:
                 contracts[at] = routine
     return contracts
+
+
+def _redim_sites(found: "Module", contracts: dict[int, Contract]) -> None:
+    """B$ExitDim removes three header words and two bound words per dimension."""
+    from iced_x86 import Code
+    from qbopt.frontend import blocks
+
+    if "B$RDIM" not in found.calls.values():
+        return
+    mapped = blocks.code_map(found)
+    if isinstance(mapped, str):
+        return
+    for block in blocks.partition(found, mapped):
+        for rank, descriptor, call in zip(block.insns, block.insns[1:], block.insns[2:]):
+            if found.calls.get(call.at) != "B$RDIM" or rank.end != descriptor.at or descriptor.end != call.at:
+                continue
+            if rank.insn.code not in {Code.PUSH_IMM16, Code.PUSHW_IMM8}:
+                continue
+            if descriptor.insn.code not in {Code.PUSH_IMM16, Code.PUSHW_IMM8, Code.PUSH_R16, Code.PUSH_RM16}:
+                continue
+            if any(rank.at <= field < rank.end for field in found.fixup_at):
+                continue
+            dimensions = rank.insn.immediate(0) & 255
+            contracts[call.at] = replace(
+                worst("B$RDIM"),
+                inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
+                cleanup=6 + 4 * dimensions,
+                evidence=(
+                    "VBDCL10E.LIB erase.asm RDIM tails dynamic.asm DIM_COMMON. "
+                    "ExitDim 010a reads [bp+8], clears CH, doubles twice and adds 6; "
+                    "011d..0129 pops the return address, adds that count to SP and jumps back. "
+                    "Rank is an unrelocated immediate word push immediately before the descriptor "
+                    "and call in one basic block. All GP inputs and unknown effects retained."
+                ),
+            )
 
 
 def _zero_entry_sites(found: "Module", contracts: dict[int, Contract]) -> None:

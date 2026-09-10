@@ -113,6 +113,17 @@ before/after ASM remains identical, including the camera's print call:
 call far B$PCR4                   call far B$PCR4
 ```
 
+VBDOS REDIM now receives a per-call cleanup only when a same-block immediate
+rank push immediately precedes the descriptor push and call. The shared
+`B$ExitDim` path loads `[bp+8]`, clears CH, and removes `6 + 4*rank` bytes.
+The rank word's upper byte is not a dimension count. Relocated or unproven
+ranks retain unknown contracts; allocation, alias and error effects remain
+unknown. `qrender-view-v-g3.obj` is real baseline compiler output from the
+revision and flags above, retained for fail-first rank/interface regressions.
+With the same external interfaces, the module now passes its first four
+REDIM calls and reaches `B$FREF` at 0a23. The object still refuses atomically;
+before/after assembly at 09d4 is the unchanged `call far B$RDIM`.
+
 VBDCL10E.LIB, `rtenexit.asm`, B$ENRA:
 
 ```asm
