@@ -1,5 +1,54 @@
 # Takeover checkpoint — 2026-09-09
 
+## 2026-09-10: scalar partial redundancy on dedicated incoming edges
+
+GVN can now supply a missing scalar computation on an unconditional incoming
+edge when another path already computed it. Inputs must dominate insertion;
+live conditions, loop-boundary crossings and critical edges are excluded.
+CSE must stabilize first, so temporary differences in value representation
+do not cause insertion where an existing provider will become visible.
+
+GVNPRE exercises both branches with runtime inputs. Its taken branch used to
+square twice; it now keeps the first square. The other path still squares
+once. PDS object size stays **1169 bytes**, static multiplies stay **2**,
+and executed multiplies over the two trials fall **3 -> 2**:
+
+```asm
+; before, square-producing branch
+mov ebx,eax
+imul ebx,eax
+add ebx,1
+mov [answer],ebx
+jmp commonSquare
+; other branch computes answer, then falls through
+commonSquare:
+imul eax,eax
+mov [square],eax
+
+; after, square-producing branch
+imul eax,eax
+mov ebx,eax
+add ebx,1
+mov [answer],ebx
+jmp saveSquare
+; other branch computes answer, then squares only on its own edge
+imul eax,eax
+saveSquare:
+mov [square],eax
+```
+
+Both paths print **7,36; 37,36; DONE** on QB, PDS and VBDOS. The first
+implementation printed **37,1296**: the inserted operation used the join's
+address, so a branch to the join also executed that operation. Stage dumps
+showed correct MIR/LIR block membership but the wrong emitted jump target.
+The occurrence now belongs to the predecessor; real-object regressions
+check that the jump skips the edge computation on all three compilers.
+Twenty-one BOOLS/FLAGS/NOTS/ARITH/NEGNOT/PRESSX/FPCSEX outputs are unchanged.
+Stages: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-gvnpre-fixed-stages-51lp3hmh`.
+
+This is scalar PRE on dedicated edges, not completion of GVN-PRE or the goal.
+Memory expressions, critical edges and target profitability remain.
+
 ## 2026-09-10: translate GVN expressions through input phis
 
 GVN now matches each join expression using that edge's incoming phi values.
@@ -23,7 +72,8 @@ PDS object **1200 -> 1195 bytes**. Both paths print **48,49; 37,36; DONE**
 under QB, PDS and VBDOS. MIR and all three emitted-code regressions failed
 without phi translation. Stage dumps:
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-gvnphi-stages-vj75d8jt`.
-Missing-edge insertion, memory PRE and profitability remain open.
+Dedicated-edge insertion was added in the follow-up above; memory PRE and
+profitability remain open.
 
 ## 2026-09-10: eliminate scalar redundancy across joins
 

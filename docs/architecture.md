@@ -562,8 +562,10 @@ one documented target without materially regressing another.
   (`GVN-PRE`) for scalar and memory expressions.
   Scalar full redundancy at joins is implemented: when every incoming edge
   has a dominating provider, a phi replaces the repeated computation; input
-  phis are translated separately on each incoming edge. No
-  speculative insertion, memory PRE, or strict floating reuse is implied.
+  phis are translated separately on each incoming edge. Missing scalar
+  providers can be inserted on dedicated unconditional edges after CSE
+  stabilizes. Critical-edge splitting, memory PRE, target profitability and
+  strict floating reuse remain open.
 - [ ] Replace the separate load/store cleanup rules with MemorySSA-based load
   elimination and dead-store elimination.
 - [ ] Implement sparse conditional constant propagation (`SCCP`) over values
