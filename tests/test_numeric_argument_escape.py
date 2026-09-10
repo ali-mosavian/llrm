@@ -8,6 +8,19 @@ import pytest
 from qbopt.objectfile import module
 
 
+def test_qb_register_materialized_descriptor_addresses_escape():
+    """QB FPDEEP reported no escapes although MOV AX,OFFSET descriptor; PUSH AX passes seven strings."""
+    found = corpus.loaded(Path("fixtures/omf/fpdeep-q-O.obj"))
+    assert {(9, offset) for offset in (16, 22, 28, 38, 58, 66, 78)} <= module.escaped(found)
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "v-g3"])
+def test_local_copy_address_is_not_a_call_argument(tag):
+    """FPDEEP materializes its DOUBLE initializer address for MOVSW, not for a runtime argument."""
+    found = corpus.loaded(Path(f"fixtures/omf/fpdeep-{tag}.obj"))
+    assert not any(segment == found.program_data for segment, _ in module.escaped(found))
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 @pytest.mark.parametrize("program", ["arith", "nots"])
 def test_numeric_prints_do_not_escape_program_variables(tag, program):

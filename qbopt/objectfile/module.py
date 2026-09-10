@@ -246,7 +246,8 @@ def escaped(found: "Module") -> frozenset[tuple[int, int]]:
     image. So the only way it reaches a program's variable is a pointer the
     program gave it, and this is where those are given.
 
-    A relocated immediate inside a `push` or a `lea` is what handing one
+    A relocated immediate inside a `push`, a register `mov` immediately
+    pushed, or a `lea` is what handing one
     over looks like. `Operation.ADDRESS` is not: BC pushes `offset X`,
     which is an immediate the linker fills in, and testing for `lea` found
     none of the corpus's -- so a whole-body test read every program as
@@ -264,7 +265,7 @@ def escaped(found: "Module") -> frozenset[tuple[int, int]]:
     out = set()
     values = _numeric_arguments(found)
     for at, end, text in _pushes(found):
-        if at in values:
+        if at in values or (text.startswith("mov") and end in values):
             continue
         for one in fields:
             if at <= one.offset < end:
@@ -299,6 +300,7 @@ def _numeric_arguments(found: "Module") -> frozenset[int]:
 
 def _pushes(found: "Module"):
     """Every instruction that could hand an address over, as (at, end, text)."""
+    from iced_x86 import Mnemonic, OpKind
     from qbopt.frontend import declen
 
     at = found.start
@@ -308,12 +310,20 @@ def _pushes(found: "Module"):
             at += 1
             continue
         text = str(insn.insn).lower()
-        # `push` and `lea` only. A `mov [x],ax` also carries a relocated
+        # A `mov [x],ax` also carries a relocated
         # field, but that is the store's own displacement -- the address of
         # the cell being written, not an address being handed to anybody.
         # Including it marked every written cell as escaped, which is every
         # cell, and the guarantee came to nothing.
-        if text.startswith(("push", "lea")):
+        materialized = (insn.insn.mnemonic == Mnemonic.MOV
+                        and insn.insn.op0_kind == OpKind.REGISTER
+                        and insn.insn.op1_kind in (OpKind.IMMEDIATE16, OpKind.IMMEDIATE32))
+        if materialized:
+            following = declen.decode(found.code, insn.end) if insn.end < found.end else None
+            materialized = (following is not None and following.insn.mnemonic == Mnemonic.PUSH
+                            and following.insn.op0_kind == OpKind.REGISTER
+                            and following.insn.op0_register == insn.insn.op0_register)
+        if text.startswith(("push", "lea")) or materialized:
             yield at, insn.end, text
         at = insn.end
 

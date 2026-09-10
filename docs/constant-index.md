@@ -87,6 +87,25 @@ contract, rather than interpreting absent escaped origins as disjoint bytes.
 The six independently proven square/ratio conversions do not depend on
 solving that additional memory-summary problem.
 
+### Escape-source correction and descriptor layouts
+
+Raw FPDEEP objects expose a second prerequisite for that proof. QB uses
+`mov ax, OFFSET descriptor; push ax`, not PDS's immediate PUSH. The old
+escape scan returned an empty set for QB despite seven string arguments.
+It now recognizes adjacent immediate-register materialization and PUSH of
+that same register. Known by-value numeric PRINT arguments remain excluded;
+local copy setup addresses are not treated as passed arguments. This is not
+a general inter-block pointer escape analysis or a byte-extent guarantee.
+
+The QB descriptor origins are 16, 22, 28, 38, 58, 66 and 78 in segment 9.
+PDS uses four-byte near descriptors at 0, 6, 12, 22, 42, 50 and 62, with
+relocations from each descriptor's second word to its text. VBDOS instead
+uses segment-9 offset/selector references into segment 16. A single assumed
+four-byte descriptor layout across all three compilers would be wrong.
+The QB fixture regression failed before the scan fix; 23 focused escape
+and constant-call checks pass. All three primary FPDEEP emitted objects
+remain byte-identical to before this scan fix: no speedup is claimed.
+
 ## Do not materialize an unread conversion result
 
 Floating allocation now creates the integer reload only when the result
