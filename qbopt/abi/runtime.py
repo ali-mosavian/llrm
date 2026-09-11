@@ -365,6 +365,11 @@ for _name, _evidence in {
     "B$STRI": "farstr strfcn.asm 01a3 loads AL and CX from stack arguments then "
               "calls local 0191, whose OR CX,CX overwrites incoming arithmetic flags "
               "before branching or allocation. String construction stays a call.",
+    "B$FERL": "error.asm 013b loads the stored error line into AX, XORs DX,DX "
+              "at 013e and RETFs at 0140; no incoming arithmetic flag is read.",
+    "B$RNZP": "random.asm 0079 loads the stack argument at BP+0Ah, XORs its "
+              "words at 0081, stores the seed and RETFs at 0088; the straight-line "
+              "body reads no incoming arithmetic flag. Randomization stays a call.",
 }.items():
     VARIANTS[(_name, "vbdos")] = replace(
         worst(_name),

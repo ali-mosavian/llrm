@@ -102,6 +102,8 @@ def model_calls(request):
     ("pl-move", symbol) for symbol in ("B$RND0", "B$ATN4", "B$UBND")
 ] + [
     ("mod-tex", symbol) for symbol in ("B$SSEK", "B$STRI")
+] + [
+    ("main", symbol) for symbol in ("B$FERL", "B$RNZP")
 ], indirect=["model_calls"])
 def test_model_file_calls_lower_without_replacement(model_calls, symbol):
     """Qrender modules emitted no optimized OBJ: real runtime interfaces were unknown."""
