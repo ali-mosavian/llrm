@@ -356,6 +356,9 @@ for _name, _evidence in {
     "B$ATN4": "87btriga.asm 0000 establishes its frame with SUB SP,0Ah at 0003, "
               "overwriting incoming arithmetic flags before any branch or error tail. "
               "The x87 operand and runtime call remain unchanged.",
+    "B$UBND": "dynamic.asm 0133 reads the dimension from [BP+6]; OR DH,DH at 013b "
+              "overwrites incoming arithmetic flags before the first branch at 013d. "
+              "Descriptor reads, the B$DeLink call and the B$ERR_BS tail remain intact.",
 }.items():
     VARIANTS[(_name, "vbdos")] = replace(
         worst(_name),
