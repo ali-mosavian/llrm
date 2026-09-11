@@ -1321,6 +1321,17 @@ def exchange(one: Register_, other: Register_, at: int = 0) -> Emitted | None:
     return None
 
 
+def exchange_mem(register: Register_, cell: ir.Mem, at: int = 0) -> Emitted | None:
+    """Exchange a register with a same-width memory cell."""
+    width = WIDTHS.get(register)
+    built = operand_of(cell)
+    if width not in (1, 2, 4) or cell.width != width or built is None:
+        return None
+    code = _code(f"XCHG_RM{width * 8}_R{width * 8}")
+    return None if code is None else _assemble(
+        Instruction.create_mem_reg(code, built[0], register), at, built[1])
+
+
 def unary_mem(name: str, cell: ir.Mem, at: int = 0) -> Emitted | None:
     """`neg`, `not`, `inc` or `dec` of a memory cell."""
     if name not in ONE_OPERAND:
@@ -1478,6 +1489,8 @@ def emit(
             match (dests[0], dests[1]):
                 case (ir.Reg(register=one), ir.Reg(register=other)):
                     return exchange(one, other, at)
+                case (ir.Reg(register=one), ir.Mem() as cell) | (ir.Mem() as cell, ir.Reg(register=one)):
+                    return exchange_mem(one, cell, at)
         case ir.Operation.COMPARE if len(sources) == 2:
             match (sources[0], sources[1]):
                 case (_, ir.Imm(value=value)) if (what.name or "cmp") == "cmp":

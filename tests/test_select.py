@@ -20,6 +20,24 @@ from qbopt.model import ir
 from qbopt.backend import select
 
 
+@pytest.mark.parametrize("register,width", [(Register.AL, 1), (Register.AX, 2), (Register.EAX, 4)])
+@pytest.mark.parametrize("memory_first", [False, True])
+def test_pl_move_exchange_with_frame_memory(register, width, memory_first):
+    """PL_MOVE refused at 2f4b: XCHG AX,[BP-1Ch] lacked a memory encoding."""
+    from qbopt.objectfile.module import Addr, Space
+    cell = ir.Mem(Addr(Space.FRAME, -28), width)
+    held = ir.Reg(register, width)
+    dests = (cell, held) if memory_first else (held, cell)
+    what = ir.Semantics(ir.Operation.EXCHANGE, "xchg", dests, tuple(reversed(dests)))
+    emitted = select.emit(what)
+    assert emitted is not None
+    instruction = next(iter(Decoder(16, emitted.code)))
+    assert instruction.code == getattr(Code, f"XCHG_RM{width * 8}_R{width * 8}")
+    assert instruction.memory_base == Register.BP
+    assert instruction.memory_displacement & 0xffff == 0xffe4
+    assert instruction.op1_register == register
+
+
 @pytest.mark.parametrize("source", [Register.CL, Register.AH, Register.BL, Register.DH])
 def test_byte_copy_for_nbody_timer(source):
     """NBODY's PIT writer refused at 0444: allocation required MOV AL,CL before OUT."""
