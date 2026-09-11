@@ -83,6 +83,32 @@ def test_spilled_segment_load_still_sets_es():
     assert instruction.op0_register == Register.ES
 
 
+def test_far_read_restores_its_forwarded_selector():
+    """D_SURF sc_test=-4000: a reused slot selector read through the LRU array's ES."""
+    from qbopt.model import mir
+    from qbopt.objectfile.module import Addr, Space
+    from qbopt.backend import lower, allocate
+
+    segment, result = mir.Value(1, 0), mir.Value(2, 8)
+    addr = Addr(Space.FAR, 0, segment=Register.ES)
+    ref = mir.MemRef(addr, 2, segment=segment)
+    machine = ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.AX, 2),),
+                            (ir.Mem(addr, 2, Register.BX),))
+    op = mir.Op(8, ir.Operation.MOVE, "mov", (result,), (segment,), kind=mir.Kind.LOAD,
+                args=(mir.Cell(ref),), results=(mir.Held(result, 2),), loads=(ref,), made=machine)
+    context = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),), origin={segment: Register.ES})
+    read, = lower.Lowering(context, {1, 2}, {}, (), {}).expand(op)
+    saved = _insn(ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),),
+                              (ir.Mem(Addr(Space.FRAME, -2), 2, Register.BP),)), (1,), ())
+    overwrite = _insn(ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.ES, 2),),
+                                  (ir.Reg(Register.DX, 2),)), (), (), at=4)
+    body, pins = constrain.constrained(_body(saved, overwrite, read), {1: Register.CX})
+    placed = allocate.applied(body, allocate.allocate(body, {1: Register.CX, **pins}))
+    restore = placed.insns[-2].what
+    assert restore.dests == (ir.Reg(Register.ES, 2),)
+    assert restore.sources == (ir.Reg(Register.CX, 2),)
+
+
 @pytest.mark.parametrize("registers", [(Register.BX, Register.CX),
                                      (Register.AX, Register.BX, Register.CX)])
 def test_shared_zero_is_supplied_to_every_runtime_input(registers):

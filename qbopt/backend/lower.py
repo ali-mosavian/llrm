@@ -803,7 +803,11 @@ class Lowering:
                 if not one.flags and one not in op.merges and ir.ROOT.get(self._origin.get(one, -1), -1) is source
             )
         if op.kind is not mir.Kind.CALL:
-            return ()
+            return tuple(dict.fromkeys(
+                (ir.Held(ref.segment.id, 2), Register.ES)
+                for ref in (*op.loads, *op.stores)
+                if ref.segment is not None
+            ))
         # The raise's own answer first: `args_known` is false for a call
         # whose contract declares nothing and for one to the program's own
         # code, which has no runtime contract at all -- not for a routine

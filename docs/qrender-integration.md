@@ -6,6 +6,21 @@ commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
 ## D_SURF candidate — runtime regression, not accepted
 
+The next adjacent-dump check identifies a separate lost dependency:
+forward replaces the selector load at 241a with the value from 23dc,
+correctly retaining that value in the far reference. Lowering discarded the
+reference's selector dependency, so after 23ec/23fc changed ES, the read at
+241d used the wrong array's segment. Lowering now requires each far-memory
+operation's selector in ES; spilling or forwarding must restore that value
+at its consumer. The new emitted-instruction regression fails with the fix
+removed; all 16 constraint tests pass (0.95 seconds). Native recheck pending.
+
+```asm
+; before (ES holds another array) ; required selector restoration
+mov ax,[es:bx]                    mov es,cx ; saved selector
+                                 mov ax,[es:bx]
+```
+
 Recheck after ES-write fix (`21e67d7`):
 `/tmp/qbopt-qrender-native-dsurf-es.ircB1e`, port 2217, reports **8.69943 FPS**.
 It links successfully and returns to the DOS prompt, but `sc_test=-4000`,
