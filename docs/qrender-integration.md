@@ -4,7 +4,39 @@ New optimization passes are paused until the optimized renderer builds and
 runs correctly. Target: `qb-qrender/.claude/worktrees/qgl-poly-draw`, source
 commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
-## Eighteen native modules — MOD_TEX benchmark accepted
+## Nineteen native modules — MODEL benchmark accepted
+
+`/tmp/qbopt-qrender-native-model.FJ17pP` links and returns to the DOS prompt
+(port 2224). **9.37895 FPS**, baseline **9.43334**; 13 frames. All
+non-timing/non-memory benchmark fields match. BENCH.BMP is byte-identical,
+SHA1 `d6e4096b3610249ff4d53b6829f1ab18ec108c7a`; fresh screenshot
+`bench-native-012.png` was inspected. MODEL is 26,132 -> 24,220 bytes,
+native x87 enabled. Accepted for this scene only, with no speedup claim.
+MAIN and SCREEN remain original; broader renderer coverage and the existing
+baseline face-oracle failure remain open.
+
+Existing division absorption, with the divisor 20 prepared before the original
+excerpt (008b..008e), versus native output (009c..00aa):
+
+```asm
+; before                       ; after
+push dword [si]                mov esi,[si]
+call far B$DVI4                mov ecx,14h
+                               mov eax,esi
+                               cdq
+                               idiv ecx
+```
+
+No compiler change was needed this round. Input-only project contracts are
+hash-checked in `/tmp/qbopt-model-audit-20260911.py`; all stage dumps are in
+`/tmp/qbopt-model-native`. BASIC callbacks enter B$ENRA, including SB_SEG
+at D_SURF 2904, not SB. FILE close/read/size enter local 004c, whose
+DEC AX / CMP AX,4 precedes every branch. OPENBAS/ARNEW/MEMALLOC allocate
+their frames with ADD SP; ARWIN enters the audited ARMAP. GEM alloc/free/map
+and MEM avail/free execute CMP or TEST before branching or dispatch.
+All six GP inputs remain; cleanup, memory, preservation and control are unknown.
+
+### Previous accepted build — eighteen modules
 
 `/tmp/qbopt-qrender-native-modtex.yc5nqA` links and returns to the DOS prompt
 (port 2223). **9.48704 FPS**, baseline **9.43334**; 13 frames. Every
