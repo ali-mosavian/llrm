@@ -4,7 +4,38 @@ New optimization passes are paused until the optimized renderer builds and
 runs correctly. Target: `qb-qrender/.claude/worktrees/qgl-poly-draw`, source
 commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
-## Seventeen native modules — PL_MOVE benchmark accepted
+## Eighteen native modules — MOD_TEX benchmark accepted
+
+`/tmp/qbopt-qrender-native-modtex.yc5nqA` links and returns to the DOS prompt
+(port 2223). **9.48704 FPS**, baseline **9.43334**; 13 frames. Every
+non-timing/non-memory benchmark field matches. BENCH.BMP is byte-identical,
+SHA1 `d6e4096b3610249ff4d53b6829f1ab18ec108c7a`; fresh screenshot
+`bench-native-024.png` was inspected. MOD_TEX is 17,249 -> 16,846 bytes,
+native x87 enabled. This accepts module eighteen for this scene only.
+Main, model and screen remain original; the baseline face-oracle failure
+also remains unresolved. The small FPS difference is not a proven speedup.
+
+The existing divide absorption is now exercised in MOD_LOAD_TEXTURES:
+
+```asm
+; original 049a: operands on stack     ; emitted 0589..0598
+call far B$DVI4                       mov ebx,[bp-6Ah]
+                                      mov eax,40h
+                                      cdq
+                                      mov ecx,edx
+                                      idiv ebx
+```
+
+`edc07ca` establishes input-only SSEK/STRI contracts, each with a fail-first
+real-object regression. Project bounds are hash-checked in
+`/tmp/qbopt-mod-tex-audit-20260911.py`; dumps are `/tmp/qbopt-mod-tex-native`.
+SF: FROMFILEBAS uses ADD SP at 0297, SIZE uses OR AX,BX at 04a4, PGET
+uses CMP at 0461, VIEWNEW uses ADD SP at 03d2. VIEWAIM calls QGLSETVIEW,
+whose TEST AX,AX at 01d5 precedes branching. SCR_LOAD_PART/STAGE/STEP,
+MOD_LOAD_FLAT and SYS_ERROR enter the previously audited B$ENRA.
+All six GP inputs remain; cleanup, memory, clobbers and control stay unknown.
+
+### Previous accepted build — seventeen modules
 
 `/tmp/qbopt-qrender-native-plmove.T2KVRG` links and returns to the DOS prompt
 (port 2222). **9.38883 FPS**, baseline **9.43334**; 13 frames. Every
