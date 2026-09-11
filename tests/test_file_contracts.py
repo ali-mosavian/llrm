@@ -100,9 +100,11 @@ def model_calls(request):
     ("d-surf", symbol) for symbol in ("B$DSG0", "B$PUT3", "B$SMID", "B$SPAC")
 ] + [
     ("pl-move", symbol) for symbol in ("B$RND0", "B$ATN4", "B$UBND")
+] + [
+    ("mod-tex", symbol) for symbol in ("B$SSEK", "B$STRI")
 ], indirect=["model_calls"])
 def test_model_file_calls_lower_without_replacement(model_calls, symbol):
-    """D_MDL/D_SURF/PL_MOVE emitted no optimized OBJ: real runtime interfaces were unknown."""
+    """Qrender modules emitted no optimized OBJ: real runtime interfaces were unknown."""
     found, rules, bodies = model_calls
     seen = 0
     for name, body in bodies:

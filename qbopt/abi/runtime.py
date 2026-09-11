@@ -359,6 +359,12 @@ for _name, _evidence in {
     "B$UBND": "dynamic.asm 0133 reads the dimension from [BP+6]; OR DH,DH at 013b "
               "overwrites incoming arithmetic flags before the first branch at 013d. "
               "Descriptor reads, the B$DeLink call and the B$ERR_BS tail remain intact.",
+    "B$SSEK": "dkrandio.asm 0145 calls local 0114 then B$LocateFDB in dvcore.asm "
+              "00e2; PUSH saves precede XOR SI,SI at 00e6 and CMP at 00e8, "
+              "overwriting incoming arithmetic flags before any branch. Seeking stays a call.",
+    "B$STRI": "farstr strfcn.asm 01a3 loads AL and CX from stack arguments then "
+              "calls local 0191, whose OR CX,CX overwrites incoming arithmetic flags "
+              "before branching or allocation. String construction stays a call.",
 }.items():
     VARIANTS[(_name, "vbdos")] = replace(
         worst(_name),
