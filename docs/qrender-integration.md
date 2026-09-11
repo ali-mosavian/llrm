@@ -4,6 +4,55 @@ New optimization passes are paused until the optimized renderer builds and
 runs correctly. Target: `qb-qrender/.claude/worktrees/qgl-poly-draw`, source
 commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
+## E1M1: native build fails during screenshot allocation
+
+The all-21-module native build below passes dm3, **not E1M1**.
+Isolated run: `/tmp/qbopt-qrender-e1m1.qxAC64`, normal core, Pentium III,
+75,000 cycles, 64 MB; both executables use:
+
+```text
+e1m1.bsp -lm -nostats -yaw 183 -bench 40 -ticks 60
+```
+
+Untouched baseline: **18.34392 FPS**, 19 frames, completed BMP and return to
+DOS. Native: **no valid FPS**, only the 54-byte BMP header before failure.
+Evidence: `e1m1-qbase.exe.TXT`, `e1m1-qbase.exe.BMP`, inspected screenshots
+`e1m1-qbase.exe-013.png` and `e1m1-qrender.exe-016.png` in that directory.
+
+Assets were regenerated using **the pinned** `tools/mkassets.py` and
+`tools/mkportals.py`, not the modified working-tree packer. Reusing dm3's
+archive first produced the expected map-mismatch rejection; that was setup,
+not a compiler failure. Both measured E1M1 runs used the same assets:
+
+```text
+e1m1.bsp  7b7061ec63c3e8ecb9c0e0a8075f18823efea6578666d57d601c191bcaf16c26
+assets.zip 7407e19011f0dc64b7ba9953e5e38bdc758350554910c8ef84966e4a7efb4037
+```
+
+The first-error breakpoint at loaded `B$RUNERR` (`33ea:52a3`) records
+**BX=14, out of string space**. SCREEN's `45c6: call B$LDFS` (original
+site `3bb7`) requests one palette-component byte in `SCR_SCREENSHOT`.
+`B$AlcTmpSH` calls `FResizePpv` with three bytes including its header and
+gets failure. The temporary-descriptor cursor is `47a6`, below limit
+`4812`; descriptor exhaustion is not the explanation. The later visible
+MAIN `0824:0131` out-of-memory error is secondary, in error reporting.
+All SCREEN stage dumps remain in `/tmp/qbopt-screen-native`.
+
+Actual code-segment lengths, rather than total OBJ file sizes:
+
+| Code | BC bytes | Native bytes | Growth |
+| --- | ---: | ---: | ---: |
+| SCREEN | 16,036 | 19,124 | 3,088 |
+| D_SURF | 12,547 | 15,220 | 2,673 |
+| All 21 BASIC modules | 113,386 | 131,095 | 17,709 |
+
+Every module grew. Depth-stage far free memory falls from 44,640 to 26,928
+bytes (17,712 bytes, consistent with aligned code growth). Earlier OBJ-size
+reductions are **not code-size reductions**. This is a measured regression,
+not yet proof of the allocator failure's cause. Next: distinguish heap
+growth failure from corrupted allocation state before changing contracts
+or allocation. No compiler fix or passing regression is claimed here.
+
 ## Reproducible native CLI build
 
 All 21 BASIC modules now build through the ordinary CLI with checked-in
