@@ -4,11 +4,30 @@ New optimization passes are paused until the optimized renderer builds and
 runs correctly. Target: `qb-qrender/.claude/worktrees/qgl-poly-draw`, source
 commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
-## Nineteen native modules — MODEL benchmark accepted
+## Twenty native modules — SCREEN benchmark accepted
 
-SCREEN is next; its hash-checked input-only audit is
+`/tmp/qbopt-qrender-native-screen.cMXOfq` links and returns to the DOS prompt
+(port 2225). **9.46025 FPS**, baseline **9.43334**; 13 frames. All
+non-timing/non-memory benchmark fields match. BENCH.BMP is byte-identical,
+SHA1 `d6e4096b3610249ff4d53b6829f1ab18ec108c7a`; fresh screenshot
+`bench-native-008.png` was inspected. SCREEN is 50,055 -> 46,822 bytes,
+native x87 enabled. Accepted for this scene only, without a speedup claim.
+MAIN alone remains original; broader coverage and the baseline face-oracle
+failure remain open.
+
+SCR_LOAD_PART's first floating load, original 003e versus emitted 0047:
+
+```asm
+; before: emulator protocol       ; after: native x87
+db 0CDh,35h,46h,08h              fld dword [bp+8] ; D9 46 08
+; equivalent to FLD [BP+8]
+```
+
+### SCREEN input audit
+
+SCREEN's hash-checked input-only audit is
 `/tmp/qbopt-screen-audit-20260911.py`, with native dumps in
-`/tmp/qbopt-screen-native`. No runtime acceptance is claimed yet.
+`/tmp/qbopt-screen-native`. Runtime evidence is recorded above.
 DR drawing entries allocate a frame with ADD SP before branching; RECT
 first calls HLINE, which does so. TXTCHAR does the same; TXTROW uses SUB/CMP;
 TXTLOADBAS first calls audited FILEOPENBAS. VGAINIT starts with CMP and
@@ -17,6 +36,8 @@ reads. SF row wrappers enter QGLDC access routines with CMP at 0013/0059
 before dispatch; other SF inputs and BASIC B$ENRA entries were audited above.
 Only incoming arithmetic flags are excluded; every GP input and all unknown
 clobber, memory, cleanup and control effects remain. Calls stay calls.
+
+### Previous accepted build — nineteen modules
 
 `/tmp/qbopt-qrender-native-model.FJ17pP` links and returns to the DOS prompt
 (port 2224). **9.37895 FPS**, baseline **9.43334**; 13 frames. All
