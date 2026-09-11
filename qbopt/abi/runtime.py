@@ -349,13 +349,17 @@ for _name, _evidence in {
               "OR AX,AX at 0016 kills arithmetic flags before any branch or further call.",
     "B$SPAC": "farstr strfcn.asm 0182 passes AL=20h and CX=[BP+6] to local 0191; "
               "OR CX,CX there kills arithmetic flags before allocation or an error tail.",
+    "B$RND0": "random.asm 0000 calls local 0033; MUL CX at 003b sets CF/OF, "
+              "ADD BX,AX at 0045 sets arithmetic flags before the later ADC. "
+              "The straight-line body updates the seed, stores an x87 result, "
+              "and returns its address through XCHG BX,AX at 0075.",
 }.items():
     VARIANTS[(_name, "vbdos")] = replace(
         worst(_name),
         inputs=frozenset({Reg.AX, Reg.BX, Reg.CX, Reg.DX, Reg.SI, Reg.DI}),
         evidence=("VBDCL10E.LIB: " + _evidence + " All GP inputs retained; "
                   "cleanup, memory, preservation and transitive control/error effects "
-                  "remain unknown. No file or string operation is replaced."),
+                  "remain unknown. No runtime operation is replaced."),
     )
 
 for _name in ("B$STR4", "B$STR8"):

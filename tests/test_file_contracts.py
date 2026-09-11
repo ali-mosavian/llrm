@@ -98,9 +98,11 @@ def model_calls(request):
     ("d-mdl", symbol) for symbol in ("B$FLOF", "B$GET3", "B$GET4", "B$SACT")
 ] + [
     ("d-surf", symbol) for symbol in ("B$DSG0", "B$PUT3", "B$SMID", "B$SPAC")
+] + [
+    ("pl-move", "B$RND0")
 ], indirect=["model_calls"])
 def test_model_file_calls_lower_without_replacement(model_calls, symbol):
-    """D_MDL/D_SURF emitted no optimized OBJ: these real call interfaces were unknown."""
+    """D_MDL/D_SURF/PL_MOVE emitted no optimized OBJ: real runtime interfaces were unknown."""
     found, rules, bodies = model_calls
     seen = 0
     for name, body in bodies:
