@@ -6,6 +6,15 @@ commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
 ## D_SURF candidate — runtime regression, not accepted
 
+Recheck after ES-write fix (`21e67d7`):
+`/tmp/qbopt-qrender-native-dsurf-es.ircB1e`, port 2217, reports **8.69943 FPS**.
+It links successfully and returns to the DOS prompt, but `sc_test=-4000`,
+all six previously differing non-timing fields, and the differing BMP hash
+are unchanged. Fresh `bench-native-034.png` is the screenshot evidence.
+The emitted OBJ is 36,054 bytes. Dumps in `/tmp/qbopt-d-surf-native-es`
+confirm 0fcc now writes ES before spilling it. This fixes an independently
+reproduced backend defect, **not the remaining cache failure**.
+
 `/tmp/qbopt-qrender-native-dsurf.vw3Xem` links without errors and exits to
 the DOS prompt, but the fifteen-module native-x87 candidate is **incorrect**.
 FPS is **8.61702** versus baseline **9.43334**; `sc_test=-4000` versus `1`,
@@ -25,8 +34,8 @@ original 0fcc becomes an ordinary spilled GP value, while its following far
 load still uses physical ES. A body-wide pin did not survive the spiller's
 fresh value. Lowering now attaches an instruction-level ES output requirement.
 The focused forced-spill regression fails first and decodes an ES destination
-after the fix; all 15 constraint tests pass (0.31 seconds). Runtime recheck
-is pending; this does not yet establish that all cache failures share one cause.
+after the fix; all 15 constraint tests pass (0.31 seconds). The runtime
+recheck above shows that the remaining cache failure has another cause.
 
 ```asm
 ; faulty candidate               ; required after spilling
