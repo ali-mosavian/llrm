@@ -1207,21 +1207,6 @@ def _memrefs(
     return tuple(out)
 
 
-# What each operation's unnamed memory is in, where the operation says so.
-# A push and a pop reach the stack and nothing else, whatever the depth.
-_IN: dict = {}
-
-
-def _object_of(node) -> "Space | None":
-    """Which object this instruction's memory is in, or None for anything."""
-    what = getattr(node, "semantics", None)
-    if what is None:
-        return None
-    if what.op in (ir.Operation.PUSH, ir.Operation.POP):
-        return Space.STACK
-    return None
-
-
 def _placed(
     blocks: list[Block],
     nodes: dict[int, ir.Node],
@@ -1505,10 +1490,15 @@ def raise_body(
             offset, slot = _stack_slot(node, offset, calls.get(insn.at) if calls else None)
             defines, uses = _touched(node, calls, chosen)
             used = tuple(namer.current(one, start) for one in sorted(uses, key=lambda o: (o is not FLAGS, o)))
-            where = _object_of(node)
             keeps = unreached if _narrowed(calls, insn.at) else None
-            loads = _memrefs(node.effects.loads, namer, start, slot, where, keeps)
-            stores = _memrefs(node.effects.stores, namer, start, slot, where, keeps)
+            loading_stack = node.semantics.op is ir.Operation.POP
+            storing_stack = node.semantics.op is ir.Operation.PUSH
+            loads = _memrefs(node.effects.loads, namer, start,
+                             slot if loading_stack else None,
+                             Space.STACK if loading_stack else None, keeps)
+            stores = _memrefs(node.effects.stores, namer, start,
+                              slot if storing_stack else None,
+                              Space.STACK if storing_stack else None, keeps)
             holds = dict(zip(sorted(uses, key=lambda o: (o is not FLAGS, o)), used))
             # What each variable held before this instruction writes
             # anything. The half an absorbed divide hands back is a

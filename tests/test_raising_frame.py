@@ -13,6 +13,22 @@ from qbopt.model import mir
 from qbopt.objectfile import module
 
 
+def test_pl_move_memory_push_reads_the_pointer_not_its_stack_destination():
+    """PL_MOVE refused emission at 2337: PUSH dword [BX] became a read of [SP-8]."""
+    import corpus
+    path = Path("fixtures/regressions/qrender-pl-move-v-g3.obj")
+    found = corpus.loaded(path)
+    bodies = mir.bodies(found, corpus.partitioned(path), runtime.for_module(found))
+    op = next(op for _, body in bodies for block in body.blocks
+              for op in block.ops if op.at == 0x2337)
+    source = op.loads[0]
+    assert source.addr is None
+    assert source.space is not module.Space.STACK
+    assert source.base is not None and source.width == 4
+    assert op.args == (mir.Cell(source),)
+    assert op.stores[0].addr == module.Addr(module.Space.STACK, -8)
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_chain_constant_divisors_survive_argument_setup(tag):
     """CHAIN kept six IDIVs: pushing ONE's label forgot local constants before PRINT."""
