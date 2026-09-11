@@ -53,6 +53,25 @@ not yet proof of the allocator failure's cause. Next: distinguish heap
 growth failure from corrupted allocation state before changing contracts
 or allocation. No compiler fix or passing regression is claimed here.
 
+### Matched heap comparison: the larger image exhausts available space
+
+The untouched executable was stopped at the same palette entry, **39**,
+before original SCREEN `3bb7: call B$LDFS`. Its heap chain has **17,472
+free bytes**; native has zero. Every corresponding block has the same size
+except the string heap: baseline 688 bytes, native 448. Both chains have
+the same upper sentinel (`7b57`); DGROUP moves from `434e` to `47a1`.
+Thus **17,712 bytes of loaded-image growth minus 240 fewer allocated string
+bytes = all 17,472 bytes of baseline headroom**. This is capacity exhaustion,
+not merely a correlation with the earlier depth-stage memory reading.
+
+Evidence: `baseline-heap-at-palette-39.json` and
+`baseline-palette-39-dgroup.bin` in `/tmp/qbopt-e1m1-baseline-heap.7PhNBf`;
+native `native-first-error-dgroup.bin` in the E1M1 run directory. The chain
+was read using the actual linked allocator's descriptor layout and checked
+block by block. This breakpoint run is diagnostic, not an FPS measurement.
+Reduce backend code growth without weakening call contracts or changing the
+renderer to reserve less memory; rerun E1M1 after the first measured reduction.
+
 ## Reproducible native CLI build
 
 All 21 BASIC modules now build through the ordinary CLI with checked-in
