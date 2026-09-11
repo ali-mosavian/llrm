@@ -50,12 +50,14 @@ _REGISTERS = {v: k for k, v in vars(Register).items() if isinstance(v, int)}
 from qbopt.objectfile import omf
 from qbopt.objectfile import module
 from qbopt import wholeseg
+from qbopt.abi import profile
 from qbopt.analysis import loops as loopy
 from qbopt.frontend import blocks as split
 from qbopt.frontend.blocks import code_map
 
 
-def _bodies(data: bytes, basic_semantics: bool = False, bounds_checks: bool = False):
+def _bodies(data: bytes, basic_semantics: bool = False, bounds_checks: bool = False,
+            *, external_contracts: dict | None = None):
     """Every MIR body in this object, or nothing if it does not map."""
     found = module.of(omf.parse(data))
     if found is None:
@@ -68,7 +70,7 @@ def _bodies(data: bytes, basic_semantics: bool = False, bounds_checks: bool = Fa
     # One map for the whole run, kept on the module the tool passes on, so
     # the raise and the lowering are given the same object -- built twice
     # they can differ, which is what wholeseg.py takes care not to do.
-    contracts = runtime.for_module(found)
+    contracts = runtime.for_module(found, external=external_contracts)
     return found, list(mir.bodies(found, split.partition(found, mapped), contracts,
                                   basic_semantics=basic_semantics, bounds_checks=bounds_checks)), contracts
 
@@ -564,7 +566,19 @@ def main(argv: list[str] | None = None, view=None) -> int:
         action="store_false",
         help="leave absorption to the machine arm, which is what rewrite.py does by default",
     )
+    ap.add_argument("--contracts", type=Path, help="hash-checked external call profile (same as rewrite)")
+    ap.add_argument("--contract-root", type=Path, help="artifact directory for the profile")
+    ap.add_argument("--native-fpu", action="store_true", help="emit native x87, matching rewrite --native-fpu")
     args = ap.parse_args(argv)
+    if args.native_fpu and args.basic_semantics:
+        ap.error("--basic-semantics cannot be combined with --native-fpu")
+    if args.contract_root is not None and args.contracts is None:
+        ap.error("--contract-root requires --contracts")
+    try:
+        loaded_profile = profile.load(args.contracts, args.contract_root) if args.contracts is not None else None
+    except (ValueError, OSError) as error:
+        ap.error(str(error))
+    external = {rule.name: rule for rule in loaded_profile.rules} if loaded_profile is not None else None
 
     data = args.object.read_bytes()
     if args.dump is not None:
@@ -620,7 +634,7 @@ def main(argv: list[str] | None = None, view=None) -> int:
             print(f"  --- {route}")
             _asm(out)
 
-    found, raised, contracts = _bodies(data, args.basic_semantics, args.bounds_checks)
+    found, raised, contracts = _bodies(data, args.basic_semantics, args.bounds_checks, external_contracts=external)
     debug = cvinfo.parse(omf.parse(data))
     if found is None or not raised:
         print("  nothing to raise")
@@ -644,8 +658,11 @@ def main(argv: list[str] | None = None, view=None) -> int:
         stages.setdefault(stage, []).append((name, low))
 
     try:
+        options = {"external_contracts": external} if external is not None else {}
+        if args.native_fpu:
+            options["native_fpu"] = True
         got = wholeseg.emitted(data, only=args.only, watch=watch, cpu=args.cpu,
-                               basic_semantics=args.basic_semantics, bounds_checks=args.bounds_checks)
+                               basic_semantics=args.basic_semantics, bounds_checks=args.bounds_checks, **options)
     finally:
         for name, bodies in mir_stages.items():
             was = dump(next(step), name, name, bodies, was, debug, found)

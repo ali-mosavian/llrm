@@ -18,6 +18,7 @@ from dataclasses import dataclass
 
 from qbopt.objectfile import omf
 from qbopt import wholeseg
+from qbopt.abi import profile
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +45,7 @@ def rewrite(
     cpu: str = "386",
     basic_semantics: bool = False,
     bounds_checks: bool = False,
+    contract_profile: profile.Profile | None = None,
 ) -> tuple[bytes, list[Region]]:
     """Optimize one raised body, lower once, and preserve the input on refusal.
 
@@ -77,6 +79,8 @@ def rewrite(
     # which is what stops any pass above from moving anything. The suite
     # links and runs on the MIR arm alone.
     made_by = _configuration(whole_segment, native_fpu, absorb_calls, cpu, basic_semantics, bounds_checks)
+    if contract_profile is not None:
+        made_by += f",contracts={contract_profile.fingerprint}"
     was = omf.finalised_at(omf.parse(data))
     if was is not None:
         # Already emitted by this pass. What came out is a program -- a
@@ -89,7 +93,8 @@ def rewrite(
             raise Finalised(f"this object was written by {was!r}, and this run is {made_by!r}")
         return data, regions
 
-    out, terminal = _written(data, whole_segment, native_fpu, absorb_calls, cpu, basic_semantics, bounds_checks)
+    out, terminal = _written(data, whole_segment, native_fpu, absorb_calls, cpu, basic_semantics, bounds_checks,
+                             contract_profile)
     if terminal:
         return b"".join(one.emit() for one in omf.finalised(omf.parse(out), made_by)), regions
     # A backend refusal leaves the input intact. Machine output is never
@@ -119,12 +124,15 @@ def _written(
     data: bytes, whole_segment: bool, native_fpu: bool = False, absorb_calls: bool = True, cpu: str = "386",
     basic_semantics: bool = False,
     bounds_checks: bool = False,
+    contract_profile: profile.Profile | None = None,
 ) -> tuple[bytes, bool]:
     """Lower and emit once; report whether the allocating backend completed."""
     if not whole_segment:
         return data, False
     got = wholeseg.emitted(data, native_fpu=native_fpu, cpu=cpu, basic_semantics=basic_semantics,
-                           bounds_checks=bounds_checks)
+                           bounds_checks=bounds_checks,
+                           external_contracts={rule.name: rule for rule in contract_profile.rules}
+                           if contract_profile is not None else None)
     if not bounds_checks and got.reason.startswith("unchecked array lowering unsupported"):
         raise ValueError(got.reason + "; use --bounds-checks to retain the checked helper")
     return got.data, got.outcome is wholeseg.Emission.LIR
@@ -157,6 +165,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--cpu", choices=("386", *ARCHS), default="386", help="arithmetic tuning target")
     ap.add_argument("-o", "--output", type=Path)
     ap.add_argument("--manifest", type=Path)
+    ap.add_argument("--contracts", type=Path, help="audited, hash-checked external call profile (JSON)")
+    ap.add_argument("--contract-root", type=Path, help="artifact directory; defaults to the profile directory")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--take", help="comma-separated region ids; refuse the rest")
     ap.add_argument("--max-regions", type=int)
@@ -182,10 +192,13 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     if args.basic_semantics and args.native_fpu:
         ap.error("--basic-semantics cannot be combined with --native-fpu")
+    if args.contract_root is not None and args.contracts is None:
+        ap.error("--contract-root requires --contracts")
 
     data = args.input.read_bytes()
     take = {int(x) for x in args.take.split(",")} if args.take else None
     try:
+        contracts = profile.load(args.contracts, args.contract_root) if args.contracts is not None else None
         out, found = rewrite(
             data,
             dry_run=args.dry_run,
@@ -197,8 +210,9 @@ def main(argv: list[str] | None = None) -> int:
             cpu=args.cpu,
             basic_semantics=args.basic_semantics,
             bounds_checks=args.bounds_checks,
+            contract_profile=contracts,
         )
-    except ValueError as error:
+    except (ValueError, OSError, Finalised) as error:
         ap.error(str(error))
 
     if args.output:
@@ -212,6 +226,7 @@ def main(argv: list[str] | None = None) -> int:
         "cpu": args.cpu,
         "semantics": "basic" if args.basic_semantics else "native",
         "bounds_checks": args.bounds_checks,
+        "contract_profile_sha256": contracts.fingerprint if contracts is not None else None,
         "regions": [asdict(r) for r in found],
         "taken": sum(1 for r in found if r.taken),
     }

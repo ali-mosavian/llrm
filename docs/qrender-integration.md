@@ -43,10 +43,17 @@ log completion is not claimed as process completion. No oracle was weakened.
 These modes report no FPS; the preceding 9.47705 FPS scene remains the timing evidence.
 No assembly changed during these checks.
 
-The accepted build still relies on temporary, hash-checked project-call
-audit scripts. The ordinary rewrite CLI cannot yet consume these external
-contracts. Making that build reproducible without script overrides is the
-next integration task; this is not yet an end-to-end production workflow.
+MAIN now uses the checked-in `docs/contracts/qrender-main.json` profile via
+the ordinary rewrite CLI. Its 65 symbols are checked against their defining
+objects and all artifact hashes; unknown effects remain unknown. With
+`--native-fpu --contracts docs/contracts/qrender-main.json --contract-root
+/tmp/qbopt-qrender-baseline-20260910`, `/tmp/qbopt-main-cli-native.obj` matches
+the accepted MAIN object exactly apart from the completion marker. Profile
+SHA-256: `4b4573460f973a4634d4756e85106158ba152608bc1005688b845f4abc95293f`.
+The same profile and native option work in `tools/stages.py`. No machine
+instructions changed, so no new FPS measurement is attributed to this step.
+The other modules' temporary audit scripts still need migration; this is
+not yet a fully reproducible 21-module production build.
 
 MAIN initially crashed while reserving two spill bytes: it ends through
 HOST_SHUTDOWN, not a direct runtime exit. A machine-independent, fixed-point

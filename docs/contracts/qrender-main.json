@@ -1,0 +1,818 @@
+{
+  "version": 1,
+  "artifacts": {
+    "d_faces.obj": "e19cc0b7b50733ca5720047c79618dee9e739a0cb4d67d58fa87eb8a68eb6b6e",
+    "d_mdl.obj": "5ac55e278ff818efe8728f4236ea5685114d3c07136eeb8e09b0c9479c51e936",
+    "d_surf.obj": "3af784915576281a4d696364f15a1c01159927cab52bd629f1e9696f1c3818f3",
+    "d_turb.obj": "a92e5b87dd87664d7c8e0ec19feb981085775052ec68810da97de2ca8b5b1c0a",
+    "dr.obj": "6ffd10d26f0a48e60cac1bce96240c8c227b44f5a1828780dd9ad468edf75d1d",
+    "ent.obj": "f815aa0a546affa4af20292a25b0eee874c478e03cc3202ad314bb246509b2aa",
+    "h_bench.obj": "eb8b4978d0a0f748428f272182513ed7a722cf259ee36d480e290bb4761db981",
+    "h_frame.obj": "a89011166046cbd96aee6856a4278cb38c9db735f8b203ca6a82fcf5100292ea",
+    "in_main.obj": "4d37820572254295bb70b1c3d006247d7ece51a45c6d77d20152046db4767d4d",
+    "kbd.obj": "677360877e2f813fd7f5a37ef40766ef37dc48a735a6d8f9d420a7b5b2fffcdc",
+    "m4.obj": "b3ac98e7259854a517db3011142a4baa3ec822698ab67ae1ea93d745b5e12350",
+    "mem.obj": "c18eeeb883dcb9ef480b166d5048f27fe4244189e19f717d65187e4205ccd7f8",
+    "mod_tex.obj": "8adc799a91dea62f324bd92570a03f5e1b38462643042f2c4cd6fa4f003df81d",
+    "model.obj": "03814ed0489c6acb5e34245aaf6b3e980c74788b88efb27b6d721fa48f35fc8e",
+    "mouse.obj": "596ad6d94989933eaccd2f9e14799bbc76b2a75d01e9f5f58e9aa28af9a77806",
+    "pl_move.obj": "453f4332666c1a34255c826096ec8a90aed032ff4c897265c063f72c951b7547",
+    "qglarr.obj": "ad3f318918b70df41df156422512c10340acdf9115d574bb0845b0f02b72ce5b",
+    "qglchk.obj": "764d884dd89b1cc4e1e197254304d6916f0530723e22fcd8b0abef6479f28402",
+    "qgldiff.obj": "465ea952d9aa664bf907eba5d852b498e9c1ca484174e196d4f883611dc874d1",
+    "qglface.obj": "336cc905c9fd6a9ca985932425fd89d7de82cacc6a0718724a762ea64e6dc0ef",
+    "r_bsp.obj": "93345476b7a1bcdc2fbd4fe64207f4f47300558d580d54c92b51d31cbc1d4b6c",
+    "r_walk.obj": "6e9a3ea6e2bb5445265570f0839cd49dacdfbe0bd12b422f8e519e16b58a6220",
+    "sb_build.obj": "db0b140543301f1457b0fdf516b88d23c640542e066639908496765c0ea8b437",
+    "screen.obj": "598494eae3e667d6ca043c089d873c133e23b61445dffc4975ec3a7f7641c779",
+    "sf.obj": "38cd797456f8ec113ec3582a2fe2884d7716322128c0096bee0dc0f02e7ba2c4",
+    "sys.obj": "359c02ee944e792e9181333c5acec5ba104d40a5c38512150cb562536e0aad53",
+    "tmr.obj": "c1f719ac6804a2167681895734d8a3a8d2fc3501e63e20a0fdc58b6f5bb2abc0",
+    "vga.obj": "201a348a8f4cdc9f8ac904582ed22cd52182fc7985fe74d1d68c0e331dd16d3c",
+    "vid.obj": "541375ce265e5ada944f364732a966e41eba44e14371a579b9b0207538aab158",
+    "view.obj": "cd41c40f8bb41f41d16f7b7c4c172cbd989dfa55955e1528d7bb57915de5af09",
+    "z.obj": "c0be15eeb8649a5e47fb41c577bb899b3fa8363072740ec263916c5cb689b311"
+  },
+  "contracts": {
+    "D_FACES_LAYOUT_OK": {
+      "defined_in": "d_faces.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "MDL_LOAD": {
+      "defined_in": "d_mdl.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "LS_INIT": {
+      "defined_in": "d_surf.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "SB_DUMP": {
+      "defined_in": "d_surf.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "SC_INIT": {
+      "defined_in": "d_surf.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "D_INIT_TURB": {
+      "defined_in": "d_turb.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "QGLDRBLIT": {
+      "defined_in": "dr.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "QGLDRFILL": {
+      "defined_in": "dr.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "ENT_LOAD_SPAWN": {
+      "defined_in": "ent.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "HOST_BENCH_REPORT": {
+      "defined_in": "h_bench.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "HOST_ADVANCE": {
+      "defined_in": "h_frame.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "HOST_RENDER": {
+      "defined_in": "h_frame.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "IN_INIT": {
+      "defined_in": "in_main.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "IN_SCREENSHOT_KEY": {
+      "defined_in": "in_main.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "QGLKBDSHUTDOWN": {
+      "defined_in": "kbd.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "QGLM4PERSP": {
+      "defined_in": "m4.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "QGLMEMAVAIL": {
+      "defined_in": "mem.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "QGLMEMINIT": {
+      "defined_in": "mem.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "QGLMEMSHUTDOWN": {
+      "defined_in": "mem.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "MOD_LOAD_TEXINFO": {
+      "defined_in": "mod_tex.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "MOD_LOAD_TEXTURES": {
+      "defined_in": "mod_tex.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "MOD_TEX_DUMP": {
+      "defined_in": "mod_tex.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "MOD_CLOSE": {
+      "defined_in": "model.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "MOD_LOAD_COLORMAP": {
+      "defined_in": "model.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "MOD_LOAD_WORLD": {
+      "defined_in": "model.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "MOD_OPEN": {
+      "defined_in": "model.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "QGLMOUSEPOS": {
+      "defined_in": "mouse.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "QGLMOUSESHUTDOWN": {
+      "defined_in": "mouse.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "MDL_SPAWN": {
+      "defined_in": "pl_move.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "PL_INIT": {
+      "defined_in": "pl_move.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "PL_ITEMS_DROP": {
+      "defined_in": "pl_move.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "QGLARRALL": {
+      "defined_in": "qglarr.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "QGLCHECKALL": {
+      "defined_in": "qglchk.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "QGLDIFFALL": {
+      "defined_in": "qgldiff.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "QGLFACEALL": {
+      "defined_in": "qglface.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "R_LEAF_BOUND": {
+      "defined_in": "r_bsp.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "R_LEAF_CONTENTS": {
+      "defined_in": "r_bsp.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "R_WALK_LAYOUT_OK": {
+      "defined_in": "r_walk.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "SB_LAYOUT_OK": {
+      "defined_in": "sb_build.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "DRAW_INIT_FONT": {
+      "defined_in": "screen.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "SCR_BEGIN_LOADING": {
+      "defined_in": "screen.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "SCR_COUNT_FRAME": {
+      "defined_in": "screen.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "SCR_DRAW_HUD": {
+      "defined_in": "screen.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "SCR_PAL_SHIFT": {
+      "defined_in": "screen.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "QGLSFINIT": {
+      "defined_in": "sf.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "SYS_ERROR": {
+      "defined_in": "sys.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "SYS_FRAME_TIME": {
+      "defined_in": "sys.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "SYS_INIT_TABLES": {
+      "defined_in": "sys.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "SYS_MEM_COUNT": {
+      "defined_in": "sys.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "SYS_MEM_FRE": {
+      "defined_in": "sys.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "SYS_MEM_MARK": {
+      "defined_in": "sys.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "SYS_MEM_TAG": {
+      "defined_in": "sys.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "SYS_NOW": {
+      "defined_in": "sys.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "SYS_PARSE_ARGS": {
+      "defined_in": "sys.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "SYS_RDTSC": {
+      "defined_in": "sys.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "SYS_TIME_INIT": {
+      "defined_in": "sys.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "QGLTMRSHUTDOWN": {
+      "defined_in": "tmr.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "QGLTMRTICKS": {
+      "defined_in": "tmr.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "QGLVGASCREEN": {
+      "defined_in": "vga.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "QGLVGASHUTDOWN": {
+      "defined_in": "vga.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "VID_INIT": {
+      "defined_in": "vid.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "VID_UPDATE": {
+      "defined_in": "vid.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "V_OPEN_SCRIPT": {
+      "defined_in": "view.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "QGLSFZNEW": {
+      "defined_in": "z.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    },
+    "QGLZSCALE": {
+      "defined_in": "z.obj",
+      "inputs": [
+        "ax",
+        "bx",
+        "cx",
+        "dx",
+        "si",
+        "di"
+      ],
+      "evidence": "Input-only audit recorded in docs/qrender-integration.md (MAIN input audit and defining-module audit). Incoming arithmetic flags are overwritten before use or never read. Other effects remain unknown."
+    }
+  }
+}

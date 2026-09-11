@@ -36,6 +36,13 @@ uv run python -m qbopt.rewrite PROGRAM.OBJ --report
 uv run python tools/stages.py PROGRAM.OBJ --dump build/stages/PROGRAM
 ```
 
+Audited project calls can be supplied with `--contracts PROFILE.json`
+and `--contract-root OBJECT_DIRECTORY` (also supported by `tools/stages.py`).
+The loader checks every artifact's SHA-256 and each symbol's defining object
+before enabling register-input/stack-cleanup facts. Unspecified effects stay
+unknown; this does not automatically prove contracts. See
+[the profile format](docs/contracts/README.md).
+
 Native arithmetic is the default, but it is not fast-math: floating-point
 reassociation and observable storage rounding are not discarded. Native LONG
 division uses machine/C behavior; `--basic-semantics` retains `B$DVI4` instead.
