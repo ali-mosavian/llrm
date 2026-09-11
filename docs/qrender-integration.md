@@ -15,6 +15,39 @@ All 21 BASIC modules are now optimized with native x87 enabled; C/ASM
 objects remain original. Accepted for this scene only, without a speedup
 claim. Broader renderer coverage and the baseline face-oracle failure remain open.
 
+### Dedicated checks on all 21 modules
+
+Fresh runs on the same normal/Pentium III/75,000-cycle machine compare the
+accepted executable to an untouched baseline copy, `qbase.exe`. Each uses
+`dm3ish.bsp -lm -nostats -yaw 183 -bench 1` plus the named flag.
+
+| Check | Native / baseline | Log comparison |
+| --- | --- | --- |
+| `-qglcheck` | PASS / PASS | Identical, 79 bytes; conventional and EMS surfaces |
+| `-qglarr` | PASS / PASS | Identical, 617 bytes; 16 probes across the 2,730-record page boundary |
+| `-qgldiff` | PASS / PASS | Identical, 2,701 bytes; flat, affine and perspective raster cases |
+| `-qglface` | FAIL / FAIL | Identical, 1,263 bytes; coverage 1,756, centre-oracle XOR 84 |
+
+The first three returned to the DOS prompt on port 2227. Logs are
+`QGL{CHK,ARR,DIFF}.native21.LOG` and baseline `QGL{CHK,ARR,DIFF}.LOG`
+in the accepted build directory. Fresh screenshots use
+`qrender.exe-qgl{check,arr,diff}-*.png` and `qbase.exe-qgl{check,arr,diff}-*.png`.
+These are off-screen checks: prompt screenshots prove completion, not a rendered scene.
+
+The face logs are in the accepted build and
+`/tmp/qbopt-qrender-native-screen.cMXOfq` respectively; the latter ran the
+untouched `qbase.exe`, not its optimized qrender executable. Fresh face
+screenshots are black, as expected for this diagnostic. Its pinned source
+holds graphics mode in a TIMER loop for 120 seconds after closing the log;
+log completion is not claimed as process completion. No oracle was weakened.
+These modes report no FPS; the preceding 9.47705 FPS scene remains the timing evidence.
+No assembly changed during these checks.
+
+The accepted build still relies on temporary, hash-checked project-call
+audit scripts. The ordinary rewrite CLI cannot yet consume these external
+contracts. Making that build reproducible without script overrides is the
+next integration task; this is not yet an end-to-end production workflow.
+
 MAIN initially crashed while reserving two spill bytes: it ends through
 HOST_SHUTDOWN, not a direct runtime exit. A machine-independent, fixed-point
 call-graph analysis now proves that HOST_SHUTDOWN reaches B$CEND and cannot
