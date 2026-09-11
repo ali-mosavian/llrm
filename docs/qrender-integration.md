@@ -45,6 +45,14 @@ Native re-emission dumps are `/tmp/qbopt-pl-move-native-push-source`; runtime
 acceptance is still pending. The refused dumps remain in
 `/tmp/qbopt-pl-move-native-ubnd`.
 
+The next refusal, XCHG AX,[BP-1Ch] at 2f4b, retained the correct operands
+through allocation but lacked an emitter case. `f3ded97` adds the memory
+encoding in the backend only. Six fail-first cases cover both operand orders
+at byte, word and dword widths (0.38 seconds). The emitted word form is
+`87 46 e4`: `xchg ax,[bp-1Ch]`, unchanged from the original operation; no
+load/store expansion weakens its exchange semantics. Fresh native dumps:
+`/tmp/qbopt-pl-move-native-xchg`.
+
 After `f5c4186`, `/tmp/qbopt-qrender-native-rbsp-live.bETvby` links and
 returns to the DOS prompt (port 2221). **9.37895 FPS**, baseline **9.43334**;
 13 frames / 9 timed samples. Every non-timing/non-memory benchmark field
