@@ -56,6 +56,33 @@ def test_runtime_requirement_renames_its_explicit_source():
     assert result.what.sources[0].value == result.uses[0]
 
 
+def test_spilled_segment_load_still_sets_es():
+    """D_SURF returned sc_test=-4000: spilling ES left a far load on the old segment."""
+    from qbopt.model import mir
+    from qbopt.objectfile.module import Addr, Space
+    from qbopt.backend import lower, allocate, spiller, select
+    from qbopt.backend import frame as frames
+    from iced_x86 import Decoder
+
+    segment = mir.Value(1, 0xfcc)
+    cell = mir.Cell(mir.MemRef(Addr(Space.FRAME, -2), 2))
+    op = mir.Op(0xfcc, ir.Operation.MOVE, "mov", (segment,), (),
+                kind=mir.Kind.LOAD, args=(cell,), results=(mir.Held(segment, 2),))
+    context = mir.MirBody(0xfcc, (mir.MirBlock(0xfcc, (), (op,), ()),),
+                          origin={segment: Register.ES})
+    load, = lower.Lowering(context, {segment.id}, {}, (), {}).expand(op)
+    use = _insn(ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(2, 2),),
+                            (ir.Held(segment.id, 2),)), (2,), (segment.id,), at=0xfcf)
+    body, pins = constrain.constrained(_body(load, use), {segment.id: Register.ES})
+    spilled, _ = spiller.spilled(body, frozenset({segment.id}), frames.Frame(0))
+    placed = allocate.applied(spilled, allocate.allocate(spilled,
+                              {**pins, **constrain.required(spilled)}))
+    emitted = select.emit(placed.insns[0].what)
+    assert emitted is not None
+    instruction = next(iter(Decoder(16, emitted.code)))
+    assert instruction.op0_register == Register.ES
+
+
 @pytest.mark.parametrize("registers", [(Register.BX, Register.CX),
                                      (Register.AX, Register.BX, Register.CX)])
 def test_shared_zero_is_supplied_to_every_runtime_input(registers):

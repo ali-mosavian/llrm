@@ -715,6 +715,16 @@ class Lowering:
                 for value in op.defines
                 if not value.flags and value.id in self._read and value in self._origin
             )
+        # Far operands still name physical ES. Its definition must set ES
+        # even if the allocator spills the corresponding value: a body pin
+        # alone does not constrain the spiller's freshly minted definition.
+        segment_results = tuple(
+            (ir.Held(result.value.id, result.width), Register.ES)
+            for result in op.results
+            if isinstance(result, mir.Held) and self._origin.get(result.value) == Register.ES
+        )
+        if segment_results:
+            return segment_results
         if op.kind is mir.Kind.OPAQUE and not isinstance(op.node, ir.Restore):
             return self._implicit_values(op, op.defines)
         if op.kind is mir.Kind.DIVMOD:

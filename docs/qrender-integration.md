@@ -20,6 +20,21 @@ observes face 0. Next isolate SC_FIND's list update versus the caller's
 nested-array read, using `/tmp/qbopt-d-surf-native-shifts` (s00..s107).
 Do not explain this away as timing variation or accept the fallback.
 
+The dumps expose a backend defect in SC_LRU_UNLINK: the segment load at
+original 0fcc becomes an ordinary spilled GP value, while its following far
+load still uses physical ES. A body-wide pin did not survive the spiller's
+fresh value. Lowering now attaches an instruction-level ES output requirement.
+The focused forced-spill regression fails first and decodes an ES destination
+after the fix; all 15 constraint tests pass (0.31 seconds). Runtime recheck
+is pending; this does not yet establish that all cache failures share one cause.
+
+```asm
+; faulty candidate               ; required after spilling
+mov dx,[si+2]                    mov es,[si+2]
+mov [bp-26h],dx                  mov [bp-26h],es
+mov dx,[es:di]                   mov dx,[es:di]
+```
+
 The candidate shrinks D_SURF from 39,734 to 36,045 bytes. At original 183a,
 the formerly unencodable hoisted shift now emits at 1d5c..1d5f:
 
