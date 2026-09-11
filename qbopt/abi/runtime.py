@@ -353,6 +353,9 @@ for _name, _evidence in {
               "ADD BX,AX at 0045 sets arithmetic flags before the later ADC. "
               "The straight-line body updates the seed, stores an x87 result, "
               "and returns its address through XCHG BX,AX at 0075.",
+    "B$ATN4": "87btriga.asm 0000 establishes its frame with SUB SP,0Ah at 0003, "
+              "overwriting incoming arithmetic flags before any branch or error tail. "
+              "The x87 operand and runtime call remain unchanged.",
 }.items():
     VARIANTS[(_name, "vbdos")] = replace(
         worst(_name),
