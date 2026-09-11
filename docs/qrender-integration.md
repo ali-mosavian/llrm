@@ -6,6 +6,17 @@ commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
 ## D_SURF candidate — runtime regression, not accepted
 
+The remaining descriptor write at 1833 loses its selector **during raise**:
+182a loads ES, 182d loads a long, then the synthesized EXTRACT at 1830 has
+no machine node. Address recognition treated that missing node as an
+unknown segment clobber. The store consequently reached lowering without
+any selector requirement. Synthesized value extraction now preserves the
+selector; unknown calls still end it. The focused regression failed on the
+missing ES input requirement before the fix; both address-dependency checks
+pass (0.33 seconds), as do all 17 constraint tests (0.45 seconds).
+Native rebuild dumps: `/tmp/qbopt-d-surf-native-extract-selector`.
+Runtime recheck is pending; this is not yet an accepted fifteenth module.
+
 Latest native-x87 recheck after selector liveness fix (`2a209e5`):
 `/tmp/qbopt-qrender-native-dsurf-selector.rYLLPB`, port 2218.
 LINK succeeds and the guest returns to the DOS prompt. **SC_SELFTEST now

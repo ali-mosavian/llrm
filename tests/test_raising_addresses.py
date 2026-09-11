@@ -50,3 +50,31 @@ def test_a_clobber_ends_the_raised_selector_dependency():
     assert value in raised[1].uses
     assert value in raised[2].uses
     assert raised[3].stores[0].segment is None
+
+
+def test_long_extraction_preserves_the_far_store_selector():
+    """D_SURF made 163 descriptors instead of 21: long extracts orphaned the store's ES."""
+    from qbopt.model import mir
+    from qbopt.frontend import raising_addresses
+    from qbopt.backend import lower
+    from qbopt.objectfile.module import Addr, Space
+
+    descriptor = mir.MemRef(Addr(Space.SEGMENT, 2, 5), 2)
+    element = mir.MemRef(Addr(Space.FAR, 0, segment=Register.ES), 4)
+    whole, low = mir.Value(1, 0), mir.Value(2, 2)
+    selector = mir.Op(1, ir.Operation.MOVE, "mov", (), (), loads=(descriptor,),
+                      kind=mir.Kind.LOAD, args=(mir.Cell(descriptor),), results=(mir.Opaque(None, "es"),))
+    extract = mir.Op(2, mir.Synth.HALF_TO_LOW, "extract", (low,), (whole,),
+                     kind=mir.Kind.EXTRACT, args=(mir.Held(whole, 4), mir.Const(0, 1)),
+                     results=(mir.Held(low, 2),))
+    store = mir.Op(3, ir.Operation.MOVE, "mov", (), (whole,), stores=(element,),
+                   kind=mir.Kind.STORE, args=(mir.Held(whole, 4),), results=(mir.Cell(element),),
+                   made=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Mem(element.addr, 4, Register.BX),),
+                                     (ir.Reg(Register.EAX, 4),)))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (selector, extract, store), ()),), {})
+    raised = raising_addresses.loaded(body)
+    first, _, last = raised.blocks[0].ops
+    segment, = first.defines
+    write, = lower.Lowering(raised, {whole.id, low.id, segment.id}, {}, (), {}).expand(last)
+    assert (ir.Held(segment.id, 2), Register.ES) in write.requires
+    assert segment.id in write.uses

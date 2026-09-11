@@ -38,6 +38,8 @@ def loaded(body: mir.MirBody) -> mir.MirBody:
                 effects = getattr(op.node, "effects", None)
                 reads = effects is None or effects.uses is None or Register.ES in effects.uses
                 writes = effects is None or effects.defs is None or Register.ES in effects.defs
+                if op.node is None and op.kind is mir.Kind.EXTRACT and not op.barrier:
+                    reads = writes = False
                 if reads or any(ref.segment == current for ref in loads + stores):
                     op = replace(op, uses=tuple(dict.fromkeys((*op.uses, current))))
                 op = replace(op, loads=loads, stores=stores, args=tuple(map(argument, op.args)), results=tuple(map(argument, op.results)))
