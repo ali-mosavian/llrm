@@ -766,6 +766,14 @@ class Lowering:
         return tuple(out)
 
     def _abi(self, op: "mir.Op") -> tuple:
+        selectors = (
+            (ir.Held(ref.segment.id, 2), Register.ES)
+            for ref in (*op.loads, *op.stores)
+            if ref.segment is not None
+        )
+        return tuple(dict.fromkeys((*self._fixed_inputs(op), *selectors)))
+
+    def _fixed_inputs(self, op: "mir.Op") -> tuple:
         """Which registers a call reads its arguments in.
 
         `op.args` are the arguments the routine's contract declares, in the
@@ -803,11 +811,7 @@ class Lowering:
                 if not one.flags and one not in op.merges and ir.ROOT.get(self._origin.get(one, -1), -1) is source
             )
         if op.kind is not mir.Kind.CALL:
-            return tuple(dict.fromkeys(
-                (ir.Held(ref.segment.id, 2), Register.ES)
-                for ref in (*op.loads, *op.stores)
-                if ref.segment is not None
-            ))
+            return ()
         # The raise's own answer first: `args_known` is false for a call
         # whose contract declares nothing and for one to the program's own
         # code, which has no runtime contract at all -- not for a routine

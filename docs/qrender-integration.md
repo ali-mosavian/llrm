@@ -15,6 +15,16 @@ operation's selector in ES; spilling or forwarding must restore that value
 at its consumer. The new emitted-instruction regression fails with the fix
 removed; all 16 constraint tests pass (0.95 seconds). Native recheck pending.
 
+The first selector-input patch missed recognized instruction sites: their
+early return supplied only the original address-register requirements.
+Two emitted candidates stayed byte-identical to the ES-write candidate;
+neither was benchmarked again. Inspecting the real raised references proved
+the selector metadata was present. A second fail-first case exercises the
+recognized-site route. Selector inputs now compose with every existing
+input requirement rather than sitting after its early returns; all 17
+constraint tests pass (0.56 seconds). Rebuild dumps:
+`/tmp/qbopt-d-surf-native-selector-sites`.
+
 ```asm
 ; before (ES holds another array) ; required selector restoration
 mov ax,[es:bx]                    mov es,cx ; saved selector

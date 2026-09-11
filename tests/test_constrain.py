@@ -83,7 +83,8 @@ def test_spilled_segment_load_still_sets_es():
     assert instruction.op0_register == Register.ES
 
 
-def test_far_read_restores_its_forwarded_selector():
+@pytest.mark.parametrize("selected_site", [False, True])
+def test_far_read_restores_its_forwarded_selector(selected_site):
     """D_SURF sc_test=-4000: a reused slot selector read through the LRU array's ES."""
     from qbopt.model import mir
     from qbopt.objectfile.module import Addr, Space
@@ -97,7 +98,8 @@ def test_far_read_restores_its_forwarded_selector():
     op = mir.Op(8, ir.Operation.MOVE, "mov", (result,), (segment,), kind=mir.Kind.LOAD,
                 args=(mir.Cell(ref),), results=(mir.Held(result, 2),), loads=(ref,), made=machine)
     context = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),), origin={segment: Register.ES})
-    read, = lower.Lowering(context, {1, 2}, {}, (), {}).expand(op)
+    sites = {op.id: ()} if selected_site else {}
+    read, = lower.Lowering(context, {1, 2}, {}, sites, {}).expand(op)
     saved = _insn(ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),),
                               (ir.Mem(Addr(Space.FRAME, -2), 2, Register.BP),)), (1,), ())
     overwrite = _insn(ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.ES, 2),),
