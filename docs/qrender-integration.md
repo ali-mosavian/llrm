@@ -4,7 +4,29 @@ New optimization passes are paused until the optimized renderer builds and
 runs correctly. Target: `qb-qrender/.claude/worktrees/qgl-poly-draw`, source
 commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
-## D_SURF candidate — runtime regression, not accepted
+## Fifteen native modules — D_SURF benchmark accepted
+
+After `d546d5f`, `/tmp/qbopt-qrender-native-dsurf-extract.JlcBA1`
+links and returns to the DOS prompt (port 2219). **9.49704 FPS** versus
+baseline **9.43334**, over 13 frames / 9 timed samples; no speedup claim.
+Every non-timing/non-memory field matches baseline: `sc_test=1`,
+`lm_fallback=0`, `sc_made=21`. BENCH.BMP is byte-identical, SHA1
+`d6e4096b3610249ff4d53b6829f1ab18ec108c7a`. Fresh screenshot
+`bench-native-022.png` was inspected. D_SURF: 39,734 -> 36,196 bytes.
+This accepts the fifteenth module for this scene, not all renderer behavior.
+Six BASIC modules remain original: main, mod_tex, model, r_bsp, screen,
+pl_move. The separate baseline QGLFACE oracle failure remains unresolved.
+
+Actual allocated descriptor write, before and after the extraction fix:
+
+```asm
+; before                         ; after
+                                 mov si,[bp-6Ch]
+                                 mov es,[si+2]
+mov [es:bx],eax                  mov [es:bx],eax
+```
+
+### D_SURF diagnosis history (failed candidates below)
 
 The remaining descriptor write at 1833 loses its selector **during raise**:
 182a loads ES, 182d loads a long, then the synthesized EXTRACT at 1830 has
@@ -15,7 +37,7 @@ selector; unknown calls still end it. The focused regression failed on the
 missing ES input requirement before the fix; both address-dependency checks
 pass (0.33 seconds), as do all 17 constraint tests (0.45 seconds).
 Native rebuild dumps: `/tmp/qbopt-d-surf-native-extract-selector`.
-Runtime recheck is pending; this is not yet an accepted fifteenth module.
+The native runtime recheck above establishes the repaired descriptor store.
 
 Latest native-x87 recheck after selector liveness fix (`2a209e5`):
 `/tmp/qbopt-qrender-native-dsurf-selector.rYLLPB`, port 2218.
