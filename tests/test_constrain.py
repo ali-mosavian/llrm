@@ -100,6 +100,7 @@ def test_far_read_restores_its_forwarded_selector(selected_site):
     context = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),), origin={segment: Register.ES})
     sites = {op.id: ()} if selected_site else {}
     read, = lower.Lowering(context, {1, 2}, {}, sites, {}).expand(op)
+    assert segment.id in read.uses, "the selector must remain live until the far read"
     saved = _insn(ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),),
                               (ir.Mem(Addr(Space.FRAME, -2), 2, Register.BP),)), (1,), ())
     overwrite = _insn(ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.ES, 2),),

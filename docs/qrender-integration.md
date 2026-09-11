@@ -25,6 +25,15 @@ input requirement rather than sitting after its early returns; all 17
 constraint tests pass (0.56 seconds). Rebuild dumps:
 `/tmp/qbopt-d-surf-native-selector-sites`.
 
+The bounded lowerer probe at 241d then proved the requirement was present
+(`v1113 -> ES`) but absent from LIR's `uses`. Operand-derived liveness had
+dropped the implicit selector even though MIR still carried it. Lowering
+now includes all required inputs in the instruction's use list. Both
+ordinary and recognized-site regressions fail first on the missing live
+selector; all 17 constraint tests pass (0.39 seconds). Recheck dumps:
+`/tmp/qbopt-d-surf-native-selector-live`. No runtime acceptance is inferred
+from these host checks.
+
 ```asm
 ; before (ES holds another array) ; required selector restoration
 mov ax,[es:bx]                    mov es,cx ; saved selector

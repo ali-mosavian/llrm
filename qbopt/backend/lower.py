@@ -934,6 +934,9 @@ class Lowering:
             speaks = what is not None and (what.dests or what.sources)
             made = tuple(_written(what.dests)) if speaks else ()
             read = tuple(_read(what)) if speaks else ()
+            requires = self._abi(op)
+            inputs = read if speaks else tuple(one.id for one in op.uses if not one.flags)
+            inputs = tuple(dict.fromkeys((*inputs, *(held.value for held, _ in requires))))
             return (
                 lir.Insn(
                     at=op.at,
@@ -942,8 +945,8 @@ class Lowering:
                     defines=made
                     if speaks and op.kind is not mir.Kind.CALL
                     else tuple(one.id for one in op.defines if not one.flags and one.id in self._read),
-                    uses=read if speaks else tuple(one.id for one in op.uses if not one.flags),
-                    requires=self._abi(op),
+                    uses=inputs,
+                    requires=requires,
                     clobbers=_clobbers(op, self._calls),
                     spread=() if op.inserted else (op.covers, *op.extra_covers) if op.extra_covers else self._coverage.get(op.id, ()),
                     delivers=self._idiom(op),
