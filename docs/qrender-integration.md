@@ -29,6 +29,22 @@ The RND0/ATN4 refusal dumps are `/tmp/qbopt-pl-move-native-rnd0` and
 `/tmp/qbopt-pl-move-native-atn4`; both preserve the original object atomically.
 No new FPS or screenshot is claimed for these emission-only attempts.
 
+After those interfaces were established, emission refused PUSH at 2337.
+The initial MIR incorrectly named its explicit `[BX]` read as the implicit
+destination `[SP-8]`. `c8b0c78` gives only PUSH stores and POP loads the stack
+slot; explicit memory operands retain their own address and alias facts.
+The real PL_MOVE regression failed first on `[SP-8]` and passes with the two
+related frame checks (3 tests). In assembly terms:
+
+```asm
+; faulty operand — refused       ; intended source restored in MIR
+push dword [sp-8]                push dword [bx]
+```
+
+Native re-emission dumps are `/tmp/qbopt-pl-move-native-push-source`; runtime
+acceptance is still pending. The refused dumps remain in
+`/tmp/qbopt-pl-move-native-ubnd`.
+
 After `f5c4186`, `/tmp/qbopt-qrender-native-rbsp-live.bETvby` links and
 returns to the DOS prompt (port 2221). **9.37895 FPS**, baseline **9.43334**;
 13 frames / 9 timed samples. Every non-timing/non-memory benchmark field
