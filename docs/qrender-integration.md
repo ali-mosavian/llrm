@@ -6,6 +6,30 @@ commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
 ## D_SURF candidate — runtime regression, not accepted
 
+Latest native-x87 recheck after selector liveness fix (`2a209e5`):
+`/tmp/qbopt-qrender-native-dsurf-selector.rYLLPB`, port 2218.
+LINK succeeds and the guest returns to the DOS prompt. **SC_SELFTEST now
+passes: `sc_test=1`, matching baseline.** D_SURF emits 36,193 bytes.
+However, this candidate is still not accepted: `lm_fallback=11` rather than
+0; `sc_built=447` rather than 469; `sc_dlit=204` rather than 214;
+`sc_made=163` rather than 21; `sc_worst=233` rather than 245.
+At 13 frames / 9 timed samples it reports **8.61702 FPS**, baseline
+**9.43334**. BENCH.BMP remains different, SHA1
+`fc890f87e7045ebbabd754e3dae030e591edc3a3`.
+Fresh screenshot `bench-native-033.png` was inspected. The fourteen-module
+build remains the last accepted benchmark. Next isolate the lightmap/cache
+build fallback using adjacent pass dumps; the LRU self-test is no longer
+the failing symptom.
+
+Actual allocation at original 241d, from
+`/tmp/qbopt-d-surf-native-selector-live/s103-lir-regalloc.txt`:
+
+```asm
+; faulty candidate               ; selector liveness fixed
+mov ax,[es:bx]                    mov es,[bp-0F4h]
+                                 mov ax,[es:bx]
+```
+
 The next adjacent-dump check identifies a separate lost dependency:
 forward replaces the selector load at 241a with the value from 23dc,
 correctly retaining that value in the far reference. Lowering discarded the
