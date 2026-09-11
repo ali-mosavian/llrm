@@ -4,9 +4,28 @@ New optimization passes are paused until the optimized renderer builds and
 runs correctly. Target: `qb-qrender/.claude/worktrees/qgl-poly-draw`, source
 commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
-## Fifteen native modules — D_SURF benchmark accepted
+## Sixteen native modules — R_BSP benchmark accepted
 
-### Next candidate: R_BSP fails visibility, not accepted
+After `f5c4186`, `/tmp/qbopt-qrender-native-rbsp-live.bETvby` links and
+returns to the DOS prompt (port 2221). **9.37895 FPS**, baseline **9.43334**;
+13 frames / 9 timed samples. Every non-timing/non-memory benchmark field
+matches; BENCH.BMP is byte-identical, SHA1
+`d6e4096b3610249ff4d53b6829f1ab18ec108c7a`. Fresh screenshot
+`bench-native-023.png` was inspected. R_BSP emits 22,021 bytes, versus
+23,280 original. This accepts module sixteen for this scene only.
+Five BASIC modules remain original: main, mod_tex, model, screen, pl_move.
+The separate baseline face-oracle failure remains unresolved.
+
+The missing byte read is restored at original 136d (emitted 159b):
+
+```asm
+; faulty candidate               ; fixed
+mov ax,[bp-68h]                  mov dl,[es:si]
+mov cx,ax                        and dx,0FFh
+and cx,0FFh
+```
+
+### R_BSP diagnosis history (rejected candidate)
 
 The adjacent r01-algebraic -> r01-dead dumps locate a dangling definition:
 PEEK's byte loads at 136d and 13d9 are deleted while the following AND 255
@@ -14,8 +33,8 @@ still reads their results. Liveness treated an explicit mask input as
 preservation-only because it also appeared in `merges`. It now follows
 the explicit read as well as any preserved upper portion. The focused
 regression fails first on the deleted load; all 11 dead-ownership and byte
-recognition tests pass (1.36 seconds). Native recheck pending, with dumps
-in `/tmp/qbopt-r-bsp-native-live-mask`. No runtime acceptance inferred.
+recognition tests pass (1.36 seconds). Native recheck above passes; full
+dumps are in `/tmp/qbopt-r-bsp-native-live-mask`.
 
 `/tmp/qbopt-qrender-native-rbsp.geOVi5` links and returns to the DOS
 prompt (port 2220), but its **13.39483 FPS is not a speedup**: polygons
