@@ -6,6 +6,29 @@ commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
 ## Sixteen native modules — R_BSP benchmark accepted
 
+PL_MOVE is the next candidate, not yet runtime-accepted. Its original 46,147-byte
+object is now a regression fixture. Native emission exposed three unknown runtime
+interfaces: RND0 at 154f, ATN4 at 18a7 and UBND at 28bc. Each focused test failed
+on that refusal before its input contract was added (`dde616a`, `5e7cba0`,
+`a941933`). All six GP inputs remain; cleanup, clobbers, memory and control
+effects remain conservative. Calls are not replaced:
+
+```asm
+; before                         ; after contract recognition
+call far B$RND0                  call far B$RND0
+call far B$ATN4                  call far B$ATN4
+call far B$UBND                  call far B$UBND
+```
+
+Raw VBDCL10E.LIB audit: RND0's straight-line helper sets arithmetic flags before
+ADC; ATN4 starts with SUB SP,0Ah at 0003; UBND executes OR DH,DH at 013b before
+its first branch. These establish incoming arithmetic-flag independence only,
+not purity or preservation. Library SHA256:
+`59ad49b055c4829528301e512abf9b8b0955181024c18282a49839e6c0680301`.
+The RND0/ATN4 refusal dumps are `/tmp/qbopt-pl-move-native-rnd0` and
+`/tmp/qbopt-pl-move-native-atn4`; both preserve the original object atomically.
+No new FPS or screenshot is claimed for these emission-only attempts.
+
 After `f5c4186`, `/tmp/qbopt-qrender-native-rbsp-live.bETvby` links and
 returns to the DOS prompt (port 2221). **9.37895 FPS**, baseline **9.43334**;
 13 frames / 9 timed samples. Every non-timing/non-memory benchmark field
