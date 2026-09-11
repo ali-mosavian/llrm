@@ -14,10 +14,34 @@ uv run python tools/stages.py /path/to/objects/main.obj --dump build/main-stages
   --contract-root /path/to/objects
 ```
 
-`qrender-main.json` records the 65 project-call interfaces audited for MAIN.
-It requires the pinned original objects listed in its artifact map, not their
-optimized replacements. It reproduces MAIN's accepted native emission; it
-does not yet replace the other modules' audit scripts.
+The qrender profiles retain the per-module interfaces from the native build
+audits in `docs/qrender-integration.md`. They require the pinned original
+objects in their artifact maps, not optimized replacements. The eight early
+modules share their original contract set; later modules keep separate sets
+so that stronger cleanup claims do not silently spread to other callers.
+
+Rebuild all 21 BASIC objects from the qbopt directory:
+
+```sh
+objects=/path/to/original/objects
+output=/path/to/native/objects
+mkdir -p "$output"
+for module in main common h_bench h_frame qglarr qglchk qgldiff qglface sys vid \
+              d_mdl d_surf d_turb mod_tex model r_bsp screen ent in_main pl_move view; do
+  case "$module" in
+    common|qglarr|qglchk|vid|d_turb|ent|in_main|view) profile=early-eight ;;
+    *) profile=$(printf '%s' "$module" | tr '_' '-') ;;
+  esac
+  uv run python -m qbopt.rewrite "$objects/$module.obj" -o "$output/$module.obj" \
+    --native-fpu --contracts "docs/contracts/qrender-$profile.json" \
+    --contract-root "$objects" || break
+done
+```
+
+Keep the original C/ASM objects for linking. A successful CLI exit alone is
+not acceptance: require each output's completion marker and inspect any
+refusal. The migration comparison and runtime evidence are recorded in the
+integration document; a profile does not broaden that runtime coverage.
 
 Version 1 has three top-level fields:
 

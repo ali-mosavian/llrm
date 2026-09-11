@@ -4,7 +4,63 @@ New optimization passes are paused until the optimized renderer builds and
 runs correctly. Target: `qb-qrender/.claude/worktrees/qgl-poly-draw`, source
 commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
-## Twenty-one native modules — MAIN benchmark accepted
+## Reproducible native CLI build
+
+All 21 BASIC modules now build through the ordinary CLI with checked-in
+profiles in `docs/contracts/`; no temporary monkeypatch scripts are needed.
+The recipe is in `docs/contracts/README.md`. It preserves the audited input
+bounds and per-caller cleanup facts, checks defining symbols and dependency
+hashes, and leaves unknown effects conservative.
+
+Fresh build `/tmp/qbopt-qrender-native-profiles.cyyLSk` (port 2228):
+**9.73036 FPS**, baseline **9.43334**, previous native build **9.47705**.
+One 13-frame scene, not a statistical speedup claim. BENCH.BMP remains
+byte-identical, SHA1 `d6e4096b3610249ff4d53b6829f1ab18ec108c7a`;
+`profiles-bench-016.png` was inspected and the run returned to DOS.
+The only additional log difference is `dt`: 0.1 -> 0.09917081 seconds.
+Pinned `h_bench.bas:225` prints `g.scr.frame_time`; `main.bas:1027` gets it
+from `sys_frame_time`, whose `sys.bas:440-459` timer delta is capped at 0.1.
+This is a timing field, not an independently changed physics answer. All
+other non-timing/non-memory fields match the baseline.
+
+Fresh surface, array and raster checks PASS with byte-identical baseline
+logs (79, 617 and 2,701 bytes). Screenshots are
+`qrender.exe-qgl{check,arr,diff}-*.png` in the fresh build; these off-screen
+checks return to DOS and report no FPS.
+The fresh face check still FAILs with a log byte-identical to the untouched
+baseline (1,263 bytes, centre-oracle XOR 84). Its screenshot is black during
+the intentional post-log timer hold. This failure remains open; it is not
+counted as a pass or as proof that all rendering is correct.
+
+Nine rebuilt objects match the previous accepted objects exactly except
+for the completion marker: MAIN, H_BENCH, H_FRAME, D_MDL, MOD_TEX, MODEL,
+R_BSP, SCREEN and PL_MOVE. The other twelve incorporate intervening backend
+fixes. All 21 have completion markers; an unchanged fallback was not counted.
+Profile validation: 14 focused tests passed. No compiler code changed here.
+
+COMMON's old/new dumps agree through coalescing; the first difference is
+`s103-lir-regalloc.txt`. Repeated CLI emission is byte-identical. At the
+original B$ERS1 site 0826, the existing ABI splitter now supplies both
+required input registers rather than assigning one shared value to both.
+Its two-byte spill also increases the frame adjustment. Actual emitted ASM:
+
+```asm
+; previous accepted              ; current CLI build
+0944 mov di,bx                   0944 mov di,si
+0946 mov bx,cx                   0946 mov [bp-0DCh],di
+0948 call far B$ERS1             094a mov di,bx
+094d add sp,64h                  094c mov bx,cx
+                                094e mov cx,si
+                                0950 mov si,[bp-0DCh]
+                                0954 call far B$ERS1
+                                0959 add sp,66h
+```
+
+Full dumps: `/tmp/qbopt-qrender-native-es-20260911/common-stages` before,
+`/tmp/qbopt-common-profile-native` after. This closes build reproducibility,
+not the broader correctness gate or the 1.5x optimization targets.
+
+## Previous twenty-one-module build — MAIN benchmark accepted
 
 `/tmp/qbopt-qrender-native-main.VVuBHt` links and returns to the DOS prompt
 (port 2226). **9.47705 FPS**, baseline **9.43334**; 13 frames. All
@@ -52,8 +108,7 @@ the accepted MAIN object exactly apart from the completion marker. Profile
 SHA-256: `4b4573460f973a4634d4756e85106158ba152608bc1005688b845f4abc95293f`.
 The same profile and native option work in `tools/stages.py`. No machine
 instructions changed, so no new FPS measurement is attributed to this step.
-The other modules' temporary audit scripts still need migration; this is
-not yet a fully reproducible 21-module production build.
+The later full-profile migration and fresh runtime evidence are above.
 
 MAIN initially crashed while reserving two spill bytes: it ends through
 HOST_SHUTDOWN, not a direct runtime exit. A machine-independent, fixed-point
