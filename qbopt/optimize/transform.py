@@ -1452,7 +1452,8 @@ def halves(body: MirBody) -> set:
                         # something reads that half of the result.
                         if (carried[one], HIGH) in out:
                             out.add((one, HIGH))
-                        continue
+                        if one not in read:
+                            continue
                     if not described or one not in read:
                         # Nothing written down says how much of it is read.
                         out.add((one, LOW))

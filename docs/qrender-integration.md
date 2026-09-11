@@ -8,6 +8,15 @@ commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
 ### Next candidate: R_BSP fails visibility, not accepted
 
+The adjacent r01-algebraic -> r01-dead dumps locate a dangling definition:
+PEEK's byte loads at 136d and 13d9 are deleted while the following AND 255
+still reads their results. Liveness treated an explicit mask input as
+preservation-only because it also appeared in `merges`. It now follows
+the explicit read as well as any preserved upper portion. The focused
+regression fails first on the deleted load; all 11 dead-ownership and byte
+recognition tests pass (1.36 seconds). Native recheck pending, with dumps
+in `/tmp/qbopt-r-bsp-native-live-mask`. No runtime acceptance inferred.
+
 `/tmp/qbopt-qrender-native-rbsp.geOVi5` links and returns to the DOS
 prompt (port 2220), but its **13.39483 FPS is not a speedup**: polygons
 266 -> 103, triangles 820 -> 323, PVS count 55 -> 167 and portal culls

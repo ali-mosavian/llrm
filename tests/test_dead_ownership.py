@@ -11,6 +11,25 @@ from qbopt.backend import select
 from qbopt.optimize import transform
 
 
+def test_explicit_mask_input_is_live_even_when_it_also_preserves_upper_bits():
+    """R_BSP drew 103/266 polygons: DCE deleted PEEK before its live AND 255."""
+    from qbopt.objectfile.module import Addr, Space
+    before = mir.Value(1, 0, variable=1, version=1)
+    after = mir.Value(2, 2, variable=1, version=2)
+    source = mir.MemRef(Addr(Space.SEGMENT, 0, 5), 1)
+    target = mir.MemRef(Addr(Space.SEGMENT, 2, 5), 2)
+    load = mir.Op(0, ir.Operation.MOVE, "mov", (before,), (), kind=mir.Kind.LOAD,
+                  args=(mir.Cell(source),), results=(mir.Held(before, 1),), loads=(source,))
+    mask = mir.Op(2, ir.Operation.BINARY, "and", (after,), (before,), kind=mir.Kind.AND,
+                  args=(mir.Held(before, 2), mir.Const(255, 2)), results=(mir.Held(after, 2),),
+                  merges={before: after})
+    store = mir.Op(4, ir.Operation.MOVE, "mov", (), (after,), kind=mir.Kind.STORE,
+                   args=(mir.Held(after, 2),), results=(mir.Cell(target),), stores=(target,))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (load, mask, store), ()),))
+    changed = transform.dead(body)
+    assert changed.blocks[0].ops[0].kind is mir.Kind.LOAD
+
+
 def test_dead_store_alone_in_a_block_keeps_only_byte_ownership():
     """BOOLS retained t=0 before t=2 because its block had no surviving neighbor."""
     from qbopt.objectfile.module import Addr, Space
