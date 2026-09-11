@@ -9,6 +9,62 @@ from qbopt.model import ir, lir
 from qbopt.backend import peephole
 
 
+@pytest.mark.parametrize("width,register,value", [(2, Register.AX, 1), (4, Register.ECX, 0x12345678)])
+def test_screen_argument_reuses_its_required_register_constant(width, register, value):
+    """SCREEN's duplicate PUSH 1/MOV AX,1 contributed to E1M1 exhausting its far heap."""
+    from qbopt.backend import select
+    operand = ir.Imm(value, width)
+    dest = ir.Reg(register, width)
+    push = lir.Insn(0, (0, 1), ir.Semantics(ir.Operation.PUSH, "push", (), (operand,)), (), ())
+    move = lir.Insn(1, (1, 1), ir.Semantics(ir.Operation.MOVE, "mov", (dest,), (operand,)), (7,), ())
+    body = lir.LirBody("screen", 0, (lir.LirBlock(0, (push, move)),), {}, {})
+    result = peephole.Peephole().transform(body)
+    expected = (move.what, replace(push.what, sources=(dest,)))
+    assert b"".join(select.emit(one.what).code for one in result.insns) == b"".join(
+        select.emit(what).code for what in expected)
+    assert result.insns[0].defines == (7,)
+    assert result.insns[1].uses == (7,)
+
+
+@pytest.mark.parametrize("barrier", ["different", "width", "stack", "frame", "relocation",
+                                     "covered", "gap", "group", "symbol", "clobber", "requires", "block"])
+def test_argument_materialization_does_not_cross_observable_boundaries(barrier):
+    """SCREEN's stack argument must not change when its register setup cannot move before it."""
+    from qbopt.objectfile.module import Addr, Space
+    literal = ir.Imm(1, 2)
+    push = lir.Insn(0, (0, 1), ir.Semantics(ir.Operation.PUSH, "push", (), (literal,)), (), ())
+    move = lir.Insn(1, (1, 1), ir.Semantics(ir.Operation.MOVE, "mov",
+                    (ir.Reg(Register.AX, 2),), (literal,)), (7,), ())
+    match barrier:
+        case "different":
+            move = replace(move, what=replace(move.what, sources=(ir.Imm(2, 2),)))
+        case "width":
+            move = replace(move, what=replace(move.what, dests=(ir.Reg(Register.EAX, 4),)))
+        case "stack" | "frame":
+            move = replace(move, what=replace(move.what, dests=(ir.Reg(
+                Register.SP if barrier == "stack" else Register.BP, 2),)))
+        case "relocation":
+            symbol = replace(literal, address=Addr(Space.SEGMENT, 0, 1))
+            push = replace(push, what=replace(push.what, sources=(symbol,)))
+            move = replace(move, what=replace(move.what, sources=(symbol,)))
+        case "covered":
+            move = replace(move, covers=(1, 4))
+        case "gap":
+            move = replace(move, at=2, covers=(2, 2))
+        case "group":
+            move = replace(move, group=1)
+        case "symbol":
+            move = replace(move, symbol=True)
+        case "clobber":
+            push = replace(push, clobbers=frozenset({Register.AX}))
+        case "requires":
+            push = replace(push, requires=((ir.Held(5, 2), Register.AX),))
+    blocks = ((lir.LirBlock(0, (push,), (1,)), lir.LirBlock(1, (move,)))
+              if barrier == "block" else (lir.LirBlock(0, (push, move)),))
+    body = lir.LirBody("screen", 0, blocks, {}, {})
+    assert peephole.pushed_constants(body) == body
+
+
 def test_nbody_does_not_reload_unchanged_array_index():
     """NBODY reloaded SI from its index spill at 0x23a after already loading it at 0x22a."""
     from qbopt import wholeseg

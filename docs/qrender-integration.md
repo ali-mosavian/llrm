@@ -72,6 +72,31 @@ block by block. This breakpoint run is diagnostic, not an FPS measurement.
 Reduce backend code growth without weakening call contracts or changing the
 renderer to reserve less memory; rerun E1M1 after the first measured reduction.
 
+### First backend reduction: share literal argument materialization
+
+SCREEN's native emission now saves **22 code bytes** (19,124 -> 19,102).
+The same constant was materialized for the stack and again for a required
+call register. The post-allocation peephole now emits:
+
+```asm
+; before, 45ba                  ; after, 45a6
+push 1                         mov ax,1
+mov ax,1                       push ax
+mov dx,bx                      mov dx,bx
+mov bx,di                      mov bx,di
+mov di,[bp-4Ch]                 mov di,[bp-4Ch]
+call far B$LDFS                 call far B$LDFS
+```
+
+Register contents, pushed bytes and flags agree. Only adjacent synthetic
+materializations qualify; stack/frame registers, relocations, constrained
+operations and block boundaries are excluded. ABI contracts are unchanged.
+All dumps through `s89-lir-prologue.txt` are unchanged; the first difference
+is the peephole in `/tmp/qbopt-screen-push-constants`. Fourteen focused
+checks pass; disabling the transform makes both emitted-code regressions
+fail again. No new runtime/FPS acceptance yet, and 22 bytes does not close
+the memory deficit. The larger allocation/copy overhead remains the priority.
+
 ## Reproducible native CLI build
 
 All 21 BASIC modules now build through the ordinary CLI with checked-in

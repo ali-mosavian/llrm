@@ -21,6 +21,7 @@ class Peephole(LIRTransform):
         body = spillforward.forwarded(body)
         body = reloads(body)
         body = storecombine.combined(body)
+        body = pushed_constants(body)
         return self._frame(waits(zeroes(addresses(overwritten(commuted(constants(pushes(body))))))))
 
     def _frame(self, body):
@@ -45,6 +46,36 @@ class Peephole(LIRTransform):
                         return body
         return replace(body, blocks=tuple(replace(block, insns=tuple(
             lir.without(block.insns, lambda one: one.frame_adjust))) for block in body.blocks))
+
+
+def pushed_constants(body: lir.LirBody) -> lir.LirBody:
+    """Materialize a call's literal once when both stack and register need it."""
+    blocks = []
+    for block in body.blocks:
+        out = []
+        for one in block.insns:
+            if out:
+                push = out[-1]
+                match push.what, one.what:
+                    case (ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Imm() as literal,)),
+                          ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg() as dest,), (source,))):
+                        if (literal == source and literal.address is None
+                            and dest.width == literal.width in (2, 4)
+                            and target.WIDTHS.get(dest.register) == dest.width
+                            and RegisterExt.full_register32(dest.register) not in (Register.ESP, Register.EBP)
+                            and one.covers == (one.at, one.at)
+                            and push.covers is not None and push.covers[1] == one.at
+                            and not push.defines and not push.uses and not one.uses
+                            and all(not (item.clobbers or item.requires or item.delivers
+                                         or item.spread or item.group is not None or item.symbol is True
+                                         or item.frame_adjust or item.spill_reload)
+                                    for item in (push, one))):
+                            out[-1] = replace(one, at=push.at, covers=(push.at, push.at), symbol=False)
+                            out.append(replace(push, what=replace(push.what, sources=(dest,)), uses=one.defines))
+                            continue
+            out.append(one)
+        blocks.append(replace(block, insns=tuple(out)))
+    return replace(body, blocks=tuple(blocks))
 
 
 def pushes(body: lir.LirBody) -> lir.LirBody:
