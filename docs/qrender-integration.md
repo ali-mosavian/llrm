@@ -6,6 +6,40 @@ commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
 ## Fifteen native modules — D_SURF benchmark accepted
 
+### Next candidate: R_BSP fails visibility, not accepted
+
+`/tmp/qbopt-qrender-native-rbsp.geOVi5` links and returns to the DOS
+prompt (port 2220), but its **13.39483 FPS is not a speedup**: polygons
+266 -> 103, triangles 820 -> 323, PVS count 55 -> 167 and portal culls
+11 -> 147. It runs 15 frames / 11 timed samples instead of 13 / 9.
+BENCH.BMP differs (SHA1 `f9b26ea9f9636b4e18acffcccc893228f2d1248d`);
+fresh screenshot `bench-native-019.png` was inspected. Keep the fifteen
+module build below. Next isolate visibility/culling in adjacent MIR dumps
+`/tmp/qbopt-r-bsp-native` (s00..s91). R_BSP is 23,280 -> 22,042 bytes.
+
+Input-only project bounds are in `/tmp/qbopt-r-bsp-audit-20260911.py`,
+hash-checked against the original objects. R_RECURSIVE_WORLD_NODE begins
+with SUB SP,48h at 0607; R_PORTAL_MARK with SUB SP,62h at 0348;
+R_PORTAL_DRAW with SUB SP,84h at 0926. QGLARMAP and QGLARLOADBAS
+begin with ADD SP at 010f and 03ea. These kill incoming arithmetic flags.
+MOD_LOAD_FLAT, MOD_PVS_PAGE, SYS_NOW and SYS_ERROR enter the previously
+audited B$ENRA. All six GP inputs remain, with unknown cleanup, memory,
+clobbers and control effects. No compiler source fix or new preservation
+claim was made for this candidate.
+
+Plane-distance address computation, decoded source versus native output
+(source emulator instructions displayed as their x87 equivalents):
+
+```asm
+; before                         ; candidate, not accepted
+mov ax,[bp+8]                    mov di,si ; retained plane pointer
+add ax,8                         add di,8
+mov si,ax
+fmul dword [si]                  fmul dword [di]
+```
+
+### Accepted fifteen-module evidence
+
 After `d546d5f`, `/tmp/qbopt-qrender-native-dsurf-extract.JlcBA1`
 links and returns to the DOS prompt (port 2219). **9.49704 FPS** versus
 baseline **9.43334**, over 13 frames / 9 timed samples; no speedup claim.
