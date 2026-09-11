@@ -4,9 +4,26 @@ New optimization passes are paused until the optimized renderer builds and
 runs correctly. Target: `qb-qrender/.claude/worktrees/qgl-poly-draw`, source
 commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
-## Sixteen native modules — R_BSP benchmark accepted
+## Seventeen native modules — PL_MOVE benchmark accepted
 
-PL_MOVE is the next candidate, not yet runtime-accepted. Its original 46,147-byte
+`/tmp/qbopt-qrender-native-plmove.T2KVRG` links and returns to the DOS prompt
+(port 2222). **9.38883 FPS**, baseline **9.43334**; 13 frames. Every
+non-timing/non-memory benchmark field matches. BENCH.BMP is byte-identical,
+SHA1 `d6e4096b3610249ff4d53b6829f1ab18ec108c7a`; fresh screenshot
+`bench-native-011.png` was inspected. PL_MOVE is 46,147 -> 41,444 bytes,
+native x87 enabled. This accepts module seventeen for this scene only,
+not a demonstrated speedup or complete renderer coverage.
+Four BASIC modules remain original: main, mod_tex, model and screen.
+The separate baseline face-oracle failure remains unresolved.
+
+```asm
+; original 2f4b                 ; emitted 2e69
+xchg ax,[bp-1Ch]                xchg ax,[bp-1Ch]
+```
+
+### PL_MOVE diagnosis history
+
+PL_MOVE initially refused emission. Its original 46,147-byte
 object is now a regression fixture. Native emission exposed three unknown runtime
 interfaces: RND0 at 154f, ATN4 at 18a7 and UBND at 28bc. Each focused test failed
 on that refusal before its input contract was added (`dde616a`, `5e7cba0`,
@@ -41,8 +58,8 @@ related frame checks (3 tests). In assembly terms:
 push dword [sp-8]                push dword [bx]
 ```
 
-Native re-emission dumps are `/tmp/qbopt-pl-move-native-push-source`; runtime
-acceptance is still pending. The refused dumps remain in
+The refused re-emission dumps are `/tmp/qbopt-pl-move-native-push-source`.
+The preceding refused dumps remain in
 `/tmp/qbopt-pl-move-native-ubnd`.
 
 The next refusal, XCHG AX,[BP-1Ch] at 2f4b, retained the correct operands
@@ -52,6 +69,8 @@ at byte, word and dword widths (0.38 seconds). The emitted word form is
 `87 46 e4`: `xchg ax,[bp-1Ch]`, unchanged from the original operation; no
 load/store expansion weakens its exchange semantics. Fresh native dumps:
 `/tmp/qbopt-pl-move-native-xchg`.
+
+### Previous accepted build — sixteen modules
 
 After `f5c4186`, `/tmp/qbopt-qrender-native-rbsp-live.bETvby` links and
 returns to the DOS prompt (port 2221). **9.37895 FPS**, baseline **9.43334**;
