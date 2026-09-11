@@ -574,9 +574,8 @@ def applied(body: lir.LirBody, got: Assignment) -> lir.LirBody:
     # becomes when both halves land in the same register, and select emits
     # nothing for it -- an instruction of zero length, which the length
     # accounting then disagrees with itself about.
-    return lir.LirBody(
-        name=body.name,
-        entry=body.entry,
+    return replace(
+        body,
         blocks=tuple(
             lir.LirBlock(
                 at=block.at,

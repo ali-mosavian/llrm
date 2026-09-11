@@ -351,7 +351,7 @@ def lowered(
     contracts: "dict[int, object]",
     coverage: "dict[int, tuple] | None" = None,
     cpu: str = "386",
-    *, pointer_model=None,
+    *, pointer_model=None, noreturn: bool = False,
 ) -> "lir.LirBody":
     """One MIR body as machine instructions, and nothing else.
 
@@ -420,6 +420,7 @@ def lowered(
     return lir.LirBody(
         name=name,
         entry=body.entry,
+        noreturn=noreturn,
         blocks=tuple(
             lir.LirBlock(
                 at=block.at,

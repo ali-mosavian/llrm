@@ -4,7 +4,42 @@ New optimization passes are paused until the optimized renderer builds and
 runs correctly. Target: `qb-qrender/.claude/worktrees/qgl-poly-draw`, source
 commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
-## Twenty native modules — SCREEN benchmark accepted
+## Twenty-one native modules — MAIN benchmark accepted
+
+`/tmp/qbopt-qrender-native-main.VVuBHt` links and returns to the DOS prompt
+(port 2226). **9.47705 FPS**, baseline **9.43334**; 13 frames. All
+non-timing/non-memory benchmark fields match; BENCH.BMP is byte-identical,
+SHA1 `d6e4096b3610249ff4d53b6829f1ab18ec108c7a`. Fresh screenshot
+`bench-native-023.png` was inspected. MAIN is 31,138 -> 29,694 bytes.
+All 21 BASIC modules are now optimized with native x87 enabled; C/ASM
+objects remain original. Accepted for this scene only, without a speedup
+claim. Broader renderer coverage and the baseline face-oracle failure remain open.
+
+MAIN initially crashed while reserving two spill bytes: it ends through
+HOST_SHUTDOWN, not a direct runtime exit. A machine-independent, fixed-point
+call-graph analysis now proves that HOST_SHUTDOWN reaches B$CEND and cannot
+return; lowering carries that fact to frame insertion. Any returning or
+unexplained exit blocks the proof. This follows LLVM FunctionAttrs' no-return
+inference; it does not infer purity or preservation. Unsupported frame
+layouts now return the original object and reason instead of throwing.
+
+The real MAIN regression fails with the frame fix removed; its negative
+case removes the terminal-call proof and still refuses. Ten focused tests
+pass. Dumps: `/tmp/qbopt-main-native`, especially `s104-lir-parcopy.txt`,
+`s105-lir-prologue.txt`, and `s107-asm-emitted.txt`.
+
+```asm
+; original MAIN                 ; emitted MAIN
+push cs                         sub sp,2       ; reserve the spill slot
+push errorHandler               push cs
+call far B$OEGA                 push errorHandler
+                                call far B$OEGA
+; ...                           ; ... [bp-2] spill/reloads ...
+call far HOST_SHUTDOWN          call far HOST_SHUTDOWN
+; no normal return              ; no normal return: no epilogue needed
+```
+
+### MAIN input audit
 
 MAIN's input-only project audit is `/tmp/qbopt-main-audit-20260911.py`;
 its sorted object-name/SHA256 manifest hashes to
@@ -15,7 +50,9 @@ test their state before branching. VGASCREEN calls local 0023 then SFINIT,
 which XORs SI before dispatch. ZSCALE and TMRTICKS read no arithmetic flags.
 Only incoming arithmetic flags are excluded; GP inputs and unknown side
 effects remain. Calls are retained, e.g. `call far QGLVGASCREEN` before/after.
-Native emission dumps: `/tmp/qbopt-main-native`. MAIN is not runtime-accepted yet.
+Native emission dumps: `/tmp/qbopt-main-native`.
+
+### Previous accepted build — twenty modules
 
 `/tmp/qbopt-qrender-native-screen.cMXOfq` links and returns to the DOS prompt
 (port 2225). **9.46025 FPS**, baseline **9.43334**; 13 frames. All

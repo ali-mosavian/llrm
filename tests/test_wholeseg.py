@@ -402,6 +402,22 @@ def test_a_tangled_copy_refuses_without_trying_another_emitter() -> None:
     assert "Tangled" in got.reason
 
 
+def test_a_frame_refusal_preserves_the_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Qrender MAIN crashed when its spill frame had no recognized return.
+    from qbopt.backend import prologue
+    from qbopt.model import lir
+
+    def refuses(self: prologue.Prologue, body: lir.LirBody) -> lir.LirBody:
+        raise prologue.Refused("2 bytes of frame have no recognized exit")
+
+    monkeypatch.setattr(prologue.Prologue, "transform", refuses)
+    data = Path("fixtures/omf/hotlop-p-g2.obj").read_bytes()
+    result = wholeseg.emitted(data)
+    assert result.outcome is wholeseg.Emission.REFUSED
+    assert result.data == data
+    assert "2 bytes of frame have no recognized exit" in result.reason
+
+
 def test_a_malformed_copy_group_is_a_bug_and_escapes() -> None:
     """Something that is not a move in a copy group is this pass being
     wrong about its own data, not a body it cannot place."""

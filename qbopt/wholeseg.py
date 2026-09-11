@@ -218,6 +218,8 @@ def _through_lir(
     from qbopt.objectfile import objwrite
     from qbopt.backend import frame as frames
     from qbopt.backend import pointers
+    from qbopt.backend import prologue
+    from qbopt.analysis import noreturn
     from qbopt.model import ir
     from qbopt.objectfile.module import Addr, Space
 
@@ -227,6 +229,14 @@ def _through_lir(
         records, index = omf.with_external(records, "b$HugeShift")
         pointer_model = pointers.Model(ir.Mem(Addr(Space.EXTERNAL, 0, index), 1, disp_width=2))
 
+    symbols = {name: at for at, name in omf.pubdef_names(records, found.seg).items()}
+    terminal_calls = frozenset(at for at, contract in contracts.items()
+                               if contract.established and contract.control is runtime.Control.NEVER)
+    no_return = noreturn.inferred(
+        {body.entry: body for _, body in bodies},
+        {at: symbols[name] for at, name in found.calls.items() if name in symbols},
+        terminal_calls,
+    )
     done = []
     for name, body in bodies:
         try:
@@ -239,6 +249,7 @@ def _through_lir(
                 found.coverage,
                 cpu,
                 pointer_model=pointer_model,
+                noreturn=body.entry in no_return,
             )
             if watch is not None:
                 watch("lowered", name, low)
@@ -247,7 +258,7 @@ def _through_lir(
                 low = phase.transform(low)
                 if watch is not None:
                     watch(phase.name, name, low)
-        except (lower.Unlowered, mir.Unraisable, frames.Refused) as short:
+        except (lower.Unlowered, mir.Unraisable, frames.Refused, prologue.Refused) as short:
             # A contract this cannot honour, or an operand no encoding
             # covers. Named here for the same reason as the four below:
             # this body falls back to BC's own layout instead of taking

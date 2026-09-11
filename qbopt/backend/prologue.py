@@ -62,7 +62,7 @@ def reserved(body: lir.LirBody, frame: frames.Frame, calls: dict | None = None) 
         if (calls.get(one.at, "").upper() == frames.LEAVE and (one.what is None or one.what.op is ir.Operation.CALL))
         or (runtime_entry is None and one.what is not None and one.what.op is ir.Operation.RETURN)
     ]
-    if not leaves and not _ends_the_program(body, calls or {}):
+    if not leaves and not body.noreturn and not _ends_the_program(body, calls or {}):
         raise Refused(f"{frame.size} bytes of frame are wanted and this body has no return to give them back at")
 
     take = _adjust(entry.insns[0], -frame.size)

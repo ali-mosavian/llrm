@@ -164,6 +164,7 @@ class LirBody:
     origin: dict
     pins: dict
     ordered: bool = False
+    noreturn: bool = False
 
     @property
     def insns(self) -> "tuple[Insn, ...]":
