@@ -6,6 +6,17 @@ commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
 ## Twenty native modules — SCREEN benchmark accepted
 
+MAIN's input-only project audit is `/tmp/qbopt-main-audit-20260911.py`;
+its sorted object-name/SHA256 manifest hashes to
+`e25c794952bd94f09693ab058aad41f945f7c15a7464f8c4df03a34db12990a1`.
+All project calls resolve. BASIC entries enter B$ENRA; C layout checks start
+with CMP; assembly drawing/matrix routines start with ADD SP; shutdown helpers
+test their state before branching. VGASCREEN calls local 0023 then SFINIT,
+which XORs SI before dispatch. ZSCALE and TMRTICKS read no arithmetic flags.
+Only incoming arithmetic flags are excluded; GP inputs and unknown side
+effects remain. Calls are retained, e.g. `call far QGLVGASCREEN` before/after.
+Native emission dumps: `/tmp/qbopt-main-native`. MAIN is not runtime-accepted yet.
+
 `/tmp/qbopt-qrender-native-screen.cMXOfq` links and returns to the DOS prompt
 (port 2225). **9.46025 FPS**, baseline **9.43334**; 13 frames. All
 non-timing/non-memory benchmark fields match. BENCH.BMP is byte-identical,
