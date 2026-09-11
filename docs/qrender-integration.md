@@ -4,7 +4,32 @@ New optimization passes are paused until the optimized renderer builds and
 runs correctly. Target: `qb-qrender/.claude/worktrees/qgl-poly-draw`, source
 commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
-## D_SURF interface audit — integration pending
+## D_SURF candidate — runtime regression, not accepted
+
+`/tmp/qbopt-qrender-native-dsurf.vw3Xem` links without errors and exits to
+the DOS prompt, but the fifteen-module native-x87 candidate is **incorrect**.
+FPS is **8.61702** versus baseline **9.43334**; `sc_test=-4000` versus `1`,
+`lm_fallback=11` versus `0`, and cache counters differ. BENCH.BMP differs
+(SHA1 `fc890f87e7045ebbabd754e3dae030e591edc3a3`). Fresh
+`bench-native-022.png` captures the rendered scene. The fourteen-module build
+below remains the last accepted benchmark.
+
+The pinned source decodes -4000 precisely: after allocating three cache
+blocks and touching face 0, SC_SELFTEST expects face 1 at the LRU head but
+observes face 0. Next isolate SC_FIND's list update versus the caller's
+nested-array read, using `/tmp/qbopt-d-surf-native-shifts` (s00..s107).
+Do not explain this away as timing variation or accept the fallback.
+
+The candidate shrinks D_SURF from 39,734 to 36,045 bytes. At original 183a,
+the formerly unencodable hoisted shift now emits at 1d5c..1d5f:
+
+```asm
+; before: whole-object refusal   ; candidate (not correctness-approved)
+; cidx << 2 had no mnemonic      mov ax,[bp-1Ah]
+                                shl ax,2
+```
+
+### Interface and lowering fixes
 
 Four real D_SURF calls failed lowering before their VBDOS input contracts
 were established: DSG0 at 211c, PUT3 at 2ceb, SMID at 2d5d and SPAC at 2d11.
@@ -22,8 +47,9 @@ pinpoint the next defect: a hoisted `cidx << 2` at 183a is valid MIR but
 lowering gives it an empty mnemonic. The adjacent lowered view shows the
 valid increment at the same address, followed by this unnamed shift.
 Lowering now maps SHL/SHR/SAR explicitly; six fail-first regressions decode
-the emitted 16/32-bit instructions and check their operands. Project bindings
-remain hash-scoped. This is **not yet an accepted fifteenth module**; the latest
+the emitted 16/32-bit instructions and check their operands. All 27 focused
+lowering checks pass in 0.38 seconds. Project bindings remain hash-scoped.
+This is **not yet an accepted fifteenth module**; the latest
 verified FPS and screenshot remain the fourteen-module evidence below.
 
 Before/after this interface-only change (call instruction retained; final
