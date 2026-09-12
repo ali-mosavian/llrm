@@ -40,7 +40,7 @@ class Space(StrEnum):
     # Kept distinct rather than folded into SEGMENT so nothing ever compares
     # a group index against a segment index by accident -- resolving which
     # segments a group covers is out of scope, so an address in this space
-    # is refused everywhere it matters: may_alias() answers True (never
+    # is refused everywhere it matters: regions answers True (never
     # provably disjoint), lift.operand() refuses to resolve one at all, and
     # lift.memory() raises if one ever reaches it regardless.
     GROUP = "grp"
@@ -100,6 +100,23 @@ class Addr:
         where = f"{self.space}:{self.index}" if self.space in (Space.SEGMENT, Space.EXTERNAL) else self.space
         indexed = f"+{INDEX_NAMES.get(self.base, f'r{self.base}')}" if self.base != Register.NONE else ""
         return f"[{where}{indexed}{self.disp:+#x}]"
+
+
+class Group(frozenset):
+    """DGROUP's segment indexes, and which of them the link overlays.
+
+    A frozenset, so every `index in dgroup` means what it did. `shared` is
+    the COMMON-combined ones: the link lays every object's copy over the
+    same bytes, so a name another object defines can be in one. The rest
+    of this object's segment bytes are its alone.
+    """
+
+    shared: frozenset[int]
+
+    def __new__(cls, members=(), shared=frozenset()):
+        self = super().__new__(cls, members)
+        self.shared = frozenset(shared)
+        return self
 
 
 class Family(StrEnum):
@@ -169,7 +186,7 @@ class Module:
     fixup_at: dict[int, omf.Fixup] = field(default_factory=dict)
     # segment indices DGROUP's own GRPDEF names -- a stack slot (Space.FRAME)
     # can never be the same byte as a segment outside this set, which is what
-    # may_alias() rests on.
+    # regions rests on.
     dgroup: frozenset[int] = frozenset()
     # The segment BC put this program's own variables in -- the one whose
     # SEGDEF class is BC_DATA. DGROUP holds it beside the runtime's own
@@ -276,6 +293,7 @@ def escaped(found: "Module") -> frozenset[tuple[int, int]]:
 def _numeric_arguments(found: "Module") -> frozenset[int]:
     """Numeric argument pushes, including nested long-arithmetic call frames."""
     from iced_x86 import Mnemonic
+
     from qbopt.abi import runtime
     from qbopt.frontend import declen
 
@@ -304,7 +322,8 @@ def _numeric_arguments(found: "Module") -> frozenset[int]:
                         break
             pending = []
         at = insn.end
-    from qbopt.frontend import blocks, stack
+    from qbopt.frontend import stack
+    from qbopt.frontend import blocks
 
     def long_arity(name):
         return 2 if runtime.numeric_stack_arguments(name) == 8 else None
@@ -318,7 +337,9 @@ def _numeric_arguments(found: "Module") -> frozenset[int]:
 
 def _pushes(found: "Module"):
     """Address-bearing spans and the push consuming a materialized address."""
-    from iced_x86 import Mnemonic, OpKind
+    from iced_x86 import OpKind
+    from iced_x86 import Mnemonic
+
     from qbopt.frontend import declen
 
     at = found.start
@@ -333,9 +354,11 @@ def _pushes(found: "Module"):
         # the cell being written, not an address being handed to anybody.
         # Including it marked every written cell as escaped, which is every
         # cell, and the guarantee came to nothing.
-        materialized = (insn.insn.mnemonic == Mnemonic.MOV
-                        and insn.insn.op0_kind == OpKind.REGISTER
-                        and insn.insn.op1_kind in (OpKind.IMMEDIATE16, OpKind.IMMEDIATE32))
+        materialized = (
+            insn.insn.mnemonic == Mnemonic.MOV
+            and insn.insn.op0_kind == OpKind.REGISTER
+            and insn.insn.op1_kind in (OpKind.IMMEDIATE16, OpKind.IMMEDIATE32)
+        )
         pushed = _pushed_before_write(found, insn.end, insn.insn.op0_register) if materialized else None
         materialized = pushed is not None
         if text.startswith(("push", "lea")) or materialized:
@@ -344,7 +367,11 @@ def _pushes(found: "Module"):
 
 
 def _pushed_before_write(found: "Module", at: int, register: Register_) -> int | None:
-    from iced_x86 import FlowControl, Mnemonic, OpKind, RegisterExt
+    from iced_x86 import OpKind
+    from iced_x86 import Mnemonic
+    from iced_x86 import FlowControl
+    from iced_x86 import RegisterExt
+
     from qbopt.frontend import declen
 
     root = RegisterExt.full_register32(register)
@@ -352,11 +379,16 @@ def _pushed_before_write(found: "Module", at: int, register: Register_) -> int |
         one = declen.decode(found.code, at)
         if one is None or one.insn.flow_control != FlowControl.NEXT:
             return None
-        if (one.insn.mnemonic == Mnemonic.PUSH and one.insn.op0_kind == OpKind.REGISTER
-            and RegisterExt.full_register32(one.insn.op0_register) == root):
+        if (
+            one.insn.mnemonic == Mnemonic.PUSH
+            and one.insn.op0_kind == OpKind.REGISTER
+            and RegisterExt.full_register32(one.insn.op0_register) == root
+        ):
             return at
-        if any(access.access in declen.WRITES and RegisterExt.full_register32(access.register) == root
-               for access in declen.INFO.info(one.insn).used_registers()):
+        if any(
+            access.access in declen.WRITES and RegisterExt.full_register32(access.register) == root
+            for access in declen.INFO.info(one.insn).used_registers()
+        ):
             return None
         at = one.end
     return None
@@ -366,7 +398,7 @@ def landmarks(found: "Module") -> dict[tuple[Space, int], tuple[int, ...]]:
     """Every displacement in each segment that some operand names exactly.
 
     An indexed operand reads or writes its whole segment as far as
-    may_alias is concerned, and that is what stops LICM dead on any loop
+    regions is concerned, and that is what stops LICM dead on any loop
     that writes an array -- matrix's inner loop has nothing invariant in it
     because `m(r * w + c)` is taken to reach `w`, `r` and `c`.
 
@@ -397,102 +429,6 @@ def reach(addr: Addr, width: int, bounds: dict[tuple[Space, int], tuple[int, ...
         return None
     after = [one for one in known if one > addr.disp]
     return (addr.disp, after[0]) if after else None
-
-
-def may_alias(
-    a: Addr | None,
-    b: Addr | None,
-    dgroup: frozenset[int],
-    a_width: int = WIDEST,
-    b_width: int = WIDEST,
-    bounds: dict[tuple[Space, int], tuple[int, ...]] | None = None,
-) -> bool:
-    """Whether two addresses could name the same byte, conservatively.
-
-    False only where it is provable from the object alone, which -- measured
-    across the corpus -- is most of the time: 94% of explicit memory
-    references resolve through a fixup to an exact (segment, displacement),
-    so disjointness between two of them is arithmetic on the displacements
-    and needs no assumption whatsoever. The cases, in the order they are
-    decided:
-
-    An indexed address is never provably disjoint from anything. `[si+arr]`
-    with si unbounded can reach any byte of its segment, and bounding it
-    needs array extents the object does not carry -- so an indexed operand
-    reads or writes its whole segment as far as this is concerned. That is
-    76 instructions corpus-wide, which is what makes refusing them cheap.
-    A Space.FAR address is exactly this argument one register up: it always
-    carries a base (bx, measured), so it falls into the same catch-all --
-    unbounded here because *two* registers would have to still hold what
-    they held, es as well as bx, and nothing at this layer can see either.
-    That also makes two Space.FAR addresses through different segment
-    registers, or a Space.FAR address against anything else, alias: neither
-    comparison ever reaches the space-specific cases below, which is the
-    point -- proving them disjoint needs the same-segment, same-base
-    arithmetic memory.py's aliases() does, sound only under the same
-    obligation as the SI/DI case above (every tracked cell whose bx or es an
-    instruction writes is dropped first).
-
-    Two bare displacements are disjoint when their own ranges do not meet.
-    Within one object a SEGDEF index names one segment, and two distinct
-    SEGDEFs are two distinct segments, so a differing index is disjoint
-    outright; a matching one is the range test. Same for two frame slots,
-    where the ranges are bp-relative -- sound only while bp is invariant
-    across the region asking, which is the caller's own obligation to check
-    (nothing here can see whether something wrote bp), the way registers.py
-    already checks a single register's own liveness.
-
-    A frame or stack slot is never the same byte as an addressed variable.
-    SS==DS in this model and the stack lives in DGROUP, so the two *could*
-    coincide and the object cannot prove they do not -- SS itself does not
-    exist until the runtime sets it up. What rules it out is that the stack
-    is the last thing in DGROUP and grows down, so it reaches a named
-    variable only by overflowing into it, which is a program that has
-    already lost. Every optimising compiler assumes locals and globals are
-    disjoint on the same argument.
-
-    Refusing to assume it costs the whole of loop-invariant code motion in
-    any loop that pushes an argument: one `push` makes every named load in
-    the loop alias something, so nothing is invariant. lngmix is two long
-    divides over an operand that never changes and it could not move either.
-
-    A stack slot against a frame slot is a different question and stays
-    conservative -- both are in the same region and their displacements are
-    against different registers.
-
-    This is the one rule here that rests on anything beyond arithmetic, and
-    it is centralised rather than re-derived at each call site.
-
-    None stands for "address not known" -- an unresolved operand, or a
-    Space.GROUP address (see Space.GROUP's own comment) -- and is never
-    provably disjoint from anything.
-    """
-    if a is None or b is None:
-        return True
-    if a.base != Register.NONE or b.base != Register.NONE:
-        # An indexed operand reaches its whole segment unless a caller has
-        # handed over the layout to bound it with. See landmarks().
-        if bounds is None or a.space is not b.space or a.index != b.index:
-            return True
-        here, there = reach(a, a_width, bounds), reach(b, b_width, bounds)
-        if here is None or there is None:
-            return True
-        return here[0] < there[1] and there[0] < here[1]
-    match (a.space, b.space):
-        case (Space.STACK, Space.STACK):
-            return _overlaps(a, a_width, b, b_width)
-        case (Space.STACK, Space.FRAME) | (Space.FRAME, Space.STACK):
-            return True
-        case (Space.STACK, _) | (_, Space.STACK):
-            return False
-        case (Space.FRAME, Space.FRAME):
-            return _overlaps(a, a_width, b, b_width)
-        case (Space.SEGMENT, Space.SEGMENT):
-            return a.index == b.index and _overlaps(a, a_width, b, b_width)
-        case (Space.FRAME, Space.SEGMENT) | (Space.SEGMENT, Space.FRAME):
-            return False
-        case _:
-            return True
 
 
 # The SEGDEF name BC gives the segment holding a program's own variables.
@@ -546,7 +482,8 @@ def of(records: list[omf.Record]) -> Module | None:
     )
     sites = frozenset(fixup.offset for fixup in fixups)
     fixup_at = {fixup.offset: fixup for fixup in fixups if fixup.offset in operands}
-    dgroup = frozenset(omf.groups(records).get(DGROUP, ()))
+    shared = frozenset(index for index, kind in omf.combines(records).items() if kind == omf.COMBINE_COMMON)
+    dgroup = Group(omf.groups(records).get(DGROUP, ()), shared)
     program_data = _program_data(records)
 
     return Module(

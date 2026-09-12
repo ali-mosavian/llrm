@@ -28,17 +28,17 @@ import iced_x86
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from qbopt import rewrite
 from qbopt.model import ir
 from qbopt.model import mir
+from qbopt.abi import runtime
+from qbopt.analysis import avail
 from qbopt.objectfile import omf
 from qbopt.objectfile import module
-from qbopt import rewrite
-from qbopt.objectfile.module import Space
 from qbopt.analysis import loops as loopy
-from qbopt.analysis import avail
+from qbopt.objectfile.module import Space
 from qbopt.frontend import blocks as split
 from qbopt.frontend.blocks import code_map
-from qbopt.abi import runtime
 
 
 def _program(path: Path, records=None) -> str:
@@ -54,7 +54,7 @@ def _program(path: Path, records=None) -> str:
             continue
         length = record.body[0]
         if length and len(record.body) >= length + 1:
-            source = record.body[1:length + 1].decode("latin-1").replace("\\", "/")
+            source = record.body[1 : length + 1].decode("latin-1").replace("\\", "/")
             name = Path(source).stem
             if name:
                 return name.upper()
@@ -157,6 +157,14 @@ CALLED = {
     "B$RMI4": 120,
     "B$CPI4": 40,
     # Full straight-line bodies, including waits and stack traffic; see docs/float-integer-values.md.
+    # FIL2 executes CWD and then the complete FILD body.  FILD itself saves
+    # BP/BX, materializes DX:AX on its stack, executes the x87 load, restores
+    # the frame and far-returns. Charging either as a bare far CALL made
+    # replacing FIL2 with one `fild` look slower, even though the replacement
+    # removes that whole wrapper.  These are deliberately conservative 386
+    # rankings of the literal 87bhelp.asm listings named in runtime.toml.
+    "B$FIL2": 90,
+    "B$FILD": 88,
     "B$FIST": 106,
     "B$FIS2": 100,
 }
@@ -336,8 +344,7 @@ def _execution_blocks(blocks, entry, contracts):
         for index, insn in enumerate(block.insns):
             contract = contracts.get(insn.at)
             if contract is not None and contract.established and contract.control is runtime.Control.NEVER:
-                block = replace(block, insns=block.insns[:index + 1], end=insn.end,
-                                ends=split.Ends.LEAVES, succ=())
+                block = replace(block, insns=block.insns[: index + 1], end=insn.end, ends=split.Ends.LEAVES, succ=())
                 break
         trimmed[block.at] = block
     reached, pending = set(), [entry]
@@ -486,6 +493,12 @@ def counted(paths: list[Path], raw: bool = False) -> Counter:
             raise Unmeasured(f"{path}: no code module")
         if split.event_enabled(module_):
             found["event-enabled configuration"] += 1
+        if "B$LINA" in module_.calls.values():
+            # A /D build tracks the current line at every statement and checks
+            # every subscript. Every target in docs/targets.md is BC's own plain
+            # build, so the two are not the same program -- harr-bounds scored
+            # 30,578 against HARR's 1,834 and read as a 16.67x miss.
+            found["checked configuration"] += 1
         mapped = code_map(module_)
         if isinstance(mapped, str):
             raise Unmeasured(f"{path}: {mapped}")
@@ -594,13 +607,13 @@ TARGETS = {
     "CMPORD": 1966,  # Eight initial stores, 24 three-call rows, DONE and termination.
     "CHAIN": 482,  # Twelve numeric stores, seven label/result rows, DONE and termination.
     "JUMPS": 742,  # Three expanded iterations, twelve stores and six four-call output rows.
-    "FPDEEP": 1086,
+    "FPDEEP": 1317,  # PDS: 1086 output + 21 stores + 21 pending-exception checks.
 }
 
 
 PROVISIONAL_TARGETS = {
     "FPCSEX": "reference reassociates the sum and omits SINGLE rounding",
-    "FPDEEP": "numeric reference omits checkpoints/stores without a whole-program observability proof",
+    "FPDEEP": "complete reference is verified only for ordinary non-resumable PDS builds",
 }
 
 
@@ -629,10 +642,22 @@ def against_targets(paths: list[Path], raw: bool = False) -> int:
             print(f"  {path.stem:10s} {cost:7d} {'--':>7s} {'--':>6s}   {left}  NO TARGET")
             continue
         reason = PROVISIONAL_TARGETS.get(program)
+        if program == "FPDEEP" and path.is_file():
+            reference_module = module.load(path)
+            flags = int.from_bytes(reference_module.code[split.U_FLAG : split.U_FLAG + 2], "little")
+            # u_sw_x permits resumable errors; that requires a separate reference.
+            if (
+                module.family(reference_module.records) is module.Family.PDS
+                and split.has_header(reference_module)
+                and not flags & (split.EVENTS | 0x20)
+            ):
+                reason = None
         if program == "CHAIN":
             reference_module = module.load(path)
             if sum(name == "B$PEI4" for name in reference_module.calls.values()) != 7:
-                reason = "CHAIN reference requires the current seven-row source; this object has different output coverage"
+                reason = (
+                    "CHAIN reference requires the current seven-row source; this object has different output coverage"
+                )
         if program == "FPCSE":
             family = module.family(omf.parse(path.read_bytes())) if path.is_file() else module.Family.UNKNOWN
             if family is module.Family.QUICKBASIC:
@@ -641,6 +666,8 @@ def against_targets(paths: list[Path], raw: bool = False) -> int:
                 reason = "FPCSE requires an identified compiler for its entry-checkpoint reference"
         if found.get("event-enabled configuration"):
             reason = "event-enabled build requires a reference retaining event checks; the plain-program target is not comparable"
+        if found.get("checked configuration"):
+            reason = "/D build requires a reference retaining line tracking and subscript checks; the plain-program target is not comparable"
         if reason:
             failed = True
             print(f"  {path.stem:10s} {cost:7d} {want:7d} {'--':>6s}   {left}  PROVISIONAL: {reason}")

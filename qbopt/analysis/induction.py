@@ -37,8 +37,8 @@ class Affine:
     """
 
     value: int  # the exact SSA value at the loop header
-    start: "mir.Arg"
-    step: "mir.Arg"
+    start: mir.Held | mir.Const
+    step: mir.Held | mir.Const
     header: int  # the loop it recurs in
 
 
@@ -102,10 +102,11 @@ def basics(body: mir.MirBody, loop) -> dict[int, Affine]:
             if where not in inside:
                 continue
             definition = made.get(value.id)
-            results = [
-                arg for arg in definition.results
-                if isinstance(arg, mir.Held) and arg.value == value
-            ] if definition else []
+            results = (
+                [arg for arg in definition.results if isinstance(arg, mir.Held) and arg.value == value]
+                if definition
+                else []
+            )
             if len(results) != 1:
                 steps.append(None)
                 continue
@@ -137,7 +138,7 @@ def _copied(operand: mir.Held, made: dict[int, mir.Op]) -> mir.Held:
     return operand
 
 
-def _stepped(op: "mir.Op | None", value: int, still: set[int], made: dict[int, mir.Op]) -> "mir.Arg | None":
+def _stepped(op: mir.Op | None, value: int, still: set[int], made: dict[int, mir.Op]) -> mir.Held | mir.Const | None:
     """What this operation adds to `variable` each time round, or None."""
     if op is None:
         return None
@@ -214,13 +215,25 @@ def derived(
     out = []
     for at in inside:
         for op in at_of[at].ops:
-            if (op.kind is mir.Kind.PTR_OFFSET and len(op.args) == 2 and len(op.results) == 1
-                and isinstance(op.results[0], mir.Held) and op.results[0].width == 4
-                and not op.loads and not op.stores and not op.barrier and not op.merges):
+            if (
+                op.kind is mir.Kind.PTR_OFFSET
+                and len(op.args) == 2
+                and len(op.results) == 1
+                and isinstance(op.results[0], mir.Held)
+                and op.results[0].width == 4
+                and not op.loads
+                and not op.stores
+                and not op.barrier
+                and not op.merges
+            ):
                 pointer, offset = op.args
-                if (isinstance(pointer, mir.Held) and pointer.value.id in still
-                    and isinstance(offset, mir.Held) and offset.value.id in found
-                    and pointer.width == offset.width == found[offset.value.id].start.width == 4):
+                if (
+                    isinstance(pointer, mir.Held)
+                    and pointer.value.id in still
+                    and isinstance(offset, mir.Held)
+                    and offset.value.id in found
+                    and pointer.width == offset.width == found[offset.value.id].start.width == 4
+                ):
                     out.append(Derived(op, found[offset.value.id], mir.Const(1, 4), pointer=pointer))
                 continue
             # It may load: the multiplier is a Cell and `imul word [w]`
@@ -277,16 +290,18 @@ def _last_counter(body: mir.MirBody, loop, counter: Affine, facts: dict, width: 
         return None
     test = branch.test
     if branch.target not in inside:
-        test = {mir.Kind.LE: mir.Kind.GT, mir.Kind.LT: mir.Kind.GE,
-                mir.Kind.GE: mir.Kind.LT, mir.Kind.GT: mir.Kind.LE,
-                mir.Kind.EQ: mir.Kind.NE, mir.Kind.NE: mir.Kind.EQ}.get(test)
-    comparisons = [bound for op in header.ops[:-1]
-                   if (bound := _counter_bound(op, branch, counter, width)) is not None]
+        test = {
+            mir.Kind.LE: mir.Kind.GT,
+            mir.Kind.LT: mir.Kind.GE,
+            mir.Kind.GE: mir.Kind.LT,
+            mir.Kind.GT: mir.Kind.LE,
+            mir.Kind.EQ: mir.Kind.NE,
+            mir.Kind.NE: mir.Kind.EQ,
+        }.get(test)
+    comparisons = [bound for op in header.ops[:-1] if (bound := _counter_bound(op, branch, counter, width)) is not None]
     if len(comparisons) != 1:
         return None
-    start, step, bound = (
-        _signed(arg, facts, width) for arg in (counter.start, counter.step, comparisons[0])
-    )
+    start, step, bound = (_signed(arg, facts, width) for arg in (counter.start, counter.step, comparisons[0]))
     if start is None or step is None or bound is None or step == 0:
         return None
     if step > 0 and test in (mir.Kind.LE, mir.Kind.LT):
@@ -307,9 +322,16 @@ def _last_counter(body: mir.MirBody, loop, counter: Affine, facts: dict, width: 
 
 
 def _counter_bound(op, branch, counter, width):
-    if (len(op.args) != 2 or op.loads or op.stores or op.barrier or op.merges
-        or not isinstance(op.args[0], mir.Held) or op.args[0].value.id != counter.value
-        or op.args[0].width != width):
+    if (
+        len(op.args) != 2
+        or op.loads
+        or op.stores
+        or op.barrier
+        or op.merges
+        or not isinstance(op.args[0], mir.Held)
+        or op.args[0].value.id != counter.value
+        or op.args[0].width != width
+    ):
         return None
     flags = [value for value in op.defines if value.flags]
     if len(flags) != 1 or flags[0] not in branch.uses:
@@ -331,8 +353,11 @@ def _quotients(body: mir.MirBody, loop, found: dict[int, Affine]) -> list[Derive
         for op in block.ops:
             if op.kind is not mir.Kind.DIVMOD or len(op.args) != 2 or len(op.results) != 2:
                 continue
-            if op.loads or op.stores or op.barrier or not all(
-                isinstance(result, mir.Held) and result.width == 2 for result in op.results
+            if (
+                op.loads
+                or op.stores
+                or op.barrier
+                or not all(isinstance(result, mir.Held) and result.width == 2 for result in op.results)
             ):
                 continue
             dividend, divisor = op.args
@@ -348,7 +373,10 @@ def _quotients(body: mir.MirBody, loop, found: dict[int, Affine]) -> list[Derive
             if last is None or not all(-32768 <= value // denominator <= 32767 for value in (start, last)):
                 continue
             quotient = Affine(
-                counter.value, mir.Const(start // denominator, 2), mir.Const(step // denominator, 2), loop.header,
+                counter.value,
+                mir.Const(start // denominator, 2),
+                mir.Const(step // denominator, 2),
+                loop.header,
             )
             out.append(Derived(op, quotient, mir.Const(1, 2)))
     return out
@@ -360,9 +388,7 @@ def nonempty(body: mir.MirBody, loop) -> bool:
     return any(_last_counter(body, loop, counter, facts, 2) is not None for counter in basics(body, loop).values())
 
 
-def _composed(
-    body: mir.MirBody, loop, found: dict[int, Affine], made: dict[int, mir.Op], settled
-) -> list[Derived]:
+def _composed(body: mir.MirBody, loop, found: dict[int, Affine], made: dict[int, mir.Op], settled) -> list[Derived]:
     inside = set(loop.body)
     known = consts.known(body)
     still = invariant(body, inside)
@@ -379,8 +405,13 @@ def _composed(
             if block.at not in inside:
                 continue
             for op in block.ops:
-                if (block.at != loop.header and op.kind is mir.Kind.SIGN_EXTEND
-                    and op.results and isinstance(op.results[0], mir.Held) and op.results[0].value.id not in forms):
+                if (
+                    block.at != loop.header
+                    and op.kind is mir.Kind.SIGN_EXTEND
+                    and op.results
+                    and isinstance(op.results[0], mir.Held)
+                    and op.results[0].value.id not in forms
+                ):
                     extended = _extended(body, loop, op, forms, known)
                     if extended is not None:
                         forms[op.results[0].value.id] = extended
@@ -420,14 +451,20 @@ def _composed(
                     scale = first[1] + second[1] if op.kind is mir.Kind.ADD else first[1] - second[1]
                     sign = 1 if op.kind is mir.Kind.ADD else -1
                     offsets = first[2] + tuple((arg, coefficient * sign) for arg, coefficient in second[2])
-                elif (op.kind is mir.Kind.ADD and (first is not None or second is not None)
-                      or op.kind is mir.Kind.SUB and first is not None and second is None):
+                elif (
+                    op.kind is mir.Kind.ADD
+                    and (first is not None or second is not None)
+                    or op.kind is mir.Kind.SUB
+                    and first is not None
+                    and second is None
+                ):
                     recurrence, offset = (first, right) if first is not None else (second, left)
                     if isinstance(offset, mir.Cell):
                         ref = offset.ref
                         if (
                             ref.addr is None
-                            or ref.base is not None and ref.base.id not in still
+                            or ref.base is not None
+                            and ref.base.id not in still
                             or ref.segment is not None
                             or ref.width != width
                             or not settled(ref)
@@ -451,7 +488,10 @@ def _composed(
                     else:
                         continue
                 elif (
-                    op.kind is mir.Kind.SHL and first is not None and isinstance(right, mir.Const) and 0 <= right.n < width * 8
+                    op.kind is mir.Kind.SHL
+                    and first is not None
+                    and isinstance(right, mir.Const)
+                    and 0 <= right.n < width * 8
                 ):
                     base, scale = first[0], first[1] << right.n
                     offsets = tuple((arg, coefficient << right.n) for arg, coefficient in first[2])

@@ -29,11 +29,12 @@ known: the x87 instructions, and the addresses in a space select.py does
 not encode.
 """
 
+import collections
 from dataclasses import replace
 
 from qbopt.model import ir
-from qbopt.backend import asm
 from qbopt.model import mir
+from qbopt.backend import asm
 from qbopt.backend import lower
 from qbopt.legacy import regalloc
 from qbopt.model.mir import MirBody
@@ -45,30 +46,205 @@ Table = asm.Table
 selectable = mir.rewritable
 
 
+def _emits(block) -> bool:
+    """Whether this block puts any byte in the output."""
+    return any(op.kind is not mir.Kind.NOTHING for op in block.ops)
+
+
+def _following(body: MirBody) -> dict[int, int]:
+    """Per block, the next one that emits anything.
+
+    Skipping the ones that do not is the whole point: a block whose every
+    operation is NOTHING keeps its address and its `covers` and contributes
+    no bytes, so control reaching its predecessor's end falls through it to
+    whatever comes after. Comparing against the immediately next block
+    instead put a `jmp` back over every block `_threaded` had just emptied,
+    which is why threading first appeared to do nothing at all.
+    """
+    ordered = sorted(body.blocks, key=lambda block: block.at)
+    out: dict[int, int] = {}
+    for index, block in enumerate(ordered):
+        for after in ordered[index + 1 :]:
+            if _emits(after):
+                out[block.at] = after.at
+                break
+    return out
+
+
 def _fallthroughs(body: MirBody) -> MirBody:
     """Make implicit CFG edges explicit when address-order placement breaks them."""
-    ordered = sorted(body.blocks, key=lambda block: block.at)
-    following = {block.at: after.at for block, after in zip(ordered, ordered[1:])}
+    following = _following(body)
     changed = []
     for block in body.blocks:
         last = lower.current(block.ops[-1]) if block.ops else None
         destination = None
-        if len(block.succ) == 1 and (last is None or last.op not in (
-            ir.Operation.JUMP, ir.Operation.BRANCH, ir.Operation.RETURN
-        )):
-            destination, = block.succ
+        if len(block.succ) == 1 and (
+            last is None or last.op not in (ir.Operation.JUMP, ir.Operation.BRANCH, ir.Operation.RETURN)
+        ):
+            (destination,) = block.succ
         elif len(block.succ) == 2 and last is not None and last.op is ir.Operation.BRANCH:
             if last.target in block.succ:
                 destination = next(at for at in block.succ if at != last.target)
         if destination is not None and destination != following.get(block.at):
+            turned = _turned(block, last, destination, following.get(block.at))
+            if turned is not None:
+                changed.append(turned)
+                continue
             anchor = block.ops[-1].at if block.ops else block.at
-            jump = mir.Op(anchor, ir.Operation.JUMP, "jmp", (), (),
-                          kind=mir.Kind.JUMP, target=destination,
-                          made=ir.Semantics(ir.Operation.JUMP, "jmp", target=destination),
-                          covers=(anchor, anchor), symbol=False)
+            jump = mir.Op(
+                anchor,
+                ir.Operation.JUMP,
+                "jmp",
+                (),
+                (),
+                kind=mir.Kind.JUMP,
+                target=destination,
+                made=ir.Semantics(ir.Operation.JUMP, "jmp", target=destination),
+                covers=(anchor, anchor),
+                symbol=False,
+            )
             block = replace(block, ops=(*block.ops, jump))
         changed.append(block)
     return replace(body, blocks=tuple(changed))
+
+
+# Each condition and the one that is true exactly when it is false. `jcxz`
+# and `loop*` are absent on purpose: they have no inverse to name, so a
+# block ending in one keeps its jump.
+_PAIRS = (
+    ("je", "jne"),
+    ("jz", "jnz"),
+    ("jl", "jge"),
+    ("jnge", "jnl"),
+    ("jle", "jg"),
+    ("jng", "jnle"),
+    ("jb", "jae"),
+    ("jc", "jnc"),
+    ("jnae", "jnb"),
+    ("jbe", "ja"),
+    ("jna", "jnbe"),
+    ("js", "jns"),
+    ("jo", "jno"),
+    ("jp", "jnp"),
+    ("jpe", "jpo"),
+)
+_OPPOSITE = {one: other for pair in _PAIRS for one, other in (pair, pair[::-1])}
+
+
+def _turned(block, last, destination: int, after: "int | None"):
+    """`block` with its branch inverted, where that is what removes the jump.
+
+    Only when the branch already goes to the block placed next: inverting it
+    then sends it where the jump was going and leaves the next block as the
+    fall-through, so the jump has nothing left to do. Any other arrangement
+    still needs one.
+    """
+    if last is None or last.op is not ir.Operation.BRANCH or after is None or last.target != after:
+        return None
+    return _inverted(block, last.name)
+
+
+def _inverted(block, name: "str | None", target: "int | None" = None):
+    """`block` with its closing branch's sense reversed, or None.
+
+    Inverting a condition is the same control flow either way, so this needs
+    no proof beyond the mnemonic having an opposite -- which `jcxz` and the
+    `loop` forms do not, and they keep their jump.
+    """
+    opposite = _OPPOSITE.get((name or "").lower())
+    if opposite is None or not block.ops:
+        return None
+    branch = block.ops[-1]
+    if branch.made is None or branch.made.op is not ir.Operation.BRANCH:
+        return None
+    where = branch.target if target is None else target
+    return replace(
+        block,
+        ops=(
+            *block.ops[:-1],
+            replace(branch, name=opposite, target=where, made=replace(branch.made, name=opposite, target=where)),
+        ),
+    )
+
+
+def _threaded(body: MirBody) -> MirBody:
+    """Branch past a block that only jumps somewhere else.
+
+    Blocks stay in BC's address order -- `_ordered` says so -- so which of a
+    branch's two edges falls through is BC's choice, and the families do not
+    make it the same way. QB's BC writes
+
+        je   dc          ; taken
+        jmp  f5          ; the fall-through, a block of its own
+      dc: ...
+
+    where PDS's BC writes the inverted branch and no jump at all. Reversing
+    the condition and sending it to `f5` leaves `dc` as the fall-through and
+    the jump with nothing to do. That is the whole difference between the
+    `jumps` target passing on PDS and VBDOS /G2 and missing it on QB /O,
+    /noO and VBDOS plain.
+
+    The emptied block keeps its place and its `covers`, because BC's bytes
+    have to stay owned by something -- it simply emits nothing, which is
+    what `mir.Kind.NOTHING` is for. Only a block whose single operation is
+    the jump qualifies, and only where the branch's own target is what
+    follows it, so the fall-through the inversion needs is already there.
+    """
+    following = _following(body)
+    at_of = {block.at: block for block in body.blocks}
+    reached = collections.Counter(at for block in body.blocks for at in block.succ)
+
+    turned: dict[int, mir.MirBlock] = {}
+    for block in body.blocks:
+        last = lower.current(block.ops[-1]) if block.ops else None
+        if last is None or last.op is not ir.Operation.BRANCH or len(block.succ) != 2:
+            continue
+        if last.target not in block.succ:
+            continue
+        through = next(at for at in block.succ if at != last.target)
+        if through != following.get(block.at) or reached[through] != 1 or through in turned:
+            continue
+        middle = at_of.get(through)
+        if middle is None or last.target != following.get(through):
+            continue
+        alive = [op for op in middle.ops if op.kind is not mir.Kind.NOTHING]
+        if len(alive) != 1 or alive[0].kind is not mir.Kind.JUMP or len(middle.succ) != 1:
+            continue
+        (beyond,) = middle.succ
+        if beyond == through or beyond not in at_of:
+            continue
+        inverted = _inverted(block, last.name, beyond)
+        if inverted is None:
+            continue
+        turned[block.at] = replace(inverted, succ=(beyond, last.target))
+        turned[through] = replace(
+            middle,
+            succ=(),
+            ops=tuple(
+                replace(
+                    op,
+                    kind=mir.Kind.NOTHING,
+                    name="",
+                    defines=(),
+                    uses=(),
+                    loads=(),
+                    stores=(),
+                    args=(),
+                    results=(),
+                    merges={},
+                    made=None,
+                    raised=None,
+                    target=None,
+                    test=None,
+                    stack=None,
+                    symbol=False,
+                )
+                for op in middle.ops
+            ),
+        )
+    if not turned:
+        return body
+    return replace(body, blocks=tuple(turned.get(block.at, block) for block in body.blocks))
 
 
 def _ordered(body: MirBody, *, linear: bool = False) -> list[mir.Op]:
@@ -384,7 +560,7 @@ def rebuild(
     # the same work, and `wholeseg.py` calls it before this -- which is
     # what let objwrite.py stop being allocated over a second time.
     sequenced = frozenset(body.entry for _, body in bodies) if ordered else ordered_entries
-    bodies = [(name, _fallthroughs(body) if body.entry in sequenced else body) for name, body in bodies]
+    bodies = [(name, _fallthroughs(_threaded(body))) for name, body in bodies]
     held = asm._held(assignment)
     bodies = [(name, _grounded(body, held)) for name, body in bodies]
 
@@ -421,7 +597,14 @@ def rebuild(
         (span[1] for one in ops if (span := asm._stands_for(one, found)) and span[0] < span[1]),
         default=lowest,
     )
-    inside = [Table(lo, hi) for lo, hi in tables if lowest <= lo and hi <= found.end]
+    dead_dispatch_ends = {
+        op.node.insn.end
+        for op in ops
+        if op.kind is mir.Kind.NOTHING and isinstance(op.node, ir.Call) and op.node.name == "B$OGTA"
+    }
+    inside = [
+        Table(lo, hi, discarded=lo in dead_dispatch_ends) for lo, hi in tables if lowest <= lo and hi <= found.end
+    ]
     highest = max(highest, *(one.hi for one in inside)) if inside else highest
 
     # BC pads the end of its code segment with zeros, and every object in
@@ -481,7 +664,9 @@ def rebuild(
         origin.update(body.origin)
     labels = {label: target for _, body in bodies for label, target in _labels(body).items()}
     anchors = {label: op for _, body in bodies for label, op in _anchors(body).items()} if sequenced else None
-    return asm.assemble(_interleaved(ops, inside), lowest, found, fields, native_fpu, assignment, origin, labels, anchors)
+    return asm.assemble(
+        _interleaved(ops, inside), lowest, found, fields, native_fpu, assignment, origin, labels, anchors
+    )
 
 
 def _starts_at(op: mir.Op) -> int:
@@ -504,9 +689,12 @@ def _interleaved(ops: list, inside: list) -> list:
     """
     rank = {id(one): (index, 1) for index, one in enumerate(ops)}
     for one in inside:
-        preceding = [(high, index) for index, op in enumerate(ops)
-                     for low, high in (*((op.covers,) if op.covers is not None else ()), *op.extra_covers)
-                     if low < high <= one.lo]
+        preceding = [
+            (high, index)
+            for index, op in enumerate(ops)
+            for low, high in (*((op.covers,) if op.covers is not None else ()), *op.extra_covers)
+            if low < high <= one.lo
+        ]
         index = max(preceding)[1] + 1 if preceding else 0
         rank[id(one)] = (index, 0)
     return sorted([*ops, *inside], key=lambda one: rank[id(one)])

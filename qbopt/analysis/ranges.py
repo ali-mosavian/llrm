@@ -1,9 +1,13 @@
 """Non-wrapping integer intervals, scoped to the taken body of a counted loop."""
 
-from dataclasses import dataclass, replace
+from dataclasses import replace
+from dataclasses import dataclass
 
-from qbopt.analysis import consts, induction, loops
-from qbopt.model import ir, mir
+from qbopt.model import ir
+from qbopt.model import mir
+from qbopt.analysis import loops
+from qbopt.analysis import consts
+from qbopt.analysis import induction
 from qbopt.objectfile.module import Space
 
 
@@ -30,10 +34,19 @@ def on_edge(block, successor, known, facts=None):
     if branch.kind is not mir.Kind.BRANCH or branch.target not in block.succ or len(flags) != 1:
         return result
     compare = next((op for op in reversed(block.ops[:-1]) if flags[0] in op.defines), None)
-    if (compare is None or compare.op is not ir.Operation.COMPARE or len(compare.args) != 2
-        or compare.kind is not mir.Kind.SUB or compare.defines != (flags[0],)
-        or compare.results or compare.loads or compare.stores or compare.merges
-        or compare.barrier or compare.floating is not None):
+    if (
+        compare is None
+        or compare.op is not ir.Operation.COMPARE
+        or len(compare.args) != 2
+        or compare.kind is not mir.Kind.SUB
+        or compare.defines != (flags[0],)
+        or compare.results
+        or compare.loads
+        or compare.stores
+        or compare.merges
+        or compare.barrier
+        or compare.floating is not None
+    ):
         return result
     left, right = compare.args
     if not all(isinstance(arg, (mir.Held, mir.Const)) for arg in (left, right)):
@@ -42,31 +55,57 @@ def on_edge(block, successor, known, facts=None):
         return result
     kind = branch.test
     if successor != branch.target:
-        kind = {mir.Kind.LE: mir.Kind.GT, mir.Kind.LT: mir.Kind.GE,
-                mir.Kind.GE: mir.Kind.LT, mir.Kind.GT: mir.Kind.LE,
-                mir.Kind.EQ: mir.Kind.NE, mir.Kind.NE: mir.Kind.EQ}.get(kind)
+        kind = {
+            mir.Kind.LE: mir.Kind.GT,
+            mir.Kind.LT: mir.Kind.GE,
+            mir.Kind.GE: mir.Kind.LT,
+            mir.Kind.GT: mir.Kind.LE,
+            mir.Kind.EQ: mir.Kind.NE,
+            mir.Kind.NE: mir.Kind.EQ,
+            mir.Kind.ABOVE: mir.Kind.BELOW_EQ,
+            mir.Kind.ABOVE_EQ: mir.Kind.BELOW,
+            mir.Kind.BELOW: mir.Kind.ABOVE_EQ,
+            mir.Kind.BELOW_EQ: mir.Kind.ABOVE,
+        }.get(kind)
     sign = 1 << (left.width * 8 - 1)
     full = Interval(-sign, sign - 1, left.width)
     first = _operand(left, known, facts or {}) or full
     second = _operand(right, known, facts or {}) or full
+    if kind in (mir.Kind.ABOVE, mir.Kind.ABOVE_EQ, mir.Kind.BELOW, mir.Kind.BELOW_EQ):
+        first_low, first_high = _unsigned_span(first)
+        second_low, second_high = _unsigned_span(second)
+        match kind:
+            case mir.Kind.ABOVE:
+                possible = first_high > second_low
+            case mir.Kind.ABOVE_EQ:
+                possible = first_high >= second_low
+            case mir.Kind.BELOW:
+                possible = first_low < second_high
+            case mir.Kind.BELOW_EQ:
+                possible = first_low <= second_high
+        return result if possible else None
     if kind in (mir.Kind.GE, mir.Kind.GT):
         left, right, first, second = right, left, second, first
         kind = mir.Kind.LE if kind is mir.Kind.GE else mir.Kind.LT
     match kind:
         case mir.Kind.LE | mir.Kind.LT:
             strict = int(kind is mir.Kind.LT)
-            spans = ((first.low, min(first.high, second.high - strict)),
-                     (max(second.low, first.low + strict), second.high))
+            spans = (
+                (first.low, min(first.high, second.high - strict)),
+                (max(second.low, first.low + strict), second.high),
+            )
         case mir.Kind.EQ:
             shared = max(first.low, second.low), min(first.high, second.high)
             spans = shared, shared
         case mir.Kind.NE:
+
             def excluding(interval, other):
                 low, high = interval.low, interval.high
                 if other.low == other.high:
                     low += int(low == other.low)
                     high -= int(high == other.low)
                 return low, high
+
             spans = excluding(first, second), excluding(second, first)
         case _:
             return result
@@ -76,6 +115,13 @@ def on_edge(block, successor, known, facts=None):
         if isinstance(arg, mir.Held):
             result[arg.value] = Interval(low, high, arg.width)
     return result
+
+
+def _unsigned_span(interval: Interval) -> tuple[int, int]:
+    mask = (1 << (interval.width * 8)) - 1
+    if interval.low < 0 <= interval.high:
+        return 0, mask
+    return interval.low & mask, interval.high & mask
 
 
 def covering(ref: mir.MemRef, known: dict[mir.Value, Interval]) -> mir.MemRef:
@@ -241,3 +287,13 @@ def bounded(body: mir.MirBody) -> dict[int, dict[mir.Value, Interval]]:
                     if low <= high:
                         destination[value] = Interval(low, high, interval.width)
     return result
+
+
+def constants(body: mir.MirBody, dgroup: frozenset[int] | None = None, calls: dict[int, str] | None = None) -> dict:
+    """Every value `consts` knows, as the singleton interval an alias query reads.
+
+    `bounded` knows loop counters, not that `es` was loaded with 0xA000; a far
+    access through a literal selector is axiom 3's region only once its
+    selector's value reaches the query.
+    """
+    return {value: Interval(fact.n, fact.n, fact.width) for value, fact in consts.known(body, dgroup, calls).items()}

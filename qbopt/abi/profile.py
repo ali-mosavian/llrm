@@ -1,7 +1,8 @@
 import json
-from dataclasses import dataclass, replace
-from hashlib import sha256
 from pathlib import Path
+from hashlib import sha256
+from dataclasses import replace
+from dataclasses import dataclass
 
 from qbopt.abi import runtime
 from qbopt.objectfile import omf
@@ -11,6 +12,27 @@ from qbopt.objectfile import omf
 class Profile:
     rules: tuple[runtime.Contract, ...]
     fingerprint: str
+
+
+def combined(profiles: tuple[Profile, ...]) -> Profile:
+    """Combine independently audited profiles without an order-dependent override."""
+    if not profiles:
+        raise ValueError("at least one contract profile is required")
+    if len(profiles) == 1:
+        return profiles[0]
+    rules: dict[str, runtime.Contract] = {}
+    for one in profiles:
+        for rule in one.rules:
+            if rule.name in rules:
+                raise ValueError(f"external contract is declared by multiple profiles: {rule.name}")
+            rules[rule.name] = rule
+    document = {"version": 1, "profiles": sorted(one.fingerprint for one in profiles)}
+    fingerprint = sha256(json.dumps(document, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return Profile(tuple(rules[name] for name in sorted(rules)), fingerprint)
+
+
+def load_many(paths: list[Path], root: Path | None = None) -> Profile:
+    return combined(tuple(load(path, root) for path in paths))
 
 
 def _unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -48,22 +70,32 @@ def load(path: Path, root: Path | None = None) -> Profile:
         if sha256(data).hexdigest() != expected:
             raise ValueError(f"contract profile artifact hash mismatch: {name}")
         contents[name] = data
-    symbols = {}
+    symbols: dict[str, dict[str, set[str | None]]] = {}
     rules = []
     for name, declaration in sorted(declarations.items()):
-        row = _fields(declaration, {"defined_in", "inputs", "evidence"}, {"cleanup"})
+        row = _fields(declaration, {"defined_in", "inputs", "evidence"}, {"cleanup", "member"})
         defining = row["defined_in"]
         if not isinstance(defining, str) or defining not in contents:
-            raise ValueError(f"{name}: defining object is not a verified artifact")
+            raise ValueError(f"{name}: defining file is not a verified artifact")
         if defining not in symbols:
-            records = omf.parse(contents[defining])
-            symbols[defining] = {
-                symbol
-                for seg in range(1, len(omf.segments(records)))
-                for symbol in omf.pubdef_names(records, seg).values()
-            }
-        if not name or name not in symbols[defining]:
+            archived = omf.library_modules(contents[defining])
+            record_sets = ((None, omf.parse(contents[defining])),) if not archived else archived
+            definitions: dict[str, set[str | None]] = {}
+            for member, records in record_sets:
+                for seg in range(1, len(omf.segments(records))):
+                    for symbol in omf.pubdef_names(records, seg).values():
+                        definitions.setdefault(symbol, set()).add(member)
+            symbols[defining] = definitions
+        definitions = symbols[defining].get(name, set())
+        member = row.get("member")
+        if member is not None and (not isinstance(member, str) or not member):
+            raise ValueError(f"{name}: member must be a nonempty archive module name")
+        if not name or not definitions:
             raise ValueError(f"{name}: symbol is not defined in {defining}")
+        if member is not None and member not in definitions:
+            raise ValueError(f"{name}: symbol is not defined by {member} in {defining}")
+        if member is None and len(definitions) != 1:
+            raise ValueError(f"{name}: symbol is defined by multiple members of {defining}; specify member")
         inputs = row["inputs"]
         if not isinstance(inputs, list) or any(not isinstance(item, str) for item in inputs):
             raise ValueError(f"{name}: inputs must be a list of register names")

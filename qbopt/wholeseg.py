@@ -23,10 +23,14 @@ from dataclasses import dataclass
 from collections.abc import Callable
 
 from qbopt.model import mir
-from qbopt.objectfile import omf
-from qbopt.objectfile import module
 from qbopt.abi import runtime
+from qbopt.objectfile import omf
+from qbopt.abi import nativecalls
+from qbopt.frontend import extent
+from qbopt.objectfile import module
+from qbopt.frontend import fppatches
 from qbopt.optimize import transform
+from qbopt.backend import nativeframe
 from qbopt.frontend import blocks as split
 from qbopt.frontend.blocks import code_map
 
@@ -60,16 +64,28 @@ class Emitted:
     fallback_reason: str | None = None
 
 
+def _native_only(native_fpu: bool) -> None:
+    """`native_fpu=False` asked for the emulator, which no longer exists.
+
+    Kept as an error rather than dropped from the signature: silently
+    building native for a caller that asked for emulation would be the one
+    outcome worse than refusing.
+    """
+    if not native_fpu:
+        raise ValueError("native floating point is the only path; native_fpu=False is no longer supported")
+
+
 def emitted(
     data: bytes,
     optimise: bool = True,
-    native_fpu: bool = False,
+    native_fpu: bool = True,
     only: str | None = None,
     watch: Watch | None = None,
     cpu: str = "386",
     basic_semantics: bool = False,
     bounds_checks: bool = False,
-    *, external_contracts: dict[str, runtime.Contract] | None = None,
+    *,
+    external_contracts: dict[str, runtime.Contract] | None = None,
 ) -> Emitted:
     """The object rewritten, and which emitter did it.
 
@@ -79,10 +95,18 @@ def emitted(
     phases to get them dumps a different program: its allocation is not the
     one that produced the object, so the first bad transition is not in it.
     """
-    if basic_semantics and native_fpu:
-        raise ValueError("--basic-semantics cannot be combined with --native-fpu")
-    out, why, _ = _rebuilt(data, optimise, native_fpu, only, watch, cpu, basic_semantics, bounds_checks,
-                         external_contracts=external_contracts)
+    _native_only(native_fpu)
+    out, why, _ = _rebuilt(
+        data,
+        optimise,
+        native_fpu,
+        only,
+        watch,
+        cpu,
+        basic_semantics,
+        bounds_checks,
+        external_contracts=external_contracts,
+    )
     if why != REBUILT:
         return Emitted(out, Emission.REFUSED, why)
     return Emitted(out, Emission.LIR, why)
@@ -91,9 +115,11 @@ def emitted(
 def rebuilt(
     data: bytes,
     optimise: bool = True,
-    native_fpu: bool = False,
+    native_fpu: bool = True,
     only: str | None = None,
-    *, basic_semantics: bool = False, bounds_checks: bool = False,
+    *,
+    basic_semantics: bool = False,
+    bounds_checks: bool = False,
 ) -> tuple[bytes, str]:
     """`emitted`, as every caller already reads it."""
     got = emitted(data, optimise, native_fpu, only, basic_semantics=basic_semantics, bounds_checks=bounds_checks)
@@ -103,13 +129,14 @@ def rebuilt(
 def _rebuilt(
     data: bytes,
     optimise: bool = True,
-    native_fpu: bool = False,
+    native_fpu: bool = True,
     only: str | None = None,
     watch: Watch | None = None,
     cpu: str = "386",
     basic_semantics: bool = False,
     bounds_checks: bool = False,
-    *, external_contracts: dict[str, runtime.Contract] | None = None,
+    *,
+    external_contracts: dict[str, runtime.Contract] | None = None,
 ) -> tuple[bytes, str, str | None]:
     """The object with its code segment rewritten, and what happened.
 
@@ -123,18 +150,67 @@ def _rebuilt(
     mapped = code_map(found)
     if isinstance(mapped, str):
         return data, mapped, None
+    if fppatches.sites(found, mapped.starts):
+        # A real coprocessor is the only floating-point target. Asked of
+        # the whole corpus, native converts 487 of 487 objects and refuses
+        # none, so retaining the emulator bought a path nothing needed and
+        # a second floating-point semantics to keep true.
+        if basic_semantics:
+            return data, "BASIC floating behaviour cannot be preserved through native conversion", None
+        records = fppatches.native_records(found, mapped.starts)
+        converted = module.of(records)
+        if converted is None:
+            return data, "native floating-point conversion lost the code segment", None
+        found = converted
+        mapped = code_map(found)
+        if isinstance(mapped, str):
+            return data, mapped, None
+    from qbopt.objectfile import addends
 
+    normalized = addends.canonical(records, found.seg, len(found.code))
+    if isinstance(normalized, str):
+        return data, normalized, None
+    if normalized is not records:
+        records = normalized
+        found = module.of(records)
+        if found is None:
+            return data, "addend normalization lost the code segment", None
+        mapped = code_map(found)
+        if isinstance(mapped, str):
+            return data, mapped, None
     blocks = split.partition(found, mapped)
     # One map for the whole module, and the same object reaches the raise
     # and the lowering: a contract chosen twice can be chosen differently.
     contracts = runtime.for_module(found, external=external_contracts)
-    bodies = list(mir.bodies(found, blocks, contracts, basic_semantics=basic_semantics,
-                            bounds_checks=bounds_checks))
+    native_frames = {}
+    if not split.has_header(found):
+        partition = extent.partition(found)
+        if isinstance(partition, str) or not partition.complete:
+            return data, "native procedure ownership is incomplete", None
+        contracts = nativecalls.interfaces(found, partition, tuple(blocks), contracts)
+        cleanup = {at: rule.cleanup for at, rule in contracts.items() if rule.cleanup is not None}
+        cleanup = nativecalls.stack_recovery(found, partition, tuple(blocks), cleanup)
+        for procedure in partition.bodies:
+            owned = tuple(block for block in blocks if any(start <= block.at < end for start, end in procedure.ranges))
+            layout = nativeframe.plan(owned, procedure.seed)
+            layout = nativeframe.checked(owned, layout, cleanup) if layout is not None else None
+            if layout is None:
+                return data, f"native frame or call cleanup unproved at {procedure.seed:#x}", None
+            native_frames[procedure.seed] = layout
+    bodies = list(mir.bodies(found, blocks, contracts, basic_semantics=basic_semantics, bounds_checks=bounds_checks))
     if not bodies:
         return data, "no bodies were raised", None
     if not bounds_checks:
-        retained = next((op for _, body in bodies for block in body.blocks for op in block.ops
-                         if op.kind is mir.Kind.CALL and found.calls.get(op.at) == "B$HARY"), None)
+        retained = next(
+            (
+                op
+                for _, body in bodies
+                for block in body.blocks
+                for op in block.ops
+                if op.kind is mir.Kind.CALL and found.calls.get(op.at) == "B$HARY"
+            ),
+            None,
+        )
         if retained is not None:
             return data, f"unchecked array lowering unsupported at {retained.at:#x} (B$HARY)", None
 
@@ -179,7 +255,21 @@ def _rebuilt(
     # carry from one that is real code it simply did not raise.
     reached = frozenset(at for block in blocks for insn in block.insns for at in range(insn.at, insn.end))
     fields = frozenset(one.offset for one in omf.fixups(records) if one.seg == found.seg)
-    short = _through_lir(found, records, blocks, bodies, mapped, fields, reached, native_fpu, contracts, watch, cpu)
+    short = _through_lir(
+        found,
+        records,
+        blocks,
+        bodies,
+        mapped,
+        fields,
+        reached,
+        native_fpu,
+        contracts,
+        watch,
+        cpu,
+        basic_semantics=basic_semantics,
+        native_frames=native_frames,
+    )
     if not isinstance(short, str):
         if watch is not None:
             watch("route", None, "the LIR emitter wrote these bytes")
@@ -201,6 +291,9 @@ def _through_lir(
     contracts: dict[int, runtime.Contract],
     watch: Watch | None = None,
     cpu: str = "386",
+    *,
+    basic_semantics: bool = False,
+    native_frames: dict[int, nativeframe.Plan] | None = None,
 ) -> bytes | str:
     """Every body lowered, placed and written, or why one could not be.
 
@@ -211,27 +304,33 @@ def _through_lir(
     is the measurement the phase order is judged by.
     """
     from qbopt import flow
+    from qbopt.model import ir
     from qbopt.backend import lower
     from qbopt.backend import parcopy
     from qbopt.backend import spiller
     from qbopt.backend import allocate
-    from qbopt.objectfile import objwrite
-    from qbopt.backend import frame as frames
     from qbopt.backend import pointers
     from qbopt.backend import prologue
     from qbopt.analysis import noreturn
-    from qbopt.model import ir
-    from qbopt.objectfile.module import Addr, Space
+    from qbopt.objectfile import objwrite
+    from qbopt.objectfile.module import Addr
+    from qbopt.backend import frame as frames
+    from qbopt.objectfile.module import Space
 
     pointer_model = None
-    if any(op.kind is mir.Kind.PTR_OFFSET or any(ref.pointer for ref in (*op.loads, *op.stores))
-           for _, body in bodies for block in body.blocks for op in block.ops):
+    if any(
+        op.kind is mir.Kind.PTR_OFFSET or any(ref.pointer for ref in (*op.loads, *op.stores))
+        for _, body in bodies
+        for block in body.blocks
+        for op in block.ops
+    ):
         records, index = omf.with_external(records, "b$HugeShift")
         pointer_model = pointers.Model(ir.Mem(Addr(Space.EXTERNAL, 0, index), 1, disp_width=2))
 
     symbols = {name: at for at, name in omf.pubdef_names(records, found.seg).items()}
-    terminal_calls = frozenset(at for at, contract in contracts.items()
-                               if contract.established and contract.control is runtime.Control.NEVER)
+    terminal_calls = frozenset(
+        at for at, contract in contracts.items() if contract.established and contract.control is runtime.Control.NEVER
+    )
     no_return = noreturn.inferred(
         {body.entry: body for _, body in bodies},
         {at: symbols[name] for at, name in found.calls.items() if name in symbols},
@@ -251,10 +350,14 @@ def _through_lir(
                 pointer_model=pointer_model,
                 noreturn=body.entry in no_return,
             )
+            if (native := (native_frames or {}).get(body.entry)) is not None:
+                low = nativeframe.bound(low, native)
             if watch is not None:
                 watch("lowered", name, low)
-            frame = frames.of(low, found.calls, family=module.family(found.records))
-            for phase in flow.machine(flow._pinned(low), frame, found.calls):
+            frame = frames.of(
+                low, found.calls, family=module.family(found.records), native=(native_frames or {}).get(body.entry)
+            )
+            for phase in flow.machine(flow._pinned(low), frame, found.calls, basic_semantics=basic_semantics):
                 low = phase.transform(low)
                 if watch is not None:
                     watch(phase.name, name, low)

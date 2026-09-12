@@ -36,20 +36,20 @@ from dataclasses import replace
 
 from qbopt.model import ir
 from qbopt.model import mir
+from qbopt.model.mir import Op
 from qbopt.analysis import avail
 from qbopt.frontend import pairs
+from qbopt.optimize import lcssa
 from qbopt.analysis import consts
-from qbopt.objectfile import module
-from qbopt.model.mir import Op
+from qbopt.optimize import unroll
 from qbopt.optimize import promote
+from qbopt.model.mir import MirBody
+from qbopt.objectfile import module
 from qbopt.optimize import strength
+from qbopt.model.passes import Where
 from qbopt.optimize import algebraic
 from qbopt.optimize import loopmotion
-from qbopt.optimize import unroll
-from qbopt.optimize import lcssa
-from qbopt.model.mir import MirBody
-from qbopt.objectfile.module import Space
-from qbopt.model.passes import Where
+from qbopt.optimize import loopsimplify
 from qbopt.analysis import loops as loopy
 from qbopt.model.passes import MIRTransform
 from qbopt.analysis import liveness as alive_at
@@ -84,8 +84,12 @@ def _without(ops: list[Op], drop) -> list[Op]:
     out: list[Op] = []
     for op in ops:
         if drop(op):
-            if (op.covers is not None and op.covers[0] == op.covers[1]
-                and not op.extra_covers and op.floating_origin is None):
+            if (
+                op.covers is not None
+                and op.covers[0] == op.covers[1]
+                and not op.extra_covers
+                and op.floating_origin is None
+            ):
                 continue
             # The bytes go to the op immediately before, and only if that op
             # is adjacent and gets its length from select.py. Anything
@@ -266,9 +270,10 @@ def subexpressions(body: MirBody, dgroup: frozenset[int] = frozenset()) -> MirBo
     order = {block.at: index for index, block in enumerate(body.blocks)}
     whole = _widths(body)
     demanded = halves(body)
-    from qbopt.analysis import floatbounds, floatfacts
-    exact = floatfacts.known(body, dgroup, {}) if any(
-        op.floating for block in body.blocks for op in block.ops) else {}
+    from qbopt.analysis import floatfacts
+    from qbopt.analysis import floatbounds
+
+    exact = floatfacts.known(body, dgroup, {}) if any(op.floating for block in body.blocks for op in block.ops) else {}
     bounded = floatbounds.exact(body, exact, dgroup)
 
     seen: dict[tuple, list[tuple[int, int, Op]]] = {}
@@ -298,18 +303,26 @@ def subexpressions(body: MirBody, dgroup: frozenset[int] = frozenset()) -> MirBo
             if key is None:
                 continue
             candidates = seen.setdefault(key, [])
-            first = next((candidate for candidate in reversed(candidates)
-                          if _reaches(candidate[0], candidate[1], order[block.at], index, doms, body, block)), None)
+            first = next(
+                (
+                    candidate
+                    for candidate in reversed(candidates)
+                    if _reaches(candidate[0], candidate[1], order[block.at], index, doms, body, block)
+                ),
+                None,
+            )
             if first is None:
                 candidates.append((order[block.at], index, op))
                 continue
             at, where, earlier = first
-            if op.floating is not None and not _exact_float_path(
+            if op.floating is not None and not _reusable_float_path(
                 body, body.blocks[at].at, where, block.at, index, exact, bounded
             ):
                 candidates.append((order[block.at], index, op))
                 continue
-            if op.loads and (at != order[block.at] or not _undisturbed(op, earlier, block.ops[where + 1:index], dgroup)):
+            if op.loads and (
+                at != order[block.at] or not _undisturbed(op, earlier, block.ops[where + 1 : index], dgroup)
+            ):
                 candidates.append((order[block.at], index, op))
                 continue
             if len(earlier.defines) != len(op.defines):
@@ -324,9 +337,13 @@ def subexpressions(body: MirBody, dgroup: frozenset[int] = frozenset()) -> MirBo
     if not gone and not floating_gone:
         return body
     if floating_gone:
-        body = replace(body, blocks=tuple(replace(block, ops=tuple(
-            _erased_floating(op) if id(op) in floating_gone else op for op in block.ops
-        )) for block in body.blocks))
+        body = replace(
+            body,
+            blocks=tuple(
+                replace(block, ops=tuple(_erased_floating(op) if id(op) in floating_gone else op for op in block.ops))
+                for block in body.blocks
+            ),
+        )
     if gone:
         body = _reclaimed(body, gone)
     return replace(
@@ -342,15 +359,20 @@ def subexpressions(body: MirBody, dgroup: frozenset[int] = frozenset()) -> MirBo
     )
 
 
-def _exact_float_path(
-    body: MirBody, source: int, first: int, destination: int, last: int, facts: dict, bounded: set[int],
+def _reusable_float_path(
+    body: MirBody,
+    source: int,
+    first: int,
+    destination: int,
+    last: int,
+    facts: dict,
+    bounded: set[int],
 ) -> bool:
-    """All operations between dominating FP candidates are exception-free.
+    from qbopt.model.floating import Exceptions
 
-    Acyclic paths may cross diamonds; cycles need a separate environment
-    invariant proof. Loads still require the independent memory guard.
-    """
     blocks = {block.at: block for block in body.blocks}
+    candidates = (blocks[source].ops[first], blocks[destination].ops[last])
+    deferred = all(op.floating is not None and op.floating.exceptions is Exceptions.DEFERRED for op in candidates)
     predecessors = loopy.predecessors(body.blocks)
     active: set[int] = set()
     checked: dict[int, bool] = {}
@@ -364,7 +386,10 @@ def _exact_float_path(
         ops = blocks[at].ops
         start = first if at == source else 0
         end = last + 1 if at == destination else len(ops)
-        exact = all(id(op) in bounded or _exact_floating(op, facts) for op in ops[start:end])
+        exact = all(
+            _unchanged_float_environment(op) if deferred else id(op) in bounded or _exact_floating(op, facts)
+            for op in ops[start:end]
+        )
         parents = predecessors[at]
         result = exact and (at == source or (bool(parents) and all(visit(parent) for parent in parents)))
         active.remove(at)
@@ -374,42 +399,88 @@ def _exact_float_path(
     return visit(destination)
 
 
+def _unchanged_float_environment(op: Op) -> bool:
+    from qbopt.model.floating import Exceptions
+
+    if op.barrier or op.kind in (mir.Kind.CALL, mir.Kind.OPAQUE, mir.Kind.FCHECK):
+        return False
+    if op.floating is None:
+        return op.stack is None
+    return op.floating.exceptions is Exceptions.DEFERRED
+
+
 def _exact_stored_load(op: Op, facts: dict) -> Op | None:
     """An exact storage conversion leaves the source value available for reloads."""
-    from qbopt.model.floating import Format, Precision, Rounding, Semantics
-    if (op.kind is not mir.Kind.FSTORE or op.floating is None
+    from qbopt.model.floating import Format
+    from qbopt.model.floating import Rounding
+    from qbopt.model.floating import Precision
+    from qbopt.model.floating import Semantics
+
+    if (
+        op.kind is not mir.Kind.FSTORE
+        or op.floating is None
         or op.floating.inputs != (Format.EXTENDED80,)
         or op.floating.result not in (Format.BINARY32, Format.BINARY64)
-        or len(op.stores) != 1 or op.loads or not _exact_floating(op, facts)):
+        or len(op.stores) != 1
+        or op.loads
+        or not _exact_floating(op, facts)
+    ):
         return None
-    source, = op.args
+    (source,) = op.args
     if not isinstance(source, mir.Held) or source.width != 10:
         return None
-    rule = Semantics((op.floating.result,), Format.EXTENDED80, Precision.EXACT, Rounding.NONE,
-                     op.floating.exceptions)
-    return replace(op, kind=mir.Kind.FLOAD, args=(mir.Cell(op.stores[0]),), results=(source,),
-                   defines=(source.value,), uses=(), loads=op.stores, stores=(), merges={}, floating=rule)
+    rule = Semantics((op.floating.result,), Format.EXTENDED80, Precision.EXACT, Rounding.NONE, op.floating.exceptions)
+    return replace(
+        op,
+        kind=mir.Kind.FLOAD,
+        args=(mir.Cell(op.stores[0]),),
+        results=(source,),
+        defines=(source.value,),
+        uses=(),
+        loads=op.stores,
+        stores=(),
+        merges={},
+        floating=rule,
+    )
 
 
 def _exact_floating(op: Op, facts: dict) -> bool:
     """No intervening exceptional FP work or unmodelled environment change."""
     from qbopt.analysis import floatfacts
+
     if op.barrier or op.kind in (mir.Kind.CALL, mir.Kind.OPAQUE):
         return False
     if op.floating is None:
         return op.stack is None
     if op.kind is mir.Kind.FSTORE:
-        return (len(op.args) == 1 and isinstance(op.args[0], mir.Held)
-                and op.args[0].value in facts
-                and floatfacts.evaluated(op.kind, op.floating, (facts[op.args[0].value],)) is not None)
-    return (len(op.results) == 1 and isinstance(op.results[0], mir.Held)
-            and op.results[0].value in facts)
+        return (
+            len(op.args) == 1
+            and isinstance(op.args[0], mir.Held)
+            and op.args[0].value in facts
+            and floatfacts.evaluated(op.kind, op.floating, (facts[op.args[0].value],)) is not None
+        )
+    return len(op.results) == 1 and isinstance(op.results[0], mir.Held) and op.results[0].value in facts
 
 
 def _erased_floating(op: Op) -> Op:
-    return replace(op, op=ir.Operation.NOTHING, kind=mir.Kind.NOTHING, name="",
-                   args=(), results=(), uses=(), defines=(), loads=(), stores=(),
-                   merges={}, node=None, made=None, raised=None, floating=None, stack=None)
+    return replace(
+        op,
+        op=ir.Operation.NOTHING,
+        kind=mir.Kind.NOTHING,
+        name="",
+        args=(),
+        results=(),
+        uses=(),
+        defines=(),
+        loads=(),
+        stores=(),
+        merges={},
+        node=None,
+        made=None,
+        raised=None,
+        floating=None,
+        stack=None,
+    )
 
 
 def _reclaimed(body: MirBody, gone: set[int]) -> MirBody:
@@ -530,7 +601,12 @@ def _width(_value: mir.Value, op: Op) -> int | None:
 def _computation(op: Op, stands: dict[int, mir.Value], whole: dict[int, int]) -> tuple | None:
     """What this operation computes, or None where that is not only its operands."""
     floating = op.floating is not None and op.kind in (
-        mir.Kind.FLOAD, mir.Kind.FADD, mir.Kind.FSUB, mir.Kind.FMUL, mir.Kind.FDIV)
+        mir.Kind.FLOAD,
+        mir.Kind.FADD,
+        mir.Kind.FSUB,
+        mir.Kind.FMUL,
+        mir.Kind.FDIV,
+    )
     if (op.kind not in _PURE | {mir.Kind.LOAD} and not floating) or op.stores or op.merges or op.barrier:
         return None
     if not op.defines or not op.args:
@@ -555,10 +631,21 @@ def _computation(op: Op, stands: dict[int, mir.Value], whole: dict[int, int]) ->
         else:
             return None
     results = tuple(one.width for one in op.results if isinstance(one, mir.Held))
-    operands = frozenset(named) if len(named) == 2 and op.kind in {
-        mir.Kind.ADD, mir.Kind.MUL, mir.Kind.AND, mir.Kind.OR, mir.Kind.XOR,
-        mir.Kind.EQ, mir.Kind.NE,
-    } else tuple(named)
+    operands = (
+        frozenset(named)
+        if len(named) == 2
+        and op.kind
+        in {
+            mir.Kind.ADD,
+            mir.Kind.MUL,
+            mir.Kind.AND,
+            mir.Kind.OR,
+            mir.Kind.XOR,
+            mir.Kind.EQ,
+            mir.Kind.NE,
+        }
+        else tuple(named)
+    )
     return (op.kind, op.floating if floating else op.name, operands, results)
 
 
@@ -821,9 +908,23 @@ def _may_pass(one: Op, run: list[Op], dgroup: frozenset[int], calls: dict[int, s
 
 def _empty_operation(op: Op) -> Op:
     """Keep provenance and owned byte ranges, but no computation or memory effect."""
-    return replace(op, op=ir.Operation.NOTHING, name="", kind=mir.Kind.NOTHING,
-                   defines=(), uses=(), args=(), results=(), loads=(), stores=(), merges={},
-                   node=None, made=None, raised=None, symbol=False)
+    return replace(
+        op,
+        op=ir.Operation.NOTHING,
+        name="",
+        kind=mir.Kind.NOTHING,
+        defines=(),
+        uses=(),
+        args=(),
+        results=(),
+        loads=(),
+        stores=(),
+        merges={},
+        node=None,
+        made=None,
+        raised=None,
+        symbol=False,
+    )
 
 
 def without_dead_stores(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
@@ -833,9 +934,16 @@ def without_dead_stores(body: MirBody, dgroup: frozenset[int], calls: dict[int, 
         return body
     return replace(
         body,
-        blocks=tuple(replace(one, ops=tuple(_empty_operation(op) if id(op) in gone else op
-                                           for op in _without(list(one.ops), lambda op: id(op) in gone)))
-                     for one in body.blocks),
+        blocks=tuple(
+            replace(
+                one,
+                ops=tuple(
+                    _empty_operation(op) if id(op) in gone else op
+                    for op in _without(list(one.ops), lambda op: id(op) in gone)
+                ),
+            )
+            for one in body.blocks
+        ),
     )
 
 
@@ -864,16 +972,48 @@ def forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> M
         ops: list[Op] = []
         for op in block.ops:
             holder = served.get(id(op))
+            if isinstance(holder, mir.Const) and op.kind is not mir.Kind.LOAD:
+                holder = None
             args = _served(op, holder) if holder is not None else None
-            ops.append(op if args is None else replace(op, args=args, loads=(), uses=op.uses + (holder,)))
+            if args is None:
+                ops.append(op)
+            elif isinstance(holder, mir.Const):
+                # Only a load, which becomes the constant itself. An
+                # arithmetic operand is a machine question this is not
+                # allowed to answer: `idiv [x]` has no immediate form, and
+                # serving its operand refused the whole of deedlines.
+                # A load always has one -- it is a materialisation.
+                #
+                # A constant is not a value either: nothing holds it and
+                # nothing has to stay alive to, so `uses` does not grow.
+                ops.append(
+                    replace(
+                        op,
+                        kind=mir.Kind.COPY,
+                        op=ir.Operation.MOVE,
+                        name="mov",
+                        args=args,
+                        loads=(),
+                        uses=op.uses,
+                        node=None,
+                        made=None,
+                        raised=None,
+                        symbol=False,
+                        covers=op.covers or mir_span(op),
+                    )
+                )
+            else:
+                ops.append(replace(op, args=args, loads=(), uses=op.uses + (holder,)))
         out.append(replace(block, ops=tuple(ops)))
     return replace(body, blocks=tuple(out))
 
 
 def _floating_forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
     """Exact stored values can replace arithmetic memory inputs without rounding anew."""
-    from qbopt.analysis import floatbounds, floatfacts
+    from qbopt.analysis import floatfacts
+    from qbopt.analysis import floatbounds
     from qbopt.model.floating import Format
+
     if not any(op.kind is mir.Kind.FSTORE for block in body.blocks for op in block.ops):
         return body
     facts = floatfacts.known(body, dgroup, calls)
@@ -884,37 +1024,65 @@ def _floating_forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, 
         ops = []
         for op in block.ops:
             changed = op
-            if (not op.barrier and op.kind in (mir.Kind.FADD, mir.Kind.FSUB, mir.Kind.FMUL, mir.Kind.FDIV)
-                and op.floating is not None and len(op.args) == len(op.floating.inputs)):
+            if (
+                not op.barrier
+                and op.kind in (mir.Kind.FADD, mir.Kind.FSUB, mir.Kind.FMUL, mir.Kind.FDIV)
+                and op.floating is not None
+                and len(op.args) == len(op.floating.inputs)
+            ):
                 args, formats = list(op.args), list(op.floating.inputs)
                 for index, (arg, format) in enumerate(zip(args, formats)):
                     if not isinstance(arg, mir.Cell):
                         continue
-                    provider = next((one for one in reversed(available)
-                                     if one.floating.inputs == (format,)
-                                     and mir.same_bytes(one.loads[0], arg.ref)), None)
+                    provider = next(
+                        (
+                            one
+                            for one in reversed(available)
+                            if one.floating.inputs == (format,) and mir.same_bytes(one.loads[0], arg.ref)
+                        ),
+                        None,
+                    )
                     if provider is not None:
                         args[index] = provider.results[0]
                         formats[index] = Format.EXTENDED80
                 if tuple(args) != op.args:
-                    changed = replace(op, args=tuple(args),
+                    changed = replace(
+                        op,
+                        args=tuple(args),
                         loads=tuple(arg.ref for arg in args if isinstance(arg, mir.Cell)),
-                        uses=tuple(dict.fromkeys((*op.uses, *(arg.value for arg in args if isinstance(arg, mir.Held))))),
-                        floating=replace(op.floating, inputs=tuple(formats)))
+                        uses=tuple(
+                            dict.fromkeys((*op.uses, *(arg.value for arg in args if isinstance(arg, mir.Held))))
+                        ),
+                        floating=replace(op.floating, inputs=tuple(formats)),
+                    )
             ops.append(changed)
-            available = [one for one in available if not any(
-                mir.overlapping(one.loads[0], written, dgroup) for written in op.stores)]
+            available = [
+                one
+                for one in available
+                if not any(mir.overlapping(one.loads[0], written, dgroup) for written in op.stores)
+            ]
             if id(op) not in bounded and not _exact_floating(op, facts):
                 available.clear()
             provider = _exact_stored_load(op, facts)
-            if (id(op) in bounded and op.kind is mir.Kind.FLOAD
-                and len(op.loads) == len(op.results) == 1 and not op.stores
-                and isinstance(op.results[0], mir.Held) and op.results[0].width == 10):
+            if (
+                id(op) in bounded
+                and op.kind is mir.Kind.FLOAD
+                and len(op.loads) == len(op.results) == 1
+                and not op.stores
+                and isinstance(op.results[0], mir.Held)
+                and op.results[0].width == 10
+            ):
                 provider = op
             if provider is not None:
                 available.append(provider)
         blocks.append(replace(block, ops=tuple(ops)))
     return replace(body, blocks=tuple(blocks))
+
+
+def mir_span(op):
+    """The bytes an op stood for, for a rewrite that clears its node."""
+    span = ir.span(op.node) if op.node is not None else None
+    return span
 
 
 def _served(op: Op, holder) -> "tuple[mir.Arg, ...] | None":
@@ -931,108 +1099,15 @@ def _served(op: Op, holder) -> "tuple[mir.Arg, ...] | None":
     if len(cells) != 1:
         return None
     cell = cells[0]
+    if cell in op.results:
+        # An update in place: the read is the write's own operand, and serving
+        # it turns one instruction into a load, the operation and a store.
+        return None
+    if isinstance(holder, mir.Const):
+        if holder.width != cell.ref.width:
+            return None
+        return tuple(holder if one is cell else one for one in op.args)
     return tuple(mir.Held(holder, cell.ref.width) if one is cell else one for one in op.args)
-
-
-SEGMENT_NAMES = frozenset({"es", "fs", "gs"})
-
-
-def _segment_load(op: Op):
-    """(which resource, what it is loaded from) where this op loads one.
-
-    A descriptor lands in a machine resource MIR has no value for, so it
-    arrives as mir.Opaque carrying that resource's own name. This read the
-    register number out of the instruction.
-    """
-    if op.kind is not mir.Kind.LOAD or len(op.results) != 1 or len(op.args) != 1:
-        return None
-    into = op.results[0]
-    if not isinstance(into, mir.Opaque) or into.name not in SEGMENT_NAMES:
-        return None
-    return into.name, op.args[0]
-
-
-def segments(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
-    """A segment register loaded from what it already holds, dropped.
-
-    `mov es,[desc+2]` twice in one statement, because the element appears
-    twice in it -- and again on every pass of the loop, from a word written
-    once before the loop ran. `segments.py` does this against the machine
-    code and finds 42 sites in qb-qrender; nothing in MIR did.
-
-    Cross-block, and it has to be: what a block starts holding is what every
-    path into it agrees on, and the reload that matters most arrives over a
-    back-edge. Starting from "nothing is held" and growing is the
-    conservative direction -- a cycle cannot talk itself into a fact.
-
-    Hoisting the survivor out of the loop is a separate and larger thing,
-    and needs code motion between blocks. This only removes the duplicate.
-    """
-    blocks = {block.at: block for block in body.blocks}
-    preds: dict[int, list[int]] = {at: [] for at in blocks}
-    for block in body.blocks:
-        for successor in block.succ:
-            if successor in preds:
-                preds[successor].append(block.at)
-
-    def through(block, holding: dict, gone: set[int] | None):
-        holding = dict(holding)
-        for op in block.ops:
-            if op.barrier or op.at in calls:
-                holding = {}
-                continue
-            found = _segment_load(op)
-            if found is not None:
-                register, source = found
-                if holding.get(register) == source:
-                    if gone is not None:
-                        gone.add(op.at)
-                elif source is not None:
-                    holding[register] = source
-                continue
-            # A write through the segment itself cannot be the descriptor
-            # it was loaded from. A dynamic array's storage is outside
-            # DGROUP -- that is the whole reason it needs a segment -- and
-            # the descriptor is a LITERAL or SEGMENT cell reached through
-            # ds. Anything else that writes memory, or writes somewhere
-            # this cannot name, puts the descriptor back in doubt.
-            if any(one.addr is None or one.addr.space is not Space.FAR for one in op.stores):
-                holding = {}
-        return holding
-
-    exits = {at: {} for at in blocks}
-    for _round in range(len(blocks) + 1):
-        changing = False
-        for at in sorted(blocks):
-            entering: dict | None = None
-            for previous in preds[at]:
-                was = exits[previous]
-                entering = dict(was) if entering is None else {k: v for k, v in entering.items() if was.get(k) == v}
-            got = through(blocks[at], entering or {}, None)
-            if got != exits[at]:
-                exits[at] = got
-                changing = True
-        if not changing:
-            break
-
-    gone: set[int] = set()
-    for at in sorted(blocks):
-        entering = None
-        for previous in preds[at]:
-            was = exits[previous]
-            entering = dict(was) if entering is None else {k: v for k, v in entering.items() if was.get(k) == v}
-        through(blocks[at], entering or {}, gone)
-    if not gone:
-        return body
-    return replace(
-        body,
-        blocks=tuple(replace(one, ops=tuple(_absorb(list(one.ops), gone))) for one in body.blocks),
-    )
-
-
-# Operations with a register operand the encoding does not name: the
-# one-operand `imul`/`idiv` whose other half is dx:ax, `cwd` and `cdq`, and
-# a shift by cl. select.py cannot remap what is not an operand.
 
 
 def _preheader(body: MirBody, loop) -> int | None:
@@ -1129,7 +1204,8 @@ def _cannot_fault(op: Op) -> bool:
         return False
     divisor = op.args[1]
     return isinstance(divisor, mir.Const) and consts.masked(divisor.n, divisor.width) not in (
-        0, (1 << (divisor.width * 8)) - 1,
+        0,
+        (1 << (divisor.width * 8)) - 1,
     )
 
 
@@ -1137,11 +1213,18 @@ def _whole_shift(op: Op, readable: set | None) -> bool:
     """A complete scalar definition needs no loop-carried destination contents."""
     match op.kind, op.args, op.results:
         case mir.Kind.SHL, (mir.Held(width=width), mir.Const(n=count)), (mir.Held(width=result_width),):
-            return (width == result_width and 0 < count < width * 8 and not op.merges
-                    and readable is not None
-                    and not any(value.flags and value in readable for value in op.defines))
+            return (
+                width == result_width
+                and 0 < count < width * 8
+                and not op.merges
+                and readable is not None
+                and not any(value.flags and value in readable for value in op.defines)
+            )
         case _:
             return False
+
+
+_consumed = mir.consumed
 
 
 def _invariant_run(
@@ -1156,6 +1239,7 @@ def _invariant_run(
     readable: set | None = None,
     intervals: dict | None = None,
     nonempty: bool = False,
+    floating_allowed: frozenset[int] = frozenset(),
 ) -> list[Op]:
     """The ops in this loop whose result never changes, in order.
 
@@ -1182,7 +1266,7 @@ def _invariant_run(
         changing = False
         for one in ops:
             real = mir.instruction(one)
-            if one in run or one.stores or one.floating is not None or not real:
+            if one in run or one.stores or (one.floating is not None and id(one) not in floating_allowed) or not real:
                 continue
             # A branch is where the loop is. hotlop's latch block held
             # `cmp`, `jle` and `jmp`, all three reading nothing the loop
@@ -1229,8 +1313,11 @@ def _invariant_run(
             if any(isinstance(result, mir.Opaque) for result in one.results):
                 continue
             if (
-                one.kind is mir.Kind.COPY and not one.loads and not any(use in made for use in one.uses)
+                one.kind is mir.Kind.COPY
+                and not one.loads
+                and not any(use in made for use in one.uses)
                 and not (len(one.args) == 1 and isinstance(one.args[0], mir.Symbol))
+                and not _literal(one)
             ):
                 continue
             # Only definition of its register in the loop, or the loop's own
@@ -1244,14 +1331,21 @@ def _invariant_run(
             # change, which is segld's inner counter and 1030 for 1050.
             # A stable load can replace its carried initial value only after
             # proving that at least one iteration executes.
-            if any(
-                value in begins and value in twice and (readable is None or value in readable)
-                for value in one.defines
-                if not value.flags
-            ) and not (
-                one.kind is mir.Kind.COPY and not one.merges
-                and len(one.args) == 1 and isinstance(one.args[0], mir.Symbol)
-            ) and not _whole_shift(one, readable) and not (nonempty and one.loads and not one.merges):
+            if (
+                any(
+                    value in begins and value in twice and (readable is None or value in readable)
+                    for value in one.defines
+                    if not value.flags
+                )
+                and not (
+                    one.kind is mir.Kind.COPY
+                    and not one.merges
+                    and len(one.args) == 1
+                    and isinstance(one.args[0], mir.Symbol)
+                )
+                and not _whole_shift(one, readable)
+                and not (nonempty and one.loads and not one.merges)
+            ):
                 continue
             # An operand nothing writes down used to end the run here.
             # hotlop hoisted `mov ax,[n] / imul word [k]`, the recolour
@@ -1261,9 +1355,14 @@ def _invariant_run(
             # puts such an operand anywhere but where its instruction reads
             # it, and a result the machine places is copied out rather than
             # re-seated -- see `copied` below.
+            # Each side with its own facts: a POKE's selector is a value at
+            # the store, and asked with the load's alone the store could be
+            # in any segment, so no descriptor load in a DEF SEG loop left.
             if any(
-                ref.addr is None or mir.overlapping(ref, other, dgroup, bounds, known=(intervals or {}).get(id(one)))
-                for ref in one.loads for other in stores
+                ref.addr is None
+                or mir.overlapping(ref, other, dgroup, bounds, known=(intervals or {}).get(id(one)), other_known=theirs)
+                for ref in one.loads
+                for other, theirs in stores
             ):
                 continue
             # A phi result is the loop-carried value itself: `v2` at
@@ -1274,7 +1373,7 @@ def _invariant_run(
             # Per use, not per value: hotlop's counter is genuinely read by
             # the compare, and that must not make the load of `n` -- which
             # only preserves the register it lives in -- loop-carried too.
-            blocking = [use for use in one.uses if not use.flags and use not in one.merges]
+            blocking = [use for use in _consumed(one) if not use.flags]
             if any(use in inside and use not in made for use in blocking):
                 continue
             run.append(one)
@@ -1285,7 +1384,12 @@ def _invariant_run(
     while thinning:
         thinning = False
         for one in run:
-            if one.kind is not mir.Kind.COPY or one.loads or any(isinstance(arg, mir.Symbol) for arg in one.args):
+            if (
+                one.kind is not mir.Kind.COPY
+                or one.loads
+                or any(isinstance(arg, mir.Symbol) for arg in one.args)
+                or _literal(one)
+            ):
                 continue
             if any(value in other.uses for other in run if other is not one for value in one.defines):
                 continue
@@ -1364,6 +1468,7 @@ _OBSERVED = frozenset(
         mir.Kind.RETURN,
         mir.Kind.JUMP,
         mir.Kind.BRANCH,
+        mir.Kind.SWITCH,
         mir.Kind.ESCAPE,
         mir.Kind.ARG,
         mir.Kind.RESULT,
@@ -1530,12 +1635,16 @@ def _comparison(block, op: Op):
     # matching ir.Operation.COMPARE and reading ir.Loc operands out of it.
     if compare.kind is mir.Kind.SUB and len(compare.args) == 2 and not compare.results:
         return index, compare
-    if (compare.kind in (mir.Kind.AND, mir.Kind.OR, mir.Kind.XOR)
-        and op.test in (mir.Kind.EQ, mir.Kind.NE) and not compare.barrier
-        and len(compare.args) == 2 and len(compare.results) == 1
+    if (
+        compare.kind in (mir.Kind.AND, mir.Kind.OR, mir.Kind.XOR)
+        and op.test in (mir.Kind.EQ, mir.Kind.NE)
+        and not compare.barrier
+        and len(compare.args) == 2
+        and len(compare.results) == 1
         and isinstance(result := compare.results[0], mir.Held)
         and result.width in (2, 4)
-        and all(isinstance(arg, (mir.Held, mir.Const)) and arg.width == result.width for arg in compare.args)):
+        and all(isinstance(arg, (mir.Held, mir.Const)) and arg.width == result.width for arg in compare.args)
+    ):
         return index, compare
     return None
 
@@ -1559,12 +1668,46 @@ def _outcome(block, op: Op, facts: dict, held: dict) -> bool | None:
     return _TAKEN[op.test](_signed(left), _signed(right), lambda n: n & 0xFFFFFFFF)
 
 
+def _switch_target(op: mir.Op, facts: dict[mir.Value, consts.Known]) -> int | None:
+    if op.kind is not mir.Kind.SWITCH or len(op.args) != 1 or op.target is None:
+        return None
+    if (
+        not isinstance(op.args[0], (mir.Held, mir.Const))
+        or op.args[0].width not in (1, 2, 4)
+        or op.defines
+        or op.results
+        or op.loads
+        or op.stores
+        or op.merges
+        or op.barrier
+        or op.stack is not None
+        or op.floating is not None
+    ):
+        return None
+    cases = [consts.masked(number, op.args[0].width) for number, _ in op.cases]
+    if len(set(cases)) != len(cases):
+        return None
+    value = consts._operand(op, op.args[0], facts)
+    if value is None:
+        return None
+    return next((target for number, target in op.cases if consts.masked(number, value.width) == value.n), op.target)
+
+
 def _executable_successors(block, facts, states, held):
     from qbopt.analysis.constant_cycles import State
 
-    if not block.ops or len(block.succ) != 2:
+    if not block.ops:
         return block.succ
     last = block.ops[-1]
+    if last.kind is mir.Kind.SWITCH:
+        target = _switch_target(last, facts)
+        if target in block.succ:
+            return (target,)
+        if any(isinstance(arg, mir.Held) and states.get(arg.value) is State.PENDING for arg in last.args):
+            return None
+        return block.succ
+    if len(block.succ) != 2:
+        return block.succ
     if last.target not in block.succ:
         return block.succ
     answer = _outcome(block, last, facts, held)
@@ -1581,18 +1724,54 @@ def _executable_successors(block, facts, states, held):
 def _threaded(body: MirBody) -> MirBody:
     """Bypass empty control-flow blocks without changing any incoming phi value."""
     known = {block.at: block for block in body.blocks}
+    predecessors = loopy.predecessors(body.blocks)
+    loop_edges = set()
+    for loop in loopy.loops(body.blocks, body.entry):
+        outside = predecessors[loop.header] - loop.body
+        if len(outside) == 1:
+            parent = next(iter(outside))
+            if known[parent].succ == (loop.header,):
+                loop_edges.add(parent)
+        if len(loop.latches) == 1:
+            parent = next(iter(loop.latches))
+            if known[parent].succ == (loop.header,):
+                loop_edges.add(parent)
+        loop_edges.update(
+            block.at
+            for block in body.blocks
+            if block.at not in loop.body
+            and predecessors[block.at]
+            and predecessors[block.at] <= loop.body
+            and len(block.succ) == 1
+            and block.succ[0] not in loop.body
+        )
     redirects = {}
     explicit_jumps = set()
     for block in body.blocks:
-        if block.phis or len(block.succ) != 1:
+        # Loop-simplify form deliberately keeps a unique entry edge and a
+        # unique backedge and dedicated exits as blocks of their own. Threading
+        # one may be locally valid, but recreates the mixed entry, latch or
+        # exit shape LoopSimplify has to rebuild on the next fixed-point round.
+        if block.phis or len(block.succ) != 1 or block.at in loop_edges:
             continue
         ops = block.ops
         if ops and ops[-1].kind is mir.Kind.JUMP and ops[-1].target == block.succ[0]:
             explicit_jumps.add(block.at)
             ops = ops[:-1]
-        if any(op.kind is not mir.Kind.NOTHING or op.defines or op.uses or op.loads or op.stores
-               or op.args or op.results or op.merges or op.barrier
-               or op.floating is not None or op.stack is not None for op in ops):
+        if any(
+            op.kind is not mir.Kind.NOTHING
+            or op.defines
+            or op.uses
+            or op.loads
+            or op.stores
+            or op.args
+            or op.results
+            or op.merges
+            or op.barrier
+            or op.floating is not None
+            or op.stack is not None
+            for op in ops
+        ):
             continue
         successor = known.get(block.succ[0])
         if successor is not None and not successor.phis:
@@ -1611,6 +1790,9 @@ def _threaded(body: MirBody) -> MirBody:
     changed = False
     for block in body.blocks:
         last = block.ops[-1] if block.ops else None
+        if last is not None and last.kind is mir.Kind.SWITCH:
+            blocks.append(block)
+            continue
         explicit = last.target if last is not None and last.kind in {mir.Kind.JUMP, mir.Kind.BRANCH} else None
         successors = tuple(dict.fromkeys(destination(at, block.at, implicit=at != explicit) for at in block.succ))
         if successors == block.succ:
@@ -1622,9 +1804,19 @@ def _threaded(body: MirBody) -> MirBody:
             last = ops[-1]
             last = replace(last, target=destination(last.target, block.at))
             if last.kind is mir.Kind.BRANCH and len(successors) == 1:
-                last = replace(last, op=ir.Operation.JUMP, kind=mir.Kind.JUMP, name="jmp",
-                               uses=(), args=(), results=(), test=None, made=None,
-                               target=successors[0], covers=last.covers or _span_of(last))
+                last = replace(
+                    last,
+                    op=ir.Operation.JUMP,
+                    kind=mir.Kind.JUMP,
+                    name="jmp",
+                    uses=(),
+                    args=(),
+                    results=(),
+                    test=None,
+                    made=None,
+                    target=successors[0],
+                    covers=last.covers or _span_of(last),
+                )
             ops = (*ops[:-1], last)
         blocks.append(replace(block, ops=ops, succ=successors))
     return _unreachable(replace(body, blocks=tuple(blocks))) if changed else body
@@ -1646,9 +1838,13 @@ def decided(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
     facts = consts.known(body, dgroup, calls)
     held = consts.cells(body, dgroup, calls, facts)
     from qbopt.analysis import constant_cycles
+
     facts = constant_cycles.propagated(
         body, facts, lambda block, values, states: _executable_successors(block, values, states, held)
     )
+    from qbopt.analysis import ranges
+
+    scoped = ranges.bounded(body)
 
     out = []
     changed = False
@@ -1657,7 +1853,32 @@ def decided(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
             out.append(block)
             continue
         last = block.ops[-1]
+        if last.kind is mir.Kind.SWITCH:
+            target = _switch_target(last, facts)
+            if target not in block.succ:
+                out.append(block)
+                continue
+            jump = replace(
+                last,
+                kind=mir.Kind.JUMP,
+                target=target,
+                cases=(),
+                args=(),
+                uses=(),
+                defines=(),
+                results=(),
+                name="",
+                made=None,
+                raised=None,
+            )
+            out.append(replace(block, ops=(*block.ops[:-1], jump), succ=(target,)))
+            changed = True
+            continue
         answer = _outcome(block, last, facts, held)
+        if answer is None and block.at in scoped and last.kind is mir.Kind.BRANCH and len(block.succ) == 2:
+            possible = tuple(at for at in block.succ if ranges.on_edge(block, at, scoped[block.at], facts) is not None)
+            if len(possible) == 1:
+                answer = possible[0] == last.target
         if answer is None:
             out.append(block)
             continue
@@ -1777,7 +1998,11 @@ def dead(body: MirBody) -> MirBody:
     """
     # Incomplete readers forbid global removal, but a result overwritten
     # locally before reaching one cannot supply its hidden inputs.
-    limited = any(one.barrier or one.kind is mir.Kind.OPAQUE for block in body.blocks for one in block.ops)
+    limited = any(
+        (one.barrier or one.kind is mir.Kind.OPAQUE) and not one.reads_complete
+        for block in body.blocks
+        for one in block.ops
+    )
     if not limited:
         body = _pruned_phis(body, live(body))
     alive = live(body)
@@ -1788,8 +2013,13 @@ def dead(body: MirBody) -> MirBody:
             alive.update(value for phi in block.phis for value in phi.incoming.values())
         while True:
             before = len(alive)
-            alive.update(value for block in body.blocks for op in block.ops
-                         if any(value in alive for value in op.defines) for value in op.uses)
+            alive.update(
+                value
+                for block in body.blocks
+                for op in block.ops
+                if any(value in alive for value in op.defines)
+                for value in op.uses
+            )
             if len(alive) == before:
                 break
     out = []
@@ -1798,17 +2028,15 @@ def dead(body: MirBody) -> MirBody:
         # Several semantic operations may share an input address. Their
         # computations are independent even when their provenance is not.
         overwritten = _overwritten_locally(block) if limited else None
-        gone = {id(op) for op in block.ops if _removable(op, alive)
-                and (overwritten is None or set(op.defines) <= overwritten)}
+        gone = {
+            id(op)
+            for op in block.ops
+            if _removable(op, alive) and (overwritten is None or set(op.defines) <= overwritten)
+        }
         if not gone:
             out.append(block)
             continue
-        ops = [
-            _empty_operation(op)
-            if id(op) in gone
-            else op
-            for op in block.ops
-        ]
+        ops = [_empty_operation(op) if id(op) in gone else op for op in block.ops]
         changed = True
         out.append(replace(block, ops=tuple(ops)))
     if not changed:
@@ -1843,8 +2071,7 @@ def _overwritten_locally(block) -> set:
         if op.barrier or op.kind is mir.Kind.OPAQUE:
             written.clear()
             continue
-        overwritten.update(value for value in op.defines
-                           if value.version and (value.variable, value.flags) in written)
+        overwritten.update(value for value in op.defines if value.version and (value.variable, value.flags) in written)
         written.update((value.variable, value.flags) for value in op.defines if value.version)
     return overwritten
 
@@ -1922,7 +2149,9 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
 
     edges = floatfacts.exit_cells(body, dgroup, calls)
     facts = consts.known(body, dgroup, calls, edges=edges)
-    floating_facts = floatfacts.known(body, dgroup, calls) if any(op.floating for block in body.blocks for op in block.ops) else {}
+    floating_facts = (
+        floatfacts.known(body, dgroup, calls) if any(op.floating for block in body.blocks for op in block.ops) else {}
+    )
     conversions = floatfacts.converted(body, dgroup, calls, facts=floating_facts)
     argument_facts = facts | conversions
     memory = (
@@ -1948,14 +2177,19 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
                 changed |= replacements != (op,)
                 continue
             updated = _constant_update(op, facts, memory.get((block.at, index), {}), wanted)
-            made = _constant_operands(_folded_op(updated, facts, wanted),
-                                      argument_facts if op.kind is mir.Kind.ARG else facts,
-                                      memory.get((block.at, index), {}))
+            made = _constant_operands(
+                _folded_op(updated, facts, wanted),
+                argument_facts if op.kind is mir.Kind.ARG else facts,
+                memory.get((block.at, index), {}),
+            )
             changed = changed or made is not op
             ops.append(made)
         out.append(replace(block, ops=tuple(ops)))
     from qbopt.optimize import floatfold
-    return floatfold.stored(floatfold.discarded(replace(body, blocks=tuple(out)) if changed else body, conversions), floating_facts)
+
+    return floatfold.stored(
+        floatfold.discarded(replace(body, blocks=tuple(out)) if changed else body, conversions), floating_facts
+    )
 
 
 def _constant_update(op: Op, facts: dict, memory: dict, wanted: set) -> Op:
@@ -1965,28 +2199,61 @@ def _constant_update(op: Op, facts: dict, memory: dict, wanted: set) -> Op:
     if fact is None:
         return op
     address_values = {value for ref in op.stores for value in (ref.base, ref.segment) if value is not None}
-    return replace(op, op=ir.Operation.MOVE, kind=mir.Kind.STORE, name="mov", defines=(),
-                   uses=tuple(value for value in op.uses if value in address_values), loads=(),
-                   args=(mir.Const(fact.n, fact.width),), node=None, made=None, raised=None, symbol=False)
+    return replace(
+        op,
+        op=ir.Operation.MOVE,
+        kind=mir.Kind.STORE,
+        name="mov",
+        defines=(),
+        uses=tuple(value for value in op.uses if value in address_values),
+        loads=(),
+        args=(mir.Const(fact.n, fact.width),),
+        node=None,
+        made=None,
+        raised=None,
+        symbol=False,
+    )
 
 
 def _constant_operands(op: Op, facts: dict, memory: dict | None = None) -> Op:
     """Propagate width-proven constants without reversing ordered operands."""
     if op.kind is mir.Kind.ARG:
         return _constant_argument(op, facts, memory or {})
-    if (op.kind is mir.Kind.STORE and len(op.args) == len(op.stores) == 1
-        and not op.defines and not op.merges and not op.loads and not op.barrier
-        and op.floating is None and isinstance(arg := op.args[0], mir.Held)
-        and arg.width == op.stores[0].width
-        and (fact := facts.get(arg.value)) is not None and fact.width >= arg.width):
-        address_values = {value for ref in op.stores for value in (ref.base, ref.segment) if value is not None}
-        return replace(op, args=(mir.Const(consts.masked(fact.n, arg.width), arg.width),),
-            uses=tuple(value for value in op.uses if value != arg.value or value in address_values),
-            node=None, made=None, raised=None, symbol=False)
     if (
-        op.kind not in (
-            mir.Kind.ADD, mir.Kind.ADD_CARRY, mir.Kind.AND, mir.Kind.OR, mir.Kind.XOR,
-            mir.Kind.MUL, mir.Kind.SUB, mir.Kind.SUB_BORROW, mir.Kind.DIVMOD,
+        op.kind is mir.Kind.STORE
+        and len(op.args) == len(op.stores) == 1
+        and not op.defines
+        and not op.merges
+        and not op.loads
+        and not op.barrier
+        and op.floating is None
+        and isinstance(arg := op.args[0], mir.Held)
+        and arg.width == op.stores[0].width
+        and (fact := facts.get(arg.value)) is not None
+        and fact.width >= arg.width
+    ):
+        address_values = {value for ref in op.stores for value in (ref.base, ref.segment) if value is not None}
+        return replace(
+            op,
+            args=(mir.Const(consts.masked(fact.n, arg.width), arg.width),),
+            uses=tuple(value for value in op.uses if value != arg.value or value in address_values),
+            node=None,
+            made=None,
+            raised=None,
+            symbol=False,
+        )
+    if (
+        op.kind
+        not in (
+            mir.Kind.ADD,
+            mir.Kind.ADD_CARRY,
+            mir.Kind.AND,
+            mir.Kind.OR,
+            mir.Kind.XOR,
+            mir.Kind.MUL,
+            mir.Kind.SUB,
+            mir.Kind.SUB_BORROW,
+            mir.Kind.DIVMOD,
             mir.Kind.PTR_OFFSET,
         )
         or len(op.args) != 2
@@ -2000,14 +2267,21 @@ def _constant_operands(op: Op, facts: dict, memory: dict | None = None) -> Op:
     ordered = op.kind in (mir.Kind.SUB, mir.Kind.SUB_BORROW, mir.Kind.DIVMOD, mir.Kind.PTR_OFFSET)
     for index, arg in enumerate(op.args):
         if (
-            (not ordered or index == 1) and isinstance(arg, mir.Held)
-            and (fact := facts.get(arg.value)) is not None and fact.width >= arg.width
+            (not ordered or index == 1)
+            and isinstance(arg, mir.Held)
+            and (fact := facts.get(arg.value)) is not None
+            and fact.width >= arg.width
         ):
             args.append(mir.Const(consts.masked(fact.n, arg.width), arg.width))
             replaced.add(arg.value)
-        elif ((not ordered or index == 1) and isinstance(arg, mir.Cell)
-              and not op.stores and not op.barrier and arg.ref in op.loads
-              and (fact := consts._cell(memory or {}, arg.ref)) is not None):
+        elif (
+            (not ordered or index == 1)
+            and isinstance(arg, mir.Cell)
+            and not op.stores
+            and not op.barrier
+            and arg.ref in op.loads
+            and (fact := consts._cell(memory or {}, arg.ref)) is not None
+        ):
             args.append(mir.Const(fact.n, arg.ref.width))
             removed.add(arg.ref)
         else:
@@ -2019,7 +2293,8 @@ def _constant_operands(op: Op, facts: dict, memory: dict | None = None) -> Op:
     retained = {arg.value for arg in args if isinstance(arg, mir.Held)}
     retained.update(value for ref in op.loads + op.stores for value in (ref.base, ref.segment) if value is not None)
     return replace(
-        op, args=tuple(args),
+        op,
+        args=tuple(args),
         loads=tuple(ref for ref in op.loads if ref not in removed),
         node=None if removed else op.node,
         made=None if removed else op.made,
@@ -2044,10 +2319,19 @@ def _constant_argument(op: Op, facts: dict, memory: dict) -> Op:
     if fact is None or fact.width < width:
         return op
     kept = tuple(ref for ref in op.loads if not isinstance(arg, mir.Cell) or ref != arg.ref)
-    uses = tuple(dict.fromkeys(value for ref in (*kept, *op.stores)
-                               for value in (ref.base, ref.segment) if value is not None))
-    return replace(op, args=(mir.Const(consts.masked(fact.n, width), width),), uses=uses,
-                   loads=kept, node=None, made=None, raised=None, symbol=False)
+    uses = tuple(
+        dict.fromkeys(value for ref in (*kept, *op.stores) for value in (ref.base, ref.segment) if value is not None)
+    )
+    return replace(
+        op,
+        args=(mir.Const(consts.masked(fact.n, width), width),),
+        uses=uses,
+        loads=kept,
+        node=None,
+        made=None,
+        raised=None,
+        symbol=False,
+    )
 
 
 def _folded_op(op: Op, facts: dict, wanted: set) -> Op:
@@ -2118,9 +2402,7 @@ def _placement(block, run: list, alive) -> int | None:
     it is where every hoist bug this year came from.
     """
     made = {value for one in run for value in one.defines}
-    wants = {
-        value for one in run for value in one.uses if not value.flags and value not in one.merges and value not in made
-    }
+    wants = {value for one in run for value in _consumed(one) if not value.flags and value not in made}
     ready = set(alive.live_in.get(block.at, ()))
     index = 0
     for number, one in enumerate(block.ops):
@@ -2199,6 +2481,39 @@ def _reparented(body: MirBody, crossed: set) -> MirBody:
     )
 
 
+def _guaranteed_float_work(body: MirBody, loop: loopy.Loop, nonempty: bool) -> frozenset[int]:
+    if not nonempty:
+        return frozenset()
+    blocks = {block.at: block for block in body.blocks}
+    if any(not _unchanged_float_environment(op) for at in loop.body for op in blocks[at].ops):
+        return frozenset()
+    starts = [at for at in blocks[loop.header].succ if at in loop.body and at != loop.header]
+    if len(starts) != 1:
+        return frozenset()
+
+    def reaches(at: int, target: int, visiting: frozenset[int]) -> bool:
+        if at == target:
+            return True
+        if at == loop.header or at not in loop.body or at in visiting:
+            return False
+        successors = blocks[at].succ
+        return bool(successors) and all(reaches(to, target, visiting | {at}) for to in successors)
+
+    return frozenset(
+        id(op)
+        for at in loop.body
+        if at == loop.header or reaches(starts[0], at, frozenset())
+        for op in blocks[at].ops
+        if op.floating is not None
+    )
+
+
+def _literal(op: Op) -> bool:
+    """A constant that stayed a definition: fold puts every literal its reader
+    can take into the reader, so what is left is work, like a selector."""
+    return op.kind is mir.Kind.COPY and bool(op.args) and all(isinstance(arg, mir.Const) for arg in op.args)
+
+
 def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds: dict | None = None) -> MirBody:
     """A loop-invariant run of operations, done once before the loop.
 
@@ -2218,8 +2533,11 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
     if not inside:
         return body
     from qbopt.analysis import ranges
+
     scoped = ranges.bounded(body)
-    intervals = {id(op): scoped.get(block.at, {}) for block in body.blocks for op in block.ops}
+    constant = ranges.constants(body)
+    facts = {at: {**constant, **inside} for at, inside in scoped.items()}
+    intervals = {id(op): facts.get(block.at, constant) for block in body.blocks for op in block.ops}
     at_of = {block.at: block for block in body.blocks}
     alive = alive_at.live(body)
     readable = live(body)
@@ -2238,18 +2556,38 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
         originals = ops
         ops = [
             replace(one, uses=tuple(value for value in one.uses if value not in one.merges), merges={})
-            if one.kind is mir.Kind.COPY and len(one.args) == 1 and isinstance(one.args[0], mir.Symbol)
+            if one.kind is mir.Kind.COPY
+            and len(one.args) == 1
+            and isinstance(one.args[0], mir.Symbol)
             and all((value, HIGH) not in demanded for value in one.defines)
             else one
             for one in ops
         ]
         identities = {id(one): id(original) for one, original in zip(ops, originals, strict=True)}
-        stores = [ref for one in ops for ref in one.stores]
+        stores = [
+            (ref, intervals.get(id(original)))
+            for one, original in zip(ops, originals, strict=True)
+            for ref in one.stores
+        ]
         carried = {phi.result for at in loop.body for phi in at_of[at].phis}
         phis = [phi for at in loop.body for phi in at_of[at].phis]
         from qbopt.analysis import induction
-        run = _invariant_run(ops, carried, stores, dgroup, calls, phis, bounds, _starts(phis), readable, intervals,
-                             nonempty=induction.nonempty(body, loop))
+
+        nonempty = induction.nonempty(body, loop)
+        run = _invariant_run(
+            ops,
+            carried,
+            stores,
+            dgroup,
+            calls,
+            phis,
+            bounds,
+            _starts(phis),
+            readable,
+            intervals,
+            nonempty=nonempty,
+            floating_allowed=_guaranteed_float_work(body, loop, nonempty),
+        )
         # Track operations, not source addresses: hoisted definitions share
         # their anchor's address with other computations and the jump. HARR
         # lost all of those when its descriptor moved a second time.
@@ -2379,6 +2717,7 @@ class Decide(MIRTransform):
 
     def transform(self, body: MirBody) -> MirBody:
         from qbopt.optimize import cfg
+
         return cfg.merged(decided(body, self.where.dgroup, self.where.named))
 
 
@@ -2387,16 +2726,6 @@ class Dead(MIRTransform):
 
     def transform(self, body: MirBody) -> MirBody:
         return dead(body)
-
-
-class Segments(MIRTransform):
-    name = "segments"
-
-    def __init__(self, where: Where) -> None:
-        self.where = where
-
-    def transform(self, body: MirBody) -> MirBody:
-        return segments(body, self.where.dgroup, self.where.named)
 
 
 class Hoist(MIRTransform):
@@ -2466,7 +2795,10 @@ class Cse(MIRTransform):
         self.where = where
 
     def transform(self, body: MirBody) -> MirBody:
-        from qbopt.optimize import floatfold, gvn, loadjoins
+        from qbopt.optimize import gvn
+        from qbopt.optimize import floatfold
+        from qbopt.optimize import loadjoins
+
         canonical = subexpressions(body, self.where.dgroup)
         # Finish exposing existing providers before making a supposedly missing one.
         joined = gvn.joined(canonical, insert=canonical == body)
@@ -2502,7 +2834,7 @@ def pipeline(where: Where, **wanted) -> list[MIRTransform]:
     every: list[MIRTransform] = [
         Fold(where),
         Decide(where),
-        Segments(where),
+        loopsimplify.LoopSimplify(),
         lcssa.LoopClosedSSA(),
         Hoist(where),
         Forward(where),
@@ -2543,7 +2875,6 @@ def applied(
     lcssa_: bool = True,
     decide: bool = True,
     dead: bool = True,
-    segments_: bool = True,
     hoist: bool = True,
     forward: bool = True,
     drop_loads: bool = True,
@@ -2553,6 +2884,7 @@ def applied(
     unroll_: bool = True,
     unswitch_: bool = False,
     only: str | None = None,
+    registers: int | None = None,
     watch=None,
 ) -> MirBody:
     """Every transform this module has, or the one `only` names.
@@ -2578,7 +2910,6 @@ def applied(
         "fold": fold,
         "decide": decide,
         "dead": dead,
-        "segments": segments_,
         "hoist": hoist,
         "forward": forward,
         "drop_loads": drop_loads,
@@ -2595,6 +2926,9 @@ def applied(
         bounds=module.landmarks(found) if found is not None else None,
         blocks=blocks,
         found=found,
+        # From the model, which is where MIR's register knowledge already
+        # is. It belongs to the caller once the drivers thread it.
+        registers=len(mir.TRACKED) if registers is None else registers,
     )
     passes = [one for one in pipeline(where, **wanted) if only is None or one.name == only]
     if found is not None:
@@ -2622,6 +2956,7 @@ def applied(
         if only is not None or body == before:
             if only is None and unswitch_:
                 from qbopt.optimize import unswitch
+
                 return unswitch.optimized(body, dgroup, calls, watch=watch)
             return body
     raise RuntimeError("MIR optimization did not converge after 16 rounds")

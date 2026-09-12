@@ -100,14 +100,82 @@ def _ordered(moves: list[lir.Insn]) -> list[lir.Insn]:
         wanted = {_outof(one) for one in left}
         ready = [one for one in left if _into(one) not in wanted]
         if not ready:
-            raise Tangled(
-                "these moves all read each other's destinations and need a temporary: "
-                + ", ".join(f"{_into(one)} <- {_outof(one)}" for one in left)
-            )
+            rotated = _rotated(left)
+            if rotated is None:
+                raise Tangled(
+                    "these moves all read each other's destinations and need a temporary: "
+                    + ", ".join(f"{_into(one)} <- {_outof(one)}" for one in left)
+                )
+            made, used = rotated
+            out += made
+            for one in used:
+                left.remove(one)
+            continue
         for one in ready:
             out.append(replace(one, group=None))
             left.remove(one)
     return out
+
+
+def _rotated(left: list[lir.Insn]) -> "tuple[list[lir.Insn], list[lir.Insn]] | None":
+    """One cycle out of `left`, as the exchanges that perform it.
+
+    A cycle `p1 <- p2 <- ... <- pn <- p1` is `xchg p1,p2` then `xchg p2,p3`
+    and so on: n-1 instructions, no scratch register, and xchg writes no
+    flags, which is why this can run after allocation where there is
+    neither a spare register nor a spare flag.
+
+    None where the machine cannot say it: xchg takes at most one memory
+    operand, so two memory places adjacent in the chain have no
+    instruction and the caller refuses as before.
+    """
+    writes = {_into(one): one for one in left}
+    start = left[0]
+    cycle = [start]
+    place = _outof(start)
+    while place != _into(start):
+        one = writes.get(place)
+        if one is None or one in cycle:
+            return None  # not a cycle this walk closes
+        cycle.append(one)
+        place = _outof(one)
+
+    operands = [one.what.dests[0] for one in cycle]
+    pairs = list(zip(operands, operands[1:]))
+    from qbopt.backend import target
+
+    if any(isinstance(one, ir.Reg) and one.register in target.SEGMENTS for one in operands):
+        return None  # no `xchg` names a segment register
+    if any(isinstance(a, ir.Mem) and isinstance(b, ir.Mem) for a, b in pairs):
+        return None
+    # One width across the whole chain. `_named` keys a register by its
+    # root, which is right for the ordering -- writing ax really does
+    # clobber eax's low half, so the dependency is real -- but it makes
+    # `mov ax,bx` and `mov ebx,eax` walk as one clean 2-cycle, and the
+    # exchange built from their own operands is `xchg ax,ebx`: either no
+    # encoding at all or the low halves swapped and ebx's upper half
+    # quietly wrong. Mem has the same hole, its width being no part of the
+    # key either.
+    if len({one.width for one in operands}) != 1:
+        return None
+    # The last move contributes no instruction, so it must stand for no
+    # bytes -- every copy a group holds is inserted, and `lir.without`
+    # relies on the same fact.
+    last = cycle[-1]
+    if last.covers and last.covers[0] != last.covers[1]:
+        return None
+
+    made = [
+        replace(
+            one,
+            what=ir.Semantics(ir.Operation.EXCHANGE, "xchg", (a, b), (b, a)),
+            group=None,
+            defines=(),
+            uses=(),
+        )
+        for one, (a, b) in zip(cycle, pairs)
+    ]
+    return made, cycle
 
 
 def _into(one: lir.Insn) -> str:

@@ -3,8 +3,8 @@
 from pathlib import Path
 
 import pytest
-import corpus
 
+import corpus
 from qbopt import wholeseg
 from qbopt.analysis import loops
 
@@ -13,6 +13,7 @@ from qbopt.analysis import loops
 def test_invariant_branch_load_moves_out_but_its_test_stays(tag, monkeypatch):
     """IVWORD reloaded unchanged branchChoice every trip because its test prevented LICM."""
     from qbopt.optimize import unswitch
+
     monkeypatch.setattr(unswitch, "optimized", lambda body, *args, **kwargs: body)
     result = wholeseg.emitted(Path(f"fixtures/regressions/ivword-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
@@ -29,26 +30,28 @@ def test_invariant_branch_load_moves_out_but_its_test_stays(tag, monkeypatch):
 def test_internal_branch_reuses_the_value_recurrence(tag, program, monkeypatch):
     """IVARM kept a second counter solely for ten trips around a conditional store."""
     from qbopt.optimize import unswitch
+
     monkeypatch.setattr(unswitch, "optimized", lambda body, *args, **kwargs: body)
     result = wholeseg.emitted(Path(f"fixtures/regressions/{program}-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
     assert not any(one.startswith("inc ") for one in instructions)
-    comparisons = [index for index, one in enumerate(instructions)
-                   if one.startswith("cmp ") and one.endswith(",25h")]
+    comparisons = [index for index, one in enumerate(instructions) if one.startswith("cmp ") and one.endswith(",25h")]
     assert len(comparisons) == 1
     assert instructions[comparisons[0] + 1].startswith("jne ")
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
-@pytest.mark.parametrize("program,branches", [("harr", 1), ("matrix", 2), ("nested", 1)])
-def test_harr_reuses_an_existing_recurrence_for_termination(tag, program, branches):
+@pytest.mark.parametrize("program,branches,increments", [("harr", 1, 1), ("matrix", 2, 1), ("nested", 2, 0)])
+def test_harr_reuses_an_existing_recurrence_for_termination(
+    tag: str, program: str, branches: int, increments: int
+) -> None:
     """HARR advanced both c and r+c on each inner iteration; one recurrence suffices."""
     result = wholeseg.emitted(Path(f"fixtures/omf/{program}-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
     assert sum(one.startswith("jne ") for one in instructions) == branches
-    assert sum(one.startswith("inc ") for one in instructions) == 1
+    assert sum(one.startswith("inc ") for one in instructions) == increments
 
 
 def test_harr_initializes_the_reused_counter_before_its_exit_bound():
@@ -62,7 +65,9 @@ def test_harr_initializes_the_reused_counter_before_its_exit_bound():
 def test_indvar_simplify_reads_through_an_lcssa_exit(monkeypatch) -> None:
     """LCSSA made HARR's redundant loop counter look externally observed."""
     from qbopt.model import mir
-    from qbopt.optimize import indvars, lcssa, transform
+    from qbopt.optimize import lcssa
+    from qbopt.optimize import indvars
+    from qbopt.optimize import transform
 
     path = Path("fixtures/omf/harr-v-g3.obj")
     found = corpus.loaded(path)
@@ -86,24 +91,34 @@ def test_indvar_simplify_reads_through_an_lcssa_exit(monkeypatch) -> None:
 @pytest.mark.parametrize("hazard", ["observed-counter", "zero-trip", "wrapping-exit", "short-period"])
 def test_counter_elimination_requires_a_complete_trip_count_and_no_body_use(monkeypatch, hazard):
     from dataclasses import replace
-    from qbopt.analysis import consts, induction, loops
+
     from qbopt.model import mir
-    from qbopt.optimize import indvars, transform
+    from qbopt.analysis import loops
+    from qbopt.analysis import consts
+    from qbopt.optimize import indvars
+    from qbopt.analysis import induction
+    from qbopt.optimize import transform
+
     path = Path("fixtures/omf/harr-v-g3.obj")
     found = corpus.loaded(path)
     partition = corpus.partitioned(path)
     with monkeypatch.context() as context:
         context.setattr(indvars, "simplified", lambda body: body)
-        body = transform.applied(mir.bodies(found, partition)[0][1], found.dgroup,
-                                 found.calls, blocks=partition, found=found)
+        body = transform.applied(
+            mir.bodies(found, partition)[0][1], found.dgroup, found.calls, blocks=partition, found=found
+        )
     loop = next(loop for loop in loops.loops(body.blocks, body.entry) if len(loop.body) == 2)
     facts = consts.known(body)
-    counter = next(counter for counter in induction.basics(body, loop).values()
-                   if induction._last_counter(body, loop, counter, facts, counter.start.width) is not None)
+    counter = next(
+        counter
+        for counter in induction.basics(body, loop).values()
+        if induction._last_counter(body, loop, counter, facts, counter.start.width) is not None
+    )
     header = next(block for block in body.blocks if block.at == loop.header)
     value = next(phi.result for phi in header.phis if phi.result.id == counter.value)
-    alternative_updates = {phi.incoming[next(iter(loop.latches))] for phi in header.phis
-                           if phi.result.id != counter.value}
+    alternative_updates = {
+        phi.incoming[next(iter(loop.latches))] for phi in header.phis if phi.result.id != counter.value
+    }
     changed = []
     for block in body.blocks:
         ops = []

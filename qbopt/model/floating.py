@@ -1,7 +1,7 @@
 """Machine-independent floating formats and observable evaluation rules."""
 
-from dataclasses import dataclass
 from enum import StrEnum
+from dataclasses import dataclass
 
 
 class Format(StrEnum):
@@ -26,6 +26,7 @@ class Rounding(StrEnum):
 
 class Exceptions(StrEnum):
     STRICT = "strict"
+    DEFERRED = "deferred"
 
 
 @dataclass(frozen=True, slots=True)

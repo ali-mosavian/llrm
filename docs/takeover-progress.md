@@ -5129,3 +5129,1223 @@ NBODY VBDOS before/after assembly is identical; no target improvement claimed.
 Dumps are in
 `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-global-copies-sri89wqu`.
 General operand substitution remains unfinished, so the roadmap item stays open.
+
+### Native C reconstruction and selector rematerialization
+
+`r_span.obj` no longer disappears at reconstruction.  Its unreferenced static
+procedure at `0x034e` is admitted only after a bounded tentative walk from the
+native `push bp / mov bp,sp` entry proves that every path returns and every
+remaining byte in the containing gap is inert.  Applying the same rule to the
+five available Borland C objects maps all of each code segment: `d_faces` has
+2,050 instructions and four bodies, `pl_trace` 804 and three, `r_span` 1,808
+and 27, `r_walk` 757 and five, and `sb_build` 502 and two.  Local near wrappers
+which push CS before calling a far-returning procedure now distinguish physical
+return-address depth from the callee's semantic argument cleanup.
+
+Relocated selector immediates and ES-indexed static offsets now survive the MIR
+boundary independently.  LOC_BASE fixups are no longer mistaken for numeric
+zero, and an explicitly segmented generated operand uses OMF's target frame
+rather than DGROUP.  With artifact-audited diagnostic contracts, `r_span.obj`
+rebuilds from 8,734 to 8,235 bytes.  The emitted object has SHA-256
+`44d9530cd670abe51658c0ac862dcff73baa744913038127a032f509661e3d00`; the
+store reconstructed at `0x10ae` retains its OFF16 relocation to segment 4 with
+addend `0x1800`, and its selector load retains the paired LOC_BASE relocation.
+The UGL contract artifact is a real OMF library, so contract profiles now
+validate a symbol against its archive member rather than accepting only a
+standalone OBJ.  `MATHC.LIB`, which defines `F_FTOL@`, is not available on this
+host; therefore no complete persistent profile was fabricated.
+
+The corrected selector SSA initially exposed a backend regression in
+`pl_trace.obj`: current output was 2,015 bytes with ten spill bytes, versus the
+previous accepted 1,969-byte artifact with four.  Adjacent stage dumps showed
+three two-byte slots storing ES selector values.  MIR CSE had correctly kept
+one load of `[bp+1e]` across intervening `LES` definitions; generic allocation
+then tried to keep overlapping selector values in the one physical ES resource.
+The backend now recognizes a unique, unchanged positive BP-relative selector
+load as a rematerialization recipe, retries allocation after cheap
+rematerializations before spilling the other conflicts, and forwards identical
+physical reloads through read-only x87 operations.  It invalidates that fact on
+an actual segment write or a possibly aliasing store.
+
+The resulting helper has the hand-derived sequence: one `mov es,[bp+1e]` before
+each of the three runs which need that selector, no selector stores, and no
+repeat reload between adjacent ES-relative x87 reads.  Its frame is again the
+original 34 bytes plus exactly four spill bytes, and its final instruction count
+is 541 versus 542 in the older artifact.  The whole object is 1,985 bytes.  The
+remaining 16-byte object-size difference is outside spill expansion and follows
+earlier semantic reconstruction changes; no equivalence claim is made from size
+alone.  Stage evidence is in `/tmp/qbopt-pltrace-remat`.
+
+Per the user's explicit instruction for this checkpoint, no tests were written
+or run.  Only syntax compilation, selected-file diff checks, stage dumps, object
+rebuilds, disassembly, hashes, and parsed relocation records were used.  The
+project-wide target and the regression-test gate remain incomplete.
+
+### Composable native-call evidence and R_WALK allocation baseline
+
+External-call profiles now compose without copying independent audits into a
+new JSON file.  Repeating `--contracts` loads each hash-checked profile against
+the common artifact root, rejects a symbol declared by more than one profile,
+sorts the resulting rules, and records one argument-order-independent
+fingerprint.  A single profile retains its existing fingerprint.  Composing
+the current generated qrender interfaces with the UGLV audit yields 201 unique
+contracts and fingerprint
+`876e9244ca162f734f1a53488f32574959efd2092c1f15a6c7592c3ae2714984` in
+either argument order.
+
+`tools/contracts.py` could not initially audit `r_sweep.obj`: its shared module
+reader treated every standalone OMF object as an empty library.  The reader now
+uses the archive layout for a LIB and parses exactly one valid THEADR module for
+an OBJ.  That exposed a second measurement defect: generic register-copy
+handling shadowed the analyzer's `mov bp,sp` case, and fixed stack reservation
+plus `leave` were unmodeled.  With frame moves ordered first and signed
+`add/sub sp,imm` plus `leave` modeled, the analyzer follows both near calls to
+the local helper and derives the public routine's only normal return as
+`cleanup: 18`, with no unknown path.  Raw bytes at `0x0135` are `CA 12 00`
+(`retf 18`).  The audit is pinned to `r_sweep.obj` SHA-256
+`01073a08dff883e30870a9ec959bd2f79a66ffa8c065191d9fd0db77d4c6499c` in
+`docs/contracts/qrender-r-sweep.json`; UGL cleanup-only facts are independently
+pinned to the 138-member UGLV archive in `qrender-uglv.json`.
+
+The three available profile sets cover `R_SWEEP_ROW`, `UGLDCSIZE`,
+`UGLSETVIEW`, `UGLSPANBEGIN`, and `UGLSPANTP` for `r_span.obj`.  Production
+still refuses the original object unchanged at native procedure `0x04d5`.  Its
+two remaining unknown calls are `F_FTOL@` at `0x0cec` and `0x0d15`; raw caller
+assembly loads the operand into x87 `st0` and pushes no stack argument, but the
+defining Borland MATHC library is absent, so no persistent ABI contract was
+made from caller convention alone.  The earlier `F_FTOL@` call at `0x047d` has
+the same shape in another procedure.  `MATHC.LIB` and `CL.LIB` are absent from
+all available work and temporary trees.  Consequently `d_faces` still lacks
+`F_FTOL@` plus three `R_SPAN_*` and `SB_BUILD` contracts; `sb_build` lacks
+`F_FTOL@` and `F_SCOPY@`; `r_span` lacks only `F_FTOL@`.  Unknown callees remain
+unknown rather than being admitted from historical hashes whose bytes cannot
+be checked here.
+
+`r_walk.obj` has a complete available contract set and rebuilds through the
+production LIR emitter to 2,112 bytes, versus the earlier recorded 2,130-byte
+artifact.  Its five procedures have these adjacent backend counts:
+
+| Stage | Procedure counts |
+| --- | --- |
+| lowered | 69, 10, 357, 28, 267 |
+| phi elimination | 69, 12, 361, 28, 326 |
+| two-address | 70, 12, 366, 28, 360 |
+| coalesce | 70, 10, 366, 28, 346 |
+| register allocation | 71, 10, 385, 28, 309 |
+| prologue | 71, 10, 388, 28, 314 |
+| peephole | 70, 10, 384, 28, 311 |
+
+The third procedure's allocation growth is concrete rather than inferred from
+object size.  For example, values loaded through ES are saved in new spill
+slots such as `[bp-22h]`, immediately reloaded into the same physical register,
+then stored into existing program locals; those spill homes have later reads,
+so deleting the first round trip alone would be wrong.  Reusing the already
+written stable local as a spill/rematerialization home is the next general
+backend question.  Complete dumps are in `/tmp/qbopt-rwalk-current`.
+
+That backend question is now answered conservatively in LIR.  A spilled value
+may use a source-program frame local as its home only when one original
+negative BP-relative store dominates every other use, no use is part of a
+parallel copy, and the whole procedure contains no call, incomplete memory
+barrier, or store which may alias that cell.  The initializing store remains;
+later uses get short reload values from the existing local before coloring.
+This is backend rematerialization and introduces no physical register fact into
+MIR.
+
+On the real `r_walk.obj`, the rule fires for the fields copied to `[bp-6]` and
+`[bp-0Ah]`.  Register-allocation output for the third procedure drops from 385
+to 381 instructions, its extra spill reservation from ten to six bytes, and
+the complete emitted object from 2,112 to 2,100 bytes.  Before, the first field
+included `mov [bp-22h],bx; mov bx,[bp-22h]; mov [bp-6],bx`; after, it is directly
+`mov [bp-6],bx`, and later consumers load `[bp-6]`.  The analogous long-lived
+value reached through a separate copy is not admitted: it has no pre-existing
+frame home, and the coalescer deliberately keeps its short load range separate
+because merging it fails the colorability guard.  Post-change dumps are in
+`/tmp/qbopt-rwalk-framehomes2`.  `pl_trace.obj` remains a 1,985-byte LIR rebuild,
+so selector rematerialization is unchanged by this rule.
+
+This checkpoint again contains no authored or executed tests at the user's
+request.  Syntax compilation, profile validation, real-object stage dumping,
+raw disassembly, hash checks, and selected-file whitespace checks succeeded.
+The required fail-first regressions and project-wide integration gate remain
+open while that restriction is in force.
+
+## 2026-09-12: a computed store does not name what it stored
+
+`avail.stored_from()` answered "this cell now holds value V" for any operation
+with one store, no load, and exactly one value read.  `inc [x]`, `dec [x]` and
+`add [x],k` fit that shape and store something other than what they read; the
+deedlines rewrite contains 543 of them.
+
+The availability lattice then carried the pre-store value across the store, all
+three predecessors of the join agreed on it, and `forward` served the reload of
+`kxy0%` from the value the variable held before the branch that changed it.
+zoomdistort drew 5,235 wrong screen bytes.
+
+Copy propagation inside `cse` only exposed it.  Until both arms of the branch
+read the same SSA value the meet disagreed and the wrong fact never reached the
+join, which is why the failure looked like a CSE bug and bisected into one.
+
+`stored_from` now requires `Kind.STORE` or `Kind.ARG` -- the two shapes that put
+a value in a cell unchanged.  Emitted code for the update, before and after:
+
+    mov [bp-8Ah],bx          mov [bp-8Ah],ax
+    ...                      mov ax,[bp-8Ah]
+    cmp ax,0FF9Ch            cmp ax,0FF9Ch
+
+The reload costs two instructions on two paths.  deedlines mark 3 goes from
+5,235 differing bytes to none; marks 1, 2, 4, 6, 7 and 8 stay byte-identical.
+actions3d (mark 5) still differs by 3,067 bytes and is not this bug.
+
+## 2026-09-12: the emulator's segment protocol is not a dialect's
+
+Under /FPi the compiler emits `int 3Ch` for a segment override, with the real
+ESC opcode after it.  `blocks.decoded_instruction` restored the ES that
+interrupt stands for only when the module's family was `vbdos`, on the strength
+of a patch read out of VBDCL10E.
+
+So in QuickBASIC objects every emulated float access through a dynamic array
+decoded as `fld dword [bx]` -- DS, not ES.  The reference carried no segment
+value, the `mov es,[si+2]` before it had no reader, and `dead` removed it.
+deedlines' translate3d then divided by whatever ES held, every projected point
+landed outside output3d's range test, and actions3d drew an empty screen.
+
+Read back out of the running program, which is the only place the answer is:
+
+    0824:A3F2  90 26 D9 07      (was CD 3C D9 07)
+
+NOP plus a 26h ES override, in QuickBASIC 4.5's own deedlines.  The protocol is
+the emulator's; the family test is gone.  The raised load now reads
+
+    fld  [es:bx+0x0]   base=v4_20  segment=v6_1   uses=(v4_20, v6_1)
+
+Emission already handled this: `_emulator_protocol` takes the interrupt byte
+from the original site and `fpu.wrapped` accepts either a bare or 26h-prefixed
+ESC under the 3Ch protocol.
+
+## 2026-09-12: a store forgets nothing a register holds
+
+`peephole.reloads()` cleared its whole table at any store and kept one cell
+per register. Both are wrong. A store changes no register's value, and two
+bp-relative slots whose byte ranges do not meet cannot be the same byte --
+arithmetic, not analysis. A register also holds every slot it has been read
+out of or written into since, not the last one.
+
+It now invalidates only overlapping slots and remembers each register's cells.
+`spiller._store` marks its own stores so an inserted one can say it writes that
+slot and nothing else; it carries the `op` of whatever it stands beside, whose
+stores are not its own.
+
+deedlines, every mark still byte-identical to BC's output:
+
+| mark | before | after |
+| --- | --- | --- |
+| 1 | 1.21x | 1.28x |
+| 3 zoomdistort | 0.98x | 1.00x |
+| 4 rgblights | 0.99x | 1.02x |
+| 5 actions3d | 1.24x | 1.26x |
+| 7 plasmablobs | 0.92x | 0.93x |
+| total | 1.08x | 1.088x |
+
+qbdemo's shadebob went 1.18x to 1.28x; oimad is unchanged at 1.01x.
+
+## 2026-09-12: more alias precision, and a measurement that could not answer
+
+`may_alias` answers True for any indexed operand against anything in another
+space, so one `POKE` through `es:bx` makes every frame local in the loop
+aliased. Indexing moves within the thing indexed, and Space.FAR is a $DYNAMIC
+array element in the far heap, so the rule that already separates a frame local
+from a named variable arguably separates it from both. Relaxing it let
+`forward` serve plasmablobs' reload of `x%`.
+
+plasmablobs grew from 1,079 instructions to 1,092, so the change was reverted:
+the longer live ranges a more precise analysis exposes are spilled rather than
+held, and the gain arrives as extra spill slots and reloads.
+
+The first version of this entry also claimed five other procedures grew. That
+was the instrument, not the subject: the variant objects were built with MIR
+passes restricted to plasmablobs, so every other procedure was being compared
+against its own unoptimised form. Only the plasmablobs figure was a comparison
+of like with like. Whether the relaxed rule helps or hurts elsewhere is still
+unmeasured.
+
+## 2026-09-12: the relaxed alias rule, measured whole-module
+
+The entry above left the question open. Built with the whole module optimised,
+the relaxation costs instructions everywhere it changes anything:
+
+| | now | relaxed |
+| --- | --- | --- |
+| plasmablobs | 1078 | 1092 |
+| zoomdistort | 728 | 753 |
+| spheremaplasma | 1080 | 1108 |
+| all 11 bodies | 6862 | 6932 |
+
+Reverted for good.
+
+## 2026-09-12: a reload is redundant on every path, not just the one behind it
+
+`spillforward` compared a block's first instruction with its predecessor's
+last, and `peephole.reloads()` did the same thing within one block. Neither can
+see plasmablobs' x loop, which reloads its counter at the top although the
+latch left it in `ax` -- the edge between them is a block holding one `jmp`.
+
+Both are now one availability fixpoint over (register, slot) facts in
+`spillforward`, met at every incoming edge; `reloads()` is gone. Two things had
+to be right for it to find anything:
+
+  - A `jmp` writes nothing. `_register_effects` answers only for instructions
+    that fall through, so reading its `None` as "gives up" ended every fact at
+    the end of every block that ends in one.
+  - `op.stores` is the last word only for an instruction that is its own op. A
+    reload carries the op of whatever it stands beside, stores and all, so
+    reading it as a write to memory ended every fact at the very instruction
+    the facts were there to answer.
+
+## 2026-09-12: what is dead after a block is not a question a block can answer
+
+`peephole.overwritten()` walks a block backwards from "assume everything live",
+which is exactly where a phi's parallel copy is written. `backend/liveness.py`
+computes the lanes dead on exit from each block and seeds it.
+
+A call is not a register barrier either. `requires` and `clobbers` are the
+contract the allocation is already built on -- `allocate` keeps live ranges in
+registers a call does not clobber -- so liveness reads a call the same way
+instead of treating every register as live across it.
+
+## 2026-09-12: a loop counter does not need a second home
+
+`spiller._frame_homes` refused any body containing a call and any value with
+more than one definition, so deedlines' plasmablobs stored `x%` to a slot of
+its own beside its own `[bp-2Eh]`, once per iteration of a 64000-iteration
+loop.
+
+Both restrictions asked a question about the body that is really about a point
+in the program: whether the store is the last thing to have written the cell.
+It is now a forward dataflow -- the store establishes it, a definition of the
+value, a call, an incomplete barrier or an aliasing write ends it, and every
+use must have it. A call before the loop is no longer a reason: the store
+re-establishes the fact on every path into the loop.
+
+`[bp-0A2h]` is gone from plasmablobs. Its x loop is 77 instructions against
+BC's 76; the one left is a phi copy on the backedge for a value read after
+both loops, which the allocator pays rather than hold a register across them.
+
+All three demos, every screen byte-identical to BC's (qbdemo's mark 1 keeps its
+known 9-byte fractal difference):
+
+| | before | after |
+| --- | --- | --- |
+| deedlines total | 1.092x | 1.102x |
+| deedlines 3 zoomdistort | 1.00x | 1.01x |
+| deedlines 4 rgblights | 1.06x | 1.07x |
+| deedlines 7 plasmablobs | 0.95x | 0.99x |
+| oimad | 1.01x | 1.01x |
+
+qbdemo is 1.32x, 1.22x and 1.32x on marks 1, 3 and 4. Its mark 2 is not an
+instrument at this resolution: five runs of one binary spanned 824k to 942k
+ticks, so nothing under about 15% can be read from it.
+
+## 2026-09-12: the alias relaxation again, with the allocation defects fixed
+
+The relaxation above was worth re-measuring once the redundant reloads, the
+duplicate home and the block-local liveness were gone -- its cost looked like
+an allocation failure, not an analysis error.
+
+It is not. On the same eleven bodies: 6841 instructions without, 6913 with
+(plasmablobs +16, zoomdistort +26, spheremaplasma +26). The extra precision
+makes three more loads loop-invariant, `hoist` moves them out, and the values
+are then live across the whole loop, so the allocator spills each one back to
+where the load was and pays the store as well.
+
+The spill weight is already LLVM's -- references weighted by loop depth over
+live length -- and that is the formula that decides this: a value defined in
+the preheader and used inside the loop has a denominator the length of the
+loop, so it is always the cheapest thing to spill. Nothing short of splitting
+the live range changes that answer, which is what LLVM does instead of
+spilling whole ranges.
+
+## 2026-09-12: the program's own redundant loads
+
+`spillforward` removed only allocator-owned reloads. A program load of a local
+into a register that already holds it is as redundant, and the availability
+fact proves the same thing about both. Six more instructions across deedlines;
+all three demos unchanged.
+
+cycleblobs' latch keeps its reload of `x%` even so: its inner loop writes the
+screen through `es:bx`, which no sound rule here separates from a frame local.
+
+## 2026-09-12: a rebuilt value is not a slot, and a read is not a store
+
+Two things the spiller knew about slot-backed values and not about the ones it
+rebuilds.
+
+**Rebuilding a load.** `_frame_loads` recognised only word selectors out of a
+positive bp-relative argument slot. `_stable_loads` asks the general question:
+a value whose one definition is a load, from a cell nothing changes on any
+path to any use, is that load. Reading the cell again is the same value, so
+the load goes back where it was and no slot is taken -- which is what makes a
+hoist free when the allocator then refuses the value a register.
+
+**Folding the read.** `_source` folds a spilled value's use into the
+instruction that wanted it, and it ran only on slot-backed values. A rebuilt
+cell reads exactly as well, so the rebuild was costing a whole instruction
+more than the spill it replaced -- `mov si,[bp-2Eh]; add dx,si` where BC
+writes `add dx,[bp-2Eh]`. Only the read: `_in_place` and `_tied` write the
+cell back, and a program's own variable is not there for that.
+
+plasmablobs' x loop is now 76 instructions, which is BC's own count.
+
+| mark | before | after |
+| --- | --- | --- |
+| 3 zoomdistort | 1.01x | 1.03x |
+| 4 rgblights | 1.07x | 1.08x |
+| 7 plasmablobs | 0.99x | **1.00x** |
+| deedlines total | 1.102x | **1.106x** |
+
+qbdemo 1.32/1.28/1.22/1.31 and oimad 1.01x, both unchanged; every screen in
+all three byte-identical to BC's but qbdemo mark 1's known 9 bytes. Only
+cycleblobs is still under parity, at 0.99x.
+
+## 2026-09-12: pricing a rebuilt value lower does not pay
+
+If the spiller can rebuild a value for free, the allocator should prefer to
+spill it -- so its weight was scaled down, at 0.5 as LLVM does and at 0.01.
+Both moved instructions from one loop to another: zoomdistort lost eight and
+plasmablobs' x loop gained two, because the saving is only the store, and a
+hoisted load's store is in the preheader where it costs almost nothing. The
+three loads per iteration that keeping it in a register avoids are worth more
+than the one spill it displaces. Reverted; the honest version prices each
+reference by what spilling it would actually emit, which is a bigger change
+than a factor.
+
+## 2026-09-12: which half of the alias relaxation costs the instructions
+
+Measured apart rather than together, the two halves are not alike. Against
+6831 without either:
+
+| | total |
+| --- | --- |
+| FRAME disjoint from indexed FAR only | 6882 |
+| FRAME disjoint from indexed SEGMENT only | 6834 |
+
+The FAR half carries all of it -- plasmablobs 1062 to 1079, zoomdistort 723 to
+740, spheremaplasma 1079 to 1098, the same damage the full relaxation did. The
+SEGMENT half is a wash.
+
+Neither unblocks cycleblobs' latch reload, which was the reason for trying:
+the screen write its inner loop makes is neither, so the reload stays whatever
+this rule says.
+
+## 2026-09-12: the FAR rule, priced in hot loops instead of body totals
+
+The screen write cycleblobs' inner loop makes is `Space.FAR` -- a $DYNAMIC
+array element in the runtime's far heap -- and that is what ends the fact that
+`bx` already holds `x%`, one instruction before the loop reloads it. Making
+FRAME and indexed FAR disjoint in `may_alias` removes that reload and brings
+the loop to 62 instructions against BC's 63.
+
+It also takes plasmablobs' x loop from 76 -- BC's own count -- to 81, and the
+five are three new spill slots reloaded inside the loop:
+
+    mov bx,[bp-0A2h]      mov si,[bp-0A4h]      mov si,[bp-0A0h]
+    mov bx,[bx]           add bx,[si]           mov cx,[si]
+
+The precision makes three address computations loop-invariant, `hoist` moves
+them out, and all three are spilled straight back -- so each use is a reload
+and an indirect load where it had been the arithmetic. Weighted by the marks
+they are in, 5 out of 76 in a 12.8M-tick loop against 1 out of 63 in a
+10.5M-tick one, it loses.
+
+The rule is not wrong; the pipeline cannot hold what it exposes. What is
+missing is rematerializing cheap address arithmetic the way `_stable_loads`
+now rematerializes a load -- LLVM's `isAsCheapAsAMove`. Until that exists this
+stays reverted, and this is the third and most precise measurement saying so.
+
+## 2026-09-12: a copy for what comes after the loop belongs after the loop
+
+A phi whose value is computed in a loop and read after it becomes a copy on
+the way back to the header, so it runs every iteration to hand over a value
+nothing inside looks at. plasmablobs ended its inner loop with `mov di,bx` for
+a call after both loops -- 64000 copies for one use -- and cycleblobs' inner
+loop carried two.
+
+`backend/copysink.py` moves such a copy to the exit block. Two things had to
+be asked correctly:
+
+  - **Whose liveness.** The destination is live-in at the block that branches
+    out of the loop, because the *exit* reads it -- which is the path the sunk
+    copy is for. The question is whether it is dead on the way back to the
+    header, at that block's in-loop successors.
+  - **Which blocks are in between.** The copy is in the block before the
+    branch, and the loop body writes its source. Only a path from the copy to
+    the exit that does not come back through the copy's own block can be why
+    the last copy before the exit is wrong, so the walk leaves that block out.
+
+plasmablobs' x loop is 75 instructions and cycleblobs' inner loop 62, against
+BC's 76 and 63. Every screen in all three demos byte-identical but qbdemo mark
+1's known 9 bytes.
+
+| mark | before | after |
+| --- | --- | --- |
+| 2 spheremaplasma | 1.02x | 1.06x |
+| 6 cycleblobs | 0.99x | **1.00x** |
+| 7 plasmablobs | 1.00x | 1.03x |
+| deedlines total | 1.106x | **1.114x** |
+
+qbdemo mark 3 went 1.22x to 1.24x; oimad is 1.01x. No mark of any demo is
+below parity with BC any more.
+
+## 2026-09-12: a sign word through the stack, and two instruments
+
+Re-scoring `--targets` over the committed PDS `/G2` fixtures found two things.
+
+**The bounds fixtures were never comparable.** `_program` reads the THEADR, so
+`harr-bounds-p-g2` -- a `/D` build of the same source -- was scored against
+HARR's plain-build target and read as a 16.67x miss (30,578 against 1,834);
+arridx-bounds read as 6.20x. A `/D` build tracks the line at every statement
+and checks every subscript. `opportunity.py` now says so, the way it already
+does for an event-enabled build. Those two targets are uncovered, not passed.
+
+**A divide's sign word went through the stack.** The raise decodes BC's `cwd`
+faithfully as `extract(sign_extend(x), 16)`, and lowering had one rule for an
+extract: push the dword and pop both halves. stride's loop paid
+
+    mov cx,5 / movsx eax,bx / push eax / pop ax / pop dx / mov ax,bx / idiv cx
+
+where the popped low half was dead -- the divide reads the word itself -- and
+the sign is one `cwd`. `_word_division` already emits exactly that Semantics;
+`_extract` now does too, and an extract of the low half is a `mov`.
+
+Only where a divide asked for it. `cwd` pins its word to ax and takes dx,
+which is free where `idiv` wanted dx:ax and a shuffle anywhere else: emitting
+it for every sign word cost deedlines' actions3d 1.5% of its running time
+(mark 5 1.26x to 1.24x) while shrinking the object. Gated on the extract being
+a divide's high half over the word beside it, actions3d is back to 1.26x.
+
+stride 3.10x to 2.54x, every other row in the suite unchanged. Six documented
+targets are still above 1.5x: stride 2.54x, jumps 2.95x, hotlpx 2.06x, harr
+1.77x, lngmxx 1.57x, segld 1.56x. The `-x` rows want the native-FPU
+configuration this scan does not use.
+
+Demos, every screen byte-identical but qbdemo mark 1's known 9 bytes:
+
+| mark | before | after |
+| --- | --- | --- |
+| 1 prehistoricode | 1.29x | 1.30x |
+| 4 rgblights | 1.08x | 1.10x |
+| 8 telos | 1.09x | 1.10x |
+| deedlines total | 1.114x | **1.115x** |
+
+qbdemo 1.32/1.25/1.24/1.29 and oimad 1.01x.
+
+## The sign-extended dividend, and what the inner loops have in common
+
+**A dividend that reached a long by `movsx` is still one `idiv r16`.**
+`raising_division` collapsed a three-argument divide only where BC wrote
+`cwd`. stride's dividend comes from `movsx eax,bx`, which the raise says as
+`extract(sign_extend(x), 16)` -- the same fact in the shape the long raise
+leaves. It now matches both, and the `op.merges` refusal became a rewrite:
+`idiv r16` ties dx:ax to the pair it writes, and dropping the high half drops
+its tie with it, because the lowering builds a fresh high from `cwd`.
+
+With the divide a `divmod`, `induction._quotients` recognises `i \ 5` where
+`i` strides by five, and stride's loop is the sequence 0, 1, 2, ... : 13
+instructions to 5, and the sum folds to a constant. stride 2.54x to **0.76x**.
+Five documented targets remain above 1.5x.
+
+**The spiller asked select.py too late.** Relaxing the merges rule let a tie
+land on a widening multiply, and `_tied` wrote `imul [bp-4Ah],cx` -- a form
+x86 does not have. Its docstring said an unsupported form "refuses there,
+which is a refusal and not a wrong program"; a refusal is what qbdemo became.
+`_tied` now asks select.py whether the form exists before committing to it.
+Neutral on the demos, four bytes on segld.
+
+**Two instrument defects.** `BenchSnap` masked IRQ0 across its reading, which
+stops the BIOS tick from moving without making it right: a tick already
+pending is not counted. And mark 4 spans about five BIOS ticks, so one tick of
+inconsistency is 17% of the reading -- qbdemo mark 4 read 1.29x and 1.06x for
+two programs whose mark-4 code is the same instructions, and flipped sign
+between the dynamic and the normal core. The mark is too short to read below
+about 20%; the normal core is what settles a question that size.
+
+### What the inner loops have in common
+
+Three demos, one shape. qbdemo's shadebob inner loop:
+
+    mov di,[bp-76h] / mov es,[0] / mov dl,[es:di] / and dx,0FFh
+    mov es,[bp-96h] / mov [es:si],dx / inc di / mov [bp-76h],di
+    inc cx / add si,2 / mov [bp-7Ah],cx / cmp cx,9Fh / jle
+
+and oimad's palette store, which recomputes the descriptor as well:
+
+    mov bx,[bp-48h] / lea cx,[ebx+ebx] / lea si,[bp-1Ch] / mov di,cx
+    add di,[si+0Ah] / mov es,[si+2] / mov [es:di],ax / inc bx
+    mov [bp-48h],bx / cmp bx,2FFh / jle
+
+Four instructions of work in eleven to thirteen. Over qbdemo's seventeen
+innermost loops: 9.3% reloads of a local, 8.2% stores back to one, 6.5%
+segment loads, 3.1% loop-invariant address arithmetic. Twenty-seven per cent
+of innermost-loop instructions move values that never needed to leave a
+register.
+
+Two mechanisms, and they are the same problem in an order.
+
+**A far store is assumed to alias the frame.** Every one of these loops writes
+through `es:`, and `may_alias` short-circuits an indexed operand to True. So
+`mov [es:di],dx` may clobber `[bp-76h]` and the descriptor at `[bp-1Ch]`: the
+counter goes back to its slot every iteration and the array's base and segment
+loads are pinned inside the loop. The counter is both reloaded and stored --
+not a spill, a fence.
+
+**Segment registers are not allocated.** `Register.FS` and `Register.GS`
+appear in one line of the codebase, `target.SEGMENTS`, as scenery. A loop
+reading one segment and writing another reloads `es` twice an iteration and
+cannot hoist either, because there is one register for two values.
+
+This is why the alias relaxation lost four times: relaxed, the segment loads
+become loop-invariant, and there is nowhere to hoist them to.
+
+**Corrected, by reading the LIR's own flags rather than emitted addresses.**
+The counting above is of emitted text, and it cannot tell an allocator spill
+from the program's own memory. Asked of `spill_reload` and `spill_store`:
+
+| | qbdemo, 32 innermost loops | deedlines, 183 |
+| --- | --- | --- |
+| the program's own | 75.3% | 79.3% |
+| inserted register-to-register moves | 5.1% | 6.6% |
+| allocator spills | 4.4% | 3.9% |
+| inserted constant materialization | 4.1% | 2.5% |
+
+So most of that traffic is not spilling, and the average hides where the
+spilling is. PLASMA's `loop@0xe2d` -- qbdemo mark 3, two thirds of the demo's
+running time -- is 18 spills in 74 instructions, and its latch is sixteen
+instructions to advance five counters:
+
+    BX := mov [[bp-0x96]] ; SPILL RELOAD / BX := add BX, 0xb
+    CX := mov [[bp-0xa6]] ; SPILL RELOAD / CX := add CX, 0x3
+    DX := mov [[bp-0x98]] ; SPILL RELOAD / DX := add DX, 0x2
+    SI := mov [[bp-0x9a]] ; SPILL RELOAD / SI := add SI, 0x4
+    DI := mov [[bp-0x9c]] ; SPILL RELOAD / DI := add DI, 0x9
+    push [[bp-0x9e]] / [[bp-0x94]] := pop / five stores back
+
+Those five are strength reduction's derived counters, one per `sine(...)`
+argument. Spilled, each costs reload, add and store where recomputing the
+argument is `mov bx,ax; add bx,[f]` -- two instructions, and nothing carried
+across the backedge. The transform is a net loss at this site and the
+allocator cannot undo it.
+
+`strength.py` says the assumption outright: "Allocation owns pressure and
+spilling." It cannot, when the pass ahead of it has committed five
+loop-carried values to a six-register file. LLVM's LSR prices formulas
+against register pressure for this reason; this one does not price at all.
+
+Order, by where the evidence is: price strength reduction's loop-carried
+pressure, then segment allocation, then FRAME-vs-FAR. The alias relaxation
+alone re-runs an experiment whose answer is already recorded.
+
+One correctness lead sits in the same territory: a `BenchSnap` that compared a
+LONG reference parameter it had written earlier in the same loop spun forever
+in the qbopt build where BC's build ran. Worked around in the harness, not
+diagnosed.
+
+Measured after the batch, every screen byte-identical but qbdemo mark 1's
+known nine bytes:
+
+| demo | marks | total |
+| --- | --- | --- |
+| qbdemo | 1.38 / 1.25 / 1.22 / 1.06 | 1.25x |
+| deedlines | 1.23 / 1.06 / 1.03 / 1.09 / 1.26 / 1.00 / 1.03 / 1.10 | 1.11x |
+| oimad | 1.02 | 1.02x |
+
+qbdemo mark 4 reads 1.09x under the normal core against 1.06x under the
+dynamic one, which is the whole width of what that mark can say.
+
+## Strength reduction, priced
+
+The pass invented counters without counting them. Each one is a value live
+around the whole loop, so a loop given more than the target has registers
+gets every one of them spilled, and a spilled counter costs reload, add and
+store where recomputing the expression it replaced costs two instructions and
+carries nothing. qbdemo's plasma nest -- mark 3, two thirds of that demo --
+had five, and its latch was sixteen instructions to advance them:
+
+    BX := mov [[bp-0x96]] ; SPILL RELOAD / BX := add BX, 0xb
+    CX := mov [[bp-0xa6]] ; SPILL RELOAD / CX := add CX, 0x3
+    DX := mov [[bp-0x98]] ; SPILL RELOAD / DX := add DX, 0x2
+    SI := mov [[bp-0x9a]] ; SPILL RELOAD / SI := add SI, 0x4
+    DI := mov [[bp-0x9c]] ; SPILL RELOAD / DI := add DI, 0x9
+    push [[bp-0x9e]] / [[bp-0x94]] := pop / five stores back
+
+`Where.registers` is the budget, told to the pass rather than asked of the
+machine -- a number is not machine form, and zero means nothing was said.
+`pressure()` moved from `legacy/regalloc.py` to `analysis/liveness.py`, which
+is the rule-5 example liveness.py's own docstring already gives, and gained
+an `inside` so it can be asked of one loop.
+
+**Two models were wrong before the third worked.** Pricing against peak
+pressure inside the loop refused the array-indexing reductions the pass
+exists for -- peak is high exactly where the multiply chain still is -- and
+cost harr 1.77x to 5.28x, matrix 1.03x to 1.63x, segld 1.56x to 3.13x.
+Pricing against values live across the backedge is no better: a promoted loop
+legitimately carries more than the register file, and harr's loops report
+nine against six registers.
+
+What works is the count of recurrences the loop already drives, `_RESERVE`
+for what its body computes with. Per round, not per call: a derived counter
+is a phi advanced by a constant, so the next round reads it as a recurrence
+and the budget shrinks as the pass spends it. Counting only one call's
+additions let five rounds add five counters, one each.
+
+`_RESERVE` swept against the suite and qbdemo's loops: 1 and 2 leave the
+suite untouched, 3 costs harr 182 instructions and nested 8. Two is the knee.
+Sorting candidates to spend the budget on multiplies first was measured and
+dropped -- it cost harr 40 instructions and made plasma's loop worse.
+
+plasma's inner loop 18 spills in 74 instructions to **12 in 68**; its latch
+sixteen instructions to three. Every row of the documented suite unchanged.
+
+| demo | before | after |
+| --- | --- | --- |
+| qbdemo mark 3 | 1.22x | 1.23x |
+| qbdemo mark 4 | 1.06x | 1.13x |
+| qbdemo total | 1.25x | **1.26x** |
+| deedlines total | 1.11x | 1.11x |
+| oimad | 1.02x | 1.02x |
+
+The loop is dominated by its array loads and the FP emulator, not its latch,
+so thirteen instructions out of a hot loop is two tenths of a per cent of
+mark 3. The mechanism is right and the site was not where the time is.
+
+## qbdemo mark 1's nine bytes, narrowed
+
+Every one is at screen x=160, rows 98-105, and qbopt writes 1 where BC writes
+2, 3, 155, 255, 255, 4, 2, 2, 2. Through `render`'s scaling that column is the
+fractal's centre, which is the midpoint pixel `fracline` computes on its own
+after the scanline loop -- with `y` left over from a mid-body `EXIT DO`, which
+made `loopexit.evaluated` the obvious suspect.
+
+It is not. Three results, each a build and a run:
+
+- **Not an optimization.** With `fold, decide, dead, segments, hoist, forward,
+  drop_loads, drop_stores, promote, strength, unroll` all off -- qbdemo down
+  to 1.14x from 1.26x -- mark 1 still differs.
+- **Not the peephole.** Neutered, 1.19x, mark 1 still differs.
+- **Not FRACLINE's MIR.** Diffed across all 53 stages: the tail block changes
+  once, a CSE reusing one load of 0.0 for `re` and `im`. `y`'s cell is
+  untouched end to end. The emitted entry, loop, latch and tail match BC's
+  raise operation for operation, including which parameter each `bx` and `si`
+  holds and `B$FCMP`'s operand order, and the x87 stack balances in both.
+
+So it is in lowering or allocation, not in a pass -- which makes it mechanism
+1 and a shared mechanism rather than a patch. `floatalloc` cannot be bisected
+the way the others can: neutered it refuses at `fild`, because assigning the
+x87 stack is what it is for.
+
+### Where the instructions in a hot loop actually go
+
+Innermost loops, every one in the demo, by what put the instruction there:
+
+| | qbdemo, 1186 | deedlines, 7364 |
+| --- | --- | --- |
+| real work in registers | 57.8% | 65.9% |
+| backend inserted | 24.1% | 20.7% |
+| the program's own op with a local as operand | 10.5% | 5.4% |
+| the program's own load/store of a local | 7.7% | 7.9% |
+
+The backend adds about a fifth of every hot loop, and inserted
+register-to-register moves (5.1%) outweigh spills (4.4%). That is the largest
+addressable bucket and it is mechanism 2.
+
+The rest is the shape of the problem. Between a half and two thirds of what
+runs in a hot loop is BC's own instruction selection, reproduced unchanged,
+and every win recorded in this document is subtractive -- a redundant reload,
+a dead store, a duplicate home, a spilled counter. Deleting all of the
+backend's own overhead would leave that untouched.
+
+**Not the x87 stack either.** Absolute depth cannot be checked here -- nothing
+records how many stack entries a runtime float call consumes, and a model that
+guesses flags UNWHITEFADE and WHITEFADE, whose output is byte-identical. Run
+the identical model over BC's raise and over the emitted code and the blind
+spot cancels: the flag sets agree for every body in qbdemo, FRACLINE included.
+So the stack discipline is reproduced faithfully and the divergence is at the
+value level, in which location holds what.
+
+Eliminated so far, each by a build and a run or by a differential: every MIR
+optimization, the peephole, FRACLINE's raise, FRACLINE's lowering read against
+BC's operation for operation, and the x87 stack discipline of every body.
+
+## Where the failure actually is
+
+## Where the failure actually is
+
+Measured on qbdemo's 32 innermost loops, BC's raise against our emitted code,
+matched by the BC bytes each op still covers (`scratchpad/wall.py`):
+
+| | instructions | operands touching memory |
+|---|---|---|
+| BC | 1205 | 595 (49.4%) |
+| ours | 1186 | 533 (43.8%) |
+
+**1.02x.** Nineteen instructions across every hot loop in the program. The
+1.26x the demo reports is won outside the loops, which is where the time is
+not.
+
+### What the phases do to it
+
+Instruction count in those same loops after each LIR phase, which is rule 4
+answering a question that was being reasoned about instead:
+
+| phase | insns | reg-to-reg moves |
+|---|---|---|
+| lowered | **1012** | 3 |
+| floatalloc | 1032 | 3 |
+| phielim | 1111 | 75 |
+| twoaddr | 1319 | 280 |
+| coalesce | 1168 | 129 |
+| regalloc | 1244 | 83 |
+| peephole | 1186 | 63 |
+
+Lowering hands allocation 1012 instructions against BC's 1205 -- 1.19x. The
+conversion to six registers and two-address form costs 174 of it back, and
+the win is gone. Both halves are small: the optimizer finds 16% redundancy,
+allocation spends 17%.
+
+### What was tried and did not move it
+
+Each of these is a mechanism, measured, and each is worth about one percent.
+Recorded so they stop being re-proposed.
+
+| | effect on the 1186 |
+|---|---|
+| frame slots disjoint from every indexed operand | 1182 (-4) |
+| optimistic coalescing (no Briggs refusal) | 1178 (-8), spills 48 -> 63 |
+| strength reduction refusing more counters (`_RESERVE` 2->4) | 1193 (+7), spills 48 -> 57 |
+| float cell reuse, the subset with no rounding question | -22 available |
+| rematerializing constant-advanced counters | -8 available |
+| a seventh allocatable register | 1158 (-28), spills 48 -> 30 |
+
+Aliasing in particular should stop being the suspect: that relaxation is the
+strongest the oracle could have and it is the fourth one to buy nothing.
+Refusing strength reduction is worse than spilling its counters, so the
+budget added for it is not the lever either -- the multiply chain it replaces
+costs more than the reload, add and store that carry it.
+
+### What the residue is made of
+
+The 1186, by what the instructions are:
+
+  * 993 of 1123 register operands are 16-bit. 71 are 32-bit.
+  * **0 memory operands carry a scale factor.** 139 are indexed, all at
+    scale 1.
+  * 441 instructions (37%) are `mov`. 38 are `shl` by 1 to 3 and 87 are
+    register `add`s -- 11% of the loop is address arithmetic that a 386
+    `[base+index*scale+disp]` operand exists to absorb, against 16 `lea`.
+
+So the residue is not redundancy that was missed. It is BC's instruction
+selection, passed through: 8086 forms, 16-bit widths, addresses computed
+longhand. Deleting redundancy is worth 16% and allocation spends 17%, which
+is the whole of the 1.02x. The 3x to 17x in `docs/targets.md` is re-selection
+-- and there is no stage that re-selects. Every pass either deletes an
+operation or rewrites it in place, which is why seven fixes in one session
+each landed between 0.1% and 1%.
+
+## The target scoreboard cannot score a loop transformation
+
+`unroll` is restricted to floating loops -- `if not any(op.floating for op in
+latch.ops)` -- and `loopclone.peeled` is the general cloner sitting unused
+beside it, already accepting a body with BRANCH and SWITCH in it. Routing
+non-floating constant-trip loops through it builds every fixture and moves
+the scoreboard a long way: segld 1.56x to 0.33x, spill 1.16x to 0.17x,
+nested 1.17x to 0.66x, matrix 1.03x to 1.00x, hotlpx 2.06x to 1.82x, lngmxx
+1.57x to 1.42x.
+
+None of it is real. A hand-derived reference is the best code a person could
+write, so beating one by 6x is not a result -- it is `_cost`'s own stand-in
+being removed. The model weights a loop by ten per nesting level "as a
+stand-in for a trip count nothing here knows"; unrolling a three-trip loop
+replaces one body at weight ten with three at weight one, which is 0.3x for
+free and measures nothing.
+
+Emitted instruction counts say what actually happened:
+
+| | before | after |
+|---|---|---|
+| segld | 45 | 940 |
+| spill | 41 | 882 |
+| matrix | 54 | 428 |
+| nested | 49 | 396 |
+| stride | 24 | 230 |
+| jumps | 115 | 115 |
+
+Twenty times the code, and nothing at all for `jumps`, which is the target
+that motivated it. Reverted.
+
+So the instrument has to be fixed before this optimization can be worked on:
+`_cost` must weight a loop by `unroll._trips`'s answer where there is one,
+and fall back to ten only where there is not. Until then no loop
+transformation can be scored, which is the likeliest reason the five targets
+above 1.5x have resisted -- four of them (HOTLPX, PRESSX, FPCSEX, LNGMXX)
+already carry a hand-written trip override in `_TRIPS`, and everything else
+is being scored against a guess.
+
+### Why `jumps` does not unroll
+
+Followed to the bottom, because 2.95x is the worst documented target.
+`induction.basics` reports no counter, so the trip count is unknown and both
+expansions refuse. The header phi is there -- `v1_3 := phi 0x30:v1_5,
+0x127:v1_29` -- and the loop arm is `inc v1_17`, where `v1_17` is still a
+`LOAD` of `[seg:5+0x12]`, the counter's own cell. Nothing clears
+availability in that loop and the cell is in `promotable()`, so promotion
+created the variable and the phi and then left this one read in memory.
+`basics` requires the step to apply to the phi's own result and chases
+copies on the result side only, so a read that came back through memory
+breaks the recurrence.
+
+That is the chain: promote leaves one read, induction sees no recurrence,
+and every consumer of a trip count -- unroll, strength reduction, the cost
+model's own weighting -- gets nothing. Fixing it is one mechanism at the
+first link, not five at the ends.
+
+## The `ON GOTO` dispatcher was unbounding every cell in its program
+
+`jumps` was the worst documented target at 2.95x. Followed to the bottom,
+through four instruments each of which had to be corrected first:
+
+`induction.basics` reports no counter, so no trip count, so neither
+expansion runs. The header phi is there and its loop arm is `inc v1_17`,
+where `v1_17` is a `LOAD` of `[seg:5+0x12]` -- the counter's own cell. So
+the counter never left memory. `promote` reports no candidate at all for the
+body, and with the pipeline's own dgroup and bounds rather than an empty set
+(the first probe passed `frozenset()` and answered a different question):
+touches and widths pass, and the availability filter is what drops it.
+
+What clears availability is one call:
+
+    [avail] 0x3100000001 0x00052 CALL removes ['[seg:5+0x12]', '[seg:5+0x8]']
+            via stores=[('None', 0, None)]
+
+`beyond=None` -- no bound at all, so the store aliases the whole program.
+The call is `B$OGTA`, the `ON GOTO` dispatcher, and it sits inside the loop.
+Every `B$P*` output routine beside it in that same loop carries
+`beyond=(5, {...})` and is bounded.
+
+The difference is one condition in `raising_call_memory.reachable`: it
+admits `Control.RETURNS` and `Control.NEVER`, and `B$OGTA` is
+`Control.INLINE_TABLE`. Its `writes` level is 3, the same as every routine
+that is bounded. Where a routine leaves control is a different question from
+what it can write, and `beyond` answers only the second -- an INLINE_TABLE
+call resumes at one of the table's targets, which the raise already models
+as the dispatch block's own successors. So the bound holds across it exactly
+as it holds across a return.
+
+**Before and after**, emitted instructions for jumps-p-g2, 115 to 60:
+
+| removed | |
+|---|---|
+| 12 | `push r40.4` |
+| 12 | `pop r24.2` |
+| 6 | `pop r22.2`, 6 `pop r21.2` |
+| 6 | `mov [seg:5+0xe],r21` and 6 `mov [seg:5+0x10],r24` |
+| 6 | reloads of `[seg:5+0xa]` and `[seg:5+0x6]` |
+
+and the `and`/`or`/`xor`/`sub`/`sbb` rows now read registers where they read
+memory. `a`, `b` and `r` stay in registers across the loop, which is what
+promotion is for and what one unbounded call was preventing.
+
+Cost 2192 to 1106, **2.95x to 1.49x**, and the emitted count moved the same
+way -- 1.92x against the cost model's 1.98x. Both directions agreeing is the
+check the unroll attempt above failed.
+
+Across the support matrix, 31 fewer instructions on every non-event variant
+of all three families: jumps-p-g2, -p-noO, -p-ot, -q-O, -q-noO, -v-g2, -v-g3,
+-v-noO, -v-plain. Event-enabled builds are unchanged, which is expected --
+an event check makes the call a barrier. `jumptable` emits one more pseudo-op
+and the same 8 real instructions in the same 761 bytes. Every other
+documented target is unchanged. No demo uses `B$OGTA`, so none can be
+affected.
+
+Four documented targets remain above 1.5x: hotlpx 2.06x, harr 1.77x,
+lngmxx 1.57x, segld 1.56x.
+
+## `merges` was standing in for "not analysable", and it is every accumulator
+
+`loopexit.py` is the mechanism two documented targets needed and it was
+already written: "Evaluate affine exit values and delete finite,
+side-effect-free counted loops ... a fixed increment sums to N * step; an
+affine increment also contributes N(N-1)/2 times its stride." It runs from
+`Strength.transform`, so it was reached on every body, and it never fired.
+
+`_exit_terms` could not linearise the accumulator:
+
+    [terms] phi v10_1 update=v10_3 linear=None
+
+`_linear` refuses an operation with `op.merges` set. That is the two-address
+tie -- which use shares a register with which definition -- and it says
+nothing about whether the operation is a linear function of its own
+arguments. `op.args` and `op.results` describe the arithmetic either way, and
+`_linear` already admits only COPY, ADD, SUB, INCREMENT and DECREMENT with a
+single result it asked for, so nothing wider can reach it. BC writes every
+accumulator as a two-address `add`, so the check refused every accumulator
+in the corpus. `_disposable` carried the same check, where deleting the block
+removes the tied use and the tied definition together.
+
+Removing it from both leaves hotlpx's loop **gone**:
+
+    imul r24 <- r24,[seg:5+0x6]    ; n*k
+    lea  r21 <- [r40+r40*4]        ; x5
+    shl  r21 <- r21,2              ; x20
+    add  r21 <- r21,210
+    mov  [seg:5+0xc] <- 21         ; i
+    mov  [seg:5+0xa] <- r21        ; s
+
+which is `docs/targets.md`'s own reference term for term -- `s = (20 *
+((n*k) mod 65536) + 210) mod 65536` and `i = 21`. `loops()` over the emitted
+code counts zero loops in hotlpx and in lngmxx.
+
+**hotlpx 2.06x to 1.13x, lngmxx 1.57x to 1.16x**, and pressx 1.37x to 1.20x,
+rotate 1.38x to 0.89x, spill 1.16x to 0.43x, hotlop 0.79x to 0.37x, lngmix
+0.91x to 0.58x, press 0.66x to 0.44x. No ratio anywhere is worse.
+
+Static instruction counts go the other way -- hotlpx 31 to 38, lngmxx 45 to
+49 -- and that is what loop deletion looks like: a body that ran twenty
+times is replaced by straight-line arithmetic that runs once. The unroll
+attempt recorded above failed exactly this check, because there the body
+still ran the same number of times and only the cost model's weighting had
+changed. The distinguishing evidence is the loop count in the emitted code,
+not either number on its own.
+
+Two documented targets remain above 1.5x: harr 1.77x and segld 1.56x, both
+with six refusals.
+
+## Two counters that were always equal
+
+harr and segld are the same fixture twice: a dynamic array subscripted
+inside a nested loop. Their own comments name the cause as the descriptor
+and segment being reloaded every pass, and by now neither is -- the segment
+is hoisted and the offsets are strength-reduced. What was left in segld's
+inner loop is eight instructions:
+
+    mov [es:bx+0x0] <- r22     ; a(i) = i
+    mov r23 <- [es:bx+0x0]     ; the cell just written, read back
+    add r24 <- r24,r23
+    inc r22
+    add r27 <- r27,2           ; two offsets into `a`
+    add r28 <- r28,2           ; always equal to the first
+    cmp r22,20
+    jle
+
+`mir.same_bytes` refuses `Space.FAR` unless both references carry the same
+proven `allocation`, and both of these do -- `arrayfacts` annotates them by
+`mir-r01-cse`. What it then refuses on is `one.base != other.base`: the
+store's address and the load's address are different SSA values, because BC
+computes the subscript once per use. So the reload of the cell just written
+could not be forwarded, and that is `opportunity.py`'s "load of a cell just
+written" -- three of them in harr.
+
+The two offsets have the same start and the same step, so they are the same
+value at every iteration. `ivshare` did not merge them: it looks for a start
+defined by `add source,const`, and two identical counters share a start
+rather than computing one from the other. Nothing else merges them either,
+because a phi is not one of the computations `transform`'s value numbering
+considers.
+
+Handling the degenerate case -- same start, same step, offset zero, so a
+COPY of the canonical phi rather than an ADD -- removes the duplicate `add`
+and, because the two references then share a base value, lets the reload
+forward as well.
+
+**harr 1.77x to 1.12x with its six refusals gone, segld 1.56x to 1.05x with
+its six gone.**
+
+## Every documented target is now within 1.5x
+
+| | was | now |
+|---|---|---|
+| jumps | 2.95x | 1.49x |
+| hotlpx | 2.06x | 1.13x |
+| harr | 1.77x | 1.12x |
+| lngmxx | 1.57x | 1.16x |
+| segld | 1.56x | 1.05x |
+
+The highest remaining ratio across the whole scored suite is jumps at 1.49x.
+Nothing scored got worse: pressx 1.37x to 1.20x and rotate 1.38x to 0.89x
+improved alongside, and every other program is unchanged. divmod, fpemu and
+procs have no target; fpcsex stays PROVISIONAL for the reason already
+recorded against it.
+
+Three changes, each one condition:
+
+  * `raising_call_memory.reachable` admits `Control.INLINE_TABLE`. Where a
+    routine leaves control is not what it can write.
+  * `loopexit._linear` and `_disposable` no longer refuse on `op.merges`.
+    That is the two-address tie, and BC writes every accumulator as one.
+  * `ivshare` merges two counters with the same start and step.
+
+None of them is a program-specific patch and none names a machine.
+
+### The gate
+
+487 objects in `fixtures/omf`, all three compiler families and every
+variant: **0 refused, 132 changed, all 132 smaller, none larger.** The
+changes run across families as the mechanism should -- harr-p, -q and -v,
+hotlop, hotlpx and the rest at the same sizes in each.
+
+Object size is not the claim (the goal says so outright); the ratios are.
+Size is the no-regression evidence beside them.
+
+All four demo objects -- deedlines, oimad, qbdemo, qbfrac -- emit an
+identical instruction count before and after all three changes, so no demo
+behaviour or timing can move and no run is called for.
+
+Two things to keep in view rather than file as finished. `jumps` at 1.49x is
+inside the gate by one hundredth, so it is the first thing any later change
+should be re-measured against. And the loop-deleted programs emit *more*
+static instructions than before -- hotlpx 31 to 38, lngmxx 45 to 49 -- which
+is what replacing a body that ran twenty times with arithmetic that runs
+once looks like; the check that separates it from the reverted unroll is the
+loop count in the emitted code, which is zero for both.
+
+## Mechanism 2, and what its headroom actually is
+
+The phase table is unchanged by any of the three fixes above, because none
+of them touches a demo: lowering hands allocation 1012 instructions for
+qbdemo's innermost loops and emission delivers 1186. Where the 174 goes:
+floatalloc +20, phi elimination and the two-address fixup +136 net of
+coalescing, allocation +76, peephole -58.
+
+Five levers tried against it, each measured:
+
+| | effect on the 1186 |
+|---|---|
+| optimistic coalescing (no Briggs refusal) | -8, spills 48 -> 63 |
+| coalescing innermost-loop first | 0 (coalesce 1168 -> 1170, allocation absorbs it) |
+| a seventh allocatable register | -28, spills 48 -> 30 |
+| a fifth | +50, spills 48 -> 85 |
+| eliminating every immediately-dead definition | 4 exist, all `pop` pairs |
+
+211 of the 268 copies coalescing leaves behind have ends that do **not**
+interfere -- Briggs refused them rather than interference forbidding them.
+Both attempts to spend that differently came to nothing, and the register
+sensitivity says why: the binding constraint is six registers, not the order
+or the boldness of the joins. Joining more classes makes them uncolourable
+and the allocator spills instead, which is the trade the first row measures.
+
+An earlier note in this file blamed constant rematerialization for 4.1% of
+each hot loop, reading `mov r23,968; mov r23,969; mov r23,969` off an
+example dump. That was an artefact of printing examples keyed on `covers`,
+which is the same address for everything inserted at one point. Asked
+properly -- an instruction whose whole register result the next one
+overwrites without reading -- qbdemo has four, and all four are `pop` pairs
+whose stack-pointer effect the question does not model. There is no
+redundant constant materialization to remove.
+
+So the remaining 174 is the cost of SSA-to-six-registers with two-address
+operations in this pipeline's shape, and reducing it needs a restructuring
+rather than a tuning: allocation over SSA with phi congruence resolved after
+colouring, or George-Appel's iterated coalescing with an undo. The
+allocator's retry loop already splits before spilling, so the undo has
+somewhere to live -- what is missing is that `coalesce` renames its joined
+values and keeps no record of which copy created which class, so nothing
+downstream can separate one again.
+
+## The all-compiler scan, and the one thing it found
+
+`target-coverage-current.md` says of its own numbers: "This is not an
+all-compiler scan or runtime correctness gate." Everything above was scored
+on ordinary PDS `/G2`, so the scan was run: `--targets` over all 487
+fixtures, 329 scored rows across QuickBASIC, PDS and VBDOS and every
+variant.
+
+Four rows above 1.5x, all of them `jumps`: **q-O, q-O-zd and q-noO at 1.57x,
+v-plain at 1.55x**. The PDS-only view had hidden them. Contracts are
+identical across the three families, so the difference is not the ABI --
+it is what BC chose to emit. QB's BC writes
+
+    je   dc
+    jmp  f5        ; a block of its own
+  dc: ...
+
+where PDS's BC writes the inverted branch and no jump. `layout` keeps BC's
+block order and only ever *adds* jumps, so the choice was preserved.
+
+`_threaded` reverses such a branch, sends it where the jump went, and leaves
+the branch's own target as the fall-through. The emptied block keeps its
+address and its `covers` -- BC's bytes must stay owned -- and emits nothing.
+
+One thing had to change with it: `_fallthroughs` compared a block's
+fall-through against the *immediately* next block, so it put a `jmp` straight
+back over every block just emptied, and threading appeared to do nothing at
+all. `_following` now skips blocks that emit no bytes, which is what falling
+through one means.
+
+487 objects, 0 refused, **19 changed, all smaller, none larger**. jumps-q-O
+and v-plain 1.57x/1.55x to **1.54x**, p-g2 1.49x to 1.48x.
+
+### What those four still need
+
+Still 1.54x against a 1.5x gate. The rest of the QB/PDS difference is three
+instructions:
+
+    mov r21,0
+    mov [bp-0x2],r21     ; a frame temporary holding a constant
+    ...
+    mov r21,[bp-0x2]
+    push r21             ; where PDS emits `push 0`
+
+`promote` should take that cell -- a fixed FRAME address, touched twice, one
+width -- and every PRINT call between the store and the load clobbers it,
+because `_out_of_reach` bounds a call's writes only over `Space.SEGMENT`.
+The same measured fact covers frame locals: a runtime routine writes its own
+data and whatever the program handed it a pointer to. A frame slot whose
+address is never taken is not that.
+
+The analysis for it is written and connected to nothing:
+`qbopt/analysis/frameescape.py` computes `exposed`, the frame offsets whose
+address escapes. The place to put its answer already exists too --
+`MemRef.excludes`, "exact byte ranges this effect cannot reach", which
+`arrayfacts` already fills for statics and `_excluded` already reads.
+
+Not done here, deliberately. A frame address escapes through VARPTR, VARSEG,
+by-reference argument passing, and -- as `frameescape`'s own first comment
+warns -- runtime frame walking and callbacks, none of which its `origins`
+claim to cover. Wiring an escape analysis into an aliasing bound on the
+strength of a 1.54x-to-1.5x gap is how a silent miscompile gets shipped. It
+needs the obligations discharged first, and that is the next piece of work.
+
+### Measured: the frame cannot be bounded the way DGROUP is
+
+The `beyond` bound exists because a measurement justified it --
+`tools/runtime_writes.py`, reading a linked image, finds that no runtime
+write names a cell in BC_DATA, so a program's variable is reachable only
+through a pointer the program handed over. The proposal above was to extend
+the same bound to frame slots. Run the same instrument and it refutes it.
+
+Four linked images, PDS and VBDOS:
+
+| image | fixed writes in STACK | writes through `ss` |
+|---|---:|---:|
+| B_BOOLS | 9 | 10 |
+| B_MATRIX | 3 | 10 |
+| B_LNGMIX | 0 | 17 |
+| B_DIVMOD | 0 | 10 |
+
+Every image agrees on BC_DATA -- "No runtime write names a cell in
+BC_DATA" -- and every image contradicts the frame: the runtime writes the
+stack segment, at fixed addresses in two of the four and through
+`ss`-relative addresses in all four. A frame slot is `ss`-relative, and
+relating a runtime `[ss:...]` write to a caller's `[bp-2]` needs sp's
+relation to bp inside the callee, which nothing at this layer can see.
+
+`module.may_alias` already says exactly this and gives the same reason: "A
+stack slot against a frame slot is a different question and stays
+conservative -- both are in the same region and their displacements are
+against different registers." Relaxing the call bound over frame cells
+would have contradicted a rule already in the file for a stated reason.
+
+So the four `jumps` rows stay at 1.54x, and the reason is a measured
+property of the runtime rather than a judgement about risk. Closing that
+0.04x needs the three instructions removed some other way -- the constant
+never routed through a frame temporary in the first place, which is a
+question about how QB's BC passes a literal argument and therefore about the
+raise, not about aliasing.

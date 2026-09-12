@@ -7,13 +7,14 @@ from pathlib import Path
 from dataclasses import fields
 
 import pytest
+from iced_x86 import Register
 
 import corpus
 from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.frontend.blocks import Ends
-from qbopt.objectfile.module import Addr
 from qbopt.frontend.blocks import Block
+from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
@@ -22,6 +23,7 @@ FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 def test_call_flag_inputs_follow_the_contract(monkeypatch) -> None:
     """DIVMOD refused MUL at 0x20a: PRINT read the deleted helper flags."""
     from dataclasses import replace
+
     from qbopt.abi import runtime
 
     routine = runtime.contract("B$PEI4")
@@ -246,18 +248,23 @@ def test_the_carry_between_a_pair_is_an_edge_not_an_adjacency() -> None:
     assert pairs, "arith-v-g3 is a program of 32-bit arithmetic; it has pairs"
 
 
-def test_the_frame_and_the_segments_never_become_values() -> None:
-    """They are where values live, not values. Promoting bp would dissolve
-    every local, and a segment register decides which bytes an access names.
+def test_the_frame_never_becomes_a_value_and_the_selector_does() -> None:
+    """bp and sp are where values live, not values: promoting bp would
+    dissolve every local.
 
-    Asked of body.origin, since a value no longer names a register at all --
-    the question is whether raising ever made one OF bp or a segment, which
-    is a fact about what was raised and lives in that map now.
+    The selector is the other way round. Which bytes a far access names is
+    exactly a value -- two accesses through one loaded descriptor are the
+    same segment, and saying so is what makes the second load redundant.
+    It is pinned to ES at every definition and every use, which is a fact
+    about lowering and lives in body.origin.
+
+    Asked of body.origin, since a value no longer names a register at all.
     """
     assert not (set(mir.TRACKED) & mir.PHYSICAL)
+    frame = {Register.SP, Register.ESP, Register.BP, Register.EBP}
     for built, _ in raised(Path("fixtures/omf/procs-v-g3.obj")):
         for value in built.values:
-            assert built.origin[value] not in mir.PHYSICAL
+            assert built.origin[value] not in frame
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
@@ -789,9 +796,9 @@ def test_a_declared_call_raises_its_arguments_as_operands() -> None:
     """
     from pathlib import Path
 
+    from qbopt.abi import runtime
     from qbopt.objectfile import omf
     from qbopt.objectfile import module
-    from qbopt.abi import runtime
     from qbopt.frontend import blocks as split
     from qbopt.frontend.blocks import code_map
 
@@ -878,8 +885,8 @@ def test_the_entry_routine_declares_its_frame_size_where_that_is_established() -
     helper, but a site immediately preceded by `mov bx,0` bypasses that edge,
     so the module-specific refinement establishes bx and cx there.
     """
-    from qbopt.objectfile import module
     from qbopt.abi import runtime
+    from qbopt.objectfile import module
 
     made = _raised_calls("procs-p-g2.obj")
     assert "B$ENRA" in made, f"no B$ENRA raised; found {sorted(made)}"
@@ -918,9 +925,9 @@ def test_a_procedure_this_module_defines_is_not_a_runtime_routine() -> None:
     """
     from pathlib import Path
 
+    from qbopt.abi import runtime
     from qbopt.objectfile import omf
     from qbopt.objectfile import module
-    from qbopt.abi import runtime
 
     records = omf.parse(Path("fixtures/omf/procs-p-evt.obj").read_bytes())
     found = module.of(records)
@@ -956,8 +963,8 @@ def test_the_exit_routine_declares_what_it_reads_where_that_is_established() -> 
     nothing on any path. Both normal continuations nevertheless export
     dx:ax to the BASIC caller, and the exit boundary must keep them live.
     """
-    from qbopt.objectfile import module
     from qbopt.abi import runtime
+    from qbopt.objectfile import module
 
     pds = frozenset({runtime.Reg.AX, runtime.Reg.CX, runtime.Reg.DX, runtime.Reg.SI, runtime.Reg.DI})
     vbdos = frozenset({runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX, runtime.Reg.DX, runtime.Reg.SI, runtime.Reg.DI})

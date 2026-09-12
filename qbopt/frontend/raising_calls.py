@@ -4,36 +4,55 @@ from dataclasses import replace
 
 from iced_x86 import Register
 
+from qbopt.model import ir
+from qbopt.model import mir
 from qbopt.legacy import calls
 from qbopt.analysis import flags
-from qbopt.model import ir, mir
 
 
 def _discarded(push):
-    return mir.Op(push.at, ir.Operation.NOTHING, "", (), (),
-                  kind=mir.Kind.NOTHING, covers=push.covers, id=push.id)
+    return mir.Op(push.at, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.NOTHING, covers=push.covers, id=push.id)
 
 
 def _capture(push, arg, held):
     memory = isinstance(arg, mir.Cell)
-    uses = ((arg.value,) if isinstance(arg, mir.Held) else
-            tuple(value for value in (arg.ref.base, arg.ref.segment) if value is not None) if memory else ())
-    return replace(push, kind=mir.Kind.LOAD if memory else mir.Kind.COPY,
-                   op=ir.Operation.MOVE, name="mov", defines=(held.value,), uses=uses,
-                   args=(arg,), results=(held,), loads=(arg.ref,) if memory else (), stores=(),
-                   made=None, raised=None, merges={}, stack=None)
+    uses = (
+        (arg.value,)
+        if isinstance(arg, mir.Held)
+        else tuple(value for value in (arg.ref.base, arg.ref.segment) if value is not None)
+        if memory
+        else ()
+    )
+    return replace(
+        push,
+        kind=mir.Kind.LOAD if memory else mir.Kind.COPY,
+        op=ir.Operation.MOVE,
+        name="mov",
+        defines=(held.value,),
+        uses=uses,
+        args=(arg,),
+        results=(held,),
+        loads=(arg.ref,) if memory else (),
+        stores=(),
+        made=None,
+        raised=None,
+        merges={},
+        stack=None,
+    )
 
 
 def _whole_memory(group):
     if len(group) != 2:
         return None
     high, low = group
-    if (high.covers[1] != low.covers[0] or not isinstance(high.args[0], mir.Cell)
-        or not isinstance(low.args[0], mir.Cell)):
+    if (
+        high.covers[1] != low.covers[0]
+        or not isinstance(high.args[0], mir.Cell)
+        or not isinstance(low.args[0], mir.Cell)
+    ):
         return None
     upper, lower = high.args[0].ref, low.args[0].ref
-    if (lower.addr is None or lower.width != 2 or upper.width != 2
-        or replace(lower, addr=lower.addr.plus(2)) != upper):
+    if lower.addr is None or lower.width != 2 or upper.width != 2 or replace(lower, addr=lower.addr.plus(2)) != upper:
         return None
     return replace(lower, width=4)
 
@@ -41,9 +60,17 @@ def _whole_memory(group):
 def arithmetic(body: mir.MirBody, found, blocks, *, basic_semantics: bool = False) -> mir.MirBody:
     reached = [insn for block in blocks for insn in block.insns]
     sites = calls.sites(found, reached, blocks)
-    sites = [replace(site, consume=tuple(insn for insn in reached
-                                       if site.start <= insn.at < site.at and insn.code in calls.PUSH_BYTES))
-             if site.name in (*calls.DIVIDES, calls.MULTIPLY, calls.COMPARE) and not site.consume else site for site in sites]
+    sites = [
+        replace(
+            site,
+            consume=tuple(
+                insn for insn in reached if site.start <= insn.at < site.at and insn.code in calls.PUSH_BYTES
+            ),
+        )
+        if site.name in (*calls.DIVIDES, calls.MULTIPLY, calls.COMPARE) and not site.consume
+        else site
+        for site in sites
+    ]
     live_flags = flags.live_in(blocks)
     candidates = {
         site.at: site
@@ -58,7 +85,7 @@ def arithmetic(body: mir.MirBody, found, blocks, *, basic_semantics: bool = Fals
     values = {value for block in body.blocks for op in block.ops for value in (*op.defines, *op.uses)}
     values |= {value for block in body.blocks for phi in block.phis for value in (phi.result, *phi.incoming.values())}
     values |= set(body.origin)
-    readers = {value for block in body.blocks for op in block.ops for value in op.uses if value not in op.merges}
+    readers = {value for block in body.blocks for op in block.ops for value in mir.consumed(op)}
     phis = [phi for block in body.blocks for phi in block.phis]
     while True:
         incoming = {value for phi in phis if phi.result in readers for value in phi.incoming.values()}
@@ -155,9 +182,15 @@ def arithmetic(body: mir.MirBody, found, blocks, *, basic_semantics: bool = Fals
             if compare:
                 # CPI4 pushes left first, unlike multiply and divide.
                 comparison = mir.Op(
-                    call.at, ir.Operation.COMPARE, "cmp", call.defines,
-                    tuple(arg.value for arg in arguments), kind=mir.Kind.SUB,
-                    args=tuple(arguments), covers=call.covers, id=call.id,
+                    call.at,
+                    ir.Operation.COMPARE,
+                    "cmp",
+                    call.defines,
+                    tuple(arg.value for arg in arguments),
+                    kind=mir.Kind.SUB,
+                    args=tuple(arguments),
+                    covers=call.covers,
+                    id=call.id,
                 )
                 replacements.update(pending)
                 replacements[id(call)] = (*setup, comparison)

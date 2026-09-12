@@ -30,30 +30,35 @@ answer questions and change nothing, which is why nothing here lists them.
 """
 
 from qbopt.model import mir
-from qbopt.objectfile import omf
+from qbopt.abi import runtime
 from qbopt.backend import lower
-from qbopt.objectfile import module
+from qbopt.objectfile import omf
 from qbopt.backend import parcopy
 from qbopt.backend import phielim
-from qbopt.abi import runtime
 from qbopt.backend import twoaddr
 from qbopt.backend import allocate
 from qbopt.backend import coalesce
-from qbopt.objectfile import objwrite
-from qbopt.backend import prologue
 from qbopt.backend import peephole
+from qbopt.backend import prologue
+from qbopt.objectfile import module
 from qbopt.optimize import transform
-from qbopt.frontend import blocks as split
+from qbopt.objectfile import objwrite
 from qbopt.backend import frame as frames
+from qbopt.frontend import blocks as split
 from qbopt.frontend.blocks import code_map
 from qbopt.model.passes import LIRTransform
 
 
-def machine(pinned: dict, frame=None, calls: dict | None = None) -> list[LIRTransform]:
+def machine(
+    pinned: dict, frame=None, calls: dict | None = None, *, basic_semantics: bool = False
+) -> list[LIRTransform]:
     """Every phase between lowering and emission, in order."""
     from qbopt.backend import floatalloc
+
+    if frame is not None and frame.native is not None:
+        pinned = {**pinned, **frame.native_pins}
     return [
-        floatalloc.FloatAlloc(frame),
+        floatalloc.FloatAlloc(frame, basic_semantics=basic_semantics),
         phielim.PhiElimination(),
         twoaddr.TwoAddress(),
         coalesce.Coalescer(),

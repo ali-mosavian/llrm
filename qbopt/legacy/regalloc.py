@@ -29,19 +29,17 @@ into six registers, which is impossible: renaming does not change what is
 live, only what it is called.
 """
 
-from dataclasses import dataclass
 from dataclasses import replace
 
 from iced_x86 import Register_
 
 from qbopt.model import ir
-from qbopt.backend import lower
-from qbopt.model import lir
-from qbopt.analysis import liveness
 from qbopt.model import mir
+from qbopt.backend import lower
 from qbopt.backend import target
 from qbopt.model.mir import NAMES
 from qbopt.model.mir import Value
+from qbopt.analysis import liveness
 
 # The register file is target.py's. What is left here is the allocation
 # itself. The flags are not a register anything can be put in, and
@@ -62,9 +60,7 @@ def _addressing(body: mir.MirBody) -> set[Value]:
             if what is None:
                 continue
             wanted = {where for where, need in target.reads(what).items() if need.fixed is None}
-            found |= {
-                value for value in op.uses if ir.ROOT.get(body.origin.get(value, -1), -1) in wanted
-            }
+            found |= {value for value in op.uses if ir.ROOT.get(body.origin.get(value, -1), -1) in wanted}
     return found
 
 
@@ -101,23 +97,9 @@ def required(body: mir.MirBody) -> dict[Value, Register_]:
     return out
 
 
-def pressure(body: mir.MirBody, found: liveness.Liveness | None = None) -> int:
-    """The most values live at once anywhere in this body, flags aside.
-
-    Cannot exceed the number of registers BC itself used, because the
-    program came out of them -- so a number above len(target.AVAILABLE) is a bug
-    in the liveness and not a body that needs spilling.
-    """
-    found = found or liveness.live(body)
-    peak = 0
-    for block in body.blocks:
-        alive = set(found.live_out[block.at])
-        peak = max(peak, len([one for one in alive if not one.flags]))
-        for op in reversed(block.ops):
-            alive -= set(op.defines)
-            alive |= set(op.uses)
-            peak = max(peak, len([one for one in alive if not one.flags]))
-    return peak
+# Where it belongs: it names no register, and liveness.py is already where
+# the analysis it is one line of lives.
+pressure = liveness.pressure
 
 
 def clobbered(body: mir.MirBody, found: liveness.Liveness | None = None) -> dict[Value, frozenset]:
@@ -378,8 +360,7 @@ def untangled(body: mir.MirBody) -> mir.MirBody:
     out = []
     for block in body.blocks:
         phis = tuple(
-            replace(one, incoming={**one.incoming, **swaps[id(one)]}) if id(one) in swaps else one
-            for one in block.phis
+            replace(one, incoming={**one.incoming, **swaps[id(one)]}) if id(one) in swaps else one for one in block.phis
         )
         ops = tuple(
             one
@@ -518,9 +499,11 @@ def colour(body: mir.MirBody, pinned: dict[Value, Register_] | None = None) -> d
             return _legal({one: clean[of[one]] for one in graph if of[one] in clean}, barred, of)
 
     def offers(root: Value) -> list[Register_]:
-        out = target.AVAILABLE if root not in reached_by else [
-            where for where in target.AVAILABLE if ir.ROOT.get(where, where) in wide_addressing
-        ]
+        out = (
+            target.AVAILABLE
+            if root not in reached_by
+            else [where for where in target.AVAILABLE if ir.ROOT.get(where, where) in wide_addressing]
+        )
         gone = barred.get(root)
         return [where for where in out if gone is None or where not in gone]
 

@@ -1,20 +1,8 @@
-"""Make values leaving a natural loop explicit at its exit.
-
-Loop transforms need one place to find everything a loop produces.  LCSSA
-provides it: a value defined in the loop and read after it is carried through
-an exit phi, so later passes need not search through arbitrary downstream
-uses.
-
-The current raised corpus already has a dedicated exit and one exiting edge
-for every natural loop.  Those are the only loops changed here.  Multiple
-exits need CFG canonicalisation first; guessing a merge for them would make a
-foundational invariant unsound.
-"""
-
 from dataclasses import replace
 
-from qbopt.analysis import loops, ssa
 from qbopt.model import mir
+from qbopt.analysis import ssa
+from qbopt.analysis import loops
 from qbopt.model.passes import MIRTransform
 
 
@@ -44,16 +32,22 @@ def _closed_loop(body: mir.MirBody, loop: loops.Loop) -> mir.MirBody:
         for successor in block.succ
         if successor in blocks and successor not in loop.body
     ]
-    if len(exiting) != 1:
+    exits = {target for _, target in exiting}
+    if len(exits) > 1:
+        from qbopt.optimize import lcssamerges
+
+        return lcssamerges.closed(body, loop)
+    if not exits:
         return body
 
-    source, exit_at = exiting[0]
+    (exit_at,) = exits
+    sources = frozenset(source for source, _ in exiting)
     predecessors = loops.predecessors(body.blocks)
-    if predecessors[exit_at] != frozenset({source}):
+    if predecessors[exit_at] != sources:
         return body
 
     defined = {
-        value
+        value: block.at
         for block in body.blocks
         if block.at in loop.body
         for value in (
@@ -86,7 +80,9 @@ def _closed_loop(body: mir.MirBody, loop: loops.Loop) -> mir.MirBody:
     crossing = [
         value
         for value, sites in use_sites.items()
-        if sites and all(exit_at in dominators.get(site, frozenset()) for site in sites)
+        if sites
+        and all(exit_at in dominators.get(site, frozenset()) for site in sites)
+        and all(defined[value] in dominators.get(source, frozenset()) for source in sources)
     ]
     if not crossing:
         return body
@@ -106,7 +102,7 @@ def _closed_loop(body: mir.MirBody, loop: loops.Loop) -> mir.MirBody:
         result = mir.Value(next_id + offset, exit_at, variable=value.variable, version=next_version[value.variable])
         next_version[value.variable] += 1
         swap[value.id] = result
-        phis.append(mir.Phi(result, {source: value}))
+        phis.append(mir.Phi(result, {source: value for source in sorted(sources)}))
 
     def rewritten(block: mir.MirBlock) -> mir.MirBlock:
         if block.at in loop.body:
@@ -128,8 +124,11 @@ def _closed_loop(body: mir.MirBody, loop: loops.Loop) -> mir.MirBody:
         return replace(
             block,
             phis=existing + (tuple(phis) if block.at == exit_at else ()),
-            ops=(tuple(ssa.substituted(op, swap) for op in block.ops)
-                 if exit_at in dominators.get(block.at, frozenset()) else block.ops),
+            ops=(
+                tuple(ssa.substituted(op, swap) for op in block.ops)
+                if exit_at in dominators.get(block.at, frozenset())
+                else block.ops
+            ),
         )
 
     return replace(body, blocks=tuple(rewritten(block) for block in body.blocks))

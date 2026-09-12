@@ -131,6 +131,22 @@ evidence = '''
 rt/rtinit.asm: `cProc B$DSEG,<PUBLIC,FAR>` with parmW newseg, whole body `MOV AX,newseg` / `MOV [b$seg],AX`, header `Modifies: NONE` -- which is wrong by one register. With the cmacros prologue and epilogue that is push bp / mov bp,sp / two movs / mov sp,bp / pop bp / ret 2, and not one of them writes a flag. b$seg is the runtime's own DGROUP word that PEEK and POKE read later, not anything the caller can name.
 '''
 
+["B$DSG0"]
+cleanup = 0
+control = "returns"
+enters_user_code = false
+raises_error = false
+error_handling = false
+writes = "NONE"
+reads = "NONE"
+clobbers = []
+established = true
+documented = []
+inputs = []
+evidence = '''
+rt/rtinit.asm, CODE:299, five bytes whole: `mov [b$seg],ds` / `retf`, the store's fixup segment 4 + 197 -- BR_DATA:197, the same b$seg word B$DSEG writes. Bare DEF SEG, restoring the default segment. It touches no register and no flag, so clobbers is empty rather than B$DSEG's ax. writes is NONE on B$DSEG's argument, not a second measurement.
+'''
+
 ["B$DVI4"]
 cleanup = 8
 control = "returns"
@@ -158,6 +174,22 @@ clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
 established = true
 evidence = '''
 inc/stack.inc: `The basic frame is set up on entry to the main program, by B$ENSA/B$ENRA SUB and FUNCTION entry routines`, and it names what lands there -- the previous BASIC frame at FR_BFRAME, si and di at FR_SI/FR_DI `Preserved for C compatability`, the local byte count at FR_CLOCALS and a zeroed GOSUB count at FR_GOSUB. inc/rtmint.inc and inc/ulib.inc list it as an entry family with B$ENSA/B$ENRD/B$ENSD/B$ENFA; the code is in none of them. AGENTS.md measured the call site: the frame size arrives in cx, so nothing is on the stack to clean up. It moves both sp and bp, which is why it is in clobbers and why nothing may track stack depth across it.
+'''
+
+["B$ERAS"]
+cleanup = 2
+control = "returns"
+enters_user_code = false
+raises_error = true
+error_handling = false
+writes = "OWN"
+reads = "OWN"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+documented = ["ax", "bx", "cx", "dx"]
+established = true
+inputs = []
+evidence = '''
+rt/dynamic.asm: `B$ERAS - erase an array`, `Entry: pAd ds relative array descriptor offset`, `Uses: AX, BX, CX, DX`. It is `MOV AX,1` then `SKIP 2` (`DB 03DH`, swallowing B$IErase's `XOR AX,AX`) into `cProc ERASE_COMMON,FAR,<SI,DI>` with one `parmW pAd`, so RETF 2 and si/di/bp restored. It clears the descriptor at pAd and frees the storage: B$LHDALC and B$LH_CPCT move the local heap, B$FHDealloc unlinks a far heap descriptor, and a static array is cleared through `GETSEG ES` and `REP STOSW` -- so es is clobbered beyond the documented four. `Exceptions: None`, but B$LH_CPCT raises the nontrappable B$ERR_SSC on heap corruption.
 '''
 
 ["B$EVCK"]
@@ -216,6 +248,96 @@ established = true
 inputs = []
 evidence = '''
 87bhelp.asm, disassembled from all three libraries and identical in each: push bp / mov bp,sp / wait / fcompp / wait / fnstsw [0] / nop / wait / mov ah,[0] / sahf / mov sp,bp / pop bp / retf. It names bx, cx, dx, si and di nowhere; ah is the only register written, and the flags ARE the return value. sahf writes SF, ZF, AF, PF and CF and cannot write OF -- it is bit 11, outside the byte -- so the comparison arrives in CF and ZF and only the unsigned branches read it, which is what wide.COMPARISONS records and what BC emits at every site. Microsoft's own runtime agrees: rt/grwindow.asm calls it and branches with JZ and JC. The fnstsw writes one word of DGROUP, the runtime's own, which is why writes is NONE the way B$DSEG's is.
+'''
+
+["B$SIN4"]
+cleanup = 0
+control = "returns"
+enters_user_code = false
+raises_error = true
+error_handling = false
+writes = "NONE"
+reads = "NONE"
+clobbers = ["ax", "bx", "cx", "dx", "si", "di", "bp", "sp", "ds", "es", "flags"]
+established = true
+inputs = ["ax", "bx", "cx", "dx", "si", "di"]
+evidence = '''
+87btrig.asm, disassembled from the linked image because the math library is not in the source drop. tools/libdump.py shows one module defining B$SIN4, B$SIN8, B$COS4, B$COS8, B$TAN4, B$TAN8 and the __FI aliases, and in the library its first bytes are four `mov dx,<relocated>` stubs that all jump to one shared kernel -- six names, four stubs, because SIN4/SIN8 and COS4/COS8 each share an entry. In qbdemo's BASE.EXE that stub is at image 0x8b43 with the selectors relocated to 0x4a2, 0x4ba, 0x4d2 and 0x4ea, 24 bytes apart, and the kernel it jumps to is 0x8b81: push bp / mov bp,sp / sub sp,12h / call 0x8c09 / mov al,[bp-11h] / or al,al, and the normal path is mov sp,bp / pop bp / retf. The arithmetic at 0x8c09 is `int 35h` with the emulator's inline operand, which declen.py decodes. So: an 18-byte frame of its own below sp and the emulator's own DGROUP word, and no caller cell -- the same basis on which 87bhelp.asm's six helpers beside it in this library are NONE, and the same as B$FCMP's fnstsw. `retf` with no immediate is the cleanup: nothing arrives on the 8086 stack, the operand is on the x87 stack. One path leaves instead of returning -- `jmp 01B5h:4610h` at 0x8bd0, reached after testing al and the flag byte at [bp-6] -- so raises_error stays true and reachable() gates it on whether the program handles errors. Registers stay at the worst case: the stub itself writes dx and the kernel writes ax and bx, and nothing here establishes what the emulator tail preserves.
+'''
+
+["B$SIN8"]
+cleanup = 0
+control = "returns"
+enters_user_code = false
+raises_error = true
+error_handling = false
+writes = "NONE"
+reads = "NONE"
+clobbers = ["ax", "bx", "cx", "dx", "si", "di", "bp", "sp", "ds", "es", "flags"]
+established = true
+inputs = ["ax", "bx", "cx", "dx", "si", "di"]
+evidence = '''
+87btrig.asm, disassembled from the linked image because the math library is not in the source drop. tools/libdump.py shows one module defining B$SIN4, B$SIN8, B$COS4, B$COS8, B$TAN4, B$TAN8 and the __FI aliases, and in the library its first bytes are four `mov dx,<relocated>` stubs that all jump to one shared kernel -- six names, four stubs, because SIN4/SIN8 and COS4/COS8 each share an entry. In qbdemo's BASE.EXE that stub is at image 0x8b43 with the selectors relocated to 0x4a2, 0x4ba, 0x4d2 and 0x4ea, 24 bytes apart, and the kernel it jumps to is 0x8b81: push bp / mov bp,sp / sub sp,12h / call 0x8c09 / mov al,[bp-11h] / or al,al, and the normal path is mov sp,bp / pop bp / retf. The arithmetic at 0x8c09 is `int 35h` with the emulator's inline operand, which declen.py decodes. So: an 18-byte frame of its own below sp and the emulator's own DGROUP word, and no caller cell -- the same basis on which 87bhelp.asm's six helpers beside it in this library are NONE, and the same as B$FCMP's fnstsw. `retf` with no immediate is the cleanup: nothing arrives on the 8086 stack, the operand is on the x87 stack. One path leaves instead of returning -- `jmp 01B5h:4610h` at 0x8bd0, reached after testing al and the flag byte at [bp-6] -- so raises_error stays true and reachable() gates it on whether the program handles errors. Registers stay at the worst case: the stub itself writes dx and the kernel writes ax and bx, and nothing here establishes what the emulator tail preserves.
+'''
+
+["B$COS4"]
+cleanup = 0
+control = "returns"
+enters_user_code = false
+raises_error = true
+error_handling = false
+writes = "NONE"
+reads = "NONE"
+clobbers = ["ax", "bx", "cx", "dx", "si", "di", "bp", "sp", "ds", "es", "flags"]
+established = true
+inputs = ["ax", "bx", "cx", "dx", "si", "di"]
+evidence = '''
+87btrig.asm, disassembled from the linked image because the math library is not in the source drop. tools/libdump.py shows one module defining B$SIN4, B$SIN8, B$COS4, B$COS8, B$TAN4, B$TAN8 and the __FI aliases, and in the library its first bytes are four `mov dx,<relocated>` stubs that all jump to one shared kernel -- six names, four stubs, because SIN4/SIN8 and COS4/COS8 each share an entry. In qbdemo's BASE.EXE that stub is at image 0x8b43 with the selectors relocated to 0x4a2, 0x4ba, 0x4d2 and 0x4ea, 24 bytes apart, and the kernel it jumps to is 0x8b81: push bp / mov bp,sp / sub sp,12h / call 0x8c09 / mov al,[bp-11h] / or al,al, and the normal path is mov sp,bp / pop bp / retf. The arithmetic at 0x8c09 is `int 35h` with the emulator's inline operand, which declen.py decodes. So: an 18-byte frame of its own below sp and the emulator's own DGROUP word, and no caller cell -- the same basis on which 87bhelp.asm's six helpers beside it in this library are NONE, and the same as B$FCMP's fnstsw. `retf` with no immediate is the cleanup: nothing arrives on the 8086 stack, the operand is on the x87 stack. One path leaves instead of returning -- `jmp 01B5h:4610h` at 0x8bd0, reached after testing al and the flag byte at [bp-6] -- so raises_error stays true and reachable() gates it on whether the program handles errors. Registers stay at the worst case: the stub itself writes dx and the kernel writes ax and bx, and nothing here establishes what the emulator tail preserves.
+'''
+
+["B$COS8"]
+cleanup = 0
+control = "returns"
+enters_user_code = false
+raises_error = true
+error_handling = false
+writes = "NONE"
+reads = "NONE"
+clobbers = ["ax", "bx", "cx", "dx", "si", "di", "bp", "sp", "ds", "es", "flags"]
+established = true
+inputs = ["ax", "bx", "cx", "dx", "si", "di"]
+evidence = '''
+87btrig.asm, disassembled from the linked image because the math library is not in the source drop. tools/libdump.py shows one module defining B$SIN4, B$SIN8, B$COS4, B$COS8, B$TAN4, B$TAN8 and the __FI aliases, and in the library its first bytes are four `mov dx,<relocated>` stubs that all jump to one shared kernel -- six names, four stubs, because SIN4/SIN8 and COS4/COS8 each share an entry. In qbdemo's BASE.EXE that stub is at image 0x8b43 with the selectors relocated to 0x4a2, 0x4ba, 0x4d2 and 0x4ea, 24 bytes apart, and the kernel it jumps to is 0x8b81: push bp / mov bp,sp / sub sp,12h / call 0x8c09 / mov al,[bp-11h] / or al,al, and the normal path is mov sp,bp / pop bp / retf. The arithmetic at 0x8c09 is `int 35h` with the emulator's inline operand, which declen.py decodes. So: an 18-byte frame of its own below sp and the emulator's own DGROUP word, and no caller cell -- the same basis on which 87bhelp.asm's six helpers beside it in this library are NONE, and the same as B$FCMP's fnstsw. `retf` with no immediate is the cleanup: nothing arrives on the 8086 stack, the operand is on the x87 stack. One path leaves instead of returning -- `jmp 01B5h:4610h` at 0x8bd0, reached after testing al and the flag byte at [bp-6] -- so raises_error stays true and reachable() gates it on whether the program handles errors. Registers stay at the worst case: the stub itself writes dx and the kernel writes ax and bx, and nothing here establishes what the emulator tail preserves.
+'''
+
+["B$TAN4"]
+cleanup = 0
+control = "returns"
+enters_user_code = false
+raises_error = true
+error_handling = false
+writes = "NONE"
+reads = "NONE"
+clobbers = ["ax", "bx", "cx", "dx", "si", "di", "bp", "sp", "ds", "es", "flags"]
+established = true
+inputs = ["ax", "bx", "cx", "dx", "si", "di"]
+evidence = '''
+87btrig.asm, disassembled from the linked image because the math library is not in the source drop. tools/libdump.py shows one module defining B$SIN4, B$SIN8, B$COS4, B$COS8, B$TAN4, B$TAN8 and the __FI aliases, and in the library its first bytes are four `mov dx,<relocated>` stubs that all jump to one shared kernel -- six names, four stubs, because SIN4/SIN8 and COS4/COS8 each share an entry. In qbdemo's BASE.EXE that stub is at image 0x8b43 with the selectors relocated to 0x4a2, 0x4ba, 0x4d2 and 0x4ea, 24 bytes apart, and the kernel it jumps to is 0x8b81: push bp / mov bp,sp / sub sp,12h / call 0x8c09 / mov al,[bp-11h] / or al,al, and the normal path is mov sp,bp / pop bp / retf. The arithmetic at 0x8c09 is `int 35h` with the emulator's inline operand, which declen.py decodes. So: an 18-byte frame of its own below sp and the emulator's own DGROUP word, and no caller cell -- the same basis on which 87bhelp.asm's six helpers beside it in this library are NONE, and the same as B$FCMP's fnstsw. `retf` with no immediate is the cleanup: nothing arrives on the 8086 stack, the operand is on the x87 stack. One path leaves instead of returning -- `jmp 01B5h:4610h` at 0x8bd0, reached after testing al and the flag byte at [bp-6] -- so raises_error stays true and reachable() gates it on whether the program handles errors. Registers stay at the worst case: the stub itself writes dx and the kernel writes ax and bx, and nothing here establishes what the emulator tail preserves.
+'''
+
+["B$TAN8"]
+cleanup = 0
+control = "returns"
+enters_user_code = false
+raises_error = true
+error_handling = false
+writes = "NONE"
+reads = "NONE"
+clobbers = ["ax", "bx", "cx", "dx", "si", "di", "bp", "sp", "ds", "es", "flags"]
+established = true
+inputs = ["ax", "bx", "cx", "dx", "si", "di"]
+evidence = '''
+87btrig.asm, disassembled from the linked image because the math library is not in the source drop. tools/libdump.py shows one module defining B$SIN4, B$SIN8, B$COS4, B$COS8, B$TAN4, B$TAN8 and the __FI aliases, and in the library its first bytes are four `mov dx,<relocated>` stubs that all jump to one shared kernel -- six names, four stubs, because SIN4/SIN8 and COS4/COS8 each share an entry. In qbdemo's BASE.EXE that stub is at image 0x8b43 with the selectors relocated to 0x4a2, 0x4ba, 0x4d2 and 0x4ea, 24 bytes apart, and the kernel it jumps to is 0x8b81: push bp / mov bp,sp / sub sp,12h / call 0x8c09 / mov al,[bp-11h] / or al,al, and the normal path is mov sp,bp / pop bp / retf. The arithmetic at 0x8c09 is `int 35h` with the emulator's inline operand, which declen.py decodes. So: an 18-byte frame of its own below sp and the emulator's own DGROUP word, and no caller cell -- the same basis on which 87bhelp.asm's six helpers beside it in this library are NONE, and the same as B$FCMP's fnstsw. `retf` with no immediate is the cleanup: nothing arrives on the 8086 stack, the operand is on the x87 stack. One path leaves instead of returning -- `jmp 01B5h:4610h` at 0x8bd0, reached after testing al and the flag byte at [bp-6] -- so raises_error stays true and reachable() gates it on whether the program handles errors. Registers stay at the worst case: the stub itself writes dx and the kernel writes ax and bx, and nothing here establishes what the emulator tail preserves.
 '''
 
 ["B$FERR"]

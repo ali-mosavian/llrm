@@ -20,22 +20,25 @@ from enum import StrEnum
 from dataclasses import replace
 from dataclasses import dataclass
 
+from iced_x86 import Code
+from iced_x86 import Register
 from iced_x86 import FlowControl
-from iced_x86 import Code, Register
 
+from qbopt.objectfile import omf
+from qbopt.frontend import fppatches
 from qbopt.frontend.declen import Insn
 from qbopt.frontend.declen import decode
-from qbopt.objectfile.module import Module
-from qbopt.objectfile.module import family, defines
 from qbopt.objectfile.module import Space
-from qbopt.objectfile import omf
+from qbopt.objectfile.module import Module
+from qbopt.objectfile.module import family
+from qbopt.objectfile.module import defines
 
 # Runtime routines that do not return to the byte after the call, because their
 # arguments are sitting there.
 # The one routine that reads a table laid inline after its own call site.
-# Established from the shipped libraries rather than inferred -- gosub.asm,
-# byte for byte the same in BCOM45.LIB, BCL71ENR.LIB and VBDCL10E.LIB, read
-# out with tools/libdump.py:
+# Established from the shipped libraries rather than inferred -- gosub.asm
+# in BCOM45.LIB, BCL71ENR.LIB and VBDCL10E.LIB, read with tools/libdump.py.
+# The implementations differ; the QB form below shows the table protocol:
 #
 #   lds  si,[bp+2]     si = the return address, which IS the table
 #   lodsb              al = the count, si now on the entries
@@ -45,9 +48,8 @@ from qbopt.objectfile import omf
 #   push bx / push dx  and a far return goes to whichever was chosen
 #
 # So an entry is a two-byte offset into this same segment, the count is one
-# byte in front of them, and out of range means the statement after the
-# table. All three are what inline_table() below reads and what the block's
-# own successors are.
+# byte in front of them. Selectors 0 or count+1..255 fall through; values
+# above 255 enter B$FrameFC instead. These are normal CFG successors only.
 INLINE_TABLE = {"B$OGTA"}
 
 PAD = 0x90
@@ -86,13 +88,17 @@ class CodeMap:
     leaders: frozenset[int]
     tables: tuple[tuple[int, int], ...] = ()
     unreached: tuple[tuple[int, int], ...] = ()
+    procedures: frozenset[int] = frozenset()
 
 
 def terminator(insn: Insn, module: Module | None = None) -> Ends:
     """What this instruction does to control flow."""
-    if (module is not None and module.calls.get(insn.at) == "B$RETA"
-            and family(module.records) in ("pds71", "vbdos")
-            and "B$RETA" not in defines(module.records, module.seg)):
+    if (
+        module is not None
+        and module.calls.get(insn.at) == "B$RETA"
+        and family(module.records) in ("pds71", "vbdos")
+        and "B$RETA" not in defines(module.records, module.seg)
+    ):
         # gosub.asm discards this call's return IP, then returns to the
         # GOSUB continuation or tail-jumps through B$EVTRET for an event.
         return Ends.LEAVES
@@ -111,6 +117,24 @@ def inline_table(module: Module, insn: Insn) -> tuple[int, int, list[int]] | Non
     lo, hi = insn.end, insn.end + 1 + count * 2
     entries = sorted(at for at in module.operands if lo < at < hi)
     return lo, hi, entries
+
+
+def dispatch_targets(module: Module, insn: Insn) -> tuple[int, ...] | None:
+    if insn.end >= min(module.end, len(module.code)):
+        return None
+    table = inline_table(module, insn)
+    if table is None:
+        return None
+    lo, hi, fields = table
+    if hi > min(module.end, len(module.code)) or fields != list(range(lo + 1, hi, 2)):
+        return None
+    entries = [module.operands[at] for at in fields]
+    if any(
+        entry.space is not Space.SEGMENT or entry.index != module.seg or not module.start <= entry.disp < module.end
+        for entry in entries
+    ):
+        return None
+    return tuple(entry.disp for entry in entries)
 
 
 # MODULE_CODE in the QuickBASIC 4.5 runtime's addr.inc: a signature word, an
@@ -136,29 +160,78 @@ def has_header(module: Module) -> bool:
 
 def event_enabled(module: Module) -> bool:
     """The compiler requested event checks, whether or not it emitted a stub."""
-    return (has_header(module) and len(module.code) >= U_FLAG + 2
-            and bool(int.from_bytes(module.code[U_FLAG:U_FLAG + 2], "little") & EVENTS))
+    return (
+        has_header(module)
+        and len(module.code) >= U_FLAG + 2
+        and bool(int.from_bytes(module.code[U_FLAG : U_FLAG + 2], "little") & EVENTS)
+    )
+
+
+# CMP word [b$EVTFLG],0 / JNE past / RET / POP AX / PUSH CS / PUSH AX / JMP FAR B$EVK1
+EVENT_ADAPTER = (
+    (Code.CMP_RM16_IMM8, Code.CMP_RM16_IMM16),
+    (Code.JNE_REL8_16, Code.JNE_REL16),
+    (Code.RETNW,),
+    (Code.POP_R16,),
+    (Code.PUSHW_CS,),
+    (Code.PUSH_R16,),
+    (Code.JMP_PTR1616,),
+)
 
 
 def event_stub(module: Module) -> int | None:
-    """Where the event-poll routine starts, in a module that carries one."""
+    """Where the event-poll routine starts, in a module that carries one.
+
+    Identified by its instructions and relocations, not its place or
+    encoding: BC puts it just past the entry jump, a rebuilt segment may lay
+    it out anywhere and re-encode its compare.
+    """
     if not event_enabled(module):
         return None
-    jump = decode(module.code, ENTRY)
-    if (jump is not None
-            and jump.insn.code in (Code.SUB_RM16_IMM8, Code.SUB_RM16_IMM16)
-            and jump.insn.op0_register == Register.SP):
-        # The allocator's main-body spill reservation precedes the original
-        # entry jump. This is emitted layout, not a BC prologue convention.
-        jump = decode(module.code, jump.end)
-    if jump is None or terminator(jump) is not Ends.JUMP:
+    names = omf.externals(module.records)
+    fields = {fixup.offset: fixup for fixup in omf.fixups(module.records) if fixup.seg == module.seg}
+
+    def named(at: int, loc: int, name: str) -> bool:
+        fixup = fields.get(at)
+        return (
+            fixup is not None
+            and fixup.target == "external"
+            and fixup.disp == 0
+            and not fixup.selfrel
+            and fixup.loc == loc
+            and names[fixup.index] == name
+        )
+
+    for flag in sorted(at for at in fields if named(at, omf.LOC_OFF16, "b$EVTFLG")):
+        insns, at = [], flag - 2
+        for codes in EVENT_ADAPTER:
+            one = decode(module.code, at)
+            if one is None or one.insn.code not in codes:
+                break
+            insns.append(one)
+            at = one.end
+        else:
+            compare, skip, _ret, pop, _cs, push, far = insns
+            if (
+                compare.insn.immediate(1) == 0
+                and skip.insn.near_branch_target == pop.at
+                and pop.insn.op0_register == push.insn.op0_register == Register.AX
+                and named(far.at + 1, omf.LOC_PTR32, "B$EVK1")
+                and sum(insns[0].at <= site < far.end for site in fields) == 2
+            ):
+                return insns[0].at
+    return None
+
+
+def local_call_target(module: Module, insn: Insn) -> int | None:
+    if insn.flow != FlowControl.CALL or insn.target is None or any(insn.at <= site < insn.end for site in module.sites):
         return None
-    return jump.end
+    return insn.target if module.start <= insn.target < module.end else None
 
 
-def walk(module: Module, entry: int) -> CodeMap | str:
+def walk(module: Module, entry: int, extra_entries: frozenset[int] = frozenset()) -> CodeMap | str:
     """Every byte reachable as an instruction, from the entry points on."""
-    seeds = {entry} | module.targets | module.publics
+    seeds = {entry} | module.targets | module.publics | extra_entries
     if (stub := event_stub(module)) is not None:
         seeds.add(stub)
     entries = sorted(seeds)
@@ -178,6 +251,12 @@ def walk(module: Module, entry: int) -> CodeMap | str:
             if insn is None:
                 return f"the decoder gave up at {at:#x}, reached from an entry point"
             starts.add(at)
+
+            # A reachable private near call identifies code, but its callee
+            # is not a CFG successor: execution also continues after the call.
+            if (target := local_call_target(module, insn)) is not None:
+                leaders.add(target)
+                pending.append(target)
 
             if (table := inline_table(module, insn)) is not None:
                 lo, hi, held = table
@@ -205,7 +284,66 @@ def walk(module: Module, entry: int) -> CodeMap | str:
                 leaders.add(insn.end)
             at = insn.end
 
-    return CodeMap(frozenset(starts), frozenset(leaders), tuple(sorted(tables)), gaps(module, starts, tables))
+    return CodeMap(
+        frozenset(starts),
+        frozenset(leaders),
+        tuple(sorted(tables)),
+        gaps(module, starts, tables),
+        extra_entries,
+    )
+
+
+def native_gap_entry(
+    module: Module,
+    found: CodeMap,
+    gap: tuple[int, int],
+    entry: int,
+    extra_entries: frozenset[int],
+) -> int | None:
+    """A disconnected, frame-based C procedure that exactly explains a gap.
+
+    Stripped Borland objects do not name an unreferenced static procedure in
+    PUBDEF, LINNUM or a debug segment.  Its ABI entry still does: PUSH BP;
+    MOV BP,SP.  The byte shape alone is not enough, so accept it only when a
+    walk from that entry stays inside this one previously unexplained range,
+    every path is closed by a return, and anything it leaves behind is inert.
+    """
+    lo, hi = gap
+    push = decode(module.code, lo)
+    establish = decode(module.code, push.end) if push is not None else None
+    if not (
+        push is not None
+        and establish is not None
+        and push.code == Code.PUSH_R16
+        and push.insn.op0_register == Register.BP
+        and establish.code == Code.MOV_R16_RM16
+        and establish.insn.op0_register == Register.BP
+        and establish.insn.op1_register == Register.SP
+        and push.end == establish.at
+    ):
+        return None
+
+    candidate = walk(module, entry, extra_entries | {lo})
+    if isinstance(candidate, str):
+        return None
+    added = candidate.starts - found.starts
+    if not added or any(not lo <= at < hi for at in added):
+        return None
+
+    candidate_blocks = [block for block in partition(module, candidate) if block.at in added]
+    if not candidate_blocks or any(
+        any(successor not in added for successor in block.succ) or (not block.succ and block.ends is not Ends.RETURN)
+        for block in candidate_blocks
+    ):
+        return None
+    if any(
+        leftover is None
+        for remaining in candidate.unreached
+        if remaining[0] < hi and remaining[1] > lo
+        for leftover in [benign(module, (max(lo, remaining[0]), min(hi, remaining[1])))]
+    ):
+        return None
+    return lo
 
 
 def gaps(module: Module, starts: set[int], tables: list[tuple[int, int]]) -> tuple[tuple[int, int], ...]:
@@ -246,8 +384,12 @@ def statement_table(module: Module) -> tuple[int, int] | None:
     if not has_header(module):
         return None
     ref = module.operands.get(0x0A)
-    if (ref is None or ref.space is not Space.SEGMENT or ref.index != module.seg
-            or module.code[0x0A:0x0C] != b"\x00\x00"):
+    if (
+        ref is None
+        or ref.space is not Space.SEGMENT
+        or ref.index != module.seg
+        or module.code[0x0A:0x0C] != b"\x00\x00"
+    ):
         return None
     start = at = ref.disp
     if at < ENTRY:
@@ -255,13 +397,16 @@ def statement_table(module: Module) -> tuple[int, int] | None:
     while at + 2 <= module.end:
         address = module.operands.get(at)
         if address is None:
-            if (module.code[at:at + 2] == b"\x00\x00"
-                    and not any(at <= site < at + 2 for site in module.sites)):
+            if module.code[at : at + 2] == b"\x00\x00" and not any(at <= site < at + 2 for site in module.sites):
                 return start, at + 2
             return None
-        if (address.space is not Space.SEGMENT or address.index != module.seg
-                or at + 4 > module.end or module.code[at:at + 2] != b"\x00\x00"
-                or any(at < site < at + 4 for site in module.sites)):
+        if (
+            address.space is not Space.SEGMENT
+            or address.index != module.seg
+            or at + 4 > module.end
+            or module.code[at : at + 2] != b"\x00\x00"
+            or any(at < site < at + 4 for site in module.sites)
+        ):
             return None
         at += 4
     return None
@@ -304,9 +449,13 @@ def benign(module: Module, gap: tuple[int, int]) -> list[Insn] | None:
     Two kinds turn up. PDS under /Ot pads between procedure bodies with nops.
     And /V /W puts an event-polling call at every statement boundary, including
     ones the optimiser then jumps straight over -- dead code BC emitted and
-    never enters. Both are safe to slide, but only if nothing inside them holds
-    a self-relative displacement that would need recomputing, so that is the
-    test rather than the shape.
+    never enters. BC also leaves branches from loop forms that an earlier
+    simplification made unreachable. All are safe to slide as opaque bytes:
+    reachability proves no instruction can execute an internal relative
+    displacement, while a public, fixup or live branch target into the span is
+    already an entry and therefore keeps it out of a gap. The test here is only
+    that the whole span is instruction-shaped, rather than accepting arbitrary
+    data because it happens to be unreachable.
     """
     lo, hi = gap
     if set(module.code[lo:hi]) == {PAD}:
@@ -315,8 +464,6 @@ def benign(module: Module, gap: tuple[int, int]) -> list[Insn] | None:
     while at < hi:
         insn = decode(module.code, at)
         if insn is None or insn.end > hi:
-            return None
-        if terminator(insn) in (Ends.CONDITIONAL, Ends.JUMP):
             return None
         dead.append(insn)
         at = insn.end
@@ -375,29 +522,37 @@ def code_map(module: Module) -> CodeMap | str:
     best: tuple[int, int, CodeMap] | None = None
 
     for entry in [ENTRY] if has_header(module) else range(HEADER_SEARCH):
-        found = walk(module, entry)
+        native = not has_header(module) and omf.code_segment(module.records) is not None
+        extra_entries: set[int] = set()
+        while True:
+            found = walk(module, entry, frozenset(extra_entries))
+            if isinstance(found, str):
+                break
+            stranded_gap = next(
+                (gap for gap in found.unreached if gap[0] >= entry and benign(module, gap) is None),
+                None,
+            )
+            if stranded_gap is None:
+                break
+            discovered = (
+                native_gap_entry(module, found, stranded_gap, entry, frozenset(extra_entries)) if native else None
+            )
+            if discovered is None:
+                why = f"{stranded_gap[0]:#x}..{stranded_gap[1]:#x} is neither reached nor inert"
+                found = "unexplained code"
+                break
+            extra_entries.add(discovered)
         if isinstance(found, str):
             continue
-        dead: list[Insn] = []
-        stranded = False
-        for gap in found.unreached:
-            if gap[0] < entry:
-                continue
-            leftover = benign(module, gap)
-            if leftover is None:
-                stranded = True
-                why = f"{gap[0]:#x}..{gap[1]:#x} is neither reached nor inert"
-                break
-            dead += leftover
-        if stranded:
-            continue
+        dead = [insn for gap in found.unreached if gap[0] >= entry for insn in (benign(module, gap) or ())]
         fields = operand_fields(module, found, dead)
         if fields is None:
             continue
-        tables = unexplained_tables(module, fields, entry)
+        patches = fppatches.sites(module, found.starts)
+        tables = unexplained_tables(module, fields | patches, entry)
         for lo, hi in tables:
             fields |= set(range(lo, hi))
-        if not all(site in fields for site in module.sites if site >= entry):
+        if not all(site in fields or site in patches for site in module.sites if site >= entry):
             continue
         if tables:
             covered = {at for lo, hi in tables for at in range(lo, hi)}
@@ -412,7 +567,7 @@ def code_map(module: Module) -> CodeMap | str:
         # because each exempts whatever lies before the entry it was given. The
         # count is what separates them, and the largest entry breaks the tie, so
         # the least data gets decoded.
-        explained = sum(1 for site in module.sites if site in fields)
+        explained = sum(1 for site in module.sites if site in fields or site in patches)
         if best is None or (explained, entry) > (best[0], best[1]):
             best = (explained, entry, found)
 
@@ -425,13 +580,19 @@ def code_map(module: Module) -> CodeMap | str:
 
 
 def decoded_instruction(module: Module, at: int) -> Insn | None:
-    """Decode with the compiler's FP-emulator segment protocol restored."""
+    """Decode with the FP emulator's segment protocol restored."""
     insn = decode(module.code, at)
-    if (insn is not None and module.code[at:at + 2] == b"\xcd\x3c"
-            and insn.insn.code != Code.INT_IMM8
-            and family(module.records) == "vbdos"
-            and "FIDRQQ" in omf.externals(module.records)):
-        # VBDCL10E patches CD 3C D9 07 into 90 26 D9 07: ES, not DS.
+    if (
+        insn is not None
+        and module.code[at : at + 2] == b"\xcd\x3c"
+        and insn.insn.code != Code.INT_IMM8
+        and "FIDRQQ" in omf.externals(module.records)
+    ):
+        # The emulator patches CD 3C D9 07 into 90 26 D9 07: ES, not DS.
+        # Read out of QuickBASIC 4.5's own deedlines at 0824:A3F2, so the
+        # protocol is the emulator's and not one dialect's -- gating it on
+        # vbdos left every QB float access reading a segment nothing set,
+        # and `dead` then deleted the `mov es,[si+2]` before it.
         # Keep file offsets and length; only the virtual instruction changes.
         native = insn.insn.copy()
         native.segment_prefix = Register.ES
@@ -491,8 +652,8 @@ def _close(module: Module, run: list[Insn], mapped: CodeMap) -> Block:
     succ: list[int] = []
 
     if (table := _table_at(module, mapped, last)) is not None:
-        # every label it can reach, plus the fall-through past the table
-        succ = [*sorted(module.targets), table[1]]
+        targets = dispatch_targets(module, last)
+        succ = [*(sorted(module.targets) if targets is None else targets), table[1]]
         ends = Ends.TABLE
     elif ends in (Ends.CONDITIONAL, Ends.JUMP):
         target = last.target

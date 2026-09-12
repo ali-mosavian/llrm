@@ -11,8 +11,9 @@ import pytest
 
 import corpus
 from qbopt.objectfile import omf
-from qbopt.objectfile import module
+from qbopt.analysis import regions
 from qbopt.legacy.lift import lift
+from qbopt.objectfile import module
 from qbopt.legacy.lift import literal_only
 
 # The operator fixtures are compare-and-divide programs: both are calls into the
@@ -136,7 +137,7 @@ OTHER = frozenset({9})
         (module.Addr(module.Space.SEGMENT, 0, 9), module.Addr(module.Space.FRAME, -4), False),
         # a DGROUP segment too: the stack is the last thing in DGROUP and
         # grows down, so it reaches a named variable only by overflowing
-        # into it. Assumed, not proven -- see may_alias's own note.
+        # into it. Assumed, not proven -- see regions' own note.
         (module.Addr(module.Space.FRAME, -4), module.Addr(module.Space.SEGMENT, 0, 1), False),
         # and a pushed argument is not a named variable either, which is what
         # let lngmix's loop hold anything invariant at all
@@ -185,7 +186,7 @@ OTHER = frozenset({9})
     ],
 )
 def test_may_alias(a: module.Addr, b: module.Addr, expected: bool) -> None:
-    assert module.may_alias(a, b, DGROUP) is expected
+    assert regions.addresses(a, module.WIDEST, b, module.WIDEST) is expected
 
 
 @pytest.mark.parametrize(
@@ -196,19 +197,19 @@ def test_may_alias_narrows_with_a_known_width(width: int, expected: bool) -> Non
     """Two adjacent frame slots meet or not depending on how wide the access is."""
     a = module.Addr(module.Space.FRAME, -4)
     b = module.Addr(module.Space.FRAME, -6)
-    assert module.may_alias(a, b, DGROUP, width, width) is expected
+    assert regions.addresses(a, width, b, width) is expected
 
 
 def test_may_alias_over_states_an_unstated_width() -> None:
     """The default must never report disjoint where a real width could overlap."""
     a = module.Addr(module.Space.SEGMENT, 0, 1)
     b = module.Addr(module.Space.SEGMENT, module.WIDEST - 1, 1)
-    assert module.may_alias(a, b, DGROUP) is True
+    assert regions.addresses(a, module.WIDEST, b, module.WIDEST) is True
 
 
 def test_may_alias_is_conservative_about_the_unknown() -> None:
-    assert module.may_alias(None, module.Addr(module.Space.FRAME, -4), DGROUP) is True
-    assert module.may_alias(module.Addr(module.Space.SEGMENT, 0, 9), None, DGROUP) is True
+    assert regions.addresses(None, 2, module.Addr(module.Space.FRAME, -4), 2) is True
+    assert regions.addresses(module.Addr(module.Space.SEGMENT, 0, 9), 2, None, 2) is True
 
 
 @pytest.mark.skipif(shutil.which("ndisasm") is None, reason="ndisasm is not installed")
@@ -246,7 +247,7 @@ def test_every_value_starts_where_ndisasm_says_an_instruction_does(mapped_obj: P
 def test_an_indexed_operand_is_bounded_by_the_next_thing_named_after_it() -> None:
     """`m(r * w + c)` does not reach `w`.
 
-    may_alias takes an indexed operand to read or write its whole segment,
+    regions takes an indexed operand to read or write its whole segment,
     which is sound and stops LICM dead: matrix's inner loop has nothing
     invariant in it because the store to the array is taken to reach every
     scalar beside it.
@@ -271,17 +272,17 @@ def test_an_indexed_operand_is_bounded_by_the_next_thing_named_after_it() -> Non
 
     for disp in (0x328, 0x32A, 0x32C):
         scalar = module.Addr(module.Space.SEGMENT, disp, 5)
-        assert module.may_alias(array, scalar, frozenset(), 2, 2), "unbounded, it reaches everything"
-        assert not module.may_alias(array, scalar, frozenset(), 2, 2, bounds), f"bounded, it cannot reach {disp:#x}"
+        assert regions.addresses(array, 2, scalar, 2), "unbounded, it reaches everything"
+        assert not regions.addresses(array, 2, scalar, 2, bounds), f"bounded, it cannot reach {disp:#x}"
 
     # Inside the array it still may, which is what keeps this a bound and
     # not a licence.
     inside = module.Addr(module.Space.SEGMENT, 0x100, 5)
-    assert module.may_alias(array, inside, frozenset(), 2, 2, bounds)
+    assert regions.addresses(array, 2, inside, 2, bounds)
 
     # And a segment with no names to bound it by is unchanged.
     assert module.reach(array, 2, {}) is None
-    assert module.may_alias(array, module.Addr(module.Space.SEGMENT, 0x328, 5), frozenset(), 2, 2, {})
+    assert regions.addresses(array, 2, module.Addr(module.Space.SEGMENT, 0x328, 5), 2, {})
 
 
 def test_the_compiler_that_made_an_object_is_read_off_it() -> None:

@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "artifacts": {
+    "UGLV.LIB": "e260291c7a8979a4d041437b27bd874b57f660855575bd1a38c87c9c2d568067"
+  },
+  "contracts": {
+    "MEMCOPY": {
+      "defined_in": "UGLV.LIB",
+      "member": "dosmem.asm",
+      "inputs": ["ax", "bx", "cx", "dx", "si", "di"],
+      "cleanup": 12,
+      "evidence": "Hash-pinned UGLV.LIB dosmem.asm; reachable normal return at 02BE is RETF 12. All six GP inputs retained conservatively; no preservation or memory-effect claim."
+    },
+    "UGLBUILDSURF": {
+      "defined_in": "UGLV.LIB",
+      "member": "uglsurf.asm",
+      "inputs": ["ax", "bx", "cx", "dx", "si", "di"],
+      "cleanup": 12,
+      "evidence": "Hash-pinned UGLV.LIB uglsurf.asm; reachable normal returns at 046F and 0480 are RETF 12. All six GP inputs retained conservatively; no preservation or memory-effect claim."
+    },
+    "UGLDCSIZE": {
+      "defined_in": "UGLV.LIB",
+      "member": "uglspan.asm",
+      "inputs": ["ax", "bx", "cx", "dx", "si", "di"],
+      "cleanup": 6,
+      "evidence": "Hash-pinned UGLV.LIB uglspan.asm; every reachable normal return in UGLDCSIZE is RETF 6. All six GP inputs retained conservatively; no preservation or memory-effect claim."
+    },
+    "UGLLINE": {
+      "defined_in": "UGLV.LIB",
+      "member": "uglline.asm",
+      "inputs": ["ax", "bx", "cx", "dx", "si", "di"],
+      "cleanup": 16,
+      "evidence": "Hash-pinned UGLV.LIB uglline.asm; reachable normal return at 00D0 is RETF 16. All six GP inputs retained conservatively; no preservation or memory-effect claim."
+    },
+    "UGLPOLYTP": {
+      "defined_in": "UGLV.LIB",
+      "member": "uglplxtp.asm",
+      "inputs": ["ax", "bx", "cx", "dx", "si", "di"],
+      "cleanup": 16,
+      "evidence": "Hash-pinned UGLV.LIB uglplxtp.asm; reachable normal return at 0317 is RETF 16. All six GP inputs retained conservatively; no preservation or memory-effect claim."
+    },
+    "UGLSETVIEW": {
+      "defined_in": "UGLV.LIB",
+      "member": "uglview.asm",
+      "inputs": ["ax", "bx", "cx", "dx", "si", "di"],
+      "cleanup": 8,
+      "evidence": "Hash-pinned UGLV.LIB uglview.asm; every reachable normal return in UGLSETVIEW is RETF 8. All six GP inputs retained conservatively; no preservation or memory-effect claim."
+    },
+    "UGLSPANBEGIN": {
+      "defined_in": "UGLV.LIB",
+      "member": "uglspan.asm",
+      "inputs": ["ax", "bx", "cx", "dx", "si", "di"],
+      "cleanup": 22,
+      "evidence": "Hash-pinned UGLV.LIB uglspan.asm; every reachable normal return in UGLSPANBEGIN is RETF 22. All six GP inputs retained conservatively; no preservation or memory-effect claim."
+    },
+    "UGLSPANTP": {
+      "defined_in": "UGLV.LIB",
+      "member": "uglspan.asm",
+      "inputs": ["ax", "bx", "cx", "dx", "si", "di"],
+      "cleanup": 18,
+      "evidence": "Hash-pinned UGLV.LIB uglspan.asm; every reachable normal return in UGLSPANTP is RETF 18. All six GP inputs retained conservatively; no preservation or memory-effect claim."
+    },
+    "UGLTRIF": {
+      "defined_in": "UGLV.LIB",
+      "member": "uglplxf.asm",
+      "inputs": ["ax", "bx", "cx", "dx", "si", "di"],
+      "cleanup": 12,
+      "evidence": "Hash-pinned UGLV.LIB uglplxf.asm; reachable normal return at 00B9 is RETF 12. All six GP inputs retained conservatively; no preservation or memory-effect claim."
+    },
+    "UGLTRIT": {
+      "defined_in": "UGLV.LIB",
+      "member": "uglplxt.asm",
+      "inputs": ["ax", "bx", "cx", "dx", "si", "di"],
+      "cleanup": 14,
+      "evidence": "Hash-pinned UGLV.LIB uglplxt.asm; reachable normal return at 00D8 is RETF 14. All six GP inputs retained conservatively; no preservation or memory-effect claim."
+    },
+    "UGLTRITP": {
+      "defined_in": "UGLV.LIB",
+      "member": "uglplxtp.asm",
+      "inputs": ["ax", "bx", "cx", "dx", "si", "di"],
+      "cleanup": 14,
+      "evidence": "Hash-pinned UGLV.LIB uglplxtp.asm; reachable normal return at 00DF is RETF 14. All six GP inputs retained conservatively; no preservation or memory-effect claim."
+    },
+    "UGLZMODE": {
+      "defined_in": "UGLV.LIB",
+      "member": "uglz.asm",
+      "inputs": ["ax", "bx", "cx", "dx", "si", "di"],
+      "cleanup": 2,
+      "evidence": "Hash-pinned UGLV.LIB uglz.asm; reachable normal return at 00AA is RETF 2. All six GP inputs retained conservatively; no preservation or memory-effect claim."
+    }
+  }
+}

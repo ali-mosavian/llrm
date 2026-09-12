@@ -20,11 +20,13 @@ is covered. Unknown and overlapping writes still invalidate the cell facts.
 Phi inputs and memory facts meet on agreement across incoming paths.
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import replace
+from dataclasses import dataclass
 
 from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.abi import runtime
+from qbopt.objectfile.module import Space
 
 # What each operation does to two known numbers, within one width. Division
 # has two results and is handled separately, with the faulting cases excluded.
@@ -113,9 +115,15 @@ def initialized(op: mir.Op, ref: mir.MemRef) -> Known | None:
 
 def updated(op: mir.Op, known: dict, here: Cells) -> Known | None:
     """The value of an exact scalar read-modify-write, before its store kills the facts."""
-    if (op.barrier or op.floating or op.merges or len(op.stores) != 1
-        or op.loads != op.stores or op.results != (mir.Cell(op.stores[0]),)
-        or any(not value.flags for value in op.defines)):
+    if (
+        op.barrier
+        or op.floating
+        or op.merges
+        or len(op.stores) != 1
+        or op.loads != op.stores
+        or op.results != (mir.Cell(op.stores[0]),)
+        or any(not value.flags for value in op.defines)
+    ):
         return None
     width = op.stores[0].width
     if width not in (2, 4):
@@ -137,28 +145,85 @@ def updated(op: mir.Op, known: dict, here: Cells) -> Known | None:
 
 
 def _fragments(ref: mir.MemRef, fact: Known) -> Cells:
-    return {(ref.addr.plus(offset), 1): Known((fact.n >> (offset * 8)) & 255, 1)
-            for offset in range(min(ref.width, fact.width))}
+    return {
+        (ref.addr.plus(offset), 1): Known((fact.n >> (offset * 8)) & 255, 1)
+        for offset in range(min(ref.width, fact.width))
+    }
+
+
+def _selector(
+    ref: mir.MemRef,
+    known: dict[mir.Value, Known],
+    allowed: "frozenset[mir.Value] | None" = None,
+) -> "mir.Value | None":
+    """A far store's selector, where nothing yet says which segment it is
+    and it is still one this run may take on faith."""
+    if ref.addr is None or ref.addr.space is not Space.FAR or ref.segment is None:
+        return None
+    if ref.segment in known or (allowed is not None and ref.segment not in allowed):
+        return None
+    return ref.segment
+
+
+def _intervals(known: dict[mir.Value, Known]) -> dict:
+    """What each value is, as the alias lattice asks for it.
+
+    Axiom 3 wants the selector's number; this map is the same fact in the
+    shape `regions` reads, so a far store through a resolved selector stops
+    killing the statics it cannot reach.
+    """
+    from qbopt.analysis.ranges import Interval
+
+    return {value: Interval(fact.n, fact.n, fact.width) for value, fact in known.items()}
 
 
 def _kills(
-    here: Cells, op: mir.Op, known: dict[mir.Value, Known], dgroup: frozenset[int], calls: dict[int, str]
+    here: Cells,
+    op: mir.Op,
+    known: dict[mir.Value, Known],
+    dgroup: frozenset[int],
+    calls: dict[int, str],
+    assume: "set[mir.Value] | None" = None,
+    allowed: "frozenset[mir.Value] | None" = None,
 ) -> Cells:
-    """The cell facts still standing after this operation."""
+    """The cell facts still standing after this operation.
+
+    `assume` collects the far selectors this took on faith. Nothing here can
+    learn `b$seg` is 0xa000 while the POKE that reads it is taken to write
+    every static, and the POKE cannot be placed until `b$seg` is known: the
+    two wait on each other for ever and the pessimistic answer is stable. So
+    an unresolved selector is assumed to be some absolute segment -- axiom 3,
+    applied before it is proven -- and the caller checks afterwards that
+    every one of them did resolve. `allowed` is which selectors a run may
+    still assume; see `known`.
+    """
     from qbopt.analysis import effects
+
     if effects.unmodeled_write(op) and (op.barrier or op.at not in calls):
         here = {}
-    if op.kind is mir.Kind.CALL and op.at in calls:
+    if op.kind is mir.Kind.CALL and op.at in calls and not op.stores:
+        # A raised call names what its callee writes as one of its stores,
+        # and the loop below reads it like any other. Only a call with none
+        # has to be taken at its word.
         contract = runtime.contract(calls[op.at])
-        if runtime.barrier(contract) or (runtime.writes_caller_memory(contract) and not op.stores):
+        if runtime.barrier(contract) or runtime.writes_caller_memory(contract):
             here = {}
     put = _put(op, known) if op.kind is mir.Kind.STORE else updated(op, known, here)
+    facts = _intervals(known)
     for ref in op.stores:
         ref = _addressed(ref, known)
+        if assume is not None and (selector := _selector(ref, known, allowed)) is not None:
+            # Taken on faith, and recorded so the caller can check it. A cell
+            # in `here` is always a static -- `_fragments` adds no far ref --
+            # so an absolute segment reaches none of them.
+            assume.add(selector)
+            continue
         here = {
             where: fact
             for where, fact in here.items()
-            if not mir.overlapping(mir.MemRef(where[0], where[1], None, None), ref, dgroup)
+            if not mir.overlapping(
+                mir.MemRef(where[0], where[1], None, None), ref, dgroup, known=facts, other_known=facts
+            )
         }
         if put is not None and ref.addr is not None and ref.base is None and ref.segment is None:
             here.update(_fragments(ref, put))
@@ -175,7 +240,11 @@ def cells(
     dgroup: frozenset[int],
     calls: dict[int, str],
     known: dict[mir.Value, Known] | None = None,
-    *, initial: Cells | None = None, edges: dict[tuple[int, int], Cells] | None = None,
+    *,
+    initial: Cells | None = None,
+    edges: dict[tuple[int, int], Cells] | None = None,
+    assume: "set[mir.Value] | None" = None,
+    allowed: "frozenset[mir.Value] | None" = None,
 ) -> dict[tuple[int, int], Cells]:
     """What each memory cell holds before each operation, where it is a number.
 
@@ -212,8 +281,11 @@ def cells(
             extra = (edges or {}).get((one, at), {})
             here = outof[one]
             if extra:
-                here = {where: fact for where, fact in here.items()
-                        if not any((where[0].plus(offset), 1) in extra for offset in range(where[1]))}
+                here = {
+                    where: fact
+                    for where, fact in here.items()
+                    if not any((where[0].plus(offset), 1) in extra for offset in range(where[1]))
+                }
                 here = {**here, **extra}
             seen.append(here)
         if at == body.entry:
@@ -230,7 +302,7 @@ def cells(
             if here is None:
                 continue
             for op in block.ops:
-                here = _kills(here, op, known, dgroup, calls)
+                here = _kills(here, op, known, dgroup, calls, assume, allowed)
             if outof[block.at] != here:
                 outof[block.at] = here
                 changing = True
@@ -240,7 +312,7 @@ def cells(
         here = entering(block.at) or {}
         for index, op in enumerate(block.ops):
             found[(block.at, index)] = here
-            here = _kills(here, op, known, dgroup, calls)
+            here = _kills(here, op, known, dgroup, calls, assume, allowed)
     return found
 
 
@@ -274,6 +346,7 @@ def _cell(here: Cells, ref: mir.MemRef) -> Known | None:
 def _addressed(ref: mir.MemRef, known: dict) -> mir.MemRef:
     """Resolve one proven constant offset using the existing no-wrap address proof."""
     from qbopt.analysis import ranges
+
     ref = mir._symbolic_ref(ref)
     if ref.base is None:
         return ref
@@ -368,8 +441,12 @@ def _result(
         return None
     if op.kind is mir.Kind.SIGN_EXTEND and len(parts) == len(op.results) == 1:
         source, result = op.args[0], op.results[0]
-        if (not isinstance(source, (mir.Held, mir.Const)) or not isinstance(result, mir.Held)
-            or not 0 < source.width < result.width <= 4 or parts[0].width < source.width):
+        if (
+            not isinstance(source, (mir.Held, mir.Const))
+            or not isinstance(result, mir.Held)
+            or not 0 < source.width < result.width <= 4
+            or parts[0].width < source.width
+        ):
             return None
         sign = 1 << (source.width * 8 - 1)
         signed = (masked(parts[0].n, source.width) ^ sign) - sign
@@ -382,16 +459,23 @@ def _result(
         return Known((masked(parts[0].n, high.width) << (low.width * 8)) | masked(parts[1].n, low.width), width)
     if op.kind in (mir.Kind.SHL, mir.Kind.SHR) and len(parts) == 2 and len(op.results) == 1:
         source, result = op.args[0], op.results[0]
-        if (not isinstance(source, (mir.Held, mir.Const)) or not isinstance(result, mir.Held)
-            or source.width != result.width or parts[0].width < source.width):
+        if (
+            not isinstance(source, (mir.Held, mir.Const))
+            or not isinstance(result, mir.Held)
+            or source.width != result.width
+            or parts[0].width < source.width
+        ):
             return None
         return Known(masked(ARITH[op.kind](parts[0].n, parts[1].n), result.width), result.width)
     width = min(one.width for one in parts)
     if op.kind is mir.Kind.SMULHI and len(parts) == 2 and len(op.results) == 1:
         result = op.results[0]
-        if (not isinstance(result, mir.Held) or result.width not in (2, 4)
+        if (
+            not isinstance(result, mir.Held)
+            or result.width not in (2, 4)
             or any(not isinstance(arg, (mir.Held, mir.Const)) or arg.width != result.width for arg in op.args)
-            or width < result.width):
+            or width < result.width
+        ):
             return None
         width = result.width
         sign = 1 << (width * 8 - 1)
@@ -430,14 +514,23 @@ def _carry(op: mir.Op, facts: dict, here: Cells) -> int | None:
 
 def _pointer_stores(body: mir.MirBody, dgroup: frozenset[int]) -> dict[mir.Value, mir.Arg]:
     """Dominating, exact stores supplying whole-pointer loads outside the static-cell lattice."""
-    from qbopt.analysis import loops, memoryssa
+    from qbopt.analysis import loops
+    from qbopt.analysis import memoryssa
 
-    candidates = [(memoryssa.Site(block.at, index), op)
-                  for block in body.blocks for index, op in enumerate(block.ops)
-                  if op.kind is mir.Kind.LOAD and not op.barrier and not op.floating and not op.stores
-                  and len(op.loads) == len(op.args) == len(op.results) == 1
-                  and op.loads[0].pointer and op.args == (mir.Cell(op.loads[0]),)
-                  and isinstance(op.results[0], mir.Held) and op.results[0].width == op.loads[0].width]
+    candidates = [
+        (memoryssa.Site(block.at, index), op)
+        for block in body.blocks
+        for index, op in enumerate(block.ops)
+        if op.kind is mir.Kind.LOAD
+        and not op.barrier
+        and not op.floating
+        and not op.stores
+        and len(op.loads) == len(op.args) == len(op.results) == 1
+        and op.loads[0].pointer
+        and op.args == (mir.Cell(op.loads[0]),)
+        and isinstance(op.results[0], mir.Held)
+        and op.results[0].width == op.loads[0].width
+    ]
     if not candidates:
         return {}
     graph = memoryssa.built(body)
@@ -450,16 +543,21 @@ def _pointer_stores(body: mir.MirBody, dgroup: frozenset[int]) -> dict[mir.Value
         if access is None or access.kind is not memoryssa.Kind.DEF or access.site is None:
             continue
         source = access.site
-        if (source.block not in dominators[site.block]
-            or source.block == site.block and source.index >= site.index):
+        if source.block not in dominators[site.block] or source.block == site.block and source.index >= site.index:
             continue
         store = graph.operations[source]
-        if (store.kind is mir.Kind.STORE and not store.barrier and not store.floating
-            and not store.loads and not store.defines and not store.merges
+        if (
+            store.kind is mir.Kind.STORE
+            and not store.barrier
+            and not store.floating
+            and not store.loads
+            and not store.defines
+            and not store.merges
             and len(store.stores) == len(store.args) == 1
             and graph.pointers.same_bytes(op.loads[0], store.stores[0])
             and isinstance(arg := store.args[0], (mir.Const, mir.Held))
-            and arg.width == op.loads[0].width):
+            and arg.width == op.loads[0].width
+        ):
             providers[op.results[0].value] = arg
     return providers
 
@@ -468,7 +566,9 @@ def known(
     body: mir.MirBody,
     dgroup: frozenset[int] | None = None,
     calls: dict[int, str] | None = None,
-    *, edges: dict[tuple[int, int], Cells] | None = None, initial: Cells | None = None,
+    *,
+    edges: dict[tuple[int, int], Cells] | None = None,
+    initial: Cells | None = None,
 ) -> dict[mir.Value, Known]:
     """Every value this body computes that is a number, to a fixed point.
 
@@ -477,6 +577,31 @@ def known(
     which is SSA's own doing, since the value is defined once -- so the
     walk terminates on the count of values rather than on any ordering.
     """
+    # Optimistic, then shrinking. A run may assume every selector it does
+    # not know is some absolute segment; the ones that came out numbers keep
+    # the assumption and the rest lose it, and the run is repeated until
+    # every selector still assumed resolved. All or nothing threw the answer
+    # away whenever one body had a selector that never could resolve -- a
+    # $DYNAMIC array's, which is every one of qbdemo's 213.
+    allowed: frozenset[mir.Value] | None = None
+    while True:
+        got, assumed = _solved(body, dgroup, calls, edges=edges, initial=initial, assume=set(), allowed=allowed)
+        resolved = frozenset(value for value in assumed if value in got)
+        if resolved == assumed:
+            return got
+        allowed = resolved
+
+
+def _solved(
+    body: mir.MirBody,
+    dgroup: frozenset[int] | None,
+    calls: dict[int, str] | None,
+    *,
+    edges: dict[tuple[int, int], Cells] | None,
+    initial: Cells | None,
+    assume: "set[mir.Value] | None",
+    allowed: "frozenset[mir.Value] | None" = None,
+) -> "tuple[dict[mir.Value, Known], set[mir.Value]]":
     facts: dict[mir.Value, Known] = {}
     carries: dict[mir.Value, int] = {}
     held: dict[tuple[int, int], Cells] = {}
@@ -491,7 +616,7 @@ def known(
         # `n * k` inside the loop, which is three statements and a store
         # away.
         if dgroup is not None and calls is not None:
-            held = cells(body, dgroup, calls, facts, edges=edges, initial=initial)
+            held = cells(body, dgroup, calls, facts, edges=edges, initial=initial, assume=assume, allowed=allowed)
         for block in body.blocks:
             # A join is known where every path into it agrees. Nothing else
             # about a phi is knowable -- and this is what makes the
@@ -525,4 +650,5 @@ def known(
                     facts[target] = found
                     changing = True
     from qbopt.analysis import constant_cycles
-    return constant_cycles.propagated(body, facts)
+
+    return constant_cycles.propagated(body, facts), (assume or set())

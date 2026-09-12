@@ -20,19 +20,19 @@ This lattice intersects at joins. Where predecessor values differ,
 availability proof. Lowering and allocation handle that phi normally.
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import field
+from dataclasses import replace
+from dataclasses import dataclass
 
-
-from qbopt.model import ir
-from qbopt.analysis import loops, memoryssa
 from qbopt.model import mir
-from qbopt.model.mir import Held
-from qbopt.model.mir import Kind
 from qbopt.model.mir import Op
-from qbopt.abi import runtime
+from qbopt.analysis import loops
+from qbopt.model.mir import Kind
 from qbopt.model.mir import Value
+from qbopt.analysis import effects
 from qbopt.model.mir import MemRef
 from qbopt.model.mir import MirBody
+from qbopt.analysis import memoryssa
 from qbopt.objectfile.module import Space
 
 # What a cell maps to, and the whole lattice element.
@@ -45,6 +45,9 @@ class Held:
 
     into: dict[int, Holders]
     outof: dict[int, Holders]
+    # Each value's constant, so a far access through a literal selector is
+    # not taken to reach the frame.
+    known: dict = field(default_factory=dict)
 
 
 def _addressing(op: Op) -> set[Value]:
@@ -74,8 +77,15 @@ def loaded_into(op: Op) -> tuple[MemRef, Value] | None:
     same shape has to be refused here. Constants are not SSA uses: after
     folding, `20 + [base]` can have only address uses yet is still not a load.
     """
-    if (op.kind is not Kind.LOAD or op.floating is not None or len(op.loads) != 1 or op.stores or op.barrier
-        or op.loads[0].addr is None and not op.loads[0].pointer):
+    if (
+        op.kind is not Kind.LOAD
+        or op.floating is not None
+        or len(op.loads) != 1
+        or op.stores
+        or op.barrier
+        or op.loads[0].addr is None
+        and not op.loads[0].pointer
+    ):
         return None
     defines = _real(op.defines)
     if len(defines) != 1:
@@ -108,18 +118,40 @@ def _preserved(op: Op) -> set[Value]:
     """
     if op.kind is not Kind.LOAD:
         return set()
-    named = {one.value for one in op.args if isinstance(one, Held)}
+    named = {one.value for one in op.args if isinstance(one, mir.Held)}
     return {one for one in _real(op.uses) if one not in named}
 
 
 def stored_from(op: Op) -> tuple[MemRef, Value] | None:
-    """The cell this op purely stores, and the value it wrote there."""
-    if (op.floating is not None or len(op.stores) != 1 or op.loads or op.barrier
-        or op.stores[0].addr is None and not op.stores[0].pointer):
+    """The cell this op purely stores, and the value it wrote there.
+
+    Purely: the cell receives the value, not something computed from it.
+    `inc [x]` and `add [x],1` read one value and store another, and naming
+    the one they read made deedlines' zoom read `kxy0%` as the value it
+    held before the branch that changed it.
+    """
+    if (
+        op.kind not in (Kind.STORE, Kind.ARG)
+        or op.floating is not None
+        or len(op.stores) != 1
+        or op.loads
+        or op.barrier
+        or op.stores[0].addr is None
+        and not op.stores[0].pointer
+    ):
         return None
     if _real(op.defines):
         return None
     reading = [one for one in _real(op.uses) if one not in _addressing(op)]
+    if not reading:
+        # A constant written straight to the cell reads no value at all, so
+        # the count above refused it and the bytes were unknowable for the
+        # rest of the body. `DEF SEG = &HA000` is one store and twenty-three
+        # reads, none of which could be served.
+        written = [one for one in op.args if isinstance(one, mir.Const)]
+        if len(written) == 1 and len(op.args) == 1 and written[0].width == op.stores[0].width:
+            return op.stores[0], written[0]
+        return None
     if len(reading) != 1:
         return None
     return op.stores[0], reading[0]
@@ -159,44 +191,25 @@ def stored_cell(op: Op) -> MemRef | None:
     return op.stores[0]
 
 
-def _clean(op: Op, calls: dict[int, str]) -> bool:
-    """Whether this call provably leaves caller memory alone.
-
-    mir.py gives a call a store of `MemRef(addr=None)`, which aliases
-    everything and wipes this map. That is the right default and the wrong
-    answer for the routines runtime.py has actually read: B$MUI4 multiplies
-    two longs in registers and touches no caller memory at all, so a cell
-    established before it is still that value after.
-
-    Registers are a separate question and are not answered here. A call
-    clobbers physical registers independently of memory. An SSA value remains
-    the same value; allocation must preserve it if forwarding extends its use.
-    """
-    name = calls.get(op.at)
-    if name is None:
-        return False
-    routine = runtime.contract(name)
-    return routine.established and not runtime.barrier(routine) and not runtime.writes_caller_memory(routine)
-
-
 def _after(
     op: Op,
     holders: Holders,
     dgroup: frozenset[int],
     calls: dict[int, str],
+    known: dict | None = None,
 ) -> Holders:
     """The map across one op."""
-    if op.barrier:
+    if effects.unmodeled_write(op):
         return {}
     if op.kind is Kind.CALL:
-        # Even a call runtime.py proves memory-clean uses the stack: it is
-        # entered by a push of the return address and the callee pops its
-        # own arguments off. "Writes no caller memory" is a claim about the
-        # caller's variables, never about the scratch below sp.
-        return _local(holders) if _clean(op, calls) else {}
+        holders = _local(holders)
 
     for ref in op.stores:
-        holders = {one: who for one, who in holders.items() if not mir.overlapping(one, ref, dgroup)}
+        holders = {
+            one: who
+            for one, who in holders.items()
+            if not mir.overlapping(one, ref, dgroup, known=known, other_known=known)
+        }
     found = stored_from(op) or loaded_into(op)
     if found is not None:
         ref, value = found
@@ -244,7 +257,10 @@ def holders(
     register. redundant() asks for it; forwardable() must not, and a
     generated program caught it doing so.
     """
+    from qbopt.analysis import ranges
+
     calls = calls or {}
+    known = ranges.constants(body, dgroup, calls)
     preds: dict[int, list[int]] = {block.at: [] for block in body.blocks}
     for block in body.blocks:
         for succ in block.succ:
@@ -261,12 +277,12 @@ def holders(
             arriving = {} if block.at == body.entry else _meet([outof[one] for one in preds[block.at]])
             leaving = dict(arriving)
             for op in block.ops:
-                leaving = _after(op, leaving, dgroup, calls)
+                leaving = _after(op, leaving, dgroup, calls, known)
             if arriving != into[block.at] or leaving != outof[block.at]:
                 into[block.at], outof[block.at] = arriving, leaving
                 changing = True
 
-    return Held(into, outof)
+    return Held(into, outof, known)
 
 
 def provider(
@@ -285,23 +301,25 @@ def provider(
         for op in block.ops:
             if op.at == at:
                 return next((who for one, who in current.items() if mir.same_bytes(one, ref)), None)
-            current = _after(op, current, dgroup, calls)
+            current = _after(op, current, dgroup, calls, found.known)
     return None
 
 
 @dataclass(frozen=True, slots=True)
 class Forward:
-    """A memory read whose bytes equal a known SSA value."""
+    """A memory read whose bytes equal a known SSA value, or a constant."""
 
     at: int
     # The value holding them. Which register that is, is the allocator's
     # answer; a caller that has no values -- the machine arm -- looks it up
     # in the body's own `origin`, which is where that question belongs.
-    value: "mir.Value"
+    value: "mir.Value | mir.Const"
     op: Op | None = None
 
 
-def _dead_in(block, overwritten: dict, dgroup: frozenset[int], calls: dict[int, str]):
+def _dead_in(
+    block: mir.MirBlock, overwritten: dict[MemRef, int], dgroup: frozenset[int], calls: dict[int, str]
+) -> tuple[list[int], dict[MemRef, int]]:
     """One block, backward, from what its successors have already overwritten.
 
     Returns the stores it found dead and what is overwritten on entry, so
@@ -317,16 +335,13 @@ def _dead_in(block, overwritten: dict, dgroup: frozenset[int], calls: dict[int, 
             # store, since sp comes back where it started and nothing
             # outside the idiom reads the cells it passed through.
             continue
-        if op.floating is not None or op.kind is Kind.FCHECK or op.barrier or (op.kind is Kind.CALL and not _clean(op, calls)):
+        if (
+            op.floating is not None
+            or op.kind is Kind.FCHECK
+            or effects.unmodeled_write(op)
+            or (op.kind is Kind.CALL and not op.loads)
+        ):
             overwritten = {}
-            continue
-        if op.kind is Kind.CALL:
-            # A clean call still carries mir.py's own MemRef(addr=None) in
-            # both loads and stores -- the default that aliases everything
-            # -- so falling through to the clearing below wiped the map for
-            # a routine _clean() had just proved touches no caller memory.
-            # Its arguments are on the stack, and a stack cell is never in
-            # this map to begin with.
             continue
 
         wrote = stored_cell(op)
@@ -349,7 +364,7 @@ def _dead_in(block, overwritten: dict, dgroup: frozenset[int], calls: dict[int, 
                 if ref.addr is not None and ref.addr.space is Space.STACK:
                     # A push. `stored_from()` does not name it, so without
                     # this it clears through the general case -- and
-                    # may_alias() says a stack cell and a static may be the
+                    # regions says a stack cell and a static may be the
                     # same byte, because BC runs with SS == DS. True only of
                     # a program whose stack has already grown down into its
                     # own data, which has crashed. Four pushes ahead of a
@@ -422,9 +437,7 @@ def dead_stores(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) ->
     return tuple(op for block in body.blocks for op in block.ops if id(op) in found)
 
 
-def redundant(
-    body: MirBody, dgroup: frozenset[int], calls: dict[int, str]
-) -> tuple[tuple[int, Value, Value], ...]:
+def redundant(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> tuple[tuple[int, Value, Value], ...]:
     """Loads that put back into a register exactly what it already held.
 
     `(where, what the load defined, the value that already held it)`. The
@@ -465,12 +478,11 @@ def redundant(
         # `mov ax,[x]` on the strength of that entry is how this read the
         # wrong cell. SSA forwarding instead retains the load's definition
         # and replaces its memory operand with the known value.
-        inside: dict[Register_, Value] = {}
+        inside: dict[int, Value] = {}
         for op in block.ops:
             # A call clobbers ax, cx, dx and bx whatever it does to memory,
             # so a value that was in one of them is not there afterwards.
-            # _after() keeps the *memory* map across a call runtime.py has
-            # proved clean, which is right and is exactly what makes this
+            # _after() keeps disjoint memory facts across calls, which makes this
             # separate bookkeeping necessary: the cell is still that value
             # and the register is not.
             if op.kind is Kind.CALL or op.barrier:
@@ -487,7 +499,7 @@ def redundant(
                 where = body.origin.get(value)
                 if where is not None:
                     inside[where] = value
-            current = _after(op, current, dgroup, calls)
+            current = _after(op, current, dgroup, calls, held.known)
     return tuple(found)
 
 
@@ -516,14 +528,16 @@ def forwardable(
                     found.append(Forward(op.at, who, op))
                 else:
                     missing.append((memoryssa.Site(block.at, index), op))
-            current = _after(op, current, dgroup, calls)
+            current = _after(op, current, dgroup, calls, held.known)
     if missing:
         found.extend(_memory_providers(body, dgroup, missing))
     return tuple(found)
 
 
 def _memory_providers(
-    body: MirBody, dgroup: frozenset[int], missing: list[tuple[memoryssa.Site, Op]],
+    body: MirBody,
+    dgroup: frozenset[int],
+    missing: list[tuple[memoryssa.Site, Op]],
 ) -> list[Forward]:
     """Recover dominating memory values lost by the forward lattice at loops."""
     graph = memoryssa.built(body)
@@ -533,9 +547,11 @@ def _memory_providers(
     found: list[Forward] = []
 
     def available(source: memoryssa.Site, site: memoryssa.Site, cell: MemRef, value: Value) -> bool:
-        return (source.block in dominators[site.block]
-                and (source.block != site.block or source.index < site.index)
-                and (source.block == site.block or bool(_local({cell: value}))))
+        return (
+            source.block in dominators[site.block]
+            and (source.block != site.block or source.index < site.index)
+            and (source.block == site.block or bool(_local({cell: value})))
+        )
 
     for site, op in missing:
         if len(op.loads) != 1 or op.barrier or op.kind is Kind.CALL:
@@ -550,8 +566,11 @@ def _memory_providers(
                     found.append(Forward(op.at, value, op))
                     continue
         for source, (cell, value) in loads:
-            if (available(source, site, cell, value) and graph.pointers.same_bytes(cell, op.loads[0])
-                and graph.unchanged(source, site, cell, dgroup)):
+            if (
+                available(source, site, cell, value)
+                and graph.pointers.same_bytes(cell, op.loads[0])
+                and graph.unchanged(source, site, cell, dgroup)
+            ):
                 found.append(Forward(op.at, value, op))
                 break
     return found

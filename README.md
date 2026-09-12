@@ -18,6 +18,31 @@ uv run python -m qbopt.rewrite PROGRAM.OBJ -o PROGRAMQ.OBJ --cpu 386
 LINK PROGRAMQ.OBJ
 ```
 
+Pass every object and library in the same order as the LINK invocation when
+the program spans modules. qbopt resolves each external against that complete
+link unit, optimizes every standalone object, and writes only after all of them
+have completed:
+
+```sh
+uv run python -m qbopt.rewrite MAIN.OBJ DRAW.OBJ BCOM45.LIB \
+  --output-dir build/optimized --cpu 386
+LINK build/optimized/MAIN.OBJ+build/optimized/DRAW.OBJ,,,BCOM45.LIB
+```
+
+For a resolved definition whose audited runtime interface is not already
+known, qbopt follows the OMF call graph and conservatively discovers which
+entry-register values can reach a read. Recursive, indirect, ambiguous, and
+otherwise unresolved edges consume all allocatable GP inputs. This narrows
+only the call's input liveness; memory, clobber, control, cleanup, and error
+effects remain opaque.
+
+Unsupported OMF records, unresolved or ambiguous externals, incomplete
+lowering, allocation failures, and unencodable instructions are errors by
+default. `--allow-unchanged` is the explicit compatibility mode for retaining
+an input object when its backend refuses it. With multiple objects, qbopt
+finishes the entire link unit in memory before creating any output, so a
+failure cannot leave a partly optimized set behind.
+
 Useful options:
 
 ```sh
@@ -57,6 +82,8 @@ The raise recognizes BC-specific LONG pairs, runtime arithmetic calls, and
 supported numeric array descriptors. MIR passes are machine-independent;
 only lowering, allocation, and peephole work with registers or instructions.
 See [the MIR boundary](docs/split.md).
+The [compiler foundations plan](docs/compiler-foundations.md) defines the
+correctness and code-quality goals, ownership boundaries, and delivery order.
 
 Current work includes:
 

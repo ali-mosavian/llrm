@@ -5,4 +5,4 @@ from qbopt.model import mir
 
 def unmodeled_write(op: mir.Op) -> bool:
     """Missing call effects are unknown, not a proof that the call is readonly."""
-    return op.barrier or (op.kind is mir.Kind.CALL and not op.stores)
+    return (op.barrier and not op.memory_complete) or (op.kind is mir.Kind.CALL and not op.stores)

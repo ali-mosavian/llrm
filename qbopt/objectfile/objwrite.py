@@ -19,13 +19,16 @@ allocator settled, so there is one emitter rather than two that drift.
 
 from dataclasses import replace
 
-from qbopt.backend import layout
-from qbopt.model import lir
+from iced_x86 import Register
+
 from qbopt.model import ir
+from qbopt.model import lir
 from qbopt.model import mir
+from qbopt.backend import layout
 from qbopt.objectfile import omf
 from qbopt.objectfile import relocate
-from qbopt.objectfile.module import Module, Space
+from qbopt.objectfile.module import Space
+from qbopt.objectfile.module import Module
 
 
 def written(
@@ -76,15 +79,26 @@ def written(
     for new, old in laid.relocations:
         relocations.setdefault(old, []).append(kept + new)
     groups = list(omf.groups(records))
-    if laid.symbols and "DGROUP" not in groups:
+    group_framed = [address for _offset, address in laid.symbols if address.segment == Register.NONE]
+    if group_framed and "DGROUP" not in groups:
         return "generated data references require an established DGROUP frame"
     added = []
     for offset, address in laid.symbols:
-        if address.space is Space.SEGMENT and address.index not in found.dgroup:
-            return "generated data reference is outside DGROUP"
-        fixup = omf.offset_fixup(found.seg, kept + offset,
-            "segment" if address.space is Space.SEGMENT else "external",
-            address.index, address.disp, groups.index("DGROUP") + 1)
+        if address.space is Space.SEGMENT and address.index not in found.dgroup and address.segment == Register.NONE:
+            return f"generated data reference at {kept + offset:#x} is outside DGROUP: {address}"
+        target = "segment" if address.space is Space.SEGMENT else "external"
+        fixup = (
+            omf.target_offset_fixup(found.seg, kept + offset, target, address.index, address.disp)
+            if address.segment != Register.NONE
+            else omf.offset_fixup(
+                found.seg,
+                kept + offset,
+                target,
+                address.index,
+                address.disp,
+                groups.index("DGROUP") + 1,
+            )
+        )
         added.append((kept + offset, fixup))
     made = relocate.as_records(
         records,
@@ -192,8 +206,7 @@ def _carried(one: "lir.Insn") -> mir.Op:
     # that merely stands beside a far call still claims nothing.
     return replace(
         one.op,
-        kind=mir._kind_of(one.what, (), ())
-        if one.op.kind is mir.Kind.DIVMOD and one.what is not None else one.op.kind,
+        kind=mir._kind_of(one.what, (), ()) if one.op.kind is mir.Kind.DIVMOD and one.what is not None else one.op.kind,
         made=one.what,
         at=one.at,
         covers=one.covers,

@@ -28,18 +28,21 @@ changes, then emit.
 """
 
 from dataclasses import field
-from dataclasses import dataclass, replace
+from dataclasses import replace
+from dataclasses import dataclass
 
 from iced_x86 import OpKind
 from iced_x86 import Register
 
 from qbopt.model import ir
 from qbopt.model import mir
+from qbopt.backend import fpu
 from qbopt.backend import lower
 from qbopt.backend import select
 from qbopt.backend import target
-from qbopt.backend import fpu
-from qbopt.objectfile.module import Module, Addr, Space
+from qbopt.objectfile.module import Addr
+from qbopt.objectfile.module import Space
+from qbopt.objectfile.module import Module
 from qbopt.frontend.declen import STANDS_IN
 
 
@@ -88,6 +91,7 @@ class Table:
 
     lo: int
     hi: int
+    discarded: bool = False
 
     @property
     def at(self) -> int:
@@ -216,7 +220,7 @@ def _still_has_an_operand_for_it(op: mir.Op) -> bool:
     # this asks. `op.made` used to be that marker; a pass that says what it
     # computes in MIR's own operands sets nothing, so ask lower.
     what = lower.rewritten(op)
-    if what is None:
+    if what is None or (what.op is ir.Operation.BARRIER and _raw_span(op) is not None):
         return True
     holds = [one for one in (*what.dests, *what.sources) if isinstance(one, (ir.Mem, ir.Address, ir.Imm))]
     if not holds:
@@ -224,6 +228,27 @@ def _still_has_an_operand_for_it(op: mir.Op) -> bool:
     was = getattr(op.node, "semantics", None)
     had = was is not None and any(isinstance(one, (ir.Mem, ir.Address)) for one in (*was.dests, *was.sources))
     return not (had and not any(isinstance(one, (ir.Mem, ir.Address)) for one in holds))
+
+
+_TRANSFERS = frozenset({ir.Operation.CALL, ir.Operation.JUMP, ir.Operation.BRANCH, ir.Operation.ESCAPE})
+
+
+def _relocatable(what: "ir.Semantics | None") -> bool:
+    """Whether this instruction has an operand a relocation can sit in.
+
+    A symbolic memory operand's displacement, or a symbolic immediate --
+    `push offset X`. A frame or stack displacement is a number the assembler
+    knows and no fixup names one.
+    """
+    if what is None or what.target is not None or what.op in _TRANSFERS:
+        # A call or jump carries its fixup in the target, not in an operand:
+        # read as operands only, every far call went out as `call 0:0`.
+        return True
+    return any(
+        isinstance(one, (ir.Address, ir.Imm))
+        or (isinstance(one, ir.Mem) and (one.addr is None or one.addr.space in (Space.SEGMENT, Space.EXTERNAL)))
+        for one in (*what.dests, *what.sources)
+    )
 
 
 def _absorbed(site, read):
@@ -350,8 +375,12 @@ def _divide_fields(op: mir.Op, found: Module, fields: frozenset[int]) -> "tuple[
     for index, one in enumerate(op.args):
         if not isinstance(one, mir.Cell):
             continue
-        if (index >= len(was) or not isinstance(was[index], mir.Cell) or index not in known
-            or replace(was[index].ref, base=one.ref.base, segment=one.ref.segment) != one.ref):
+        if (
+            index >= len(was)
+            or not isinstance(was[index], mir.Cell)
+            or index not in known
+            or replace(was[index].ref, base=one.ref.base, segment=one.ref.segment) != one.ref
+        ):
             return None
         out.append(known[index])
     return tuple(out)
@@ -406,6 +435,26 @@ def _fields_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) 
     return () if one is None else (one,)
 
 
+def _generated_immediate(op, what: ir.Semantics | None) -> "Addr | None":
+    """The address a symbolic immediate carries, when this op has no fixup of its own.
+
+    `mov ax,offset X` emitted by a pass rather than read back off BC's bytes
+    has no recorded field -- the field is the operand, and the operand is
+    here. Without this the spiller's rematerialization of such a constant
+    emitted a literal zero: the abandoned original became an inert anchor,
+    its fixup fell inside that anchor's covers and so read as explained, and
+    the new site got nothing.
+
+    Memory operands are answered separately and deliberately: their address
+    already routes through the `symbols` fallback below, and widening their
+    encoding here would change bytes on every object that has one.
+    """
+    if what is None or op.symbol is False:
+        return None
+    found = [one.address for one in (*what.dests, *what.sources) if isinstance(one, ir.Imm) and one.address is not None]
+    return found[0] if len(found) == 1 else None
+
+
 def _field_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -> int | None:
     """The address of the one relocated field inside `op`'s own bytes.
 
@@ -434,9 +483,15 @@ def _field_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -
     # stop rather than to relocate.
     if op.symbol is True:
         what = _semantics(op)
-        if (op.id is not None and what is not None and what.op is ir.Operation.CALL
-            and what.target is None and op.at in found.calls
-            and found.code[op.at:op.at + 1] == b"\x9a" and op.at + 1 in fields):
+        if (
+            op.id is not None
+            and what is not None
+            and what.op is ir.Operation.CALL
+            and what.target is None
+            and op.at in found.calls
+            and found.code[op.at : op.at + 1] == b"\x9a"
+            and op.at + 1 in fields
+        ):
             return op.at + 1
         said = found.refs.get(op.id) if op.id is not None else None
         if said is None or len(said) != 1 or not _still_has_an_operand_for_it(op):
@@ -506,9 +561,23 @@ def _field_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -
 # instruction. The short branch's whole range.
 REACH = range(-128, 128)
 
+_FLOATING_MACHINE = frozenset(
+    {
+        ir.Operation.FLOAT_LOAD,
+        ir.Operation.FLOAT_STORE,
+        ir.Operation.FLOAT_ARITH,
+        ir.Operation.FLOAT_ARITH_POP,
+        ir.Operation.FLOAT_UNARY,
+        ir.Operation.EXCHANGE,
+    }
+)
+
 
 def _placed(
-    ops: list, at: int, lengths: list[int], labels: dict[int, int] | None = None,
+    ops: list,
+    at: int,
+    lengths: list[int],
+    labels: dict[int, int] | None = None,
     anchors: dict[int, mir.Op] | None = None,
 ) -> tuple[list[int], dict[int, int]]:
     """Where each op lands, given what each one measures.
@@ -527,6 +596,16 @@ def _placed(
     for op, length in zip(ops, lengths):
         placed.append(where)
         moved.setdefault(op.at, where)
+        if isinstance(op, Table) and length:
+            # A copied run preserves the relative position of every byte,
+            # not only its first one. Deedlines has a LINNUM entry at
+            # 0x8950 inside the unreachable 0x8943..0x8952 run; mapping only
+            # Table.at copied the code and then refused the perfectly valid
+            # line record. Fixups inside a table already use this same
+            # translation during emission. Give every other OMF code-offset
+            # field the identical answer here.
+            for old in range(op.lo, op.hi):
+                moved.setdefault(old, where + old - op.lo)
         where += length
     for label, destination in (labels or {}).items():
         if destination in moved:
@@ -538,19 +617,40 @@ def _placed(
 
 
 def _emulator_protocol(op, found, native_fpu):
-    if (not native_fpu and op.id in found.float_protocols and op.made is not None
-        and op.made.op is ir.Operation.FLOAT_LOAD):
+    if (
+        not native_fpu
+        and op.id in found.float_protocols
+        and op.made is not None
+        and op.made.op is ir.Operation.FLOAT_LOAD
+    ):
         return found.float_protocols[op.id]
     if native_fpu or not fpu.emulated_at(found.code, op.at):
+        return None
+    # An inserted or materializing instruction can inherit an emulated x87
+    # operation's source address and provenance while computing an ordinary
+    # integer move.  The address says which bytes it stands beside, not which
+    # protocol its newly selected bytes speak.  Wrapping Deedlines' spill move
+    # as though its 89h MOV opcode were an ESC instruction refused the entire
+    # object after selection had succeeded.
+    what = op.made
+    if (
+        what is not None
+        and what.op not in _FLOATING_MACHINE
+        and not (what.op is ir.Operation.NOTHING and what.name in ("wait", "fwait"))
+    ):
         return None
     protocol = found.code[op.at + 1]
     if op.node is not None:
         return protocol
-    what = op.made
-    if (op.covers == (op.at, op.at) and protocol in STANDS_IN and what is not None
+    if (
+        op.covers == (op.at, op.at)
+        and protocol in STANDS_IN
+        and what is not None
         and what.op in (ir.Operation.FLOAT_LOAD, ir.Operation.EXCHANGE)
-        and what.name in ("fld", "fxch") and what.sources
-        and all(isinstance(arg, ir.St) for arg in (*what.sources, *what.dests))):
+        and what.name in ("fld", "fxch")
+        and what.sources
+        and all(isinstance(arg, ir.St) for arg in (*what.sources, *what.dests))
+    ):
         # Allocator moves inherit their anchor's mode, not its memory prefix.
         # wrapped() derives the interrupt number from the selected ESC byte.
         return 0x34
@@ -584,7 +684,7 @@ def assemble(
     lengths: list[int] = []
     for op in ops:
         if isinstance(op, Table):
-            lengths.append(op.hi - op.lo)
+            lengths.append(0 if op.discarded else op.hi - op.lo)
             continue
         what = _semantics(op)
         # `op.node is not None` because this reads the original bytes at
@@ -634,7 +734,7 @@ def assemble(
             at=at,
             where=_where(op, assignment, origin),
             held=_held(assignment),
-            relocated=_field_in(found, op, fields) is not None,
+            relocated=_field_in(found, op, fields) is not None or _generated_immediate(op, what) is not None,
         )
         if made is not None and (protocol := _emulator_protocol(op, found, native_fpu)) is not None:
             made = fpu.wrapped(made, protocol)
@@ -663,9 +763,13 @@ def assemble(
             landed = moved.get(what.target)
             if landed is None:
                 continue
-            if (what.op is ir.Operation.JUMP and what.name == "jmp"
-                and lengths[index] > 0 and landed == placed[index] + lengths[index]
-                and not _fields_in(found, op, fields)):
+            if (
+                what.op is ir.Operation.JUMP
+                and what.name == "jmp"
+                and lengths[index] > 0
+                and landed == placed[index] + lengths[index]
+                and not _fields_in(found, op, fields)
+            ):
                 fallthrough.add(index)
                 lengths[index] = 0
                 changing = True
@@ -688,7 +792,7 @@ def assemble(
                 where=_where(op, assignment, origin),
                 held=_held(assignment),
                 short=True,
-                relocated=_field_in(found, op, fields) is not None,
+                relocated=_field_in(found, op, fields) is not None or _generated_immediate(op, what) is not None,
             )
             if made is None:
                 continue  # a call has no short form, and says so by refusing
@@ -708,6 +812,8 @@ def assemble(
         if index in fallthrough:
             continue
         if isinstance(op, Table):
+            if op.discarded:
+                continue
             # Copied verbatim, with every fixup inside it moved by the same
             # amount the table itself moved. The entries are relocated words
             # and their destinations live in the fixups' own displacements,
@@ -786,7 +892,7 @@ def assemble(
             where=_where(op, assignment, origin),
             held=_held(assignment),
             short=index in short,
-            relocated=_field_in(found, op, fields) is not None,
+            relocated=_field_in(found, op, fields) is not None or _generated_immediate(op, what) is not None,
         )
         if made is not None and (protocol := _emulator_protocol(op, found, native_fpu)) is not None:
             made = fpu.wrapped(made, protocol)
@@ -801,6 +907,14 @@ def assemble(
         # instruction: absorbing a long divide is four and two of them are
         # relocated, and each fixup belongs to the operand it was read off.
         wanted = _fields_in(found, op, fields)
+        if wanted and not _relocatable(what):
+            # A fixup belongs to an operand, and this instruction has none a
+            # relocation could sit in -- no symbolic memory operand and no
+            # symbolic immediate. Forwarding served the read from a register,
+            # so `add ax,[d]` is `add ax,bx` and the displacement went with
+            # the operand. The check below is for the other case, an
+            # instruction that should have had a field and lost it.
+            wanted = ()
         if wanted:
             landed = made.places
             if len(landed) < len(wanted):
@@ -808,9 +922,16 @@ def assemble(
             for where, field in zip(landed, wanted, strict=False):
                 relocations.append((len(out) + where, field))
         else:
-            addresses = [arg.addr for arg in (*what.dests, *what.sources)
-                         if isinstance(arg, ir.Mem) and arg.addr is not None
-                         and arg.addr.space in (Space.SEGMENT, Space.EXTERNAL)]
+            addresses = [
+                arg.addr
+                for arg in (*what.dests, *what.sources)
+                if isinstance(arg, ir.Mem)
+                and arg.addr is not None
+                and arg.addr.space in (Space.SEGMENT, Space.EXTERNAL)
+            ]
+            immediate = _generated_immediate(op, what)
+            if immediate is not None and immediate.space in (Space.SEGMENT, Space.EXTERNAL):
+                addresses.append(immediate)
             if addresses:
                 if len(addresses) != 1 or len(made.places) != 1:
                     return f"{op.at:#06x}: cannot bind a generated symbolic memory operand"
@@ -826,6 +947,8 @@ def assemble(
     folded: dict[int, int] = {}
     for op in ops:
         if isinstance(op, Table):
+            if op.discarded:
+                explained.update(one for one in known if op.lo <= one < op.hi)
             continue
         landed = moved.get(op.at)
         for lo, hi in _ranges_of(op, found):

@@ -31,13 +31,19 @@ HERE = Path(__file__).resolve().parent.parent / "qbopt"
 
 # Discover every optimization module, including new passes and subpackages.
 # Shared analyses and the remaining frontend compatibility helpers are explicit.
-PASSES = tuple(sorted({
-    path.relative_to(HERE).as_posix() for path in (HERE / "optimize").rglob("*.py")
-    if path.name != "__init__.py"
-} | {
-    "frontend/pairs.py", "frontend/wide.py", "analysis/consts.py",
-    "analysis/avail.py", "analysis/ssa.py", "analysis/induction.py",
-}))
+PASSES = tuple(
+    sorted(
+        {path.relative_to(HERE).as_posix() for path in (HERE / "optimize").rglob("*.py") if path.name != "__init__.py"}
+        | {
+            "frontend/pairs.py",
+            "frontend/wide.py",
+            "analysis/consts.py",
+            "analysis/avail.py",
+            "analysis/ssa.py",
+            "analysis/induction.py",
+        }
+    )
+)
 
 # Naming any of these is naming the machine.
 NAMED = frozenset(
@@ -59,12 +65,6 @@ ALLOWED = {
     "frontend/pairs.py": None,  # pair identity is BC's register convention
     "analysis/avail.py": {"redundant"},
     "frontend/wide.py": {"_wider"},
-    # transform.py and segments.py have no blanket permission. What is
-    # left is one function: `_leaving`, which answers "what does the caller
-    # see" -- a statement about registers, and the reading Value's own
-    # docstring sanctions.
-    "optimize/transform.py": {"_leaving"},
-    "optimize/segments.py": set(),
 }
 
 
@@ -102,10 +102,13 @@ def _named_in(path: Path) -> dict[str, set[str]]:
     return found
 
 
-@pytest.mark.parametrize("source", [
-    "from iced_x86 import Register as R\ndef f(): return R.EAX\n",
-    "import iced_x86 as machine\ndef f(): return machine.Code.MOV_R16_RM16\n",
-])
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from iced_x86 import Register as R\ndef f(): return R.EAX\n",
+        "import iced_x86 as machine\ndef f(): return machine.Code.MOV_R16_RM16\n",
+    ],
+)
 def test_architecture_scan_cannot_be_bypassed_by_an_import_alias(tmp_path, source):
     """The boundary instrument must not report clean after Register is renamed R."""
     path = tmp_path / "pass.py"
@@ -143,10 +146,10 @@ def test_a_pass_is_a_transform_and_nothing_else() -> None:
     layout as arguments and ended up choosing registers with it. A class
     whose only entry point is `transform(body)` cannot.
     """
-    from qbopt.model.passes import MIRTransform
     from qbopt.model.passes import Where
-    from qbopt.optimize.transform import PASSES as ORDER
+    from qbopt.model.passes import MIRTransform
     from qbopt.optimize.transform import pipeline
+    from qbopt.optimize.transform import PASSES as ORDER
 
     every = pipeline(Where())
     assert [one.name for one in every] == list(ORDER)

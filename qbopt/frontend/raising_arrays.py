@@ -2,13 +2,16 @@ from dataclasses import replace
 
 from qbopt.model import mir
 from qbopt.analysis import consts
-from qbopt.objectfile.module import Addr, Space
+from qbopt.objectfile.module import Addr
+from qbopt.objectfile.module import Space
 
 
 def annotated(body: mir.MirBody, calls: dict[int, str], *, family: str = "") -> mir.MirBody:
     sites = {at: name for at, name in calls.items() if name in ("B$DDIM", "B$RDIM")}
     if not sites:
-        from qbopt.frontend import arrayfacts, raising_fields
+        from qbopt.frontend import arrayfacts
+        from qbopt.frontend import raising_fields
+
         return raising_fields.named(arrayfacts.proven(body))
     known = consts.known(body)
     symbols: dict[mir.Value, mir.Symbol] = {}
@@ -17,7 +20,7 @@ def annotated(body: mir.MirBody, calls: dict[int, str], *, family: str = "") -> 
         arguments: list[mir.Const | mir.Symbol | None] = []
         ops = []
         for op in block.ops:
-            if op.kind is mir.Kind.COPY and len(op.args) == len(op.results) == 1:
+            if op.kind in (mir.Kind.COPY, mir.Kind.ADDRESS) and len(op.args) == len(op.results) == 1:
                 source = _argument(op.args[0], known, symbols)
                 result = op.results[0]
                 if isinstance(source, mir.Symbol) and isinstance(result, mir.Held) and result.width == source.width:
@@ -29,7 +32,7 @@ def annotated(body: mir.MirBody, calls: dict[int, str], *, family: str = "") -> 
                 values = _descriptor_values(request, arguments, family) if sites[op.at] == "B$DDIM" else ()
                 op = replace(op, array=request, memory_values=values)
                 arguments.clear()
-            elif op.kind not in (mir.Kind.COPY, mir.Kind.XOR) or op.stores or op.barrier:
+            elif op.kind not in (mir.Kind.COPY, mir.Kind.ADDRESS, mir.Kind.XOR) or op.stores or op.barrier:
                 arguments.clear()
             ops.append(op)
         blocks.append(replace(block, ops=tuple(ops)))
@@ -64,12 +67,17 @@ def _addresses(body: mir.MirBody, symbols: dict[mir.Value, mir.Symbol]) -> mir.M
 
     def reference(ref: mir.MemRef) -> mir.MemRef:
         symbol = symbols.get(ref.base)
-        if symbol is None or symbol.space is not Space.SEGMENT or symbol.width != 2:
+        if symbol is None or symbol.space not in (Space.SEGMENT, Space.FRAME) or symbol.width != 2:
             return ref
         if ref.addr is None or ref.addr.space is not Space.LITERAL or ref.segment is not None:
             return ref
         offset = symbol.offset + symbol.addend + ref.addr.disp
-        if not 0 <= offset <= 0x10000 - ref.width:
+        if (
+            symbol.space is Space.SEGMENT
+            and not 0 <= offset <= 0x10000 - ref.width
+            or symbol.space is Space.FRAME
+            and not -0x8000 <= offset <= 0x7FFF - ref.width + 1
+        ):
             return ref
         return replace(ref, symbolic=mir.Symbol(symbol.space, symbol.index, offset, 2))
 
@@ -102,6 +110,12 @@ def _argument(
 ) -> mir.Const | mir.Symbol | None:
     if isinstance(arg, (mir.Const, mir.Symbol)):
         return arg if arg.width == 2 else None
+    if isinstance(arg, mir.FrameAddress) and arg.width == 2:
+        # A local dynamic-array descriptor is still a symbolic object even
+        # though its address is relative to this invocation's frame.  The
+        # frame-address raise deliberately removed BP from MIR; preserve the
+        # same descriptor identity here without putting the register back.
+        return mir.Symbol(Space.FRAME, 0, arg.offset, arg.width)
     if not isinstance(arg, mir.Held) or arg.width != 2:
         return None
     if symbol := symbols.get(arg.value):
@@ -113,7 +127,9 @@ def _argument(
     return mir.Const(number if number < 0x8000 else number - 0x10000, 2)
 
 
-def _shape(arguments):
+def _shape(
+    arguments: list[mir.Const | mir.Symbol | None],
+) -> tuple[mir.Symbol, int, int, int] | None:
     # runtime/rt/dynamic.asm: lo1, hi1, ..., loN, hiN, element size,
     # dimension count plus attributes, descriptor. ADIM does not allocate.
     if len(arguments) < 5:

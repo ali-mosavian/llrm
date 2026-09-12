@@ -19,9 +19,14 @@ the same thing twice, and the two would drift.
 LLVM's LSR is far larger than this: it enumerates formulas for every use,
 prices them against register pressure, and picks. That machinery exists
 because a target with many addressing modes has many ways to write the same
-address. Both inner and outer loops are eligible. Allocation owns pressure
-and spilling: an older blanket ban on outer recurrences outlived the
-allocator behavior that motivated it and retained NESTED's row multiplies.
+address. Both inner and outer loops are eligible.
+
+The pricing half is here because allocation cannot own it. A counter this
+pass invents is live around the whole loop, so a loop given more of them
+than the target has registers gets every one of them spilled, and a spilled
+counter costs reload, add and store where recomputing the expression it
+replaced costs two instructions and carries nothing. The allocator sees the
+decision, not the choice. `_RESERVE` and `Where.registers` are the budget.
 """
 
 from dataclasses import replace
@@ -29,8 +34,8 @@ from dataclasses import replace
 from qbopt.model import mir
 from qbopt.analysis import ssa
 from qbopt.model.mir import Op
-from qbopt.analysis import induction
 from qbopt.model.mir import MirBody
+from qbopt.analysis import induction
 from qbopt.model.passes import Where
 from qbopt.model.passes import MIRTransform
 
@@ -42,13 +47,25 @@ class Strength(MIRTransform):
         self.where = where
 
     def transform(self, body: MirBody) -> MirBody:
-        from qbopt.optimize import floatloop, loopexit, indvars
+        from qbopt.optimize import indvars
+        from qbopt.optimize import ivshare
+        from qbopt.optimize import exitsink
+        from qbopt.optimize import loopexit
+        from qbopt.optimize import floatloop
+        from qbopt.optimize import transform
 
-        body = loopexit.evaluated(reduced(body, self.where.dgroup, self.where.bounds))
+        body = reduced(body, self.where.dgroup, self.where.bounds, self.where.registers)
+        body = exitsink.sunk(transform.dead(ivshare.shared(body)))
+        body = loopexit.evaluated(body)
         return indvars.simplified(floatloop.specialized(body, self.where.dgroup, self.where.calls))
 
 
-def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | None = None) -> MirBody:
+def reduced(
+    body: MirBody,
+    dgroup: frozenset[int] = frozenset(),
+    bounds: dict | None = None,
+    registers: int = 0,
+) -> MirBody:
     """`body` with every multiply of a counter by an invariant made an add."""
     from qbopt.optimize import transform as passes
 
@@ -84,7 +101,28 @@ def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | 
         ]
         consumed = {arg.value for one in candidates for arg in one.op.args if isinstance(arg, mir.Held)}
         candidates = [one for one in candidates if one.op.results[0].value not in consumed]
+        # Priced, which is the half of LLVM's LSR this did not have. A
+        # derived counter is a value live around the whole loop, and where
+        # the loop already drives a register file's worth the allocator's
+        # only answer is to spill it: reload, add and store every iteration,
+        # three instructions where recomputing the expression is two and
+        # carries nothing. qbdemo's plasma nest had five of them and spilled
+        # all five, sixteen instructions in a latch to advance five counters.
+        #
+        # Against the recurrences the loop drives, not against pressure.
+        # Peak pressure inside a loop is high exactly where the multiply
+        # chain still is, so pricing against it refuses the array-indexing
+        # reductions this pass exists for -- harr 1.77x to 5.28x, matrix
+        # 1.03x to 1.63x. Values live across the backedge is no better: a
+        # promoted loop legitimately carries more than the register file,
+        # and harr's loops report nine.
+        room = len(candidates)
+        if registers:
+            room = max(0, registers - _recurrences(body, loop) - _RESERVE)
+        added = 0
         for one in candidates:
+            if added >= room:
+                break
             # Once each. A multiply inside a nest is derived in every loop
             # that contains it, and reducing it twice would set up two
             # counters for one value.
@@ -136,6 +174,7 @@ def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | 
                 merges={},
                 symbol=False,
             )
+            added += 1
 
     if not replacements:
         return body
@@ -150,6 +189,25 @@ def reduced(body: MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | 
         ),
     )
     return ssa.constructed(changed, frozenset(range(first, taken + 1)))
+
+
+# What a loop's body needs to compute with, beyond the recurrences it
+# drives. Swept against the documented suite and qbdemo's loops: at 1 and 2
+# the suite is untouched, at 3 harr loses 182 instructions and nested 8. Two
+# is the knee, and it is the number of operands an expression has.
+_RESERVE = 2
+
+
+def _recurrences(body: MirBody, loop) -> int:
+    """How many recurrences the loop drives already, this pass's own included.
+
+    Counted per round rather than per call. A derived counter is a phi
+    advanced by a constant, so the next round reads it as a recurrence like
+    any other -- which is what makes the budget shrink as the pass spends
+    it. Counting only this call's additions let five rounds add five
+    counters to qbdemo's plasma nest, one each, every one of them spilled.
+    """
+    return len(induction.basics(body, loop))
 
 
 def _multiplies(one: induction.Derived, derived: list[induction.Derived]) -> bool:

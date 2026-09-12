@@ -13,16 +13,15 @@ import pytest
 
 import corpus
 from qbopt.model import ir
-from qbopt.analysis import liveness
 from qbopt.model import mir
 from qbopt.analysis import avail
-from qbopt.objectfile import module
-from qbopt.legacy import regalloc
-from qbopt.frontend import blocks as blockmod
-from qbopt.frontend.blocks import code_map
+from qbopt.analysis import liveness
 from qbopt.model.mir import MirBody
+from qbopt.objectfile import module
 from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
+from qbopt.frontend.blocks import code_map
+from qbopt.frontend import blocks as blockmod
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
@@ -33,8 +32,14 @@ def test_current_mir_decides_whether_a_call_invalidates_memory(real_call, metada
     """Removed HARY sites killed frame facts; real unknown calls must still invalidate them."""
     ref = mir.MemRef(Addr(Space.FRAME, -20), 2)
     value = mir.Value(1, 0)
-    op = mir.Op(10, ir.Operation.CALL if real_call else ir.Operation.NOTHING, "", (), (),
-                kind=mir.Kind.CALL if real_call else mir.Kind.NOTHING)
+    op = mir.Op(
+        10,
+        ir.Operation.CALL if real_call else ir.Operation.NOTHING,
+        "",
+        (),
+        (),
+        kind=mir.Kind.CALL if real_call else mir.Kind.NOTHING,
+    )
     held = {ref: value}
     calls = {10: "B$HARY"} if metadata else {}
     assert avail._after(op, held, frozenset(), calls) == ({} if real_call else held)
@@ -106,16 +111,6 @@ def test_the_map_reaches_a_fixed_point(obj: Path) -> None:
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
 def test_no_entry_survives_a_store_that_could_reach_it(obj: Path) -> None:
-    """The kill is the only thing keeping this sound.
-
-    A call is the one exception, and the reason it is one is runtime.py: a
-    routine established to write no caller memory keeps the map, even though
-    mir.py gives every call a store of MemRef(addr=None) that aliases
-    everything. That is not this rule being bent -- the store is the default
-    for a callee nothing is known about, and knowing something is what
-    replaces it. B$MUI4 has always been such a routine; the fpemu fixtures
-    added six more, and are what first put a surviving entry across one.
-    """
     found = corpus.loaded(obj)
     assert found is not None
     for body in bodies_of(found, corpus.partitioned(obj)):
@@ -123,10 +118,7 @@ def test_no_entry_survives_a_store_that_could_reach_it(obj: Path) -> None:
         for block in body.blocks:
             current = dict(held.into[block.at])
             for op in block.ops:
-                clean = op.at in found.calls and avail._clean(op, found.calls)
                 current = avail._after(op, current, found.dgroup, found.calls)
-                if clean:
-                    continue
                 for ref in op.stores:
                     kept = avail.stored_from(op)
                     for cell in current:
@@ -156,22 +148,16 @@ def test_an_accumulate_is_not_a_provider() -> None:
     assert seen == 2, "the two accumulate sites are gone from the fixture"
 
 
-def test_a_memory_clean_call_does_not_wipe_the_map() -> None:
-    """B$MUI4 multiplies two longs in registers and touches no caller memory.
-
-    mir.py gives every call a store of MemRef(addr=None), which aliases
-    everything -- the right default, and wrong for the routines runtime.py
-    has actually read. Without this, two of nbody's reloads report "no
-    provider" when the truth is "the provider is dead", which are different
-    findings: one is a modelling gap and the other is a spill.
-    """
+def test_a_runtime_name_does_not_replace_missing_effect_proofs() -> None:
     found = corpus.loaded(Path("fixtures/omf/divmod-p-evt.obj"))
     assert found is not None
     for body in bodies_of(found, corpus.partitioned(Path("fixtures/omf/divmod-p-evt.obj"))):
         for block in body.blocks:
             for op in block.ops:
                 if found.calls.get(op.at) == "B$MUI4":
-                    assert avail._clean(op, found.calls)
+                    ref = mir.MemRef(Addr(Space.FRAME, -20), 2)
+                    held = {ref: mir.Value(1, 0)}
+                    assert avail._after(op, held, found.dgroup, found.calls) == {}
                     return
     raise AssertionError("no B$MUI4 call in this fixture -- it is what the test is about")
 
@@ -255,8 +241,8 @@ def test_an_accumulate_is_not_a_load_however_its_values_look() -> None:
     thing forward._loads_only exists to stop, arrived at from the other
     side.
     """
-    from qbopt.frontend import declen
     from qbopt.model import ir
+    from qbopt.frontend import declen
     from qbopt.objectfile.module import Addr
     from qbopt.objectfile.module import Space
 
@@ -268,7 +254,7 @@ def test_an_accumulate_is_not_a_load_however_its_values_look() -> None:
         assert insn is not None
         return ir.instruction_semantics(insn, somewhere)
 
-    made = semantics("2b060000")   # sub ax,[x]
+    made = semantics("2b060000")  # sub ax,[x]
     moved = semantics("a1000000")  # mov ax,[x]
     assert made.dests[0] in made.sources, "a subtract reads its own destination"
     assert moved.dests[0] not in moved.sources, "a move does not"
@@ -281,7 +267,6 @@ def test_nothing_redundant_is_an_accumulate(obj: Path) -> None:
     """Corpus-wide: every deletion redundant() proposes is a move."""
     from qbopt.model import ir
     from qbopt.model import mir
-    from qbopt.frontend import blocks as split
     from qbopt.frontend.blocks import code_map
 
     found = corpus.loaded(obj)
@@ -475,9 +460,7 @@ def _orphaned(before, after) -> list[str]:
     had, has = _defined(before), _defined(after)
     reads = _read(after)
     return [
-        f"v{one} is read by {reads[one]} and its definition was deleted"
-        for one in sorted(had - has)
-        if one in reads
+        f"v{one} is read by {reads[one]} and its definition was deleted" for one in sorted(had - has) if one in reads
     ]
 
 
@@ -497,11 +480,11 @@ def test_dropping_a_redundant_load_leaves_no_use_without_a_definition(obj: str) 
     """
     from pathlib import Path
 
-    from qbopt.frontend import blocks as split
     from qbopt.model import mir
-    from qbopt.objectfile import module
     from qbopt.objectfile import omf
+    from qbopt.objectfile import module
     from qbopt.optimize import transform
+    from qbopt.frontend import blocks as split
     from qbopt.frontend.blocks import code_map
 
     path = Path(f"fixtures/omf/{obj}.obj")
@@ -513,8 +496,6 @@ def test_dropping_a_redundant_load_leaves_no_use_without_a_definition(obj: str) 
     blocks = split.partition(found, mapped)
 
     for name, body in mir.bodies(found, blocks):
-        after = transform.applied(
-            body, found.dgroup, found.calls, blocks=blocks, found=found, only="drop_loads"
-        )
+        after = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found, only="drop_loads")
         broken = _orphaned(body, after)
         assert not broken, f"{obj} {name}: " + "; ".join(broken[:3])

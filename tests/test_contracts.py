@@ -17,6 +17,21 @@ def library(code: str) -> Library:
     return Library([Module("sample", [omf.Record(0xA0, b"\x01\x00\x00" + payload)])])
 
 
+def test_allocator_budget_visits_direct_dependencies_before_error_descendants() -> None:
+    # B$AlcTmpSH's 256-node DFS report omitted its direct FResizePpv dependency.
+    path = LIBS["vbdos"]
+    if not path.exists():
+        pytest.skip("VBDOS runtime library unavailable")
+    found = Library(modules(path.read_bytes()), functions=4)
+    (root,) = found.symbols["B$AlcTmpSH"]
+    direct = {target for target, _ in found.decode(root).calls.values() if target is not None}
+    assert len(direct) == 3
+    graph = found.graph(root)
+    assert direct <= graph.keys()
+    result = summarize(graph)[root]
+    assert result.unknown
+
+
 def contract(code: str) -> Contract:
     found = library(code)
     return summarize(found.graph((0, 1, 0)))[0, 1, 0]

@@ -1,11 +1,11 @@
 # qbopt
 
 See [AGENTS.md](AGENTS.md). It carries the goal, the architecture and the
-five rules, and this file exists only so that either name finds them.
+six rules, and this file exists only so that either name finds them.
 
-The five rules, because they are the ones most easily forgotten mid-task.
-The first three are global; the fourth and fifth are this project's own,
-and all five get restated at the end of a reply here:
+The six rules, because they are the ones most easily forgotten mid-task.
+The first three are global; the last three are this project's own, and all
+six get restated at the end of a reply here:
 
 1. **Say it and stop.** The minimum needed to understand, in every word
    written -- comments, commit messages, docs, tests, replies alike.
@@ -23,3 +23,8 @@ and all five get restated at the end of a reply here:
    machine. Only lower, regalloc and peephole see machine form. What an
    idiom *is* -- a long pair, an absorbable call -- is the raise's answer,
    not a pass's, or the pass ends up knowing x86.
+6. **Only general solutions, never an edge-case patch.** A fix that names
+   one combination -- one pair of spaces, one routine, one demo -- means the
+   mechanism is wrong. Name the general rule it is an instance of first; if
+   there is none, building it is the work. Deleting code is the evidence it
+   landed.

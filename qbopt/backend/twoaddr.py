@@ -41,6 +41,14 @@ def tied(body: lir.LirBody) -> lir.LirBody:
     """`body` with every tied instruction reading what it writes."""
     changed = False
     from qbopt.backend import allocate
+    from qbopt.backend.spiller import _next_value
+
+    counter = [_next_value(body)]
+
+    def mint() -> int:
+        counter[0] += 1
+        return counter[0] - 1
+
     _, leaving = allocate.live(body)
     copies = _copy_destinations(body)
     blocks = []
@@ -56,7 +64,7 @@ def tied(body: lir.LirBody) -> lir.LirBody:
             chosen = _commuted(one, live_after[id(one)], copies)
             changed |= chosen is not one
             one = chosen
-            fix = _untied(one)
+            fix = _untied(one, mint)
             if fix is None:
                 insns.append(one)
                 continue
@@ -72,29 +80,46 @@ def _copy_destinations(body: lir.LirBody) -> dict[int, set[int]]:
     for block in body.blocks:
         for one in block.insns:
             what = one.what
-            if (what is not None and what.op is ir.Operation.MOVE
+            if (
+                what is not None
+                and what.op is ir.Operation.MOVE
                 and len(what.dests) == len(what.sources) == 1
-                and isinstance(what.dests[0], ir.Held) and isinstance(what.sources[0], ir.Held)
-                and what.dests[0].width == what.sources[0].width):
+                and isinstance(what.dests[0], ir.Held)
+                and isinstance(what.sources[0], ir.Held)
+                and what.dests[0].width == what.sources[0].width
+            ):
                 targets.setdefault(what.sources[0].value, set()).add(what.dests[0].value)
     return targets
 
 
 def _commuted(one: lir.Insn, alive: frozenset[int], copies=None) -> lir.Insn:
     what = one.what
-    if (what is None or what.op is not ir.Operation.BINARY or what.name not in {"add", "and", "or", "xor"}
-        or len(what.dests) != 1 or len(what.sources) != 2 or one.group is not None
-        or one.requires or one.delivers):
+    if (
+        what is None
+        or what.op is not ir.Operation.BINARY
+        or what.name not in {"add", "and", "or", "xor"}
+        or len(what.dests) != 1
+        or len(what.sources) != 2
+        or one.group is not None
+        or one.requires
+        or one.delivers
+    ):
         return one
     into, first, second = what.dests[0], *what.sources
-    if (not all(isinstance(arg, ir.Held) for arg in (into, first, second))
-        or not into.width == first.width == second.width or into.value == first.value):
+    if (
+        not all(isinstance(arg, ir.Held) for arg in (into, first, second))
+        or not into.width == first.width == second.width
+        or into.value == first.value
+    ):
         return one
     targets = (copies or {}).get(into.value, ())
-    reusable = (first.value not in alive and second.value not in alive
-                and second.value in targets and first.value not in targets)
-    if (second.value == into.value or first.value in alive and second.value not in alive
-        or reusable):
+    reusable = (
+        first.value not in alive
+        and second.value not in alive
+        and second.value in targets
+        and first.value not in targets
+    )
+    if second.value == into.value or first.value in alive and second.value not in alive or reusable:
         return replace(one, what=replace(what, sources=(second, first)))
     return one
 
@@ -110,7 +135,7 @@ def _nothing(beside: lir.Insn) -> tuple[int, int]:
     return (at, at)
 
 
-def _untied(one: lir.Insn) -> "list[lir.Insn] | None":
+def _untied(one: lir.Insn, mint) -> "list[lir.Insn] | None":
     """The copy and the fixed instruction, or None where it is already tied."""
     what = one.what
     if what is None or not what.dests or not what.sources:
@@ -119,6 +144,8 @@ def _untied(one: lir.Insn) -> "list[lir.Insn] | None":
     if what.op not in _TIED and not multiply:
         return None
     into, first = what.dests[0], what.sources[0]
+    if isinstance(into, ir.Mem):
+        return _through_register(one, what, into, mint)
     if not isinstance(into, ir.Held) or not isinstance(first, (ir.Held, ir.Imm)):
         return None
     if isinstance(first, ir.Held) and into.value == first.value:
@@ -137,3 +164,44 @@ def _untied(one: lir.Insn) -> "list[lir.Insn] | None":
         value for value in one.uses if not isinstance(first, ir.Held) or value != first.value or value in remaining
     )
     return [move, replace(fixed, uses=tuple(dict.fromkeys((into.value, *uses))))]
+
+
+def _through_register(one: lir.Insn, what: ir.Semantics, into: ir.Mem, mint) -> "list[lir.Insn] | None":
+    """A memory destination computed in a register, then stored.
+
+    `add [x],bx` reads [x]. Where a pass served that read from a value
+    instead -- forwarding `y := [x]` into the cell's own accumulation --
+    the instruction still read memory and sphere-mapped plasma accumulated
+    onto a stale [bp-0EEh].
+    """
+    if len(what.dests) != 1 or what.sources[0] == into or one.group is not None:
+        return None
+    if any(isinstance(source, ir.Mem) for source in what.sources) or one.requires or one.delivers:
+        return None
+    held = ir.Held(mint(), into.width)
+    first = what.sources[0]
+    load = lir.Insn(
+        at=one.at,
+        covers=_nothing(one),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (held,), (first,)),
+        defines=(held.value,),
+        uses=tuple(value.value for value in ir.values(first)),
+        op=one.op,
+    )
+    computed = replace(
+        one,
+        what=ir.Semantics(what.op, what.name, (held,), (held, *what.sources[1:]), what.target),
+        defines=(held.value,),
+        uses=tuple(
+            dict.fromkeys((held.value, *(value.value for source in what.sources[1:] for value in ir.values(source))))
+        ),
+    )
+    store = lir.Insn(
+        at=one.at,
+        covers=_nothing(one),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (into,), (held,)),
+        defines=(),
+        uses=tuple(dict.fromkeys((held.value, *(value.value for value in ir.values(into))))),
+        op=one.op,
+    )
+    return [load, computed, store]

@@ -45,7 +45,8 @@ flowchart LR
 
     Write -->|"OMF .OBJ"| Link["LINK.EXE"]
 
-    Refuse["Any unsupported contract or encoding"] -.->|"refuse atomically"| Original["Return original .OBJ unchanged"]
+    Refuse["Any unsupported contract or encoding"] -.->|"strict default"| Error["Exit nonzero; write no output"]
+    Refuse -.->|"explicit --allow-unchanged"| Original["Retain original .OBJ"]
     Raise -.-> Refuse
     Lower -.-> Refuse
     Machine -.-> Refuse
@@ -258,6 +259,11 @@ without collapsing all memory into one cell.
 The production pass order comes directly from `transform.pipeline()`. The
 sequence repeats until the body is unchanged, with a hard limit of 16 rounds.
 LCSSA precedes the loop transforms, which consume its explicit exit values.
+
+Within `strength`, equal-stride sharing (`ivshare`) preserves observed upper
+bits only with a common-source proof. Dead-value cleanup exposes exit-only
+ADD/SUB producers; `exitsink` moves them through single-input exit phis.
+Unknown readers and live flag dependencies retain the original computation.
 
 ```mermaid
 flowchart LR
@@ -475,7 +481,8 @@ stateDiagram-v2
     Lowered --> Refused: Unlowered or frame refusal
     Allocated --> Refused: Unplaced, Spilled, Tangled
     Written --> Refused: layout or relocation refusal
-    Refused --> Original: return input bytes unchanged
+    Refused --> Error: strict CLI exits nonzero and writes no output
+    Refused --> Original: only with explicit --allow-unchanged
     Error --> [*]
 ```
 
@@ -485,8 +492,8 @@ different configuration raises `Finalised` instead of raising already-generated
 prologues, spill code and edge copies as if BC had emitted them.
 
 A fallback is never reported as successful optimized output. `wholeseg.Emission`
-distinguishes `LIR` from `REFUSED`, and production accepts only `LIR` as a
-completed rewrite.
+distinguishes `LIR` from `REFUSED`; the production CLI raises on `REFUSED` and
+buffers every object in a link unit before writing any of them.
 
 ## Source package map
 
@@ -573,14 +580,107 @@ one documented target without materially regressing another.
   a dedicated preheader and exits; only VBDOS PITSNAP in FPBENCH and NBODY
   has multiple latches. General canonicalization remains required, but is
   not the current arithmetic-kernel optimization blocker.
-- [x] Preserve loop-exit SSA explicitly (`LCSSA`). Single-edge dedicated exits
+  `loopsimplify` now groups predecessor edges into a preheader or unique
+  latch, and splits exits shared with outside predecessors. Phi inputs are
+  merged in the new block; unsupported transfers or malformed phis leave the
+  loop unchanged atomically. Nested-loop membership is recomputed after edits.
+  The pass runs before LCSSA, following LLVM LoopSimplify's structural contract.
+  Jump threading preserves dedicated preheaders. PL_MOVE's MDL_ANGLEMOD
+  exposed the interaction: Decide bypassed the second loop's empty preheader,
+  LoopSimplify recreated it, and optimization aborted after 16 rounds.
+  The real-object regression checks convergence while retaining both loops.
+  Qrender integration (2026-09-11) exposed a second boundary defect:
+  layout repaired implicit edges only for cloned bodies. BG_BAND's new
+  exit block was skipped, leaving the pixel counter in AX for the row
+  increment; the renderer never finished painting the loading screen.
+  Layout now materializes displaced fallthroughs for every body:
+
+  ```asm
+  ; before (wrong)             ; after
+  jle pixelLoop                jle pixelLoop
+  inc ax                       jmp exitBridge
+  mov [bp-16h],ax               nextRow: inc ax
+                               mov [bp-16h],ax
+                               ; exitBridge reloads AX from [bp-16h],
+                               ; restores SI/DI, then jumps to nextRow.
+  ```
+
+  With only SCREEN rebuilt, the native-FPU E1M1 run completes at 23.72 FPS
+  (23 frames, 19 measured intervals), and BENCH.BMP exactly matches the
+  validated image. Disabling LoopSimplify only in SCREEN independently
+  restores the same result; the fix keeps the pass enabled. Regression:
+  `tests/test_loop_exit_layout.py`, fail-first and mutation-checked.
+  Build, screenshots and per-stage evidence: `/tmp/qbopt-quake-launch.X8v5aq`.
+  Full rebuild with the repair: all 21 native-FPU modules emit, link and
+  have complete reachable-code coverage. E1M1 completes at 23.42 FPS
+  (42.692 ms mean across 19 measured intervals; 23 frames total), with
+  byte-identical BENCH.BMP. Evidence: `/tmp/qbopt-quake-fixed.8BnoLI`.
+  NBODY and FPBENCH's real PITSNAP loops now have one backedge. NBODY's
+  native-FPU object shrinks 4082 → 4079 bytes (modeled cost 343576 → 343556)
+  because its two retry trampolines become one:
+
+  ```asm
+  ; before                           ; after
+  jl retryB                          jl retryA
+  ; ...                              ; ...
+  retryA: jmp readTimer               retryA: jmp readTimer
+  retryB: jmp readTimer
+  ```
+
+  BC and both optimized variants agree on all 24 physics outputs plus DONE
+  at ten steps. Observed ticks: BC 3128, before 674, after 674; no timing
+  improvement is established, and the prior PIT-instrument warning still
+  applies. Evidence: `/tmp/qbopt-loopsimplify-run.6jnfLx`; full stage dumps:
+  `/tmp/qbopt-loopsimplify-nbody-20260911`. General coverage remains open:
+  irreducible, entry-header and unsupported-transfer loops are not normalized.
+- [x] Preserve loop-exit SSA explicitly (`LCSSA`). Dedicated exits
   are closed before loop transforms in each fixed-point round; unsupported exit shapes remain
   unchanged until `LoopSimplify` supplies their canonical CFG.
+  A single exit can now merge several exiting edges, provided each incoming
+  edge is dominated by the value's definition. The regression fails when that
+  dominance guard is removed. Distinct dedicated exits now receive exit phis,
+  with downstream SSA merges where their values meet. Bypass phi inputs are
+  repaired on their incoming edges; a direct use reachable without a defining
+  exit is left unchanged rather than supplied an invented value.
+  Real PDS `fixtures/regressions/lcmerge-p-g2.obj` exercises two `EXIT DO`
+  paths and an accumulator use after their join. Its MIR gains two exit phis
+  and one downstream merge; all five focused regressions pass, including a
+  following cycle and a bypass join. Baseline and both native builds print
+  `COUNT=5`, `TOTAL=11`, `DONE`, with zero compile/link errors. LCSSA disabled
+  and enabled emit identical 939-byte objects; no speedup is claimed.
+  Relevant emitted assembly is unchanged on both sides:
+
+  ```asm
+  ; before                        ; after
+  cmp cx,0Ah                      cmp cx,0Ah
+  jl short 005Bh                  jl short 005Bh
+  jmp short 006Fh                 jmp short 006Fh
+  cmp bx,cx                       cmp bx,cx
+  jne short 0061h                 jne short 0061h
+  jmp short 006Fh                 jmp short 006Fh
+  ; ... loop update ...           ; ... loop update ...
+  add eax,1                       add eax,1
+  mov [0],eax                     mov [0],eax
+  ```
+
+  The final store has the same relocated accumulator address. Compile/link
+  logs, both complete listings, screenshot and every stage:
+  `/tmp/qbopt-lcssa-merge.g9W4To`. The earlier `lcexit-p-g2.obj` witness has
+  only memory uses after its exits and does not exercise this SSA merge.
   Exit values reaching a bypass join are rewritten on the incoming edge,
   even when the exit does not dominate the join. This fixes qrender's
-  `MDL_FIRE` repeatedly adding six phis until the 16-round limit;
-  `pl_move` and `screen` now finish MIR optimization but still refuse
-  emission on unestablished call contracts. No optimized runtime claim yet.
+  `MDL_FIRE` repeatedly adding six phis until the 16-round limit.
+  With the hash-checked qrender contracts and the layout repair above,
+  both modules now emit and the full optimized E1M1 build runs correctly.
+  Exit-value evaluation now follows single-edge exit phis and rewrites
+  downstream phi inputs on their incoming edges. ADDRM's closed-SSA long sum
+  becomes 210 outside the loop; observed recurrences remain intact. Isolated
+  before/after lowering removes `mov eax,0` plus the loop's `add eax,ecx`,
+  replacing the final store's source with `mov ebx,210`. Both objects and BC
+  print `T=210`, `U=210`, `DONE` identically in DOS (2026-09-11); dumps,
+  binaries and screenshot: `/tmp/qbopt-lcssa-exit.ihku8G`.
+  This removes a pass-order dependency, not an additional full-pipeline
+  speedup: the existing ordering already optimizes this fixture.
 - [ ] Canonicalize primary counters and derived recurrences
   (`IndVarSimplify`).
   Existing recurrences can replace redundant termination counters across
@@ -598,6 +698,34 @@ one documented target without materially regressing another.
   overshooting and wrap-dependent progressions retain no finite-count proof.
   IVARM's `7, 10, ..., 34` recurrence therefore retains its ten-iteration count
   after the original counter is removed.
+  Arithmetic consumers now qualify too: the recurrence's own update is
+  excluded by SSA definition, not by rejecting every ADD/SUB. NESTED's outer
+  loop reuses `i*10`, removing its spilled termination counter. Native objects
+  shrink PDS 865 → 850, QB 845 → 830 and VBDOS 1049 → 1034 bytes. Each
+  compiler's baseline and both optimized binaries print `T=675`, `DONE`
+  identically, with successful links and screenshots for all three families.
+  The strengthened NESTED regression fails when
+  the arithmetic exclusion is restored. Before/after outer-loop tails:
+
+  ```asm
+  ; before                        ; after
+  mov dx,[bp-2]
+  inc dx
+  add ax,0Ah                      add ax,0Ah
+  add bx,0Ch                      add bx,0Ch
+  mov [bp-2],dx
+  mov dx,[bp-2]
+  cmp dx,4                        cmp ax,32h
+  jle outer_body                  jne outer_body
+  ```
+
+  The frame spill allocation disappears, and the final source counter is
+  stored as constant 5. No FPS or hardware timing claim. Full stage dumps,
+  assembly, link logs and runtime screenshot:
+  `/tmp/qbopt-indvars-arithmetic.1KZ9xE`.
+  Affine starts and strides are typed as scalar SSA values or constants,
+  matching every constructor; memory operands remain in derived invariant
+  terms rather than masquerading as recurrence seeds.
 - [x] Build `MemorySSA`: one def-use graph for loads, stores and call effects.
   `analysis/memoryssa.py` provides live-on-entry, memory uses/definitions and
   join/backedge phis. Calls conservatively define memory. This is an analysis
@@ -610,6 +738,41 @@ one documented target without materially regressing another.
   could also resurrect pre-barrier high-word facts. PRESS-derived MIR cases
   reproduce both defects. Known runtime contracts still refine constant facts;
   precise readonly attributes for promotion remain future work.
+  Availability now distinguishes explicit MIR operands from preserved
+  partial-write inputs: its result-map class had shadowed `mir.Held`, making
+  the operand check ineffective. A fail-first, mutation-checked regression
+  rejects a load carrying an extra data input. HARR's native-FPU object and
+  assembly remain byte-identical (1038 bytes); no speedup is claimed.
+  Call reachability now uses the selected per-site contract, independently
+  for reads and writes. Audited NONE/ARGUMENTS effects exclude BC_DATA even
+  when its addresses escape, but still alias runtime scratch and stack.
+  Unknown contracts, callbacks and handled errors retain unknown effects.
+  `B$FCMP` is not stack-only: its `fnstsw` writes runtime-owned DGROUP.
+  Fail-first regressions cover PL_MOVE's comparisons and contract overrides;
+  restoring the old reachability makes both fail. Native PL_MOVE assembly is
+  unchanged, including this comparison (before = after):
+
+  ```asm
+  fld dword [bp-1Ch]
+  fld dword [bp-18h]
+  wait
+  call far B$FCMP
+  jne short next
+  ```
+
+  This establishes sound mod/ref facts, not a measured renderer speedup.
+  Numeric-literal protection uses those same selected contracts. Previously,
+  an unknown PRINT override still inherited the global table's exclusions.
+  FPDEEP regressions now cover missing, unknown, arbitrary-writing and
+  error-handler contracts; all four detect restoration of the old lookup.
+  Default native FPDEEP assembly remains identical, including `push 200h`
+  followed by `call far B$PEI4` before and after.
+  Availability and dead-store elimination no longer reinterpret runtime names:
+  both consume MIR read/write ranges. Unknown effects invalidate values even
+  under a formerly clean helper name; disjoint calls preserve values and allow
+  overwritten stores to disappear without any runtime name. Fail-first tests
+  cover both directions. FPDEEP's native assembly remains identical while its
+  fixed point takes three rounds rather than four.
   Whole-pointer accesses proven inside one allocation now use shared SSA
   bases and constant byte offsets to exclude disjoint writes. Exact dominating
   stores supply constants or SSA values; unknown roots and unbounded offsets
@@ -730,6 +893,13 @@ one documented target without materially regressing another.
   save a read on the supplying arm but add a jump on the missing arm; QB is
   unchanged. Implicit critical edges, target profitability and strict floating
   reuse remain open.
+  Native deferred-exception floating CSE now reuses values across acyclic
+  paths with unchanged controls and independently checked memory. Calls,
+  opaque effects and explicit checkpoints stop it; strict mode still requires
+  exact-path evidence. FPCSEX computes `a+b` once using an x87 duplicate rather
+  than a second load/add, retaining both SINGLE stores and accumulation order.
+  PDS code saves six bytes; 144 QEMU precision/rounding/input cases match exact
+  output state. See `native-fpu-waits.md` for before/after assembly.
 - [ ] Replace the separate load/store cleanup rules with MemorySSA-based load
   elimination and dead-store elimination.
 - [x] Implement sparse conditional constant propagation (`SCCP`) over values
@@ -750,6 +920,12 @@ one documented target without materially regressing another.
   treat unknown BASIC inputs or unsupported machine effects as unreachable.
 - [ ] Consolidate branch folding, empty-block removal, jump threading and
   unreachable cleanup into `SimplifyCFG`.
+  Proven loop-body intervals now resolve impossible comparison edges, including
+  unsigned bounds without treating negative selectors as small positive values.
+  JUMPS loses its unreachable dispatch error call/table; the counter stays in
+  SI across print calls. PDS modeled cost falls 1366 -> 1058 (1.43x target),
+  with byte-identical native-FPU runtime output. See `switches.md` for assembly
+  and screenshot evidence; this is not full SimplifyCFG completion.
   `decide` now bypasses empty fallthrough blocks as well as jump-only blocks,
   including implicit incoming edges through fallthrough-only paths. An implicit
   edge retains a trampoline's physical jump; bypassing it without materializing
@@ -903,6 +1079,14 @@ one documented target without materially regressing another.
   commutative inputs, allowing coalescing to remove LOCALP's accumulator copy.
   Its loop loses one MOV (20 modeled units at the standard ten-iteration weight)
   on each compiler. Liveness and fixed/grouped operand constraints take priority.
+  The greedy allocator also uses soft copy-neighbor preferences, including
+  copies inserted after coalescing. It prefers fixed or already assigned
+  neighbors without relaxing interference, clobbers, classes or pins.
+  The current uncommitted qrender rollout removes 10,590 code bytes across
+  all 21 BASIC modules and restores E1M1 screenshot completion. Three dedicated
+  QGL checks match baseline; broader renderer acceptance remains open. See
+  [the integration evidence](qrender-integration.md) for assembly and runtime
+  results. This does not complete general spill optimization or copy propagation.
 - [ ] Add instruction scheduling for 486/P5/P6 only after their latency,
   dependency and pairing models are validated against primary sources.
 

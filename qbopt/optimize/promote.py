@@ -33,13 +33,13 @@ from dataclasses import replace
 
 from qbopt.model import mir
 from qbopt.analysis import ssa
+from qbopt.model.mir import Op
 from qbopt.analysis import loops
 from qbopt.analysis import consts
 from qbopt.analysis import effects
-from qbopt.model.mir import Op
 from qbopt.model.mir import MirBody
-from qbopt.objectfile.module import Space
 from qbopt.model.passes import Where
+from qbopt.objectfile.module import Space
 from qbopt.model.passes import MIRTransform
 
 READS = frozenset(
@@ -48,6 +48,8 @@ READS = frozenset(
         mir.Kind.ADD,
         mir.Kind.ADD_CARRY,
         mir.Kind.SUB,
+        mir.Kind.INCREMENT,
+        mir.Kind.DECREMENT,
         mir.Kind.MUL,
         mir.Kind.AND,
         mir.Kind.OR,
@@ -136,13 +138,22 @@ def _initializers(body: MirBody, cells: dict, dgroup: frozenset[int], bounds: di
     for block in body.blocks:
         for index, op in enumerate(block.ops):
             cell = _cell(op)
-            if (op.kind is not mir.Kind.STORE or op.barrier or cell is None or cell.addr is None
-                or cell.base is not None or cell.segment is not None or cell.addr.space not in CELLS):
+            if (
+                op.kind is not mir.Kind.STORE
+                or op.barrier
+                or cell is None
+                or cell.addr is None
+                or cell.base is not None
+                or cell.segment is not None
+                or cell.addr.space not in CELLS
+            ):
                 continue
             after = consts._kills(memory.get((block.at, index), {}), op, {}, dgroup, calls)
             initialized[id(op)] = {
-                addr: fact for addr, width in cells.items()
-                if not isinstance(addr, mir.MemRef) and (addr, width) != (cell.addr, cell.width)
+                addr: fact
+                for addr, width in cells.items()
+                if not isinstance(addr, mir.MemRef)
+                and (addr, width) != (cell.addr, cell.width)
                 and mir.overlapping(mir.MemRef(addr, width), cell, dgroup, bounds)
                 and (fact := consts._cell(after, mir.MemRef(addr, width))) is not None
             }
@@ -163,8 +174,8 @@ def _available(body: MirBody, cells: dict, dgroup: frozenset[int], bounds: dict 
 
     def through(block: mir.MirBlock, available: set, reads: set[int] | None = None) -> set:
         def redefined(values):
-            available.difference_update(key for key, ref in refs.items()
-                                        if ref.base in values or ref.segment in values)
+            available.difference_update(key for key, ref in refs.items() if ref.base in values or ref.segment in values)
+
         redefined({phi.result for phi in block.phis})
         for op in block.ops:
             if effects.unmodeled_write(op):
@@ -172,8 +183,7 @@ def _available(body: MirBody, cells: dict, dgroup: frozenset[int], bounds: dict 
                 continue
             cell = _cell(op)
             key = _key(cell) if cell is not None else None
-            if (reads is not None and op.loads and cell is not None and key in available
-                and cell.width == cells[key]):
+            if reads is not None and op.loads and cell is not None and key in available and cell.width == cells[key]:
                 reads.add(id(op))
             redefined(set(op.defines))
             available.difference_update(
@@ -181,8 +191,7 @@ def _available(body: MirBody, cells: dict, dgroup: frozenset[int], bounds: dict 
                 for addr, ref in refs.items()
                 if any(mir.overlapping(ref, written, dgroup, bounds) for written in op.stores)
             )
-            if (op.kind is mir.Kind.STORE and cell is not None and key in cells
-                and cell.width == cells[key]):
+            if op.kind is mir.Kind.STORE and cell is not None and key in cells and cell.width == cells[key]:
                 available.add(key)
             available.update(initializers.get(id(op), {}))
         return available
@@ -250,15 +259,35 @@ def promoted(
                 exact = _instead(op, holds, found, fresh)
                 if exact is not None:
                     fresh += 1
-                    ops.append(replace(exact, node=None, made=None, id=None, covers=(op.at, op.at),
-                                       extra_covers=(), symbol=False))
+                    ops.append(
+                        replace(
+                            exact, node=None, made=None, id=None, covers=(op.at, op.at), extra_covers=(), symbol=False
+                        )
+                    )
                 for addr, fact in initialized.items():
                     value = mir.Value(fresh, op.at, variable=holds[addr], version=1)
                     fresh += 1
-                    ops.append(replace(op, kind=mir.Kind.COPY, name="mov", defines=(value,), uses=(),
-                        loads=(), stores=(), merges={}, args=(mir.Const(fact.n, fact.width),),
-                        results=(mir.Held(value, fact.width),), node=None, made=None, raised=None,
-                        id=None, covers=(op.at, op.at), extra_covers=(), symbol=False))
+                    ops.append(
+                        replace(
+                            op,
+                            kind=mir.Kind.COPY,
+                            name="mov",
+                            defines=(value,),
+                            uses=(),
+                            loads=(),
+                            stores=(),
+                            merges={},
+                            args=(mir.Const(fact.n, fact.width),),
+                            results=(mir.Held(value, fact.width),),
+                            node=None,
+                            made=None,
+                            raised=None,
+                            id=None,
+                            covers=(op.at, op.at),
+                            extra_covers=(),
+                            symbol=False,
+                        )
+                    )
                 changed = True
                 continue
             if op.loads and id(op) not in usable:
@@ -362,8 +391,13 @@ def _instead(op: Op, holds: dict, found: dict, fresh: int) -> "Op | None":
         return replace(
             op,
             kind=mir.Kind.COPY if op.kind is mir.Kind.LOAD else op.kind,
-            uses=tuple(dict.fromkeys([one.value for one in op.args if isinstance(one, mir.Held)]
-                                    + [one for one in op.uses if one.flags] + [holding])),
+            uses=tuple(
+                dict.fromkeys(
+                    [one.value for one in op.args if isinstance(one, mir.Held)]
+                    + [one for one in op.uses if one.flags]
+                    + [holding]
+                )
+            ),
             loads=(),
             args=tuple(mir.Held(holding, width) if isinstance(one, mir.Cell) else one for one in op.args),
         )

@@ -28,6 +28,18 @@ class Refused(Exception):
     """The frame cannot be grown safely on this body."""
 
 
+def _native_anchor(block: lir.LirBlock, at: int, role: str) -> int:
+    anchors = [index for index, one in enumerate(block.insns) if one.at == at]
+    covered = [
+        index
+        for index in anchors
+        if block.insns[index].covers is not None and block.insns[index].covers[0] < block.insns[index].covers[1]
+    ]
+    if not anchors or anchors != list(range(anchors[0], anchors[-1] + 1)) or len(covered) != 1:
+        raise Refused(f"native frame {role} anchor was lost or duplicated")
+    return anchors[0]
+
+
 class Prologue(LIRTransform):
     name = "prologue"
 
@@ -43,6 +55,8 @@ def reserved(body: lir.LirBody, frame: frames.Frame, calls: dict | None = None) 
     """`body` with sp lowered by what the frame grew, and put back."""
     if not frame.size:
         return body
+    if frame.native is not None:
+        body = _arguments(body, frame.size)
     calls = calls or {}
     entry = next((block for block in body.blocks if block.at == body.entry), None)
     if entry is None or not entry.insns:
@@ -62,6 +76,19 @@ def reserved(body: lir.LirBody, frame: frames.Frame, calls: dict | None = None) 
         if (calls.get(one.at, "").upper() == frames.LEAVE and (one.what is None or one.what.op is ir.Operation.CALL))
         or (runtime_entry is None and one.what is not None and one.what.op is ir.Operation.RETURN)
     ]
+    entry_index = runtime_entry + 1 if runtime_entry is not None else 0
+    if frame.native is not None:
+        if runtime_entry is not None:
+            raise Refused("native and runtime frame plans cannot be combined")
+        entry_index = _native_anchor(entry, frame.native.entry.reserve_at, "reservation")
+        leaves = [
+            (block, _native_anchor(block, at, "release"))
+            for at in frame.native.releases
+            for block in body.blocks
+            if any(one.at == at for one in block.insns)
+        ]
+        if len(leaves) != len(frame.native.releases):
+            raise Refused("native frame release anchor was lost or duplicated")
     if not leaves and not body.noreturn and not _ends_the_program(body, calls or {}):
         raise Refused(f"{frame.size} bytes of frame are wanted and this body has no return to give them back at")
 
@@ -77,8 +104,41 @@ def reserved(body: lir.LirBody, frame: frames.Frame, calls: dict | None = None) 
                         block,
                         take if block.at == body.entry else None,
                         give,
-                        runtime_entry + 1 if runtime_entry is not None else 0,
+                        entry_index,
                     )
+                ),
+            )
+            for block in body.blocks
+        ),
+    )
+
+
+def _arguments(body: lir.LirBody, size: int) -> lir.LirBody:
+    def operand(where: ir.Loc) -> ir.Loc:
+        if isinstance(where, ir.Mem) and where.stack_argument and where.addr is not None:
+            displacement = where.addr.disp - size
+            if displacement < -0x8000:
+                raise Refused("outgoing argument exceeds the native frame displacement range")
+            return replace(where, addr=replace(where.addr, disp=displacement))
+        return where
+
+    return replace(
+        body,
+        blocks=tuple(
+            replace(
+                block,
+                insns=tuple(
+                    replace(
+                        one,
+                        what=replace(
+                            one.what,
+                            dests=tuple(map(operand, one.what.dests)),
+                            sources=tuple(map(operand, one.what.sources)),
+                        ),
+                    )
+                    if one.what is not None
+                    else one
+                    for one in block.insns
                 ),
             )
             for block in body.blocks

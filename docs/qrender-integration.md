@@ -4,7 +4,385 @@ New optimization passes are paused until the optimized renderer builds and
 runs correctly. Target: `qb-qrender/.claude/worktrees/qgl-poly-draw`, source
 commit `2965fa9d91c8e5f14fd3cddd804219956c75e42c`.
 
-## E1M1: native build fails during screenshot allocation
+## Latest: all 21 modules with native FPU and copy hints
+
+### Combined rematerialization cleanup: E1M1 checked
+
+All 21 BASIC modules now emit with the abandoned-definition cleanup. Code
+falls **120,505 -> 120,300 bytes** (205 saved); 6,914 bytes of growth over
+BC remain. Complete batch dumps: `/tmp/qbopt-remat-batch.9ztsjq`, plus the
+MODEL dumps below. The two batch processes finished successfully.
+
+`/tmp/qbopt-qrender-remat-all.hahmoJ` links the combined candidate and runs
+native-FPU E1M1 at **23.02325 FPS**, 22 frames / 18 timed samples, returning
+to DOS. Its final `BENCH.BMP` is byte-identical to the preceding accepted
+build; `final.png` is the inspected lossless conversion. Scene counters
+remain 39 polygons, one drawn model, 60 ticks, player `(480,-352,88)`.
+Depth-buffer far-free memory rises **37,584 -> 37,792 bytes**. These short
+runs do not establish a performance change.
+
+The combined executable's QGLCHK, QGLARR and QGLDIFF diagnostics all report
+`RESULT PASS`, with byte-identical baseline logs on the same E1M1 assets.
+`checks.conf` records the commands and `checks-live.png` captures completion
+at the DOS prompt. On dm3, QGLFACE reaches its oracle and produces a log
+byte-identical to the untouched baseline (1,263 bytes, coverage 1,756,
+centre-oracle XOR 84). Its existing baseline failure remains a failure,
+not a pass. The dm3 configuration, log and inspected black off-screen
+diagnostic screenshot are in `/tmp/qbopt-remat-face-final.kAURIS`.
+These checks have no meaningful FPS. This closes the targeted runtime checks
+for the batch, not the full-suite gate or the overall optimization goal.
+
+| Module | Code bytes saved |
+| --- | ---: |
+| D_MDL | 49 |
+| SCREEN | 35 |
+| PL_MOVE | 22 |
+| R_BSP | 21 |
+| COMMON | 20 |
+| ENT | 19 |
+| H_FRAME | 15 |
+| MODEL, SYS | 8 each |
+| MOD_TEX | 6 |
+| QGLARR | 2 |
+| Other ten modules | 0 |
+
+### MODEL runtime checked: remove abandoned rematerialized definitions
+
+The spiller now drops a rematerialized definition only when no use remains,
+with constraints and opaque operations guarded. If reordered byte ownership
+prevents removal, it retains the existing backend's NOP anchor. MODEL emits
+**5,270 -> 5,262 code bytes** in `/tmp/qbopt-model-remat-anchor.Hg7qjY`;
+all stages are dumped there. `/tmp/qbopt-qrender-remat.snIaWk` replaces only
+MODEL in the accepted all-module build and links without errors. Native-FPU
+E1M1 completes at **23.36583 FPS**, 23 frames and 19 timed samples, and
+returns to DOS. Its final BMP is byte-identical to the preceding build;
+`final.png` is the inspected lossless conversion. Depth-buffer far-free
+memory rises **37,584 -> 37,600 bytes** after alignment. The short-run
+difference from 23.44898 FPS is not a demonstrated performance change.
+
+MOD_OPEN loses the dead constant and the BX spill/reload it forced:
+
+```asm
+; before                      ; after
+mov [bp-18h],bx               ; no spill
+; address setup               ; address setup
+mov bx,40h                    nop
+mov ax,40h                    mov ax,40h
+push ax                       push ax
+mov bx,[bp-18h]               ; BX still holds the original value
+call far B$LDFS               call far B$LDFS
+```
+
+Six focused cleanup checks pass; disabling the cleanup makes both positive
+cases fail. The earlier spiller selection passed 49 checks before the
+additional reordered-span case. A NOP remains a layout limitation, not the
+desired final code. Other modules still use the preceding copy-hint build;
+this validates MODEL on E1M1, not a full rollout of the spiller change.
+
+`/tmp/qbopt-qrender-all-hints.M3XEhA/QHINT.EXE` links all 21 rewritten
+BASIC modules with unchanged C/ASM objects. Code totals **131,095 -> 120,505
+bytes**, saving **10,590 bytes** versus the previous native build. Original
+BC code totals 113,386 bytes: 7,119 bytes of growth remain.
+
+E1M1 completes at **23.44898 FPS** (19 timed samples), returns to DOS, and
+produces a byte-identical baseline `BENCH.BMP`. This short run is correctness
+evidence, not a statistically established speedup. Depth-buffer far-free
+memory is **37,584 bytes**, versus 26,928 before this rollout and 44,640 in
+the untouched baseline. `all-final.png` is a lossless conversion of the
+actual benchmark BMP; `BENCH.TXT` holds the measurements.
+
+QGLCHK, QGLARR and QGLDIFF report `RESULT PASS` with baseline-identical logs.
+QGLARR was compared with the untouched executable using the same E1M1
+assets: its older dm3 log had a different face-record count, not a regression.
+These off-screen checks do not measure FPS. A matched E1M1 QGLFACE run
+reports `FAIL no qgl buffer` in both executables, with identical 443-byte
+logs: neither reaches the coverage oracle. This is not the older dm3
+coverage mismatch and does not validate face rendering. Both return to DOS;
+logs, configurations and prompt screenshots are preserved in
+`/tmp/qbopt-face-matched.MQ3NnU`. No FPS is reported for this failed diagnostic.
+The smaller dm3 fixture reaches the face oracle on both current executables.
+Fresh logs are byte-identical (1,263 bytes): coverage 1,756, centre-oracle
+coverage 1,758, XOR 84, and 1,390 non-exact texels. Thus the allocator
+rollout preserves this observed baseline failure; it does not fix it or
+turn QGLFACE into a pass. Evidence is in `/tmp/qbopt-dm3-face.L8ABwZ`:
+`native.log`, `baseline.log`, both configurations and oracle screenshots.
+The screenshots are black because the diagnostic renders off-screen;
+the logs establish that the oracle ran. No diagnostic FPS is meaningful.
+The broader correctness gate and the 1.5x optimization goal remain open.
+
+For example, actual native assembly in `PL_GROUND_ACCEL` loses two address
+copies. The floating-point arithmetic is unchanged:
+
+```asm
+; before                      ; after
+mov ax,[bp-2Ch]               mov si,[bp-2Ch]
+mov bx,ax                     add si,4
+add bx,4                      fld dword [si]
+fld dword [bx]                mov di,[bp-26h]
+mov ax,[bp-26h]               add di,4
+mov di,ax                     fmul dword [di]
+add di,4                      faddp
+fmul dword [di]
+faddp
+```
+
+PL_MOVE code falls 17,593 -> 16,426 bytes. Complete stage dumps for the
+remaining thirteen-module batch are under `/tmp/qbopt-remaining-hints.qKNuEs`.
+This allocator change remains uncommitted: the rejected gate is recorded below.
+
+## Earlier isolated SCREEN run: copy hints recover screenshot completion
+
+The isolated build, `/tmp/qbopt-qrender-hints.1NbvND`, replaces only
+SCREEN in the native build described below. It completes E1M1 and returns
+to DOS: **23.46965 FPS**, versus untouched baseline **18.34392 FPS**.
+These are short runs (19 versus 15 timed samples), not a statistical
+speedup claim or a measurement of SCREEN alone. Native x87 FPU is enabled.
+
+`BENCH.BMP` is byte-identical to baseline (SHA256
+`c403dfd281983bc642f98db71744e8115987286ecb9a27fcd1e1e014d069657d`).
+The inspected `hints-run-01.png` captures the rendered room during this
+run; it is not the final benchmark frame. Final scene fields agree.
+The `k_*` counters accumulate per rendered frame (`h_frame.bas:539–547`
+at the pinned revision), so their totals are not an equality oracle for
+19 versus 23 frames. Far free memory is consistently 15,968 bytes below
+baseline; allocation deltas agree. Broader renderer acceptance remains open.
+
+The allocator now prefers registers of fixed or already assigned copy
+neighbors, including copies introduced after coalescing. This follows the
+copy-hint principle in LLVM's `CalcSpillWeights.cpp`, without frequency
+weighting. Preferences do not change interference, clobber, register-class
+or fixed-register constraints. No machine detail was added to MIR.
+
+SCREEN code falls **19,102 -> 17,381 bytes** (1,721 saved by copy hints;
+1,743 including the preceding constant-materialization change). Stage
+dumps in `/tmp/qbopt-screen-hints/stages` first differ at register allocation;
+all stages through `s86-lir-coalesce.txt` match the preceding build.
+
+```asm
+; before                      ; after
+mov bx,[bp-34h]               mov dx,[bp-34h]
+mov ax,bx                     mov bx,dx
+inc ax                        inc bx
+mov di,ax                     add bx,[si+0ah]
+add di,[si+0ah]                mov es,[si+2]
+mov es,[si+2]                 push es
+push es                       push bx
+push di                       mov ax,1
+mov ax,1                      push ax
+push ax                       call far B$LDFS
+mov dx,bx
+mov bx,di
+mov di,[bp-4ch]
+call far B$LDFS
+```
+
+Six focused regression checks pass. Disabling hints makes both positive
+cases fail; overlap, clobber, class and fixed-register exclusions remain
+covered. This is not a full-suite or all-module acceptance claim.
+The commit attempt was rejected: seven existing allocator annotation errors
+and 2,348 repository-wide type diagnostics. Its full-suite hook was stopped
+after 112 passes (27 seconds), not accepted as a passing gate. The change
+remains uncommitted pending the commit-gate policy or cleanup.
+The seven allocator annotation errors have since been corrected without
+changing behavior: scoped `ruff check` and `ty check` pass, and the six
+copy-hint regressions pass. The repository-wide gate has not been rerun or
+waived; its remaining diagnostics are not claimed resolved.
+The shared `ir.Loc` union now includes the existing `Held` operand used by
+LIR. Removing it reproduces five type errors in the copy-hint regression
+file; restoring it makes scoped typing pass. Emission assertions also check
+for absent semantics or refused encoding explicitly. These are type-contract
+and test changes, with no generated-assembly change.
+
+### D_SURF rollout: another 1,256 code bytes removed
+
+`/tmp/qbopt-qrender-dsurf-hints.4W1WeV` replaces only D_SURF in the
+SCREEN-hints candidate. Native-FPU emission took 38.86 seconds and shrank
+its code **15,220 -> 13,964 bytes**. Complete dumps are in
+`/tmp/qbopt-dsurf-hints.yz64bK/stages`; the output object was saved from
+that same emission, not a second compilation.
+
+E1M1 completes and returns to DOS: **22.55696 FPS**, 22 frames, 18 timed
+samples. SCREEN-only was 23.46965 FPS; baseline was 18.34392. Do not call
+this a speed gain: these short samples differ, including timer calibration.
+The final BMP remains byte-identical to both earlier completed runs.
+`dsurf-run-01.png` shows the rendered final view; `dsurf-run-02.png`
+records the DOS prompt. Far free memory increases **1,264 bytes** throughout
+the log (aligned code reduction), with identical allocation deltas.
+
+Actual linked-input object disassembly, LS_LCHAR return setup (old `0106`,
+new `00d8`), shows the unnecessary copy cycle and spills disappearing:
+
+```asm
+; before                      ; after
+mov si,[bp-2ah]               add sp,4
+mov [bp-28h],si               call far B$EXSA
+mov si,[bp-2ch]               retf 2
+mov [bp-2eh],si
+mov [bp-30h],ax
+mov si,bx
+mov di,cx
+mov ax,dx
+mov cx,[bp-28h]
+mov dx,[bp-2eh]
+mov bx,[bp-30h]
+add sp,12h
+call far B$EXSA
+retf 2
+```
+
+### MAIN rollout: 803 more code bytes removed
+
+`/tmp/qbopt-qrender-main-hints.qp5aEL` additionally replaces MAIN:
+**8,995 -> 8,192 code bytes**, emitted in 26.76 seconds. Complete dumps
+and the emitted object are in `/tmp/qbopt-main-hints.IZkUkd`.
+Native-FPU E1M1 completes at **22.75249 FPS** (22 frames, 18 timed samples),
+with a baseline-identical BMP and identical render counters to the preceding
+candidate. The inspected `main-run-01.png` shows the room; the debugger
+confirms return to DOS. Depth-stage far free memory grows **29,936 -> 30,752
+bytes**, matching the 816-byte aligned image reduction.
+
+MDL_PICK_SECTION's native x87 operations remain unchanged; allocation
+removes call-setup shuffling (old `02b4`, new `029b`):
+
+```asm
+; before                      ; after
+fild dword [bp-4ch]            fild dword [bp-4ch]
+fstp dword [bp-44h]            fstp dword [bp-44h]
+wait                          wait
+mov cx,[bp-60h]               mov cx,[bp-50h]
+mov si,[bp-5ch]               call far B$RND0
+mov di,ax
+mov ax,[bp-54h]
+call far B$RND0
+```
+
+### SYS rollout: smaller argument-parser frame
+
+`/tmp/qbopt-qrender-sys-hints.bZM9SW` additionally replaces SYS:
+**5,120 -> 4,348 code bytes**, emitted in 10.52 seconds. Complete stage
+dumps and the emitted object are in `/tmp/qbopt-sys-hints.c0xtlx`.
+Native-FPU E1M1 completes at **22.75249 FPS**, identical to the preceding
+short run (22 frames, 18 timed samples). The final BMP and render counters
+match. `sys-run-01.png` was inspected; the debugger confirms return to DOS.
+Far free memory rises **768 bytes**, with unchanged allocation deltas.
+
+SYS_PARSE_ARGS entry (both start at `0033`):
+
+```asm
+; before                      ; after
+mov si,32h                    mov bx,2
+mov si,cx                     mov cx,32h
+mov di,bx                     call far B$ENRA
+mov cx,32h                    sub sp,1ah
+mov bx,2
+call far B$ENRA
+sub sp,76h
+```
+
+The extra spill frame falls from 118 to 26 bytes.
+
+### MODEL rollout: 477 more code bytes removed
+
+`/tmp/qbopt-qrender-model-hints.sgdpYJ` additionally replaces MODEL:
+**5,747 -> 5,270 code bytes**, emitted in 6.48 seconds. The reusable capture
+script, stage dumps and emitted object are in `/tmp/qbopt-model-hints.UKkgMX`.
+Native-FPU E1M1 completes at **22.55696 FPS** (22 frames, 18 timed samples),
+with identical final BMP and render counters, and return to DOS.
+`model-run-01.png` captures loading; `final-frame.png` is a lossless format
+conversion of this run's BENCH.BMP, not another run. Both were inspected.
+Far free memory increases **480 bytes**, with unchanged allocation deltas.
+
+MOD_OPEN, old `0059` versus new `0059`:
+
+```asm
+; before                      ; after
+mov si,40h                    mov bx,40h
+push 40h                      mov ax,40h
+mov si,bx                     push ax
+mov ax,40h                    mov bx,[bp-18h]
+mov bx,[bp-1ah]               call far B$LDFS
+call far B$LDFS
+```
+
+The new `mov bx,40h` is still dead before BX is restored: a concrete future
+dead-machine-instruction cleanup case, not a claimed improvement here.
+### R_BSP rollout: direct address-register definitions
+
+`/tmp/qbopt-qrender-rbsp-hints.GFQHsb` additionally replaces R_BSP:
+**7,602 -> 7,008 code bytes**, emitted in 18.81 seconds. The emitted object
+and complete stage dumps are in `/tmp/qbopt-rbsp-hints.vWmZZb`.
+Native-FPU E1M1 completes at **23.13316 FPS** (22 frames, 18 timed samples).
+Final BMP and render counters match; the debugger confirms return to DOS.
+`rbsp-run-01.png` caught a blank transition, not the final scene;
+`rbsp-final.png` is the inspected lossless PNG conversion of BENCH.BMP.
+Depth-stage far free memory rises **32,000 -> 32,608 bytes**.
+
+R_DRAW_WORLD, old `04b8` versus new `0435`:
+
+```asm
+; before                      ; after
+mov ax,[bp+1ch]               mov si,[bp+1ch]
+mov si,ax                     add si,1370h
+add si,1370h                  mov dword [si],0
+mov dword [si],0
+```
+
+Its extra spill frame falls **62 -> 40 bytes**. Six modules now remove
+**5,645 code bytes** from the earlier native build; fifteen BASIC modules
+still await this allocator rollout. Completed rollout DOSBox processes
+were closed after confirming their exact paths and DOS prompts; all files
+and screenshots remain. Older frozen error-diagnostic guests were not touched.
+### MOD_TEX rollout: fewer texture-count address copies
+
+`/tmp/qbopt-qrender-modtex-hints.0YR98K` additionally replaces MOD_TEX:
+**4,900 -> 4,469 code bytes**, emitted in 9.44 seconds. Complete dumps
+and the emitted object are in `/tmp/qbopt-modtex-hints.rfSNJX`.
+Native-FPU E1M1 completes at **22.72959 FPS** (22 frames, 18 timed samples),
+with identical final BMP and render counters, and return to DOS.
+`modtex-run-01.png` caught a blank transition; `modtex-final.png` is the
+inspected lossless PNG conversion of BENCH.BMP. Far free memory grows
+**32,608 -> 33,040 bytes**. The completed emulator was closed.
+
+MOD_LOAD_TEXTURES, old `0219` versus new `01e1`:
+
+```asm
+; before                      ; after
+mov ax,[bp+8]                 mov si,[bp+8]
+mov bx,ax                     add si,9eh
+add bx,9eh                    mov eax,[si]
+mov eax,[bx]                  sub eax,1
+sub eax,1
+```
+
+### D_MDL rollout: model-drawing path checked
+
+`/tmp/qbopt-qrender-dmdl-hints.hcsGCh` additionally replaces D_MDL:
+**3,558 -> 3,328 code bytes**, emitted in 8.99 seconds. The emitted object
+and complete stage dumps are in `/tmp/qbopt-dmdl-hints.flllmC`.
+Native-FPU E1M1 completes at **22.72959 FPS**, identical to the preceding
+short run (22 frames, 18 timed samples), with matching final BMP and render
+counters. The debugger confirms return to DOS. `dmdl-run-01.png` caught a
+blank transition; `dmdl-final.png` is the inspected lossless conversion of
+BENCH.BMP. Far free memory grows **33,040 -> 33,280 bytes**.
+
+MDL_DRAW's zero-frame-type path, old `0b10` versus new `0a4e`:
+
+```asm
+; before                      ; after
+mov si,ax                     mov bx,ax
+add si,16h                    add bx,16h
+mov si,[si]                   mov bx,[bx]
+mov [bp-16h],si               mov [bp-16h],bx
+mov cx,dx                     jmp 0AECh
+jmp 0BB6h
+```
+
+Eight modules now remove **6,306 code bytes** from the earlier native
+build; thirteen BASIC modules still await this allocator rollout.
+Code still exceeds BC's output; the memory regression is reduced, not
+eliminated, and the broader correctness gate remains open.
+
+## Earlier E1M1 failure: screenshot allocation
 
 The all-21-module native build below passes dm3, **not E1M1**.
 Isolated run: `/tmp/qbopt-qrender-e1m1.qxAC64`, normal core, Pentium III,
@@ -1960,3 +2338,33 @@ VBDCL10E.LIB, `rtenexit.asm`, B$ENRA:
 `tools/contracts.py` follows this dependency graph but reports incomplete
 proofs, not an ABI declaration. Assembly before/after remains identical on
 refusal; no optimized listing should be presented for these modules yet.
+
+## Native floating integration — 2026-09-11
+
+All 21 BASIC modules completed optimization and linked successfully after
+native checkpoint removal and deferred-exception floating CSE. Inputs remain
+the pinned `/tmp/qbopt-qrender-baseline-20260910` build, not a fresh checkout
+compile. Original C/ASM objects and VBDOS/Borland libraries are unchanged.
+
+| Measurement | Before | After |
+| --- | ---: | ---: |
+| Executable bytes | 513724 | 512908 |
+| Mean frame time, ms | 42.79754664 | 41.26906709 |
+| Mean FPS | 23.36582535 | 24.23122379 |
+
+One run per build, same DOSBox normal core, Pentium III, 75000 cycles,
+`-bench 40 -ticks 60`: 23 frames, 19 measured intervals. The observed FPS
+increase is 3.70%, not a hardware-latency measurement or confidence interval.
+`BENCH.BMP` is byte-identical; all 23 selected simulation-state fields match
+(entity records, player position/velocity/health, ticks, water and platform state).
+
+Before: `/tmp/qbopt-quake-launch.GWCLuW`; after:
+`/tmp/qbopt-quake-float.dgK0tu`. Logs and benchmark records remain in each
+directory; `benchmark.png` in the latter is converted directly from its
+`BENCH.BMP`. Temporary link/benchmark guests were closed; the user's live
+game was left untouched and still runs the preceding build.
+
+The source-level transformation and actual FPCSEX before/after assembly are
+recorded in [native-fpu-waits.md](native-fpu-waits.md): repeated load/add becomes
+one stack-value duplicate, with SINGLE rounding stores retained. This integration
+run covers the combined floating batch, not a separate speedup attribution to CSE.

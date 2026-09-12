@@ -5,51 +5,94 @@ from dataclasses import replace
 from iced_x86 import Register
 
 from qbopt.model import mir
-from qbopt.analysis import ssa
 from qbopt.objectfile.module import Space
 
 
-def loaded(body: mir.MirBody) -> mir.MirBody:
-    values = ssa.values(body)
-    serial = max((value.id for value in values), default=0)
-    variable = max((value.variable for value in values), default=0)
-    origin = dict(body.origin)
-    blocks = []
-    for block in body.blocks:
-        current = None
-        ops = []
-        for op in block.ops:
-            if _selector(op):
-                serial += 1
-                variable += 1
-                current = mir.Value(serial, op.at, variable=variable, version=1)
-                origin[current] = Register.ES
-                op = replace(op, defines=(current,), results=(mir.Held(current, 2),), merges={})
-            elif current is not None:
-                def reference(ref):
-                    if ref.addr is not None and ref.addr.space is Space.FAR and ref.addr.segment == Register.ES:
-                        return replace(ref, segment=current)
-                    return ref
+def loaded(body: mir.MirBody, contracts: "dict | None" = None) -> mir.MirBody:
+    """Give the segment register a value, so that reloading it is redundant.
 
-                def argument(arg):
-                    return mir.Cell(reference(arg.ref)) if isinstance(arg, mir.Cell) else arg
-                loads = tuple(map(reference, op.loads))
-                stores = tuple(map(reference, op.stores))
-                effects = getattr(op.node, "effects", None)
-                reads = effects is None or effects.uses is None or Register.ES in effects.uses
-                writes = effects is None or effects.defs is None or Register.ES in effects.defs
-                if op.node is None and op.kind is mir.Kind.EXTRACT and not op.barrier:
-                    reads = writes = False
-                if reads or any(ref.segment == current for ref in loads + stores):
-                    op = replace(op, uses=tuple(dict.fromkeys((*op.uses, current))))
-                op = replace(op, loads=loads, stores=stores, args=tuple(map(argument, op.args)), results=tuple(map(argument, op.results)))
-                if writes:
-                    current = None
-            ops.append(op)
-        if current is not None and ops:
-            ops[-1] = replace(ops[-1], uses=tuple(dict.fromkeys((*ops[-1].uses, current))))
-        blocks.append(replace(block, ops=tuple(ops)))
-    return replace(body, blocks=tuple(blocks), origin=origin)
+    One mechanism, not two. This used to run a block-local version -- a fresh
+    variable per load, dropped at every block boundary and every write -- and
+    reach for real SSA only where an `les` had already forced the question.
+    Two loads of one descriptor could then never be the same value, which is
+    the whole of what makes a reload removable, so a separate pass removed
+    them against the machine instead.
+    """
+    from qbopt.frontend import raising_address_state
+
+    return _allocated(raising_address_state.raised(body, _selector, contracts))
+
+
+def _allocated(body: mir.MirBody) -> mir.MirBody:
+    """Attach a FAR access to the descriptor its selector was loaded from.
+
+    Bounds and object identity are separate facts.  An unchecked subscript
+    may be outside the allocation, but loading ES from descriptor D still
+    puts the access in D's heap segment; it cannot thereby become a write to
+    the caller's stack frame or to another array's descriptor.  The earlier
+    array raise already identified allocation requests, and this is the
+    first point where selector loads and their SSA values both exist.
+    """
+    selectors = {
+        (
+            request.descriptor.space,
+            request.descriptor.index,
+            request.descriptor.offset + request.descriptor.addend + 2,
+        ): request.descriptor
+        for block in body.blocks
+        for op in block.ops
+        if (request := op.array) is not None
+    }
+    if not selectors:
+        return body
+
+    owners: dict[mir.Value, mir.Symbol] = {}
+    for block in body.blocks:
+        for op in block.ops:
+            if op.kind is not mir.Kind.LOAD or len(op.loads) != 1:
+                continue
+            ref = mir._symbolic_ref(op.loads[0])
+            if ref.addr is None or ref.base is not None or ref.segment is not None:
+                continue
+            owner = selectors.get((ref.addr.space, ref.addr.index, ref.addr.disp))
+            if owner is None:
+                continue
+            owners.update(
+                (result.value, owner) for result in op.results if isinstance(result, mir.Held) and result.width == 2
+            )
+    if not owners:
+        return body
+
+    def allocated(ref: mir.MemRef) -> mir.MemRef:
+        owner = owners.get(ref.segment)
+        return (
+            replace(ref, allocation=owner)
+            if owner is not None and ref.addr is not None and ref.addr.space is Space.FAR
+            else ref
+        )
+
+    def argument(arg: mir.Arg) -> mir.Arg:
+        return mir.Cell(allocated(arg.ref)) if isinstance(arg, mir.Cell) else arg
+
+    return replace(
+        body,
+        blocks=tuple(
+            replace(
+                block,
+                ops=tuple(
+                    replace(
+                        op,
+                        loads=tuple(map(allocated, op.loads)),
+                        stores=tuple(map(allocated, op.stores)),
+                        args=tuple(map(argument, op.args)),
+                        results=tuple(map(argument, op.results)),
+                    )
+                    for op in block.ops
+                ),
+            )
+            for block in body.blocks
+        ),
+    )
 
 
 def _selector(op: mir.Op) -> bool:
@@ -57,6 +100,5 @@ def _selector(op: mir.Op) -> bool:
         return False
     match op.args, op.results:
         case (mir.Cell(ref=ref),), (mir.Opaque(name="es"),):
-            return (ref.width == 2 and op.loads == (ref,) and ref.addr is not None
-                    and ref.addr.space is not Space.FAR and ref.addr.segment != Register.ES)
+            return ref.width == 2 and op.loads == (ref,) and ref.addr is not None and ref.addr.segment != Register.ES
     return False

@@ -1,5 +1,9 @@
-"""
-The driver: an .OBJ in, an .OBJ out.
+"""The driver: one LINK unit in, each standalone .OBJ optimized once.
+
+Positional inputs are the object and library inputs in linker order. External
+calls are resolved across that unit before any body is raised, and all output
+objects are buffered until every one has completed. A refusal is an error by
+default; `--allow-unchanged` names the compatibility behavior explicitly.
 
 --dry-run decides everything and then writes the input's bytes back. That is
 what makes the harness testable before the pass is -- a failure downstream of a
@@ -16,9 +20,10 @@ from pathlib import Path
 from dataclasses import asdict
 from dataclasses import dataclass
 
-from qbopt.objectfile import omf
 from qbopt import wholeseg
 from qbopt.abi import profile
+from qbopt.abi import runtime
+from qbopt.objectfile import omf
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,27 +44,32 @@ def rewrite(
     dry_run: bool,
     take: set[int] | None = None,
     max_regions: int | None = None,
-    native_fpu: bool = False,
+    native_fpu: bool = True,
     whole_segment: bool = True,
     absorb_calls: bool = True,
     cpu: str = "386",
     basic_semantics: bool = False,
     bounds_checks: bool = False,
     contract_profile: profile.Profile | None = None,
+    external_contracts: dict[str, runtime.Contract] | None = None,
+    contract_fingerprint: str | None = None,
+    allow_unchanged: bool = False,
 ) -> tuple[bytes, list[Region]]:
-    """Optimize one raised body, lower once, and preserve the input on refusal.
+    """Optimize one raised body and lower it once.
 
     Repeated optimization belongs on MIR, never on emitted machine code.
     Only output from the allocating backend receives the completion marker.
+    A refusal raises by default: returning the input makes an unsupported
+    construct indistinguishable from a successful no-op optimization.
     """
     # `take`, `max_regions` and `dry_run` bisected the machine arm by
     # region index. There are no regions to bisect: what replaced them is
     # `transform.applied(only=...)`, which runs one MIR pass and is a
     # better question anyway -- a pass has a name, a region had a number.
     from qbopt.backend import arithmetic
+
     arithmetic.validate(cpu)
-    if basic_semantics and native_fpu:
-        raise ValueError("--basic-semantics cannot be combined with --native-fpu")
+    wholeseg._native_only(native_fpu)
     if dry_run:
         return data, []
 
@@ -79,8 +89,13 @@ def rewrite(
     # which is what stops any pass above from moving anything. The suite
     # links and runs on the MIR arm alone.
     made_by = _configuration(whole_segment, native_fpu, absorb_calls, cpu, basic_semantics, bounds_checks)
-    if contract_profile is not None:
-        made_by += f",contracts={contract_profile.fingerprint}"
+    fingerprints = tuple(
+        one
+        for one in (contract_fingerprint, contract_profile.fingerprint if contract_profile is not None else None)
+        if one is not None
+    )
+    if fingerprints:
+        made_by += ",contracts=" + hashlib.sha256(";".join(fingerprints).encode()).hexdigest()
     was = omf.finalised_at(omf.parse(data))
     if was is not None:
         # Already emitted by this pass. What came out is a program -- a
@@ -93,21 +108,44 @@ def rewrite(
             raise Finalised(f"this object was written by {was!r}, and this run is {made_by!r}")
         return data, regions
 
-    out, terminal = _written(data, whole_segment, native_fpu, absorb_calls, cpu, basic_semantics, bounds_checks,
-                             contract_profile)
+    combined = dict(external_contracts or {})
+    if contract_profile is not None:
+        combined.update({rule.name: rule for rule in contract_profile.rules})
+    out, terminal, reason = _written(
+        data,
+        whole_segment,
+        native_fpu,
+        absorb_calls,
+        cpu,
+        basic_semantics,
+        bounds_checks,
+        combined or None,
+    )
     if terminal:
         return b"".join(one.emit() for one in omf.finalised(omf.parse(out), made_by)), regions
-    # A backend refusal leaves the input intact. Machine output is never
-    # fed back into the raise to approximate a MIR fixed point.
-    return data, regions
+    if allow_unchanged:
+        # Explicit compatibility mode only. Machine output is never fed back
+        # into the raise to approximate a MIR fixed point.
+        return data, regions
+    raise Unsupported(reason)
 
 
 class Finalised(Exception):
     """An object this pass already wrote, asked for with other options."""
 
 
-def _configuration(whole_segment: bool, native_fpu: bool, absorb_calls: bool, cpu: str = "386",
-                   basic_semantics: bool = False, bounds_checks: bool = False) -> str:
+class Unsupported(RuntimeError):
+    """The strict optimizer encountered a construct it cannot reproduce."""
+
+
+def _configuration(
+    whole_segment: bool,
+    native_fpu: bool,
+    absorb_calls: bool,
+    cpu: str = "386",
+    basic_semantics: bool = False,
+    bounds_checks: bool = False,
+) -> str:
     """Every option that can change what the emitter writes, as one string.
 
     The marker holds it so a second run can tell "already done" from
@@ -115,69 +153,84 @@ def _configuration(whole_segment: bool, native_fpu: bool, absorb_calls: bool, cp
     first: a later version of this pass reading an older marker has to
     refuse rather than assume the bytes mean what they would today.
     """
-    return "1;" + ",".join(
-        name for name, on in (("whole", whole_segment), ("fpu", native_fpu), ("absorb", absorb_calls)) if on
-    ) + (f",cpu={cpu}" if cpu != "386" else "") + (",basic-semantics" if basic_semantics else "") + (",bounds-checks" if bounds_checks else "")
+    return (
+        "1;"
+        + ",".join(name for name, on in (("whole", whole_segment), ("fpu", native_fpu), ("absorb", absorb_calls)) if on)
+        + (f",cpu={cpu}" if cpu != "386" else "")
+        + (",basic-semantics" if basic_semantics else "")
+        + (",bounds-checks" if bounds_checks else "")
+    )
 
 
 def _written(
-    data: bytes, whole_segment: bool, native_fpu: bool = False, absorb_calls: bool = True, cpu: str = "386",
+    data: bytes,
+    whole_segment: bool,
+    native_fpu: bool = True,
+    absorb_calls: bool = True,
+    cpu: str = "386",
     basic_semantics: bool = False,
     bounds_checks: bool = False,
-    contract_profile: profile.Profile | None = None,
-) -> tuple[bytes, bool]:
+    external_contracts: dict[str, runtime.Contract] | None = None,
+) -> tuple[bytes, bool, str]:
     """Lower and emit once; report whether the allocating backend completed."""
     if not whole_segment:
-        return data, False
-    got = wholeseg.emitted(data, native_fpu=native_fpu, cpu=cpu, basic_semantics=basic_semantics,
-                           bounds_checks=bounds_checks,
-                           external_contracts={rule.name: rule for rule in contract_profile.rules}
-                           if contract_profile is not None else None)
+        return data, False, "whole-segment emission is disabled"
+    got = wholeseg.emitted(
+        data,
+        native_fpu=native_fpu,
+        cpu=cpu,
+        basic_semantics=basic_semantics,
+        bounds_checks=bounds_checks,
+        external_contracts=external_contracts,
+    )
     if not bounds_checks and got.reason.startswith("unchecked array lowering unsupported"):
         raise ValueError(got.reason + "; use --bounds-checks to retain the checked helper")
-    return got.data, got.outcome is wholeseg.Emission.LIR
-
-
-def orphaned_externals_renamed(records: list[omf.Record]) -> list[omf.Record]:
-    """A qbopt-owned EXTDEF nothing points at any more, renamed to one that resolves.
-
-    Absorbing every call to fixMul& drops every fixup that named it, and that
-    is deliberately not the same as dropping the EXTDEF: doing that would
-    renumber every later index, in every fixup and every THREAD, file-wide.
-    Renaming costs none of that -- the index stays where every fixup and
-    thread already expects it, and only the one EXTDEF entry's bytes change.
-    """
-    names = omf.externals(records)
-    live = {f.index for f in omf.fixups(records) if f.target == "external"}
-    survivor = next((n for i, n in enumerate(names) if i in live and n), None)
-    if survivor is None:
-        return records
-    for index, name in enumerate(names):
-        if name in RENAMABLE_IF_ORPHANED and index not in live:
-            records = omf.rename_external(records, index, survivor)
-    return records
+    return got.data, got.outcome is wholeseg.Emission.LIR, got.reason
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="qbopt.rewrite")
-    ap.add_argument("input", type=Path)
+    ap.add_argument(
+        "inputs",
+        type=Path,
+        nargs="+",
+        help="OMF .OBJ files to optimize and .LIB files used to resolve them, in LINK order",
+    )
     from qbopt.cycles.timings import ARCHS
+
     ap.add_argument("--cpu", choices=("386", *ARCHS), default="386", help="arithmetic tuning target")
-    ap.add_argument("-o", "--output", type=Path)
+    ap.add_argument("-o", "--output", type=Path, help="output file; valid for a single input OBJ")
+    ap.add_argument("--output-dir", type=Path, help="directory receiving every optimized input OBJ")
     ap.add_argument("--manifest", type=Path)
-    ap.add_argument("--contracts", type=Path, help="audited, hash-checked external call profile (JSON)")
-    ap.add_argument("--contract-root", type=Path, help="artifact directory; defaults to the profile directory")
+    ap.add_argument(
+        "--contracts",
+        type=Path,
+        action="append",
+        help="audited, hash-checked external call profile (JSON); repeat to combine profiles",
+    )
+    ap.add_argument(
+        "--contract-root",
+        type=Path,
+        help="artifact directory shared by all profiles; defaults to each profile directory",
+    )
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--take", help="comma-separated region ids; refuse the rest")
     ap.add_argument("--max-regions", type=int)
     ap.add_argument("--report", action="store_true")
-    ap.add_argument("--basic-semantics", action="store_true",
-                    help="preserve BASIC numeric runtime errors, conversions and floating behavior")
-    ap.add_argument("--bounds-checks", action="store_true", help="retain BASIC array bounds checks (independent of numeric semantics)")
+    ap.add_argument(
+        "--basic-semantics",
+        action="store_true",
+        help="preserve BASIC numeric runtime errors, conversions and floating behavior",
+    )
+    ap.add_argument(
+        "--bounds-checks",
+        action="store_true",
+        help="retain BASIC array bounds checks (independent of numeric semantics)",
+    )
     ap.add_argument(
         "--native-fpu",
         action="store_true",
-        help="replace the FP emulator's interrupts with real x87 -- REQUIRES A COPROCESSOR",
+        help="accepted and ignored: real x87 is the only floating-point path, and every build REQUIRES A COPROCESSOR",
     )
     ap.add_argument(
         "--no-absorb-calls",
@@ -189,57 +242,98 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="patch BC's own bytes rather than writing the code segment from MIR",
     )
+    ap.add_argument(
+        "--allow-unchanged",
+        action="store_true",
+        help="explicitly retain an input OBJ when the backend refuses it (strict failure is the default)",
+    )
     args = ap.parse_args(argv)
-    if args.basic_semantics and args.native_fpu:
-        ap.error("--basic-semantics cannot be combined with --native-fpu")
     if args.contract_root is not None and args.contracts is None:
         ap.error("--contract-root requires --contracts")
-
-    data = args.input.read_bytes()
+    if args.output is not None and args.output_dir is not None:
+        ap.error("use either --output or --output-dir, not both")
     take = {int(x) for x in args.take.split(",")} if args.take else None
     try:
-        contracts = profile.load(args.contracts, args.contract_root) if args.contracts is not None else None
-        out, found = rewrite(
-            data,
-            dry_run=args.dry_run,
-            take=take,
-            max_regions=args.max_regions,
-            native_fpu=args.native_fpu,
-            whole_segment=not args.no_whole_segment,
-            absorb_calls=not args.no_absorb_calls,
-            cpu=args.cpu,
-            basic_semantics=args.basic_semantics,
-            bounds_checks=args.bounds_checks,
-            contract_profile=contracts,
-        )
-    except (ValueError, OSError, Finalised) as error:
+        from qbopt.abi import linkunit
+
+        unit = linkunit.LinkUnit.read(args.inputs)
+        if args.output is not None and len(unit.objects) != 1:
+            raise ValueError("--output requires exactly one standalone OBJ; use --output-dir for several")
+        contracts = profile.load_many(args.contracts, args.contract_root) if args.contracts is not None else None
+        optimized = []
+        # Finish the whole unit before writing any member. One unsupported
+        # object therefore leaves every caller input and prior output intact.
+        for source in unit.objects:
+            try:
+                out, regions = rewrite(
+                    source.data,
+                    dry_run=args.dry_run,
+                    take=take,
+                    max_regions=args.max_regions,
+                    whole_segment=not args.no_whole_segment,
+                    absorb_calls=not args.no_absorb_calls,
+                    cpu=args.cpu,
+                    basic_semantics=args.basic_semantics,
+                    bounds_checks=args.bounds_checks,
+                    contract_profile=contracts,
+                    external_contracts=unit.contracts_for(source),
+                    contract_fingerprint=unit.fingerprint,
+                    allow_unchanged=args.allow_unchanged,
+                )
+            except Unsupported as error:
+                raise Unsupported(f"{source.path}: {error}") from error
+            optimized.append((source, out, regions))
+    except (ValueError, OSError, Finalised, Unsupported) as error:
         ap.error(str(error))
 
-    if args.output:
-        args.output.write_bytes(out)
+    if args.output_dir is not None:
+        names = [source.path.name.casefold() for source, _out, _regions in optimized]
+        if len(names) != len(set(names)):
+            ap.error("--output-dir cannot represent input OBJs with duplicate filenames")
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        for source, out, _regions in optimized:
+            (args.output_dir / source.path.name).write_bytes(out)
+    elif args.output is not None:
+        args.output.write_bytes(optimized[0][1])
 
-    manifest = {
-        "input": str(args.input),
-        "input_sha256": hashlib.sha256(data).hexdigest(),
-        "output_sha256": hashlib.sha256(out).hexdigest(),
+    objects = [
+        {
+            "input": str(source.path),
+            "input_sha256": hashlib.sha256(source.data).hexdigest(),
+            "output_sha256": hashlib.sha256(out).hexdigest(),
+            "input_bytes": len(source.data),
+            "output_bytes": len(out),
+            "regions": [asdict(region) for region in regions],
+            "taken": sum(1 for region in regions if region.taken),
+        }
+        for source, out, regions in optimized
+    ]
+    common = {
         "dry_run": args.dry_run,
         "cpu": args.cpu,
         "semantics": "basic" if args.basic_semantics else "native",
         "bounds_checks": args.bounds_checks,
+        "link_inputs": [str(path) for path in unit.inputs],
+        "link_unit_sha256": unit.fingerprint,
         "contract_profile_sha256": contracts.fingerprint if contracts is not None else None,
-        "regions": [asdict(r) for r in found],
-        "taken": sum(1 for r in found if r.taken),
     }
-    path = args.manifest or (args.output.with_suffix(".json") if args.output else None)
+    manifest = {**objects[0], **common} if len(objects) == 1 else {**common, "objects": objects}
+    path = args.manifest
+    if path is None and args.output is not None:
+        path = args.output.with_suffix(".json")
+    if path is None and args.output_dir is not None:
+        path = args.output_dir / "qbopt-manifest.json"
     if path:
         path.write_text(json.dumps(manifest, indent=2))
 
     if args.report:
-        print(f"{args.input.name}: {len(found)} regions, {manifest['taken']} taken")
-        for r in found:
-            span = r.end - r.at
-            note = "taken" if r.taken else f"refused -- {r.reason}"
-            print(f"   {r.id:3} {r.at:#06x}..{r.end:#06x}  {span:4}b  {note}")
+        for source, out, regions in optimized:
+            taken = sum(1 for region in regions if region.taken)
+            print(f"{source.path.name}: {len(source.data)} -> {len(out)} bytes; {len(regions)} regions, {taken} taken")
+            for region in regions:
+                span = region.end - region.at
+                note = "taken" if region.taken else f"refused -- {region.reason}"
+                print(f"   {region.id:3} {region.at:#06x}..{region.end:#06x}  {span:4}b  {note}")
     return 0
 
 

@@ -26,8 +26,11 @@ def test_jumps_reference_uses_three_iterations_and_all_six_output_rows():
     left, right = 305419896, 252645135
     on = [left & right, left | right, left ^ right]
     cases = [left + right, left - right, -left]
-    expected = [line for index, (one, case) in enumerate(zip(on, cases), 1)
-                for line in (f"ON {index} ={one: d}", f"CASE {index} ={case: d}")] + ["DONE"]
+    expected = [
+        line
+        for index, (one, case) in enumerate(zip(on, cases), 1)
+        for line in (f"ON {index} ={one: d}", f"CASE {index} ={case: d}")
+    ] + ["DONE"]
     assert Path("suite/golden/jumps.txt").read_text().splitlines() == expected
     assert opportunity.TRIPS.get("JUMPS") == 3
     stores = (2 + 4 + 6) * (2 + opportunity.TOUCH)
@@ -37,6 +40,7 @@ def test_jumps_reference_uses_three_iterations_and_all_six_output_rows():
 
 def test_chain_reference_preserves_signed_remainders_and_output_states():
     """CHAIN's seven nested divide/remainder rows had no complete reference target."""
+
     def quotient(left, right):
         magnitude = abs(left) // abs(right)
         return -magnitude if (left < 0) != (right < 0) else magnitude
@@ -47,8 +51,15 @@ def test_chain_reference_preserves_signed_remainders_and_output_states():
     numerator, divisor, outer = 1073741831, 39678839, 100003
     positive = remainder(remainder(numerator, divisor), outer)
     negative = remainder(remainder(-numerator, divisor), outer)
-    results = [0, 0, positive, positive, quotient(quotient(numerator, divisor), 3),
-               negative, quotient(quotient(-numerator, divisor), 3)]
+    results = [
+        0,
+        0,
+        positive,
+        positive,
+        quotient(quotient(numerator, divisor), 3),
+        negative,
+        quotient(quotient(-numerator, divisor), 3),
+    ]
     assert results == [0, 0, 13106, 13106, 9, -13106, -9]
     labels = ["ONE", "CONST", "CONST2", "MODMOD", "DIVDIV", "NEGMOD", "NEGDIV"]
     expected = [f"{label}={value: d}" for label, value in zip(labels, results)] + ["DONE"]
@@ -72,6 +83,7 @@ def test_chain_legacy_objects_cannot_pass_a_seven_row_reference(tag, capsys, tmp
 def test_chain_fixtures_cover_current_seven_result_source(path):
     """Legacy CHAIN objects omitted CONST and CONST2, hiding two output/arithmetic paths."""
     from qbopt.objectfile import module
+
     assert sum(name == "B$PEI4" for name in module.load(path).calls.values()) == 7
 
 
@@ -110,9 +122,12 @@ def test_flags_reference_preserves_states_at_each_output_call():
 def test_fpcse_complete_reference_uses_object_compiler_identity(tag, stores, tmp_path, monkeypatch, capsys):
     """The old 98-unit FPCSE target omitted entry synchronization and observable numeric stores."""
     from collections import Counter
+
     path = tmp_path / "renamed.obj"
     path.write_bytes(Path(f"fixtures/omf/fpcse-{tag}.obj").read_bytes())
-    target = stores * (2 + opportunity.TOUCH) + opportunity.FLOAT["wait"] + 3 * (6 + opportunity.CALL) + opportunity.CALL
+    target = (
+        stores * (2 + opportunity.TOUCH) + opportunity.FLOAT["wait"] + 3 * (6 + opportunity.CALL) + opportunity.CALL
+    )
     monkeypatch.setattr(opportunity, "counted", lambda *args: Counter(cost=target))
     assert opportunity.against_targets([path]) == 0
     report = capsys.readouterr().out
@@ -124,6 +139,7 @@ def test_nbody_cost_includes_main_when_optimized_code_cannot_be_raised(tmp_path)
     """NBODY scored only PITSNAP's 6386 units, omitting its entire optimized simulation."""
     from collections import Counter
     from types import SimpleNamespace
+
     from qbopt import wholeseg
     from qbopt.model import ir
     from qbopt.frontend import blocks
@@ -137,9 +153,10 @@ def test_nbody_cost_includes_main_when_optimized_code_cannot_be_raised(tmp_path)
     partition = blocks.partition(module, blocks.code_map(module))
     expected = Counter()
     for decoded in ir.decode_module(module):
-        body = SimpleNamespace(entry=decoded.body.seed, blocks=tuple(
-            block for block in partition
-            if any(lo <= block.at < hi for lo, hi in decoded.body.ranges)))
+        body = SimpleNamespace(
+            entry=decoded.body.seed,
+            blocks=tuple(block for block in partition if any(lo <= block.at < hi for lo, hi in decoded.body.ranges)),
+        )
         opportunity._cost(body, module, expected)
     assert expected["cost"] > 6386
     assert opportunity.counted([path], raw=True)["cost"] == expected["cost"]
@@ -158,11 +175,13 @@ def test_instruction_cost_does_not_require_mir_recognition(monkeypatch):
 @pytest.mark.parametrize("proven", [True, False])
 def test_nbody_output_loop_is_outside_the_completed_simulation(tmp_path, proven):
     """NBODY's output was priced at 100 trips because CEND fell into appended phi edges."""
-    from qbopt import wholeseg
-    from qbopt.frontend import blocks
-    from qbopt.analysis import loops
-    from qbopt.abi import runtime
     from dataclasses import replace
+
+    from qbopt import wholeseg
+    from qbopt.abi import runtime
+    from qbopt.analysis import loops
+    from qbopt.frontend import blocks
+
     source = Path("fixtures/bench/nbody-v-g3.obj")
     path = tmp_path / source.name
     path.write_bytes(wholeseg.emitted(source.read_bytes()).data)
@@ -172,15 +191,19 @@ def test_nbody_output_loop_is_outside_the_completed_simulation(tmp_path, proven)
     mine = [block for block in physical if any(lo <= block.at < hi for lo, hi in decoded.ranges)]
     contracts = runtime.for_module(module)
     # Recreate the former appended-edge hazard independently of today's allocator layout.
-    mine = [replace(block, succ=(decoded.seed,)) if any(
-        contracts.get(insn.at) is not None and contracts[insn.at].control is runtime.Control.NEVER
-        for insn in block.insns) else block for block in mine]
+    mine = [
+        replace(block, succ=(decoded.seed,))
+        if any(
+            contracts.get(insn.at) is not None and contracts[insn.at].control is runtime.Control.NEVER
+            for insn in block.insns
+        )
+        else block
+        for block in mine
+    ]
     if not proven:
-        contracts = {at: replace(contract, control=runtime.Control.UNKNOWN)
-                     for at, contract in contracts.items()}
+        contracts = {at: replace(contract, control=runtime.Control.UNKNOWN) for at, contract in contracts.items()}
     execution = opportunity._execution_blocks(mine, decoded.seed, contracts)
-    output = next(block for block in execution
-                  if any(module.calls.get(insn.at) == "B$STI2" for insn in block.insns))
+    output = next(block for block in execution if any(module.calls.get(insn.at) == "B$STI2" for insn in block.insns))
     assert loops.depth(execution, decoded.seed)[output.at] == (1 if proven else 2)
 
 
@@ -188,10 +211,12 @@ def test_nbody_output_loop_is_outside_the_completed_simulation(tmp_path, proven)
 def test_cost_refuses_incomplete_or_overlapping_body_partitions(monkeypatch, duplicate):
     """NBODY's omitted main exposed that partial body coverage was accepted as a full score."""
     decode = opportunity.ir.decode_module
+
     def broken(module):
         bodies = decode(module)
         assert len(bodies) > 1
         return (*bodies, bodies[0]) if duplicate else bodies[1:]
+
     monkeypatch.setattr(opportunity.ir, "decode_module", broken)
     with pytest.raises(opportunity.Unmeasured, match="overlap|cover every"):
         opportunity.counted([Path("fixtures/omf/procs-p-g2.obj")], raw=True)
@@ -215,6 +240,7 @@ def test_object_identity_not_temporary_filename_selects_weight_and_target(filena
 
 def test_program_identity_accepts_dos_source_paths_and_retains_headerless_fallback():
     from qbopt.objectfile import omf
+
     source = b"C:\\BUILD\\ArrIdx.BAS"
     header = omf.Record(omf.THEADR, bytes([len(source)]) + source)
     assert opportunity._program(Path("renamed.obj"), [header]) == "ARRIDX"
@@ -225,9 +251,12 @@ def test_cost_does_not_count_synthetic_raising_operations():
     """NOTS acquired extra cost from MIR extracts even though its emitted bytes were unchanged."""
     from collections import Counter
     from dataclasses import replace
+
     from qbopt.model import mir
-    from qbopt.objectfile import module, omf
+    from qbopt.objectfile import omf
     from qbopt.frontend import blocks
+    from qbopt.objectfile import module
+
     found = module.of(omf.parse(Path("fixtures/omf/nots-p-g2.obj").read_bytes()))
     partition = blocks.partition(found, blocks.code_map(found))
     body = mir.bodies(found, partition)[0][1]
@@ -254,12 +283,26 @@ def test_qb_nots_meets_the_corrected_reference(capsys):
     assert "nots-q-O" in capsys.readouterr().out
 
 
-def test_fpdeep_has_a_source_derived_reference(capsys):
-    """FPDEEP has a numerical denominator, not yet a complete observability proof."""
-    assert opportunity.TARGETS["FPDEEP"] == 9 * (4 * (6 + 20)) + 2 * 52 + 46
-    assert opportunity.against_targets([Path("fixtures/omf/fpdeep-p-g2.obj")]) == 1
+def test_fpdeep_has_a_source_derived_reference(capsys: pytest.CaptureFixture[str]) -> None:
+    # The old 1086 reference omitted 21 numeric stores and 21 checkpoints.
+    assert opportunity.TARGETS["FPDEEP"] == 9 * (4 * (6 + 20)) + 2 * 52 + 46 + 21 * 6 + 21 * 5 == 1317
+    assert opportunity.against_targets([Path("fixtures/omf/fpdeep-p-g2.obj")]) == 0
     report = capsys.readouterr().out
-    assert "NO TARGET" not in report and "PROVISIONAL" in report
+    assert "PROVISIONAL" not in report and "1.34x" in report
+
+
+@pytest.mark.parametrize("tag,accepted", [("p-g2", True), ("q-O", False), ("v-g3", False), ("p-evt", False)])
+def test_fpdeep_reference_scope_comes_from_object_metadata(
+    tag: str, accepted: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from collections import Counter
+
+    path = tmp_path / "renamed.obj"
+    path.write_bytes(Path(f"fixtures/omf/fpdeep-{tag}.obj").read_bytes())
+    monkeypatch.setattr(opportunity, "counted", lambda *args: Counter(cost=1317))
+    assert opportunity.against_targets([path]) == int(not accepted)
+    report = capsys.readouterr().out
+    assert ("PROVISIONAL" not in report) == accepted
 
 
 @pytest.mark.parametrize("name,body_cost", [("B$FIST", 86), ("B$FIS2", 80)])
@@ -281,6 +324,7 @@ def test_event_build_does_not_use_a_plain_program_target(tag, tmp_path, capsys):
 
 def test_event_configuration_cannot_pass_even_below_plain_target(monkeypatch, capsys):
     from collections import Counter
+
     monkeypatch.setattr(opportunity, "counted", lambda *args: Counter({"cost": 1, "event-enabled configuration": 1}))
     assert opportunity.against_targets([Path("bools-q-O.obj")]) != 0
     assert "PROVISIONAL" in capsys.readouterr().out
@@ -404,6 +448,7 @@ def test_a_target_is_a_number_the_board_can_reach() -> None:
 def test_missing_target_cannot_verify_completion(monkeypatch, capsys):
     """Nbody had no hand-derived target, yet its target report returned success."""
     from collections import Counter
+
     monkeypatch.setattr(opportunity, "counted", lambda *args: Counter(cost=1))
     assert opportunity.against_targets([Path("nbody-p-g2.obj")]) != 0
     assert "NO TARGET" in capsys.readouterr().out
@@ -413,6 +458,7 @@ def test_missing_target_cannot_verify_completion(monkeypatch, capsys):
 def test_provisional_target_cannot_verify_completion(program, monkeypatch, capsys):
     """Unverified floating references or unknown compiler identities cannot certify completion."""
     from collections import Counter
+
     monkeypatch.setattr(opportunity, "counted", lambda *args: Counter(cost=1))
     assert opportunity.against_targets([Path(f"{program}-p-g2.obj")]) != 0
     assert "PROVISIONAL" in capsys.readouterr().out
@@ -421,6 +467,7 @@ def test_provisional_target_cannot_verify_completion(program, monkeypatch, capsy
 def test_fpcse_target_preserves_each_single_rounding_without_reassociation():
     """FPCSE's provisional 1340 hid its exact 487.5 constant-output reference."""
     from fractions import Fraction
+
     total = Fraction(0)
     for _ in range(10):
         product = (Fraction(2) + 4) * 8
@@ -473,7 +520,7 @@ def test_lngmxx_magic_reference_keeps_signed_quotient_and_wrapped_sum():
         assert (10 * (value - 6 * quotient)) & 0xFFFFFFFF == (10 * (expected + remainder)) & 0xFFFFFFFF
 
 
-@pytest.mark.parametrize("values", [(3,5,7,11,13,17,19,23), (-32768,)*8, (32767,)*8, (-123,71)*4])
+@pytest.mark.parametrize("values", [(3, 5, 7, 11, 13, 17, 19, 23), (-32768,) * 8, (32767,) * 8, (-123, 71) * 4])
 def test_pressx_reference_retains_modular_sum(values):
     """The PRESSX reference combines ten iterations without assuming signed arithmetic cannot wrap."""
     products = [values[index] * values[index + 1] for index in range(0, 8, 2)]

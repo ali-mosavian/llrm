@@ -241,6 +241,8 @@ def order(where: "frozenset[Register_] | None") -> tuple[Register_, ...]:
     if where is None:
         return AVAILABLE
     wanted = {ir.ROOT.get(one, one) for one in where}
+    if wanted and wanted <= SEGMENTS:
+        return tuple(one for one in SELECTORS if one in wanted)
     return tuple(one for one in AVAILABLE if one in wanted)
 
 
@@ -251,6 +253,10 @@ def order(where: "frozenset[Register_] | None") -> tuple[Register_, ...]:
 SEGMENTS: frozenset[Register_] = frozenset(
     {Register.ES, Register.CS, Register.SS, Register.DS, Register.FS, Register.GS}
 )
+
+# The ones a selector value may be placed in. DS is DGROUP, SS the stack and
+# CS the code; ES is BC's, and FS and GS are the 386's.
+SELECTORS: tuple[Register_, ...] = (Register.ES, Register.FS, Register.GS)
 
 
 def known(register: Register_) -> bool:

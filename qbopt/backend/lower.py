@@ -18,11 +18,11 @@ from iced_x86 import InstructionInfoFactory
 
 from qbopt.model import ir
 from qbopt.model import mir
-from qbopt.backend import target
-from qbopt.backend import arithmetic
-from qbopt.backend import division
 from qbopt.abi import runtime
+from qbopt.backend import target
+from qbopt.backend import division
 from qbopt.analysis import liveness
+from qbopt.backend import arithmetic
 from qbopt.objectfile.module import Addr
 
 
@@ -34,6 +34,13 @@ def operand(arg: mir.Arg) -> ir.Loc:
         return ir.Imm(value=arg.n, width=arg.width)
     if isinstance(arg, mir.Symbol):
         return ir.Imm(arg.addend, arg.width, Addr(arg.space, arg.offset, arg.index))
+    if isinstance(arg, mir.FrameAddress):
+        return ir.Address(
+            Addr(mir.Space.FRAME, arg.offset),
+            Register.BP,
+            offset=arg.offset,
+            disp_width=1 if -128 <= arg.offset <= 127 else 2,
+        )
     if isinstance(arg, mir.Cell):
         return arg.ref
     return arg.what  # the x87 stack, which has no MIR form
@@ -72,10 +79,16 @@ _MACHINE: dict[mir.Kind, tuple[ir.Operation, str]] = {
 
 
 _BRANCHES = {
-    mir.Kind.EQ: "je", mir.Kind.NE: "jne",
-    mir.Kind.LT: "jl", mir.Kind.LE: "jle", mir.Kind.GT: "jg", mir.Kind.GE: "jge",
-    mir.Kind.BELOW: "jb", mir.Kind.BELOW_EQ: "jbe",
-    mir.Kind.ABOVE: "ja", mir.Kind.ABOVE_EQ: "jae",
+    mir.Kind.EQ: "je",
+    mir.Kind.NE: "jne",
+    mir.Kind.LT: "jl",
+    mir.Kind.LE: "jle",
+    mir.Kind.GT: "jg",
+    mir.Kind.GE: "jge",
+    mir.Kind.BELOW: "jb",
+    mir.Kind.BELOW_EQ: "jbe",
+    mir.Kind.ABOVE: "ja",
+    mir.Kind.ABOVE_EQ: "jae",
 }
 
 
@@ -89,6 +102,7 @@ def semantics(op: mir.Op, was: ir.Semantics | None = None, place=None) -> ir.Sem
     """
     if op.floating_origin is not None and place is not as_a_value:
         from qbopt.backend import lower_floats
+
         op = lower_floats.operation(op)
     same_target = was is None or op.target == was.target
     if place is None and op.raised is not None and (op.args, op.results) == op.raised and same_target:
@@ -120,6 +134,9 @@ def semantics(op: mir.Op, was: ir.Semantics | None = None, place=None) -> ir.Sem
     if op.kind is mir.Kind.NOTHING and op.op is not ir.Operation.NOTHING:
         was_op, name = ir.Operation.NOTHING, "nop"
     args = op.args
+    if op.kind is mir.Kind.RETURN:
+        # Returned values constrain allocation but RET only encodes stack cleanup.
+        args = tuple(one for one, original in zip(args, was.sources if was else ()) if isinstance(original, ir.Imm))
     if (
         place is as_a_value
         and op.kind in (mir.Kind.ADD, mir.Kind.AND, mir.Kind.OR, mir.Kind.XOR)
@@ -177,7 +194,7 @@ def _valueized(what: "ir.Semantics", op: "mir.Op") -> "ir.Semantics":
                 out.append(ir.Held(was.value.id, one.width))
             elif isinstance(one, ir.Mem) and isinstance(was, mir.Cell):
                 base = ir.Held(was.ref.base.id, was.ref.base_width) if was.ref.base is not None else None
-                out.append(replace(one, base=base))
+                out.append(replace(one, base=base, selector=_selector(was.ref)))
             else:
                 out.append(one)
         return tuple(out)
@@ -301,10 +318,19 @@ def _machine(one, had: tuple, index: int):
             if before is not None
             else replace(_addressed(one), through=Register.NONE)
         )
-        return replace(made, base=base)
+        return replace(made, base=base, selector=_selector(one))
     if before is not None:
-        return ir.Mem(one.addr, one.width, before.through, before.offset, before.disp_width)
-    return _addressed(one)
+        return ir.Mem(one.addr, one.width, before.through, before.offset, before.disp_width, selector=_selector(one))
+    return replace(_addressed(one), selector=_selector(one))
+
+
+def _selector(ref: "mir.MemRef") -> "ir.Held | None":
+    """The value a far cell's segment is in, for allocation to place."""
+    from qbopt.objectfile.module import Space
+
+    if ref.segment is None or ref.addr is None or ref.addr.space is not Space.FAR:
+        return None
+    return ir.Held(ref.segment.id, 2)
 
 
 def _addressed(one: "mir.MemRef") -> "ir.Mem":
@@ -334,11 +360,26 @@ def _addressed(one: "mir.MemRef") -> "ir.Mem":
         return ir.Mem(addr, one.width, Register.BP, 0, 2)
     if addr.space is Space.LITERAL and one.base is not None:
         return ir.Mem(addr, one.width, Register.NONE, 0, 2)
-    if addr.space is Space.SEGMENT:
+    if addr.space is Space.FAR and one.base is not None and one.segment is not None:
+        # MIR names both parts of the address as values. _machine() attaches
+        # the offset value as Mem.base, allocation gives it an addressing
+        # register, and Lowering._abi pins the selector value to the segment
+        # register carried by addr. Nothing here has to guess either one.
+        if addr.segment == Register.NONE or addr.base == Register.NONE:
+            raise Unlowered(f"a far cell at {addr} has no encodable offset or selector register")
+        return ir.Mem(addr, one.width, Register.NONE, addr.disp, 2)
+    if addr.space in (Space.SEGMENT, Space.EXTERNAL):
         # An indexed element says which register reaches it: `addr.base` is
         # part of the address's own identity, because two elements at the
         # same displacement are not the same address unless that register
         # agrees. So the encoding is not a guess -- it is written down.
+        #
+        # EXTERNAL encodes identically. Which relocation namespace names the
+        # cell -- EXTDEF against SEGDEF -- is the whole of the difference,
+        # and the instruction is the same DS-relative displacement either
+        # way. It is here because raising_defseg synthesizes a store to
+        # b$seg, and nothing else in the corpus had ever built an EXTERNAL
+        # operand rather than carrying BC's own bytes for one.
         return ir.Mem(addr, one.width, addr.base, 0, 2)
     raise Unlowered(f"a cell at {addr} in {addr.space} has no encoding this can derive")
 
@@ -351,7 +392,9 @@ def lowered(
     contracts: "dict[int, object]",
     coverage: "dict[int, tuple] | None" = None,
     cpu: str = "386",
-    *, pointer_model=None, noreturn: bool = False,
+    *,
+    pointer_model=None,
+    noreturn: bool = False,
 ) -> "lir.LirBody":
     """One MIR body as machine instructions, and nothing else.
 
@@ -367,13 +410,16 @@ def lowered(
     without anything having been optimised.
     """
     from qbopt.model import lir
-    from qbopt.backend import lower_floats
     from qbopt.analysis import ssa
+    from qbopt.backend import lower_floats
+    from qbopt.backend import lower_switches
 
+    try:
+        body = lower_switches.expanded(body)
+    except ValueError as error:
+        raise Unlowered(str(error)) from error
     lower_floats.checked(body)
-    body = ssa.pruned_phis(body, {
-        phi.result for block in body.blocks for phi in block.phis if not phi.result.flags
-    })
+    body = ssa.pruned_phis(body, {phi.result for block in body.blocks for phi in block.phis if not phi.result.flags})
 
     # An absorbed call site is emitted by select.absorbed, seventeen bytes
     # of mov and idiv, and not from any semantics this could give it.
@@ -411,8 +457,9 @@ def lowered(
             one for op in scheduled[block.at] for one in making.expand(op, preserve_flags=id(op) in preserve)
         )
     uses = Counter(value for insns in made.values() for one in insns for value in one.uses)
-    uses.update(held.value for insns in made.values() for one in insns
-                for held, _ in one.requires if held.value not in one.uses)
+    uses.update(
+        held.value for insns in made.values() for one in insns for held, _ in one.requires if held.value not in one.uses
+    )
     uses.update(value.id for block in body.blocks for phi in block.phis for value in phi.incoming.values())
     made = {at: _immediate_arguments(insns, uses) for at, insns in made.items()}
     made = {at: _rematerialized_arguments(insns, uses, making._exposed) for at, insns in made.items()}
@@ -438,7 +485,7 @@ def lowered(
             for block in body.blocks
         ),
         origin=dict(body.origin),
-        ordered=bool(body.repetitions) or body.cloned,
+        ordered=True,
         pins={**body.pins, **{value: Register.ES for value in body.values if body.origin.get(value) == Register.ES}},
     )
 
@@ -447,7 +494,11 @@ def _check_inserted_conditions(ops: tuple[mir.Op, ...], leaving: frozenset[mir.V
     alive = {value for value in leaving if value.flags}
     for op in reversed(ops):
         preserved = alive - set(op.defines)
-        if op.node is None and op.kind in (mir.Kind.ADD, mir.Kind.MUL, mir.Kind.SMULHI, mir.Kind.PTR_OFFSET) and preserved:
+        if (
+            op.node is None
+            and op.kind in (mir.Kind.ADD, mir.Kind.MUL, mir.Kind.SMULHI, mir.Kind.PTR_OFFSET)
+            and preserved
+        ):
             raise Unlowered(f"inserted {op.kind} at {op.at:#x} crosses a live condition")
         alive.difference_update(op.defines)
         alive.update(value for value in op.uses if value.flags)
@@ -463,23 +514,39 @@ def _rematerialized_arguments(insns, uses, exposed):
     for one in insns:
         match one.what:
             case ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Held(value, width),)):
-                if (value in literals and not (one.clobbers or one.requires or one.delivers or one.spread)
-                    and not one.defines and one.uses == (value,)):
+                if (
+                    value in literals
+                    and not (one.clobbers or one.requires or one.delivers or one.spread)
+                    and not one.defines
+                    and one.uses == (value,)
+                ):
                     definition, immediate = literals[value]
                     if width == immediate.width:
-                        one = replace(one, what=replace(one.what, sources=(immediate,)), uses=(),
-                                      op=definition.op, symbol=True if immediate.address is not None else False)
+                        one = replace(
+                            one,
+                            what=replace(one.what, sources=(immediate,)),
+                            uses=(),
+                            op=definition.op,
+                            symbol=True if immediate.address is not None else False,
+                        )
                         consumed[value] += 1
         for value in one.defines:
             literals.pop(value, None)
         match one.what:
             case ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(value, width),), (ir.Imm() as immediate,)):
-                if (width == immediate.width and width in (2, 4) and one.defines == (value,)
-                    and not (one.uses or one.clobbers or one.requires or one.delivers or one.spread)):
+                if (
+                    width == immediate.width
+                    and width in (2, 4)
+                    and one.defines == (value,)
+                    and not (one.uses or one.clobbers or one.requires or one.delivers or one.spread)
+                ):
                     literals[value] = (one, immediate)
         out.append(one)
-    dead = {id(definition) for value, (definition, _) in literals.items()
-            if consumed[value] == uses[value] and consumed[value] and value not in exposed}
+    dead = {
+        id(definition)
+        for value, (definition, _) in literals.items()
+        if consumed[value] == uses[value] and consumed[value] and value not in exposed
+    }
     return tuple(lir.without(out, lambda one: id(one) in dead))
 
 
@@ -490,15 +557,24 @@ def _immediate_arguments(insns, uses):
     out = []
     index = 0
     while index < len(insns):
-        pair = insns[index:index + 2]
+        pair = insns[index : index + 2]
         if len(pair) == 2 and all(not (one.clobbers or one.requires or one.delivers or one.spread) for one in pair):
             copy, push = pair
             match copy.what, push.what:
-                case (ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(value, width),), (ir.Imm() as immediate,)),
-                      ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Held(pushed, pushed_width),))):
-                    if (value == pushed and width == pushed_width == immediate.width
-                        and width in (2, 4) and uses[value] == 1 and not copy.uses
-                        and copy.defines == (value,) and push.uses == (value,) and not push.defines):
+                case (
+                    ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(value, width),), (ir.Imm() as immediate,)),
+                    ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Held(pushed, pushed_width),)),
+                ):
+                    if (
+                        value == pushed
+                        and width == pushed_width == immediate.width
+                        and width in (2, 4)
+                        and uses[value] == 1
+                        and not copy.uses
+                        and copy.defines == (value,)
+                        and push.uses == (value,)
+                        and not push.defines
+                    ):
                         combined = replace(copy, what=replace(push.what, sources=(immediate,)), defines=(), uses=())
                         folded = lir.without((combined, push), lambda one: one is push)
                         if len(folded) == 1:
@@ -539,7 +615,26 @@ def _branch_condition(block: mir.MirBlock, readers: Counter[mir.Value]) -> tuple
 # becomes. Intrinsic expansions belong here rather than in `expand` itself.
 def _extract(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]:
     match op.args, op.results:
-        case (mir.Held(value=source, width=4), mir.Const(n=offset)), (mir.Held(value=result, width=2),) if offset in (0, 16):
+        case (mir.Held(value=source, width=4), mir.Const(n=offset)), (mir.Held(value=result, width=2),) if offset in (
+            0,
+            16,
+        ):
+            # The halves of a sign extension are the word itself and its sign,
+            # and x86 has an instruction for the second. Going through the
+            # stack instead cost stride's loop four instructions for what
+            # `cwd` does in one -- and the low half it popped was dead, the
+            # divide already reading the word.
+            word = lowering.sign_extended(source.id)
+            if word is not None:
+                kept = ir.Held(result.id, 2)
+                if offset == 0:
+                    return (ir.Semantics(ir.Operation.MOVE, "mov", (kept,), (operand(word),)),)
+                # Only where a divide already wanted dx:ax. `cwd` pins its word
+                # to ax and takes dx, which is free there and is a shuffle
+                # anywhere else -- emitting it for every sign word cost
+                # deedlines' actions3d 1.5% of its running time.
+                if lowering.divides(result.id, word):
+                    return (ir.Semantics(ir.Operation.EXTEND, "cwd", (kept,), (operand(word),)),)
             discarded = ir.Held(lowering.fresh(), 2)
             kept = ir.Held(result.id, 2)
             return (
@@ -556,15 +651,23 @@ def _word_division(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]
     width = op.results[0].width if isinstance(op.results[0], mir.Held) else 0
     if width == 4 and op.node is not None:
         return None  # Legacy folded sites order results by their runtime entry point.
-    if (width not in (2, 4)
+    if (
+        width not in (2, 4)
         or not all(isinstance(arg, mir.Held) and arg.width == width for arg in (op.args[0], *op.results))
-        or not isinstance(op.args[1], (mir.Held, mir.Const)) or op.args[1].width != width):
+        or not isinstance(op.args[1], (mir.Held, mir.Const))
+        or op.args[1].width != width
+    ):
         return None
     dividend, divisor = map(operand, op.args)
     if isinstance(op.args[1], mir.Const):
-        reciprocal = division.reciprocal(dividend, op.args[1].n, tuple(map(operand, op.results)),
-                                         lowering.fresh, lowering.cpu,
-                                         remainder=op.results[1].value.id in lowering._read)
+        reciprocal = division.reciprocal(
+            dividend,
+            op.args[1].n,
+            tuple(map(operand, op.results)),
+            lowering.fresh,
+            lowering.cpu,
+            remainder=op.results[1].value.id in lowering._read,
+        )
         if reciprocal is not None:
             return reciprocal
     setup = ()
@@ -573,7 +676,8 @@ def _word_division(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]
         setup = (ir.Semantics(ir.Operation.MOVE, "mov", (held,), (divisor,)),)
         divisor = held
     high = ir.Held(lowering.fresh(), width)
-    return (*setup,
+    return (
+        *setup,
         ir.Semantics(ir.Operation.EXTEND, "cwd" if width == 2 else "cdq", (high,), (dividend,)),
         ir.Semantics(ir.Operation.DIVIDE, "idiv", tuple(map(operand, op.results)), (high, dividend, divisor)),
     )
@@ -592,9 +696,13 @@ def _concat(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]:
 
 
 def _signed_high_product(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]:
-    if (len(op.args) != 2 or len(op.results) != 1
-        or not isinstance(result := op.results[0], mir.Held) or result.width not in (2, 4)
-        or any(not isinstance(arg, (mir.Held, mir.Const)) or arg.width != result.width for arg in op.args)):
+    if (
+        len(op.args) != 2
+        or len(op.results) != 1
+        or not isinstance(result := op.results[0], mir.Held)
+        or result.width not in (2, 4)
+        or any(not isinstance(arg, (mir.Held, mir.Const)) or arg.width != result.width for arg in op.args)
+    ):
         raise Unlowered(f"unsupported signed high product at {op.at:#x}")
     setup, sources = [], []
     for arg in op.args:
@@ -631,6 +739,7 @@ def _pointer_access(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...
     if ref.base is None or ref.base_width != 4 or ref.addr is not None or ref.segment is not None:
         raise Unlowered(f"whole-pointer access has an unnormalized address at {op.at:#x}")
     from qbopt.objectfile.module import Space
+
     offset = ir.Held(lowering.fresh(), 2)
     selector = ir.Reg(Register.ES, 2)
     cell = ir.Mem(Addr(Space.FAR, 0, segment=Register.ES), ref.width, base=offset)
@@ -658,14 +767,26 @@ def _constant_store(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...
         case (mir.Const(n=bits, width=8),), (mir.Cell(ref=ref),) if ref.width == 8:
             if ref.base is not None or ref.segment is not None or ref.addr is None:
                 raise Unlowered("wide constant store needs a static address")
-            return tuple(ir.Semantics(ir.Operation.MOVE, "mov",
-                         (_addressed(replace(ref, width=4, addr=replace(ref.addr, disp=ref.addr.disp + offset))),),
-                         (ir.Imm((bits >> (offset * 8)) & 0xffffffff, 4),)) for offset in (0, 4))
+            return tuple(
+                ir.Semantics(
+                    ir.Operation.MOVE,
+                    "mov",
+                    (_addressed(replace(ref, width=4, addr=replace(ref.addr, disp=ref.addr.disp + offset))),),
+                    (ir.Imm((bits >> (offset * 8)) & 0xFFFFFFFF, 4),),
+                )
+                for offset in (0, 4)
+            )
     return _pointer_access(op, lowering)
 
 
-_EXPANDS: dict = {mir.Kind.STORE: _constant_store, mir.Kind.EXTRACT: _extract, mir.Kind.DIVMOD: _word_division, mir.Kind.CONCAT: _concat,
-                 mir.Kind.SMULHI: _signed_high_product, mir.Kind.PTR_OFFSET: _pointer_offset}
+_EXPANDS: dict = {
+    mir.Kind.STORE: _constant_store,
+    mir.Kind.EXTRACT: _extract,
+    mir.Kind.DIVMOD: _word_division,
+    mir.Kind.CONCAT: _concat,
+    mir.Kind.SMULHI: _signed_high_product,
+    mir.Kind.PTR_OFFSET: _pointer_offset,
+}
 
 
 class Lowering:
@@ -698,7 +819,34 @@ class Lowering:
                 out[value.id] = width
         return tuple(sorted(out.items()))
 
-    def _idiom(self, op: "mir.Op") -> tuple:
+    def _idiom(self, op: "mir.Op", speaks: bool = False) -> tuple:
+        """Where an operation that names no operand leaves what it writes."""
+        return tuple(dict.fromkeys((*self._selectors(op, speaks), *self._delivered(op))))
+
+    def _selectors(self, op: "mir.Op", speaks: bool = False) -> tuple:
+        """A selector is delivered in ES by whatever writes ES.
+
+        The mirror of _abi's own rule for reading one. An operand carries the
+        value where the operation has one -- `mov es,[d]` -- and where it has
+        none the register is still written, so the value is still defined:
+        a call clobbers ES and the next far access goes through whatever it
+        left there. Saying so here is what lets the definition exist at all;
+        without it lowering refuses a value no operand names.
+        """
+        carried = {one.value.id for one in op.results if isinstance(one, mir.Held)}
+        # An operand that carries the selector is placed like any value; only
+        # an operation with no operands still says ES.
+        return tuple(
+            (ir.Held(one.value.id, one.width), Register.ES)
+            for one in op.results
+            if not speaks and isinstance(one, mir.Held) and self._origin.get(one.value) == Register.ES
+        ) + tuple(
+            (ir.Held(one.id, 2), Register.ES)
+            for one in op.defines
+            if one.id not in carried and not one.flags and one.id in self._read and self._origin.get(one) == Register.ES
+        )
+
+    def _delivered(self, op: "mir.Op") -> tuple:
         """Where an operation that names no operand leaves what it writes.
 
         Only the restore idiom: three instructions behind one node, whose
@@ -711,21 +859,10 @@ class Lowering:
         if op.kind is mir.Kind.CALL:
             widths = dict(self._widths(op))
             return tuple(
-                (ir.Held(value.id, widths.get(value.id, 2)),
-                 target.named(self._origin[value], widths.get(value.id, 2)))
+                (ir.Held(value.id, widths.get(value.id, 2)), target.named(self._origin[value], widths.get(value.id, 2)))
                 for value in op.defines
                 if not value.flags and value.id in self._read and value in self._origin
             )
-        # Far operands still name physical ES. Its definition must set ES
-        # even if the allocator spills the corresponding value: a body pin
-        # alone does not constrain the spiller's freshly minted definition.
-        segment_results = tuple(
-            (ir.Held(result.value.id, result.width), Register.ES)
-            for result in op.results
-            if isinstance(result, mir.Held) and self._origin.get(result.value) == Register.ES
-        )
-        if segment_results:
-            return segment_results
         if op.kind is mir.Kind.OPAQUE and not isinstance(op.node, ir.Restore):
             return self._implicit_values(op, op.defines)
         if op.kind is mir.Kind.DIVMOD:
@@ -766,11 +903,18 @@ class Lowering:
             out.append((ir.Held(one.id, 2), target.named(root, 2)))  # a half, and the idiom pops one word into each
         return tuple(out)
 
-    def _abi(self, op: "mir.Op") -> tuple:
+    def _abi(self, op: "mir.Op", what: "ir.Semantics | None" = None) -> tuple:
+        # A cell that names its selector value is placed by allocation; one
+        # emitted without an operand for it still goes through ES.
+        placed = {
+            operand.selector.value
+            for operand in ((*what.dests, *what.sources) if what is not None else ())
+            if isinstance(operand, ir.Mem) and operand.selector is not None
+        }
         selectors = (
             (ir.Held(ref.segment.id, 2), Register.ES)
             for ref in (*op.loads, *op.stores)
-            if ref.segment is not None
+            if ref.segment is not None and ref.segment.id not in placed
         )
         return tuple(dict.fromkeys((*self._fixed_inputs(op), *selectors)))
 
@@ -787,8 +931,16 @@ class Lowering:
         every tracked register until a contract narrows it, and that is a
         liveness dependency rather than an argument list.
         """
+        if op.kind is mir.Kind.RETURN and op.node is not None:
+            returned = []
+            for arg, location in zip(op.args, op.node.semantics.sources):
+                if isinstance(location, ir.Reg):
+                    if not isinstance(arg, mir.Held):
+                        raise Unlowered(f"{op.at:#06x}: return operand needs materialization")
+                    returned.append((ir.Held(arg.value.id, arg.width), location.register))
+            return tuple(returned)
         if op.kind is mir.Kind.OPAQUE and not isinstance(op.node, ir.Restore):
-            return self._implicit_values(op, op.uses)
+            return self._implicit_values(op, op.uses, inputs=True)
         if op.id in self._sites:
             # These selected multi-instruction sequences still encode their
             # original addressing registers. Make that constraint explicit
@@ -845,7 +997,7 @@ class Lowering:
             made.append((ir.Held(one.value.id, one.width), mir.AS_NAMED[slot]))
         return tuple(made)
 
-    def _implicit_values(self, op: mir.Op, values: tuple[mir.Value, ...]) -> tuple:
+    def _implicit_values(self, op: mir.Op, values: tuple[mir.Value, ...], *, inputs: bool = False) -> tuple:
         """Unencoded operands of an opaque instruction still have machine locations."""
         if not isinstance(op.node, ir.Opaque):
             return ()
@@ -853,6 +1005,28 @@ class Lowering:
             ir.ROOT.get(one.register, one.register): one.register
             for one in InstructionInfoFactory().info(op.node.insn.insn).used_registers()
         }
+        if inputs:
+            # SSA holds the unshifted word; copying its low byte to AH is not an extraction.
+            registers = {
+                root: target.named(root, 2)
+                if register in (Register.AH, Register.BH, Register.CH, Register.DH)
+                else register
+                for root, register in registers.items()
+            }
+            # A use's register is its position, not its value's origin: the
+            # raise listed them in variable order, and a pass that forwards a
+            # copy into `out dx,al` hands it a value BC kept somewhere else.
+            # By origin, UNWHITEFADE's third OUT pinned nothing to AL and
+            # wrote 0x3C9's low byte as every blue.
+            order = sorted(mir._touched(op.node)[1], key=lambda one: (one is not mir.FLAGS, one))
+            if len(op.uses) < len(order):
+                raise Unlowered(f"{op.at:#06x}: {len(op.uses)} uses for {len(order)} operand registers")
+            return tuple(
+                (ir.Held(value.id, RegisterExt.size(register)), register)
+                for value, root in zip(op.uses, order)
+                if not value.flags
+                if (register := registers.get(root)) is not None
+            )
         return tuple(
             (ir.Held(value.id, RegisterExt.size(register)), register)
             for value in values
@@ -860,13 +1034,54 @@ class Lowering:
             if (register := registers.get(self._origin.get(value))) is not None
         )
 
-    def __init__(self, body: "mir.MirBody", read: set, calls: dict, absorbed, contracts=None, coverage=None, cpu="386",
-                 *, pointer_model=None) -> None:
+    def __init__(
+        self,
+        body: "mir.MirBody",
+        read: set,
+        calls: dict,
+        absorbed,
+        contracts=None,
+        coverage=None,
+        cpu="386",
+        *,
+        pointer_model=None,
+    ) -> None:
         arithmetic.validate(cpu)
         self.cpu = cpu
         self.pointer_model = pointer_model
         self._read = read
+        # Which dword values are a word's sign extension, and which word.
+        self._extended = {
+            one.results[0].value.id: one.args[0]
+            for block in body.blocks
+            for one in block.ops
+            if one.kind is mir.Kind.SIGN_EXTEND
+            and len(one.args) == 1
+            and len(one.results) == 1
+            and isinstance(one.args[0], mir.Held)
+            and one.args[0].width == 2
+            and isinstance(one.results[0], mir.Held)
+            and one.results[0].width == 4
+        }
+        # A value used once, as a divide's high half over the low half beside
+        # it. Anything else reading it means `cwd` would be computing the sign
+        # for something that did not ask for dx.
+        readers: dict[int, int] = {}
+        dividends: dict[int, int] = {}
+        for block in body.blocks:
+            for one in block.ops:
+                for arg in one.args:
+                    if isinstance(arg, mir.Held):
+                        readers[arg.value.id] = readers.get(arg.value.id, 0) + 1
+                if (
+                    one.kind is mir.Kind.DIV
+                    and len(one.args) == 3
+                    and all(isinstance(arg, mir.Held) for arg in one.args[:2])
+                ):
+                    dividends[one.args[0].value.id] = one.args[1].value.id
+        self._dividends = {high: low for high, low in dividends.items() if readers.get(high) == 1}
         from qbopt.frontend.raising_words import leaving
+
         self._exposed = {value.id for value in leaving(body)}
         self._coverage = coverage or {}
         self._origin = body.origin
@@ -888,6 +1103,9 @@ class Lowering:
         # caller with only the set of absorbed ids says the site is folded
         # and nothing more.
         self._sites = absorbed if isinstance(absorbed, dict) else {}
+        from qbopt.backend import addressforms
+
+        self._address_forms = addressforms.offsets(body)
         every = [
             one.id for block in body.blocks for op in block.ops for one in (*op.defines, *op.uses) if one.id is not None
         ]
@@ -898,6 +1116,15 @@ class Lowering:
         """A value id nothing in this body already uses."""
         self._next += 1
         return self._next - 1
+
+    def sign_extended(self, value: int) -> "mir.Held | None":
+        """The word this dword is the sign extension of, if it is one."""
+        return self._extended.get(value)
+
+    def divides(self, high: int, word: "mir.Held") -> bool:
+        """Whether `high` is only ever a divide's high half over that word."""
+        found = self._dividends.get(high)
+        return found is not None and found == word.value.id
 
     def expand(self, op: "mir.Op", *, preserve_flags: bool = True) -> "tuple[lir.Insn, ...]":
         """Every instruction this operation becomes, the leader first."""
@@ -922,6 +1149,9 @@ class Lowering:
             # no site's bytes to be emitted from.
             folded = op.id in self._absorbed and op.node is not None
             what = None if folded else current(op, as_a_value)
+            from qbopt.backend import addressforms
+
+            what = addressforms.selected(what, self._address_forms)
             # An instruction's dataflow is what its own operands name. The
             # two used to be separate -- `defines` from the operation and
             # the operands from BC's registers -- and once the operands
@@ -935,7 +1165,17 @@ class Lowering:
             speaks = what is not None and (what.dests or what.sources)
             made = tuple(_written(what.dests)) if speaks else ()
             read = tuple(_read(what)) if speaks else ()
-            requires = self._abi(op)
+            requires = self._abi(op, what)
+            delivers = self._idiom(op, bool(speaks))
+            if speaks and op.kind is not mir.Kind.CALL:
+                # A register operand MIR has no value for -- BH -- is emitted
+                # as itself, and the value the operation defines through it
+                # would reach its readers from nowhere: oimad's `xor bh,bh`
+                # left `mov ax,bx` reading a spill slot nothing stored.
+                given = {*made, *(held.value for held, _ in delivers)}
+                lost = [one for one in op.defines if not one.flags and one.id in self._read and one.id not in given]
+                if lost:
+                    raise Unlowered(f"{op.at:#06x}: {what} defines {lost} through no operand")
             inputs = read if speaks else tuple(one.id for one in op.uses if not one.flags)
             inputs = tuple(dict.fromkeys((*inputs, *(held.value for held, _ in requires))))
             return (
@@ -948,9 +1188,13 @@ class Lowering:
                     else tuple(one.id for one in op.defines if not one.flags and one.id in self._read),
                     uses=inputs,
                     requires=requires,
-                    clobbers=_clobbers(op, self._calls),
-                    spread=() if op.inserted else (op.covers, *op.extra_covers) if op.extra_covers else self._coverage.get(op.id, ()),
-                    delivers=self._idiom(op),
+                    clobbers=_clobbers(op, self._calls, self._contracts),
+                    spread=()
+                    if op.inserted
+                    else (op.covers, *op.extra_covers)
+                    if op.extra_covers
+                    else self._coverage.get(op.id, ()),
+                    delivers=delivers,
                     widths=self._widths(op) if what is None else (),
                     op=op,
                     symbol=op.symbol,
@@ -979,14 +1223,24 @@ class Lowering:
 
 def _flag_test(op: mir.Op, context: Lowering) -> tuple[ir.Semantics, ...] | None:
     """A dead AND destination needs flags, not a two-address temporary."""
-    if (op.kind is not mir.Kind.AND or op.loads or op.stores or op.merges or op.barrier
-        or len(op.results) != 1 or len(op.args) != 2
-        or not isinstance(op.results[0], mir.Held)):
+    if (
+        op.kind is not mir.Kind.AND
+        or op.loads
+        or op.stores
+        or op.merges
+        or op.barrier
+        or len(op.results) != 1
+        or len(op.args) != 2
+        or not isinstance(op.results[0], mir.Held)
+    ):
         return None
     result = op.results[0]
-    if (result.value.id in context._read | context._exposed or result.width not in (2, 4)
+    if (
+        result.value.id in context._read | context._exposed
+        or result.width not in (2, 4)
         or any(not isinstance(arg, mir.Held) or arg.width != result.width for arg in op.args)
-        or any(value != result.value and not value.flags for value in op.defines)):
+        or any(value != result.value and not value.flags for value in op.defines)
+    ):
         return None
     return (ir.Semantics(ir.Operation.COMPARE, "test", (), tuple(map(operand, op.args))),)
 
@@ -1000,11 +1254,16 @@ def _scaled(op: mir.Op, context: Lowering) -> tuple[ir.Semantics, ...] | None:
         source, scale = scale, source
     result = op.results[0]
     if not (
-        isinstance(source, mir.Held) and isinstance(scale, mir.Const) and isinstance(result, mir.Held)
-        and source.width == result.width and source.width in (2, 4)
+        isinstance(source, mir.Held)
+        and isinstance(scale, mir.Const)
+        and isinstance(result, mir.Held)
+        and source.width == result.width
+        and source.width in (2, 4)
         and scale.width == source.width
         and 1 < scale.n < 1 << (source.width * 8)
-        and not op.loads and not op.stores and not op.merges
+        and not op.loads
+        and not op.stores
+        and not op.merges
     ):
         return None
     chain = arithmetic.scale(scale.n, getattr(context, "cpu", "386"))
@@ -1131,7 +1390,7 @@ def clobbering(op: "mir.Op") -> "frozenset[Register_]":
     return _clobbers(op, {}) if op.kind is mir.Kind.DIVMOD else frozenset()
 
 
-def _clobbers(op: "mir.Op", calls: dict[int, str]) -> "frozenset[Register_]":
+def _clobbers(op: "mir.Op", calls: dict[int, str], contracts: dict | None = None) -> "frozenset[Register_]":
     """Which registers this instruction destroys without naming them.
 
     For a call, from `runtime.py`'s own contract for the routine
@@ -1161,15 +1420,16 @@ def _clobbers(op: "mir.Op", calls: dict[int, str]) -> "frozenset[Register_]":
         return frozenset({machine.RESULT, machine.DIVISOR, Register.EDX, machine.OTHER} & set(target.AVAILABLE))
     if op.kind is not mir.Kind.CALL:
         return frozenset()
-    contract = runtime.contract(calls.get(op.at))
+    contract = (contracts or {}).get(op.at) or runtime.contract(calls.get(op.at))
     if contract is None:
-        return frozenset(target.AVAILABLE)
+        return frozenset((*target.AVAILABLE, *target.SELECTORS))
     names = _names()
-    return frozenset(
-        register
-        for register in target.AVAILABLE
-        for named in (contract.clobbers or ())
-        if named.value.lower() in names.get(register, ())
+    disturbed = runtime.disturbs(contract)
+    # A contract is about the 8086 and names no FS or GS; one reaching user
+    # code runs code that may use them.
+    unnamed = frozenset(target.SELECTORS) - frozenset(names) if disturbed == runtime.EVERY else frozenset()
+    return unnamed | frozenset(
+        register for register in names for named in disturbed if named.value.lower() in names[register]
     )
 
 
@@ -1178,5 +1438,5 @@ def _clobbers(op: "mir.Op", calls: dict[int, str]) -> "frozenset[Register_]":
 def _names() -> dict:
     return {
         register: {target.name_of(target.named(register, 2)), target.name_of(target.named(register, 4))}
-        for register in target.AVAILABLE
+        for register in (*target.AVAILABLE, Register.ES)
     }

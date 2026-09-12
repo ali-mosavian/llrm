@@ -11,6 +11,65 @@ and beside it what the same loop should be. Counts are instructions in the
 body and bytes; the bytes matter less than the reloads, since a reload in a
 loop costs a memory access every iteration.
 
+## Native-FPU PDS snapshot — 2026-09-11
+
+**Refreshed after dispatch and LCSSA follow-ups:** 28 of 29 measured PDS
+programs have comparable targets and are within 1.5x; FPCSEX is provisional.
+Only JUMPS's object differs from the saved pre-dispatch scan: 1264 → 1058.
+FPDEEP remains 1771 with its verified 1317 reference. All 29 emit through
+LIR; this does not replace runtime or all-compiler validation. The complete
+refresh is recorded in [target-coverage-current.md](target-coverage-current.md).
+
+Historical pre-dispatch snapshot:
+
+The pre-dispatch allocator/rematerialization worktree emitted 29
+target-bearing `*-p-g2.obj` fixtures with `native_fpu=True`. The scorer read
+those emitted files directly (`--raw`), not a second default rewrite.
+Artifacts and the measurement script: `/tmp/qbopt-native-targets.Xr96r6`.
+This is a modeled-cost snapshot, not runtime validation or all-compiler coverage.
+
+- 26 comparable programs are within 1.5x.
+- JUMPS remains above the goal: **1264 / 742 = 1.70x**.
+- FPCSEX costs 4456; its reference remains provisional for the semantic
+  reasons recorded below. FPDEEP's then-provisional 1771-unit result now has
+  a complete, executed PDS reference: **1771/1317 = 1.34x** (see below).
+- HG and FX have target entries but no matching input in this fixture
+  selection; their coverage is missing, not passed.
+
+The next measured optimization gap is JUMPS's multiway dispatch and
+branched constant-trip loop. Fresh stage dumps still show `B$OGTA` as a CALL
+after unrolling, and emitted code retains `mov bx,[bp-2] / call far B$OGTA`.
+Recognition belongs in the raise, with the selector-range and outgoing-value
+proofs below; bounded CFG unrolling then exposes each iteration to SCCP.
+No dispatch optimization is claimed implemented by this measurement.
+Subsequent guarded dispatch recognition initially emitted JUMPS at
+**1366/742 = 1.84x**. Range-driven branch simplification now removes its
+unreachable error call/table and enables register-resident loop counting:
+**1058/742 = 1.43x**, with byte-identical PDS runtime output. This closes the
+JUMPS miss in the snapshot; provisional/missing targets above remain open.
+See `switches.md` for the runtime gate and before/after assembly.
+
+Frontend prerequisite: ON GOTO now takes successors from its own validated
+inline relocation fields, not every relocated code label in the module.
+On `jumptable.obj`, the edge set changes from `46,52,5e,ea` to `46,52,5e`;
+`ea` belongs to the statement table. Ordered and repeated destinations are
+retained separately from the deduplicated CFG edges. Unproved tables keep
+the conservative edges; the runtime call and its exceptional behavior remain.
+The regression failed first and failed again with the fix disabled. Fourteen
+focused dispatch cases pass, including QB/PDS/VBDOS and event-enabled output;
+the preceding block check passed 1,977 cases.
+
+All-stage dumps in `/tmp/qbopt-dispatch-edges-{before,after}-20260911`
+show identical MIR and emitted ASM for this fixture: later reachability had
+already discarded that non-code edge. This is a frontend CFG correction,
+not a measured speedup or closure of JUMPS's target gap:
+
+```asm
+; before                         ; after
+mov bx,2                         mov bx,2
+call far B$OGTA                  call far B$OGTA
+```
+
 ## Event-enabled configurations need separate references
 
 The listings below do not account for `/V` or `/W` event checks. Comparing
@@ -497,13 +556,29 @@ OWN memory contract alone proves neither fact. JUMPS's three iterations satisfy
 the selector range, but general dispatch recognition cannot assume that range.
 This contract audit changes no emitted assembly.
 
+The raised PDS JUMPS body was checked directly on 2026-09-11. The selector
+is the single two-byte argument at `0052`. None of the call's seven defined
+values has an instruction reader. One reaches the SI phi at `0151`; that
+phi has no instruction or phi users. Prune dead phis before testing whether
+the call's results are observable, rather than weakening its clobber contract.
+
+Implementation order: represent ordered cases, normal default and invalid
+selector behavior in MIR; teach SSA/CFG cloning and SCCP that representation;
+then lower surviving switches to branches and repair successor phis. LLVM's
+`llvm/lib/Transforms/Utils/LowerSwitch.cpp` at
+`338e0c94943a6fb917c276bbbd9ff4b6cd6dd71e` is the local reference for the
+last step, particularly `FixPhis` and `NewLeafBlock`. Its unrestricted default
+does not replace BASIC's invalid-selector path. Runtime-specific recognition
+stays in raise; no optimizer may inspect the helper name or selector register.
+
 ## FPDEEP — exact constant floating expressions
 
-**The same audit limitation applies here:** 1086 prices the numerical/printing
-listing, which omits synchronization and numeric stores. Exact arithmetic
-does not establish their unobservability across the retained runtime calls.
-This denominator remains unchanged but provisional until a whole-program
-proof or an observation-preserving independent listing is available.
+**Current PDS target: 1317.** The former 1086 numerical/printing listing below
+omitted synchronization and numeric stores. The complete reference retains
+those observations and has been assembled with JWasm, linked and executed.
+QB/VBDOS, event-enabled and resumable-error builds remain provisional; their
+checkpoint placement needs separate verification. This target correction
+does not change qbopt's emitted code.
 
 For ordinary unchecked, event-free builds, the three array elements are
 12, 28 and 60, `k=4`, and `d=12`; no numeric address escapes. Expand the
@@ -557,6 +632,9 @@ Event-enabled builds remain provisional because their event observations
 cannot be discarded by this reference.
 
 ### Current DOUBLE-tail blocker (2026-09-10, compiler 70ee58b)
+
+Historical optimization analysis; the later complete PDS reference supersedes
+the denominator's provisional status, not the copy-recognition limitation.
 
 Fresh per-pass dumps of QB `/O` and PDS `/G2` distinguish the source-level
 constant from what the raise actually knows. PDS initializes `d=12` using four
@@ -637,6 +715,71 @@ floating arithmetic; modeled cost falls **1570 → 1317**, while its fixture
 object grows **1727 → 1742 bytes**. All eleven runtime answers pass on QB,
 PDS and VBDOS. PDS/VBDOS retain their opaque copy and are not claimed improved.
 This does not validate the old numerical-only denominator.
+
+### Complete PDS reference — 2026-09-11
+
+`tools/references/fpdeep.asm` is hand-written JWasm, not qbopt output. The
+wrapper preserves the hash-pinned BC object's data and runtime relocations;
+it uses neither MIR optimization nor qbopt instruction selection.
+
+Keep p(1..3)=12,28,60 and k=4, and store i=1,2,3,4 at the source iteration
+boundaries. For each of nine indexed rows, check pending exceptions before
+the exact arithmetic, store q's SINGLE bits, retain the three label/index/
+equals output calls, then check again before the exact CLNG result is printed.
+Calls can leave pending exceptions: those second checks are not redundant.
+
+The DOUBLE tail stores d=12 before its first check, then e=6, retaining two
+dword stores per DOUBLE. Keep a check after each DSQ/DRATIO label call before
+printing 144/6. The source's END remains B$CEND. All arithmetic/conversions
+are exact normal finite values under every supported precision/rounding mode,
+as derived in the table above. This does not authorize deleting runtime-input
+FPCSEX operations or inferring a DF guarantee for PDS's MOVSW initializer.
+
+| Required work | Count | Ranking cost |
+| --- | ---: | ---: |
+| Initial p/k stores | 4 | 24 |
+| Loop-counter stores | 4 | 24 |
+| q stores before output | 9 | 54 |
+| d/e dword stores | 4 | 24 |
+| Pending-exception checks | 21 | 105 |
+| Original output calls/arguments and END | full listing | 1086 |
+| **Total** | | **1317** |
+
+Representative difference (reference, not a new optimizer pass):
+
+```asm
+; BC's first row
+fld dword [p1]
+fmul dword [p1]
+fstp dword [q]
+wait
+; three output calls
+fld dword [q]
+call far B$FIST
+push dx
+push ax
+call far B$PEI4
+
+; independent reference
+wait
+mov dword [q],043100000h       ; 144.0, exact SINGLE
+; the same three output calls
+wait
+push dword 144
+call far B$PEI4
+```
+
+Native-FPU run evidence: `/tmp/qbopt-fpdeep-jwasm.xq6rYz`. BASE, REF and OPT
+link without errors and print byte-identical eleven answers plus DONE; all
+return to DOS. `result.png` was captured and inspected. FPS is inapplicable
+to this console program. Raw scoring independently gives REF=1317 and the
+unchanged OPT=1771: **1.34x**, not a measured runtime speedup.
+
+Regression checks count the assembled stores/checkpoints, validate q/counter/
+DOUBLE values and all 42 runtime calls, and reject unaudited input/absent
+relocation metadata. Removing the nine arithmetic-entry checks makes the
+test fail (12 WAITs instead of 21); the mutation is restored. The scorer
+selects the accepted scope from object compiler/switch metadata, not filenames.
 
 ## NOTS and NEGNOT — constant expressions across output statements
 

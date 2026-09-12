@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "artifacts": {
+    "r_sweep.obj": "01073a08dff883e30870a9ec959bd2f79a66ffa8c065191d9fd0db77d4c6499c"
+  },
+  "contracts": {
+    "R_SWEEP_ROW": {
+      "defined_in": "r_sweep.obj",
+      "inputs": ["ax", "bx", "cx", "dx", "si", "di"],
+      "cleanup": 18,
+      "evidence": "Hash-pinned r_sweep.obj; the only reachable public normal return is CA 12 00 (RETF 18) at 0135 after LEAVE. Its two calls target the local near-returning helper at 0138. All six GP inputs retained conservatively; no preservation or memory-effect claim."
+    }
+  }
+}

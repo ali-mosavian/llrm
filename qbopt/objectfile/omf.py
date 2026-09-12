@@ -110,6 +110,58 @@ def parse(d: bytes) -> list[Record]:
     return out
 
 
+def library_modules(data: bytes) -> tuple[tuple[str, list[Record]], ...]:
+    """The named object modules in an OMF library, or no modules for an OBJ.
+
+    A library begins with its F0 header and aligns every THEADR..MODEND object
+    module to the page size recorded there. Its F1 dictionary is not an OMF
+    record stream and is deliberately not parsed. Keeping this here gives
+    profile validation and diagnostic tools one archive reader.
+    """
+    if not data or data[0] != 0xF0:
+        return ()
+    if len(data) < 3:
+        raise ValueError("truncated OMF library header")
+    payload = int.from_bytes(data[1:3], "little")
+    page = payload + 3
+    if payload == 0 or page > len(data):
+        raise ValueError("invalid OMF library page size")
+
+    modules: list[tuple[str, list[Record]]] = []
+    current: list[Record] = []
+    name: str | None = None
+    at = page
+    while at + 3 <= len(data):
+        kind = data[at]
+        if kind == 0xF1:
+            break
+        size = int.from_bytes(data[at + 1 : at + 3], "little")
+        if size == 0 or at + 3 + size > len(data):
+            raise ValueError(f"invalid OMF library record at {at}")
+        raw = data[at : at + 3 + size]
+        body = data[at + 3 : at + 2 + size]
+        if kind == THEADR:
+            if current:
+                raise ValueError("OMF library module has no MODEND")
+            if not body or len(body) != body[0] + 1:
+                raise ValueError("invalid OMF library THEADR")
+            name = body[1:].decode("latin-1")
+        if name is None:
+            raise ValueError(f"OMF library record at {at} precedes THEADR")
+        current.append(Record(kind, body, raw))
+        at += 3 + size
+        if kind in (MODEND, MODEND | 1):
+            modules.append((name, current))
+            current = []
+            name = None
+            at = ((at + page - 1) // page) * page
+    if current:
+        raise ValueError("truncated OMF library module")
+    if not modules:
+        raise ValueError("OMF library contains no modules")
+    return tuple(modules)
+
+
 def write(path: Path | str, recs: list[Record]) -> None:
     Path(path).write_bytes(b"".join(r.emit() for r in recs))
 
@@ -149,6 +201,24 @@ def segments(recs: list[Record]) -> list[tuple[str, int] | None]:
         i += 2
         ni, i = _index(r.body, i)
         out.append((nm[ni] if ni < len(nm) else "?", ln))
+    return out
+
+
+COMBINE_COMMON = 6
+
+
+def combines(recs: list[Record]) -> dict[int, int]:
+    """SEGDEF combine types, by 1-based segment index.
+
+    COMMON (6) lays every object's copy of the segment over the same bytes;
+    PUBLIC (2, 4, 7) concatenates them and private (0) keeps them apart.
+    """
+    out, index = {}, 0
+    for r in recs:
+        if r.type & 0xFE != SEGDEF:
+            continue
+        index += 1
+        out[index] = (r.body[0] >> 2) & 7
     return out
 
 
@@ -193,7 +263,18 @@ def pubdef_names(records: list[Record], seg: int) -> dict[int, str]:
 
     Mirrors code_offsets()'s PUBDEF branch, but keeps the name it skips past.
     """
-    out: dict[int, str] = {}
+    return {offset: name for name, (segment, offset) in public_definitions(records).items() if segment == seg}
+
+
+def public_definitions(records: list[Record]) -> dict[str, tuple[int, int]]:
+    """Every externally visible PUBDEF as ``name -> (segment, offset)``.
+
+    Link-unit resolution needs names from every segment, while the code mapper
+    asks for offsets in one. Keeping the record parser here gives both callers
+    one interpretation of PUBDEF and covers the 32-bit record form explicitly.
+    Local PUBDEFs do not satisfy an EXTDEF and are deliberately absent.
+    """
+    out: dict[str, tuple[int, int]] = {}
     for r in records:
         if r.type & 0xFE != PUBDEF:
             continue
@@ -202,16 +283,19 @@ def pubdef_names(records: list[Record], seg: int) -> dict[int, str]:
         base, at = _index(body, at)
         if base == 0:  # an absolute segment names its frame instead
             at += 2
-        if base != seg:
-            continue
+        width = 4 if r.type == PUBDEF + 1 else 2
         while at < len(body):
             namelen = body[at]
             name = body[at + 1 : at + 1 + namelen].decode("latin1")
             at += 1 + namelen
-            offset = struct.unpack_from("<H", body, at)[0]
-            at += 2
+            if at + width > len(body):
+                raise ValueError("truncated PUBDEF offset")
+            offset = int.from_bytes(body[at : at + width], "little")
+            at += width
             _, at = _index(body, at)  # the type index, unused here
-            out[offset] = name
+            if name in out:
+                raise ValueError(f"duplicate PUBDEF {name!r} in one object module")
+            out[name] = (base, offset)
     return out
 
 
@@ -333,18 +417,22 @@ def read_thread(body: bytes, at: int) -> tuple[bool, int, Thread, int]:
 
 
 def code_segment(records: list[Record]) -> tuple[int, str, int] | None:
-    """The module's code segment as (index, name, length), or None.
-
-    `<MODULE>_CODE` is BC's own naming, and matching it is what keeps this
-    pass to the compiler it models. A C module in the same link names its
-    code `<MODULE>_TEXT` and comes back None here, so qbopt does nothing to
-    it -- which is the right answer, not a gap. Measured across qb-qrender:
-    246 of its 256 objects have one, and every object without is either
-    empty or has a `.c` in its THEADR.
-    """
     for index, segment in enumerate(segments(records)):
         if segment and segment[0].endswith("_CODE"):
             return index, segment[0], segment[1]
+    headers = [record.body for record in records if record.type == THEADR]
+    if len(headers) != 1 or not headers[0]:
+        return None
+    header = headers[0]
+    if len(header) != header[0] + 1 or not header[1:].lower().endswith((b".c", b".asm")):
+        return None
+    candidates = [
+        (index, segment[0], segment[1])
+        for index, segment in enumerate(segments(records))
+        if segment and segment[0].endswith("_TEXT")
+    ]
+    if len(candidates) == 1:
+        return candidates[0]
     return None
 
 
@@ -533,8 +621,7 @@ def with_external(records: list[Record], name: str) -> tuple[list[Record], int]:
     names = externals(records)
     if name in names:
         return records, names.index(name)
-    position = max((index + 1 for index, record in enumerate(records)
-                    if record.type & 0xFE == EXTDEF), default=1)
+    position = max((index + 1 for index, record in enumerate(records) if record.type & 0xFE == EXTDEF), default=1)
     added = extdef_record([(name.encode("latin1"), b"\x00")])
     return [*records[:position], added, *records[position:]], len(names)
 
@@ -665,8 +752,40 @@ def offset_fixup(seg: int, offset: int, target: str, index: int, disp: int, grou
     method = {"segment": 0, "external": 2}[target]
     raw = bytes((0xC4, 0, 0x10 | method)) + as_index(group) + as_index(index) + struct.pack("<H", disp)
     record = fixupp_record([raw])
-    return Fixup(seg, offset, LOC_OFF16, False, target, index, disp,
-                 group, record, 0, len(raw), len(raw) - 2, frame_method=1)
+    return Fixup(
+        seg, offset, LOC_OFF16, False, target, index, disp, group, record, 0, len(raw), len(raw) - 2, frame_method=1
+    )
+
+
+def target_offset_fixup(seg: int, offset: int, target: str, index: int, disp: int) -> Fixup:
+    """A new absolute offset16 relocation framed by its own target.
+
+    An explicitly segmented operand such as ``es:[bx+symbol]`` does not use
+    DGROUP as its runtime frame. The selector in ES already names the target,
+    so the offset relocation must use that same SEGDEF or EXTDEF as both frame
+    and target. Encoding it as a DGROUP-relative offset is a different address.
+    """
+    method = {"segment": 0, "external": 2}[target]
+    # Frame method 5 means "the target's frame" and carries no frame datum.
+    # d32x's independent OMF writer emits 54/56 for the zero-displacement
+    # forms; clearing P (bit 2) to 50/52 adds the displacement below.
+    raw = bytes((0xC4, 0, 0x50 | method)) + as_index(index) + struct.pack("<H", disp)
+    record = fixupp_record([raw])
+    return Fixup(
+        seg,
+        offset,
+        LOC_OFF16,
+        False,
+        target,
+        index,
+        disp,
+        None,
+        record,
+        0,
+        len(raw),
+        len(raw) - 2,
+        frame_method=None,
+    )
 
 
 def reemit(fixup: Fixup, offset: int | None = None, disp: int | None = None) -> bytes:

@@ -4,11 +4,43 @@ from dataclasses import replace
 
 from iced_x86 import Code
 
-from qbopt.frontend.raising_calls import _discarded
 from qbopt.model import ir
+from qbopt.model import mir
+from qbopt.model.floating import Exceptions
+from qbopt.frontend.raising_calls import _discarded
+
+
+def checkpoints(body: mir.MirBody) -> mir.MirBody:
+    return replace(
+        body,
+        blocks=tuple(
+            replace(
+                block,
+                ops=tuple(
+                    _discarded(op)
+                    if op.kind is mir.Kind.FCHECK
+                    else replace(op, floating=replace(op.floating, exceptions=Exceptions.DEFERRED))
+                    if op.floating is not None
+                    else op
+                    for op in block.ops
+                ),
+            )
+            for block in body.blocks
+        ),
+    )
 
 
 def native(body):
-    return replace(body, blocks=tuple(replace(block, ops=tuple(
-        _discarded(op) if isinstance(op.node, ir.Opaque) and op.node.insn.insn.code == Code.INTO else op
-        for op in block.ops)) for block in body.blocks))
+    return replace(
+        body,
+        blocks=tuple(
+            replace(
+                block,
+                ops=tuple(
+                    _discarded(op) if isinstance(op.node, ir.Opaque) and op.node.insn.insn.code == Code.INTO else op
+                    for op in block.ops
+                ),
+            )
+            for block in body.blocks
+        ),
+    )

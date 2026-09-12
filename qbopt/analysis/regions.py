@@ -1,0 +1,282 @@
+"""
+What a reference can reach, as one set instead of five fields.
+
+`MemRef` already carries a region set, spelled five different ways --
+`allocation` is an object identity, `beyond` is what a call reaches,
+`excludes` is the complement of one, `space` is the kind when the byte is not
+known, and `frame_bounded` is one bit of "not the frame". Each was added to
+answer one pair of spaces, and `module.may_alias`'s `match (a.space, b.space)`
+is the same idea again one layer down. All of them are derived here from one
+lattice, so the pairs nobody wrote down are answered too.
+
+Two references may alias when their region sets intersect. That is the whole
+rule; there is no table.
+
+A span is a byte range in a region, counted from an origin.
+
+**Byte range, not segment.** `excludes` is a byte range and only a byte range
+can hold it, and the same arithmetic then answers two frame slots and two
+statics as a consequence rather than as two more arms.
+
+**Region, as a path.** A reference that cannot name its segment still knows it
+is in DGROUP, and one that knows nothing at all is the root. A coarser region
+meets every finer one below it and nothing outside it -- which is how an
+EXTDEF cell aliases every static and still cannot be heap storage. Written as
+flat names, that last fact has to be asserted pair by pair.
+
+**Origin, because a displacement means nothing without one.** The frame is the
+stack counted from bp instead of sp, so the two cannot be compared and always
+meet -- while an exclusion still speaks only for its own origin. That is what
+lets a call proven clear of the caller's locals still push.
+
+A set is what it names less what it is known to miss. Both halves are needed
+and they are independent: a reference can name its byte exactly and still
+carry exclusions.
+
+## The axioms
+
+Everything else here is arithmetic on the object. Real mode makes an address
+`segment * 16 + offset`, so two byte intervals either meet or they do not, and
+94% of references resolve through a fixup to an exact (segment, displacement).
+These three are the assumptions, and they are the whole list. Each is one
+region, so removing one is deleting a region rather than editing a rule.
+
+**1. Locals are not globals.** The stack is its own region and not part of
+DGROUP. SS==DS here and the stack lives in DGROUP, so the two could coincide
+and the object cannot prove they do not -- SS itself does not exist until the
+runtime sets it up. What rules it out is that the stack is last in DGROUP and
+grows down, so it reaches a named variable only by overflowing into it, which
+is a program that has already lost. Every optimising compiler assumes this.
+Refusing it costs the whole of loop-invariant code motion in any loop that
+pushes an argument: one `push` makes every named load in the loop alias
+something, so nothing is invariant.
+
+**2. Heap storage is not DGROUP.** A `B$DDIM`/`B$RDIM` allocation is its own
+region. Its selector is whatever the allocator returned and cannot be the
+current stack segment or a program's own data segment, independently of
+whether an unchecked subscript is in range within it. Bounds and object
+identity are separate facts: an out-of-range subscript may leave the array,
+but it cannot thereby become a write to the caller's frame.
+
+**3. An absolute selector is not DGROUP.** A far access through a selector the
+program loaded as a literal -- `DEF SEG = &HA000`, then `POKE` -- is in that
+segment and no other. The loader places DGROUP; a program naming a selector in
+its own code is naming hardware or an arena it was given, not the variables
+the linker laid out. This is the one that costs something when refused: every
+`POKE` aliased every static, so the `DEF SEG` cell could not be forwarded to
+the access that needed it.
+
+The first two are regions this file has always had. The third needs the
+selector's value, which arrives in `known` -- an interval per value, singleton
+where it is a constant.
+
+## What the link decides
+
+An EXTDEF names bytes another object contributes, so it is not arithmetic on
+this one -- except where this object's bytes are its alone. PUBLIC and private
+combine give a segment's bytes to the object that wrote them; COMMON combine
+lays every object's copy over the same bytes, and a name defined elsewhere
+can be in one. So an extern and a static meet only in a COMMON segment, and
+`layout` -- `module.Group` -- says which those are. Without it every segment
+is taken as overlaid.
+
+Each extern is its own origin. Two symbols cannot be compared, since the link
+may put one inside the other, so they meet; one symbol is displacement
+arithmetic; and an exclusion can name one symbol and no other.
+"""
+
+from dataclasses import dataclass
+
+from qbopt.objectfile import module
+from qbopt.objectfile.module import Space
+
+# Axiom 1 lives here: the stack is its own region and not a child of DGROUP.
+ROOT: tuple[str, ...] = ()
+STACK = ("stack",)
+DGROUP = ("dgroup",)
+# Axiom 2 and axiom 3: an allocation and a literal selector are each their own
+# region, beside DGROUP rather than inside it.
+ALLOCATION = ("alloc",)
+ABSOLUTE = ("absolute",)
+# Bytes the link places: every extern, and every COMMON-combined segment.
+LINKED = (*DGROUP, "linked")
+
+# Displacements counted from sp, from bp, and from the segment itself.
+SP, BP, HERE = "sp", "bp", ""
+
+_FLOOR, _CEILING = -(1 << 31), 1 << 31
+WHOLE = (_FLOOR, _CEILING)
+
+Span = tuple[tuple[str, ...], str, int, int]
+
+
+@dataclass(frozen=True)
+class RegionSet:
+    """The bytes a reference may reach: `spans`, less `holes`."""
+
+    spans: frozenset[Span]
+    holes: frozenset[Span] = frozenset()
+
+    def intersects(self, other: "RegionSet") -> bool:
+        # Either side's exclusion rules out the other's byte: the fact is
+        # about the pair, not about whichever reference happens to carry it.
+        holes = self.holes | other.holes
+        return any(_meets(one, two) for one in _surviving(self.spans, holes) for two in _surviving(other.spans, holes))
+
+
+def _under(region: tuple[str, ...], other: tuple[str, ...]) -> bool:
+    """Whether one region is the other or lies inside it."""
+    return region[: len(other)] == other or other[: len(region)] == region
+
+
+def _meets(one: Span, two: Span) -> bool:
+    region, origin, low, high = one
+    other, its, start, end = two
+    if not _under(region, other):
+        return False
+    if region != other or origin != its:
+        return True  # a coarser region, or a displacement from another origin
+    return low < end and start < high
+
+
+def _surviving(spans: frozenset[Span], holes: frozenset[Span]) -> list[Span]:
+    """The spans no single hole covers.
+
+    One hole, not their union: two exclusions that together cover a span but
+    neither of which does alone leave it reachable. That is the conservative
+    answer and it is the one `_excluded` already gave.
+    """
+    return [
+        one
+        for one in spans
+        if not any(
+            one[0][: len(hole[0])] == hole[0] and hole[1] == one[1] and hole[2] <= one[2] and one[3] <= hole[3]
+            for hole in holes
+        )
+    ]
+
+
+EVERYWHERE = RegionSet(frozenset({(ROOT, HERE, *WHOLE)}))
+
+
+def _absolute(ref, known: dict | None) -> "tuple[tuple[str, ...], str] | None":
+    """Axiom 3: a selector the program named as a literal is its own region.
+
+    Asked of the selector's value rather than of the instruction, because by
+    the time this matters the load of `b$seg` and the far access through it
+    are in different blocks. A singleton interval is a constant.
+    """
+    if not known or ref.segment is None:
+        return None
+    interval = known.get(ref.segment)
+    if interval is None or interval.low != interval.high:
+        return None
+    return (*ABSOLUTE, f"{interval.low:#06x}"), HERE
+
+
+def _region(space, index: int | None, layout=None) -> tuple[tuple[str, ...], str]:
+    """The region a space names and the register its displacements count from.
+
+    `index` of None is a reference that knows its kind and not which one --
+    the coarser region, which is the point of there being a path at all.
+    """
+    match space:
+        case Space.STACK:
+            return STACK, SP
+        case Space.FRAME:
+            return STACK, BP
+        case Space.SEGMENT:
+            if index is None:
+                return DGROUP, HERE
+            owned = isinstance(layout, module.Group) and index not in layout.shared
+            return (*(DGROUP if owned else LINKED), f"seg:{index}"), HERE
+        case Space.EXTERNAL:
+            return LINKED, (HERE if index is None else f"ext:{index}")
+        case _:
+            # LITERAL, FAR and GROUP: a displacement no fixup claims, an
+            # address through a segment register, a group index this refuses
+            # to resolve. Each could be anywhere, bar the argument below.
+            return ROOT, HERE
+
+
+def _floor(addr) -> frozenset[Span]:
+    """What an address is known to miss by virtue of where it is written."""
+    if addr is not None and _region(addr.space, addr.index)[0] is ROOT:
+        # A displacement in the code reaches anything in DGROUP, and the stack
+        # is not in DGROUP. See the region comment above.
+        return frozenset({(STACK, SP, *WHOLE)})
+    return frozenset()
+
+
+def _at(addr, width: int, bounds: dict | None, layout=None) -> frozenset[Span]:
+    """The bytes an address names, as coarsely as it knows them."""
+    if addr is None:
+        return frozenset({(ROOT, HERE, *WHOLE)})
+    span = module.reach(addr, max(width, 1), bounds) if bounds else None
+    if span is None:
+        # Indexed with nothing to bound it: every byte of its own region, and
+        # that is still not every byte.
+        span = WHOLE if addr.base else (addr.disp, addr.disp + max(width, 1))
+    region, origin = _region(addr.space, addr.index, layout)
+    return frozenset({(region, origin, *(WHOLE if region in (ROOT, DGROUP) else span))})
+
+
+def addressed(addr, width: int, bounds: dict | None = None, layout=None) -> RegionSet:
+    """Which bytes an address reaches, for a caller that holds no reference."""
+    return RegionSet(_at(addr, width, bounds, layout), _floor(addr))
+
+
+def _holes(ref, layout=None) -> frozenset[Span]:
+    """What the reference is known not to reach.
+
+    `beyond` is this -- a call that escapes no pointer into a segment cannot
+    reach that segment -- and so is `excludes`, which is why they belong
+    together rather than one per code path.
+    """
+    out: set[Span] = set()
+    if ref.beyond is not None:
+        owner, reaches = ref.beyond
+        if not any(segment == owner for segment, _ in reaches):
+            out.add((*_region(Space.SEGMENT, owner, layout), *WHOLE))
+    for addr, width in ref.excludes:
+        out.add((*_region(addr.space, addr.index, layout), addr.disp, addr.disp + width))
+    return frozenset(out) | _floor(ref.addr)
+
+
+def _spans(ref, bounds: dict | None, known: dict | None = None, layout=None) -> frozenset[Span]:
+    """The bytes the reference names, as coarsely as it knows them."""
+    absolute = _absolute(ref, known)
+    if absolute is not None:
+        return frozenset({(*absolute, *WHOLE)})
+    if ref.allocation is not None:
+        # A $DYNAMIC array is an owning allocation: two descriptors denote two
+        # live objects, and B$DDIM's storage is not in DGROUP at all. Which
+        # byte of it this is stays for the same-base arithmetic to answer.
+        return frozenset({(("alloc", str(ref.allocation)), HERE, *WHOLE)})
+    if ref.pointer or ref.addr is None:
+        # No byte, but often still a kind: a push is a push whatever the depth.
+        return frozenset({(*_region(ref.space, None, layout), *WHOLE)})
+    return _at(ref.addr, ref.width, bounds, layout)
+
+
+def regions(ref, bounds: dict | None = None, known: dict | None = None, layout=None) -> RegionSet:
+    """Which bytes this reference may reach.
+
+    `bounds` is the module's own layout -- `module.landmarks` -- and is the
+    one input that is not on the reference: an indexed operand reaches its
+    whole segment unless the next thing named after it says where it stops.
+    `module.reach` is reused rather than restated; it is the same question.
+    """
+    return RegionSet(_spans(ref, bounds, known, layout), _holes(ref, layout))
+
+
+def may_alias(
+    one, other, bounds: dict | None = None, known: dict | None = None, other_known: dict | None = None, layout=None
+) -> bool:
+    """Whether two references can name the same byte."""
+    return regions(one, bounds, known, layout).intersects(regions(other, bounds, other_known, layout))
+
+
+def addresses(a, a_width: int, b, b_width: int, bounds: dict | None = None, layout=None) -> bool:
+    """The same question for a caller that holds addresses and no reference."""
+    return addressed(a, a_width, bounds, layout).intersects(addressed(b, b_width, bounds, layout))

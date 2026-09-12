@@ -2,7 +2,8 @@
 
 from dataclasses import replace
 
-from qbopt.model import ir, mir
+from qbopt.model import ir
+from qbopt.model import mir
 from qbopt.optimize import lcssa
 
 
@@ -96,12 +97,16 @@ def test_exit_edge_into_a_bypass_join_is_closed_once() -> None:
     body, carried, _ = loop_with_exit_use()
     seed = body.blocks[0].ops[0].defines[0]
     answer = mir.Value(9, 4, variable=1, version=4)
-    body = replace(body, blocks=(
-        replace(body.blocks[0], succ=(1, 4)),
-        body.blocks[1], body.blocks[2],
-        mir.MirBlock(3, (), (), (4,)),
-        mir.MirBlock(4, (mir.Phi(answer, {0: seed, 3: carried}),), (), ()),
-    ))
+    body = replace(
+        body,
+        blocks=(
+            replace(body.blocks[0], succ=(1, 4)),
+            body.blocks[1],
+            body.blocks[2],
+            mir.MirBlock(3, (), (), (4,)),
+            mir.MirBlock(4, (mir.Phi(answer, {0: seed, 3: carried}),), (), ()),
+        ),
+    )
     result = lcssa.closed(body)
     exit_value = result.block(3).phis[0].result
     assert result.block(4).phis[0].incoming == {0: seed, 3: exit_value}
@@ -125,13 +130,43 @@ def test_a_value_already_consumed_by_an_exit_phi_is_closed() -> None:
     assert lcssa.closed(body) == body
 
 
-def test_multiple_exit_edges_are_left_for_loop_simplify() -> None:
-    body, _, _ = loop_with_exit_use()
+def test_multiple_edges_to_one_dedicated_exit_are_closed() -> None:
+    body, carried, _ = loop_with_exit_use()
     latch = body.block(2)
     assert latch is not None
     body = mir.MirBody(
         body.entry,
-        tuple(mir.MirBlock(block.at, block.phis, block.ops, (1, 3)) if block.at == latch.at else block
-              for block in body.blocks),
+        tuple(
+            mir.MirBlock(block.at, block.phis, block.ops, (1, 3)) if block.at == latch.at else block
+            for block in body.blocks
+        ),
     )
-    assert lcssa.closed(body) == body
+    result = lcssa.closed(body)
+    exit_block = result.block(3)
+    assert exit_block is not None
+    assert len(exit_block.phis) == 1
+    assert exit_block.phis[0].incoming == {1: carried, 2: carried}
+    assert exit_block.ops[0].uses == (exit_block.phis[0].result,)
+    assert lcssa.closed(result) is result
+
+
+def test_exit_phi_cannot_read_a_value_missing_on_one_edge() -> None:
+    body, _, consume = loop_with_exit_use()
+    latch = body.blocks[2]
+    stepped = latch.ops[0].defines[0]
+    body = replace(
+        body,
+        blocks=(
+            body.blocks[0],
+            body.blocks[1],
+            replace(latch, succ=(1, 3)),
+            replace(body.blocks[3], ops=(replace(consume, uses=(stepped,), args=(mir.Held(stepped, 2),)),)),
+        ),
+    )
+    assert lcssa.closed(body) is body
+
+
+def test_exit_shared_with_a_bypass_still_requires_canonicalization() -> None:
+    body, _, _ = loop_with_exit_use()
+    body = replace(body, blocks=(replace(body.blocks[0], succ=(1, 3)), *body.blocks[1:]))
+    assert lcssa.closed(body) is body

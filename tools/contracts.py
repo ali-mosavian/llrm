@@ -11,6 +11,7 @@ import json
 import argparse
 from pathlib import Path
 from hashlib import sha256
+from collections import deque
 from dataclasses import field
 from dataclasses import asdict
 from dataclasses import replace
@@ -26,9 +27,9 @@ from libdump import modules
 from iced_x86 import Decoder
 from iced_x86 import Mnemonic
 from iced_x86 import Register
-from iced_x86 import RflagsBits
 from iced_x86 import Formatter
 from iced_x86 import Register_
+from iced_x86 import RflagsBits
 from iced_x86 import FlowControl
 from iced_x86 import FormatterSyntax
 
@@ -92,8 +93,9 @@ def opaque(reason: str) -> Contract:
 
 
 class Library:
-    def __init__(self, objects: list[Module], limit: int = 2000, functions: int | None = 256,
-                 *, fp_emulation: bool = False) -> None:
+    def __init__(
+        self, objects: list[Module], limit: int = 2000, functions: int | None = 256, *, fp_emulation: bool = False
+    ) -> None:
         self.objects = objects
         self.limit = limit
         self.functions = functions
@@ -173,7 +175,7 @@ class Library:
                 routine.unknown.append("instruction budget exceeded")
                 break
             insn = Decoder(16, code[at:], ip=at).decode()
-            if self.fp_emulation and code[at:at + 1] == b"\xcd" and at + 1 < len(code):
+            if self.fp_emulation and code[at : at + 1] == b"\xcd" and at + 1 < len(code):
                 if code[at + 1] in declen.STANDS_IN and (site := declen.emulated(code, at)):
                     insn = site.insn.copy()
                     insn.len = site.length
@@ -238,9 +240,9 @@ class Library:
 
     def graph_from(self, roots: list[Address]) -> dict[Address, Routine]:
         graph = {}
-        pending = list(reversed(roots))
+        pending = deque(roots)
         while pending and (self.functions is None or len(graph) < self.functions):
-            address = pending.pop()
+            address = pending.popleft()
             if address in graph:
                 continue
             routine = graph[address] = self.decode(address)
@@ -383,7 +385,12 @@ def analyze(routine: Routine, contracts: dict[Address, Contract], budget: int = 
         for used in info.used_registers():
             parts = register_parts(used.register)
             if used.access in READS:
-                reads.update(parts)
+                # A contract names values required on entry, not whichever
+                # physical scratch register happens to hold them later.  The
+                # byte-lane tokens are the provenance already carried by this
+                # analysis: after `mov ax, 1`, a later read of AX consumes the
+                # constant, while after `mov ax, bx` it consumes entry BX.
+                reads.update(before[part] for part in parts if before[part] in REGISTERS)
             if used.access in WRITES:
                 written.update(parts)
                 for part in parts:
@@ -392,7 +399,8 @@ def analyze(routine: Routine, contracts: dict[Address, Contract], budget: int = 
                     unknown.add(f"{at:04x}: stack segment change")
         for lane, bit in FLAG_BITS.items():
             if insn.rflags_read & bit:
-                reads.add(lane)
+                if before[lane] in REGISTERS:
+                    reads.add(before[lane])
             if insn.rflags_modified & bit:
                 written.add(lane)
                 values[lane] = "?"
@@ -407,6 +415,11 @@ def analyze(routine: Routine, contracts: dict[Address, Contract], budget: int = 
         pop = insn.mnemonic == Mnemonic.POP and len(destination) == width and width in (2, 4)
         call = insn.flow_control in (FlowControl.CALL, FlowControl.INDIRECT_CALL)
         returning = insn.mnemonic in (Mnemonic.RET, Mnemonic.RETF)
+        frame_depth = (
+            int(before[ALIASES["bp"][0]].split(":")[1])
+            if before[ALIASES["bp"][0]].startswith("stack:") and before[ALIASES["bp"][0]] == before[ALIASES["bp"][1]]
+            else None
+        )
         if push:
             stack += tuple(before[part] for part in destination) if len(destination) == width else ("?",) * width
         elif pop:
@@ -415,9 +428,6 @@ def analyze(routine: Routine, contracts: dict[Address, Contract], budget: int = 
                 stack = stack[:-width]
             else:
                 unknown.add(f"{at:04x}: pop outside tracked stack")
-        elif insn.mnemonic == Mnemonic.MOV and destination and source:
-            if len(destination) == len(source):
-                values.update(zip(destination, (before[part] for part in source), strict=True))
         elif insn.mnemonic == Mnemonic.MOV and insn.op0_register == Register.BP and insn.op1_register == Register.SP:
             for part in ALIASES["bp"]:
                 values[part] = f"stack:{len(stack)}"
@@ -425,14 +435,38 @@ def analyze(routine: Routine, contracts: dict[Address, Contract], budget: int = 
             insn.mnemonic == Mnemonic.MOV
             and insn.op0_register == Register.SP
             and insn.op1_register == Register.BP
-            and before[ALIASES["bp"][0]].startswith("stack:")
-            and before[ALIASES["bp"][0]] == before[ALIASES["bp"][1]]
+            and frame_depth is not None
         ):
-            depth = int(before[ALIASES["bp"][0]].split(":")[1])
-            if depth <= len(stack):
-                stack = stack[:depth]
+            if frame_depth <= len(stack):
+                stack = stack[:frame_depth]
             else:
                 unknown.add(f"{at:04x}: frame outside tracked stack")
+        elif insn.mnemonic == Mnemonic.LEAVE and frame_depth is not None:
+            if 2 <= frame_depth <= len(stack):
+                stack = stack[:frame_depth]
+                values.update(zip(ALIASES["bp"], stack[-2:], strict=True))
+                stack = stack[:-2]
+            else:
+                unknown.add(f"{at:04x}: frame outside tracked stack")
+        elif (
+            insn.mnemonic in (Mnemonic.ADD, Mnemonic.SUB)
+            and insn.op0_register == Register.SP
+            and insn.op1_kind in (OpKind.IMMEDIATE8TO16, OpKind.IMMEDIATE16)
+        ):
+            change = (
+                insn.immediate8to16 if insn.op1_kind == OpKind.IMMEDIATE8TO16 else (insn.immediate16 ^ 0x8000) - 0x8000
+            )
+            if insn.mnemonic == Mnemonic.SUB:
+                change = -change
+            if change < 0:
+                stack += ("?",) * -change
+            elif change <= len(stack):
+                stack = stack[:-change] if change else stack
+            else:
+                unknown.add(f"{at:04x}: stack adjustment outside tracked stack")
+        elif insn.mnemonic == Mnemonic.MOV and destination and source:
+            if len(destination) == len(source):
+                values.update(zip(destination, (before[part] for part in source), strict=True))
         elif (
             any(
                 used.register in (Register.SP, Register.ESP, Register.RSP) and used.access in WRITES
@@ -450,7 +484,12 @@ def analyze(routine: Routine, contracts: dict[Address, Contract], budget: int = 
         if at in routine.calls:
             target, reason = routine.calls[at]
             callee = contracts.get(target, opaque(reason or "recursive or budget-limited dependency"))
-            reads.update(callee.reads)
+            # Callee inputs are expressed in the callee's physical lanes.
+            # Translate them through the caller state just as an ordinary
+            # instruction read is translated above.  Adding the lane names
+            # directly made every scratch register used by a dependency look
+            # like an input to every transitive caller.
+            reads.update(before[name] for name in callee.reads if name in before and before[name] in REGISTERS)
             written.update(callee.clobbers)
             for name in callee.clobbers:
                 values[name] = "?"
@@ -488,7 +527,6 @@ def analyze(routine: Routine, contracts: dict[Address, Contract], budget: int = 
     preserved = {name for name in REGISTERS if returns and all(values[name] == name for values, _ in returns)}
     if unknown:
         preserved.clear()
-        reads.update(REGISTERS)
         memory_write = True
     cleanups = {cleanup for _, cleanup in returns}
     return Contract(
@@ -607,8 +645,9 @@ def main() -> int:
         "--lib", type=Path, action="append", required=True, help="OMF .lib or .obj; repeat for dependencies"
     )
     parser.add_argument("--json", action="store_true")
-    parser.add_argument("--fp-emulation", action="store_true",
-                        help="follow BASIC /FPi sites; emulator effects remain unknown")
+    parser.add_argument(
+        "--fp-emulation", action="store_true", help="follow BASIC /FPi sites; emulator effects remain unknown"
+    )
     parser.add_argument("--dump", type=Path, help="write reachable disassembly and contracts to JSON")
     parser.add_argument("--instructions", type=int, default=2000)
     parser.add_argument("--functions", type=int, help="default 256 for one symbol; unlimited for --all")

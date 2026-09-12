@@ -4,9 +4,26 @@ Profiles turn reviewed ABI facts into reproducible compiler inputs. They are
 not automatic output from `tools/contracts.py`: its unknown paths still need
 review. Never infer purity or preservation from an input-only audit.
 
+Pass `--contracts` more than once to compose independent audits. The loader
+checks every profile against the shared `--contract-root`, refuses a symbol
+declared by more than one profile rather than choosing by argument order, and
+records one order-independent fingerprint for the combination. A single
+profile keeps its own fingerprint unchanged.
+
+`qrender-uglv.json` contains conservative cleanup-only contracts audited from
+the pinned UGLV archive. `qrender-r-sweep.json` does the same for the assembly
+span-row helper. These are separate because the evidence and artifacts have
+independent provenance; callers compose only the sets they actually need.
+
 ```sh
 uv run python -m qbopt.rewrite /path/to/objects/main.obj -o main-opt.obj \
   --native-fpu --contracts docs/contracts/qrender-main.json \
+  --contract-root /path/to/objects
+
+uv run python -m qbopt.rewrite /path/to/objects/r_span.obj -o r_span-opt.obj \
+  --native-fpu \
+  --contracts docs/contracts/qrender-uglv.json \
+  --contracts /path/to/objects/basic-interfaces.json \
   --contract-root /path/to/objects
 
 uv run python tools/stages.py /path/to/objects/main.obj --dump build/main-stages \
@@ -48,9 +65,14 @@ Version 1 has three top-level fields:
 - `version`: integer `1`.
 - `artifacts`: relative filename → lowercase SHA-256. Include every dependency
   used by the audit; all are checked, even when not directly called.
-- `contracts`: symbol → `defined_in`, `inputs`, `evidence`, optional `cleanup`.
+- `contracts`: symbol → `defined_in`, `inputs`, `evidence`, optional `cleanup`
+  and optional archive `member`.
 
-`defined_in` names a verified OMF object exporting the symbol. `inputs` uses
+`defined_in` names a verified OMF object or library exporting the symbol. A
+library is read in member order through its F0 page layout, stopping before
+the F1 dictionary. `member` names the defining THEADR module; it is required
+when more than one member exports the symbol and otherwise checked when
+supplied. `inputs` uses
 the ABI's word-register names (`ax`, `bx`, `cx`, `dx`, `si`, `di`, `bp`, `sp`,
 `ds`, `es`, `flags`), not partial-register analyzer lanes. `cleanup` is an
 even byte count or null; omitted means unknown. Evidence must identify the

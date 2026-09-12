@@ -56,6 +56,33 @@ def entry_values(body: mir.MirBody) -> frozenset[Value]:
     return frozenset(used - defined)
 
 
+def pressure(
+    body: mir.MirBody, found: "Liveness | None" = None, inside: "frozenset[int] | set[int] | None" = None
+) -> int:
+    """The most values live at once, flags aside -- anywhere, or in `inside`.
+
+    Cannot exceed the number of registers BC itself used, because the
+    program came out of them, so a number above the register file is a bug
+    in the liveness and not a body that needs spilling.
+
+    `inside` asks it of one loop's blocks, which is what a pass deciding
+    whether it can afford another loop-carried value has to know: a body's
+    peak says nothing about the loop the value would live around.
+    """
+    found = found or live(body)
+    peak = 0
+    for block in body.blocks:
+        if inside is not None and block.at not in inside:
+            continue
+        alive = set(found.live_out[block.at])
+        peak = max(peak, len([one for one in alive if not one.flags]))
+        for op in reversed(block.ops):
+            alive -= set(op.defines)
+            alive |= set(op.uses)
+            peak = max(peak, len([one for one in alive if not one.flags]))
+    return peak
+
+
 def live(body: mir.MirBody) -> Liveness:
     """What is live at each block's entry and exit, to a fixed point."""
     defines = {block.at: _defines(block) for block in body.blocks}
@@ -92,5 +119,3 @@ def live(body: mir.MirBody) -> Liveness:
         {at: frozenset(what) for at, what in live_in.items()},
         {at: frozenset(what) for at, what in live_out.items()},
     )
-
-

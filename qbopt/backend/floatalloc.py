@@ -1,9 +1,12 @@
 """Assign floating LIR values to the target register stack."""
 
+from collections import deque
+from collections import Counter
 from dataclasses import replace
-from collections import Counter, defaultdict, deque
+from collections import defaultdict
 
-from qbopt.model import ir, lir
+from qbopt.model import ir
+from qbopt.model import lir
 from qbopt.model.passes import LIRTransform
 
 
@@ -16,26 +19,42 @@ def _integer_loads(body: lir.LirBody, frame) -> lir.LirBody:
         insns = []
         for one in block.insns:
             what = one.what
-            if (what is not None and what.op is ir.Operation.FLOAT_LOAD and what.name == "fild"
+            if (
+                what is not None
+                and what.op is ir.Operation.FLOAT_LOAD
+                and what.name == "fild"
                 and len(what.sources) == len(what.dests) == 1
                 and isinstance(what.sources[0], (ir.Held, ir.Imm))
-                and what.sources[0].width in (2, 4) and isinstance(what.dests[0], (ir.Held, ir.St))):
+                and what.sources[0].width in (2, 4)
+                and isinstance(what.dests[0], (ir.Held, ir.St))
+            ):
+                if isinstance(what.sources[0], ir.Imm) and what.sources[0].value in (0, 1):
+                    insns.append(
+                        replace(
+                            one, what=replace(what, name="fldz" if what.sources[0].value == 0 else "fld1", sources=())
+                        )
+                    )
+                    continue
                 if frame is None:
                     raise Unlowered("integer-to-floating conversion requires an owned frame")
                 value, destination = what.sources[0], what.dests[0]
                 key = destination.value if isinstance(destination, ir.Held) else ("integer-load", one.at)
                 cell = frame.cell(key, value.width)
                 uses = (value.value,) if isinstance(value, ir.Held) else ()
-                insns.append(lir.Insn(one.at, (one.at, one.at),
-                    ir.Semantics(ir.Operation.MOVE, "mov", (cell,), (value,)), (), uses))
-                one = replace(one, what=replace(what, sources=(cell,)),
-                              uses=tuple(arg for arg in one.uses if arg not in uses))
+                insns.append(
+                    lir.Insn(
+                        one.at, (one.at, one.at), ir.Semantics(ir.Operation.MOVE, "mov", (cell,), (value,)), (), uses
+                    )
+                )
+                one = replace(
+                    one, what=replace(what, sources=(cell,)), uses=tuple(arg for arg in one.uses if arg not in uses)
+                )
             insns.append(one)
         blocks.append(replace(block, insns=tuple(insns)))
     return replace(body, blocks=tuple(blocks))
 
 
-def _integer_stores(body: lir.LirBody, frame) -> lir.LirBody:
+def _integer_stores(body: lir.LirBody, frame, basic_semantics: bool) -> lir.LirBody:
     """Materialize integer conversions, including runtime results in physical ST0."""
     from qbopt.backend.lower import Unlowered
 
@@ -52,35 +71,56 @@ def _integer_stores(body: lir.LirBody, frame) -> lir.LirBody:
         insns = []
         for one in block.insns:
             what = one.what
-            if (what is None or what.op is not ir.Operation.FLOAT_STORE or what.name != "fistp"
-                or len(what.sources) != 1 or len(what.dests) != 1
-                or not isinstance(what.dests[0], ir.Held) or what.dests[0].width not in (2, 4)):
+            if (
+                what is None
+                or what.op is not ir.Operation.FLOAT_STORE
+                or what.name != "fistp"
+                or len(what.sources) != 1
+                or len(what.dests) != 1
+                or not isinstance(what.dests[0], ir.Held)
+                or what.dests[0].width not in (2, 4)
+            ):
                 insns.append(one)
                 continue
             if frame is None:
                 raise Unlowered("floating-to-integer conversion requires an owned frame")
             result = what.dests[0]
             cell = frame.cell(("integer-conversion", result.value), result.width)
-            wait = lir.Insn(one.at, (one.at, one.at),
-                ir.Semantics(ir.Operation.NOTHING, "wait", (), ()), (), ())
-            insns.extend((wait, replace(one, what=replace(what, dests=(cell,)),
+            wait = lir.Insn(one.at, (one.at, one.at), ir.Semantics(ir.Operation.NOTHING, "wait", (), ()), (), ())
+            store = replace(
+                one,
+                what=replace(what, dests=(cell,)),
                 defines=tuple(value for value in one.defines if value != result.value),
-                widths=tuple((value, width) for value, width in one.widths if value != result.value)), wait))
+                widths=tuple((value, width) for value, width in one.widths if value != result.value),
+            )
+            insns.extend((wait, store, wait) if basic_semantics else (store,))
             if unknown_readers or result.value in integer_readers:
-                insns.append(lir.Insn(one.at, (one.at, one.at),
-                    ir.Semantics(ir.Operation.MOVE, "mov", (result,), (cell,)),
-                    (result.value,), (), widths=((result.value, result.width),)))
+                insns.append(
+                    lir.Insn(
+                        one.at,
+                        (one.at, one.at),
+                        ir.Semantics(ir.Operation.MOVE, "mov", (result,), (cell,)),
+                        (result.value,),
+                        (),
+                        widths=((result.value, result.width),),
+                    )
+                )
         blocks.append(replace(block, insns=tuple(insns)))
     return replace(body, blocks=tuple(blocks))
 
 
-def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
+def allocated(body: lir.LirBody, frame=None, *, basic_semantics: bool = True) -> lir.LirBody:
     from qbopt.backend.lower import Unlowered
 
-    body = _integer_stores(_integer_loads(body, frame), frame)
-    floating = {arg.value for block in body.blocks for one in block.insns if one.what
-                for arg in (*one.what.sources, *one.what.dests)
-                if isinstance(arg, ir.Held) and arg.width == 10}
+    body = _integer_stores(_integer_loads(body, frame), frame, basic_semantics)
+    floating = {
+        arg.value
+        for block in body.blocks
+        for one in block.insns
+        if one.what
+        for arg in (*one.what.sources, *one.what.dests)
+        if isinstance(arg, ir.Held) and arg.width == 10
+    }
     if not floating:
         return body
     predecessors = {block.at: set() for block in body.blocks}
@@ -89,9 +129,11 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
             if successor in predecessors:
                 predecessors[successor].add(block.at)
     order = tuple(block.at for block in body.blocks)
-    next_blocks = {block.at: block.succ[0] for block in body.blocks
-                   if len(block.succ) == 1 and block.succ[0] != body.entry
-                   and predecessors.get(block.succ[0]) == {block.at}}
+    next_blocks = {
+        block.at: block.succ[0]
+        for block in body.blocks
+        if len(block.succ) == 1 and block.succ[0] != body.entry and predecessors.get(block.succ[0]) == {block.at}
+    }
     at_of = {block.at: block for block in body.blocks}
     destinations = set(next_blocks.values())
     roots = [at for at in order if at not in destinations]
@@ -104,10 +146,12 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
             at = next_blocks.get(at)
     body = replace(body, blocks=tuple(scheduled))
     continues = {
-        index for index, (block, following) in enumerate(zip(body.blocks, body.blocks[1:]))
+        index
+        for index, (block, following) in enumerate(zip(body.blocks, body.blocks[1:]))
         if next_blocks.get(block.at) == following.at
     }
     from qbopt.backend.floatregions import bridged
+
     regions, region = {}, 0
     for index, block in enumerate(body.blocks):
         if index - 1 not in continues:
@@ -117,11 +161,22 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
     if len(body.blocks) != len(order):
         # Splitting critical edges changes the regions and their stack lifetimes.
         by_at = {block.at: block for block in body.blocks}
-        return allocated(replace(body, blocks=tuple(by_at[at] for at in order)
-            + tuple(block for block in body.blocks if block.at not in order)), frame)
-    floating = {arg.value for block in body.blocks for one in block.insns if one.what
-                for arg in (*one.what.sources, *one.what.dests)
-                if isinstance(arg, ir.Held) and arg.width == 10}
+        return allocated(
+            replace(
+                body,
+                blocks=tuple(by_at[at] for at in order)
+                + tuple(block for block in body.blocks if block.at not in order),
+            ),
+            frame,
+        )
+    floating = {
+        arg.value
+        for block in body.blocks
+        for one in block.insns
+        if one.what
+        for arg in (*one.what.sources, *one.what.dests)
+        if isinstance(arg, ir.Held) and arg.width == 10
+    }
     blocks = []
     stack: list[int] = []
     spilled: dict[int, ir.Mem] = {}
@@ -133,7 +188,7 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
             while end in continues:
                 end += 1
             next_uses = defaultdict(deque)
-            region = (one for member in body.blocks[index:end + 1] for one in member.insns)
+            region = (one for member in body.blocks[index : end + 1] for one in member.insns)
             for position, instruction in enumerate(region):
                 if instruction.what:
                     for arg in instruction.what.sources:
@@ -143,35 +198,55 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
         insns = []
         for one in block.insns:
             what = one.what
-            if what is None or not any(isinstance(arg, ir.Held) and arg.width == 10
-                                      for arg in (*what.sources, *what.dests)):
+            if what is None or not any(
+                isinstance(arg, ir.Held) and arg.width == 10 for arg in (*what.sources, *what.dests)
+            ):
                 if floating.intersection((*one.uses, *one.defines)):
                     raise Unlowered("floating value used by an unmodelled instruction")
-                if (stack or any(remaining[value] for value in spilled)) and (what is None or what.op in (ir.Operation.CALL, ir.Operation.BARRIER)
-                              or any(isinstance(arg, ir.St) for arg in (*what.sources, *what.dests))):
+                if (stack or any(remaining[value] for value in spilled)) and (
+                    what is None
+                    or what.op in (ir.Operation.CALL, ir.Operation.BARRIER)
+                    or any(isinstance(arg, ir.St) for arg in (*what.sources, *what.dests))
+                ):
                     raise Unlowered("floating stack crosses an unmodelled instruction")
                 insns.append(one)
                 continue
 
-            if (what.op is ir.Operation.FLOAT_ARITH and what.name in ("fadd", "fmul", "fsub", "fdiv")
+            if (
+                what.op is ir.Operation.FLOAT_ARITH
+                and what.name in ("fadd", "fmul", "fsub", "fdiv")
                 and len(what.sources) == 2
                 and all(isinstance(arg, ir.Held) and arg.width == 10 for arg in what.sources)
-                and what.sources[0] != what.sources[1] and remaining[what.sources[1].value] == 1):
+                and what.sources[0] != what.sources[1]
+                and remaining[what.sources[1].value] == 1
+            ):
                 reverse = not stack or stack[0] != what.sources[1].value
-                names = {"fadd": ("faddp", "faddp"), "fmul": ("fmulp", "fmulp"),
-                         "fsub": ("fsubp", "fsubrp"), "fdiv": ("fdivp", "fdivrp")}
-                what = replace(what, op=ir.Operation.FLOAT_ARITH_POP, name=names[what.name][reverse],
-                               sources=what.sources[::-1] if reverse else what.sources)
+                names = {
+                    "fadd": ("faddp", "faddp"),
+                    "fmul": ("fmulp", "fmulp"),
+                    "fsub": ("fsubp", "fsubrp"),
+                    "fdiv": ("fdivp", "fdivrp"),
+                }
+                what = replace(
+                    what,
+                    op=ir.Operation.FLOAT_ARITH_POP,
+                    name=names[what.name][reverse],
+                    sources=what.sources[::-1] if reverse else what.sources,
+                )
             used = Counter(arg.value for arg in what.sources if isinstance(arg, ir.Held) and arg.width == 10)
             for value, count in used.items():
                 for _ in range(count):
                     next_uses[value].popleft()
             missing = [value for value in used if value not in stack]
-            retained_store = (what.op is ir.Operation.FLOAT_STORE and what.name == "fstp"
-                              and len(what.sources) == len(what.dests) == 1
-                              and isinstance(what.sources[0], ir.Held)
-                              and isinstance(what.dests[0], ir.Mem) and what.dests[0].width in (4, 8)
-                              and remaining[what.sources[0].value] > used[what.sources[0].value])
+            retained_store = (
+                what.op is ir.Operation.FLOAT_STORE
+                and what.name == "fstp"
+                and len(what.sources) == len(what.dests) == 1
+                and isinstance(what.sources[0], ir.Held)
+                and isinstance(what.dests[0], ir.Mem)
+                and what.dests[0].width in (4, 8)
+                and remaining[what.sources[0].value] > used[what.sources[0].value]
+            )
             if retained_store:
                 what = replace(what, name="fst")
             extra = 0
@@ -190,26 +265,49 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
             while len(stack) + len(missing) + extra > 8:
                 if frame is None:
                     raise Unlowered("floating spill requires an owned frame")
-                victim = max((slot for slot in range(len(stack)) if stack[slot] not in used),
-                             key=lambda slot: next_uses[stack[slot]][0] if next_uses[stack[slot]] else float("inf"),
-                             default=None)
+                victim = max(
+                    (slot for slot in range(len(stack)) if stack[slot] not in used),
+                    key=lambda slot: next_uses[stack[slot]][0] if next_uses[stack[slot]] else float("inf"),
+                    default=None,
+                )
                 if victim is None:
                     raise Unlowered("floating instruction requires too many stack operands")
                 if victim:
                     operands = ir.St(0), ir.St(victim)
-                    insns.append(lir.Insn(one.at, (one.at, one.at),
-                        ir.Semantics(ir.Operation.EXCHANGE, "fxch", operands, operands), (), ()))
+                    insns.append(
+                        lir.Insn(
+                            one.at,
+                            (one.at, one.at),
+                            ir.Semantics(ir.Operation.EXCHANGE, "fxch", operands, operands),
+                            (),
+                            (),
+                        )
+                    )
                     stack[0], stack[victim] = stack[victim], stack[0]
                 value = stack.pop(0)
                 cell = frame.cell(("floating", value), 10)
                 spilled[value] = cell
-                insns.append(lir.Insn(one.at, (one.at, one.at),
-                    ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cell,), (ir.St(0),)), (), ()))
+                insns.append(
+                    lir.Insn(
+                        one.at,
+                        (one.at, one.at),
+                        ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cell,), (ir.St(0),)),
+                        (),
+                        (),
+                    )
+                )
             for value in missing:
                 if value not in spilled:
                     raise Unlowered("floating stack input is unavailable")
-                insns.append(lir.Insn(one.at, (one.at, one.at),
-                    ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ir.St(0),), (spilled[value],)), (), ()))
+                insns.append(
+                    lir.Insn(
+                        one.at,
+                        (one.at, one.at),
+                        ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ir.St(0),), (spilled[value],)),
+                        (),
+                        (),
+                    )
+                )
                 stack.insert(0, value)
 
             def source(arg):
@@ -230,8 +328,15 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
                     required = None
             if isinstance(required, ir.St) and required.index:
                 operands = (ir.St(0), required)
-                insns.append(lir.Insn(one.at, (one.at, one.at),
-                    ir.Semantics(ir.Operation.EXCHANGE, "fxch", operands, operands), (), ()))
+                insns.append(
+                    lir.Insn(
+                        one.at,
+                        (one.at, one.at),
+                        ir.Semantics(ir.Operation.EXCHANGE, "fxch", operands, operands),
+                        (),
+                        (),
+                    )
+                )
                 stack[0], stack[required.index] = stack[required.index], stack[0]
                 inputs = tuple(map(source, what.sources))
             arithmetic_slot = 0
@@ -240,15 +345,28 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
                     if len(stack) == 8:
                         raise Unlowered("floating stack requires a spill to preserve a live value")
                     operands = (ir.St(0),)
-                    insns.append(lir.Insn(one.at, (one.at, one.at),
-                        ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", operands, operands), (), ()))
+                    insns.append(
+                        lir.Insn(
+                            one.at,
+                            (one.at, one.at),
+                            ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", operands, operands),
+                            (),
+                            (),
+                        )
+                    )
                     stack.insert(0, stack[0])
                     inputs = tuple(map(source, what.sources))
-                    if (what.op is ir.Operation.FLOAT_ARITH and what.name in ("fadd", "fmul")
-                        and len(what.sources) == 2 and what.sources[0] == what.sources[1]
-                        and len(what.dests) == 1 and isinstance(what.dests[0], ir.Held)
-                        and next_uses[stack[0]] and next_uses[what.dests[0].value]
-                        and next_uses[stack[0]][0] < next_uses[what.dests[0].value][0]):
+                    if (
+                        what.op is ir.Operation.FLOAT_ARITH
+                        and what.name in ("fadd", "fmul")
+                        and len(what.sources) == 2
+                        and what.sources[0] == what.sources[1]
+                        and len(what.dests) == 1
+                        and isinstance(what.dests[0], ir.Held)
+                        and next_uses[stack[0]]
+                        and next_uses[what.dests[0].value]
+                        and next_uses[stack[0]][0] < next_uses[what.dests[0].value][0]
+                    ):
                         inputs = ir.St(1), ir.St(0)
                         arithmetic_slot = 1
             elif what.op is ir.Operation.FLOAT_ARITH_POP:
@@ -259,8 +377,15 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
                 def duplicate(index):
                     if len(stack) == 8:
                         raise Unlowered("floating stack requires a spill to preserve a live value")
-                    insns.append(lir.Insn(one.at, (one.at, one.at),
-                        ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ir.St(0),), (ir.St(index),)), (), ()))
+                    insns.append(
+                        lir.Insn(
+                            one.at,
+                            (one.at, one.at),
+                            ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ir.St(0),), (ir.St(index),)),
+                            (),
+                            (),
+                        )
+                    )
                     stack.insert(0, stack[index])
 
                 if remaining[stack[left]]:
@@ -271,8 +396,15 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
                     left, right = left + 1, 0
                 if right:
                     operands = (ir.St(0), ir.St(right))
-                    insns.append(lir.Insn(one.at, (one.at, one.at),
-                        ir.Semantics(ir.Operation.EXCHANGE, "fxch", operands, operands), (), ()))
+                    insns.append(
+                        lir.Insn(
+                            one.at,
+                            (one.at, one.at),
+                            ir.Semantics(ir.Operation.EXCHANGE, "fxch", operands, operands),
+                            (),
+                            (),
+                        )
+                    )
                     stack[0], stack[right] = stack[right], stack[0]
                     if left == 0:
                         left = right
@@ -315,10 +447,15 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
                 if not stack:
                     raise Unlowered("floating stack pop has no value")
                 stack.pop(0)
-            insns.append(replace(one, what=replace(what, sources=inputs, dests=tuple(outputs)),
-                uses=tuple(value for value in one.uses if value not in floating),
-                defines=tuple(value for value in one.defines if value not in floating),
-                widths=tuple((value, width) for value, width in one.widths if value not in floating)))
+            insns.append(
+                replace(
+                    one,
+                    what=replace(what, sources=inputs, dests=tuple(outputs)),
+                    uses=tuple(value for value in one.uses if value not in floating),
+                    defines=tuple(value for value in one.defines if value not in floating),
+                    widths=tuple((value, width) for value, width in one.widths if value not in floating),
+                )
+            )
         if stack and index not in continues:
             raise Unlowered("floating stack live-out requires cross-block allocation")
         if index not in continues:
@@ -331,8 +468,9 @@ def allocated(body: lir.LirBody, frame=None) -> lir.LirBody:
 class FloatAlloc(LIRTransform):
     name = "floatalloc"
 
-    def __init__(self, frame=None):
+    def __init__(self, frame=None, *, basic_semantics: bool = True):
         self.frame = frame
+        self.basic_semantics = basic_semantics
 
     def transform(self, body):
-        return allocated(body, self.frame)
+        return allocated(body, self.frame, basic_semantics=self.basic_semantics)

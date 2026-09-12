@@ -119,6 +119,10 @@ class Insn:
     # Allocator-owned stack reads can be deleted when their result is dead;
     # an arbitrary source-program memory read may have observable faults.
     spill_reload: bool = False
+    # The allocator's own store putting a spilled value away. It writes that
+    # slot and nothing else, which an inserted instruction cannot otherwise
+    # say: it carries the `op` of whatever it stands beside, stores and all.
+    spill_store: bool = False
     frame_adjust: bool = False
 
 
@@ -221,8 +225,9 @@ def without(insns, drop, made=None) -> "list[Insn]":
         out[where] = replace(last, covers=(last.covers[0], one.covers[1]))
     if len(out) > 1:
         first = out[0]
-        following = next((index for index, one in enumerate(out[1:], 1)
-                          if one.covers and one.covers[0] < one.covers[1]), None)
+        following = next(
+            (index for index, one in enumerate(out[1:], 1) if one.covers and one.covers[0] < one.covers[1]), None
+        )
         second = out[following] if following is not None else None
         if (
             drop(first)

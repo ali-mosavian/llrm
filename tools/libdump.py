@@ -28,11 +28,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from configs import QB45
 from configs import PDS71
 from configs import VBDOS
+from iced_x86 import OpKind
 from iced_x86 import Decoder
 from iced_x86 import Mnemonic
 from iced_x86 import Formatter
+from iced_x86 import FlowControl
 from iced_x86 import FormatterSyntax
-from iced_x86 import FlowControl, OpKind
 
 from qbopt.objectfile import omf
 from qbopt.frontend.declen import BITNESS
@@ -80,46 +81,15 @@ class Module:
 
 
 def modules(data: bytes) -> list[Module]:
-    """Every object module in the library, in order.
-
-    The dictionary at the end is not made of records and would raise, so the
-    walk stops at the first byte that does not begin one -- which is exactly
-    where the modules end.
-    """
-    out: list[Module] = []
-    current: list[omf.Record] = []
-    name = "?"
-    at = 0
-    page = 1
-    while at + 3 <= len(data):
-        kind = data[at]
-        size = int.from_bytes(data[at + 1 : at + 3], "little")
-        if kind == 0xF1:
-            break
-        if at + 3 + size > len(data) or size == 0:
-            break
-        body = data[at + 3 : at + 2 + size]
-        if kind == 0xF0:
-            page = size + 3
-            at += page
-            continue
-        if kind == THEADR:
-            if current:
-                out.append(Module(name, current))
-            current = []
-            name = body[1 : 1 + body[0]].decode("latin-1") if body else "?"
-        current.append(omf.Record(kind, body))
-        at += 3 + size
-        if kind in MODEND:
-            out.append(Module(name, current))
-            current = []
-            name = "?"
-            # a module is padded to the library's page boundary
-            while at % page:
-                at += 1
-    if current:
-        out.append(Module(name, current))
-    return out
+    """Every object module in a library, or the one module in an OBJ."""
+    archived = omf.library_modules(data)
+    if archived:
+        return [Module(name, records) for name, records in archived]
+    records = omf.parse(data)
+    headers = [record.body for record in records if record.type == THEADR]
+    if len(headers) != 1 or not headers[0] or len(headers[0]) != headers[0][0] + 1:
+        raise ValueError("standalone OMF object needs exactly one valid THEADR")
+    return [Module(headers[0][1:].decode("latin-1"), records)]
 
 
 def code_of(module: Module, seg: int) -> bytes:
@@ -145,15 +115,21 @@ def disassemble(code: bytes, start: int, limit: int = 400) -> list[str]:
     visited, targets = set(), set()
     for insn in decoder:
         visited.add(insn.ip)
-        if (insn.flow_control in (FlowControl.CONDITIONAL_BRANCH, FlowControl.UNCONDITIONAL_BRANCH)
-            and insn.op0_kind in (OpKind.NEAR_BRANCH16, OpKind.NEAR_BRANCH32, OpKind.NEAR_BRANCH64)):
+        if insn.flow_control in (
+            FlowControl.CONDITIONAL_BRANCH,
+            FlowControl.UNCONDITIONAL_BRANCH,
+        ) and insn.op0_kind in (OpKind.NEAR_BRANCH16, OpKind.NEAR_BRANCH32, OpKind.NEAR_BRANCH64):
             targets.add(insn.near_branch_target)
         out.append(f"  {insn.ip:04x}  {code[insn.ip : insn.ip + insn.len].hex():<14} {formatter.format(insn)}")
         if insn.mnemonic in (Mnemonic.RET, Mnemonic.RETF) or len(out) >= limit:
             break
     if missing := targets - visited:
-        out.append("  ; linear listing has unvisited branch targets: " + ", ".join(f"{at:04x}" for at in sorted(missing)))
-        out.append("  ; use tools/contracts.py for reachable control flow and dependencies; this is not a complete contract")
+        out.append(
+            "  ; linear listing has unvisited branch targets: " + ", ".join(f"{at:04x}" for at in sorted(missing))
+        )
+        out.append(
+            "  ; use tools/contracts.py for reachable control flow and dependencies; this is not a complete contract"
+        )
     return out
 
 

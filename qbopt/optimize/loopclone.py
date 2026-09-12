@@ -7,8 +7,9 @@ the candidate for emission. Loop live-outs must already be in LCSSA.
 
 from dataclasses import replace
 
-from qbopt.analysis import loops, ssa
 from qbopt.model import mir
+from qbopt.analysis import ssa
+from qbopt.analysis import loops
 from qbopt.optimize import edges
 
 
@@ -22,28 +23,41 @@ def peeled(body: mir.MirBody, loop: loops.Loop, count: int) -> mir.MirBody | Non
     outside = set(predecessors[loop.header]) - loop.body
     if len(outside) != 1:
         return None
-    entry, = outside
-    latch, = loop.latches
+    (entry,) = outside
+    (latch,) = loop.latches
     if blocks[entry].succ != (loop.header,) or blocks[latch].succ != (loop.header,):
         return None
     if any(set(predecessors[at]) - loop.body for at in loop.body if at != loop.header):
         return None
     originals = [block for block in body.blocks if block.at in loop.body]
-    if any(len(block.succ) > 1 and (
-        len(block.succ) != 2 or not block.ops or block.ops[-1].kind is not mir.Kind.BRANCH
-        or block.ops[-1].target not in block.succ
-    ) for block in originals):
+    if any(
+        len(block.succ) > 1
+        and (
+            not block.ops
+            or not (
+                block.ops[-1].kind is mir.Kind.BRANCH
+                and len(block.succ) == 2
+                and block.ops[-1].target in block.succ
+                or block.ops[-1].kind is mir.Kind.SWITCH
+                and set(block.succ) == {block.ops[-1].target, *(target for _, target in block.ops[-1].cases)}
+            )
+        )
+        for block in originals
+    ):
         return None
-    defined = {value for block in originals for value in
-               (*[phi.result for phi in block.phis],
-                *[value for op in block.ops for value in op.defines])}
+    defined = {
+        value
+        for block in originals
+        for value in (*[phi.result for phi in block.phis], *[value for op in block.ops for value in op.defines])
+    }
     for block in body.blocks:
         if block.at in loop.body:
             continue
         if any(value in defined for op in block.ops for value in op.uses):
             return None
-        if any(value in defined and source not in loop.body
-               for phi in block.phis for source, value in phi.incoming.items()):
+        if any(
+            value in defined and source not in loop.body for phi in block.phis for source, value in phi.incoming.items()
+        ):
             return None
 
     all_values = tuple(ssa.values(body))
@@ -74,32 +88,57 @@ def peeled(body: mir.MirBody, loop: loops.Loop, count: int) -> mir.MirBody | Non
             phis = []
             for phi in block.phis:
                 if block.at == loop.header:
-                    incoming = ({entry: phi.incoming[entry]} if iteration == 0 else
-                                {labels[iteration - 1][latch]: value(phi.incoming[latch], iteration - 1)})
+                    incoming = (
+                        {entry: phi.incoming[entry]}
+                        if iteration == 0
+                        else {labels[iteration - 1][latch]: value(phi.incoming[latch], iteration - 1)}
+                    )
                 else:
-                    incoming = {labels[iteration][source]: value(incoming, iteration)
-                                for source, incoming in phi.incoming.items()}
+                    incoming = {
+                        labels[iteration][source]: value(incoming, iteration)
+                        for source, incoming in phi.incoming.items()
+                    }
                 phis.append(mir.Phi(value(phi.result, iteration), incoming))
             ops = []
             for op in block.ops:
                 read = ssa.substituted(op, copies[iteration])
-                ops.append(replace(
-                    read, defines=tuple(value(result, iteration) for result in op.defines),
-                    results=tuple(replace(result, value=value(result.value, iteration))
-                                  if isinstance(result, mir.Held) else result for result in read.results),
-                    target=destination(op.target, block.at, iteration),
-                    covers=(op.at, op.at), extra_covers=(), raised=None,
-                    symbol=op.symbol is not False,
-                ))
-            cloned.append(mir.MirBlock(labels[iteration][block.at], tuple(phis), tuple(ops),
-                                      tuple(destination(at, block.at, iteration) for at in block.succ)))
+                ops.append(
+                    replace(
+                        read,
+                        defines=tuple(value(result, iteration) for result in op.defines),
+                        results=tuple(
+                            replace(result, value=value(result.value, iteration))
+                            if isinstance(result, mir.Held)
+                            else result
+                            for result in read.results
+                        ),
+                        target=destination(op.target, block.at, iteration),
+                        cases=tuple((number, destination(target, block.at, iteration)) for number, target in op.cases),
+                        covers=(op.at, op.at),
+                        extra_covers=(),
+                        raised=None,
+                        symbol=op.symbol is not False,
+                    )
+                )
+            cloned.append(
+                mir.MirBlock(
+                    labels[iteration][block.at],
+                    tuple(phis),
+                    tuple(ops),
+                    tuple(destination(at, block.at, iteration) for at in block.succ),
+                )
+            )
 
     changed = []
     for block in body.blocks:
         if block.at == entry:
-            block = replace(block, succ=(labels[0][loop.header],), ops=tuple(
-                replace(op, target=labels[0][loop.header]) if op.target == loop.header else op
-                for op in block.ops))
+            block = replace(
+                block,
+                succ=(labels[0][loop.header],),
+                ops=tuple(
+                    replace(op, target=labels[0][loop.header]) if op.target == loop.header else op for op in block.ops
+                ),
+            )
         phis = []
         for phi in block.phis:
             incoming = dict(phi.incoming)
@@ -109,13 +148,24 @@ def peeled(body: mir.MirBody, loop: loops.Loop, count: int) -> mir.MirBody | Non
             elif block.at not in loop.body:
                 for source, original in phi.incoming.items():
                     if source in loop.body:
-                        incoming.update({labels[iteration][source]: value(original, iteration)
-                                         for iteration in range(count)})
+                        incoming.update(
+                            {labels[iteration][source]: value(original, iteration) for iteration in range(count)}
+                        )
             phis.append(replace(phi, incoming=incoming))
         changed.append(replace(block, phis=tuple(phis)))
+
     # Copy opaque allocation provenance without interpreting physical locations.
     def metadata(original):
-        return {**original, **{value(old, iteration): location for old, location in original.items()
-                              if old in defined for iteration in range(count)}}
-    return replace(body, blocks=(*changed, *cloned), cloned=True,
-                   origin=metadata(body.origin), pins=metadata(body.pins))
+        return {
+            **original,
+            **{
+                value(old, iteration): location
+                for old, location in original.items()
+                if old in defined
+                for iteration in range(count)
+            },
+        }
+
+    return replace(
+        body, blocks=(*changed, *cloned), cloned=True, origin=metadata(body.origin), pins=metadata(body.pins)
+    )

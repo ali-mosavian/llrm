@@ -99,6 +99,14 @@ class Where:
 
     -- and until each does, this is where they are, named rather than
     threaded through every signature.
+
+    `registers` is not one of those. It is how many values the target can
+    keep live at once, which a pass that creates loop-carried values has to
+    be told: strength reduction gave deedlines and qbdemo five new counters
+    in a loop with six registers and every one of them was spilled. A
+    number is not machine form -- a pass told "you have six" still knows
+    nothing about x86 -- and zero means nothing was said, so nothing is
+    priced.
     """
 
     dgroup: frozenset[int] = frozenset()
@@ -106,6 +114,7 @@ class Where:
     bounds: dict | None = None
     blocks: list | None = None
     found: object | None = None
+    registers: int = 0
 
     @property
     def named(self) -> dict:

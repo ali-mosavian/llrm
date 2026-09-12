@@ -71,27 +71,27 @@ from iced_x86 import Register_
 from iced_x86 import RegisterExt
 from iced_x86 import MemorySizeExt
 
+from qbopt.legacy.lift import FIXUP
 from qbopt.analysis.flags import ALL
 from qbopt.analysis.flags import Flag
-from qbopt.legacy.lift import FIXUP
+from qbopt.legacy.lift import Decoded
 from qbopt.frontend.declen import INFO
 from qbopt.frontend.declen import Insn
 from qbopt.frontend.extent import Body
-from qbopt.objectfile.module import Addr
-from qbopt.frontend.blocks import Block
-from qbopt.frontend.declen import READS
-from qbopt.legacy.lift import Decoded
-from qbopt.objectfile.module import Space
-from qbopt.frontend.declen import WRITES
 from qbopt.legacy.lift import Resolver
 from qbopt.legacy.lift import classify
-from qbopt.objectfile.module import Module
-from qbopt.frontend.blocks import CodeMap
+from qbopt.frontend.blocks import Block
+from qbopt.frontend.declen import READS
+from qbopt.frontend.declen import WRITES
+from qbopt.objectfile.module import Addr
 from qbopt.analysis.flags import CLOBBERS
+from qbopt.frontend.blocks import CodeMap
+from qbopt.objectfile.module import Space
 from qbopt.frontend.blocks import code_map
+from qbopt.objectfile.module import Module
+from qbopt.analysis.flags import written_by
 from qbopt.frontend.declen import to_signed
 from qbopt.frontend.extent import Partition
-from qbopt.analysis.flags import written_by
 from qbopt.frontend.blocks import INLINE_TABLE
 from qbopt.legacy.lift import operand as long_operand
 from qbopt.frontend.extent import partition as body_partition
@@ -145,7 +145,7 @@ class Reg:
 @dataclass(frozen=True, slots=True)
 class Mem:
     """A memory cell. `addr` is None where the address is not known, and a
-    None address is never provably disjoint from anything -- module.may_alias
+    None address is never provably disjoint from anything -- regions
     is the one place that rule lives.
 
     `through` is the register the operand is reached by, kept even where the
@@ -175,6 +175,10 @@ class Mem:
     # array elements through one stale register. `through` stays what it
     # was -- how to encode the operand once something has placed it.
     base: "Held | None" = field(default=None)
+    stack_argument: bool = False
+    # The value holding a far cell's segment, where one did. Like `base`, which
+    # register holds it is the allocator's answer, not the raise's.
+    selector: "Held | None" = field(default=None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,7 +247,7 @@ class St:
     index: int
 
 
-type Loc = Reg | Mem | Imm | Address | St
+type Loc = Reg | Mem | Imm | Address | St | Held
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,6 +285,7 @@ class Effects:
     loads: tuple[Mem, ...] = ()
     stores: tuple[Mem, ...] = ()
     fp_stack: bool = False
+    memory_complete: bool = False
 
     @property
     def touches_memory(self) -> bool:
@@ -394,7 +399,7 @@ class Semantics:
 # what a caller must do about it. The mnemonic is deliberately not carried:
 # a barrier node always wraps a real Insn, so there is nowhere for a second,
 # drifting copy of it to live.
-def values(where) -> "list[Held]":
+def values(where: Loc) -> list[Held]:
     """Every abstract value an operand names, nested ones included.
 
     One place, because "which values does this read" is one question and
@@ -404,17 +409,21 @@ def values(where) -> "list[Held]":
     """
     if isinstance(where, Held):
         return [where]
-    if isinstance(where, Mem) and where.base is not None:
-        return [where.base]
+    if isinstance(where, Mem):
+        return [one for one in (where.base, where.selector) if one is not None]
     return []
 
 
-def mapped(where, made):
+def mapped(where: Loc, made: Callable[[Held], Held]) -> Loc:
     """`where` with every abstract value it names put through `made`."""
     if isinstance(where, Held):
         return made(where)
-    if isinstance(where, Mem) and where.base is not None:
-        return replace(where, base=made(where.base))
+    if isinstance(where, Mem) and (where.base is not None or where.selector is not None):
+        return replace(
+            where,
+            base=None if where.base is None else made(where.base),
+            selector=None if where.selector is None else made(where.selector),
+        )
     return where
 
 
@@ -526,6 +535,18 @@ def _touches_fp_stack(insn: Insn) -> bool:
     return any(RegisterExt.is_st(one.register) for one in INFO.info(insn.insn).used_registers())
 
 
+OPAQUE_MEMORY_COMPLETE = frozenset(
+    {
+        Code.FCOMPP,
+        Code.FNSTSW_M2BYTE,
+        Code.FNSTSW_AX,
+        Code.SAHF,
+        Code.FSTP_STI,
+        Code.LES_R16_M1616,
+    }
+)
+
+
 def instruction_effects(insn: Insn, resolve: Resolver) -> Effects:
     """The conservative effect of one real instruction.
 
@@ -537,7 +558,8 @@ def instruction_effects(insn: Insn, resolve: Resolver) -> Effects:
     more than a register or a memory cell, so `fp_stack` is True for exactly
     the reason `loads`/`stores` are ANY_MEMORY: unknown, not absent.
 
-    A barrier, in its memory reach only. `out` is the one that stays one:
+    A barrier without a verified memory footprint, in its memory reach only.
+    `out` is the one that stays one:
     programming a DMA controller through a port writes memory this layer
     cannot see. A handful of x87 shapes stay barriers too -- SHAPE's own
     comment names them -- and get the same ANY_MEMORY treatment; the 18
@@ -548,6 +570,9 @@ def instruction_effects(insn: Insn, resolve: Resolver) -> Effects:
     exact liveness across one costs no safety. CLD and STD are also known
     to have no memory effect. They remain barriers for their unmodelled
     direction state, but must not erase literal bytes before a string copy.
+    Selected comparison/status/stack forms have complete memory footprints
+    independently of their opaque computation. Their barriers still pin
+    the unmodeled state; FNSTSW retains its actual status-word write.
     """
     if insn.flow in CLOBBERS:
         # The callee's flag reads are as unknowable as its writes. Costs
@@ -557,10 +582,15 @@ def instruction_effects(insn: Insn, resolve: Resolver) -> Effects:
     defs, uses = _register_effects(insn)
     read = Flag(insn.reads & ALL)
     fp_stack = _touches_fp_stack(insn)
-    if barrier(instruction_semantics(insn, resolve)) and insn.insn.mnemonic not in (Mnemonic.CLD, Mnemonic.STD):
+    complete = insn.insn.code in OPAQUE_MEMORY_COMPLETE
+    if (
+        barrier(instruction_semantics(insn, resolve))
+        and not complete
+        and insn.insn.mnemonic not in (Mnemonic.CLD, Mnemonic.STD)
+    ):
         return Effects(defs, uses, written_by(insn), read, ANY_MEMORY, ANY_MEMORY, fp_stack)
     loads, stores = _memory_effects(insn, resolve)
-    return Effects(defs, uses, written_by(insn), read, loads, stores, fp_stack)
+    return Effects(defs, uses, written_by(insn), read, loads, stores, fp_stack, memory_complete=complete)
 
 
 # What each immediate encoding means once sign extension has been applied.
@@ -901,6 +931,8 @@ def _float_load(insn: Insn, resolve: Resolver, op: Operation, name: str) -> Sema
     not in qb-qrender's own object corpus and stays a barrier; SHAPE's own
     comment says so.
     """
+    if insn.insn.op_count == 0 and insn.insn.mnemonic in (Mnemonic.FLDZ, Mnemonic.FLD1):
+        return Semantics(op, name, (St(0),), (Imm(int(insn.insn.mnemonic == Mnemonic.FLD1), 2),))
     if insn.insn.op_count != 1 or insn.insn.op_kind(0) != OpKind.MEMORY:
         return None
     source = _location(insn, 0, resolve)
@@ -920,14 +952,11 @@ def _float_store(insn: Insn, resolve: Resolver, op: Operation, name: str) -> Sem
 
 
 def _float_arith(insn: Insn, resolve: Resolver, op: Operation, name: str) -> Semantics | None:
-    """`fadd`/`fsub`/`fmul`/`fdiv`/`fidiv`/`fisub`, the memory form only:
-    the top combined with the one real memory operand, in place -- no push,
-    no pop. Refuses the register-register form of the same mnemonic (`fadd
-    st(0),st(1)`, a different shape iced files under the same Mnemonic)
-    rather than guess that it does not pop either -- it does not, but BC
-    never emits it (measured over qb-qrender's own object corpus), so
-    nothing here claims it.
-    """
+    if insn.insn.op_count == 2 and name in ("fadd", "fsub", "fmul", "fdiv"):
+        dest, source = _stack_register(insn, 0), _stack_register(insn, 1)
+        if dest is None or source is None or (dest.index != 0 and source.index != 0):
+            return None
+        return Semantics(op, name, (dest,), (dest, source))
     if insn.insn.op_count != 1 or insn.insn.op_kind(0) != OpKind.MEMORY:
         return None
     source = _location(insn, 0, resolve)
@@ -1082,10 +1111,6 @@ SHAPE: dict[int, tuple[Operation, str]] = {
     # corpus:
     #   `fld st(i)`, a stack-duplicate with no memory operand at all --
     #     _float_load only accepts the memory form.
-    #   the non-popping register-register form of `fadd`/`fsub`/`fmul`/
-    #     `fdiv` (`fadd st(0),st(1)`) -- the same Mnemonic as the memory
-    #     form covers, a different shape, and `_float_arith` only accepts
-    #     the memory one.
     #   `fiadd`/`fimul` and every `r`-suffixed reversed form (`fsubr`,
     #     `fdivr`, `fsubrp`, `fdivrp`, `fisubr`, `fidivr`) -- not in SHAPE
     #     at all, so they fall to instruction_semantics' own `found is
@@ -1096,6 +1121,9 @@ SHAPE: dict[int, tuple[Operation, str]] = {
     # A form joining this corpus is a decision to model, not a gap to
     # paper over by widening one of the five builders below to guess at it.
     Mnemonic.FLD: (Operation.FLOAT_LOAD, "fld"),
+    # These exact constants have integer-to-real semantics, independent of RC.
+    Mnemonic.FLDZ: (Operation.FLOAT_LOAD, "fild"),
+    Mnemonic.FLD1: (Operation.FLOAT_LOAD, "fild"),
     Mnemonic.FILD: (Operation.FLOAT_LOAD, "fild"),
     Mnemonic.FSTP: (Operation.FLOAT_STORE, "fstp"),
     Mnemonic.FISTP: (Operation.FLOAT_STORE, "fistp"),
@@ -1139,7 +1167,7 @@ def instruction_semantics(insn: Insn, resolve: Resolver) -> Semantics:
     still modelled (its registers are real, nameable locations regardless of
     what its memory operand resolves to), and the unnamed cell is what
     keeps it from ever being claimed disjoint from anything -- module.
-    may_alias's own "None is never provably disjoint" rule, not a pin.
+    regions' own "None is never provably disjoint" rule, not a pin.
     """
     found = SHAPE.get(insn.insn.mnemonic)
     if found is None:
@@ -1347,7 +1375,48 @@ def decode_body(module: Module, mapped: CodeMap, blocks: list[Block], body: Body
             nodes.append(node)
             last = node
             at = span(node)[1]
-    return tuple(nodes)
+    return _at_devices(nodes, {block.at for block in blocks})
+
+
+def _at_devices(nodes: list[Node], starts: set[int]) -> tuple[Node, ...]:
+    """Each `in` and `out` whose port is a literal, at its device's memory reach.
+
+    The port is data flow rather than part of the instruction: BC loads dx just
+    before the `out`. The walk back to dx's definition stops at a block start,
+    so what it finds is the only definition that reaches.
+    """
+    from qbopt.abi import ports
+
+    out = list(nodes)
+    for index, node in enumerate(nodes):
+        if not isinstance(node, Opaque) or node.insn.insn.mnemonic not in (Mnemonic.IN, Mnemonic.OUT):
+            continue
+        insn = node.insn.insn
+        operand = 0 if insn.mnemonic == Mnemonic.OUT else 1
+        if insn.op_kind(operand) == OpKind.IMMEDIATE8:
+            port = insn.immediate8
+        elif insn.op_kind(operand) == OpKind.REGISTER and insn.op_register(operand) == Register.DX:
+            port = _literal_dx(nodes, index, starts)
+        else:
+            continue
+        if port is not None and ports.silent(port):
+            out[index] = replace(node, effects=replace(node.effects, loads=(), stores=(), memory_complete=True))
+    return tuple(out)
+
+
+def _literal_dx(nodes: list[Node], index: int, starts: set[int]) -> int | None:
+    """The literal dx holds before `nodes[index]`, where its block says so."""
+    while index > 0 and span(nodes[index])[0] not in starts:
+        previous = nodes[index - 1]
+        if span(previous)[1] != span(nodes[index])[0] or previous.effects.defs is None:
+            return None
+        if Register.EDX in previous.effects.defs:
+            match getattr(previous, "semantics", None):
+                case Semantics(Operation.MOVE, _, (Reg(Register.DX | Register.EDX),), (Imm(value, _, None),)):
+                    return value & 0xFFFF
+            return None
+        index -= 1
+    return None
 
 
 @dataclass(frozen=True, slots=True)

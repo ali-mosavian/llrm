@@ -30,7 +30,7 @@ edge in a graph a later pass can fold the pair without pattern-matching
 their addresses.
 
 **A memory reference keeps its Addr** rather than becoming a computed
-address. module.may_alias() and memory.py's own rules are the entire alias
+address. regions.py and memory.py's own rules are the entire alias
 story this pass has, and they are written against Addr; throwing that away
 for a prettier representation would cost the one analysis that already
 works. What a MemRef adds is the SSA values of the registers the address is
@@ -71,15 +71,16 @@ from iced_x86 import Register_
 from iced_x86 import RegisterExt
 
 from qbopt.model import ir
-from qbopt.model.floating import Semantics as FloatingSemantics
+from qbopt.abi import runtime
 from qbopt.analysis import loops
 from qbopt.frontend import stack
+from qbopt.analysis import regions
 from qbopt.objectfile import module
-from qbopt.abi import runtime
-from qbopt.objectfile.module import Addr
 from qbopt.frontend.blocks import Block
+from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
 from qbopt.objectfile.module import Module
+from qbopt.model.floating import Semantics as FloatingSemantics
 
 # The registers that become values. Rooted, so a write to ax and a write to
 # eax are the same variable -- see this module's own docstring.
@@ -290,6 +291,12 @@ class Symbol:
 
 
 @dataclass(frozen=True, slots=True)
+class FrameAddress:
+    offset: int
+    width: int
+
+
+@dataclass(frozen=True, slots=True)
 class ArrayRequest:
     descriptor: Symbol
     element_width: int
@@ -322,7 +329,7 @@ class Opaque:
     name: str = ""
 
 
-type Arg = Held | Const | Symbol | Cell | Opaque
+type Arg = Held | Const | Symbol | FrameAddress | Cell | Opaque
 
 
 class Kind(StrEnum):
@@ -402,6 +409,7 @@ class Kind(StrEnum):
     # control
     CALL = "call"
     BRANCH = "branch"  # on a value, to `target` or the next block
+    SWITCH = "switch"
     JUMP = "jump"
     RETURN = "return"
     ESCAPE = "escape"  # leaves the body somewhere it does not name
@@ -518,6 +526,19 @@ def _stack_effect(what: "ir.Semantics") -> int | None:
     return _FLOAT_DEPTH.get(what.op)
 
 
+def consumed(op: "Op") -> "set[Value]":
+    """Every value this operation actually reads.
+
+    A merged use is only carried into the result -- unless the operation
+    also names it as an operand: `or ax,[m]` reads AX's low word and
+    carries its high one, so the same use is both.
+    """
+    explicit = {arg.value for arg in op.args if isinstance(arg, Held)}
+    cells = [arg.ref for arg in (*op.args, *op.results) if isinstance(arg, Cell)]
+    explicit.update(value for cell in cells for value in (cell.base, cell.segment) if isinstance(value, Value))
+    return (set(op.uses) - op.merges.keys()) | explicit
+
+
 def rewritten(op: "Op") -> bool:
     """Whether a pass has changed what this operation computes.
 
@@ -533,8 +554,9 @@ def rewritten(op: "Op") -> bool:
 def _merged(what: "ir.Semantics", holds: dict, written: dict, args: tuple) -> dict:
     """Which use is only the previous contents of which result.
 
-    A use is carried when it shares a place with something the operation
-    writes and the operation never names that place as an input. An
+    A word result preserves the upper word even when its low word is an
+    arithmetic input. Otherwise a use is carried when it shares a place
+    with a result and the operation never names that place as an input. An
     operation naming no operand at all describes nothing, so nothing in it
     is a partial write: a call names none, and every argument it reads
     shares a register with something it clobbers -- reading those as
@@ -543,12 +565,15 @@ def _merged(what: "ir.Semantics", holds: dict, written: dict, args: tuple) -> di
     if not what.sources and not what.dests:
         return {}
     named = {ir.ROOT.get(one.register, one.register) for one in what.sources if isinstance(one, ir.Reg)}
+    narrow = {
+        ir.ROOT.get(one.register, one.register) for one in what.dests if isinstance(one, ir.Reg) and one.width == 2
+    }
     out: dict = {}
     for register, value in written.items():
         if value.flags:
             continue
         root = ir.ROOT.get(register, register)
-        if root in named:
+        if root in named and root not in narrow:
             continue
         was = holds.get(register)
         if was is not None:
@@ -830,6 +855,9 @@ class Op:
     # Where a branch goes, as a block address. Control flow, not machine
     # form: the blocks are MIR's own and the address is what names one.
     target: int | None = None
+    # SWITCH uses target as its explicit default; invalid-selector behavior
+    # must be an explicit CFG path, never an implicit assumption about default.
+    cases: tuple[tuple[int, int], ...] = field(default=(), kw_only=True)
     # What this operation is, apart from where it is. Given at the raise and
     # carried through every `replace()`, so a fact established then can live
     # in a side table instead of on the op -- which is the only way those
@@ -853,6 +881,11 @@ class Op:
     # Noncontiguous input bytes (such as an absorbed call's argument pushes).
     # Deletion transfers these alongside covers; no machine semantics live here.
     extra_covers: tuple[tuple[int, int], ...] = ()
+    # Complete memory footprints do not imply modeled computation or
+    # permission to move/remove an opaque operation.
+    memory_complete: bool = False
+    # Complete value reads do not imply movable or removable side effects.
+    reads_complete: bool = False
 
     @property
     def barrier(self) -> bool:
@@ -861,7 +894,9 @@ class Op:
     @property
     def inserted(self) -> bool:
         """An explicit zero-byte occurrence, even if its operands retain source identity."""
-        return self.node is None and not self.extra_covers and self.covers is not None and self.covers[0] == self.covers[1]
+        return (
+            self.node is None and not self.extra_covers and self.covers is not None and self.covers[0] == self.covers[1]
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -951,7 +986,9 @@ def _call_args(routine: "runtime.Contract | None", holds: dict, at: int = 0) -> 
     return tuple(made), True
 
 
-def _call_touches(name: str | None, routine: "runtime.Contract | None" = None) -> tuple[frozenset[Register_], frozenset[Register_]] | None:
+def _call_touches(
+    name: str | None, routine: "runtime.Contract | None" = None
+) -> tuple[frozenset[Register_], frozenset[Register_]] | None:
     """What a call really disturbs, where runtime.py has established it.
 
     ir.Effects answers "any register" for every call, which is the right
@@ -965,20 +1002,9 @@ def _call_touches(name: str | None, routine: "runtime.Contract | None" = None) -
     routine = routine if routine is not None else runtime.contract(name)
     if not routine.established and not runtime.established_inputs(routine):
         return None
-    kept = {FROM_CONTRACT[one] for one in runtime.preserves(routine) if one in FROM_CONTRACT}
-    disturbed = frozenset(one for one in TRACKED if one not in kept) | {FLAGS}
-    if runtime.barrier(routine):
-        # A barrier reaches code this module cannot see -- an event handler,
-        # an ON ERROR target -- and what the routine's own body preserves
-        # says nothing about what that code leaves behind. So it disturbs
-        # everything, which is what the worst-case ir.Effects said before
-        # any of this. What it *reads* is a different question, and the two
-        # were answered together: B$CENP, whose contract is `cProc B$CENP`
-        # with no parameters, was made to read every tracked register, so
-        # esi's entry value stayed live to the end of the body with nothing
-        # having written it, and spilling that phantom put a reload of a
-        # slot no one stored.
-        disturbed = frozenset(TRACKED) | {FLAGS}
+    # The lowering's clobbers come from the same answer.
+    changed = {FROM_CONTRACT[one] for one in runtime.disturbs(routine) if one in FROM_CONTRACT}
+    disturbed = frozenset(one for one in TRACKED if one in changed) | {FLAGS}
     # Clobbering is not reading, and this returned the same set for both.
     # Every routine runtime.py has established takes its arguments on the
     # stack -- cmacros' cProc with parmW, and the print family's own AX is
@@ -1030,8 +1056,9 @@ def _restore_touches(node: ir.Node) -> tuple[frozenset[Register_], frozenset[Reg
     return frozenset({into}), frozenset({source, into})
 
 
-def _touched(node: ir.Node, calls: dict[int, str] | None = None,
-             contracts: "dict[int, runtime.Contract] | None" = None) -> tuple[frozenset[Register_], frozenset[Register_]]:
+def _touched(
+    node: ir.Node, calls: dict[int, str] | None = None, contracts: "dict[int, runtime.Contract] | None" = None
+) -> tuple[frozenset[Register_], frozenset[Register_]]:
     """(defines, uses) as tracked variables, flags included as FLAGS.
 
     Reads ir.Effects rather than ir.Semantics, deliberately: Effects is
@@ -1044,9 +1071,15 @@ def _touched(node: ir.Node, calls: dict[int, str] | None = None,
         # On its fallthrough path INTO only observes OF. The exceptional
         # path remains a memory/control barrier, not fictitious GP results.
         return frozenset(), frozenset({FLAGS})
-    if calls is not None and isinstance(node, ir.Call) and (known := _call_touches(
-        calls.get(node.insn.at), contracts.get(node.insn.at) if contracts is not None else None
-    )):
+    if (
+        calls is not None
+        and isinstance(node, ir.Call)
+        and (
+            known := _call_touches(
+                calls.get(node.insn.at), contracts.get(node.insn.at) if contracts is not None else None
+            )
+        )
+    ):
         return known
     if (halves := _restore_touches(node)) is not None:
         return halves
@@ -1294,6 +1327,17 @@ def _operands(
                 address = loc.address
                 return Symbol(address.space, address.index, address.disp, loc.width, loc.value)
             return Const(loc.value, loc.width)
+        if (
+            isinstance(loc, ir.Address)
+            and loc.through == Register.BP
+            and loc.index == Register.NONE
+            and loc.addr is not None
+            and loc.addr.space is Space.FRAME
+            and what.dests
+            and isinstance(what.dests[0], ir.Reg)
+            and what.dests[0].width == 2
+        ):
+            return FrameAddress(loc.offset, 2)
         if isinstance(loc, ir.Mem):
             if not cells:
                 return Opaque(loc)
@@ -1391,6 +1435,7 @@ def raise_body(
     sites: dict | None = None,
     unreached: "tuple[int, frozenset] | None" = None,
     contracts: "dict[int, runtime.Contract] | None" = None,
+    spared: "dict[int, tuple] | None" = None,
 ) -> MirBody | str:
     """One body's blocks, in SSA, or why they could not be.
 
@@ -1410,6 +1455,7 @@ def raise_body(
     # One contract per call site, and the same one the lowering reads.
     # Built here only for a caller with none to give -- a tool, a test.
     chosen = contracts if contracts is not None else runtime.per_call(calls or {})
+    handles_errors = any(contract.error_handling for contract in chosen.values())
     if not blocks:
         return "no blocks to raise"
     start = entry if entry is not None else blocks[0].at
@@ -1490,15 +1536,43 @@ def raise_body(
             offset, slot = _stack_slot(node, offset, calls.get(insn.at) if calls else None)
             defines, uses = _touched(node, calls, chosen)
             used = tuple(namer.current(one, start) for one in sorted(uses, key=lambda o: (o is not FLAGS, o)))
-            keeps = unreached if _narrowed(calls, insn.at) else None
+            from qbopt.frontend import raising_call_memory
+
+            contract = chosen.get(insn.at)
+            read_reach = raising_call_memory.reachable(
+                contract, contract.reads if contract else runtime.Memory.ANY, unreached, handles_errors
+            )
+            write_reach = raising_call_memory.reachable(
+                contract, contract.writes if contract else runtime.Memory.ANY, unreached, handles_errors
+            )
             loading_stack = node.semantics.op is ir.Operation.POP
-            storing_stack = node.semantics.op is ir.Operation.PUSH
-            loads = _memrefs(node.effects.loads, namer, start,
-                             slot if loading_stack else None,
-                             Space.STACK if loading_stack else None, keeps)
-            stores = _memrefs(node.effects.stores, namer, start,
-                              slot if storing_stack else None,
-                              Space.STACK if storing_stack else None, keeps)
+            pushing = node.semantics.op is ir.Operation.PUSH
+            # A call stores twice: its return address, which is a push spelled
+            # differently, and whatever the callee writes, which `write_reach`
+            # bounds. One reference cannot say both. Named STACK, the callee's
+            # writes vanished and a user SUB wrote nothing; named nowhere, the
+            # return address reached every cell in the program. Both carry the
+            # call's bound: the return address lands where the callee's own
+            # pushes do, and without it every frame slot died at every call.
+            calling = node.semantics.op is ir.Operation.CALL
+            loads = _memrefs(
+                node.effects.loads,
+                namer,
+                start,
+                slot if loading_stack else None,
+                Space.STACK if loading_stack else None,
+                read_reach,
+            )
+            stores = _memrefs(
+                node.effects.stores,
+                namer,
+                start,
+                slot if pushing else None,
+                Space.STACK if pushing or calling else None,
+                write_reach,
+            )
+            if calling:
+                stores += (MemRef(None, 4, None, None, None, write_reach, excludes=(spared or {}).get(insn.at, ())),)
             holds = dict(zip(sorted(uses, key=lambda o: (o is not FLAGS, o)), used))
             # What each variable held before this instruction writes
             # anything. The half an absorbed divide hands back is a
@@ -1549,10 +1623,12 @@ def raise_body(
                     references = iter(loads)
                     operands = tuple(Cell(next(references)) if isinstance(one, Cell) else one for one in operands)
                     where = operands, where[1]
-                    used = tuple(dict.fromkeys(
-                        [arg.value for arg in operands if isinstance(arg, Held)]
-                        + [value for ref in loads for value in (ref.base, ref.segment) if value is not None]
-                    ))
+                    used = tuple(
+                        dict.fromkeys(
+                            [arg.value for arg in operands if isinstance(arg, Held)]
+                            + [value for ref in loads for value in (ref.base, ref.segment) if value is not None]
+                        )
+                    )
                     stores = ()
             _called = _call_args(chosen.get(insn.at), holds, insn.at) if kind is Kind.CALL else ((), True)
             # The snapshot the raise took, arguments included. `semantics`
@@ -1589,6 +1665,8 @@ def raise_body(
                     target=node.semantics.target,
                     id=next(_IDS),
                     args_known=_called[1],
+                    memory_complete=node.effects.memory_complete,
+                    reads_complete=node.effects.uses is not None and _called[1],
                 )
             )
             if handed is not None:
@@ -1967,7 +2045,7 @@ def same_bytes(one: MemRef, other: MemRef) -> bool:
     """Whether two references certainly name the same bytes.
 
     Keyed on the base *value*, never on which register holds it. That is
-    the whole difference between this and module.may_alias: an Addr says
+    the whole difference between this and regions.addresses: an Addr says
     `[si+6]`, and the moment anything reallocates registers that name is
     about a register which may now hold something else, while the value it
     stood for is still the same value. Two references agree here because
@@ -1976,17 +2054,28 @@ def same_bytes(one: MemRef, other: MemRef) -> bool:
 
     Certainly, not possibly -- this answers the forwarding question ("is
     this the load I already did"), and its negation is not a disjointness
-    proof. `may_alias` still answers that one.
+    proof. `regions` still answers that one.
     """
     if one.pointer or other.pointer:
-        return (one.pointer and other.pointer and one.base is not None and one.base == other.base
-                and one.width == other.width and one.addr is None and other.addr is None
-                and one.segment is None and other.segment is None and one.base_width == other.base_width)
+        return (
+            one.pointer
+            and other.pointer
+            and one.base is not None
+            and one.base == other.base
+            and one.width == other.width
+            and one.addr is None
+            and other.addr is None
+            and one.segment is None
+            and other.segment is None
+            and one.base_width == other.base_width
+        )
     one, other = _symbolic_ref(one), _symbolic_ref(other)
     if one.addr is None or other.addr is None:
         return False  # nothing this can name is never known to be anything
-    if one.addr.space is Space.FAR and one.segment is None and not (
-        one.allocation is not None and one.allocation == other.allocation
+    if (
+        one.addr.space is Space.FAR
+        and one.segment is None
+        and not (one.allocation is not None and one.allocation == other.allocation)
     ):
         return False
     if one.width != other.width or one.base != other.base or one.segment != other.segment:
@@ -2004,118 +2093,84 @@ def overlapping(
 ) -> bool:
     """Whether a write through `other` could land on `one`.
 
-    module.may_alias for the symbolic part, and the base value for the rest.
+    `regions` for the symbolic part, and the base value for the rest.
     Where both name the same base value their displacements settle it by
     arithmetic, exactly as two bare statics do -- and soundly for the same
     reason memory.aliases() gives, except that this holds it by value
     identity rather than by the caller having promised the register was not
     written in between.
     """
-    if one.pointer or other.pointer:
-        if _allocation_disjoint(one, other) or _allocation_disjoint(other, one):
-            return False
-        return True  # Distinct pointer values alone do not establish disjoint allocations.
-    if known or other_known:
-        from qbopt.analysis import ranges
-        one, other = ranges.covering(one, known or {}), ranges.covering(other, other_known or {})
-    one, other = _symbolic_ref(one), _symbolic_ref(other)
-    if _allocation_disjoint(one, other) or _allocation_disjoint(other, one):
-        return False
-    if _excluded(one, other) or _excluded(other, one):
-        return False
-    if one.addr is None or other.addr is None:
-        # Neither names the byte, but each may name the object. LLVM's
-        # PseudoSourceValue rule: two different kinds never alias, and one
-        # whose kind is unknown aliases anything.
-        if _out_of_reach(one, other) or _out_of_reach(other, one):
-            return False
-        return _may_reach(one.where, other.where)
-    if (
-        one.base is not None
-        and one.base == other.base
-        and one.addr.space is other.addr.space
-        and one.addr.index == other.addr.index
-        and one.segment == other.segment
-        and (one.addr.space is not Space.FAR or one.segment is not None)
-    ):
-        return one.addr.disp < other.addr.disp + other.width and other.addr.disp < one.addr.disp + one.width
-    return module.may_alias(one.addr, other.addr, dgroup, one.width, other.width, bounds)
+    if not (one.pointer or other.pointer):
+        if known or other_known:
+            from qbopt.analysis import ranges
+
+            one, other = ranges.covering(one, known or {}), ranges.covering(other, other_known or {})
+        one, other = _symbolic_ref(one), _symbolic_ref(other)
+        if (
+            one.base is not None
+            and one.base == other.base
+            and one.addr is not None
+            and other.addr is not None
+            and one.addr.space is other.addr.space
+            and one.addr.index == other.addr.index
+            and one.segment == other.segment
+            and (one.addr.space is not Space.FAR or one.segment is not None)
+        ):
+            return one.addr.disp < other.addr.disp + other.width and other.addr.disp < one.addr.disp + one.width
+    return regions.may_alias(one, other, bounds, known, other_known, dgroup)
 
 
 def _symbolic_ref(ref: MemRef) -> MemRef:
     if ref.symbolic is None:
         return ref
     symbol = ref.symbolic
-    return replace(ref, addr=module.Addr(symbol.space, symbol.offset + symbol.addend, symbol.index), base=None, segment=None)
-
-
-def _allocation_disjoint(allocated: MemRef, static: MemRef) -> bool:
-    return (
-        allocated.allocation is not None and static.allocation is None
-        and static.addr is not None and static.addr.space is Space.SEGMENT
-        and static.addr.index == allocated.allocation.index
-        and static.base is None and static.segment is None and static.addr.base == Register.NONE
+    return replace(
+        ref, addr=module.Addr(symbol.space, symbol.offset + symbol.addend, symbol.index), base=None, segment=None
     )
 
 
-def _excluded(blind: MemRef, named: MemRef) -> bool:
-    """An occurrence-specific proof excludes all bytes of this static access."""
-    if (named.addr is not None and named.addr.base == Register.NONE
-        and named.base is None and named.segment is None and named.width > 0):
-        if any(named.addr.space is addr.space and named.addr.index == addr.index
-               and addr.disp <= named.addr.disp and named.addr.disp + named.width <= addr.disp + width
-               for addr, width in blind.excludes):
-            return True
-    return False
+# Every bp-relative displacement there is. `beyond` bounds a call inside the
+# program's data segment and says nothing about the frame, which is a
+# different region -- so a call proven to reach no caller variable still
+# aliased every local, and the counter of every loop holding one round-tripped
+# through its slot. Written as an exclusion rather than a flag because that is
+# what it is, and one kind of negative fact is enough.
+WHOLE_FRAME = (module.Addr(Space.FRAME, -(1 << 15)), 1 << 16)
 
 
-def _out_of_reach(blind: MemRef, named: MemRef) -> bool:
-    """Whether `blind` says it cannot reach the cell `named` is in."""
-    if _excluded(blind, named):
-        return True
-    if blind.beyond is None or named.addr is None:
-        return False
-    owner, reaches = blind.beyond
-    if named.addr.space is not Space.SEGMENT or named.addr.index != owner:
-        return False  # not the program's own data; this says nothing about it
-    # Escapes name pointer origins, not allocation bounds. An origin at
-    # offset N can reach fields at N+2 (or an adjusted pointer at N-2).
-    # Only an empty escape set for this segment proves disjointness;
-    # narrower claims require explicit byte-range exclusions above.
-    return not any(segment == owner for segment, _ in reaches)
+def _frame_bounded(body: MirBody) -> MirBody:
+    """Exclude this body's frame slots from every bounded effect.
 
-
-def _may_reach(one: "Space | None", other: "Space | None") -> bool:
-    """Whether a reference in one object could land in the other.
-
-    The kinds alone, for a pair where at least one cannot name its byte.
-    `module.may_alias` is the same question with the displacements known;
-    this is what is left when they are not.
+    Runs once the body is complete because the escape set is a fact about
+    the whole body, and the references that carry the bound are built while
+    it is still being assembled.
     """
-    if one is None or other is None:
-        return True
-    if one is other:
-        return True  # same object, unknown offsets
-    # The stack and the frame are one region reached two ways, so they
-    # alias each other and nothing else. Everything else is a different
-    # object entirely.
-    return {one, other} == {Space.STACK, Space.FRAME}
+    from qbopt.analysis import frameescape
 
+    # Only where no frame address escapes anywhere in the body at all.
+    # `frameescape` records pointer origins and not their extents, so one
+    # escaped local leaves every offset reachable and there is nothing
+    # narrower to say -- the same reason `beyond` accepts only an empty
+    # escape set as proof.
+    escapes = frameescape.analysed(body)
+    if escapes.exposed or escapes.opaque_addresses:
+        return body
 
-def _narrowed(calls: dict | None, at: int) -> bool:
-    """Whether this call's contract lets it be told what it cannot reach.
+    def bound(ref: MemRef) -> MemRef:
+        if ref.beyond is None:
+            return ref
+        return replace(ref, excludes=ref.excludes + (WHOLE_FRAME,))
 
-    Only a call, and only one whose writes are its own. A routine that
-    hands control back to the program -- B$EVCK polls for an event and may
-    run an event GOSUB -- writes whatever that code writes, and GCC's
-    modref gives up on an indirect call for the same reason.
-    """
-    from qbopt.abi import runtime
-
-    if calls is None or at not in calls:
-        return False
-    contract = runtime.contract(calls[at])
-    return contract.writes is not runtime.Memory.ANY and contract.reads is not runtime.Memory.ANY
+    blocks = []
+    for block in body.blocks:
+        ops = [
+            replace(op, loads=tuple(bound(one) for one in op.loads), stores=tuple(bound(one) for one in op.stores))
+            if any(one.beyond is not None for one in (*op.loads, *op.stores))
+            else op
+            for op in block.ops
+        ]
+        blocks.append(replace(block, ops=tuple(ops)))
+    return replace(body, blocks=tuple(blocks))
 
 
 def _unreached(found: Module) -> "tuple[int, frozenset] | None":
@@ -2140,9 +2195,17 @@ def _copied_word(arg, definitions):
     while isinstance(arg, Held) and arg.width == 2 and arg.value not in seen:
         seen.add(arg.value)
         copy = definitions.get(arg.value)
-        if (copy is None or copy.kind is not Kind.COPY or copy.loads or copy.stores or copy.barrier
-            or copy.results != (arg,) or len(copy.args) != 1
-            or not isinstance(copy.args[0], Held) or copy.args[0].width != arg.width):
+        if (
+            copy is None
+            or copy.kind is not Kind.COPY
+            or copy.loads
+            or copy.stores
+            or copy.barrier
+            or copy.results != (arg,)
+            or len(copy.args) != 1
+            or not isinstance(copy.args[0], Held)
+            or copy.args[0].width != arg.width
+        ):
             break
         arg = copy.args[0]
     return arg
@@ -2157,16 +2220,28 @@ def extracted_whole(high, low, definitions):
             return None
         if offset == 0 and original is not None:
             extension = definitions.get(original.value)
-            if (extension is not None and extension.kind is Kind.SIGN_EXTEND
+            if (
+                extension is not None
+                and extension.kind is Kind.SIGN_EXTEND
                 and len(extension.args) == 1
                 and _copied_word(extension.args[0], definitions) == arg
                 and extension.results == (original,)
-                and not extension.loads and not extension.stores and not extension.barrier):
+                and not extension.loads
+                and not extension.stores
+                and not extension.barrier
+            ):
                 return original
         op = definitions.get(arg.value)
-        if (op is None or op.kind is not Kind.EXTRACT or op.results != (arg,) or len(op.args) != 2
-            or not isinstance(op.args[0], Held) or op.args[0].width != 4
-            or not isinstance(op.args[1], Const) or op.args[1].n != offset):
+        if (
+            op is None
+            or op.kind is not Kind.EXTRACT
+            or op.results != (arg,)
+            or len(op.args) != 2
+            or not isinstance(op.args[0], Held)
+            or op.args[0].width != 4
+            or not isinstance(op.args[1], Const)
+            or op.args[1].n != offset
+        ):
             return None
         if original is not None and original != op.args[0]:
             return None
@@ -2175,8 +2250,12 @@ def extracted_whole(high, low, definitions):
 
 
 def bodies(
-    found: Module, blocks: list[Block], contracts: "dict[int, runtime.Contract] | None" = None,
-    *, basic_semantics: bool = False, bounds_checks: bool = False,
+    found: Module,
+    blocks: list[Block],
+    contracts: "dict[int, runtime.Contract] | None" = None,
+    *,
+    basic_semantics: bool = False,
+    bounds_checks: bool = False,
 ) -> list[tuple[str, MirBody]]:
     """Every body in the module, raised, labelled, and skipping what will not.
 
@@ -2191,17 +2270,32 @@ def bodies(
     if isinstance(result, str):
         return []
     nodes = {ir.span(node)[0]: node for body in result for node in body.nodes}
+    from qbopt.frontend import blocks as split
+
+    if not split.has_header(found):
+        from qbopt.frontend import raising_returns
+
+        nodes = {at: raising_returns.native(node) for at, node in nodes.items()}
     if contracts is None:
         # The module's own toolchain, which is where a per-family contract
         # is chosen and the only place a family is read at all.
         contracts = runtime.for_module(found)
+    from qbopt.frontend import raising_call_memory
+
+    spared = raising_call_memory.spared(found, result, contracts)
     out: list[tuple[str, MirBody]] = []
     for body in result:
         mine = [one for one in blocks if any(lo <= one.at < hi for lo, hi in body.body.ranges)]
         from qbopt.frontend import raising_control
+
         mine = raising_control.terminal_edges(mine, contracts)
         if not mine:
             continue
+        from qbopt.frontend import raising_carried
+
+        # In place: the lowering reads this same map, and must pin what the
+        # raise made an input.
+        contracts.update(raising_carried.carried(mine, nodes, found.calls, contracts))
         built = raise_body(
             mine,
             nodes,
@@ -2210,22 +2304,27 @@ def bodies(
             _sites(found, blocks),
             unreached,
             contracts,
+            spared,
         )
         if not isinstance(built, str):
             from qbopt.frontend import raising_frame
+
             built = raising_frame.annotated(built, found, mine, contracts)
             if not basic_semantics:
                 from qbopt.frontend import raising_numeric_policy
+
                 built = raising_numeric_policy.native(built)
+            from qbopt.frontend import raising_calls
             from qbopt.frontend import raising_arrays
             from qbopt.frontend import raising_division
-            from qbopt.frontend import raising_calls
 
             built = raising_division.scalar(built)
             built = raising_calls.arithmetic(built, found, mine, basic_semantics=basic_semantics)
             from qbopt.frontend import raising_bytes
+
             built = raising_bytes.scalar(built)
             from qbopt.frontend import raising_longs
+
             built = raising_longs.sign_fills(built)
             built = raising_longs.scalar(built)
             built = raising_longs.unary(built)
@@ -2233,34 +2332,53 @@ def bodies(
             built = raising_longs.scalar(built)
             built = raising_longs.arguments(built)
             from qbopt.frontend import raising_copies
+
             built = raising_copies.scalar(built, found)
             from qbopt.frontend import raising_conditions
+
             built = raising_conditions.loaded(built)
             defined = module.defines(found.records, found.seg)
             array_calls = {at: name for at, name in found.calls.items() if name not in defined}
             built = raising_arrays.annotated(built, array_calls, family=module.family(found.records))
             from qbopt.frontend import raising_array_access
+
             built = raising_array_access.native(built, found, bounds_checks=bounds_checks)
             from qbopt.frontend import raising_addresses
-            built = raising_addresses.loaded(built)
+
+            built = raising_addresses.loaded(built, contracts)
+            from qbopt.frontend import raising_defseg
+
+            built = raising_defseg.raised(built, found, contracts)
             from qbopt.frontend import raising_float_calls
+
             if not basic_semantics:
                 built = raising_float_calls.raised(built, found, contracts)
             from qbopt.frontend import raising_float_results
+
             if not basic_semantics:
                 built = raising_float_results.raised(built, found, contracts)
             built = raising_longs.arguments(built)
             from qbopt.frontend import raising_floats
+
             built = raising_longs.sign_fills(built)
             built = raising_floats.annotated(built)
+            if not basic_semantics:
+                built = raising_numeric_policy.checkpoints(built)
             from qbopt.frontend import raising_float_values
+
             built = raising_float_values.raised(built)
             from qbopt.frontend import raising_words
+
             built = raising_words.scalar(built)
             if body.body.kind == "main":
                 from qbopt.frontend import raising_literals
-                built = raising_literals.initialized(built, found)
+
+                built = raising_literals.initialized(built, found, contracts)
+            from qbopt.frontend import raising_dispatch
+
+            built = raising_dispatch.raised(built, found, mine)
             found.refs.update(_referenced(built, found))
+            built = _frame_bounded(built)
             held = {**_returned(built), **_folded(built, found, blocks)}
             if held:
                 built = replace(built, pins={**built.pins, **held})
@@ -2386,15 +2504,13 @@ def instruction(op: "Op") -> bool:
     lower.py directly is a MIR pass calling a machine one, which is the
     thing rule 5 forbids.
     """
-    if op.kind is Kind.PTR_OFFSET:
-        return True
-    if any(ref.pointer for ref in (*op.loads, *op.stores)):
-        return op.kind in (Kind.LOAD, Kind.STORE)
-    if op.floating_origin is not None:
-        return op.kind is not Kind.NOTHING
-    from qbopt.backend import lower
-
-    return lower.current(op) is not None
+    # The raise already answered this in MIR's own vocabulary. NOTHING is a
+    # marker with no instruction behind it; every other kind is an operation
+    # that either came from one or was deliberately introduced for lowering.
+    # Asking lower.current() here used machine encodability as identity and
+    # made a MIR pass fail on a perfectly explicit far-memory Cell before the
+    # backend had even been entered.
+    return op.kind is not Kind.NOTHING
 
 
 def rewritable(op: "Op") -> bool:

@@ -17,8 +17,8 @@ shrink by one. It is the interrupt: each of these traps into the emulator,
 which decodes the inline operand and does the arithmetic in software. On a
 machine with a 387 the same work is one instruction.
 
-The byte-only native() helper refuses int 3Ch: its segment depends on the
-runtime dialect. The module-aware frontend recovers VBDOS/FIDRQQ's verified
+The byte-only native() helper refuses int 3Ch: the override it stands for is
+not in the bytes it can see. The module-aware frontend recovers the emulator's
 ES override, so ordinary instruction selection can emit that native access.
 wrapped() also restores that known ES form when retaining emulator support.
 """
@@ -54,14 +54,26 @@ def wrapped(made: "Emitted", protocol: int) -> "Emitted | None":
             prefix, tail, shift = bytes([INTERRUPT, Stands.SEGMENTED]), code, 2
         else:
             return None
+    elif protocol in EMULATED and code[0] == 0x26 and len(code) > 1 and code[1] in ESC:
+        # A runtime conversion has no instruction-site protocol to preserve:
+        # raising_float_calls records an ordinary FIDRQQ entry merely to say
+        # that the runtime supplied emulation.  Selection can subsequently
+        # put its integer operand in a dynamic array, making the instruction
+        # ES-relative.  Open Watcom represents that override with the 3Ch
+        # prefix protocol followed by the real ESC opcode; trying to retain
+        # the placeholder 34h protocol refused Deedlines' `fild es:[bx]`.
+        prefix, tail, shift = bytes([INTERRUPT, Stands.SEGMENTED]), code[1:], 1
     elif protocol in EMULATED and code[0] in ESC:
         prefix, tail, shift = bytes([INTERRUPT, EMULATED.start + code[0] - ESC.start]), code[1:], 1
     else:
         return None
-    return replace(made, code=prefix + tail,
-                   displacement_at=None if made.displacement_at is None else made.displacement_at + shift,
-                   immediate_at=None if made.immediate_at is None else made.immediate_at + shift,
-                   fields=tuple(field + shift for field in made.fields))
+    return replace(
+        made,
+        code=prefix + tail,
+        displacement_at=None if made.displacement_at is None else made.displacement_at + shift,
+        immediate_at=None if made.immediate_at is None else made.immediate_at + shift,
+        fields=tuple(field + shift for field in made.fields),
+    )
 
 
 def emulated_at(code: bytes, at: int) -> bool:

@@ -40,13 +40,13 @@ from iced_x86 import FlowControl
 from iced_x86 import Instruction
 from iced_x86 import MemoryOperand
 
-from qbopt.frontend.declen import run
 from qbopt.analysis.flags import Flag
+from qbopt.frontend.declen import run
 from qbopt.frontend.declen import INFO
 from qbopt.frontend.declen import Insn
 from qbopt.objectfile.module import Addr
-from qbopt.objectfile.module import Space
 from qbopt.frontend.declen import BITNESS
+from qbopt.objectfile.module import Space
 from qbopt.analysis.flags import DIVERGENT
 from qbopt.frontend.declen import to_signed
 from qbopt.objectfile.module import far_pointer
@@ -234,11 +234,10 @@ def operand(insn: Insn, resolve: Resolver) -> Addr | None:
     no notion of a segment at all; now Addr carries one (Space.FAR's own
     `segment` field), so an override is resolved -- as a Space.FAR address,
     through the register that names it -- everywhere that field can hold a
-    real answer, and refused everywhere it cannot. Measured against
-    qb-qrender: every one of 11,150 segment-override instructions is `bx`
-    with no index, so that is the one shape resolved; a `ds:` prefix on a mode
+    real answer, and refused everywhere it cannot. Borland's r_walk also
+    loads floats through es:si and es:di; a `ds:` prefix on a mode
     that already defaults to ds (REDUNDANT_DS) is not an override to record at
-    all. Anything else -- an override on bp, or on a base other than bx --
+    all. Anything else -- an override on bp, or an indexed address --
     stays refused: there is nothing measured to say what it should resolve to,
     and refusing is always the safe answer. Also refuses a Space.GROUP address
     -- see that space's own comment in module.py.
@@ -247,21 +246,26 @@ def operand(insn: Insn, resolve: Resolver) -> Addr | None:
         return None
     override = insn.segment_override
     if override != Register.NONE and override != Register.DS:
-        if insn.memory_base != Register.BX:
+        if insn.memory_base not in (Register.BX, Register.SI, Register.DI):
             return None
-        return far_pointer(insn.displacement, Register.BX, override)
+        if insn.disp_at is not None:
+            resolved = resolve(insn.disp_at, insn.insn.memory_displacement)
+            if resolved.space is Space.GROUP:
+                return None
+            if resolved.space in (Space.SEGMENT, Space.EXTERNAL):
+                return replace(resolved, base=insn.memory_base, segment=override)
+        return far_pointer(insn.displacement, insn.memory_base, override)
     if override == Register.DS and insn.memory_base not in REDUNDANT_DS:
         return None
     if insn.disp_at is None:
-        return (Addr(Space.LITERAL, 0, base=insn.memory_base)
-                if insn.memory_base in (Register.SI, Register.DI) else None)
+        return Addr(Space.LITERAL, 0, base=insn.memory_base) if insn.memory_base in (Register.SI, Register.DI) else None
     match insn.memory_base:
         case Register.NONE:
             resolved = resolve(insn.disp_at, insn.insn.memory_displacement)
             return None if resolved.space is Space.GROUP else resolved
         case Register.BP:
             return frame_relative(insn.displacement)
-        case Register.SI | Register.DI:
+        case Register.BX | Register.SI | Register.DI:
             resolved = resolve(insn.disp_at, insn.insn.memory_displacement)
             return None if resolved.space is Space.GROUP else replace(resolved, base=insn.memory_base)
         case _:
@@ -833,7 +837,7 @@ WIDE_IMM32 = {
 }
 
 
-def relocated_memory(base: Register_) -> MemoryOperand:
+def relocated_memory(base: Register_, segment: Register_ = Register.NONE) -> MemoryOperand:
     """A relocated address, always emitted as zero.
 
     LINK adds what is in the code to the fixup's target, so anything else
@@ -843,14 +847,14 @@ def relocated_memory(base: Register_) -> MemoryOperand:
     base, never optimised away to a bare displacement, which would silently
     mean a different element.
     """
-    return MemoryOperand(base=base, displ=0, displ_size=2)
+    return MemoryOperand(base=base, displ=0, displ_size=2, seg=segment)
 
 
 def memory(value: Value) -> MemoryOperand:
     """The operand as the widened instruction has to carry it."""
     match value.mem:
-        case Addr(space=Space.SEGMENT, base=base):
-            return relocated_memory(base)
+        case Addr(space=Space.SEGMENT, base=base, segment=segment):
+            return relocated_memory(base, segment)
         case Addr(space=Space.FRAME, disp=disp):
             return MemoryOperand(base=Register.BP, displ=disp, displ_size=value.dlen or 1)
         case Addr(space=Space.FAR, base=base, disp=disp, segment=segment):

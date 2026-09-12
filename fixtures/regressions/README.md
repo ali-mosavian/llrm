@@ -355,3 +355,10 @@ jle loop
 QB/PDS modeled cost **380 → 360**, VBDOS **368 → 348**; all objects shrink
 three bytes. All three linked outputs remain 28 and DONE. This is a backend
 operand-selection change: MIR's arithmetic and value identities are unchanged.
+
+`qbdemo-fil2.obj` is BC's object for qbdemo. It is the only object that has
+both the `FIDRQQ` emulator symbol and a read of the `dx` that `B$FIL2` leaves
+behind, so it is the one that exercises raising those calls: `B$FIL2` is a
+`cwd` falling into `B$FILD`, and its `dx` is the sign of the word it was
+handed rather than an unknown. 18 of its 31 `B$FIL2` calls were kept as calls
+for that read; the regression fails with the fix disabled.

@@ -34,8 +34,8 @@ from iced_x86 import RepPrefixKind
 
 from qbopt.model import ir
 from qbopt.backend import target
-from qbopt.objectfile.module import Space
 from qbopt.frontend.declen import BITNESS
+from qbopt.objectfile.module import Space
 
 # The 32-bit roots this can name, and their 16-bit halves.
 # The six mir.py tracks, plus bp and sp. Those two are not values -- they
@@ -128,13 +128,7 @@ def _assemble(made: Instruction, at: int, symbolic: bool = True) -> Emitted | No
     # own displacement. An array element is symbolic and keeps its fixup
     # though it is reached through si.
     absolute = offsets.has_displacement and symbolic
-    where = (
-        offsets.displacement_offset
-        if absolute
-        else offsets.immediate_offset
-        if offsets.has_immediate
-        else None
-    )
+    where = offsets.displacement_offset if absolute else offsets.immediate_offset if offsets.has_immediate else None
     return Emitted(
         code,
         offsets.displacement_offset if offsets.has_displacement else None,
@@ -197,7 +191,7 @@ def operand_of(what: ir.Mem) -> tuple[MemoryOperand, bool] | None:
             # `through` is where it went -- encoding BC's own register then
             # reads element zero through whatever si happens to hold.
             base = what.through if what.base is not None else addr.base
-            return MemoryOperand(base=base, displ=0, displ_size=2), True
+            return MemoryOperand(base=base, displ=0, displ_size=2, seg=addr.segment), True
         case Space.FRAME if addr.base == Register.NONE:
             return (
                 MemoryOperand(
@@ -363,7 +357,7 @@ def _operand(one: ir.Loc, where: dict[Register_, Register_] | None, held: dict |
 
 
 def _immediate(value: int, width: int) -> int:
-    return ((value & 0xffffffff) ^ 0x80000000) - 0x80000000 if width == 4 else value
+    return ((value & 0xFFFFFFFF) ^ 0x80000000) - 0x80000000 if width == 4 else value
 
 
 def load(into: Register_, value: int, at: int = 0) -> Emitted | None:
@@ -579,12 +573,14 @@ def move_into(cell: ir.Mem, outof: Register_, at: int = 0) -> Emitted | None:
 def store_imm(cell: ir.Mem, value: int, at: int = 0) -> Emitted | None:
     """`mov [cell], imm`, at the cell's own width.
 
-    The width is the cell's and not the value's: `mov word ptr [x],0` and
-    `mov dword ptr [x],0` write two bytes and four, and the immediate says
-    nothing about which was meant.
+    The width is the cell's and not the value's: `mov byte ptr [x],0`,
+    `mov word ptr [x],0` and `mov dword ptr [x],0` write one, two and four
+    bytes, and the immediate says nothing about which was meant. Deedlines'
+    COPPER procedure stores a folded zero into `es:[si]`; excluding the byte
+    form here left an ordinary x86 instruction unselectable at 0x32e0.
     """
     built = operand_of(cell)
-    if built is None or cell.width not in (2, 4):
+    if built is None or cell.width not in (1, 2, 4):
         return None
     code = _code(f"MOV_RM{cell.width * 8}_IMM{cell.width * 8}")
     if code is None:
@@ -734,6 +730,23 @@ def ret_far(popped: int, at: int = 0) -> Emitted | None:
         return None
     made = Instruction.create_i32(code, popped) if popped else Instruction.create(code)
     return _assemble(made, at)
+
+
+def test_immediate(dest: ir.Loc, value: int, at: int = 0) -> Emitted | None:
+    if not isinstance(dest, (ir.Reg, ir.Mem)) or dest.width not in (1, 2, 4):
+        return None
+    code = _code(f"TEST_RM{dest.width * 8}_IMM{dest.width * 8}")
+    if code is None:
+        return None
+    value = _immediate(value, dest.width)
+    match dest:
+        case ir.Reg(register=register):
+            return _assemble(Instruction.create_reg_i32(code, register, value), at)
+        case ir.Mem() as cell:
+            built = operand_of(cell)
+            if built is not None:
+                return _assemble(Instruction.create_mem_i32(code, built[0], value), at, built[1])
+    return None
 
 
 def compare(dest: ir.Loc, value: int, at: int = 0, relocated: bool = False) -> Emitted | None:
@@ -1047,7 +1060,14 @@ def compare_mem(dest: Register_, cell: ir.Mem, at: int = 0) -> Emitted | None:
 # The segment registers, which are not values -- mir.PHYSICAL keeps them
 # out -- and which an instruction still names. BC pushes cs to build a far
 # return address.
-SEGMENTS = {Register.CS: "CS", Register.DS: "DS", Register.ES: "ES", Register.SS: "SS"}
+SEGMENTS = {
+    Register.CS: "CS",
+    Register.DS: "DS",
+    Register.ES: "ES",
+    Register.SS: "SS",
+    Register.FS: "FS",
+    Register.GS: "GS",
+}
 
 
 def push_segment(one: Register_, width: int = 2, at: int = 0) -> Emitted | None:
@@ -1127,7 +1147,11 @@ def shift(name: str, dest: Register_ | ir.Mem, count: int | None, at: int = 0) -
         code = _code(f"{name.upper()}_RM{width * 8}_CL")
         if code is None:
             return None
-        instruction = Instruction.create_mem_reg(code, built[0], Register.CL) if memory else Instruction.create_reg_reg(code, dest, Register.CL)
+        instruction = (
+            Instruction.create_mem_reg(code, built[0], Register.CL)
+            if memory
+            else Instruction.create_reg_reg(code, dest, Register.CL)
+        )
         return _assemble(instruction, at, built[1] if memory else False)
     # `shl reg,1` has its own opcode, a byte shorter than the immediate form
     # and what BC writes for a doubling. iced models the implicit 1 as a real
@@ -1140,7 +1164,11 @@ def shift(name: str, dest: Register_ | ir.Mem, count: int | None, at: int = 0) -
         code = _code(shape)
         if code is None:
             continue
-        instruction = Instruction.create_mem_i32(code, built[0], count) if memory else Instruction.create_reg_i32(code, dest, count)
+        instruction = (
+            Instruction.create_mem_i32(code, built[0], count)
+            if memory
+            else Instruction.create_reg_i32(code, dest, count)
+        )
         made = _assemble(instruction, at, built[1] if memory else False)
         if made is not None:
             return made
@@ -1174,8 +1202,11 @@ def float_pop(name: str, index: int, at: int = 0) -> Emitted | None:
 
 def float_stack(what: ir.Semantics, at: int = 0) -> Emitted | None:
     """Select explicit stack operands without changing their evaluation order."""
-    if any(not 0 <= operand.index < len(STACK_REGISTERS)
-           for operand in (*what.dests, *what.sources) if isinstance(operand, ir.St)):
+    if any(
+        not 0 <= operand.index < len(STACK_REGISTERS)
+        for operand in (*what.dests, *what.sources)
+        if isinstance(operand, ir.St)
+    ):
         return None
     match what.op, what.name, what.dests, what.sources:
         case ir.Operation.FLOAT_LOAD, "fld", (ir.St(index=0),), (ir.St(index=index),):
@@ -1187,8 +1218,11 @@ def float_stack(what: ir.Semantics, at: int = 0) -> Emitted | None:
                 return None
             form = "ST0_STI" if dest == 0 else "STI_ST0"
             code = _code(f"{name.upper()}_{form}")
-            return None if code is None else _assemble(Instruction.create_reg_reg(
-                code, STACK_REGISTERS[dest], STACK_REGISTERS[source]), at)
+            return (
+                None
+                if code is None
+                else _assemble(Instruction.create_reg_reg(code, STACK_REGISTERS[dest], STACK_REGISTERS[source]), at)
+            )
     return None
 
 
@@ -1240,7 +1274,11 @@ def multiply_into(dest: Register_, source: Register_ | ir.Mem, value: int | None
             return None if code is None else _assemble(Instruction.create_reg_mem(code, dest, built[0]), at, built[1])
         bits = 8 if fits_in_a_byte(value) else width * 8
         code = _code(f"IMUL_R{width * 8}_RM{width * 8}_IMM{bits}")
-        return None if code is None else _assemble(Instruction.create_reg_mem_i32(code, dest, built[0], value), at, built[1])
+        return (
+            None
+            if code is None
+            else _assemble(Instruction.create_reg_mem_i32(code, dest, built[0], value), at, built[1])
+        )
     if WIDTHS.get(source) != width:
         return None
     if value is None:
@@ -1257,6 +1295,11 @@ def move_segment(into: Register_, outof: Register_ | ir.Mem, at: int = 0) -> Emi
     A segment register is not a value mir.py tracks, and it is still where a
     $DYNAMIC array's base lives: qb-qrender does this 614 times.
     """
+    if into in SEGMENTS and not isinstance(outof, ir.Mem) and outof in SEGMENTS:
+        # No `mov sreg,sreg`: through the stack, which writes no flags.
+        pushed = push_segment(outof, 2, at)
+        popped = None if pushed is None else pop_segment(into, 2, at + len(pushed.code))
+        return None if popped is None else Emitted(pushed.code + popped.code)
     if into in SEGMENTS:
         code = _code("MOV_SREG_RM16")
         if code is None:
@@ -1269,6 +1312,41 @@ def move_segment(into: Register_, outof: Register_ | ir.Mem, at: int = 0) -> Emi
     if code is None or not isinstance(outof, Register_ | int) or outof not in SEGMENTS:
         return None
     return _assemble(Instruction.create_reg_reg(code, into, outof), at)
+
+
+# `pop cs` is 8086-only -- 80286 and later fault on it -- so cs is not here
+# and a constant into cs has no form at all.
+_POP_SEGMENT = {
+    Register.DS: "POPW_DS",
+    Register.ES: "POPW_ES",
+    Register.SS: "POPW_SS",
+    Register.FS: "POPW_FS",
+    Register.GS: "POPW_GS",
+}
+
+
+def load_segment(into: Register_, value: int, at: int = 0) -> Emitted | None:
+    """`push 0A000h / pop es` -- a constant into a segment register.
+
+    There is no `mov sreg,imm`: a segment register loads only from r/m16.
+    The other form is `mov r,imm / mov sreg,r`, which needs a scratch
+    register, and selection runs after allocation with none to borrow.
+    This needs none, is a byte shorter, and writes no flags.
+    """
+    named = _POP_SEGMENT.get(into)
+    push = _code("PUSH_IMM16")
+    if named is None or push is None:
+        return None
+    pop = _code(named)
+    if pop is None:
+        return None
+    out = bytearray()
+    for made in (Instruction.create_u32(push, value & 0xFFFF), Instruction.create_reg(pop, into)):
+        got = _assemble(made, at + len(out))
+        if got is None:
+            return None
+        out += got.code
+    return Emitted(bytes(out))
 
 
 def store_segment(cell: ir.Mem, outof: Register_, at: int = 0) -> Emitted | None:
@@ -1328,8 +1406,7 @@ def exchange_mem(register: Register_, cell: ir.Mem, at: int = 0) -> Emitted | No
     if width not in (1, 2, 4) or cell.width != width or built is None:
         return None
     code = _code(f"XCHG_RM{width * 8}_R{width * 8}")
-    return None if code is None else _assemble(
-        Instruction.create_mem_reg(code, built[0], register), at, built[1])
+    return None if code is None else _assemble(Instruction.create_mem_reg(code, built[0], register), at, built[1])
 
 
 def unary_mem(name: str, cell: ir.Mem, at: int = 0) -> Emitted | None:
@@ -1391,8 +1468,11 @@ def emit(
         return None
 
     dests, sources = what.dests, what.sources
-    if (what.op in (ir.Operation.FLOAT_LOAD, ir.Operation.FLOAT_ARITH, ir.Operation.EXCHANGE)
-        and sources and all(isinstance(operand, ir.St) for operand in (*dests, *sources))):
+    if (
+        what.op in (ir.Operation.FLOAT_LOAD, ir.Operation.FLOAT_ARITH, ir.Operation.EXCHANGE)
+        and sources
+        and all(isinstance(operand, ir.St) for operand in (*dests, *sources))
+    ):
         return float_stack(what, at)
     match what.op:
         case ir.Operation.EXTEND if what.name == "movsx" and len(dests) == len(sources) == 1:
@@ -1410,6 +1490,10 @@ def emit(
                     return store_segment(cell, outof, at)
                 case (ir.Reg(register=into), ir.Reg(register=outof)) if into in SEGMENTS or outof in SEGMENTS:
                     return move_segment(into, outof, at)
+                # Before the plain immediate load, which would build the
+                # `mov sreg,imm` the machine has no encoding for.
+                case (ir.Reg(register=into), ir.Imm(value=value)) if into in SEGMENTS:
+                    return load_segment(into, value, at)
                 case (ir.Reg(register=into), ir.Reg(register=outof)):
                     return move(into, outof, at)
                 case (ir.Reg(register=into), ir.Imm(value=value)):
@@ -1477,6 +1561,8 @@ def emit(
             return call_far(at) if what.target is None else call_near(what.target, at)
         case ir.Operation.ESCAPE if what.target is None:
             return jump_far(at)
+        case ir.Operation.FLOAT_LOAD if what.name in ("fldz", "fld1") and not sources and dests == (ir.St(0),):
+            return _assemble(Instruction.create(Code.FLDZ if what.name == "fldz" else Code.FLD1), at)
         case ir.Operation.FLOAT_LOAD | ir.Operation.FLOAT_ARITH if sources:
             match sources[-1]:
                 case ir.Mem() as cell:
@@ -1493,6 +1579,8 @@ def emit(
                     return exchange_mem(one, cell, at)
         case ir.Operation.COMPARE if len(sources) == 2:
             match (sources[0], sources[1]):
+                case (_, ir.Imm(value=value)) if what.name == "test":
+                    return test_immediate(sources[0], value, at)
                 case (_, ir.Imm(value=value)) if (what.name or "cmp") == "cmp":
                     return compare(sources[0], value, at, relocated)
                 case (ir.Reg(register=into), ir.Mem() as cell) if (what.name or "cmp") == "cmp":
@@ -1516,7 +1604,14 @@ def emit(
                 case (ir.Reg(register=into), ir.Mem() as cell):
                     return multiply_into(into, cell, count, at)
                 case (ir.Reg(register=into), ir.Imm(value=only)):
-                    return multiply_into(into, into, only, at)
+                    # The product of the first source, which is the
+                    # destination only when something tied it there:
+                    # `imul cx,[bp-0Eh],2` is not `imul cx,2`.
+                    match sources[0]:
+                        case ir.Reg(register=one):
+                            return multiply_into(into, one, only, at)
+                        case ir.Mem() as cell:
+                            return multiply_into(into, cell, only, at)
         case ir.Operation.MULTIPLY if len(dests) == 2 and sources:
             # Two destinations means the widening form: dx:ax, neither
             # encoded. The three-operand `imul r,rm,imm` has one.

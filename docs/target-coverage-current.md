@@ -1,5 +1,33 @@
 # Current target coverage
 
+## Native-FPU PDS refresh — 2026-09-11
+
+Current worktree, 29 target-bearing ordinary PDS `/G2` fixtures, rewritten
+with `native_fpu=True` and scored directly from emitted objects (`--raw`).
+All 29 have the finalized LIR marker; 28 are comparable and within 1.5x.
+FPCSEX remains provisional. HG and FX still lack matching inputs in this
+selection. This is not an all-compiler scan or runtime correctness gate.
+
+| Program | Prior saved native build | Current cost | Target | Current ratio |
+|---|---:|---:|---:|---:|
+| JUMPS | 1264 | 1058 | 742 | 1.43x |
+| FPDEEP | 1771 | 1771 | 1317, now verified for plain PDS | 1.34x |
+| IVCHAN | 756 | 756 | 560 | 1.35x |
+| NESTED | 1030 | 1030 | 768 | 1.34x |
+| HARR | 2048 | 2048 | 1834 | 1.12x |
+| FPCSEX | 4456 | 4456 | Provisional | — |
+
+Only JUMPS differs byte-for-byte from the previous saved native objects;
+the other 28 are identical. In particular, the LCSSA exit-evaluation fix
+does not change this selection's final output. JUMPS's range-proven dispatch
+change is shown in [switches.md](switches.md); FPDEEP's new denominator is
+an executed JWasm reference, not an optimizer speedup.
+
+Previous artifacts: `/tmp/qbopt-native-targets.Xr96r6`.
+Current objects, measurement script and all 29 rows:
+`/tmp/qbopt-target-refresh.jC2U3t`.
+The older figures below retain their original compiler/configuration scope.
+
 ## Latest focused check
 
 Signed-store follow-up: NBODY now costs **351822**, down from 352122
@@ -278,6 +306,26 @@ configurations with existing plain targets also need event-preserving
 references; their plain-program denominator is not comparable.
 
 ## Next work
+
+FPCSEX now has an executable JWasm candidate in `tools/references/fpcsex.asm`.
+The PDS-linked original and candidate both print `S= 487.5` and `DONE`;
+their output files match byte-for-byte. Both additions, all SINGLE conversions
+and checkpoints remain. This is initial runtime evidence only: varied inputs,
+floating-environment behavior and independent cost auditing are still required,
+so the denominator remains provisional. See `tools/references/README.md`.
+The 144-case arithmetic/environment comparison matched in DOSBox-X, but its
+rounding/exception sanity checks failed. That run is rejected as evidence for
+floating-environment equivalence; it does not make the target valid.
+The same kernels pass all 144 comparisons under QEMU 10.2.0 TCG, including
+directed-rounding and exception-status sanity checks. This establishes the
+tested masked-exception cases. Unmasked traps and the independent cost/quality
+audit remain outstanding; the candidate is not yet the denominator.
+The unmasked extension exposed a candidate bug: q was written before an
+invalid-division trap. Restoring the original WAIT/ESC synchronization fixes
+it; all 216 masked/unmasked cases now match, with a fail-first runtime
+regression. The candidate's hand-audited model cost is 5158, agreeing with the
+scorer. This conservative listing is not proven optimal and has stricter wait
+placement than current native output, so it remains outside the denominator.
 
 1. Derive and validate strict FPCSEX and complete FPDEEP reference listings;
    retain source-order rounding, pending exceptions and observable stores.

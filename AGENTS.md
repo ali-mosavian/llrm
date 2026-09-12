@@ -96,6 +96,33 @@ are broken today with a name against each.
   separate things and was worked around five times before anyone asked why
   MIR was carrying 16-bit halves at all.
 
+## The general mechanism — the sixth rule
+
+**Only general solutions. Never an edge-case patch.** A fix that names one
+combination -- one pair of `Space` values, one runtime routine, one demo --
+is a symptom of the mechanism being wrong, not a fix for it.
+
+The alias model is what this rule is made of. It grew one hand-written arm
+per category pair -- `(FRAME, SEGMENT)`, `(STACK, _)`, `(FRAME, EXTERNAL)` --
+so every combination nobody had written yet was a bug waiting, and `MemRef`
+ended up carrying five partial spellings of one idea: `allocation`, `beyond`,
+`excludes`, `space`, `frame_bounded`. Each arrived as a reasonable local fix.
+Together they are why a constant could not reach the segment of the store
+that needed it, and they cost more than the mechanism would have.
+
+- **Name the general rule the fix is an instance of, before writing it.**
+  If there is no such rule, the work is to build it. Say so and cost it out
+  rather than adding the arm.
+- **Prefer collapsing special cases to adding one.** Five partial answers to
+  the same question are worse than one whole answer, however reasonable each
+  was on the day.
+- **Deleting code is the evidence.** A refactor that removes
+  `_allocation_disjoint` or `optimize/segments.py` landed the general form.
+  One that only adds did not.
+- **An assumption gets stated once, by name.** Locals-vs-globals is sound and
+  load-bearing; what makes it safe is that it is written down in one place
+  with its justification, not spread implicitly across a dozen match arms.
+
 A post-compilation pass over the `.OBJ` BC produces, between BC and LINK.
 Most of what is here was established the hard way by a runtime version of the
 same idea that still lives in uGL. What survived the move is below.

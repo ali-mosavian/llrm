@@ -98,6 +98,7 @@ def launch(
     timeout: int = 300,
     conf: str = FAST,
     env: dict[str, str] | None = None,
+    visible: bool = False,
 ) -> Run:
     binary = dosbox_bin()
     if binary is None:
@@ -125,7 +126,7 @@ def launch(
         [binary, "-nolog", "-exit", "-conf", str(workdir / "dosbox.conf")],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        env={**os.environ, "SDL_VIDEODRIVER": "dummy"},
+        env=os.environ if visible else {**os.environ, "SDL_VIDEODRIVER": "dummy"},
     )
     timed_out = False
     try:

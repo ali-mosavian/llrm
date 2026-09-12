@@ -2,10 +2,10 @@ from pathlib import Path
 from dataclasses import replace
 
 import pytest
-
 from iced_x86 import Register
 
-from qbopt.model import ir, lir
+from qbopt.model import ir
+from qbopt.model import lir
 from qbopt.backend import peephole
 
 
@@ -13,6 +13,7 @@ from qbopt.backend import peephole
 def test_screen_argument_reuses_its_required_register_constant(width, register, value):
     """SCREEN's duplicate PUSH 1/MOV AX,1 contributed to E1M1 exhausting its far heap."""
     from qbopt.backend import select
+
     operand = ir.Imm(value, width)
     dest = ir.Reg(register, width)
     push = lir.Insn(0, (0, 1), ir.Semantics(ir.Operation.PUSH, "push", (), (operand,)), (), ())
@@ -21,28 +22,46 @@ def test_screen_argument_reuses_its_required_register_constant(width, register, 
     result = peephole.Peephole().transform(body)
     expected = (move.what, replace(push.what, sources=(dest,)))
     assert b"".join(select.emit(one.what).code for one in result.insns) == b"".join(
-        select.emit(what).code for what in expected)
+        select.emit(what).code for what in expected
+    )
     assert result.insns[0].defines == (7,)
     assert result.insns[1].uses == (7,)
 
 
-@pytest.mark.parametrize("barrier", ["different", "width", "stack", "frame", "relocation",
-                                     "covered", "gap", "group", "symbol", "clobber", "requires", "block"])
+@pytest.mark.parametrize(
+    "barrier",
+    [
+        "different",
+        "width",
+        "stack",
+        "frame",
+        "relocation",
+        "covered",
+        "gap",
+        "group",
+        "symbol",
+        "clobber",
+        "requires",
+        "block",
+    ],
+)
 def test_argument_materialization_does_not_cross_observable_boundaries(barrier):
     """SCREEN's stack argument must not change when its register setup cannot move before it."""
-    from qbopt.objectfile.module import Addr, Space
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
     literal = ir.Imm(1, 2)
     push = lir.Insn(0, (0, 1), ir.Semantics(ir.Operation.PUSH, "push", (), (literal,)), (), ())
-    move = lir.Insn(1, (1, 1), ir.Semantics(ir.Operation.MOVE, "mov",
-                    (ir.Reg(Register.AX, 2),), (literal,)), (7,), ())
+    move = lir.Insn(1, (1, 1), ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.AX, 2),), (literal,)), (7,), ())
     match barrier:
         case "different":
             move = replace(move, what=replace(move.what, sources=(ir.Imm(2, 2),)))
         case "width":
             move = replace(move, what=replace(move.what, dests=(ir.Reg(Register.EAX, 4),)))
         case "stack" | "frame":
-            move = replace(move, what=replace(move.what, dests=(ir.Reg(
-                Register.SP if barrier == "stack" else Register.BP, 2),)))
+            move = replace(
+                move, what=replace(move.what, dests=(ir.Reg(Register.SP if barrier == "stack" else Register.BP, 2),))
+            )
         case "relocation":
             symbol = replace(literal, address=Addr(Space.SEGMENT, 0, 1))
             push = replace(push, what=replace(push.what, sources=(symbol,)))
@@ -59,8 +78,11 @@ def test_argument_materialization_does_not_cross_observable_boundaries(barrier):
             push = replace(push, clobbers=frozenset({Register.AX}))
         case "requires":
             push = replace(push, requires=((ir.Held(5, 2), Register.AX),))
-    blocks = ((lir.LirBlock(0, (push,), (1,)), lir.LirBlock(1, (move,)))
-              if barrier == "block" else (lir.LirBlock(0, (push, move)),))
+    blocks = (
+        (lir.LirBlock(0, (push,), (1,)), lir.LirBlock(1, (move,)))
+        if barrier == "block"
+        else (lir.LirBlock(0, (push, move)),)
+    )
     body = lir.LirBody("screen", 0, blocks, {}, {})
     assert peephole.pushed_constants(body) == body
 
@@ -68,28 +90,51 @@ def test_argument_materialization_does_not_cross_observable_boundaries(barrier):
 def test_nbody_does_not_reload_unchanged_array_index():
     """NBODY reloaded SI from its index spill at 0x23a after already loading it at 0x22a."""
     from qbopt import wholeseg
+
     states = []
+
     def watch(stage, name, body):
         if stage == "peephole" and body.entry == 0x30:
             states.append(body)
+
     result = wholeseg.emitted(Path("fixtures/bench/nbody-v-g3.obj").read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
-    assert not any(one.at == 0x23a and one.spill_reload for one in states[0].insns)
+    assert not any(one.at == 0x23A and one.spill_reload for one in states[0].insns)
 
 
 @pytest.mark.parametrize("change", ["other", "partial", "frame", "segment", "store", "call", "unknown", "unowned"])
 def test_repeated_spill_reload_requires_unchanged_register_and_memory(change):
     """NBODY's saved index may be reused only while its slot, base and register remain intact."""
-    from qbopt.objectfile.module import Addr, Space
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
     register = ir.Reg(Register.EAX, 4)
     cell = ir.Mem(Addr(Space.FRAME, -4), 4, through=Register.BP)
-    load = lir.Insn(0, (0, 0), ir.Semantics(ir.Operation.MOVE, "mov", (register,), (cell,)), (), (),
-                    spill_reload=change != "unowned")
-    dest = {"partial": ir.Reg(Register.AH, 1), "frame": ir.Reg(Register.BP, 2),
-            "segment": ir.Reg(Register.SS, 2), "store": cell}.get(change, ir.Reg(Register.ECX, 4))
-    middle = replace(load, at=1, what=ir.Semantics(ir.Operation.MOVE, "mov", (dest,),
-                                                (ir.Reg(Register.DX, 2) if change == "segment"
-                                                 else ir.Imm(1, dest.width),)), spill_reload=False)
+    load = lir.Insn(
+        0,
+        (0, 0),
+        ir.Semantics(ir.Operation.MOVE, "mov", (register,), (cell,)),
+        (),
+        (),
+        spill_reload=change != "unowned",
+    )
+    dest = {
+        "partial": ir.Reg(Register.AH, 1),
+        "frame": ir.Reg(Register.BP, 2),
+        "segment": ir.Reg(Register.SS, 2),
+        "store": cell,
+    }.get(change, ir.Reg(Register.ECX, 4))
+    middle = replace(
+        load,
+        at=1,
+        what=ir.Semantics(
+            ir.Operation.MOVE,
+            "mov",
+            (dest,),
+            (ir.Reg(Register.DX, 2) if change == "segment" else ir.Imm(1, dest.width),),
+        ),
+        spill_reload=False,
+    )
     if change in {"call", "unknown"}:
         middle = replace(middle, what=None, clobbers=frozenset({Register.EAX}) if change == "call" else frozenset())
     last = replace(load, at=2)
@@ -100,11 +145,12 @@ def test_repeated_spill_reload_requires_unchanged_register_and_memory(change):
 
 def test_reload_of_frame_base_cannot_prove_the_next_address_identical():
     """Loading BP changes the address of a following [BP-4], even with identical operands."""
-    from qbopt.objectfile.module import Addr, Space
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
     register = ir.Reg(Register.BP, 2)
     cell = ir.Mem(Addr(Space.FRAME, -4), 2, through=Register.BP)
-    load = lir.Insn(0, (0, 0), ir.Semantics(ir.Operation.MOVE, "mov", (register,), (cell,)), (), (),
-                    spill_reload=True)
+    load = lir.Insn(0, (0, 0), ir.Semantics(ir.Operation.MOVE, "mov", (register,), (cell,)), (), (), spill_reload=True)
     body = lir.LirBody("base", 0, (lir.LirBlock(0, (load, replace(load, at=1)), ()),), {}, {})
     assert sum(one.spill_reload for one in peephole.reloads(body).insns) == 2
 
@@ -112,22 +158,30 @@ def test_reload_of_frame_base_cannot_prove_the_next_address_identical():
 def test_nbody_header_uses_the_register_both_predecessors_just_stored():
     """NBODY reloaded its spilled counter immediately after both paths stored the same register."""
     from qbopt import wholeseg
+
     states = []
+
     def watch(stage, name, body):
         if stage == "peephole" and body.entry == 0x30:
             states.append(body)
+
     result = wholeseg.emitted(Path("fixtures/bench/nbody-v-g3.obj").read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
-    header = next(block for block in states[0].blocks if block.at == 0x2f0)
-    assert not any(one.spill_reload and one.what.dests == (ir.Reg(Register.EAX, 4),)
-                   for one in header.insns if one.what is not None)
+    header = next(block for block in states[0].blocks if block.at == 0x2F0)
+    assert not any(
+        one.spill_reload and one.what.dests == (ir.Reg(Register.EAX, 4),)
+        for one in header.insns
+        if one.what is not None
+    )
 
 
 @pytest.mark.parametrize("mismatch", ["none", "register", "slot", "width", "clobber", "missing", "unowned", "entry"])
 def test_entry_reload_requires_agreement_on_every_edge(mismatch):
     """NBODY's header reload is redundant only when all paths carry the exact stored bits."""
     from qbopt.backend import spillforward
-    from qbopt.objectfile.module import Addr, Space
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
     register = ir.Reg(Register.EAX, 4)
     cell = ir.Mem(Addr(Space.FRAME, -4), 4, through=Register.BP)
     store = lir.Insn(1, (1, 1), ir.Semantics(ir.Operation.MOVE, "mov", (cell,), (register,)), (), ())
@@ -143,11 +197,26 @@ def test_entry_reload_requires_agreement_on_every_edge(mismatch):
             other = replace(store, clobbers=frozenset({Register.EAX}))
         case "missing":
             other = replace(store, what=None)
-    reload = lir.Insn(3, (3, 3), ir.Semantics(ir.Operation.MOVE, "mov", (register,), (cell,)), (), (),
-                      spill_reload=mismatch != "unowned")
-    body = lir.LirBody("join", 3 if mismatch == "entry" else 0, (
-        lir.LirBlock(0, (), (1, 2)), lir.LirBlock(1, (store,), (3,)),
-        lir.LirBlock(2, (other,), (3,)), lir.LirBlock(3, (reload,), ())), {}, {})
+    reload = lir.Insn(
+        3,
+        (3, 3),
+        ir.Semantics(ir.Operation.MOVE, "mov", (register,), (cell,)),
+        (),
+        (),
+        spill_reload=mismatch != "unowned",
+    )
+    body = lir.LirBody(
+        "join",
+        3 if mismatch == "entry" else 0,
+        (
+            lir.LirBlock(0, (), (1, 2)),
+            lir.LirBlock(1, (store,), (3,)),
+            lir.LirBlock(2, (other,), (3,)),
+            lir.LirBlock(3, (reload,), ()),
+        ),
+        {},
+        {},
+    )
     done = spillforward.forwarded(body)
     assert any(one.spill_reload or one.what == reload.what for one in done.blocks[-1].insns) == (mismatch != "none")
 
@@ -156,11 +225,14 @@ def test_nbody_accumulator_does_not_copy_its_addend_over_its_running_sum():
     """NBODY copied ECX to ESI and EAX to ECX before ADD ECX,ESI on every force pair."""
     import corpus
     from qbopt import wholeseg
+
     result = wholeseg.emitted(Path("fixtures/bench/nbody-v-g3.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
-    assert not any(instructions[index:index + 3] == ["mov esi,ecx", "mov ecx,eax", "add ecx,esi"]
-                   for index in range(len(instructions) - 2))
+    assert not any(
+        instructions[index : index + 3] == ["mov esi,ecx", "mov ecx,eax", "add ecx,esi"]
+        for index in range(len(instructions) - 2)
+    )
 
 
 @pytest.mark.parametrize("name", ["add", "and", "or", "xor", "sub", "adc"])
@@ -183,20 +255,27 @@ def test_commuted_accumulator_keeps_the_saved_value(name, width):
     assert len(result.insns) == 2
     assert result.insns[0].what == semantics[0]
     assert result.insns[1].what.sources == (accumulator, term)
-    for seed, addend in ((0, 0), (1, 2), (0x7fff, 1), (0xffffffff, 1)):
+    for seed, addend in ((0, 0), (1, 2), (0x7FFF, 1), (0xFFFFFFFF, 1)):
         mask = (1 << (width * 8)) - 1
+
         def execute(operations):
             values = {accumulator: seed & mask, temporary: 42, term: addend & mask}
             for one in operations:
                 operands = [values[arg] for arg in one.what.sources]
                 match one.what.name:
-                    case "mov": value = operands[0]
-                    case "add": value = sum(operands)
-                    case "and": value = operands[0] & operands[1]
-                    case "or": value = operands[0] | operands[1]
-                    case "xor": value = operands[0] ^ operands[1]
+                    case "mov":
+                        value = operands[0]
+                    case "add":
+                        value = sum(operands)
+                    case "and":
+                        value = operands[0] & operands[1]
+                    case "or":
+                        value = operands[0] | operands[1]
+                    case "xor":
+                        value = operands[0] ^ operands[1]
                 values[one.what.dests[0]] = value & mask
             return values
+
         assert execute(insns) == execute(result.insns)
 
 
@@ -204,6 +283,7 @@ def test_fpcse_pushes_constant_single_as_one_dword():
     """QB FPCSE pushed 487.5 as 43F3h then C000h instead of one dword."""
     import corpus
     from qbopt import wholeseg
+
     result = wholeseg.emitted(Path("fixtures/omf/fpcse-q-O.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
@@ -216,30 +296,38 @@ def test_fpcse_passes_literal_addresses_without_register_shuffles(tag):
     """FPCSE materialized both PRINT literal addresses in AX solely to push them."""
     import corpus
     from qbopt import wholeseg
+
     result = wholeseg.emitted(Path(f"fixtures/omf/fpcse-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
     assert "push ax" not in instructions
 
 
-@pytest.mark.parametrize("high,low", [(0x43f3, 0xc000), (-1, -2), (0, 0), (0x8000, 0x7fff)])
+@pytest.mark.parametrize("high,low", [(0x43F3, 0xC000), (-1, -2), (0, 0), (0x8000, 0x7FFF)])
 def test_constant_push_pair_preserves_stack_bytes(high, low):
-    from qbopt.backend import select
     from iced_x86 import Decoder
+
+    from qbopt.backend import select
+
     def push(at, number):
         return lir.Insn(at, (at, at + 3), ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Imm(number, 2),)), (), ())
+
     pair = (push(0, high), push(3, low))
     body = lir.LirBody("arguments", 0, (lir.LirBlock(0, pair, ()),), {}, {})
     result = peephole.pushes(body).insns
     assert len(result) == 1 and result[0].covers == (0, 6)
     operand = result[0].what.sources[0]
-    assert operand.value.to_bytes(4, "little") == (low & 0xffff).to_bytes(2, "little") + (high & 0xffff).to_bytes(2, "little")
+    assert operand.value.to_bytes(4, "little") == (low & 0xFFFF).to_bytes(2, "little") + (high & 0xFFFF).to_bytes(
+        2, "little"
+    )
     assert next(iter(Decoder(16, select.emit(result[0].what).code))).stack_pointer_increment == -4
 
 
 @pytest.mark.parametrize("barrier", ["relocation", "gap", "block", "instruction"])
 def test_constant_push_fusion_stops_at_boundaries(barrier):
-    from qbopt.objectfile.module import Addr, Space
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
     first = lir.Insn(0, (0, 3), ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Imm(1, 2),)), (), ())
     second = replace(first, at=3, covers=(3, 6))
     match barrier:
@@ -247,10 +335,12 @@ def test_constant_push_fusion_stops_at_boundaries(barrier):
             first = replace(first, what=replace(first.what, sources=(ir.Imm(1, 2, Addr(Space.SEGMENT, 0, 5)),)))
         case "gap":
             second = replace(second, at=4, covers=(4, 7))
-    insns = ((first, lir.Insn(3, (3, 3), None, (), ()), second)
-             if barrier == "instruction" else (first, second))
-    blocks = ((lir.LirBlock(0, (first,), (3,)), lir.LirBlock(3, (second,), ()))
-              if barrier == "block" else (lir.LirBlock(0, insns, ()),))
+    insns = (first, lir.Insn(3, (3, 3), None, (), ()), second) if barrier == "instruction" else (first, second)
+    blocks = (
+        (lir.LirBlock(0, (first,), (3,)), lir.LirBlock(3, (second,), ()))
+        if barrier == "block"
+        else (lir.LirBlock(0, insns, ()),)
+    )
     body = lir.LirBody("boundary", 0, blocks, {}, {})
     assert peephole.pushes(body) == body
 
@@ -259,6 +349,7 @@ def test_fpcse_drops_unused_allocator_reload():
     """QB FPCSE printed 487.5 correctly but restored AX only to overwrite it."""
     import corpus
     from qbopt import wholeseg
+
     result = wholeseg.emitted(Path("fixtures/omf/fpcse-q-O.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
@@ -271,9 +362,11 @@ def test_fpcse_drops_unused_allocator_reload():
 def test_dead_reload_requires_allocator_ownership_and_no_read(owned, read):
     """FPCSE's dead spill is removable, but source loads and live spills are not."""
     from qbopt.backend.frame import Frame
+
     ax = ir.Reg(Register.AX, 2)
-    load = lir.Insn(0, (0, 0), ir.Semantics(ir.Operation.MOVE, "mov", (ax,), (Frame(0).cell(1, 2),)),
-                    (), (), spill_reload=owned)
+    load = lir.Insn(
+        0, (0, 0), ir.Semantics(ir.Operation.MOVE, "mov", (ax,), (Frame(0).cell(1, 2),)), (), (), spill_reload=owned
+    )
     use = lir.Insn(1, (1, 1), ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.BX, 2),), (ax,)), (), ())
     write = lir.Insn(2, (2, 2), ir.Semantics(ir.Operation.MOVE, "mov", (ax,), (ir.Imm(4, 2),)), (), ())
     insns = (load, use, write) if read else (load, write)
@@ -287,8 +380,18 @@ def test_overwritten_register_copy_respects_byte_reads(middle, removed):
     ax, si = ir.Reg(Register.AX, 2), ir.Reg(Register.SI, 2)
     copy = lir.Insn(0, (0, 0), ir.Semantics(ir.Operation.MOVE, "mov", (ax,), (si,)), (), ())
     width = 1 if middle in (Register.AL, Register.AH) else 2
-    read = lir.Insn(1, (1, 1), ir.Semantics(ir.Operation.MOVE, "mov",
-        (ir.Reg(Register.BL if width == 1 else Register.BX, width),), (ir.Reg(middle, width),)), (), ())
+    read = lir.Insn(
+        1,
+        (1, 1),
+        ir.Semantics(
+            ir.Operation.MOVE,
+            "mov",
+            (ir.Reg(Register.BL if width == 1 else Register.BX, width),),
+            (ir.Reg(middle, width),),
+        ),
+        (),
+        (),
+    )
     overwrite = lir.Insn(2, (2, 2), ir.Semantics(ir.Operation.MOVE, "mov", (ax,), (ir.Imm(4, 2),)), (), ())
     body = lir.LirBody("copies", 0, (lir.LirBlock(0, (copy, read, overwrite), ()),), {}, {})
     result = peephole.overwritten(body)
@@ -300,6 +403,7 @@ def test_fpdeep_discards_overwritten_copy_shuffles(tag):
     """FPDEEP emitted six AX/SI and BX/DI shuffles around its four MOVSWs."""
     import corpus
     from qbopt import wholeseg
+
     result = wholeseg.emitted(Path(f"fixtures/omf/fpdeep-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
@@ -320,6 +424,7 @@ def test_addrm_index_scale_uses_one_lea():
     """ADDRM QB copied and shifted SI on every iteration instead of one LEA."""
     import corpus
     from qbopt import wholeseg
+
     result = wholeseg.emitted(Path("fixtures/omf/addrm-q-O.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
@@ -345,9 +450,11 @@ def test_index_lea_preserves_observed_shift_flags(following):
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_hotlpx_uses_scaled_address_for_factor_five(tag):
     """HOTLPX's factor twenty expanded to copy/shift/add/shift instead of LEA/shift."""
-    import corpus
     from iced_x86 import Mnemonic
+
+    import corpus
     from qbopt import wholeseg
+
     result = wholeseg.emitted(Path(f"fixtures/omf/hotlpx-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     insns = [one.insn for block in corpus.partitioned(result.data) for one in block.insns]
@@ -361,26 +468,33 @@ def test_scaled_lea_does_not_require_another_shift(amount, following, width):
     """HOTLPX's scale idiom needed three instructions when followed by CMP instead of SHL."""
     dest = ir.Reg(Register.BX if width == 2 else Register.EBX, width)
     source = ir.Reg(Register.CX if width == 2 else Register.ECX, width)
+
     def insn(at, kind, name, args):
         return lir.Insn(at, (at, at), ir.Semantics(kind, name, (dest,), args), (), ())
+
     copy = insn(0, ir.Operation.MOVE, "mov", (source,))
     shift = insn(1, ir.Operation.BINARY, "shl", (dest, ir.Imm(amount, 1)))
     add = insn(2, ir.Operation.BINARY, "add", (dest, source))
-    last = insn(3, ir.Operation.COMPARE if following == "cmp" else ir.Operation.BINARY,
-                following, (dest, ir.Imm(0, 2)))
+    last = insn(3, ir.Operation.COMPARE if following == "cmp" else ir.Operation.BINARY, following, (dest, ir.Imm(0, 2)))
     body = lir.LirBody("scale", 0, (lir.LirBlock(0, (copy, shift, add, last), ()),), {}, {})
     result = peephole.addresses(body).insns
-    expected = ["lea", "cmp"] if following == "cmp" else (
-        ["lea", "add", following] if amount == 1 else ["mov", "shl", "add", following])
+    expected = (
+        ["lea", "cmp"]
+        if following == "cmp"
+        else (["lea", "add", following] if amount == 1 else ["mov", "shl", "add", following])
+    )
     assert [one.what.name for one in result] == expected
     if following == "cmp":
         from qbopt.backend import select
         from qbopt.frontend.declen import decode
+
         emitted = decode(select.emit(result[0].what).code, 0).insn
         assert emitted.memory_index_scale == 1 << amount
 
 
-@pytest.mark.parametrize("guard", ["none", "dword", "carry", "zero_shift", "bytes", "wrong_source", "same", "stack", "relocation"])
+@pytest.mark.parametrize(
+    "guard", ["none", "dword", "carry", "zero_shift", "bytes", "wrong_source", "same", "stack", "relocation"]
+)
 def test_scaled_address_requires_dead_flags_and_exact_allocated_operands(guard):
     """HOTLPX's LEA must retain low-word arithmetic without losing flags or owned bytes."""
     width = 4 if guard == "dword" else 2
@@ -390,8 +504,10 @@ def test_scaled_address_requires_dead_flags_and_exact_allocated_operands(guard):
         source = dest
     if guard == "stack":
         source = ir.Reg(Register.SP, width)
+
     def insn(at, kind, name, sources):
         return lir.Insn(at, (at, at), ir.Semantics(kind, name, (dest,), sources), (), ())
+
     copy = insn(0, ir.Operation.MOVE, "mov", (source,))
     shift = insn(1, ir.Operation.BINARY, "shl", (dest, ir.Imm(2, 1)))
     add = insn(2, ir.Operation.BINARY, "add", (dest, source))
@@ -418,14 +534,23 @@ def test_scaled_address_requires_dead_flags_and_exact_allocated_operands(guard):
         assert ((bits + bits * 4) & mask) == original
 
 
-@pytest.mark.parametrize("following,zeroed", [("cmp", True), ("add", True),
-    ("adc", False), ("inc", False), ("shl", False), ("call", False), ("je", False)])
+@pytest.mark.parametrize(
+    "following,zeroed",
+    [("cmp", True), ("add", True), ("adc", False), ("inc", False), ("shl", False), ("call", False), ("je", False)],
+)
 def test_zeroing_requires_flags_overwritten_before_observation(following, zeroed):
     """HARR-style zeroing is safe before CMP, but not before a carry consumer."""
     dest = ir.Reg(Register.AX, 2)
     first = lir.Insn(0, (0, 3), ir.Semantics(ir.Operation.MOVE, "mov", (dest,), (ir.Imm(0, 2),)), (), ())
-    last = lir.Insn(3, (3, 5), ir.Semantics(ir.Operation.COMPARE if following == "cmp" else ir.Operation.BINARY,
-                    following, (), (dest, ir.Imm(1, 2))), (), ())
+    last = lir.Insn(
+        3,
+        (3, 5),
+        ir.Semantics(
+            ir.Operation.COMPARE if following == "cmp" else ir.Operation.BINARY, following, (), (dest, ir.Imm(1, 2))
+        ),
+        (),
+        (),
+    )
     body = lir.LirBody("zero", 0, (lir.LirBlock(0, (first, last), ()),), {}, {})
     assert peephole.Peephole().transform(body).insns[0].what.name == ("xor" if zeroed else "mov")
 
@@ -434,6 +559,7 @@ def test_harr_uses_short_zeroing_before_overwritten_flags():
     """HARR's CX initialization cost three bytes despite ADD replacing its flags."""
     import corpus
     from qbopt import wholeseg
+
     result = wholeseg.emitted(Path("fixtures/omf/harr-p-g2.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
@@ -442,7 +568,9 @@ def test_harr_uses_short_zeroing_before_overwritten_flags():
 
 @pytest.mark.parametrize("variant", ["plain", "dword", "byte", "relocation", "boundary", "unknown", "clobber"])
 def test_zeroing_preserves_width_relocations_and_unknown_flag_observers(variant):
-    from qbopt.objectfile.module import Addr, Space
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
     width = 4 if variant == "dword" else 1 if variant == "byte" else 2
     register = {1: Register.AL, 2: Register.AX, 4: Register.EAX}[width]
     dest = ir.Reg(register, width)
@@ -466,9 +594,11 @@ def test_zeroing_preserves_width_relocations_and_unknown_flag_observers(variant)
 @pytest.mark.parametrize("middle", ["", "mov", "fnstsw", "fninit", None, "block"])
 def test_wait_elimination_does_not_cross_observable_work(middle):
     """FPCSEX's redundant waits may disappear, but integer observers still need completion."""
+
     def instruction(at, name):
         what = None if name is None else ir.Semantics(ir.Operation.NOTHING, name, (), ())
         return lir.Insn(at, (at, at + 1), what, (), ())
+
     first, between, last = instruction(0, "wait"), instruction(1, middle), instruction(2, "fld")
     blocks = (lir.LirBlock(0, (first, between, last), ()),)
     if middle == "block":
@@ -482,7 +612,8 @@ def test_fpcsex_keeps_only_waits_before_integer_work(tag, waits):
     """Runtime-input FPCSEX issued three waits per iteration; two preceded waiting FP instructions."""
     import corpus
     from qbopt import wholeseg
-    result = wholeseg.emitted(Path(f"fixtures/omf/fpcsex-{tag}.obj").read_bytes())
+
+    result = wholeseg.emitted(Path(f"fixtures/omf/fpcsex-{tag}.obj").read_bytes(), basic_semantics=True)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [one.insn for block in corpus.partitioned(result.data) for one in block.insns]
     assert sum(str(one) == "wait" for one in instructions) == waits
@@ -491,10 +622,20 @@ def test_fpcsex_keeps_only_waits_before_integer_work(tag, waits):
 @pytest.mark.parametrize("change", [None, Register.CH, Register.AH])
 def test_repeated_copy_requires_unchanged_source_and_destination(change):
     """LNGMXX copied ECX into EAX twice around CDQ; partial writes must prevent reuse."""
-    move = lir.Insn(0, (0, 1), ir.Semantics(ir.Operation.MOVE, "mov",
-                    (ir.Reg(Register.EAX, 4),), (ir.Reg(Register.ECX, 4),)), (), ())
-    extend = lir.Insn(1, (1, 2), ir.Semantics(ir.Operation.EXTEND, "cdq",
-                      (ir.Reg(Register.EDX, 4),), (ir.Reg(Register.EAX, 4),)), (), ())
+    move = lir.Insn(
+        0,
+        (0, 1),
+        ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.EAX, 4),), (ir.Reg(Register.ECX, 4),)),
+        (),
+        (),
+    )
+    extend = lir.Insn(
+        1,
+        (1, 2),
+        ir.Semantics(ir.Operation.EXTEND, "cdq", (ir.Reg(Register.EDX, 4),), (ir.Reg(Register.EAX, 4),)),
+        (),
+        (),
+    )
     if change is not None:
         extend = replace(extend, clobbers=frozenset({change}))
     final = replace(move, at=2, covers=(2, 3))
@@ -505,9 +646,10 @@ def test_repeated_copy_requires_unchanged_source_and_destination(change):
 
 def test_copied_value_survives_overwriting_its_original_register():
     """A copied value is a snapshot, not an alias of the register it came from."""
+
     def copy(at, dest, source):
-        return lir.Insn(at, (at, at + 1), ir.Semantics(ir.Operation.MOVE, "mov",
-                        (ir.Reg(dest, 4),), (source,)), (), ())
+        return lir.Insn(at, (at, at + 1), ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(dest, 4),), (source,)), (), ())
+
     insns = (
         copy(0, Register.EAX, ir.Reg(Register.ECX, 4)),
         copy(1, Register.EDX, ir.Reg(Register.ECX, 4)),
@@ -523,9 +665,11 @@ def test_copied_value_survives_overwriting_its_original_register():
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_lngmxx_does_not_reload_dividend_after_sign_extension(tag):
     """LNGMXX's CDQ leaves its dividend intact, but lowering reloaded it before IDIV."""
-    import corpus
     from iced_x86 import Mnemonic
+
+    import corpus
     from qbopt import wholeseg
+
     result = wholeseg.emitted(Path(f"fixtures/omf/lngmxx-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     insns = [one.insn for block in corpus.partitioned(result.data) for one in block.insns]
@@ -536,21 +680,32 @@ def test_lngmxx_does_not_reload_dividend_after_sign_extension(tag):
 
 def test_nbody_repeated_fixed_constant_is_removed():
     """Nbody materialized 512 twice before one divide, with a non-clobbering CDQ between them."""
-    from qbopt import wholeseg
-    from qbopt.objectfile import module, omf
-    from qbopt.frontend import blocks
     from iced_x86 import Code
+
+    from qbopt import wholeseg
+    from qbopt.objectfile import omf
+    from qbopt.frontend import blocks
+    from qbopt.objectfile import module
+
     result = wholeseg.emitted(Path("fixtures/regressions/nbody-stack-p-g2.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
-    assert sum(one.insn.code == Code.MOV_R32_IMM32 and one.insn.immediate32 == 512
-               for one in blocks.instructions(found)) == 1
+    assert (
+        sum(one.insn.code == Code.MOV_R32_IMM32 and one.insn.immediate32 == 512 for one in blocks.instructions(found))
+        == 1
+    )
 
 
 def test_partial_write_invalidates_constant():
     def move(at, dest, source):
-        return lir.Insn(at=at, covers=(at, at+1), defines=(), uses=(),
-                        what=ir.Semantics(ir.Operation.MOVE, "mov", (dest,), (source,)))
+        return lir.Insn(
+            at=at,
+            covers=(at, at + 1),
+            defines=(),
+            uses=(),
+            what=ir.Semantics(ir.Operation.MOVE, "mov", (dest,), (source,)),
+        )
+
     first = move(0, ir.Reg(Register.EAX, 4), ir.Imm(512, 4))
     change = move(1, ir.Reg(Register.AH, 1), ir.Imm(0, 1))
     again = move(2, ir.Reg(Register.EAX, 4), ir.Imm(512, 4))
@@ -570,27 +725,37 @@ def test_empty_ownership_marker_preserves_register_knowledge(clobbers):
     assert sum(one.what == what for one in result.insns) == (2 if clobbers else 1)
 
 
-@pytest.mark.parametrize("interruption", ["none", "extend", "extend_write", "extend_clobber", "call", "clobber", "unknown", "relocation", "block"])
+@pytest.mark.parametrize(
+    "interruption",
+    ["none", "extend", "extend_write", "extend_clobber", "call", "clobber", "unknown", "relocation", "block"],
+)
 def test_constant_knowledge_is_local_and_invalidated(interruption):
-    from qbopt.objectfile.module import Addr, Space
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
     source = ir.Imm(512, 4)
     if interruption == "relocation":
         source = ir.Imm(512, 4, Addr(Space.SEGMENT, 0, 5))
     what = ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.EAX, 4),), (source,))
     first = lir.Insn(0, (0, 1), what, (), ())
     last = replace(first, at=2, covers=(2, 3))
-    middle = lir.Insn(1, (1, 2), ir.Semantics(ir.Operation.MOVE, "mov",
-                     (ir.Reg(Register.BX, 2),), (ir.Imm(7, 2),)), (), ())
+    middle = lir.Insn(
+        1, (1, 2), ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.BX, 2),), (ir.Imm(7, 2),)), (), ()
+    )
     if interruption == "call":
         middle = replace(middle, what=ir.Semantics(ir.Operation.CALL, "call", (), ()))
     if interruption in ("extend", "extend_clobber"):
-        middle = replace(middle, what=ir.Semantics(ir.Operation.EXTEND, "cdq",
-                         (ir.Reg(Register.EDX, 4),), (ir.Reg(Register.EAX, 4),)))
+        middle = replace(
+            middle,
+            what=ir.Semantics(ir.Operation.EXTEND, "cdq", (ir.Reg(Register.EDX, 4),), (ir.Reg(Register.EAX, 4),)),
+        )
         if interruption == "extend_clobber":
             middle = replace(middle, clobbers=frozenset({Register.AH}))
     if interruption == "extend_write":
-        middle = replace(middle, what=ir.Semantics(ir.Operation.EXTEND, "movsx",
-                         (ir.Reg(Register.EAX, 4),), (ir.Reg(Register.AX, 2),)))
+        middle = replace(
+            middle,
+            what=ir.Semantics(ir.Operation.EXTEND, "movsx", (ir.Reg(Register.EAX, 4),), (ir.Reg(Register.AX, 2),)),
+        )
     if interruption == "clobber":
         middle = replace(middle, clobbers=frozenset({Register.EAX}))
     if interruption == "unknown":

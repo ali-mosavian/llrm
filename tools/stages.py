@@ -42,22 +42,23 @@ from iced_x86 import FormatterSyntax
 from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.backend import lower
-from qbopt.objectfile import cvinfo
 from qbopt.legacy import regalloc
 from qbopt.frontend import fpstack
+from qbopt.objectfile import cvinfo
 
 _REGISTERS = {v: k for k, v in vars(Register).items() if isinstance(v, int)}
-from qbopt.objectfile import omf
-from qbopt.objectfile import module
 from qbopt import wholeseg
 from qbopt.abi import profile
+from qbopt.objectfile import omf
+from qbopt.objectfile import module
 from qbopt.analysis import loops as loopy
 from qbopt.frontend import blocks as split
 from qbopt.frontend.blocks import code_map
 
 
-def _bodies(data: bytes, basic_semantics: bool = False, bounds_checks: bool = False,
-            *, external_contracts: dict | None = None):
+def _bodies(
+    data: bytes, basic_semantics: bool = False, bounds_checks: bool = False, *, external_contracts: dict | None = None
+):
     """Every MIR body in this object, or nothing if it does not map."""
     found = module.of(omf.parse(data))
     if found is None:
@@ -71,8 +72,19 @@ def _bodies(data: bytes, basic_semantics: bool = False, bounds_checks: bool = Fa
     # the raise and the lowering are given the same object -- built twice
     # they can differ, which is what wholeseg.py takes care not to do.
     contracts = runtime.for_module(found, external=external_contracts)
-    return found, list(mir.bodies(found, split.partition(found, mapped), contracts,
-                                  basic_semantics=basic_semantics, bounds_checks=bounds_checks)), contracts
+    return (
+        found,
+        list(
+            mir.bodies(
+                found,
+                split.partition(found, mapped),
+                contracts,
+                basic_semantics=basic_semantics,
+                bounds_checks=bounds_checks,
+            )
+        ),
+        contracts,
+    )
 
 
 def _shape(body) -> str:
@@ -248,6 +260,8 @@ def _short(one, cells: Cells) -> str:
         return f"{one.n}"
     if isinstance(one, mir.Symbol):
         return f"&{one.space}:{one.index}+{one.offset + one.addend:#x}"
+    if isinstance(one, mir.FrameAddress):
+        return f"frame({one.offset:+#x})"
     if isinstance(one, mir.Cell):
         return cells.of(one.ref)
     return one.name or "?"
@@ -268,12 +282,20 @@ def _mir(bodies, found=None, verbose: bool = False, debug=None) -> None:
     procs = {one.name.rstrip("&%!#$"): one for one in (debug.procedures if debug is not None else ())}
     for name, body in bodies:
         print(f"  {name}")
+        from qbopt.analysis import frameescape
+
+        escapes = frameescape.analysed(body)
+        if escapes.origins or escapes.opaque_addresses:
+            exposed = ", ".join(f"{offset:+#x}" for offset in sorted(escapes.exposed)) or "none observed"
+            opaque = ", ".join(f"{at:#x}" for at in sorted(escapes.opaque_addresses)) or "none"
+            print(f"  frame addresses exposed: {exposed}; opaque address sites: {opaque}")
         for line in _signature(procs.get(name.split()[-1])):
             print(line)
         cells = Cells(debug)
         depth = _depth(body)
         floats = fpstack.readings(body)
         from qbopt.analysis import floatfacts
+
         exact = floatfacts.known(body, found.dgroup, calls) if found is not None else {}
         for block in body.blocks:
             pad = "  " * depth.get(block.at, 0)
@@ -290,14 +312,24 @@ def _mir(bodies, found=None, verbose: bool = False, debug=None) -> None:
                 if flow is not None and (flow.uses or flow.defines is not None):
                     uses = ", ".join(str(value) for value in flow.uses.values()) or "-"
                     values = f"  ; fp values: {uses} -> {flow.defines or '-'}"
+                if op.barrier and op.memory_complete:
+                    reads = ",".join(cells.of(ref) for ref in op.loads) or "-"
+                    writes = ",".join(cells.of(ref) for ref in op.stores) or "-"
+                    values += f"  ; memory: complete reads={reads} writes={writes}"
                 if op.floating is not None:
                     rule = op.floating
                     inputs = ",".join(rule.inputs)
-                    values += (f"  ; {inputs} -> {rule.result}; precision={rule.precision}"
-                               f" rounding={rule.rounding} exceptions={rule.exceptions}")
-                    numeric = [exact[arg.value] for arg in op.results if isinstance(arg, mir.Held) and arg.value in exact]
+                    values += (
+                        f"  ; {inputs} -> {rule.result}; precision={rule.precision}"
+                        f" rounding={rule.rounding} exceptions={rule.exceptions}"
+                    )
+                    numeric = [
+                        exact[arg.value] for arg in op.results if isinstance(arg, mir.Held) and arg.value in exact
+                    ]
                     if numeric:
-                        values += " exact=" + ",".join("-0" if fact.negative_zero else str(fact.value) for fact in numeric)
+                        values += " exact=" + ",".join(
+                            "-0" if fact.negative_zero else str(fact.value) for fact in numeric
+                        )
                 print(f"    {op.at:#06x}  {pad}{_says(op, cells, calls, verbose)}{values}")
         if found is not None:
             for proof in floatfacts.loop_exits(body, found.dgroup, calls):
@@ -431,7 +463,27 @@ def _lir_body(name: str, body) -> None:
             dests = ", ".join(_operand(x) for x in what.dests)
             sources = ", ".join(_operand(x) for x in what.sources)
             said = f"{dests} := " if dests else ""
-            print(f"      {one.at:#06x}  {said}{what.name} {sources}".rstrip())
+            notes = []
+            if one.covers is not None and one.covers[0] == one.covers[1]:
+                notes.append("inserted")
+            if one.group is not None:
+                notes.append(f"parallel-copy {one.group}")
+            if one.spill_reload:
+                notes.append("spill reload")
+            if one.frame_adjust:
+                notes.append("frame adjust")
+            if one.requires:
+                notes.append(
+                    "requires " + ",".join(f"v{held.value}@{_name_of(register)}" for held, register in one.requires)
+                )
+            if one.delivers:
+                notes.append(
+                    "delivers " + ",".join(f"v{held.value}@{_name_of(register)}" for held, register in one.delivers)
+                )
+            if one.clobbers:
+                notes.append("clobbers " + ",".join(_name_of(register) for register in sorted(one.clobbers)))
+            annotation = "  ; " + "; ".join(notes) if notes else ""
+            print(f"      {one.at:#06x}  {said}{what.name} {sources}{annotation}".rstrip())
 
 
 def _operand(one) -> str:
@@ -521,14 +573,16 @@ def _asm(data: bytes) -> None:
     for fixup in omf.fixups(found.records):
         if fixup.seg != found.seg:
             continue
-        target = (externals[fixup.index] if fixup.target == "external"
-                  else f"{fixup.target}[{fixup.index}]")
+        target = externals[fixup.index] if fixup.target == "external" else f"{fixup.target}[{fixup.index}]"
         relocations.setdefault(fixup.offset, []).append(
-            f"{omf.LOCNAME.get(fixup.loc, fixup.loc)} {target}+{fixup.disp:#x}")
+            f"{omf.LOCNAME.get(fixup.loc, fixup.loc)} {target}+{fixup.disp:#x}"
+        )
     for insn in instructions:
-        notes = [f"+{offset - insn.at:#x}: {target}"
-                 for offset in range(insn.at, insn.end)
-                 for target in relocations.get(offset, ())]
+        notes = [
+            f"+{offset - insn.at:#x}: {target}"
+            for offset in range(insn.at, insn.end)
+            for target in relocations.get(offset, ())
+        ]
         annotation = "  ; reloc " + ", ".join(notes) if notes else ""
         print(f"    {insn.at:#06x}  {formatter.format(insn.insn)}{annotation}")
 
@@ -536,13 +590,22 @@ def _asm(data: bytes) -> None:
 def main(argv: list[str] | None = None, view=None) -> int:
     ap = argparse.ArgumentParser(prog="stages")
     ap.add_argument("object", type=Path)
+    ap.add_argument(
+        "--link-input",
+        type=Path,
+        action="append",
+        default=[],
+        help="an OBJ or LIB following the object in LINK order; repeat for the complete link unit",
+    )
     from qbopt.cycles.timings import ARCHS
+
     ap.add_argument("--cpu", choices=("386", *ARCHS), default="386", help="CPU used for arithmetic selection")
     ap.add_argument("--only", help="one pass by name, instead of each in turn")
     ap.add_argument("--basic-semantics", action="store_true")
     ap.add_argument("--bounds-checks", action="store_true")
     ap.add_argument("--asm", action="store_true", help="disassemble what came out, after the last stage")
     ap.add_argument("--quiet", action="store_true", help="shape only, no per-op detail")
+    ap.add_argument("--body", help="dump only procedures whose names contain this text")
     ap.add_argument(
         "--verbose",
         action="store_true",
@@ -566,8 +629,10 @@ def main(argv: list[str] | None = None, view=None) -> int:
         action="store_false",
         help="leave absorption to the machine arm, which is what rewrite.py does by default",
     )
-    ap.add_argument("--contracts", type=Path, help="hash-checked external call profile (same as rewrite)")
-    ap.add_argument("--contract-root", type=Path, help="artifact directory for the profile")
+    ap.add_argument(
+        "--contracts", type=Path, action="append", help="hash-checked external call profile; repeat to combine profiles"
+    )
+    ap.add_argument("--contract-root", type=Path, help="artifact directory shared by all profiles")
     ap.add_argument("--native-fpu", action="store_true", help="emit native x87, matching rewrite --native-fpu")
     args = ap.parse_args(argv)
     if args.native_fpu and args.basic_semantics:
@@ -575,17 +640,33 @@ def main(argv: list[str] | None = None, view=None) -> int:
     if args.contract_root is not None and args.contracts is None:
         ap.error("--contract-root requires --contracts")
     try:
-        loaded_profile = profile.load(args.contracts, args.contract_root) if args.contracts is not None else None
+        loaded_profile = profile.load_many(args.contracts, args.contract_root) if args.contracts is not None else None
     except (ValueError, OSError) as error:
         ap.error(str(error))
-    external = {rule.name: rule for rule in loaded_profile.rules} if loaded_profile is not None else None
+    external = {}
+    if args.link_input:
+        try:
+            from qbopt.abi import linkunit
 
-    data = args.object.read_bytes()
+            unit = linkunit.LinkUnit.read([args.object, *args.link_input])
+            source = next(one for one in unit.objects if one.path == args.object.resolve())
+            external.update(unit.contracts_for(source))
+            data = source.data
+        except (ValueError, OSError, StopIteration) as error:
+            ap.error(str(error))
+    else:
+        data = args.object.read_bytes()
+    if loaded_profile is not None:
+        external.update({rule.name: rule for rule in loaded_profile.rules})
+    external = external or None
     if args.dump is not None:
         args.dump.mkdir(parents=True, exist_ok=True)
 
     step = itertools.count()
     given = view
+
+    def selected(name: str) -> bool:
+        return args.body is None or args.body.casefold() in name.casefold()
 
     @contextlib.contextmanager
     def writing(number: int, form: str, name: str):
@@ -613,6 +694,7 @@ def main(argv: list[str] | None = None, view=None) -> int:
 
     def dump(number: int, name: str, tag: str, bodies, was, debug, found):
         """One stage, as MIR. There is no other form of one."""
+        bodies = [(body_name, body) for body_name, body in bodies if selected(body_name)]
         with view(number, "mir", name):
             now = _report(tag, bodies, was, not args.quiet)
             _mir(bodies, found, args.verbose, debug)
@@ -655,14 +737,23 @@ def main(argv: list[str] | None = None, view=None) -> int:
         if stage == "route":
             route = low
             return
+        if name is not None and not selected(name):
+            return
         stages.setdefault(stage, []).append((name, low))
 
     try:
         options = {"external_contracts": external} if external is not None else {}
         if args.native_fpu:
             options["native_fpu"] = True
-        got = wholeseg.emitted(data, only=args.only, watch=watch, cpu=args.cpu,
-                               basic_semantics=args.basic_semantics, bounds_checks=args.bounds_checks, **options)
+        got = wholeseg.emitted(
+            data,
+            only=args.only,
+            watch=watch,
+            cpu=args.cpu,
+            basic_semantics=args.basic_semantics,
+            bounds_checks=args.bounds_checks,
+            **options,
+        )
     finally:
         for name, bodies in mir_stages.items():
             was = dump(next(step), name, name, bodies, was, debug, found)

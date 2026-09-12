@@ -12,12 +12,12 @@ import pytest
 from iced_x86 import Register
 
 import corpus
+from qbopt import rewrite
 from qbopt.model import ir
 from qbopt.model import mir
-from qbopt.objectfile import omf
 from qbopt.backend import lower
+from qbopt.objectfile import omf
 from qbopt.objectfile import module
-from qbopt import rewrite
 from qbopt.optimize import transform
 
 
@@ -25,8 +25,10 @@ from qbopt.optimize import transform
 def test_empty_jump_threading_preserves_phi_inputs_and_effects(guard):
     """Collapsed FPCSE's trampoline is removable; a phi edge or store is not."""
     from dataclasses import replace
+
     def jump(at, target):
         return mir.Op(at, ir.Operation.JUMP, "jmp", (), (), kind=mir.Kind.JUMP, target=target)
+
     entry = mir.MirBlock(0, (), (jump(0, 1),), (1,))
     middle = mir.MirBlock(1, (), (jump(1, 2),), (2,))
     end = mir.MirBlock(2, (), (), ())
@@ -51,8 +53,8 @@ def test_empty_jump_threading_preserves_phi_inputs_and_effects(guard):
 
 def test_pipeline_reaches_a_fixed_point_without_emission() -> None:
     """lngmix still changed on a second optimization of the same MIR body."""
-    from qbopt.frontend import blocks
     from qbopt.abi import runtime
+    from qbopt.frontend import blocks
 
     found = corpus.loaded(Path("fixtures/omf/lngmix-p-g2.obj"))
     partition = blocks.partition(found, blocks.code_map(found))
@@ -64,8 +66,8 @@ def test_pipeline_reaches_a_fixed_point_without_emission() -> None:
 
 def test_hoisted_variables_do_not_collide_with_promoted_cells() -> None:
     """lngmix printed 4081664 for 142900 after hoisting reused a promoted variable id."""
-    from qbopt.frontend import blocks
     from qbopt.abi import runtime
+    from qbopt.frontend import blocks
 
     found = corpus.loaded(Path("fixtures/omf/lngmix-p-g2.obj"))
     partition = blocks.partition(found, blocks.code_map(found))
@@ -121,8 +123,8 @@ def test_hoisting_preserves_cross_variable_accumulator_edges() -> None:
 
 def test_redundant_load_chains_keep_a_defined_return_value() -> None:
     """procs-q-O's return named a deleted intermediate reload and could not allocate."""
-    from qbopt.frontend import blocks
     from qbopt.abi import runtime
+    from qbopt.frontend import blocks
 
     found = corpus.loaded(Path("fixtures/omf/procs-q-O.obj"))
     partition = blocks.partition(found, blocks.code_map(found))
@@ -177,15 +179,45 @@ def test_dead_store_does_not_delete_a_load_at_the_same_address() -> None:
     source, loaded = mir.Value(1, 0), mir.Value(2, 3)
     target = mir.MemRef(ir.Addr(module.Space.SEGMENT, 0, index=5), 2)
     counter = mir.MemRef(ir.Addr(module.Space.SEGMENT, 2, index=5), 2)
-    first = mir.Op(0, ir.Operation.MOVE, "mov", (source,), (), kind=mir.Kind.COPY,
-                   args=(mir.Const(7, 2),), results=(mir.Held(source, 2),), covers=(0, 3))
-    store = mir.Op(3, ir.Operation.MOVE, "mov", (), (source,), kind=mir.Kind.STORE,
-                   args=(mir.Held(source, 2),), results=(mir.Cell(target),), stores=(target,), covers=(3, 3))
-    load = mir.Op(3, ir.Operation.MOVE, "mov", (loaded,), (), kind=mir.Kind.LOAD,
-                  args=(mir.Cell(counter),), results=(mir.Held(loaded, 2),), loads=(counter,), covers=(3, 6))
+    first = mir.Op(
+        0,
+        ir.Operation.MOVE,
+        "mov",
+        (source,),
+        (),
+        kind=mir.Kind.COPY,
+        args=(mir.Const(7, 2),),
+        results=(mir.Held(source, 2),),
+        covers=(0, 3),
+    )
+    store = mir.Op(
+        3,
+        ir.Operation.MOVE,
+        "mov",
+        (),
+        (source,),
+        kind=mir.Kind.STORE,
+        args=(mir.Held(source, 2),),
+        results=(mir.Cell(target),),
+        stores=(target,),
+        covers=(3, 3),
+    )
+    load = mir.Op(
+        3,
+        ir.Operation.MOVE,
+        "mov",
+        (loaded,),
+        (),
+        kind=mir.Kind.LOAD,
+        args=(mir.Cell(counter),),
+        results=(mir.Held(loaded, 2),),
+        loads=(counter,),
+        covers=(3, 6),
+    )
     overwrite = replace(store, at=6, covers=(6, 9))
-    use = mir.Op(9, ir.Operation.PUSH, "push", (), (loaded,), kind=mir.Kind.ARG,
-                 args=(mir.Held(loaded, 2),), covers=(9, 10))
+    use = mir.Op(
+        9, ir.Operation.PUSH, "push", (), (loaded,), kind=mir.Kind.ARG, args=(mir.Held(loaded, 2),), covers=(9, 10)
+    )
     body = mir.MirBody(0, (mir.MirBlock(0, (), (first, store, load, overwrite, use), ()),), {})
     done = transform.without_dead_stores(body, frozenset({5}), {})
     ops = done.blocks[0].ops
@@ -198,28 +230,71 @@ def test_forwarding_extends_lifetime_without_conflating_shared_addresses() -> No
     source, loaded, unrelated = (mir.Value(index, index) for index in (1, 2, 3))
     target = mir.MemRef(ir.Addr(module.Space.SEGMENT, 0, index=5), 4)
     other = mir.MemRef(ir.Addr(module.Space.SEGMENT, 8, index=5), 4)
-    first = mir.Op(0, ir.Operation.MOVE, "mov", (source,), (), kind=mir.Kind.COPY,
-                   args=(mir.Const(7, 4),), results=(mir.Held(source, 4),))
-    store = mir.Op(1, ir.Operation.MOVE, "mov", (), (source,), kind=mir.Kind.STORE,
-                   args=(mir.Held(source, 4),), results=(mir.Cell(target),), stores=(target,))
-    load = mir.Op(2, ir.Operation.MOVE, "mov", (loaded,), (), kind=mir.Kind.LOAD,
-                  args=(mir.Cell(target),), results=(mir.Held(loaded, 4),), loads=(target,))
-    neighbor = mir.Op(2, ir.Operation.MOVE, "mov", (unrelated,), (), kind=mir.Kind.LOAD,
-                      args=(mir.Cell(other),), results=(mir.Held(unrelated, 4),), loads=(other,))
+    first = mir.Op(
+        0,
+        ir.Operation.MOVE,
+        "mov",
+        (source,),
+        (),
+        kind=mir.Kind.COPY,
+        args=(mir.Const(7, 4),),
+        results=(mir.Held(source, 4),),
+    )
+    store = mir.Op(
+        1,
+        ir.Operation.MOVE,
+        "mov",
+        (),
+        (source,),
+        kind=mir.Kind.STORE,
+        args=(mir.Held(source, 4),),
+        results=(mir.Cell(target),),
+        stores=(target,),
+    )
+    load = mir.Op(
+        2,
+        ir.Operation.MOVE,
+        "mov",
+        (loaded,),
+        (),
+        kind=mir.Kind.LOAD,
+        args=(mir.Cell(target),),
+        results=(mir.Held(loaded, 4),),
+        loads=(target,),
+    )
+    neighbor = mir.Op(
+        2,
+        ir.Operation.MOVE,
+        "mov",
+        (unrelated,),
+        (),
+        kind=mir.Kind.LOAD,
+        args=(mir.Cell(other),),
+        results=(mir.Held(unrelated, 4),),
+        loads=(other,),
+    )
     body = mir.MirBody(0, (mir.MirBlock(0, (), (first, store, load, neighbor), ()),), {})
     done = transform.forwarded(body, frozenset({5}), {}).blocks[0].ops
     assert done[2].args == (mir.Held(source, 4),) and not done[2].loads
     assert done[3] == neighbor
 
 
-@pytest.mark.parametrize("number,safe", [(7, True), (0, False), (0xffffffff, False)])
+@pytest.mark.parametrize("number,safe", [(7, True), (0, False), (0xFFFFFFFF, False)])
 def test_divisor_constants_propagate_without_reordering(number, safe):
     """LNGMXX retained invariant division by 7 because its constant divisor stayed opaque to LICM."""
     from qbopt.analysis import consts
+
     dividend, divisor, quotient, remainder = (mir.Value(index, 0) for index in range(1, 5))
-    op = mir.Op(0, ir.Operation.DIVIDE, "idiv", (quotient, remainder), (dividend, divisor),
-                kind=mir.Kind.DIVMOD, args=(mir.Held(dividend, 4), mir.Held(divisor, 4)),
-                results=(mir.Held(quotient, 4), mir.Held(remainder, 4)))
+    op = mir.Op(
+        0,
+        ir.Operation.DIVIDE,
+        "idiv",
+        (quotient, remainder),
+        (dividend, divisor),
+        kind=mir.Kind.DIVMOD,
+        args=(mir.Held(dividend, 4), mir.Held(divisor, 4)),
+        results=(mir.Held(quotient, 4), mir.Held(remainder, 4)),
+    )
     done = transform._constant_operands(op, {divisor: consts.Known(number, 4)})
     assert done.args == (mir.Held(dividend, 4), mir.Const(number, 4))
     assert done.uses == (dividend,)
@@ -388,7 +463,7 @@ def test_the_invariant_run_never_takes_control_flow_a_flag_or_a_carried_value() 
                 carried = {phi.result for at in loop.body for phi in at_of[at].phis}
                 phis = [phi for at in loop.body for phi in at_of[at].phis]
                 run = transform._invariant_run(
-                    ops, carried, [ref for one in ops for ref in one.stores], found.dgroup, found.calls, phis
+                    ops, carried, [(ref, None) for one in ops for ref in one.stores], found.dgroup, found.calls, phis
                 )
                 if not run:
                     continue
@@ -1152,10 +1227,10 @@ def test_both_lngmix_divides_absorb():
     """
     from pathlib import Path
 
-    from qbopt.objectfile import omf
-    from qbopt.legacy import calls
-    from qbopt.objectfile import module
     from qbopt import wholeseg
+    from qbopt.legacy import calls
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
     from qbopt.frontend import blocks as split
     from qbopt.frontend.blocks import code_map
 
@@ -1173,16 +1248,34 @@ def test_cse_propagates_a_complete_narrow_copy_to_an_opaque_reader(preserves_hig
     """HARR's equal selector names blocked forwarding, adding an array reload per iteration."""
     source = mir.Value(1, 0, variable=1, version=1)
     copied = mir.Value(2, 2, variable=2, version=1)
-    first = mir.Op(0, ir.Operation.MOVE, "mov", (source,), (), kind=mir.Kind.COPY,
-                   args=(mir.Const(7, 2),), results=(mir.Held(source, 2),), covers=(0, 2))
-    copy = mir.Op(2, ir.Operation.MOVE, "mov", (copied,), (source,), kind=mir.Kind.COPY,
-                  args=(mir.Held(source, 2),), results=(mir.Held(copied, 2),), covers=(2, 4))
+    first = mir.Op(
+        0,
+        ir.Operation.MOVE,
+        "mov",
+        (source,),
+        (),
+        kind=mir.Kind.COPY,
+        args=(mir.Const(7, 2),),
+        results=(mir.Held(source, 2),),
+        covers=(0, 2),
+    )
+    copy = mir.Op(
+        2,
+        ir.Operation.MOVE,
+        "mov",
+        (copied,),
+        (source,),
+        kind=mir.Kind.COPY,
+        args=(mir.Held(source, 2),),
+        results=(mir.Held(copied, 2),),
+        covers=(2, 4),
+    )
     if preserves_high:
         from dataclasses import replace
+
         previous = mir.Value(3, 0, variable=3, version=1)
         copy = replace(copy, uses=(source, previous), merges={previous: copied})
-    use = mir.Op(4, ir.Operation.PUSH, "push", (), (copied,), kind=mir.Kind.OPAQUE,
-                 covers=(4, 6))
+    use = mir.Op(4, ir.Operation.PUSH, "push", (), (copied,), kind=mir.Kind.OPAQUE, covers=(4, 6))
     body = mir.MirBody(0, (mir.MirBlock(0, (), (first, copy, use), ()),), {})
     done = transform.subexpressions(body)
     assert done.blocks[0].ops[-1].uses == (copied if preserves_high else source,)
@@ -1277,10 +1370,10 @@ def test_decided_boolean_edges_stop_generating_phi_copies() -> None:
 
 def test_dead_boolean_block_does_not_leave_an_unreachable_jump() -> None:
     """bools-q-O could not be measured: its dead block retained a self-relative jump."""
+    from qbopt import wholeseg
     from qbopt.objectfile import omf
     from qbopt.frontend import blocks
     from qbopt.objectfile import module
-    from qbopt import wholeseg
 
     result = wholeseg.emitted(Path("fixtures/omf/bools-q-O.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result
@@ -1406,10 +1499,10 @@ def test_one_idiv_serves_both_of_lngmix_s_divides_in_the_image(monkeypatch) -> N
     from iced_x86 import Decoder
     from iced_x86 import Mnemonic
 
+    from qbopt import wholeseg
     from qbopt.objectfile import omf
     from qbopt.analysis import consts
     from qbopt.objectfile import module
-    from qbopt import wholeseg
 
     # Exercise reuse separately from folding both constant answers away.
     monkeypatch.setattr(consts, "division", lambda *args: None)

@@ -27,13 +27,18 @@ def _insn(what, defines, uses, at=0x100) -> lir.Insn:
 def test_call_result_spill_keeps_its_register_after_input_split():
     """H_BENCH printed ft_n=0 and infinite ft_mean: SI's result was spilled from BX."""
     from dataclasses import replace
-    from qbopt.backend import allocate, spiller
+
+    from qbopt.backend import spiller
+    from qbopt.backend import allocate
     from qbopt.backend import frame as frames
 
     argument, result = ir.Held(1, 2), ir.Held(2, 2)
     source = _insn(ir.Semantics(ir.Operation.MOVE, "mov", (argument,), (ir.Imm(7, 2),)), (1,), ())
-    call = replace(_insn(ir.Semantics(ir.Operation.CALL, "call", (), ()), (2,), (1,), at=0x108),
-                   requires=((argument, Register.AX),), delivers=((result, Register.SI),))
+    call = replace(
+        _insn(ir.Semantics(ir.Operation.CALL, "call", (), ()), (2,), (1,), at=0x108),
+        requires=((argument, Register.AX),),
+        delivers=((result, Register.SI),),
+    )
     use = _insn(ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(3, 2),), (result,)), (3,), (2,), at=0x110)
     split, pins = constrain.constrained(_body(source, call, use), {2: Register.SI})
     spilled, _ = spiller.spilled(split, frozenset({2}), frames.Frame(0))
@@ -48,9 +53,11 @@ def test_call_result_spill_keeps_its_register_after_input_split():
 def test_runtime_requirement_renames_its_explicit_source():
     """JUMPS refused emission: ON GOTO read old v20 while its required input became v143."""
     from dataclasses import replace
+
     value = ir.Held(20, 2)
-    call = replace(_insn(ir.Semantics(ir.Operation.CALL, "call", (), (value,)), (), (20,)),
-                   requires=((value, Register.AX),))
+    call = replace(
+        _insn(ir.Semantics(ir.Operation.CALL, "call", (), (value,)), (), (20,)), requires=((value, Register.AX),)
+    )
     got, _ = constrain.constrained(_body(call))
     result = next(one for one in got.insns if one.what.op is ir.Operation.CALL)
     assert result.what.sources[0].value == result.uses[0]
@@ -58,25 +65,40 @@ def test_runtime_requirement_renames_its_explicit_source():
 
 def test_spilled_segment_load_still_sets_es():
     """D_SURF returned sc_test=-4000: spilling ES left a far load on the old segment."""
-    from qbopt.model import mir
-    from qbopt.objectfile.module import Addr, Space
-    from qbopt.backend import lower, allocate, spiller, select
-    from qbopt.backend import frame as frames
     from iced_x86 import Decoder
 
-    segment = mir.Value(1, 0xfcc)
+    from qbopt.model import mir
+    from qbopt.backend import lower
+    from qbopt.backend import select
+    from qbopt.backend import spiller
+    from qbopt.backend import allocate
+    from qbopt.objectfile.module import Addr
+    from qbopt.backend import frame as frames
+    from qbopt.objectfile.module import Space
+
+    segment = mir.Value(1, 0xFCC)
     cell = mir.Cell(mir.MemRef(Addr(Space.FRAME, -2), 2))
-    op = mir.Op(0xfcc, ir.Operation.MOVE, "mov", (segment,), (),
-                kind=mir.Kind.LOAD, args=(cell,), results=(mir.Held(segment, 2),))
-    context = mir.MirBody(0xfcc, (mir.MirBlock(0xfcc, (), (op,), ()),),
-                          origin={segment: Register.ES})
-    load, = lower.Lowering(context, {segment.id}, {}, (), {}).expand(op)
-    use = _insn(ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(2, 2),),
-                            (ir.Held(segment.id, 2),)), (2,), (segment.id,), at=0xfcf)
+    op = mir.Op(
+        0xFCC,
+        ir.Operation.MOVE,
+        "mov",
+        (segment,),
+        (),
+        kind=mir.Kind.LOAD,
+        args=(cell,),
+        results=(mir.Held(segment, 2),),
+    )
+    context = mir.MirBody(0xFCC, (mir.MirBlock(0xFCC, (), (op,), ()),), origin={segment: Register.ES})
+    (load,) = lower.Lowering(context, {segment.id}, {}, (), {}).expand(op)
+    use = _insn(
+        ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(2, 2),), (ir.Held(segment.id, 2),)),
+        (2,),
+        (segment.id,),
+        at=0xFCF,
+    )
     body, pins = constrain.constrained(_body(load, use), {segment.id: Register.ES})
     spilled, _ = spiller.spilled(body, frozenset({segment.id}), frames.Frame(0))
-    placed = allocate.applied(spilled, allocate.allocate(spilled,
-                              {**pins, **constrain.required(spilled)}))
+    placed = allocate.applied(spilled, allocate.allocate(spilled, {**pins, **constrain.required(spilled)}))
     emitted = select.emit(placed.insns[0].what)
     assert emitted is not None
     instruction = next(iter(Decoder(16, emitted.code)))
@@ -87,45 +109,67 @@ def test_spilled_segment_load_still_sets_es():
 def test_far_read_restores_its_forwarded_selector(selected_site):
     """D_SURF sc_test=-4000: a reused slot selector read through the LRU array's ES."""
     from qbopt.model import mir
-    from qbopt.objectfile.module import Addr, Space
-    from qbopt.backend import lower, allocate
+    from qbopt.backend import lower
+    from qbopt.backend import allocate
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     segment, result = mir.Value(1, 0), mir.Value(2, 8)
     addr = Addr(Space.FAR, 0, segment=Register.ES)
     ref = mir.MemRef(addr, 2, segment=segment)
-    machine = ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.AX, 2),),
-                            (ir.Mem(addr, 2, Register.BX),))
-    op = mir.Op(8, ir.Operation.MOVE, "mov", (result,), (segment,), kind=mir.Kind.LOAD,
-                args=(mir.Cell(ref),), results=(mir.Held(result, 2),), loads=(ref,), made=machine)
+    machine = ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.AX, 2),), (ir.Mem(addr, 2, Register.BX),))
+    op = mir.Op(
+        8,
+        ir.Operation.MOVE,
+        "mov",
+        (result,),
+        (segment,),
+        kind=mir.Kind.LOAD,
+        args=(mir.Cell(ref),),
+        results=(mir.Held(result, 2),),
+        loads=(ref,),
+        made=machine,
+    )
     context = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),), origin={segment: Register.ES})
     sites = {op.id: ()} if selected_site else {}
-    read, = lower.Lowering(context, {1, 2}, {}, sites, {}).expand(op)
+    (read,) = lower.Lowering(context, {1, 2}, {}, sites, {}).expand(op)
     assert segment.id in read.uses, "the selector must remain live until the far read"
-    saved = _insn(ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),),
-                              (ir.Mem(Addr(Space.FRAME, -2), 2, Register.BP),)), (1,), ())
-    overwrite = _insn(ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.ES, 2),),
-                                  (ir.Reg(Register.DX, 2),)), (), (), at=4)
-    body, pins = constrain.constrained(_body(saved, overwrite, read), {1: Register.CX})
+    saved = _insn(
+        ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),), (ir.Mem(Addr(Space.FRAME, -2), 2, Register.BP),)),
+        (1,),
+        (),
+    )
+    overwrite = _insn(
+        ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.ES, 2),), (ir.Reg(Register.DX, 2),)), (), (), at=4
+    )
+    body = allocate.explicit_selectors(_body(saved, overwrite, read), {1: Register.CX})
+    body, pins = constrain.constrained(body, {1: Register.CX})
     placed = allocate.applied(body, allocate.allocate(body, {1: Register.CX, **pins}))
     restore = placed.insns[-2].what
     assert restore.dests == (ir.Reg(Register.ES, 2),)
     assert restore.sources == (ir.Reg(Register.CX, 2),)
 
 
-@pytest.mark.parametrize("registers", [(Register.BX, Register.CX),
-                                     (Register.AX, Register.BX, Register.CX)])
+@pytest.mark.parametrize("registers", [(Register.BX, Register.CX), (Register.AX, Register.BX, Register.CX)])
 def test_shared_zero_is_supplied_to_every_runtime_input(registers):
     """QGLDIFF hung in heap compaction: ENRA lost BX=0 after CSE joined its CX=0."""
     from dataclasses import replace
+
     from qbopt.backend import allocate
+
     value = ir.Held(1, 2)
     constant = _insn(ir.Semantics(ir.Operation.MOVE, "mov", (value,), (ir.Imm(0, 2),)), (1,), ())
-    call = replace(_insn(ir.Semantics(ir.Operation.CALL, "call", (), ()), (), (1,), at=0x108),
-                   requires=tuple((value, register) for register in registers))
+    call = replace(
+        _insn(ir.Semantics(ir.Operation.CALL, "call", (), ()), (), (1,), at=0x108),
+        requires=tuple((value, register) for register in registers),
+    )
     body, pins = constrain.constrained(_body(constant, call))
     placed = allocate.applied(body, allocate.allocate(body, pins))
-    zeros = {one.what.dests[0].register for one in placed.insns
-             if one.what.name == "mov" and one.what.sources == (ir.Imm(0, 2),)}
+    zeros = {
+        one.what.dests[0].register
+        for one in placed.insns
+        if one.what.name == "mov" and one.what.sources == (ir.Imm(0, 2),)
+    }
     assert set(registers) <= zeros
     assert {pins[value] for value in body.insns[-1].uses} == set(registers)
 
@@ -133,16 +177,23 @@ def test_shared_zero_is_supplied_to_every_runtime_input(registers):
 def test_fixed_address_requirement_renames_memory_base():
     """Qrender FIDIV 035c retained unplaced v398 after its SI input became v1036."""
     from dataclasses import replace
-    from qbopt.objectfile.module import Addr, Space
+
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
     value = ir.Held(20, 2)
     cell = ir.Mem(Addr(Space.LITERAL, 0), 2, base=value)
-    instruction = replace(_insn(ir.Semantics(ir.Operation.FLOAT_ARITH, "fidiv",
-        (ir.St(0),), (ir.St(0), cell)), (), (20,)), requires=((value, Register.SI),))
+    instruction = replace(
+        _insn(ir.Semantics(ir.Operation.FLOAT_ARITH, "fidiv", (ir.St(0),), (ir.St(0), cell)), (), (20,)),
+        requires=((value, Register.SI),),
+    )
     got, pins = constrain.constrained(_body(instruction))
     result = got.insns[-1]
     assert result.what.sources[-1].base.value == result.uses[0]
     assert pins[result.uses[0]] == Register.SI
-    from qbopt.backend import allocate, select
+    from qbopt.backend import select
+    from qbopt.backend import allocate
+
     placed = allocate.applied(got, allocate.allocate(got, pins))
     emitted = select.emit(placed.insns[-1].what)
     assert emitted is not None

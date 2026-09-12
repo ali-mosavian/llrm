@@ -66,12 +66,13 @@ from qbopt.objectfile import omf
 from qbopt.frontend.blocks import Ends
 from qbopt.frontend.blocks import Block
 from qbopt.frontend.blocks import ENTRY
-from qbopt.objectfile.module import Module
 from qbopt.frontend.blocks import CodeMap
 from qbopt.frontend.blocks import code_map
+from qbopt.objectfile.module import Module
 from qbopt.frontend.blocks import event_stub
 from qbopt.frontend.blocks import has_header
 from qbopt.frontend.blocks import INLINE_TABLE
+from qbopt.frontend.blocks import local_call_target
 from qbopt.frontend.blocks import partition as block_partition
 
 EVENT_STUB_NAME = "event poll stub"
@@ -183,7 +184,9 @@ def _ranges(mapped: CodeMap, blocks_by_at: dict[int, Block], owned: frozenset[in
 
 def partition(module: Module) -> Partition | str:
     """The module's code, cut into its main body, its procedures, and whatever neither accounts for."""
-    if not has_header(module):
+    basic = has_header(module)
+    native = not basic and module.name.endswith("_TEXT") and omf.code_segment(module.records) is not None
+    if not basic and not native:
         return "no module header: which offset is the entry is not known without one"
     mapped = code_map(module)
     if isinstance(mapped, str):
@@ -192,22 +195,32 @@ def partition(module: Module) -> Partition | str:
     all_blocks = block_partition(module, mapped)
     from qbopt.abi import runtime
     from qbopt.frontend import raising_control
+
     all_blocks = raising_control.terminal_edges(all_blocks, runtime.for_module(module))
     blocks_by_at = {blk.at: blk for blk in all_blocks}
     names = omf.pubdef_names(module.records, module.seg)
 
-    seeds: list[tuple[BodyKind, int, str | None]] = [(BodyKind.MAIN, ENTRY, None)]
+    seeds: list[tuple[BodyKind, int, str | None]] = [(BodyKind.MAIN, ENTRY, None)] if basic else []
     if (stub := event_stub(module)) is not None:
         seeds.append((BodyKind.EVENT_STUB, stub, EVENT_STUB_NAME))
     seeds += [(BodyKind.PROCEDURE, at, names.get(at)) for at in sorted(module.publics)]
+    if native:
+        private = {
+            target
+            for block in all_blocks
+            for insn in block.insns
+            if (target := local_call_target(module, insn)) is not None
+        } | set(mapped.procedures)
+        private -= module.publics
+        seeds += [(BodyKind.PROCEDURE, at, None) for at in sorted(private)]
     from qbopt.abi.events import handler_entries
-    seeds += [(BodyKind.EVENT_HANDLER, at, "timer handler")
-              for at in sorted(handler_entries(module) - module.publics)]
+
+    seeds += [(BodyKind.EVENT_HANDLER, at, "timer handler") for at in sorted(handler_entries(module) - module.publics)]
     from qbopt.abi.handlers import error_entries
+
     handlers = error_entries(module)
     occupied = {seed for _, seed, _ in seeds}
-    seeds += [(BodyKind.ERROR_HANDLER, at, "error handler")
-              for at in sorted(handlers - occupied)]
+    seeds += [(BodyKind.ERROR_HANDLER, at, "error handler") for at in sorted(handlers - occupied)]
 
     seed_offsets = frozenset(seed for _, seed, _ in seeds)
     reached = {seed: _reachable(seed, seed_offsets - {seed}, blocks_by_at, module, mapped) for _, seed, _ in seeds}
@@ -226,6 +239,6 @@ def partition(module: Module) -> Partition | str:
     bodies = tuple(Body(kind, seed, name, _ranges(mapped, blocks_by_at, reached[seed])) for kind, seed, name in seeds)
     conflicts = _merge([(blk.at, blk.end) for at, blk in blocks_by_at.items() if owners.get(at, 0) > 1])
     unexplained = _merge([(blk.at, blk.end) for at, blk in blocks_by_at.items() if owners.get(at, 0) == 0])
-    benign = tuple(gap for gap in mapped.unreached if gap[0] >= ENTRY)
+    benign = tuple(gap for gap in mapped.unreached if gap[0] >= (ENTRY if basic else module.start))
 
     return Partition(bodies, benign, unexplained, conflicts)

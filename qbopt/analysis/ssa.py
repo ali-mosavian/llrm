@@ -8,11 +8,7 @@ from qbopt.model.mir import MirBody
 
 
 def pruned_phis(body: MirBody, roots: set[mir.Value]) -> MirBody:
-    needed = (
-        roots
-        | {value for block in body.blocks for op in block.ops for value in op.uses if value not in op.merges}
-        | {arg.value for block in body.blocks for op in block.ops for arg in op.args if isinstance(arg, mir.Held)}
-    )
+    needed = roots | {value for block in body.blocks for op in block.ops for value in mir.consumed(op)}
     needed |= {
         value
         for block in body.blocks
@@ -89,6 +85,57 @@ def substituted(op: Op, swap: dict[int, mir.Value]) -> Op:
         stores=tuple(reference(ref) for ref in op.stores),
         merges={provider(source, swap): mask for source, mask in op.merges.items()},
     )
+
+
+def renumbered(body: MirBody, variable: int) -> MirBody:
+    """Make one variable's versions run from one without a gap.
+
+    Construction numbers the definitions it is shown, so a definition removed
+    afterwards leaves a hole -- and versions 2,3,4,5 read as a different
+    variable from the one written four times, which is the whole point of a
+    variable having versions rather than four names.
+    """
+    order = sorted({one for one in values(body) if one.variable == variable}, key=lambda one: one.version)
+    swap = {one.id: replace(one, version=index) for index, one in enumerate(order, 1)}
+    if all(one.version == swap[one.id].version for one in order):
+        return body
+
+    def named(one: "mir.Value | None") -> "mir.Value | None":
+        return swap.get(one.id, one) if one is not None else None
+
+    def reference(ref: mir.MemRef) -> mir.MemRef:
+        return replace(ref, base=named(ref.base), segment=named(ref.segment))
+
+    def operand(one: mir.Arg) -> mir.Arg:
+        match one:
+            case mir.Held(value=held, width=width):
+                return mir.Held(named(held), width)
+            case mir.Cell(ref=ref):
+                return mir.Cell(reference(ref))
+            case _:
+                return one
+
+    blocks = []
+    for block in body.blocks:
+        phis = tuple(
+            replace(phi, result=named(phi.result), incoming={at: named(one) for at, one in phi.incoming.items()})
+            for phi in block.phis
+        )
+        ops = tuple(
+            replace(
+                op,
+                defines=tuple(named(one) for one in op.defines),
+                uses=tuple(named(one) for one in op.uses),
+                args=tuple(operand(one) for one in op.args),
+                results=tuple(operand(one) for one in op.results),
+                loads=tuple(reference(one) for one in op.loads),
+                stores=tuple(reference(one) for one in op.stores),
+                merges={named(source): mask for source, mask in op.merges.items()},
+            )
+            for op in block.ops
+        )
+        blocks.append(replace(block, phis=phis, ops=ops))
+    return replace(body, blocks=tuple(blocks), origin={named(one): where for one, where in body.origin.items()})
 
 
 def constructed(body: MirBody, variables: frozenset[int]) -> MirBody:
@@ -192,7 +239,9 @@ def constructed(body: MirBody, variables: frozenset[int]) -> MirBody:
     return replace(
         body,
         blocks=tuple(
-            block if fixed is None else replace(
+            block
+            if fixed is None
+            else replace(
                 block,
                 phis=tuple(
                     replace(

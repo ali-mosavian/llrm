@@ -15,16 +15,22 @@ spill stages advance monotonically; the result does not claim optimality.
 
 import heapq
 from enum import IntEnum
+from collections import Counter
 from dataclasses import replace
+from typing import TYPE_CHECKING
 from dataclasses import dataclass
 
-from iced_x86 import Register_, Register
+from iced_x86 import Register
+from iced_x86 import Register_
 
 from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.backend import target
-from qbopt.analysis import intervals as ranges
 from qbopt.model.passes import LIRTransform
+from qbopt.analysis import intervals as ranges
+
+if TYPE_CHECKING:
+    from qbopt.backend.frame import Frame
 
 # Maximum queue visits before the remaining values are spilled.
 BUDGET = 200_000
@@ -130,6 +136,7 @@ def narrowed(body: lir.LirBody, pinned: "dict[int, Register_]") -> "tuple[lir.Li
                 replace(
                     one,
                     defines=tuple(value for value in one.defines if value not in gone),
+                    delivers=tuple((held, register) for held, register in one.delivers if held.value not in gone),
                     clobbers=one.clobbers | frozenset(gone.values()),
                 )
             )
@@ -192,7 +199,7 @@ class Stage(IntEnum):
     DONE = 3
 
 
-def classes(body: lir.LirBody) -> dict[int, frozenset]:
+def classes(body: lir.LirBody) -> dict[int, frozenset[Register_]]:
     """The register class each value is confined to, where it is confined.
 
     LLVM allocates within a `TargetRegisterClass` and orders the candidates
@@ -209,8 +216,13 @@ def classes(body: lir.LirBody) -> dict[int, frozenset]:
     `target.reads()` and `target.writes()` are what would answer them here
     when they do not.
     """
-    out: dict[int, frozenset] = {}
-    def restrict(value, choices):
+    out: dict[int, frozenset[Register_]] = {}
+    # A selector goes in a segment register only where every other operand
+    # it appears in can name one: a move, a push or a pop.
+    selecting: set[int] = set()
+    numeric: set[int] = set()
+
+    def restrict(value: int, choices: frozenset[Register_]) -> None:
         out[value] = out.get(value, choices) & choices
 
     for block in body.blocks:
@@ -218,6 +230,12 @@ def classes(body: lir.LirBody) -> dict[int, frozenset]:
             if one.what is None:
                 continue
             for where in (*one.what.dests, *one.what.sources):
+                if isinstance(where, ir.Mem) and where.selector is not None:
+                    selecting.add(where.selector.value)
+                if isinstance(where, ir.Mem) and where.base is not None:
+                    numeric.add(where.base.value)
+                if isinstance(where, ir.Held) and (where.width != 2 or one.what.op not in _SEGMENT_OPERANDS):
+                    numeric.add(where.value)
                 # `base` and not `through`: the first is the value that
                 # computed the address, the second only how to encode the
                 # operand once something has placed it. 16-bit addressing
@@ -227,7 +245,79 @@ def classes(body: lir.LirBody) -> dict[int, frozenset]:
                     restrict(where.base.value, target.ADDRESSING)
                 if isinstance(where, ir.Held) and where.width == 1:
                     restrict(where.value, frozenset({Register.AX, Register.BX, Register.CX, Register.DX}))
+    for value in selecting - numeric:
+        restrict(value, frozenset(target.SELECTORS))
     return out
+
+
+_SEGMENT_OPERANDS = frozenset({ir.Operation.MOVE, ir.Operation.PUSH, ir.Operation.POP})
+
+
+def explicit_selectors(body: lir.LirBody, pinned: "dict[int, Register_] | None" = None) -> lir.LirBody:
+    """Each far cell whose selector is also read as a number, or pinned to a
+    general register, reached through ES.
+
+    That value cannot live in a segment register, so the cell names ES and the
+    instruction requires the value there, the way a call requires an argument:
+    `constrain` gives the occurrence a copy of its own.
+    """
+    confined = classes(body)
+    selectors = frozenset(target.SELECTORS)
+    conflicted = {
+        where.selector.value
+        for one in body.insns
+        if one.what is not None
+        for where in (*one.what.dests, *one.what.sources)
+        if isinstance(where, ir.Mem)
+        and where.selector is not None
+        and (
+            confined.get(where.selector.value) != selectors
+            or (pinned or {}).get(where.selector.value, Register.ES) not in target.SEGMENTS
+        )
+    }
+    if not conflicted:
+        return body
+
+    def through_es(where):
+        if isinstance(where, ir.Mem) and where.selector is not None and where.selector.value in conflicted:
+            return replace(where, selector=None, addr=replace(where.addr, segment=Register.ES))
+        return where
+
+    blocks = []
+    for block in body.blocks:
+        insns = []
+        for one in block.insns:
+            named = (
+                []
+                if one.what is None
+                else [
+                    where.selector
+                    for where in (*one.what.dests, *one.what.sources)
+                    if isinstance(where, ir.Mem) and where.selector is not None and where.selector.value in conflicted
+                ]
+            )
+            if not named:
+                insns.append(one)
+                continue
+            what = replace(
+                one.what, dests=tuple(map(through_es, one.what.dests)), sources=tuple(map(through_es, one.what.sources))
+            )
+            requires = tuple(dict.fromkeys((*one.requires, *((held, Register.ES) for held in named))))
+            uses = tuple(dict.fromkeys((*one.uses, *(held.value for held in named))))
+            insns.append(replace(one, what=what, requires=requires, uses=uses))
+        blocks.append(replace(block, insns=tuple(insns)))
+    return replace(body, blocks=tuple(blocks))
+
+
+def _copy_hints(body: lir.LirBody) -> dict[int, list[int]]:
+    hints: dict[int, list[int]] = {}
+    for one in body.insns:
+        match one.what:
+            case ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held() as dest,), (ir.Held() as source,)):
+                if dest.width == source.width and dest.value != source.value:
+                    hints.setdefault(dest.value, []).append(source.value)
+                    hints.setdefault(source.value, []).append(dest.value)
+    return hints
 
 
 def allocate(
@@ -279,6 +369,7 @@ def allocate(
     # the reload lands tied at the same instruction and the round repeats.
     confined = classes(body)
     fixed = dict(pinned or {})
+    hints = _copy_hints(body)
 
     # What is assigned to each register, as intervals. LLVM's
     # LiveIntervalUnion: the question an allocator asks a thousand times is
@@ -309,6 +400,13 @@ def allocate(
         if mine is None:
             continue
         order = target.order(confined.get(value)) if value not in fixed else (fixed[value],)
+        if value not in fixed:
+            votes = Counter(
+                _whole(register)
+                for other in hints.get(value, ())
+                if (register := fixed.get(other, where.get(other))) is not None
+            )
+            order = tuple(sorted(order, key=lambda register: -votes[_whole(register)]))
 
         got = _free(mine, order, union, live, masks)
         if got is not None:
@@ -431,7 +529,13 @@ def _free(one: "ranges.Interval", order: tuple, union: dict, live: dict, masks: 
     return None
 
 
-def _evict(one: "ranges.Interval", order: tuple, union: dict, live: dict, masks: list):
+def _evict(
+    one: ranges.Interval,
+    order: tuple[Register_, ...],
+    union: dict[Register_, list[int]],
+    live: dict[int, ranges.Interval],
+    masks: list[tuple[int, frozenset[Register_]]],
+) -> tuple[Register_, list[int]] | None:
     """The cheapest register to take, and what has to move out of it.
 
     Only where everything evicted is cheaper than what wants the register,
@@ -475,7 +579,7 @@ class RegAlloc(LIRTransform):
     # groups, so it wants more rounds to settle.
     ROUNDS = 12
 
-    def __init__(self, pinned: "dict[int, Register_] | None" = None, frame=None) -> None:
+    def __init__(self, pinned: "dict[int, Register_] | None" = None, frame: "Frame | None" = None) -> None:
         self.pinned: dict[int, Register_] = dict(pinned or {})
         self.frame = frame
 
@@ -495,6 +599,7 @@ class RegAlloc(LIRTransform):
 
         if self.frame is None:
             self.frame = frames.of(body)
+        body = explicit_selectors(body, self.pinned)
         # Once, before anything is placed. A required register is a claim
         # about one instruction -- `imul`'s product is dx:ax and it names
         # neither -- so the operand becomes a value of its own, live across
@@ -511,6 +616,38 @@ class RegAlloc(LIRTransform):
         # is not a value at all, and its register is a clobber.
         body, narrower = narrowed(body, self.pinned)
         self.pinned = narrower
+        # A fixed-register definition is a constraint on that occurrence,
+        # not a lifetime-long register class.  OIMAD's allocator first saw
+        # a runtime result in AX and later used the same value as the base
+        # of `es:[base]`, whose 16-bit encoding permits only BX/BP/SI/DI.
+        # Keeping the MIR pin on the whole SSA value made the final load
+        # `es:[ax]`, an encoding that does not exist.  `delivers` retains
+        # the call's real AX requirement; release the incompatible whole-
+        # range pin so constrain can split that occurrence and leave the
+        # value after its copy in the class its uses require.
+        confined = classes(body)
+        incompatible = {
+            value
+            for value, register in self.pinned.items()
+            if value in confined and _whole(register) not in {_whole(choice) for choice in confined[value]}
+        }
+        if incompatible:
+            delivered = {held.value for one in body.insns for held, _register in one.delivers}
+            missing = incompatible - delivered
+            if missing:
+                value = min(missing)
+                raise Unplaced(
+                    f"value#{value} is pinned outside its register class and has no defining occurrence to split"
+                )
+            self.pinned = {value: register for value, register in self.pinned.items() if value not in incompatible}
+        # A selector pinned to a segment register is placed like any other
+        # value in its class: ES, FS and GS are one choice, and every read
+        # through ES that is not a cell's operand already says so itself.
+        self.pinned = {
+            value: register
+            for value, register in self.pinned.items()
+            if not (register in target.SEGMENTS and confined.get(value) == frozenset(target.SELECTORS))
+        }
         body, fixed = constrain.constrained(body, self.pinned)
         # Disjoint by construction -- the splitter mints ids above every one
         # the body holds -- and said rather than assumed, because a silent
@@ -527,6 +664,9 @@ class RegAlloc(LIRTransform):
         # says the same as `LiveInterval::markNotSpillable`, and the
         # reloads below are already handed back the same way.
         reloads: frozenset[int] = frozenset(fixed)
+        # Which values have already been cut. Splitting is bounded per
+        # value, not merely per round.
+        already: set[int] = set()
         for _round in range(self.ROUNDS):
             # Recomputed every attempt, and merged last. The spiller puts a
             # fresh value at an instruction between rounds, and a
@@ -542,10 +682,43 @@ class RegAlloc(LIRTransform):
             # and a load. Only the values that failed -- splitting every
             # crossing range on principle cost 12,329 bytes over the
             # corpus and freed nothing.
-            cut = splitkit.split(body, got.spilled)
-            if cut is not body and not allocate(cut, self.pinned, reloads).spilled:
-                body = cut
-                continue
+            cut = splitkit.split(body, got.spilled, already)
+            if cut is not body:
+                # Progress, not perfection. `RegAllocGreedy` requeues the
+                # pieces of a split range and asks again; demanding that
+                # one cut place the whole body meant a cut that halved the
+                # spill set was thrown away because one other value still
+                # wanted a slot. Fewer spilled, or the same number at a
+                # lower cost, is the same test LLVM's stage ladder makes.
+                after = allocate(cut, {**prefer, **constrain.required(cut)}, reloads)
+                if not after.spilled:
+                    return applied(cut, after)
+                # Count, not cost. A shorter range is a cheaper range
+                # whether or not it became placeable, so accepting a cost
+                # improvement accepts a cut that achieved nothing -- the
+                # same livelock `already` guards from the other side.
+                if len(after.spilled) < len(got.spilled):
+                    body = cut
+                    continue
+            # A cheap value with an independently reproducible definition is
+            # not a stack object.  Recreate those first, then ask allocation
+            # again before committing any of the values they conflicted with
+            # to frame slots.  Otherwise one rematerializable selector and
+            # the short selector ranges it crosses are all spilled together,
+            # even though removing the former makes every latter range fit.
+            rematerializable = spiller.rematerializable(body, got.spilled)
+            if rematerializable:
+                remade, made = spiller.spilled(body, rematerializable, self.frame)
+                if remade != body:
+                    body = remade
+                    reloads |= made
+                    continue
+            # Classification names a candidate, not evidence that rewriting
+            # it changed the body. Retrying a no-op consumed all twelve
+            # allocation rounds in OIMAD while the real spill set was never
+            # touched. Rematerialization is a preference, not progress; when
+            # it made no structural change, spill the values allocation
+            # actually selected in this same round.
             body, made = spiller.spilled(body, got.spilled, self.frame)
             reloads |= made
         self.pinned = {**prefer, **constrain.required(body)}
@@ -609,19 +782,32 @@ def _dead_insertions(body: lir.LirBody) -> lir.LirBody:
         used.update(value for block in body.blocks for phi in block.phis for _, value in phi.incoming)
         dead = set()
         for one in body.insns:
-            if (not one.covers or one.covers[0] != one.covers[1] or one.spread
-                or one.clobbers or one.requires or one.delivers or one.symbol is True):
+            if (
+                not one.covers
+                or one.covers[0] != one.covers[1]
+                or one.spread
+                or one.clobbers
+                or one.requires
+                or one.delivers
+                or one.symbol is True
+            ):
                 continue
             match one.what:
                 case ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(value, _),), (source,)):
-                    if (one.defines == (value,) and value not in used
-                        and (isinstance(source, (ir.Held, ir.Imm))
-                             or isinstance(source, ir.Mem) and one.spill_reload)):
+                    if (
+                        one.defines == (value,)
+                        and value not in used
+                        and (isinstance(source, (ir.Held, ir.Imm)) or isinstance(source, ir.Mem) and one.spill_reload)
+                    ):
                         dead.add(id(one))
         if not dead:
             return body
-        body = replace(body, blocks=tuple(replace(block, insns=tuple(
-            one for one in block.insns if id(one) not in dead)) for block in body.blocks))
+        body = replace(
+            body,
+            blocks=tuple(
+                replace(block, insns=tuple(one for one in block.insns if id(one) not in dead)) for block in body.blocks
+            ),
+        )
 
 
 def _identity_anchor(one: lir.Insn) -> lir.Insn:
@@ -655,8 +841,13 @@ def _placed(one: lir.Insn, held: dict, origin: dict) -> lir.Insn:
     return replace(one, what=ir.Semantics(what.op, what.name, dests, sources, what.target))
 
 
-def _settled(where, held: dict, origin: dict):
+def _settled(where: ir.Loc | ir.Held, held: dict, origin: dict) -> ir.Loc:
     """One operand with its value resolved to the register holding it."""
+    if isinstance(where, ir.Mem) and where.selector is not None:
+        register = held.get(where.selector.value)
+        if register is None:
+            raise Unplaced(f"selector value#{where.selector.value} has no register")
+        where = replace(where, addr=replace(where.addr, segment=register))
     if isinstance(where, ir.Mem) and where.base is not None:
         # The cell keeps saying which value reached it; `through` becomes
         # the register that value was given. Everything else is untouched.
