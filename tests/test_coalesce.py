@@ -253,3 +253,28 @@ def test_a_join_that_would_make_a_class_uncolourable_is_refused() -> None:
     for phase in flow.machine(pinned, None, found.calls):
         low = phase.transform(low)
     assert low, "the allocator refused the body"
+
+
+def test_nbody_shifts_each_product_where_it_multiplied_it() -> None:
+    """nbody's accumulated products went `mov edx,esi / sar edx,9 / add [bp-8],edx`.
+
+    Briggs refused the copy: the product's class is long and busy. George's
+    test accepts it, since every neighbour of the shift already neighbours
+    the product.
+    """
+    from iced_x86 import Mnemonic
+    from iced_x86 import OpKind
+
+    from test_observers import _nbody_inner_loop
+
+    loop = _nbody_inner_loop()
+    accumulated = [
+        index
+        for index, one in enumerate(loop)
+        if one.mnemonic == Mnemonic.ADD and one.op0_kind == OpKind.MEMORY and one.op1_kind == OpKind.REGISTER
+    ]
+    assert len(accumulated) == 2
+    for index in accumulated:
+        copied, shifted = loop[index - 2], loop[index - 1]
+        assert shifted.mnemonic == Mnemonic.SAR
+        assert not (copied.mnemonic == Mnemonic.MOV and copied.op0_register == shifted.op0_register)

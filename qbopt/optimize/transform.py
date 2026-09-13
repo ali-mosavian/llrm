@@ -927,9 +927,11 @@ def _empty_operation(op: Op) -> Op:
     )
 
 
-def without_dead_stores(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
-    """Every store overwritten before anything read it, removed."""
-    gone = {id(op) for op in avail.dead_stores(body, dgroup, calls)}
+def without_dead_stores(
+    body: MirBody, dgroup: frozenset[int], calls: dict[int, str], private=None, bounds: dict | None = None
+) -> MirBody:
+    """Every store overwritten, or never observable, before anything read it, removed."""
+    gone = {id(op) for op in avail.dead_stores(body, dgroup, calls, private, bounds)}
     if not gone:
         return body
     return replace(
@@ -2786,7 +2788,10 @@ class DropStores(MIRTransform):
         self.where = where
 
     def transform(self, body: MirBody) -> MirBody:
-        return without_dead_stores(body, self.where.dgroup, self.where.named)
+        from qbopt.analysis import observers
+
+        private = observers.private(body, self.where.found, self.where.blocks)
+        return without_dead_stores(body, self.where.dgroup, self.where.named, private, self.where.bounds)
 
 
 class Reuse(MIRTransform):

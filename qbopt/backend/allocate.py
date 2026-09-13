@@ -372,7 +372,7 @@ def allocate(
     cost model right at a price that grows with the body.
     """
     index = ranges.indexed(body)
-    live = ranges.intervals(body, index)
+    live = _sibling_priced(body, ranges.intervals(body, index))
     masks = _masks(body, index)
     # A reload's value is live across one instruction and must have a
     # register: spilling it again puts a load in front of a load and
@@ -748,10 +748,69 @@ class RegAlloc(LIRTransform):
             # touched. Rematerialization is a preference, not progress; when
             # it made no structural change, spill the values allocation
             # actually selected in this same round.
-            body, made = spiller.spilled(body, got.spilled, self.frame)
+            chosen = got.spilled | spiller.siblings(body, got.spilled, self.frame, frozenset(self.pinned) | reloads)
+            body, made = spiller.spilled(body, chosen, self.frame)
             reloads |= made
         self.pinned = {**prefer, **constrain.required(body)}
         return applied(body, allocate(body, self.pinned, reloads))
+
+
+def _sibling_priced(body: lir.LirBody, live: dict) -> dict:
+    """Intervals whose copies to a value they could share a slot with cost nothing.
+
+    Spilling a value spills the copies between it and its non-interfering
+    siblings with it, and `spiller.siblings` then puts them in one slot
+    where the copy writes a cell from itself. Priced as references, those
+    copies made nbody's accY -- a phi, a sum and three copies -- dearer to
+    spill than the loop counter, and the counter went to memory instead.
+
+    Only between two values that are nothing but moves and updates in
+    place. A value that is also read -- PLASMA's `fuh` pointer, dereferenced
+    and compared on every pass -- pays a reload for each of those reads, and
+    discounting its copies spilled it in place of the invariant it was
+    being added to.
+    """
+    from qbopt.backend import spiller
+    from qbopt.backend import coalesce
+
+    moves = [
+        (block.at, pair)
+        for block in body.blocks
+        for one in block.insns
+        if (pair := spiller._plain_move(one)) is not None and pair[0] != pair[1]
+    ]
+    if not moves:
+        return live
+    impure: set[int] = set()
+    for one in body.insns:
+        if spiller._plain_move(one) is not None:
+            continue
+        what = one.what
+        in_place = (
+            what is not None
+            and what.op in (ir.Operation.BINARY, ir.Operation.UNARY)
+            and not one.requires
+            and not one.delivers
+            and not any(isinstance(x, ir.Mem) for x in (*what.dests, *what.sources))
+        )
+        impure.update(
+            value for value in (*one.defines, *one.uses) if not (in_place and value in one.defines and value in one.uses)
+        )
+    near = coalesce._interference(body)
+    deep = ranges.depths(body)
+    free: dict[int, float] = {}
+    for at, (into, out_of) in moves:
+        if into in impure or out_of in impure or out_of in near.get(into, ()):
+            continue
+        each = float(ranges.PER_LEVEL ** deep.get(at, 0))
+        for value in (into, out_of):
+            free[value] = free.get(value, 0.0) + each
+    return {
+        value: replace(one, weight=max(0.0, one.weight - free[value] / (one.size + ranges.GRACE)))
+        if value in free
+        else one
+        for value, one in live.items()
+    }
 
 
 def applied(body: lir.LirBody, got: Assignment) -> lir.LirBody:

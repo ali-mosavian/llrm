@@ -66,11 +66,16 @@ def spilled(
     stored = values - constants.keys() - frame_loads.keys() - frame_homes.keys()
     abandoned: set[int] = set()
     rematerialized_definitions: set[int] = set()
+    identities: set[int] = set()
 
     blocks = []
     for block in body.blocks:
         insns: list[lir.Insn] = []
         for one in block.insns:
+            if _identity(one, stored, frame):
+                identities.add(id(one))
+                insns.append(one)
+                continue
             source = _group_source(one)
             if source is not None and source.value in constants:
                 one = replace(one, what=replace(one.what, sources=(constants[source.value],)), uses=(), symbol=False)
@@ -168,9 +173,137 @@ def spilled(
                 for block in result.blocks
             ),
         )
+    if identities:
+        result = replace(
+            result,
+            blocks=tuple(
+                replace(block, insns=tuple(lir.without(block.insns, lambda one: id(one) in identities)))
+                for block in result.blocks
+            ),
+        )
     result = _remove_abandoned(result, abandoned)
     surviving = {value for one in result.insns for value in one.defines}
     return result, frozenset(made & surviving)
+
+
+def _identity(one: lir.Insn, stored: "frozenset[int]", frame) -> bool:
+    """A move between two spilled values that share one slot."""
+    pair = _plain_move(one)
+    if pair is None or not set(pair) <= stored or pair[0] == pair[1]:
+        return False
+    slots = getattr(frame, "slots", {})
+    return pair[0] in slots and slots.get(pair[0]) == slots.get(pair[1])
+
+
+def _plain_move(one: lir.Insn) -> "tuple[int, int] | None":
+    what = one.what
+    if (
+        what is None
+        or what.op is not ir.Operation.MOVE
+        or len(what.dests) != 1
+        or len(what.sources) != 1
+        or not isinstance(what.dests[0], ir.Held)
+        or not isinstance(what.sources[0], ir.Held)
+        or what.dests[0].width != what.sources[0].width
+        or one.requires
+        or one.delivers
+    ):
+        return None
+    return what.dests[0].value, what.sources[0].value
+
+
+def siblings(body: lir.LirBody, values: "frozenset[int]", frame, fixed: "frozenset[int]") -> frozenset[int]:
+    """Values copied to and from a spilled one that are cheaper in its slot.
+
+    LLVM's InlineSpiller spills a value's siblings with it. A phi's copies
+    join the accumulator it carries to the sum the loop writes; spill the
+    phi alone and every pass reloads it on the edge that skips the sum and
+    stores it back at the latch -- nbody's inner loop did both for accX and
+    accY. In one slot, a copy between two of them writes a cell from
+    itself and goes, and the sum is an `add` to the cell.
+
+    A copy web member joins when the loop-weighted moves it removes outweigh
+    the reloads and stores it adds, and when it interferes with no value
+    already in the slot. A move out of the web stays a move, and an update
+    that reads and writes it happens in the slot. Each web gets one slot,
+    handed out here, so the spiller sees the copies as identities.
+    """
+    if frame is None or not values:
+        return frozenset()
+    from qbopt.backend import coalesce
+    from qbopt.analysis import intervals
+
+    adjacent: dict[int, set[int]] = {}
+    widths: dict[int, int] = {}
+    for one in body.insns:
+        pair = _plain_move(one)
+        if pair is None or pair[0] == pair[1]:
+            continue
+        widths[pair[0]] = widths[pair[1]] = one.what.dests[0].width
+        adjacent.setdefault(pair[0], set()).add(pair[1])
+        adjacent.setdefault(pair[1], set()).add(pair[0])
+    if not any(one in adjacent for one in values):
+        return frozenset()
+
+    near = coalesce._interference(body)
+    deep = intervals.depths(body)
+    wanted = set(adjacent)
+    occurs: dict[int, list[tuple[float, lir.Insn]]] = {}
+    for block in body.blocks:
+        each = float(intervals.PER_LEVEL ** deep.get(block.at, 0))
+        for one in block.insns:
+            for value in wanted.intersection((*one.defines, *one.uses)):
+                occurs.setdefault(value, []).append((each, one))
+
+    def worth(candidate: int, group: set[int]) -> bool:
+        saved = cost = 0.0
+        for each, one in occurs.get(candidate, ()):
+            pair = _plain_move(one)
+            if pair is not None:
+                if set(pair) - {candidate} <= group:
+                    saved += each
+                continue
+            what = one.what
+            in_place = (
+                what is not None
+                and what.op in (ir.Operation.BINARY, ir.Operation.UNARY)
+                and candidate in one.defines
+                and candidate in one.uses
+                and not one.requires
+                and not one.delivers
+                and not any(isinstance(x, ir.Mem) for x in (*what.dests, *what.sources))
+            )
+            if not in_place:
+                cost += each
+        return saved > cost
+
+    taken: set[int] = set()
+    chosen: set[int] = set()
+    for first in sorted(one for one in values if one in adjacent):
+        if first in taken:
+            continue
+        group = {first}
+        growing = True
+        while growing:
+            growing = False
+            frontier = set().union(*(adjacent.get(one, set()) for one in group)) - group - taken - fixed
+            for candidate in sorted(frontier):
+                if widths.get(candidate) != widths.get(first):
+                    continue
+                if any(one in near.get(candidate, ()) for one in group):
+                    continue
+                if candidate in values or worth(candidate, group):
+                    group.add(candidate)
+                    growing = True
+        slots = {frame.slots[one] for one in group if one in frame.slots}
+        if len(group) < 2 or len(slots) > 1:
+            continue
+        home = slots.pop() if slots else frame.slot(first, widths[first])
+        for one in group:
+            frame.slots[one] = home
+        taken |= group
+        chosen |= group - values
+    return frozenset(chosen)
 
 
 def rematerializable(body: lir.LirBody, values: frozenset[int]) -> frozenset[int]:

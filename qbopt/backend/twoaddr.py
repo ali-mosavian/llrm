@@ -75,8 +75,11 @@ def tied(body: lir.LirBody) -> lir.LirBody:
 
 
 def _copy_destinations(body: lir.LirBody) -> dict[int, set[int]]:
-    """Copy affinities are hints; liveness and allocation still decide legality."""
-    targets = {}
+    """Which values each value is copied to or from.
+
+    Copy affinities are hints; liveness and allocation still decide legality.
+    """
+    adjacent: dict[int, set[int]] = {}
     for block in body.blocks:
         for one in block.insns:
             what = one.what
@@ -88,8 +91,21 @@ def _copy_destinations(body: lir.LirBody) -> dict[int, set[int]]:
                 and isinstance(what.sources[0], ir.Held)
                 and what.dests[0].width == what.sources[0].width
             ):
-                targets.setdefault(what.sources[0].value, set()).add(what.dests[0].value)
-    return targets
+                adjacent.setdefault(what.sources[0].value, set()).add(what.dests[0].value)
+                adjacent.setdefault(what.dests[0].value, set()).add(what.sources[0].value)
+    return adjacent
+
+
+def _distance(copies: dict[int, set[int]], start: int, goal: int, limit: int = 8) -> float:
+    """How many copies apart two values are; infinite where none joins them within `limit`."""
+    seen, frontier, steps = {start}, {start}, 0
+    while frontier and steps <= limit:
+        if goal in frontier:
+            return steps
+        frontier = {other for one in frontier for other in copies.get(one, ()) if other not in seen}
+        seen |= frontier
+        steps += 1
+    return float("inf")
 
 
 def _commuted(one: lir.Insn, alive: frozenset[int], copies=None) -> lir.Insn:
@@ -112,12 +128,15 @@ def _commuted(one: lir.Insn, alive: frozenset[int], copies=None) -> lir.Insn:
         or into.value == first.value
     ):
         return one
-    targets = (copies or {}).get(into.value, ())
+    # Tie the source nearest the destination in the copy graph. An
+    # accumulator is a phi, the sum the loop writes, and the copies phi
+    # elimination put between them: `acc := d + acc` has to tie `acc` for
+    # the three to be one value, and nbody's accY tied `d` and copied the
+    # sum back into its slot on every pass.
     reusable = (
         first.value not in alive
         and second.value not in alive
-        and second.value in targets
-        and first.value not in targets
+        and _distance(copies or {}, into.value, second.value) < _distance(copies or {}, into.value, first.value)
     )
     if second.value == into.value or first.value in alive and second.value not in alive or reusable:
         return replace(one, what=replace(what, sources=(second, first)))

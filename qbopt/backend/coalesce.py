@@ -103,8 +103,10 @@ def joined(body: lir.LirBody, pinned: dict | None = None) -> lir.LirBody:
             # not free and the heterogeneous-palette argument does not apply.
             constrained = any(value in held for value in (*neighbours, here, there))
             if len([o for o in neighbours if may.get(o, everything) & allowed
-                    and len(near.get(o, ())) >= (k if constrained else len(may.get(o, everything)))]) >= k:
-                continue  # Briggs: the merged class would not be colourable
+                    and len(near.get(o, ())) >= (k if constrained else len(may.get(o, everything)))]) >= k and (
+                constrained or not (_george(here, there, allowed, near, may) or _george(there, here, allowed, near, may))
+            ):
+                continue  # Briggs and George: the merged class would not be colourable
             # Allocation receives pins keyed by the original value ids.
             # Keep the pinned member as the class representative.
             if mine_pin is not None and theirs_pin is None:
@@ -149,6 +151,27 @@ def joined(body: lir.LirBody, pinned: dict | None = None) -> lir.LirBody:
             )
             for block in body.blocks
         ),
+    )
+
+
+def _george(gone: int, kept: int, allowed: frozenset, near: dict, may: dict) -> bool:
+    """Whether `gone` can join `kept` without making `kept` harder to colour.
+
+    George's test, for the join Briggs refuses because the class is long
+    and busy: a loop counter and its increment, whose copy is one
+    instruction long, share every neighbour but the few live across that
+    instruction. Each neighbour of `gone` either already constrains `kept`,
+    cannot take a register the class may, or has fewer neighbours than
+    registers of its own -- and `kept` keeps its whole palette.
+    """
+    everything = frozenset(target.AVAILABLE)
+    if allowed != may.get(kept, everything):
+        return False
+    return all(
+        other in near.get(kept, ())
+        or not (may.get(other, everything) & allowed)
+        or len(near.get(other, ())) < len(may.get(other, everything))
+        for other in near.get(gone, set()) - {gone, kept}
     )
 
 

@@ -20,6 +20,7 @@ This lattice intersects at joins. Where predecessor values differ,
 availability proof. Lowering and allocation handle that phi normally.
 """
 
+from collections.abc import Callable
 from dataclasses import field
 from dataclasses import replace
 from dataclasses import dataclass
@@ -318,7 +319,12 @@ class Forward:
 
 
 def _dead_in(
-    block: mir.MirBlock, overwritten: dict[MemRef, int], dgroup: frozenset[int], calls: dict[int, str]
+    block: mir.MirBlock,
+    overwritten: dict[MemRef, int],
+    dgroup: frozenset[int],
+    calls: dict[int, str],
+    private: "Callable[[MemRef], bool] | None" = None,
+    bounds: dict | None = None,
 ) -> tuple[list[int], dict[MemRef, int]]:
     """One block, backward, from what its successors have already overwritten.
 
@@ -328,6 +334,9 @@ def _dead_in(
     found: list[int] = []
     overwritten = dict(overwritten)
     for op in reversed(block.ops):
+        # Nothing can read a private cell but by its name: not a call, and
+        # not an address this cannot resolve.
+        shielded = private is not None and op.floating is None and not op.barrier
         if op.kind is Kind.JOIN:
             # `push eax / pop ax / pop dx`. A barrier for values, because
             # nothing here can name in SSA what it writes -- and nothing at
@@ -341,7 +350,8 @@ def _dead_in(
             or effects.unmodeled_write(op)
             or (op.kind is Kind.CALL and not op.loads)
         ):
-            overwritten = {}
+            kept = shielded and op.kind is Kind.CALL
+            overwritten = {one: at for one, at in overwritten.items() if private(one)} if kept else {}
             continue
 
         wrote = stored_cell(op)
@@ -358,7 +368,12 @@ def _dead_in(
         for ref in op.loads:
             if ref.addr is not None and ref.addr.space is Space.STACK:
                 continue  # a pop, for the same reason a push is skipped below
-            overwritten = {one: at for one, at in overwritten.items() if not mir.overlapping(one, ref, dgroup)}
+            unnamed = shielded and (op.kind is Kind.CALL or ref.addr is None)
+            overwritten = {
+                one: at
+                for one, at in overwritten.items()
+                if (unnamed and private(one)) or not mir.overlapping(one, ref, dgroup, bounds)
+            }
         if wrote is None:
             for ref in op.stores:
                 if ref.addr is not None and ref.addr.space is Space.STACK:
@@ -371,11 +386,22 @@ def _dead_in(
                     # call were wiping everything known, which is where the
                     # seven stores memory.py finds and this did not all sat.
                     continue
-                overwritten = {one: at for one, at in overwritten.items() if not mir.overlapping(one, ref, dgroup)}
+                unnamed = shielded and (op.kind is Kind.CALL or ref.addr is None)
+                overwritten = {
+                    one: at
+                    for one, at in overwritten.items()
+                    if (unnamed and private(one)) or not mir.overlapping(one, ref, dgroup, bounds)
+                }
     return found, overwritten
 
 
-def dead_stores(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> tuple[Op, ...]:
+def dead_stores(
+    body: MirBody,
+    dgroup: frozenset[int],
+    calls: dict[int, str],
+    private: "Callable[[MemRef], bool] | None" = None,
+    bounds: dict | None = None,
+) -> tuple[Op, ...]:
     """Stores whose bytes are overwritten before anything reads them.
 
     Return operations, not addresses: inserted stores can share an address
@@ -387,15 +413,18 @@ def dead_stores(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) ->
 
     Across edges, not only within a block -- a cell has to be overwritten on
     *every* successor path, so what a block starts from is the intersection
-    of what its successors have. That is a must-analysis, and the fixed
-    point starts from "nothing is overwritten" and grows: the conservative
-    direction, and it means a cycle cannot justify itself into judging a
-    store dead that is not. Block-scoped was costing seven stores against
-    memory.py, all of them BC's module init, where the overwrite is in a
-    later block.
+    of what its successors have. That is liveness seen from the other side:
+    a store is live only if some path reads it, so the fixed point starts
+    from every stored cell and shrinks. Starting from nothing and growing
+    let a loop's back edge veto every store inside the loop: nbody wrote
+    four variables per inner pass that nothing ever read. Only the last
+    round's verdicts stand, since an earlier one was made on a guess.
+    Block-scoped was costing seven stores against memory.py, all of them
+    BC's module init, where the overwrite is in a later block.
 
     A block with no successor, or one this cannot see, starts from nothing:
-    the caller may read the cell.
+    the caller may read the cell -- unless `private` says nothing outside
+    the body can, in which case it starts from every such cell stored here.
 
     These clear what is known, and each is a way the cell could be
     read without this seeing a load of it: a barrier, whose addresses are
@@ -409,31 +438,41 @@ def dead_stores(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) ->
     read it" is a claim this has no standing to make.
     """
     known = {block.at: block for block in body.blocks}
-    entry: dict[int, dict] = {at: {} for at in known}
-    found: set[int] = set()
+    stored = {
+        ref: -1
+        for block in body.blocks
+        for op in block.ops
+        if (ref := stored_cell(op)) is not None and ref.addr is not None and ref.addr.space is not Space.STACK
+    }
+    entry: dict[int, dict] = {at: dict(stored) for at in known}
+    unread = (
+        {ref: -1 for block in body.blocks for op in block.ops if (ref := stored_cell(op)) is not None and private(ref)}
+        if private is not None
+        else {}
+    )
 
-    for _round in range(len(known) + 1):
+    changing = True
+    while changing:
         changing = False
+        found: set[int] = set()
         for block in sorted(body.blocks, key=lambda one: one.at, reverse=True):
             out: dict | None = None
             for successor in block.succ:
                 have = entry.get(successor)
                 if have is None:  # an edge out of this body
-                    out = {}
+                    out = dict(unread)
                     break
                 if out is None:
                     out = dict(have)
                 else:
                     out = {one: at for one, at in out.items() if any(mir.same_bytes(one, other) for other in have)}
             if out is None:
-                out = {}  # no successor at all: the caller may read it
-            mine, start = _dead_in(block, out, dgroup, calls)
+                out = dict(unread)  # no successor at all: only the caller may read it
+            mine, start = _dead_in(block, out, dgroup, calls, private, bounds)
             found.update(mine)
             if len(start) != len(entry[block.at]):
                 changing = True
             entry[block.at] = start
-        if not changing:
-            break
     return tuple(op for block in body.blocks for op in block.ops if id(op) in found)
 
 

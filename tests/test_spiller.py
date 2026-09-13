@@ -511,3 +511,56 @@ def test_a_dword_index_is_reloaded_as_a_dword():
     out = _out(_body(counter, read), {1})
     reloads = [one for one in out if one.spill_reload]
     assert reloads and all(one.what.dests[0].width == 4 for one in reloads), [one.what for one in out]
+
+
+def test_nbody_accumulates_in_the_slots_it_spills() -> None:
+    """accX and accY were reloaded on the skipping edge and stored at the latch.
+
+    A phi, the sum the loop writes and the copies between them are one
+    accumulator: spilled together into one slot, the copies are gone and
+    `acc += d` is an `add` to the cell. Spilled apart, every pass loaded and
+    stored both -- and once the sum tied the wrong operand, accY went
+    `mov eax,[s] / mov [s],ecx / add [s],eax`.
+    """
+    from iced_x86 import OpKind
+    from iced_x86 import Register
+    from iced_x86 import Mnemonic
+    from test_observers import _nbody_inner_loop
+
+    loop = _nbody_inner_loop()
+    updates = [one for one in loop if one.mnemonic == Mnemonic.ADD and one.op0_kind == OpKind.MEMORY]
+    stores = [one for one in loop if one.mnemonic == Mnemonic.MOV and one.op0_kind == OpKind.MEMORY]
+    loads = [
+        one
+        for one in loop
+        if one.mnemonic == Mnemonic.MOV and one.op1_kind == OpKind.MEMORY and one.memory_base == Register.BP
+    ]
+    assert len(updates) == 2
+    assert not stores and not loads
+
+
+def test_no_qbdemo_loop_compares_through_a_reload_of_a_cell_it_adds_to() -> None:
+    """PLASMA's fill loop went `add word [bp-76h],2 / mov dx,[bp-76h] / cmp dx,[bp-8Ch]`.
+
+    Pricing the pointer's copies as free spilled it, though it is also read
+    every pass, and kept the copy it was compared through in a register.
+    """
+    from iced_x86 import OpKind
+    from iced_x86 import Mnemonic
+
+    from test_observers import _loops
+
+    def cell(one):
+        return (one.memory_segment, one.memory_base, one.memory_index, one.memory_displacement)
+
+    for loop in _loops(Path("fixtures/regressions/qbdemo-fil2.obj")):
+        loaded, compared = loop[-3:-1]
+        if not (
+            compared.mnemonic == Mnemonic.CMP
+            and loaded.mnemonic == Mnemonic.MOV
+            and loaded.op1_kind == OpKind.MEMORY
+            and loaded.op0_register == compared.op0_register
+        ):
+            continue
+        updated = [one for one in loop if one.mnemonic == Mnemonic.ADD and one.op0_kind == OpKind.MEMORY]
+        assert all(cell(one) != cell(loaded) for one in updated), f"{loaded} / {compared}"
