@@ -338,21 +338,15 @@ def _padding_runs(
     nothing can arrive at. They were the only thing in the corpus that
     refused a whole-segment rebuild.
 
-    Carrying them rests on one fact: no block walked in. A Table already
-    copies its bytes and remaps every fixup inside it by however far it
-    moved, so a relocated call travels correctly; what a Table cannot do is
-    fix up a branch that lands in the middle of it, and reachability is the
-    proof there is no such branch. If that proof were wrong the rebuild
-    would already be unsound for the code around them.
+    Those are discarded, not carried. What kept them dead was the `jmp` in
+    front, and layout drops a jump to the next block: deedlines' ACTIONS
+    writes `add [pa],-360 / jmp next / jmp short back`, and carried, the
+    dead short jump followed the `add` and ran, landing inside it on an
+    illegal `FE`. Padding is still carried; falling into `90` is harmless.
 
-    And where reachability is wrong in the one way that would matter -- a
-    computed jump into a gap, through a form nothing here models -- the
-    entry is a relocated word, so the target is an offset some record or
-    fixup names. A gap's interior is not in the placement map, so
-    relocate.as_records cannot map it and refuses the whole object. That
-    refusal is what makes carrying safe rather than merely usually right,
-    and it has to exist on both paths: the record one always did, the fixup
-    one is newer.
+    A computed jump into a discarded gap would name an offset whose
+    interior is not in the placement map, so relocate.as_records still
+    refuses the object, as it did when the gap was carried.
 
     `reached` is what makes the question askable here. Without it only
     padding is carried, which is what this did before.
@@ -372,10 +366,9 @@ def _padding_runs(
             start = at
         elif not empty and start is not None:
             span = range(start, at)
-            if all(one in PADDING for one in found.code[start:at]) or (
-                reached is not None and not any(one in reached for one in span)
-            ):
-                out.append(Table(start, at))
+            padding = all(one in PADDING for one in found.code[start:at])
+            if padding or (reached is not None and not any(one in reached for one in span)):
+                out.append(Table(start, at, discarded=not padding))
             start = None
     return out
 

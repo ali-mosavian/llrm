@@ -202,7 +202,7 @@ def laid(obj: Path) -> Iterator[tuple]:
             yield body, got, found
 
 
-def paired(ops: list, back: list, found) -> list[tuple]:
+def paired(ops: list, back: list, found, moved: dict[int, int]) -> list[tuple]:
     """(op, the instructions it emitted). One each, except a folded call.
 
     An operation is not always an instruction: the raise turns an
@@ -211,7 +211,13 @@ def paired(ops: list, back: list, found) -> list[tuple]:
     are paired by how many bytes each op emitted rather than one for one.
     """
     out, at = [], 0
-    for op in ops:
+    for index, op in enumerate(ops):
+        # A jump to the op placed next emits nothing: wendgo's main jumps over
+        # the SUB between its two halves, and alone in its layout the two meet.
+        following = ops[index + 1] if index + 1 < len(ops) else None
+        if following is not None and following.at != op.at and moved.get(op.at) == moved.get(following.at) is not None:
+            out.append((op, []))
+            continue
         folded = found.absorbed.get(getattr(op, "id", None)) if found is not None else None
         made = None
         if folded is not None:
@@ -244,9 +250,9 @@ def test_a_laid_out_body_is_the_same_instructions_in_the_same_order(obj: Path) -
     for body, got, found in laid(obj):
         ops = layout._ordered(body)
         back = walked(got.code, body.entry)
-        for op, made in paired(ops, back, found):
-            if found.absorbed.get(getattr(op, "id", None)) is not None:
-                continue  # a folded call is not the instruction it came from
+        for op, made in paired(ops, back, found, got.moved):
+            if not made or found.absorbed.get(getattr(op, "id", None)) is not None:
+                continue  # emitted nothing, or a folded call is not the instruction it came from
             want = original(op)
             if want is None:
                 continue  # an idiom is not the instruction it came from
@@ -265,9 +271,9 @@ def test_every_branch_points_where_its_target_went(obj: Path) -> None:
     for body, got, found in laid(obj):
         ops = layout._ordered(body)
         back = walked(got.code, body.entry)
-        for op, made in paired(ops, back, found):
-            if found.absorbed.get(getattr(op, "id", None)) is not None:
-                continue  # a folded call branches nowhere
+        for op, made in paired(ops, back, found, got.moved):
+            if not made or found.absorbed.get(getattr(op, "id", None)) is not None:
+                continue  # a jump to what follows emits nothing, and a folded call branches nowhere
             want = original(op)
             if want is None or want.op0_kind != OpKind.NEAR_BRANCH16:
                 continue
@@ -306,9 +312,9 @@ def test_relaxation_settles_and_leaves_every_branch_reaching(obj: Path) -> None:
     for body, got, found in laid(obj):
         ops = layout._ordered(body)
         back = walked(got.code, body.entry)
-        for op, group in paired(ops, back, found):
-            if found.absorbed.get(getattr(op, "id", None)) is not None:
-                continue  # a folded call branches nowhere
+        for op, group in paired(ops, back, found, got.moved):
+            if not group or found.absorbed.get(getattr(op, "id", None)) is not None:
+                continue  # a jump to what follows emits nothing, and a folded call branches nowhere
             made = group[0]
             want = original(op)
             if want is None or want.op0_kind != OpKind.NEAR_BRANCH16:
@@ -748,3 +754,28 @@ def test_a_jump_to_the_block_placed_next_emits_nothing():
     body = mir.MirBody(0, (mir.MirBlock(0, (), (jump,), (4,)), mir.MirBlock(4, (), (work,), ())))
     (first, _) = layout._fallen(body).blocks
     assert first.ops[-1].kind is mir.Kind.NOTHING and first.ops[-1].covers == (0, 2)
+
+
+def test_no_branch_lands_inside_an_instruction_after_a_dropped_jump() -> None:
+    """BC's dead `jmp short` after a WEND reached by GOTO must not survive a dropped jump.
+
+    BC writes `add [pa],-360 / jmp next / jmp short back` and nothing reaches
+    the short jump. The rebuild dropped the near `jmp` for a fall-through and
+    carried the dead bytes after the `add`, so wrapping the angle ran them:
+    `jmp short` into the middle of the `add`, whose last byte `FE` is an
+    illegal opcode. DOSBox exited on it in deedlines' mark 8.
+    """
+    from qbopt import wholeseg
+    from qbopt.objectfile import module
+
+    result = wholeseg.emitted(Path("fixtures/omf/wendgo-q-O.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    found = module.of(omf.parse(result.data))
+    mapped = code_map(found)
+    assert not isinstance(mapped, str), mapped
+    owners: dict[int, list[int]] = {}
+    for block in split.partition(found, mapped):
+        for one in block.insns:
+            for at in range(one.at, one.end):
+                owners.setdefault(at, []).append(one.at)
+    assert not [at for at, who in owners.items() if len(set(who)) > 1]

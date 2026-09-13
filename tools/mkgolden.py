@@ -476,8 +476,19 @@ def cmpof() -> list[str]:
     return [*lines, "DONE"]
 
 
+def wendgo() -> list[str]:
+    # Each call steps pa once and leaves by GOTO; 355 stepped ten times wraps past 360.
+    pa = 355
+    for _ in range(10):
+        pa += 1
+        if pa > 360:
+            pa -= 360
+    return [f"PA={num(pa)}", "DONE"]
+
+
 PROGRAMS = {
     "arith": arith,
+    "wendgo": wendgo,
     "cmpof": cmpof,
     "procs": procs,
     "jumps": jumps,
