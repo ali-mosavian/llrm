@@ -564,3 +564,24 @@ def test_no_qbdemo_loop_compares_through_a_reload_of_a_cell_it_adds_to() -> None
             continue
         updated = [one for one in loop if one.mnemonic == Mnemonic.ADD and one.op0_kind == OpKind.MEMORY]
         assert all(cell(one) != cell(loaded) for one in updated), f"{loaded} / {compared}"
+
+
+def test_a_stable_load_stored_to_a_local_keeps_its_store_defined() -> None:
+    """A value reloadable from its cell and homed in a local lost the value its store read.
+
+    deedlines' plasmablobs loads `k1%` and stores it as the fade loop's limit.
+    The spiller dropped the load as a stable one and kept the store reading
+    the value as its home's initializer. Nothing defined it, the next round
+    gave it a slot nothing wrote, and the loop ran past 191 through the DAC.
+    """
+    from iced_x86 import Register
+
+    def cell(disp):
+        return ir.Mem(Addr(Space.FRAME, disp), 2, Register.BP, disp, 1)
+
+    load = lir.Insn(0x10, (0x10, 0x13), ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),), (cell(-0x3C),)), (1,), ())
+    store = lir.Insn(0x13, (0x13, 0x16), ir.Semantics(ir.Operation.MOVE, "mov", (cell(-0x4E),), (ir.Held(1, 2),)), (), (1,))
+    limit = lir.Insn(0x16, (0x16, 0x18), ir.Semantics(ir.Operation.COMPARE, "cmp", (), (ir.Held(2, 2), ir.Held(1, 2))), (3,), (2, 1))
+    out = _out(_body(load, store, limit), {1})
+    defined = {value for one in out for value in one.defines}
+    assert all(value in defined for one in out for value in one.uses if value != 2), [str(one.what) for one in out]

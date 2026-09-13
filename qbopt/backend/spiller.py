@@ -61,7 +61,7 @@ def spilled(
     made: set[int] = set()
     constants = _constants(body, values)
     frame_loads = {**_stable_loads(body, values), **_frame_loads(body, values)}
-    frame_homes = _frame_homes(body, values)
+    frame_homes = _frame_homes(body, values - frame_loads.keys())
     rebuilt = {**frame_loads, **{value: home for value, (home, _at) in frame_homes.items()}}
     stored = values - constants.keys() - frame_loads.keys() - frame_homes.keys()
     abandoned: set[int] = set()
