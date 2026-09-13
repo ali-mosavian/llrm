@@ -241,8 +241,16 @@ def classes(body: lir.LirBody) -> dict[int, frozenset[Register_]]:
                 # operand once something has placed it. 16-bit addressing
                 # reaches memory through bx, bp, si and di and nothing
                 # else, so the value is confined to those.
-                if isinstance(where, ir.Mem) and where.base is not None:
+                # Unless it is scaled: `[base+index*scale]` is 32-bit addressing,
+                # which any general register reaches memory through.
+                if isinstance(where, ir.Mem) and where.base is not None and where.index is None:
                     restrict(where.base.value, target.ADDRESSING)
+                if isinstance(where, ir.Mem) and where.index is not None:
+                    numeric.add(where.index.value)
+                    if where.index.width == 2:
+                        restrict(where.index.value, target.WORD_INDEXES)
+                        if where.base is not None:
+                            restrict(where.base.value, target.WORD_BASES)
                 if isinstance(where, ir.Held) and where.width == 1:
                     restrict(where.value, frozenset({Register.AX, Register.BX, Register.CX, Register.DX}))
     for value in selecting - numeric:
@@ -251,6 +259,23 @@ def classes(body: lir.LirBody) -> dict[int, frozenset[Register_]]:
 
 
 _SEGMENT_OPERANDS = frozenset({ir.Operation.MOVE, ir.Operation.PUSH, ir.Operation.POP})
+
+
+def _unread_move(one: lir.Insn) -> bool:
+    """A plain move into one value; whether anything reads it is the caller's."""
+    what = one.what
+    return (
+        what is not None
+        and what.op is ir.Operation.MOVE
+        and len(what.dests) == 1
+        and len(what.sources) == 1
+        and isinstance(what.dests[0], ir.Held)
+        and isinstance(what.sources[0], (ir.Imm, ir.Held))
+        and one.defines == (what.dests[0].value,)
+        and not (one.requires or one.delivers or one.clobbers)
+        and one.group is None
+        and one.symbol is not True
+    )
 
 
 def explicit_selectors(body: lir.LirBody, pinned: "dict[int, Register_] | None" = None) -> lir.LirBody:
@@ -668,6 +693,10 @@ class RegAlloc(LIRTransform):
         # value, not merely per round.
         already: set[int] = set()
         for _round in range(self.ROUNDS):
+            # A move into a value nothing reads is not a value. nbody's
+            # hoisted 512 kept ecx after rematerialization gave every reader
+            # its own copy.
+            body = spiller._remove_abandoned(body, {id(one) for one in body.insns if _unread_move(one)})
             # Recomputed every attempt, and merged last. The spiller puts a
             # fresh value at an instruction between rounds, and a
             # requirement is about the instruction rather than about the
@@ -848,6 +877,16 @@ def _settled(where: ir.Loc | ir.Held, held: dict, origin: dict) -> ir.Loc:
         if register is None:
             raise Unplaced(f"selector value#{where.selector.value} has no register")
         where = replace(where, addr=replace(where.addr, segment=register))
+    if isinstance(where, ir.Mem) and where.index is not None:
+        base = held.get(where.base.value) if where.base is not None else None
+        index = held.get(where.index.value)
+        if index is None or (where.base is not None and base is None):
+            raise Unplaced(f"scaled cell {where} has no register for its base or index")
+        return replace(
+            where,
+            through=target.named(base, where.base.width) if base is not None else Register.NONE,
+            index_through=target.named(index, where.index.width),
+        )
     if isinstance(where, ir.Mem) and where.base is not None:
         # The cell keeps saying which value reached it; `through` becomes
         # the register that value was given. Everything else is untouched.

@@ -7,6 +7,7 @@ from iced_x86 import Mnemonic
 from iced_x86 import OpAccess
 from iced_x86 import Register
 from iced_x86 import Register_
+from iced_x86 import RflagsBits
 from iced_x86 import FlowControl
 from iced_x86 import RegisterExt
 
@@ -23,6 +24,7 @@ class Peephole(LIRTransform):
         self.frame = frame
 
     def transform(self, body: lir.LirBody) -> lir.LirBody:
+        from qbopt.backend import phielim
         from qbopt.backend import copyprop
         from qbopt.backend import copysink
         from qbopt.backend import regthrash
@@ -32,13 +34,13 @@ class Peephole(LIRTransform):
         # Before the rest: a thrashed copy is one fewer instruction for
         # everything below to reason about, and it is the only pass here
         # that can remove a copy the coalescer refused on colourability.
-        body = regthrash.thrashed(body)
+        body = regthrash.thrashed(phielim.unsplit(body))
         body = copyprop.forwarded(body)
         body = copysink.sunk(body)
         body = spillforward.forwarded(body)
         body = storecombine.combined(body)
         body = pushed_constants(body)
-        return self._frame(waits(zeroes(addresses(overwritten(shuttles(commuted(constants(pushes(body)))))))))
+        return self._frame(waits(tested(zeroes(addresses(overwritten(shuttles(commuted(constants(pushes(body))))))))))
 
     def _frame(self, body):
         """Drop only synthetic reservations when no added stack storage remains."""
@@ -292,8 +294,16 @@ def _register_operand(one: ir.Loc, before: Register_, after: Register_) -> ir.Lo
     """One allocated operand with aliases of `before` renamed to `after`."""
     if isinstance(one, ir.Reg) and ir.root(one.register) == ir.root(before):
         return replace(one, register=target.named(after, one.width))
-    if isinstance(one, ir.Mem) and ir.root(one.through) == ir.root(before):
-        return replace(one, through=target.named(after, target.width_of(one.through)))
+    if isinstance(one, ir.Mem) and ir.root(before) in {ir.root(one.through), ir.root(one.index_through)}:
+        return replace(
+            one,
+            through=target.named(after, target.width_of(one.through))
+            if ir.root(one.through) == ir.root(before)
+            else one.through,
+            index_through=target.named(after, target.width_of(one.index_through))
+            if ir.root(one.index_through) == ir.root(before)
+            else one.index_through,
+        )
     if isinstance(one, ir.Address):
         through = (
             target.named(after, target.width_of(one.through))
@@ -633,6 +643,127 @@ def _flags_before(one: lir.Insn, flags_dead: bool) -> bool:
         case ir.Semantics(ir.Operation.NOTHING, None | ""):
             return flags_dead
     return False
+
+
+_ZERO_BRANCHES = {"je": RflagsBits.ZF, "jne": RflagsBits.ZF, "js": RflagsBits.SF, "jns": RflagsBits.SF}
+_BRANCH_FLAGS = {
+    **_ZERO_BRANCHES,
+    "jl": RflagsBits.SF | RflagsBits.OF,
+    "jge": RflagsBits.SF | RflagsBits.OF,
+    "jle": RflagsBits.ZF | RflagsBits.SF | RflagsBits.OF,
+    "jg": RflagsBits.ZF | RflagsBits.SF | RflagsBits.OF,
+    "jb": RflagsBits.CF,
+    "jae": RflagsBits.CF,
+    "jbe": RflagsBits.CF | RflagsBits.ZF,
+    "ja": RflagsBits.CF | RflagsBits.ZF,
+}
+_ARITHMETIC = RflagsBits.OF | RflagsBits.SF | RflagsBits.ZF | RflagsBits.AF | RflagsBits.CF | RflagsBits.PF
+# What `cmp r,0` leaves that the instruction computing r may not: inc keeps
+# the carry, add and subtract set carry and overflow from their operands.
+_DIFFERING = _flag_lanes(RflagsBits.OF | RflagsBits.CF | RflagsBits.AF)
+
+
+def tested(body: lir.LirBody) -> lir.LirBody:
+    """`inc edi; cmp edi,0; jne` is `inc edi; jne`.
+
+    An add, subtract, logic or unary operation sets ZF and SF from its result
+    exactly as a zero test of that result does. The test goes where only its
+    branch reads those two, and no later instruction reads the carry,
+    overflow or adjust flags it would have cleared.
+    """
+    live = _flags_live_out(body)
+    blocks = []
+    for block in body.blocks:
+        insns = list(block.insns)
+        # Moves change no flag, so the three may have a phi's copies between them.
+        work = [index for index, one in enumerate(insns) if not _nothing(one)]
+        test_at = len(work) - 2
+        while test_at >= 1 and _moves(insns[work[test_at]]):
+            test_at -= 1
+        register = _zero_tested(insns[work[test_at]]) if test_at >= 1 else None
+        before_at = test_at - 1
+        while register is not None and before_at >= 0 and _moves(insns[work[before_at]], register):
+            before_at -= 1
+        if register is not None and before_at >= 0 and work:
+            before, test, branch = insns[work[before_at]], insns[work[test_at]], insns[work[-1]]
+            if (
+                branch.what is not None
+                and branch.what.op is ir.Operation.BRANCH
+                and branch.what.name in _ZERO_BRANCHES
+                and _sets_from(before, register)
+                and not live[block.at] & _DIFFERING
+            ):
+                insns[work[test_at]] = replace(test, what=ir.Semantics(ir.Operation.NOTHING, ""), defines=(), uses=(), widths=())
+        blocks.append(replace(block, insns=tuple(insns)))
+    return replace(body, blocks=tuple(blocks))
+
+
+def _moves(one: lir.Insn, register: "ir.Reg | None" = None) -> bool:
+    """A plain move, writing nothing that shares a root with `register`."""
+    if one.what is None or one.what.op is not ir.Operation.MOVE or one.what.name != "mov" or one.clobbers:
+        return False
+    return register is None or all(
+        not isinstance(dest, ir.Reg) or ir.root(dest.register) != ir.root(register.register) for dest in one.what.dests
+    )
+
+
+def _nothing(one: lir.Insn) -> bool:
+    return one.what is not None and one.what.op is ir.Operation.NOTHING and not one.what.name
+
+
+def _zero_tested(one: lir.Insn) -> "Register_ | None":
+    if one.clobbers or one.symbol is True or one.what is None:
+        return None
+    match one.what:
+        case ir.Semantics(ir.Operation.COMPARE, "cmp", _, (ir.Reg() as register, ir.Imm(0, _, None))):
+            return register
+        case ir.Semantics(ir.Operation.COMPARE, "test", _, (ir.Reg() as register, ir.Reg() as other)) if other == register:
+            return register
+    return None
+
+
+def _sets_from(one: lir.Insn, register: ir.Reg) -> bool:
+    if one.clobbers or one.what is None:
+        return False
+    match one.what:
+        case ir.Semantics(ir.Operation.BINARY, "add" | "sub" | "and" | "or" | "xor", (ir.Reg() as dest,), _):
+            return dest == register
+        case ir.Semantics(ir.Operation.UNARY, "inc" | "dec" | "neg", (ir.Reg() as dest,), _):
+            return dest == register
+    return False
+
+
+def _flags_live_out(body: lir.LirBody) -> dict[int, set]:
+    """Which flag lanes something may read after each block's last instruction."""
+    every = _flag_lanes(_ARITHMETIC)
+
+    def effects(one: lir.Insn) -> tuple[set, set]:
+        if one.what is not None and one.what.op is ir.Operation.BRANCH:
+            return _flag_lanes(_BRANCH_FLAGS.get(one.what.name, _ARITHMETIC)), set()
+        if one.what is not None and one.what.op is ir.Operation.JUMP or _nothing(one):
+            return set(), set()
+        found = _register_effects(one, flags=True)
+        if found is None:
+            return every, set()
+        reads, writes = found
+        return {lane for lane in reads if lane[0] == Register.NONE}, {lane for lane in writes if lane[0] == Register.NONE}
+
+    steps = {block.at: [effects(one) for one in block.insns] for block in body.blocks}
+    live_in = {block.at: set() for block in body.blocks}
+    out = {}
+    changed = True
+    while changed:
+        changed = False
+        for block in reversed(body.blocks):
+            after = set().union(*(live_in.get(at, every) for at in block.succ)) if block.succ else set(every)
+            out[block.at] = after
+            live = set(after)
+            for reads, writes in reversed(steps[block.at]):
+                live = (live - writes) | reads
+            if live != live_in[block.at]:
+                live_in[block.at] = live
+                changed = True
+    return out
 
 
 def zeroes(body: lir.LirBody) -> lir.LirBody:

@@ -244,6 +244,11 @@ def _rebuilt(
                 watch=(lambda stage, state: watch(f"mir-{stage}", name, state)) if watch is not None else None,
             )
             if only is None:
+                from qbopt.optimize import rotate
+
+                done = rotate.entered(done)
+                if watch is not None:
+                    watch("mir-rotate", name, done)
                 done = transform.widened(done)
                 if watch is not None:
                     watch("mir-widen", name, done)

@@ -59,6 +59,7 @@ def eliminated(body: lir.LirBody) -> lir.LirBody:
     kept: dict[int, tuple[lir.Phi, ...]] = {}
     for block in body.blocks:
         stays = []
+        crossing: dict[int, list[tuple[int, int]]] = {}
         for phi in block.phis:
             edges = [(where, value) for where, value in phi.incoming if where in at_of]
             if len(edges) != len(phi.incoming):
@@ -87,12 +88,15 @@ def eliminated(body: lir.LirBody) -> lir.LirBody:
                     for _where, value in edges:
                         rename[value] = phi.result
                     continue
-                # Split the edge. The copy goes in a block of its own that
-                # only the branch reaches, and which jumps back to the
-                # successor -- so it runs on that path and no other.
+                # Split the edge, unless nothing on the predecessor's other
+                # paths can read what the copies write (decided per edge
+                # below, since its copies happen at once). The copy goes in a
+                # block of its own that only the branch reaches, and which
+                # jumps back to the successor -- so it runs on that path and
+                # no other.
                 for where, value in edges:
                     if successors.get(where, 0) > 1:
-                        split.setdefault((where, block.at), []).append((phi.result, value))
+                        crossing.setdefault(where, []).append((phi.result, value))
                     else:
                         copies.setdefault(where, []).append(
                             _copy(at_of[where], phi.result, value, edge_group(where, block.at), widths[phi.result])
@@ -107,6 +111,17 @@ def eliminated(body: lir.LirBody) -> lir.LirBody:
                         edge_group(where, block.at),
                         widths[phi.result],
                     )
+                )
+        for where, pairs in crossing.items():
+            # A loop entered at its body has its back edge here: the copies
+            # define only what the loop reads, so they run before the branch
+            # instead of from a block placed out of line.
+            if any(_observed(body, at_of, where, block.at, result) for result, _ in pairs):
+                split.setdefault((where, block.at), []).extend(pairs)
+                continue
+            for result, value in pairs:
+                copies.setdefault(where, []).append(
+                    _copy(at_of[where], result, value, edge_group(where, block.at), widths[result])
                 )
         kept[block.at] = tuple(stays)
 
@@ -125,6 +140,29 @@ def eliminated(body: lir.LirBody) -> lir.LirBody:
             for block in body.blocks
         ),
     )
+
+
+def _observed(body: lir.LirBody, at_of: dict, where: int, into: int, value: int) -> bool:
+    """Whether `value` can be read after leaving `where` other than into `into`.
+
+    `into` defines it, so a path through `into` reads a new one.
+    """
+    pending = [at for at in at_of[where].succ if at != into]
+    seen = set(pending)
+    while pending:
+        block = at_of.get(pending.pop())
+        if block is None:
+            return True
+        if any(value in one.uses or any(held.value == value for held, _ in one.requires) for one in block.insns):
+            return True
+        for successor in block.succ:
+            follower = at_of.get(successor)
+            if follower is not None and any((block.at, value) in phi.incoming for phi in follower.phis):
+                return True
+            if successor != into and successor not in seen:
+                seen.add(successor)
+                pending.append(successor)
+    return False
 
 
 def _read_once(body: lir.LirBody) -> dict[int, int]:
@@ -355,3 +393,44 @@ def _retargeted(one: lir.Insn, landing: dict, here: int) -> lir.Insn:
     if at is None:
         return one
     return replace(one, what=ir.Semantics(what.op, what.name, what.dests, what.sources, at))
+
+
+def unsplit(body: lir.LirBody) -> lir.LirBody:
+    """A split edge whose copies all went away is the edge again.
+
+    Coalescing gives both ends of a copy one register and the copy goes,
+    leaving the block `_split_edges` made holding only its jump. On a loop
+    entered at its body the back edge is the critical one, and that jump,
+    placed out of line, was taken on every pass.
+    """
+    floor = (body.entry + 1) << 32
+    bypass = {}
+    for block in body.blocks:
+        if block.at < floor or block.phis or len(block.succ) != 1:
+            continue
+        live = [one for one in block.insns if not (one.what is not None and one.what.op is ir.Operation.NOTHING and not one.what.name)]
+        if len(live) == 1 and live[0].what is not None and live[0].what.op is ir.Operation.JUMP and live[0].what.target == block.succ[0]:
+            bypass[block.at] = block.succ[0]
+    if not bypass:
+        return body
+
+    def where(at: int) -> int:
+        seen = set()
+        while at in bypass and at not in seen:
+            seen.add(at)
+            at = bypass[at]
+        return at
+
+    blocks = []
+    for block in body.blocks:
+        if block.at in bypass:
+            continue
+        insns = tuple(
+            replace(one, what=replace(one.what, target=where(one.what.target)))
+            if one.what is not None and one.what.target in bypass
+            else one
+            for one in block.insns
+        )
+        phis = tuple(replace(phi, incoming=tuple((where(at), value) for at, value in phi.incoming)) for phi in block.phis)
+        blocks.append(replace(block, insns=insns, succ=tuple(where(at) for at in block.succ), phis=phis))
+    return replace(body, blocks=tuple(blocks))

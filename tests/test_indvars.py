@@ -59,7 +59,8 @@ def test_harr_initializes_the_reused_counter_before_its_exit_bound():
     result = wholeseg.emitted(Path("fixtures/omf/harr-v-g3.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
-    assert instructions.index("mov si,ax") < instructions.index("mov dx,si")
+    bound = instructions.index("mov dx,si")
+    assert any(text.startswith("mov si,") for text in instructions[:bound]), instructions[:bound]
 
 
 def test_indvar_simplify_reads_through_an_lcssa_exit(monkeypatch) -> None:
@@ -103,7 +104,9 @@ def test_counter_elimination_requires_a_complete_trip_count_and_no_body_use(monk
     found = corpus.loaded(path)
     partition = corpus.partitioned(path)
     with monkeypatch.context() as context:
+        # Counting to zero rewrites the very compare each hazard edits.
         context.setattr(indvars, "simplified", lambda body: body)
+        context.setattr(indvars, "zeroed", lambda body: body)
         body = transform.applied(
             mir.bodies(found, partition)[0][1], found.dgroup, found.calls, blocks=partition, found=found
         )

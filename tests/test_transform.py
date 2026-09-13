@@ -772,7 +772,14 @@ def test_an_invariant_multiply_leaves_a_loop_it_cannot_be_folded_out_of() -> Non
     sees it. It goes between, which is a position and not a preference.
     """
     seen = _rebuilt("hotlpx-p-g2")
-    start = next(i for i, (_, text) in enumerate(seen) if text.startswith("jmp"))
+    # Where the loop starts: the target of its back edge. An entered-at-the-body
+    # loop has no jump in front of it to find.
+    targets = [
+        int(text.split()[-1], 16)
+        for ip, text in seen
+        if text.startswith("j") and text.split()[-1].startswith("0x") and int(text.split()[-1], 16) < ip
+    ]
+    start = next((i for i, (ip, _) in enumerate(seen) if targets and ip == targets[0]), len(seen))
     inside = [text for _, text in seen[start:]]
     assert not [text for text in inside if text.startswith("imul")], (
         f"the invariant multiply is still in the loop: {inside[:6]}"

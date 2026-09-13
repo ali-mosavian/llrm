@@ -13,7 +13,10 @@ def sunk_stores(body: mir.MirBody, dgroup: frozenset[int], bounds: dict | None =
     predecessors = loops.predecessors(body.blocks)
     for loop in loops.loops(body.blocks, body.entry):
         scoped = ranges.bounded(body)
-        intervals = {id(op): scoped.get(block.at, {}) for block in body.blocks for op in block.ops}
+        # With constants, as hoist asks: a store through the literal selector
+        # 0A000h otherwise observes every frame and descriptor cell.
+        constant = ranges.constants(body, dgroup)
+        intervals = {id(op): {**constant, **scoped.get(block.at, {})} for block in body.blocks for op in block.ops}
         blocks = {block.at: block for block in body.blocks}
         inside = [blocks[at] for at in loop.body]
         exits = {(block.at, to) for block in inside for to in block.succ if to not in loop.body}
@@ -209,7 +212,8 @@ def _unobserved(op: mir.Op, operations: list[mir.Op], dgroup: frozenset[int], bo
     if ref.base is not None and (ref.base not in address_values or not ref.excludes):
         return False
     return not any(
-        mir.overlapping(ref, other, dgroup, bounds, other_known=(intervals or {}).get(id(one)))
+        mir.overlapping(ref, other, dgroup, bounds, known=(intervals or {}).get(id(op)),
+                        other_known=(intervals or {}).get(id(one)))
         for one in operations
         if one is not op
         for other in (*one.loads, *one.stores)

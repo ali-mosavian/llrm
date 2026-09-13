@@ -7,6 +7,8 @@ from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.analysis import ssa
 from qbopt.analysis import loops
+from qbopt.optimize import rotate
+from qbopt.optimize import indvars
 from qbopt.optimize import strength
 from qbopt.analysis import induction
 from qbopt.optimize import transform
@@ -106,6 +108,8 @@ def test_sign_extended_recurrence_requires_no_narrow_wrap(offset, accepted, monk
     from qbopt import wholeseg
     from qbopt.analysis import consts
     monkeypatch.setattr(strength, "reduced", lambda body, *args: body)
+    monkeypatch.setattr(indvars, "zeroed", lambda body: body)
+    monkeypatch.setattr(rotate, "entered", lambda body: body)
     states = []
     def watch(stage, name, state):
         if stage == "mir-widen":

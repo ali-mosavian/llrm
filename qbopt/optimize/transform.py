@@ -1002,6 +1002,25 @@ def forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> M
                         covers=op.covers or mir_span(op),
                     )
                 )
+            elif op.kind is mir.Kind.LOAD:
+                # A load served by a value is a copy of it. Left a load, the
+                # counter's `mov ax,[x]` hid PLASMA's x from induction.
+                ops.append(
+                    replace(
+                        op,
+                        kind=mir.Kind.COPY,
+                        op=ir.Operation.MOVE,
+                        name="mov",
+                        args=args,
+                        loads=(),
+                        uses=op.uses + (holder,),
+                        node=None,
+                        made=None,
+                        raised=None,
+                        symbol=False,
+                        covers=op.covers or mir_span(op),
+                    )
+                )
             else:
                 ops.append(replace(op, args=args, loads=(), uses=op.uses + (holder,)))
         out.append(replace(block, ops=tuple(ops)))
@@ -2233,14 +2252,15 @@ def _constant_operands(op: Op, facts: dict, memory: dict | None = None) -> Op:
         and fact.width >= arg.width
     ):
         address_values = {value for ref in op.stores for value in (ref.base, ref.segment) if value is not None}
+        # The node and its field stay: the destination is still this op's,
+        # and segld's `mov [x],ax` folded to `mov [x],6` counted its fixup
+        # as gone while emitting a new one.
         return replace(
             op,
             args=(mir.Const(consts.masked(fact.n, arg.width), arg.width),),
             uses=tuple(value for value in op.uses if value != arg.value or value in address_values),
-            node=None,
             made=None,
             raised=None,
-            symbol=False,
         )
     if (
         op.kind
@@ -2929,6 +2949,8 @@ def applied(
         # From the model, which is where MIR's register knowledge already
         # is. It belongs to the caller once the drivers thread it.
         registers=len(mir.TRACKED) if registers is None else registers,
+        # 32-bit registers are tracked, so the target is a 386 and has SIB.
+        index_scales=frozenset({1, 2, 4, 8}),
     )
     passes = [one for one in pipeline(where, **wanted) if only is None or one.name == only]
     if found is not None:

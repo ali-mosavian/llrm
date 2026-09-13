@@ -89,13 +89,15 @@ def run(data: bytes, native_fpu: bool = False, optimise: bool = True) -> tuple[b
     if not raised:
         return data, "nothing to raise"
 
+    from qbopt.optimize import rotate
+
     done = []
     for name, body in raised:
         if optimise:
             body = transform.applied(
                 body, found.dgroup, found.calls, blocks=blocks, found=found, promote_=False, strength_=False
             )
-            body = transform.widened(body)
+            body = transform.widened(rotate.entered(body))
         low = lower.lowered(name, body, found.calls, set(found.absorbed), contracts)
         frame = frames.of(low, found.calls)
         for phase in machine(_pinned(low), frame, found.calls):

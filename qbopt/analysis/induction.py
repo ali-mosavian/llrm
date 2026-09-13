@@ -182,10 +182,17 @@ def unwritten(body: mir.MirBody, inside: set[int], dgroup: frozenset[int], bound
     scalar in DGROUP reads as written by it. `module.landmarks()` knows
     where each object ends.
     """
+    from qbopt.analysis import ranges
+
     wrote = [one for block in body.blocks if block.at in inside for op in block.ops for one in op.stores]
+    # With constants, as hoist asks: a store through the literal selector
+    # 0A000h otherwise lands on the frame and on every array descriptor.
+    known = ranges.constants(body, dgroup) if wrote else {}
 
     def settled(cell: "mir.MemRef") -> bool:
-        return not any(mir.overlapping(cell, one, dgroup, bounds) for one in wrote)
+        return not any(
+            mir.overlapping(cell, one, dgroup, bounds, known=known, other_known=known) for one in wrote
+        )
 
     return settled
 
@@ -385,7 +392,10 @@ def _quotients(body: mir.MirBody, loop, found: dict[int, Affine]) -> list[Derive
 def nonempty(body: mir.MirBody, loop) -> bool:
     """A canonical counted loop whose first iteration and finite exit are proven."""
     facts = consts.known(body)
-    return any(_last_counter(body, loop, counter, facts, 2) is not None for counter in basics(body, loop).values())
+    return any(
+        _last_counter(body, loop, counter, facts, counter.start.width) is not None
+        for counter in basics(body, loop).values()
+    )
 
 
 def _composed(body: mir.MirBody, loop, found: dict[int, Affine], made: dict[int, mir.Op], settled) -> list[Derived]:

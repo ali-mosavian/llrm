@@ -179,6 +179,11 @@ class Mem:
     # The value holding a far cell's segment, where one did. Like `base`, which
     # register holds it is the allocator's answer, not the raise's.
     selector: "Held | None" = field(default=None)
+    # A scaled index added to `base`: `[base+index*scale]`, which only 32-bit
+    # addressing has. Part of which bytes are meant, like `base`.
+    index: "Held | None" = field(default=None)
+    scale: int = 1
+    index_through: Register_ = field(default=Register.NONE, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -410,7 +415,7 @@ def values(where: Loc) -> list[Held]:
     if isinstance(where, Held):
         return [where]
     if isinstance(where, Mem):
-        return [one for one in (where.base, where.selector) if one is not None]
+        return [one for one in (where.base, where.index, where.selector) if one is not None]
     return []
 
 
@@ -418,10 +423,11 @@ def mapped(where: Loc, made: Callable[[Held], Held]) -> Loc:
     """`where` with every abstract value it names put through `made`."""
     if isinstance(where, Held):
         return made(where)
-    if isinstance(where, Mem) and (where.base is not None or where.selector is not None):
+    if isinstance(where, Mem) and (where.base is not None or where.selector is not None or where.index is not None):
         return replace(
             where,
             base=None if where.base is None else made(where.base),
+            index=None if where.index is None else made(where.index),
             selector=None if where.selector is None else made(where.selector),
         )
     return where

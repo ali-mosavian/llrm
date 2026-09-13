@@ -21,6 +21,13 @@ prices them against register pressure, and picks. That machinery exists
 because a target with many addressing modes has many ways to write the same
 address. Both inner and outer loops are eligible.
 
+Where the target has scaled addressing, a value read only as a far cell's
+address is not given a recurrence at all: `b + i*m` stays in the loop with
+`b` computed once, and lowering makes it the cell's `[base+index*scale]`.
+Every such address shares the counter, so the loop advances one register.
+A scale above one needs the counter as a dword, which is exact only while
+it cannot wrap and the address only while it is in bounds.
+
 The pricing half is here because allocation cannot own it. A counter this
 pass invents is live around the whole loop, so a loop given more of them
 than the target has registers gets every one of them spilled, and a spilled
@@ -31,8 +38,11 @@ decision, not the choice. `_RESERVE` and `Where.registers` are the budget.
 
 from dataclasses import replace
 
+from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.analysis import ssa
+from qbopt.analysis import consts
+from qbopt.objectfile.module import Space
 from qbopt.model.mir import Op
 from qbopt.model.mir import MirBody
 from qbopt.analysis import induction
@@ -54,10 +64,11 @@ class Strength(MIRTransform):
         from qbopt.optimize import floatloop
         from qbopt.optimize import transform
 
-        body = reduced(body, self.where.dgroup, self.where.bounds, self.where.registers)
+        body = reduced(body, self.where.dgroup, self.where.bounds, self.where.registers, self.where.index_scales)
         body = exitsink.sunk(transform.dead(ivshare.shared(body)))
         body = loopexit.evaluated(body)
-        return indvars.simplified(floatloop.specialized(body, self.where.dgroup, self.where.calls))
+        body = indvars.simplified(floatloop.specialized(body, self.where.dgroup, self.where.calls))
+        return indvars.zeroed(body)
 
 
 def reduced(
@@ -65,6 +76,7 @@ def reduced(
     dgroup: frozenset[int] = frozenset(),
     bounds: dict | None = None,
     registers: int = 0,
+    scales: frozenset[int] = frozenset(),
 ) -> MirBody:
     """`body` with every multiply of a counter by an invariant made an add."""
     from qbopt.optimize import transform as passes
@@ -78,7 +90,9 @@ def reduced(
     first = taken + 1
     ahead: dict[int, list[Op]] = {}
     behind: dict[int, list[Op]] = {}
-    replacements: dict[int, Op] = {}
+    replacements: dict[int, "Op | tuple[Op, ...]"] = {}
+    wide: set[mir.Value] = set()
+    facts = consts.known(body) if scales else {}
     for loop, _basics, derived in found:
         preheader = passes._preheader(body, loop)
         latches = [at for at in loop.latches if at in at_of]
@@ -101,6 +115,8 @@ def reduced(
         ]
         consumed = {arg.value for one in candidates for arg in one.op.args if isinstance(arg, mir.Held)}
         candidates = [one for one in candidates if one.op.results[0].value not in consumed]
+        if scales:
+            candidates = [one for one in candidates if not _indexed(body, one)]
         # Priced, which is the half of LLVM's LSR this did not have. A
         # derived counter is a value live around the whole loop, and where
         # the loop already drives a register file's worth the allocator's
@@ -116,6 +132,66 @@ def reduced(
         # 1.03x to 1.63x. Values live across the backedge is no better: a
         # promoted loop legitimately carries more than the register file,
         # and harr's loops report nine.
+        indexes = {
+            id(one.op): scale for one in candidates if (scale := _indexable(body, loop, one, scales, facts)) is not None
+        }
+        # Only a counter every address indexes. One pointer left beside it can
+        # end the loop in its place, and the index then costs the register
+        # the counter would have given back.
+        stepped = {one.of.value for one in candidates if id(one.op) not in indexes}
+        indexes = {id(one.op): indexes[id(one.op)] for one in candidates if id(one.op) in indexes and one.of.value not in stepped}
+        counter_ops = _widened(body, loop, facts) if any(scale > 1 for scale in indexes.values()) else None
+        if counter_ops is None:
+            indexes = {key: scale for key, scale in indexes.items() if scale == 1}
+        else:
+            for op, widened in counter_ops:
+                replacements.setdefault(id(op), widened)
+        for one in candidates:
+            if id(one.op) not in indexes or id(one.op) in replacements:
+                continue
+            scale, answer = indexes[id(one.op)], _answer(body, one.op)
+            counter = next(phi.result for phi in at_of[loop.header].phis if phi.result.id == one.of.value)
+            taken += 1
+            base = mir.Value(id=_next(body, taken), at=preheader, variable=taken, version=1)
+            ahead.setdefault(preheader, []).extend(_starts(base, one, preheader, counted=False))
+            taken += len(one.offsets) * 2
+            address = dict(
+                kind=mir.Kind.ADD,
+                op=ir.Operation.BINARY,
+                name="add",
+                node=None,
+                made=None,
+                defines=(answer,),
+                loads=(),
+                stores=(),
+                merges={},
+                symbol=False,
+            )
+            if scale == 1:
+                replacements[id(one.op)] = replace(
+                    one.op, uses=(base, counter), args=(mir.Held(base, 2), mir.Held(counter, 2)), results=(mir.Held(answer, 2),), **address
+                )
+                continue
+            taken += 1
+            extended = mir.Value(id=_next(body, taken), at=preheader, variable=taken, version=1)
+            ahead[preheader].append(
+                replace(_made(mir.Kind.ZERO_EXTEND, "movzx", extended, (mir.Held(base, 2),), preheader, one.op), results=(mir.Held(extended, 4),))
+            )
+            taken += 1
+            product = mir.Value(id=_next(body, taken), at=one.op.at, variable=taken, version=1)
+            shift = _made(mir.Kind.SHL, "shl", product, (mir.Held(counter, 4), mir.Const(scale.bit_length() - 1, 1)), one.op.at, one.op)
+            replacements[id(one.op)] = (
+                shift,
+                replace(
+                    one.op,
+                    uses=(extended, product),
+                    args=(mir.Held(extended, 4), mir.Held(product, 4)),
+                    results=(mir.Held(answer, 4),),
+                    **address,
+                ),
+            )
+            wide.add(answer)
+        candidates = [one for one in candidates if id(one.op) not in indexes]
         room = len(candidates)
         if registers:
             room = max(0, registers - _recurrences(body, loop) - _RESERVE)
@@ -183,7 +259,10 @@ def reduced(
         blocks=tuple(
             replace(
                 block,
-                ops=tuple(_woven(block, ahead.get(block.at, []), behind.get(block.at, []), replacements)),
+                ops=tuple(
+                    _rebased(op, wide)
+                    for op in _woven(block, ahead.get(block.at, []), behind.get(block.at, []), replacements)
+                ),
             )
             for block in body.blocks
         ),
@@ -242,8 +321,11 @@ def _start(into, one, preheader: int) -> Op:
     return _made(mir.Kind.MUL, "imul", into, (one.of.start, one.by), preheader, one.op)
 
 
-def _starts(into: mir.Value, one: induction.Derived, preheader: int) -> list[Op]:
-    """Initialize scale * start plus invariant offsets once, before the loop."""
+def _starts(into: mir.Value, one: induction.Derived, preheader: int, counted: bool = True) -> list[Op]:
+    """Initialize scale * start plus invariant offsets once, before the loop.
+
+    Not `counted`, the offsets alone: the base an index is added to.
+    """
     if one.pointer is not None:
         return [_made(mir.Kind.PTR_OFFSET, "", into, (one.pointer, one.of.start), preheader, one.op)]
     if not one.offsets:
@@ -253,8 +335,11 @@ def _starts(into: mir.Value, one: induction.Derived, preheader: int) -> list[Op]
         mir.Value(into.id + 2 + number, preheader, variable=into.variable + 1 + number, version=1)
         for number in range(len(one.offsets) * 2)
     )
-    current = next(temporaries)
-    operations = [_start(current, one, preheader)]
+    current = None
+    operations = []
+    if counted:
+        current = next(temporaries)
+        operations.append(_start(current, one, preheader))
     for index, (offset, coefficient) in enumerate(one.offsets):
         if coefficient != 1:
             product = next(temporaries)
@@ -270,7 +355,11 @@ def _starts(into: mir.Value, one: induction.Derived, preheader: int) -> list[Op]
             )
             offset = mir.Held(product, width)
         result = into if index == len(one.offsets) - 1 else next(temporaries)
-        operations.append(_made(mir.Kind.ADD, "add", result, (mir.Held(current, width), offset), preheader, one.op))
+        if current is None:
+            kind = mir.Kind.LOAD if isinstance(offset, mir.Cell) else mir.Kind.COPY
+            operations.append(_made(kind, "mov", result, (offset,), preheader, one.op))
+        else:
+            operations.append(_made(mir.Kind.ADD, "add", result, (mir.Held(current, width), offset), preheader, one.op))
         current = result
     return operations
 
@@ -317,7 +406,7 @@ def _woven(block, ahead: list, behind: list, replacements: dict[int, Op]) -> lis
     the flags something before it set and a new add would be read as having
     changed them.
     """
-    kept = [replacements.get(id(op), op) for op in block.ops]
+    kept = [made for op in block.ops for made in _replaced(replacements.get(id(op), op))]
     if ahead or behind:
         cut = len(kept)
         while cut and kept[cut - 1].kind in (mir.Kind.JUMP, mir.Kind.BRANCH):
@@ -334,6 +423,148 @@ def _woven(block, ahead: list, behind: list, replacements: dict[int, Op]) -> lis
         inserted = [replace(op, at=at, covers=(boundary, boundary)) for op in (*ahead, *behind)]
         kept = kept[:cut] + inserted + kept[cut:]
     return kept
+
+
+def _replaced(one: "Op | tuple[Op, ...]") -> tuple[Op, ...]:
+    return one if isinstance(one, tuple) else (one,)
+
+
+def _indexable(body: MirBody, loop, one: induction.Derived, scales: frozenset[int], facts: dict) -> "int | None":
+    """The scale this address is its counter times, where the counter can index it.
+
+    From zero by one, so the counter is the index. A scale above one needs
+    the counter as a dword, and the address is then exact only in bounds.
+    """
+    if (
+        one.pointer is not None
+        or not one.offsets
+        or _width(one.op) != 2
+        or not isinstance(one.by, mir.Const)
+        or one.by.n not in scales
+        or induction._signed(one.of.start, facts, 2) != 0
+        or induction._signed(one.of.step, facts, 2) != 1
+    ):
+        return None
+    answer = _answer(body, one.op)
+    refs = _addressed(body, answer) if answer is not None else None
+    if not refs or any(ref.where is not Space.FAR or ref.base_width != 2 for ref in refs):
+        return None
+    if one.by.n > 1 and any(ref.allocation is None for ref in refs):
+        return None
+    return one.by.n
+
+
+def _indexed(body: MirBody, one: induction.Derived) -> bool:
+    """Whether this is already a cell's base plus its counter, as lowering folds it.
+
+    Reducing it again would give the address back the recurrence the index
+    replaced. A word is folded only unscaled, `[bx+si]`.
+    """
+    op = one.op
+    answer = _answer(body, op)
+    if op.kind is not mir.Kind.ADD or len(op.args) != 2 or answer is None:
+        return False
+    if not all(isinstance(arg, mir.Held) and arg.width == _width(op) for arg in op.args):
+        return False
+    made = {value: other for block in body.blocks for other in block.ops for value in other.defines}
+    for arg in op.args:
+        shift = made.get(arg.value)
+        counted = arg.value.id == one.of.value or (
+            _width(op) == 4
+            and shift is not None
+            and shift.kind is mir.Kind.SHL
+            and isinstance(shift.args[0], mir.Held)
+            and shift.args[0].value.id == one.of.value
+        )
+        if counted:
+            return bool(_addressed(body, answer))
+    return False
+
+
+def _addressed(body: MirBody, value: mir.Value) -> "list[mir.MemRef] | None":
+    """Every cell `value` is the address of, or None if anything else reads it."""
+    fed = {phi.result for block in body.blocks for phi in block.phis if value in phi.incoming.values()}
+    refs = []
+    for block in body.blocks:
+        for op in block.ops:
+            if fed.intersection(op.uses):
+                return None
+            if value not in op.uses:
+                continue
+            cells = [one.ref for one in (*op.args, *op.results) if isinstance(one, mir.Cell)]
+            found = [ref for ref in cells if ref.base == value]
+            if (
+                not found
+                or any(isinstance(arg, mir.Held) and arg.value == value for arg in op.args)
+                or any(ref.segment == value for ref in cells)
+            ):
+                return None
+            refs.extend(found)
+    return refs
+
+
+def _widened(body: MirBody, loop, facts: dict) -> "list[tuple[Op, Op]] | None":
+    """The ops setting and advancing this loop's counter, rewritten as dwords.
+
+    Exact where the counter starts at a word constant no less than zero and
+    stops before it could wrap, and nothing reads the flags its step sets.
+    """
+    at_of = {block.at: block for block in body.blocks}
+    header = at_of[loop.header]
+    made = {value: op for block in body.blocks for op in block.ops for value in op.defines}
+    read = {value for block in body.blocks for op in block.ops for value in op.uses}
+    phis = [phi for block in body.blocks for phi in block.phis]
+    while grown := {value for phi in phis if phi.result in read for value in phi.incoming.values()} - read:
+        read |= grown
+    for affine in induction.basics(body, loop).values():
+        if induction._signed(affine.start, facts, 2) != 0 or induction._signed(affine.step, facts, 2) != 1:
+            continue
+        if induction._last_counter(body, loop, affine, facts, 2) is None:
+            continue
+        phi = next((phi for phi in header.phis if phi.result.id == affine.value), None)
+        if phi is None or len(phi.incoming) != 2:
+            continue
+        ops = [made.get(value) for value in phi.incoming.values()]
+        # A promoted slot the step also writes keeps its word: it reads the low half.
+        if any(op is None or op.loads or op.stores or op.barrier or len(op.results) != 1 for op in ops):
+            continue
+        out = []
+        for op in ops:
+            if any(value.flags and value in read for value in op.defines):
+                break
+            match op.kind, op.args:
+                case mir.Kind.COPY, (mir.Const(n=n, width=2),) if n >= 0:
+                    args = (mir.Const(n, 4),)
+                case mir.Kind.INCREMENT, (mir.Held(value=counter, width=2),) if counter == phi.result:
+                    args = (mir.Held(counter, 4),)
+                case mir.Kind.ADD, (mir.Held(value=counter, width=2), mir.Const(n=1)) if counter == phi.result:
+                    args = (mir.Held(counter, 4), mir.Const(1, 4))
+                case _:
+                    break
+            out.append((op, replace(op, args=args, results=(mir.Held(op.results[0].value, 4),))))
+        else:
+            return out
+    return None
+
+
+def _rebased(op: Op, wide: set[mir.Value]) -> Op:
+    """`op` with every cell addressed through a widened value saying so."""
+    if not wide or not wide.intersection(op.uses):
+        return op
+
+    def ref(one: mir.MemRef) -> mir.MemRef:
+        return replace(one, base_width=4) if one.base in wide else one
+
+    def arg(one):
+        return replace(one, ref=ref(one.ref)) if isinstance(one, mir.Cell) else one
+
+    return replace(
+        op,
+        args=tuple(map(arg, op.args)),
+        results=tuple(map(arg, op.results)),
+        loads=tuple(map(ref, op.loads)),
+        stores=tuple(map(ref, op.stores)),
+    )
 
 
 def _made(kind, name: str, into, args: tuple, at: int, beside: Op) -> Op:

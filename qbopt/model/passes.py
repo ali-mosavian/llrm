@@ -115,6 +115,11 @@ class Where:
     blocks: list | None = None
     found: object | None = None
     registers: int = 0
+    # The multipliers an address may apply to an index register, empty where
+    # nothing was said. Like `registers`, a fact about the target that names
+    # no register: a pass told "an address may be base + index*2" still
+    # knows nothing about how that is spelt.
+    index_scales: frozenset[int] = frozenset()
 
     @property
     def named(self) -> dict:

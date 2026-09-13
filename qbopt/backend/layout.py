@@ -217,34 +217,49 @@ def _threaded(body: MirBody) -> MirBody:
         if inverted is None:
             continue
         turned[block.at] = replace(inverted, succ=(beyond, last.target))
-        turned[through] = replace(
-            middle,
-            succ=(),
-            ops=tuple(
-                replace(
-                    op,
-                    kind=mir.Kind.NOTHING,
-                    name="",
-                    defines=(),
-                    uses=(),
-                    loads=(),
-                    stores=(),
-                    args=(),
-                    results=(),
-                    merges={},
-                    made=None,
-                    raised=None,
-                    target=None,
-                    test=None,
-                    stack=None,
-                    symbol=False,
-                )
-                for op in middle.ops
-            ),
-        )
+        turned[through] = replace(middle, succ=(), ops=tuple(_emptied(op) for op in middle.ops))
     if not turned:
         return body
     return replace(body, blocks=tuple(turned.get(block.at, block) for block in body.blocks))
+
+
+def _emptied(op: mir.Op) -> mir.Op:
+    """`op` emitting nothing, still owning the bytes it covers."""
+    return replace(
+        op,
+        kind=mir.Kind.NOTHING,
+        name="",
+        defines=(),
+        uses=(),
+        loads=(),
+        stores=(),
+        args=(),
+        results=(),
+        merges={},
+        made=None,
+        raised=None,
+        target=None,
+        test=None,
+        stack=None,
+        symbol=False,
+    )
+
+
+def _fallen(body: MirBody) -> MirBody:
+    """A jump to the block placed next emits nothing: control falls through to it."""
+    following = _following(body)
+    changed = []
+    for block in body.blocks:
+        last = lower.current(block.ops[-1]) if block.ops else None
+        if (
+            last is not None
+            and last.op is ir.Operation.JUMP
+            and block.succ == (last.target,)
+            and last.target == following.get(block.at)
+        ):
+            block = replace(block, ops=(*block.ops[:-1], _emptied(block.ops[-1])))
+        changed.append(block)
+    return replace(body, blocks=tuple(changed))
 
 
 def _ordered(body: MirBody, *, linear: bool = False) -> list[mir.Op]:
@@ -560,7 +575,7 @@ def rebuild(
     # the same work, and `wholeseg.py` calls it before this -- which is
     # what let objwrite.py stop being allocated over a second time.
     sequenced = frozenset(body.entry for _, body in bodies) if ordered else ordered_entries
-    bodies = [(name, _fallthroughs(_threaded(body))) for name, body in bodies]
+    bodies = [(name, _fallen(_fallthroughs(_threaded(body)))) for name, body in bodies]
     held = asm._held(assignment)
     bodies = [(name, _grounded(body, held)) for name, body in bodies]
 

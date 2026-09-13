@@ -632,9 +632,11 @@ def _width(one: lir.Insn, value: int) -> int:
             return width
     if one.what is None:
         return frames.WORD
+    # A cell's base and index too: `[eax+edx*2]` reads all of edx.
     for where in (*one.what.dests, *one.what.sources):
-        if isinstance(where, ir.Held) and where.value == value:
-            return where.width
+        for held in ir.values(where):
+            if held.value == value:
+                return held.width
     return frames.WORD
 
 

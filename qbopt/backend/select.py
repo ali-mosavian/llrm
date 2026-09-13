@@ -169,6 +169,8 @@ def operand_of(what: ir.Mem) -> tuple[MemoryOperand, bool] | None:
     same operand for the same reason.
     """
     addr = what.addr
+    if what.index is not None:
+        return _scaled_operand(what)
     if addr is None:
         # No nameable address, but the operand is still encodable where it
         # is reached through a register: `mov ax,[si]` means whatever si
@@ -245,6 +247,40 @@ def operand_of(what: ir.Mem) -> tuple[MemoryOperand, bool] | None:
             return MemoryOperand(base=base, displ=addr.disp, displ_size=wide), False
         case _:
             return None
+
+
+_WORD_BASES = frozenset({Register.BX, Register.BP})
+_WORD_INDEXES = frozenset({Register.SI, Register.DI})
+
+
+def _scaled_operand(what: ir.Mem) -> tuple[MemoryOperand, bool] | None:
+    """`[base+index*scale+disp]`, for a cell no fixup names.
+
+    A word index is 16-bit addressing, `[bx+si]`, which wraps the way the
+    word arithmetic it replaces does; a dword index is 32-bit addressing.
+    A relocated address carries a 16-bit fixup a 32-bit displacement field
+    would not hold, so only a far cell or a literal one.
+    """
+    addr = what.addr
+    if addr is None or addr.space not in (Space.FAR, Space.LITERAL) or what.index_through == Register.NONE:
+        return None
+    if addr.space is Space.FAR and addr.segment == Register.NONE:
+        return None
+    base, disp = what.through, addr.disp
+    segment = addr.segment if addr.space is Space.FAR else Register.NONE
+    if what.index_through in _WORD_INDEXES:
+        if what.scale != 1 or base not in _WORD_BASES:
+            return None
+        size = _displacement_size(base, disp)
+        return MemoryOperand(base=base, index=what.index_through, displ=disp, displ_size=size, seg=segment), False
+    if base == Register.NONE:
+        size = 4
+    elif disp == 0 and base != Register.EBP:
+        size = 0
+    else:
+        size = 1 if -128 <= disp <= 127 else 4
+    operand = MemoryOperand(base=base, index=what.index_through, scale=what.scale, displ=disp, displ_size=size, seg=segment)
+    return operand, False
 
 
 def move(into: Register_, outof: Register_, at: int = 0) -> Emitted | None:
@@ -1475,10 +1511,11 @@ def emit(
     ):
         return float_stack(what, at)
     match what.op:
-        case ir.Operation.EXTEND if what.name == "movsx" and len(dests) == len(sources) == 1:
+        case ir.Operation.EXTEND if what.name in ("movsx", "movzx") and len(dests) == len(sources) == 1:
+            code = Code.MOVSX_R32_RM16 if what.name == "movsx" else Code.MOVZX_R32_RM16
             match dests[0], sources[0]:
                 case ir.Reg(register=into), ir.Reg(register=outof) if into in target.WIDE and outof in target.NARROW:
-                    return _assemble(Instruction.create_reg_reg(Code.MOVSX_R32_RM16, into, outof), at)
+                    return _assemble(Instruction.create_reg_reg(code, into, outof), at)
             return None
         case ir.Operation.MOVE if len(dests) == 1 and len(sources) == 1:
             match (dests[0], sources[0]):

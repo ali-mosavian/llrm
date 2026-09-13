@@ -30,6 +30,9 @@ from qbopt.model import mir
 # ---------------------------------------------------------------- registers
 
 ADDRESSING: frozenset[Register_] = frozenset({Register.BX, Register.BP, Register.SI, Register.DI})
+# `[bx+si]`: a word base and a word index are each confined to their half.
+WORD_BASES: frozenset[Register_] = frozenset({Register.BX})
+WORD_INDEXES: frozenset[Register_] = frozenset({Register.SI, Register.DI})
 
 
 @dataclass(frozen=True, slots=True)

@@ -62,6 +62,7 @@ _MACHINE: dict[mir.Kind, tuple[ir.Operation, str]] = {
     mir.Kind.DECREMENT: (ir.Operation.UNARY, "dec"),
     mir.Kind.COPY: (ir.Operation.MOVE, "mov"),
     mir.Kind.SIGN_EXTEND: (ir.Operation.EXTEND, "movsx"),
+    mir.Kind.ZERO_EXTEND: (ir.Operation.EXTEND, "movzx"),
     mir.Kind.LOAD: (ir.Operation.MOVE, "mov"),
     mir.Kind.STORE: (ir.Operation.MOVE, "mov"),
     mir.Kind.JUMP: (ir.Operation.JUMP, "jmp"),
@@ -1106,6 +1107,7 @@ class Lowering:
         from qbopt.backend import addressforms
 
         self._address_forms = addressforms.offsets(body)
+        self._indexed, self._folded = addressforms.indexed(body, self._exposed)
         every = [
             one.id for block in body.blocks for op in block.ops for one in (*op.defines, *op.uses) if one.id is not None
         ]
@@ -1130,6 +1132,11 @@ class Lowering:
         """Every instruction this operation becomes, the leader first."""
         from qbopt.model import lir
 
+        from qbopt.backend import addressforms
+
+        if any(one.id in self._folded for one in op.defines):
+            # The address is its cells' base and index now; see addressforms.indexed.
+            op = replace(op, kind=mir.Kind.NOTHING, name="", args=(), results=(), defines=(), uses=(), node=None, made=None)
         made = _EXPANDS.get(op.kind)
         parts = made(op, self) if made is not None else _pointer_access(op, self)
         parts = _flag_test(op, self) or parts
@@ -1151,7 +1158,7 @@ class Lowering:
             what = None if folded else current(op, as_a_value)
             from qbopt.backend import addressforms
 
-            what = addressforms.selected(what, self._address_forms)
+            what = addressforms.scaled(addressforms.selected(what, self._address_forms), self._indexed)
             # An instruction's dataflow is what its own operands name. The
             # two used to be separate -- `defines` from the operation and
             # the operands from BC's registers -- and once the operands
@@ -1207,6 +1214,7 @@ class Lowering:
         # operation's operands would say the product is live from the load
         # that starts the run. The effect the operation had belongs to the
         # run, not to any one instruction in it.
+        parts = tuple(addressforms.scaled(one, self._indexed) for one in parts)
         return (
             lir.Insn(
                 at=op.at,

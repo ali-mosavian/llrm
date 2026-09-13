@@ -736,3 +736,15 @@ def test_an_operation_may_carry_a_fixup_for_each_instruction_it_stands_for() -> 
 
     silent = select.Emitted(b"\x99")
     assert silent.places == () and silent.relocated_at is None
+
+
+def test_a_jump_to_the_block_placed_next_emits_nothing():
+    """A rotated loop's preheader kept `jmp short` to the instruction after it."""
+    from qbopt.backend import layout
+
+    jump = mir.Op(0, ir.Operation.JUMP, "jmp", (), (), kind=mir.Kind.JUMP, target=4,
+                  made=ir.Semantics(ir.Operation.JUMP, "jmp", target=4), covers=(0, 2))
+    work = mir.Op(4, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY, covers=(4, 6))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (jump,), (4,)), mir.MirBlock(4, (), (work,), ())))
+    (first, _) = layout._fallen(body).blocks
+    assert first.ops[-1].kind is mir.Kind.NOTHING and first.ops[-1].covers == (0, 2)

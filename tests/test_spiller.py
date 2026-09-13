@@ -9,6 +9,7 @@ emitted `r24 <- [bp-8]` and then `r27 <- r24`, and R came out 6460 for 7500.
 """
 
 from pathlib import Path
+from dataclasses import replace
 
 import pytest
 
@@ -489,3 +490,24 @@ def test_the_body_that_never_settled_allocates() -> None:
         low = phase.transform(low)
     got = allocate.RegAlloc(flow._pinned(body), frame).transform(low)
     assert got is not None
+
+
+def test_a_dword_index_is_reloaded_as_a_dword():
+    """A spilled dword counter indexing `[eax+edx*2]` came back as a word:
+    PLASMA's first pass read the cell through edx's stale high half."""
+    from iced_x86 import Register
+
+    counter = _move(1, 3)
+    counter = replace(counter, what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 4),), (ir.Held(3, 4),)))
+    cell = ir.Mem(Addr(Space.FAR, 0, segment=Register.ES), 2, base=ir.Held(5, 4), index=ir.Held(1, 4), scale=2)
+    read = lir.Insn(
+        at=0x100,
+        covers=(0x100, 0x100),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(4, 2),), (cell,)),
+        defines=(4,),
+        uses=(5, 1),
+        op=None,
+    )
+    out = _out(_body(counter, read), {1})
+    reloads = [one for one in out if one.spill_reload]
+    assert reloads and all(one.what.dests[0].width == 4 for one in reloads), [one.what for one in out]
