@@ -779,3 +779,29 @@ def test_no_branch_lands_inside_an_instruction_after_a_dropped_jump() -> None:
             for at in range(one.at, one.end):
                 owners.setdefault(at, []).append(one.at)
     assert not [at for at, who in owners.items() if len(set(who)) > 1]
+
+
+def test_a_jump_over_a_block_holding_a_phi_copy_is_kept() -> None:
+    """A block emptied in MIR can still emit the copy a phi left in it.
+
+    deedlines' plasmablobs flips `rc%` in `IF ... THEN rc% = -1`. Its store
+    was dead, so the THEN block held nothing but the phi's `mov cx,-1`, which
+    rides on a NOTHING op. Layout asked the op's kind, saw an empty block and
+    dropped the `jmp` over it: `jne` landed on the next instruction, rc%
+    became -1 on both paths, and the plasma ramp came out inverted.
+    """
+    from iced_x86 import FlowControl
+
+    from qbopt import wholeseg
+    from qbopt.objectfile import module
+
+    result = wholeseg.emitted(Path("fixtures/omf/rcflip-q-O.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    found = module.of(omf.parse(result.data))
+    insns = sorted((one for block in split.partition(found, code_map(found)) for one in block.insns), key=lambda one: one.at)
+    collapsed = [
+        f"{one.at:#x}: {one.insn}"
+        for one, following in zip(insns, insns[1:])
+        if one.insn.flow_control == FlowControl.CONDITIONAL_BRANCH and one.insn.near_branch_target == following.at
+    ]
+    assert not collapsed, collapsed

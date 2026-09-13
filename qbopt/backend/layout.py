@@ -48,7 +48,19 @@ selectable = mir.rewritable
 
 def _emits(block) -> bool:
     """Whether this block puts any byte in the output."""
-    return any(op.kind is not mir.Kind.NOTHING for op in block.ops)
+    return any(_emitting(op) for op in block.ops)
+
+
+def _emitting(op: mir.Op) -> bool:
+    """Whether `op` puts bytes out, which its machine form answers and its kind does not.
+
+    A phi's copy placed after allocation rides on a NOTHING op. Asked by kind,
+    deedlines' `IF ... THEN rc% = -1` read as an empty block, the jump over it
+    went, and the copy ran on both paths.
+    """
+    if op.made is not None:
+        return op.made.op is not ir.Operation.NOTHING
+    return op.kind is not mir.Kind.NOTHING
 
 
 def _following(body: MirBody) -> dict[int, int]:
@@ -207,7 +219,7 @@ def _threaded(body: MirBody) -> MirBody:
         middle = at_of.get(through)
         if middle is None or last.target != following.get(through):
             continue
-        alive = [op for op in middle.ops if op.kind is not mir.Kind.NOTHING]
+        alive = [op for op in middle.ops if _emitting(op)]
         if len(alive) != 1 or alive[0].kind is not mir.Kind.JUMP or len(middle.succ) != 1:
             continue
         (beyond,) = middle.succ

@@ -486,9 +486,38 @@ def wendgo() -> list[str]:
     return [f"PA={num(pa)}", "DONE"]
 
 
+def rcflip() -> list[str]:
+    # deedlines' plasma ramp: a sawtooth whose direction flag flips at 0 and 63.
+    def idiv(a: int, b: int) -> int:
+        return int(a / b)
+
+    dt = {}
+    rc = -1
+    for i in range(-1, -157, -1):
+        dt[i] = 63 - (i - idiv(i - 63, 64) * 64)
+        if rc == 1:
+            dt[i] = 63 - dt[i]
+        if dt[i] == 0 and rc == 1:
+            rc = -1
+        if dt[i] == 63 and rc == -1:
+            rc = 1
+    rc = 1
+    for i in range(0, 157):
+        dt[i] = i - idiv(i, 64) * 64
+        if rc == -1:
+            dt[i] = 63 - dt[i]
+        if dt[i] == 63 and rc == 1:
+            rc = -1
+        if dt[i] == 0 and rc == -1:
+            rc = 1
+    total = sum(dt[i] * (i + 200) for i in range(-156, 157))
+    return [f"SUM={num(total)}", "DONE"]
+
+
 PROGRAMS = {
     "arith": arith,
     "wendgo": wendgo,
+    "rcflip": rcflip,
     "cmpof": cmpof,
     "procs": procs,
     "jumps": jumps,
