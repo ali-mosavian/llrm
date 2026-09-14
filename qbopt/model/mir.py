@@ -2298,10 +2298,10 @@ def bodies(
     nodes = {ir.span(node)[0]: node for body in result for node in body.nodes}
     from qbopt.frontend import blocks as split
 
-    if not split.has_header(found):
-        from qbopt.frontend import raising_returns
+    from qbopt.frontend import raising_returns
 
-        nodes = {at: raising_returns.native(node) for at, node in nodes.items()}
+    header = split.has_header(found)
+    nodes = {at: raising_returns.returned(node, header) for at, node in nodes.items()}
     if contracts is None:
         # The module's own toolchain, which is where a per-family contract
         # is chosen and the only place a family is read at all.

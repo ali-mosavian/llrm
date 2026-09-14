@@ -5,12 +5,17 @@ from iced_x86 import Register
 from qbopt.model import ir
 
 
-def native(node: ir.Node) -> ir.Node:
+def returned(node: ir.Node, header: bool) -> ir.Node:
+    """A return, reading the registers its caller reads after it.
+
+    BC's FUNCTION answers in AX or DX:AX. A headerless C object has no return
+    type, so both words of DX:AX, and SI/DI too, including when the original
+    leaf never used them.
+    """
     if not isinstance(node, ir.Opaque) or node.semantics.op is not ir.Operation.RETURN:
         return node
-    # Headerless C objects have no return type: retain both words of DX:AX.
-    # SI/DI are observable too, including when the original leaf never used them.
-    returned = tuple(ir.Reg(register, 2) for register in (Register.AX, Register.DX, Register.SI, Register.DI))
+    registers = (Register.AX, Register.DX) if header else (Register.AX, Register.DX, Register.SI, Register.DI)
+    returned = tuple(ir.Reg(register, 2) for register in registers)
     uses = node.effects.uses
     return replace(
         node,

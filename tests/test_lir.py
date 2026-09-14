@@ -60,6 +60,26 @@ def test_string_copy_keeps_its_implicit_address_registers() -> None:
         assert {register for _, register in one.delivers} == {Register.SI, Register.DI}
 
 
+def test_a_procedure_hands_back_dx_ax() -> None:
+    """procs p-ot's TWICE& left its answer in bx and ax, and its callers read dx:ax."""
+    from qbopt.backend import lower
+    from qbopt.abi import runtime
+
+    found = module.of(omf.parse(Path("fixtures/omf/procs-p-ot.obj").read_bytes()))
+    contracts = runtime.for_module(found)
+    name, body = next(
+        one for one in mir.bodies(found, split.partition(found, code_map(found)), contracts) if "TWICE" in one[0]
+    )
+    lowered = lower.lowered(name, body, found.calls, found.absorbed, contracts)
+    (ret,) = [
+        one
+        for block in lowered.blocks
+        for one in block.insns
+        if one.op is not None and one.op.kind is mir.Kind.RETURN
+    ]
+    assert {register for _, register in ret.requires} == {Register.AX, Register.DX}
+
+
 def _semantics(op: mir.Op) -> ir.Semantics | None:
     return op.made if op.made is not None else getattr(op.node, "semantics", None)
 
