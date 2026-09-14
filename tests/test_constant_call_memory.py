@@ -34,14 +34,22 @@ def test_call_preserves_constants_when_no_program_address_escapes(escapes):
     assert consts._cell(after, mir.MemRef(address, 4)) == consts.Known(0x12345678, 4)
 
 
-@pytest.mark.parametrize("name,effects", [("UNKNOWN", True), ("B$PSSD", False)])
-def test_unproven_call_still_invalidates_constants(name, effects):
-    """An empty escape set cannot override an unknown call or missing write effects."""
+def test_a_call_with_no_write_effects_invalidates_constants():
+    """Missing write effects are not a proof the call writes nothing."""
     address = Addr(Space.SEGMENT, 6, index=5)
     cells = consts._fragments(mir.MemRef(address, 4), consts.Known(7, 4))
-    stores = (mir.MemRef(None, 0, beyond=(5, frozenset())),) if effects else ()
-    call = mir.Op(10, ir.Operation.MOVE, "", (), (), kind=mir.Kind.CALL, stores=stores)
-    assert consts._kills(cells, call, {}, frozenset({5}), {10: name}) == {}
+    call = mir.Op(10, ir.Operation.MOVE, "", (), (), kind=mir.Kind.CALL, stores=())
+    assert consts._kills(cells, call, {}, frozenset({5}), {10: "B$PSSD"}) == {}
+
+
+@pytest.mark.parametrize("name", ["UNKNOWN", "TWICE"])
+def test_only_a_contracted_call_is_bounded_by_its_escapes(name):
+    """A user SUB writes SHARED statics no pointer escaped to, so its call gets no write bound."""
+    from qbopt.abi import runtime
+    from qbopt.frontend import raising_call_memory
+
+    contract = runtime.contract(name)
+    assert raising_call_memory.reachable(contract, runtime.Memory.NONE, (5, frozenset())) is None
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
