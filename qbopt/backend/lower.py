@@ -23,6 +23,8 @@ from qbopt.backend import target
 from qbopt.backend import division
 from qbopt.analysis import liveness
 from qbopt.backend import arithmetic
+from qbopt.model.floating import Format
+from qbopt.model.floating import Rounding
 from qbopt.objectfile.module import Addr
 
 
@@ -91,6 +93,61 @@ _BRANCHES = {
     mir.Kind.ABOVE: "ja",
     mir.Kind.ABOVE_EQ: "jae",
 }
+
+
+# The instruction each kind is, for MIR that says only what it computes.
+_NAMED: dict[mir.Kind, tuple[ir.Operation, str]] = {
+    **_MACHINE,
+    mir.Kind.SUB: (ir.Operation.BINARY, "sub"),
+    mir.Kind.AND: (ir.Operation.BINARY, "and"),
+    mir.Kind.OR: (ir.Operation.BINARY, "or"),
+    mir.Kind.XOR: (ir.Operation.BINARY, "xor"),
+    mir.Kind.NEG: (ir.Operation.UNARY, "neg"),
+    mir.Kind.NOT: (ir.Operation.UNARY, "not"),
+    mir.Kind.DIVMOD: (ir.Operation.DIVIDE, "idiv"),
+    mir.Kind.ADDRESS: (ir.Operation.ADDRESS, "lea"),
+    mir.Kind.ARG: (ir.Operation.PUSH, "push"),
+    mir.Kind.CONCAT: (ir.Operation.MOVE, ""),
+    mir.Kind.BRANCH: (ir.Operation.BRANCH, ""),
+    mir.Kind.FADD: (ir.Operation.FLOAT_ARITH, "fadd"),
+    mir.Kind.FSUB: (ir.Operation.FLOAT_ARITH, "fsub"),
+    mir.Kind.FMUL: (ir.Operation.FLOAT_ARITH, "fmul"),
+    mir.Kind.FDIV: (ir.Operation.FLOAT_ARITH, "fdiv"),
+}
+_INTEGERS = frozenset({Format.SIGNED16, Format.SIGNED32, Format.SIGNED64})
+
+
+def _instruction(op: mir.Op) -> tuple[ir.Operation, str] | None:
+    if op.kind is mir.Kind.SUB and not op.results:
+        return ir.Operation.COMPARE, "cmp"
+    if op.kind is mir.Kind.FLOAD and op.floating is not None:
+        return ir.Operation.FLOAT_LOAD, "fild" if op.floating.inputs[0] in _INTEGERS else "fld"
+    if op.kind is mir.Kind.FSTORE and op.floating is not None:
+        if op.floating.result not in _INTEGERS:
+            return ir.Operation.FLOAT_STORE, "fstp"
+        # Toward zero is fisttp, which a 387 lacks: FloatAlloc spells it for one.
+        return ir.Operation.FLOAT_STORE, "fisttp" if op.floating.rounding is Rounding.TOWARD_ZERO else "fistp"
+    return _NAMED.get(op.kind)
+
+
+def named(body: "mir.MirBody") -> "mir.MirBody":
+    """Every operation with no machine form given one from what it computes.
+
+    An operation a raise states only as a kind reaches here with an empty
+    `op` and `name`; the rest of lowering reads those, so they are filled
+    first, and only here, where naming the machine is this layer's job.
+    """
+    from dataclasses import replace
+
+    def one(op: mir.Op) -> mir.Op:
+        if op.op is not ir.Operation.NOTHING or op.name or op.kind is mir.Kind.NOTHING or op.made is not None:
+            return op
+        found = _instruction(op)
+        if found is None:
+            raise Unlowered(f"{op.at:#06x}: no instruction for {op.kind}")
+        return replace(op, op=found[0], name=found[1])
+
+    return replace(body, blocks=tuple(replace(block, ops=tuple(map(one, block.ops))) for block in body.blocks))
 
 
 def semantics(op: mir.Op, was: ir.Semantics | None = None, place=None) -> ir.Semantics | None:
@@ -415,6 +472,7 @@ def lowered(
         body = lower_switches.expanded(body)
     except ValueError as error:
         raise Unlowered(str(error)) from error
+    body = named(body)
     lower_floats.checked(body)
     body = ssa.pruned_phis(body, {phi.result for block in body.blocks for phi in block.phis if not phi.result.flags})
 

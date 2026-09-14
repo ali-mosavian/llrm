@@ -43,6 +43,7 @@ class Symbol:
     attr: int
     call_class: int = 0
     call_target: int = 0
+    register_parms: bool = False  # any argument passed in a register
 
     @property
     def proc(self) -> bool:
@@ -147,6 +148,7 @@ def unit(records: list[Record]) -> Unit:
                 symbol = made.symbols[handle(args[0])]
                 symbol.call_class = int(fields["class"], 16)
                 symbol.call_target = int(fields["target"], 16)
+                symbol.register_parms = fields.get("parms", "[]") != "[]"
             case "BENewBack":
                 made.backs[handle(one.result)] = handle(args[0])
             case "CGProcDecl":

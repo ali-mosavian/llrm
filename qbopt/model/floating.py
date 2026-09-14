@@ -22,6 +22,7 @@ class Precision(StrEnum):
 class Rounding(StrEnum):
     NONE = "none"
     DYNAMIC = "dynamic"
+    TOWARD_ZERO = "toward_zero"  # whatever the environment says; C's cast to an integer
 
 
 class Exceptions(StrEnum):

@@ -14,7 +14,7 @@ from qbopt.model import lir
 from qbopt.backend import target
 from qbopt.objectfile.module import Space
 
-SIZES = {1: "byte", 2: "word", 4: "dword"}
+SIZES = {1: "byte", 2: "word", 4: "dword", 8: "qword", 10: "tbyte"}
 # Callee-saved under the C convention, saved whole: a 16-bit caller keeps SI
 # and DI, and a caller built here may keep all 32 bits.
 SAVED = (Register.ESI, Register.EDI)
@@ -146,6 +146,18 @@ def _instruction(one: lir.Insn, procedure: Procedure, names: dict, number: int, 
             if callee is None:
                 raise Unprintable("a call with no callee")
             return [f"call {'far ptr ' if callee.far else ''}{callee.name}"]
+        case ir.Operation.BARRIER:
+            return [f"{name} {(dests or sources)[0]}"]
+        case ir.Operation.FLOAT_LOAD:
+            return [name] if name in ("fldz", "fld1") or not sources else [f"{name} {sources[0]}"]
+        case ir.Operation.FLOAT_STORE:
+            return [f"{name} {dests[0]}"]
+        case ir.Operation.FLOAT_ARITH if isinstance(what.sources[-1], ir.Mem):
+            return [f"{name} {sources[-1]}"]
+        case ir.Operation.FLOAT_ARITH | ir.Operation.FLOAT_ARITH_POP:
+            return [f"{name} {dests[0]}, {sources[-1]}"]
+        case ir.Operation.FLOAT_UNARY:
+            return [name]
         case ir.Operation.RETURN:
             restore = [f"pop {target.name_of(register)}" for register in reversed(saved)]
             return [*restore, "mov sp, bp", "pop bp", name or ("retf" if procedure.far else "ret")]
@@ -156,6 +168,8 @@ def _operand(where, names: dict) -> str:
     match where:
         case ir.Reg(register=register):
             return target.name_of(register)
+        case ir.St(index=index):
+            return f"st({index})"
         case ir.Imm(value=value, address=None):
             return str(value)
         case ir.Imm(value=value, address=address):

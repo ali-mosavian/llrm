@@ -25,7 +25,7 @@ from qbopt.backend import frame as frames
 WCCQ = Path(__file__).resolve().parents[2] / "owshim" / "bin" / "wccq"
 # Borland's medium model: far code, near data, cdecl, byte-packed structs,
 # 16-bit enums, x87 inline, no stack probes, no default library.
-FLAGS = ("-mm", "-3", "-fpi87", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq")
+FLAGS = ("-mm", "-3", "-fpi87", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq", f"-fi={Path(__file__).with_name('borland.h')}")
 
 
 def recorded(source: Path, includes: list[str]) -> str:

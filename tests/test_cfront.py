@@ -59,6 +59,52 @@ def test_float_moves_as_its_bits():
     assert cfront.mir.Const(0x3D4CCCCD, 4) in pushed
 
 
+def test_raised_mir_names_no_instruction():
+    """MIR says what each operation computes; lowering picks the instruction.
+    The raise wrote `mov`, `lea` and `fistp` into every op it made."""
+    for module in ("pal", "qglsurf", "choose", "ls"):
+        unit = cfront.hir.unit(cfront.stream.parse((FIXTURES / f"{module}.cgs").read_text()))
+        for proc in unit.procs:
+            for block in cfront.raise_hir.raised(unit, proc).body.blocks:
+                for op in block.ops:
+                    if op.made is None:
+                        assert (op.op, op.name) == (cfront.raise_hir.ir.Operation.NOTHING, ""), (module, op)
+
+
+def test_float_cast_truncates():
+    """`(long)(anim_time * 10.0f)`: fistp rounds by the control word, so it is
+    set to toward-zero around the store and put back. The raise refused
+    float O_TIMES."""
+    lines = _asm("ls")
+    body = lines[lines.index("_ls_animate proc far") : lines.index("_ls_animate endp")]
+    at = body.index("fld dword ptr [bp+8]")
+    assert body[at + 1] == "fimul word ptr [bp-10]"
+    assert body[at + 2 : at + 8] == [
+        "fnstcw word ptr [bp-22]",
+        "fnstcw word ptr [bp-24]",
+        "or word ptr [bp-24], 3072",
+        "fldcw word ptr [bp-24]",
+        "fistp dword ptr [bp-16]",
+        "fldcw word ptr [bp-22]",
+    ]
+
+
+def test_register_convention_is_refused():
+    """A callee taking arguments in registers: the raise pushed them anyway,
+    and ls linked against `strlen_`, Watcom's register-convention strlen."""
+    try:
+        _asm("regs")
+    except cfront.hir.Unsupported as refused:
+        assert "_twice has a register calling convention" in str(refused)
+    else:
+        raise AssertionError("a register convention was compiled as a stack one")
+
+
+def test_runtime_is_the_target_s_cdecl():
+    """borland.h moves Open Watcom's runtime declarations to cdecl."""
+    assert "call far ptr _strlen" in _asm("ls")
+
+
 def test_calls_push_in_convention_order():
     """cdecl pushes last first and pops after; pascal pushes first first."""
     lines = _asm("qglsurf")

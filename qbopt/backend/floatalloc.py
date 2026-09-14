@@ -76,7 +76,7 @@ def _integer_stores(body: lir.LirBody, frame, basic_semantics: bool) -> lir.LirB
             if (
                 what is None
                 or what.op is not ir.Operation.FLOAT_STORE
-                or what.name != "fistp"
+                or what.name not in ("fistp", "fisttp")
                 or len(what.sources) != 1
                 or len(what.dests) != 1
                 or not isinstance(what.dests[0], ir.Held)
@@ -637,7 +637,39 @@ def allocated(body: lir.LirBody, frame=None, *, basic_semantics: bool = True) ->
             raise Unlowered("floating stack live-out requires cross-block allocation")
         blocks.append(replace(block, insns=tuple(lir.without(stack.out, lambda one: id(one) in stack.vacated))))
     allocated_blocks = {block.at: block for block in blocks}
-    return replace(body, blocks=tuple(allocated_blocks[at] for at in order))
+    return _truncating(replace(body, blocks=tuple(allocated_blocks[at] for at in order)), frame)
+
+
+def _truncating(body: lir.LirBody, frame) -> lir.LirBody:
+    """`fisttp` as a 387 has it: `fistp` with the control word set to round
+    toward zero and put back. After allocation, so the control-word barriers
+    split no region."""
+    from qbopt.backend.lower import Unlowered
+
+    blocks = []
+    for block in body.blocks:
+        insns = []
+        for one in block.insns:
+            if one.what is None or one.what.op is not ir.Operation.FLOAT_STORE or one.what.name != "fisttp":
+                insns.append(one)
+                continue
+            if frame is None:
+                raise Unlowered("rounding toward zero requires an owned frame")
+            saved, chop = frame.cell(("control", one.at), 2), frame.cell(("chop", one.at), 2)
+
+            def insn(what: ir.Semantics, at: int = one.at) -> lir.Insn:
+                return lir.Insn(at, (at, at), what, (), ())
+
+            insns += [
+                insn(ir.Semantics(ir.Operation.BARRIER, "fnstcw", (saved,), ())),
+                insn(ir.Semantics(ir.Operation.BARRIER, "fnstcw", (chop,), ())),
+                insn(ir.Semantics(ir.Operation.BINARY, "or", (chop,), (chop, ir.Imm(0x0C00, 2)))),
+                insn(ir.Semantics(ir.Operation.BARRIER, "fldcw", (), (chop,))),
+                replace(one, what=replace(one.what, name="fistp")),
+                insn(ir.Semantics(ir.Operation.BARRIER, "fldcw", (), (saved,))),
+            ]
+        blocks.append(replace(block, insns=tuple(insns)))
+    return replace(body, blocks=tuple(blocks))
 
 
 class FloatAlloc(LIRTransform):

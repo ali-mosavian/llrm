@@ -19,6 +19,7 @@ from iced_x86 import Register
 
 from qbopt.abi import runtime
 from qbopt.model import ir
+from qbopt.model import floating
 from qbopt.model import mir
 from qbopt.cfront import hir
 from qbopt.cfront.hir import Unsupported
@@ -44,6 +45,21 @@ WIDTHS = {
     "TY_SINGLE": 4,
 }
 FLOATS = frozenset({"TY_SINGLE", "TY_DOUBLE", "TY_LONG_DOUBLE"})
+FLOAT_ARITHMETIC = {
+    "O_PLUS": mir.Kind.FADD,
+    "O_MINUS": mir.Kind.FSUB,
+    "O_TIMES": mir.Kind.FMUL,
+    "O_DIV": mir.Kind.FDIV,
+}
+EXTENDED = floating.Format.EXTENDED80
+INTEGER_FORMATS = {2: floating.Format.SIGNED16, 4: floating.Format.SIGNED32}
+# What each float operation computes, which MIR states and lowering spells.
+ARITH_RULE = floating.Semantics((EXTENDED, EXTENDED), EXTENDED, floating.Precision.DYNAMIC, floating.Rounding.DYNAMIC)
+STORE_SINGLE = floating.Semantics((EXTENDED,), floating.Format.BINARY32, floating.Precision.DESTINATION, floating.Rounding.DYNAMIC)
+
+
+def _loaded(source: floating.Format) -> floating.Semantics:
+    return floating.Semantics((source,), EXTENDED, floating.Precision.EXACT, floating.Rounding.NONE)
 SIGNED = frozenset({"TY_INT_1", "TY_INT_2", "TY_INT_4", "TY_INTEGER"})
 FAR_POINTERS = frozenset({"TY_LONG_POINTER", "TY_HUGE_POINTER"})
 
@@ -68,12 +84,12 @@ SWAPPED = {
     K.BELOW: K.ABOVE, K.ABOVE: K.BELOW, K.BELOW_EQ: K.ABOVE_EQ, K.ABOVE_EQ: K.BELOW_EQ,
 }  # fmt: skip
 ARITHMETIC = {
-    "O_PLUS": (K.ADD, ir.Operation.BINARY, "add", True),
-    "O_MINUS": (K.SUB, ir.Operation.BINARY, "sub", False),
-    "O_AND": (K.AND, ir.Operation.BINARY, "and", True),
-    "O_OR": (K.OR, ir.Operation.BINARY, "or", True),
-    "O_XOR": (K.XOR, ir.Operation.BINARY, "xor", True),
-    "O_TIMES": (K.MUL, ir.Operation.MULTIPLY, "imul", True),
+    "O_PLUS": (K.ADD, True),
+    "O_MINUS": (K.SUB, False),
+    "O_AND": (K.AND, True),
+    "O_OR": (K.OR, True),
+    "O_XOR": (K.XOR, True),
+    "O_TIMES": (K.MUL, True),
 }
 
 
@@ -140,6 +156,20 @@ class Raised:
     calls: dict[int, str]  # call site -> callee object name
     callees: dict[int, hir.Symbol]
     contracts: dict[int, runtime.Contract]
+
+
+@dataclass(frozen=True, slots=True)
+class Real:
+    """A float literal: its bits where it is moved, the x87's where it is computed."""
+
+    value: float
+
+
+@dataclass(frozen=True, slots=True)
+class FloatCell:
+    """A float in memory, not yet read: moved as bytes or loaded onto the x87."""
+
+    address: object
 
 
 def raised(unit: hir.Unit, proc: hir.Proc) -> Raised:
@@ -221,7 +251,7 @@ class _Raise:
             self.current.succ.append(key)
         self.current = _Block(key)
         self.blocks.append(self.current)
-        self.op(K.NOTHING, ir.Operation.NOTHING, "")
+        self.op(K.NOTHING)
 
     def label(self) -> str:
         self.anonymous += 1
@@ -231,7 +261,7 @@ class _Raise:
         self.current.succ.extend(succ)
         self.current.ended = True
 
-    def op(self, kind, machine, name, results=(), args=(), *, defines=None, uses=None, **extra) -> mir.Op:
+    def op(self, kind, results=(), args=(), *, defines=None, uses=None, **extra) -> mir.Op:
         if self.current is None or self.current.ended:
             self.start(self.label())
         self.at += 1
@@ -248,7 +278,7 @@ class _Raise:
             ]
             uses = tuple(dict.fromkeys(read))
         made = mir.Op(
-            self.at, machine, name, defines, uses, kind=kind, args=args, results=results, id=next(mir._IDS), **extra
+            self.at, ir.Operation.NOTHING, "", defines, uses, kind=kind, args=args, results=results, id=next(mir._IDS), **extra
         )
         self.current.ops.append(made)
         return made
@@ -292,7 +322,7 @@ class _Raise:
             case "CGControl", ("O_LABEL", _, label):
                 self.start(label)
             case "CGControl", ("O_GOTO", _, label):
-                self.op(K.JUMP, ir.Operation.JUMP, "jmp", target=label)
+                self.op(K.JUMP, target=label)
                 self.end(label)
             case "CGControl", ("O_IF_TRUE" | "O_IF_FALSE" as test, node, label):
                 self.branch(node, label, test == "O_IF_TRUE")
@@ -314,7 +344,7 @@ class _Raise:
                     low, high = mir.Const(whole.n & 0xFFFF, 2), mir.Const((whole.n >> 16) & 0xFFFF, 2)
                 else:
                     shifted = self.fresh()
-                    self.op(K.SHR, ir.Operation.BINARY, "shr", (mir.Held(shifted, 4),), (whole, mir.Const(16, 1)))
+                    self.op(K.SHR, (mir.Held(shifted, 4),), (whole, mir.Const(16, 1)))
                     low, high = mir.Held(whole.value, 2), mir.Held(shifted, 2)
                 returned = (self.copy(low), self.copy(high))
             else:
@@ -322,11 +352,7 @@ class _Raise:
         for value, register in zip(returned, (Register.EAX, Register.EDX)):
             self.pins[value] = register
         name = "retf" if self.symbol.far else "ret"
-        self.op(
-            K.RETURN,
-            ir.Operation.RETURN,
-            name,
-            args=tuple(mir.Held(one, 2) for one in returned),
+        self.op(K.RETURN, args=tuple(mir.Held(one, 2) for one in returned),
             uses=returned,
             made=ir.Semantics(ir.Operation.RETURN, name),
         )
@@ -354,7 +380,7 @@ class _Raise:
                 value = self.operand(self.eval(node), "TY_INTEGER")
                 flags = self.fresh(flags=True)
                 width = value.width if isinstance(value, mir.Held) else 2
-                self.op(K.SUB, ir.Operation.COMPARE, "cmp", (), (value, mir.Const(0, width)), defines=(flags,))
+                self.op(K.SUB, (), (value, mir.Const(0, width)), defines=(flags,))
                 self.jump_if(flags, K.NE if when else K.EQ, label)
 
     def compare(self, tree: hir.Node) -> tuple[mir.Value, mir.Kind]:
@@ -370,11 +396,11 @@ class _Raise:
         if isinstance(a, mir.Const):
             a = mir.Held(self.copy(a), width)
         flags = self.fresh(flags=True)
-        self.op(K.SUB, ir.Operation.COMPARE, "cmp", (), (a, b), defines=(flags,))
+        self.op(K.SUB, (), (a, b), defines=(flags,))
         return flags, test
 
     def jump_if(self, flags: mir.Value, test: mir.Kind, label: str) -> None:
-        self.op(K.BRANCH, ir.Operation.BRANCH, "", uses=(flags,), test=test, target=label)
+        self.op(K.BRANCH, uses=(flags,), test=test, target=label)
         fall = self.label()
         self.end(fall, label)
         self.start(fall)
@@ -392,7 +418,7 @@ class _Raise:
             case "CGInteger", (value, type_):
                 return mir.Const(int(value), max(2, self.width(type_)))
             case "CGFloat", (text, "TY_SINGLE"):
-                return mir.Const(int.from_bytes(struct.pack("<f", float(text)), "little", signed=True), 4)
+                return Real(float(text))
             case "CGFEName", (symbol, type_):
                 return self.name(symbol)
             case "CGTempName", (temp, _):
@@ -450,7 +476,7 @@ class _Raise:
         otherwise, join = self.label(), self.label()
         self.branch(test, otherwise, False)
         self.store(self.cell(joined, width), self.narrowed(yes(), width))
-        self.op(K.JUMP, ir.Operation.JUMP, "jmp", target=join)
+        self.op(K.JUMP, target=join)
         self.end(join)
         self.start(otherwise)
         self.store(self.cell(joined, width), self.narrowed(no(), width))
@@ -487,19 +513,34 @@ class _Raise:
                 return Far(got.high, got.low)
             if self.width(type_) == 4:
                 whole = self.fresh()
-                self.op(K.CONCAT, ir.Operation.MOVE, "", (mir.Held(whole, 4),), (mir.Held(got.high, 2), mir.Held(got.low, 2)))
+                self.op(K.CONCAT, (mir.Held(whole, 4),), (mir.Held(got.high, 2), mir.Held(got.low, 2)))
                 return mir.Held(whole, 4)
             return self.extended(mir.Held(got.low, 2), type_)
         address = self.address(got)
         if type_ in self.unit.types:
             return Aggregate(address, self.unit.types[type_])
+        if type_ == "TY_SINGLE":
+            return FloatCell(address)
         loaded = self.load(self.cell(address, self.width(type_)), type_)
         if self.far_pointer(type_):
             return self.split(loaded)
         return loaded
 
     def convert(self, got, source: str, type_: str):
-        if (source in FLOATS) != (type_ in FLOATS) or (source in FLOATS and source != type_):
+        if source in FLOATS or type_ in FLOATS:
+            if source == type_:
+                return got
+            if source == "TY_SINGLE" and type_ not in FLOATS:
+                return self.truncated(self.floating(got), type_)
+            if type_ == "TY_SINGLE" and source not in FLOATS:
+                whole = self.operand(got, source)
+                if source not in SIGNED and self.width(source) == 4:
+                    raise Unsupported(f"{self.symbol.name}: fild of an unsigned long")
+                if self.width(source) == 1 or source not in SIGNED:
+                    whole = self.convert(whole, source, "TY_INT_4")
+                result = self.fresh()
+                self.op(K.FLOAD, (mir.Held(result, 10),), (whole,), floating=_loaded(INTEGER_FORMATS[whole.width]))
+                return mir.Held(result, 10)
             raise Unsupported(f"{self.symbol.name}: conversion {source} to {type_}")
         if isinstance(got, (Frame, Global, Near)) and self.far_pointer(type_):
             return Far(self.dgroup(), self.near(got))
@@ -516,8 +557,8 @@ class _Raise:
             return mir.Const(self.wrapped(got.n, type_), max(2, to))
         if to == 4 and got.width < 4:
             wide = self.fresh()
-            kind, name = (K.SIGN_EXTEND, "movsx") if source in SIGNED else (K.ZERO_EXTEND, "movzx")
-            self.op(kind, ir.Operation.EXTEND, name, (mir.Held(wide, 4),), (mir.Held(got.value, 2),))
+            kind = K.SIGN_EXTEND if source in SIGNED else K.ZERO_EXTEND
+            self.op(kind, (mir.Held(wide, 4),), (mir.Held(got.value, 2),))
             return mir.Held(wide, 4)
         if to == 1:
             return self.extended(mir.Held(got.value, 2), type_)
@@ -534,12 +575,21 @@ class _Raise:
             n = -value.n if cg_op == "O_UMINUS" else ~value.n
             return mir.Const(self.wrapped(n, type_), width)
         result = self.fresh()
-        kind, name = (K.NEG, "neg") if cg_op == "O_UMINUS" else (K.NOT, "not")
-        self.op(kind, ir.Operation.UNARY, name, (mir.Held(result, width),), (self.narrowed(value, width),))
+        kind = K.NEG if cg_op == "O_UMINUS" else K.NOT
+        self.op(kind, (mir.Held(result, width),), (self.narrowed(value, width),))
         return self.extended(mir.Held(result, width), type_)
 
     def binary(self, cg_op: str, left: str, right: str, type_: str):
         a, b = self.eval(left), self.eval(right)
+        if type_ == "TY_SINGLE":
+            if cg_op not in FLOAT_ARITHMETIC:
+                raise Unsupported(f"{self.symbol.name}: float {cg_op}")
+            kind = FLOAT_ARITHMETIC[cg_op]
+            x = self.floating(self.convert(a, self.type_of(left), type_))
+            y = self.floating(self.convert(b, self.type_of(right), type_))
+            result = self.fresh()
+            self.op(kind, (mir.Held(result, 10),), (x, y), floating=ARITH_RULE)
+            return mir.Held(result, 10)
         if cg_op in ("O_PLUS", "O_MINUS") and isinstance(b, (Frame, Global, Near, Far)) and cg_op == "O_PLUS":
             a, b = b, a
         if isinstance(a, mir.Held) and self.far_pointer(self.type_of(left)):
@@ -557,7 +607,7 @@ class _Raise:
         index = self.narrowed(by, 2)
         if subtract:
             negated = self.fresh()
-            self.op(K.NEG, ir.Operation.UNARY, "neg", (mir.Held(negated, 2),), (index,))
+            self.op(K.NEG, (mir.Held(negated, 2),), (index,))
             index = mir.Held(negated, 2)
         if isinstance(address, Far):
             moved = self.add(mir.Held(address.offset, 2), index)
@@ -567,7 +617,7 @@ class _Raise:
 
     def add(self, a: mir.Held, b: Operand) -> mir.Value:
         result = self.fresh()
-        self.op(K.ADD, ir.Operation.BINARY, "add", (mir.Held(result, a.width),), (a, b))
+        self.op(K.ADD, (mir.Held(result, a.width),), (a, b))
         return result
 
     def arithmetic(self, cg_op: str, a: Operand, b: Operand, type_: str) -> Operand:
@@ -585,8 +635,7 @@ class _Raise:
             if isinstance(a, mir.Const):
                 a = mir.Held(self.copy(a), width)
             remainder = self.fresh()
-            self.op(
-                K.DIVMOD, ir.Operation.DIVIDE, "idiv", (mir.Held(result, width), mir.Held(remainder, width)), (a, b)
+            self.op(K.DIVMOD, (mir.Held(result, width), mir.Held(remainder, width)), (a, b)
             )
             return mir.Held(result if cg_op == "O_DIV" else remainder, width)
         if cg_op in ("O_LSHIFT", "O_RSHIFT"):
@@ -594,17 +643,17 @@ class _Raise:
                 raise Unsupported(f"{self.symbol.name}: shift by a variable count")
             if isinstance(a, mir.Const):
                 a = mir.Held(self.copy(a), width)
-            kind, name = (K.SHL, "shl") if cg_op == "O_LSHIFT" else ((K.SAR, "sar") if signed else (K.SHR, "shr"))
-            self.op(kind, ir.Operation.BINARY, name, (mir.Held(result, width),), (a, mir.Const(b.n, 1)))
+            kind = K.SHL if cg_op == "O_LSHIFT" else (K.SAR if signed else K.SHR)
+            self.op(kind, (mir.Held(result, width),), (a, mir.Const(b.n, 1)))
             return self.extended(mir.Held(result, width), type_)
         if cg_op not in ARITHMETIC:
             raise Unsupported(f"{self.symbol.name}: {cg_op}")
-        kind, machine, name, commutes = ARITHMETIC[cg_op]
+        kind, commutes = ARITHMETIC[cg_op]
         if isinstance(a, mir.Const) and commutes:
             a, b = b, a
         if isinstance(a, mir.Const):
             a = mir.Held(self.copy(a), width)
-        self.op(kind, machine, name, (mir.Held(result, width),), (a, b))
+        self.op(kind, (mir.Held(result, width),), (a, b))
         return self.extended(mir.Held(result, width), type_)
 
     def assign(self, target: str, source: str, type_: str) -> Operand:
@@ -615,7 +664,14 @@ class _Raise:
             self.store(self.cell(address, 2), self.near(Near(value.offset, value.disp)))
             self.store(self.cell(replace(address, disp=address.disp + 2), 2), mir.Held(value.segment, 2))
             return value
-        operand = self.coerced(value, source, type_)
+        operand = self.coerced(value, source, type_) if type_ != "TY_SINGLE" else self.convert(value, self.type_of(source), type_)
+        if isinstance(operand, mir.Held) and operand.width == 10:
+            # fstp pops what it stores, so the assignment's own value is the cell.
+            ref = self.cell(address, width)
+            self.op(K.FSTORE, (mir.Cell(ref),), (operand,), stores=(ref,), floating=STORE_SINGLE)
+            return FloatCell(address)
+        if isinstance(operand, (Real, FloatCell)):
+            operand = self.operand(operand, type_)
         self.store(self.cell(address, width), operand)
         return operand
 
@@ -628,9 +684,9 @@ class _Raise:
             width = 4 if source.size - done >= 4 else (2 if source.size - done >= 2 else 1)
             moved = self.fresh()
             got = self.cell(replace(source.address, disp=source.address.disp + done), width)
-            self.op(K.LOAD, ir.Operation.MOVE, "mov", (mir.Held(moved, width),), (mir.Cell(got),), loads=(got,))
+            self.op(K.LOAD, (mir.Held(moved, width),), (mir.Cell(got),), loads=(got,))
             put = self.cell(replace(into, disp=into.disp + done), width)
-            self.op(K.STORE, ir.Operation.MOVE, "mov", (mir.Cell(put),), (mir.Held(moved, width),), stores=(put,))
+            self.op(K.STORE, (mir.Cell(put),), (mir.Held(moved, width),), stores=(put,))
             done += width
 
     def call(self, call: hir.Call) -> Returned:
@@ -638,16 +694,16 @@ class _Raise:
         if not isinstance(target, Function):
             raise Unsupported(f"{self.symbol.name}: indirect call")
         callee = target.symbol
+        # Stack arguments only: cdecl (caller pops) or pascal (reversed, callee pops).
+        stacked = callee.call_class & (hir.CALLER_POPS | hir.REVERSE_PARMS) in (hir.CALLER_POPS, hir.REVERSE_PARMS)
+        if callee.register_parms or not stacked:
+            raise Unsupported(f"{self.symbol.name}: {callee.object_name} has a register calling convention")
         arguments = [(self.eval(node), type_) for node, type_ in call.parms]
         if callee.call_class & hir.REVERSE_PARMS:
             arguments.reverse()
         pushed = sum(self.push(value, type_) for value, type_ in arguments)
         low, high = self.fresh(), self.fresh()
-        site = self.op(
-            K.CALL,
-            ir.Operation.CALL,
-            "call",
-            (mir.Held(low, 2), mir.Held(high, 2)),
+        site = self.op(K.CALL, (mir.Held(low, 2), mir.Held(high, 2)),
             defines=(low, high),
             uses=(),
             made=ir.Semantics(ir.Operation.CALL, "call"),
@@ -672,11 +728,7 @@ class _Raise:
         )
         if caller_pops and pushed:
             sp = ir.Reg(Register.SP, 2)
-            self.op(
-                K.OPAQUE,
-                ir.Operation.BINARY,
-                "add",
-                defines=(),
+            self.op(K.OPAQUE, defines=(),
                 uses=(),
                 made=ir.Semantics(ir.Operation.BINARY, "add", (sp,), (sp, ir.Imm(pushed, 2))),
             )
@@ -684,12 +736,12 @@ class _Raise:
 
     def push(self, value, type_: str) -> int:
         if isinstance(value, Far):
-            self.op(K.ARG, ir.Operation.PUSH, "push", (), (mir.Held(value.segment, 2),))
-            self.op(K.ARG, ir.Operation.PUSH, "push", (), (mir.Held(self.near(Near(value.offset, value.disp)), 2),))
+            self.op(K.ARG, (), (mir.Held(value.segment, 2),))
+            self.op(K.ARG, (), (mir.Held(self.near(Near(value.offset, value.disp)), 2),))
             return 4
         width = max(2, self.width(type_))
         operand = self.narrowed(self.operand(value, type_), width)
-        self.op(K.ARG, ir.Operation.PUSH, "push", (), (operand,))
+        self.op(K.ARG, (), (operand,))
         return width
 
     # ---- values and cells ----
@@ -701,13 +753,48 @@ class _Raise:
             case Far():
                 whole = self.fresh()
                 offset = self.near(Near(got.offset, got.disp))
-                self.op(K.CONCAT, ir.Operation.MOVE, "", (mir.Held(whole, 4),), (mir.Held(got.segment, 2), mir.Held(offset, 2)))
+                self.op(K.CONCAT, (mir.Held(whole, 4),), (mir.Held(got.segment, 2), mir.Held(offset, 2)))
                 return mir.Held(whole, 4)
             case Frame() | Global() | Near():
                 return mir.Held(self.near(got), 2)
             case Returned():
                 return self.operand(self.points(got, type_), type_)
+            case Real(value):
+                return mir.Const(int.from_bytes(struct.pack("<f", value), "little", signed=True), 4)
+            case FloatCell(address):
+                return self.load(self.cell(address, 4), "TY_UINT_4")
         raise Unsupported(f"{self.symbol.name}: {got} used as a value")
+
+    def floating(self, got) -> mir.Held:
+        """A float on the x87."""
+        match got:
+            case mir.Held(width=10):
+                return got
+            case FloatCell(address):
+                ref = self.cell(address, 4)
+                result = self.fresh()
+                self.op(
+                    K.FLOAD, (mir.Held(result, 10),), (mir.Cell(ref),), loads=(ref,), floating=_loaded(floating.Format.BINARY32)
+                )
+                return mir.Held(result, 10)
+            case Real(value) if value.is_integer() and -0x8000 <= value < 0x8000:
+                result = self.fresh()
+                self.op(K.FLOAD, (mir.Held(result, 10),), (mir.Const(int(value), 2),), floating=_loaded(INTEGER_FORMATS[2]))
+                return mir.Held(result, 10)
+        raise Unsupported(f"{self.symbol.name}: {got} computed as a float")
+
+    def truncated(self, value: mir.Held, type_: str) -> Operand:
+        """C's float-to-integer cast rounds toward zero, whatever the environment says."""
+        width = max(2, self.width(type_))
+        result = self.fresh()
+        rule = floating.Semantics(
+            (floating.Format.EXTENDED80,),
+            floating.Format.SIGNED32 if width == 4 else floating.Format.SIGNED16,
+            floating.Precision.DESTINATION,
+            floating.Rounding.TOWARD_ZERO,
+        )
+        self.op(K.FSTORE, (mir.Held(result, width),), (value,), floating=rule)
+        return self.convert(mir.Held(result, width), "TY_INT_4" if width == 4 else "TY_INT_2", type_)
 
     def address(self, got) -> Address:
         match got:
@@ -721,18 +808,18 @@ class _Raise:
 
     def split(self, pointer: mir.Held) -> Far:
         segment = self.fresh()
-        self.op(K.SHR, ir.Operation.BINARY, "shr", (mir.Held(segment, 4),), (pointer, mir.Const(16, 1)))
+        self.op(K.SHR, (mir.Held(segment, 4),), (pointer, mir.Const(16, 1)))
         return Far(segment, pointer.value)
 
     def near(self, address: Address) -> mir.Value:
         match address:
             case Frame(disp):
                 result = self.fresh()
-                self.op(K.ADDRESS, ir.Operation.ADDRESS, "lea", (mir.Held(result, 2),), (mir.FrameAddress(disp, 2),))
+                self.op(K.ADDRESS, (mir.Held(result, 2),), (mir.FrameAddress(disp, 2),))
                 return result
             case Global(space, index, disp):
                 result = self.fresh()
-                self.op(K.COPY, ir.Operation.MOVE, "mov", (mir.Held(result, 2),), (mir.Symbol(space, index, disp, 2),))
+                self.op(K.COPY, (mir.Held(result, 2),), (mir.Symbol(space, index, disp, 2),))
                 return result
             case Near(base, 0):
                 return base
@@ -743,7 +830,7 @@ class _Raise:
     def dgroup(self) -> mir.Value:
         """DGROUP's selector, which is SS's in this model: a near address's far form."""
         result = self.fresh()
-        self.op(K.COPY, ir.Operation.MOVE, "mov", (mir.Held(result, 2),), (mir.Symbol(Space.GROUP, 0, 0, 2),))
+        self.op(K.COPY, (mir.Held(result, 2),), (mir.Symbol(Space.GROUP, 0, 0, 2),))
         return result
 
     def cell(self, address: Address, width: int) -> mir.MemRef:
@@ -768,21 +855,21 @@ class _Raise:
     def load(self, ref: mir.MemRef, type_: str) -> mir.Held:
         result = self.fresh()
         if ref.width == 1:
-            kind, name = (K.SIGN_EXTEND, "movsx") if type_ in SIGNED else (K.ZERO_EXTEND, "movzx")
-            self.op(kind, ir.Operation.EXTEND, name, (mir.Held(result, 2),), (mir.Cell(ref),), loads=(ref,))
+            kind = K.SIGN_EXTEND if type_ in SIGNED else K.ZERO_EXTEND
+            self.op(kind, (mir.Held(result, 2),), (mir.Cell(ref),), loads=(ref,))
             return mir.Held(result, 2)
-        self.op(K.LOAD, ir.Operation.MOVE, "mov", (mir.Held(result, ref.width),), (mir.Cell(ref),), loads=(ref,))
+        self.op(K.LOAD, (mir.Held(result, ref.width),), (mir.Cell(ref),), loads=(ref,))
         return mir.Held(result, ref.width)
 
     def store(self, ref: mir.MemRef, value: Operand | mir.Value) -> None:
         if isinstance(value, mir.Value):
             value = mir.Held(value, 2)
         value = self.narrowed(value, ref.width)
-        self.op(K.STORE, ir.Operation.MOVE, "mov", (mir.Cell(ref),), (value,), stores=(ref,))
+        self.op(K.STORE, (mir.Cell(ref),), (value,), stores=(ref,))
 
     def copy(self, value: Operand) -> mir.Value:
         result = self.fresh()
-        self.op(K.COPY, ir.Operation.MOVE, "mov", (mir.Held(result, value.width),), (value,))
+        self.op(K.COPY, (mir.Held(result, value.width),), (value,))
         return result
 
     def narrowed(self, value: Operand, width: int) -> Operand:
@@ -799,8 +886,8 @@ class _Raise:
         if self.width(type_) != 1:
             return value
         result = self.fresh()
-        kind, name = (K.SIGN_EXTEND, "movsx") if type_ in SIGNED else (K.ZERO_EXTEND, "movzx")
-        self.op(kind, ir.Operation.EXTEND, name, (mir.Held(result, 2),), (mir.Held(value.value, 1),))
+        kind = K.SIGN_EXTEND if type_ in SIGNED else K.ZERO_EXTEND
+        self.op(kind, (mir.Held(result, 2),), (mir.Held(value.value, 1),))
         return mir.Held(result, 2)
 
     def wrapped(self, n: int, type_: str) -> int:
