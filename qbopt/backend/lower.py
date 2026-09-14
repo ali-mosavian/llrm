@@ -965,7 +965,7 @@ class Lowering:
                 if not one.flags and one not in op.merges and ir.ROOT.get(self._origin.get(one, -1), -1) is source
             )
         if op.kind is not mir.Kind.CALL:
-            return ()
+            return self._unencoded(op)
         # The raise's own answer first: `args_known` is false for a call
         # whose contract declares nothing and for one to the program's own
         # code, which has no runtime contract at all -- not for a routine
@@ -1008,31 +1008,51 @@ class Lowering:
         }
         if inputs:
             # SSA holds the unshifted word; copying its low byte to AH is not an extraction.
-            registers = {
-                root: target.named(root, 2)
-                if register in (Register.AH, Register.BH, Register.CH, Register.DH)
-                else register
-                for root, register in registers.items()
-            }
-            # A use's register is its position, not its value's origin: the
-            # raise listed them in variable order, and a pass that forwards a
-            # copy into `out dx,al` hands it a value BC kept somewhere else.
-            # By origin, UNWHITEFADE's third OUT pinned nothing to AL and
-            # wrote 0x3C9's low byte as every blue.
-            order = sorted(mir._touched(op.node)[1], key=lambda one: (one is not mir.FLAGS, one))
-            if len(op.uses) < len(order):
-                raise Unlowered(f"{op.at:#06x}: {len(op.uses)} uses for {len(order)} operand registers")
-            return tuple(
-                (ir.Held(value.id, RegisterExt.size(register)), register)
-                for value, root in zip(op.uses, order)
-                if not value.flags
-                if (register := registers.get(root)) is not None
+            return self._positional(
+                op,
+                {
+                    root: target.named(root, 2)
+                    if register in (Register.AH, Register.BH, Register.CH, Register.DH)
+                    else register
+                    for root, register in registers.items()
+                },
             )
         return tuple(
             (ir.Held(value.id, RegisterExt.size(register)), register)
             for value in values
             if not value.flags
             if (register := registers.get(self._origin.get(value))) is not None
+        )
+
+    def _unencoded(self, op: mir.Op) -> tuple:
+        """An operand the raise left opaque is emitted in BC's registers, so what it reads must be there."""
+        registers = {
+            ir.ROOT.get(where, where): where
+            for arg in op.args
+            if isinstance(arg, mir.Opaque)
+            for where in (
+                getattr(arg.what, "through", None),
+                getattr(arg.what, "index", None),
+                getattr(arg.what, "index_through", None),
+            )
+            if isinstance(where, int) and where != Register.NONE
+        }
+        return self._positional(op, registers) if registers and op.node is not None else ()
+
+    def _positional(self, op: mir.Op, registers: dict) -> tuple:
+        # A use's register is its position, not its value's origin: the
+        # raise listed them in variable order, and a pass that forwards a
+        # copy into `out dx,al` hands it a value BC kept somewhere else.
+        # By origin, UNWHITEFADE's third OUT pinned nothing to AL and
+        # wrote 0x3C9's low byte as every blue.
+        order = sorted(mir._touched(op.node)[1], key=lambda one: (one is not mir.FLAGS, one))
+        if len(op.uses) < len(order):
+            raise Unlowered(f"{op.at:#06x}: {len(op.uses)} uses for {len(order)} operand registers")
+        return tuple(
+            (ir.Held(value.id, RegisterExt.size(register)), register)
+            for value, root in zip(op.uses, order)
+            if not value.flags
+            if (register := registers.get(root)) is not None
         )
 
     def __init__(

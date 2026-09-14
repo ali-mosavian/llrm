@@ -60,6 +60,26 @@ def test_string_copy_keeps_its_implicit_address_registers() -> None:
         assert {register for _, register in one.delivers} == {Register.SI, Register.DI}
 
 
+def test_an_opaque_address_keeps_the_registers_it_is_written_in() -> None:
+    """hotlpx rebuilt twice printed S=250 for 630: `lea ax,[ebx+ebx*4]` pinned
+    nothing, and the product it reads was allocated to ax."""
+    from qbopt.backend import lower
+    from qbopt.abi import runtime
+    from qbopt.rewrite import rewrite
+
+    found = module.of(omf.parse(rewrite(Path("fixtures/omf/hotlpx-p-g2.obj").read_bytes(), dry_run=False)[0]))
+    contracts = runtime.for_module(found)
+    name, body = mir.bodies(found, split.partition(found, code_map(found)), contracts)[0]
+    lowered = lower.lowered(name, body, found.calls, found.absorbed, contracts)
+    (lea,) = [
+        one
+        for block in lowered.blocks
+        for one in block.insns
+        if one.op is not None and one.op.kind is mir.Kind.ADDRESS and one.op.at == 0x51
+    ]
+    assert {ir.ROOT[register] for _, register in lea.requires} == {Register.EBX}
+
+
 def test_a_procedure_hands_back_dx_ax() -> None:
     """procs p-ot's TWICE& left its answer in bx and ax, and its callers read dx:ax."""
     from qbopt.backend import lower
