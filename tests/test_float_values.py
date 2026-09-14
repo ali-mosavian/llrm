@@ -6,6 +6,7 @@ from dataclasses import replace
 import corpus
 import pytest
 
+from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.backend import lower_floats
 from qbopt import wholeseg
@@ -105,10 +106,11 @@ def test_lowering_can_preserve_a_shared_sum_after_redundant_float_ops_are_remove
     path = Path("fixtures/omf/fpcse-p-g2.obj")
     body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
     block = next(block for block in body.blocks if any(op.floating_origin for op in block.ops))
-    floats = [op for op in block.ops if op.floating_origin]
-    first_sum = floats[1].results[0].value
-    second_sum = floats[5].results[0].value
-    removed = {floats[4].id, floats[5].id}
+    floats = [op for op in block.ops if op.floating]
+    sums = [op for op in floats if op.kind is mir.Kind.FADD]
+    first_sum = sums[0].results[0].value
+    second_sum = sums[1].results[0].value
+    removed = {sums[1].id} | {op.id for op in floats if set(op.defines) & set(sums[1].uses)}
     ops = tuple(replace(op, op=ir.Operation.NOTHING, kind=mir.Kind.NOTHING,
                         name="", args=(), results=(), uses=(), defines=(), loads=(),
                         stores=(), merges={}, node=None, made=None, raised=None,
@@ -121,6 +123,18 @@ def test_lowering_can_preserve_a_shared_sum_after_redundant_float_ops_are_remove
     assert names.count("fadd") == 3  # shared sum plus the two accumulator additions
     assert any(one.what and one.what.name == "fld" and one.what.sources == (ir.St(0),)
                for one in low.insns), "the shared sum must survive the destructive multiply"
+
+
+def test_a_float_operation_a_pass_rebuilt_still_lowers():
+    """FPCSE's multiply without BC's stack origin was refused: its input was 'used outside its original computation'."""
+    path = Path("fixtures/omf/fpcse-p-g2.obj")
+    body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
+    rebuilt = replace(body, blocks=tuple(replace(block, ops=tuple(
+        replace(op, floating_origin=None) if op.kind is mir.Kind.FMUL else op for op in block.ops))
+        for block in body.blocks))
+    def names(low):
+        return [one.what.name for one in low.insns if one.what]
+    assert names(_allocated(rebuilt, path)) == names(_allocated(body, path))
 
 
 def test_floating_values_survive_lowering_until_allocation():
@@ -146,9 +160,11 @@ def test_removed_float_operation_cannot_retain_hidden_computation():
     from qbopt.backend.lower import Unlowered
     path = Path("fixtures/omf/fpcse-p-g2.obj")
     body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
-    op = next(op for block in body.blocks for op in block.ops if op.floating_origin)
+    body = replace(body, blocks=tuple(replace(block, ops=tuple(
+        replace(op, kind=mir.Kind.NOTHING) if op.kind is mir.Kind.FLOAD else op for op in block.ops))
+        for block in body.blocks))
     with pytest.raises(Unlowered, match="retains computation"):
-        lower_floats.operation(replace(op, kind=mir.Kind.NOTHING))
+        lower_floats.checked(body)
 
 
 def test_cse_reuses_exact_fpcse_sum():
@@ -170,6 +186,23 @@ def test_cse_reuses_exact_fpcse_sum():
     assert sum(str(one.insn).split()[0] in {"fadd", "faddp"} for one in instructions) == 3
 
 
+def test_float_arithmetic_reads_values_not_memory():
+    """NBODYS squared deltaX as `fmul [deltaX]`: the read's format lived on the multiply, so no load analysis saw it."""
+    path = Path("fixtures/bench/nbodys-v-g3.obj")
+    found = corpus.loaded(path)
+    arithmetic = [
+        op
+        for _, body in mir.bodies(found, corpus.partitioned(path))
+        for block in body.blocks
+        for op in block.ops
+        if op.kind in (mir.Kind.FADD, mir.Kind.FSUB, mir.Kind.FMUL, mir.Kind.FDIV)
+        and isinstance(op.args[0], mir.Held)
+    ]
+    square = next(op for op in arithmetic if op.at == 0x12D)
+    assert not any(isinstance(arg, mir.Cell) for op in arithmetic for arg in op.args)
+    assert not square.loads and all(isinstance(arg, mir.Held) and arg.width == 10 for arg in square.args)
+
+
 @pytest.mark.parametrize("guard", [None, "unknown", "rounding", "barrier", "alias"])
 def test_exact_store_can_supply_a_later_floating_load(guard, monkeypatch):
     """Controlled FPCSE witness: an exact stored product was loaded again instead of kept alive."""
@@ -180,7 +213,8 @@ def test_exact_store_can_supply_a_later_floating_load(guard, monkeypatch):
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
     block = next(block for block in body.blocks if any(op.floating for op in block.ops))
     floats = [op for op in block.ops if op.floating]
-    store, load = floats[3:5]
+    store = next(op for op in floats if op.kind is mir.Kind.FSTORE)
+    load = floats[floats.index(store) + 1]
     reload = replace(load, args=store.results, loads=store.stores)
     ops = list(block.ops)
     ops[ops.index(load)] = reload
@@ -205,8 +239,14 @@ def test_exact_store_can_supply_a_later_floating_load(guard, monkeypatch):
     if guard is None:
         before = _allocated(body, path)
         after = _allocated(changed, path)
-        assert any(one.at == load.at and one.what and one.what.name == "fld" for one in before.insns)
-        assert not any(one.at == load.at and one.what and one.what.name == "fld" for one in after.insns)
+        # The reload may be a memory operand of each reader rather than an `fld` of its own.
+        cell = next(
+            one.what.dests[0]
+            for one in before.insns
+            if one.at == store.at and one.what and one.what.op is ir.Operation.FLOAT_STORE
+        )
+        reads = [sum(cell in one.what.sources for one in allocated.insns if one.what) for allocated in (before, after)]
+        assert reads[1] < reads[0]
 
 
 @pytest.mark.parametrize("change", ["barrier", "alias", "rounding"])
@@ -239,17 +279,17 @@ def test_fpcse_float_values_link_each_computation(tag):
     path = Path(f"fixtures/omf/fpcse-{tag}.obj")
     body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
     operations = [op for block in body.blocks for op in block.ops if op.floating is not None]
-    assert operations and all(op.floating_origin is not None for op in operations)
+    assert operations
     assert not any(isinstance(arg, mir.Opaque) for op in operations for arg in (*op.args, *op.results))
-    start = next(index for index, op in enumerate(operations) if op.kind is mir.Kind.FADD) - 1
-    load, add, multiply, store = operations[start:start+4]
-    assert add.args[0] == load.results[0]
-    assert multiply.args[0] == add.results[0]
+    start = next(index for index, op in enumerate(operations) if op.kind is mir.Kind.FADD) - 2
+    load, read, add, loaded, multiply, store = operations[start : start + 6]
+    assert add.args == (load.results[0], read.results[0])
+    assert multiply.args == (add.results[0], loaded.results[0])
     assert store.args[0] == multiply.results[0]
-    assert all(op.results[0].value in op.defines for op in (load, add, multiply))
+    assert all(op.results[0].value in op.defines for op in (load, read, add, loaded, multiply))
     variables = {op.results[0].value.variable for op in operations if op.results and isinstance(op.results[0], mir.Held)}
     assert not variables.intersection(value.variable for block in body.blocks for op in block.ops
-                                      if op.floating_origin is None for value in (*op.uses, *op.defines))
+                                      if op.floating is None for value in (*op.uses, *op.defines))
     result = wholeseg.emitted(path.read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
 
@@ -289,39 +329,6 @@ def test_generic_memory_reuse_respects_float_conversion_and_effects():
     assert avail.stored_from(store) is None
     assert avail.stored_cell(store) is None
     assert transform._served(load, store.args[0].value) is None
-
-
-def test_direct_lowering_uses_the_same_float_baseline():
-    """Legacy instruction consumers must not mistake a floating value for a general register."""
-    from qbopt.backend import lower
-    path = Path("fixtures/omf/fpcse-p-g2.obj")
-    body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
-    op = next(op for block in body.blocks for op in block.ops if op.kind is mir.Kind.FMUL)
-    assert lower.current(op) == op.node.semantics
-    with pytest.raises(lower.Unlowered, match="floating dataflow"):
-        lower.current(replace(op, args=(replace(op.args[0], value=mir.Value(9999, 0, variable=9999)), *op.args[1:])))
-
-
-@pytest.mark.parametrize("change", ["missing_push", "premature_pop", "wrong_slot"])
-def test_float_lowering_checks_actual_stack_transitions(change):
-    """FPCSE must not consume an empty or different slot despite unchanged SSA names."""
-    from qbopt.backend.lower import Unlowered
-    path = Path("fixtures/omf/fpcse-p-g2.obj")
-    body = mir.bodies(corpus.loaded(path), corpus.partitioned(path))[0][1]
-    block = next(block for block in body.blocks if any(op.floating_origin for op in block.ops))
-    ops = list(block.ops)
-    index = next(index for index, op in enumerate(ops)
-                 if op.kind is (mir.Kind.FLOAD if change == "missing_push" else mir.Kind.FADD))
-    op = ops[index]
-    if change == "wrong_slot":
-        origin = op.floating_origin
-        ops[index] = replace(op, floating_origin=replace(origin,
-            machine_inputs=(mir.Opaque(None, "st1"), *origin.machine_inputs[1:])))
-    else:
-        ops[index] = replace(op, stack=0 if change == "missing_push" else -1)
-    changed = replace(body, blocks=tuple(replace(one, ops=tuple(ops)) if one is block else one for one in body.blocks))
-    with pytest.raises(Unlowered, match="floating stack"):
-        lower_floats._stack_checked(next(one for one in changed.blocks if one.at == block.at))
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])

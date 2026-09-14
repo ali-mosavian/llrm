@@ -27,6 +27,85 @@ def _regions(block):
             run = []
 
 
+_ARITHMETIC = (mir.Kind.FADD, mir.Kind.FSUB, mir.Kind.FMUL, mir.Kind.FDIV)
+
+
+def loaded(body: mir.MirBody) -> mir.MirBody:
+    """Arithmetic over values: a memory operand becomes its own load, which carries the format."""
+    from qbopt.model import ir
+    from qbopt.model.floating import Format
+    from qbopt.model.floating import Precision
+    from qbopt.model.floating import Rounding
+    from qbopt.model.floating import Semantics
+
+    values = tuple(ssa.values(body))
+    serial = max((value.id for value in values), default=0)
+    variable = max((value.variable for value in values), default=0)
+    blocks = []
+    for block in body.blocks:
+        ops = []
+        for op in block.ops:
+            if (
+                op.kind not in _ARITHMETIC
+                or op.floating is None
+                or op.stores
+                or len(op.loads) != 1
+                or len(op.args) != 2
+                or not isinstance(op.args[0], mir.Held)
+                or op.args[0].width != 10
+                or not isinstance(op.args[1], mir.Cell)
+            ):
+                ops.append(op)
+                continue
+            kept, cell = op.args
+            serial += 1
+            variable += 1
+            read = mir.Held(mir.Value(serial, op.at, variable=variable, version=1), 10)
+            integer = op.name.startswith("fi")
+            ops.append(
+                replace(
+                    op,
+                    kind=mir.Kind.FLOAD,
+                    op=ir.Operation.FLOAT_LOAD,
+                    name="fild" if integer else "fld",
+                    args=(cell,),
+                    results=(read,),
+                    defines=(read.value,),
+                    uses=tuple(value for value in op.uses if value != kept.value),
+                    merges={},
+                    floating=Semantics(
+                        (op.floating.inputs[1],),
+                        Format.EXTENDED80,
+                        Precision.EXACT,
+                        Rounding.NONE,
+                        op.floating.exceptions,
+                    ),
+                    floating_origin=None,
+                    stack=None,
+                    node=None,
+                    made=None,
+                    raised=None,
+                    symbol=None,
+                    covers=(op.at, op.at),
+                    extra_covers=(),
+                    id=next(mir._IDS),
+                )
+            )
+            ops.append(
+                replace(
+                    op,
+                    name="f" + op.name[2:] if integer else op.name,
+                    args=(kept, read),
+                    uses=(kept.value, read.value),
+                    loads=(),
+                    raised=None,
+                    floating=replace(op.floating, inputs=(Format.EXTENDED80, Format.EXTENDED80)),
+                )
+            )
+        blocks.append(replace(block, ops=tuple(ops)))
+    return replace(body, blocks=tuple(blocks))
+
+
 def raised(body: mir.MirBody) -> mir.MirBody:
     values = tuple(ssa.values(body))
     serial = max((value.id for value in values), default=0)

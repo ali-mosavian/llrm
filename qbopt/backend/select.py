@@ -821,7 +821,7 @@ def compare(dest: ir.Loc, value: int, at: int = 0, relocated: bool = False) -> E
 FLOAT_SIZED = {4: "M32FP", 8: "M64FP", 10: "M80FP"}
 INT_SIZED = {2: "M16INT", 4: "M32INT", 8: "M64INT"}
 FLOAT_MEMORY = ("fld", "fstp", "fst", "fadd", "fsub", "fmul", "fdiv", "fsubr", "fdivr", "fcom", "fcomp")
-INT_MEMORY = ("fild", "fistp", "fist", "fiadd", "fisub", "fimul", "fidiv")
+INT_MEMORY = ("fild", "fistp", "fist", "fiadd", "fisub", "fimul", "fidiv", "fisubr", "fidivr")
 
 
 def float_memory(name: str, cell: ir.Mem, at: int = 0) -> Emitted | None:

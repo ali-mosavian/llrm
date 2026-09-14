@@ -2392,7 +2392,7 @@ def bodies(
                 built = raising_numeric_policy.checkpoints(built)
             from qbopt.frontend import raising_float_values
 
-            built = raising_float_values.raised(built)
+            built = raising_float_values.loaded(raising_float_values.raised(built))
             from qbopt.frontend import raising_words
 
             built = raising_words.scalar(built)

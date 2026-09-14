@@ -69,7 +69,9 @@ def expanded(body: mir.MirBody, dgroup: frozenset[int], calls: dict) -> mir.MirB
         if len(counts) != 1:
             continue
         count, = counts
-        if count < 2 or count * (len(latch.ops) + len(header.ops)) > 256:
+        # The budget is what the expansion emits; an erased marker emits nothing.
+        emitted = sum(op.kind is not mir.Kind.NOTHING for op in (*latch.ops, *header.ops))
+        if count < 2 or count * emitted > 256:
             continue
         if any(set(phi.incoming) != {entry, latch.at} for phi in header.phis):
             continue

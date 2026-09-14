@@ -60,7 +60,11 @@ def semantics(op: mir.Op) -> Semantics | None:
                 and not op.stores
                 and len(op.args) == 2
                 and len(op.results) == 1
-                and all(isinstance(arg, mir.Opaque) and isinstance(arg.what, ir.St) for arg in (*op.args, *op.results))
+                and all(
+                    (isinstance(arg, mir.Opaque) and isinstance(arg.what, ir.St))
+                    or (isinstance(arg, mir.Held) and arg.width == 10)
+                    for arg in (*op.args, *op.results)
+                )
             ):
                 return Semantics(
                     (Format.EXTENDED80, Format.EXTENDED80), Format.EXTENDED80, Precision.DYNAMIC, Rounding.DYNAMIC

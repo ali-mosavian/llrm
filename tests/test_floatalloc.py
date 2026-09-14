@@ -3,6 +3,7 @@
 from dataclasses import replace
 
 import pytest
+from iced_x86 import Register
 
 from qbopt.model import ir
 from qbopt.model import lir
@@ -24,6 +25,196 @@ def _body(operations):
         for index, what in enumerate(operations)
     )
     return lir.LirBody("floating", 0, (lir.LirBlock(0, insns),), {}, {})
+
+
+_ARITHMETIC = {
+    "fadd": lambda d, s: d + s,
+    "fsub": lambda d, s: d - s,
+    "fsubr": lambda d, s: s - d,
+    "fmul": lambda d, s: d * s,
+    "fdiv": lambda d, s: d / s,
+    "fdivr": lambda d, s: s / d,
+}
+
+
+def _x87(insns, memory):
+    """Run allocated instructions over `memory`, cells to numbers: the memory after and the stack left."""
+    memory, stack = dict(memory), []
+    for one in insns:
+        what = one.what
+        if what.op is ir.Operation.NOTHING:
+            continue
+        assert select.emit(what) is not None, what
+        read = (lambda arg: stack[arg.index] if isinstance(arg, ir.St) else memory[arg])
+        match what.op:
+            case ir.Operation.FLOAT_LOAD:
+                stack.insert(0, read(what.sources[0]))
+                assert len(stack) <= 8
+            case ir.Operation.EXCHANGE:
+                index = what.sources[1].index
+                stack[0], stack[index] = stack[index], stack[0]
+            case ir.Operation.FLOAT_STORE:
+                memory[what.dests[0]] = stack[0]
+                if what.name.endswith("p"):
+                    stack.pop(0)
+            case ir.Operation.FLOAT_UNARY:
+                assert what.name == "fchs"
+                stack[0] = -stack[0]
+            case ir.Operation.FLOAT_ARITH:
+                name = "f" + what.name[2:] if what.name.startswith("fi") else what.name
+                index = what.dests[0].index
+                stack[index] = _ARITHMETIC[name](stack[index], read(what.sources[1]))
+            case ir.Operation.FLOAT_ARITH_POP:
+                index = what.dests[0].index
+                stack[index] = _ARITHMETIC[what.name[:-1]](stack[index], stack[0])
+                stack.pop(0)
+    return memory, stack
+
+
+def _cells(*displacements, width=4):
+    return tuple(ir.Mem(Addr(Space.FRAME, disp), width) for disp in displacements)
+
+
+def _load(value, cell):
+    return ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (value,), (cell,))
+
+
+def _store(cell, value):
+    return ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cell,), (value,))
+
+
+def _arithmetic(name, result, left, right):
+    return ir.Semantics(ir.Operation.FLOAT_ARITH, name, (result,), (left, right))
+
+
+def test_a_load_read_by_several_arithmetics_is_each_ones_memory_operand():
+    """NBODYS held `falloff` for two multiplies -- `fld`, `fxch st2`, `fmul st2` -- where BC wrote `fmul [m]` twice."""
+    x, y, falloff, px, py = _cells(-4, -8, -12, -16, -20)
+    a, b, f, p, q = (ir.Held(index, 10) for index in range(1, 6))
+    body = _body(
+        [
+            _load(a, x),
+            _load(b, y),
+            _load(f, falloff),
+            _arithmetic("fmul", p, a, f),
+            _store(px, p),
+            _arithmetic("fmul", q, b, f),
+            _store(py, q),
+        ]
+    )
+    result = floatalloc.allocated(body)
+    assert [(one.what.name, one.what.sources) for one in result.insns if falloff in one.what.sources] == [
+        ("fmul", (ir.St(0), falloff))
+    ] * 2
+    memory, stack = _x87(result.insns, {x: 3, y: 5, falloff: 0.5})
+    assert (memory[px], memory[py], stack) == (1.5, 2.5, [])
+
+
+@pytest.mark.parametrize("written", ["same", "indexed"])
+def test_a_load_is_not_read_again_after_a_store_that_may_reach_it(written):
+    """Reading a cell again is the value only while nothing may have written it."""
+    falloff = ir.Mem(Addr(Space.SEGMENT, 0x10, index=5), 4)
+    target = (
+        falloff
+        if written == "same"
+        else ir.Mem(Addr(Space.SEGMENT, 0, index=5), 4, through=Register.SI, base=ir.Held(9, 2), disp_width=2)
+    )
+    x, y, py = _cells(-4, -8, -20)
+    a, b, f, p, q = (ir.Held(index, 10) for index in range(1, 6))
+    body = _body(
+        [
+            _load(f, falloff),
+            _load(a, x),
+            _arithmetic("fmul", p, a, f),
+            _store(target, p),
+            _load(b, y),
+            _arithmetic("fmul", q, b, f),
+            _store(py, q),
+        ]
+    )
+    result = floatalloc.allocated(body)
+    assert len([one for one in result.insns if falloff in one.what.sources]) == 1
+    memory, stack = _x87(result.insns, {x: 3, y: 5, falloff: 0.5})
+    assert (memory[py], stack) == (2.5, [])
+
+
+@pytest.mark.parametrize("proven", [False, True])
+def test_a_first_read_moves_past_a_trapping_instruction_only_for_a_quiet_cell(proven):
+    """`fld m32` raises on a signalling NaN; read after a division, that exception would come second."""
+    w, x, y, c, z, out, other = _cells(-4, -8, -12, -16, -20, -24, -28)
+    h, a, b, f, q, g, r = (ir.Held(index, 10) for index in range(1, 8))
+    body = _body(
+        ([_load(h, w), _store(c, h)] if proven else [])
+        + [
+            _load(a, x),
+            _load(b, y),
+            _load(f, c),
+            _arithmetic("fdiv", q, a, b),
+            _store(out, q),
+            _load(g, z),
+            _arithmetic("fmul", r, g, f),
+            _store(other, r),
+        ]
+    )
+    result = floatalloc.allocated(body)
+    readers = [index for index, one in enumerate(result.insns) if c in one.what.sources]
+    division = next(index for index, one in enumerate(result.insns) if one.what.name.startswith("fdiv"))
+    assert len(readers) == 1 and (readers[0] > division) == proven
+    memory, stack = _x87(result.insns, {w: 0.25, x: 6, y: 3, c: 0.5, z: 4})
+    assert (memory[out], memory[other], stack) == (2, 1 if proven else 2, [])
+
+
+def test_arithmetic_overwrites_the_operand_that_dies():
+    """Neither operand on top, the second dying: the first was exchanged up and duplicated where one exchange does."""
+    x, y, z, first, second, third = _cells(-10, -20, -30, -40, -50, -60, width=10)
+    loaded = [ir.Held(index, 10) for index in range(1, 4)]
+    a, b, c, r = (ir.Held(index, 10) for index in range(4, 8))
+    body = _body(
+        [
+            operation
+            for load, value, cell in zip(loaded, (a, b, c), (x, y, z), strict=True)
+            for operation in (_load(load, cell), ir.Semantics(ir.Operation.FLOAT_UNARY, "fchs", (value,), (load,)))
+        ]
+        + [_arithmetic("fsub", r, a, b), _store(first, r), _store(second, c), _store(third, a)]
+    )
+    result = floatalloc.allocated(body)
+    names = [one.what.name for one in result.insns]
+    assert names.count("fxch") == 1
+    assert not any(one.what.name == "fld" and isinstance(one.what.sources[0], ir.St) for one in result.insns)
+    memory, stack = _x87(result.insns, {x: 8, y: 2, z: 1})
+    assert (memory[first], memory[second], memory[third], stack) == (-6, -1, -8, [])
+
+
+@pytest.mark.parametrize("boundary", [ir.Operation.CALL, ir.Operation.BARRIER])
+def test_a_float_live_across_a_call_waits_in_an_owned_cell(boundary):
+    """A value loaded before a call and stored after it refused the whole object: 'floating stack crosses an unmodelled instruction'."""
+    from qbopt.backend import frame
+
+    value = ir.Held(1, 10)
+    source, target = ir.Mem(Addr(Space.FRAME, -4), 4), ir.Mem(Addr(Space.FRAME, -8), 4)
+    body = _body(
+        [
+            ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (value,), (source,)),
+            ir.Semantics(boundary, "call" if boundary is ir.Operation.CALL else "", (), ()),
+            ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (target,), (value,)),
+        ]
+    )
+    result = floatalloc.allocated(body, frame.Frame(-8))
+    shape = [
+        (one.what.name, one.what.dests, one.what.sources)
+        for one in result.insns
+        if one.what.op is not ir.Operation.NOTHING
+    ]
+    cell = shape[1][1][0]
+    assert isinstance(cell, ir.Mem) and cell.width == 10
+    assert shape == [
+        ("fld", (ir.St(0),), (source,)),
+        ("fstp", (cell,), (ir.St(0),)),
+        shape[2],
+        ("fld", (ir.St(0),), (cell,)),
+        ("fstp", (target,), (ir.St(0),)),
+    ]
+    assert shape[2][0] == ("call" if boundary is ir.Operation.CALL else "")
 
 
 @pytest.mark.parametrize("boundary", [None, ir.Operation.CALL, ir.Operation.BARRIER])
@@ -63,6 +254,32 @@ def test_region_value_reuses_one_reload_until_an_unknown_effect(boundary):
     assert all(one.dests == (cell,) and one.sources == (ir.St(0),) for one in stores)
     if boundary is None:
         assert all(select.emit(one.what) is not None for one in consumer.insns)
+
+
+@pytest.mark.parametrize(
+    "loaded, name, loaded_first, fused",
+    [("fld", "fmul", False, "fmul"), ("fld", "fsub", True, "fsubr"), ("fild", "fdiv", False, "fidiv")],
+)
+def test_a_load_read_once_by_the_next_arithmetic_is_its_memory_operand(loaded, name, loaded_first, fused):
+    """`fld [x]` then a popping multiply spent an instruction and a stack slot `fmul [x]` does not."""
+    value, temporary, answer = (ir.Held(index, 10) for index in range(1, 4))
+    home, cell = ir.Mem(Addr(Space.FRAME, -4), 4), ir.Mem(Addr(Space.FRAME, -8), 4)
+    body = _body(
+        [
+            ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (value,), (home,)),
+            ir.Semantics(ir.Operation.FLOAT_LOAD, loaded, (temporary,), (cell,)),
+            ir.Semantics(ir.Operation.FLOAT_ARITH, name, (answer,), (temporary, value) if loaded_first else (value, temporary)),
+            ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (home,), (answer,)),
+        ]
+    )
+    result = floatalloc.allocated(body)
+    emitted = [one for one in result.insns if one.what.op is not ir.Operation.NOTHING]
+    assert [(one.what.name, one.what.sources) for one in emitted] == [
+        ("fld", (home,)),
+        (fused, (ir.St(0), cell)),
+        ("fstp", (ir.St(0),)),
+    ]
+    assert all(select.emit(one.what) is not None for one in result.insns)
 
 
 def test_square_keeps_the_next_used_operand_on_top():
@@ -185,40 +402,26 @@ def test_ninth_float_uses_an_owned_extended_precision_spill():
     """Nine live FP values previously refused allocation instead of preserving 80 bits."""
     from qbopt.backend import frame
 
-    cell = ir.Mem(Addr(Space.FRAME, -4), 4)
-    values = [ir.Held(index, 10) for index in range(1, 10)]
+    sources = _cells(*range(-40, -4, 4))
+    answers = _cells(*range(-80, -44, 4))
+    loaded = [ir.Held(index, 10) for index in range(1, 10)]
+    values = [ir.Held(index, 10) for index in range(11, 20)]
     body = _body(
-        [ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (value,), (cell,)) for value in values]
-        + [ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cell,), (value,)) for value in values]
+        [
+            operation
+            for load, value, cell in zip(loaded, values, sources, strict=True)
+            for operation in (_load(load, cell), ir.Semantics(ir.Operation.FLOAT_UNARY, "fchs", (value,), (load,)))
+        ]
+        + [_store(cell, value) for value, cell in zip(values, answers, strict=True)]
     )
-    slots = frame.Frame(-4)
+    slots = frame.Frame(-80)
     integer_scratch = slots.cell(1, 2)
     allocated = floatalloc.allocated(body, slots)
     spills = [one for one in allocated.insns if one.what.name == "fstp" and one.what.dests[0].width == 10]
     assert len(spills) == 1 and slots.size >= 10
-    assert all(one.what.dests[0].addr != integer_scratch.addr for one in spills)
-    stack, memory, answers = [], {}, []
-    inputs = iter(range(1, 10))
-    for one in allocated.insns:
-        what = one.what
-        assert select.emit(what) is not None
-        match what.name:
-            case "fld":
-                source = what.sources[0]
-                value = memory[source.addr.disp] if source.width == 10 else next(inputs)
-                stack.insert(0, value)
-                assert len(stack) <= 8
-            case "fxch":
-                index = what.sources[1].index
-                stack[0], stack[index] = stack[index], stack[0]
-            case "fstp":
-                value = stack.pop(0)
-                if what.dests[0].width == 10:
-                    memory[what.dests[0].addr.disp] = value
-                    assert one.covers[0] == one.covers[1]
-                else:
-                    answers.append(value)
-    assert answers == list(range(1, 10)) and not stack
+    assert all(one.what.dests[0].addr != integer_scratch.addr and one.covers[0] == one.covers[1] for one in spills)
+    memory, stack = _x87(allocated.insns, {cell: index for index, cell in enumerate(sources, 1)})
+    assert [memory[cell] for cell in answers] == [-index for index in range(1, 10)] and not stack
 
 
 @pytest.mark.parametrize("path", [(0, 16, 48), (0, 32, 48), (0, 16, 16, 48)])
@@ -268,6 +471,8 @@ def test_float_survives_fork_join_and_loop_without_rereading_source(path):
                     else:
                         assert destination.width == 10
                     memory[destination.addr.disp] = answer
+                case "":
+                    pass
                 case _:
                     pytest.fail(f"Unexpected allocation instruction: {what}")
         assert not stack
@@ -370,6 +575,8 @@ def test_floating_loop_phis_swap_in_parallel_on_the_critical_backedge(target):
                         answers.append(value)
                 case "jmp" | "jne":
                     continue
+                case "":
+                    pass
                 case _:
                     pytest.fail(f"Unexpected allocation instruction: {what}")
             assert select.emit(what) is not None
@@ -456,7 +663,7 @@ def test_integer_conversion_materializes_a_frame_operand(width):
     )
     slots = frame.Frame(-8)
     result = floatalloc.allocated(body, slots)
-    store, load, _ = result.insns
+    store, load, _ = [one for one in result.insns if one.what.op is not ir.Operation.NOTHING]
     assert slots.size == width
     assert store.what.sources == (integer,)
     assert store.what.dests == load.what.sources == (slots.cell(2, width),)
@@ -483,41 +690,42 @@ def test_integer_conversion_into_physical_x87_stack_materializes_memory(width):
 
 
 @pytest.mark.parametrize("operation", ["fsub", "fchs", "fstp", "fsubp"])
-def test_buried_float_operand_is_exchanged_not_reloaded(operation):
+def test_buried_float_operand_is_exchanged_not_duplicated(operation):
     """A second live value must not prevent using the first, or reverse subtraction."""
-    first, second, result = (ir.Held(index, 10) for index in (1, 2, 3))
-    cell = ir.Mem(Addr(Space.FRAME, -4), 4)
+    first_cell, second_cell, answer, kept = _cells(-4, -8, -12, -16)
+    first_load, second_load, first, second, result = (ir.Held(index, 10) for index in range(1, 6))
     operations = [
-        ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (first,), (cell,)),
-        ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (second,), (cell,)),
+        _load(first_load, first_cell),
+        ir.Semantics(ir.Operation.FLOAT_UNARY, "fchs", (first,), (first_load,)),
+        _load(second_load, second_cell),
+        ir.Semantics(ir.Operation.FLOAT_UNARY, "fchs", (second,), (second_load,)),
     ]
     match operation:
         case "fsub":
-            operations.append(ir.Semantics(ir.Operation.FLOAT_ARITH, "fsub", (result,), (first, cell)))
+            operations.append(ir.Semantics(ir.Operation.FLOAT_ARITH, "fsub", (result,), (first, second_cell)))
         case "fchs":
             operations.append(ir.Semantics(ir.Operation.FLOAT_UNARY, "fchs", (result,), (first,)))
         case "fstp":
-            operations.append(ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cell,), (first,)))
+            operations.append(_store(answer, first))
         case "fsubp":
             operations.append(ir.Semantics(ir.Operation.FLOAT_ARITH_POP, "fsubp", (result,), (second, first)))
     if operation != "fstp":
-        operations.append(ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cell,), (result,)))
+        operations.append(_store(answer, result))
     if operation != "fsubp":
-        operations.append(ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cell,), (second,)))
-    body = _body(operations)
-    allocated = floatalloc.allocated(body)
-    insns = allocated.blocks[0].insns
-    exchange = insns[2]
-    assert exchange.what == ir.Semantics(ir.Operation.EXCHANGE, "fxch", (ir.St(0), ir.St(1)), (ir.St(0), ir.St(1)))
-    assert select.emit(exchange.what).code == bytes.fromhex("d9c9")
-    assert exchange.covers == (16, 16) and exchange.op is None
-    assert not exchange.uses and not exchange.defines and not exchange.spread
-    assert [one.covers for one in insns if one is not exchange] == [one.covers for one in body.insns]
-    expected = (
-        (ir.St(1), ir.St(0)) if operation == "fsubp" else (ir.St(0), cell) if operation == "fsub" else (ir.St(0),)
-    )
-    assert insns[3].what.sources == expected
-    assert all(select.emit(one.what) is not None for one in insns)
+        operations.append(_store(kept, second))
+    allocated = floatalloc.allocated(_body(operations))
+    moves = [
+        one
+        for one in allocated.insns
+        if one.what.op is ir.Operation.EXCHANGE or one.what.sources and isinstance(one.what.sources[0], ir.St)
+        and one.what.op is ir.Operation.FLOAT_LOAD
+    ]
+    # Both operands of the popping subtraction die, so the result overwrites one in place.
+    assert [one.what.name for one in moves] == ([] if operation == "fsubp" else ["fxch"])
+    assert all(one.covers[0] == one.covers[1] and not one.uses and not one.defines for one in moves)
+    memory, stack = _x87(allocated.insns, {first_cell: 7, second_cell: 2})
+    assert memory[answer] == {"fsub": -9, "fchs": 7, "fstp": -7, "fsubp": 5}[operation] and not stack
+    assert operation == "fsubp" or memory[kept] == -2
 
 
 @pytest.mark.parametrize(
@@ -533,7 +741,8 @@ def test_buried_float_operand_is_exchanged_not_reloaded(operation):
 def test_last_register_operand_is_consumed_without_reversing_arithmetic(name, popping, expected, top):
     """Forwarded floating memory operands must die without leaking a stack slot or reversing division."""
     left, right, result = (ir.Held(index, 10) for index in (1, 2, 3))
-    cell = ir.Mem(Addr(Space.FRAME, -4), 4)
+    # No arithmetic reads m80, so the loads stay register operands.
+    cell = ir.Mem(Addr(Space.FRAME, -10), 10)
     inputs = (right, left) if top == "left" else (left, right)
     body = _body(
         [
@@ -557,6 +766,8 @@ def test_last_register_operand_is_consumed_without_reversing_arithmetic(name, po
                 stack[0], stack[index] = stack[index], stack[0]
             case "fstp":
                 stored.append(stack.pop(0))
+            case "":
+                continue
             case _:
                 assert what.name == (popping if top == "left" else popping.replace("rp", "p"))
                 index = what.sources[0].index
@@ -607,45 +818,30 @@ def test_shared_producer_is_kept_across_two_arithmetic_consumers():
 @pytest.mark.parametrize("live", ["left", "right", "both", "same", "same_dead"])
 def test_popping_subtraction_preserves_reused_values(live):
     """Shared FP values were refused when FSUBP consumed an operand used later."""
-    left, right, result = (ir.Held(index, 10) for index in (1, 2, 3))
-    cell = ir.Mem(Addr(Space.FRAME, -4), 4)
-    operations = [ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (left,), (cell,))]
+    left_cell, right_cell, out, again, other = _cells(-4, -8, -12, -16, -20)
+    left_load, right_load, left, right, result = (ir.Held(index, 10) for index in range(1, 6))
+    operations = [_load(left_load, left_cell), ir.Semantics(ir.Operation.FLOAT_UNARY, "fchs", (left,), (left_load,))]
     if live in {"same", "same_dead"}:
         right = left
     else:
-        operations.append(ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (right,), (cell,)))
-    operations.extend(
-        [
-            ir.Semantics(ir.Operation.FLOAT_ARITH_POP, "fsubp", (result,), (left, right)),
-            ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cell,), (result,)),
+        operations += [
+            _load(right_load, right_cell),
+            ir.Semantics(ir.Operation.FLOAT_UNARY, "fchs", (right,), (right_load,)),
         ]
-    )
+    operations += [ir.Semantics(ir.Operation.FLOAT_ARITH_POP, "fsubp", (result,), (left, right)), _store(out, result)]
     if live in {"left", "both", "same"}:
-        operations.append(ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cell,), (left,)))
+        operations.append(_store(again, left))
     if live in {"right", "both"}:
-        operations.append(ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (cell,), (right,)))
-    allocated = floatalloc.allocated(_body(operations))
-    stack, stored = [], []
-    loads = iter((7, 2))
-    for one in allocated.insns:
-        what = one.what
-        assert select.emit(what) is not None
-        match what.name:
-            case "fld":
-                source = what.sources[0]
-                stack.insert(0, stack[source.index] if isinstance(source, ir.St) else next(loads))
-            case "fxch":
-                index = what.sources[1].index
-                stack[0], stack[index] = stack[index], stack[0]
-            case "fsubp":
-                index = what.sources[0].index
-                assert index > 0 and what.sources[1] == ir.St(0)
-                stack[index] -= stack[0]
-                stack.pop(0)
-            case "fstp":
-                stored.append(stack.pop(0))
-    assert stored == {"left": [5, 7], "right": [5, 2], "both": [5, 7, 2], "same": [0, 7], "same_dead": [0]}[live]
-    assert not stack
+        operations.append(_store(other, right))
+    memory, stack = _x87(floatalloc.allocated(_body(operations)).insns, {left_cell: 7, right_cell: 2})
+    expected = {
+        "left": {out: -5, again: -7},
+        "right": {out: -5, other: -2},
+        "both": {out: -5, again: -7, other: -2},
+        "same": {out: 0, again: -7},
+        "same_dead": {out: 0},
+    }[live]
+    assert {cell: memory[cell] for cell in expected} == expected and not stack
 
 
 @pytest.mark.parametrize("native", [False, True])

@@ -11,3 +11,8 @@ OFFSET16 relocation. No bytes were synthesized or patched.
 with the same compiler, switches and zero compiler errors, also built on
 2026-09-09. It is retained for the current floating-point benchmark and
 optimization investigation; `docs/numbers.md` records its hash and results.
+
+`nbodys-v-g3.obj` is the same compiler's build of `bench/nbodys.bas`, the
+integrator with its LONG state as SINGLE, built on 2026-09-13 with the same
+switches and zero compiler errors, while the program still timed itself with
+the PIT. It is the float MIR work's inner loop.

@@ -13,6 +13,16 @@ def _identifier(value: int | mir.Value) -> int:
     return value if isinstance(value, int) else value.id
 
 
+def boundary(one: lir.Insn) -> bool:
+    """Whether the x87 stack cannot be assumed to survive this instruction."""
+    what = one.what
+    return (
+        what is None
+        or what.op in (ir.Operation.CALL, ir.Operation.BARRIER)
+        or any(isinstance(arg, ir.St) for arg in (*what.sources, *what.dests))
+    )
+
+
 def bridged(body: lir.LirBody, regions: dict[int, int], frame) -> lir.LirBody:
     from qbopt.backend.lower import Unlowered
 
@@ -66,7 +76,7 @@ def bridged(body: lir.LirBody, regions: dict[int, int], frame) -> lir.LirBody:
     crossing |= {
         value
         for value, uses in readers.items()
-        if value in definitions and any(regions[at] != regions[definitions[value][0][0]] for at, _ in uses)
+        if value in definitions and any(regions[use] != regions[definitions[value][0]] for use in uses)
     }
     if not crossing:
         return body
@@ -88,11 +98,7 @@ def bridged(body: lir.LirBody, regions: dict[int, int], frame) -> lir.LirBody:
         resident = {}
         for one in block.insns:
             what = one.what
-            if (
-                what is None
-                or what.op in (ir.Operation.CALL, ir.Operation.BARRIER)
-                or any(isinstance(arg, ir.St) for arg in (*what.sources, *what.dests))
-            ):
+            if boundary(one):
                 resident.clear()
             explicit = (
                 set()
