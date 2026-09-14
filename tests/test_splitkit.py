@@ -90,3 +90,93 @@ def test_a_cut_range_renames_the_cell_it_is_the_base_of() -> None:
         0,
         2,
     )
+
+
+def _counting_loop() -> lir.LirBody:
+    """v4 counts to 10: set before the loop, tested in its header, bumped in its latch, read after."""
+    return lir.LirBody(
+        name="count",
+        entry=0,
+        blocks=(
+            lir.LirBlock(
+                at=0,
+                insns=(
+                    _insn(0, ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(4, 2),), (ir.Imm(0, 2),)), (4,), ()),
+                    _insn(2, ir.Semantics(ir.Operation.JUMP, "jmp", (), (), 0x10)),
+                ),
+                succ=(0x10,),
+            ),
+            lir.LirBlock(
+                at=0x10,
+                insns=(
+                    _insn(0x10, ir.Semantics(ir.Operation.COMPARE, "cmp", (), (ir.Held(4, 2), ir.Imm(10, 2))), (), (4,)),
+                    _insn(0x12, ir.Semantics(ir.Operation.BRANCH, "jge", (), (), 0x30)),
+                ),
+                succ=(0x20, 0x30),
+            ),
+            lir.LirBlock(
+                at=0x20,
+                insns=(
+                    _insn(
+                        0x20,
+                        ir.Semantics(ir.Operation.BINARY, "add", (ir.Held(4, 2),), (ir.Held(4, 2), ir.Imm(1, 2))),
+                        (4,),
+                        (4,),
+                    ),
+                    _insn(0x22, ir.Semantics(ir.Operation.JUMP, "jmp", (), (), 0x10)),
+                ),
+                succ=(0x10,),
+            ),
+            lir.LirBlock(
+                at=0x30,
+                insns=(
+                    _insn(0x30, ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(5, 2),), (ir.Held(4, 2),)), (5,), (4,)),
+                    _insn(0x32, ir.Semantics(ir.Operation.RETURN, "ret", (), ()), (), (5,)),
+                ),
+                succ=(),
+            ),
+        ),
+        origin={},
+        pins={},
+    )
+
+
+def _run(body: lir.LirBody) -> dict[int, int]:
+    """Values after executing the body: moves, add, cmp, jge, jmp and ret."""
+    blocks = {block.at: block for block in body.blocks}
+    values: dict[int, int] = {}
+    at, flags = body.entry, 0
+
+    def read(x) -> int:
+        return x.value if isinstance(x, ir.Imm) else values[x.value]
+
+    for _step in range(1000):
+        block, following = blocks[at], None
+        for one in block.insns:
+            what = one.what
+            match what.op:
+                case ir.Operation.MOVE:
+                    values[what.dests[0].value] = read(what.sources[0])
+                case ir.Operation.BINARY:
+                    values[what.dests[0].value] = read(what.sources[0]) + read(what.sources[1])
+                case ir.Operation.COMPARE:
+                    flags = read(what.sources[0]) - read(what.sources[1])
+                case ir.Operation.BRANCH:
+                    following = what.target if flags >= 0 else next(one for one in block.succ if one != what.target)
+                case ir.Operation.JUMP:
+                    following = what.target
+                case ir.Operation.RETURN:
+                    return values
+        at = following if following is not None else block.succ[0]
+    raise AssertionError("the loop never ended")
+
+
+def test_a_cut_loop_counter_keeps_its_latch_value() -> None:
+    """A piece carved over a loop's header and latch took its copy in at the
+    header's top, which the back edge runs too: the latch's increment was
+    overwritten with the value from before it, and pal_bestfit under --opt
+    looped forever."""
+    assert _run(_counting_loop())[5] == 10
+    body = splitkit.split(_counting_loop(), frozenset({4}))
+    assert any(4 not in one.uses for one in body.insns if one.at in (0x10, 0x20) and one.uses), "nothing was cut"
+    assert _run(body)[5] == 10

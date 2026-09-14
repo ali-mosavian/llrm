@@ -51,14 +51,18 @@ def compiled(text: str, module: str, *, optimise: bool = False, dump: Path | Non
         if optimise:
             from qbopt.optimize import transform
 
-            body = transform.applied(body, frozenset(), raised.calls, found=None)
+            def watch(stage: str, after: mir.MirBody, name: str = raised.name) -> None:
+                _write(dump, f"passes/{name}.{stage}", _mir_text(name, after))
+
+            body = transform.applied(body, frozenset(), raised.calls, found=None, watch=watch if dump else None)
             mirs.append(_mir_text(raised.name + " (opt)", body))
         low = lower.lowered(raised.name, body, raised.calls, {}, raised.contracts, {}, "386")
         lirs.append(_lir_text(raised.name, low))
         frame = frames.of(low, raised.calls)
-        for phase in flow.machine(flow._pinned(low), frame, raised.calls):
+        for number, phase in enumerate(flow.machine(flow._pinned(low), frame, raised.calls)):
             if not isinstance(phase, prologue.Prologue):
                 low = phase.transform(low)
+                _write(dump, f"phases/{raised.name}.{number:02d}-{type(phase).__name__}", _lir_text(raised.name, low))
         lirs.append(_lir_text(raised.name + " (allocated)", low))
         reserve = -min(min(frame.slots.values(), default=0), frame.floor)
         callees = {at: masm.Callee(one.object_name, one.far) for at, one in raised.callees.items()}
@@ -131,6 +135,7 @@ def _mir_text(name: str, body: mir.MirBody) -> str:
     out = [f"== {name}"]
     for block in body.blocks:
         out.append(f"block {block.at} -> {block.succ}")
+        out += [f"  phi {phi}" for phi in block.phis]
         for op in block.ops:
             extra = f" test={op.test} target={op.target}" if op.test or op.target is not None else ""
             out.append(f"  {op.at:4} {op.kind} {op.args} -> {op.results}{extra}")
@@ -141,13 +146,14 @@ def _lir_text(name: str, body) -> str:
     out = [f"== {name}"]
     for block in body.blocks:
         out.append(f"block {block.at} -> {block.succ}")
+        out += [f"  phi {phi}" for phi in block.phis]
         out += [f"  {one.at:4} {one.what} req={one.requires} del={one.delivers}" for one in block.insns]
     return "\n".join(out) + "\n"
 
 
 def _write(dump: Path | None, stage: str, text: str) -> None:
     if dump is not None:
-        dump.mkdir(parents=True, exist_ok=True)
+        (dump / stage).parent.mkdir(parents=True, exist_ok=True)
         (dump / stage).write_text(text)
 
 

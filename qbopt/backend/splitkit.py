@@ -202,9 +202,34 @@ def _carved(body: lir.LirBody, value: int, fresh: int, width: int, region: Regio
     """
     live_out = _live_out(body, value)
     entered = _entries(body, region)
+    # A region block also reached from inside the region cannot take the
+    # copy in at its top: the inside edge runs it too, and overwrites the
+    # piece with the value from before the region -- a loop header's copy
+    # undid its latch's increment. Its outside predecessors take it instead,
+    # at their end; on their other paths the piece is written and not read.
+    predecessors: dict[int, set[int]] = {}
+    for block in body.blocks:
+        for where in block.succ:
+            predecessors.setdefault(where, set()).add(block.at)
+    shared = set() if region.starts_at is not None else {
+        at for at in entered if predecessors.get(at, set()) & region.blocks
+    }
+    feeding = {where for at in shared for where in predecessors[at] if where not in region.blocks}
+    at_of = {block.at: block for block in body.blocks}
+    if any(at == body.entry or not predecessors[at] - region.blocks for at in shared) or any(
+        not at_of[where].insns for where in feeding
+    ):
+        return body  # entered with no outside predecessor to hold the copy
     blocks = []
     changed = False
     for block in body.blocks:
+        if block.at in feeding:
+            insns = list(block.insns)
+            place = len(insns) - 1 if _terminates(insns[-1]) else len(insns)
+            insns.insert(place, _copy(insns[-1], fresh, value, width))
+            blocks.append(replace(block, insns=tuple(insns)))
+            changed = True
+            continue
         if block.at not in region.blocks:
             blocks.append(block)
             continue
@@ -215,7 +240,7 @@ def _carved(body: lir.LirBody, value: int, fresh: int, width: int, region: Regio
         if not interior:
             blocks.append(block)
             continue
-        if block.at in entered or region.starts_at is not None:
+        if (block.at in entered and block.at not in shared) or region.starts_at is not None:
             insns.append(_copy(interior[0], fresh, value, width))
             changed = True
         insns.extend(interior)
