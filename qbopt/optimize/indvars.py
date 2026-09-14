@@ -298,6 +298,14 @@ def zeroed(body: mir.MirBody) -> mir.MirBody:
                     op, args=args, uses=tuple(moved if value == base.value else value for value in op.uses)
                 )
             finished = mir.Value(serial, exit_at, variable=variable)
+            # A start of its own: the constant it was seeded from can start another loop too.
+            begun = mir.Value(serial + 1, ending.at, variable=variable + 1)
+            seeded = seed.args[0].width
+            seeds.append(
+                strength._made(
+                    mir.Kind.COPY, "", begun, (mir.Const(consts.masked(start - final, seeded), seeded),), ending.at, ending
+                )
+            )
             finish = strength._made(
                 mir.Kind.COPY, "", finished, (mir.Const(consts.masked(final, width), width),), exit_at, blocks[exit_at].ops[0]
             )
@@ -309,9 +317,7 @@ def zeroed(body: mir.MirBody) -> mir.MirBody:
             for block in changed.blocks:
                 ops = []
                 for op in block.ops:
-                    if op is seed:
-                        op = replace(op, args=(mir.Const(consts.masked(start - final, seed.args[0].width), seed.args[0].width),))
-                    elif op is compare:
+                    if op is compare:
                         op = replace(
                             op,
                             args=(mir.Held(phi.result, width), mir.Const(0, width)),
@@ -334,7 +340,15 @@ def zeroed(body: mir.MirBody) -> mir.MirBody:
                     cut = len(ops) - (ops[-1].kind in (mir.Kind.JUMP, mir.Kind.BRANCH))
                     ops[cut:cut] = seeds
                 out.append(
-                    replace(block, ops=tuple(ops), phis=tuple(other for other in block.phis if other.result not in removed))
+                    replace(
+                        block,
+                        ops=tuple(ops),
+                        phis=tuple(
+                            replace(other, incoming={**other.incoming, preheader: begun}) if other.result == phi.result else other
+                            for other in block.phis
+                            if other.result not in removed
+                        ),
+                    )
                 )
             return zeroed(replace(changed, blocks=tuple(out)))
     return body

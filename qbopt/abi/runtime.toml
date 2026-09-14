@@ -141,7 +141,6 @@ writes = "NONE"
 reads = "NONE"
 clobbers = []
 established = true
-documented = []
 inputs = []
 evidence = '''
 rt/rtinit.asm, CODE:299, five bytes whole: `mov [b$seg],ds` / `retf`, the store's fixup segment 4 + 197 -- BR_DATA:197, the same b$seg word B$DSEG writes. Bare DEF SEG, restoring the default segment. It touches no register and no flag, so clobbers is empty rather than B$DSEG's ax. writes is NONE on B$DSEG's argument, not a second measurement.
@@ -550,6 +549,21 @@ evidence = '''
 rt/prnval.asm: the entry point is `MOV AX,<term> SHL 8 + <type>` then `JMP SHORT B$PRINT` (B$PESD falls straight in). `cProc B$PRINT,<PUBLIC,FAR>,<SI>` saves si and the epilogue restores si and bp before returning, so those two survive; the rest does not, because the numeric path calls B$FOUTBX and the file comment there says it `changes all registers except BP` -- flatly contradicting ifout.asm's "Per convention. (DS, ES, SI, DI, BP preserved.)" for the same routine, and the conservative reading wins. PRINTX pops one parameter word, then a second unless `TEST AL,VT_SD` is non-zero, which it is for VT_I2=2 and VT_SD=3 and is not for VT_I4=14h (inc/rtps.inc). Memory is the worst case and read as such: print using goes through the [b$PUSG] vector into prtu.asm, which calls B$SASS, and output goes through the [VTYP], [VWCH] and [b$pFLUSH] vectors whose targets depend on the open device. Any string allocation on those paths reaches B$STALC, whose step 4 calls B$STCPCT -- and rt/nhstutil.asm says of it `The string descriptors referenced by the string header are adjusted to reflect their movement`, writing [BX+2] of every live descriptor including a module-level string variable's. Header: `Exceptions: bad file mode; I/O error or Disk full error when flush the buffer if a EOL encountered`.
 '''
 
+["B$PER8"]
+cleanup = 8
+control = "returns"
+enters_user_code = false
+raises_error = true
+error_handling = false
+writes = "OWN"
+reads = "OWN"
+clobbers = ["ax", "bx", "cx", "di", "ds", "dx", "es", "flags"]
+established = true
+inputs = []
+evidence = '''
+rt/prnvalfp.asm: `MOV AX,EOL SHL 8 + VT_R8` then `JMP B$PRINT`, the same entry as B$PER4 with VT_R8=08h (inc/rtps.inc); BCOM45.LIB 0028, BCL71ENR.LIB and VBDCL10E.LIB 001e all read `mov ax,208h` / `jmp`. Everything else is B$PER4's B$PRINT: si and bp survive, the rest does not, and memory is the worst case. PRINTX pops one parameter word, a second because `TEST AL,VT_SD` is zero for 08h, and a third and fourth because `TEST AL,8` is not; BCOM45.LIB B$PRINT 00e2..00f3 matches and re-pushes the far return address before RETF, so the cleanup is 8.
+'''
+
 ["B$PESD"]
 cleanup = 2
 control = "returns"
@@ -683,6 +697,36 @@ established = true
 inputs = []
 evidence = '''
 rt/helpi4.asm: `jmp __aFlrem`, otherwise identical to B$DVI4, and __aFlrem is not in the tree either.
+'''
+
+["B$ASSN"]
+cleanup = 12
+control = "returns"
+enters_user_code = false
+raises_error = true
+error_handling = false
+writes = "OWN"
+reads = "OWN"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+established = true
+inputs = []
+evidence = '''
+rt/string.asm: `cProc B$ASSN,<FAR,PUBLIC>,<DI,SI,ES>` with parmD pSrc, parmW cbSrc, parmD pDest, parmW cbDest, `Uses: per convention`. It reads its operands off the stack, and `OR AX,AX` sets the flags before any branch reads them. A fixed-length destination is written through pDest outright (`REP MOVSB` / `REP STOSB`); a descriptor destination goes through B$LDFS and B$SASS, or B$LSET for a descriptor source, which reach string allocation and so B$STCPCT. BCOM45.LIB 0050..00a1 and BCL71ENR.LIB 0028..0079 are the same code: PUSH SI/DI/ES on entry, every path joins POP ES/DI/SI/BP / RETF 0Ch. ES is listed anyway: VBDCL10E.LIB's farstr B$ASSN loads it and does not restore it, and that family's own variant stays in force.
+'''
+
+["B$LDFS"]
+cleanup = 6
+control = "returns"
+enters_user_code = false
+raises_error = true
+error_handling = false
+writes = "STRINGS"
+reads = "OWN"
+clobbers = ["ax", "bx", "cx", "dx", "es", "flags"]
+established = true
+inputs = []
+evidence = '''
+rt/string.asm: `cProc B$LDFS,<PUBLIC,FAR>,<ES,SI,DI>` with parmD pString, parmW cbString; it reads [cbString] into BX, calls B$STALCTMP for a temporary (BX = descriptor, DX = data), copies from pString with DS saved around the block move, and returns the descriptor in AX. What it writes is the temporary, and allocation reaches B$STCPCT, which moves other strings: string space, not the caller's data. `Exceptions: Runtime error can occur (such as 'insufficient string space')`. BCOM45.LIB 002b..004d and BCL71ENR.LIB 0000..0025 both PUSH SI/DI/ES, POP ES/DI/SI/BP and RETF 6.
 '''
 
 ["B$SASS"]

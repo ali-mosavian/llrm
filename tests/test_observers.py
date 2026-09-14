@@ -6,6 +6,9 @@ dead whatever calls run in between.
 
 from pathlib import Path
 
+import corpus
+import pytest
+
 from qbopt import wholeseg
 from qbopt.model import ir
 from qbopt.model import mir
@@ -164,3 +167,22 @@ def test_nbody_counts_its_inner_loop_in_one_register() -> None:
     counted, compared, branch = loop[step : step + 3]
     assert compared.mnemonic == Mnemonic.CMP and compared.op0_register == counted.op0_register
     assert branch.flow_control == FlowControl.CONDITIONAL_BRANCH
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_a_long_handed_to_a_sub_keeps_both_halves_stored(tag) -> None:
+    """PROCS printed TWICE= 3088. Report was handed &r, and r's high half, stored at
+    +2 by its own operand, looked like a separate cell nobody could see: each call's
+    DX store went, and only the low word of Twice& reached Report."""
+    from iced_x86 import Register
+    from iced_x86 import Mnemonic
+    from iced_x86 import OpKind
+
+    result = wholeseg.emitted(Path(f"fixtures/omf/procs-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    stores = [
+        one.insn for block in corpus.partitioned(result.data) for one in block.insns
+        if one.insn.mnemonic == Mnemonic.MOV and one.insn.op0_kind == OpKind.MEMORY
+        and one.insn.memory_base == Register.NONE and one.insn.op1_kind == OpKind.REGISTER
+    ]
+    assert sum(one.op1_register == Register.DX for one in stores) == 3

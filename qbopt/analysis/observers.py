@@ -99,18 +99,21 @@ def _exposure(found: Module, blocks: list) -> Exposure | None:
         if one.target != "segment" or one.index != data:
             continue
         insn = by_field.get(one.offset) if one.seg == found.seg else None
+        operand = insn is not None and one.offset == insn.disp_at
         owner = (
             next((body.seed for body in partition.bodies if any(lo <= insn.at < hi for lo, hi in body.ranges)), None)
-            if insn is not None
-            and one.offset == insn.disp_at
-            and insn.memory_base == Register.NONE
-            and insn.memory_index == Register.NONE
+            if operand and insn.memory_base == Register.NONE and insn.memory_index == Register.NONE
             else None
         )
-        if owner is None:
-            everywhere.append(reach(one.disp))
-        else:
+        if owner is not None:
             direct.setdefault(owner, []).append(reach(one.disp))
+        elif insn is not None and not operand:
+            # An address the code hands over. How far its holder writes from it is
+            # not in the object, and the next named displacement is no bound: BC
+            # names a long's high word by its own operand, and PROCS lost that store.
+            everywhere.append((one.disp, BEYOND))
+        else:
+            everywhere.append(reach(one.disp))
 
     main = next(
         (

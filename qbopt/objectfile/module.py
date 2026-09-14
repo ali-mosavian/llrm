@@ -279,9 +279,12 @@ def escaped(found: "Module") -> frozenset[tuple[int, int]]:
     fields = [one for one in omf.fixups(found.records) if one.seg == found.seg]
     if not fields:
         return frozenset()
+    instructions = _instructions(found)
+    if instructions is None:
+        return frozenset((one.index, one.disp) for one in fields)
     out = set()
-    values = _numeric_arguments(found)
-    for at, end, pushed in _pushes(found):
+    values = _numeric_arguments(found, instructions)
+    for at, end, pushed in _pushes(found, instructions):
         if at in values or pushed in values:
             continue
         for one in fields:
@@ -290,23 +293,37 @@ def escaped(found: "Module") -> frozenset[tuple[int, int]]:
     return frozenset(out)
 
 
-def _numeric_arguments(found: "Module") -> frozenset[int]:
+def _instructions(found: "Module") -> list | None:
+    """The code map's instructions in address order, or None where there is no map.
+
+    Not a sweep from the segment's start: that decodes the module header as
+    code, and on /G3 FPCALC it was still out of step at `mov bx,offset
+    inputValue`, so READ's destination never escaped.
+    """
+    from qbopt.frontend import blocks
+    from qbopt.frontend import declen
+
+    mapped = blocks.code_map(found)
+    if isinstance(mapped, str):
+        return None
+    decoded = (declen.decode(found.code, at) for at in sorted(mapped.starts))
+    return [insn for insn in decoded if insn is not None]
+
+
+def _numeric_arguments(found: "Module", instructions: list | None = None) -> frozenset[int]:
     """Numeric argument pushes, including nested long-arithmetic call frames."""
     from iced_x86 import Mnemonic
 
     from qbopt.abi import runtime
-    from qbopt.frontend import declen
 
     local = defines(found.records, found.seg)
     calls = {at: name for at, name in found.calls.items() if name not in local}
-    pending, values = [], set()
-    at = found.start
-    while at < found.end:
-        insn = declen.decode(found.code, at)
-        if insn is None:
+    pending, values, end = [], set(), None
+    for insn in _instructions(found) or () if instructions is None else instructions:
+        at = insn.at
+        if at != end:
             pending = []
-            at += 1
-            continue
+        end = insn.end
         if insn.insn.mnemonic == Mnemonic.PUSH:
             pending.append(insn)
         else:
@@ -321,7 +338,6 @@ def _numeric_arguments(found: "Module") -> frozenset[int]:
                             values.update(consumed)
                         break
             pending = []
-        at = insn.end
     from qbopt.frontend import stack
     from qbopt.frontend import blocks
 
@@ -335,19 +351,13 @@ def _numeric_arguments(found: "Module") -> frozenset[int]:
     return frozenset(values)
 
 
-def _pushes(found: "Module"):
+def _pushes(found: "Module", instructions: list | None = None):
     """Address-bearing spans and the push consuming a materialized address."""
     from iced_x86 import OpKind
     from iced_x86 import Mnemonic
 
-    from qbopt.frontend import declen
-
-    at = found.start
-    while at < found.end:
-        insn = declen.decode(found.code, at)
-        if insn is None:
-            at += 1
-            continue
+    for insn in _instructions(found) or () if instructions is None else instructions:
+        at = insn.at
         text = str(insn.insn).lower()
         # A `mov [x],ax` also carries a relocated
         # field, but that is the store's own displacement -- the address of
@@ -363,7 +373,6 @@ def _pushes(found: "Module"):
         materialized = pushed is not None
         if text.startswith(("push", "lea")) or materialized:
             yield at, insn.end, pushed
-        at = insn.end
 
 
 def _pushed_before_write(found: "Module", at: int, register: Register_) -> int | None:

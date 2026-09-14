@@ -81,3 +81,12 @@ def test_other_consumers_do_not_grant_a_long_value_proof(name):
     calls = {at: name if routine == "B$PEI4" else routine for at, routine in found.calls.items()}
     found = replace(found, calls=calls)
     assert any(segment == found.program_data for segment, _ in module.escaped(found))
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+def test_the_escape_scan_decodes_from_instructions_not_the_header(tag):
+    """FPCALC printed its first READ three times on /G3. A sweep from offset 0 decoded the
+    module header as code and never landed on `mov bx,offset inputValue`, so READ was
+    taken to write nothing the program owns and the unrolled reloads were forwarded."""
+    found = corpus.loaded(Path(f"fixtures/regressions/fpcalc-{tag}.obj"))
+    assert (found.program_data, 6) in module.escaped(found)

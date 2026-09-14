@@ -7,6 +7,7 @@ import pytest
 
 import corpus
 from qbopt.model import mir
+from qbopt import wholeseg
 from qbopt.abi import runtime
 from qbopt.backend import lower
 
@@ -196,3 +197,16 @@ def test_qbdemo_main_calls_lower(symbol):
                 assert any(one.at == op.at and one.what.name == "call" for one in result.insns)
                 seen += 1
     assert seen
+
+
+@pytest.mark.parametrize("name,cleanup", [("B$ASSN", 12), ("B$PER8", 8)])
+def test_qb45_string_assignment_and_double_print_have_fixed_cleanup(name, cleanup):
+    """QB45 NESTUD and BYREF2 were refused: B$ASSN's and B$PER8's interfaces were
+    established for VBDOS only, though BCOM45.LIB returns RETF 0Ch and pops the double."""
+    assert runtime.per_call({0: name}, "qb45")[0].cleanup == cleanup
+
+
+@pytest.mark.parametrize("program", ["byref2", "nestud"])
+def test_qb45_programs_reaching_them_are_rewritten(program):
+    result = wholeseg.emitted(Path(f"fixtures/omf/{program}-q-O.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason

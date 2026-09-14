@@ -136,3 +136,66 @@ def test_counter_elimination_requires_a_complete_trip_count_and_no_body_use(monk
         changed.append(replace(block, ops=tuple(ops)))
     body = replace(body, blocks=tuple(changed))
     assert indvars.simplified(body) is body
+
+
+def _trip_counts(data: bytes) -> list[int]:
+    """How often each emitted counted loop runs: its counter's start, step and exit test, simulated."""
+    from iced_x86 import Mnemonic
+    from iced_x86 import OpKind
+
+    insns = [one.insn for block in corpus.partitioned(data) for one in block.insns]
+    immediates = (OpKind.IMMEDIATE8, OpKind.IMMEDIATE8TO16, OpKind.IMMEDIATE16)
+    counts = []
+    for index, branch in enumerate(insns):
+        if branch.mnemonic not in (Mnemonic.JLE, Mnemonic.JL, Mnemonic.JNE) or branch.near_branch_target >= branch.ip:
+            continue
+        inside = [one for one in insns[:index] if one.ip >= branch.near_branch_target]
+        steps = [
+            one for one in inside if one.mnemonic in (Mnemonic.INC, Mnemonic.DEC) and one.op0_kind == OpKind.REGISTER
+        ]
+        if not steps:
+            continue
+        step = steps[-1]
+        register, delta = step.op0_register, 1 if step.mnemonic == Mnemonic.INC else -1
+        # The counter can move between registers inside the loop: `mov dx,cx / inc dx / mov cx,dx`.
+        held = {register} | {
+            one.op1_register for one in inside
+            if one.mnemonic == Mnemonic.MOV and one.op1_kind == OpKind.REGISTER and one.op0_register == register
+        }
+        test = insns[index - 1]
+        if test.mnemonic == Mnemonic.MOV and test.op0_kind == OpKind.REGISTER and test.op0_register in held:
+            test = insns[index - 2]
+        if test.mnemonic == Mnemonic.CMP and test.op0_kind == OpKind.REGISTER and test.op0_register in held \
+                and test.op1_kind in immediates:
+            bound = (test.immediate16 ^ 0x8000) - 0x8000
+        elif test is step or (test.mnemonic == Mnemonic.TEST and test.op0_register in held
+                              and test.op0_register == test.op1_register):
+            bound = 0
+        else:
+            continue
+        before = [one for one in insns[:index] if one.ip < branch.near_branch_target]
+        start = next((one for one in reversed(before)
+                      if one.mnemonic == Mnemonic.MOV and one.op0_kind == OpKind.REGISTER
+                      and one.op0_register in held and one.op1_kind in immediates), None)
+        if start is None:
+            continue
+        value, trips = (start.immediate16 ^ 0x8000) - 0x8000, 0
+        while trips < 1 << 17:
+            trips += 1
+            value = ((value + delta + 0x8000) & 0xFFFF) - 0x8000
+            taken = {Mnemonic.JLE: value <= bound, Mnemonic.JL: value < bound, Mnemonic.JNE: value != bound}
+            if not taken[branch.mnemonic]:
+                break
+        counts.append(trips)
+    return sorted(counts)
+
+
+@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+@pytest.mark.parametrize("program,trips", [("spill", [10]), ("segld", [5, 20])])
+def test_counting_one_loop_to_zero_leaves_a_loop_sharing_its_start_alone(tag, program, trips):
+    """SPILL printed T= 4620 and SEGLD T= 975: both loops of each nest start at 1, one
+    constant, and counting one to zero rewrote that constant, so the other ran from -10
+    (or -5) up to its own bound."""
+    result = wholeseg.emitted(Path(f"fixtures/omf/{program}-{tag}.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    assert _trip_counts(result.data) == trips
