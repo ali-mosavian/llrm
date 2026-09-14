@@ -305,7 +305,7 @@ class _Raise:
             )
             for block in kept
         )
-        body = mir.MirBody(blocks[0].at, blocks, origin=dict(self.origin), pins=dict(self.pins))
+        body = mir.MirBody(blocks[0].at, blocks, origin=dict(self.origin), pins=dict(self.pins), sealed=True)
         problems = mir.verify(body)
         if problems:
             raise Unsupported(f"{self.symbol.name}: raised MIR is not SSA: {problems[:3]}")

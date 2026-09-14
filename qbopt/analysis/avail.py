@@ -25,6 +25,8 @@ from dataclasses import field
 from dataclasses import replace
 from dataclasses import dataclass
 
+from iced_x86 import Register
+
 from qbopt.model import mir
 from qbopt.model.mir import Op
 from qbopt.analysis import loops
@@ -318,6 +320,21 @@ class Forward:
     op: Op | None = None
 
 
+def _fixed(ref: MemRef) -> bool:
+    """Whether a cell is named outright rather than reached through a value.
+
+    Only a named cell can be a private one: a cell is private because no
+    address of it escaped, so a pointer, an index or a selector reaches it
+    no more than a call does.
+    """
+    return (
+        ref.addr is not None
+        and ref.addr.base == Register.NONE
+        and ref.base is None
+        and ref.segment is None
+    )
+
+
 def _dead_in(
     block: mir.MirBlock,
     overwritten: dict[MemRef, int],
@@ -368,7 +385,7 @@ def _dead_in(
         for ref in op.loads:
             if ref.addr is not None and ref.addr.space is Space.STACK:
                 continue  # a pop, for the same reason a push is skipped below
-            unnamed = shielded and (op.kind is Kind.CALL or ref.addr is None)
+            unnamed = shielded and (op.kind is Kind.CALL or not _fixed(ref))
             overwritten = {
                 one: at
                 for one, at in overwritten.items()
@@ -386,7 +403,7 @@ def _dead_in(
                     # call were wiping everything known, which is where the
                     # seven stores memory.py finds and this did not all sat.
                     continue
-                unnamed = shielded and (op.kind is Kind.CALL or ref.addr is None)
+                unnamed = shielded and (op.kind is Kind.CALL or not _fixed(ref))
                 overwritten = {
                     one: at
                     for one, at in overwritten.items()

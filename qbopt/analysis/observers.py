@@ -127,10 +127,18 @@ def _exposure(found: Module, blocks: list) -> Exposure | None:
 
 
 def private(body: mir.MirBody, found: Module | None, blocks: list | None) -> Callable[[mir.MemRef], bool] | None:
-    """A test for the cells no call and no exit of `body` can observe."""
+    """A test for the cells no call and no exit of `body` can observe.
+
+    Without a module there is no program data to know the reach of, but a
+    body the raise calls sealed still owns its frame: nothing resumes inside
+    it, so the frame rule needs nothing the module would have said.
+    """
     if found is None or blocks is None:
-        return None
-    exposed = exposure(found, blocks)
+        if not body.sealed:
+            return None
+        exposed = Exposure(None, None, (), {})
+    else:
+        exposed = exposure(found, blocks)
     if exposed is None:
         return None
     escapes = frameescape.analysed(body)

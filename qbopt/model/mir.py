@@ -946,6 +946,10 @@ class MirBody:
     repetitions: tuple[tuple[int, int], ...] = ()
     # Cloned CFGs retain source provenance but have a new semantic sequence.
     cloned: bool = False
+    # Control enters only at `entry` and moves only along `succ`: nothing
+    # resumes inside the body. The raise's to say -- BC's error and event
+    # handlers do resume inside one, C has nothing that does.
+    sealed: bool = False
 
     def block(self, at: int) -> MirBlock | None:
         return next((one for one in self.blocks if one.at == at), None)
@@ -1983,6 +1987,7 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
         body.initial,
         body.repetitions,
         body.cloned,
+        body.sealed,
     )
 
 

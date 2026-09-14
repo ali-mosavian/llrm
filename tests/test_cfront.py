@@ -122,6 +122,17 @@ def test_optimised_return_arrives_in_ax():
     assert body[epilogue - 1].startswith("mov ax,"), body[epilogue - 3 : epilogue]
 
 
+def test_optimised_locals_lose_their_dead_stores():
+    """A C local whose address is never taken is gone when the body returns,
+    so a store nothing reads again is dead. The optimiser kept every one:
+    pal_bestfit wrote dr, dg, db and d to the frame on every iteration."""
+    text = cfront.compiled((FIXTURES / "pal.cgs").read_text(), "pal", optimise=True)
+    lines = [line.strip() for line in text.splitlines()]
+    body = lines[lines.index("_pal_bestfit proc far") : lines.index("_pal_bestfit endp")]
+    stored = [one for one in body if one.startswith("mov dword ptr [bp-") and one.split("[bp-")[1].split("]")[0] in ("14", "18", "22", "26")]
+    assert stored == []
+
+
 def test_calls_push_in_convention_order():
     """cdecl pushes last first and pops after; pascal pushes first first."""
     lines = _asm("qglsurf")
