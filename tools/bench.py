@@ -1,16 +1,15 @@
 """
-A real before/after: build, link and run bench/nbody.bas twice -- once as BC
-left it, once with qbopt's rewrite applied -- and read the 8253 PIT the way
-docs/measurement.md prescribes rather than TIMER, which would put 0.2 of
-error into a ratio this small.
+A real before/after: build, link and run a bench program twice -- once as BC
+left it, once with qbopt's rewrite applied -- timed by RDTSC in milliseconds.
 
-conf/pinned.conf fixes the emulated CPU rate. Every repetition and its
-program answers are kept; PIT scheduling noise is reported as a spread,
-not mistaken for evidence that the configuration changed.
+The PIT reader tore by whole BIOS ticks between identical runs. conf/pinned.conf
+fixes the emulated CPU rate, and DOSBox-X scales RDTSC by it, so a count is
+emulated time. Every repetition and its program answers are kept.
 """
 
 import sys
 import shutil
+import subprocess
 import hashlib
 import argparse
 import statistics
@@ -32,13 +31,24 @@ ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "bench"
 BUILD = ROOT / "build" / "bench"
 PINNED = ROOT / "conf" / "pinned.conf"
+NATIVE = Path.home() / "work/other/d32x/toolchains/native/bin"
+STAMPS = ("TSC0=", "TSC1=")
 
 
-def ticks(text: str) -> int | None:
+def _counts_per_ms() -> int:
+    """DOSBox-X's RDTSC advances by the fixed cycle rate per emulated millisecond."""
+    return int(re.search(r"^cycles=(\d+)$", PINNED.read_text(), re.MULTILINE).group(1))
+
+
+def elapsed_ms(text: str) -> float | None:
+    stamps = {}
     for line in text.splitlines():
-        if line.startswith("TICKS="):
-            return int(line.split("=", 1)[1])
-    return None
+        if line.startswith(STAMPS):
+            hi, lo = (int(one) & 0xFFFFFFFF for one in line.split("=", 1)[1].split())
+            stamps[line[:4]] = hi << 32 | lo
+    if len(stamps) != 2:
+        return None
+    return (stamps["TSC1"] - stamps["TSC0"]) / _counts_per_ms()
 
 
 def optimized(data: bytes, native_fpu: bool, cpu: str, basic_semantics: bool = False,
@@ -51,7 +61,7 @@ def optimized(data: bytes, native_fpu: bool, cpu: str, basic_semantics: bool = F
 
 
 def answers(text: str) -> tuple[str, ...]:
-    lines = tuple(line.strip() for line in text.splitlines() if line.strip() and not line.startswith("TICKS="))
+    lines = tuple(line.strip() for line in text.splitlines() if line.strip() and not line.startswith(STAMPS))
     if len(lines) < 2 or lines[-1] != "DONE":
         raise SystemExit("benchmark did not produce an answer followed by DONE")
     return lines
@@ -88,12 +98,19 @@ def build(tag: str, prog: str = "nbody", native_fpu: bool = False, transform=Non
     change = transform or (lambda data: optimized(data, native_fpu, cpu, basic_semantics, bounds_checks))
     (work / f"{name}Q.OBJ").write_bytes(change(obj.read_bytes()))
 
+    assembled = subprocess.run(
+        [str(NATIVE / "jwasm"), "-c", "-Cp", "-Zg", "-omf", f"-Fo{work / 'TSCSNAP.OBJ'}", str(BENCH / "tscsnap.asm")],
+        capture_output=True,
+        text=True,
+    )
+    if assembled.returncode != 0:
+        raise SystemExit(f"jwasm failed on tscsnap.asm:\n{assembled.stdout}{assembled.stderr}")
     linking = launch(
         work,
         cfg.mount,
         [
-            f"{cfg.link} {name}.OBJ, BASE.EXE,, {cfg.runtime}; >> LINK.OUT",
-            f"{cfg.link} {name}Q.OBJ, OPT.EXE,, {cfg.runtime}; >> LINK.OUT",
+            f"{cfg.link} {name}.OBJ+TSCSNAP.OBJ, BASE.EXE,, {cfg.runtime}; >> LINK.OUT",
+            f"{cfg.link} {name}Q.OBJ+TSCSNAP.OBJ, OPT.EXE,, {cfg.runtime}; >> LINK.OUT",
         ],
         env={"LIB": r"V:\LIB"},
     )
@@ -109,7 +126,7 @@ def build(tag: str, prog: str = "nbody", native_fpu: bool = False, transform=Non
 
 
 def run(tag: str, exe: Path, steps: int, reps: int, prog: str = "nbody", *,
-        expected: tuple[str, ...] | None = None) -> list[int]:
+        expected: tuple[str, ...] | None = None) -> list[float]:
     cfg = CONFIGS[tag]
     work = BUILD / tag / prog
     readings = []
@@ -129,9 +146,9 @@ def run(tag: str, exe: Path, steps: int, reps: int, prog: str = "nbody", *,
             expected = actual
         if actual != expected:
             raise SystemExit(f"benchmark answer mismatch: {work / name}")
-        got = ticks(out)
+        got = elapsed_ms(out)
         if got is None or got <= 0:
-            raise SystemExit(f"no positive TICKS= reading in {work / name}")
+            raise SystemExit(f"no positive RDTSC reading in {work / name}")
         readings.append(got)
     return readings
 
@@ -160,18 +177,15 @@ def main(argv: list[str] | None = None) -> int:
     cfg = CONFIGS[args.config]
     base_exe, opt_exe = build(args.config, args.prog, args.native_fpu, cpu=args.cpu,
                               basic_semantics=args.basic_semantics, bounds_checks=args.bounds_checks)
-    base_ticks = run(args.config, base_exe, args.steps, args.reps, args.prog)
+    base_ms = run(args.config, base_exe, args.steps, args.reps, args.prog)
     expected = answers(read_dos(BUILD / args.config / args.prog, output_name(base_exe, 0)))
-    opt_ticks = run(args.config, opt_exe, args.steps, args.reps, args.prog, expected=expected)
+    opt_ms = run(args.config, opt_exe, args.steps, args.reps, args.prog, expected=expected)
 
-    for label, readings in (("base", base_ticks), ("opt", opt_ticks)):
-        spread = max(readings) - min(readings)
-        print(f"{label}: {readings} ticks, spread {spread}")
-        if spread != 0:
-            print(f"  observed spread: {spread / 1193.182:.3f} ms (includes emulator timer noise)")
+    for label, readings in (("base", base_ms), ("opt", opt_ms)):
+        print(f"{label}: {[round(one, 3) for one in readings]} ms, spread {max(readings) - min(readings):.3f} ms")
 
-    b, o = statistics.median(base_ticks), statistics.median(opt_ticks)
-    print(f"\nmedian: base {b} ticks ({b / 1193.182:.1f} ms), opt {o} ticks ({o / 1193.182:.1f} ms)")
+    b, o = statistics.median(base_ms), statistics.median(opt_ms)
+    print(f"\nmedian: base {b:.3f} ms, opt {o:.3f} ms")
     print(f"ratio: base/opt = {b / o:.4f}")
 
     print("\nquotable stamp:")
@@ -182,6 +196,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  numeric semantics: {'basic' if args.basic_semantics else 'native'}")
     print(f"  bounds checks: {args.bounds_checks}")
     print(f"  BC.EXE sha256: {sha256(host_path(cfg.mount, cfg.bc))}")
+    print(f"  jwasm sha256: {sha256(NATIVE / 'jwasm')}")
     print(f"  LINK.EXE sha256: {sha256(host_path(cfg.mount, cfg.link))}")
     print(f"  runtime sha256: {sha256(host_path(cfg.mount, cfg.runtime))}")
     return 0
