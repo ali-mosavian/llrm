@@ -159,6 +159,9 @@ class Contract:
     # `clobbers` was proven over every path the call can return along,
     # whatever code those paths reach.
     clobbers_reached: bool = field(default=False)
+    # Bytes the caller pops once the call returns: C's convention, where
+    # `cleanup` is 0 and the arguments are still the caller's to release.
+    caller_cleanup: int = field(default=0)
 
 
 def worst(name: str) -> Contract:

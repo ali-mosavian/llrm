@@ -351,11 +351,7 @@ class _Raise:
                 returned = (self.copy(self.narrowed(self.operand(got, type_), 2)),)
         for value, register in zip(returned, (Register.EAX, Register.EDX)):
             self.pins[value] = register
-        name = "retf" if self.symbol.far else "ret"
-        self.op(K.RETURN, args=tuple(mir.Held(one, 2) for one in returned),
-            uses=returned,
-            made=ir.Semantics(ir.Operation.RETURN, name),
-        )
+        self.op(K.RETURN, args=tuple(mir.Held(one, 2) for one in returned), uses=returned)
         self.end()
 
     def branch(self, node: str, label: str, when: bool) -> None:
@@ -703,11 +699,7 @@ class _Raise:
             arguments.reverse()
         pushed = sum(self.push(value, type_) for value, type_ in arguments)
         low, high = self.fresh(), self.fresh()
-        site = self.op(K.CALL, (mir.Held(low, 2), mir.Held(high, 2)),
-            defines=(low, high),
-            uses=(),
-            made=ir.Semantics(ir.Operation.CALL, "call"),
-        )
+        site = self.op(K.CALL, (mir.Held(low, 2), mir.Held(high, 2)), defines=(low, high), uses=())
         self.origin[low], self.origin[high] = Register.EAX, Register.EDX
         caller_pops = bool(callee.call_class & hir.CALLER_POPS)
         self.calls[site.at] = callee.object_name
@@ -725,13 +717,8 @@ class _Raise:
             established=True,
             evidence="Borland medium model: stack arguments, result in AX or DX:AX; every register assumed clobbered",
             inputs=frozenset(),
+            caller_cleanup=pushed if caller_pops else 0,
         )
-        if caller_pops and pushed:
-            sp = ir.Reg(Register.SP, 2)
-            self.op(K.OPAQUE, defines=(),
-                uses=(),
-                made=ir.Semantics(ir.Operation.BINARY, "add", (sp,), (sp, ir.Imm(pushed, 2))),
-            )
         return Returned(low, high)
 
     def push(self, value, type_: str) -> int:
@@ -842,9 +829,8 @@ class _Raise:
             case Near(base, disp):
                 return mir.MemRef(Addr(Space.LITERAL, disp), width, base=base, space=Space.LITERAL, base_width=2)
             case Far(segment, offset, disp):
-                # The registers are placeholders the allocator replaces: `_addressed` wants a far cell's pair named.
                 return mir.MemRef(
-                    Addr(Space.FAR, disp, base=Register.BX, segment=Register.ES),
+                    Addr(Space.FAR, disp),
                     width,
                     base=offset,
                     segment=segment,

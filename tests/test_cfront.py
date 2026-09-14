@@ -37,10 +37,11 @@ def test_choose_joins_both_arms_in_one_cell():
     value-producing CGCompare, which ls_init has 17 of."""
     lines = _asm("choose")
     pick = lines[lines.index("_pick proc near") : lines.index("_pick endp")]
-    assert pick.count("mov word ptr [bp-4], ax") == 2 and "jmp L0_12" in pick
+    assert pick.count("mov word ptr [bp-4], ax") == 2 and any(one.startswith("jmp L0_") for one in pick)
     body = lines[lines.index("_choose proc far") : lines.index("_choose endp")]
     at = body.index("mov word ptr [bp-4], 1")
-    assert body[at - 3 : at] == ["cmp ax, 0", "je L2_21", "L2_18:"] and body[at + 3] == "mov word ptr [bp-4], 0"
+    assert body[at - 3] == "cmp ax, 0" and body[at - 2].startswith("je L2_") and body[at - 1].endswith(":")
+    assert body[at + 3] == "mov word ptr [bp-4], 0"
 
 
 def test_data_pointer_to_a_literal():
@@ -61,14 +62,19 @@ def test_float_moves_as_its_bits():
 
 def test_raised_mir_names_no_instruction():
     """MIR says what each operation computes; lowering picks the instruction.
-    The raise wrote `mov`, `lea` and `fistp` into every op it made."""
+    The raise wrote `mov`, `lea` and `fistp` into every op it made, `call`
+    and `retf` as machine semantics, `add sp` naming SP, and ES and BX into
+    every far cell."""
+    ir, Space = cfront.raise_hir.ir, cfront.raise_hir.Space
     for module in ("pal", "qglsurf", "choose", "ls"):
         unit = cfront.hir.unit(cfront.stream.parse((FIXTURES / f"{module}.cgs").read_text()))
         for proc in unit.procs:
             for block in cfront.raise_hir.raised(unit, proc).body.blocks:
                 for op in block.ops:
-                    if op.made is None:
-                        assert (op.op, op.name) == (cfront.raise_hir.ir.Operation.NOTHING, ""), (module, op)
+                    assert (op.op, op.name, op.made) == (ir.Operation.NOTHING, "", None), (module, op)
+                    for ref in (*op.loads, *op.stores):
+                        if ref.addr is not None and ref.addr.space is Space.FAR:
+                            assert (ref.addr.base, ref.addr.segment) == (0, 0), (module, ref)
 
 
 def test_float_cast_truncates():

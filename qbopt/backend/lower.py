@@ -113,6 +113,8 @@ _NAMED: dict[mir.Kind, tuple[ir.Operation, str]] = {
     mir.Kind.FSUB: (ir.Operation.FLOAT_ARITH, "fsub"),
     mir.Kind.FMUL: (ir.Operation.FLOAT_ARITH, "fmul"),
     mir.Kind.FDIV: (ir.Operation.FLOAT_ARITH, "fdiv"),
+    mir.Kind.CALL: (ir.Operation.CALL, "call"),
+    mir.Kind.RETURN: (ir.Operation.RETURN, ""),
 }
 _INTEGERS = frozenset({Format.SIGNED16, Format.SIGNED32, Format.SIGNED64})
 
@@ -173,6 +175,10 @@ def semantics(op: mir.Op, was: ir.Semantics | None = None, place=None) -> ir.Sem
         return ir.Semantics(ir.Operation.NOTHING, "wait", (), ())
     if op.kind is mir.Kind.JUMP and op.target is not None:
         return ir.Semantics(ir.Operation.JUMP, "jmp", (), (), op.target)
+    if op.node is None and op.kind in (mir.Kind.CALL, mir.Kind.RETURN) and op.op in (ir.Operation.CALL, ir.Operation.RETURN):
+        # Named from its kind: results arrive and values leave in the
+        # registers the ABI says, which origin and pins carry, not operands.
+        return ir.Semantics(op.op, op.name, (), ())
     if not op.args and not op.results and op.raised is None and op.kind is not mir.Kind.BRANCH:
         return None  # nothing to build one from
     # A value resolves to the register the original instruction had in the
@@ -419,8 +425,9 @@ def _addressed(one: "mir.MemRef") -> "ir.Mem":
         # the offset value as Mem.base, allocation gives it an addressing
         # register, and Lowering._abi pins the selector value to the segment
         # register carried by addr. Nothing here has to guess either one.
-        if addr.segment == Register.NONE or addr.base == Register.NONE:
-            raise Unlowered(f"a far cell at {addr} has no encodable offset or selector register")
+        if addr.segment == Register.NONE:
+            # MIR names the selector only as a value, which _abi pins to ES.
+            addr = replace(addr, segment=Register.ES)
         return ir.Mem(addr, one.width, Register.NONE, addr.disp, 2)
     if addr.space in (Space.SEGMENT, Space.EXTERNAL):
         # An indexed element says which register reaches it: `addr.base` is
@@ -1202,6 +1209,15 @@ class Lowering:
         found = self._dividends.get(high)
         return found is not None and found == word.value.id
 
+    def _caller_cleanup(self, op: "mir.Op") -> "tuple[lir.Insn, ...]":
+        """`add sp` after a call whose contract leaves its arguments to the caller."""
+        contract = self._contracts.get(op.at) if op.kind is mir.Kind.CALL and self._contracts else None
+        count = getattr(contract, "caller_cleanup", 0)
+        if not count:
+            return ()
+        sp = ir.Reg(Register.SP, 2)
+        return (_follows(op, ir.Semantics(ir.Operation.BINARY, "add", (sp,), (sp, ir.Imm(count, 2)))),)
+
     def expand(self, op: "mir.Op", *, preserve_flags: bool = True) -> "tuple[lir.Insn, ...]":
         """Every instruction this operation becomes, the leader first."""
         from qbopt.model import lir
@@ -1280,6 +1296,7 @@ class Lowering:
                     op=op,
                     symbol=op.symbol,
                 ),
+                *self._caller_cleanup(op),
             )
         # The leader keeps the operation's identity -- its address, the
         # bytes it stands for, the operation itself -- and nothing else.
