@@ -16,7 +16,7 @@ def _instruction(raw):
     decoded = declen.decode(bytes(0x14b) + raw, 0x14b)
     node = ir.Opaque(decoded, ir.instruction_effects(decoded, lambda *_: None))
     return mir.Op(decoded.at, ir.Operation.BARRIER, "", (), (), node=node,
-                  covers=(decoded.at, decoded.end),
+                  covers=(decoded.at, decoded.end), memory_complete=node.effects.memory_complete,
                   loads=tuple(mir.MemRef(cell.addr, cell.width) for cell in node.effects.loads),
                   stores=tuple(mir.MemRef(cell.addr, cell.width) for cell in node.effects.stores))
 

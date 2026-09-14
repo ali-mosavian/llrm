@@ -549,6 +549,8 @@ OPAQUE_MEMORY_COMPLETE = frozenset(
         Code.SAHF,
         Code.FSTP_STI,
         Code.LES_R16_M1616,
+        Code.CLD,
+        Code.STD,
     }
 )
 
@@ -589,11 +591,7 @@ def instruction_effects(insn: Insn, resolve: Resolver) -> Effects:
     read = Flag(insn.reads & ALL)
     fp_stack = _touches_fp_stack(insn)
     complete = insn.insn.code in OPAQUE_MEMORY_COMPLETE
-    if (
-        barrier(instruction_semantics(insn, resolve))
-        and not complete
-        and insn.insn.mnemonic not in (Mnemonic.CLD, Mnemonic.STD)
-    ):
+    if barrier(instruction_semantics(insn, resolve)) and not complete:
         return Effects(defs, uses, written_by(insn), read, ANY_MEMORY, ANY_MEMORY, fp_stack)
     loads, stores = _memory_effects(insn, resolve)
     return Effects(defs, uses, written_by(insn), read, loads, stores, fp_stack, memory_complete=complete)
