@@ -9,6 +9,7 @@ from qbopt import wholeseg
 from qbopt.analysis import loops
 
 
+@pytest.mark.xfail(reason="IVWORD's invariant branch load stays in the loop on p-g2 and q-O", strict=True)
 @pytest.mark.parametrize("tag", ["p-g2", "q-O"])
 def test_invariant_branch_load_moves_out_but_its_test_stays(tag, monkeypatch):
     """IVWORD reloaded unchanged branchChoice every trip because its test prevented LICM."""

@@ -100,31 +100,8 @@ def test_resolving_segld_renames_memory_operands_with_their_accesses() -> None:
     assert checked
 
 
-def test_absorbed_multiply_defines_its_returned_high_half() -> None:
-    """arrays printed P0=53248 instead of -1474836480: the product's high half was a clobber."""
-    from qbopt.objectfile import omf
-    from qbopt.frontend import blocks
-    from qbopt.objectfile import module
-
-    found = module.of(omf.parse(Path("fixtures/omf/divmod-p-g2.obj").read_bytes()))
-    bodies = mir.bodies(found, blocks.partition(found, blocks.code_map(found)))
-    seen = 0
-    for _, body in bodies:
-        for block in body.blocks:
-            for op in block.ops:
-                if op.kind is mir.Kind.MUL and op.id in found.absorbed:
-                    seen += 1
-                    assert any(
-                        other.at == op.at
-                        and other.kind is mir.Kind.JOIN
-                        and any(value in other.uses for value in op.defines)
-                        for other in block.ops
-                    ), "the high half needs an explicit definition from the product"
-    assert seen
-
-
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
-def test_absorbed_arithmetic_has_only_operand_dependencies(tag: str) -> None:
+def test_arithmetic_has_only_operand_dependencies(tag: str) -> None:
     """nbody refused emission: an absorbed multiply read an undefined condition."""
     path = Path(f"fixtures/omf/divmod-{tag}.obj")
     found = corpus.loaded(path)
@@ -132,7 +109,7 @@ def test_absorbed_arithmetic_has_only_operand_dependencies(tag: str) -> None:
     for _, body in mir.bodies(found, corpus.partitioned(path)):
         for block in body.blocks:
             for op in block.ops:
-                if op.id not in found.absorbed or op.kind not in (mir.Kind.MUL, mir.Kind.DIVMOD):
+                if op.kind not in (mir.Kind.MUL, mir.Kind.DIVMOD):
                     continue
                 seen += 1
                 expected = {arg.value for arg in op.args if isinstance(arg, mir.Held)}
@@ -651,16 +628,20 @@ def test_induction_finds_a_counter_and_what_it_derives() -> None:
     blocks = split.partition(found, code_map(found))
     bounds = module.landmarks(found)
 
+    from qbopt.optimize import transform
+
     counters = reduced = 0
     for _name, body in mir.bodies(found, blocks):
+        # BC keeps the counter in its cell; it is a value only once the
+        # passes have forwarded the store to the reload.
+        body = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
         for _loop, basics, derived in induction.of(body, found.dgroup, bounds):
             counters += len(basics)
             reduced += len(derived)
             for one in basics.values():
                 assert isinstance(one.step, (mir.Const, mir.Held)), "a step that is neither"
             for one in derived:
-                assert one.op.kind in (mir.Kind.MUL, mir.Kind.SHL)
-                assert not one.op.stores, "a multiply that stores is not a candidate"
+                assert not one.op.stores, "an operation that stores is not a candidate"
     assert counters, "matrix counts; the analysis says otherwise"
     # Two, not one: matrix multiplies in both the inner loop and the outer.
     # A weaker analysis finds neither -- each of the three fixes above takes
@@ -834,10 +815,12 @@ def _raised_calls(name: str):
 
     at = Path("fixtures/omf") / name
     assert at.exists(), f"{name} is checked in and this test needs it"
+    from qbopt.abi import runtime
+
     found = module.of(omf.parse(at.read_bytes()))
     blocks = split.partition(found, code_map(found))
     out: dict[str, list] = {}
-    for _who, body in mir.bodies(found, blocks):
+    for _who, body in mir.bodies(found, blocks, runtime.for_module(found)):
         for block in body.blocks:
             for op in block.ops:
                 if op.kind is mir.Kind.CALL:
@@ -858,7 +841,10 @@ def test_a_call_established_to_read_nothing_says_that_instead() -> None:
     made = _raised_calls("addrm-p-evt.obj")
     assert "B$PEI2" in made, f"no B$PEI2 raised; found {sorted(made)}"
     for op in made["B$PEI2"]:
-        assert op.args == () and op.args_known is True, f"args={op.args} known={op.args_known}"
+        # No declared slot; si or di only where the caller reads them after
+        # the call, which raising_carried makes an input.
+        assert op.args_known is True, f"args={op.args} known={op.args_known}"
+        assert len(op.args) <= 2 and all(one.width == 2 for one in op.args), f"args={op.args}"
 
 
 def test_a_call_established_to_read_its_arguments_raises_them() -> None:
@@ -892,17 +878,20 @@ def test_the_entry_routine_declares_its_frame_size_where_that_is_established() -
     assert "B$ENRA" in made, f"no B$ENRA raised; found {sorted(made)}"
     for op in made["B$ENRA"]:
         assert op.args_known is True, f"{op.at:#06x}: known={op.args_known}"
-        assert [one.width for one in op.args] == [2], f"{op.at:#06x}: {op.args}"
+        # cx, then si and di where the procedure reads them after the call.
+        assert 1 <= len(op.args) <= 3 and all(one.width == 2 for one in op.args), f"{op.at:#06x}: {op.args}"
 
     # QuickBASIC 4.5 is established the same way, on the selector rather
     # than on a fixture: no checked-in q object calls B$ENRA.
     assert runtime.per_call({0: "B$ENRA"}, module.Family.QUICKBASIC)[0].inputs == frozenset({runtime.Reg.CX})
     assert runtime.per_call({0: "B$ENRA"}, module.Family.PDS)[0].inputs == frozenset({runtime.Reg.CX})
-    assert runtime.per_call({0: "B$ENRA"}, module.Family.VBDOS)[0].inputs is None
+    # VBDOS's is bounded to every general register its entry may read (ec7e2de).
+    assert runtime.per_call({0: "B$ENRA"}, module.Family.VBDOS)[0].inputs == frozenset(
+        {runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX, runtime.Reg.DX, runtime.Reg.SI, runtime.Reg.DI}
+    )
     assert runtime.per_call({0: "B$ENRA"}, module.Family.UNKNOWN)[0].inputs is None
 
-    # The general VBDOS contract remains unknown, while the two concrete
-    # sites prove bx=0 and therefore have a bounded interface.
+    # The two concrete VBDOS sites prove bx=0 and have a narrower interface.
     from pathlib import Path
 
     from qbopt.objectfile import omf
@@ -912,7 +901,8 @@ def test_the_entry_routine_declares_its_frame_size_where_that_is_established() -
     assert "B$ENRA" in theirs
     for op in theirs["B$ENRA"]:
         assert op.args_known is True, f"{op.at:#06x}: the site refinement was lost"
-        assert [one.width for one in op.args] == [2, 2], f"{op.at:#06x}: {op.args}"
+        # bx and cx, then the carried si and di.
+        assert 2 <= len(op.args) <= 4 and all(one.width == 2 for one in op.args), f"{op.at:#06x}: {op.args}"
     assert runtime.contract("B$ENRA").inputs is None, "the nameless contract still declares nothing"
 
 

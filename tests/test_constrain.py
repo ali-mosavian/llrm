@@ -67,6 +67,8 @@ def test_spilled_segment_load_still_sets_es():
     """D_SURF returned sc_test=-4000: spilling ES left a far load on the old segment."""
     from iced_x86 import Decoder
 
+    from qbopt.backend import target
+
     from qbopt.model import mir
     from qbopt.backend import lower
     from qbopt.backend import select
@@ -90,19 +92,14 @@ def test_spilled_segment_load_still_sets_es():
     )
     context = mir.MirBody(0xFCC, (mir.MirBlock(0xFCC, (), (op,), ()),), origin={segment: Register.ES})
     (load,) = lower.Lowering(context, {segment.id}, {}, (), {}).expand(op)
-    use = _insn(
-        ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(2, 2),), (ir.Held(segment.id, 2),)),
-        (2,),
-        (segment.id,),
-        at=0xFCF,
-    )
-    body, pins = constrain.constrained(_body(load, use), {segment.id: Register.ES})
+    far = ir.Mem(Addr(Space.FAR, 0x10, segment=Register.ES), 2, selector=ir.Held(segment.id, 2))
+    use = _insn(ir.Semantics(ir.Operation.MOVE, "mov", (far,), (ir.Imm(7, 2),)), (), (segment.id,), at=0xFCF)
+    body, pins = constrain.constrained(_body(load, use), {})
     spilled, _ = spiller.spilled(body, frozenset({segment.id}), frames.Frame(0))
     placed = allocate.applied(spilled, allocate.allocate(spilled, {**pins, **constrain.required(spilled)}))
-    emitted = select.emit(placed.insns[0].what)
-    assert emitted is not None
-    instruction = next(iter(Decoder(16, emitted.code)))
-    assert instruction.op0_register == Register.ES
+    reload, access = (next(iter(Decoder(16, select.emit(one.what).code))) for one in placed.insns)
+    assert reload.op0_register in target.SELECTORS
+    assert access.segment_prefix == reload.op0_register, "the far access reads a segment the reload did not set"
 
 
 @pytest.mark.parametrize("selected_site", [False, True])

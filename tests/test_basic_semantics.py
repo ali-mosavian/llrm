@@ -67,18 +67,17 @@ def test_semantic_mode_is_part_of_completion_marker():
 
 def test_cli_records_basic_semantics_and_is_idempotent(tmp_path):
     source = Path("fixtures/omf/lngmxx-p-g2.obj")
+    from qbopt.abi import linkunit
+
     output = tmp_path / "basic.obj"
-    assert main([str(source), "-o", str(output), "--basic-semantics"]) == 0
+    library = corpus.runtime_library(source)
+    assert main([str(source), str(library), "-o", str(output), "--basic-semantics"]) == 0
+    unit = linkunit.LinkUnit.read([source, library]).fingerprint
     assert json.loads(output.with_suffix(".json").read_text())["semantics"] == "basic"
     data = output.read_bytes()
-    assert rewrite(data, dry_run=False, basic_semantics=True)[0] == data
+    assert rewrite(data, dry_run=False, basic_semantics=True, contract_fingerprint=unit)[0] == data
     with pytest.raises(Finalised):
-        rewrite(data, dry_run=False)
-
-
-def test_basic_rejects_emulator_replacement():
-    with pytest.raises(ValueError, match="native-fpu"):
-        wholeseg.emitted(b"", basic_semantics=True, native_fpu=True)
+        rewrite(data, dry_run=False, contract_fingerprint=unit)
 
 
 def test_retained_division_delivers_live_results_in_abi_registers():

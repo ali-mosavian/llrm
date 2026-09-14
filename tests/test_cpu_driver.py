@@ -11,14 +11,19 @@ FIXTURE = Path("fixtures/omf/lngmxx-p-g2.obj")
 
 
 def test_cli_cpu_selects_reciprocal_and_records_target(tmp_path):
+    from qbopt.abi import linkunit
+
     output = tmp_path / "lngmxx.obj"
-    assert rewrite.main([str(FIXTURE), "-o", str(output), "--cpu", "P5"]) == 0
+    library = corpus.runtime_library(FIXTURE)
+    assert rewrite.main([str(FIXTURE), str(library), "-o", str(output), "--cpu", "P5"]) == 0
+    # The marker names the link unit it was resolved against.
+    unit = linkunit.LinkUnit.read([FIXTURE, library]).fingerprint
     data = output.read_bytes()
     assert not any(one.insn.mnemonic == Mnemonic.IDIV for block in corpus.partitioned(data) for one in block.insns)
     assert json.loads(output.with_suffix(".json").read_text())["cpu"] == "P5"
-    assert rewrite.rewrite(data, dry_run=False, cpu="P5")[0] == data
+    assert rewrite.rewrite(data, dry_run=False, cpu="P5", contract_fingerprint=unit)[0] == data
     with pytest.raises(rewrite.Finalised):
-        rewrite.rewrite(data, dry_run=False, cpu="386")
+        rewrite.rewrite(data, dry_run=False, cpu="386", contract_fingerprint=unit)
 
 
 def test_default_marker_means_386_not_unspecified():

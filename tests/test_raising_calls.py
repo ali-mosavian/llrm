@@ -22,7 +22,10 @@ def test_nbody_timer_does_not_keep_arithmetic_scratch_values_live():
     ops = [op for block in body.blocks for op in block.ops]
     timers = [op for op in ops if op.kind is mir.Kind.CALL and found.calls.get(op.at) == "PITSNAP"]
     assert len(timers) == 2
-    assert all(not op.uses and op.defines for op in timers)
+    # Only the SI and DI its caller reads afterwards, which the callee keeps.
+    from iced_x86 import Register
+    assert all(op.defines and {body.origin.get(value) for value in op.uses} <= {Register.ESI, Register.EDI}
+               for op in timers)
     assert any(op.at == 0x26e and op.kind is mir.Kind.DIVMOD for op in ops)
     emitted = wholeseg.emitted(path.read_bytes())
     assert emitted.outcome is wholeseg.Emission.LIR, emitted.reason
@@ -99,8 +102,10 @@ def test_unused_loop_clobbers_do_not_hide_nbody_division() -> None:
     assert not any(op.at == 0x204 and op.kind is mir.Kind.CALL for op in ops)
 
 
-def test_widening_does_not_move_nbody_store_before_its_definition() -> None:
+def test_widening_does_not_move_nbody_store_before_its_definition(monkeypatch) -> None:
     """PDS nbody printed PX0=6137536 for 1258 after widening moved DELTAY before its subtract."""
+    # Needs the stores drop_stores proves unobservable.
+    monkeypatch.setattr("qbopt.analysis.observers.private", lambda *args: None)
     path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
     found = corpus.loaded(path)
     blocks = corpus.partitioned(path)
@@ -175,8 +180,10 @@ def test_computed_divisions_are_values_not_runtime_calls(tag: str) -> None:
                     assert set(op.uses) <= defined
 
 
-def test_recovered_memory_arguments_keep_their_relocations() -> None:
+def test_recovered_memory_arguments_keep_their_relocations(monkeypatch) -> None:
     """QuickBASIC chain printed CONST2=0 for 13106 after argument loads read address zero."""
+    # Needs the stores drop_stores proves unobservable.
+    monkeypatch.setattr("qbopt.analysis.observers.private", lambda *args: None)
     path = Path("fixtures/regressions/chain-stack-q-O.obj")
     result = wholeseg.emitted(path.read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason

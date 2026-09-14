@@ -21,7 +21,7 @@ def _insn(at: int, what: ir.Semantics, defines=(), uses=()) -> lir.Insn:
 
 
 def _pointer_across_a_loop() -> lir.LirBody:
-    """v3 is made before the loop and read after it, as a cell's base."""
+    """v3 is made before the loop, read in it and after it, as a cell's base."""
     where = Addr(Space.SEGMENT, 0x10, base=Register.SI)
     cell = ir.Mem(where, 2, Register.NONE, 0, 2, base=ir.Held(3, 2))
     return lir.LirBody(
@@ -46,6 +46,7 @@ def _pointer_across_a_loop() -> lir.LirBody:
                         (4,),
                         (4,),
                     ),
+                    _insn(0x11, ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(6, 2),), (cell,)), (6,), (3,)),
                     _insn(0x12, ir.Semantics(ir.Operation.BRANCH, "jne", (), (), 0x10), (), ()),
                 ),
                 succ=(0x10, 0x20),
@@ -72,12 +73,17 @@ def test_a_cut_range_renames_the_cell_it_is_the_base_of() -> None:
     it encoded still read v3, which nothing defines after the cut.
     """
     body = splitkit.split(_pointer_across_a_loop(), frozenset({3}))
-    after = next(block for block in body.blocks if block.at == 0x20)
-    load = next(one for one in after.insns if any(isinstance(x, ir.Mem) for x in one.what.sources))
-    cell = load.what.sources[0]
-    assert load.uses == (cell.base.value,), f"uses {load.uses}, cell on {cell.base}"
-    assert load.uses != (3,), "nothing was cut; the fixture does not reach the rename"
-    assert cell.through == Register.NONE, "the rename placed it"
+    loads = [
+        one
+        for block in body.blocks
+        for one in block.insns
+        if one.what and any(isinstance(x, ir.Mem) for x in one.what.sources)
+    ]
+    assert any(one.uses != (3,) for one in loads), "nothing was cut; the fixture does not reach the rename"
+    for load in loads:
+        cell = load.what.sources[0]
+        assert load.uses == (cell.base.value,), f"uses {load.uses}, cell on {cell.base}"
+        assert cell.through == Register.NONE, "the rename placed it"
     assert (cell.addr, cell.width, cell.offset, cell.disp_width) == (
         Addr(Space.SEGMENT, 0x10, base=Register.SI),
         2,

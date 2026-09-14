@@ -33,13 +33,15 @@ def test_native_unknown_cleanup_is_refused_atomically() -> None:
     assert "call cleanup unproved" in result.reason
 
 
-def test_text_segment_does_not_admit_assembly() -> None:
+def test_text_segment_is_admitted_only_for_c_and_assembly() -> None:
     module = corpus.loaded(Path("fixtures/regressions/r_walk-borland.obj"))
     assert module is not None
-    records = [
-        replace(record, body=b"\x0ar_walk.asm") if record.type == omf.THEADR else record for record in module.records
-    ]
-    assert omf.code_segment(records) is None
+
+    def named(header: bytes):
+        return [replace(record, body=header) if record.type == omf.THEADR else record for record in module.records]
+
+    assert omf.code_segment(named(b"\x0ar_walk.asm")) is not None
+    assert omf.code_segment(named(b"\x0ar_walk.pas")) is None
 
 
 def test_multiple_c_text_segments_are_not_selected_arbitrarily() -> None:

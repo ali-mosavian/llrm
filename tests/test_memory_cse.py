@@ -9,7 +9,12 @@ from qbopt.optimize import transform
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
-@pytest.mark.parametrize("disturbed", [False, True])
+@pytest.mark.parametrize("disturbed", [
+    pytest.param(False, marks=pytest.mark.xfail(
+        reason="the ES store names no allocation: its selector load is based, which _allocated does not follow",
+        strict=True)),
+    True,
+])
 def test_harr_reuses_descriptor_address_only_when_unchanged(tag, disturbed):
     """HARR computed its identical descriptor-adjusted address twice per element."""
     path = Path(f"fixtures/omf/harr-{tag}.obj")

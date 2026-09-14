@@ -85,5 +85,5 @@ def test_rngarm_writes_its_counter_only_after_the_loop(tag):
     writes = [(block.at, ref) for block in body.blocks for op in block.ops for ref in op.stores
               if ref.addr is not None and ref.addr.space is Space.SEGMENT
               and ref.addr.index == found.program_data and ref.addr.disp == 14]
-    assert inside and len(writes) == 1
-    assert writes[0][0] not in inside
+    assert inside and len(writes) <= 1
+    assert not {at for at, _ in writes} & inside

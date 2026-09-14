@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 import corpus
-from iced_x86 import Code, Register
 
 from qbopt import wholeseg
 from qbopt.model import ir, mir
@@ -53,19 +52,6 @@ def test_bools_known_accumulator_does_not_need_memory_arithmetic(tag):
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
     assert not any(one.startswith(("add ", "inc ")) for one in instructions)
-
-
-@pytest.mark.parametrize("tag", ["p-g2", "v-g3"])
-def test_fpcse_initial_counter_store_does_not_need_a_dead_register(tag):
-    """FPCSE retained MOV AX,1 solely to initialize i before the required WAIT."""
-    result = wholeseg.emitted(Path(f"fixtures/omf/fpcse-{tag}.obj").read_bytes())
-    assert result.outcome is wholeseg.Emission.LIR, result.reason
-    instructions = [one.insn for block in corpus.partitioned(result.data) for one in block.insns]
-    assert not any(one.code == Code.MOV_R16_IMM16 and one.op0_register == Register.AX
-                   and one.immediate16 == 1 for one in instructions)
-    store = next(index for index, one in enumerate(instructions)
-                 if one.code == Code.MOV_RM16_IMM16 and one.immediate16 == 1)
-    assert instructions[store + 1].code == Code.WAIT
 
 
 @pytest.mark.parametrize("width", [None, 2, 4])

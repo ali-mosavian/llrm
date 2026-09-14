@@ -170,7 +170,7 @@ def test_lowering_uses_the_same_per_site_clobbers_as_raising() -> None:
     parts = tuple(blocks.partition(module, mapped))
     contracts = nativecalls.interfaces(module, partition, parts, runtime.for_module(module))
     # This is a contract-routing test, not a claim about the real callee.
-    contracts[0x6BF] = replace(contracts[0x6BF], clobbers=frozenset({runtime.Reg.AX}))
+    contracts[0x6BF] = replace(contracts[0x6BF], clobbers=frozenset({runtime.Reg.AX}), clobbers_reached=True)
     name, body = next((name, body) for name, body in mir.bodies(module, list(parts), contracts) if body.entry == 0x604)
     low = lower.lowered(name, body, module.calls, module.absorbed, contracts)
     calls = [one for one in low.insns if one.at == 0x6BF and one.what and one.what.name == "call"]

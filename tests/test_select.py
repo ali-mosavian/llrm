@@ -1032,7 +1032,7 @@ def test_an_instruction_holding_a_moved_operand_is_not_the_site_it_came_from() -
     from qbopt.frontend import blocks as split
     from qbopt.frontend.blocks import code_map
 
-    found = module.of(omf.parse(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes()))
+    found = module.of(omf.parse(Path("fixtures/omf/cmpord-p-g2.obj").read_bytes()))
     bodies = list(mir.bodies(found, split.partition(found, code_map(found))))
     site = next(one for one in found.absorbed)
     # Kind and all, so the site's own record would answer for it: the

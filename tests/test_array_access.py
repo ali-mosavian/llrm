@@ -115,7 +115,14 @@ def test_overflow_observation_has_no_normal_path_register_results():
     body = mir.bodies(found, corpus.partitioned(path), basic_semantics=True, bounds_checks=True)[0][1]
     checks = [op for block in body.blocks for op in block.ops if found.code[op.at:op.at + 1] == b"\xce"]
     assert checks
-    assert all(not op.defines for op in checks)
+    # An interrupt may define a selector; nothing on the normal path may read it.
+    invented = {value for op in checks for value in op.defines}
+    merged = True
+    while merged:
+        merged = {phi.result for block in body.blocks for phi in block.phis
+                  if invented & set(phi.incoming.values())} - invented
+        invented |= merged
+    assert not [op for block in body.blocks for op in block.ops if invented & set(op.uses)]
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
@@ -142,15 +149,19 @@ def test_array_checks_are_independent_of_numeric_semantics(tag, basic_semantics,
 def test_bounds_policy_is_recorded_separately(tmp_path):
     """Numeric compatibility must not silently enable array checks or reuse unchecked output."""
     source = Path("fixtures/regressions/arridx-bounds-p-g2.obj")
+    from qbopt.abi import linkunit
+
     output = tmp_path / "checked.obj"
-    assert main([str(source), "-o", str(output), "--bounds-checks"]) == 0
+    library = corpus.runtime_library(source)
+    assert main([str(source), str(library), "-o", str(output), "--bounds-checks"]) == 0
+    unit = linkunit.LinkUnit.read([source, library]).fingerprint
     report = json.loads(output.with_suffix(".json").read_text())
     assert report["bounds_checks"] is True
     assert report["semantics"] == "native"
     data = output.read_bytes()
-    assert rewrite(data, dry_run=False, bounds_checks=True)[0] == data
+    assert rewrite(data, dry_run=False, bounds_checks=True, contract_fingerprint=unit)[0] == data
     with pytest.raises(Finalised):
-        rewrite(data, dry_run=False)
+        rewrite(data, dry_run=False, contract_fingerprint=unit)
 
 
 def test_unsupported_checked_helper_is_not_unchecked_success():

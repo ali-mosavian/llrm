@@ -40,20 +40,7 @@ CALL_REPLACEMENT_OPCODES = {
 
 def test_a_real_pass_rewrites_the_code_and_keeps_the_records_readable(obj: Path) -> None:
     data = obj.read_bytes()
-    out, found = corpus.rewritten(obj, dry_run=False)
-    if not any(region.taken for region in found):
-        # Byte-identical only with the segment left alone. Writing it from
-        # MIR is a transform in its own right -- it picks shorter encodings
-        # than BC's layout could use, 201 bytes over this corpus -- so it
-        # applies whether or not a region was taken. The invariant that a
-        # pass finding nothing changes nothing still holds for the patching
-        # half, which is what this asks.
-        from qbopt.rewrite import rewrite
-
-        patched, _ = rewrite(data, dry_run=False, whole_segment=False)
-        assert patched == b"".join(record.emit() for record in omf.parse(data))
-        assert omf.parse(out), "and the rewritten segment is still a readable module"
-        return
+    out, _ = corpus.rewritten(obj, dry_run=False)
     before, after = omf.code_segment(omf.parse(data)), omf.code_segment(omf.parse(out))
     assert before is not None and after is not None
     # The segment may grow. Widening never makes it longer, but absorbing a
@@ -186,22 +173,21 @@ def test_a_fallback_is_not_finalised_or_raised_again() -> None:
 
     allocate.RegAlloc.transform, wholeseg.emitted = refuses, spy
     try:
-        out, _ = rewrite(raw, dry_run=False, absorb_calls=False)
+        out, _ = rewrite(raw, dry_run=False, absorb_calls=False, allow_unchanged=True)
     finally:
         allocate.RegAlloc.transform, wholeseg.emitted = was_alloc, was_emit
 
-    assert seen and set(seen) == {"mir"}, seen
-    assert len(seen) == 1, "fallback machine code was raised again"
+    assert seen == ["refused"], "BC's own machine code was raised again"
     assert out == raw, "a failed backend must preserve the original object"
     assert omf.finalised_at(omf.parse(out)) is None, "a fallback was marked as final"
 
 
 def test_a_refusal_is_unmarked_non_terminal_and_does_not_loop_for_nothing() -> None:
-    """A refusal leaves BC's own bytes. Nothing is marked, and once they
-    stop changing the driver stops asking."""
+    """A refusal raises. Kept only when asked for: BC's own bytes, unmarked,
+    and asked once."""
     from qbopt.objectfile import omf
     from qbopt import wholeseg
-    from qbopt.rewrite import rewrite
+    from qbopt.rewrite import Unsupported, rewrite
 
     raw = Path("fixtures/omf/hotlop-q-evt.obj").read_bytes()
     was = wholeseg.emitted
@@ -214,11 +200,12 @@ def test_a_refusal_is_unmarked_non_terminal_and_does_not_loop_for_nothing() -> N
 
     wholeseg.emitted = refuses
     try:
-        out, _ = rewrite(raw, dry_run=False, absorb_calls=False)
+        with pytest.raises(Unsupported, match="injected refusal"):
+            rewrite(raw, dry_run=False, absorb_calls=False)
+        out, _ = rewrite(raw, dry_run=False, absorb_calls=False, allow_unchanged=True)
     finally:
         wholeseg.emitted = was
 
-    assert set(seen) == {"refused"}, seen
-    assert len(seen) == 1, f"it kept asking after the bytes were stable: {len(seen)}"
+    assert seen == ["refused", "refused"], f"one question per call: {seen}"
     assert out == raw, "a refusal changed the object"
     assert omf.finalised_at(omf.parse(out)) is None

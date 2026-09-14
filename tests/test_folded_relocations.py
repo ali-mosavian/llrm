@@ -16,8 +16,11 @@ def test_arith_folded_constant_has_no_data_address_fixup(tag):
     result = wholeseg.emitted(Path(f"fixtures/omf/arith-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
+    # Whole, as its two halves, or folded further into a pushed answer.
     constants = [one for one in blocks.instructions(found)
-                 if one.insn.code == Code.MOV_R32_IMM32 and one.insn.immediate32 == 0x12345678]
+                 if one.insn.code == Code.PUSHD_IMM32
+                 or one.insn.code in (Code.MOV_R32_IMM32, Code.MOV_R16_IMM16)
+                 and one.insn.immediate(1) in (0x12345678, 0x1234, 0x5678)]
     assert constants
     fixups = [one for one in omf.fixups(found.records) if one.seg == found.seg]
     assert not any(insn.imm_at <= fixup.offset < insn.imm_at + insn.imm_len

@@ -225,3 +225,22 @@ def relocated(source: Path | bytes, shift: Shift) -> list[omf.Record] | str:
 def mappable(source: Path | bytes) -> bool:
     data = _bytes(source)
     return _on_disk(_key("mappable", data), lambda: loaded(data) is not None and not isinstance(mapped(data), str))
+
+
+def runtime_library(obj: Path) -> Path:
+    """The BC runtime an object in fixtures/ links against. The CLI resolves
+    every external before it optimizes anything, so an object alone is refused."""
+    import re
+
+    import pytest
+    from configs import PDS71, QB45, VBDOS
+
+    compiler = re.search(r"-([pqv])-", Path(obj).name).group(1)
+    library = {
+        "p": PDS71 / "LIB" / "BCL71ENR.LIB",
+        "q": QB45 / "LIB" / "BCOM45.LIB",
+        "v": VBDOS / "LIB" / "VBDCL10E.LIB",
+    }[compiler]
+    if not library.exists():
+        pytest.skip(f"no {library}")
+    return library

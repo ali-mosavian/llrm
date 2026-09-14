@@ -49,7 +49,8 @@ def test_a_clobber_ends_the_raised_selector_dependency():
     assert raised[1].stores[0].segment == value
     assert value in raised[1].uses
     assert value in raised[2].uses
-    assert raised[3].stores[0].segment is None
+    after = raised[3].stores[0].segment
+    assert after != value and after in raised[2].defines, "the store after the call still names the old selector"
 
 
 def test_long_extraction_preserves_the_far_store_selector():
@@ -76,5 +77,6 @@ def test_long_extraction_preserves_the_far_store_selector():
     first, _, last = raised.blocks[0].ops
     segment, = first.defines
     write, = lower.Lowering(raised, {whole.id, low.id, segment.id}, {}, (), {}).expand(last)
-    assert (ir.Held(segment.id, 2), Register.ES) in write.requires
+    # The cell carries its selector; the allocator seats it in a segment register.
+    assert write.what.dests[0].selector == ir.Held(segment.id, 2)
     assert segment.id in write.uses

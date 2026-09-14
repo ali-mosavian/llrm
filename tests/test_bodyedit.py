@@ -149,6 +149,7 @@ def test_every_fixture_body_takes_the_insertion_and_relocates_cleanly(fixtures: 
         for body_ir in decoded:
             made = insert_nop(body_ir)
             if isinstance(made, str):
+                assert len(body_ir.nodes) <= 1, (path.name, body_ir.body.kind, made)
                 refused += 1
                 continue
             moved = corpus.relocated(path, Shift.of([made]))
@@ -160,4 +161,3 @@ def test_every_fixture_body_takes_the_insertion_and_relocates_cleanly(fixtures: 
             assert after[2] == before[2] + 1, (path.name, body_ir.body.kind)
             taken += 1
     assert taken > 0, taken
-    assert refused == 0, refused

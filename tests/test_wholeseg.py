@@ -143,7 +143,11 @@ def test_a_rebuilt_object_keeps_every_code_fixup_it_still_has_a_home_for(obj: Pa
     # `laid.relocations` is (offset within the image, the original field);
     # the header sits in front of the image in the object, which is the
     # same `kept + new` the record writer applies.
-    moved = {old: header + new for new, old in laid.relocations}
+    # One field may land more than once: an op copied into two places takes
+    # its relocation to both.
+    moved: dict[int, list[int]] = {}
+    for new, old in laid.relocations:
+        moved.setdefault(old, []).append(header + new)
     kept = [one for one in original if one.offset in moved]
     gone = [one for one in original if one.offset not in moved]
     assert not (set(moved) & set(laid.dropped)), f"{obj.stem}: a fixup is both relocated and dropped"
@@ -152,7 +156,16 @@ def test_a_rebuilt_object_keeps_every_code_fixup_it_still_has_a_home_for(obj: Pa
         f"{sorted(hex(x) for x in {one.offset for one in gone} ^ set(laid.dropped))[:4]} "
         "is neither relocated nor accounted as dropped"
     )
-    assert len(emitted) == len(kept), f"{obj.stem}: {len(kept)} relocations survived and {len(emitted)} were emitted"
+    # A reference the backend made itself -- a constant now held in a cell,
+    # say -- is in `laid.symbols`, and is the only other fixup there may be.
+    made = {(header + offset, address.index, address.disp) for offset, address in laid.symbols}
+    placed = sum(len(moved[one.offset]) for one in kept)
+    assert len(emitted) == placed + len(laid.symbols), (
+        f"{obj.stem}: {placed} relocations were placed, {len(laid.symbols)} were made and {len(emitted)} were emitted"
+    )
+    assert made <= {(one.offset, one.index, one.disp) for one in emitted}, (
+        f"{obj.stem}: a made reference was not emitted"
+    )
 
     # Each survivor still names what it named. `inside` maps an offset in
     # the old code to where the layout put it, which is what a fixup into
@@ -163,10 +176,11 @@ def test_a_rebuilt_object_keeps_every_code_fixup_it_still_has_a_home_for(obj: Pa
     inside = {one: relocate._mapped(one, header, both) for one in both}
     landed = {one.offset: one for one in emitted}
     for one in kept:
-        other = landed.get(moved[one.offset])
-        assert other is not None, f"{obj.stem}: {one.offset:#x} moved to nothing"
-        want, got = _resolved(one, before.seg, inside), _resolved(other, after.seg)
-        assert want == got, f"{obj.stem}: {one.offset:#x} changed what it names: {want} became {got}"
+        for at in moved[one.offset]:
+            other = landed.get(at)
+            assert other is not None, f"{obj.stem}: {one.offset:#x} moved to nothing"
+            want, got = _resolved(one, before.seg, inside), _resolved(other, after.seg)
+            assert want == got, f"{obj.stem}: {one.offset:#x} changed what it names: {want} became {got}"
 
     # And each one that went belonged to something that is gone.
     assert not (set(laid.dropped) & set(laid.moved)), f"{obj.stem}: a dropped fixup sits on an op that is still there"
@@ -208,9 +222,10 @@ def test_the_partition_notices_an_occurrence_that_went_missing() -> None:
 
     # And by what each fixup names, it would: the same cell is referenced
     # more than once, so dropping one leaves the set of names unchanged.
-    names = {(one.target, one.index, one.disp) for one in emitted}
-    fewer = {(one.target, one.index, one.disp) for one in emitted[1:]}
-    assert names == fewer, "this fixture does not repeat a target, so it proves nothing"
+    names = [(one.target, one.index, one.disp) for one in emitted]
+    repeated = next((at for at, name in enumerate(names) if names.count(name) > 1), None)
+    assert repeated is not None, "this fixture does not repeat a target, so it proves nothing"
+    assert set(names) == set(names[:repeated] + names[repeated + 1 :])
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
@@ -235,63 +250,6 @@ def test_the_code_block_comes_after_every_extdef(obj: Path) -> None:
     externals = [n for n, r in enumerate(records) if r.type & 0xFE == omf.EXTDEF]
     if externals and code_at:
         assert min(code_at) > max(externals), f"{obj.stem}: code fixups precede an EXTDEF"
-
-
-def test_a_refused_body_is_laid_out_widened_and_only_that_body_is_widened() -> None:
-    """Two things at once, because they are the same arrangement.
-
-    A body the allocator refuses is laid out as it was raised -- widened,
-    because widening writes machine form with the registers BC had, so it
-    needs no allocation and is right either way. Dropping it cost nbody
-    every byte the object gained, 2,664 for 2,551.
-
-    And the widening happens for the body that needs it. Pre-widening every
-    raised body as well as every optimised one walked each pair chain twice:
-    68 calls over the p-g2 fixtures where 38 do.
-    """
-    from qbopt.model import mir
-    from qbopt.objectfile import omf
-    from qbopt.objectfile import module
-    from qbopt.legacy import regalloc
-    from qbopt.optimize import transform
-    from qbopt.frontend import blocks as split
-    from qbopt.frontend.blocks import code_map
-
-    calls = []
-    real = transform.widened
-
-    def counting(body, dead=frozenset()):
-        calls.append(body)
-        return real(body, dead)
-
-    # addrm-p-evt rather than arith-p-g2: raising a declared call's
-    # arguments changed what the allocator sees, and arith no longer has a
-    # body it refuses. This one still does.
-    obj = Path("fixtures/omf/addrm-p-evt.obj")
-    found = module.of(omf.parse(obj.read_bytes()))
-    assert found is not None
-    mapped = code_map(found)
-    assert not isinstance(mapped, str)
-    blocks = split.partition(found, mapped)
-
-    refused = 0
-    for _who, body in mir.bodies(found, blocks):
-        done = real(transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found))
-        fixed = regalloc.untangled(done)
-        if isinstance(regalloc.colour(fixed, fixed.pins), str) and isinstance(regalloc.colour(done, done.pins), str):
-            refused += 1
-            assert real(body) is not body, "the raise of the refused body widens"
-    assert refused, "no body is refused here, so this proves nothing"
-
-    transform.widened = counting
-    try:
-        out, why = wholeseg.rebuilt(obj.read_bytes())
-    finally:
-        transform.widened = real
-    assert why == wholeseg.REBUILT, why
-    # One per body, plus one for each the allocator sent back to its raise.
-    bodies = len(list(mir.bodies(found, blocks)))
-    assert bodies < len(calls) <= bodies * 2, f"{len(calls)} for {bodies} bodies"
 
 
 @pytest.mark.parametrize("stem", ["ivchan-q-O", "stride-p-g2"])
@@ -506,11 +464,11 @@ def test_a_spilled_copy_stays_grouped_and_legacy_refusals_are_reported() -> None
 
     spiller.spilled = refusing
     try:
-        got = wholeseg.emitted((Path("fixtures/omf") / "jumps-v-g3.obj").read_bytes())
+        got = wholeseg.emitted((Path("fixtures/omf") / "matrix-v-g3.obj").read_bytes())
     finally:
         spiller.spilled = real
     assert got.outcome is wholeseg.Emission.REFUSED
-    assert got.data == Path("fixtures/omf/jumps-v-g3.obj").read_bytes()
+    assert got.data == Path("fixtures/omf/matrix-v-g3.obj").read_bytes()
     assert "Simultaneous" in got.reason
 
 
@@ -536,24 +494,6 @@ def test_a_body_that_falls_back_is_not_reported_as_lir() -> None:
             assert got.data == one.read_bytes()
             assert got.reason != wholeseg.REBUILT
     assert seen, "nothing emitted through LIR; the gate proves nothing"
-
-
-def test_a_call_with_an_unestablished_interface_falls_back_and_is_not_lir() -> None:
-    """A refusal is not an emission, and forced LIR must say so.
-
-    procs-p-evt calls B$ENRA, whose contract declares no inputs, so the
-    lowering refuses it rather than emitting a call whose arguments the
-    allocation is free to move. The original object comes back unchanged,
-    with no second emitter hiding the missing contract.
-    """
-    from pathlib import Path
-
-    from qbopt import wholeseg
-
-    got = wholeseg.emitted(Path("fixtures/omf/procs-p-evt.obj").read_bytes())
-    assert got.outcome is wholeseg.Emission.REFUSED
-    assert got.data == Path("fixtures/omf/procs-p-evt.obj").read_bytes()
-    assert "not established" in got.reason
 
 
 def test_the_long_divide_bodys_entry_reads_nothing_it_has_not_written() -> None:

@@ -14,8 +14,10 @@ from qbopt.objectfile.module import Addr, Space
 
 
 @pytest.mark.parametrize("tag", ["q-O", "p-g2", "v-g3"])
-def test_bools_final_words_are_one_dword_store(tag):
+def test_bools_final_words_are_one_dword_store(tag, monkeypatch):
     """BOOLS wrote x=-1 and t=2 separately despite adjacent statically known words."""
+    # Needs the stores drop_stores proves unobservable.
+    monkeypatch.setattr("qbopt.analysis.observers.private", lambda *args: None)
     result = wholeseg.emitted(Path(f"fixtures/omf/bools-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     assert any(one.insn.code == Code.MOV_RM32_IMM32 and one.insn.immediate32 == 0x0002ffff

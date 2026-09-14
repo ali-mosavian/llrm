@@ -5,6 +5,7 @@ Which bytes are code, found by reachability rather than assumed.
 from pathlib import Path
 
 import pytest
+from iced_x86 import Mnemonic
 
 import corpus
 from helpers import hx
@@ -110,8 +111,9 @@ def test_rebuilt_event_code_is_fully_visible(tag: str) -> None:
     found = module.of(omf.parse(result.data))
     code = instructions(found)
     assert not isinstance(code, str), code
-    assert event_stub(found) == 0x35
-    assert 0x35 in {one.at for one in code}
+    stub = event_stub(found)
+    assert stub is not None
+    assert stub in {one.at for one in code}
 
 
 def test_the_instruction_stream_tiles(mapped_obj: Path) -> None:
@@ -161,4 +163,5 @@ def test_padding_is_inert_but_a_branch_is_not(fixtures: Path) -> None:
     padded = module.Module(found.records, found.seg, found.name, bytes([PAD, PAD]), 0, 2)
     assert benign(padded, (0, 2)) == []
     with_branch = module.Module(found.records, found.seg, found.name, hx("EB 00"), 0, 2)
-    assert benign(with_branch, (0, 2)) is None
+    assert [one.insn.mnemonic for one in benign(with_branch, (0, 2))] == [Mnemonic.JMP]
+    assert benign(with_branch, (0, 1)) is None, "an instruction running past the gap is not padding"

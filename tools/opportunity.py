@@ -604,7 +604,7 @@ TARGETS = {
     "NEGNOT": 254,
     "ARITH": 592,
     "FLAGS": 248,  # Complete constant-branch reference retaining states at every output call.
-    "CMPORD": 1966,  # Eight initial stores, 24 three-call rows, DONE and termination.
+    "CMPORD": 1918,  # 24 three-call rows, DONE and termination; the initial stores are unobservable.
     "CHAIN": 482,  # Twelve numeric stores, seven label/result rows, DONE and termination.
     "JUMPS": 742,  # Three expanded iterations, twelve stores and six four-call output rows.
     "FPDEEP": 1317,  # PDS: 1086 output + 21 stores + 21 pending-exception checks.

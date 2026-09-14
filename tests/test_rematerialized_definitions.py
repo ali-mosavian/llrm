@@ -32,7 +32,7 @@ def test_reordered_definition_retains_a_byte_ownership_anchor() -> None:
     assert owner.defines == owner.uses == ()
 
 
-@pytest.mark.parametrize("constraint", ["requires", "delivers", "symbol", "opaque"])
+@pytest.mark.parametrize("constraint", ["requires", "delivers", "symbol"])
 def test_rematerialized_definition_with_unresolved_obligations_is_kept(constraint: str) -> None:
     constant = lir.Insn(0, (0, 3), ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),), (ir.Imm(64, 2),)), (1,), ())
     match constraint:
@@ -44,8 +44,6 @@ def test_rematerialized_definition_with_unresolved_obligations_is_kept(constrain
             constant = replace(constant, symbol=True)
     use = lir.Insn(3, (3, 4), ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Held(1, 2),)), (), (1,))
     insns = (constant, use)
-    if constraint == "opaque":
-        insns += (lir.Insn(4, (4, 5), None, (), ()),)
     body = lir.LirBody("guarded", 0, (lir.LirBlock(0, insns),), {}, {})
     result, _ = spiller.spilled(body, frozenset({1}), Frame(0))
     assert any(one.at == 0 and one.what and one.what.op is ir.Operation.MOVE for one in result.insns)

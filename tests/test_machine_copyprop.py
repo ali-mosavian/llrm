@@ -38,7 +38,8 @@ def test_copy_at_join_requires_agreement_on_every_path(change, reverse_order):
         lir.LirBlock(0, (first, branch), (10, 20)),
         lir.LirBlock(10, (), (30,)),
         lir.LirBlock(20, middle, (30,)),
-        lir.LirBlock(30, (last,), (20,) if change == "loop" else ()),
+        lir.LirBlock(30, (last,), (20, 40) if change == "loop" else ()),
+        *((lir.LirBlock(40, (), ()),) if change == "loop" else ()),
     ), {}, {})
     if reverse_order:
         body = replace(body, blocks=body.blocks[::-1])

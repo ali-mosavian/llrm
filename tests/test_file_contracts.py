@@ -173,7 +173,7 @@ def test_model_file_calls_lower_without_replacement(model_calls, symbol):
     assert rule.cleanup is None and rule.clobbers == runtime.EVERY
     assert rule.reads is runtime.Memory.ANY and rule.writes is runtime.Memory.ANY
     assert rule.control is runtime.Control.UNKNOWN and rule.raises_error
-    assert runtime.per_call({0: symbol}, "qb45")[0].inputs is None
+    assert runtime.per_call({0: symbol}, "qb45")[0] == runtime.contract(symbol)
 
 
 @pytest.mark.parametrize("symbol", ["B$ERAS", "B$SCLS", "B$POW4", "B$INKY", "B$SCMP", "B$BSAV"])

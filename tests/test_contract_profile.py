@@ -6,6 +6,8 @@ from unittest.mock import Mock
 
 import pytest
 
+import corpus
+
 from qbopt import rewrite
 from qbopt.abi import profile, runtime
 from qbopt.objectfile import omf
@@ -125,17 +127,24 @@ def test_cli_forwards_profile_and_marks_its_identity(
 ) -> None:
     path, document = declaration
     output = path.parent / "rewritten.obj"
+    from qbopt.abi import linkunit
+
     capture = Mock(wraps=rewrite.wholeseg.emitted)
     monkeypatch.setattr(rewrite.wholeseg, "emitted", capture)
-    assert rewrite.main(["fixtures/omf/hotlop-p-g2.obj", "--contracts", str(path), "-o", str(output)]) == 0
+    source = Path("fixtures/omf/hotlop-p-g2.obj")
+    library = corpus.runtime_library(source)
+    assert rewrite.main([str(source), str(library), "--contracts", str(path), "-o", str(output)]) == 0
+    unit = linkunit.LinkUnit.read([source, library]).fingerprint
     loaded = profile.load(path)
     assert capture.call_count == 1
-    assert capture.call_args.kwargs["external_contracts"] == {rule.name: rule for rule in loaded.rules}
+    # The profile's rules win over what the link unit resolved.
+    forwarded = capture.call_args.kwargs["external_contracts"]
+    assert all(forwarded[rule.name] == rule for rule in loaded.rules)
     marker = omf.finalised_at(omf.parse(output.read_bytes()))
     assert marker is not None
-    assert f"contracts={loaded.fingerprint}" in marker
+    assert f"contracts={sha256(f'{unit};{loaded.fingerprint}'.encode()).hexdigest()}" in marker
     assert json.loads(output.with_suffix(".json").read_text())["contract_profile_sha256"] == loaded.fingerprint
-    again, _ = rewrite.rewrite(output.read_bytes(), dry_run=False, contract_profile=loaded)
+    again, _ = rewrite.rewrite(output.read_bytes(), dry_run=False, contract_profile=loaded, contract_fingerprint=unit)
     assert again == output.read_bytes() and capture.call_count == 1
     document["contracts"]["HOST_SHUTDOWN"]["evidence"] += " Revised audit."
     path.write_text(json.dumps(document))

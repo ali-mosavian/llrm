@@ -409,11 +409,6 @@ def test_not_writes_no_flags() -> None:
     ("code", "why"),
     [
         ("D9 C1", "fld st(1), a stack duplicate -- no memory operand for _float_load to accept"),
-        (
-            "D8 C1",
-            "fadd st(0),st(1), the non-popping register form -- a different shape under "
-            "the same Mnemonic as the memory form _float_arith accepts",
-        ),
         ("CD 21", "an ordinary software interrupt"),
         ("E4 40", "in -- what it does happens in a device"),
         ("EE", "out, likewise"),
@@ -470,15 +465,13 @@ def test_reading_a_segment_register_is_modelled_too() -> None:
     assert _semantics("8C C8") == ir.Semantics(ir.Operation.MOVE, "mov", (AX,), (CS,))
 
 
-def test_a_segment_override_this_pass_cannot_express_still_refuses_the_address() -> None:
-    # `mov ax,es:[si+2]` -- measured against qb-qrender, every one of the
-    # 11,150 segment-override instructions is bx with no index; this shape
-    # is not among them, so lift.operand() refuses to resolve it. The
-    # instruction is still modelled (ax is a real, nameable destination),
-    # but its source is Mem(None, ...) -- unnamed, and never provably
-    # disjoint from anything, rather than a whole-node barrier.
+def test_a_segment_override_is_modelled_with_its_segment() -> None:
+    # `mov ax,es:[si+2]` once came back Mem(None, ...): unnamed, never
+    # provably disjoint. A far cell now carries its selector.
     found = _semantics("26 8B 44 02")
-    assert found == ir.Semantics(ir.Operation.MOVE, "mov", (AX,), (ir.Mem(None, 2),))
+    assert found.op is ir.Operation.MOVE and found.dests == (AX,)
+    (source,) = found.sources
+    assert isinstance(source, ir.Mem) and source.addr is not None and source.addr.segment == Register.ES
     assert ir.modelled(found) is True
 
 

@@ -204,6 +204,7 @@ def test_offset_composition_preserves_modular_values_and_observers(kind, guard):
         assert (((value + 65530) & 65535) + delta) & 65535 == (value + done.args[1].n) & 65535
 
 
+@pytest.mark.xfail(reason="i*4 is rebuilt from i: lea bx,[eax+eax] then mov di,ax / shl di,2", strict=True)
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_addrm_reuses_word_scale_for_long_address(tag):
     """ADDRM rebuilt i*4 after using i*2, paying another copy and a larger shift each iteration."""

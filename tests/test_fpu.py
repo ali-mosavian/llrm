@@ -69,15 +69,17 @@ def test_emulator_wait_remains_an_emulator_wait() -> None:
     assert fpu.wrapped(Emitted(b"\x36\xd9\x07"), 0x3c) is None
 
 
-def test_unknown_compiler_does_not_inherit_vbdos_emulator_segment() -> None:
-    """The qrender ES fix must not invent a segment for another runtime dialect."""
+def test_the_emulator_segment_protocol_is_not_one_dialects() -> None:
+    """The emulator patches its interrupt into an ES-prefixed opcode whatever
+    compiled the object; gated on VBDOS, QB's float accesses read a segment
+    nothing set."""
     from dataclasses import replace
     from iced_x86 import Register
     from qbopt.frontend.blocks import decoded_instruction
 
     found = corpus.loaded(Path("fixtures/regressions/qrender-ent-v-g3.obj"))
     unknown = replace(found, records=[record for record in found.records if record.type != 0x88])
-    assert decoded_instruction(unknown, 0x729).segment_override == Register.NONE
+    assert decoded_instruction(unknown, 0x729).segment_override == Register.ES
 
 
 def sites(obj: Path) -> tuple:

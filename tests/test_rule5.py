@@ -11,11 +11,10 @@ one cannot be added quietly.
 
 What is allowed, and why. `MirBody.origin` is where BC kept a value, and
 `Value`'s own docstring sanctions reading it "with a reason, not by
-accident". Three compatibility readers remain:
+accident". Two compatibility readers remain:
 
   pairs.py    which register pair a long arrived in -- ax:dx or cx:bx is
               BC's convention and the only evidence a load pair is one long
-  avail.py    the legacy redundant-load query still uses register identity
   wide.py     widening a register operand to its own root
 
 Everything else in the list is a defect with a name attached.
@@ -63,7 +62,6 @@ NAMED = frozenset(
 # a name leaving this list is progress and a name joining it needs one.
 ALLOWED = {
     "frontend/pairs.py": None,  # pair identity is BC's register convention
-    "analysis/avail.py": {"redundant"},
     "frontend/wide.py": {"_wider"},
 }
 

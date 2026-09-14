@@ -12,7 +12,6 @@ from qbopt import wholeseg
 def test_fpcsex_reuses_sum_only_under_native_policy(basic_semantics: bool, adds: int, tag: str) -> None:
     result = wholeseg.emitted(
         Path(f"fixtures/omf/fpcsex-{tag}.obj").read_bytes(),
-        native_fpu=not basic_semantics,
         basic_semantics=basic_semantics,
     )
     assert result.outcome is wholeseg.Emission.LIR, result.reason

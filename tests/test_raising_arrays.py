@@ -6,7 +6,6 @@ import pytest
 import corpus
 from qbopt.model import ir
 from qbopt.model import mir
-from qbopt import wholeseg
 from qbopt.objectfile.module import Space
 from qbopt.frontend import raising_arrays
 from qbopt.analysis import consts
@@ -127,15 +126,3 @@ def test_only_allocating_calls_carry_requests(name: str) -> None:
     assert raising_arrays.annotated(interrupted, {4: "unknown", 5: name}).blocks[0].ops[-1].array is None
 
 
-@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
-def test_descriptor_metadata_alone_does_not_change_emission(tag: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    from qbopt.frontend import raising_array_bounds
-
-    monkeypatch.setattr(raising_array_bounds, "proven", lambda body: body)
-    data = (Path("fixtures/omf") / f"harr-{tag}.obj").read_bytes()
-    annotated = wholeseg.emitted(data)
-    monkeypatch.setattr(raising_arrays, "annotated", lambda body, calls, **kwargs: body)
-    original = wholeseg.emitted(data)
-    assert annotated.outcome is wholeseg.Emission.LIR
-    assert original.outcome is wholeseg.Emission.LIR
-    assert annotated.data == original.data

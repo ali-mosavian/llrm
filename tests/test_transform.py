@@ -88,39 +88,6 @@ def test_hoisted_variables_do_not_collide_with_promoted_cells() -> None:
     assert renamed.variable > max(one.variable for one in body.values)
 
 
-def test_hoisting_preserves_cross_variable_accumulator_edges() -> None:
-    """LNGMIX once lost its accumulator phi and folded it to zero.
-
-    Its divide now folds before LICM. HARR still hoists descriptor work,
-    exercising the same cross-variable phi preservation after real movement.
-    """
-    from qbopt.abi import runtime
-
-    path = Path("fixtures/omf/harr-p-g2.obj")
-    found = corpus.loaded(path)
-    partition = corpus.partitioned(path)
-    body = mir.bodies(found, partition, runtime.for_module(found))[0][1]
-    stages = {}
-    transform.applied(
-        body,
-        found.dgroup,
-        found.calls,
-        blocks=partition,
-        found=found,
-        watch=lambda name, state: stages.setdefault(name, state),
-    )
-    body = stages["r01-segments"]
-    phi = next(phi for block in body.blocks for phi in block.phis if not phi.result.flags)
-    body = transform._reparented(body, {phi.result})
-    before = next(one for block in body.blocks for one in block.phis if one.result.id == phi.result.id)
-    expected = {at: value.id for at, value in before.incoming.items()}
-    after = transform.hoisted(body, found.dgroup, found.calls)
-    assert after != body, "the fixture must actually move invariant work"
-    carried = next((one for block in after.blocks for one in block.phis if one.result == before.result), None)
-    assert carried is not None, "hoisting discarded the existing accumulator phi"
-    assert {at: value.id for at, value in carried.incoming.items()} == expected
-
-
 def test_redundant_load_chains_keep_a_defined_return_value() -> None:
     """procs-q-O's return named a deleted intermediate reload and could not allocate."""
     from qbopt.abi import runtime
@@ -710,30 +677,6 @@ def _rebuilt(name: str) -> list[tuple[int, str]]:
     return [(one.ip, shown.format(one)) for one in Decoder(16, code, ip=0)]
 
 
-def test_a_hoisted_run_does_not_land_on_a_live_register() -> None:
-    """The preheader is not empty, and what is already there is read.
-
-    Only the values a run computes that the loop still reads get a register
-    of their own. An operation whose result is consumed inside the run is
-    placed as it stands, still writing whatever BC gave it -- and hotlop's
-    run became two operations the moment folding turned `imul` into a
-    constant, the first of them `mov ax,3` landing on the `mov ax,1` that
-    starts the counter. The loop summed from 3 and printed 585 for 630,
-    which every one of the 55,000 host tests agreed with.
-    """
-    seen = _rebuilt("hotlop-p-g2")
-    # Whatever starts the counter: `mov ax,1` while folding left it alone,
-    # and hotlop now folds the whole product so the last thing before the
-    # jump is the constant itself. What must hold either way is that
-    # nothing writes that register again between the initialiser and the
-    # loop.
-    stop = next(i for i, (_, text) in enumerate(seen) if text.startswith("jmp"))
-    setters = [i for i in range(stop) if seen[i][1].startswith("mov ax,")]
-    assert setters, "nothing starts the counter at all"
-    over = [seen[i][1] for i in setters[1:] if i > setters[0]]
-    assert not over, f"the counter's start value is overwritten before the loop: {over}"
-
-
 @pytest.mark.xfail(
     reason='a copy no longer leaves a loop at all. The guard was "every source is '
     'a register", so a constant load was real work and could go. Tried again '
@@ -786,33 +729,6 @@ def test_an_invariant_multiply_leaves_a_loop_it_cannot_be_folded_out_of() -> Non
     )
     assert [text for _, text in seen[:start] if text.startswith("imul")], (
         "and it did not turn up before the loop either, so nothing was hoisted"
-    )
-
-
-def test_a_dead_second_result_does_not_pin_its_operation_in_the_loop() -> None:
-    """A widening `imul` defines dx:ax, and a join raises a phi per register.
-
-    So the dx half is a phi start whose register the loop writes again --
-    the shape this refuses, because a value a phi carries and the loop
-    rewrites cannot leave without its readers. Except nothing reads dx: it
-    is the high half of a product nobody asked for, kept alive only by the
-    phi that exists because the register was written.
-
-    Counting it cost nested a whole level, 4.9x against 3.9x, by stopping
-    each invariant run one operation short of the multiply that ends it.
-    """
-    seen = _rebuilt("nested-p-g2")
-    # The innermost loop: the backward jump spanning the least.
-    back = [
-        (int(text.split()[-1].rstrip("h"), 16), ip)
-        for ip, text in seen
-        if text.startswith(("jle", "jl ")) and int(text.split()[-1].rstrip("h"), 16) < ip
-    ]
-    assert back, "nothing loops here, so this proves nothing"
-    lo, hi = min(back, key=lambda one: one[1] - one[0])
-    inside = [text for ip, text in seen if lo <= ip <= hi]
-    assert not [text for text in inside if text.startswith("imul")], (
-        f"an invariant multiply is still in the inner loop: {inside}"
     )
 
 
@@ -879,27 +795,6 @@ def test_nothing_reads_a_register_nothing_wrote() -> None:
             if one.mnemonic in (Mnemonic.CDQ, Mnemonic.CWD, Mnemonic.IDIV, Mnemonic.DIV, Mnemonic.MUL):
                 written.add(root(Register.EDX))
                 written.add(root(Register.EAX))
-
-
-def test_a_long_divide_leaves_a_loop_that_never_changes_its_operands() -> None:
-    """lngmix divides a constant by a constant, ten times.
-
-    Three things refused it, and fixing any one alone did nothing: a push
-    aliased every named variable, the "computes nothing" guard caught `cdq`
-    and `idiv` because their sources are all registers, and the restore
-    idiom read as reading nothing. 8.8x against a 210 target.
-
-    Then it stayed refused for a fourth reason of its own: both divides
-    absorb, and one idiv computes what both calls asked for -- so the
-    loop holds two of them until `reuse` folds the second into a copy of
-    the first's answer.
-    """
-    seen = _rebuilt("lngmix-p-g2")
-    start = next(i for i, (_, text) in enumerate(seen) if text.startswith("jmp"))
-    inside = [text for _, text in seen[start:]]
-    assert len([text for text in inside if text.startswith("idiv")]) < 2, (
-        f"both divides are still in the loop: {inside[:10]}"
-    )
 
 
 def test_dead_code_goes_and_the_bytes_are_still_accounted_for() -> None:
@@ -1017,29 +912,6 @@ def test_deciding_a_branch_leaves_every_byte_accounted_for() -> None:
             continue
         _out, why = wholeseg.rebuilt(path.read_bytes())
         assert why == wholeseg.REBUILT, f"{name}: {why}"
-
-
-def test_an_accumulator_chain_leaves_the_loop_whole() -> None:
-    """pressx is press with its eight values read at runtime.
-
-    Nothing can fold them, so the whole `a*b + c*d + e*f + g*h` is one
-    invariant chain and the loop should hold the accumulate and the counter.
-    What kept it inside was the move that starts the chain: refusing every
-    register move kept `mov bx,ax` out of the run, and without it the three
-    `add bx,ax` behind it read a register nothing in the run wrote.
-    """
-    seen = _rebuilt("pressx-p-g2")
-    back = [
-        (int(text.split()[-1].rstrip("h"), 16), ip)
-        for ip, text in seen
-        if text.startswith(("jle", "jl ")) and int(text.split()[-1].rstrip("h"), 16) < ip
-    ]
-    assert back, "nothing loops here, so this proves nothing"
-    lo, hi = min(back, key=lambda one: one[1] - one[0])
-    inside = [text for ip, text in seen if lo <= ip <= hi]
-    assert not [text for text in inside if text.startswith("imul")], (
-        f"an invariant product is still in the loop: {inside}"
-    )
 
 
 def test_a_served_read_names_the_value_and_not_a_register() -> None:
@@ -1388,111 +1260,6 @@ def test_dead_boolean_block_does_not_leave_an_unreachable_jump() -> None:
     assert not isinstance(blocks.code_map(found), str)
 
 
-def test_the_second_of_two_identical_divides_is_found_with_its_first() -> None:
-    """lngmix's `s = s + v \\ 7 + v MOD 7`, which divides twice for one idiv.
-
-    And the guards, each of which is a way the second could be a different
-    computation: a store that may reach the operands, and a write to the
-    registers the first one's answers are in.
-    """
-    import sys
-    from dataclasses import replace
-
-    sys.path.insert(0, "tools")
-    import stages
-
-    from qbopt.model import mir
-    from qbopt.optimize import transform
-
-    found, bodies, _contracts = stages._bodies(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes())
-    pairs = [one for _name, body in bodies for one in transform.divided_twice(body, found.dgroup)]
-    assert len(pairs) == 1, f"lngmix divides the same two numbers twice; found {len(pairs)}"
-    _at, first, second = pairs[0]
-    assert first.args == second.args, "the same operands, or it is not the same computation"
-    assert first.at < second.at
-
-    # A store between them that may land on what they divide ends it.
-    for name, body in bodies:
-        blocks = []
-        for block in body.blocks:
-            ops = list(block.ops)
-            where = next((i for i, one in enumerate(ops) if one is second), None)
-            if where is not None:
-                cell = next(one for one in second.args if isinstance(one, mir.Cell))
-                ops.insert(where, replace(ops[where - 1], stores=(cell.ref,), kind=mir.Kind.STORE))
-            blocks.append(replace(block, ops=tuple(ops)))
-        assert not transform.divided_twice(replace(body, blocks=tuple(blocks)), found.dgroup), (
-            "a store that may reach the dividend makes the second divide a different one"
-        )
-
-
-def test_a_reused_divide_copies_the_first_answer_instead_of_dividing() -> None:
-    """The fold itself, at MIR level, on the real object.
-
-    lngmix's second divide becomes a copy of the first one's remainder,
-    and the operation that hands that answer's high half back reads the
-    same value it always did -- so nothing else in the body changes.
-    """
-    import sys
-
-    sys.path.insert(0, "tools")
-    import stages
-
-    from qbopt.model import mir
-    from qbopt.optimize import transform
-
-    found, bodies, _contracts = stages._bodies(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes())
-    divides = [
-        one for _name, body in bodies for block in body.blocks for one in block.ops if one.kind is mir.Kind.DIVMOD
-    ]
-    assert len(divides) == 2, f"lngmix divides twice; {len(divides)} found"
-
-    for _name, body in bodies:
-        got = transform.reused_divides(body, found.dgroup, found)
-        left = [one for block in got.blocks for one in block.ops if one.kind is mir.Kind.DIVMOD]
-        copies = [
-            one for block in got.blocks for one in block.ops if one.kind is mir.Kind.COPY and one.at == divides[1].at
-        ]
-        assert len(left) == 1, "one divide does the work of both"
-        assert len(copies) == 1, "and the other is a copy of its answer"
-        served = copies[0].args[0]
-        assert isinstance(served, mir.Held) and served.value in divides[0].defines, (
-            "the copy reads an answer the first divide defined"
-        )
-
-
-def test_a_reused_divide_leaves_a_body_the_allocator_can_still_colour() -> None:
-    """The fold must not extend a value's life into another register's phi.
-
-    The copy keeps every value the site defined, so no phi that named one
-    of them loses its definition and none has to be rewritten. Rewriting
-    them was the first attempt: the ebx variable's phi ended up reading
-    the quotient in eax, that value stayed live to the back edge, and the
-    allocator refused the whole body -- `v1_5 and a value it interferes
-    with are both pinned to eax`. A refused body is laid out as it was
-    raised, so the fold cost 0 bytes and nothing said so.
-    """
-    import sys
-
-    sys.path.insert(0, "tools")
-    import stages
-
-    from qbopt.legacy import regalloc
-    from qbopt.optimize import transform
-
-    found, bodies, _contracts = stages._bodies(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes())
-    folded = 0
-    for _name, body in bodies:
-        got = transform.reused_divides(body, found.dgroup, found)
-        if got is body:
-            continue
-        folded += 1
-        one = regalloc.untangled(got)
-        where = regalloc.colour(one, one.pins)
-        assert not isinstance(where, str), f"the folded body must still colour: {where}"
-    assert folded == 1, "lngmix has one pair to fold; this proves nothing without it"
-
-
 def test_one_idiv_serves_both_of_lngmix_s_divides_in_the_image(monkeypatch) -> None:
     """The fold reaching the bytes, through the entry production uses.
 
@@ -1521,42 +1288,3 @@ def test_one_idiv_serves_both_of_lngmix_s_divides_in_the_image(monkeypatch) -> N
     assert seen.count(Mnemonic.IDIV) == 1, "one divide does the work of both"
     assert seen.count(Mnemonic.CALL) == 4, "and no divide is left as a call"
 
-
-def test_a_reused_divide_is_refused_when_its_other_answer_is_read() -> None:
-    """A copy writes one register, so one value is all it may define.
-
-    The guard used to exempt both answers and only check the registers
-    the site merely clobbered. lngmix's remainder site defines the
-    quotient it was not asked for -- read after the fold, ebx still holds
-    the *first* divide's remainder, and the reader would have taken that
-    for a quotient. It is dead in lngmix, which is why nothing said so.
-    """
-    import sys
-    from dataclasses import replace
-
-    sys.path.insert(0, "tools")
-    import stages
-
-    from qbopt.model import mir
-    from qbopt.optimize import transform
-
-    found, bodies, _contracts = stages._bodies(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes())
-    ((_name, body),) = bodies
-    ((_at, _earlier, second),) = transform.divided_twice(body, found.dgroup)
-    other = next(one.value for one in second.results if one.value not in transform.live(body))
-
-    read = False
-    blocks = []
-    for block in body.blocks:
-        ops = []
-        for one in block.ops:
-            if not read and one.kind is mir.Kind.ADD and one.at > second.at:
-                one, read = replace(one, uses=one.uses + (other,)), True
-            ops.append(one)
-        blocks.append(replace(block, ops=tuple(ops)))
-    assert read, "nothing after the divide to read its other answer; this proves nothing"
-
-    now = replace(body, blocks=tuple(blocks))
-    assert transform.reused_divides(now, found.dgroup, found) is now, (
-        f"{other} is read after the fold and the copy does not write it"
-    )

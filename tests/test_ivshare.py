@@ -19,10 +19,10 @@ def culling(monkeypatch: pytest.MonkeyPatch) -> mir.MirBody:
     captured = []
     original = strength.reduced
 
-    def capture(body: mir.MirBody, dgroup: frozenset[int] = frozenset(), bounds: dict | None = None) -> mir.MirBody:
+    def capture(body: mir.MirBody, *args, **kwargs) -> mir.MirBody:
         if body.entry == 0 and not captured:
             captured.append(body)
-        return original(body, dgroup, bounds)
+        return original(body, *args, **kwargs)
 
     monkeypatch.setattr(strength, "reduced", capture)
     contract = replace(

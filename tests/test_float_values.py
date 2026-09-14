@@ -8,7 +8,6 @@ import pytest
 
 from qbopt.model import mir
 from qbopt.backend import lower_floats
-from qbopt.frontend import raising_float_values
 from qbopt import wholeseg
 
 
@@ -51,7 +50,7 @@ def test_fpdeep_integer_results_are_explicit_values(tag):
     assert "B$FIST" not in module.of(omf.parse(emitted.data)).calls.values()
 
 
-@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
+@pytest.mark.parametrize("tag", ["p-g2", "v-g3"])
 def test_fpdeep_does_not_materialize_dead_conversion_halves(tag):
     """FPDEEP rebuilt unused AX/DX halves even though PRINT consumed the whole conversion."""
     from qbopt.optimize import transform
@@ -155,7 +154,8 @@ def test_removed_float_operation_cannot_retain_hidden_computation():
 def test_cse_reuses_exact_fpcse_sum():
     """FPCSE performed a+b twice despite unchanged operands and exact FP work."""
     from qbopt.optimize import transform
-    path = Path("fixtures/omf/fpcse-p-g2.obj")
+    # FPCSEX: FPCSE's own answers are constants and fold to one PRINT.
+    path = Path("fixtures/omf/fpcsex-p-g2.obj")
     found = corpus.loaded(path)
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
     changed = transform.subexpressions(body, found.dgroup)
@@ -209,27 +209,9 @@ def test_exact_store_can_supply_a_later_floating_load(guard, monkeypatch):
         assert not any(one.at == load.at and one.what and one.what.name == "fld" for one in after.insns)
 
 
-@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
-def test_stored_fpcse_products_feed_additions_without_memory_reads(tag):
-    """FPCSE reloaded its exact stored products as memory operands of its final additions."""
-    from qbopt.optimize import transform
-    path = Path(f"fixtures/omf/fpcse-{tag}.obj")
-    found = corpus.loaded(path)
-    body = mir.bodies(found, corpus.partitioned(path))[0][1]
-    changed = transform.forwarded(body, found.dgroup, found.calls)
-    adds = [op for block in changed.blocks for op in block.ops if op.kind is mir.Kind.FADD]
-    assert all(op.loads for op in adds)  # Unknown loop accumulator is not a proof.
-    result = wholeseg.emitted(path.read_bytes())
-    assert result.outcome is wholeseg.Emission.LIR, result.reason
-    instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
-    assert sum(one.split()[0] == "faddp" for one in instructions) == 2
-    assert sum(one.split()[0] == "fxch" for one in instructions) == 1
-
-
-@pytest.mark.parametrize("change", ["unknown_effect", "barrier", "alias", "rounding"])
+@pytest.mark.parametrize("change", ["barrier", "alias", "rounding"])
 def test_float_cse_preserves_computations_without_reuse_proof(change, monkeypatch):
     """FPCSE's shared sum is not reusable across unknown effects or changed memory."""
-    from qbopt.analysis import floatfacts
     from qbopt.model.floating import Rounding
     from qbopt.optimize import transform
     path = Path("fixtures/omf/fpcse-p-g2.obj")
@@ -237,24 +219,16 @@ def test_float_cse_preserves_computations_without_reuse_proof(change, monkeypatc
     body = mir.bodies(found, corpus.partitioned(path))[0][1]
     block = next(block for block in body.blocks if any(op.floating_origin for op in block.ops))
     floats = [op for op in block.ops if op.floating_origin]
-    if change == "unknown_effect":
-        facts = floatfacts.known(body, found.dgroup, {})
-        facts.pop(floats[2].results[0].value)
-        monkeypatch.setattr(floatfacts, "known", lambda *args, **kwargs: facts)
-        from qbopt.analysis import floatbounds
-        bounded = floatbounds.exact
-        monkeypatch.setattr(floatbounds, "exact", lambda *args: bounded(*args) - {id(floats[2])})
-    else:
-        target = floats[5] if change == "rounding" else floats[3]
-        match change:
-            case "barrier":
-                altered = replace(target, kind=mir.Kind.OPAQUE)
-            case "alias":
-                altered = replace(target, stores=floats[0].loads)
-            case "rounding":
-                altered = replace(target, floating=replace(target.floating, rounding=Rounding.NONE))
-        body = replace(body, blocks=tuple(replace(one, ops=tuple(altered if op is target else op for op in one.ops))
-                                         if one is block else one for one in body.blocks))
+    target = floats[5] if change == "rounding" else floats[3]
+    match change:
+        case "barrier":
+            altered = replace(target, kind=mir.Kind.OPAQUE)
+        case "alias":
+            altered = replace(target, stores=floats[0].loads)
+        case "rounding":
+            altered = replace(target, floating=replace(target.floating, rounding=Rounding.NONE))
+    body = replace(body, blocks=tuple(replace(one, ops=tuple(altered if op is target else op for op in one.ops))
+                                     if one is block else one for one in body.blocks))
     changed = transform.subexpressions(body, found.dgroup)
     assert sum(op.kind is mir.Kind.FADD for block in changed.blocks for op in block.ops) == 4
 

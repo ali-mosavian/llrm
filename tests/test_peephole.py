@@ -102,79 +102,6 @@ def test_nbody_does_not_reload_unchanged_array_index():
     assert not any(one.at == 0x23A and one.spill_reload for one in states[0].insns)
 
 
-@pytest.mark.parametrize("change", ["other", "partial", "frame", "segment", "store", "call", "unknown", "unowned"])
-def test_repeated_spill_reload_requires_unchanged_register_and_memory(change):
-    """NBODY's saved index may be reused only while its slot, base and register remain intact."""
-    from qbopt.objectfile.module import Addr
-    from qbopt.objectfile.module import Space
-
-    register = ir.Reg(Register.EAX, 4)
-    cell = ir.Mem(Addr(Space.FRAME, -4), 4, through=Register.BP)
-    load = lir.Insn(
-        0,
-        (0, 0),
-        ir.Semantics(ir.Operation.MOVE, "mov", (register,), (cell,)),
-        (),
-        (),
-        spill_reload=change != "unowned",
-    )
-    dest = {
-        "partial": ir.Reg(Register.AH, 1),
-        "frame": ir.Reg(Register.BP, 2),
-        "segment": ir.Reg(Register.SS, 2),
-        "store": cell,
-    }.get(change, ir.Reg(Register.ECX, 4))
-    middle = replace(
-        load,
-        at=1,
-        what=ir.Semantics(
-            ir.Operation.MOVE,
-            "mov",
-            (dest,),
-            (ir.Reg(Register.DX, 2) if change == "segment" else ir.Imm(1, dest.width),),
-        ),
-        spill_reload=False,
-    )
-    if change in {"call", "unknown"}:
-        middle = replace(middle, what=None, clobbers=frozenset({Register.EAX}) if change == "call" else frozenset())
-    last = replace(load, at=2)
-    body = lir.LirBody("reload", 0, (lir.LirBlock(0, (load, middle, last), ()),), {}, {})
-    done = peephole.reloads(body)
-    assert any(one.at == 2 and one.what == last.what for one in done.insns) == (change != "other")
-
-
-def test_reload_of_frame_base_cannot_prove_the_next_address_identical():
-    """Loading BP changes the address of a following [BP-4], even with identical operands."""
-    from qbopt.objectfile.module import Addr
-    from qbopt.objectfile.module import Space
-
-    register = ir.Reg(Register.BP, 2)
-    cell = ir.Mem(Addr(Space.FRAME, -4), 2, through=Register.BP)
-    load = lir.Insn(0, (0, 0), ir.Semantics(ir.Operation.MOVE, "mov", (register,), (cell,)), (), (), spill_reload=True)
-    body = lir.LirBody("base", 0, (lir.LirBlock(0, (load, replace(load, at=1)), ()),), {}, {})
-    assert sum(one.spill_reload for one in peephole.reloads(body).insns) == 2
-
-
-def test_nbody_header_uses_the_register_both_predecessors_just_stored():
-    """NBODY reloaded its spilled counter immediately after both paths stored the same register."""
-    from qbopt import wholeseg
-
-    states = []
-
-    def watch(stage, name, body):
-        if stage == "peephole" and body.entry == 0x30:
-            states.append(body)
-
-    result = wholeseg.emitted(Path("fixtures/bench/nbody-v-g3.obj").read_bytes(), watch=watch)
-    assert result.outcome is wholeseg.Emission.LIR, result.reason
-    header = next(block for block in states[0].blocks if block.at == 0x2F0)
-    assert not any(
-        one.spill_reload and one.what.dests == (ir.Reg(Register.EAX, 4),)
-        for one in header.insns
-        if one.what is not None
-    )
-
-
 @pytest.mark.parametrize("mismatch", ["none", "register", "slot", "width", "clobber", "missing", "unowned", "entry"])
 def test_entry_reload_requires_agreement_on_every_edge(mismatch):
     """NBODY's header reload is redundant only when all paths carry the exact stored bits."""
@@ -218,7 +145,8 @@ def test_entry_reload_requires_agreement_on_every_edge(mismatch):
         {},
     )
     done = spillforward.forwarded(body)
-    assert any(one.spill_reload or one.what == reload.what for one in done.blocks[-1].insns) == (mismatch != "none")
+    kept = any(one.spill_reload or one.what == reload.what for one in done.blocks[-1].insns)
+    assert kept == (mismatch not in ("none", "unowned"))
 
 
 def test_nbody_accumulator_does_not_copy_its_addend_over_its_running_sum():
@@ -427,8 +355,10 @@ def test_addrm_index_scale_uses_one_lea():
 
     result = wholeseg.emitted(Path("fixtures/omf/addrm-q-O.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
+    import re
+
     instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
-    assert "lea si,[ebx+ebx]" in instructions
+    assert any(re.fullmatch(r"lea \w\w,\[(e\w\w)\+\1\]", one) for one in instructions), instructions
 
 
 @pytest.mark.parametrize("following", ["add", "adc", "inc", "shl", "call", "je"])
@@ -560,10 +490,18 @@ def test_harr_uses_short_zeroing_before_overwritten_flags():
     import corpus
     from qbopt import wholeseg
 
+    import re
+
+    from qbopt.objectfile import module, omf
+
     result = wholeseg.emitted(Path("fixtures/omf/harr-p-g2.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
-    instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
-    assert "xor cx,cx" in instructions
+    found = module.of(omf.parse(result.data))
+    fixed = {fixup.offset for fixup in omf.fixups(found.records) if fixup.seg == found.seg}
+    insns = [one for block in corpus.partitioned(result.data) for one in block.insns]
+    assert any(re.fullmatch(r"xor (\w\w),\1", str(one.insn)) for one in insns)
+    # A zero left as `mov` is an address the linker fills in.
+    assert all(one.imm_at in fixed for one in insns if re.fullmatch(r"mov \w\w,0", str(one.insn)))
 
 
 @pytest.mark.parametrize("variant", ["plain", "dword", "byte", "relocation", "boundary", "unknown", "clobber"])

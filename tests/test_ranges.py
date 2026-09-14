@@ -16,7 +16,7 @@ def test_fpdeep_one_based_index_has_a_bounded_byte_offset(tag):
     found = corpus.loaded(path)
     partition = corpus.partitioned(path)
     body = transform.applied(mir.bodies(found, partition)[0][1], found.dgroup,
-                             found.calls, blocks=partition, found=found)
+                             found.calls, blocks=partition, found=found, unroll_=False)  # Unrolled, i is a constant.
     known = ranges.bounded(body)
     accesses = [(block.at, ref) for block in body.blocks for op in block.ops
                 for ref in op.loads if op.kind is mir.Kind.FLOAD and ref.base is not None]
@@ -73,6 +73,8 @@ def test_nbody_scaled_index_is_bounded_only_inside_its_loop(recurrences, monkeyp
         from qbopt.optimize import strength
         original = strength._multiplies
         monkeypatch.setattr(strength, "_multiplies", lambda one, derived: one.op.kind is mir.Kind.SHL or original(one, derived))
+    # Needs the stores drop_stores proves unobservable.
+    monkeypatch.setattr("qbopt.analysis.observers.private", lambda *args: None)
     path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
     found = corpus.loaded(path)
     blocks = corpus.partitioned(path)

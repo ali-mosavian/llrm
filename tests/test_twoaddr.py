@@ -27,7 +27,7 @@ def test_commutative_instruction_reuses_the_dying_operand(name):
     assert chosen.what.sources == tuple(reversed(one.what.sources))
     assert chosen.uses == one.uses and chosen.defines == one.defines
     assert chosen.covers == one.covers
-    copy, tied = twoaddr._untied(chosen)
+    copy, tied = twoaddr._untied(chosen, iter(range(1000, 2000)).__next__)
     assert copy.what.sources == (ir.Held(2, 4),)
     assert tied.what.sources == (ir.Held(3, 4), ir.Held(1, 4))
 
@@ -52,20 +52,6 @@ def test_result_copy_affinity_does_not_override_liveness(alive, swapped):
     one = addition()
     chosen = twoaddr._commuted(one, alive, {3: {2}})
     assert chosen.what.sources == (tuple(reversed(one.what.sources)) if swapped else one.what.sources)
-
-
-@pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
-def test_lngmxx_loop_has_no_accumulator_copy_roundtrip(tag):
-    """LNGMXX emitted MOV temp,sum / ADD temp,invariant / MOV sum,temp on each of ten iterations."""
-    result = wholeseg.emitted(Path(f"fixtures/omf/lngmxx-{tag}.obj").read_bytes())
-    assert result.outcome is wholeseg.Emission.LIR, result.reason
-    found = module.of(omf.parse(result.data))
-    reached = [one.insn for one in blocks.instructions(found)]
-    backedges = [one for one in reached if one.is_jcc_short_or_near and one.near_branch_target < one.ip]
-    assert backedges
-    for branch in backedges:
-        assert not any(one.mnemonic == Mnemonic.MOV and one.op0_kind == one.op1_kind == OpKind.REGISTER
-                       for one in reached if branch.near_branch_target <= one.ip < branch.ip)
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])

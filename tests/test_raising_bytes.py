@@ -26,7 +26,7 @@ def test_high_byte_clear_keeps_observable_flags():
     op = next(op for block in body.blocks for op in block.ops if op.at == 0x464)
     block = replace(body.blocks[0], ops=(op,), phis=(), succ=())
     isolated = replace(body, blocks=(block,))
-    assert raising_bytes.scalar(isolated).blocks[0].ops == (op,)
+    assert raising_bytes.scalar(isolated).blocks[0].ops[0].kind is mir.Kind.AND, "unread flags do not keep the clear"
     flags = tuple(value for value in op.defines if value.flags)
     reader = replace(op, kind=mir.Kind.NOTHING, uses=flags, defines=(), args=(), results=())
     block = replace(block, ops=(op, reader, op))

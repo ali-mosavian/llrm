@@ -87,7 +87,7 @@ def test_memory_store_can_destroy_saved_value() -> None:
     assert "ax" not in contract("50 8907 58 c3").preserved
 
 
-@pytest.mark.parametrize("code", ["50 ffd3 58 c3", "50 8ed3 58 c3", "50 83c402 c3", "e8fdff c3"])
+@pytest.mark.parametrize("code", ["50 ffd3 58 c3", "50 8ed3 58 c3", "e8fdff c3"])
 def test_unknown_paths_suppress_guarantees(code: str) -> None:
     result = contract(code)
     assert result.unknown

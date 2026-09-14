@@ -139,13 +139,12 @@ def test_a_loop_body_always_contains_its_own_header_and_latch(obj: Path) -> None
         assert loop.body <= known, "a loop body never names a block outside the graph"
 
 
-def test_resume_dispatch_is_the_only_deep_nesting_in_the_corpus() -> None:
-    """RESUME's own dispatch block, and nothing else, nests more than one deep.
+def test_nothing_in_the_corpus_nests_past_two_loops() -> None:
+    """Loop depth is bounded by the source, RESUME's dispatch included.
 
-    Every path the handler can return to dominates the dispatch, so each is a
-    natural loop and the block reports a depth in the twenties. It is what
-    the definition says, not a defect -- but it is the reason depth() cannot
-    be trusted on a body built with /X, which is out of scope anyway.
+    divmod, the /X program, once reported a depth in the twenties: every
+    path its handler returned to dominated the dispatch. The code map no
+    longer reads those paths as loops.
     """
     deepest: dict[str, int] = {}
     for obj in FIXTURES:
@@ -158,15 +157,12 @@ def test_resume_dispatch_is_the_only_deep_nesting_in_the_corpus() -> None:
         nesting = loops.depth(corpus.partitioned(obj))
         deepest[obj.stem] = max(nesting.values()) if nesting else 0
 
-    resumable = [d for stem, d in deepest.items() if stem.startswith("divmod")]
-    everything_else = [d for stem, d in deepest.items() if not stem.startswith("divmod")]
     # Two, not one: matrix, nested, spill and segld are written with a
     # nested FOR because that is what an optimiser has to see through --
     # an invariant in an inner loop costs the outer loop's trip count
     # times over. Before they existed nothing here nested at all, which
     # is what this asserted.
-    assert max(everything_else) == 2, "nothing but RESUME nests past two loops"
-    assert min(resumable) > 1, "divmod is the /X program, and RESUME is why"
+    assert max(deepest.values()) == 2, "nothing nests past two loops"
 
 
 def test_the_entry_dominates_everything_and_nothing_dominates_it() -> None:

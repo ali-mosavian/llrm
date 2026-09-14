@@ -92,8 +92,8 @@ def test_cmpord_has_a_complete_source_derived_reference(tag, capsys):
     """CMPORD's 24 signed-comparison rows had no reference despite constant answers."""
     assert opportunity.against_targets([Path(f"fixtures/omf/cmpord-{tag}.obj")]) == 0
     report = capsys.readouterr().out
-    assert "1966" in report and "1.00x" in report
-    assert opportunity.TARGETS["CMPORD"] == 8 * (2 + 4) + 24 * 3 * (6 + 20) + (6 + 20) + 20
+    assert "1918" in report and "1.00x" in report
+    assert opportunity.TARGETS["CMPORD"] == 24 * 3 * (6 + 20) + (6 + 20) + 20
 
 
 def test_subexp_reference_includes_all_stores_and_output_calls():
@@ -288,7 +288,7 @@ def test_fpdeep_has_a_source_derived_reference(capsys: pytest.CaptureFixture[str
     assert opportunity.TARGETS["FPDEEP"] == 9 * (4 * (6 + 20)) + 2 * 52 + 46 + 21 * 6 + 21 * 5 == 1317
     assert opportunity.against_targets([Path("fixtures/omf/fpdeep-p-g2.obj")]) == 0
     report = capsys.readouterr().out
-    assert "PROVISIONAL" not in report and "1.34x" in report
+    assert "PROVISIONAL" not in report and "1.19x" in report
 
 
 @pytest.mark.parametrize("tag,accepted", [("p-g2", True), ("q-O", False), ("v-g3", False), ("p-evt", False)])

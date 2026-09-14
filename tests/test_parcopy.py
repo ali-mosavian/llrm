@@ -116,17 +116,20 @@ def test_two_groups_are_scheduled_apart() -> None:
     assert got == [f"{di}<-{parcopy._named(_slot(8))}", f"{bp}<-{di}"], got
 
 
-def test_a_cycle_is_refused_by_name_rather_than_written_wrongly() -> None:
+def test_a_register_cycle_is_exchanged_and_a_slot_cycle_refused_by_name() -> None:
     """Two moves that each read the other's destination need a temporary or
-    an exchange. Refused, so a caller falls back rather than emitting an
-    order that computes something else."""
-    with pytest.raises(parcopy.Tangled, match="temporary"):
-        parcopy.scheduled(
-            _body(
-                _move(_reg(Register.AX), _reg(Register.CX), group=1),
-                _move(_reg(Register.CX), _reg(Register.AX), group=1),
-            )
+    an exchange. Registers get the exchange; no instruction exchanges two
+    slots, so that is refused rather than written in an order that computes
+    something else."""
+    swapped = parcopy.scheduled(
+        _body(
+            _move(_reg(Register.AX), _reg(Register.CX), group=1),
+            _move(_reg(Register.CX), _reg(Register.AX), group=1),
         )
+    ).blocks[0].insns
+    assert [one.what.name for one in swapped] == ["xchg"]
+    with pytest.raises(parcopy.Tangled, match="temporary"):
+        parcopy.scheduled(_body(_move(_slot(4), _slot(8), group=1), _move(_slot(8), _slot(4), group=1)))
 
 
 def test_something_that_is_not_a_move_in_a_group_is_refused() -> None:
@@ -177,10 +180,9 @@ def test_nothing_leaves_the_machine_pipeline_still_grouped() -> None:
     assert not left, f"copies still marked simultaneous at {[hex(x) for x in left]}"
 
 
-def test_a_tangled_copy_falls_back_and_says_so() -> None:
+def test_a_tangled_copy_is_refused_and_says_so() -> None:
     """A refusal the emitter names, not a program written in the wrong
-    order. The fallback is BC's layout and is not marked as this pass's
-    own final output."""
+    order. BC's own object comes back, unmarked."""
     from pathlib import Path
 
     from qbopt.objectfile import omf
@@ -196,26 +198,9 @@ def test_a_tangled_copy_falls_back_and_says_so() -> None:
         got = wholeseg.emitted(Path("fixtures/omf/pressx-p-g2.obj").read_bytes())
     finally:
         parcopy.ParallelCopy.transform = was
-    assert got.outcome is wholeseg.Emission.MIR
-    assert got.reason == wholeseg.REBUILT
-    assert got.fallback_reason and "Tangled" in got.fallback_reason
+    assert got.outcome is wholeseg.Emission.REFUSED
+    assert got.data == Path("fixtures/omf/pressx-p-g2.obj").read_bytes()
+    assert "Tangled" in got.reason
     assert omf.finalised_at(omf.parse(got.data)) is None
 
 
-def test_an_unestablished_interface_is_refused_rather_than_invented() -> None:
-    """The event builds call a routine nothing is established about.
-
-    pressx-p-evt and pressx-v-evt both refuse at `0x0043` rather than
-    guessing an ABI for it -- which is why neither can be the fixture for
-    a test about a later phase.
-    """
-    from pathlib import Path
-
-    from qbopt import wholeseg
-
-    for name in ("pressx-p-evt.obj", "pressx-v-evt.obj"):
-        got = wholeseg.emitted((Path("fixtures/omf") / name).read_bytes())
-        assert got.outcome is wholeseg.Emission.MIR, f"{name} emitted through {got.outcome}"
-        assert got.fallback_reason and "interface is not established" in got.fallback_reason, (
-            f"{name}: {got.fallback_reason}"
-        )

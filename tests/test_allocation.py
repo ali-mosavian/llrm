@@ -32,7 +32,6 @@ from qbopt.backend import select
 from qbopt.backend import target
 from qbopt.abi import runtime
 from qbopt.legacy import regalloc
-from qbopt.optimize import transform
 from qbopt.frontend import blocks as split
 from qbopt.frontend.blocks import code_map
 
@@ -357,37 +356,6 @@ def test_a_pin_against_what_the_machine_demands_is_refused() -> None:
     assert tried, "no fixed requirement to contradict, so this proves nothing"
 
 
-def test_a_copy_on_the_phi_edge_untangles_a_class() -> None:
-    """The live range split, where the split belongs.
-
-    colour() refuses to move a class two of whose members are live at once
-    -- nothing runs on a phi edge, so its result and arguments must already
-    share a register. The way out is to put something on the edge.
-
-    addrm is the shape: v4 = phi(v10, v31) with v31 still wanted after the
-    phi, so the class cannot move and `v31 is wanted across its own phi`.
-    """
-    found = corpus.loaded(Path("fixtures/omf/addrm-p-g2.obj"))
-    mapped = code_map(found)
-    assert not isinstance(mapped, str)
-    blocks = split.partition(found, mapped)
-    seen = 0
-    for _who, body in mir.bodies(found, blocks):
-        # Exercise the legacy colourer's edge split without promotion's
-        # new variables, which the production LIR allocator handles.
-        done = transform.widened(
-            transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found, promote_=False)
-        )
-        if not regalloc._tangled(done):
-            continue
-        seen += 1
-        assert isinstance(regalloc.colour(done, done.pins), str), "it refuses while tangled"
-        fixed = regalloc.untangled(done)
-        assert not regalloc._tangled(fixed), "and the copy breaks the class"
-        assert not isinstance(regalloc.colour(fixed, fixed.pins), str), "so it can be coloured"
-    assert seen, "addrm no longer tangles, so this proves nothing"
-
-
 def _through_regalloc(body, pinned=None):
     """The whole phase, which is where the constraint splitter runs."""
     from qbopt.backend import allocate
@@ -695,10 +663,13 @@ def test_a_fixed_call_argument_reaches_its_register_through_the_whole_phase() ->
     from qbopt.model import ir
     from qbopt.model import lir
 
+    from qbopt.objectfile.module import Addr, Space
+
+    # Loaded, not a constant: a constant is simply made in cx.
     made = lir.Insn(
         at=0,
         covers=(0, 3),
-        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(2, 2),), (ir.Imm(0, 2),)),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(2, 2),), (ir.Mem(Addr(Space.SEGMENT, 0x10), 2),)),
         defines=(2,),
         uses=(),
         op=None,
@@ -802,7 +773,7 @@ def test_a_value_minted_for_a_fixed_register_is_not_spilled_out_of_it() -> None:
         last.append(got)
         return got
 
-    for name in ("nested-p-g2", "harr-p-g2"):
+    for name in ("harr-p-g2", "segld-p-g2"):
         minted.clear()
         last.clear()
         constrain.constrained = note_constrained
