@@ -1,0 +1,287 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x13
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+SEG 11 attr=0x2 name="_BSS" align=2
+START
+TYPE T25 size=768 align=1
+SETSEG 11
+SYM y1 name="pal_now" base="pal_now" pattern="_*" attr=0x42 seg=11
+b1 BENewBack y1
+- DGLabel b1
+- DGUBytes 768
+TYPE T26 size=256 align=1
+TYPE T27 size=64 align=1
+TYPE T28 size=20 align=1
+TYPE T29 size=12 align=1
+TYPE T30 size=12 align=1
+TYPE T31 size=3 align=1
+SETSEG 4
+SYM y2 name="pal_have" base="pal_have" pattern="_*" attr=0x42 seg=4
+b2 BENewBack y2
+- DGLabel b2
+- DGInteger 0 TY_UINT_2
+f3 DBSrcFile "src/pal.c"
+- DBSrcCue f3 6 1
+SYM y3 name="pal_install" base="pal_install" pattern="_*" attr=0x7 seg=1
+CALLCONV y3 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y3 TY_INTEGER
+SYM y4 name="p" base="p" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y4 TY_LONG_POINTER
+l4 CGLastParm
+t5 CGTemp TY_INTEGER
+SYM y5 name="i" base="i" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y5 TY_INT_2
+l6 BENewLabel
+l7 BENewLabel
+- DBSrcCue f3 10 1
+n8 CGFEName y5 TY_INT_2
+n9 CGInteger 0 TY_INTEGER
+n10 CGAssign n8 n9 TY_INT_2
+- CGDone n10
+- CGControl O_LABEL n0 l6
+n11 CGFEName y5 TY_INT_2
+n12 CGUnary O_POINTS n11 TY_INT_2
+n13 CGInteger 256 TY_INTEGER
+n14 CGCompare O_LT n12 n13 TY_INTEGER
+- CGControl O_IF_FALSE n14 l7
+n15 CGFEName y1 T25
+n16 CGFEName y5 TY_INT_2
+n17 CGUnary O_POINTS n16 TY_INT_2
+n18 CGInteger 3 TY_INTEGER
+n19 CGBinary O_TIMES n17 n18 TY_INTEGER
+n20 CGBinary O_PLUS n15 n19 TY_POINTER
+n21 CGFEName y4 TY_LONG_POINTER
+n22 CGUnary O_POINTS n21 TY_LONG_POINTER
+n23 CGFEName y5 TY_INT_2
+n24 CGUnary O_POINTS n23 TY_INT_2
+n25 CGInteger 3 TY_INTEGER
+n26 CGBinary O_TIMES n24 n25 TY_INTEGER
+n27 CGBinary O_PLUS n22 n26 TY_LONG_POINTER
+n28 CGUnary O_POINTS n27 T31
+n29 CGLVAssign n20 n28 T31
+- CGDone n29
+n30 CGFEName y5 TY_INT_2
+n31 CGInteger 1 TY_INTEGER
+n32 CGPostGets O_PLUS n30 n31 TY_INT_2
+- CGDone n32
+- CGControl O_GOTO n0 l6
+- CGControl O_LABEL n0 l7
+- DBSrcCue f3 11 1
+n33 CGFEName y2 TY_INT_2
+n34 CGInteger 1 TY_INTEGER
+n35 CGAssign n33 n34 TY_INT_2
+- CGDone n35
+- DBSrcCue f3 12 1
+SYM y6 name="qglVgaPalette" base="qglVgaPalette" pattern="^" attr=0xf seg=1
+CALLCONV y6 class=0x1 target=0x306 parms=[] ret=0:0
+n36 CGFEName y6 TY_CODE_PTR
+c37 CGInitCall n36 TY_INTEGER y6
+n38 CGFEName y1 T25
+n39 CGUnary O_CONVERT n38 TY_LONG_POINTER
+- CGAddParm c37 n39 TY_LONG_POINTER
+n40 CGCall c37
+- CGDone n40
+- DBSrcCue f3 13 1
+- CGReturn n0 TY_INTEGER
+- DBSrcCue f3 15 1
+SYM y7 name="pal_current" base="pal_current" pattern="_*" attr=0x7 seg=1
+CALLCONV y7 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y7 TY_LONG_POINTER
+l41 CGLastParm
+t42 CGTemp TY_LONG_POINTER
+- DBSrcCue f3 17 1
+n43 CGFEName y1 T25
+n44 CGUnary O_CONVERT n43 TY_LONG_POINTER
+n45 CGUnary O_CONVERT n44 TY_LONG_POINTER
+n46 CGTempName t42 TY_LONG_POINTER
+n47 CGAssign n46 n45 TY_LONG_POINTER
+- CGDone n47
+- DBSrcCue f3 18 1
+n48 CGTempName t42 TY_LONG_POINTER
+n49 CGUnary O_POINTS n48 TY_LONG_POINTER
+- CGReturn n49 TY_LONG_POINTER
+- DBSrcCue f3 25 1
+SYM y8 name="pal_bestfit" base="pal_bestfit" pattern="_*" attr=0x7 seg=1
+CALLCONV y8 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y8 TY_INT_2
+SYM y9 name="r" base="r" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y9 TY_INT_2
+SYM y10 name="g" base="g" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y10 TY_INT_2
+SYM y11 name="b" base="b" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y11 TY_INT_2
+l50 CGLastParm
+t51 CGTemp TY_INT_2
+SYM y12 name="best" base="best" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y12 TY_INT_4
+SYM y13 name="bi" base="bi" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y13 TY_INT_2
+SYM y14 name="i" base="i" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y14 TY_INT_2
+l52 BENewLabel
+l53 BENewLabel
+l54 BENewLabel
+l55 BENewLabel
+l56 BENewLabel
+l57 BENewLabel
+- DBSrcCue f3 27 1
+n58 CGFEName y12 TY_INT_4
+n59 CGInteger 2147483647 TY_INT_4
+n60 CGAssign n58 n59 TY_INT_4
+- CGDone n60
+- DBSrcCue f3 28 1
+n61 CGFEName y13 TY_INT_2
+n62 CGInteger 0 TY_INTEGER
+n63 CGAssign n61 n62 TY_INT_2
+- CGDone n63
+- DBSrcCue f3 31 1
+n64 CGFEName y2 TY_INT_2
+n65 CGUnary O_POINTS n64 TY_INT_2
+n66 CGInteger 0 TY_INTEGER
+n67 CGCompare O_EQ n65 n66 TY_INTEGER
+- CGControl O_IF_FALSE n67 l52
+n68 CGInteger 0 TY_INT_2
+n69 CGTempName t51 TY_INT_2
+n70 CGAssign n69 n68 TY_INT_2
+- CGDone n70
+- CGControl O_GOTO n0 l53
+- CGControl O_LABEL n0 l52
+- DBSrcCue f3 32 1
+n71 CGFEName y14 TY_INT_2
+n72 CGInteger 0 TY_INTEGER
+n73 CGAssign n71 n72 TY_INT_2
+- CGDone n73
+- CGControl O_LABEL n0 l54
+n74 CGFEName y14 TY_INT_2
+n75 CGUnary O_POINTS n74 TY_INT_2
+n76 CGInteger 256 TY_INTEGER
+n77 CGCompare O_LT n75 n76 TY_INTEGER
+- CGControl O_IF_FALSE n77 l55
+SYM y15 name="dr" base="dr" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y15 TY_INT_4
+SYM y16 name="dg" base="dg" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y16 TY_INT_4
+SYM y17 name="db" base="db" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y17 TY_INT_4
+SYM y18 name="d" base="d" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y18 TY_INT_4
+- DBSrcCue f3 33 1
+n78 CGFEName y15 TY_INT_4
+n79 CGFEName y1 T25
+n80 CGFEName y14 TY_INT_2
+n81 CGUnary O_POINTS n80 TY_INT_2
+n82 CGInteger 3 TY_INTEGER
+n83 CGBinary O_TIMES n81 n82 TY_INTEGER
+n84 CGBinary O_PLUS n79 n83 TY_POINTER
+n85 CGInteger 0 TY_UNSIGNED
+n86 CGBinary O_PLUS n84 n85 TY_POINTER
+n87 CGUnary O_POINTS n86 TY_UINT_1
+n88 CGUnary O_CONVERT n87 TY_INT_4
+n89 CGFEName y9 TY_INT_2
+n90 CGUnary O_POINTS n89 TY_INT_2
+n91 CGBinary O_MINUS n88 n90 TY_INT_4
+n92 CGAssign n78 n91 TY_INT_4
+- CGDone n92
+- DBSrcCue f3 34 1
+n93 CGFEName y16 TY_INT_4
+n94 CGFEName y1 T25
+n95 CGFEName y14 TY_INT_2
+n96 CGUnary O_POINTS n95 TY_INT_2
+n97 CGInteger 3 TY_INTEGER
+n98 CGBinary O_TIMES n96 n97 TY_INTEGER
+n99 CGBinary O_PLUS n94 n98 TY_POINTER
+n100 CGInteger 1 TY_UNSIGNED
+n101 CGBinary O_PLUS n99 n100 TY_POINTER
+n102 CGUnary O_POINTS n101 TY_UINT_1
+n103 CGUnary O_CONVERT n102 TY_INT_4
+n104 CGFEName y10 TY_INT_2
+n105 CGUnary O_POINTS n104 TY_INT_2
+n106 CGBinary O_MINUS n103 n105 TY_INT_4
+n107 CGAssign n93 n106 TY_INT_4
+- CGDone n107
+- DBSrcCue f3 35 1
+n108 CGFEName y17 TY_INT_4
+n109 CGFEName y1 T25
+n110 CGFEName y14 TY_INT_2
+n111 CGUnary O_POINTS n110 TY_INT_2
+n112 CGInteger 3 TY_INTEGER
+n113 CGBinary O_TIMES n111 n112 TY_INTEGER
+n114 CGBinary O_PLUS n109 n113 TY_POINTER
+n115 CGInteger 2 TY_UNSIGNED
+n116 CGBinary O_PLUS n114 n115 TY_POINTER
+n117 CGUnary O_POINTS n116 TY_UINT_1
+n118 CGUnary O_CONVERT n117 TY_INT_4
+n119 CGFEName y11 TY_INT_2
+n120 CGUnary O_POINTS n119 TY_INT_2
+n121 CGBinary O_MINUS n118 n120 TY_INT_4
+n122 CGAssign n108 n121 TY_INT_4
+- CGDone n122
+- DBSrcCue f3 36 1
+n123 CGFEName y18 TY_INT_4
+n124 CGFEName y15 TY_INT_4
+n125 CGUnary O_POINTS n124 TY_INT_4
+n126 CGFEName y15 TY_INT_4
+n127 CGUnary O_POINTS n126 TY_INT_4
+n128 CGBinary O_TIMES n125 n127 TY_INT_4
+n129 CGFEName y16 TY_INT_4
+n130 CGUnary O_POINTS n129 TY_INT_4
+n131 CGFEName y16 TY_INT_4
+n132 CGUnary O_POINTS n131 TY_INT_4
+n133 CGBinary O_TIMES n130 n132 TY_INT_4
+n134 CGBinary O_PLUS n128 n133 TY_INT_4
+n135 CGFEName y17 TY_INT_4
+n136 CGUnary O_POINTS n135 TY_INT_4
+n137 CGFEName y17 TY_INT_4
+n138 CGUnary O_POINTS n137 TY_INT_4
+n139 CGBinary O_TIMES n136 n138 TY_INT_4
+n140 CGBinary O_PLUS n134 n139 TY_INT_4
+n141 CGAssign n123 n140 TY_INT_4
+- CGDone n141
+- DBSrcCue f3 38 1
+n142 CGFEName y18 TY_INT_4
+n143 CGUnary O_POINTS n142 TY_INT_4
+n144 CGFEName y12 TY_INT_4
+n145 CGUnary O_POINTS n144 TY_INT_4
+n146 CGCompare O_LT n143 n145 TY_INT_4
+- CGControl O_IF_FALSE n146 l56
+n147 CGFEName y12 TY_INT_4
+n148 CGFEName y18 TY_INT_4
+n149 CGUnary O_POINTS n148 TY_INT_4
+n150 CGAssign n147 n149 TY_INT_4
+- CGDone n150
+n151 CGFEName y13 TY_INT_2
+n152 CGFEName y14 TY_INT_2
+n153 CGUnary O_POINTS n152 TY_INT_2
+n154 CGAssign n151 n153 TY_INT_2
+- CGDone n154
+n155 CGFEName y18 TY_INT_4
+n156 CGUnary O_POINTS n155 TY_INT_4
+n157 CGInteger 0 TY_INTEGER
+n158 CGCompare O_EQ n156 n157 TY_INT_4
+- CGControl O_IF_FALSE n158 l57
+- CGControl O_GOTO n0 l55
+- CGControl O_LABEL n0 l57
+- CGControl O_LABEL n0 l56
+- DBSrcCue f3 39 1
+n159 CGFEName y14 TY_INT_2
+n160 CGInteger 1 TY_INTEGER
+n161 CGPostGets O_PLUS n159 n160 TY_INT_2
+- CGDone n161
+- CGControl O_GOTO n0 l54
+- CGControl O_LABEL n0 l55
+- DBSrcCue f3 40 1
+n162 CGFEName y13 TY_INT_2
+n163 CGUnary O_POINTS n162 TY_INT_2
+n164 CGUnary O_CONVERT n163 TY_INT_2
+n165 CGTempName t51 TY_INT_2
+n166 CGAssign n165 n164 TY_INT_2
+- CGDone n166
+- DBSrcCue f3 41 1
+- CGControl O_LABEL n0 l53
+n167 CGTempName t51 TY_INT_2
+n168 CGUnary O_POINTS n167 TY_INT_2
+- CGReturn n168 TY_INT_2
+STOP
+FINI

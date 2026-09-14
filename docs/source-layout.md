@@ -7,6 +7,7 @@ The package root contains pipeline orchestration: `flow`, `rewrite`, and
 | --- | --- |
 | `objectfile` | OMF records, module metadata, relocation, object writing |
 | `frontend` | Decode, partition, recognize BC idioms, raise SSA values |
+| `cfront` | C through Open Watcom's front end (`owshim/`): its cg stream as HIR, raised to MIR |
 | `model` | MIR, LIR, decoded IR, floating semantics, phase interfaces |
 | `analysis` | SSA, liveness, ranges, loops, induction, memory/value facts |
 | `optimize` | MIR transformations |
