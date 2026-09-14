@@ -115,6 +115,11 @@ def _data(unit: hir.Unit):
                     name = unit.symbols[hir.handle(symbol)].object_name
                     far = type_ in raise_hir.FAR_POINTERS or type_ in ("TY_LONG_CODE_PTR", "TY_CODE_PTR")
                     lines.append(f"    {'dd' if far else 'dw'} {name}{'+' + offset if offset != '0' else ''}")
+                case "DGBackPtr", (back, _segment, offset, type_):
+                    symbol = unit.backs[hir.handle(back)]
+                    name = unit.symbols[symbol].object_name if symbol else f"L_b{hir.handle(back)}"
+                    far = type_ in raise_hir.FAR_POINTERS
+                    lines.append(f"    {'dd' if far else 'dw'} {name}{'+' + offset if offset != '0' else ''}")
                 case "DGAlign", (align,):
                     lines.append(f"    align {align}")
                 case _:

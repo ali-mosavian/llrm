@@ -10,6 +10,7 @@ built with: C procedures far and cdecl, results in AX or DX:AX, SI, DI, BP
 and DS preserved, SS equal to DGROUP.
 """
 
+import struct
 from dataclasses import field
 from dataclasses import replace
 from dataclasses import dataclass
@@ -39,7 +40,10 @@ WIDTHS = {
     "TY_LONG_POINTER": 4,
     "TY_HUGE_POINTER": 4,
     "TY_LONG_CODE_PTR": 4,
+    # A float moves as its bits; only arithmetic and conversion need the x87.
+    "TY_SINGLE": 4,
 }
+FLOATS = frozenset({"TY_SINGLE", "TY_DOUBLE", "TY_LONG_DOUBLE"})
 SIGNED = frozenset({"TY_INT_1", "TY_INT_2", "TY_INT_4", "TY_INTEGER"})
 FAR_POINTERS = frozenset({"TY_LONG_POINTER", "TY_HUGE_POINTER"})
 
@@ -180,10 +184,14 @@ class _Raise:
         for symbol, type_ in proc.parms:
             self.frame[f"y{symbol}"] = at
             at += _even(max(2, self.size(type_)))
-        down = 0
+        self.down = 0
         for key, type_ in proc.autos:
-            down -= _even(self.size(type_))
-            self.frame[key] = down
+            self.frame[key] = self.slot(self.size(type_))
+
+    def slot(self, size: int) -> int:
+        """A new frame cell below the last."""
+        self.down -= _even(size)
+        return self.down
 
     # ---- types ----
 
@@ -351,6 +359,8 @@ class _Raise:
 
     def compare(self, tree: hir.Node) -> tuple[mir.Value, mir.Kind]:
         cg_op, left, right, type_ = tree.args
+        if type_ in FLOATS:
+            raise Unsupported(f"{self.symbol.name}: float compare")
         width = max(2, self.width(type_))
         a = self.narrowed(self.coerced(self.eval(left), left, type_), width)
         b = self.narrowed(self.coerced(self.eval(right), right, type_), width)
@@ -374,13 +384,15 @@ class _Raise:
     def eval(self, node: str):
         key = hir.handle(node)
         if key not in self.done:
-            self.done[key] = self.expression(self.unit.nodes[key])
+            self.done[key] = self.expression(self.unit.nodes[key], node)
         return self.done[key]
 
-    def expression(self, tree: hir.Node):
+    def expression(self, tree: hir.Node, node: str):
         match tree.call, tree.args:
             case "CGInteger", (value, type_):
                 return mir.Const(int(value), max(2, self.width(type_)))
+            case "CGFloat", (text, "TY_SINGLE"):
+                return mir.Const(int.from_bytes(struct.pack("<f", float(text)), "little", signed=True), 4)
             case "CGFEName", (symbol, type_):
                 return self.name(symbol)
             case "CGTempName", (temp, _):
@@ -411,11 +423,40 @@ class _Raise:
                 return old if tree.call == "CGPostGets" else new
             case "CGCall", (call,):
                 return self.call(self.unit.calls[hir.handle(call)])
+            case "CGChoose", (test, yes, no, type_):
+                return self.choose(test, yes, no, type_)
+            case "CGCompare" | "CGFlow", _:
+                return self.truth(node)
             case "CGEval" | "CGVolatile", (inner,):
                 return self.eval(inner)
             case "CGAttr", (inner, _):
                 return self.eval(inner)
         raise Unsupported(f"{self.symbol.name}: {tree.call} {' '.join(tree.args)}")
+
+    def choose(self, test: str, yes: str, no: str, type_: str):
+        return self.joined(
+            test, lambda: self.coerced(self.eval(yes), yes, type_), lambda: self.coerced(self.eval(no), no, type_), type_
+        )
+
+    def truth(self, test: str):
+        """A compare or flow as a value: 1 or 0."""
+        return self.joined(test, lambda: mir.Const(1, 2), lambda: mir.Const(0, 2), "TY_INTEGER")
+
+    def joined(self, test: str, yes, no, type_: str):
+        """`test ? yes() : no()`: each arm stores into one frame cell, read after
+        the join -- a variable like any other, left for promotion to make SSA."""
+        width = max(2, self.width(type_))
+        joined = Frame(self.slot(width))
+        otherwise, join = self.label(), self.label()
+        self.branch(test, otherwise, False)
+        self.store(self.cell(joined, width), self.narrowed(yes(), width))
+        self.op(K.JUMP, ir.Operation.JUMP, "jmp", target=join)
+        self.end(join)
+        self.start(otherwise)
+        self.store(self.cell(joined, width), self.narrowed(no(), width))
+        self.start(join)
+        loaded = self.load(self.cell(joined, width), type_)
+        return self.split(loaded) if self.far_pointer(type_) else loaded
 
     def type_of(self, node: str) -> str:
         tree = self.unit.nodes[hir.handle(node)]
@@ -424,7 +465,7 @@ class _Raise:
                 return self.unit.calls[hir.handle(tree.args[0])].type
             case "CGEval" | "CGVolatile" | "CGAttr":
                 return self.type_of(tree.args[0])
-            case "CGFlow":
+            case "CGFlow" | "CGCompare":
                 return "TY_BOOLEAN"
         return tree.args[-1]
 
@@ -458,6 +499,8 @@ class _Raise:
         return loaded
 
     def convert(self, got, source: str, type_: str):
+        if (source in FLOATS) != (type_ in FLOATS) or (source in FLOATS and source != type_):
+            raise Unsupported(f"{self.symbol.name}: conversion {source} to {type_}")
         if isinstance(got, (Frame, Global, Near)) and self.far_pointer(type_):
             return Far(self.dgroup(), self.near(got))
         if isinstance(got, (Frame, Global, Near, Far)):
@@ -483,6 +526,8 @@ class _Raise:
         return got
 
     def unary(self, cg_op: str, got, type_: str) -> Operand:
+        if type_ in FLOATS:
+            raise Unsupported(f"{self.symbol.name}: float {cg_op}")
         value = self.operand(got, type_)
         width = max(2, self.width(type_))
         if isinstance(value, mir.Const):
@@ -526,6 +571,8 @@ class _Raise:
         return result
 
     def arithmetic(self, cg_op: str, a: Operand, b: Operand, type_: str) -> Operand:
+        if type_ in FLOATS:
+            raise Unsupported(f"{self.symbol.name}: float {cg_op}")
         width = max(2, self.width(type_))
         a, b = self.narrowed(a, width), self.narrowed(b, width)
         signed = type_ in SIGNED

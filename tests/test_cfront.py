@@ -32,6 +32,33 @@ def test_far_pointer_return_in_dx_ax():
     assert body[-6:-3] == ["mov eax, dword ptr [bp-4]", "mov edx, eax", "shr edx, 16"]
 
 
+def test_choose_joins_both_arms_in_one_cell():
+    """`c ? a : b` and `p != 0` as a value: the raise refused CGChoose and a
+    value-producing CGCompare, which ls_init has 17 of."""
+    lines = _asm("choose")
+    pick = lines[lines.index("_pick proc near") : lines.index("_pick endp")]
+    assert pick.count("mov word ptr [bp-4], ax") == 2 and "jmp L0_12" in pick
+    body = lines[lines.index("_choose proc far") : lines.index("_choose endp")]
+    at = body.index("mov word ptr [bp-4], 1")
+    assert body[at - 3 : at] == ["cmp ax, 0", "je L2_21", "L2_18:"] and body[at + 3] == "mov word ptr [bp-4], 0"
+
+
+def test_data_pointer_to_a_literal():
+    """ls's style table points at its pattern strings; DGBackPtr was refused."""
+    unit = cfront.hir.unit(cfront.stream.parse((FIXTURES / "ls.cgs").read_text()))
+    lines = dict(cfront._data(unit))
+    assert "    dw L_b2" in next(items for items in lines.values() if "    dw L_b3" in items)
+
+
+def test_float_moves_as_its_bits():
+    """`ls_animate(&ls, 0.05f)` pushes the single's four bytes; CGFloat was refused."""
+    unit = cfront.hir.unit(cfront.stream.parse((FIXTURES / "ls.cgs").read_text()))
+    proc = next(one for one in unit.procs if unit.symbols[one.symbol].name == "ls_selftest")
+    body = cfront.raise_hir.raised(unit, proc).body
+    pushed = [op.args[0] for block in body.blocks for op in block.ops if op.kind.name == "ARG"]
+    assert cfront.mir.Const(0x3D4CCCCD, 4) in pushed
+
+
 def test_calls_push_in_convention_order():
     """cdecl pushes last first and pops after; pascal pushes first first."""
     lines = _asm("qglsurf")
