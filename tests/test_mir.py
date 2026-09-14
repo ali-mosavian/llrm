@@ -177,8 +177,8 @@ def test_every_body_raises_and_the_form_holds(obj: Path) -> None:
     program -- so this is the only thing standing between construction and
     everything built on it.
     """
-    for built, where in raised(obj):
-        assert mir.verify(built, where) == []
+    for built, _where in raised(obj):
+        assert mir.verify(built) == []
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
@@ -534,7 +534,7 @@ def test_resolving_preserves_an_untouched_bodys_program(obj: Path) -> None:
         assert not isinstance(got, str), f"{obj.stem} {name}: {got}"
 
         assert mir.lower(got) == mir.lower(body), f"{obj.stem} {name}: the rebuild lowers differently"
-        assert not mir.verify(got, split.partition(found, mapped)), f"{obj.stem} {name}: the rebuild is not SSA"
+        assert not mir.verify(got), f"{obj.stem} {name}: the rebuild is not SSA"
 
 
 def test_a_variable_keeps_one_name_across_every_version_of_it() -> None:

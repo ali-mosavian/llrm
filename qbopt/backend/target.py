@@ -164,7 +164,7 @@ def reads(what: ir.Semantics) -> dict[Register_, Need]:
     for one in (*what.dests, *what.sources):
         for where in (
             getattr(one, "through", None),
-            getattr(one, "index", None),
+            getattr(one, "index_through", None),
             getattr(getattr(one, "addr", None), "base", None),
         ):
             if where is not None and where is not Register.NONE:

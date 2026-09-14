@@ -1747,7 +1747,7 @@ def _touched_op(op: Op, calls: dict[int, str] | None = None) -> tuple[frozenset[
     for one in (*what.dests, *what.sources):
         for where in (
             getattr(one, "through", None),
-            getattr(one, "index", None),
+            getattr(one, "index_through", None),
             getattr(getattr(one, "addr", None), "base", None),
         ):
             if (root := tracked(where)) is not None:
@@ -1975,7 +1975,7 @@ def resolved(body: MirBody, calls: dict[int, str] | None = None) -> MirBody | st
     )
 
 
-def verify(body: MirBody, blocks: list[Block]) -> list[str]:
+def verify(body: MirBody) -> list[str]:
     """Everything SSA promises, checked. Empty means the form holds.
 
     Three properties, and each one is load-bearing for a different consumer:
@@ -1987,8 +1987,12 @@ def verify(body: MirBody, blocks: list[Block]) -> list[str]:
     vanishes at the join. Checked rather than assumed because construction
     is the one place a renaming bug hides silently -- the graph still looks
     well-formed, it just describes a different program.
+
+    Over the body's own blocks, not the machine code's: the raise splits a
+    jump table's dispatch into blocks BC never had, and against BC's graph
+    every phi after one names predecessors that do not exist.
     """
-    doms = loops.dominators(blocks, body.entry)
+    doms = loops.dominators(list(body.blocks), body.entry)
     problems: list[str] = []
 
     defined_at: dict[Value, int] = {}
@@ -2003,7 +2007,7 @@ def verify(body: MirBody, blocks: list[Block]) -> list[str]:
                     problems.append(f"{value} defined twice, at {op.at:#06x}")
                 defined_at[value] = block.at
 
-    preds = loops.predecessors(blocks)
+    preds = loops.predecessors(list(body.blocks))
     for block in body.blocks:
         for phi in block.phis:
             want = {one for one in preds[block.at] if body.block(one) is not None}
