@@ -1755,6 +1755,17 @@ def _touched_op(op: Op, calls: dict[int, str] | None = None) -> tuple[frozenset[
     return frozenset(defines), frozenset(uses)
 
 
+def unheld(op: Op) -> tuple[frozenset | None, frozenset | None]:
+    """(written, read) of the machine state no value holds -- stack, frame, segments. None is all of it."""
+    if op.node is None:
+        return frozenset(), frozenset()
+
+    def outside(registers):
+        return None if registers is None else frozenset(one for one in registers if one not in TRACKED)
+
+    return outside(op.node.effects.defs), outside(op.node.effects.uses)
+
+
 def _rebased(refs: tuple[MemRef, ...], namer: "_Namer", at: int) -> tuple[MemRef, ...]:
     """The same cells, holding whichever value reaches them now."""
     out = []

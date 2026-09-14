@@ -898,12 +898,25 @@ def _may_pass(one: Op, run: list[Op], dgroup: frozenset[int], calls: dict[int, s
     wrote = {value for value in one.defines}
     if any(use in wrote for other in run for use in other.uses):
         return False
+    # A push moves the stack pointer, so `mov bp,sp` may not pass one.
+    written, read = mir.unheld(one)
+    for other in run:
+        theirs_written, theirs_read = mir.unheld(other)
+        if _meets(written, theirs_read) or _meets(read, theirs_written):
+            return False
     for ref in one.loads + one.stores:
         for other in run:
             for theirs in other.loads + other.stores:
                 if mir.overlapping(ref, theirs, dgroup):
                     return False
     return True
+
+
+def _meets(one: frozenset | None, other: frozenset | None) -> bool:
+    """Whether two sets share anything, None being everything."""
+    if one is None or other is None:
+        return one != frozenset() and other != frozenset()
+    return bool(one & other)
 
 
 def _empty_operation(op: Op) -> Op:

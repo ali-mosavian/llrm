@@ -1094,6 +1094,26 @@ def test_place_takes_a_store_out_of_a_push_run():
     )
 
 
+def test_place_keeps_the_frame_pointer_behind_the_push_that_saves_it():
+    """procs p-ot's REPORT moved `mov bp,sp` ahead of `push bp`, so every
+    argument it read through bp was one word off."""
+    from pathlib import Path
+
+    from qbopt.model import mir
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
+    from qbopt.optimize import transform
+    from qbopt.frontend import blocks as split
+    from qbopt.frontend.blocks import code_map
+
+    found = module.of(omf.parse(Path("fixtures/omf/procs-p-ot.obj").read_bytes()))
+    blocks = split.partition(found, code_map(found))
+    body = next(body for name, body in mir.bodies(found, blocks) if "REPORT" in name)
+    done = transform.placed(body, found.dgroup, found.calls)
+
+    assert [op.at for op in done.blocks[0].ops[:2]] == [0x142, 0x143]
+
+
 def test_both_lngmix_divides_absorb():
     """The whole point of the above: 952 -> 930 bytes, no runtime divide.
 
