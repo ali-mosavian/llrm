@@ -24,8 +24,9 @@ def test_unknown_far_segments_cannot_use_offset_disjointness() -> None:
     assert mir.overlapping(one, other, frozenset())
 
 
-def test_equal_index_values_do_not_establish_equal_segment_origins() -> None:
+def test_an_index_stays_inside_its_own_segment() -> None:
+    """Axiom 4 in regions: two segments' indexed cells never meet."""
     base = mir.Value(1, 0)
     one = mir.MemRef(Addr(Space.SEGMENT, 0x20, 1, Register.SI), 2, base)
     other = mir.MemRef(Addr(Space.SEGMENT, 0x10, 2, Register.SI), 2, base)
-    assert mir.overlapping(one, other, frozenset({1, 2}))
+    assert not mir.overlapping(one, other, frozenset({1, 2}))

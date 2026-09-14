@@ -38,8 +38,9 @@ carry exclusions.
 Everything else here is arithmetic on the object. Real mode makes an address
 `segment * 16 + offset`, so two byte intervals either meet or they do not, and
 94% of references resolve through a fixup to an exact (segment, displacement).
-These three are the assumptions, and they are the whole list. Each is one
-region, so removing one is deleting a region rather than editing a rule.
+These four are the assumptions, and they are the whole list. The first three
+are each one region, so removing one is deleting a region rather than editing
+a rule.
 
 **1. Locals are not globals.** The stack is its own region and not part of
 DGROUP. SS==DS here and the stack lives in DGROUP, so the two could coincide
@@ -65,6 +66,12 @@ its own code is naming hardware or an arena it was given, not the variables
 the linker laid out. This is the one that costs something when refused: every
 `POKE` aliased every static, so the `DEF SEG` cell could not be forwarded to
 the access that needed it.
+
+**4. An index stays inside its own segment.** `[seg1+si+0x20]` and
+`[seg2+si+0x10]` could be one byte if the link put seg2 0x10 after seg1; the
+object cannot prove otherwise. Reaching it takes a subscript past the end of
+its own segment, which BASIC's arrays do not allow. So an indexed reference
+reaches every byte of its own segment and no other's.
 
 The first two are regions this file has always had. The third needs the
 selector's value, which arrives in `known` -- an interval per value, singleton
@@ -215,7 +222,7 @@ def _at(addr, width: int, bounds: dict | None, layout=None) -> frozenset[Span]:
     span = module.reach(addr, max(width, 1), bounds) if bounds else None
     if span is None:
         # Indexed with nothing to bound it: every byte of its own region, and
-        # that is still not every byte.
+        # none of another's -- axiom 4.
         span = WHOLE if addr.base else (addr.disp, addr.disp + max(width, 1))
     region, origin = _region(addr.space, addr.index, layout)
     return frozenset({(region, origin, *(WHOLE if region in (ROOT, DGROUP) else span))})
