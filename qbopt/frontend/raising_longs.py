@@ -73,7 +73,7 @@ def _negated_whole(high, low, definitions):
         return None
     lower, upper = definitions.get(low.value), definitions.get(high.value)
     if any(op is None or op.kind is not mir.Kind.NEG or len(op.args) != 1
-           or op.loads or op.stores or op.barrier or op.merges for op in (lower, upper)):
+           or op.loads or op.stores or op.barrier or mir.partial(op) for op in (lower, upper)):
         return None
     if lower.results != (low,) or upper.results != (high,):
         return None
@@ -82,7 +82,7 @@ def _negated_whole(high, low, definitions):
         return None
     carry = definitions.get(carried.value)
     if (carry is None or carry.kind is not mir.Kind.ADD_CARRY or carry.loads or carry.stores
-        or carry.barrier or carry.merges or carry.results != (carried,) or len(carry.args) != 2
+        or carry.barrier or mir.partial(carry) or carry.results != (carried,) or len(carry.args) != 2
         or carry.args[1] != mir.Const(0, 2)):
         return None
     flags = {value for value in lower.defines if value.flags}
@@ -137,7 +137,7 @@ def unary(body: mir.MirBody) -> mir.MirBody:
             group = block.ops[index:index + count]
             source = None
             if (low.kind in (mir.Kind.NOT, mir.Kind.NEG) and len(group) == count
-                and all(not op.loads and not op.stores and not op.barrier and not op.merges
+                and all(not op.loads and not op.stores and not op.barrier and not mir.partial(op)
                         and len(op.results) == 1 and isinstance(op.results[0], mir.Held)
                         and op.results[0].width == 2 for op in group)
                 and all(one.covers[1] == other.covers[0] for one, other in zip(group, group[1:]))):

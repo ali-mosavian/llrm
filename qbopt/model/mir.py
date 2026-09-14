@@ -582,6 +582,16 @@ def _merged(what: "ir.Semantics", holds: dict, written: dict, args: tuple) -> di
     return out
 
 
+def partial(op: "Op") -> bool:
+    """Whether a result keeps part of what its place held before.
+
+    A word result's merge is the register's upper word, which a word value
+    does not have; only a narrower or unnamed result is partial.
+    """
+    words = {result.value for result in op.results if isinstance(result, Held) and result.width == 2}
+    return any(value not in words for value in op.merges.values())
+
+
 # What each absorbable routine computes, in MIR's own vocabulary.
 _ABSORBS = {
     "B$MUI4": Kind.MUL,

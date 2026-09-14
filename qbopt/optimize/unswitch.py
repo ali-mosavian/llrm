@@ -50,8 +50,9 @@ def specialized(body: mir.MirBody) -> mir.MirBody:
                 continue
             _, compare = matched
             if (branch.loads or branch.stores or branch.barrier or branch.floating or branch.stack
-                or branch.defines or branch.results or branch.merges
-                or compare.loads or compare.stores or compare.barrier or compare.floating or compare.merges or compare.stack
+                or branch.defines or branch.results or mir.partial(branch)
+                or compare.loads or compare.stores or compare.barrier or compare.floating or mir.partial(compare)
+                or compare.stack
                 or not all(isinstance(arg, (mir.Held, mir.Const)) for arg in compare.args)
                 or any(owners.get(value) in loop.body or
                        (value in owners and owners[value] not in dominators[entry]) for value in compare.uses)):

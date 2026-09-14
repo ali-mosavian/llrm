@@ -14,7 +14,7 @@ def named(body: mir.MirBody) -> mir.MirBody:
             return None
         op = definitions.get(value)
         if (op is None or op.results != (mir.Held(value, 2),) or op.loads or op.stores
-            or op.barrier or op.merges):
+            or op.barrier or mir.partial(op)):
             return None
         if op.kind is mir.Kind.COPY and len(op.args) == 1 and isinstance(op.args[0], mir.Held):
             return parts(op.args[0].value, seen | {value}) if op.args[0].width == 2 else None
@@ -50,7 +50,7 @@ def named(body: mir.MirBody) -> mir.MirBody:
     for block in body.blocks:
         ops = []
         for op in block.ops:
-            if op.kind not in (mir.Kind.LOAD, mir.Kind.STORE) or op.barrier or op.merges:
+            if op.kind not in (mir.Kind.LOAD, mir.Kind.STORE) or op.barrier or mir.partial(op):
                 ops.append(op)
                 continue
             refs = {ref: reference(ref) for ref in (*op.loads, *op.stores)}
