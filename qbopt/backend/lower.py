@@ -117,6 +117,9 @@ _NAMED: dict[mir.Kind, tuple[ir.Operation, str]] = {
     mir.Kind.RETURN: (ir.Operation.RETURN, ""),
 }
 _INTEGERS = frozenset({Format.SIGNED16, Format.SIGNED32, Format.SIGNED64})
+# Where an operation with no node of its own returns values and a call
+# delivers them, by position: every x86 C convention's AX, then DX.
+_RETURNED = (Register.EAX, Register.EDX)
 
 
 def _instruction(op: mir.Op) -> tuple[ir.Operation, str] | None:
@@ -920,10 +923,13 @@ class Lowering:
         """
         if op.kind is mir.Kind.CALL:
             widths = dict(self._widths(op))
+            where = dict(self._origin)
+            if op.node is None:
+                where = {**dict(zip((one for one in op.defines if not one.flags), _RETURNED)), **where}
             return tuple(
-                (ir.Held(value.id, widths.get(value.id, 2)), target.named(self._origin[value], widths.get(value.id, 2)))
+                (ir.Held(value.id, widths.get(value.id, 2)), target.named(where[value], widths.get(value.id, 2)))
                 for value in op.defines
-                if not value.flags and value.id in self._read and value in self._origin
+                if not value.flags and value.id in self._read and value in where
             )
         if op.kind is mir.Kind.OPAQUE and not isinstance(op.node, ir.Restore):
             return self._implicit_values(op, op.defines)
@@ -993,6 +999,15 @@ class Lowering:
         every tracked register until a contract narrows it, and that is a
         liveness dependency rather than an argument list.
         """
+        if op.kind is mir.Kind.RETURN and op.node is None and op.args:
+            # Placed by position, not by pinning the value: a pass may
+            # replace the operand, and a pin stays with the value it named.
+            returned = []
+            for arg, register in zip(op.args, _RETURNED):
+                if not isinstance(arg, mir.Held):
+                    raise Unlowered(f"{op.at:#06x}: return operand needs materialization")
+                returned.append((ir.Held(arg.value.id, arg.width), target.named(register, arg.width)))
+            return tuple(returned)
         if op.kind is mir.Kind.RETURN and op.node is not None:
             returned = []
             for arg, location in zip(op.args, op.node.semantics.sources):

@@ -111,6 +111,17 @@ def test_runtime_is_the_target_s_cdecl():
     assert "call far ptr _strlen" in _asm("ls")
 
 
+def test_optimised_return_arrives_in_ax():
+    """Under --opt ls_lchar left its result in BX: the raise pinned the value
+    it returned, forwarding replaced the return's operand with an unpinned
+    one, and ls_selftest failed with -1."""
+    text = cfront.compiled((FIXTURES / "ls.cgs").read_text(), "ls", optimise=True)
+    lines = [line.strip() for line in text.splitlines()]
+    body = lines[lines.index("_ls_lchar proc near") : lines.index("_ls_lchar endp")]
+    epilogue = body.index("mov sp, bp")
+    assert body[epilogue - 1].startswith("mov ax,"), body[epilogue - 3 : epilogue]
+
+
 def test_calls_push_in_convention_order():
     """cdecl pushes last first and pops after; pascal pushes first first."""
     lines = _asm("qglsurf")

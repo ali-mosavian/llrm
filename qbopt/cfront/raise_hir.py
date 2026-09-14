@@ -15,8 +15,6 @@ from dataclasses import field
 from dataclasses import replace
 from dataclasses import dataclass
 
-from iced_x86 import Register
-
 from qbopt.abi import runtime
 from qbopt.model import ir
 from qbopt.model import floating
@@ -349,8 +347,6 @@ class _Raise:
                 returned = (self.copy(low), self.copy(high))
             else:
                 returned = (self.copy(self.narrowed(self.operand(got, type_), 2)),)
-        for value, register in zip(returned, (Register.EAX, Register.EDX)):
-            self.pins[value] = register
         self.op(K.RETURN, args=tuple(mir.Held(one, 2) for one in returned), uses=returned)
         self.end()
 
@@ -700,7 +696,6 @@ class _Raise:
         pushed = sum(self.push(value, type_) for value, type_ in arguments)
         low, high = self.fresh(), self.fresh()
         site = self.op(K.CALL, (mir.Held(low, 2), mir.Held(high, 2)), defines=(low, high), uses=())
-        self.origin[low], self.origin[high] = Register.EAX, Register.EDX
         caller_pops = bool(callee.call_class & hir.CALLER_POPS)
         self.calls[site.at] = callee.object_name
         self.callees[site.at] = callee
