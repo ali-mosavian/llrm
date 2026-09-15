@@ -117,6 +117,9 @@ def _instruction(one: lir.Insn, procedure: Procedure, names: dict, number: int, 
             return [f"{name} {dests[0]}, {sources[1]}"]
         case ir.Operation.UNARY:
             return [f"{name} {dests[0]}"]
+        case ir.Operation.COMPARE if name.startswith("f"):
+            memory = [text for text, source in zip(sources, what.sources) if isinstance(source, ir.Mem)]
+            return [f"{name} {memory[0]}" if memory else name]
         case ir.Operation.COMPARE:
             return [f"{name or 'cmp'} {sources[0]}, {sources[1]}"]
         case ir.Operation.MULTIPLY if len(dests) == 1:

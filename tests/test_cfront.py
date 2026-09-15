@@ -133,6 +133,54 @@ def test_optimised_locals_lose_their_dead_stores():
     assert stored == []
 
 
+def _proc(lines: list[str], name: str) -> list[str]:
+    return lines[lines.index(f"{name} proc far") : lines.index(f"{name} endp")]
+
+
+def test_float_compare_moves_the_status_word_into_the_flags():
+    """`a < b` on floats, 66 of qcport's procedures, was refused. x87 C0 and C3
+    reach CF and ZF through sahf, so the branch is an unsigned one."""
+    lines = _asm("floats")
+    pick = _proc(lines, "_pick")
+    at = pick.index("fnstsw ax")
+    assert pick[at - 2 : at + 3] == ["fld dword ptr [bp+6]", "fcomp dword ptr [bp+10]", "fnstsw ax", "sahf", "jae L1_10"]
+    sign = _proc(lines, "_sign")
+    at = sign.index("fcompp")
+    assert sign[at - 2 : at + 4] == ["fldz", "fld qword ptr [bp+6]", "fcompp", "fnstsw ax", "sahf", "jb L2_9"]
+
+
+def test_float_literal_is_read_from_dgroup():
+    """`d * 0.5`: CGFloat TY_DOUBLE was refused, and a single that is no small
+    integer had nowhere to be loaded from."""
+    lines = _asm("floats")
+    assert "fmul dword ptr L_f0" in _proc(lines, "_half")
+    at = lines.index("L_f0 label byte")
+    assert lines[at + 1] == "db 000h,000h,000h,03fh"
+
+
+def test_float_results_arrive_and_leave_in_st0():
+    """A float call's result was taken for DX:AX and a float return refused.
+    ext_scale's result waits in memory across half's call; scaled returns its
+    sum on the x87."""
+    body = _proc(_asm("floats"), "_scaled")
+    at = body.index("call far ptr _ext_scale")
+    assert body[at + 1 : at + 3] == ["add sp, 4", "fstp tbyte ptr [bp-22]"]
+    at = body.index("call far ptr _half")
+    assert body[at - 4 : at] == ["mov eax, dword ptr [bp-8]", "push eax", "mov eax, dword ptr [bp-12]", "push eax"]
+    assert body[at + 1 : at + 4] == ["add sp, 8", "fld tbyte ptr [bp-22]", "faddp st(1), st(0)"]
+    assert body[body.index("mov sp, bp") - 1] == "fld dword ptr [bp-4]"
+
+
+def test_library_math_calls_the_runtime():
+    """OW's front end makes `sqrt` an operator, O_SQRT, which was refused;
+    Borland's library has `_sqrt`, taking a double and returning in st(0)."""
+    lines = _asm("floats")
+    body = _proc(lines, "_mag")
+    at = body.index("call far ptr _sqrt")
+    assert body[at + 1] == "add sp, 8" and "fabs" in body
+    assert "extern _sqrt:far" in lines
+
+
 def test_calls_push_in_convention_order():
     """cdecl pushes last first and pops after; pascal pushes first first."""
     lines = _asm("qglsurf")

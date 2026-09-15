@@ -44,8 +44,9 @@ def compiled(text: str, module: str, *, optimise: bool = False, dump: Path | Non
     _write(dump, "stream", text)
     _write(dump, "hir", hir.text(unit))
     procedures, mirs, lirs = [], [], []
+    shared = raise_hir.Shared()
     for proc in unit.procs:
-        raised = raise_hir.raised(unit, proc)
+        raised = raise_hir.raised(unit, proc, shared)
         body = raised.body
         mirs.append(_mir_text(raised.name, body))
         if optimise:
@@ -72,10 +73,10 @@ def compiled(text: str, module: str, *, optimise: bool = False, dump: Path | Non
     text = masm.text(
         masm.Module(
             code=f"{module.upper()}_TEXT",
-            names=raise_hir.names(unit),
-            externs=_externs(unit),
+            names=raise_hir.names(unit, shared),
+            externs=_externs(unit) + tuple((one.object_name, "far") for one in shared.runtime.values()),
             publics=tuple(one.object_name for one in unit.symbols.values() if one.exported),
-            data=tuple(_data(unit)),
+            data=(*_data(unit), *_literals(shared)),
             procedures=tuple(procedures),
         )
     )
@@ -129,6 +130,14 @@ def _data(unit: hir.Unit):
                 case _:
                     raise hir.Unsupported(f"data item {call} {' '.join(args)}")
         yield segment.name, tuple(lines)
+
+
+def _literals(shared: raise_hir.Shared):
+    """The float constants the raise placed, in DGROUP's constant segment."""
+    lines = []
+    for packed, number in shared.literals.items():
+        lines += [f"L_f{number} label byte", "    db " + ",".join(f"0{byte:02x}h" for byte in packed)]
+    return (("CONST", tuple(lines)),) if lines else ()
 
 
 def _mir_text(name: str, body: mir.MirBody) -> str:

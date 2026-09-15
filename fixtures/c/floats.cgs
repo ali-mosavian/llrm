@@ -1,0 +1,194 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x13
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+f1 DBSrcFile "floats.c"
+- DBSrcCue f1 6 1
+SYM y1 name="half" base="half" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_DOUBLE
+SYM y2 name="d" base="d" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_DOUBLE
+l2 CGLastParm
+t3 CGTemp TY_DOUBLE
+- DBSrcCue f1 8 1
+n4 CGFEName y2 TY_DOUBLE
+n5 CGUnary O_POINTS n4 TY_DOUBLE
+n6 CGFloat "5.0000000000000000000e-01" TY_DOUBLE
+n7 CGBinary O_TIMES n5 n6 TY_DOUBLE
+n8 CGUnary O_CONVERT n7 TY_DOUBLE
+n9 CGTempName t3 TY_DOUBLE
+n10 CGAssign n9 n8 TY_DOUBLE
+- CGDone n10
+- DBSrcCue f1 9 1
+n11 CGTempName t3 TY_DOUBLE
+n12 CGUnary O_POINTS n11 TY_DOUBLE
+- CGReturn n12 TY_DOUBLE
+- DBSrcCue f1 11 1
+SYM y3 name="pick" base="pick" pattern="_*" attr=0x7 seg=1
+CALLCONV y3 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y3 TY_SINGLE
+SYM y4 name="a" base="a" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y4 TY_SINGLE
+SYM y5 name="b" base="b" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y5 TY_SINGLE
+l13 CGLastParm
+t14 CGTemp TY_SINGLE
+l15 BENewLabel
+l16 BENewLabel
+- DBSrcCue f1 13 1
+n17 CGFEName y4 TY_SINGLE
+n18 CGUnary O_POINTS n17 TY_SINGLE
+n19 CGFEName y5 TY_SINGLE
+n20 CGUnary O_POINTS n19 TY_SINGLE
+n21 CGCompare O_LT n18 n20 TY_SINGLE
+- CGControl O_IF_FALSE n21 l15
+n22 CGFEName y5 TY_SINGLE
+n23 CGUnary O_POINTS n22 TY_SINGLE
+n24 CGUnary O_CONVERT n23 TY_SINGLE
+n25 CGTempName t14 TY_SINGLE
+n26 CGAssign n25 n24 TY_SINGLE
+- CGDone n26
+- CGControl O_GOTO n0 l16
+- CGControl O_LABEL n0 l15
+- DBSrcCue f1 14 1
+n27 CGFEName y4 TY_SINGLE
+n28 CGUnary O_POINTS n27 TY_SINGLE
+n29 CGUnary O_CONVERT n28 TY_SINGLE
+n30 CGTempName t14 TY_SINGLE
+n31 CGAssign n30 n29 TY_SINGLE
+- CGDone n31
+- DBSrcCue f1 15 1
+- CGControl O_LABEL n0 l16
+n32 CGTempName t14 TY_SINGLE
+n33 CGUnary O_POINTS n32 TY_SINGLE
+- CGReturn n33 TY_SINGLE
+- DBSrcCue f1 17 1
+SYM y6 name="sign" base="sign" pattern="_*" attr=0x7 seg=1
+CALLCONV y6 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y6 TY_INT_2
+SYM y7 name="d" base="d" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y7 TY_DOUBLE
+l34 CGLastParm
+t35 CGTemp TY_INT_2
+l36 BENewLabel
+l37 BENewLabel
+- DBSrcCue f1 19 1
+n38 CGFEName y7 TY_DOUBLE
+n39 CGUnary O_POINTS n38 TY_DOUBLE
+n40 CGFloat "0.0000000000000000000e+00" TY_DOUBLE
+n41 CGCompare O_GE n39 n40 TY_DOUBLE
+n42 CGInteger 1 TY_INTEGER
+n43 CGInteger -1 TY_INTEGER
+n44 CGChoose n41 n42 n43 TY_INTEGER
+n45 CGUnary O_CONVERT n44 TY_INT_2
+n46 CGTempName t35 TY_INT_2
+n47 CGAssign n46 n45 TY_INT_2
+- CGDone n47
+- DBSrcCue f1 20 1
+n48 CGTempName t35 TY_INT_2
+n49 CGUnary O_POINTS n48 TY_INT_2
+- CGReturn n49 TY_INT_2
+- DBSrcCue f1 22 1
+SYM y8 name="scaled" base="scaled" pattern="_*" attr=0x7 seg=1
+CALLCONV y8 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y8 TY_SINGLE
+SYM y9 name="x" base="x" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y9 TY_SINGLE
+l50 CGLastParm
+t51 CGTemp TY_SINGLE
+- DBSrcCue f1 24 1
+SYM y10 name="ext_scale" base="ext_scale" pattern="_*" attr=0xf seg=1
+CALLCONV y10 class=0x80 target=0x716 parms=[] ret=0:0
+n52 CGFEName y10 TY_CODE_PTR
+c53 CGInitCall n52 TY_SINGLE y10
+n54 CGFEName y9 TY_SINGLE
+n55 CGUnary O_POINTS n54 TY_SINGLE
+- CGAddParm c53 n55 TY_SINGLE
+n56 CGCall c53
+n57 CGUnary O_POINTS n56 TY_SINGLE
+n58 CGFEName y1 TY_CODE_PTR
+c59 CGInitCall n58 TY_DOUBLE y1
+n60 CGFEName y9 TY_SINGLE
+n61 CGUnary O_POINTS n60 TY_SINGLE
+n62 CGUnary O_CONVERT n61 TY_DOUBLE
+- CGAddParm c59 n62 TY_DOUBLE
+n63 CGCall c59
+n64 CGUnary O_POINTS n63 TY_DOUBLE
+n65 CGUnary O_CONVERT n64 TY_SINGLE
+n66 CGBinary O_PLUS n57 n65 TY_SINGLE
+n67 CGUnary O_CONVERT n66 TY_SINGLE
+n68 CGTempName t51 TY_SINGLE
+n69 CGAssign n68 n67 TY_SINGLE
+- CGDone n69
+- DBSrcCue f1 25 1
+n70 CGTempName t51 TY_SINGLE
+n71 CGUnary O_POINTS n70 TY_SINGLE
+- CGReturn n71 TY_SINGLE
+- DBSrcCue f1 27 1
+SYM y11 name="mag" base="mag" pattern="_*" attr=0x7 seg=1
+CALLCONV y11 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y11 TY_DOUBLE
+SYM y12 name="x" base="x" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y12 TY_DOUBLE
+SYM y13 name="y" base="y" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y13 TY_DOUBLE
+l72 CGLastParm
+t73 CGTemp TY_DOUBLE
+- DBSrcCue f1 29 1
+n74 CGFEName y12 TY_DOUBLE
+n75 CGUnary O_POINTS n74 TY_DOUBLE
+n76 CGFEName y12 TY_DOUBLE
+n77 CGUnary O_POINTS n76 TY_DOUBLE
+n78 CGBinary O_TIMES n75 n77 TY_DOUBLE
+n79 CGFEName y13 TY_DOUBLE
+n80 CGUnary O_POINTS n79 TY_DOUBLE
+n81 CGFEName y13 TY_DOUBLE
+n82 CGUnary O_POINTS n81 TY_DOUBLE
+n83 CGBinary O_TIMES n80 n82 TY_DOUBLE
+n84 CGBinary O_PLUS n78 n83 TY_DOUBLE
+n85 CGUnary O_SQRT n84 TY_DOUBLE
+n86 CGFEName y12 TY_DOUBLE
+n87 CGUnary O_POINTS n86 TY_DOUBLE
+n88 CGUnary O_FABS n87 TY_DOUBLE
+n89 CGBinary O_PLUS n85 n88 TY_DOUBLE
+n90 CGUnary O_CONVERT n89 TY_DOUBLE
+n91 CGTempName t73 TY_DOUBLE
+n92 CGAssign n91 n90 TY_DOUBLE
+- CGDone n92
+- DBSrcCue f1 30 1
+n93 CGTempName t73 TY_DOUBLE
+n94 CGUnary O_POINTS n93 TY_DOUBLE
+- CGReturn n94 TY_DOUBLE
+- DBSrcCue f1 32 1
+SYM y14 name="negated" base="negated" pattern="_*" attr=0x7 seg=1
+CALLCONV y14 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y14 TY_SINGLE
+SYM y15 name="x" base="x" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y15 TY_SINGLE
+l95 CGLastParm
+t96 CGTemp TY_SINGLE
+SYM y16 name="y" base="y" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y16 TY_SINGLE
+- DBSrcCue f1 34 1
+n97 CGFEName y16 TY_SINGLE
+n98 CGFEName y15 TY_SINGLE
+n99 CGUnary O_POINTS n98 TY_SINGLE
+n100 CGUnary O_UMINUS n99 TY_SINGLE
+n101 CGAssign n97 n100 TY_SINGLE
+- CGDone n101
+- DBSrcCue f1 35 1
+n102 CGFEName y16 TY_SINGLE
+n103 CGUnary O_POINTS n102 TY_SINGLE
+n104 CGUnary O_CONVERT n103 TY_SINGLE
+n105 CGTempName t96 TY_SINGLE
+n106 CGAssign n105 n104 TY_SINGLE
+- CGDone n106
+- DBSrcCue f1 36 1
+n107 CGTempName t96 TY_SINGLE
+n108 CGUnary O_POINTS n107 TY_SINGLE
+- CGReturn n108 TY_SINGLE
+STOP
+FINI

@@ -113,8 +113,20 @@ _NAMED: dict[mir.Kind, tuple[ir.Operation, str]] = {
     mir.Kind.FSUB: (ir.Operation.FLOAT_ARITH, "fsub"),
     mir.Kind.FMUL: (ir.Operation.FLOAT_ARITH, "fmul"),
     mir.Kind.FDIV: (ir.Operation.FLOAT_ARITH, "fdiv"),
+    mir.Kind.FNEG: (ir.Operation.FLOAT_UNARY, "fchs"),
+    mir.Kind.FABS: (ir.Operation.FLOAT_UNARY, "fabs"),
+    # FloatAlloc picks fcom, fcomp or fcompp by what dies.
+    mir.Kind.FCOMPARE: (ir.Operation.COMPARE, "fcom"),
     mir.Kind.CALL: (ir.Operation.CALL, "call"),
     mir.Kind.RETURN: (ir.Operation.RETURN, ""),
+}
+# An x87 compare's answer reaches the flags through sahf, C0 into CF and C3
+# into ZF, where an unsigned compare leaves it.
+_UNORDERED = {
+    mir.Kind.LT: mir.Kind.BELOW,
+    mir.Kind.LE: mir.Kind.BELOW_EQ,
+    mir.Kind.GT: mir.Kind.ABOVE,
+    mir.Kind.GE: mir.Kind.ABOVE_EQ,
 }
 _INTEGERS = frozenset({Format.SIGNED16, Format.SIGNED32, Format.SIGNED64})
 # Where an operation with no node of its own returns values and a call
@@ -144,7 +156,11 @@ def named(body: "mir.MirBody") -> "mir.MirBody":
     """
     from dataclasses import replace
 
+    compared = {value for block in body.blocks for op in block.ops if op.kind is mir.Kind.FCOMPARE for value in op.defines}
+
     def one(op: mir.Op) -> mir.Op:
+        if op.kind is mir.Kind.BRANCH and op.test in _UNORDERED and compared.intersection(op.uses):
+            op = replace(op, test=_UNORDERED[op.test])
         if op.op is not ir.Operation.NOTHING or op.name or op.kind is mir.Kind.NOTHING or op.made is not None:
             return op
         found = _instruction(op)
@@ -925,7 +941,9 @@ class Lowering:
             widths = dict(self._widths(op))
             where = dict(self._origin)
             if op.node is None:
-                where = {**dict(zip((one for one in op.defines if not one.flags), _RETURNED)), **where}
+                # A float result is on the x87, not in a register.
+                integers = (one for one in op.defines if not one.flags and widths.get(one.id) != 10)
+                where = {**dict(zip(integers, _RETURNED)), **where}
             return tuple(
                 (ir.Held(value.id, widths.get(value.id, 2)), target.named(where[value], widths.get(value.id, 2)))
                 for value in op.defines
@@ -1003,7 +1021,8 @@ class Lowering:
             # Placed by position, not by pinning the value: a pass may
             # replace the operand, and a pin stays with the value it named.
             returned = []
-            for arg, register in zip(op.args, _RETURNED):
+            integers = [arg for arg in op.args if not (isinstance(arg, mir.Held) and arg.width == 10)]
+            for arg, register in zip(integers, _RETURNED):
                 if not isinstance(arg, mir.Held):
                     raise Unlowered(f"{op.at:#06x}: return operand needs materialization")
                 returned.append((ir.Held(arg.value.id, arg.width), target.named(register, arg.width)))
@@ -1288,16 +1307,38 @@ class Lowering:
                 lost = [one for one in op.defines if not one.flags and one.id in self._read and one.id not in given]
                 if lost:
                     raise Unlowered(f"{op.at:#06x}: {what} defines {lost} through no operand")
-            inputs = read if speaks else tuple(one.id for one in op.uses if not one.flags)
+            # A node-less call's float result and a return's float operand are
+            # in st(0): said by an instruction beside it, which FloatAlloc reads.
+            floats = (
+                tuple(one.value.id for one in (*op.args, *op.results) if isinstance(one, mir.Held) and one.width == 10)
+                if op.node is None and op.kind in (mir.Kind.CALL, mir.Kind.RETURN)
+                else ()
+            )
+            before = tuple(
+                _follows(op, ir.Semantics(ir.Operation.FLOAT_STORE, "", (), (ir.Held(one, 10),)))
+                for one in floats
+                if op.kind is mir.Kind.RETURN
+            )
+            after = tuple(
+                _follows(op, ir.Semantics(ir.Operation.FLOAT_LOAD, "", (ir.Held(one, 10),), ()))
+                if one in self._read
+                else _follows(op, ir.Semantics(ir.Operation.FLOAT_STORE, "fstp", (ir.St(0),), (ir.St(0),)))
+                for one in floats
+                if op.kind is mir.Kind.CALL
+            )
+            inputs = read if speaks else tuple(one.id for one in op.uses if not one.flags and one.id not in floats)
             inputs = tuple(dict.fromkeys((*inputs, *(held.value for held, _ in requires))))
             return (
+                *before,
                 lir.Insn(
                     at=op.at,
                     covers=op.covers,
                     what=what,
                     defines=made
                     if speaks and op.kind is not mir.Kind.CALL
-                    else tuple(one.id for one in op.defines if not one.flags and one.id in self._read),
+                    else tuple(
+                        one.id for one in op.defines if not one.flags and one.id in self._read and one.id not in floats
+                    ),
                     uses=inputs,
                     requires=requires,
                     clobbers=_clobbers(op, self._calls, self._contracts),
@@ -1312,6 +1353,7 @@ class Lowering:
                     symbol=op.symbol,
                 ),
                 *self._caller_cleanup(op),
+                *after,
             )
         # The leader keeps the operation's identity -- its address, the
         # bytes it stands for, the operation itself -- and nothing else.

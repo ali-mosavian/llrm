@@ -10,6 +10,7 @@ built with: C procedures far and cdecl, results in AX or DX:AX, SI, DI, BP
 and DS preserved, SS equal to DGROUP.
 """
 
+import math
 import struct
 from dataclasses import field
 from dataclasses import replace
@@ -41,28 +42,47 @@ WIDTHS = {
     "TY_LONG_CODE_PTR": 4,
     # A float moves as its bits; only arithmetic and conversion need the x87.
     "TY_SINGLE": 4,
+    "TY_DOUBLE": 8,
 }
-FLOATS = frozenset({"TY_SINGLE", "TY_DOUBLE", "TY_LONG_DOUBLE"})
+FLOATS = frozenset({"TY_SINGLE", "TY_DOUBLE"})
 FLOAT_ARITHMETIC = {
     "O_PLUS": mir.Kind.FADD,
     "O_MINUS": mir.Kind.FSUB,
     "O_TIMES": mir.Kind.FMUL,
     "O_DIV": mir.Kind.FDIV,
 }
+FLOAT_UNARY = {"O_UMINUS": mir.Kind.FNEG, "O_FABS": mir.Kind.FABS}
+# Operators OW's front end has a node for and Borland's library a routine.
+LIBRARY = {
+    "O_SQRT": "sqrt", "O_COS": "cos", "O_SIN": "sin", "O_TAN": "tan", "O_ACOS": "acos", "O_ASIN": "asin",
+    "O_ATAN": "atan", "O_LOG": "log", "O_LOG10": "log10", "O_EXP": "exp", "O_POW": "pow", "O_ATAN2": "atan2",
+    "O_FMOD": "fmod",
+}  # fmt: skip
 EXTENDED = floating.Format.EXTENDED80
+FORMATS = {4: floating.Format.BINARY32, 8: floating.Format.BINARY64}
 INTEGER_FORMATS = {2: floating.Format.SIGNED16, 4: floating.Format.SIGNED32}
 # What each float operation computes, which MIR states and lowering spells.
 ARITH_RULE = floating.Semantics((EXTENDED, EXTENDED), EXTENDED, floating.Precision.DYNAMIC, floating.Rounding.DYNAMIC)
-STORE_SINGLE = floating.Semantics((EXTENDED,), floating.Format.BINARY32, floating.Precision.DESTINATION, floating.Rounding.DYNAMIC)
+EXACT_UNARY = floating.Semantics((EXTENDED,), EXTENDED, floating.Precision.EXACT, floating.Rounding.NONE)
 
 
 def _loaded(source: floating.Format) -> floating.Semantics:
     return floating.Semantics((source,), EXTENDED, floating.Precision.EXACT, floating.Rounding.NONE)
+
+
+def _stored(result: floating.Format) -> floating.Semantics:
+    return floating.Semantics((EXTENDED,), result, floating.Precision.DESTINATION, floating.Rounding.DYNAMIC)
+
+
+def _packed(value: float, width: int) -> bytes:
+    return struct.pack("<f" if width == 4 else "<d", value)
 SIGNED = frozenset({"TY_INT_1", "TY_INT_2", "TY_INT_4", "TY_INTEGER"})
 FAR_POINTERS = frozenset({"TY_LONG_POINTER", "TY_HUGE_POINTER"})
 
-# Literal labels (a back handle with no symbol) share the symbol index space.
+# Literal labels (a back handle with no symbol) share the symbol index space;
+# float constants the raise itself places come after them.
 LITERAL = 1 << 20
+POOL = 1 << 21
 
 K = mir.Kind
 TESTS = {  # (signed, unsigned)
@@ -161,6 +181,7 @@ class Real:
     """A float literal: its bits where it is moved, the x87's where it is computed."""
 
     value: float
+    width: int = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,16 +189,26 @@ class FloatCell:
     """A float in memory, not yet read: moved as bytes or loaded onto the x87."""
 
     address: object
+    width: int = 4
 
 
-def raised(unit: hir.Unit, proc: hir.Proc) -> Raised:
-    return _Raise(unit, proc).run()
+@dataclass
+class Shared:
+    """What a module's procedures raise into together."""
+
+    literals: dict[bytes, int] = field(default_factory=dict)  # a constant's bits -> its number
+    runtime: dict[str, hir.Symbol] = field(default_factory=dict)  # routines no declaration names
 
 
-def names(unit: hir.Unit) -> dict[tuple[Space, int], str]:
+def raised(unit: hir.Unit, proc: hir.Proc, shared: Shared | None = None) -> Raised:
+    return _Raise(unit, proc, shared or Shared()).run()
+
+
+def names(unit: hir.Unit, shared: Shared | None = None) -> dict[tuple[Space, int], str]:
     """Every (space, index) a raised operand can name, as its object name."""
     out = {(_space(one), one.id): one.object_name for one in unit.symbols.values()}
     out.update({(Space.SEGMENT, LITERAL + back): f"L_b{back}" for back, symbol in unit.backs.items() if not symbol})
+    out.update({(Space.SEGMENT, POOL + n): f"L_f{n}" for n in (shared.literals.values() if shared else ())})
     return out
 
 
@@ -190,9 +221,10 @@ def _even(n: int) -> int:
 
 
 class _Raise:
-    def __init__(self, unit: hir.Unit, proc: hir.Proc) -> None:
+    def __init__(self, unit: hir.Unit, proc: hir.Proc, shared: Shared) -> None:
         self.unit = unit
         self.proc = proc
+        self.shared = shared
         self.symbol = unit.symbols[proc.symbol]
         if not self.symbol.call_class & hir.CALLER_POPS or self.symbol.call_class & hir.REVERSE_PARMS:
             raise Unsupported(f"{self.symbol.name}: only cdecl procedures are defined")
@@ -331,6 +363,11 @@ class _Raise:
 
     def ret(self, node: str, type_: str) -> None:
         returned: tuple[mir.Value, ...] = ()
+        if node != "n0" and type_ in FLOATS:
+            value = self.floating(self.eval(node))
+            self.op(K.RETURN, args=(value,), uses=(value.value,))
+            self.end()
+            return
         if node != "n0":
             got = self.eval(node)
             if isinstance(got, Far):
@@ -378,7 +415,11 @@ class _Raise:
     def compare(self, tree: hir.Node) -> tuple[mir.Value, mir.Kind]:
         cg_op, left, right, type_ = tree.args
         if type_ in FLOATS:
-            raise Unsupported(f"{self.symbol.name}: float compare")
+            x = self.floating(self.convert(self.eval(left), self.type_of(left), type_))
+            y = self.floating(self.convert(self.eval(right), self.type_of(right), type_))
+            flags = self.fresh(flags=True)
+            self.op(K.FCOMPARE, (), (x, y), defines=(flags,))
+            return flags, TESTS[cg_op][0]
         width = max(2, self.width(type_))
         a = self.narrowed(self.coerced(self.eval(left), left, type_), width)
         b = self.narrowed(self.coerced(self.eval(right), right, type_), width)
@@ -409,8 +450,8 @@ class _Raise:
         match tree.call, tree.args:
             case "CGInteger", (value, type_):
                 return mir.Const(int(value), max(2, self.width(type_)))
-            case "CGFloat", (text, "TY_SINGLE"):
-                return Real(float(text))
+            case "CGFloat", (text, type_) if type_ in FLOATS:
+                return self.real(float(text), self.width(type_))
             case "CGFEName", (symbol, type_):
                 return self.name(symbol)
             case "CGTempName", (temp, _):
@@ -424,14 +465,29 @@ class _Raise:
                 return self.points(self.eval(inner), type_)
             case "CGUnary", ("O_CONVERT", inner, type_):
                 return self.convert(self.eval(inner), self.type_of(inner), type_)
-            case "CGUnary", ("O_UMINUS" | "O_COMPLEMENT" as cg_op, inner, type_):
+            case "CGUnary", ("O_UMINUS" | "O_COMPLEMENT" | "O_FABS" as cg_op, inner, type_):
                 return self.unary(cg_op, self.eval(inner), type_)
+            case "CGUnary", (cg_op, inner, type_) if cg_op in LIBRARY:
+                return self.library(LIBRARY[cg_op], [(inner, self.eval(inner))], type_)
+            case "CGBinary", ("O_COMMA", left, right, _):
+                self.eval(left)
+                return self.eval(right)
+            case "CGBinary", (cg_op, left, right, type_) if cg_op in LIBRARY:
+                # The runtime takes them last first, as every call's parms are listed.
+                return self.library(LIBRARY[cg_op], [(right, self.eval(right)), (left, self.eval(left))], type_)
             case "CGBinary", (cg_op, left, right, type_):
                 return self.binary(cg_op, left, right, type_)
             case "CGAssign", (target, source, type_):
                 return self.assign(target, source, type_)
             case "CGLVAssign", (target, source, _):
                 return self.aggregate(self.eval(target), self.eval(source))
+            case "CGPostGets" | "CGPreGets", (cg_op, target, source, type_) if type_ in FLOATS:
+                address = self.address(self.eval(target))
+                width = self.width(type_)
+                old = self.floating(FloatCell(address, width))
+                new = self.float_arithmetic(cg_op, old, self.floating(self.convert(self.eval(source), self.type_of(source), type_)))
+                self.put_float(address, width, new)
+                return old if tree.call == "CGPostGets" else FloatCell(address, width)
             case "CGPostGets" | "CGPreGets", (cg_op, target, source, type_):
                 address = self.address(self.eval(target))
                 width = self.width(type_)
@@ -452,6 +508,13 @@ class _Raise:
         raise Unsupported(f"{self.symbol.name}: {tree.call} {' '.join(tree.args)}")
 
     def choose(self, test: str, yes: str, no: str, type_: str):
+        if type_ in FLOATS:
+            return self.joined(
+                test,
+                lambda: self.convert(self.eval(yes), self.type_of(yes), type_),
+                lambda: self.convert(self.eval(no), self.type_of(no), type_),
+                type_,
+            )
         return self.joined(
             test, lambda: self.coerced(self.eval(yes), yes, type_), lambda: self.coerced(self.eval(no), no, type_), type_
         )
@@ -463,16 +526,25 @@ class _Raise:
     def joined(self, test: str, yes, no, type_: str):
         """`test ? yes() : no()`: each arm stores into one frame cell, read after
         the join -- a variable like any other, left for promotion to make SSA."""
-        width = max(2, self.width(type_))
+        width = self.width(type_) if type_ in FLOATS else max(2, self.width(type_))
         joined = Frame(self.slot(width))
+
+        def put(value) -> None:
+            if type_ in FLOATS:
+                self.put_float(joined, width, value)
+            else:
+                self.store(self.cell(joined, width), self.narrowed(value, width))
+
         otherwise, join = self.label(), self.label()
         self.branch(test, otherwise, False)
-        self.store(self.cell(joined, width), self.narrowed(yes(), width))
+        put(yes())
         self.op(K.JUMP, target=join)
         self.end(join)
         self.start(otherwise)
-        self.store(self.cell(joined, width), self.narrowed(no(), width))
+        put(no())
         self.start(join)
+        if type_ in FLOATS:
+            return FloatCell(joined, width)
         loaded = self.load(self.cell(joined, width), type_)
         return self.split(loaded) if self.far_pointer(type_) else loaded
 
@@ -500,6 +572,8 @@ class _Raise:
         return Global(_space(symbol), symbol.id)
 
     def points(self, got, type_: str):
+        if isinstance(got, mir.Held) and got.width == 10:
+            return got  # a float call's result, already a value
         if isinstance(got, Returned):
             if self.far_pointer(type_):
                 return Far(got.high, got.low)
@@ -511,8 +585,8 @@ class _Raise:
         address = self.address(got)
         if type_ in self.unit.types:
             return Aggregate(address, self.unit.types[type_])
-        if type_ == "TY_SINGLE":
-            return FloatCell(address)
+        if type_ in FLOATS:
+            return FloatCell(address, self.width(type_))
         loaded = self.load(self.cell(address, self.width(type_)), type_)
         if self.far_pointer(type_):
             return self.split(loaded)
@@ -520,20 +594,20 @@ class _Raise:
 
     def convert(self, got, source: str, type_: str):
         if source in FLOATS or type_ in FLOATS:
-            if source == type_:
-                return got
-            if source == "TY_SINGLE" and type_ not in FLOATS:
+            if source in FLOATS and type_ in FLOATS:
+                return self.real(got.value, self.width(type_)) if isinstance(got, Real) else got
+            if source in FLOATS:
                 return self.truncated(self.floating(got), type_)
-            if type_ == "TY_SINGLE" and source not in FLOATS:
-                whole = self.operand(got, source)
-                if source not in SIGNED and self.width(source) == 4:
-                    raise Unsupported(f"{self.symbol.name}: fild of an unsigned long")
-                if self.width(source) == 1 or source not in SIGNED:
-                    whole = self.convert(whole, source, "TY_INT_4")
-                result = self.fresh()
-                self.op(K.FLOAD, (mir.Held(result, 10),), (whole,), floating=_loaded(INTEGER_FORMATS[whole.width]))
-                return mir.Held(result, 10)
-            raise Unsupported(f"{self.symbol.name}: conversion {source} to {type_}")
+            if isinstance(got, mir.Const):
+                return self.real(float(self.wrapped(got.n, source)), self.width(type_))
+            whole = self.operand(got, source)
+            if source not in SIGNED and self.width(source) == 4:
+                raise Unsupported(f"{self.symbol.name}: fild of an unsigned long")
+            if self.width(source) == 1 or source not in SIGNED:
+                whole = self.convert(whole, source, "TY_INT_4")
+            result = self.fresh()
+            self.op(K.FLOAD, (mir.Held(result, 10),), (whole,), floating=_loaded(INTEGER_FORMATS[whole.width]))
+            return mir.Held(result, 10)
         if isinstance(got, (Frame, Global, Near)) and self.far_pointer(type_):
             return Far(self.dgroup(), self.near(got))
         if isinstance(got, (Frame, Global, Near, Far)):
@@ -560,7 +634,13 @@ class _Raise:
 
     def unary(self, cg_op: str, got, type_: str) -> Operand:
         if type_ in FLOATS:
-            raise Unsupported(f"{self.symbol.name}: float {cg_op}")
+            if cg_op not in FLOAT_UNARY:
+                raise Unsupported(f"{self.symbol.name}: float {cg_op}")
+            result = self.fresh()
+            self.op(FLOAT_UNARY[cg_op], (mir.Held(result, 10),), (self.floating(got),), floating=EXACT_UNARY)
+            return mir.Held(result, 10)
+        if cg_op == "O_FABS":
+            raise Unsupported(f"{self.symbol.name}: O_FABS of {type_}")
         value = self.operand(got, type_)
         width = max(2, self.width(type_))
         if isinstance(value, mir.Const):
@@ -573,15 +653,10 @@ class _Raise:
 
     def binary(self, cg_op: str, left: str, right: str, type_: str):
         a, b = self.eval(left), self.eval(right)
-        if type_ == "TY_SINGLE":
-            if cg_op not in FLOAT_ARITHMETIC:
-                raise Unsupported(f"{self.symbol.name}: float {cg_op}")
-            kind = FLOAT_ARITHMETIC[cg_op]
+        if type_ in FLOATS:
             x = self.floating(self.convert(a, self.type_of(left), type_))
             y = self.floating(self.convert(b, self.type_of(right), type_))
-            result = self.fresh()
-            self.op(kind, (mir.Held(result, 10),), (x, y), floating=ARITH_RULE)
-            return mir.Held(result, 10)
+            return self.float_arithmetic(cg_op, x, y)
         if cg_op in ("O_PLUS", "O_MINUS") and isinstance(b, (Frame, Global, Near, Far)) and cg_op == "O_PLUS":
             a, b = b, a
         if isinstance(a, mir.Held) and self.far_pointer(self.type_of(left)):
@@ -606,6 +681,13 @@ class _Raise:
             return Far(address.segment, moved, address.disp)
         base = address.base if isinstance(address, Near) else self.near(replace(address, disp=0))
         return Near(self.add(mir.Held(base, 2), index), address.disp)
+
+    def float_arithmetic(self, cg_op: str, x: mir.Held, y: mir.Held) -> mir.Held:
+        if cg_op not in FLOAT_ARITHMETIC:
+            raise Unsupported(f"{self.symbol.name}: float {cg_op}")
+        result = self.fresh()
+        self.op(FLOAT_ARITHMETIC[cg_op], (mir.Held(result, 10),), (x, y), floating=ARITH_RULE)
+        return mir.Held(result, 10)
 
     def add(self, a: mir.Held, b: Operand) -> mir.Value:
         result = self.fresh()
@@ -656,16 +738,30 @@ class _Raise:
             self.store(self.cell(address, 2), self.near(Near(value.offset, value.disp)))
             self.store(self.cell(replace(address, disp=address.disp + 2), 2), mir.Held(value.segment, 2))
             return value
-        operand = self.coerced(value, source, type_) if type_ != "TY_SINGLE" else self.convert(value, self.type_of(source), type_)
-        if isinstance(operand, mir.Held) and operand.width == 10:
-            # fstp pops what it stores, so the assignment's own value is the cell.
-            ref = self.cell(address, width)
-            self.op(K.FSTORE, (mir.Cell(ref),), (operand,), stores=(ref,), floating=STORE_SINGLE)
-            return FloatCell(address)
-        if isinstance(operand, (Real, FloatCell)):
-            operand = self.operand(operand, type_)
+        if type_ in FLOATS:
+            return self.put_float(address, width, self.convert(value, self.type_of(source), type_))
+        operand = self.coerced(value, source, type_)
         self.store(self.cell(address, width), operand)
         return operand
+
+    def put_float(self, address: Address, width: int, got):
+        """A float into a cell of `width` bytes, and the value the assignment is."""
+        match got:
+            case Real(value=value):
+                packed = _packed(value, width)
+                for at in range(0, width, 4):
+                    bits = int.from_bytes(packed[at : at + 4], "little", signed=True)
+                    self.store(self.cell(replace(address, disp=address.disp + at), 4), mir.Const(bits, 4))
+                return Real(value, width)
+            case FloatCell(address=source, width=size) if size == width:
+                for at in range(0, width, 4):
+                    moved = self.load(self.cell(replace(source, disp=source.disp + at), 4), "TY_UINT_4")
+                    self.store(self.cell(replace(address, disp=address.disp + at), 4), moved)
+                return FloatCell(address, width)
+        # fstp pops what it stores, so the assignment's own value is the cell.
+        ref = self.cell(address, width)
+        self.op(K.FSTORE, (mir.Cell(ref),), (self.floating(got),), stores=(ref,), floating=_stored(FORMATS[width]))
+        return FloatCell(address, width)
 
     def aggregate(self, target, source) -> None:
         if not isinstance(source, Aggregate):
@@ -681,21 +777,39 @@ class _Raise:
             self.op(K.STORE, (mir.Cell(put),), (mir.Held(moved, width),), stores=(put,))
             done += width
 
-    def call(self, call: hir.Call) -> Returned:
+    def call(self, call: hir.Call):
         target = self.eval(call.target)
         if not isinstance(target, Function):
             raise Unsupported(f"{self.symbol.name}: indirect call")
-        callee = target.symbol
+        return self.invoke(target.symbol, [(self.eval(node), type_) for node, type_ in call.parms], call.type)
+
+    def library(self, name: str, arguments: list, type_: str):
+        """A C runtime routine taking and returning doubles, for an operator."""
+        callee = self.shared.runtime.get(name)
+        if callee is None:
+            attr = hir.FE_PROC | hir.FE_IMPORT
+            callee = hir.Symbol(-1 - len(self.shared.runtime), name, name, "_*", attr, hir.CALLER_POPS, hir.FAR_CALL)
+            self.shared.runtime[name] = callee
+        doubles = [(self.convert(value, self.type_of(node), "TY_DOUBLE"), "TY_DOUBLE") for node, value in arguments]
+        return self.convert(self.invoke(callee, doubles, "TY_DOUBLE"), "TY_DOUBLE", type_)
+
+    def invoke(self, callee: hir.Symbol, arguments: list, type_: str):
+        """A call, with `arguments` last first; a float result arrives on the x87."""
         # Stack arguments only: cdecl (caller pops) or pascal (reversed, callee pops).
         stacked = callee.call_class & (hir.CALLER_POPS | hir.REVERSE_PARMS) in (hir.CALLER_POPS, hir.REVERSE_PARMS)
         if callee.register_parms or not stacked:
             raise Unsupported(f"{self.symbol.name}: {callee.object_name} has a register calling convention")
-        arguments = [(self.eval(node), type_) for node, type_ in call.parms]
         if callee.call_class & hir.REVERSE_PARMS:
-            arguments.reverse()
+            arguments = arguments[::-1]
         pushed = sum(self.push(value, type_) for value, type_ in arguments)
-        low, high = self.fresh(), self.fresh()
-        site = self.op(K.CALL, (mir.Held(low, 2), mir.Held(high, 2)), defines=(low, high), uses=())
+        if type_ in FLOATS:
+            result = self.fresh()
+            site = self.op(K.CALL, (mir.Held(result, 10),), defines=(result,), uses=())
+            returned = mir.Held(result, 10)
+        else:
+            low, high = self.fresh(), self.fresh()
+            site = self.op(K.CALL, (mir.Held(low, 2), mir.Held(high, 2)), defines=(low, high), uses=())
+            returned = Returned(low, high)
         caller_pops = bool(callee.call_class & hir.CALLER_POPS)
         self.calls[site.at] = callee.object_name
         self.callees[site.at] = callee
@@ -714,9 +828,25 @@ class _Raise:
             inputs=frozenset(),
             caller_cleanup=pushed if caller_pops else 0,
         )
-        return Returned(low, high)
+        return returned
 
     def push(self, value, type_: str) -> int:
+        if type_ in FLOATS:
+            width = self.width(type_)
+            value = self.convert(value, type_, type_)
+            if not isinstance(value, (Real, FloatCell)) or value.width != width:
+                temporary = Frame(self.slot(width))
+                self.put_float(temporary, width, value)
+                value = FloatCell(temporary, width)
+            # The high doubleword first, so the low one is at the lower address.
+            for at in reversed(range(0, width, 4)):
+                if isinstance(value, Real):
+                    bits = int.from_bytes(_packed(value.value, width)[at : at + 4], "little", signed=True)
+                    self.op(K.ARG, (), (mir.Const(bits, 4),))
+                else:
+                    cell = self.cell(replace(value.address, disp=value.address.disp + at), 4)
+                    self.op(K.ARG, (), (self.load(cell, "TY_UINT_4"),))
+            return width
         if isinstance(value, Far):
             self.op(K.ARG, (), (mir.Held(value.segment, 2),))
             self.op(K.ARG, (), (mir.Held(self.near(Near(value.offset, value.disp)), 2),))
@@ -741,28 +871,38 @@ class _Raise:
                 return mir.Held(self.near(got), 2)
             case Returned():
                 return self.operand(self.points(got, type_), type_)
-            case Real(value):
-                return mir.Const(int.from_bytes(struct.pack("<f", value), "little", signed=True), 4)
-            case FloatCell(address):
+            case Real(value=value, width=4):
+                return mir.Const(int.from_bytes(_packed(value, 4), "little", signed=True), 4)
+            case FloatCell(address=address, width=4):
                 return self.load(self.cell(address, 4), "TY_UINT_4")
         raise Unsupported(f"{self.symbol.name}: {got} used as a value")
+
+    def real(self, value: float, width: int) -> Real:
+        """A literal at a float type's precision."""
+        return Real(struct.unpack("<f", _packed(value, 4))[0] if width == 4 else value, width)
 
     def floating(self, got) -> mir.Held:
         """A float on the x87."""
         match got:
             case mir.Held(width=10):
                 return got
-            case FloatCell(address):
-                ref = self.cell(address, 4)
+            case FloatCell(address=address, width=width):
+                ref = self.cell(address, width)
                 result = self.fresh()
-                self.op(
-                    K.FLOAD, (mir.Held(result, 10),), (mir.Cell(ref),), loads=(ref,), floating=_loaded(floating.Format.BINARY32)
-                )
+                self.op(K.FLOAD, (mir.Held(result, 10),), (mir.Cell(ref),), loads=(ref,), floating=_loaded(FORMATS[width]))
                 return mir.Held(result, 10)
-            case Real(value) if value.is_integer() and -0x8000 <= value < 0x8000:
+            case Real(value=value) if value.is_integer() and -0x8000 <= value < 0x8000 and math.copysign(1, value) > 0:
                 result = self.fresh()
                 self.op(K.FLOAD, (mir.Held(result, 10),), (mir.Const(int(value), 2),), floating=_loaded(INTEGER_FORMATS[2]))
                 return mir.Held(result, 10)
+            case Real(value=value):
+                # A constant in memory, at the narrowest width that holds it exactly.
+                try:
+                    width = 4 if struct.unpack("<f", _packed(value, 4))[0] == value else 8
+                except OverflowError:
+                    width = 8
+                number = self.shared.literals.setdefault(_packed(value, width), len(self.shared.literals))
+                return self.floating(FloatCell(Global(Space.SEGMENT, POOL + number), width))
         raise Unsupported(f"{self.symbol.name}: {got} computed as a float")
 
     def truncated(self, value: mir.Held, type_: str) -> Operand:

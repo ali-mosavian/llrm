@@ -407,6 +407,21 @@ class _Stack:
         two = _two_values(what)
         if two is not None and results:
             self.arithmetic(*two, results[0])
+        elif what.op is ir.Operation.FLOAT_LOAD and not what.name and not what.sources and results:
+            # A call's result, which it left in st(0).
+            if self.values:
+                raise Unlowered("a call's floating result arrives on a stack that is not empty")
+            self.values.insert(0, results[0])
+            self.vacate()
+        elif what.op is ir.Operation.FLOAT_STORE and not what.name and not what.dests and len(operands) == 1:
+            # A returned value, left in st(0) for the caller.
+            self.top(operands[0])
+            if len(self.values) != 1:
+                raise Unlowered("a returned float leaves other values on the stack")
+            self.values.pop(0)
+            self.vacate()
+        elif what.op is ir.Operation.COMPARE and len(operands) == 2 and not results:
+            self.compare(*operands)
         elif what.op is ir.Operation.FLOAT_LOAD and not operands and results:
             if _rereadable(self.sequence, self.here, self.pending(results[0])):
                 self.home[results[0]] = one
@@ -453,6 +468,53 @@ class _Stack:
             self.duplicate(source)
         self.emit(replace(what, name=name, sources=(ir.St(0),)))
         self.values.pop(0)
+
+    def compare(self, left: int, right: int) -> None:
+        """`left` against `right`, the answer moved from the status word into the flags."""
+        from qbopt.backend import select
+
+        load = self.home.get(right)
+        if (
+            right != left
+            and right not in self.values
+            and load is not None
+            and load.what.name == "fld"
+            and select.float_memory("fcomp", load.what.sources[0]) is not None
+        ):
+            self.top(left)
+            if self.survives(left):
+                self.duplicate(left)
+            covers = self.one.covers
+            self.emit(
+                ir.Semantics(ir.Operation.COMPARE, "fcomp", (), (ir.St(0), load.what.sources[0])),
+                uses=load.uses,
+                widths=load.widths,
+                requires=tuple(dict.fromkeys((*load.requires, *self.one.requires))),
+                symbol=False if covers and covers[0] != covers[1] else self.one.symbol,
+            )
+            self.values.pop(0)
+        else:
+            for value in sorted({left, right} - set(self.values), key=lambda value: self.defined.get(value, -1)):
+                self.materialize(value)
+            # Left on top and right beneath it, each a copy where it is read again.
+            if self.survives(left):
+                self.duplicate(left)
+            else:
+                self.top(left)
+            if right == left or self.survives(right):
+                self.duplicate(right)
+                self.exchange(1)
+            elif self.values.index(right) != 1:
+                slot = self.values.index(right)
+                self.exchange(slot)
+                self.exchange(1)
+                self.exchange(slot)
+            self.emit(ir.Semantics(ir.Operation.COMPARE, "fcompp", (), (ir.St(0), ir.St(1))))
+            del self.values[:2]
+        at = self.one.at
+        status = ir.Semantics(ir.Operation.BARRIER, "fnstsw", (ir.Reg(Register.AX, 2),), ())
+        self.out.append(lir.Insn(at=at, covers=(at, at), what=status, defines=(), uses=(), clobbers=frozenset({Register.EAX})))
+        self.insert(ir.Semantics(ir.Operation.NOTHING, "sahf", (), ()))
 
     def consume(self, source: int, what: ir.Semantics, result: int) -> None:
         """An instruction replacing the top with its result."""
