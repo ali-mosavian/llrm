@@ -162,6 +162,9 @@ class Contract:
     # Bytes the caller pops once the call returns: C's convention, where
     # `cleanup` is 0 and the arguments are still the caller's to release.
     caller_cleanup: int = field(default=0)
+    # 386 code: a register kept under the 8086 convention keeps only its
+    # 16-bit half, and FS and GS are not kept at all.
+    i386: bool = field(default=False)
 
 
 def worst(name: str) -> Contract:

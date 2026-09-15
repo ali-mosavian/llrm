@@ -1178,7 +1178,7 @@ def constants(body: lir.LirBody) -> lir.LirBody:
             if candidate is not None and not one.clobbers and held.get(candidate[0]) == candidate[1]:
                 redundant.add(id(one))
                 continue
-            written = {RegisterExt.full_register32(reg) for reg in one.clobbers}
+            written = {RegisterExt.full_register32(reg) for reg in (*one.clobbers, *one.clobbers_high)}
             written.update(
                 RegisterExt.full_register32(dest.register) for dest in what.dests if isinstance(dest, ir.Reg)
             )

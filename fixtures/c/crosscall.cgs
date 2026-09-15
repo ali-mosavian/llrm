@@ -1,0 +1,70 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+f1 DBSrcFile "/Users/alim/work/personal/qbopt/.claude/worktrees/watcom-16bit-qbopt-qcport-1d97c8/fixtures/c/crosscall.c"
+- DBSrcCue f1 4 1
+SYM y1 name="total" base="total" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_INT_2
+SYM y2 name="n" base="n" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_INT_2
+l2 CGLastParm
+t3 CGTemp TY_INT_2
+SYM y3 name="i" base="i" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y3 TY_INT_2
+SYM y4 name="t" base="t" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y4 TY_INT_2
+l4 BENewLabel
+l5 BENewLabel
+- DBSrcCue f1 6 1
+n6 CGFEName y4 TY_INT_2
+n7 CGInteger 0 TY_INTEGER
+n8 CGAssign n6 n7 TY_INT_2
+- CGDone n8
+- DBSrcCue f1 7 1
+n9 CGFEName y3 TY_INT_2
+n10 CGInteger 0 TY_INTEGER
+n11 CGAssign n9 n10 TY_INT_2
+- CGDone n11
+- CGControl O_LABEL n0 l4
+n12 CGFEName y3 TY_INT_2
+n13 CGUnary O_POINTS n12 TY_INT_2
+n14 CGFEName y2 TY_INT_2
+n15 CGUnary O_POINTS n14 TY_INT_2
+n16 CGCompare O_LT n13 n15 TY_INTEGER
+- CGControl O_IF_FALSE n16 l5
+- DBSrcCue f1 8 1
+n17 CGFEName y4 TY_INT_2
+SYM y5 name="Map" base="Map" pattern="^" attr=0xf seg=1
+CALLCONV y5 class=0x1 target=0x306 parms=[] ret=0:0
+n18 CGFEName y5 TY_CODE_PTR
+c19 CGInitCall n18 TY_INT_2 y5
+n20 CGFEName y3 TY_INT_2
+n21 CGUnary O_POINTS n20 TY_INT_2
+- CGAddParm c19 n21 TY_INT_2
+n22 CGCall c19
+n23 CGUnary O_POINTS n22 TY_INT_2
+n24 CGPreGets O_PLUS n17 n23 TY_INT_2
+- CGDone n24
+n25 CGFEName y3 TY_INT_2
+n26 CGInteger 1 TY_INTEGER
+n27 CGPostGets O_PLUS n25 n26 TY_INT_2
+- CGDone n27
+- CGControl O_GOTO n0 l4
+- CGControl O_LABEL n0 l5
+- DBSrcCue f1 9 1
+n28 CGFEName y4 TY_INT_2
+n29 CGUnary O_POINTS n28 TY_INT_2
+n30 CGUnary O_CONVERT n29 TY_INT_2
+n31 CGTempName t3 TY_INT_2
+n32 CGAssign n31 n30 TY_INT_2
+- CGDone n32
+- DBSrcCue f1 10 1
+n33 CGTempName t3 TY_INT_2
+n34 CGUnary O_POINTS n33 TY_INT_2
+- CGReturn n34 TY_INT_2
+STOP
+FINI

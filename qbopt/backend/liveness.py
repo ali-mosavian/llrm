@@ -71,6 +71,8 @@ def _declared(one) -> "tuple[frozenset, frozenset] | None":
     writes = {lane for held, register in one.delivers for lane in _lanes(register)}
     for register in one.clobbers:
         writes |= _lanes(register)
+    for register in one.clobbers_high:
+        writes |= {lane for lane in _lanes(register) if lane[1] >= 2}
     return frozenset(reads), frozenset(writes | _flag_lanes(0xFFFFFFFF))
 
 

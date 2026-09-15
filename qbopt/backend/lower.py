@@ -1352,6 +1352,7 @@ class Lowering:
                     uses=inputs,
                     requires=requires,
                     clobbers=_clobbers(op, self._calls, self._contracts),
+                    clobbers_high=_clobbered_high(op, self._calls, self._contracts),
                     spread=()
                     if op.inserted
                     else (op.covers, *op.extra_covers)
@@ -1592,11 +1593,24 @@ def _clobbers(op: "mir.Op", calls: dict[int, str], contracts: dict | None = None
     names = _names()
     disturbed = runtime.disturbs(contract)
     # A contract is about the 8086 and names no FS or GS; one reaching user
-    # code runs code that may use them.
-    unnamed = frozenset(target.SELECTORS) - frozenset(names) if disturbed == runtime.EVERY else frozenset()
+    # code, or written for the 386, runs code that may use them.
+    unnamed = (
+        frozenset(target.SELECTORS) - frozenset(names) if disturbed == runtime.EVERY or contract.i386 else frozenset()
+    )
     return unnamed | frozenset(
         register for register in names for named in disturbed if named.value.lower() in names[register]
     )
+
+
+def _clobbered_high(op: "mir.Op", calls: dict[int, str], contracts: dict | None = None) -> "frozenset[Register_]":
+    """The registers a 386 callee keeps only the 16-bit half of."""
+    if op.kind is not mir.Kind.CALL:
+        return frozenset()
+    contract = (contracts or {}).get(op.at) or runtime.contract(calls.get(op.at))
+    if contract is None or not contract.i386:
+        return frozenset()
+    whole = {ir.ROOT.get(register, register) for register in _clobbers(op, calls, contracts)}
+    return frozenset(register for register in target.AVAILABLE if ir.ROOT.get(register, register) not in whole)
 
 
 # Each allocatable register by the names runtime.py's own Reg enum uses:

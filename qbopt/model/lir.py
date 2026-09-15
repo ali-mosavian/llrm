@@ -69,6 +69,9 @@ class Insn:
     # nbody's 162 call defines were read by nothing, and each one still got
     # an interval, competed for a register and was spilled.
     clobbers: "frozenset[Register_]" = frozenset()
+    # Registers it destroys only the upper half of: a 386 callee under the
+    # 8086 convention keeps si and di, and nothing more of esi and edi.
+    clobbers_high: "frozenset[Register_]" = frozenset()
     # Every disjoint range of BC's bytes the operation stands for, where
     # that is more than the one `covers` names. A folded site whose pushes
     # sit apart from its call is the only shape with any: `covers` cannot

@@ -890,9 +890,10 @@ class _Raise:
             error_handling=False,
             writes=runtime.Memory.ANY,
             reads=runtime.Memory.ANY,
-            clobbers=runtime.EVERY,
+            clobbers=frozenset({runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX, runtime.Reg.DX, runtime.Reg.ES, runtime.Reg.FLAGS}),
             established=True,
-            evidence="Borland medium model: stack arguments, result in AX or DX:AX; every register assumed clobbered",
+            evidence="Borland medium model: stack arguments, result in AX or DX:AX; SI, DI, BP and DS kept as 16-bit registers",
+            i386=True,
             inputs=frozenset(),
             caller_cleanup=pushed if caller_pops else 0,
         )

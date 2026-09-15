@@ -374,6 +374,7 @@ def allocate(
     index = ranges.indexed(body)
     live = _sibling_priced(body, ranges.intervals(body, index))
     masks = _masks(body, index)
+    widths = _widest(body)
     # A reload's value is live across one instruction and must have a
     # register: spilling it again puts a load in front of a load and
     # nothing settles. LLVM's `markNotSpillable`, as a weight nothing can
@@ -433,7 +434,7 @@ def allocate(
             )
             order = tuple(sorted(order, key=lambda register: -votes[_whole(register)]))
 
-        got = _free(mine, order, union, live, masks)
+        got = _free(mine, order, union, live, masks, widths.get(value, 4))
         if got is not None:
             where[value] = got
             union.setdefault(_whole(got), []).append(value)
@@ -444,10 +445,10 @@ def allocate(
             if other in fixed:
                 return False
             elsewhere = tuple(one for one in target.order(confined.get(other)) if _whole(one) != _whole(register))
-            return _free(live[other], elsewhere, union, live, masks) is not None
+            return _free(live[other], elsewhere, union, live, masks, widths.get(other, 4)) is not None
 
         if at is Stage.ASSIGN or mine.weight == float("inf"):
-            evicted = _evict(mine, order, union, live, masks, movable)
+            evicted = _evict(mine, order, union, live, masks, movable, widths.get(value, 4))
             if evicted is not None:
                 got, victims = evicted
                 for one in victims:
@@ -503,18 +504,34 @@ def _priority(one: "ranges.Interval | None", at: Stage) -> float:
     return one.size + (1e6 if at is not Stage.ASSIGN else 0.0)
 
 
-def _masks(body: lir.LirBody, index: "ranges.Indexes") -> "list[tuple[int, frozenset[Register_]]]":
+def _widest(body: lir.LirBody) -> dict[int, int]:
+    """How wide each value is anywhere it is read or written."""
+    out: dict[int, int] = {}
+    for one in body.insns:
+        held = [where for operand in ((*one.what.dests, *one.what.sources) if one.what is not None else ())
+                for where in ir.values(operand)]
+        held += [where for where, _register in (*one.requires, *one.delivers)]
+        for where in held:
+            out[where.value] = max(out.get(where.value, 0), where.width)
+        for value, width in one.widths:
+            out[value] = max(out.get(value, 0), width)
+    return out
+
+
+def _masks(body: lir.LirBody, index: "ranges.Indexes") -> "list[tuple[int, frozenset[Register_], frozenset[Register_]]]":
     """Every point a register is destroyed without being named, and which.
 
     LLVM's `LiveIntervals::getRegMaskSlots()`. A call is the only one here.
+    The second set is the registers it destroys only the upper half of.
 
     Rooted, because a mask naming eax destroys ax with it.
     """
     out = []
     for block in body.blocks:
         for one in block.insns:
-            if one.clobbers:
-                out.append((index.at[id(one)], frozenset(_whole(register) for register in one.clobbers)))
+            if one.clobbers or one.clobbers_high:
+                out.append((index.at[id(one)], frozenset(_whole(register) for register in one.clobbers),
+                            frozenset(_whole(register) for register in one.clobbers_high)))
     return out
 
 
@@ -530,7 +547,7 @@ def _whole(register: Register_) -> Register_:
     return ir.ROOT.get(register, register)
 
 
-def _clobbered(one: "ranges.Interval", register: Register_, masks: list) -> bool:
+def _clobbered(one: "ranges.Interval", register: Register_, masks: list, width: int = 4) -> bool:
     """Whether this range is live across a point that destroys the register.
 
     LLVM's `checkRegMaskInterference`, and it is what lets a call stop
@@ -542,18 +559,18 @@ def _clobbered(one: "ranges.Interval", register: Register_, masks: list) -> bool
     starts after the clobber, and one that dies at the call ends before it.
     """
     mine = _whole(register)
-    for slot, mask in masks:
-        if mine not in mask:
+    for slot, mask, high in masks:
+        if mine not in mask and (mine not in high or width <= 2):
             continue
         if any(seg.start < slot and seg.end > slot + ranges.DEF for seg in one.segments):
             return True
     return False
 
 
-def _free(one: "ranges.Interval", order: tuple, union: dict, live: dict, masks: list) -> "Register_ | None":
+def _free(one: "ranges.Interval", order: tuple, union: dict, live: dict, masks: list, width: int = 4) -> "Register_ | None":
     """A register nothing live at the same time is using, and no call kills."""
     for register in order:
-        if _clobbered(one, register, masks):
+        if _clobbered(one, register, masks, width):
             continue
         if not any(live[other].overlaps(one) for other in union.get(_whole(register), ()) if other in live):
             return register
@@ -567,6 +584,7 @@ def _evict(
     live: dict[int, ranges.Interval],
     masks: list[tuple[int, frozenset[Register_]]],
     movable=lambda other, register: False,
+    width: int = 4,
 ) -> tuple[Register_, list[int]] | None:
     """The cheapest register to take, and what has to move out of it.
 
@@ -579,9 +597,9 @@ def _evict(
     """
     best = None
     for register in order:
-        if _clobbered(one, register, masks):
+        if _clobbered(one, register, masks, width):
             continue
-        victims = [other for other in union.get(_whole(register), ()) if other in live and live[other].overlaps(one)]
+        victims =[other for other in union.get(_whole(register), ()) if other in live and live[other].overlaps(one)]
         if not victims:
             continue
         bill = sum(0.0 if movable(other, register) else live[other].weight for other in victims)

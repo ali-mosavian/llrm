@@ -345,6 +345,15 @@ def test_private_store_dies_across_float_operations():
     assert not any("[bp-4]" in line for line in body)
 
 
+def test_short_value_crosses_a_call_in_si_or_di():
+    """A call was said to destroy every register, so the running total lived
+    in a slot and each pass wrote `add word ptr [bp-4], ax`. The callee keeps
+    SI and DI as 16-bit registers."""
+    text = cfront.compiled((FIXTURES / "crosscall.cgs").read_text(), "crosscall", optimise=True)
+    body = _proc([line.strip() for line in text.splitlines()], "_total")
+    assert any(line in ("add si, ax", "add di, ax") for line in body), body
+
+
 def test_loaded_far_pointer_moves_whole():
     """A far pointer read from memory was split into offset and segment and
     never put back together: stored as two words, reloaded as a dword, split
