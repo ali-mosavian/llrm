@@ -40,7 +40,8 @@ class Peephole(LIRTransform):
         body = spillforward.forwarded(body)
         body = storecombine.combined(body)
         body = pushed_constants(body)
-        return self._frame(waits(zero_compares(tested(zeroes(addresses(overwritten(shuttles(commuted(constants(pushes(body)))))))))))
+        body = fused(overwritten(shuttles(commuted(constants(pushes(body))))))
+        return self._frame(waits(zero_compares(tested(zeroes(addresses(body))))))
 
     def _frame(self, body):
         """Drop only synthetic reservations when no added stack storage remains."""
@@ -502,6 +503,130 @@ def overwritten(body: lir.LirBody) -> lir.LirBody:
             dead = (dead | writes) - reads
         blocks.append(replace(block, insns=tuple(lir.without(block.insns, lambda one: id(one) in redundant))))
     return replace(body, blocks=tuple(blocks))
+
+
+_FUSED_BINARY = frozenset({"add", "sub", "and", "or", "xor"})
+_FUSED_UNARY = frozenset({"inc", "dec", "neg", "not"})
+
+
+def fused(body: lir.LirBody) -> lir.LirBody:
+    """`mov r,[m]; op r,x; mov [m],r` is `op [m],x`; `mov r,[m]; cmp r,x` is `cmp [m],x`.
+
+    The memory forms set the flags the register forms do and leave the cell
+    as the store did. What they no longer write is r, so nothing may read r
+    after, and r must be neither how the cell is reached nor the operand.
+    Only instructions that stand for no object bytes are dropped.
+    """
+    from qbopt.backend import liveness
+
+    exits = liveness.dead_at_exit(body)
+    blocks = []
+    for block in body.blocks:
+        insns = list(block.insns)
+        dead_after: list[frozenset] = [frozenset()] * len(insns)
+        dead = set(exits[block.at])
+        for index in range(len(insns) - 1, -1, -1):
+            dead_after[index] = frozenset(dead)
+            one = insns[index]
+            if liveness._terminator(one.what):
+                if one.what.op is ir.Operation.BRANCH:
+                    dead -= _flag_lanes(0xFFFFFFFF)
+                continue
+            effects = _register_effects(one, flags=True)
+            if effects is None:
+                dead.clear()
+                continue
+            reads, writes = effects
+            dead = (dead | writes) - reads
+        work = [index for index, one in enumerate(insns) if not _nothing(one)]
+        removed = set()
+        at = 0
+        while at + 1 < len(work):
+            store = work[at + 2] if at + 2 < len(work) else None
+            made = _fused(
+                insns[work[at]],
+                insns[work[at + 1]],
+                insns[store] if store is not None else None,
+                dead_after[work[at + 1]],
+                dead_after[store] if store is not None else frozenset(),
+            )
+            if made is None:
+                at += 1
+                continue
+            replacement, used = made
+            insns[work[at + 1]] = replacement
+            removed.add(work[at])
+            if used == 3:
+                removed.add(work[at + 2])
+            at += used
+        blocks.append(replace(block, insns=tuple(one for index, one in enumerate(insns) if index not in removed)))
+    return replace(body, blocks=tuple(blocks))
+
+
+def _fused(load, work, store, dead_work, dead_store) -> "tuple[lir.Insn, int] | None":
+    from qbopt.backend import select
+
+    def plain(one: lir.Insn, dropped: bool) -> bool:
+        return not (
+            one.what is None
+            or one.clobbers
+            or one.requires
+            or one.delivers
+            or one.spread
+            or one.group is not None
+            or one.symbol is True
+            or one.frame_adjust
+            or dropped
+            and one.covers is not None
+            and one.covers[0] != one.covers[1]
+        )
+
+    if not plain(load, True) or not plain(work, False):
+        return None
+    match load.what:
+        case ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg() as register,), (ir.Mem() as cell,)):
+            if register.width != cell.width:
+                return None
+        case _:
+            return None
+    root = ir.root(register.register)
+    if root in {ir.root(cell.through), ir.root(cell.index_through)}:
+        return None
+    lanes = _lanes(register.register)
+
+    def operand(one: ir.Loc) -> bool:
+        return isinstance(one, ir.Imm) and one.address is None or isinstance(one, ir.Reg) and ir.root(one.register) != root
+
+    def stored() -> bool:
+        return (
+            store is not None
+            and plain(store, True)
+            and store.what.op is ir.Operation.MOVE
+            and store.what.name == "mov"
+            and store.what.dests == (cell,)
+            and store.what.sources == (register,)
+            and lanes <= dead_store
+        )
+
+    match work.what:
+        case ir.Semantics(ir.Operation.COMPARE, "cmp", (), (ir.Reg() as tested, other)):
+            if tested != register or not operand(other) or not lanes <= dead_work:
+                return None
+            made, used = ir.Semantics(ir.Operation.COMPARE, "cmp", (), (cell, other)), 2
+        case ir.Semantics(ir.Operation.BINARY, name, (ir.Reg() as dest,), (ir.Reg() as source, other)):
+            if name not in _FUSED_BINARY or not dest == source == register or not operand(other) or not stored():
+                return None
+            made, used = ir.Semantics(ir.Operation.BINARY, name, (cell,), (cell, other)), 3
+        case ir.Semantics(ir.Operation.UNARY, name, (ir.Reg() as dest,), sources):
+            if name not in _FUSED_UNARY or dest != register or any(one != register for one in sources) or not stored():
+                return None
+            made, used = ir.Semantics(ir.Operation.UNARY, name, (cell,), tuple(cell for _ in sources)), 3
+        case _:
+            return None
+    if select.emit(made) is None:
+        return None
+    uses = tuple(one for one in work.uses if one not in load.defines)
+    return replace(work, what=made, defines=(), uses=uses), used
 
 
 def _scaled_address(parts: tuple[lir.Insn, ...], *, flags_dead: bool = False) -> lir.Insn | None:
