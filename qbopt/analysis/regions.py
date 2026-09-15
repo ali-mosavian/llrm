@@ -215,15 +215,19 @@ def _floor(addr) -> frozenset[Span]:
     return frozenset()
 
 
-def _at(addr, width: int, bounds: dict | None, layout=None) -> frozenset[Span]:
-    """The bytes an address names, as coarsely as it knows them."""
+def _at(addr, width: int, bounds: dict | None, layout=None, indexed: bool = False) -> frozenset[Span]:
+    """The bytes an address names, as coarsely as it knows them.
+
+    `indexed` is a reference reached through an index value rather than a
+    register its address names: the landmarks bound neither.
+    """
     if addr is None:
         return frozenset({(ROOT, HERE, *WHOLE)})
-    span = module.reach(addr, max(width, 1), bounds) if bounds else None
+    span = module.reach(addr, max(width, 1), bounds) if bounds and not indexed else None
     if span is None:
         # Indexed with nothing to bound it: every byte of its own region, and
         # none of another's -- axiom 4.
-        span = WHOLE if addr.base else (addr.disp, addr.disp + max(width, 1))
+        span = WHOLE if addr.base or indexed else (addr.disp, addr.disp + max(width, 1))
     region, origin = _region(addr.space, addr.index, layout)
     return frozenset({(region, origin, *(WHOLE if region in (ROOT, DGROUP) else span))})
 
@@ -263,7 +267,7 @@ def _spans(ref, bounds: dict | None, known: dict | None = None, layout=None) -> 
     if ref.pointer or ref.addr is None:
         # No byte, but often still a kind: a push is a push whatever the depth.
         return frozenset({(*_region(ref.space, None, layout), *WHOLE)})
-    return _at(ref.addr, ref.width, bounds, layout)
+    return _at(ref.addr, ref.width, bounds, layout, indexed=ref.base is not None and not ref.addr.base)
 
 
 def regions(ref, bounds: dict | None = None, known: dict | None = None, layout=None) -> RegionSet:

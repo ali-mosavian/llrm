@@ -19,7 +19,7 @@ def test_implicit_conversion_is_the_raise_s():
     """wcc leaves `(long) byte - short` as mixed-width operands; the raise
     refused pal_bestfit with `used at width 4` until it converted them."""
     lines = _asm("pal")
-    at = lines.index("movzx ax, byte ptr [bx]")
+    at = lines.index("movzx ax, byte ptr _pal_now[bx]")
     assert lines[at + 1 : at + 5] == ["movzx eax, ax", "mov bx, word ptr [bp+6]", "movsx ebx, bx", "sub eax, ebx"]
 
 
@@ -310,3 +310,24 @@ def test_float_check_is_named_fwait():
     body = cfront.mir.MirBody(5, (cfront.mir.MirBlock(5, (), (check,), ()),))
     (named,) = cfront.lower.named(body).blocks[0].ops
     assert (named.op, named.name) == (cfront.lower.ir.Operation.NOTHING, "fwait")
+
+
+def test_global_array_cell_is_named_through_its_index():
+    """`sy[j] = sx[j]` addressed `offset _sy + j` as an unnamed near pointer: its
+    store could reach the frame, so j round-tripped through its slot and every
+    access took three instructions."""
+    text = cfront.compiled((FIXTURES / "indexed.cgs").read_text(), "indexed", optimise=True)
+    lines = [line.strip() for line in text.splitlines()]
+    body = lines[lines.index("_copy proc far") : lines.index("_copy endp")]
+    assert not any("offset _s" in line or "[bp-" in line for line in body)
+    assert any(line.startswith("mov word ptr _sy[") for line in body)
+
+
+def test_indexed_cell_reaches_its_whole_symbol():
+    """An index value with no register in the address read as element zero
+    alone, so a store to `sy[j]` did not reach `sy[2]`."""
+    Addr, Space = cfront.raise_hir.Addr, cfront.raise_hir.Space
+    j = cfront.mir.Value(1, 10)
+    element = cfront.mir.MemRef(Addr(Space.SEGMENT, 0, 5), 2, base=j, space=Space.SEGMENT, base_width=2)
+    fixed = cfront.mir.MemRef(Addr(Space.SEGMENT, 4, 5), 2, space=Space.SEGMENT)
+    assert cfront.mir.overlapping(fixed, element, frozenset())

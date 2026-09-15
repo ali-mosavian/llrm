@@ -126,6 +126,7 @@ class Global:
     space: Space
     index: int
     disp: int = 0
+    base: mir.Value | None = None  # an index into the symbol, `_arr[j]`
 
 
 @dataclass(frozen=True, slots=True)
@@ -727,6 +728,10 @@ class _Raise:
         if isinstance(address, Far):
             moved = self.add(mir.Held(address.offset, 2), index)
             return Far(address.segment, moved, address.disp)
+        if isinstance(address, Global):
+            # The symbol stays named, so its cells alias only the symbol's own.
+            moved = index.value if address.base is None else self.add(mir.Held(address.base, 2), index)
+            return replace(address, base=moved)
         base = address.base if isinstance(address, Near) else self.near(replace(address, disp=0))
         return Near(self.add(mir.Held(base, 2), index), address.disp)
 
@@ -1043,10 +1048,12 @@ class _Raise:
                 result = self.fresh()
                 self.op(K.ADDRESS, (mir.Held(result, 2),), (mir.FrameAddress(disp, 2),))
                 return result
-            case Global(space, index, disp):
+            case Global(space, index, disp, None):
                 result = self.fresh()
                 self.op(K.COPY, (mir.Held(result, 2),), (mir.Symbol(space, index, disp, 2),))
                 return result
+            case Global(space, index, disp, base):
+                return self.add(mir.Held(self.near(Global(space, index, disp)), 2), mir.Held(base, 2))
             case Near(base, 0):
                 return base
             case Near(base, disp):
@@ -1063,8 +1070,10 @@ class _Raise:
         match address:
             case Frame(disp):
                 return mir.MemRef(Addr(Space.FRAME, disp), width, space=Space.FRAME)
-            case Global(space, index, disp):
+            case Global(space, index, disp, None):
                 return mir.MemRef(Addr(space, disp, index), width, space=space)
+            case Global(space, index, disp, base):
+                return mir.MemRef(Addr(space, disp, index), width, base=base, space=space, base_width=2)
             case Near(base, disp):
                 return mir.MemRef(Addr(Space.LITERAL, disp), width, base=base, space=Space.LITERAL, base_width=2)
             case Far(segment, offset, disp):
