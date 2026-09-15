@@ -144,6 +144,7 @@ class Far:
     offset: mir.Value
     disp: int = 0
     whole: mir.Value | None = None  # the 4-byte pointer these halves were split from, at disp 0
+    named: int = 0  # the selector symbol when the segment is a named object's own, else 0
 
 
 type Address = Frame | Global | Near | Far
@@ -615,7 +616,7 @@ class _Raise:
             segment, offset = self.fresh(), self.fresh()
             self.op(K.COPY, (mir.Held(segment, 2),), (mir.Symbol(Space.GROUP, SELECTOR + symbol.id, 0, 2),))
             self.op(K.COPY, (mir.Held(offset, 2),), (mir.Symbol(_space(symbol), symbol.id, 0, 2),))
-            return Far(segment, offset)
+            return Far(segment, offset, named=SELECTOR + symbol.id)
         return Global(_space(symbol), symbol.id)
 
     def points(self, got, type_: str):
@@ -735,7 +736,7 @@ class _Raise:
             index = mir.Held(negated, 2)
         if isinstance(address, Far):
             moved = self.add(mir.Held(address.offset, 2), index)
-            return Far(address.segment, moved, address.disp)
+            return Far(address.segment, moved, address.disp, named=address.named)
         if isinstance(address, Global):
             # The symbol stays named, so its cells alias only the symbol's own.
             moved = index.value if address.base is None else self.add(mir.Held(address.base, 2), index)
@@ -1114,9 +1115,9 @@ class _Raise:
                 return mir.MemRef(Addr(space, disp, index), width, base=base, space=space, base_width=2)
             case Near(base, disp):
                 return mir.MemRef(Addr(Space.LITERAL, disp), width, base=base, space=Space.LITERAL, base_width=2)
-            case Far(segment, offset, disp):
+            case Far(segment, offset, disp, _, named):
                 return mir.MemRef(
-                    Addr(Space.FAR, disp),
+                    Addr(Space.FAR, disp, named),
                     width,
                     base=offset,
                     segment=segment,

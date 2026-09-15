@@ -63,7 +63,9 @@ but it cannot thereby become a write to the caller's frame.
 program loaded as a literal -- `DEF SEG = &HA000`, then `POKE` -- is in that
 segment and no other. The loader places DGROUP; a program naming a selector in
 its own code is naming hardware or an arena it was given, not the variables
-the linker laid out. This is the one that costs something when refused: every
+the linker laid out. A selector a fixup names for a far object is that
+object's segment, which the link keeps out of DGROUP, and the same holds.
+This is the one that costs something when refused: every
 `POKE` aliased every static, so the `DEF SEG` cell could not be forwarded to
 the access that needed it.
 
@@ -105,6 +107,9 @@ DGROUP = ("dgroup",)
 # region, beside DGROUP rather than inside it.
 ALLOCATION = ("alloc",)
 ABSOLUTE = ("absolute",)
+# A selector a fixup names -- a far object's own segment -- is outside DGROUP
+# and the stack by the link. Two such objects may share a segment, so one region.
+NAMED = ("named",)
 # Bytes the link places: every extern, and every COMMON-combined segment.
 LINKED = (*DGROUP, "linked")
 
@@ -199,6 +204,8 @@ def _region(space, index: int | None, layout=None) -> tuple[tuple[str, ...], str
             return (*(DGROUP if owned else LINKED), f"seg:{index}"), HERE
         case Space.EXTERNAL:
             return LINKED, (HERE if index is None else f"ext:{index}")
+        case Space.FAR if index:
+            return NAMED, HERE
         case _:
             # LITERAL, FAR and GROUP: a displacement no fixup claims, an
             # address through a segment register, a group index this refuses
@@ -229,7 +236,7 @@ def _at(addr, width: int, bounds: dict | None, layout=None, indexed: bool = Fals
         # none of another's -- axiom 4.
         span = WHOLE if addr.base or indexed else (addr.disp, addr.disp + max(width, 1))
     region, origin = _region(addr.space, addr.index, layout)
-    return frozenset({(region, origin, *(WHOLE if region in (ROOT, DGROUP) else span))})
+    return frozenset({(region, origin, *(WHOLE if region in (ROOT, DGROUP, NAMED) else span))})
 
 
 def addressed(addr, width: int, bounds: dict | None = None, layout=None) -> RegionSet:

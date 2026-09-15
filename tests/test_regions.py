@@ -283,3 +283,22 @@ def test_an_extern_is_in_no_segment_this_object_owns() -> None:
     spared = _ref(None, width=4, excludes=((Addr(Space.EXTERNAL, -(1 << 15), 3), 1 << 16),))
     assert not regions.may_alias(bseg, spared)
     assert regions.may_alias(other, spared), "the exclusion names one symbol"
+
+
+def test_a_named_far_objects_selector_reaches_neither_stack_nor_dgroup() -> None:
+    """qcport's `reached[i] = 0` over a `static short far` array: the store's
+    selector is the array's own segment, yet it aliased every local and static,
+    so the bound and the counter were reloaded around it and the loop never
+    became a fill -- bcc's `rep stosw`."""
+    offset, selector = mir.Value(1, 1), mir.Value(2, 1)
+    named = _ref(Addr(Space.FAR, 0, 5), base=offset, segment=selector, space=Space.FAR, base_width=2)
+    loaded = _ref(Addr(Space.FAR, 0), base=offset, segment=selector, space=Space.FAR, base_width=2)
+    other = _ref(Addr(Space.FAR, 4, 6), base=selector, segment=offset, space=Space.FAR, base_width=2)
+    local = _ref(Addr(Space.FRAME, -0x58), space=Space.FRAME)
+    static = _ref(Addr(Space.SEGMENT, 0x12, 7), space=Space.SEGMENT)
+
+    assert not regions.may_alias(named, local)
+    assert not regions.may_alias(named, static)
+    assert regions.may_alias(named, loaded), "a loaded far pointer may point anywhere"
+    assert regions.may_alias(named, other), "two far objects may share a segment"
+    assert regions.may_alias(loaded, local)
