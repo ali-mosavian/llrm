@@ -668,13 +668,17 @@ def test_register_round_trip_through_memory_is_one_instruction(variant, printed)
         ("segment first", "les bx, dword ptr [bp-8]"),
         ("fs", "lfs bx, dword ptr [bp-8]"),
         ("through the offset", None),
+        ("through the offset, segment first", "les bx, dword ptr [bx]"),
+        ("override", "les bx, dword ptr es:[si+16]"),
+        ("override, segment first", None),
         ("another cell", None),
     ],
 )
 def test_far_pointer_loaded_in_one_instruction(variant, printed):
     """`mov bx,[bp-8]; mov es,[bp-6]` where bcc writes `les bx,[bp-8]`: 862 pairs
-    over qcport. Refused when the register written first addresses the second
-    read, and for words of two different cells."""
+    over qcport, and 18 more left as `mov bx,es:[si+16]; mov es,es:[si+18]`
+    because ES also reached the cell. Refused only when the register written
+    first addresses the second read, and for words of two different cells."""
     from iced_x86 import Decoder
     from qbopt.backend import masm
     from qbopt.backend import select
@@ -685,14 +689,21 @@ def test_far_pointer_loaded_in_one_instruction(variant, printed):
     segment = ir.Reg(Register.FS if variant == "fs" else Register.ES, 2)
     low = ir.Mem(Addr(Space.FRAME, -8), 2, Register.BP, 0, 2)
     high = ir.Mem(Addr(Space.FRAME, -4 if variant == "another cell" else -6), 2, Register.BP, 0, 2)
-    if variant == "through the offset":
+    base = Register.BP
+    if variant.startswith("through the offset"):
         low, high = ir.Mem(None, 2, Register.BX, 0, 1), ir.Mem(None, 2, Register.BX, 2, 1)
+        base = Register.BX
+    if variant.startswith("override"):
+        # As lowered and allocated: the offset value placed in si.
+        low, high = (ir.Mem(Addr(Space.FAR, disp, segment=Register.ES), 2, Register.SI, 0, 2, base=ir.Held(1, 2))
+                     for disp in (16, 18))
+        base = Register.SI
 
     def move(at, dest, cell):
         return lir.Insn(at, None, ir.Semantics(ir.Operation.MOVE, "mov", (dest,), (cell,)), (), ())
 
     pair = (move(0, bx, low), move(1, segment, high))
-    if variant == "segment first":
+    if variant.endswith("segment first"):
         pair = pair[::-1]
     block = lir.LirBlock(0, pair, ())
     result = peephole.far_loads(lir.LirBody("far", 0, (block,), {}, {})).blocks[0].insns
@@ -704,7 +715,7 @@ def test_far_pointer_loaded_in_one_instruction(variant, printed):
 
     decoded = next(iter(Decoder(16, select.emit(result[0].what).code)))
     expected = Mnemonic.LFS if variant == "fs" else Mnemonic.LES
-    assert (decoded.mnemonic, decoded.op0_register, decoded.memory_base) == (expected, Register.BX, Register.BP)
+    assert (decoded.mnemonic, decoded.op0_register, decoded.memory_base) == (expected, Register.BX, base)
 
 
 @pytest.mark.parametrize("middle", ["", "mov", "fnstsw", "fninit", None, "block"])

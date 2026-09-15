@@ -633,8 +633,8 @@ def far_loads(body: lir.LirBody) -> lir.LirBody:
     """`mov r,[m]; mov es,[m+2]`, in either order, is `les r,[m]` (and FS, GS).
 
     One instruction reads both words before it writes either register, so
-    neither register may be how the cell is reached. Only instructions that
-    stand for no object bytes are joined.
+    the register the pair writes first may not reach the word it reads
+    second. Only instructions that stand for no object bytes are joined.
     """
     blocks = []
     for block in body.blocks:
@@ -686,9 +686,11 @@ def _far_load(first: lir.Insn, second: lir.Insn) -> "lir.Insn | None":
     (segment, high), (offset, low) = segments[0], offsets[0]
     if not _next_word(low, high):
         return None
-    reached = {ir.root(one) for cell in (low, high) for one in (cell.through, cell.index_through)}
-    overrides = {cell.addr.segment for cell in (low, high) if cell.addr is not None}
-    if ir.root(offset.register) in reached or segment.register in overrides:
+    (written, _), (_, read) = words
+    if written.register in target.SEGMENTS:
+        if read.addr is not None and read.addr.segment == written.register:
+            return None
+    elif ir.root(written.register) in {ir.root(one) for one in (read.through, read.index_through)}:
         return None
     made = ir.Semantics(ir.Operation.MOVE, select.FAR_LOADS[segment.register][0], (offset, segment), (replace(low, width=4),))
     if select.emit(made) is None:
