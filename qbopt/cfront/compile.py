@@ -40,7 +40,9 @@ def recorded(source: Path, includes: list[str]) -> str:
         out = Path(scratch) / "unit.cgs"
         searched = (*(f"-I{one}" for one in includes), f"-I{COMPAT}")
         command = [str(WCCQ), *FLAGS, *searched, f"-fo={scratch}/unit.obj", str(source)]
-        done = subprocess.run(command, env={**os.environ, "QBOPT_CG_STREAM": str(out)}, capture_output=True, text=True)
+        # In the scratch directory, where wccq also leaves its .err file.
+        environment = {**os.environ, "QBOPT_CG_STREAM": str(out)}
+        done = subprocess.run(command, env=environment, capture_output=True, text=True, cwd=scratch)
         if done.returncode != 0 or not out.exists():
             raise hir.Unsupported(f"wccq failed on {source}:\n{done.stdout}{done.stderr}")
         return out.read_text()
@@ -124,7 +126,9 @@ def _data(unit: hir.Unit):
                         for start in range(0, len(data), 32)
                     ]
                 case "DGInteger", (value, type_):
-                    lines.append(f"    {widths[raise_hir.WIDTHS.get(type_, 2)]} {value}")
+                    # The shim prints a negative item as its 32-bit two's complement.
+                    width = raise_hir.WIDTHS.get(type_, 2)
+                    lines.append(f"    {widths[width]} {int(value) & ((1 << (8 * width)) - 1)}")
                 case "DGFEPtr", (symbol, type_, offset):
                     name = unit.symbols[hir.handle(symbol)].object_name
                     far = type_ in raise_hir.FAR_POINTERS or type_ in ("TY_LONG_CODE_PTR", "TY_CODE_PTR")

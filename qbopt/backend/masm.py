@@ -159,6 +159,8 @@ def _instruction(one: lir.Insn, procedure: Procedure, names: dict, number: int, 
             return [f"push {sources[0]}"]
         case ir.Operation.POP:
             return [f"pop {dests[0]}"]
+        case ir.Operation.EXCHANGE if name == "fxch":
+            return [f"fxch {dests[1]}"]
         case ir.Operation.EXCHANGE:
             return [f"xchg {dests[0]}, {dests[1]}"]
         case ir.Operation.FUNNEL:

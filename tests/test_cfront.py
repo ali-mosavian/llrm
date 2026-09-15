@@ -51,6 +51,14 @@ def test_data_pointer_to_a_literal():
     assert "    dw L_b2" in next(items for items in lines.values() if "    dw L_b3" in items)
 
 
+def test_negative_data_fits_its_width():
+    """`short sbar_health = -1` printed as `dw 4294967295`: the shim writes a
+    negative item as 32 bits, and jwasm refused the initializer."""
+    unit = cfront.hir.Unit()
+    unit.segments[1] = cfront.hir.Segment(1, "_DATA", 0, [("DGInteger", ("4294967295", "TY_INT_2"))])
+    assert dict(cfront._data(unit))["_DATA"] == ("    dw 65535",)
+
+
 def test_float_moves_as_its_bits():
     """`ls_animate(&ls, 0.05f)` pushes the single's four bytes; CGFloat was refused."""
     unit = cfront.hir.unit(cfront.stream.parse((FIXTURES / "ls.cgs").read_text()))
