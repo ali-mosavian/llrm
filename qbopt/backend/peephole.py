@@ -438,7 +438,7 @@ def overwritten(body: lir.LirBody) -> lir.LirBody:
         for one in reversed(block.insns):
             if liveness._terminator(one.what):
                 if one.what.op is ir.Operation.BRANCH:
-                    dead -= _flag_lanes(0xFFFFFFFF)
+                    dead -= _branch_reads(one.what)
                 continue
             effects = _register_effects(one, flags=True)
             if effects is None:
@@ -530,7 +530,7 @@ def fused(body: lir.LirBody) -> lir.LirBody:
             one = insns[index]
             if liveness._terminator(one.what):
                 if one.what.op is ir.Operation.BRANCH:
-                    dead -= _flag_lanes(0xFFFFFFFF)
+                    dead -= _branch_reads(one.what)
                 continue
             effects = _register_effects(one, flags=True)
             if effects is None:
@@ -583,9 +583,13 @@ def _fused(load, work, store, dead_work, dead_store) -> "tuple[lir.Insn, int] | 
 
     if not plain(load, True) or not plain(work, False):
         return None
+    extension = None
     match load.what:
         case ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg() as register,), (ir.Mem() as cell,)):
             if register.width != cell.width:
+                return None
+        case ir.Semantics(ir.Operation.EXTEND, "movsx" | "movzx" as extension, (ir.Reg() as register,), (ir.Mem() as cell,)):
+            if register.width <= cell.width:
                 return None
         case _:
             return None
@@ -612,13 +616,21 @@ def _fused(load, work, store, dead_work, dead_store) -> "tuple[lir.Insn, int] | 
         case ir.Semantics(ir.Operation.COMPARE, "cmp", (), (ir.Reg() as tested, other)):
             if tested != register or not operand(other) or not lanes <= dead_work:
                 return None
+            if extension is not None:
+                # Zero tests the widened value as it does the cell, but for SF: movsx copies
+                # the cell's top bit as the narrow compare does, movzx leaves it clear.
+                if not (isinstance(other, ir.Imm) and other.value == 0):
+                    return None
+                if extension == "movzx" and not _flag_lanes(RflagsBits.SF) <= dead_work:
+                    return None
+                other = ir.Imm(0, cell.width)
             made, used = ir.Semantics(ir.Operation.COMPARE, "cmp", (), (cell, other)), 2
         case ir.Semantics(ir.Operation.BINARY, name, (ir.Reg() as dest,), (ir.Reg() as source, other)):
-            if name not in _FUSED_BINARY or not dest == source == register or not operand(other) or not stored():
+            if extension is not None or name not in _FUSED_BINARY or not dest == source == register or not operand(other) or not stored():
                 return None
             made, used = ir.Semantics(ir.Operation.BINARY, name, (cell,), (cell, other)), 3
         case ir.Semantics(ir.Operation.UNARY, name, (ir.Reg() as dest,), sources):
-            if name not in _FUSED_UNARY or dest != register or any(one != register for one in sources) or not stored():
+            if extension is not None or name not in _FUSED_UNARY or dest != register or any(one != register for one in sources) or not stored():
                 return None
             made, used = ir.Semantics(ir.Operation.UNARY, name, (cell,), tuple(cell for _ in sources)), 3
         case _:
@@ -870,6 +882,11 @@ _BRANCH_FLAGS = {
     "jbe": RflagsBits.CF | RflagsBits.ZF,
     "ja": RflagsBits.CF | RflagsBits.ZF,
 }
+def _branch_reads(what: ir.Semantics) -> set[tuple[int, int]]:
+    """The flags a conditional jump reads: those its condition names, or all where this does not know it."""
+    return _flag_lanes(_BRANCH_FLAGS.get(what.name or "", 0xFFFFFFFF))
+
+
 _ARITHMETIC = RflagsBits.OF | RflagsBits.SF | RflagsBits.ZF | RflagsBits.AF | RflagsBits.CF | RflagsBits.PF
 # What `cmp r,0` leaves that the instruction computing r may not: inc keeps
 # the carry, add and subtract set carry and overflow from their operands.

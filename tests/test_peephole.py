@@ -612,6 +612,9 @@ def test_zero_compare_before_its_branch_is_or(variant, rewritten):
         ("unary", ["neg word ptr [bp-4]"]),
         ("compare", ["cmp word ptr [bp-4], 5", "jl L0_9"]),
         ("zero", ["cmp word ptr [bp-4], 0", "jl L0_9"]),
+        ("signed byte", ["cmp byte ptr [bp-4], 0", "jl L0_9"]),
+        ("unsigned byte", ["cmp byte ptr [bp-4], 0", "je L0_9"]),
+        ("unsigned byte, sign read", None),
         ("live", None),
         ("addressed", None),
         ("bytes", None),
@@ -621,13 +624,17 @@ def test_register_round_trip_through_memory_is_one_instruction(variant, printed)
     """`mov bx,[bp-4]; add bx,1; mov [bp-4],bx` where bcc writes `add word ptr [bp-4],1`,
     and `mov bx,[bp-4]; cmp bx,5` where it writes `cmp word ptr [bp-4],5`: 183 and 265
     sites over qcport. Refused while the register is read after, when the cell is
-    addressed through it, and for instructions that stand for bytes of an object."""
+    addressed through it, and for instructions that stand for bytes of an object.
+    `movzx bx,byte ptr [bp-4]; cmp bx,0` too, sieve's flag test once per slot, unless
+    the branch reads SF: the extension clears it where the byte compare copies bit 7."""
     from qbopt.backend import masm
     from qbopt.objectfile.module import Addr
     from qbopt.objectfile.module import Space
 
+    extension = {"signed byte": "movsx", "unsigned byte": "movzx", "unsigned byte, sign read": "movzx"}.get(variant)
+    compares = variant in ("compare", "zero") or extension is not None
     bx, cx = ir.Reg(Register.BX, 2), ir.Reg(Register.CX, 2)
-    cell = ir.Mem(Addr(Space.FRAME, -4), 2, Register.BP, 0, 2)
+    cell = ir.Mem(Addr(Space.FRAME, -4), 1 if extension else 2, Register.BP, 0, 2)
     if variant == "addressed":
         cell = ir.Mem(None, 2, Register.BX, 2, 1)
     spans = (0, 3) if variant == "bytes" else None
@@ -636,21 +643,24 @@ def test_register_round_trip_through_memory_is_one_instruction(variant, printed)
         return lir.Insn(at, covers, ir.Semantics(op, name, dests, sources, target), (), ())
 
     load = insn(0, ir.Operation.MOVE, "mov", (bx,), (cell,), covers=spans)
+    if extension:
+        load = insn(0, ir.Operation.EXTEND, extension, (bx,), (cell,))
     work = {
         "register": insn(1, ir.Operation.BINARY, "add", (bx,), (bx, cx)),
         "unary": insn(1, ir.Operation.UNARY, "neg", (bx,), (bx,)),
         "compare": insn(1, ir.Operation.COMPARE, "cmp", (), (bx, ir.Imm(5, 2))),
-        "zero": insn(1, ir.Operation.COMPARE, "cmp", (), (bx, ir.Imm(0, 2))),
     }.get(variant, insn(1, ir.Operation.BINARY, "add", (bx,), (bx, ir.Imm(1, 2))))
-    if variant in ("compare", "zero"):
-        head = (load, work, insn(2, ir.Operation.BRANCH, "jl", target=9))
+    if variant == "zero" or extension:
+        work = insn(1, ir.Operation.COMPARE, "cmp", (), (bx, ir.Imm(0, 2)))
+    if compares:
+        head = (load, work, insn(2, ir.Operation.BRANCH, "je" if variant == "unsigned byte" else "jl", target=9))
     else:
         head = (load, work, insn(2, ir.Operation.MOVE, "mov", (cell,), (bx,)))
     reread = insn(8, ir.Operation.MOVE, "mov", (ir.Reg(Register.AX, 2),), (bx,))
     rewrite = insn(8, ir.Operation.MOVE, "mov", (bx,), (cx,))
     # Back to the top rather than a return: liveness reads a return as reading every register.
     blocks = (
-        lir.LirBlock(0, head, (8, 9) if variant in ("compare", "zero") else (8,)),
+        lir.LirBlock(0, head, (8, 9) if compares else (8,)),
         lir.LirBlock(8, (reread if variant == "live" else rewrite, insn(9, ir.Operation.JUMP, "jmp", target=0)), (0,)),
         lir.LirBlock(9, (rewrite, insn(10, ir.Operation.JUMP, "jmp", target=0)), (0,)),
     )

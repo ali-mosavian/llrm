@@ -512,6 +512,43 @@ def test_a_compare_of_memory_against_a_small_literal_takes_the_byte_form(value: 
     assert made.code.hex() == want
 
 
+@pytest.mark.parametrize(("value", "want"), [(0, "807efc00"), (200, "807efcc8"), (-1, "807efcff")])
+def test_a_compare_of_a_byte_cell_against_a_literal(value: int, want: str) -> None:
+    """`cmp byte ptr [bp-4],0` came back None: only word and long cells were
+    admitted, so sieve's flag test stayed `movzx dx,[m]; or dx,dx`."""
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
+    made = select.compare(ir.Mem(addr=Addr(Space.FRAME, -4, 0), width=1), value)
+    assert made is not None
+    assert made.code.hex() == want
+
+
+@pytest.mark.parametrize(
+    ("name", "dest", "source", "want"),
+    [
+        ("movzx", Register.BX, 1, "0fb65efc"),
+        ("movsx", Register.AX, 1, "0fbe46fc"),
+        ("movzx", Register.EBX, 2, "660fb75efc"),
+        ("movzx", Register.EBX, Register.BX, "660fb7db"),
+    ],
+)
+def test_an_extension_encodes_from_a_byte_or_a_cell(name: str, dest, source, want: str) -> None:
+    """Only `movzx r32,r16` encoded, so liveness read `movzx bx,byte ptr [bp-4]` as
+    touching every lane and the flags before sieve's flag test looked live."""
+    from qbopt.backend import target
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
+    if source in (1, 2):
+        operand = ir.Mem(Addr(Space.FRAME, -4, 0), source, Register.BP, 0, 2)
+    else:
+        operand = ir.Reg(source, 2)
+    made = select.emit(ir.Semantics(ir.Operation.EXTEND, name, (ir.Reg(dest, target.WIDTHS[dest]),), (operand,)))
+    assert made is not None
+    assert made.code.hex() == want
+
+
 def test_a_compare_of_memory_against_a_large_literal_stays_wide() -> None:
     from qbopt.objectfile.module import Addr
     from qbopt.objectfile.module import Space

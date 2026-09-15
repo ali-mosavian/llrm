@@ -1423,9 +1423,11 @@ def arith_into_imm(name: str, cell: ir.Mem, value: int, at: int = 0, relocated: 
     and is the only answer that is right in both cases.
     """
     built = operand_of(cell)
-    if name not in TWO_OPERAND or built is None or cell.width not in (2, 4):
+    if name not in TWO_OPERAND or built is None or cell.width not in (1, 2, 4):
         return None
     value = _immediate(value, cell.width)
+    if cell.width == 1:
+        value = ((value & 0xFF) ^ 0x80) - 0x80
     for bits in (8, cell.width * 8) if fits_in_a_byte(value) and not relocated else (cell.width * 8,):
         code = _code(f"{name.upper()}_RM{cell.width * 8}_IMM{bits}")
         if code is None:
@@ -1529,10 +1531,16 @@ def emit(
         return float_stack(what, at)
     match what.op:
         case ir.Operation.EXTEND if what.name in ("movsx", "movzx") and len(dests) == len(sources) == 1:
-            code = Code.MOVSX_R32_RM16 if what.name == "movsx" else Code.MOVZX_R32_RM16
             match dests[0], sources[0]:
-                case ir.Reg(register=into), ir.Reg(register=outof) if into in target.WIDE and outof in target.NARROW:
-                    return _assemble(Instruction.create_reg_reg(code, into, outof), at)
+                case ir.Reg(register=into), ir.Reg(register=outof):
+                    code = _code(f"{what.name.upper()}_R{WIDTHS.get(into, 0) * 8}_RM{WIDTHS.get(outof, 0) * 8}")
+                    if code is not None and WIDTHS[into] > WIDTHS[outof]:
+                        return _assemble(Instruction.create_reg_reg(code, into, outof), at)
+                case ir.Reg(register=into), ir.Mem() as cell:
+                    code = _code(f"{what.name.upper()}_R{WIDTHS.get(into, 0) * 8}_RM{cell.width * 8}")
+                    built = operand_of(cell)
+                    if code is not None and built is not None and WIDTHS[into] > cell.width:
+                        return _assemble(Instruction.create_reg_mem(code, into, built[0]), at, built[1])
             return None
         case ir.Operation.MOVE if len(dests) == 2 and len(sources) == 1:
             match (dests[0], dests[1], sources[0]):

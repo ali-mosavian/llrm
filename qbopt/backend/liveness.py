@@ -36,6 +36,7 @@ def _universe() -> frozenset:
 def _backwards(block, live: frozenset, universe: frozenset) -> frozenset:
     """The lanes live before `block`, given those live after it."""
     from qbopt.backend.peephole import _flag_lanes
+    from qbopt.backend.peephole import _branch_reads
     from qbopt.backend.peephole import _register_effects
 
     for one in reversed(block.insns):
@@ -43,13 +44,15 @@ def _backwards(block, live: frozenset, universe: frozenset) -> frozenset:
             # Its flag read is not in `_register_effects`, which answers only
             # for instructions that fall through. It writes nothing.
             if one.what.op is ir.Operation.BRANCH:
-                live = live | _flag_lanes(0xFFFFFFFF)
+                live = live | _branch_reads(one.what)
             continue
         effects = _register_effects(one, flags=True)
         if effects is None:
             effects = _declared(one)
         if effects is None:
-            return universe
+            # It may read anything, but what the block writes before it is still written first.
+            live = universe
+            continue
         live = (live - effects[1]) | effects[0]
     return live
 
