@@ -15,9 +15,9 @@ from qbopt.backend import target
 from qbopt.objectfile.module import Space
 
 SIZES = {1: "byte", 2: "word", 4: "dword", 8: "qword", 10: "tbyte"}
-# Callee-saved under the C convention, saved whole: a 16-bit caller keeps SI
-# and DI, and a caller built here may keep all 32 bits.
-SAVED = (Register.ESI, Register.EDI)
+# Callee-saved under the C convention: a Borland caller keeps SI and DI, not
+# their upper halves, and a caller built here keeps nothing across a call.
+SAVED = {Register.ESI: Register.SI, Register.EDI: Register.DI}
 SEGMENTS = {"_DATA": ".data", "_BSS": ".data?", "CONST": ".const"}
 
 
@@ -75,7 +75,7 @@ def text(module: Module) -> str:
 
 
 def _procedure(procedure: Procedure, names: dict, number: int) -> list[str]:
-    saved = [one for one in SAVED if one in _roots(procedure.body)]
+    saved = [low for whole, low in SAVED.items() if whole in _roots(procedure.body)]
     reserve = procedure.reserve + (procedure.reserve & 1)
     # Inline code is bytes this printer cannot read, so it may address the frame.
     framed = bool(reserve) or Register.EBP in _roots(procedure.body) or any(one.code for one in procedure.callees.values())

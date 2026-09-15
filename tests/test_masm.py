@@ -50,6 +50,14 @@ def test_frame_only_where_something_uses_it():
     assert "mov sp, bp" in _printed((through,), 4)
 
 
+def test_callee_saves_only_what_the_convention_keeps():
+    """SI and DI were pushed and popped whole: an operand-size prefix on every save
+    and restore, for upper halves no Borland caller keeps across a call."""
+    lines = _printed((ir.Reg(Register.ESI, 4),), 0)
+    assert "push si" in lines and "pop si" in lines
+    assert "push esi" not in lines and "pop esi" not in lines
+
+
 def test_arithmetic_lea_scales_its_index():
     """peephole's multiply by three has no address, only base, index and scale."""
     where = ir.Address(None, through=Register.EBX, index=Register.EBX, scale=2)
