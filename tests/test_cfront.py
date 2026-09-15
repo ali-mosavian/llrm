@@ -344,6 +344,16 @@ def test_private_store_dies_across_float_operations():
     assert not any("[bp-4]" in line for line in body)
 
 
+def test_loaded_far_pointer_moves_whole():
+    """A far pointer read from memory was split into offset and segment and
+    never put back together: stored as two words, reloaded as a dword, split
+    again and rejoined through `push bx / push ax / pop eax` to test it."""
+    text = cfront.compiled((FIXTURES / "farptr.cgs").read_text(), "farptr", optimise=True)
+    lines = [line.strip() for line in text.splitlines()]
+    body = lines[lines.index("_copy proc far") : lines.index("_copy endp")]
+    assert not any("_pts+2" in line or line == "pop eax" for line in body), body
+
+
 def test_indexed_cell_reaches_its_whole_symbol():
     """An index value with no register in the address read as element zero
     alone, so a store to `sy[j]` did not reach `sy[2]`."""

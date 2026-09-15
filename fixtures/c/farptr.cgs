@@ -1,0 +1,61 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+SEG 11 attr=0x2 name="_BSS" align=2
+START
+SETSEG 11
+SYM y1 name="other" base="other" pattern="_*" attr=0x6 seg=11
+b1 BENewBack y1
+- DGLabel b1
+- DGUBytes 4
+SETSEG 11
+SYM y2 name="pts" base="pts" pattern="_*" attr=0x42 seg=11
+b2 BENewBack y2
+- DGLabel b2
+- DGUBytes 4
+TYPE T25 size=4 align=1
+f3 DBSrcFile "farptr.c"
+- DBSrcCue f3 8 1
+SYM y3 name="copy" base="copy" pattern="_*" attr=0x7 seg=1
+CALLCONV y3 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y3 TY_INT_2
+l4 CGLastParm
+t5 CGTemp TY_INT_2
+l6 BENewLabel
+l7 BENewLabel
+- DBSrcCue f3 10 1
+n8 CGFEName y2 TY_LONG_POINTER
+n9 CGFEName y1 TY_LONG_POINTER
+n10 CGUnary O_POINTS n9 TY_LONG_POINTER
+n11 CGAssign n8 n10 TY_LONG_POINTER
+- CGDone n11
+- DBSrcCue f3 11 1
+SYM y4 name="Use" base="Use" pattern="_*" attr=0xf seg=1
+CALLCONV y4 class=0x80 target=0x716 parms=[] ret=0:0
+n12 CGFEName y4 TY_CODE_PTR
+c13 CGInitCall n12 TY_INTEGER y4
+n14 CGFEName y2 TY_LONG_POINTER
+n15 CGUnary O_POINTS n14 TY_LONG_POINTER
+- CGAddParm c13 n15 TY_LONG_POINTER
+n16 CGCall c13
+- CGDone n16
+- DBSrcCue f3 12 1
+n17 CGFEName y2 TY_LONG_POINTER
+n18 CGUnary O_POINTS n17 TY_LONG_POINTER
+n19 CGInteger 0 TY_INTEGER
+n20 CGCompare O_NE n18 n19 TY_LONG_POINTER
+n21 CGInteger 1 TY_INTEGER
+n22 CGInteger 0 TY_INTEGER
+n23 CGChoose n20 n21 n22 TY_INTEGER
+n24 CGUnary O_CONVERT n23 TY_INT_2
+n25 CGTempName t5 TY_INT_2
+n26 CGAssign n25 n24 TY_INT_2
+- CGDone n26
+- DBSrcCue f3 13 1
+n27 CGTempName t5 TY_INT_2
+n28 CGUnary O_POINTS n27 TY_INT_2
+- CGReturn n28 TY_INT_2
+STOP
+FINI

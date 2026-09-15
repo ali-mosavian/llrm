@@ -140,6 +140,7 @@ class Far:
     segment: mir.Value
     offset: mir.Value
     disp: int = 0
+    whole: mir.Value | None = None  # the 4-byte pointer these halves were split from, at disp 0
 
 
 type Address = Frame | Global | Near | Far
@@ -789,6 +790,9 @@ class _Raise:
         value = self.eval(source)
         address = self.address(self.eval(target))
         width = self.width(type_)
+        if isinstance(value, Far) and value.whole is not None and value.disp == 0:
+            self.store(self.cell(address, 4), mir.Held(value.whole, 4))
+            return value
         if isinstance(value, Far):
             self.store(self.cell(address, 2), self.near(Near(value.offset, value.disp)))
             self.store(self.cell(replace(address, disp=address.disp + 2), 2), mir.Held(value.segment, 2))
@@ -957,6 +961,9 @@ class _Raise:
                     self.op(K.ARG, (), (self.load(cell, "TY_UINT_4"),))
             return width
         if isinstance(value, Far):
+            if value.whole is not None and value.disp == 0:
+                self.op(K.ARG, (), (mir.Held(value.whole, 4),))
+                return 4
             self.op(K.ARG, (), (mir.Held(value.segment, 2),))
             self.op(K.ARG, (), (mir.Held(self.near(Near(value.offset, value.disp)), 2),))
             return 4
@@ -971,6 +978,8 @@ class _Raise:
         match got:
             case mir.Held() | mir.Const():
                 return got
+            case Far(whole=split, disp=0) if split is not None:
+                return mir.Held(split, 4)
             case Far():
                 whole = self.fresh()
                 offset = self.near(Near(got.offset, got.disp))
@@ -1049,7 +1058,7 @@ class _Raise:
     def split(self, pointer: mir.Held) -> Far:
         segment = self.fresh()
         self.op(K.SHR, (mir.Held(segment, 4),), (pointer, mir.Const(16, 1)))
-        return Far(segment, pointer.value)
+        return Far(segment, pointer.value, whole=pointer.value)
 
     def near(self, address: Address) -> mir.Value:
         match address:
