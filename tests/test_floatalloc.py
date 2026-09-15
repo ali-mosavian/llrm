@@ -5,6 +5,28 @@ from dataclasses import replace
 import pytest
 from iced_x86 import Register
 
+
+def test_truncation_saves_the_control_word_once_per_body():
+    """Every `(int)f` saved the control word and built the truncating one again:
+    six instructions a site, 143 sites over qcport, where one save at entry
+    leaves three a site."""
+    from qbopt.backend import frame
+
+    def insn(at, what):
+        return lir.Insn(at, (at, at), what, (), ())
+
+    def store(at, disp):
+        cell = ir.Mem(Addr(Space.FRAME, disp), 2, Register.BP, 0, 2)
+        return insn(at, ir.Semantics(ir.Operation.FLOAT_STORE, "fisttp", (cell,), (ir.St(0),)))
+
+    blocks = (
+        lir.LirBlock(0, (insn(0, ir.Semantics(ir.Operation.NOTHING, "")),), (5,)),
+        lir.LirBlock(5, (store(5, -2), store(6, -4)), ()),
+    )
+    result = floatalloc._truncating(lir.LirBody("t", 0, blocks, {}, {}), frame.Frame(-8))
+    names = {block.at: [one.what.name for one in block.insns if one.what.name] for block in result.blocks}
+    assert names == {0: ["fnstcw", "fnstcw", "or"], 5: ["fldcw", "fistp", "fldcw", "fldcw", "fistp", "fldcw"]}
+
 from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.backend import select

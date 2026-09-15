@@ -94,14 +94,9 @@ def test_float_cast_truncates():
     body = lines[lines.index("_ls_animate proc far") : lines.index("_ls_animate endp")]
     at = body.index("fld dword ptr [bp+8]")
     assert body[at + 1] == "fimul word ptr [bp-10]"
-    assert body[at + 2 : at + 8] == [
-        "fnstcw word ptr [bp-22]",
-        "fnstcw word ptr [bp-24]",
-        "or word ptr [bp-24], 3072",
-        "fldcw word ptr [bp-24]",
-        "fistp dword ptr [bp-16]",
-        "fldcw word ptr [bp-22]",
-    ]
+    assert [line.split()[0] for line in body[at + 2 : at + 5]] == ["fldcw", "fistp", "fldcw"]
+    saves = [index for index, line in enumerate(body) if line.startswith("fnstcw")]
+    assert len(saves) == 2 and saves[-1] < at
 
 
 def test_register_convention_is_refused():
