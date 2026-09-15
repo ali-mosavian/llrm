@@ -302,3 +302,22 @@ def test_a_named_far_objects_selector_reaches_neither_stack_nor_dgroup() -> None
     assert regions.may_alias(named, loaded), "a loaded far pointer may point anywhere"
     assert regions.may_alias(named, other), "two far objects may share a segment"
     assert regions.may_alias(loaded, local)
+
+
+def test_a_declared_scalar_is_reached_only_through_its_own_type() -> None:
+    """snd_mix_frame's `snd_paint[k] = 0` reloaded `int far *snd_paint` on every
+    pass, so the loop never became bcc's `rep stosw`: an `int` store cannot
+    change a declared pointer, but only a declared object says so -- two
+    accesses of different types may be one union's members."""
+    offset, selector = mir.Value(1, 1), mir.Value(2, 1)
+    pointer = _ref(Addr(Space.SEGMENT, 0x18, 7), space=Space.SEGMENT, typed=("pointer4", True))
+    store = _ref(Addr(Space.FAR, 0), base=offset, segment=selector, space=Space.FAR, base_width=2, typed=("int2", False))
+    other = _ref(Addr(Space.FAR, 0), base=offset, segment=selector, space=Space.FAR, base_width=2, typed=("pointer4", False))
+    chars = _ref(Addr(Space.FAR, 0), base=offset, segment=selector, space=Space.FAR, base_width=2)
+    member = _ref(Addr(Space.FRAME, -8), width=4, space=Space.FRAME, typed=("float4", False))
+    punned = _ref(Addr(Space.FRAME, -8), width=4, space=Space.FRAME, typed=("int4", False))
+
+    assert not regions.may_alias(store, pointer)
+    assert regions.may_alias(other, pointer)
+    assert regions.may_alias(chars, pointer), "a char or untyped access reaches anything"
+    assert regions.may_alias(member, punned), "neither is a declared object"

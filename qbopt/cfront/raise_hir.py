@@ -80,6 +80,12 @@ def _packed(value: float, width: int) -> bytes:
     return struct.pack("<f" if width == 4 else "<d", value)
 SIGNED = frozenset({"TY_INT_1", "TY_INT_2", "TY_INT_4", "TY_INTEGER"})
 FAR_POINTERS = frozenset({"TY_LONG_POINTER", "TY_HUGE_POINTER"})
+# C's aliasing classes: a declared object is read and written only through its own, or a character type.
+CLASSES = {
+    "TY_INT_2": "int2", "TY_UINT_2": "int2", "TY_INTEGER": "int2", "TY_UNSIGNED": "int2",
+    "TY_INT_4": "int4", "TY_UINT_4": "int4", "TY_SINGLE": "float4", "TY_DOUBLE": "float8",
+    "TY_NEAR_POINTER": "pointer2", "TY_LONG_POINTER": "pointer4", "TY_HUGE_POINTER": "pointer4",
+}  # fmt: skip
 # What a callee reads and writes: no byte this body can name, bounded later
 # to miss a frame whose address never escapes.
 CALLEE = (mir.MemRef(None, 4),)
@@ -122,6 +128,7 @@ ARITHMETIC = {
 @dataclass(frozen=True, slots=True)
 class Frame:
     disp: int
+    declared: str | None = field(default=None, compare=False)  # the aliasing class of the scalar it names
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +137,7 @@ class Global:
     index: int
     disp: int = 0
     base: mir.Value | None = None  # an index into the symbol, `_arr[j]`
+    declared: str | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +153,7 @@ class Far:
     disp: int = 0
     whole: mir.Value | None = None  # the 4-byte pointer these halves were split from, at disp 0
     named: int = 0  # the selector symbol when the segment is a named object's own, else 0
+    declared: str | None = field(default=None, compare=False)
 
 
 type Address = Frame | Global | Near | Far
@@ -503,7 +512,7 @@ class _Raise:
             case "CGFloat", (text, type_) if type_ in FLOATS:
                 return self.real(float(text), self.width(type_))
             case "CGFEName", (symbol, type_):
-                return self.name(symbol)
+                return self.name(symbol, type_)
             case "CGTempName", (temp, _):
                 return Frame(self.frame[temp])
             case "CGBackName", (back, _):
@@ -541,9 +550,9 @@ class _Raise:
             case "CGPostGets" | "CGPreGets", (cg_op, target, source, type_):
                 address = self.address(self.eval(target))
                 width = self.width(type_)
-                old = self.load(self.cell(address, width), type_)
+                old = self.load(self.cell(address, width, type_), type_)
                 new = self.arithmetic(cg_op, old, self.coerced(self.eval(source), source, type_), type_)
-                self.store(self.cell(address, width), new)
+                self.store(self.cell(address, width, type_), new)
                 return old if tree.call == "CGPostGets" else new
             case "CGCall", (call,):
                 return self.call(self.unit.calls[hir.handle(call)])
@@ -614,18 +623,25 @@ class _Raise:
         """An operand at the operation's type: the code generator converts operands implicitly."""
         return self.operand(self.convert(got, self.type_of(node), type_), type_)
 
-    def name(self, token: str):
+    def name(self, token: str, type_: str | None = None):
         symbol = self.unit.symbols[hir.handle(token)]
         if symbol.proc:
             return Function(symbol)
+        declared = self.aliasing(type_)
         if token in self.frame:
-            return Frame(self.frame[token])
+            return Frame(self.frame[token], declared)
         if not self.unit.grouped(symbol):
             segment, offset = self.fresh(), self.fresh()
             self.op(K.COPY, (mir.Held(segment, 2),), (mir.Symbol(Space.GROUP, SELECTOR + symbol.id, 0, 2),))
             self.op(K.COPY, (mir.Held(offset, 2),), (mir.Symbol(_space(symbol), symbol.id, 0, 2),))
-            return Far(segment, offset, named=SELECTOR + symbol.id)
-        return Global(_space(symbol), symbol.id)
+            return Far(segment, offset, named=SELECTOR + symbol.id, declared=declared)
+        return Global(_space(symbol), symbol.id, declared=declared)
+
+    def aliasing(self, type_: str | None) -> str | None:
+        """A scalar type's aliasing class; None for a character, an aggregate or no type, which reach anything."""
+        if type_ == "TY_POINTER":
+            return f"pointer{self.width(type_)}"
+        return CLASSES.get(type_)
 
     def points(self, got, type_: str):
         if isinstance(got, mir.Held) and got.width == 10:
@@ -645,7 +661,7 @@ class _Raise:
             return FloatCell(address, self.width(type_))
         if self.far_pointer(type_):
             return self.far_loaded(address, type_)
-        return self.load(self.cell(address, self.width(type_)), type_)
+        return self.load(self.cell(address, self.width(type_), type_), type_)
 
     def convert(self, got, source: str, type_: str):
         # An address's node is typed by what it addresses: `(void far *) &a_float`.
@@ -734,6 +750,9 @@ class _Raise:
         return self.arithmetic(cg_op, self.coerced(a, left, type_), self.coerced(b, right, type_), type_)
 
     def offset(self, address: Address, by: Operand, subtract: bool) -> Address:
+        # Arithmetic leaves the declared object: what it reaches is an access.
+        if not isinstance(address, Near):
+            address = replace(address, declared=None)
         if isinstance(by, mir.Const):
             n = -by.n if subtract else by.n
             return replace(address, disp=address.disp + n)
@@ -808,16 +827,16 @@ class _Raise:
         address = self.address(self.eval(target))
         width = self.width(type_)
         if isinstance(value, Far) and value.whole is not None and value.disp == 0:
-            self.store(self.cell(address, 4), mir.Held(value.whole, 4))
+            self.store(self.cell(address, 4, type_), mir.Held(value.whole, 4))
             return value
         if isinstance(value, Far):
-            self.store(self.cell(address, 2), self.near(Near(value.offset, value.disp)))
-            self.store(self.cell(replace(address, disp=address.disp + 2), 2), mir.Held(value.segment, 2))
+            self.store(self.cell(address, 2, type_), self.near(Near(value.offset, value.disp)))
+            self.store(self.cell(replace(address, disp=address.disp + 2), 2, type_), mir.Held(value.segment, 2))
             return value
         if type_ in FLOATS:
             return self.put_float(address, width, self.convert(value, self.type_of(source), type_))
         operand = self.coerced(value, source, type_)
-        self.store(self.cell(address, width), operand)
+        self.store(self.cell(address, width, type_), operand)
         return operand
 
     def put_float(self, address: Address, width: int, got):
@@ -1084,9 +1103,9 @@ class _Raise:
 
         Read one after another here, so all three see the same memory; the
         ones nothing uses are dead. Splitting the whole instead cost a shift."""
-        whole = self.load(self.cell(address, 4), type_)
-        offset = self.load(self.cell(address, 2), "TY_UINT_2")
-        segment = self.load(self.cell(replace(address, disp=address.disp + 2), 2), "TY_UINT_2")
+        whole = self.load(self.cell(address, 4, type_), type_)
+        offset = self.load(self.cell(address, 2, type_), "TY_UINT_2")
+        segment = self.load(self.cell(replace(address, disp=address.disp + 2), 2, type_), "TY_UINT_2")
         return Far(segment.value, offset.value, whole=whole.value)
 
     def split(self, pointer: mir.Held) -> Far:
@@ -1118,7 +1137,16 @@ class _Raise:
         self.op(K.COPY, (mir.Held(result, 2),), (mir.Symbol(Space.GROUP, 0, 0, 2),))
         return result
 
-    def cell(self, address: Address, width: int) -> mir.MemRef:
+    def cell(self, address: Address, width: int, type_: str | None = None) -> mir.MemRef:
+        """The reference, typed by the object it names where declared, else by the lvalue's type."""
+        declared = getattr(address, "declared", None)
+        access = self.aliasing(type_)
+        ref = self.placed(address, width)
+        if declared is not None:
+            return replace(ref, typed=(declared, True))
+        return replace(ref, typed=(access, False)) if access is not None else ref
+
+    def placed(self, address: Address, width: int) -> mir.MemRef:
         match address:
             case Frame(disp):
                 return mir.MemRef(Addr(Space.FRAME, disp), width, space=Space.FRAME)

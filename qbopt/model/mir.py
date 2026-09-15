@@ -254,6 +254,8 @@ class MemRef:
     base_width: int = 4  # width of the address value, independently of the memory data width
     pointer: bool = False  # base is a whole pointer, not a numerical index or offset
     excludes: tuple[tuple[Addr, int], ...] = ()  # exact byte ranges this effect cannot reach
+    # The source language's aliasing class, and whether this is a declared object of it rather than an access.
+    typed: "tuple[str, bool] | None" = field(default=None, compare=False)
 
     @property
     def where(self) -> "Space | None":
@@ -2138,6 +2140,8 @@ def overlapping(
     identity rather than by the caller having promised the register was not
     written in between.
     """
+    if regions.typed_apart(one, other):
+        return False
     if not (one.pointer or other.pointer):
         if known or other_known:
             from qbopt.analysis import ranges

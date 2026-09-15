@@ -38,7 +38,7 @@ carry exclusions.
 Everything else here is arithmetic on the object. Real mode makes an address
 `segment * 16 + offset`, so two byte intervals either meet or they do not, and
 94% of references resolve through a fixup to an exact (segment, displacement).
-These four are the assumptions, and they are the whole list. The first three
+These five are the assumptions, and they are the whole list. The first three
 are each one region, so removing one is deleting a region rather than editing
 a rule.
 
@@ -74,6 +74,10 @@ the access that needed it.
 object cannot prove otherwise. Reaching it takes a subscript past the end of
 its own segment, which BASIC's arrays do not allow. So an indexed reference
 reaches every byte of its own segment and no other's.
+
+**5. A declared object is changed only through its own type.** C lets an
+lvalue of another type, bar a character type, neither read nor write a
+declared scalar; the raise says which references are which.
 
 The first two are regions this file has always had. The third needs the
 selector's value, which arrives in `known` -- an interval per value, singleton
@@ -288,10 +292,21 @@ def regions(ref, bounds: dict | None = None, known: dict | None = None, layout=N
     return RegionSet(_spans(ref, bounds, known, layout), _holes(ref, layout))
 
 
+def typed_apart(one, other) -> bool:
+    """Axiom 5: a declared object is reached only through its own type class.
+
+    An access of another class may still be a union's other member, so two
+    accesses say nothing; a character or untyped access carries no class."""
+    a, b = getattr(one, "typed", None), getattr(other, "typed", None)
+    return a is not None and b is not None and a[0] != b[0] and (a[1] or b[1])
+
+
 def may_alias(
     one, other, bounds: dict | None = None, known: dict | None = None, other_known: dict | None = None, layout=None
 ) -> bool:
     """Whether two references can name the same byte."""
+    if typed_apart(one, other):
+        return False
     return regions(one, bounds, known, layout).intersects(regions(other, bounds, other_known, layout))
 
 
