@@ -240,6 +240,7 @@ class _Raise:
         self.callees: dict[int, hir.Symbol] = {}
         self.contracts: dict[int, runtime.Contract] = {}
         self.frame: dict[str, int] = {}
+        self.selects: dict[str, tuple[list[tuple[int, str]], str | None]] = {}
         at = 6 if self.symbol.far else 4
         for symbol, type_ in proc.parms:
             self.frame[f"y{symbol}"] = at
@@ -332,7 +333,12 @@ class _Raise:
             mir.MirBlock(
                 at[block.key],
                 (),
-                tuple(replace(op, target=at[op.target]) if isinstance(op.target, str) else op for op in block.ops),
+                tuple(
+                    replace(op, target=at[op.target], cases=tuple((n, at[label]) for n, label in op.cases))
+                    if isinstance(op.target, str)
+                    else op
+                    for op in block.ops
+                ),
                 tuple(at[key] for key in block.succ),
             )
             for block in kept
@@ -358,6 +364,18 @@ class _Raise:
                 self.branch(node, label, test == "O_IF_TRUE")
             case "CGReturn", (node, type_):
                 self.ret(node, type_)
+            case "CGSelInit", (select,):
+                self.selects[select] = ([], None)
+            case "CGSelCase", (select, label, value):
+                self.selects[select][0].append((int(value), label))
+            case "CGSelOther", (select, label):
+                self.selects[select] = (self.selects[select][0], label)
+            case "CGSelect", (select, node) if self.selects[select][1] is not None:
+                cases, other = self.selects.pop(select)
+                type_ = self.type_of(node)
+                value = self.narrowed(self.operand(self.eval(node), type_), max(2, self.width(type_)))
+                self.op(K.SWITCH, args=(value,), target=other, cases=tuple(cases))
+                self.end(*dict.fromkeys((other, *(label for _, label in cases))))
             case _:
                 raise Unsupported(f"{self.symbol.name} line {one.line}: {one.call} {' '.join(one.args)}")
 
@@ -492,7 +510,7 @@ class _Raise:
                 address = self.address(self.eval(target))
                 width = self.width(type_)
                 old = self.load(self.cell(address, width), type_)
-                new = self.arithmetic(cg_op, old, self.operand(self.eval(source), type_), type_)
+                new = self.arithmetic(cg_op, old, self.coerced(self.eval(source), source, type_), type_)
                 self.store(self.cell(address, width), new)
                 return old if tree.call == "CGPostGets" else new
             case "CGCall", (call,):
@@ -593,6 +611,11 @@ class _Raise:
         return loaded
 
     def convert(self, got, source: str, type_: str):
+        # An address's node is typed by what it addresses: `(void far *) &a_float`.
+        if isinstance(got, (Frame, Global, Near)) and self.far_pointer(type_):
+            return Far(self.dgroup(), self.near(got))
+        if isinstance(got, (Frame, Global, Near, Far)):
+            return got
         if source in FLOATS or type_ in FLOATS:
             if source in FLOATS and type_ in FLOATS:
                 return self.real(got.value, self.width(type_)) if isinstance(got, Real) else got
@@ -608,10 +631,6 @@ class _Raise:
             result = self.fresh()
             self.op(K.FLOAD, (mir.Held(result, 10),), (whole,), floating=_loaded(INTEGER_FORMATS[whole.width]))
             return mir.Held(result, 10)
-        if isinstance(got, (Frame, Global, Near)) and self.far_pointer(type_):
-            return Far(self.dgroup(), self.near(got))
-        if isinstance(got, (Frame, Global, Near, Far)):
-            return got
         if isinstance(got, Returned):
             got = self.points(got, source)
             if not isinstance(got, (mir.Held, mir.Const)):
@@ -698,27 +717,35 @@ class _Raise:
         if type_ in FLOATS:
             raise Unsupported(f"{self.symbol.name}: float {cg_op}")
         width = max(2, self.width(type_))
-        a, b = self.narrowed(a, width), self.narrowed(b, width)
+        shift = cg_op in ("O_LSHIFT", "O_RSHIFT")
+        a, b = self.narrowed(a, width), (b if shift else self.narrowed(b, width))
         signed = type_ in SIGNED
         if isinstance(a, mir.Const) and isinstance(b, mir.Const):
             return mir.Const(self.wrapped(_fold(cg_op, a.n, b.n, signed), type_), width)
         result = self.fresh()
+        if cg_op in ("O_DIV", "O_MOD") and not signed:
+            if width == 4:
+                raise Unsupported(f"{self.symbol.name}: unsigned long division")
+            # A word's unsigned quotient is the signed one of its zero
+            # extensions, which no 32-bit division overflows.
+            wide = [
+                mir.Const(one.n & 0xFFFF, 4) if isinstance(one, mir.Const) else self.convert(one, "TY_UINT_2", "TY_UINT_4")
+                for one in (a, b)
+            ]
+            return self.narrowed(self.arithmetic(cg_op, *wide, "TY_INT_4"), 2)
         if cg_op in ("O_DIV", "O_MOD"):
-            if not signed:
-                raise Unsupported(f"{self.symbol.name}: unsigned division")
             if isinstance(a, mir.Const):
                 a = mir.Held(self.copy(a), width)
             remainder = self.fresh()
             self.op(K.DIVMOD, (mir.Held(result, width), mir.Held(remainder, width)), (a, b)
             )
             return mir.Held(result if cg_op == "O_DIV" else remainder, width)
-        if cg_op in ("O_LSHIFT", "O_RSHIFT"):
-            if not isinstance(b, mir.Const):
-                raise Unsupported(f"{self.symbol.name}: shift by a variable count")
+        if shift:
             if isinstance(a, mir.Const):
                 a = mir.Held(self.copy(a), width)
+            count = mir.Const(b.n, 1) if isinstance(b, mir.Const) else mir.Held(b.value, 1)
             kind = K.SHL if cg_op == "O_LSHIFT" else (K.SAR if signed else K.SHR)
-            self.op(kind, (mir.Held(result, width),), (a, mir.Const(b.n, 1)))
+            self.op(kind, (mir.Held(result, width),), (a, count))
             return self.extended(mir.Held(result, width), type_)
         if cg_op not in ARITHMETIC:
             raise Unsupported(f"{self.symbol.name}: {cg_op}")
@@ -926,6 +953,10 @@ class _Raise:
                 return Near(value)
             case mir.Held(width=4):
                 return self.split(got)
+            case mir.Const(n=n, width=4):
+                return Far(self.copy(mir.Const((n >> 16) & 0xFFFF, 2)), self.copy(mir.Const(n & 0xFFFF, 2)))
+            case mir.Const(n=n, width=2):
+                return Near(self.copy(mir.Const(n & 0xFFFF, 2)))
         raise Unsupported(f"{self.symbol.name}: {got} used as an address")
 
     def split(self, pointer: mir.Held) -> Far:

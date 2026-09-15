@@ -75,7 +75,8 @@ def _procedure(procedure: Procedure, names: dict, number: int) -> list[str]:
     if reserve:
         out.append(f"    sub sp, {reserve}")
     out += [f"    push {target.name_of(one)}" for one in saved]
-    for block in procedure.body.blocks:
+    blocks = procedure.body.blocks
+    for index, block in enumerate(blocks):
         out.append(f"L{number}_{block.at}:")
         for one in block.insns:
             if one.what is None:
@@ -85,8 +86,23 @@ def _procedure(procedure: Procedure, names: dict, number: int) -> list[str]:
             except Unprintable as error:
                 raise Unprintable(f"{procedure.name} at {one.at}: {error}") from error
             out += [f"    {line}" for line in lines]
+        fall = _falls_to(block, procedure.name)
+        if fall is not None and (index + 1 == len(blocks) or blocks[index + 1].at != fall):
+            out.append(f"    jmp L{number}_{fall}")
     out.append(f"{procedure.name} endp")
     return out
+
+
+def _falls_to(block: lir.LirBlock, name: str) -> int | None:
+    """The successor control reaches by running off the block's end, if any."""
+    last = next((one.what for one in reversed(block.insns) if one.what.op is not ir.Operation.NOTHING), None)
+    if last is not None and last.op in (ir.Operation.JUMP, ir.Operation.RETURN):
+        return None
+    taken = last.target if last is not None and last.op is ir.Operation.BRANCH else None
+    rest = [one for one in block.succ if one != taken] or [one for one in block.succ]
+    if len(rest) > 1:
+        raise Unprintable(f"{name}: block {block.at} leaves for {block.succ} with no instruction choosing")
+    return rest[0] if rest else None
 
 
 def _roots(body: lir.LirBody) -> set:
@@ -111,6 +127,9 @@ def _instruction(one: lir.Insn, procedure: Procedure, names: dict, number: int, 
     match what.op:
         case ir.Operation.NOTHING:
             return [name] if name not in ("", "nop") else []
+        case ir.Operation.MOVE if _segment(what.dests[0]) and isinstance(what.sources[0], ir.Imm):
+            # x86 has no immediate move into a segment register; the stack holds it for one instruction.
+            return [f"pushw {sources[0]}", f"pop {dests[0]}"]
         case ir.Operation.MOVE | ir.Operation.ADDRESS:
             return [f"{name} {dests[0]}, {sources[0]}"]
         case ir.Operation.BINARY:
@@ -165,6 +184,10 @@ def _instruction(one: lir.Insn, procedure: Procedure, names: dict, number: int, 
             restore = [f"pop {target.name_of(register)}" for register in reversed(saved)]
             return [*restore, "mov sp, bp", "pop bp", name or ("retf" if procedure.far else "ret")]
     raise Unprintable(f"{what}")
+
+
+def _segment(where) -> bool:
+    return isinstance(where, ir.Reg) and where.register in (Register.ES, Register.DS, Register.SS, Register.FS, Register.GS)
 
 
 def _operand(where, names: dict) -> str:

@@ -181,6 +181,53 @@ def test_library_math_calls_the_runtime():
     assert "extern _sqrt:far" in lines
 
 
+def test_switch_reaches_its_default():
+    """A switch was refused, 19 of qcport's procedures. Expanded into compares,
+    its last one fell through into the first case: nothing printed the jump
+    to a successor that is not the next block, so `default` never ran."""
+    body = _proc(_asm("control"), "_pick")
+    at = body.index("cmp ax, 9")
+    assert body[at + 1].startswith("je ") and body[at + 2].startswith("jmp ")
+    default = body.index(body[at + 2].split()[1] + ":")
+    assert body[default + 1] == "mov word ptr [bp-2], -1"
+
+
+def test_shift_counts_from_cl():
+    """`v << n` was refused for any count but a literal."""
+    body = _proc(_asm("control"), "_shifted")
+    assert {"shl eax, cl", "sar ebx, cl", "shr bx, cl"} <= set(body)
+
+
+def test_unsigned_word_division_divides_zero_extensions():
+    """`offset / 7` on an unsigned short was refused; a signed word division
+    would have read 0x8000 and up as negative."""
+    body = _proc(_asm("control"), "_per")
+    at = body.index("cdq")
+    assert body[at - 3] == "movzx ecx, ax" and body[at + 1] == "idiv ebx"
+
+
+def test_constant_far_address_loads_its_selector_through_the_stack():
+    """`*(unsigned long far *) 0x0040006C` was refused, then printed `mov es, 64`,
+    which x86 has no encoding for."""
+    body = _proc(_asm("control"), "_far_ticks")
+    at = body.index("pop es")
+    assert body[at - 1 : at + 3] == ["pushw 64", "pop es", "mov bx, 108", "mov eax, dword ptr es:[bx]"]
+
+
+def test_compound_assignment_widens_its_source():
+    """`total += step`, a long and a short: the raise refused a word used at width 4."""
+    body = _proc(_asm("control"), "_grow")
+    at = body.index("movsx ebx, bx")
+    assert body[at + 1 : at + 3] == ["add eax, ebx", "mov dword ptr [bp+6], eax"]
+
+
+def test_address_of_a_float_is_a_pointer():
+    """`(void far *) &cell`: the name node is typed by the float it names, and the
+    conversion loaded it onto the x87."""
+    body = _proc(_asm("control"), "_where")
+    assert body[body.index("mov bx, offset _cell") - 1] == "mov ax, DGROUP"
+
+
 def test_calls_push_in_convention_order():
     """cdecl pushes last first and pops after; pascal pushes first first."""
     lines = _asm("qglsurf")
