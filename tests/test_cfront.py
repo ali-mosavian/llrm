@@ -301,3 +301,12 @@ def test_const2_is_in_dgroup():
     """d_faces's `static const float lm_recip[]` is in CONST2, which Open Watcom
     groups with DGROUP; jwasm's medium model does not, so DS reached the wrong frame."""
     assert "DGROUP group CONST2" in _asm("fardata")
+
+
+def test_float_check_is_named_fwait():
+    """floatfold keeps an FCHECK where it drops an unused inexact conversion;
+    the C path named it nothing, and --opt refused view.c's v_update_camera."""
+    check = cfront.mir.Op(5, cfront.lower.ir.Operation.NOTHING, "", (), (), kind=cfront.mir.Kind.FCHECK)
+    body = cfront.mir.MirBody(5, (cfront.mir.MirBlock(5, (), (check,), ()),))
+    (named,) = cfront.lower.named(body).blocks[0].ops
+    assert (named.op, named.name) == (cfront.lower.ir.Operation.NOTHING, "fwait")

@@ -118,6 +118,7 @@ _NAMED: dict[mir.Kind, tuple[ir.Operation, str]] = {
     mir.Kind.FABS: (ir.Operation.FLOAT_UNARY, "fabs"),
     # FloatAlloc picks fcom, fcomp or fcompp by what dies.
     mir.Kind.FCOMPARE: (ir.Operation.COMPARE, "fcom"),
+    mir.Kind.FCHECK: (ir.Operation.NOTHING, "fwait"),
     mir.Kind.CALL: (ir.Operation.CALL, "call"),
     mir.Kind.RETURN: (ir.Operation.RETURN, ""),
 }
