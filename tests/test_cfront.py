@@ -93,7 +93,8 @@ def test_float_cast_truncates():
     lines = _asm("ls")
     body = lines[lines.index("_ls_animate proc far") : lines.index("_ls_animate endp")]
     at = body.index("fld dword ptr [bp+8]")
-    assert body[at + 1] == "fimul word ptr [bp-10]"
+    # The constant from the pool: as an integer it was first written to a slot, `mov word ptr [bp-10], 10`.
+    assert body[at + 1].startswith("fmul dword ptr L_f") and "mov word ptr [bp-10], 10" not in body
     assert [line.split()[0] for line in body[at + 2 : at + 5]] == ["fldcw", "fistp", "fldcw"]
     saves = [index for index, line in enumerate(body) if line.startswith("fnstcw")]
     assert len(saves) == 2 and saves[-1] < at

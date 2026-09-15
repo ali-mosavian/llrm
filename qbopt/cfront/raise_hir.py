@@ -1009,7 +1009,9 @@ class _Raise:
                 result = self.fresh()
                 self.op(K.FLOAD, (mir.Held(result, 10),), (mir.Cell(ref),), loads=(ref,), floating=_loaded(FORMATS[width]))
                 return mir.Held(result, 10)
-            case Real(value=value) if value.is_integer() and -0x8000 <= value < 0x8000 and math.copysign(1, value) > 0:
+            # fldz and fld1 load these with no operand; any other constant costs a
+            # slot write before `fild` from the stack, where the pool is one operand.
+            case Real(value=value) if value in (0.0, 1.0) and math.copysign(1, value) > 0:
                 result = self.fresh()
                 self.op(K.FLOAD, (mir.Held(result, 10),), (mir.Const(int(value), 2),), floating=_loaded(INTEGER_FORMATS[2]))
                 return mir.Held(result, 10)
