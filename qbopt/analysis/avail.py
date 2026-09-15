@@ -342,6 +342,7 @@ def _dead_in(
     calls: dict[int, str],
     private: "Callable[[MemRef], bool] | None" = None,
     bounds: dict | None = None,
+    sealed: bool = False,
 ) -> tuple[list[int], dict[MemRef, int]]:
     """One block, backward, from what its successors have already overwritten.
 
@@ -361,15 +362,16 @@ def _dead_in(
             # store, since sp comes back where it started and nothing
             # outside the idiom reads the cells it passed through.
             continue
-        if (
-            op.floating is not None
-            or op.kind is Kind.FCHECK
-            or effects.unmodeled_write(op)
-            or (op.kind is Kind.CALL and not op.loads)
-        ):
-            kept = shielded and op.kind is Kind.CALL
+        exception = op.floating is not None or op.kind is Kind.FCHECK
+        if exception or effects.unmodeled_write(op) or (op.kind is Kind.CALL and not op.loads):
+            # A float exception's handler runs outside the body, and in a
+            # sealed one resumes nowhere inside: a private cell is as safe as
+            # across a call, and the op's own cells are read as any op's.
+            caught = exception and sealed and private is not None and not op.barrier and not effects.unmodeled_write(op)
+            kept = (shielded and op.kind is Kind.CALL) or caught
             overwritten = {one: at for one, at in overwritten.items() if private(one)} if kept else {}
-            continue
+            if not caught:
+                continue
 
         wrote = stored_cell(op)
         if wrote is not None:
@@ -485,7 +487,7 @@ def dead_stores(
                     out = {one: at for one, at in out.items() if any(mir.same_bytes(one, other) for other in have)}
             if out is None:
                 out = dict(unread)  # no successor at all: only the caller may read it
-            mine, start = _dead_in(block, out, dgroup, calls, private, bounds)
+            mine, start = _dead_in(block, out, dgroup, calls, private, bounds, body.sealed)
             found.update(mine)
             if len(start) != len(entry[block.at]):
                 changing = True

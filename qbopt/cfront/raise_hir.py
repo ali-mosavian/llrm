@@ -356,6 +356,7 @@ class _Raise:
             for block in kept
         )
         body = mir.MirBody(blocks[0].at, blocks, origin=dict(self.origin), pins=dict(self.pins), sealed=True)
+        body = mir._frame_bounded(body, pointers=True)
         problems = mir.verify(body)
         if problems:
             raise Unsupported(f"{self.symbol.name}: raised MIR is not SSA: {problems[:3]}")
@@ -706,6 +707,9 @@ class _Raise:
             x = self.floating(self.convert(a, self.type_of(left), type_))
             y = self.floating(self.convert(b, self.type_of(right), type_))
             return self.float_arithmetic(cg_op, x, y)
+        if cg_op in ("O_PLUS", "O_MINUS") and type_ in ("TY_POINTER", "TY_NEAR_POINTER") and not self.far_pointer(type_):
+            # A loaded near pointer is an address too, so its constant steps fold into cells.
+            a, b = (self.loaded(one, node) for one, node in ((a, left), (b, right)))
         if cg_op in ("O_PLUS", "O_MINUS") and isinstance(b, (Frame, Global, Near, Far)) and cg_op == "O_PLUS":
             a, b = b, a
         if isinstance(a, mir.Held) and self.far_pointer(self.type_of(left)):
@@ -1036,6 +1040,11 @@ class _Raise:
             case mir.Const(n=n, width=2):
                 return Near(self.copy(mir.Const(n & 0xFFFF, 2)))
         raise Unsupported(f"{self.symbol.name}: {got} used as an address")
+
+    def loaded(self, got, node: str):
+        type_ = self.type_of(node)
+        near = type_ == "TY_NEAR_POINTER" or (type_ == "TY_POINTER" and not self.far_pointer(type_))
+        return Near(got.value) if near and isinstance(got, mir.Held) and got.width == 2 else got
 
     def split(self, pointer: mir.Held) -> Far:
         segment = self.fresh()

@@ -323,6 +323,27 @@ def test_global_array_cell_is_named_through_its_index():
     assert any(line.startswith("mov word ptr _sy[") for line in body)
 
 
+def test_near_pointer_field_is_named_through_its_pointer():
+    """`scale->y` and `m[3]` added a constant to a loaded near pointer as plain
+    arithmetic: each sum was hoisted and spilled, so every access took
+    `mov bx, [bp-n]` before `fmul [bx]`."""
+    text = cfront.compiled((FIXTURES / "pointers.cgs").read_text(), "pointers", optimise=True)
+    lines = [line.strip() for line in text.splitlines()]
+    body = lines[lines.index("_transform proc far") : lines.index("_transform endp")]
+    assert "fmul dword ptr [di+12]" in body
+    assert not any(line.startswith("mov bx, word ptr [bp-") for line in body)
+
+
+def test_private_store_dies_across_float_operations():
+    """Every float op cleared what dead-store analysis knew, as if its exception
+    handler could read this frame: the promoted counter still wrote its slot
+    each pass, `mov word ptr [bp-4], ax`, for nothing to read."""
+    text = cfront.compiled((FIXTURES / "pointers.cgs").read_text(), "pointers", optimise=True)
+    lines = [line.strip() for line in text.splitlines()]
+    body = lines[lines.index("_transform proc far") : lines.index("_transform endp")]
+    assert not any("[bp-4]" in line for line in body)
+
+
 def test_indexed_cell_reaches_its_whole_symbol():
     """An index value with no register in the address read as element zero
     alone, so a store to `sy[j]` did not reach `sy[2]`."""
@@ -331,3 +352,55 @@ def test_indexed_cell_reaches_its_whole_symbol():
     element = cfront.mir.MemRef(Addr(Space.SEGMENT, 0, 5), 2, base=j, space=Space.SEGMENT, base_width=2)
     fixed = cfront.mir.MemRef(Addr(Space.SEGMENT, 4, 5), 2, space=Space.SEGMENT)
     assert cfront.mir.overlapping(fixed, element, frozenset())
+
+
+def test_pointer_store_misses_a_frame_whose_address_stays_home():
+    """snd_fetch's `out[j] = ...` could reach any frame slot, so j and out were
+    reloaded from the frame every sample. C reaches a local through a pointer
+    only where the body took its address; keep takes one, and t is reread."""
+    text = cfront.compiled((FIXTURES / "indexed.cgs").read_text(), "indexed", optimise=True)
+    lines = [line.strip() for line in text.splitlines()]
+    fill = lines[lines.index("_fill proc far") : lines.index("_fill endp")]
+    assert sum("[bp+6]" in line for line in fill) <= 1 and not any(", word ptr [bp-4]" in line for line in fill)
+    keep = lines[lines.index("_keep proc far") : lines.index("_keep endp")]
+    assert "mov ax, word ptr [bp-6]" in keep
+
+
+def test_confined_reload_moves_the_one_in_its_register():
+    """sc_lru_use's `sc->ltail[c] = b` wants the reloaded sc in BX, the only
+    base register, where the reloaded b already sat: `value#119 cannot be
+    spilled and no register is free for it`, though b fit in SI or DI."""
+    text = cfront.compiled((FIXTURES / "indexed.cgs").read_text(), "indexed", optimise=True)
+    lines = [line.strip() for line in text.splitlines()]
+    body = lines[lines.index("_lru_use proc far") : lines.index("_lru_use endp")]
+    assert any(line.startswith("mov word ptr es:[bx+") for line in body)
+
+
+def test_loop_limit_follows_the_start_it_adds_to():
+    """sc_init's `sc->desc[i] = 0`: indvars put the new loop limit before the
+    last operation of a preheader that fell through, the one defining the
+    start it adds to. Lowering read the limit from an unset SI; sc_selftest hung."""
+    from qbopt.optimize import transform
+
+    unit = cfront.hir.unit(cfront.stream.parse((FIXTURES / "indexed.cgs").read_text()))
+    proc = next(one for one in unit.procs if unit.symbols[one.symbol].name == "clear")
+    raised = cfront.raise_hir.raised(unit, proc)
+    body = transform.applied(raised.body, frozenset(), raised.calls, found=None)
+    for block in body.blocks:
+        later = {value for op in block.ops for value in op.defines}
+        for op in block.ops:
+            assert not later.intersection(op.uses), f"{op.at:#x} {op.kind} reads {later.intersection(op.uses)}"
+            later.difference_update(op.defines)
+
+
+def test_verify_reports_a_use_before_its_definition_in_one_block():
+    """verify asked only whether the defining block dominates, so the loop limit
+    read before its start, in the same block, passed as SSA."""
+    mir, ir = cfront.mir, cfront.raise_hir.ir
+    start, limit = mir.Value(1, 1), mir.Value(2, 1)
+    add = mir.Op(1, ir.Operation.NOTHING, "", (limit,), (start,), kind=mir.Kind.ADD,
+                 args=(mir.Held(start, 2), mir.Const(100, 2)), results=(mir.Held(limit, 2),))
+    copy = mir.Op(1, ir.Operation.NOTHING, "", (start,), (), kind=mir.Kind.COPY,
+                  args=(mir.Const(0, 2),), results=(mir.Held(start, 2),))
+    body = mir.MirBody(1, (mir.MirBlock(1, (), (add, copy), ()),))
+    assert any("before its definition" in problem for problem in mir.verify(body))

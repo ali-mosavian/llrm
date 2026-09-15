@@ -159,10 +159,20 @@ def simplified(body: mir.MirBody) -> mir.MirBody:
                             )
                         ops.append(op)
                     if block.at == preheader:
-                        ops.insert(len(ops) - 1, seed)
+                        _before_leaving(ops, [seed])
                     out.append(replace(block, ops=tuple(ops)))
                 return replace(changed, blocks=tuple(out))
     return body
+
+
+def _before_leaving(ops: list, inserted: list) -> None:
+    """`inserted` at the end of a preheader, before the jump it leaves by if it has one.
+
+    A preheader that falls through ends on an operation like any other, and
+    the seed may read what that one defines.
+    """
+    cut = len(ops) - bool(ops and ops[-1].kind in (mir.Kind.JUMP, mir.Kind.BRANCH))
+    ops[cut:cut] = inserted
 
 
 def zeroed(body: mir.MirBody) -> mir.MirBody:
@@ -337,8 +347,7 @@ def zeroed(body: mir.MirBody) -> mir.MirBody:
                         op = rebased.get(id(op), op)
                     ops.append(op)
                 if block.at == preheader:
-                    cut = len(ops) - (ops[-1].kind in (mir.Kind.JUMP, mir.Kind.BRANCH))
-                    ops[cut:cut] = seeds
+                    _before_leaving(ops, seeds)
                 out.append(
                     replace(
                         block,

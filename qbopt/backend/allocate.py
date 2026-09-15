@@ -440,8 +440,14 @@ def allocate(
             stage[value] = Stage.DONE
             continue
 
-        if at is Stage.ASSIGN:
-            evicted = _evict(mine, order, union, live, masks)
+        def movable(other: int, register: Register_) -> bool:
+            if other in fixed:
+                return False
+            elsewhere = tuple(one for one in target.order(confined.get(other)) if _whole(one) != _whole(register))
+            return _free(live[other], elsewhere, union, live, masks) is not None
+
+        if at is Stage.ASSIGN or mine.weight == float("inf"):
+            evicted = _evict(mine, order, union, live, masks, movable)
             if evicted is not None:
                 got, victims = evicted
                 for one in victims:
@@ -560,13 +566,16 @@ def _evict(
     union: dict[Register_, list[int]],
     live: dict[int, ranges.Interval],
     masks: list[tuple[int, frozenset[Register_]]],
+    movable=lambda other, register: False,
 ) -> tuple[Register_, list[int]] | None:
     """The cheapest register to take, and what has to move out of it.
 
     Only where everything evicted is cheaper than what wants the register,
     which is LLVM's rule and the whole of the cost model: a range is worth
     a register in proportion to how often it is referenced and how briefly
-    it is live, and the expensive one wins.
+    it is live, and the expensive one wins. A victim another register is
+    free for costs nothing, since it moves rather than splits: a reload
+    confined to BX stayed unplaced behind a source reload that SI would take.
     """
     best = None
     for register in order:
@@ -575,7 +584,7 @@ def _evict(
         victims = [other for other in union.get(_whole(register), ()) if other in live and live[other].overlaps(one)]
         if not victims:
             continue
-        bill = sum(live[other].weight for other in victims)
+        bill = sum(0.0 if movable(other, register) else live[other].weight for other in victims)
         if bill >= one.weight:
             continue
         if best is None or bill < best[0]:

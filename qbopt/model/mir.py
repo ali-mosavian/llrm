@@ -2039,13 +2039,17 @@ def verify(body: MirBody) -> list[str]:
                 where = defined_at.get(value)
                 if where is not None and where not in doms.get(came_from, frozenset()):
                     problems.append(f"{phi.result} takes {value} from {came_from:#06x}, which it does not reach")
+        pending = {value for op in block.ops for value in op.defines}
         for op in block.ops:
             for value in op.uses:
                 where = defined_at.get(value)
                 if where is None:
                     continue  # defined by the caller, in scope everywhere
-                if where not in doms.get(block.at, frozenset()):
+                if value in pending:
+                    problems.append(f"{op.at:#06x} uses {value} before its definition in {block.at:#06x}")
+                elif where not in doms.get(block.at, frozenset()):
                     problems.append(f"{op.at:#06x} uses {value}, defined in {where:#06x}, which does not dominate it")
+            pending.difference_update(op.defines)
     return problems
 
 
@@ -2170,12 +2174,16 @@ def _symbolic_ref(ref: MemRef) -> MemRef:
 WHOLE_FRAME = (module.Addr(Space.FRAME, -(1 << 15)), 1 << 16)
 
 
-def _frame_bounded(body: MirBody) -> MirBody:
+def _frame_bounded(body: MirBody, pointers: bool = False) -> MirBody:
     """Exclude this body's frame slots from every bounded effect.
 
     Runs once the body is complete because the escape set is a fact about
     the whole body, and the references that carry the bound are built while
     it is still being assembled.
+
+    `pointers` bounds every cell reached through a value as well: a source
+    language whose pointers reach this frame only through an address the
+    body itself took. C is one; BC, which walks frames, is not.
     """
     from qbopt.analysis import frameescape
 
@@ -2188,16 +2196,22 @@ def _frame_bounded(body: MirBody) -> MirBody:
     if escapes.exposed or escapes.opaque_addresses:
         return body
 
+    def bounded(ref: MemRef) -> bool:
+        if WHOLE_FRAME in ref.excludes:
+            return False
+        if ref.beyond is not None:
+            return True
+        reached = ref.base is not None or ref.segment is not None or ref.pointer
+        return pointers and reached and ref.where not in (Space.FRAME, Space.SEGMENT, Space.EXTERNAL)
+
     def bound(ref: MemRef) -> MemRef:
-        if ref.beyond is None:
-            return ref
-        return replace(ref, excludes=ref.excludes + (WHOLE_FRAME,))
+        return replace(ref, excludes=ref.excludes + (WHOLE_FRAME,)) if bounded(ref) else ref
 
     blocks = []
     for block in body.blocks:
         ops = [
             replace(op, loads=tuple(bound(one) for one in op.loads), stores=tuple(bound(one) for one in op.stores))
-            if any(one.beyond is not None for one in (*op.loads, *op.stores))
+            if any(bounded(one) for one in (*op.loads, *op.stores))
             else op
             for op in block.ops
         ]
