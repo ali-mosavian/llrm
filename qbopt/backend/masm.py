@@ -77,7 +77,13 @@ def text(module: Module) -> str:
 def _procedure(procedure: Procedure, names: dict, number: int) -> list[str]:
     saved = [one for one in SAVED if one in _roots(procedure.body)]
     reserve = procedure.reserve + (procedure.reserve & 1)
-    out = [f"{procedure.name} proc {'far' if procedure.far else 'near'}", "    push bp", "    mov bp, sp"]
+    # Inline code is bytes this printer cannot read, so it may address the frame.
+    framed = bool(reserve) or Register.EBP in _roots(procedure.body) or any(one.code for one in procedure.callees.values())
+    leave = [f"pop {target.name_of(one)}" for one in reversed(saved)]
+    leave += ["mov sp, bp"] * bool(reserve) + ["pop bp"] * framed
+    out = [f"{procedure.name} proc {'far' if procedure.far else 'near'}"]
+    if framed:
+        out += ["    push bp", "    mov bp, sp"]
     if reserve:
         out.append(f"    sub sp, {reserve}")
     out += [f"    push {target.name_of(one)}" for one in saved]
@@ -88,7 +94,7 @@ def _procedure(procedure: Procedure, names: dict, number: int) -> list[str]:
             if one.what is None:
                 raise Unprintable(f"{procedure.name} at {one.at}: an instruction with no semantics")
             try:
-                lines = _instruction(one, procedure, names, number, saved)
+                lines = _instruction(one, procedure, names, number, leave)
             except Unprintable as error:
                 raise Unprintable(f"{procedure.name} at {one.at}: {error}") from error
             out += [f"    {line}" for line in lines]
@@ -125,7 +131,7 @@ def _roots(body: lir.LirBody) -> set:
     return found
 
 
-def _instruction(one: lir.Insn, procedure: Procedure, names: dict, number: int, saved: list) -> list[str]:
+def _instruction(one: lir.Insn, procedure: Procedure, names: dict, number: int, leave: list) -> list[str]:
     what = one.what
     name = what.name or ""
     dests = [_operand(x, names) for x in what.dests]
@@ -191,8 +197,7 @@ def _instruction(one: lir.Insn, procedure: Procedure, names: dict, number: int, 
         case ir.Operation.FLOAT_UNARY:
             return [name]
         case ir.Operation.RETURN:
-            restore = [f"pop {target.name_of(register)}" for register in reversed(saved)]
-            return [*restore, "mov sp, bp", "pop bp", name or ("retf" if procedure.far else "ret")]
+            return [*leave, name or ("retf" if procedure.far else "ret")]
     raise Unprintable(f"{what}")
 
 

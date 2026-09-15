@@ -126,7 +126,9 @@ def test_optimised_return_arrives_in_ax():
     text = cfront.compiled((FIXTURES / "ls.cgs").read_text(), "ls", optimise=True)
     lines = [line.strip() for line in text.splitlines()]
     body = lines[lines.index("_ls_lchar proc near") : lines.index("_ls_lchar endp")]
-    epilogue = body.index("mov sp, bp")
+    epilogue = next(i for i, line in enumerate(body) if line.startswith("ret"))
+    while body[epilogue - 1] in ("mov sp, bp", "pop bp"):
+        epilogue -= 1
     assert body[epilogue - 1].startswith("mov ax,"), body[epilogue - 3 : epilogue]
 
 

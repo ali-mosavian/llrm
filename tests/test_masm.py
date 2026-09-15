@@ -31,6 +31,25 @@ def test_x87_exchange_is_fxch():
     assert masm._instruction(lir.Insn(1, (1, 1), swap, (), ()), None, {}, 0, []) == ["fxch st(1)"]
 
 
+def _printed(sources: tuple, reserve: int) -> list[str]:
+    move = lir.Insn(0, (0, 1), ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.AX, 2),), sources), (), ())
+    leave = lir.Insn(1, (1, 1), ir.Semantics(ir.Operation.RETURN, "retf"), (), ())
+    body = lir.LirBody("get", 1, (lir.LirBlock(1, (move, leave)),), {}, {})
+    procedure = masm.Procedure("_get", True, True, body, reserve, {})
+    return [line.strip() for line in masm._procedure(procedure, {}, 0)]
+
+
+def test_frame_only_where_something_uses_it():
+    """Every procedure got `push bp; mov bp,sp` .. `mov sp,bp; pop bp`: snd_mix_loops
+    read one global in seven instructions where bcc used two."""
+    assert _printed((ir.Reg(Register.BX, 2),), 0) == ["_get proc far", "L0_1:", "mov ax, bx", "retf", "_get endp"]
+    through = ir.Mem(Addr(Space.FRAME, 6), 2, through=Register.BP)
+    params = _printed((through,), 0)
+    assert params[1:3] == ["push bp", "mov bp, sp"] and params[-3:-1] == ["pop bp", "retf"]
+    assert "mov sp, bp" not in params
+    assert "mov sp, bp" in _printed((through,), 4)
+
+
 def test_arithmetic_lea_scales_its_index():
     """peephole's multiply by three has no address, only base, index and scale."""
     where = ir.Address(None, through=Register.EBX, index=Register.EBX, scale=2)
