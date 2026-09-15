@@ -14,6 +14,7 @@ from qbopt.cfront.stream import Record
 FE_PROC = 0x1
 FE_GLOBAL = 0x4
 FE_IMPORT = 0x8
+PRIVATE = 0x40  # a segment of its own, outside DGROUP
 # call_class and call_class_target (cgauxcc.h, x86auxcc.h)
 REVERSE_PARMS = 0x1
 CALLER_POPS = 0x80
@@ -61,6 +62,7 @@ class Symbol:
     call_target: int = 0
     register_parms: bool = False  # any argument passed in a register
     code: Code | None = None
+    segment: int = 0
 
     @property
     def proc(self) -> bool:
@@ -134,6 +136,11 @@ class Unit:
     calls: dict[int, Call] = field(default_factory=dict)
     procs: list[Proc] = field(default_factory=list)
 
+    def grouped(self, symbol: Symbol) -> bool:
+        """Whether the symbol is in DGROUP, reached through DS."""
+        segment = self.segments.get(symbol.segment)
+        return segment is None or not segment.attr & PRIVATE
+
 
 def handle(token: str) -> int:
     return int(token[1:])
@@ -159,7 +166,12 @@ def unit(records: list[Record]) -> Unit:
                 made.types[args[0]] = int(fields["size"])
             case "SYM":
                 made.symbols[handle(args[0])] = Symbol(
-                    handle(args[0]), fields["name"], fields["base"], fields["pattern"], int(fields["attr"], 16)
+                    handle(args[0]),
+                    fields["name"],
+                    fields["base"],
+                    fields["pattern"],
+                    int(fields["attr"], 16),
+                    segment=int(fields.get("seg", "0")),
                 )
             case "CALLCONV":
                 symbol = made.symbols[handle(args[0])]

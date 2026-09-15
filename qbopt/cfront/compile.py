@@ -38,8 +38,8 @@ def recorded(source: Path, includes: list[str]) -> str:
     """The code-generator stream wccq records for one C file."""
     with tempfile.TemporaryDirectory() as scratch:
         out = Path(scratch) / "unit.cgs"
-        searched = (*(f"-I{one}" for one in includes), f"-I{COMPAT}")
-        command = [str(WCCQ), *FLAGS, *searched, f"-fo={scratch}/unit.obj", str(source)]
+        searched = (*(f"-I{Path(one).resolve()}" for one in includes), f"-I{COMPAT}")
+        command = [str(WCCQ), *FLAGS, *searched, f"-fo={scratch}/unit.obj", str(source.resolve())]
         # In the scratch directory, where wccq also leaves its .err file.
         environment = {**os.environ, "QBOPT_CG_STREAM": str(out)}
         done = subprocess.run(command, env=environment, capture_output=True, text=True, cwd=scratch)
@@ -89,6 +89,7 @@ def compiled(text: str, module: str, *, optimise: bool = False, dump: Path | Non
             publics=tuple(one.object_name for one in unit.symbols.values() if one.exported),
             data=(*_data(unit), *_literals(shared)),
             procedures=tuple(procedures),
+            private=frozenset(one.name for one in unit.segments.values() if one.attr & hir.PRIVATE),
         )
     )
     _write(dump, "asm", text)

@@ -285,3 +285,19 @@ def test_calls_push_in_convention_order():
         "push bx",
         "push ax",
     ]
+
+
+def test_private_segment_data_goes_through_its_selector():
+    """r_portal's `static short far stk_leaf[]` sits outside DGROUP; the raise
+    addressed it through DS and jwasm refused `mov word ptr _stk_leaf, ax`."""
+    lines = _asm("fardata")
+    body = lines[lines.index("_peek proc far") : lines.index("_peek endp")]
+    at = body.index("mov word ptr es:[bx+si], ax")
+    assert "pushw seg _stack" in body[:at] and "pop es" in body[:at] and "mov bx, offset _stack" in body[:at]
+    assert "fardata13_DATA segment word public 'FAR_DATA'" in lines
+
+
+def test_const2_is_in_dgroup():
+    """d_faces's `static const float lm_recip[]` is in CONST2, which Open Watcom
+    groups with DGROUP; jwasm's medium model does not, so DS reached the wrong frame."""
+    assert "DGROUP group CONST2" in _asm("fardata")

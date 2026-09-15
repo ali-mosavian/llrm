@@ -51,17 +51,21 @@ class Module:
     publics: tuple[str, ...]
     data: tuple[tuple[str, tuple[str, ...]], ...]  # (segment, lines)
     procedures: tuple[Procedure, ...]
+    private: frozenset[str] = frozenset()  # data segments outside DGROUP
 
 
 def text(module: Module) -> str:
     out = [".model medium", ".386", ""]
     out += [f"public {name}" for name in module.publics]
     for segment, lines in module.data:
-        out.append(SEGMENTS.get(segment, f"{segment} segment word public 'DATA'"))
+        private = segment in module.private
+        out.append(SEGMENTS.get(segment, f"{segment} segment word public '{'FAR_DATA' if private else 'DATA'}'"))
         out += [f"extern {name}:{kind}" for name, kind in module.externs if kind == "byte"]
         out += lines
         if segment not in SEGMENTS:
             out.append(f"{segment} ends")
+            if not private:
+                out.append(f"DGROUP group {segment}")
     out += [f"extern {name}:{kind}" for name, kind in module.externs if kind != "byte"]
     out.append(f".code {module.code}")
     for number, procedure in enumerate(module.procedures):
@@ -218,7 +222,7 @@ def _operand(where, names: dict) -> str:
             return str(value)
         case ir.Imm(value=value, address=address):
             if address.space is Space.GROUP:
-                return "DGROUP"
+                return names[(address.space, address.index)]
             return f"offset {names[(address.space, address.index)]}{_signed(address.disp + value)}"
         case ir.Mem():
             return _memory(where, names)

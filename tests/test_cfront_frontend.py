@@ -46,3 +46,13 @@ def test_inline_assembly_takes_387_instructions(tmp_path):
     """d_poly.c's `fsin` in __asm: E1156 invalid instruction with current CPU setting."""
     source = "double s( double r ) { double x; __asm { fld r\n fsin\n fstp x } return x; }\n"
     assert "CGProcDecl" in _stream(tmp_path, source)
+
+
+def test_relative_source_and_include(tmp_path, monkeypatch):
+    """wccq runs in its scratch directory, where `fixtures/c/x.c` and `-I src`
+    no longer resolved: E1051 unable to open."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "one.h").write_text("int one( void );\n")
+    (tmp_path / "unit.c").write_text('#include "one.h"\nint two( void ) { return one() + 1; }\n')
+    monkeypatch.chdir(tmp_path)
+    assert "CGProcDecl" in cfront.recorded(Path("unit.c"), ["src"])

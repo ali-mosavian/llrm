@@ -85,6 +85,8 @@ FAR_POINTERS = frozenset({"TY_LONG_POINTER", "TY_HUGE_POINTER"})
 # float constants the raise itself places come after them.
 LITERAL = 1 << 20
 POOL = 1 << 21
+# Space.GROUP index of the selector of the segment symbol n is in; 0 is DGROUP's.
+SELECTOR = 1 << 22
 
 K = mir.Kind
 TESTS = {  # (signed, unsigned)
@@ -211,6 +213,10 @@ def raised(unit: hir.Unit, proc: hir.Proc, shared: Shared | None = None) -> Rais
 def names(unit: hir.Unit, shared: Shared | None = None) -> dict[tuple[Space, int], str]:
     """Every (space, index) a raised operand can name, as its object name."""
     out = {(_space(one), one.id): one.object_name for one in unit.symbols.values()}
+    out[(Space.GROUP, 0)] = "DGROUP"
+    out.update(
+        {(Space.GROUP, SELECTOR + one.id): f"seg {one.object_name}" for one in unit.symbols.values() if not unit.grouped(one)}
+    )
     out.update({(Space.SEGMENT, LITERAL + back): f"L_b{back}" for back, symbol in unit.backs.items() if not symbol})
     out.update({(Space.SEGMENT, POOL + n): f"L_f{n}" for n in (shared.literals.values() if shared else ())})
     return out
@@ -598,6 +604,11 @@ class _Raise:
             return Function(symbol)
         if token in self.frame:
             return Frame(self.frame[token])
+        if not self.unit.grouped(symbol):
+            segment, offset = self.fresh(), self.fresh()
+            self.op(K.COPY, (mir.Held(segment, 2),), (mir.Symbol(Space.GROUP, SELECTOR + symbol.id, 0, 2),))
+            self.op(K.COPY, (mir.Held(offset, 2),), (mir.Symbol(_space(symbol), symbol.id, 0, 2),))
+            return Far(segment, offset)
         return Global(_space(symbol), symbol.id)
 
     def points(self, got, type_: str):

@@ -1,0 +1,69 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+SEG 13 attr=0x44 name="fardata13_DATA" align=16
+START
+TYPE T25 size=8 align=4
+TYPE T26 size=16 align=2
+SETSEG 13
+SYM y1 name="stack" base="stack" pattern="_*" attr=0x42 seg=13
+b1 BENewBack y1
+- DGLabel b1
+- DGIBytes 16 0
+SETSEG 3
+SYM y2 name="table" base="table" pattern="_*" attr=0x52 seg=3
+b2 BENewBack y2
+- DGLabel b2
+- DGBytes 4 0000803f
+- DGBytes 4 00000040
+f3 DBSrcFile "fardata.c"
+- DBSrcCue f3 5 1
+SYM y3 name="peek" base="peek" pattern="_*" attr=0x7 seg=1
+CALLCONV y3 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y3 TY_INTEGER
+SYM y4 name="i" base="i" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y4 TY_INTEGER
+l4 CGLastParm
+t5 CGTemp TY_INTEGER
+- DBSrcCue f3 7 1
+n6 CGFEName y1 T26
+n7 CGFEName y4 TY_INTEGER
+n8 CGUnary O_POINTS n7 TY_INTEGER
+n9 CGInteger 2 TY_INTEGER
+n10 CGBinary O_TIMES n8 n9 TY_INTEGER
+n11 CGBinary O_PLUS n6 n10 TY_LONG_POINTER
+n12 CGFEName y4 TY_INTEGER
+n13 CGUnary O_POINTS n12 TY_INTEGER
+n14 CGAssign n11 n13 TY_INT_2
+- CGDone n14
+- DBSrcCue f3 8 1
+n15 CGFEName y1 T26
+n16 CGFEName y4 TY_INTEGER
+n17 CGUnary O_POINTS n16 TY_INTEGER
+n18 CGInteger 1 TY_INTEGER
+n19 CGBinary O_PLUS n17 n18 TY_INTEGER
+n20 CGInteger 2 TY_INTEGER
+n21 CGBinary O_TIMES n19 n20 TY_INTEGER
+n22 CGBinary O_PLUS n15 n21 TY_LONG_POINTER
+n23 CGUnary O_POINTS n22 TY_INT_2
+n24 CGFEName y2 T25
+n25 CGFEName y4 TY_INTEGER
+n26 CGUnary O_POINTS n25 TY_INTEGER
+n27 CGInteger 4 TY_INTEGER
+n28 CGBinary O_TIMES n26 n27 TY_INTEGER
+n29 CGBinary O_PLUS n24 n28 TY_POINTER
+n30 CGUnary O_POINTS n29 TY_SINGLE
+n31 CGUnary O_CONVERT n30 TY_INTEGER
+n32 CGBinary O_PLUS n23 n31 TY_INTEGER
+n33 CGUnary O_CONVERT n32 TY_INTEGER
+n34 CGTempName t5 TY_INTEGER
+n35 CGAssign n34 n33 TY_INTEGER
+- CGDone n35
+- DBSrcCue f3 9 1
+n36 CGTempName t5 TY_INTEGER
+n37 CGUnary O_POINTS n36 TY_INTEGER
+- CGReturn n37 TY_INTEGER
+STOP
+FINI
