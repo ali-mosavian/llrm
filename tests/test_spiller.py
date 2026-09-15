@@ -40,6 +40,27 @@ def _out(body, values):
     return [one for block in got.blocks for one in block.insns]
 
 
+def test_slot_is_as_wide_as_the_widest_use_of_its_value():
+    """snd_mix_frame spilled a value first seen as a word, then stored all four
+    bytes of it: `mov dword ptr [bp-2], eax` over the saved BP, and a 4-byte
+    store into `n`'s word ran into `endt`, so the mixer never returned."""
+    def op(name, into, width, *sources):
+        what = ir.Semantics(ir.Operation.MOVE if name == "mov" else ir.Operation.BINARY, name,
+                            (ir.Held(into, width),), tuple(ir.Held(one, width) for one in sources))
+        return lir.Insn(at=0x100, covers=(0x100, 0x100), what=what, defines=(into,),
+                        uses=tuple(dict.fromkeys(sources)), op=None)
+
+    body = _body(op("mov", 1, 2, 3), op("mov", 2, 2, 3), op("add", 1, 4, 1, 3), op("add", 2, 2, 2, 3))
+    frame = frames.Frame(0)
+    got, _made = spiller.spilled(body, frozenset({1, 2}), frame)
+    cells = {(where.addr.disp, where.width) for one in got.insns if one.what is not None
+             for where in (*one.what.dests, *one.what.sources)
+             if isinstance(where, ir.Mem) and where.addr is not None and where.addr.space is Space.FRAME}
+    assert cells and all(-frame.size <= disp and disp + width <= 0 for disp, width in cells), (cells, frame.size)
+    spans = {disp: max(width for other, width in cells if other == disp) for disp, _ in cells}
+    assert all(a + spans[a] <= b or b + spans[b] <= a for a in spans for b in spans if a != b), spans
+
+
 def test_nbody_reads_spilled_position_directly_in_subtraction():
     """NBODY loaded [BP-2Ch] into EAX solely for SUB ESI,EAX on every force pair."""
     from qbopt import wholeseg

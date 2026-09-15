@@ -64,6 +64,10 @@ def spilled(
     frame_homes = _frame_homes(body, values - frame_loads.keys())
     rebuilt = {**frame_loads, **{value: home for value, (home, _at) in frame_homes.items()}}
     stored = values - constants.keys() - frame_loads.keys() - frame_homes.keys()
+    # Before any cell names a slot: one made at the first use's width is
+    # outgrown by a wider use later, which then writes over its neighbour.
+    for value, width in sorted(_widest(body, stored).items()):
+        frame.slot(value, width)
     abandoned: set[int] = set()
     rematerialized_definitions: set[int] = set()
     identities: set[int] = set()
@@ -234,16 +238,16 @@ def siblings(body: lir.LirBody, values: "frozenset[int]", frame, fixed: "frozens
     from qbopt.analysis import intervals
 
     adjacent: dict[int, set[int]] = {}
-    widths: dict[int, int] = {}
     for one in body.insns:
         pair = _plain_move(one)
         if pair is None or pair[0] == pair[1]:
             continue
-        widths[pair[0]] = widths[pair[1]] = one.what.dests[0].width
         adjacent.setdefault(pair[0], set()).add(pair[1])
         adjacent.setdefault(pair[1], set()).add(pair[0])
     if not any(one in adjacent for one in values):
         return frozenset()
+    # A shared slot holds each member at every width it is used, not just moved.
+    widths = _widest(body, set(adjacent))
 
     near = coalesce._interference(body)
     deep = intervals.depths(body)
@@ -747,6 +751,15 @@ def _constants(body: lir.LirBody, values: frozenset[int]) -> dict[int, ir.Imm]:
                 result[value] = constant
         if len(result) == before:
             return {value: constant for value, constant in result.items() if value in values}
+
+
+def _widest(body: lir.LirBody, values) -> dict[int, int]:
+    """How wide each value is read or written anywhere, which is how big its slot has to be."""
+    widths: dict[int, int] = {}
+    for one in body.insns:
+        for value in values & {*one.defines, *one.uses}:
+            widths[value] = max(widths.get(value, 0), _width(one, value))
+    return widths
 
 
 def _width(one: lir.Insn, value: int) -> int:
