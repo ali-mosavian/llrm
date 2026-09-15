@@ -40,7 +40,7 @@ def test_choose_joins_both_arms_in_one_cell():
     assert pick.count("mov word ptr [bp-4], ax") == 2 and any(one.startswith("jmp L0_") for one in pick)
     body = lines[lines.index("_choose proc far") : lines.index("_choose endp")]
     at = body.index("mov word ptr [bp-4], 1")
-    assert body[at - 3] == "cmp ax, 0" and body[at - 2].startswith("je L2_") and body[at - 1].endswith(":")
+    assert body[at - 3] == "or ax, ax" and body[at - 2].startswith("je L2_") and body[at - 1].endswith(":")
     assert body[at + 3] == "mov word ptr [bp-4], 0"
 
 

@@ -524,9 +524,56 @@ def test_zeroing_preserves_width_relocations_and_unknown_flag_observers(variant)
     if variant == "boundary":
         blocks = (lir.LirBlock(0, (first,), (3,)), lir.LirBlock(3, (middle, last), ()))
     result = peephole.zeroes(lir.LirBody("zero", 0, blocks, {}, {})).insns[0]
-    assert result.what.name == ("xor" if variant in {"plain", "dword"} else "mov")
+    # "boundary": the next block's cmp overwrites every flag before anything reads one.
+    assert result.what.name == ("xor" if variant in {"plain", "dword", "boundary"} else "mov")
     assert result.what.dests == (dest,)
     assert result.covers == first.covers
+
+
+@pytest.mark.parametrize("successor,zeroed", [("cmp", True), ("jb", False), (None, False)])
+def test_zeroing_before_a_jump_asks_what_the_target_reads(successor, zeroed):
+    """`mov bx,0; jmp` stayed three bytes: every block end was taken to have
+    its flags read, whatever the block jumped to did first."""
+    dest = ir.Reg(Register.BX, 2)
+    zero = lir.Insn(0, (0, 3), ir.Semantics(ir.Operation.MOVE, "mov", (dest,), (ir.Imm(0, 2),)), (), ())
+    jump = lir.Insn(3, (3, 5), ir.Semantics(ir.Operation.JUMP, "jmp", (), (), target=5), (), ())
+    match successor:
+        case "cmp":
+            first = ir.Semantics(ir.Operation.COMPARE, "cmp", (), (dest, ir.Imm(1, 2)))
+        case "jb":
+            first = ir.Semantics(ir.Operation.BRANCH, "jb", (), (), target=9)
+        case None:
+            first = None
+    blocks = (lir.LirBlock(0, (zero, jump), (5,)), lir.LirBlock(5, (lir.Insn(5, (5, 7), first, (), ()),), ()))
+    result = peephole.zeroes(lir.LirBody("zero", 0, blocks, {}, {})).insns[0]
+    assert result.what.name == ("xor" if zeroed else "mov")
+
+
+@pytest.mark.parametrize("variant,rewritten", [("plain", True), ("between", False), ("adjust", False), ("memory", False)])
+def test_zero_compare_before_its_branch_is_or(variant, rewritten):
+    """`cmp ax,0; jl` is three bytes where `or ax,ax; jl` is two. Only AF
+    differs, so the branch must read straight after and nothing may read AF."""
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
+    ax = ir.Reg(Register.AX, 2)
+    tested = ir.Mem(ir.Addr(Space.FRAME, -2), 2, Register.BP, 0, 2) if variant == "memory" else ax
+    compare = lir.Insn(0, (0, 3), ir.Semantics(ir.Operation.COMPARE, "cmp", (), (tested, ir.Imm(0, 2))), (), ())
+    between = lir.Insn(3, (3, 6), ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.BX, 2),), (ir.Imm(1, 2),)), (), ())
+    branch = lir.Insn(6, (6, 8), ir.Semantics(ir.Operation.BRANCH, "jl", (), (), target=9), (), ())
+    after = ir.Semantics(ir.Operation.COMPARE, "cmp", (), (ax, ir.Imm(1, 2)))
+    unknown = variant == "adjust"
+    blocks = (
+        lir.LirBlock(0, (compare, between, branch) if variant == "between" else (compare, branch), (8, 9)),
+        lir.LirBlock(8, (lir.Insn(8, (8, 9), after, (), ()),), ()),
+        lir.LirBlock(9, (lir.Insn(9, (9, 10), None if unknown else after, (), ()),), ()),
+    )
+    result = peephole.zero_compares(lir.LirBody("zero", 0, blocks, {}, {})).insns[0]
+    if rewritten:
+        assert (result.what.op, result.what.name, result.what.dests, result.what.sources) == (
+            ir.Operation.BINARY, "or", (ax,), (ax, ax))
+    else:
+        assert result.what == compare.what
 
 
 @pytest.mark.parametrize("middle", ["", "mov", "fnstsw", "fninit", None, "block"])

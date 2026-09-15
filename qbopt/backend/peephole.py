@@ -40,7 +40,7 @@ class Peephole(LIRTransform):
         body = spillforward.forwarded(body)
         body = storecombine.combined(body)
         body = pushed_constants(body)
-        return self._frame(waits(tested(zeroes(addresses(overwritten(shuttles(commuted(constants(pushes(body))))))))))
+        return self._frame(waits(zero_compares(tested(zeroes(addresses(overwritten(shuttles(commuted(constants(pushes(body)))))))))))
 
     def _frame(self, body):
         """Drop only synthetic reservations when no added stack storage remains."""
@@ -640,7 +640,7 @@ def _flags_before(one: lir.Insn, flags_dead: bool) -> bool:
             return flags_dead
         case ir.Semantics(ir.Operation.PUSH, "push") | ir.Semantics(ir.Operation.POP, "pop"):
             return flags_dead
-        case ir.Semantics(ir.Operation.NOTHING, None | ""):
+        case ir.Semantics(ir.Operation.NOTHING, None | "") | ir.Semantics(ir.Operation.JUMP):
             return flags_dead
     return False
 
@@ -694,6 +694,39 @@ def tested(body: lir.LirBody) -> lir.LirBody:
                 and not live[block.at] & _DIFFERING
             ):
                 insns[work[test_at]] = replace(test, what=ir.Semantics(ir.Operation.NOTHING, ""), defines=(), uses=(), widths=())
+        blocks.append(replace(block, insns=tuple(insns)))
+    return replace(body, blocks=tuple(blocks))
+
+
+_ADJUST = _flag_lanes(RflagsBits.AF)
+
+
+def zero_compares(body: lir.LirBody) -> lir.LirBody:
+    """`cmp r,0; jcc` is `or r,r; jcc`, a byte shorter.
+
+    Both clear carry and overflow and set zero, sign and parity from r; only
+    the adjust flag differs, so the branch must be the next work and nothing
+    after the block may read AF. The branch reading straight after keeps OF
+    clear of anything between -- DOSBox's dynamic core loses it across OR and
+    SAHF.
+    """
+    live = _flags_live_out(body)
+    blocks = []
+    for block in body.blocks:
+        insns = list(block.insns)
+        work = [index for index, one in enumerate(insns) if not _nothing(one)]
+        if len(work) >= 2 and not live[block.at] & _ADJUST:
+            test, branch = insns[work[-2]], insns[work[-1]]
+            register = _zero_tested(test)
+            if (
+                register is not None
+                and register.register in target.WIDTHS
+                and branch.what is not None
+                and branch.what.op is ir.Operation.BRANCH
+                and branch.what.name in _BRANCH_FLAGS
+                and test.what.name == "cmp"
+            ):
+                insns[work[-2]] = replace(test, what=ir.Semantics(ir.Operation.BINARY, "or", (register,), (register, register)))
         blocks.append(replace(block, insns=tuple(insns)))
     return replace(body, blocks=tuple(blocks))
 
@@ -768,9 +801,12 @@ def _flags_live_out(body: lir.LirBody) -> dict[int, set]:
 
 def zeroes(body: lir.LirBody) -> lir.LirBody:
     """Use XOR for zero only when later integer work replaces every arithmetic flag."""
+    live = _flags_live_out(body)
     blocks = []
     for block in body.blocks:
-        flags_dead = False
+        # What the block's successors read, not a guess: `mov bx,0; jmp` to a
+        # block that sets its own flags first zeroes with xor too.
+        flags_dead = not live[block.at]
         insns = []
         for one in reversed(block.insns):
             what = one.what
