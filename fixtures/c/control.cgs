@@ -1,4 +1,4 @@
-INIT sw=0x808000 target=0xec size=50 rev=0x13
+INIT sw=0x808000 target=0xec size=50 rev=0x23
 SEG 1 attr=0x7 name="_TEXT" align=1
 SEG 2 attr=0x1c name="CONST" align=2
 SEG 3 attr=0xc name="CONST2" align=2
@@ -221,5 +221,49 @@ n110 CGAssign n109 n108 TY_INT_2
 n111 CGTempName t99 TY_INT_2
 n112 CGUnary O_POINTS n111 TY_INT_2
 - CGReturn n112 TY_INT_2
+- DBSrcCue f2 48 1
+SYM y17 name="ratio" base="ratio" pattern="_*" attr=0x7 seg=1
+CALLCONV y17 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y17 TY_UINT_4
+SYM y18 name="a" base="a" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y18 TY_UINT_4
+SYM y19 name="b" base="b" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y19 TY_UINT_4
+l113 CGLastParm
+t114 CGTemp TY_UINT_4
+- DBSrcCue f2 50 1
+n115 CGFEName y18 TY_UINT_4
+n116 CGUnary O_POINTS n115 TY_UINT_4
+n117 CGFEName y19 TY_UINT_4
+n118 CGUnary O_POINTS n117 TY_UINT_4
+n119 CGBinary O_DIV n116 n118 TY_UINT_4
+n120 CGUnary O_CONVERT n119 TY_UINT_4
+n121 CGTempName t114 TY_UINT_4
+n122 CGAssign n121 n120 TY_UINT_4
+- CGDone n122
+- DBSrcCue f2 51 1
+n123 CGTempName t114 TY_UINT_4
+n124 CGUnary O_POINTS n123 TY_UINT_4
+- CGReturn n124 TY_UINT_4
+- DBSrcCue f2 53 1
+SYM y20 name="wide" base="wide" pattern="_*" attr=0x7 seg=1
+CALLCONV y20 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y20 TY_SINGLE
+SYM y21 name="t" base="t" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y21 TY_UINT_4
+l125 CGLastParm
+t126 CGTemp TY_SINGLE
+- DBSrcCue f2 55 1
+n127 CGFEName y21 TY_UINT_4
+n128 CGUnary O_POINTS n127 TY_UINT_4
+n129 CGUnary O_CONVERT n128 TY_SINGLE
+n130 CGUnary O_CONVERT n129 TY_SINGLE
+n131 CGTempName t126 TY_SINGLE
+n132 CGAssign n131 n130 TY_SINGLE
+- CGDone n132
+- DBSrcCue f2 56 1
+n133 CGTempName t126 TY_SINGLE
+n134 CGUnary O_POINTS n133 TY_SINGLE
+- CGReturn n134 TY_SINGLE
 STOP
 FINI

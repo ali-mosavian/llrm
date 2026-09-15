@@ -376,6 +376,7 @@ class Kind(StrEnum):
     # a kind each gives CSE two keys for one divide -- which is why
     # lngmix's loop divides ten times and takes the modulus again.
     DIVMOD = "divmod"
+    UDIVMOD = "udivmod"  # DIVMOD on unsigned operands
     AND = "and"
     OR = "or"
     XOR = "xor"

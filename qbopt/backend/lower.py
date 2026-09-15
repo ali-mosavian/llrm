@@ -105,6 +105,7 @@ _NAMED: dict[mir.Kind, tuple[ir.Operation, str]] = {
     mir.Kind.NEG: (ir.Operation.UNARY, "neg"),
     mir.Kind.NOT: (ir.Operation.UNARY, "not"),
     mir.Kind.DIVMOD: (ir.Operation.DIVIDE, "idiv"),
+    mir.Kind.UDIVMOD: (ir.Operation.DIVIDE, "div"),
     mir.Kind.ADDRESS: (ir.Operation.ADDRESS, "lea"),
     mir.Kind.ARG: (ir.Operation.PUSH, "push"),
     mir.Kind.CONCAT: (ir.Operation.MOVE, ""),
@@ -740,7 +741,8 @@ def _word_division(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]
     ):
         return None
     dividend, divisor = map(operand, op.args)
-    if isinstance(op.args[1], mir.Const):
+    unsigned = op.kind is mir.Kind.UDIVMOD
+    if isinstance(op.args[1], mir.Const) and not unsigned:
         reciprocal = division.reciprocal(
             dividend,
             op.args[1].n,
@@ -757,10 +759,16 @@ def _word_division(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]
         setup = (ir.Semantics(ir.Operation.MOVE, "mov", (held,), (divisor,)),)
         divisor = held
     high = ir.Held(lowering.fresh(), width)
+    widened = (
+        ir.Semantics(ir.Operation.MOVE, "mov", (high,), (ir.Imm(0, width),))
+        if unsigned
+        else ir.Semantics(ir.Operation.EXTEND, "cwd" if width == 2 else "cdq", (high,), (dividend,))
+    )
+    name = "div" if unsigned else "idiv"
     return (
         *setup,
-        ir.Semantics(ir.Operation.EXTEND, "cwd" if width == 2 else "cdq", (high,), (dividend,)),
-        ir.Semantics(ir.Operation.DIVIDE, "idiv", tuple(map(operand, op.results)), (high, dividend, divisor)),
+        widened,
+        ir.Semantics(ir.Operation.DIVIDE, name, tuple(map(operand, op.results)), (high, dividend, divisor)),
     )
 
 
@@ -864,6 +872,7 @@ _EXPANDS: dict = {
     mir.Kind.STORE: _constant_store,
     mir.Kind.EXTRACT: _extract,
     mir.Kind.DIVMOD: _word_division,
+    mir.Kind.UDIVMOD: _word_division,
     mir.Kind.CONCAT: _concat,
     mir.Kind.SMULHI: _signed_high_product,
     mir.Kind.PTR_OFFSET: _pointer_offset,

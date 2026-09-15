@@ -1241,7 +1241,7 @@ def _invariant_run(
             # the test -- so hoisting one onto a zero-trip path raises a
             # division BC never performed. Only a divisor written down and
             # known to be neither of the two that fault leaves.
-            if one.kind is mir.Kind.DIVMOD and not _cannot_fault(one):
+            if one.kind in (mir.Kind.DIVMOD, mir.Kind.UDIVMOD) and not _cannot_fault(one):
                 continue
             # Nor a move. The guard was "every source is a register", so a
             # constant load was real work and could leave; with the hoist

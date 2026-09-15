@@ -24,15 +24,22 @@ from qbopt.backend import frame as frames
 
 WCCQ = Path(__file__).resolve().parents[2] / "owshim" / "bin" / "wccq"
 # Borland's medium model: far code, near data, cdecl, byte-packed structs,
-# 16-bit enums, x87 inline, no stack probes, no default library.
-FLAGS = ("-mm", "-3", "-fpi87", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq", f"-fi={Path(__file__).with_name('borland.h')}")
+# 16-bit enums, x87 inline, no stack probes, no default library. -fp3 is for
+# inline assembly: qcport's own uses 387 instructions.
+FLAGS = (
+    "-mm", "-3", "-fpi87", "-fp3", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq",
+    f"-fi={Path(__file__).with_name('borland.h')}",
+)  # fmt: skip
+# Borland's headers Open Watcom has under another name, searched last.
+COMPAT = Path(__file__).with_name("include")
 
 
 def recorded(source: Path, includes: list[str]) -> str:
     """The code-generator stream wccq records for one C file."""
     with tempfile.TemporaryDirectory() as scratch:
         out = Path(scratch) / "unit.cgs"
-        command = [str(WCCQ), *FLAGS, *(f"-I{one}" for one in includes), f"-fo={scratch}/unit.obj", str(source)]
+        searched = (*(f"-I{one}" for one in includes), f"-I{COMPAT}")
+        command = [str(WCCQ), *FLAGS, *searched, f"-fo={scratch}/unit.obj", str(source)]
         done = subprocess.run(command, env={**os.environ, "QBOPT_CG_STREAM": str(out)}, capture_output=True, text=True)
         if done.returncode != 0 or not out.exists():
             raise hir.Unsupported(f"wccq failed on {source}:\n{done.stdout}{done.stderr}")

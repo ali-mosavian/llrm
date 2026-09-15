@@ -198,12 +198,21 @@ def test_shift_counts_from_cl():
     assert {"shl eax, cl", "sar ebx, cl", "shr bx, cl"} <= set(body)
 
 
-def test_unsigned_word_division_divides_zero_extensions():
-    """`offset / 7` on an unsigned short was refused; a signed word division
-    would have read 0x8000 and up as negative."""
-    body = _proc(_asm("control"), "_per")
-    at = body.index("cdq")
-    assert body[at - 3] == "movzx ecx, ax" and body[at + 1] == "idiv ebx"
+def test_unsigned_division_is_div():
+    """`offset / 7` on an unsigned short and `a / b` on unsigned longs were
+    refused; a signed division reads 0x8000 and up as negative."""
+    lines = _asm("control")
+    per = _proc(lines, "_per")
+    assert per[per.index("div bx") - 1] == "mov dx, 0"
+    ratio = _proc(lines, "_ratio")
+    assert ratio[ratio.index("div ebx") - 1] == "mov edx, 0"
+
+
+def test_unsigned_long_loads_as_a_quad():
+    """`(float) t` for an unsigned long was refused: fild reads a dword signed."""
+    body = _proc(_asm("control"), "_wide")
+    at = body.index("fild qword ptr [bp-12]")
+    assert body[at - 3 : at] == ["mov eax, dword ptr [bp+6]", "mov dword ptr [bp-12], eax", "mov dword ptr [bp-8], 0"]
 
 
 def test_constant_far_address_loads_its_selector_through_the_stack():

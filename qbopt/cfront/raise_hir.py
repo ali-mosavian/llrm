@@ -625,7 +625,14 @@ class _Raise:
                 return self.real(float(self.wrapped(got.n, source)), self.width(type_))
             whole = self.operand(got, source)
             if source not in SIGNED and self.width(source) == 4:
-                raise Unsupported(f"{self.symbol.name}: fild of an unsigned long")
+                # No 32-bit integer load reads it unsigned; its zero extension as a quad does.
+                quad = Frame(self.slot(8))
+                self.store(self.cell(quad, 4), whole)
+                self.store(self.cell(replace(quad, disp=quad.disp + 4), 4), mir.Const(0, 4))
+                ref = self.cell(quad, 8)
+                result = self.fresh()
+                self.op(K.FLOAD, (mir.Held(result, 10),), (mir.Cell(ref),), loads=(ref,), floating=_loaded(floating.Format.SIGNED64))
+                return mir.Held(result, 10)
             if self.width(source) == 1 or source not in SIGNED:
                 whole = self.convert(whole, source, "TY_INT_4")
             result = self.fresh()
@@ -723,22 +730,12 @@ class _Raise:
         if isinstance(a, mir.Const) and isinstance(b, mir.Const):
             return mir.Const(self.wrapped(_fold(cg_op, a.n, b.n, signed), type_), width)
         result = self.fresh()
-        if cg_op in ("O_DIV", "O_MOD") and not signed:
-            if width == 4:
-                raise Unsupported(f"{self.symbol.name}: unsigned long division")
-            # A word's unsigned quotient is the signed one of its zero
-            # extensions, which no 32-bit division overflows.
-            wide = [
-                mir.Const(one.n & 0xFFFF, 4) if isinstance(one, mir.Const) else self.convert(one, "TY_UINT_2", "TY_UINT_4")
-                for one in (a, b)
-            ]
-            return self.narrowed(self.arithmetic(cg_op, *wide, "TY_INT_4"), 2)
         if cg_op in ("O_DIV", "O_MOD"):
             if isinstance(a, mir.Const):
                 a = mir.Held(self.copy(a), width)
             remainder = self.fresh()
-            self.op(K.DIVMOD, (mir.Held(result, width), mir.Held(remainder, width)), (a, b)
-            )
+            kind = K.DIVMOD if signed else K.UDIVMOD
+            self.op(kind, (mir.Held(result, width), mir.Held(remainder, width)), (a, b))
             return mir.Held(result if cg_op == "O_DIV" else remainder, width)
         if shift:
             if isinstance(a, mir.Const):

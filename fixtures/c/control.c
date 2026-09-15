@@ -44,3 +44,13 @@ short comma( short a )
 {
     return ( a++, a + 1 );
 }
+
+unsigned long ratio( unsigned long a, unsigned long b )
+{
+    return a / b;
+}
+
+float wide( unsigned long t )
+{
+    return (float) t;
+}
