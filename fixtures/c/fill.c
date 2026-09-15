@@ -48,3 +48,13 @@ void fill_through(int n)
     int k;
     for (k = 0; k < n; k++) paint[k] = 0;
 }
+
+static short nvoice;
+
+void fill_voices(void)
+{
+    short acc[8];
+    int i;
+    for (i = 0; i < nvoice; i++) acc[i] = 0;
+    use_shorts(acc);
+}

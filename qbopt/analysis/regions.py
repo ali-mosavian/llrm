@@ -267,6 +267,10 @@ def _holes(ref, layout=None) -> frozenset[Span]:
 
 def _spans(ref, bounds: dict | None, known: dict | None = None, layout=None) -> frozenset[Span]:
     """The bytes the reference names, as coarsely as it knows them."""
+    within = getattr(ref, "within", None)
+    if within:
+        # An address the body took of its own locals stays inside them.
+        return frozenset((STACK, BP, low, high) for low, high in within)
     absolute = _absolute(ref, known)
     if absolute is not None:
         return frozenset({(*absolute, *WHOLE)})

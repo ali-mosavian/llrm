@@ -256,6 +256,8 @@ class MemRef:
     excludes: tuple[tuple[Addr, int], ...] = ()  # exact byte ranges this effect cannot reach
     # The source language's aliasing class, and whether this is a declared object of it rather than an access.
     typed: "tuple[str, bool] | None" = field(default=None, compare=False)
+    # The frame objects' bytes (from bp) an address the body took of them stays inside, where the language says so.
+    within: "tuple[tuple[int, int], ...] | None" = field(default=None, compare=False)
 
     @property
     def where(self) -> "Space | None":
@@ -2193,6 +2195,37 @@ def _outside(reach) -> tuple[tuple[Addr, int], ...]:
     return tuple(out)
 
 
+def _through_frame(body: MirBody, framed: dict) -> MirBody:
+    """Every reference through an address into frame objects, as reaching only them."""
+    if not framed:
+        return body
+
+    def tag(ref: MemRef) -> MemRef:
+        if ref.base in framed and ref.segment is None and not ref.pointer and ref.addr is not None and ref.addr.space is Space.LITERAL:
+            return replace(ref, within=tuple(sorted(framed[ref.base])))
+        return ref
+
+    def operand(one):
+        return Cell(tag(one.ref)) if isinstance(one, Cell) else one
+
+    blocks = []
+    for block in body.blocks:
+        ops = tuple(
+            replace(
+                op,
+                loads=tuple(map(tag, op.loads)),
+                stores=tuple(map(tag, op.stores)),
+                args=tuple(map(operand, op.args)),
+                results=tuple(map(operand, op.results)),
+            )
+            if any(ref.base in framed for ref in (*op.loads, *op.stores))
+            else op
+            for op in block.ops
+        )
+        blocks.append(replace(block, ops=ops))
+    return replace(body, blocks=tuple(blocks))
+
+
 def _frame_bounded(body: MirBody, pointers: bool = False) -> MirBody:
     """Exclude this body's frame slots from every bounded effect.
 
@@ -2206,6 +2239,8 @@ def _frame_bounded(body: MirBody, pointers: bool = False) -> MirBody:
     """
     from qbopt.analysis import frameescape
 
+    if pointers:
+        body = _through_frame(body, frameescape.framed(body))
     # Only the bytes no escaped address can reach: an address the raise bounds
     # to its object reaches that object, and one it does not bound reaches all.
     escapes = frameescape.analysed(body)
