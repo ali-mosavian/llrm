@@ -169,7 +169,9 @@ def _trip_counts(data: bytes) -> list[int]:
         if test.mnemonic == Mnemonic.CMP and test.op0_kind == OpKind.REGISTER and test.op0_register in held \
                 and test.op1_kind in immediates:
             bound = (test.immediate16 ^ 0x8000) - 0x8000
-        elif test is step or (test.mnemonic == Mnemonic.TEST and test.op0_register in held
+        # `or r,r` tests for zero as `test r,r` does; the peephole writes it for `cmp r,0`.
+        elif test is step or (test.mnemonic in (Mnemonic.TEST, Mnemonic.OR) and test.op0_register in held
+                              and test.op0_kind == test.op1_kind == OpKind.REGISTER
                               and test.op0_register == test.op1_register):
             bound = 0
         else:
