@@ -90,15 +90,36 @@ def _between(at_of, inside: set, copy_at: int, exit_from: int) -> "set | None":
     return forward & backward
 
 
+def _read_inside(at_of, inside: set, block, index: int, written: set) -> bool:
+    """Whether a path from after the copy that stays in the loop reads `written` before writing it.
+
+    Not the same as asking the exit block's successors: an inner loop can read
+    the copy and come back to it without ever passing the exit test.
+    """
+    seen: set[int] = set()
+    queue = [(block.at, index + 1)]
+    while queue:
+        at, start = queue.pop()
+        for other in at_of[at].insns[start:]:
+            if _touches(other, written, reading=True):
+                return True
+            if _touches(other, written, reading=False):
+                break
+        else:
+            for to in at_of[at].succ:
+                if to in inside and to not in seen:
+                    seen.add(to)
+                    queue.append((to, 0))
+    return False
+
+
 def sunk(body: lir.LirBody) -> lir.LirBody:
     """`body` with each such copy moved from inside its loop to the exit."""
     from qbopt.backend.peephole import _lanes
-    from qbopt.backend.liveness import live_into
 
     found = loopy.loops(list(body.blocks), body.entry)
     if not found:
         return body
-    into, _successors, _universe = live_into(body)
     at_of = {block.at: block for block in body.blocks}
     predecessors: dict[int, list[int]] = {at: [] for at in at_of}
     for block in body.blocks:
@@ -128,11 +149,7 @@ def sunk(body: lir.LirBody) -> lir.LirBody:
                 written, read = _lanes(dest.register), _lanes(register.register)
                 if not written or not read or written & read:
                     continue
-                # Dead on the way round. Asking it of the copy's own successors
-                # answers the wrong question: the branch block is live-in for
-                # `di` because the *exit* reads it, which is the path the sunk
-                # copy is for. What matters is the way back to the header.
-                if any(written & into[to] for to in at_of[source_at].succ if to in inside):
+                if _read_inside(at_of, inside, block, index, written):
                     continue
                 rest = _between(at_of, inside, block.at, source_at)
                 if rest is None:
