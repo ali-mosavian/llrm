@@ -58,12 +58,16 @@ def compiled(text: str, module: str, *, optimise: bool = False, dump: Path | Non
         body = raised.body
         mirs.append(_mir_text(raised.name, body))
         if optimise:
+            from qbopt.optimize import rotate
             from qbopt.optimize import transform
 
             def watch(stage: str, after: mir.MirBody, name: str = raised.name) -> None:
                 _write(dump, f"passes/{name}.{stage}", _mir_text(name, after))
 
             body = transform.applied(body, frozenset(), raised.calls, found=None, watch=watch if dump else None)
+            body = rotate.entered(body)
+            if dump:
+                watch("rotate", body)
             mirs.append(_mir_text(raised.name + " (opt)", body))
         low = lower.lowered(raised.name, body, raised.calls, {}, raised.contracts, {}, "386")
         lirs.append(_lir_text(raised.name, low))
@@ -72,7 +76,7 @@ def compiled(text: str, module: str, *, optimise: bool = False, dump: Path | Non
             if not isinstance(phase, prologue.Prologue):
                 low = phase.transform(low)
                 _write(dump, f"phases/{raised.name}.{number:02d}-{type(phase).__name__}", _lir_text(raised.name, low))
-        low = jumps.threaded(low)
+        low = jumps.threaded(jumps.placed(low))
         lirs.append(_lir_text(raised.name + " (allocated)", low))
         reserve = -min(min(frame.slots.values(), default=0), frame.floor)
         callees = {

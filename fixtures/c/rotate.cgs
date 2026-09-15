@@ -1,0 +1,136 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+SEG 11 attr=0x2 name="_BSS" align=2
+START
+TYPE T25 size=40 align=2
+SETSEG 11
+SYM y1 name="ma" base="ma" pattern="_*" attr=0x42 seg=11
+b1 BENewBack y1
+- DGLabel b1
+- DGUBytes 40
+TYPE T26 size=40 align=2
+SETSEG 11
+SYM y2 name="mb" base="mb" pattern="_*" attr=0x42 seg=11
+b2 BENewBack y2
+- DGLabel b2
+- DGUBytes 40
+f3 DBSrcFile "/Users/alim/work/personal/qbopt/.claude/worktrees/watcom-16bit-qbopt-qcport-1d97c8/fixtures/c/rotate.c"
+- DBSrcCue f3 4 1
+SYM y3 name="dot" base="dot" pattern="_*" attr=0x7 seg=1
+CALLCONV y3 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y3 TY_INTEGER
+l4 CGLastParm
+t5 CGTemp TY_INTEGER
+SYM y4 name="k" base="k" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y4 TY_INTEGER
+SYM y5 name="s" base="s" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y5 TY_INTEGER
+l6 BENewLabel
+l7 BENewLabel
+- DBSrcCue f3 6 1
+n8 CGFEName y5 TY_INTEGER
+n9 CGInteger 0 TY_INTEGER
+n10 CGAssign n8 n9 TY_INTEGER
+- CGDone n10
+- DBSrcCue f3 7 1
+n11 CGFEName y4 TY_INTEGER
+n12 CGInteger 0 TY_INTEGER
+n13 CGAssign n11 n12 TY_INTEGER
+- CGDone n13
+- CGControl O_LABEL n0 l6
+n14 CGFEName y4 TY_INTEGER
+n15 CGUnary O_POINTS n14 TY_INTEGER
+n16 CGInteger 20 TY_INTEGER
+n17 CGCompare O_LT n15 n16 TY_INTEGER
+- CGControl O_IF_FALSE n17 l7
+n18 CGFEName y5 TY_INTEGER
+n19 CGFEName y1 T25
+n20 CGFEName y4 TY_INTEGER
+n21 CGUnary O_POINTS n20 TY_INTEGER
+n22 CGInteger 2 TY_INTEGER
+n23 CGBinary O_TIMES n21 n22 TY_INTEGER
+n24 CGBinary O_PLUS n19 n23 TY_POINTER
+n25 CGUnary O_POINTS n24 TY_INTEGER
+n26 CGFEName y2 T26
+n27 CGFEName y4 TY_INTEGER
+n28 CGUnary O_POINTS n27 TY_INTEGER
+n29 CGInteger 2 TY_INTEGER
+n30 CGBinary O_TIMES n28 n29 TY_INTEGER
+n31 CGBinary O_PLUS n26 n30 TY_POINTER
+n32 CGUnary O_POINTS n31 TY_INTEGER
+n33 CGBinary O_TIMES n25 n32 TY_INTEGER
+n34 CGPreGets O_PLUS n18 n33 TY_INTEGER
+- CGDone n34
+n35 CGFEName y4 TY_INTEGER
+n36 CGInteger 1 TY_INTEGER
+n37 CGPostGets O_PLUS n35 n36 TY_INTEGER
+- CGDone n37
+- CGControl O_GOTO n0 l6
+- CGControl O_LABEL n0 l7
+- DBSrcCue f3 8 1
+n38 CGFEName y5 TY_INTEGER
+n39 CGUnary O_POINTS n38 TY_INTEGER
+n40 CGUnary O_CONVERT n39 TY_INTEGER
+n41 CGTempName t5 TY_INTEGER
+n42 CGAssign n41 n40 TY_INTEGER
+- CGDone n42
+- DBSrcCue f3 9 1
+n43 CGTempName t5 TY_INTEGER
+n44 CGUnary O_POINTS n43 TY_INTEGER
+- CGReturn n44 TY_INTEGER
+- DBSrcCue f3 11 1
+SYM y6 name="fill" base="fill" pattern="_*" attr=0x7 seg=1
+CALLCONV y6 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y6 TY_INTEGER
+SYM y7 name="n" base="n" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y7 TY_INTEGER
+l45 CGLastParm
+t46 CGTemp TY_INTEGER
+SYM y8 name="k" base="k" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y8 TY_INTEGER
+l47 BENewLabel
+l48 BENewLabel
+- DBSrcCue f3 14 1
+n49 CGFEName y8 TY_INTEGER
+n50 CGInteger 0 TY_INTEGER
+n51 CGAssign n49 n50 TY_INTEGER
+- CGDone n51
+- CGControl O_LABEL n0 l47
+n52 CGFEName y8 TY_INTEGER
+n53 CGUnary O_POINTS n52 TY_INTEGER
+n54 CGFEName y7 TY_INTEGER
+n55 CGUnary O_POINTS n54 TY_INTEGER
+n56 CGCompare O_LT n53 n55 TY_INTEGER
+- CGControl O_IF_FALSE n56 l48
+n57 CGFEName y1 T25
+n58 CGFEName y8 TY_INTEGER
+n59 CGUnary O_POINTS n58 TY_INTEGER
+n60 CGInteger 2 TY_INTEGER
+n61 CGBinary O_TIMES n59 n60 TY_INTEGER
+n62 CGBinary O_PLUS n57 n61 TY_POINTER
+n63 CGFEName y8 TY_INTEGER
+n64 CGUnary O_POINTS n63 TY_INTEGER
+n65 CGAssign n62 n64 TY_INTEGER
+- CGDone n65
+n66 CGFEName y8 TY_INTEGER
+n67 CGInteger 1 TY_INTEGER
+n68 CGPostGets O_PLUS n66 n67 TY_INTEGER
+- CGDone n68
+- CGControl O_GOTO n0 l47
+- CGControl O_LABEL n0 l48
+- DBSrcCue f3 15 1
+n69 CGFEName y7 TY_INTEGER
+n70 CGUnary O_POINTS n69 TY_INTEGER
+n71 CGUnary O_CONVERT n70 TY_INTEGER
+n72 CGTempName t46 TY_INTEGER
+n73 CGAssign n72 n71 TY_INTEGER
+- CGDone n73
+- DBSrcCue f3 16 1
+n74 CGTempName t46 TY_INTEGER
+n75 CGUnary O_POINTS n74 TY_INTEGER
+- CGReturn n75 TY_INTEGER
+STOP
+FINI

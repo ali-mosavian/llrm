@@ -44,7 +44,7 @@ def test_choose_joins_both_arms_in_one_cell():
     body = lines[lines.index("_choose proc far") : lines.index("_choose endp")]
     at = body.index("mov word ptr [bp-4], 1")
     assert body[at - 3] == "or ax, ax" and body[at - 2].startswith("je L2_") and body[at - 1].endswith(":")
-    assert body[at + 3] == "mov word ptr [bp-4], 0"
+    assert _reached(body, body.index(body[at - 2].split()[1] + ":")) == "mov word ptr [bp-4], 0"
 
 
 def test_data_pointer_to_a_literal():
@@ -190,15 +190,21 @@ def test_library_math_calls_the_runtime():
     assert "extern _sqrt:far" in lines
 
 
+def _reached(body, at):
+    """The first instruction run from `at`, through labels and jumps."""
+    while body[at].endswith(":") or body[at].startswith("jmp "):
+        at = body.index(body[at].split()[1] + ":") if body[at].startswith("jmp ") else at + 1
+    return body[at]
+
+
 def test_switch_reaches_its_default():
     """A switch was refused, 19 of qcport's procedures. Expanded into compares,
     its last one fell through into the first case: nothing printed the jump
     to a successor that is not the next block, so `default` never ran."""
     body = _proc(_asm("control"), "_pick")
     at = body.index("cmp ax, 9")
-    assert body[at + 1].startswith("je ") and body[at + 2].startswith("jmp ")
-    default = body.index(body[at + 2].split()[1] + ":")
-    assert body[default + 1] == "mov word ptr [bp-2], -1"
+    assert body[at + 1].startswith("je ")
+    assert _reached(body, at + 2) == "mov word ptr [bp-2], -1"
 
 
 def test_shift_counts_from_cl():
@@ -381,6 +387,17 @@ def test_stored_symbol_is_forwarded_to_its_reload():
     text = cfront.compiled((FIXTURES / "pal.cgs").read_text(), "pal", optimise=True)
     body = _proc([line.strip() for line in text.splitlines()], "_pal_current")
     assert not any("[bp-" in line for line in body), body
+
+
+@pytest.mark.parametrize("name", ["_dot", "_fill"])
+def test_loop_tests_at_its_bottom(name):
+    """Every C loop tested at its top and jumped back, `cmp bx,40 / je out /
+    ... / jmp top`: two branches a pass where bcc, gcc and clang take one."""
+    text = cfront.compiled((FIXTURES / "rotate.cgs").read_text(), "rotate", optimise=True)
+    body = _proc([line.strip() for line in text.splitlines()], name)
+    labels = {line[:-1]: index for index, line in enumerate(body) if line.endswith(":")}
+    back = [line for index, line in enumerate(body) if line.startswith("jmp ") and labels.get(line.split()[1], index) < index]
+    assert back == [], body
 
 
 def test_short_value_crosses_a_call_in_si_or_di():
