@@ -104,8 +104,8 @@ def extents(image: bytes, begun: list[tuple[int, str]], ends: dict[int, int]) ->
     return out
 
 
-def instructions(lines: list[str], listing: bool) -> list[str]:
-    """Instruction texts, without labels or notes; inline `db` runs decoded like object bytes."""
+def instructions(lines: list[str], listing: bool, labels: bool = False) -> list[str]:
+    """Instruction texts, without notes, and labels only if asked; inline `db` runs decoded like object bytes."""
     out, blob = [], bytearray()
 
     def flush():
@@ -118,7 +118,7 @@ def instructions(lines: list[str], listing: bool) -> list[str]:
             blob.extend(int(byte.rstrip("h"), 16) for byte in text[3:].split(","))
             continue
         flush()
-        if not LABEL.match(text):
+        if labels or not LABEL.match(text):
             out.append(text.split(" ; ")[0])
     flush()
     # -f87 writes FWAIT before x87 instructions: a no-op on a 387, not an instruction choice.
@@ -171,7 +171,8 @@ CAUSES = (
     ("slot load then test or compare", r"mov (\w\w), (word ptr )?\[bp[-+]\w+\]\n(or \1, \1|cmp \1, -?\w+)\n", 1),
     ("constant stored to slot and register", r"mov word ptr \[bp-\w+\], -?\d+\n(mov \w\w, -?\d+|xor (\w\w), \2)\n", 1),
     ("mov sp,bp; pop bp", r"mov sp, bp\npop bp\n", 1),
-    ("constant compare at loop entry", r"(xor (\w\w), \2|mov (\w\w), -?\d+)\ncmp (\2|\3), -?\d+\nj", 2),
+    # The loop header's label sits between the constant and its compare.
+    ("constant compare at loop entry", r"(xor (\w\w), \2|mov (\w\w), -?\d+)\n(L\d+_\d+:\n)+cmp (\2|\3), -?\d+\nj", 2),
     ("jcc over a jmp", r"\nj(?!mp)\w+ \S+\njmp \S+\n", 1),
 )
 
@@ -199,6 +200,15 @@ def jumps(lines: list[str]) -> Counter:
     return found
 
 
+def counted(lines: list[str]) -> Counter:
+    """Each cause's sites in one procedure's printed lines."""
+    # Labels stay in: a pattern across one spans two blocks, which nothing local can fuse.
+    printed = "\n" + "\n".join(instructions(lines, listing=False, labels=True)) + "\n"
+    found = Counter({cause: len(re.findall(pattern, printed)) for cause, pattern, _cost in CAUSES})
+    found.update(jumps(lines))
+    return found
+
+
 def compare(bcc_dir: Path, ours_dir: Path, src_dir: Path, modules: list[str]) -> dict:
     functions, problems, causes = [], [], Counter()
     for module in modules:
@@ -209,10 +219,7 @@ def compare(bcc_dir: Path, ours_dir: Path, src_dir: Path, modules: list[str]) ->
             if name not in theirs:
                 problems.append(f"{module}.{name}: no bcc region")
                 continue
-            printed = "\n" + "\n".join(instructions(lines, listing=False)) + "\n"
-            for cause, pattern, _cost in CAUSES:
-                causes[cause] += len(re.findall(pattern, printed))
-            causes.update(jumps(lines))
+            causes.update(counted(lines))
             functions.append(
                 {
                     "module": module,

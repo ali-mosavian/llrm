@@ -16,6 +16,20 @@ def test_function_ends_before_its_switch_table():
     assert bcccmp.extents(image, [(0, "f")], {}) == {"f": (0, 6)}
 
 
+def test_a_pattern_does_not_run_across_a_label():
+    """Dropping a jmp joined sys_parse_args' `add ax,2` to a store behind label
+    L1_955, and the load-op-store count rose for a site no peephole could fuse."""
+    split = ["mov ax, word ptr [bp-76]", "add ax, 2", "L1_955:", "mov word ptr [bp-76], ax"]
+    assert bcccmp.counted(split)["slot load, op, store back"] == 0
+    assert bcccmp.counted([one for one in split if not one.endswith(":")])["slot load, op, store back"] == 1
+
+
+def test_loop_entry_compare_is_seen_past_its_header_label():
+    """Keeping labels in hid every `xor cx,cx` / `L0_20:` / `cmp cx,48`: the row read 0 for 60 sites."""
+    entry = ["xor cx, cx", "L0_20:", "cmp cx, 48", "jge L0_79"]
+    assert bcccmp.counted(entry)["constant compare at loop entry"] == 1
+
+
 def test_fwait_is_not_an_instruction_choice():
     """-f87 writes `wait` before x87 instructions: 1,727 of them counted as bcc's."""
     assert bcccmp.instructions(["0000 wait", "0001 fld st(1)"], listing=True) == ["fld st(1)"]
