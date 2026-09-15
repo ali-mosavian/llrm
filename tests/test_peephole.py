@@ -556,7 +556,10 @@ def test_zeroing_before_a_jump_asks_what_the_target_reads(successor, zeroed):
         ("moves", True),
         ("call", True),
         ("return", True),
+        ("relocated", True),
+        ("x87", True),
         ("between", False),
+        ("pushf", False),
         ("adjust", False),
         ("memory", False),
     ],
@@ -565,7 +568,9 @@ def test_zero_compare_before_its_branch_is_or(variant, rewritten):
     """`cmp ax,0; jl` is three bytes where `or ax,ax; jl` is two. Only AF
     differs, so the branch must read the flags next and nothing may read AF.
     No convention passes AF, yet a call or return after counted as reading it:
-    791 of qcport's 805 zero tests right before their branch stayed three bytes."""
+    791 of qcport's 805 zero tests right before their branch stayed three bytes.
+    A relocated move or an x87 compare the decoder cannot encode read as every
+    flag too, and held 215 more."""
     from qbopt.objectfile.module import Space
 
     ax = ir.Reg(Register.AX, 2)
@@ -575,16 +580,21 @@ def test_zero_compare_before_its_branch_is_or(variant, rewritten):
     between = lir.Insn(3, (3, 5), None if variant == "between" else move, (), ())
     branch = lir.Insn(6, (6, 8), ir.Semantics(ir.Operation.BRANCH, "jl", (), (), target=9), (), ())
     after = ir.Semantics(ir.Operation.COMPARE, "cmp", (), (ax, ir.Imm(1, 2)))
+    from qbopt.objectfile.module import Addr
+
     last = {
         "adjust": None,
         "call": ir.Semantics(ir.Operation.CALL, "call"),
         "return": ir.Semantics(ir.Operation.RETURN, ""),
+        "relocated": ir.Semantics(ir.Operation.MOVE, "mov", (ax,), (ir.Imm(0, 2, Addr(Space.SEGMENT, 0, 1)),)),
+        "x87": ir.Semantics(ir.Operation.COMPARE, "fcomp", (), (ir.Mem(ir.Addr(Space.FRAME, -4), 4, Register.BP, 0, 2),)),
+        "pushf": ir.Semantics(ir.Operation.NOTHING, "pushf", (), (ir.Imm(0, 2, Addr(Space.SEGMENT, 0, 1)),)),
     }.get(variant, after)
     head = (compare, between, branch) if variant in ("moves", "between") else (compare, branch)
     blocks = (
         lir.LirBlock(0, head, (8, 9)),
         lir.LirBlock(8, (lir.Insn(8, (8, 9), after, (), ()),), ()),
-        lir.LirBlock(9, (lir.Insn(9, (9, 10), last, (), ()),), ()),
+        lir.LirBlock(9, (lir.Insn(9, (9, 10), last, (), (), symbol=variant in ("relocated", "pushf")),), ()),
     )
     result = peephole.zero_compares(lir.LirBody("zero", 0, blocks, {}, {})).insns[0]
     if rewritten:

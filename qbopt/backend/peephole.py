@@ -699,6 +699,13 @@ def tested(body: lir.LirBody) -> lir.LirBody:
 
 
 _ADJUST = _flag_lanes(RflagsBits.AF)
+_FLAG_READERS = frozenset(
+    {"adc", "sbb", "rcl", "rcr", "lahf", "pushf", "pushfd", "daa", "das", "aaa", "aas", "into", "int", "iret", "cmc", "salc"}
+)
+
+
+def _reads_flags(name: str) -> bool:
+    return name in _FLAG_READERS or name.startswith(("j", "set", "cmov", "loop"))
 
 
 def zero_compares(body: lir.LirBody) -> lir.LirBody:
@@ -787,6 +794,11 @@ def _flags_live_out(body: lir.LirBody) -> dict[int, set]:
             return set(exits), set()
         found = _register_effects(one, flags=True)
         if found is None:
+            # Bytes this cannot encode -- a relocated operand, an x87 form --
+            # still name their instruction, and only a few instructions read
+            # a flag. Writes stay unknown, which only keeps flags live longer.
+            if one.what is not None and one.what.name and not _reads_flags(one.what.name):
+                return set(), set()
             return every, set()
         reads, writes = found
         return {lane for lane in reads if lane[0] == Register.NONE}, {lane for lane in writes if lane[0] == Register.NONE}
