@@ -34,6 +34,22 @@ class Unsupported(Exception):
     """A construct the C path refuses rather than guesses at."""
 
 
+@dataclass(frozen=True, slots=True)
+class Fixup:
+    at: int  # the two-byte hole in the code
+    kind: str  # offset | segment | reloff
+    symbol: int
+    offset: int
+
+
+@dataclass(frozen=True, slots=True)
+class Code:
+    """Inline assembly, as the pragma the front end made of it."""
+
+    data: bytes
+    fixups: tuple[Fixup, ...]
+
+
 @dataclass
 class Symbol:
     id: int
@@ -44,6 +60,7 @@ class Symbol:
     call_class: int = 0
     call_target: int = 0
     register_parms: bool = False  # any argument passed in a register
+    code: Code | None = None
 
     @property
     def proc(self) -> bool:
@@ -149,6 +166,12 @@ def unit(records: list[Record]) -> Unit:
                 symbol.call_class = int(fields["class"], 16)
                 symbol.call_target = int(fields["target"], 16)
                 symbol.register_parms = fields.get("parms", "[]") != "[]"
+            case "CODE":
+                fixups = tuple(
+                    Fixup(int(at), kind, handle(target), int(offset))
+                    for at, kind, target, offset in (one.split(":") for one in fields["fix"].split(",") if one != "-")
+                )
+                made.symbols[handle(args[0])].code = Code(bytes.fromhex(fields["bytes"]), fixups)
             case "BENewBack":
                 made.backs[handle(one.result)] = handle(args[0])
             case "CGProcDecl":

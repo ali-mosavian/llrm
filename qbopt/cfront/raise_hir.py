@@ -58,8 +58,10 @@ LIBRARY = {
     "O_ATAN": "atan", "O_LOG": "log", "O_LOG10": "log10", "O_EXP": "exp", "O_POW": "pow", "O_ATAN2": "atan2",
     "O_FMOD": "fmod",
 }  # fmt: skip
+# Borland's pseudo-function laying its constant arguments down as code.
+EMITTED = frozenset({"__emit__"})
 EXTENDED = floating.Format.EXTENDED80
-FORMATS = {4: floating.Format.BINARY32, 8: floating.Format.BINARY64}
+FORMATS ={4: floating.Format.BINARY32, 8: floating.Format.BINARY64}
 INTEGER_FORMATS = {2: floating.Format.SIGNED16, 4: floating.Format.SIGNED32}
 # What each float operation computes, which MIR states and lowering spells.
 ARITH_RULE = floating.Semantics((EXTENDED, EXTENDED), EXTENDED, floating.Precision.DYNAMIC, floating.Rounding.DYNAMIC)
@@ -174,6 +176,8 @@ class Raised:
     calls: dict[int, str]  # call site -> callee object name
     callees: dict[int, hir.Symbol]
     contracts: dict[int, runtime.Contract]
+    # A site whose callee is inline assembly: its bytes, and (kind, name, offset) where a symbol goes.
+    inline: dict[int, tuple]
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,6 +243,7 @@ class _Raise:
         self.calls: dict[int, str] = {}
         self.callees: dict[int, hir.Symbol] = {}
         self.contracts: dict[int, runtime.Contract] = {}
+        self.inline: dict[int, tuple] = {}
         self.frame: dict[str, int] = {}
         self.selects: dict[str, tuple[list[tuple[int, str]], str | None]] = {}
         at = 6 if self.symbol.far else 4
@@ -347,7 +352,7 @@ class _Raise:
         problems = mir.verify(body)
         if problems:
             raise Unsupported(f"{self.symbol.name}: raised MIR is not SSA: {problems[:3]}")
-        return Raised(self.symbol.object_name, self.symbol, body, self.calls, self.callees, self.contracts)
+        return Raised(self.symbol.object_name, self.symbol, body, self.calls, self.callees, self.contracts, self.inline)
 
     # ---- statements ----
 
@@ -386,8 +391,14 @@ class _Raise:
             self.op(K.RETURN, args=(value,), uses=(value.value,))
             self.end()
             return
+        last = self.current.ops[-1] if self.current is not None and self.current.ops else None
+        if node == "n0" and type_ in WIDTHS and last is not None and last.kind is K.CALL and len(last.results) == 2:
+            # A value-less return from a function that has one: the value is
+            # what the call before it left, as inline assembly means it to be.
+            got = Returned(last.results[0].value, last.results[1].value)
+            node = None
         if node != "n0":
-            got = self.eval(node)
+            got = self.eval(node) if node is not None else got
             if isinstance(got, Far):
                 offset = mir.Held(self.near(Near(got.offset, got.disp)), 2)
                 returned = (self.copy(offset), self.copy(mir.Held(got.segment, 2)))
@@ -805,6 +816,11 @@ class _Raise:
         target = self.eval(call.target)
         if not isinstance(target, Function):
             raise Unsupported(f"{self.symbol.name}: indirect call")
+        if target.symbol.name in EMITTED:
+            values = [self.eval(node) for node, _ in reversed(call.parms)]
+            if not all(isinstance(one, mir.Const) and 0 <= one.n < 256 for one in values):
+                raise Unsupported(f"{self.symbol.name}: {target.symbol.name} of anything but constant bytes")
+            return self.inline_code(replace(target.symbol, code=hir.Code(bytes(one.n for one in values), ())))
         return self.invoke(target.symbol, [(self.eval(node), type_) for node, type_ in call.parms], call.type)
 
     def library(self, name: str, arguments: list, type_: str):
@@ -819,6 +835,10 @@ class _Raise:
 
     def invoke(self, callee: hir.Symbol, arguments: list, type_: str):
         """A call, with `arguments` last first; a float result arrives on the x87."""
+        if callee.code is not None:
+            if arguments or type_ in FLOATS:
+                raise Unsupported(f"{self.symbol.name}: inline code taking arguments or giving a float")
+            return self.inline_code(callee)
         # Stack arguments only: cdecl (caller pops) or pascal (reversed, callee pops).
         stacked = callee.call_class & (hir.CALLER_POPS | hir.REVERSE_PARMS) in (hir.CALLER_POPS, hir.REVERSE_PARMS)
         if callee.register_parms or not stacked:
@@ -853,6 +873,51 @@ class _Raise:
             caller_cleanup=pushed if caller_pops else 0,
         )
         return returned
+
+    def inline_code(self, callee: hir.Symbol) -> Returned:
+        """Inline assembly, as a call whose callee is laid down at the site.
+
+        It reads and writes what it likes: every register, like a call with
+        no contract, and the locals it names by BP offset, which are passed
+        as addresses so nothing takes them for the body's alone. Whatever it
+        leaves in AX and DX is its result, as a call's is.
+        """
+        data = bytearray(callee.code.data)
+        parts, start, named = [], 0, []
+        for fixup in callee.code.fixups:
+            target = self.unit.symbols[fixup.symbol]
+            key = f"y{fixup.symbol}"
+            if fixup.kind == "offset" and key in self.frame:
+                data[fixup.at : fixup.at + 2] = ((self.frame[key] + fixup.offset) & 0xFFFF).to_bytes(2, "little")
+                named.append(self.frame[key])
+            elif fixup.kind in ("offset", "segment") and not target.proc:
+                parts.append(bytes(data[start : fixup.at]))
+                parts.append((fixup.kind, target.object_name, fixup.offset))
+                start = fixup.at + 2
+            else:
+                raise Unsupported(f"{self.symbol.name}: inline code's {fixup.kind} of {target.name}")
+        parts.append(bytes(data[start:]))
+        low, high = self.fresh(), self.fresh()
+        addresses = tuple(mir.FrameAddress(disp, 2) for disp in dict.fromkeys(named))
+        site = self.op(K.CALL, (mir.Held(low, 2), mir.Held(high, 2)), addresses, defines=(low, high), uses=())
+        self.inline[site.at] = tuple(parts)
+        self.calls[site.at] = callee.object_name
+        self.callees[site.at] = callee
+        self.contracts[site.at] = runtime.Contract(
+            name=callee.object_name,
+            cleanup=0,
+            control=runtime.Control.RETURNS,
+            enters_user_code=False,
+            raises_error=False,
+            error_handling=False,
+            writes=runtime.Memory.ANY,
+            reads=runtime.Memory.ANY,
+            clobbers=runtime.EVERY,
+            established=True,
+            evidence="inline assembly: every register assumed clobbered, the result left in AX or DX:AX",
+            inputs=frozenset(),
+        )
+        return Returned(low, high)
 
     def push(self, value, type_: str) -> int:
         if type_ in FLOATS:

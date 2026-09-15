@@ -1,0 +1,20 @@
+--- a/bld/cc/c/ccheck.c
++++ b/bld/cc/c/ccheck.c
+@@ -478,6 +478,17 @@
+         default:
+             break;
+         }
++        /*
++         * qbopt: Borland's int is its short. Pointers to integers of one
++         * size and signedness convert with a warning, as bcc has it.
++         */
++        if( ret_val == PM
++          && typ1->decl_type >= TYP_CHAR && typ1->decl_type <= TYP_ULONG64
++          && typ2->decl_type >= TYP_CHAR && typ2->decl_type <= TYP_ULONG64
++          && ( typ1->decl_type - TYP_CHAR ) % 2 == ( typ2->decl_type - TYP_CHAR ) % 2
++          && TypeSize( typ1 ) == TypeSize( typ2 ) ) {
++            ret_val = PS;
++        }
+     }
+     return( ret_val );
+ }

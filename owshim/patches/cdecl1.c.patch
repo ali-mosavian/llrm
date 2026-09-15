@@ -1,0 +1,18 @@
+--- a/bld/cc/c/cdecl1.c
++++ b/bld/cc/c/cdecl1.c
+@@ -131,11 +131,10 @@
+         }
+     }
+ #endif
+-    if( strcmp( CurFunc->name, "main" ) == 0
+-      || strcmp( CurFunc->name, "wmain" ) == 0 ) {
+-        sym->mods &= ~MASK_LANGUAGES;  // Turn off any language flags
+-        sym->mods |= FLAG_WATCALL;     // Turn on __watcall calling convention for main
+-    }
++    /*
++     * qbopt: Borland's startup calls main with the default convention,
++     * so main keeps it rather than being turned into __watcall.
++     */
+     SymReplace( sym, CurFuncHandle );
+ }
+ 

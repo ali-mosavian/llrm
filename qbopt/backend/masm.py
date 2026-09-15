@@ -29,6 +29,8 @@ class Unprintable(Exception):
 class Callee:
     name: str
     far: bool
+    # Inline assembly laid down in place of a call: bytes, and (kind, symbol, offset) for a fixup.
+    code: tuple = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +169,8 @@ def _instruction(one: lir.Insn, procedure: Procedure, names: dict, number: int, 
             callee = procedure.callees.get(one.at)
             if callee is None:
                 raise Unprintable("a call with no callee")
+            if callee.code:
+                return list(_code(callee.code))
             return [f"call {'far ptr ' if callee.far else ''}{callee.name}"]
         case ir.Operation.BARRIER:
             return [f"{name} {(dests or sources)[0]}"]
@@ -184,6 +188,18 @@ def _instruction(one: lir.Insn, procedure: Procedure, names: dict, number: int, 
             restore = [f"pop {target.name_of(register)}" for register in reversed(saved)]
             return [*restore, "mov sp, bp", "pop bp", name or ("retf" if procedure.far else "ret")]
     raise Unprintable(f"{what}")
+
+
+def _code(parts: tuple):
+    for part in parts:
+        match part:
+            case bytes():
+                for start in range(0, len(part), 16):
+                    yield "db " + ",".join(f"0{byte:02x}h" for byte in part[start : start + 16])
+            case ("offset", name, offset):
+                yield f"dw offset {name}{_signed(offset)}"
+            case ("segment", name, _):
+                yield f"dw seg {name}"
 
 
 def _segment(where) -> bool:

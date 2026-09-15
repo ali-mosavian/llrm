@@ -27,6 +27,21 @@ def test_borland_alloc_h_is_found(tmp_path):
     assert "CGProcDecl" in _stream(tmp_path, "#include <alloc.h>\nvoid *get( void ) { return malloc( 4 ); }\n")
 
 
+def test_main_keeps_the_default_convention(tmp_path):
+    """Open Watcom turns main into __watcall, `main_` with register parameters;
+    Borland's c0 calls `_main` cdecl."""
+    stream = _stream(tmp_path, "int main( void ) { return 0; }\n")
+    symbol = next(line for line in stream.splitlines() if 'name="main"' in line)
+    convention = stream.splitlines()[stream.splitlines().index(symbol) + 1]
+    assert 'pattern="_*"' in symbol and "class=0x80" in convention and "parms=[]" in convention
+
+
+def test_pointers_to_one_integer_size_convert(tmp_path):
+    """input.c passes a `short *` for an `int *`: Borland warns, Open Watcom stopped with E1176."""
+    source = "static short get( int *p ) { return *p; }\nshort use( short *k ) { return get( k ); }\n"
+    assert "CGProcDecl" in _stream(tmp_path, source)
+
+
 def test_inline_assembly_takes_387_instructions(tmp_path):
     """d_poly.c's `fsin` in __asm: E1156 invalid instruction with current CPU setting."""
     source = "double s( double r ) { double x; __asm { fld r\n fsin\n fstp x } return x; }\n"

@@ -237,6 +237,32 @@ def test_address_of_a_float_is_a_pointer():
     assert body[body.index("mov bx, offset _cell") - 1] == "mov ax, DGROUP"
 
 
+def test_inline_assembly_names_locals_at_their_frame_offsets():
+    """`__asm { fld f; fnstcw cw; ... }` was refused as a call with a register
+    convention. Its code goes in place with each local's BP offset patched in."""
+    body = _proc(_asm("inline"), "_chop")
+    at = body.index("db 0d9h,086h,006h,000h,0d9h,0beh,0fch,0ffh,0dfh,09eh,0fah,0ffh,0d9h,0aeh,0fch,0ffh")
+    assert body[at + 1] == "mov ax, word ptr [bp-6]"
+
+
+def test_emit_lays_down_its_bytes():
+    """`__emit__( 0x0f, 0x31 )` became a far call to `___emit__`, which no library has."""
+    lines = _asm("inline")
+    body = lines[lines.index("_raw proc near") : lines.index("_raw endp")]
+    assert body[body.index("db 0b8h,001h,000h") + 1 : body.index("db 0bah,002h,000h")] == ["db 090h"]
+    assert not any("___emit__" in one for one in lines)
+
+
+def test_value_less_return_returns_what_the_code_left():
+    """`raw` ends in inline code and `return;`-less: its MIR returned nothing,
+    and DX:AX reached the caller only because nothing was emitted after."""
+    unit = cfront.hir.unit(cfront.stream.parse((FIXTURES / "inline.cgs").read_text()))
+    proc = next(one for one in unit.procs if unit.symbols[one.symbol].name == "raw")
+    body = cfront.raise_hir.raised(unit, proc).body
+    returned = next(op for block in body.blocks for op in block.ops if op.kind.name == "RETURN")
+    assert len(returned.args) == 2
+
+
 def test_calls_push_in_convention_order():
     """cdecl pushes last first and pops after; pascal pushes first first."""
     lines = _asm("qglsurf")

@@ -168,6 +168,56 @@ static void regs( char *buf, size_t size, const hw_reg_set *set )
     }
 }
 
+static unsigned sym( cg_sym_handle h );
+
+/* An aux pragma's code -- inline assembly -- as the bytes the code generator
+ * would lay down, a two-byte hole at each place it patches, and the patches:
+ * the front end escapes them with FLOATING_FIXUP_BYTE (x86enc2.c reads the
+ * same stream). An FPU patch mark matters only to an emulator and has no bytes. */
+static void code_record( unsigned id, const byte_seq *code )
+{
+    char bytes[2 * 4096 + 1], fixes[4096];
+    size_t nb = 0, nf = 0;
+    unsigned at = 0;
+    const byte *p = code->data;
+    const byte *end = code->data + code->length;
+
+    bytes[0] = fixes[0] = '\0';
+    while( p < end && nb + 5 < sizeof( bytes ) ) {
+        if( code->relocs && p[0] == FLOATING_FIXUP_BYTE ) {
+            byte kind = p[1];
+            if( kind == FIX_SYM_OFFSET || kind == FIX_SYM_SEGMENT || kind == FIX_SYM_RELOFF ) {
+                BYTE_SEQ_SYM s;
+                BYTE_SEQ_OFF off;
+
+                p += 2;
+                memcpy( &s, p, sizeof( s ) );
+                p += sizeof( s );
+                memcpy( &off, p, sizeof( off ) );
+                p += sizeof( off );
+                nf += (size_t)snprintf( fixes + nf, sizeof( fixes ) - nf, "%s%u:%s:y%u:%u", nf ? "," : "", at,
+                          kind == FIX_SYM_OFFSET ? "offset" : kind == FIX_SYM_SEGMENT ? "segment" : "reloff",
+                          sym( (cg_sym_handle)s ), (unsigned)off );
+                nb += (size_t)snprintf( bytes + nb, sizeof( bytes ) - nb, "0000" );
+                at += 2;
+                continue;
+            }
+            if( kind != FLOATING_FIXUP_BYTE ) {
+                p += 2;
+                continue;
+            }
+            ++p;    /* an escaped FLOATING_FIXUP_BYTE: the byte itself follows */
+        }
+        nb += (size_t)snprintf( bytes + nb, sizeof( bytes ) - nb, "%02x", *p );
+        ++p;
+        ++at;
+    }
+    if( p < end ) {
+        refuse( "inline code longer than the shim holds" );
+    }
+    emit( "CODE y%u bytes=%s fix=%s", id, bytes, nf ? fixes : "-" );
+}
+
 static int empty( const hw_reg_set *set )
 {
     size_t i;
@@ -224,6 +274,12 @@ static unsigned sym( cg_sym_handle h )
         regs( one, sizeof( one ), ret );
         snprintf( line + n, sizeof( line ) - n, "] ret=%s", ret != NULL ? one : "-" );
         emit( "%s", line );
+        {
+            byte_seq *code = FEAuxInfo( aux, FEINF_CALL_BYTES );
+            if( code != NULL ) {
+                code_record( id, code );
+            }
+        }
     }
     return( id );
 }

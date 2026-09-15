@@ -73,7 +73,9 @@ def compiled(text: str, module: str, *, optimise: bool = False, dump: Path | Non
                 _write(dump, f"phases/{raised.name}.{number:02d}-{type(phase).__name__}", _lir_text(raised.name, low))
         lirs.append(_lir_text(raised.name + " (allocated)", low))
         reserve = -min(min(frame.slots.values(), default=0), frame.floor)
-        callees = {at: masm.Callee(one.object_name, one.far) for at, one in raised.callees.items()}
+        callees = {
+            at: masm.Callee(one.object_name, one.far, raised.inline.get(at, ())) for at, one in raised.callees.items()
+        }
         procedures.append(masm.Procedure(raised.name, raised.symbol.exported, raised.symbol.far, low, reserve, callees))
     _write(dump, "mir", "\n".join(mirs))
     _write(dump, "lir", "\n".join(lirs))
@@ -95,7 +97,7 @@ def _externs(unit: hir.Unit) -> tuple[tuple[str, str], ...]:
     return tuple(
         (one.object_name, ("far" if one.far else "near") if one.proc else "byte")
         for one in unit.symbols.values()
-        if one.imported
+        if one.imported and one.code is None and one.name not in raise_hir.EMITTED
     )
 
 
