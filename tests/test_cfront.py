@@ -509,16 +509,22 @@ def test_signed_word_division_by_a_power_of_two_shifts(name):
     assert not any(line.startswith("idiv") for line in body), body
 
 
-@pytest.mark.parametrize(("name", "string"), [("_fill_bytes", "rep stosb"), ("_fill_words", "rep stosw")])
-def test_counted_store_of_one_value_is_a_string_fill(name, string):
+@pytest.mark.parametrize(
+    ("name", "strings"),
+    [("_fill_bytes", ("rep stosb",)), ("_fill_words", ("rep stosw",)), ("_fill_far", ("rep stosw", "rep stosb")),
+     ("_fill_counted", ("rep stosw",))],
+)
+def test_counted_store_of_one_value_is_a_string_fill(name, strings):
     """A loop storing one value into consecutive cells took a compare, a
     branch, a store and an add per cell: sieve's reset was 32,764 cycles a
-    pass where bcc's `rep stosw` is 4,099."""
+    pass where bcc's `rep stosw` is 4,099. Far statics, qcport's `reached`
+    and `used`, stayed loops: the store's selector aliased the bound, and the
+    counter was read after the loop."""
     text = cfront.compiled((FIXTURES / "fill.cgs").read_text(), "fill", optimise=True)
     body = _proc([line.strip() for line in text.splitlines()], name)
     labels = {line[:-1]: index for index, line in enumerate(body) if line.endswith(":")}
     back = [line for index, line in enumerate(body) if line.startswith("j") and labels.get(line.split()[-1], index + 1) <= index]
-    assert string in body and back == [], body
+    assert all(one in body for one in strings) and back == [], body
 
 
 def test_a_test_known_to_fail_is_gone():

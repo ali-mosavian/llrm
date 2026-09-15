@@ -6,11 +6,13 @@ guard: the body runs once, fills from the cell the first pass would have
 stored, and leaves for the exit.
 
 The shape is narrow on purpose: a header holding only its exit test, and a
-body holding only the store and the counters' steps. The counter the test
-reads steps by one, so the count is the bound less the counter, and one more
-where the bound itself runs; the cell's index steps by the cell's width. No
-value the loop computes may be read after it -- `loopexit` has rewritten the
-ones it could by then.
+body holding the store, the counters' steps and work with no effect. The
+counter the test reads steps by one, so the count is the bound less the
+counter, and one more where the bound itself runs; the cell is reached through
+a counter stepping by the cell's width, or such a counter plus something the
+loop does not change. A far cell's selector goes with it. No value the loop
+computes may be read after it but a counter the exit takes from the header,
+which leaves the body as its start plus the count of its steps.
 """
 
 from dataclasses import replace
@@ -111,14 +113,20 @@ def _filled(body: mir.MirBody, loop) -> mir.MirBody | None:
     store = stores[0]
     if store.loads or store.barrier or len(store.args) != 1 or len(store.results) != 1:
         return None
-    if not isinstance(store.results[0], mir.Cell) or store.stores != (store.results[0].ref,):
+    # The effect may carry what it is known to miss; the cell is the same.
+    if (
+        not isinstance(store.results[0], mir.Cell)
+        or len(store.stores) != 1
+        or replace(store.stores[0], excludes=()) != replace(store.results[0].ref, excludes=())
+    ):
         return None
     ref, value = store.results[0].ref, store.args[0]
     if (
         ref.width not in (1, 2, 4)
         or ref.addr is None
         or ref.base is None
-        or ref.segment is not None
+        or (ref.segment is not None) != (ref.addr.space is Space.FAR)
+        or ref.segment in defined
         or ref.pointer
         or ref.symbolic is not None
         or ref.allocation is not None
@@ -126,21 +134,30 @@ def _filled(body: mir.MirBody, loop) -> mir.MirBody | None:
         or ref.addr.space is Space.FRAME
     ):
         return None
-    index = counters.get(ref.base.id)
+    made = {value.id: op for op in work for value in op.defines}
+    index = counters.get(ref.base.id) or _offset(made.get(ref.base.id), counters, defined)
     if index is None or not _stepping(index, ref.width):
         return None
     if not isinstance(value, (mir.Const, mir.Held)) or value.width != ref.width:
         return None
     if isinstance(value, mir.Held) and value.value in defined:
         return None
-    # Nothing after the loop may read what it computed.
+    # Nothing after the loop may read what it computed, but a counter the exit's phis take from the header.
+    left = set()
     for block in body.blocks:
         if block.at in inside:
             continue
         if any(value in defined for op in block.ops for value in op.uses):
             return None
-        if any(value in defined for phi in block.phis for value in phi.incoming.values()):
-            return None
+        for phi in block.phis:
+            for where, one in phi.incoming.items():
+                if one not in defined:
+                    continue
+                if block.at != exit_at or where != header.at or one.id not in counters:
+                    return None
+                left.add(one)
+    if any(not isinstance(counters[one.id].step, mir.Const) or counters[one.id].start.width != counter.width for one in left):
+        return None
 
     fresh = _Fresh(body)
     at = store.at
@@ -164,9 +181,17 @@ def _filled(body: mir.MirBody, loop) -> mir.MirBody | None:
         count = emit(mir.Kind.SUB, ir.Operation.BINARY, (bound, counter), width)
         if inclusive:
             count = emit(mir.Kind.ADD, ir.Operation.BINARY, (count, mir.Const(1, width)), width)
-    first = mir.Symbol(ref.addr.space, ref.addr.index, ref.addr.disp, 2)
+    finals = {}
+    for one in left:
+        step = counters[one.id].step
+        moved = count if step.n == 1 else emit(mir.Kind.MUL, ir.Operation.BINARY, (count, mir.Const(step.n, width)), width)
+        finals[one] = emit(mir.Kind.ADD, ir.Operation.BINARY, (mir.Held(one, width), moved), width).value
+    if ref.addr.space in (Space.FAR, Space.LITERAL):
+        first = mir.Const(ref.addr.disp, 2)
+    else:
+        first = mir.Symbol(ref.addr.space, ref.addr.index, ref.addr.disp, 2)
     address = emit(mir.Kind.ADD, ir.Operation.BINARY, (mir.Held(ref.base, 2), first), 2)
-    args = (value, count, address)
+    args = (value, count, address) + (() if ref.segment is None else (mir.Held(ref.segment, 2),))
     fill = replace(
         store,
         op=ir.Operation.FILL,
@@ -201,7 +226,10 @@ def _filled(body: mir.MirBody, loop) -> mir.MirBody | None:
             )
             block = replace(block, phis=phis)
         elif block.at == exit_at:
-            phis = tuple(replace(phi, incoming={**phi.incoming, latch.at: phi.incoming[header.at]}) for phi in block.phis)
+            phis = tuple(
+                replace(phi, incoming={**phi.incoming, latch.at: finals.get(phi.incoming[header.at], phi.incoming[header.at])})
+                for phi in block.phis
+            )
             block = replace(block, phis=phis)
         blocks.append(block)
     return replace(body, blocks=tuple(blocks))
@@ -211,22 +239,50 @@ def _stepping(counter: induction.Affine, by: int) -> bool:
     return isinstance(counter.step, mir.Const) and counter.step.n == by
 
 
+def _offset(op: mir.Op | None, counters: dict[int, induction.Affine], defined: set) -> induction.Affine | None:
+    """The counter `op` adds something the loop does not change to, stepping as it does."""
+    if op is None or op.kind is not mir.Kind.ADD or op.loads or op.stores or op.barrier or len(op.args) != 2:
+        return None
+    for one, other in (op.args, op.args[::-1]):
+        unchanged = isinstance(other, (mir.Const, mir.Symbol)) or isinstance(other, mir.Held) and other.value not in defined
+        if isinstance(one, mir.Held) and one.value.id in counters and unchanged:
+            return counters[one.value.id]
+    return None
+
+
 def _steps(header, latch, ops: list[mir.Op]) -> bool:
-    """Whether `ops` are each header counter's own step and nothing else."""
-    if len(ops) != len(header.phis):
-        return False
+    """Whether each header counter steps once in `ops`, and the rest compute without effect.
+
+    Done once instead of every time round, work that stores nothing, reads
+    nothing and cannot trap leaves only values nothing after the loop reads."""
     stepped = set()
     for op in ops:
-        if op.kind is not mir.Kind.ADD or op.loads or op.stores or op.barrier or len(op.args) != 2 or len(op.results) != 1:
+        phi = _stepped(header, latch, op)
+        if phi is not None and phi.result not in stepped:
+            stepped.add(phi.result)
+        elif (
+            op.loads
+            or op.stores
+            or op.barrier
+            or op.floating is not None
+            or op.kind in (mir.Kind.CALL, mir.Kind.ESCAPE, mir.Kind.OPAQUE, mir.Kind.DIVMOD, mir.Kind.UDIVMOD)
+            or not all(isinstance(result, mir.Held) for result in op.results)
+        ):
             return False
-        source, step = op.args
-        if not isinstance(source, mir.Held) or not isinstance(step, mir.Const) or not isinstance(op.results[0], mir.Held):
-            return False
-        phi = next((phi for phi in header.phis if phi.result == source.value), None)
-        if phi is None or phi.incoming.get(latch.at) != op.results[0].value:
-            return False
-        stepped.add(phi.result)
     return len(stepped) == len(header.phis)
+
+
+def _stepped(header, latch, op: mir.Op):
+    """The header phi `op` steps by a constant, if it is one."""
+    if op.kind is not mir.Kind.ADD or op.loads or op.stores or op.barrier or len(op.args) != 2 or len(op.results) != 1:
+        return None
+    source, step = op.args
+    if not isinstance(source, mir.Held) or not isinstance(step, mir.Const) or not isinstance(op.results[0], mir.Held):
+        return None
+    phi = next((phi for phi in header.phis if phi.result == source.value), None)
+    if phi is None or phi.incoming.get(latch.at) != op.results[0].value:
+        return None
+    return phi
 
 
 class _Fresh:

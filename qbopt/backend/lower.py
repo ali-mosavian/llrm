@@ -872,9 +872,10 @@ def _constant_store(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...
 def _fill(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]:
     """`rep stos`: the count in cx, the value in the accumulator, the cells through es:di.
 
+    A far cell's selector is an operand the allocation places in ES. Otherwise
     ES is set to DS for the fill and put back, so a selector living in it survives.
     """
-    value, count, address = op.args
+    value, count, address, *selector = op.args
     name = {1: "stosb", 2: "stosw", 4: "stosd"}.get(value.width)
     if name is None:
         raise Unlowered(f"fill of {value.width}-byte cells at {op.at:#x}")
@@ -888,8 +889,11 @@ def _fill(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]:
         return into
 
     stored, counted, through = held(value, value.width), held(count, 2), held(address, 2)
-    extra = ir.Reg(Register.ES, 2)
     stepped, emptied = ir.Held(lowering.fresh(), 2), ir.Held(lowering.fresh(), 2)
+    if selector:
+        sources = (stored, counted, through, held(selector[0], 2))
+        return (*setup, ir.Semantics(ir.Operation.FILL, name, (ir.Mem(None, 0), stepped, emptied), sources))
+    extra = ir.Reg(Register.ES, 2)
     return (
         *setup,
         ir.Semantics(ir.Operation.PUSH, "push", (), (extra,)),

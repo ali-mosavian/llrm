@@ -90,6 +90,8 @@ def requirements(what: "ir.Semantics") -> dict[Occurrence, Register_]:
         out[Occurrence("source", 0)] = Register.EAX
         out[Occurrence("source", 1)] = Register.ECX
         out[Occurrence("source", 2)] = Register.EDI
+        if len(what.sources) == 4 and isinstance(what.sources[3], ir.Held):
+            out[Occurrence("source", 3)] = Register.ES
         if len(what.dests) == 3:
             out[Occurrence("dest", 1)] = Register.EDI
             out[Occurrence("dest", 2)] = Register.ECX
