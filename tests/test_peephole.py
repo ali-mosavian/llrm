@@ -549,24 +549,42 @@ def test_zeroing_before_a_jump_asks_what_the_target_reads(successor, zeroed):
     assert result.what.name == ("xor" if zeroed else "mov")
 
 
-@pytest.mark.parametrize("variant,rewritten", [("plain", True), ("between", False), ("adjust", False), ("memory", False)])
+@pytest.mark.parametrize(
+    "variant,rewritten",
+    [
+        ("plain", True),
+        ("moves", True),
+        ("call", True),
+        ("return", True),
+        ("between", False),
+        ("adjust", False),
+        ("memory", False),
+    ],
+)
 def test_zero_compare_before_its_branch_is_or(variant, rewritten):
     """`cmp ax,0; jl` is three bytes where `or ax,ax; jl` is two. Only AF
-    differs, so the branch must read straight after and nothing may read AF."""
-    from qbopt.objectfile.module import Addr
+    differs, so the branch must read the flags next and nothing may read AF.
+    No convention passes AF, yet a call or return after counted as reading it:
+    791 of qcport's 805 zero tests right before their branch stayed three bytes."""
     from qbopt.objectfile.module import Space
 
     ax = ir.Reg(Register.AX, 2)
     tested = ir.Mem(ir.Addr(Space.FRAME, -2), 2, Register.BP, 0, 2) if variant == "memory" else ax
     compare = lir.Insn(0, (0, 3), ir.Semantics(ir.Operation.COMPARE, "cmp", (), (tested, ir.Imm(0, 2))), (), ())
-    between = lir.Insn(3, (3, 6), ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.BX, 2),), (ir.Imm(1, 2),)), (), ())
+    move = ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.BX, 2),), (ir.Reg(Register.CX, 2),))
+    between = lir.Insn(3, (3, 5), None if variant == "between" else move, (), ())
     branch = lir.Insn(6, (6, 8), ir.Semantics(ir.Operation.BRANCH, "jl", (), (), target=9), (), ())
     after = ir.Semantics(ir.Operation.COMPARE, "cmp", (), (ax, ir.Imm(1, 2)))
-    unknown = variant == "adjust"
+    last = {
+        "adjust": None,
+        "call": ir.Semantics(ir.Operation.CALL, "call"),
+        "return": ir.Semantics(ir.Operation.RETURN, ""),
+    }.get(variant, after)
+    head = (compare, between, branch) if variant in ("moves", "between") else (compare, branch)
     blocks = (
-        lir.LirBlock(0, (compare, between, branch) if variant == "between" else (compare, branch), (8, 9)),
+        lir.LirBlock(0, head, (8, 9)),
         lir.LirBlock(8, (lir.Insn(8, (8, 9), after, (), ()),), ()),
-        lir.LirBlock(9, (lir.Insn(9, (9, 10), None if unknown else after, (), ()),), ()),
+        lir.LirBlock(9, (lir.Insn(9, (9, 10), last, (), ()),), ()),
     )
     result = peephole.zero_compares(lir.LirBody("zero", 0, blocks, {}, {})).insns[0]
     if rewritten:

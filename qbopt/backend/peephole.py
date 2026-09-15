@@ -715,8 +715,12 @@ def zero_compares(body: lir.LirBody) -> lir.LirBody:
     for block in body.blocks:
         insns = list(block.insns)
         work = [index for index, one in enumerate(insns) if not _nothing(one)]
-        if len(work) >= 2 and not live[block.at] & _ADJUST:
-            test, branch = insns[work[-2]], insns[work[-1]]
+        at = len(work) - 2
+        # Moves change no flag, so a phi's copies may stand between the two.
+        while at >= 0 and _moves(insns[work[at]]):
+            at -= 1
+        if at >= 0 and not live[block.at] & _ADJUST:
+            test, branch = insns[work[at]], insns[work[-1]]
             register = _zero_tested(test)
             if (
                 register is not None
@@ -726,7 +730,7 @@ def zero_compares(body: lir.LirBody) -> lir.LirBody:
                 and branch.what.name in _BRANCH_FLAGS
                 and test.what.name == "cmp"
             ):
-                insns[work[-2]] = replace(test, what=ir.Semantics(ir.Operation.BINARY, "or", (register,), (register, register)))
+                insns[work[at]] = replace(test, what=ir.Semantics(ir.Operation.BINARY, "or", (register,), (register, register)))
         blocks.append(replace(block, insns=tuple(insns)))
     return replace(body, blocks=tuple(blocks))
 
@@ -769,12 +773,18 @@ def _sets_from(one: lir.Insn, register: ir.Reg) -> bool:
 def _flags_live_out(body: lir.LirBody) -> dict[int, set]:
     """Which flag lanes something may read after each block's last instruction."""
     every = _flag_lanes(_ARITHMETIC)
+    # No calling convention passes the adjust flag in or out: a callee, a
+    # caller after a return, and whatever runs after the body leaves may read
+    # any other flag, but only an instruction here that reads AF reads it.
+    exits = every - _ADJUST
 
     def effects(one: lir.Insn) -> tuple[set, set]:
         if one.what is not None and one.what.op is ir.Operation.BRANCH:
             return _flag_lanes(_BRANCH_FLAGS.get(one.what.name, _ARITHMETIC)), set()
         if one.what is not None and one.what.op is ir.Operation.JUMP or _nothing(one):
             return set(), set()
+        if one.what is not None and one.what.op in (ir.Operation.CALL, ir.Operation.RETURN):
+            return set(exits), set()
         found = _register_effects(one, flags=True)
         if found is None:
             return every, set()
@@ -788,7 +798,7 @@ def _flags_live_out(body: lir.LirBody) -> dict[int, set]:
     while changed:
         changed = False
         for block in reversed(body.blocks):
-            after = set().union(*(live_in.get(at, every) for at in block.succ)) if block.succ else set(every)
+            after = set().union(*(live_in.get(at, exits) for at in block.succ)) if block.succ else set(exits)
             out[block.at] = after
             live = set(after)
             for reads, writes in reversed(steps[block.at]):
