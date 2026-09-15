@@ -30,7 +30,7 @@ def test_far_pointer_return_in_dx_ax():
     body = lines[lines.index("_pal_current proc far") : lines.index("_pal_current endp")]
     assert "mov ax, DGROUP" in body and "mov bx, offset _pal_now" in body
     epilogue = body.index("leave")
-    assert body[epilogue - 3 : epilogue] == ["mov eax, dword ptr [bp-4]", "mov edx, eax", "shr edx, 16"]
+    assert body[epilogue - 2 : epilogue] == ["mov ax, word ptr [bp-4]", "mov dx, word ptr [bp-2]"]
 
 
 def test_choose_joins_both_arms_in_one_cell():
@@ -351,6 +351,16 @@ def test_loaded_far_pointer_moves_whole():
     lines = [line.strip() for line in text.splitlines()]
     body = lines[lines.index("_copy proc far") : lines.index("_copy endp")]
     assert not any("_pts+2" in line or line == "pop eax" for line in body), body
+
+
+def test_far_pointer_in_memory_is_read_as_its_two_words():
+    """`table->x + table->y` loaded the pointer as a dword and split it:
+    `mov ebx,[_table]; mov ecx,ebx; shr ecx,16; mov es,cx`. 1,076 splits
+    over qcport where bcc writes `les bx,[_table]`."""
+    text = cfront.compiled((FIXTURES / "farderef.cgs").read_text(), "farderef", optimise=True)
+    body = _proc([line.strip() for line in text.splitlines()], "_sum")
+    assert not any(line.startswith("shr") or "dword ptr _table" in line for line in body), body
+    assert any("word ptr _table+2" in line for line in body), body
 
 
 def test_indexed_cell_reaches_its_whole_symbol():

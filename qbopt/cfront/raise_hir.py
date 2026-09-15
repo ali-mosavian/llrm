@@ -583,8 +583,9 @@ class _Raise:
         self.start(join)
         if type_ in FLOATS:
             return FloatCell(joined, width)
-        loaded = self.load(self.cell(joined, width), type_)
-        return self.split(loaded) if self.far_pointer(type_) else loaded
+        if self.far_pointer(type_):
+            return self.far_loaded(joined, type_)
+        return self.load(self.cell(joined, width), type_)
 
     def type_of(self, node: str) -> str:
         tree = self.unit.nodes[hir.handle(node)]
@@ -630,10 +631,9 @@ class _Raise:
             return Aggregate(address, self.unit.types[type_])
         if type_ in FLOATS:
             return FloatCell(address, self.width(type_))
-        loaded = self.load(self.cell(address, self.width(type_)), type_)
         if self.far_pointer(type_):
-            return self.split(loaded)
-        return loaded
+            return self.far_loaded(address, type_)
+        return self.load(self.cell(address, self.width(type_)), type_)
 
     def convert(self, got, source: str, type_: str):
         # An address's node is typed by what it addresses: `(void far *) &a_float`.
@@ -1056,6 +1056,16 @@ class _Raise:
         type_ = self.type_of(node)
         near = type_ == "TY_NEAR_POINTER" or (type_ == "TY_POINTER" and not self.far_pointer(type_))
         return Near(got.value) if near and isinstance(got, mir.Held) and got.width == 2 else got
+
+    def far_loaded(self, address: Address, type_: str) -> Far:
+        """A far pointer in memory, as its offset word, its segment word and the whole.
+
+        Read one after another here, so all three see the same memory; the
+        ones nothing uses are dead. Splitting the whole instead cost a shift."""
+        whole = self.load(self.cell(address, 4), type_)
+        offset = self.load(self.cell(address, 2), "TY_UINT_2")
+        segment = self.load(self.cell(replace(address, disp=address.disp + 2), 2), "TY_UINT_2")
+        return Far(segment.value, offset.value, whole=whole.value)
 
     def split(self, pointer: mir.Held) -> Far:
         segment = self.fresh()
