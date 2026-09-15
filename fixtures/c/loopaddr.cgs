@@ -1,0 +1,85 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+TYPE T25 size=2 align=1
+SETSEG 4
+SYM y1 name="tag" base="tag" pattern="_*" attr=0x42 seg=4
+b1 BENewBack y1
+- DGLabel b1
+- DGBytes 2 7800
+f2 DBSrcFile "/Users/alim/work/personal/qbopt/.claude/worktrees/watcom-16bit-qbopt-qcport-1d97c8/fixtures/c/loopaddr.c"
+- DBSrcCue f2 5 1
+SYM y2 name="sum" base="sum" pattern="_*" attr=0x7 seg=1
+CALLCONV y2 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y2 TY_INT_2
+SYM y3 name="n" base="n" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y3 TY_INT_2
+l3 CGLastParm
+t4 CGTemp TY_INT_2
+SYM y4 name="i" base="i" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y4 TY_INT_2
+SYM y5 name="v" base="v" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y5 TY_INT_2
+SYM y6 name="t" base="t" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y6 TY_INT_2
+l5 BENewLabel
+l6 BENewLabel
+- DBSrcCue f2 7 1
+n7 CGFEName y6 TY_INT_2
+n8 CGInteger 0 TY_INTEGER
+n9 CGAssign n7 n8 TY_INT_2
+- CGDone n9
+- DBSrcCue f2 8 1
+n10 CGFEName y4 TY_INT_2
+n11 CGInteger 0 TY_INTEGER
+n12 CGAssign n10 n11 TY_INT_2
+- CGDone n12
+- CGControl O_LABEL n0 l5
+n13 CGFEName y4 TY_INT_2
+n14 CGUnary O_POINTS n13 TY_INT_2
+n15 CGFEName y3 TY_INT_2
+n16 CGUnary O_POINTS n15 TY_INT_2
+n17 CGCompare O_LT n14 n16 TY_INTEGER
+- CGControl O_IF_FALSE n17 l6
+- DBSrcCue f2 9 1
+SYM y7 name="Get" base="Get" pattern="^" attr=0xf seg=1
+CALLCONV y7 class=0x1 target=0x306 parms=[] ret=0:0
+n18 CGFEName y7 TY_CODE_PTR
+c19 CGInitCall n18 TY_INT_2 y7
+n20 CGFEName y1 T25
+n21 CGUnary O_CONVERT n20 TY_POINTER
+- CGAddParm c19 n21 TY_POINTER
+n22 CGFEName y5 TY_INT_2
+n23 CGUnary O_CONVERT n22 TY_POINTER
+- CGAddParm c19 n23 TY_POINTER
+n24 CGCall c19
+- CGDone n24
+- DBSrcCue f2 10 1
+n25 CGFEName y6 TY_INT_2
+n26 CGFEName y5 TY_INT_2
+n27 CGUnary O_POINTS n26 TY_INT_2
+n28 CGPreGets O_PLUS n25 n27 TY_INT_2
+- CGDone n28
+- DBSrcCue f2 11 1
+n29 CGFEName y4 TY_INT_2
+n30 CGInteger 1 TY_INTEGER
+n31 CGPostGets O_PLUS n29 n30 TY_INT_2
+- CGDone n31
+- CGControl O_GOTO n0 l5
+- CGControl O_LABEL n0 l6
+- DBSrcCue f2 12 1
+n32 CGFEName y6 TY_INT_2
+n33 CGUnary O_POINTS n32 TY_INT_2
+n34 CGUnary O_CONVERT n33 TY_INT_2
+n35 CGTempName t4 TY_INT_2
+n36 CGAssign n35 n34 TY_INT_2
+- CGDone n36
+- DBSrcCue f2 13 1
+n37 CGTempName t4 TY_INT_2
+n38 CGUnary O_POINTS n37 TY_INT_2
+- CGReturn n38 TY_INT_2
+STOP
+FINI

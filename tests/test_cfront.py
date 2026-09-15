@@ -365,6 +365,24 @@ def test_local_stored_before_a_call_is_promoted_after_it():
     assert local == []
 
 
+def test_symbol_argument_is_pushed_as_a_literal():
+    """Fold put a number into the argument that read it but not a symbol, so
+    `tag` stood as `mov di, offset _tag`, left the loop, and took a register
+    or a slot where `push offset _tag` needs neither."""
+    text = cfront.compiled((FIXTURES / "loopaddr.cgs").read_text(), "loopaddr", optimise=True)
+    body = _proc([line.strip() for line in text.splitlines()], "_sum")
+    assert "push offset _tag" in body and not any(line.startswith("mov ") and "offset _tag" in line for line in body), body
+
+
+def test_stored_symbol_is_forwarded_to_its_reload():
+    """Once a store took `offset _pal_now` as a literal, the reload after it was
+    served nothing: pal_current built a frame to store the far pointer it
+    returned and read it straight back."""
+    text = cfront.compiled((FIXTURES / "pal.cgs").read_text(), "pal", optimise=True)
+    body = _proc([line.strip() for line in text.splitlines()], "_pal_current")
+    assert not any("[bp-" in line for line in body), body
+
+
 def test_short_value_crosses_a_call_in_si_or_di():
     """A call was said to destroy every register, so the running total lived
     in a slot and each pass wrote `add word ptr [bp-4], ax`. The callee keeps

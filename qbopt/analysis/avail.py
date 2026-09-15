@@ -151,7 +151,7 @@ def stored_from(op: Op) -> tuple[MemRef, Value] | None:
         # the count above refused it and the bytes were unknowable for the
         # rest of the body. `DEF SEG = &HA000` is one store and twenty-three
         # reads, none of which could be served.
-        written = [one for one in op.args if isinstance(one, mir.Const)]
+        written = [one for one in op.args if isinstance(one, (mir.Const, mir.Symbol))]
         if len(written) == 1 and len(op.args) == 1 and written[0].width == op.stores[0].width:
             return op.stores[0], written[0]
         return None
@@ -316,7 +316,7 @@ class Forward:
     # The value holding them. Which register that is, is the allocator's
     # answer; a caller that has no values -- the machine arm -- looks it up
     # in the body's own `origin`, which is where that question belongs.
-    value: "mir.Value | mir.Const"
+    value: "mir.Value | mir.Const | mir.Symbol"
     op: Op | None = None
 
 

@@ -986,12 +986,12 @@ def forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> M
         ops: list[Op] = []
         for op in block.ops:
             holder = served.get(id(op))
-            if isinstance(holder, mir.Const) and op.kind is not mir.Kind.LOAD:
+            if isinstance(holder, (mir.Const, mir.Symbol)) and op.kind is not mir.Kind.LOAD:
                 holder = None
             args = _served(op, holder) if holder is not None else None
             if args is None:
                 ops.append(op)
-            elif isinstance(holder, mir.Const):
+            elif isinstance(holder, (mir.Const, mir.Symbol)):
                 # Only a load, which becomes the constant itself. An
                 # arithmetic operand is a machine question this is not
                 # allowed to answer: `idiv [x]` has no immediate form, and
@@ -1065,7 +1065,7 @@ def _served(op: Op, holder) -> "tuple[mir.Arg, ...] | None":
         # An update in place: the read is the write's own operand, and serving
         # it turns one instruction into a load, the operation and a store.
         return None
-    if isinstance(holder, mir.Const):
+    if isinstance(holder, (mir.Const, mir.Symbol)):
         if holder.width != cell.ref.width:
             return None
         return tuple(holder if one is cell else one for one in op.args)
@@ -2121,7 +2121,8 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
         if any(op.loads or op.kind is mir.Kind.DIVMOD for block in body.blocks for op in block.ops)
         else {}
     )
-    if not facts and not memory and not argument_facts:
+    symbols = _symbol_copies(body)
+    if not facts and not memory and not argument_facts and not symbols:
         return body
 
     # Live, not merely mentioned: see live()'s own note on hotlop's dx.
@@ -2143,6 +2144,7 @@ def folded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirB
                 _folded_op(updated, facts, wanted),
                 argument_facts if op.kind is mir.Kind.ARG else facts,
                 memory.get((block.at, index), {}),
+                symbols,
             )
             changed = changed or made is not op
             ops.append(made)
@@ -2177,10 +2179,34 @@ def _constant_update(op: Op, facts: dict, memory: dict, wanted: set) -> Op:
     )
 
 
-def _constant_operands(op: Op, facts: dict, memory: dict | None = None) -> Op:
+def _symbol_copies(body: MirBody) -> dict:
+    """Values that are a symbol's address and nothing else: a literal, as a number is."""
+    return {
+        op.defines[0]: op.args[0]
+        for block in body.blocks
+        for op in block.ops
+        if op.kind is mir.Kind.COPY
+        and len(op.args) == len(op.defines) == 1
+        and isinstance(op.args[0], mir.Symbol)
+        and not (op.loads or op.merges)
+    }
+
+
+def _literal_of(arg, facts: dict, symbols: dict) -> "mir.Const | mir.Symbol | None":
+    """A register operand as the literal it holds, a number or a symbol's address."""
+    if not isinstance(arg, mir.Held):
+        return None
+    fact = facts.get(arg.value)
+    if fact is not None and fact.width >= arg.width:
+        return mir.Const(consts.masked(fact.n, arg.width), arg.width)
+    symbol = symbols.get(arg.value)
+    return symbol if symbol is not None and symbol.width == arg.width else None
+
+
+def _constant_operands(op: Op, facts: dict, memory: dict | None = None, symbols: dict | None = None) -> Op:
     """Propagate width-proven constants without reversing ordered operands."""
     if op.kind is mir.Kind.ARG:
-        return _constant_argument(op, facts, memory or {})
+        return _constant_argument(op, facts, memory or {}, symbols or {})
     if (
         op.kind is mir.Kind.STORE
         and len(op.args) == len(op.stores) == 1
@@ -2191,8 +2217,7 @@ def _constant_operands(op: Op, facts: dict, memory: dict | None = None) -> Op:
         and op.floating is None
         and isinstance(arg := op.args[0], mir.Held)
         and arg.width == op.stores[0].width
-        and (fact := facts.get(arg.value)) is not None
-        and fact.width >= arg.width
+        and (literal := _literal_of(arg, facts, symbols or {})) is not None
     ):
         address_values = {value for ref in op.stores for value in (ref.base, ref.segment) if value is not None}
         # The node and its field stay: the destination is still this op's,
@@ -2200,7 +2225,7 @@ def _constant_operands(op: Op, facts: dict, memory: dict | None = None) -> Op:
         # as gone while emitting a new one.
         return replace(
             op,
-            args=(mir.Const(consts.masked(fact.n, arg.width), arg.width),),
+            args=(literal,),
             uses=tuple(value for value in op.uses if value != arg.value or value in address_values),
             made=None,
             raised=None,
@@ -2266,7 +2291,7 @@ def _constant_operands(op: Op, facts: dict, memory: dict | None = None) -> Op:
     )
 
 
-def _constant_argument(op: Op, facts: dict, memory: dict) -> Op:
+def _constant_argument(op: Op, facts: dict, memory: dict, symbols: dict | None = None) -> Op:
     """Substitute the value read for an argument, keeping its stack write."""
     if len(op.args) != 1 or op.defines or op.merges or op.barrier:
         return op
@@ -2279,7 +2304,9 @@ def _constant_argument(op: Op, facts: dict, memory: dict) -> Op:
         return op
     width = arg.ref.width if isinstance(arg, mir.Cell) else arg.width
     fact = consts._operand(op, arg, facts, memory)
-    if fact is None or fact.width < width:
+    if fact is not None and fact.width >= width:
+        literal = mir.Const(consts.masked(fact.n, width), width)
+    elif (literal := _literal_of(arg, {}, symbols or {})) is None:
         return op
     kept = tuple(ref for ref in op.loads if not isinstance(arg, mir.Cell) or ref != arg.ref)
     uses = tuple(
@@ -2287,7 +2314,7 @@ def _constant_argument(op: Op, facts: dict, memory: dict) -> Op:
     )
     return replace(
         op,
-        args=(mir.Const(consts.masked(fact.n, width), width),),
+        args=(literal,),
         uses=uses,
         loads=kept,
         node=None,
