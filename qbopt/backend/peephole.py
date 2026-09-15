@@ -40,7 +40,7 @@ class Peephole(LIRTransform):
         body = spillforward.forwarded(body)
         body = storecombine.combined(body)
         body = pushed_constants(body)
-        body = fused(overwritten(shuttles(commuted(constants(pushes(body))))))
+        body = far_loads(fused(overwritten(shuttles(commuted(constants(pushes(body)))))))
         return self._frame(waits(zero_compares(tested(zeroes(addresses(body))))))
 
     def _frame(self, body):
@@ -627,6 +627,92 @@ def _fused(load, work, store, dead_work, dead_store) -> "tuple[lir.Insn, int] | 
         return None
     uses = tuple(one for one in work.uses if one not in load.defines)
     return replace(work, what=made, defines=(), uses=uses), used
+
+
+def far_loads(body: lir.LirBody) -> lir.LirBody:
+    """`mov r,[m]; mov es,[m+2]`, in either order, is `les r,[m]` (and FS, GS).
+
+    One instruction reads both words before it writes either register, so
+    neither register may be how the cell is reached. Only instructions that
+    stand for no object bytes are joined.
+    """
+    blocks = []
+    for block in body.blocks:
+        insns = list(block.insns)
+        work = [index for index, one in enumerate(insns) if not _nothing(one)]
+        removed = set()
+        at = 0
+        while at + 1 < len(work):
+            made = _far_load(insns[work[at]], insns[work[at + 1]])
+            if made is None:
+                at += 1
+                continue
+            insns[work[at]] = made
+            removed.add(work[at + 1])
+            at += 2
+        blocks.append(replace(block, insns=tuple(one for index, one in enumerate(insns) if index not in removed)))
+    return replace(body, blocks=tuple(blocks))
+
+
+def _far_load(first: lir.Insn, second: lir.Insn) -> "lir.Insn | None":
+    from qbopt.backend import select
+
+    words = []
+    for one in (first, second):
+        if (
+            one.what is None
+            or one.clobbers
+            or one.requires
+            or one.delivers
+            or one.spread
+            or one.group is not None
+            or one.symbol is True
+            or one.frame_adjust
+            or one.covers is not None
+            and one.covers[0] != one.covers[1]
+        ):
+            return None
+        match one.what:
+            case ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg() as dest,), (ir.Mem() as cell,)):
+                if dest.width != 2 or cell.width != 2:
+                    return None
+                words.append((dest, cell))
+            case _:
+                return None
+    segments = [word for word in words if word[0].register in select.FAR_LOADS]
+    offsets = [word for word in words if word[0].register not in target.SEGMENTS]
+    if len(segments) != 1 or len(offsets) != 1:
+        return None
+    (segment, high), (offset, low) = segments[0], offsets[0]
+    if not _next_word(low, high):
+        return None
+    reached = {ir.root(one) for cell in (low, high) for one in (cell.through, cell.index_through)}
+    overrides = {cell.addr.segment for cell in (low, high) if cell.addr is not None}
+    if ir.root(offset.register) in reached or segment.register in overrides:
+        return None
+    made = ir.Semantics(ir.Operation.MOVE, select.FAR_LOADS[segment.register][0], (offset, segment), (replace(low, width=4),))
+    if select.emit(made) is None:
+        return None
+    return replace(
+        first,
+        what=made,
+        defines=tuple(dict.fromkeys(first.defines + second.defines)),
+        uses=tuple(dict.fromkeys(first.uses + second.uses)),
+    )
+
+
+def _next_word(low: ir.Mem, high: ir.Mem) -> bool:
+    """Whether `high` is the word right after `low`, reached the same way.
+
+    The displacement may be carried by the address, by the operand's offset,
+    or by both at once, so either may be the one two further on."""
+    same = lambda cell: replace(cell, addr=None if cell.addr is None else replace(cell.addr, disp=0), offset=0)  # noqa: E731
+    if same(low) != same(high):
+        return False
+    if low.addr is None or high.addr is None:
+        return low.addr is None and high.addr is None and high.offset == low.offset + 2
+    moved = high.addr.disp - low.addr.disp
+    return moved == 2 and high.offset - low.offset in (0, 2) or moved == 0 and high.offset == low.offset + 2
 
 
 def _scaled_address(parts: tuple[lir.Insn, ...], *, flags_dead: bool = False) -> lir.Insn | None:

@@ -1325,6 +1325,23 @@ def multiply_into(dest: Register_, source: Register_ | ir.Mem, value: int | None
     return None if code is None else _assemble(Instruction.create_reg_reg_i32(code, dest, source, value), at)
 
 
+# Each segment register a far pointer can be loaded into with its offset, and the instruction that does it.
+FAR_LOADS = {Register.ES: ("les", "LES_R16_M1616"), Register.FS: ("lfs", "LFS_R16_M1616"), Register.GS: ("lgs", "LGS_R16_M1616")}
+
+
+def far_load(name: str, into: Register_, segment: Register_, cell: ir.Mem, at: int = 0) -> Emitted | None:
+    """`les bx,[cell]`: a far pointer's offset word into `into` and its segment word into `segment`."""
+    spelled, code_name = FAR_LOADS.get(segment, ("", ""))
+    built = operand_of(cell)
+    if name != spelled or built is None or cell.width != 4 or WIDTHS.get(into) != 2 or into in SEGMENTS:
+        return None
+    code = _code(code_name)
+    if code is None:
+        return None
+    where, relocated = built
+    return _assemble(Instruction.create_reg_mem(code, into, where), at, relocated)
+
+
 def move_segment(into: Register_, outof: Register_ | ir.Mem, at: int = 0) -> Emitted | None:
     """`mov es,[si+2]` and `mov [x],es` -- how a far pointer is loaded.
 
@@ -1516,6 +1533,11 @@ def emit(
             match dests[0], sources[0]:
                 case ir.Reg(register=into), ir.Reg(register=outof) if into in target.WIDE and outof in target.NARROW:
                     return _assemble(Instruction.create_reg_reg(code, into, outof), at)
+            return None
+        case ir.Operation.MOVE if len(dests) == 2 and len(sources) == 1:
+            match (dests[0], dests[1], sources[0]):
+                case (ir.Reg(register=into), ir.Reg(register=segment), ir.Mem() as cell):
+                    return far_load(what.name or "", into, segment, cell, at)
             return None
         case ir.Operation.MOVE if len(dests) == 1 and len(sources) == 1:
             match (dests[0], sources[0]):

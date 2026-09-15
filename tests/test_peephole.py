@@ -661,6 +661,52 @@ def test_register_round_trip_through_memory_is_one_instruction(variant, printed)
         assert [line for one in result.insns for line in masm._instruction(one, None, {}, 0, [])] == printed
 
 
+@pytest.mark.parametrize(
+    "variant,printed",
+    [
+        ("offset first", "les bx, dword ptr [bp-8]"),
+        ("segment first", "les bx, dword ptr [bp-8]"),
+        ("fs", "lfs bx, dword ptr [bp-8]"),
+        ("through the offset", None),
+        ("another cell", None),
+    ],
+)
+def test_far_pointer_loaded_in_one_instruction(variant, printed):
+    """`mov bx,[bp-8]; mov es,[bp-6]` where bcc writes `les bx,[bp-8]`: 862 pairs
+    over qcport. Refused when the register written first addresses the second
+    read, and for words of two different cells."""
+    from iced_x86 import Decoder
+    from qbopt.backend import masm
+    from qbopt.backend import select
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
+    bx = ir.Reg(Register.BX, 2)
+    segment = ir.Reg(Register.FS if variant == "fs" else Register.ES, 2)
+    low = ir.Mem(Addr(Space.FRAME, -8), 2, Register.BP, 0, 2)
+    high = ir.Mem(Addr(Space.FRAME, -4 if variant == "another cell" else -6), 2, Register.BP, 0, 2)
+    if variant == "through the offset":
+        low, high = ir.Mem(None, 2, Register.BX, 0, 1), ir.Mem(None, 2, Register.BX, 2, 1)
+
+    def move(at, dest, cell):
+        return lir.Insn(at, None, ir.Semantics(ir.Operation.MOVE, "mov", (dest,), (cell,)), (), ())
+
+    pair = (move(0, bx, low), move(1, segment, high))
+    if variant == "segment first":
+        pair = pair[::-1]
+    block = lir.LirBlock(0, pair, ())
+    result = peephole.far_loads(lir.LirBody("far", 0, (block,), {}, {})).blocks[0].insns
+    if printed is None:
+        assert result == pair
+        return
+    assert [line for one in result for line in masm._instruction(one, None, {}, 0, [])] == [printed]
+    from iced_x86 import Mnemonic
+
+    decoded = next(iter(Decoder(16, select.emit(result[0].what).code)))
+    expected = Mnemonic.LFS if variant == "fs" else Mnemonic.LES
+    assert (decoded.mnemonic, decoded.op0_register, decoded.memory_base) == (expected, Register.BX, Register.BP)
+
+
 @pytest.mark.parametrize("middle", ["", "mov", "fnstsw", "fninit", None, "block"])
 def test_wait_elimination_does_not_cross_observable_work(middle):
     """FPCSEX's redundant waits may disappear, but integer observers still need completion."""

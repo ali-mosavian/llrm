@@ -359,8 +359,8 @@ def test_far_pointer_in_memory_is_read_as_its_two_words():
     over qcport where bcc writes `les bx,[_table]`."""
     text = cfront.compiled((FIXTURES / "farderef.cgs").read_text(), "farderef", optimise=True)
     body = _proc([line.strip() for line in text.splitlines()], "_sum")
-    assert not any(line.startswith("shr") or "dword ptr _table" in line for line in body), body
-    assert any("word ptr _table+2" in line for line in body), body
+    assert not any(line.startswith("shr") or line.startswith("mov e") for line in body), body
+    assert body[2] == "les bx, dword ptr _table", body
 
 
 def test_indexed_cell_reaches_its_whole_symbol():
