@@ -5,6 +5,8 @@ pal and qglsurf built this way render dm3ish to the Borland build's md5.
 
 from pathlib import Path
 
+import pytest
+
 from qbopt.cfront import compile as cfront
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "c"
@@ -361,6 +363,15 @@ def test_far_pointer_in_memory_is_read_as_its_two_words():
     body = _proc([line.strip() for line in text.splitlines()], "_sum")
     assert not any(line.startswith("shr") or line.startswith("mov e") for line in body), body
     assert body[2] == "les bx, dword ptr _table", body
+
+
+@pytest.mark.parametrize("name", ["_grab", "_pass"])
+def test_long_call_result_is_consumed_as_its_two_words(name):
+    """A long returned in DX:AX was joined through `push dx; push ax; pop eax`
+    only to be stored, tested against zero or pushed: 202 joins over qcport."""
+    text = cfront.compiled((FIXTURES / "longret.cgs").read_text(), "longret", optimise=True)
+    body = _proc([line.strip() for line in text.splitlines()], name)
+    assert not any(line.startswith("pop e") for line in body), body
 
 
 def test_indexed_cell_reaches_its_whole_symbol():

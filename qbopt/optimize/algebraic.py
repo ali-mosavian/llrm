@@ -8,7 +8,7 @@ from qbopt.model import ir, mir
 def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) -> mir.MirBody:
     from qbopt.optimize import wholephis, wholestores
     body = wholestores.joined(wholephis.joined(body))
-    body = _divisions(body)
+    body = _halved(_divisions(body))
     mentioned = {value for block in body.blocks for op in block.ops for value in op.uses if value not in op.merges} | {
         value for block in body.blocks for phi in block.phis for value in phi.incoming.values()
     }
@@ -196,6 +196,90 @@ def _recombined(op: mir.Op, definitions: dict) -> mir.Op:
         return op
     return replace(op, kind=mir.Kind.COPY, args=(original,), uses=(original.value,),
                    merges={}, node=None, made=None, raised=None)
+
+
+def _halves(op: mir.Op):
+    if (op.kind is not mir.Kind.CONCAT or op.loads or op.stores or op.barrier or len(op.args) != 2
+        or not all(isinstance(arg, (mir.Held, mir.Const)) and arg.width == 2 for arg in op.args)
+        or len(op.results) != 1 or not isinstance(op.results[0], mir.Held) or op.results[0].width != 4
+        or op.defines != (op.results[0].value,)):
+        return None
+    return op.args
+
+
+def _takes_halves(op: mir.Op, whole: mir.Held, readers: dict) -> bool:
+    """Whether this reader of a joined value can read its two words instead."""
+    if op.barrier or op.loads or op.merges:
+        return False
+    match op.kind:
+        case mir.Kind.STORE:
+            ref = op.stores[0] if len(op.stores) == 1 else None
+            return (op.args == (whole,) and not op.defines and ref is not None and ref.width == 4
+                    and ref.addr is not None and whole.value not in (ref.base, ref.segment))
+        case mir.Kind.ARG:
+            return op.args == (whole,) and not op.stores and not op.defines
+        case mir.Kind.SUB:
+            # Only the zero flag of `h | l` agrees with `whole - 0`.
+            return (op.args == (whole, mir.Const(0, 4)) and not op.stores and not op.results
+                    and all(value.flags for value in op.defines)
+                    and all(reader.kind is mir.Kind.BRANCH and reader.test in (mir.Kind.EQ, mir.Kind.NE)
+                            for value in op.defines for reader in readers.get(value, ())))
+    return False
+
+
+def _halved(body: mir.MirBody) -> mir.MirBody:
+    """A value joined from two words, read only where words will do, is never joined."""
+    joins = {op.results[0].value: halves for block in body.blocks for op in block.ops
+             if (halves := _halves(op)) is not None}
+    if not joins:
+        return body
+    readers: dict = {}
+    for block in body.blocks:
+        for op in block.ops:
+            for value in _operands_read(op) | set(op.uses):
+                readers.setdefault(value, []).append(op)
+    phied = {value for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
+    split = {value: halves for value, halves in joins.items() if value not in phied and all(
+        _takes_halves(op, mir.Held(value, 4), readers) for op in readers.get(value, ()))}
+    if not split:
+        return body
+    values = {value for block in body.blocks for op in block.ops for value in (*op.defines, *op.uses)}
+    values |= {value for block in body.blocks for phi in block.phis for value in (phi.result, *phi.incoming.values())}
+    serial = max((value.id for value in values), default=0)
+    variable = max((value.variable for value in values), default=0)
+
+    def rewritten(op):
+        nonlocal serial, variable
+        whole = next((arg.value for arg in op.args if isinstance(arg, mir.Held) and arg.value in split), None)
+        if whole is None:
+            return (op,)
+        high, low = split[whole]
+        fresh = dict(node=None, made=None, raised=None, merges={})
+        later = dict(fresh, covers=(op.at, op.at), id=None, extra_covers=())
+
+        def reads(*args, ref=None):
+            held = [arg.value for arg in args if isinstance(arg, mir.Held)]
+            return tuple(dict.fromkeys((*held, *(part for part in (ref.base, ref.segment) if part is not None)) if ref else held))
+        match op.kind:
+            case mir.Kind.STORE:
+                ref = op.stores[0]
+                words = ((low, replace(ref, width=2)), (high, replace(ref, addr=ref.addr.plus(2), width=2)))
+                return tuple(replace(op, args=(word,), results=(mir.Cell(cell),), stores=(cell,),
+                                     uses=reads(word, ref=cell), **(later if index else fresh))
+                             for index, (word, cell) in enumerate(words))
+            case mir.Kind.ARG:
+                return tuple(replace(op, args=(word,), uses=reads(word), **(later if index else fresh))
+                             for index, word in enumerate((high, low)))
+            case mir.Kind.SUB:
+                serial += 1
+                variable += 1
+                result = mir.Held(mir.Value(serial, op.at, variable=variable, version=1), 2)
+                return (replace(op, kind=mir.Kind.OR, name="or", op=ir.Operation.BINARY, args=(high, low),
+                                results=(result,), defines=(result.value, *op.defines), uses=reads(high, low), **fresh),)
+        return (op,)
+
+    return replace(body, blocks=tuple(
+        replace(block, ops=tuple(one for op in block.ops for one in rewritten(op))) for block in body.blocks))
 
 
 def _shift_chain(op: mir.Op, definitions: dict, wanted: set[mir.Value]) -> mir.Op:

@@ -1,0 +1,76 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+SEG 11 attr=0x2 name="_BSS" align=2
+START
+SETSEG 11
+SYM y1 name="saved" base="saved" pattern="_*" attr=0x6 seg=11
+b1 BENewBack y1
+- DGLabel b1
+- DGUBytes 4
+f2 DBSrcFile "/Users/alim/work/personal/qbopt/.claude/worktrees/watcom-16bit-qbopt-qcport-1d97c8/fixtures/c/longret.c"
+- DBSrcCue f2 6 1
+SYM y2 name="grab" base="grab" pattern="_*" attr=0x7 seg=1
+CALLCONV y2 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y2 TY_INT_2
+l3 CGLastParm
+t4 CGTemp TY_INT_2
+l5 BENewLabel
+l6 BENewLabel
+- DBSrcCue f2 8 1
+n7 CGFEName y1 TY_INT_4
+SYM y3 name="next" base="next" pattern="_*" attr=0xf seg=1
+CALLCONV y3 class=0x80 target=0x716 parms=[] ret=0:0
+n8 CGFEName y3 TY_CODE_PTR
+c9 CGInitCall n8 TY_INT_4 y3
+n10 CGCall c9
+n11 CGUnary O_POINTS n10 TY_INT_4
+n12 CGAssign n7 n11 TY_INT_4
+- CGDone n12
+- DBSrcCue f2 9 1
+n13 CGFEName y1 TY_INT_4
+n14 CGUnary O_POINTS n13 TY_INT_4
+n15 CGInteger 0 TY_INTEGER
+n16 CGCompare O_NE n14 n15 TY_INT_4
+- CGControl O_IF_FALSE n16 l5
+- DBSrcCue f2 10 1
+n17 CGInteger 1 TY_INT_2
+n18 CGTempName t4 TY_INT_2
+n19 CGAssign n18 n17 TY_INT_2
+- CGDone n19
+- CGControl O_GOTO n0 l6
+- CGControl O_LABEL n0 l5
+- DBSrcCue f2 11 1
+n20 CGInteger 0 TY_INT_2
+n21 CGTempName t4 TY_INT_2
+n22 CGAssign n21 n20 TY_INT_2
+- CGDone n22
+- DBSrcCue f2 12 1
+- CGControl O_LABEL n0 l6
+n23 CGTempName t4 TY_INT_2
+n24 CGUnary O_POINTS n23 TY_INT_2
+- CGReturn n24 TY_INT_2
+- DBSrcCue f2 14 1
+SYM y4 name="pass" base="pass" pattern="_*" attr=0x7 seg=1
+CALLCONV y4 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y4 TY_INTEGER
+l25 CGLastParm
+t26 CGTemp TY_INTEGER
+- DBSrcCue f2 16 1
+SYM y5 name="give" base="give" pattern="_*" attr=0xf seg=1
+CALLCONV y5 class=0x80 target=0x716 parms=[] ret=0:0
+n27 CGFEName y5 TY_CODE_PTR
+c28 CGInitCall n27 TY_INTEGER y5
+n29 CGFEName y3 TY_CODE_PTR
+c30 CGInitCall n29 TY_INT_4 y3
+n31 CGCall c30
+n32 CGUnary O_POINTS n31 TY_INT_4
+- CGAddParm c28 n32 TY_INT_4
+n33 CGCall c28
+- CGDone n33
+- DBSrcCue f2 17 1
+- CGReturn n0 TY_INTEGER
+STOP
+FINI

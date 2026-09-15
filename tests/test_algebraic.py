@@ -311,6 +311,45 @@ def test_extracted_halves_recombine_to_the_original_value(high_offset, different
         assert done == concat
 
 
+@pytest.mark.parametrize("mode", ["halves", "ordered", "nonzero", "whole_use"])
+def test_joined_halves_are_consumed_as_halves(mode) -> None:
+    """A call's DX:AX long was joined only to be stored, tested for zero and
+    pushed; lowered, the join is `push dx; push ax; pop eax`."""
+    from qbopt.cfront.raise_hir import Addr, Space
+    low, high, whole, flags, other = (mir.Value(index, 0) for index in range(1, 6))
+    flags = mir.Value(4, 0, True)
+    K = mir.Kind
+    ref = mir.MemRef(Addr(Space.SEGMENT, 8, 5), 4, space=Space.SEGMENT)
+    ops = [
+        mir.Op(1, ir.Operation.NOTHING, "", (low, high), (), kind=K.CALL,
+               results=(mir.Held(low, 2), mir.Held(high, 2))),
+        mir.Op(2, ir.Operation.NOTHING, "", (whole,), (high, low), kind=K.CONCAT,
+               args=(mir.Held(high, 2), mir.Held(low, 2)), results=(mir.Held(whole, 4),)),
+        mir.Op(3, ir.Operation.NOTHING, "", (), (whole,), kind=K.STORE,
+               args=(mir.Held(whole, 4),), results=(mir.Cell(ref),), stores=(ref,)),
+        mir.Op(4, ir.Operation.NOTHING, "", (), (whole,), kind=K.ARG, args=(mir.Held(whole, 4),)),
+        mir.Op(5, ir.Operation.NOTHING, "", (flags,), (whole,), kind=K.SUB,
+               args=(mir.Held(whole, 4), mir.Const(5 if mode == "nonzero" else 0, 4))),
+        mir.Op(6, ir.Operation.NOTHING, "", (), (flags,), kind=K.BRANCH,
+               test=K.LT if mode == "ordered" else K.NE, target=0),
+    ]
+    if mode == "whole_use":
+        ops.insert(5, mir.Op(5, ir.Operation.NOTHING, "", (other,), (whole,), kind=K.SHR,
+                             args=(mir.Held(whole, 4), mir.Const(1, 1)), results=(mir.Held(other, 4),)))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), tuple(ops), ()),))
+    done = algebraic.simplified(body, {other}, set()).blocks[0].ops
+    readers = [op for op in done if whole in op.uses]
+    if mode != "halves":
+        assert len(readers) == len(ops) - 3
+        return
+    assert not readers
+    stores = [(op.args, op.stores[0].addr, op.stores[0].width) for op in done if op.kind is K.STORE]
+    assert stores == [((mir.Held(low, 2),), ref.addr, 2), ((mir.Held(high, 2),), ref.addr.plus(2), 2)]
+    assert [op.args for op in done if op.kind is K.ARG] == [(mir.Held(high, 2),), (mir.Held(low, 2),)]
+    test = next(op for op in done if flags in op.defines)
+    assert test.kind is K.OR and set(test.args) == {mir.Held(high, 2), mir.Held(low, 2)}
+
+
 def test_nbody_multiply_value_survives_into_scaled_division() -> None:
     """Nbody rebuilt the product from two halves before /512, paying a redundant stack round trip."""
     path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
