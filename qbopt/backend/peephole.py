@@ -865,7 +865,7 @@ def _flags_before(one: lir.Insn, flags_dead: bool) -> bool:
             return flags_dead
         case ir.Semantics(ir.Operation.PUSH, "push") | ir.Semantics(ir.Operation.POP, "pop"):
             return flags_dead
-        case ir.Semantics(ir.Operation.NOTHING, None | "") | ir.Semantics(ir.Operation.JUMP):
+        case ir.Semantics(ir.Operation.NOTHING, None | "") | ir.Semantics(ir.Operation.JUMP) | ir.Semantics(ir.Operation.FILL):
             return flags_dead
     return False
 
@@ -891,6 +891,8 @@ _ARITHMETIC = RflagsBits.OF | RflagsBits.SF | RflagsBits.ZF | RflagsBits.AF | Rf
 # What `cmp r,0` leaves that the instruction computing r may not: inc keeps
 # the carry, add and subtract set carry and overflow from their operands.
 _DIFFERING = _flag_lanes(RflagsBits.OF | RflagsBits.CF | RflagsBits.AF)
+# What `xor r,r` writes: a direction flag read later, as a string fill reads it, is no objection.
+_ARITHMETIC_LANES = _flag_lanes(_ARITHMETIC)
 
 
 def tested(body: lir.LirBody) -> lir.LirBody:
@@ -1058,7 +1060,7 @@ def zeroes(body: lir.LirBody) -> lir.LirBody:
     for block in body.blocks:
         # What the block's successors read, not a guess: `mov bx,0; jmp` to a
         # block that sets its own flags first zeroes with xor too.
-        flags_dead = not live[block.at]
+        flags_dead = not live[block.at] & _ARITHMETIC_LANES
         insns = []
         for one in reversed(block.insns):
             what = one.what

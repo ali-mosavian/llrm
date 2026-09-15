@@ -869,7 +869,39 @@ def _constant_store(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...
     return _pointer_access(op, lowering)
 
 
+def _fill(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]:
+    """`rep stos`: the count in cx, the value in the accumulator, the cells through es:di.
+
+    ES is set to DS for the fill and put back, so a selector living in it survives.
+    """
+    value, count, address = op.args
+    name = {1: "stosb", 2: "stosw", 4: "stosd"}.get(value.width)
+    if name is None:
+        raise Unlowered(f"fill of {value.width}-byte cells at {op.at:#x}")
+    setup = []
+
+    def held(arg: mir.Arg, width: int) -> ir.Loc:
+        if isinstance(arg, mir.Held):
+            return operand(arg)
+        into = ir.Held(lowering.fresh(), width)
+        setup.append(ir.Semantics(ir.Operation.MOVE, "mov", (into,), (operand(arg),)))
+        return into
+
+    stored, counted, through = held(value, value.width), held(count, 2), held(address, 2)
+    extra = ir.Reg(Register.ES, 2)
+    stepped, emptied = ir.Held(lowering.fresh(), 2), ir.Held(lowering.fresh(), 2)
+    return (
+        *setup,
+        ir.Semantics(ir.Operation.PUSH, "push", (), (extra,)),
+        ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Reg(Register.DS, 2),)),
+        ir.Semantics(ir.Operation.POP, "pop", (extra,), ()),
+        ir.Semantics(ir.Operation.FILL, name, (ir.Mem(None, 0), stepped, emptied), (stored, counted, through, extra)),
+        ir.Semantics(ir.Operation.POP, "pop", (extra,), ()),
+    )
+
+
 _EXPANDS: dict = {
+    mir.Kind.FILL: _fill,
     mir.Kind.STORE: _constant_store,
     mir.Kind.EXTRACT: _extract,
     mir.Kind.DIVMOD: _word_division,

@@ -639,3 +639,16 @@ def test_dead_phis_do_not_keep_matrix_product_halves() -> None:
     after = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found, strength_=False)
     products = [op for block in after.blocks for op in block.ops if op.kind is mir.Kind.MUL]
     assert products and all(len(op.results) == 1 for op in products)
+
+
+def test_a_symbol_plus_zero_is_the_symbol() -> None:
+    """`0 + offset flags`, a fill's first cell, stayed an add: only numbers and
+    values were operands of an identity, and it was spilled as a variable."""
+    from qbopt.objectfile.module import Space
+
+    symbol = mir.Symbol(Space.SEGMENT, 2, 0, 2)
+    result = mir.Value(1, 0)
+    add = mir.Op(0, ir.Operation.BINARY, "add", (result,), (), kind=mir.Kind.ADD,
+                 args=(mir.Const(0, 2), symbol), results=(mir.Held(result, 2),))
+    done = algebraic._simplified(add, set(), set())
+    assert (done.kind, done.args) == (mir.Kind.COPY, (symbol,))

@@ -7,6 +7,8 @@ its inner loop with `mov di,bx` whose destination no path reads before writing
 it again.
 """
 
+from iced_x86 import Register
+
 from qbopt.model import ir
 from qbopt.model import lir
 
@@ -19,6 +21,10 @@ def _terminator(what) -> bool:
         and not what.sources
         and isinstance(what.target, int)
     )
+
+
+# What a caller keeps across a call, and so what a return reads beside its results.
+_KEPT = (Register.ESI, Register.EDI, Register.EBP, Register.ESP, Register.DS, Register.SS, Register.CS)
 
 
 def _universe() -> frozenset:
@@ -68,6 +74,12 @@ def _declared(one) -> "tuple[frozenset, frozenset] | None":
     from qbopt.backend.peephole import _lanes
     from qbopt.backend.peephole import _flag_lanes
 
+    if one.what is not None and one.what.op is ir.Operation.RETURN and getattr(one.op, "reads_complete", False):
+        # Nothing runs after it: it reads its results and what the caller keeps, and no other lane.
+        reads = {lane for held, register in one.requires for lane in _lanes(register)}
+        for register in _KEPT:
+            reads |= _lanes(register)
+        return frozenset(reads), _universe() - reads
     if not one.clobbers or one.symbol is True:
         return None
     reads = {lane for held, register in one.requires for lane in _lanes(register)}

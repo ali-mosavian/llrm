@@ -134,6 +134,9 @@ def _roots(body: lir.LirBody) -> set:
 def _instruction(one: lir.Insn, procedure: Procedure, names: dict, number: int, leave: list) -> list[str]:
     what = one.what
     name = what.name or ""
+    if what.op is ir.Operation.FILL:
+        # Its operands are the registers the instruction names in its opcode.
+        return [f"rep {name}"]
     dests = [_operand(x, names) for x in what.dests]
     sources = [_operand(x, names) for x in what.sources]
     match what.op:

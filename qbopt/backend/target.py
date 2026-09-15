@@ -84,6 +84,15 @@ def requirements(what: "ir.Semantics") -> dict[Occurrence, Register_]:
             out[Occurrence("source", 1)] = Register.EAX
         else:
             out[Occurrence("source", 0)] = Register.EAX
+    # A string fill reads the value, the count and the address in their own
+    # registers, and leaves di past the last cell and cx empty.
+    if what.op is ir.Operation.FILL and len(what.sources) >= 3:
+        out[Occurrence("source", 0)] = Register.EAX
+        out[Occurrence("source", 1)] = Register.ECX
+        out[Occurrence("source", 2)] = Register.EDI
+        if len(what.dests) == 3:
+            out[Occurrence("dest", 1)] = Register.EDI
+            out[Occurrence("dest", 2)] = Register.ECX
     if what.op is ir.Operation.EXTEND and what.name in {"cwd", "cdq"}:
         out[Occurrence("source", 0)] = Register.EAX
         out[Occurrence("dest", 0)] = Register.EDX

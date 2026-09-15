@@ -902,3 +902,24 @@ def test_constant_knowledge_is_local_and_invalidated(interruption):
         blocks = (lir.LirBlock(0, (first, middle), (2,)), lir.LirBlock(2, (last,), ()))
     result = peephole.constants(lir.LirBody("constants", 0, blocks, {}, {}))
     assert sum(len(block.insns) for block in result.blocks) == (2 if interruption in ("none", "extend") else 3)
+
+
+def test_a_string_fill_reading_the_direction_flag_leaves_zero_as_xor():
+    """`rep stosb` reads DF, and a zero was written `xor` only where no flag at
+    all was live after it: every body with a fill kept `mov ax,0` though xor
+    leaves DF as it is."""
+    ax, bx = ir.Reg(Register.AX, 2), ir.Reg(Register.BX, 2)
+
+    def insn(at, op, name, dests=(), sources=(), target=None):
+        return lir.Insn(at, (at, at), ir.Semantics(op, name, dests, sources, target), (), ())
+
+    blocks = (
+        lir.LirBlock(0, (insn(0, ir.Operation.MOVE, "mov", (ax,), (ir.Imm(0, 2),)), insn(1, ir.Operation.JUMP, "jmp", target=2)), (2,)),
+        lir.LirBlock(2, (
+            insn(2, ir.Operation.FILL, "stosb", (ir.Mem(None, 0),)),
+            insn(3, ir.Operation.COMPARE, "cmp", (), (ax, bx)),
+            insn(4, ir.Operation.JUMP, "jmp", target=0),
+        ), (0,)),
+    )
+    result = peephole.zeroes(lir.LirBody("zero", 0, blocks, {}, {})).blocks[0].insns[0]
+    assert (result.what.op, result.what.name) == (ir.Operation.BINARY, "xor")

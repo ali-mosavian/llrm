@@ -414,7 +414,7 @@ def _simplified(op: mir.Op, wanted: set[mir.Value], wide: set[mir.Value]) -> mir
     if any(value != result.value and value in wanted for value in op.defines):
         return op
     left, right = op.args
-    if not all(isinstance(arg, (mir.Held, mir.Const)) for arg in (left, right)):
+    if not all(isinstance(arg, (mir.Held, mir.Const, mir.Symbol)) for arg in (left, right)):
         return op
     shift = op.kind in (mir.Kind.SHL, mir.Kind.SHR, mir.Kind.SAR)
     if left.width != result.width or (right.width != result.width and not (shift and isinstance(right, mir.Const))):

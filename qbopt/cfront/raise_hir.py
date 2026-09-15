@@ -400,7 +400,7 @@ class _Raise:
         returned: tuple[mir.Value, ...] = ()
         if node != "n0" and type_ in FLOATS:
             value = self.floating(self.eval(node))
-            self.op(K.RETURN, args=(value,), uses=(value.value,))
+            self.op(K.RETURN, args=(value,), uses=(value.value,), reads_complete=True)
             self.end()
             return
         last = self.current.ops[-1] if self.current is not None and self.current.ops else None
@@ -425,7 +425,7 @@ class _Raise:
                 returned = (self.copy(low), self.copy(high))
             else:
                 returned = (self.copy(self.narrowed(self.operand(got, type_), 2)),)
-        self.op(K.RETURN, args=tuple(mir.Held(one, 2) for one in returned), uses=returned)
+        self.op(K.RETURN, args=tuple(mir.Held(one, 2) for one in returned), uses=returned, reads_complete=True)
         self.end()
 
     def branch(self, node: str, label: str, when: bool) -> None:

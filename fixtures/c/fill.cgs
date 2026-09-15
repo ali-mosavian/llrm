@@ -1,0 +1,102 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+SEG 11 attr=0x2 name="_BSS" align=2
+START
+TYPE T25 size=100 align=2
+SETSEG 11
+SYM y1 name="words" base="words" pattern="_*" attr=0x42 seg=11
+b1 BENewBack y1
+- DGLabel b1
+- DGUBytes 100
+TYPE T26 size=100 align=1
+SETSEG 11
+SYM y2 name="flags" base="flags" pattern="_*" attr=0x42 seg=11
+b2 BENewBack y2
+- DGLabel b2
+- DGUBytes 100
+f3 DBSrcFile "/Users/alim/work/personal/qbopt/.claude/worktrees/watcom-16bit-qbopt-qcport-1d97c8/fixtures/c/fill.c"
+- DBSrcCue f3 5 1
+SYM y3 name="fill_bytes" base="fill_bytes" pattern="_*" attr=0x7 seg=1
+CALLCONV y3 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y3 TY_INTEGER
+l4 CGLastParm
+t5 CGTemp TY_INTEGER
+SYM y4 name="i" base="i" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y4 TY_INTEGER
+l6 BENewLabel
+l7 BENewLabel
+- DBSrcCue f3 8 1
+n8 CGFEName y4 TY_INTEGER
+n9 CGInteger 0 TY_INTEGER
+n10 CGAssign n8 n9 TY_INTEGER
+- CGDone n10
+- CGControl O_LABEL n0 l6
+n11 CGFEName y4 TY_INTEGER
+n12 CGUnary O_POINTS n11 TY_INTEGER
+n13 CGInteger 99 TY_INTEGER
+n14 CGCompare O_LE n12 n13 TY_INTEGER
+- CGControl O_IF_FALSE n14 l7
+n15 CGFEName y2 T26
+n16 CGFEName y4 TY_INTEGER
+n17 CGUnary O_POINTS n16 TY_INTEGER
+n18 CGBinary O_PLUS n15 n17 TY_POINTER
+n19 CGInteger 1 TY_INTEGER
+n20 CGAssign n18 n19 TY_UINT_1
+- CGDone n20
+n21 CGFEName y4 TY_INTEGER
+n22 CGInteger 1 TY_INTEGER
+n23 CGPostGets O_PLUS n21 n22 TY_INTEGER
+- CGDone n23
+- CGControl O_GOTO n0 l6
+- CGControl O_LABEL n0 l7
+- DBSrcCue f3 9 1
+- CGReturn n0 TY_INTEGER
+- DBSrcCue f3 11 1
+SYM y5 name="fill_words" base="fill_words" pattern="_*" attr=0x7 seg=1
+CALLCONV y5 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y5 TY_INTEGER
+SYM y6 name="n" base="n" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y6 TY_INTEGER
+SYM y7 name="v" base="v" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y7 TY_INTEGER
+l24 CGLastParm
+t25 CGTemp TY_INTEGER
+SYM y8 name="i" base="i" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y8 TY_INTEGER
+l26 BENewLabel
+l27 BENewLabel
+- DBSrcCue f3 14 1
+n28 CGFEName y8 TY_INTEGER
+n29 CGInteger 0 TY_INTEGER
+n30 CGAssign n28 n29 TY_INTEGER
+- CGDone n30
+- CGControl O_LABEL n0 l26
+n31 CGFEName y8 TY_INTEGER
+n32 CGUnary O_POINTS n31 TY_INTEGER
+n33 CGFEName y6 TY_INTEGER
+n34 CGUnary O_POINTS n33 TY_INTEGER
+n35 CGCompare O_LT n32 n34 TY_INTEGER
+- CGControl O_IF_FALSE n35 l27
+n36 CGFEName y1 T25
+n37 CGFEName y8 TY_INTEGER
+n38 CGUnary O_POINTS n37 TY_INTEGER
+n39 CGInteger 2 TY_INTEGER
+n40 CGBinary O_TIMES n38 n39 TY_INTEGER
+n41 CGBinary O_PLUS n36 n40 TY_POINTER
+n42 CGFEName y7 TY_INTEGER
+n43 CGUnary O_POINTS n42 TY_INTEGER
+n44 CGAssign n41 n43 TY_INTEGER
+- CGDone n44
+n45 CGFEName y8 TY_INTEGER
+n46 CGInteger 1 TY_INTEGER
+n47 CGPostGets O_PLUS n45 n46 TY_INTEGER
+- CGDone n47
+- CGControl O_GOTO n0 l26
+- CGControl O_LABEL n0 l27
+- DBSrcCue f3 15 1
+- CGReturn n0 TY_INTEGER
+STOP
+FINI

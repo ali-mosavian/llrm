@@ -41,6 +41,7 @@ from qbopt.analysis import avail
 from qbopt.frontend import pairs
 from qbopt.optimize import lcssa
 from qbopt.analysis import consts
+from qbopt.optimize import fill
 from qbopt.optimize import unroll
 from qbopt.optimize import promote
 from qbopt.model.mir import MirBody
@@ -84,9 +85,9 @@ def _without(ops: list[Op], drop) -> list[Op]:
     out: list[Op] = []
     for op in ops:
         if drop(op):
+            # Inserted, or raised from no bytes at all: nothing to hand on.
             if (
-                op.covers is not None
-                and op.covers[0] == op.covers[1]
+                (op.covers is not None and op.covers[0] == op.covers[1] or op.covers is None and op.node is None)
                 and not op.extra_covers
                 and op.floating_origin is None
             ):
@@ -2841,6 +2842,7 @@ def pipeline(where: Where, **wanted) -> list[MIRTransform]:
         Dead(),
         Place(where),
         unroll.Unroll(where),
+        fill.Fill(),
     ]
     return [one for one in every if wanted.get(one.name, True)]
 
@@ -2875,6 +2877,7 @@ def applied(
     promote_: bool = True,
     strength_: bool = True,
     unroll_: bool = True,
+    fill_: bool = True,
     unswitch_: bool = False,
     only: str | None = None,
     registers: int | None = None,
@@ -2912,6 +2915,7 @@ def applied(
         "promote": promote_,
         "strength": strength_,
         "unroll": unroll_,
+        "fill": fill_,
     }
     where = Where(
         dgroup=dgroup,

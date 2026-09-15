@@ -407,6 +407,7 @@ class Kind(StrEnum):
     ZERO_EXTEND = "zero_extend"
     ADDRESS = "address"  # c := the number an address is
     PTR_OFFSET = "ptr_offset"  # c := pointer a advanced by a byte displacement
+    FILL = "fill"  # args (value, count, address): count cells of the value's width from address, each := value
 
     # control
     CALL = "call"
