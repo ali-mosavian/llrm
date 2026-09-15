@@ -46,8 +46,14 @@ def test_frame_only_where_something_uses_it():
     through = ir.Mem(Addr(Space.FRAME, 6), 2, through=Register.BP)
     params = _printed((through,), 0)
     assert params[1:3] == ["push bp", "mov bp, sp"] and params[-3:-1] == ["pop bp", "retf"]
-    assert "mov sp, bp" not in params
-    assert "mov sp, bp" in _printed((through,), 4)
+    assert "mov sp, bp" not in params and "leave" not in params
+
+
+def test_reserved_frame_leaves_in_one_instruction():
+    """`mov sp,bp; pop bp` where bcc writes `leave`: 261 instructions over qcport."""
+    through = ir.Mem(Addr(Space.FRAME, 6), 2, through=Register.BP)
+    lines = _printed((through,), 4)
+    assert lines[-3:-1] == ["leave", "retf"] and "mov sp, bp" not in lines and "pop bp" not in lines
 
 
 def test_callee_saves_only_what_the_convention_keeps():

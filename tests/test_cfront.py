@@ -29,7 +29,8 @@ def test_far_pointer_return_in_dx_ax():
     lines = _asm("pal")
     body = lines[lines.index("_pal_current proc far") : lines.index("_pal_current endp")]
     assert "mov ax, DGROUP" in body and "mov bx, offset _pal_now" in body
-    assert body[-6:-3] == ["mov eax, dword ptr [bp-4]", "mov edx, eax", "shr edx, 16"]
+    epilogue = body.index("leave")
+    assert body[epilogue - 3 : epilogue] == ["mov eax, dword ptr [bp-4]", "mov edx, eax", "shr edx, 16"]
 
 
 def test_choose_joins_both_arms_in_one_cell():
@@ -127,7 +128,7 @@ def test_optimised_return_arrives_in_ax():
     lines = [line.strip() for line in text.splitlines()]
     body = lines[lines.index("_ls_lchar proc near") : lines.index("_ls_lchar endp")]
     epilogue = next(i for i, line in enumerate(body) if line.startswith("ret"))
-    while body[epilogue - 1] in ("mov sp, bp", "pop bp"):
+    while body[epilogue - 1] in ("leave", "pop bp"):
         epilogue -= 1
     assert body[epilogue - 1].startswith("mov ax,"), body[epilogue - 3 : epilogue]
 
@@ -178,7 +179,7 @@ def test_float_results_arrive_and_leave_in_st0():
     at = body.index("call far ptr _half")
     assert body[at - 4 : at] == ["mov eax, dword ptr [bp-8]", "push eax", "mov eax, dword ptr [bp-12]", "push eax"]
     assert body[at + 1 : at + 4] == ["add sp, 8", "fld tbyte ptr [bp-22]", "faddp st(1), st(0)"]
-    assert body[body.index("mov sp, bp") - 1] == "fld dword ptr [bp-4]"
+    assert body[body.index("leave") - 1] == "fld dword ptr [bp-4]"
 
 
 def test_library_math_calls_the_runtime():

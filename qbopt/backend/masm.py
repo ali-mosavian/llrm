@@ -80,7 +80,7 @@ def _procedure(procedure: Procedure, names: dict, number: int) -> list[str]:
     # Inline code is bytes this printer cannot read, so it may address the frame.
     framed = bool(reserve) or Register.EBP in _roots(procedure.body) or any(one.code for one in procedure.callees.values())
     leave = [f"pop {target.name_of(one)}" for one in reversed(saved)]
-    leave += ["mov sp, bp"] * bool(reserve) + ["pop bp"] * framed
+    leave += ["leave"] if reserve else ["pop bp"] * framed
     out = [f"{procedure.name} proc {'far' if procedure.far else 'near'}"]
     if framed:
         out += ["    push bp", "    mov bp, sp"]
