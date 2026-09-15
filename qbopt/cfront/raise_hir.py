@@ -257,11 +257,14 @@ class _Raise:
         self.contracts: dict[int, runtime.Contract] = {}
         self.inline: dict[int, tuple] = {}
         self.frame: dict[str, int] = {}
+        self.objects: list[tuple[int, int]] = []  # each frame object's bytes
         self.selects: dict[str, tuple[list[tuple[int, str]], str | None]] = {}
         at = 6 if self.symbol.far else 4
         for symbol, type_ in proc.parms:
             self.frame[f"y{symbol}"] = at
-            at += _even(max(2, self.size(type_)))
+            size = _even(max(2, self.size(type_)))
+            self.objects.append((at, at + size))
+            at += size
         self.down = 0
         for key, type_ in proc.autos:
             self.frame[key] = self.slot(self.size(type_))
@@ -269,7 +272,12 @@ class _Raise:
     def slot(self, size: int) -> int:
         """A new frame cell below the last."""
         self.down -= _even(size)
+        self.objects.append((self.down, self.down + _even(size)))
         return self.down
+
+    def extent(self, disp: int) -> tuple[int, int] | None:
+        """The frame object holding `disp`: C keeps an address into an object inside it."""
+        return next(((low, high) for low, high in self.objects if low <= disp < high), None)
 
     # ---- types ----
 
@@ -741,8 +749,13 @@ class _Raise:
             # The symbol stays named, so its cells alias only the symbol's own.
             moved = index.value if address.base is None else self.add(mir.Held(address.base, 2), index)
             return replace(address, base=moved)
-        base = address.base if isinstance(address, Near) else self.near(replace(address, disp=0))
-        return Near(self.add(mir.Held(base, 2), index), address.disp)
+        if isinstance(address, Near):
+            return Near(self.add(mir.Held(address.base, 2), index), address.disp)
+        # From the object's first byte, so the address says which object it is in.
+        extent = self.extent(address.disp)
+        start = extent[0] if extent is not None else 0
+        base = self.near(replace(address, disp=start))
+        return Near(self.add(mir.Held(base, 2), index), address.disp - start)
 
     def float_arithmetic(self, cg_op: str, x: mir.Held, y: mir.Held) -> mir.Held:
         if cg_op not in FLOAT_ARITHMETIC:
@@ -929,7 +942,7 @@ class _Raise:
                 raise Unsupported(f"{self.symbol.name}: inline code's {fixup.kind} of {target.name}")
         parts.append(bytes(data[start:]))
         low, high = self.fresh(), self.fresh()
-        addresses = tuple(mir.FrameAddress(disp, 2) for disp in dict.fromkeys(named))
+        addresses = tuple(mir.FrameAddress(disp, 2, self.extent(disp)) for disp in dict.fromkeys(named))
         site = self.op(
             K.CALL, (mir.Held(low, 2), mir.Held(high, 2)), addresses, defines=(low, high), uses=(), loads=CALLEE, stores=CALLEE
         )
@@ -1085,7 +1098,7 @@ class _Raise:
         match address:
             case Frame(disp):
                 result = self.fresh()
-                self.op(K.ADDRESS, (mir.Held(result, 2),), (mir.FrameAddress(disp, 2),))
+                self.op(K.ADDRESS, (mir.Held(result, 2),), (mir.FrameAddress(disp, 2, self.extent(disp)),))
                 return result
             case Global(space, index, disp, None):
                 result = self.fresh()

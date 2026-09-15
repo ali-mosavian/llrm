@@ -294,6 +294,7 @@ class Symbol:
 class FrameAddress:
     offset: int
     width: int
+    extent: tuple[int, int] | None = None  # the object's bytes, where the language keeps an address inside them
 
 
 @dataclass(frozen=True, slots=True)
@@ -2175,6 +2176,19 @@ def _symbolic_ref(ref: MemRef) -> MemRef:
 WHOLE_FRAME = (module.Addr(Space.FRAME, -(1 << 15)), 1 << 16)
 
 
+def _outside(reach) -> tuple[tuple[Addr, int], ...]:
+    """The frame's bytes no range in `reach` covers, as exclusions."""
+    low, high = WHOLE_FRAME[0].disp, WHOLE_FRAME[0].disp + WHOLE_FRAME[1]
+    out, at = [], low
+    for start, end in sorted(reach):
+        if start > at:
+            out.append((module.Addr(Space.FRAME, at), start - at))
+        at = max(at, end)
+    if at < high:
+        out.append((module.Addr(Space.FRAME, at), high - at))
+    return tuple(out)
+
+
 def _frame_bounded(body: MirBody, pointers: bool = False) -> MirBody:
     """Exclude this body's frame slots from every bounded effect.
 
@@ -2188,17 +2202,17 @@ def _frame_bounded(body: MirBody, pointers: bool = False) -> MirBody:
     """
     from qbopt.analysis import frameescape
 
-    # Only where no frame address escapes anywhere in the body at all.
-    # `frameescape` records pointer origins and not their extents, so one
-    # escaped local leaves every offset reachable and there is nothing
-    # narrower to say -- the same reason `beyond` accepts only an empty
-    # escape set as proof.
+    # Only the bytes no escaped address can reach: an address the raise bounds
+    # to its object reaches that object, and one it does not bound reaches all.
     escapes = frameescape.analysed(body)
-    if escapes.exposed or escapes.opaque_addresses:
+    if escapes.opaque_addresses or escapes.reach is None:
+        return body
+    holes = _outside(escapes.reach)
+    if not holes:
         return body
 
     def bounded(ref: MemRef) -> bool:
-        if WHOLE_FRAME in ref.excludes:
+        if holes[0] in ref.excludes:
             return False
         if ref.beyond is not None:
             return True
@@ -2207,7 +2221,7 @@ def _frame_bounded(body: MirBody, pointers: bool = False) -> MirBody:
         return pointers and reached and ref.where not in (Space.FRAME, Space.SEGMENT, Space.EXTERNAL, Space.STACK)
 
     def bound(ref: MemRef) -> MemRef:
-        return replace(ref, excludes=ref.excludes + (WHOLE_FRAME,)) if bounded(ref) else ref
+        return replace(ref, excludes=ref.excludes + holes) if bounded(ref) else ref
 
     blocks = []
     for block in body.blocks:

@@ -30,3 +30,21 @@ int fill_counted(int n)
     for (i = 0; i < n; i++) words[i] = 0;
     return i;
 }
+
+void use_shorts(short *p);
+
+void fill_local(int n)
+{
+    short acc[8];
+    int i;
+    for (i = 0; i < n; i++) acc[i] = 0;
+    use_shorts(acc);
+}
+
+static int far *paint;
+
+void fill_through(int n)
+{
+    int k;
+    for (k = 0; k < n; k++) paint[k] = 0;
+}

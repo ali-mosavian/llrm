@@ -142,7 +142,8 @@ def private(body: mir.MirBody, found: Module | None, blocks: list | None) -> Cal
     if exposed is None:
         return None
     escapes = frameescape.analysed(body)
-    frame = not escapes.exposed and not escapes.opaque_addresses
+    frame = escapes.reach is not None and not escapes.opaque_addresses
+    reach = escapes.reach or frozenset()
     statics = exposed.data is not None and body.entry == exposed.main
     seen = exposed.everywhere + tuple(
         one for seed, ranges in exposed.direct.items() if seed != body.entry for one in ranges
@@ -154,7 +155,7 @@ def private(body: mir.MirBody, found: Module | None, blocks: list | None) -> Cal
             return False
         lo, hi = addr.disp, addr.disp + ref.width
         if addr.space is Space.FRAME:
-            return frame and hi <= 0
+            return frame and hi <= 0 and not any(start < hi and lo < end for start, end in reach)
         if addr.space is Space.SEGMENT and addr.index == exposed.data:
             return statics and not any(start < hi and lo < end for start, end in seen)
         return False

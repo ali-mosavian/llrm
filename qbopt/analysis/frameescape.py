@@ -8,6 +8,8 @@ class Escapes:
     origins: dict[mir.Value, frozenset[int]]
     exposed: frozenset[int]
     opaque_addresses: frozenset[int]
+    # The bytes the exposed addresses reach, or None where one is not bounded to its object.
+    reach: frozenset[tuple[int, int]] | None = frozenset()
 
 
 def analysed(body: mir.MirBody) -> Escapes:
@@ -57,4 +59,16 @@ def analysed(body: mir.MirBody) -> Escapes:
         for op in operations
         if op.kind is mir.Kind.ADDRESS and any(isinstance(arg, mir.Opaque) for arg in op.args)
     )
-    return Escapes(origins, exposed, opaque)
+    extents: dict[int, set] = {}
+    for op in operations:
+        for arg in op.args:
+            if isinstance(arg, mir.FrameAddress):
+                extents.setdefault(arg.offset, set()).add(arg.extent)
+    reach: set | None = set()
+    for offset in exposed:
+        found = extents.get(offset, {None})
+        if None in found:
+            reach = None
+            break
+        reach |= found
+    return Escapes(origins, exposed, opaque, None if reach is None else frozenset(reach))
