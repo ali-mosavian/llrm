@@ -319,14 +319,17 @@ def _divisions(body: mir.MirBody) -> mir.MirBody:
         for op in block.ops:
             if (op.kind is not mir.Kind.DIVMOD or op.loads or op.stores or op.barrier
                 or len(op.args) != 2 or len(op.results) != 2
-                or not all(isinstance(arg, mir.Held) and arg.width == 4 for arg in (op.args[0], *op.results))
-                or not isinstance(op.args[1], (mir.Held, mir.Const)) or op.args[1].width != 4
+                or not all(isinstance(arg, mir.Held) and arg.width == op.args[0].width for arg in op.results)
+                or not isinstance(op.args[0], mir.Held) or op.args[0].width not in (2, 4)
+                or not isinstance(op.args[1], (mir.Held, mir.Const)) or op.args[1].width != op.args[0].width
                 or set(op.defines) != {result.value for result in op.results}):
                 ops.append(op)
                 continue
+            width = op.args[0].width
+            bits = 8 * width
             fact = consts._operand(op, op.args[1], facts)
-            divisor = consts.masked(fact.n, 4) if fact is not None and fact.width >= 4 else 0
-            if divisor <= 1 or divisor >= 0x80000000 or divisor & (divisor - 1):
+            divisor = consts.masked(fact.n, width) if fact is not None and fact.width >= width else 0
+            if divisor <= 1 or divisor >= 1 << (bits - 1) or divisor & (divisor - 1):
                 ops.append(op)
                 continue
             shift = divisor.bit_length() - 1
@@ -337,7 +340,7 @@ def _divisions(body: mir.MirBody) -> mir.MirBody:
                 if result is None:
                     serial += 1
                     variable += 1
-                    result = mir.Held(mir.Value(serial, op.at, variable=variable, version=1), 4)
+                    result = mir.Held(mir.Value(serial, op.at, variable=variable, version=1), width)
                 sequence.append(mir.Op(
                     op.at, ir.Operation.BINARY, kind.value, (result.value,),
                     tuple(arg.value for arg in args if isinstance(arg, mir.Held)),
@@ -349,9 +352,13 @@ def _divisions(body: mir.MirBody) -> mir.MirBody:
                 return result
 
             dividend = op.args[0]
-            sign = emit(mir.Kind.SAR, (dividend, mir.Const(31, 1)))
-            bias = emit(mir.Kind.AND, (sign, mir.Const(divisor - 1, 4)))
-            adjusted = emit(mir.Kind.ADD, (dividend, bias))
+            sign = emit(mir.Kind.SAR, (dividend, mir.Const(bits - 1, 1)))
+            if divisor == 2:
+                # The bias is the sign's low bit, 0 or 1: subtracting the sign word adds it.
+                adjusted = emit(mir.Kind.SUB, (dividend, sign))
+            else:
+                bias = emit(mir.Kind.AND, (sign, mir.Const(divisor - 1, width)))
+                adjusted = emit(mir.Kind.ADD, (dividend, bias))
             quotient = emit(mir.Kind.SAR, (adjusted, mir.Const(shift, 1)), op.results[0])
             product = emit(mir.Kind.SHL, (quotient, mir.Const(shift, 1)))
             emit(mir.Kind.SUB, (dividend, product), op.results[1])

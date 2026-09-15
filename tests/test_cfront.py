@@ -498,3 +498,12 @@ def test_verify_reports_a_use_before_its_definition_in_one_block():
                   args=(mir.Const(0, 2),), results=(mir.Held(start, 2),))
     body = mir.MirBody(1, (mir.MirBlock(1, (), (add, copy), ()),))
     assert any("before its definition" in problem for problem in mir.verify(body))
+
+
+@pytest.mark.parametrize("name", ["_half", "_eighth", "_gaps"])
+def test_signed_word_division_by_a_power_of_two_shifts(name):
+    """Only a long divided by a power of two became shifts; a word went to
+    `idiv`, which shellsort's `gap /= 2` paid on every halving."""
+    text = cfront.compiled((FIXTURES / "halve.cgs").read_text(), "halve", optimise=True)
+    body = _proc([line.strip() for line in text.splitlines()], name)
+    assert not any(line.startswith("idiv") for line in body), body
