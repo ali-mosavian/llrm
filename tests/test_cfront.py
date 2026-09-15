@@ -535,3 +535,11 @@ def test_a_test_known_to_fail_is_gone():
     text = cfront.compiled((FIXTURES / "fill.cgs").read_text(), "fill", optimise=True)
     body = _proc([line.strip() for line in text.splitlines()], "_fill_bytes")
     assert not any(line.startswith(("cmp", "jg")) for line in body), body
+
+
+def test_one_expression_through_twin_counters_reaches_a_fixed_point():
+    """qcport's mod_link_anims stopped compiling once its counters left memory:
+    `t[j]` read four times through two counters stepping alike, and strength
+    gave each read its own recurrence, one a round, for more than 16 rounds."""
+    text = cfront.compiled((FIXTURES / "anims.cgs").read_text(), "anims", optimise=True)
+    assert "_link_anims" in text

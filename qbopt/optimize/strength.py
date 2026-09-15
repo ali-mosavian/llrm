@@ -196,9 +196,11 @@ def reduced(
         if registers:
             room = max(0, registers - _recurrences(body, loop) - _RESERVE)
         added = 0
+        # One counter an expression. Reads of `t[j]` through two counters
+        # stepping alike are one recurrence, and given one each, a round at a
+        # time, mod_link_anims never reached a fixed point.
+        shared: dict[tuple, mir.Value] = {}
         for one in candidates:
-            if added >= room:
-                break
             # Once each. A multiply inside a nest is derived in every loop
             # that contains it, and reducing it twice would set up two
             # counters for one value.
@@ -206,6 +208,12 @@ def reduced(
             if answer is None or id(one.op) in replacements:
                 continue
             width = _width(one.op)
+            key = (one.of.start, one.of.step, one.by, one.offsets, one.pointer, width)
+            if key in shared:
+                replacements[id(one.op)] = _copying(one.op, shared[key], answer, width)
+                continue
+            if added >= room:
+                continue
             if _times(one.of.step, one.by, width) is None:
                 continue
             if isinstance(one.by, mir.Cell):
@@ -235,21 +243,8 @@ def reduced(
                     one.op,
                 )
             )
-            replacements[id(one.op)] = replace(
-                one.op,
-                kind=mir.Kind.COPY,
-                name="",
-                node=None,
-                made=None,
-                defines=(answer,),
-                uses=(start,),
-                args=(mir.Held(start, width),),
-                results=(mir.Held(answer, width),),
-                loads=(),
-                stores=(),
-                merges={},
-                symbol=False,
-            )
+            replacements[id(one.op)] = _copying(one.op, start, answer, width)
+            shared[key] = start
             added += 1
 
     if not replacements:
@@ -268,6 +263,25 @@ def reduced(
         ),
     )
     return ssa.constructed(changed, frozenset(range(first, taken + 1)))
+
+
+def _copying(op: Op, start: mir.Value, answer: mir.Value, width: int) -> Op:
+    """`op` made a copy of the counter that replaces it."""
+    return replace(
+        op,
+        kind=mir.Kind.COPY,
+        name="",
+        node=None,
+        made=None,
+        defines=(answer,),
+        uses=(start,),
+        args=(mir.Held(start, width),),
+        results=(mir.Held(answer, width),),
+        loads=(),
+        stores=(),
+        merges={},
+        symbol=False,
+    )
 
 
 # What a loop's body needs to compute with, beyond the recurrences it
