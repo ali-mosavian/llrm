@@ -1,7 +1,7 @@
 """Borland C that Open Watcom's front end refused, through wccq itself.
 
-Skipped where owshim/build.sh has not built wccq or Open Watcom's headers
-are not installed.
+Skipped where owshim/build.sh has not built wccq or Borland's headers are
+not installed.
 """
 
 from pathlib import Path
@@ -10,21 +10,16 @@ import pytest
 
 from qbopt.cfront import compile as cfront
 
-WATCOM_H = Path.home() / "dos" / "WATCOM" / "h"
+BORLAND_H = Path.home() / "work" / "other" / "d32x" / "toolchains" / "bcpp31" / "INCLUDE"
 pytestmark = pytest.mark.skipif(
-    not cfront.WCCQ.exists() or not WATCOM_H.is_dir(), reason="needs owshim/bin/wccq and Open Watcom's headers"
+    not cfront.WCCQ.exists() or not BORLAND_H.is_dir(), reason="needs owshim/bin/wccq and Borland's headers"
 )
 
 
 def _stream(tmp_path: Path, source: str) -> str:
     unit = tmp_path / "unit.c"
     unit.write_text(source)
-    return cfront.recorded(unit, [str(WATCOM_H)])
-
-
-def test_borland_alloc_h_is_found(tmp_path):
-    """sc.c includes <alloc.h>, which Open Watcom calls malloc.h."""
-    assert "CGProcDecl" in _stream(tmp_path, "#include <alloc.h>\nvoid *get( void ) { return malloc( 4 ); }\n")
+    return cfront.recorded(unit, [str(BORLAND_H)])
 
 
 def test_main_keeps_the_default_convention(tmp_path):
@@ -56,3 +51,18 @@ def test_relative_source_and_include(tmp_path, monkeypatch):
     (tmp_path / "unit.c").write_text('#include "one.h"\nint two( void ) { return one() + 1; }\n')
     monkeypatch.chdir(tmp_path)
     assert "CGProcDecl" in cfront.recorded(Path("unit.c"), ["src"])
+
+
+def test_borland_names_a_parameter_segment(tmp_path):
+    """Borland's dos.h declares `peek( unsigned __segment, ... )`; `__segment`
+    is an Open Watcom keyword, and mdl_ai.c stopped with E1060 Invalid type."""
+    assert "CGProcDecl" in _stream(
+        tmp_path, "int peek( unsigned __segment, unsigned __offset );\nint get( void ) { return peek( 0, 0x46c ); }\n"
+    )
+
+
+def test_stdc_is_undefined_as_in_bcc(tmp_path):
+    """Open Watcom defines __STDC__ 1, which hid dos.h's FP_OFF macro: mdl_ai.c
+    called an undefined `_FP_OFF` and QCPORT.EXE did not link."""
+    stream = _stream(tmp_path, "#include <dos.h>\nunsigned off( void far *p ) { return FP_OFF( p ); }\n")
+    assert "CGProcDecl" in stream and "FP_OFF" not in stream

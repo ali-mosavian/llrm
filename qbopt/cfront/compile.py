@@ -30,15 +30,13 @@ FLAGS = (
     "-mm", "-3", "-fpi87", "-fp3", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq",
     f"-fi={Path(__file__).with_name('borland.h')}",
 )  # fmt: skip
-# Borland's headers Open Watcom has under another name, searched last.
-COMPAT = Path(__file__).with_name("include")
 
 
 def recorded(source: Path, includes: list[str]) -> str:
     """The code-generator stream wccq records for one C file."""
     with tempfile.TemporaryDirectory() as scratch:
         out = Path(scratch) / "unit.cgs"
-        searched = (*(f"-I{Path(one).resolve()}" for one in includes), f"-I{COMPAT}")
+        searched = tuple(f"-I{Path(one).resolve()}" for one in includes)
         command = [str(WCCQ), *FLAGS, *searched, f"-fo={scratch}/unit.obj", str(source.resolve())]
         # In the scratch directory, where wccq also leaves its .err file.
         environment = {**os.environ, "QBOPT_CG_STREAM": str(out)}

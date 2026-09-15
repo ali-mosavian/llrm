@@ -1,0 +1,15 @@
+--- a/bld/cc/c/cmac2.c
++++ b/bld/cc/c/cmac2.c
+@@ -731,7 +731,9 @@
+         prev_mentry = mentry;
+     }
+     if( mentry != NULL ) {
+-        if( MacroIsSpecial( mentry ) ) {
+-            CErr2p( ERR_CANT_UNDEF_THESE_NAMES, name );
+-        } else {
++        /*
++         * qbopt: Borland defines __STDC__ only under -A, so its dialect
++         * undefines a special macro like any other.
++         */
++        {
+             if( prev_mentry != NULL ) {
