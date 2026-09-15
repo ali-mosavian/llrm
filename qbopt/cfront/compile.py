@@ -16,6 +16,7 @@ from qbopt import flow
 from qbopt.model import mir
 from qbopt.cfront import hir
 from qbopt.backend import masm
+from qbopt.backend import jumps
 from qbopt.backend import lower
 from qbopt.cfront import stream
 from qbopt.backend import prologue
@@ -71,6 +72,7 @@ def compiled(text: str, module: str, *, optimise: bool = False, dump: Path | Non
             if not isinstance(phase, prologue.Prologue):
                 low = phase.transform(low)
                 _write(dump, f"phases/{raised.name}.{number:02d}-{type(phase).__name__}", _lir_text(raised.name, low))
+        low = jumps.threaded(low)
         lirs.append(_lir_text(raised.name + " (allocated)", low))
         reserve = -min(min(frame.slots.values(), default=0), frame.floor)
         callees = {
