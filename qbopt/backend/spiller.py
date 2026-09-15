@@ -381,14 +381,45 @@ def _keeps(one: lir.Insn, define: lir.Insn, cell: ir.Mem, holds: bool) -> bool:
     """Whether `cell` still holds what it held at `define` after `one`."""
     if one is define:
         return True
-    op = one.op
-    if op is not None and (op.kind is mir.Kind.CALL or op.barrier and not op.memory_complete):
-        return False
-    written = [dest for dest in (one.what.dests if one.what is not None else ()) if isinstance(dest, ir.Mem)]
-    written += list(op.stores if op is not None else ())
-    return holds and not any(
-        ref.addr is None or addresses(cell.addr, cell.width, ref.addr, ref.width) for ref in written
+    written = _written(one, cell)
+    return holds and not _may_write(one.op, cell) and not any(
+        dest.addr is None or addresses(cell.addr, cell.width, dest.addr, dest.width) for dest in written
     )
+
+
+def _may_write(op: "mir.Op | None", cell: ir.Mem) -> bool:
+    """Whether the MIR operation may change `cell`: through what it says it
+    stores, and anywhere at all where that is not stated. A call stating a
+    store with no address that spares the whole frame leaves a frame cell alone."""
+    from qbopt.analysis import effects
+
+    if op is None:
+        return False
+    if effects.unmodeled_write(op):
+        return True
+    for ref in op.stores:
+        if _in_frame(cell) and mir.WHOLE_FRAME in ref.excludes:
+            continue
+        if ref.addr is None or addresses(cell.addr, cell.width, ref.addr, ref.width):
+            return True
+    return False
+
+
+def _in_frame(cell: ir.Mem) -> bool:
+    return cell.addr is not None and cell.addr.space is Space.FRAME
+
+
+def _written(one: lir.Insn, cell: ir.Mem) -> list[ir.Mem]:
+    """The memory this instruction names as written that could be `cell`.
+
+    Outside the frame, a destination is what the MIR operation stores, so
+    stores that spare the whole frame answer for it: `mov es:[bx+10],ax`
+    cannot write a parameter whose frame nothing lets escape."""
+    op = one.op
+    spared = (_in_frame(cell) and op is not None and bool(op.stores)
+              and all(mir.WHOLE_FRAME in ref.excludes for ref in op.stores))
+    return [dest for dest in (one.what.dests if one.what is not None else ())
+            if isinstance(dest, ir.Mem) and not (spared and dest.addr is not None and dest.addr.space is not Space.FRAME)]
 
 
 def _unchanged(body: lir.LirBody, define: lir.Insn, cell: ir.Mem, uses: list) -> bool:
@@ -485,11 +516,7 @@ def _frame_loads(body: lir.LirBody, values: frozenset[int]) -> dict[int, ir.Mem]
         last_use = max(used_at for _block, used_at in locations)
         safe = True
         for one in body.blocks[block_index].insns[defined_at + 1 : last_use + 1]:
-            op = one.op
-            if op is None:
-                continue
-            changed = any(addresses(source.addr, source.width, ref.addr, ref.width) for ref in op.stores)
-            if op.kind is mir.Kind.CALL or changed or (op.barrier and not op.memory_complete):
+            if _may_write(one.op, source):
                 safe = False
                 break
         if safe:
@@ -565,12 +592,8 @@ def _holding(one: lir.Insn, value: int, home: ir.Mem, store: lir.Insn, holds: bo
         return True
     if value in one.defines:
         return False
-    op = one.op
-    if op is not None and (op.kind is mir.Kind.CALL or op.barrier and not op.memory_complete):
-        return False
-    written = [dest for dest in (one.what.dests if one.what is not None else ()) if isinstance(dest, ir.Mem)]
-    written += [ref for ref in (op.stores if op is not None else ())]
-    return holds and not any(
+    written = _written(one, home)
+    return holds and not _may_write(one.op, home) and not any(
         cell is not home and (cell.addr is None or addresses(home.addr, home.width, cell.addr, cell.width))
         for cell in written
     )

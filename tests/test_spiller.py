@@ -61,6 +61,38 @@ def test_slot_is_as_wide_as_the_widest_use_of_its_value():
     assert all(a + spans[a] <= b or b + spans[b] <= a for a in spans for b in spans if a != b), spans
 
 
+@pytest.mark.parametrize("between", ["call sparing the frame", "call", "call unstated",
+                                     "pointer store sparing the frame", "pointer store"])
+def test_parameter_is_reloaded_across_what_spares_the_frame(between):
+    """ent_move_plats copied `world`, loaded from [bp+6], to a slot of its own:
+    a call, and a store through a pointer like `mov es:[bx+10],ax`, were taken
+    to write the frame even where their stores said they could not."""
+    from iced_x86 import Register
+
+    from qbopt.model import mir
+
+    param = ir.Mem(Addr(Space.FRAME, 6), 2, Register.BP, 0, 2)
+    load = lir.Insn(at=0x100, covers=(0x100, 0x100), op=None, defines=(1,), uses=(),
+                    what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),), (param,)))
+    spared = (mir.WHOLE_FRAME,) if between.endswith("sparing the frame") else ()
+    if between.startswith("call"):
+        reach = () if between == "call unstated" else (mir.MemRef(None, 4, excludes=spared),)
+        site = mir.Op(0x101, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.CALL, stores=reach)
+        middle = lir.Insn(at=0x101, covers=(0x101, 0x101), op=site, defines=(), uses=(),
+                          what=ir.Semantics(ir.Operation.CALL, "call", (), ()), clobbers=frozenset({Register.EAX}))
+    else:
+        base = mir.Value(9, 0)
+        ref = mir.MemRef(Addr(Space.LITERAL, 10), 2, base=base, space=Space.LITERAL, base_width=2, excludes=spared)
+        site = mir.Op(0x101, ir.Operation.NOTHING, "", (), (base,), kind=mir.Kind.STORE, stores=(ref,))
+        cell = ir.Mem(Addr(Space.LITERAL, 10), 2, Register.BX, 10, 2)
+        middle = lir.Insn(at=0x101, covers=(0x101, 0x101), op=site, defines=(), uses=(),
+                          what=ir.Semantics(ir.Operation.MOVE, "mov", (cell,), (ir.Imm(0, 2),)))
+    got = _out(_body(load, middle, _add(2, 1, at=0x102)), {1})
+    slots = [where for one in got if one.what is not None for where in one.what.dests
+             if isinstance(where, ir.Mem) and where.addr is not None and where.addr.space is Space.FRAME]
+    assert (slots == []) == bool(spared), [one.what for one in got]
+
+
 def test_nbody_reads_spilled_position_directly_in_subtraction():
     """NBODY loaded [BP-2Ch] into EAX solely for SUB ESI,EAX on every force pair."""
     from qbopt import wholeseg

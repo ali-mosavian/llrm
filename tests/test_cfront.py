@@ -345,6 +345,26 @@ def test_private_store_dies_across_float_operations():
     assert not any("[bp-4]" in line for line in body)
 
 
+def test_local_stored_before_a_call_is_promoted_after_it():
+    """A call with no stated effects wrote all memory, this frame too: `k = 0`
+    before it was not available after, so the loop reloaded k's slot every
+    pass and the allocator spilled its register copy to a second slot."""
+    from qbopt.optimize import transform
+
+    unit = cfront.hir.unit(cfront.stream.parse((FIXTURES / "calls.cgs").read_text()))
+    (proc,) = unit.procs
+    raised = cfront.raise_hir.raised(unit, proc, cfront.raise_hir.Shared())
+    body = transform.applied(raised.body, frozenset(), raised.calls, found=None)
+    local = [
+        op.at
+        for block in body.blocks
+        for op in block.ops
+        if op.kind is cfront.mir.Kind.LOAD
+        and any(ref.addr is not None and ref.addr.space is cfront.raise_hir.Space.FRAME and ref.addr.disp < 0 for ref in op.loads)
+    ]
+    assert local == []
+
+
 def test_short_value_crosses_a_call_in_si_or_di():
     """A call was said to destroy every register, so the running total lived
     in a slot and each pass wrote `add word ptr [bp-4], ax`. The callee keeps

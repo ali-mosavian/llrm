@@ -2201,8 +2201,9 @@ def _frame_bounded(body: MirBody, pointers: bool = False) -> MirBody:
             return False
         if ref.beyond is not None:
             return True
-        reached = ref.base is not None or ref.segment is not None or ref.pointer
-        return pointers and reached and ref.where not in (Space.FRAME, Space.SEGMENT, Space.EXTERNAL)
+        # No address is a callee's reach: its own data or what a pointer leads to.
+        reached = ref.base is not None or ref.segment is not None or ref.pointer or ref.addr is None
+        return pointers and reached and ref.where not in (Space.FRAME, Space.SEGMENT, Space.EXTERNAL, Space.STACK)
 
     def bound(ref: MemRef) -> MemRef:
         return replace(ref, excludes=ref.excludes + (WHOLE_FRAME,)) if bounded(ref) else ref

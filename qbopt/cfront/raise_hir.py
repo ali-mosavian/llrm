@@ -80,6 +80,9 @@ def _packed(value: float, width: int) -> bytes:
     return struct.pack("<f" if width == 4 else "<d", value)
 SIGNED = frozenset({"TY_INT_1", "TY_INT_2", "TY_INT_4", "TY_INTEGER"})
 FAR_POINTERS = frozenset({"TY_LONG_POINTER", "TY_HUGE_POINTER"})
+# What a callee reads and writes: no byte this body can name, bounded later
+# to miss a frame whose address never escapes.
+CALLEE = (mir.MemRef(None, 4),)
 
 # Literal labels (a back handle with no symbol) share the symbol index space;
 # float constants the raise itself places come after them.
@@ -872,11 +875,13 @@ class _Raise:
         pushed = sum(self.push(value, type_) for value, type_ in arguments)
         if type_ in FLOATS:
             result = self.fresh()
-            site = self.op(K.CALL, (mir.Held(result, 10),), defines=(result,), uses=())
+            site = self.op(K.CALL, (mir.Held(result, 10),), defines=(result,), uses=(), loads=CALLEE, stores=CALLEE)
             returned = mir.Held(result, 10)
         else:
             low, high = self.fresh(), self.fresh()
-            site = self.op(K.CALL, (mir.Held(low, 2), mir.Held(high, 2)), defines=(low, high), uses=())
+            site = self.op(
+                K.CALL, (mir.Held(low, 2), mir.Held(high, 2)), defines=(low, high), uses=(), loads=CALLEE, stores=CALLEE
+            )
             returned = Returned(low, high)
         caller_pops = bool(callee.call_class & hir.CALLER_POPS)
         self.calls[site.at] = callee.object_name
@@ -924,7 +929,9 @@ class _Raise:
         parts.append(bytes(data[start:]))
         low, high = self.fresh(), self.fresh()
         addresses = tuple(mir.FrameAddress(disp, 2) for disp in dict.fromkeys(named))
-        site = self.op(K.CALL, (mir.Held(low, 2), mir.Held(high, 2)), addresses, defines=(low, high), uses=())
+        site = self.op(
+            K.CALL, (mir.Held(low, 2), mir.Held(high, 2)), addresses, defines=(low, high), uses=(), loads=CALLEE, stores=CALLEE
+        )
         self.inline[site.at] = tuple(parts)
         self.calls[site.at] = callee.object_name
         self.callees[site.at] = callee
