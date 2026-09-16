@@ -150,7 +150,7 @@ adapter also discarded cloned calls' relocation provenance. These are backend
 requirements, not reasons for MIR to invent machine addresses.
 
 Follow-up inspection corrected the initial diagnosis: `objwrite.written` and
-`relocate.as_records` already support one-to-many fixup destinations. The loss
+The former record-rewriting writer already supported one-to-many fixup destinations. The loss
 was earlier, in treating zero-byte clones as unrelated inserted instructions.
 The prototype now explicitly retains symbolic operand provenance. The assembler
 recognizes an explicitly retained far-call target even without an owning node.

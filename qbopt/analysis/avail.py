@@ -20,10 +20,10 @@ This lattice intersects at joins. Where predecessor values differ,
 availability proof. Lowering and allocation handle that phi normally.
 """
 
-from collections.abc import Callable
 from dataclasses import field
 from dataclasses import replace
 from dataclasses import dataclass
+from collections.abc import Callable
 
 from iced_x86 import Register
 
@@ -327,12 +327,7 @@ def _fixed(ref: MemRef) -> bool:
     address of it escaped, so a pointer, an index or a selector reaches it
     no more than a call does.
     """
-    return (
-        ref.addr is not None
-        and ref.addr.base == Register.NONE
-        and ref.base is None
-        and ref.segment is None
-    )
+    return ref.addr is not None and ref.addr.base == Register.NONE and ref.base is None and ref.segment is None
 
 
 def _dead_in(
@@ -343,6 +338,7 @@ def _dead_in(
     private: "Callable[[MemRef], bool] | None" = None,
     bounds: dict | None = None,
     sealed: bool = False,
+    handles_errors: bool = True,
 ) -> tuple[list[int], dict[MemRef, int]]:
     """One block, backward, from what its successors have already overwritten.
 
@@ -362,7 +358,7 @@ def _dead_in(
             # store, since sp comes back where it started and nothing
             # outside the idiom reads the cells it passed through.
             continue
-        exception = op.floating is not None or op.kind is Kind.FCHECK
+        exception = effects.exposes_memory(op, handles_errors)
         if exception or effects.unmodeled_write(op) or (op.kind is Kind.CALL and not op.loads):
             # A float exception's handler runs outside the body, and in a
             # sealed one resumes nowhere inside: a private cell is as safe as
@@ -420,6 +416,7 @@ def dead_stores(
     calls: dict[int, str],
     private: "Callable[[MemRef], bool] | None" = None,
     bounds: dict | None = None,
+    handles_errors: bool = True,
 ) -> tuple[Op, ...]:
     """Stores whose bytes are overwritten before anything reads them.
 
@@ -448,7 +445,7 @@ def dead_stores(
     These clear what is known, and each is a way the cell could be
     read without this seeing a load of it: a barrier, whose addresses are
     its own; a call runtime.py has not proved leaves caller memory alone;
-    a strict floating operation whose exception handler can observe memory;
+    an operation that can trap, in a module with an ON ERROR handler;
     and a load that may alias, which is the ordinary case.
 
     Stack slots are excluded outright rather than reasoned about. A
@@ -487,7 +484,7 @@ def dead_stores(
                     out = {one: at for one, at in out.items() if any(mir.same_bytes(one, other) for other in have)}
             if out is None:
                 out = dict(unread)  # no successor at all: only the caller may read it
-            mine, start = _dead_in(block, out, dgroup, calls, private, bounds, body.sealed)
+            mine, start = _dead_in(block, out, dgroup, calls, private, bounds, body.sealed, handles_errors)
             found.update(mine)
             if len(start) != len(entry[block.at]):
                 changing = True

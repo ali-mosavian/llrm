@@ -37,11 +37,11 @@ from dataclasses import replace
 from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.model.mir import Op
+from qbopt.optimize import fill
 from qbopt.analysis import avail
 from qbopt.frontend import pairs
 from qbopt.optimize import lcssa
 from qbopt.analysis import consts
-from qbopt.optimize import fill
 from qbopt.optimize import unroll
 from qbopt.optimize import promote
 from qbopt.model.mir import MirBody
@@ -942,10 +942,15 @@ def _empty_operation(op: Op) -> Op:
 
 
 def without_dead_stores(
-    body: MirBody, dgroup: frozenset[int], calls: dict[int, str], private=None, bounds: dict | None = None
+    body: MirBody,
+    dgroup: frozenset[int],
+    calls: dict[int, str],
+    private=None,
+    bounds: dict | None = None,
+    handles_errors: bool = True,
 ) -> MirBody:
     """Every store overwritten, or never observable, before anything read it, removed."""
-    gone = {id(op) for op in avail.dead_stores(body, dgroup, calls, private, bounds)}
+    gone = {id(op) for op in avail.dead_stores(body, dgroup, calls, private, bounds, handles_errors)}
     if not gone:
         return body
     return replace(
@@ -975,7 +980,7 @@ def forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> M
     Arithmetic remains intact. The allocator, not this pass, decides where
     the longer-lived provider resides.
     """
-    want =frozenset(op.at for block in body.blocks for op in block.ops if op.loads)
+    want = frozenset(op.at for block in body.blocks for op in block.ops if op.loads)
     if not want:
         return body
     served = {id(one.op): one.value for one in avail.forwardable(body, dgroup, calls, want) if one.value is not None}
@@ -2745,7 +2750,7 @@ class Hoist(MIRTransform):
 
     def transform(self, body: MirBody) -> MirBody:
         body = hoisted(body, self.where.dgroup, self.where.named, self.where.bounds)
-        return loopmotion.sunk_stores(body, self.where.dgroup, self.where.bounds)
+        return loopmotion.sunk_stores(body, self.where.dgroup, self.where.bounds, _handles_errors(self.where))
 
 
 class Forward(MIRTransform):
@@ -2778,7 +2783,15 @@ class DropStores(MIRTransform):
         from qbopt.analysis import observers
 
         private = observers.private(body, self.where.found, self.where.blocks)
-        return without_dead_stores(body, self.where.dgroup, self.where.named, private, self.where.bounds)
+        return without_dead_stores(
+            body, self.where.dgroup, self.where.named, private, self.where.bounds, _handles_errors(self.where)
+        )
+
+
+def _handles_errors(where: Where) -> bool:
+    from qbopt.abi import runtime
+
+    return runtime.handles_errors(map(runtime.contract, where.named.values()))
 
 
 class Reuse(MIRTransform):

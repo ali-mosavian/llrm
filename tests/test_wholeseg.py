@@ -11,9 +11,9 @@ from pathlib import Path
 
 import pytest
 
+from qbopt import wholeseg
 from qbopt.objectfile import omf
 from qbopt.objectfile import module
-from qbopt import wholeseg
 
 FIXTURES = sorted(Path("fixtures/omf").glob("*.obj"))
 
@@ -170,10 +170,10 @@ def test_a_rebuilt_object_keeps_every_code_fixup_it_still_has_a_home_for(obj: Pa
     # Each survivor still names what it named. `inside` maps an offset in
     # the old code to where the layout put it, which is what a fixup into
     # this same segment carries as its displacement.
-    from qbopt.objectfile import relocate
+    from qbopt.backend import omfwrite
 
     both = {**laid.covered, **laid.moved}
-    inside = {one: relocate._mapped(one, header, both) for one in both}
+    inside = {one: omfwrite._mapped(one, header, both) for one in both}
     landed = {one.offset: one for one in emitted}
     for one in kept:
         for at in moved[one.offset]:
@@ -362,8 +362,8 @@ def test_a_tangled_copy_refuses_without_trying_another_emitter() -> None:
 
 def test_a_frame_refusal_preserves_the_input(monkeypatch: pytest.MonkeyPatch) -> None:
     # Qrender MAIN crashed when its spill frame had no recognized return.
-    from qbopt.backend import prologue
     from qbopt.model import lir
+    from qbopt.backend import prologue
 
     def refuses(self: prologue.Prologue, body: lir.LirBody) -> lir.LirBody:
         raise prologue.Refused("2 bytes of frame have no recognized exit")
@@ -517,9 +517,9 @@ def test_the_long_divide_bodys_entry_reads_nothing_it_has_not_written() -> None:
     from iced_x86 import RegisterExt
     from iced_x86 import InstructionInfoFactory
 
+    from qbopt import wholeseg
     from qbopt.objectfile import omf
     from qbopt.objectfile import module
-    from qbopt import wholeseg
     from qbopt.frontend import blocks as split
     from qbopt.frontend.blocks import code_map
 
@@ -555,7 +555,7 @@ def test_the_half_a_divide_hands_back_does_not_fall_out_of_the_lir_route() -> No
     """Owning no original bytes is not the same as having no identity.
 
     The projection stands for none of BC's bytes -- the site's range
-    belongs to the divide, once -- and objwrite read that as "inserted"
+    belongs to the divide, once -- and omfwrite read that as "inserted"
     and stripped its node, which is what says which idiom it is. It
     reached the general encoder as an operation named `restore` with no
     operands, so every body holding an absorbed divide left the route

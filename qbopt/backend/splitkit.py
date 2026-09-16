@@ -53,6 +53,7 @@ def split(
     body: lir.LirBody,
     only: "frozenset[int] | None" = None,
     done: "set[int] | None" = None,
+    where: "dict | None" = None,
 ) -> lir.LirBody:
     """`body` with one failing value's range cut, or `body` unchanged.
 
@@ -89,6 +90,9 @@ def split(
         key=lambda value: (-live[value].size, value),
     )
     cut = body
+    from qbopt.backend import allocate
+
+    confined = allocate.classes(body) if where is not None else {}
     for value in order:
         width = widths.get(value)
         if width is None:
@@ -97,7 +101,7 @@ def split(
             continue
         for form in (_regional, _local, _per_block):
             plan = form(cut, value, live, index, deep)
-            if plan is None:
+            if plan is None or not _fits(value, plan, live, index, where, confined):
                 continue
             carved = _carved(cut, value, _next_value(cut), width, plan)
             if carved is not cut:
@@ -106,6 +110,45 @@ def split(
                     done.add(value)
                 break
     return cut
+
+
+def _fits(value: int, region: "Region", live: dict, index, where: "dict | None", confined: dict) -> bool:
+    """Whether some register is free, in the allocation that failed, for the piece `region` carves.
+
+    LLVM's region split is chosen per physical register, against that
+    register's interference inside the region. A piece nothing can hold
+    spills anyway, with two copies more: PLASMA's cuts into its pixel loop,
+    where every register is busy, outweighed the one cut that kept the outer
+    counter in a register, and the whole batch was thrown away.
+    """
+    if where is None or value not in live:
+        return True
+    from qbopt.backend import target
+    from qbopt.backend import allocate
+
+    spans = [ranges.Segment(*index.span[at]) for at in region.blocks if at in index.span]
+    piece = tuple(
+        sorted(
+            (
+                ranges.Segment(max(one.start, span.start), min(one.end, span.end))
+                for one in live[value].segments
+                for span in spans
+                if one.overlaps(span)
+            ),
+            key=lambda one: one.start,
+        )
+    )
+    if not piece:
+        return False
+    carved = ranges.Interval(value, piece)
+    occupants: dict = {}
+    for other, register in where.items():
+        if other != value and other in live:
+            occupants.setdefault(allocate._whole(register), []).append(other)
+    return any(
+        not any(live[other].overlaps(carved) for other in occupants.get(allocate._whole(register), ()))
+        for register in target.order(confined.get(value))
+    )
 
 
 def _references(body: lir.LirBody, value: int) -> dict[int, list[int]]:
@@ -211,9 +254,9 @@ def _carved(body: lir.LirBody, value: int, fresh: int, width: int, region: Regio
     for block in body.blocks:
         for where in block.succ:
             predecessors.setdefault(where, set()).add(block.at)
-    shared = set() if region.starts_at is not None else {
-        at for at in entered if predecessors.get(at, set()) & region.blocks
-    }
+    shared = (
+        set() if region.starts_at is not None else {at for at in entered if predecessors.get(at, set()) & region.blocks}
+    )
     feeding = {where for at in shared for where in predecessors[at] if where not in region.blocks}
     at_of = {block.at: block for block in body.blocks}
     if any(at == body.entry or not predecessors[at] - region.blocks for at in shared) or any(
@@ -250,6 +293,11 @@ def _carved(body: lir.LirBody, value: int, fresh: int, width: int, region: Regio
         if leaves and (block.at in live_out or region.starts_at is not None):
             back = _copy(interior[-1], value, fresh, width)
             place = len(insns) - 1 if _terminates(insns[-1]) else len(insns)
+            # After the last use where every way out leaves the region:
+            # LLVM's `leaveIntvAfter`. Held to the block's end, the piece
+            # was live across what the block defines after it.
+            if all(where not in region.blocks for where in block.succ):
+                place = min(place, _after_last(insns, fresh))
             insns.insert(place, back)
             changed = True
         blocks.append(replace(block, insns=tuple(insns)))
@@ -277,6 +325,14 @@ def _live_out(body: lir.LirBody, value: int) -> set[int]:
 
     _incoming, outgoing = allocate.live(body)
     return {at for at, values in outgoing.items() if value in values}
+
+
+def _after_last(insns: "list[lir.Insn]", value: int) -> int:
+    """The position after the last instruction naming `value`, and after the parallel copy holding it."""
+    place = max((position + 1 for position, one in enumerate(insns) if value in (*one.defines, *one.uses)), default=0)
+    while 0 < place < len(insns) and insns[place].group is not None and insns[place].group == insns[place - 1].group:
+        place += 1
+    return place
 
 
 def _terminates(one: lir.Insn) -> bool:
@@ -313,38 +369,9 @@ def _widths(body: lir.LirBody) -> dict[int, int]:
 
 
 def _renamed(one: lir.Insn, rename: dict[int, int]) -> lir.Insn:
-    if not rename:
-        return one
-    what = one.what
-    if what is None:
-        return replace(
-            one,
-            defines=tuple(rename.get(v, v) for v in one.defines),
-            uses=tuple(rename.get(v, v) for v in one.uses),
-        )
-    return replace(
-        one,
-        what=ir.Semantics(
-            what.op,
-            what.name,
-            tuple(_settled(x, rename) for x in what.dests),
-            tuple(_settled(x, rename) for x in what.sources),
-            what.target,
-        ),
-        defines=tuple(rename.get(v, v) for v in one.defines),
-        uses=tuple(rename.get(v, v) for v in one.uses),
-    )
+    from qbopt.backend import spiller
 
-
-def _settled(where, rename: dict[int, int]):
-    """One operand with every value it names put through the rename.
-
-    Through `ir.mapped`, so a cell's base is renamed with the rest: this
-    looked in `Mem.through`, which holds a register, and a cut past a load
-    through a pointer renamed `uses` and left the cell on the value the
-    cut had just ended.
-    """
-    return ir.mapped(where, lambda one: ir.Held(rename.get(one.value, one.value), one.width))
+    return spiller._renamed(one, rename) if rename else one
 
 
 def _next_value(body: lir.LirBody) -> int:

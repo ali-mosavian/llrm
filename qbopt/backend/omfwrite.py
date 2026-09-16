@@ -1,21 +1,30 @@
-"""A masm.Module as an OMF object, without jwasm.
+"""The one OMF emitter, shared by the C and BC-object frontends.
 
-The records jwasm writes for the same module's text, in its segment order, so
-an object from here links to the same image. A reference to anything this
-module defines is a fixup against its segment with the addend in the code, as
-jwasm writes it; anything else names its EXTDEF.
+The C adapter consumes a ``masm.Module``.  The BC adapter consumes decoded
+segment, symbol and relocation semantics plus freshly laid-out code.  Both
+construct a complete object here; neither invokes an assembler or rewrites an
+input record stream.  A reference to anything the C module defines is a fixup
+against its segment with the addend in the code, as jwasm writes it; anything
+else names its EXTDEF.
 """
 
 import struct
 from dataclasses import field
+from dataclasses import replace
 from dataclasses import dataclass
 from collections.abc import Sequence
 
+from iced_x86 import Register
+
 from qbopt.model import ir
+from qbopt.model import lir
+from qbopt.model import mir
 from qbopt.backend import masm
+from qbopt.backend import layout
 from qbopt.backend import select
 from qbopt.objectfile import omf
 from qbopt.objectfile.module import Space
+from qbopt.objectfile.module import Module
 
 OFFSET, BASE, POINTER = 1, 2, 3  # OMF locations: offset16, segment base, ptr16:16
 WIDE = {OFFSET: 2, BASE: 2, POINTER: 4}
@@ -30,6 +39,10 @@ GROUP_FRAME, TARGET_FRAME = 1, 5
 
 class Unencodable(Exception):
     """An instruction or reference this writer has no bytes for."""
+
+
+class Survived(Exception):
+    """A phi reached emission. Always a bug in phi elimination."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +94,329 @@ class Segment:
 
     def skip(self, size: int) -> None:
         self.image += bytes(size)
+
+
+def written_bc(
+    found: Module,
+    bodies: "list[lir.LirBody]",
+    records: list[omf.Record],
+    assignment: dict,
+    tables: tuple = (),
+    fields: frozenset[int] = frozenset(),
+    reached: frozenset[int] | None = None,
+    native_fpu: bool = False,
+    ordered: bool = False,
+) -> bytes | str:
+    """Write a complete fresh object for the BC-object frontend.
+
+    BC's OBJ is input syntax here: its declarations, data and relocations are
+    decoded, just as C source is decoded by the other frontend.  The output is
+    never made by splicing LEDATA or FIXUPP records back into BC's record
+    stream; ``_bc_records`` serializes a new stream from those semantics.
+    """
+    if bodies and all(body.ordered for body in bodies):
+        ordered = True
+    laid = layout.rebuild(
+        found,
+        [(one.name, _as_mir(one)) for one in bodies],
+        tables,
+        fields,
+        reached,
+        native_fpu,
+        assignment=assignment or None,
+        ordered=ordered,
+        ordered_entries=frozenset(body.entry for body in bodies if body.ordered),
+    )
+    if isinstance(laid, str):
+        return laid
+
+    kept = min(body.entry for body in bodies)
+    image = found.code[:kept] + laid.code
+    relocations: dict[int, list[int]] = {}
+    for new, old in laid.relocations:
+        relocations.setdefault(old, []).append(kept + new)
+    groups = list(omf.groups(records))
+    group_framed = [address for _offset, address in laid.symbols if address.segment == Register.NONE]
+    if group_framed and "DGROUP" not in groups:
+        return "generated data references require an established DGROUP frame"
+    added = []
+    for offset, address in laid.symbols:
+        if address.space is Space.SEGMENT and address.index not in found.dgroup and address.segment == Register.NONE:
+            return f"generated data reference at {kept + offset:#x} is outside DGROUP: {address}"
+        target = "segment" if address.space is Space.SEGMENT else "external"
+        fixup = (
+            omf.target_offset_fixup(found.seg, kept + offset, target, address.index, address.disp)
+            if address.segment != Register.NONE
+            else omf.offset_fixup(
+                found.seg,
+                kept + offset,
+                target,
+                address.index,
+                address.disp,
+                groups.index("DGROUP") + 1,
+            )
+        )
+        added.append((kept + offset, fixup))
+    moved = {**laid.covered, **laid.moved}
+    return _bc_object(
+        records,
+        found.seg,
+        kept,
+        image,
+        moved,
+        {old: tuple(dict.fromkeys(destinations)) for old, destinations in relocations.items()},
+        laid.dropped,
+        tuple(added),
+    )
+
+
+def _as_mir(body: "lir.LirBody") -> mir.MirBody:
+    """Carry allocated LIR through the layout interface until it accepts LIR."""
+    stuck = [block.at for block in body.blocks if block.phis]
+    if stuck:
+        raise Survived(
+            "a phi survives at " + ", ".join(f"{one:#06x}" for one in stuck) + "; nothing below can emit one"
+        )
+    return mir.MirBody(
+        entry=body.entry,
+        blocks=tuple(
+            mir.MirBlock(
+                at=block.at,
+                phis=(),
+                ops=tuple(_carried(one) for one in block.insns),
+                succ=block.succ,
+            )
+            for block in body.blocks
+        ),
+        origin=body.origin,
+        pins=body.pins,
+    )
+
+
+def _carried(one: "lir.Insn") -> mir.Op:
+    if one.op is None:
+        return mir.Op(one.at, one.what.op, one.what.name, (), (), made=one.what, covers=one.covers)
+    idiom = isinstance(one.op.node, ir.Restore) and getattr(one.what, "op", None) is ir.Operation.RESTORE
+    inserted = not idiom and one.covers is not None and one.covers[0] == one.covers[1]
+    return replace(
+        one.op,
+        kind=mir._kind_of(one.what, (), ()) if one.op.kind is mir.Kind.DIVMOD and one.what is not None else one.op.kind,
+        made=one.what,
+        at=one.at,
+        covers=one.covers,
+        extra_covers=() if inserted else one.op.extra_covers,
+        node=None if inserted else one.op.node,
+        id=None if inserted and one.symbol is not True else one.op.id,
+        symbol=one.symbol,
+    )
+
+
+def _mapped(offset: int, kept: int, moved: dict[int, int]) -> int | None:
+    return offset if offset < kept else moved.get(offset)
+
+
+def _bc_object(
+    records: list[omf.Record],
+    code_seg: int,
+    kept: int,
+    code: bytes,
+    moved: dict[int, int],
+    relocations: dict[int, tuple[int, ...]],
+    dropped: frozenset[int],
+    added: tuple[tuple[int, omf.Fixup], ...],
+) -> bytes | str:
+    """Canonical OMF serialization of one decoded BC module.
+
+    Segment and symbol indices deliberately retain the frontend's numbering;
+    they are identities in decoded FIXUPP semantics, not positions borrowed
+    from the old output stream.  Record boundaries and ordering are ours.
+    """
+    segments = omf.segments(records)
+    if not 0 < code_seg < len(segments) or segments[code_seg] is None:
+        return "the module has no code segment"
+    if any(omf.has_start_address(one) for one in records if one.type & 0xFE == omf.MODEND):
+        return "MODEND carries a start address, which this does not move yet"
+    supported = {
+        omf.THEADR,
+        omf.COMENT,
+        omf.MODEND,
+        omf.EXTDEF,
+        omf.PUBDEF,
+        omf.LINNUM,
+        omf.LNAMES,
+        omf.SEGDEF,
+        omf.GRPDEF,
+        omf.FIXUPP,
+        omf.LEDATA,
+    }
+    unknown = [one.name for one in records if one.type & 0xFE not in supported]
+    if unknown:
+        return f"fresh OMF emission does not model {unknown[0]}"
+
+    images: dict[int, bytes] = {}
+    spans: dict[int, list[tuple[int, int]]] = {}
+    for index, segment in enumerate(segments):
+        if index == 0 or segment is None:
+            continue
+        images[index] = code if index == code_seg else omf.segment_image(records, index, segment[1])
+        pieces = (
+            [(0, len(code))]
+            if index == code_seg and code
+            else [(at, at + len(payload)) for _record, seg, at, payload in omf.ledata(records) if seg == index]
+        )
+        spans[index] = _merged(pieces)
+
+    placed: dict[int, list[tuple[int, omf.Fixup, int]]] = {index: [] for index in images}
+    for fixup in omf.fixups(records):
+        if fixup.seg is None or fixup.seg not in placed:
+            return "a fixup has no segment to attach to"
+        destinations: tuple[int, ...]
+        if fixup.seg == code_seg:
+            landed = relocations.get(fixup.offset) if fixup.offset >= kept else (fixup.offset,)
+            if landed is None:
+                if fixup.offset in dropped:
+                    continue
+                return f"the fixup at {fixup.offset:#x} has nowhere to go in the rebuilt segment"
+            destinations = landed
+        else:
+            destinations = (fixup.offset,)
+        disp = fixup.disp
+        if fixup.target == "segment" and fixup.index == code_seg and fixup.disp_pos is not None:
+            mapped = _mapped(disp, kept, moved)
+            if mapped is None:
+                return f"a fixup names {disp:#x}, which is not an instruction the layout placed"
+            disp = mapped
+        for destination in destinations:
+            placed[fixup.seg].append((destination, fixup, disp))
+    for destination, fixup in added:
+        placed[code_seg].append((destination, fixup, fixup.disp))
+
+    headers: list[omf.Record] = []
+    first = next((one for one in records if one.type & 0xFE == omf.THEADR), None)
+    if first is None:
+        return "the module has no THEADR"
+    headers.append(omf.Record(first.type, first.body))
+    headers += [omf.Record(one.type, one.body) for one in records if one.type & 0xFE == omf.COMENT]
+
+    lnames = omf.names(records)[1:]
+    headers.append(omf.Record(omf.LNAMES, b"".join(_string(one) for one in lnames)))
+
+    seg_index = 0
+    for one in records:
+        if one.type & 0xFE != omf.SEGDEF:
+            continue
+        seg_index += 1
+        body = bytearray(one.body)
+        if seg_index == code_seg:
+            at = omf.segment_length_at(one)
+            struct.pack_into("<H", body, at, len(code) & 0xFFFF)
+            if len(code) == 0x10000:
+                body[0] |= 0x02
+            else:
+                body[0] &= ~0x02
+        headers.append(omf.Record(one.type, bytes(body)))
+    headers += [omf.Record(one.type, one.body) for one in records if one.type & 0xFE == omf.GRPDEF]
+    headers += [omf.Record(one.type, one.body) for one in records if one.type & 0xFE == omf.EXTDEF]
+
+    for one in records:
+        if one.type & 0xFE not in (omf.PUBDEF, omf.LINNUM):
+            continue
+        try:
+            changes = {
+                at: _mapped(struct.unpack_from("<H", one.body, at)[0], kept, moved)
+                for at in omf.code_offsets(one, code_seg)
+            }
+        except struct.error:
+            return "a record names a code offset past its own end"
+        if any(value is None for value in changes.values()):
+            return "a symbol or line names code that the layout did not place"
+        patched = omf.patched(one, {at: value for at, value in changes.items() if value is not None})
+        headers.append(omf.Record(patched.type, patched.body))
+
+    data: list[omf.Record] = []
+    for index in range(1, len(segments)):
+        if segments[index] is None:
+            continue
+        made = _fresh_segment(index, images[index], spans[index], placed[index])
+        if isinstance(made, str):
+            return made
+        data += made
+    end = next((one for one in reversed(records) if one.type & 0xFE == omf.MODEND), None)
+    if end is None:
+        return "the module has no MODEND"
+    fresh = [*headers, *data, omf.Record(end.type, end.body)]
+    return b"".join(one.emit() for one in fresh)
+
+
+def _merged(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    out: list[tuple[int, int]] = []
+    for lo, hi in sorted(spans):
+        if lo == hi:
+            continue
+        if out and lo <= out[-1][1]:
+            out[-1] = out[-1][0], max(out[-1][1], hi)
+        else:
+            out.append((lo, hi))
+    return out
+
+
+def _fresh_segment(
+    index: int,
+    image: bytes,
+    spans: list[tuple[int, int]],
+    fixups: list[tuple[int, omf.Fixup, int]],
+) -> list[omf.Record] | str:
+    """Canonical LEDATA/FIXUPP records for one semantic segment."""
+    widths = {0: 1, 1: 2, 2: 2, 3: 4, 4: 1, 5: 2, 9: 4, 11: 6, 13: 4}
+    if any(one.loc not in widths for _at, one, _disp in fixups):
+        return "unsupported relocation field width"
+    out: list[omf.Record] = []
+    fixups.sort(key=lambda item: item[0])
+    placed = 0
+    for span_lo, span_hi in spans:
+        start = span_lo
+        while start < span_hi:
+            stop = min(span_hi, start + CHUNK)
+            crossing = [at for at, one, _disp in fixups if at < stop < at + widths[one.loc]]
+            if crossing:
+                stop = min(crossing)
+            if stop <= start:
+                return f"segment {index}: a relocation field cannot fit in LEDATA"
+            out.append(omf.ledata_record(index, start, image[start:stop]))
+            mine = [(at, one, disp) for at, one, disp in fixups if start <= at < stop]
+            if mine:
+                out.append(omf.fixupp_record([_resolved_fixup(one, at - start, disp) for at, one, disp in mine]))
+            placed += len(mine)
+            start = stop
+    if placed != len(fixups):
+        return f"segment {index}: a fixup lies outside initialized data"
+    return out
+
+
+def _resolved_fixup(one: omf.Fixup, offset: int, disp: int) -> bytes:
+    """Encode a decoded fixup explicitly, with no dependency on THREAD state."""
+    if not 0 <= offset < 1024:
+        raise ValueError(f"a fixup offset is ten bits; {offset:#x} does not fit")
+    target_method = {"segment": 0, "group": 1, "external": 2}.get(one.target)
+    if target_method is None:
+        raise ValueError(f"unsupported fixup target {one.target}")
+    if isinstance(one.frame, omf.Thread):
+        frame_method, frame_index = one.frame.method, one.frame.index
+    elif isinstance(one.frame, int):
+        frame_method, frame_index = one.frame_method, one.frame
+    else:
+        frame_method, frame_index = 5, None  # target's frame
+    if frame_method is None:
+        frame_method = 5
+    lead = 0x80 | (0 if one.selfrel else 0x40) | one.loc << 2 | offset >> 8
+    body = bytearray([lead, offset & 0xFF, frame_method << 4 | target_method])
+    if frame_method < 3:
+        if frame_index is None:
+            raise ValueError("an explicit fixup frame has no index")
+        body += omf.as_index(frame_index)
+    body += omf.as_index(one.index)
+    body += struct.pack("<H", disp)
+    return bytes(body)
 
 
 def written(module: masm.Module, source: str) -> bytes:

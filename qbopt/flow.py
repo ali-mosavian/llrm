@@ -11,7 +11,7 @@ and a line here, not editing a driver.
     opt        MIR    -> MIR        transform.py, in transform.pipeline()
     lower      MIR    -> LIR        lower.py
     machine    LIR    -> LIR        the list below
-    write      LIR    -> bytes      objwrite.py
+    write      LIR    -> bytes      backend/omfwrite.py
 
 The machine half, against LLVM's own order:
 
@@ -38,11 +38,11 @@ from qbopt.backend import phielim
 from qbopt.backend import twoaddr
 from qbopt.backend import allocate
 from qbopt.backend import coalesce
+from qbopt.backend import omfwrite
 from qbopt.backend import peephole
 from qbopt.backend import prologue
 from qbopt.objectfile import module
 from qbopt.optimize import transform
-from qbopt.objectfile import objwrite
 from qbopt.backend import frame as frames
 from qbopt.frontend import blocks as split
 from qbopt.frontend.blocks import code_map
@@ -106,7 +106,7 @@ def run(data: bytes, native_fpu: bool = False, optimise: bool = True) -> tuple[b
 
     reached = frozenset(at for block in blocks for insn in block.insns for at in range(insn.at, insn.end))
     fields = frozenset(one.offset for one in omf.fixups(records) if one.seg == found.seg)
-    out = objwrite.written(found, done, records, {}, mapped.tables, fields, reached, native_fpu)
+    out = omfwrite.written_bc(found, done, records, {}, mapped.tables, fields, reached, native_fpu)
     return (data, out) if isinstance(out, str) else (out, "written")
 
 

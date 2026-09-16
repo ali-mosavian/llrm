@@ -382,8 +382,10 @@ def _keeps(one: lir.Insn, define: lir.Insn, cell: ir.Mem, holds: bool) -> bool:
     if one is define:
         return True
     written = _written(one, cell)
-    return holds and not _may_write(one.op, cell) and not any(
-        dest.addr is None or addresses(cell.addr, cell.width, dest.addr, dest.width) for dest in written
+    return (
+        holds
+        and not _may_write(one.op, cell)
+        and not any(dest.addr is None or addresses(cell.addr, cell.width, dest.addr, dest.width) for dest in written)
     )
 
 
@@ -416,10 +418,17 @@ def _written(one: lir.Insn, cell: ir.Mem) -> list[ir.Mem]:
     stores that spare the whole frame answer for it: `mov es:[bx+10],ax`
     cannot write a parameter whose frame nothing lets escape."""
     op = one.op
-    spared = (_in_frame(cell) and op is not None and bool(op.stores)
-              and all(mir.WHOLE_FRAME in ref.excludes for ref in op.stores))
-    return [dest for dest in (one.what.dests if one.what is not None else ())
-            if isinstance(dest, ir.Mem) and not (spared and dest.addr is not None and dest.addr.space is not Space.FRAME)]
+    spared = (
+        _in_frame(cell)
+        and op is not None
+        and bool(op.stores)
+        and all(mir.WHOLE_FRAME in ref.excludes for ref in op.stores)
+    )
+    return [
+        dest
+        for dest in (one.what.dests if one.what is not None else ())
+        if isinstance(dest, ir.Mem) and not (spared and dest.addr is not None and dest.addr.space is not Space.FRAME)
+    ]
 
 
 def _unchanged(body: lir.LirBody, define: lir.Insn, cell: ir.Mem, uses: list) -> bool:
@@ -572,7 +581,9 @@ def _frame_homes(body: lir.LirBody, values: frozenset[int]) -> dict[int, tuple[i
     result: dict[int, tuple[ir.Mem, int]] = {}
     for value in values:
         homes = candidates[value]
-        if not homes:
+        # The store reads the definition kept in a register; any other is
+        # renamed to a reload and never reaches the home.
+        if not homes or len(definitions[value]) != 1:
             continue
         eligible = []
         for _block, _index, store, home in homes:
@@ -593,9 +604,13 @@ def _holding(one: lir.Insn, value: int, home: ir.Mem, store: lir.Insn, holds: bo
     if value in one.defines:
         return False
     written = _written(one, home)
-    return holds and not _may_write(one.op, home) and not any(
-        cell is not home and (cell.addr is None or addresses(home.addr, home.width, cell.addr, cell.width))
-        for cell in written
+    return (
+        holds
+        and not _may_write(one.op, home)
+        and not any(
+            cell is not home and (cell.addr is None or addresses(home.addr, home.width, cell.addr, cell.width))
+            for cell in written
+        )
     )
 
 
@@ -683,8 +698,8 @@ class _Cells:
         return found if found is not None and found.width == width else None
 
 
-def _source(one, values, frame):
-    """Fold one untied spill source into arithmetic or a comparison."""
+def folded_source(one: lir.Insn, values: frozenset[int]) -> "ir.Held | None":
+    """The spilled source arithmetic or a comparison reads as its memory operand, needing no reload."""
     if one.group is not None or one.requires or one.delivers or one.clobbers:
         return None
     match one.what:
@@ -704,6 +719,15 @@ def _source(one, values, frame):
         or any(value in values and value not in {left.value, right.value} for value in one.uses)
     ):
         return None
+    return right
+
+
+def _source(one, values, frame):
+    """Fold one untied spill source into arithmetic or a comparison."""
+    right = folded_source(one, values)
+    if right is None:
+        return None
+    left = one.what.sources[0]
     cell = frame.cell(right.value, right.width)
     if cell is None:
         return None
@@ -855,6 +879,7 @@ def _renamed(one: lir.Insn, rename: dict[int, int]) -> lir.Insn:
             uses=tuple(rename.get(v, v) for v in one.uses),
             requires=_wants(one.requires, rename),
             delivers=_wants(one.delivers, rename),
+            widths=tuple((rename.get(value, value), width) for value, width in one.widths),
         )
     return replace(
         one,
@@ -869,6 +894,7 @@ def _renamed(one: lir.Insn, rename: dict[int, int]) -> lir.Insn:
         uses=tuple(rename.get(v, v) for v in one.uses),
         requires=_wants(one.requires, rename),
         delivers=_wants(one.delivers, rename),
+        widths=tuple((rename.get(value, value), width) for value, width in one.widths),
     )
 
 

@@ -82,6 +82,7 @@ def constrained(
     """
     pinned = {**body.pins, **(pinned or {})}
     from qbopt.backend import spiller
+
     constants = spiller._constants(body, frozenset(value for one in body.insns for value in one.defines))
 
     def source(value, width):
@@ -89,7 +90,7 @@ def constrained(
         return constant if constant is not None and constant.width == width else ir.Held(value, width)
 
     fresh = max(_next_value(body), max((getattr(value, "id", value) for value in pinned), default=0) + 1)
-    pins: "dict[int, Register_]" = {}
+    pins: dict[int, Register_] = {}
     blocks = []
     for block in body.blocks:
         insns: list[lir.Insn] = []
@@ -138,8 +139,8 @@ def constrained(
             before, after, swap = [], [], {}
             input_values, output_values = {}, {}
             what = one.what
-            dests: "list[object]" = list(what.dests) if what is not None else []
-            sources: "list[object]" = list(what.sources) if what is not None else []
+            dests: list[object] = list(what.dests) if what is not None else []
+            sources: list[object] = list(what.sources) if what is not None else []
             defines, uses = list(one.defines), list(one.uses)
             for value, (register, where) in sorted(wanted.items()):
                 held = ir.Held(fresh, widths.get(value) or _width(one, value))
@@ -184,6 +185,7 @@ def constrained(
                 output_values[value] = held.value
                 fresh += 1
             insns += before
+
             def address(operand):
                 if not isinstance(operand, ir.Mem):
                     return operand
@@ -194,8 +196,9 @@ def constrained(
                     one,
                     what=what
                     if what is None
-                    else ir.Semantics(what.op, what.name, tuple(map(address, dests)),
-                                      tuple(map(address, sources)), what.target),
+                    else ir.Semantics(
+                        what.op, what.name, tuple(map(address, dests)), tuple(map(address, sources)), what.target
+                    ),
                     defines=tuple(defines),
                     uses=tuple(uses),
                     # Rewritten onto the fresh values rather than
@@ -207,10 +210,14 @@ def constrained(
                     # spiller replaces that value between rounds. Dropped,
                     # the restore's reload arrived with no pin at all and
                     # the idiom pushed whatever eax held.
-                    requires=tuple((ir.Held(input_values.get(held.value, held.value), held.width), register)
-                                   for held, register in one.requires),
-                    delivers=tuple((ir.Held(output_values.get(held.value, held.value), held.width), register)
-                                   for held, register in one.delivers),
+                    requires=tuple(
+                        (ir.Held(input_values.get(held.value, held.value), held.width), register)
+                        for held, register in one.requires
+                    ),
+                    delivers=tuple(
+                        (ir.Held(output_values.get(held.value, held.value), held.width), register)
+                        for held, register in one.delivers
+                    ),
                 )
             )
             insns += after
@@ -229,7 +236,7 @@ def required(body: lir.LirBody) -> "dict[int, Register_]":
     again before every attempt, the new value is pinned where the old one
     was.
     """
-    out: "dict[int, Register_]" = {}
+    out: dict[int, Register_] = {}
     for block in body.blocks:
         for one in block.insns:
             for value, (register, _where) in _wanted(one).items():
@@ -296,7 +303,7 @@ def _move(beside: lir.Insn, into: "ir.Held", out_of: "ir.Held | ir.Imm") -> lir.
         defines=(into.value,),
         uses=(out_of.value,) if isinstance(out_of, ir.Held) else (),
         # The operation it stands beside, the way spiller.py's store and
-        # phielim.py's copy do: objwrite re-derives MIR from LIR and reads
+        # phielim.py's copy do: omfwrite re-derives MIR from LIR and reads
         # `op` for every instruction, so `None` there is not a valid
         # instruction -- `replace() should be called on dataclass
         # instances`, with the op it was rebuilding set to None.

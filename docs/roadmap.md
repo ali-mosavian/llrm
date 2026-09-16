@@ -310,10 +310,10 @@ now has every body layable**; it was 42 when this was written.
       targets resolved, and all 4,846 fixups in the span carried. 34 of 125
       objects; the rest refuse on an op `select.py` cannot emit, or on data
       BC put inline
-- [x] turn that image into records — `relocate.as_records`, `qbopt/wholeseg.py`.
-      The code block goes where the LAST code LEDATA stood: OMF numbers
-      externals by EXTDEF order, and a block written at the first one names
-      externals whose EXTDEF has not been read, which LINK rejects outright
+- [x] turn that image into a fresh object — `backend/omfwrite.py`, shared
+      with the C frontend. BC's OBJ supplies decoded declarations, data and
+      relocation semantics; none of its record stream is reused as an output
+      template. EXTDEFs are emitted before all LEDATA/FIXUPP records.
 - [x] **MIR-written code links and runs** — `arith`, `cmpord`, `flags` and
       `nots` on PDS /G2 and QuickBASIC /O, in `tests/test_e2e.py`
 - [x] the ON GOTO tables BC puts between instructions — carried verbatim

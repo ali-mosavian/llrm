@@ -17,8 +17,8 @@ from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.backend import spiller
 from qbopt.objectfile.module import Addr
-from qbopt.objectfile.module import Space
 from qbopt.backend import frame as frames
+from qbopt.objectfile.module import Space
 
 
 def _move(into, out_of, group=None, at=0x100) -> lir.Insn:
@@ -44,25 +44,36 @@ def test_slot_is_as_wide_as_the_widest_use_of_its_value():
     """snd_mix_frame spilled a value first seen as a word, then stored all four
     bytes of it: `mov dword ptr [bp-2], eax` over the saved BP, and a 4-byte
     store into `n`'s word ran into `endt`, so the mixer never returned."""
+
     def op(name, into, width, *sources):
-        what = ir.Semantics(ir.Operation.MOVE if name == "mov" else ir.Operation.BINARY, name,
-                            (ir.Held(into, width),), tuple(ir.Held(one, width) for one in sources))
-        return lir.Insn(at=0x100, covers=(0x100, 0x100), what=what, defines=(into,),
-                        uses=tuple(dict.fromkeys(sources)), op=None)
+        what = ir.Semantics(
+            ir.Operation.MOVE if name == "mov" else ir.Operation.BINARY,
+            name,
+            (ir.Held(into, width),),
+            tuple(ir.Held(one, width) for one in sources),
+        )
+        return lir.Insn(
+            at=0x100, covers=(0x100, 0x100), what=what, defines=(into,), uses=tuple(dict.fromkeys(sources)), op=None
+        )
 
     body = _body(op("mov", 1, 2, 3), op("mov", 2, 2, 3), op("add", 1, 4, 1, 3), op("add", 2, 2, 2, 3))
     frame = frames.Frame(0)
     got, _made = spiller.spilled(body, frozenset({1, 2}), frame)
-    cells = {(where.addr.disp, where.width) for one in got.insns if one.what is not None
-             for where in (*one.what.dests, *one.what.sources)
-             if isinstance(where, ir.Mem) and where.addr is not None and where.addr.space is Space.FRAME}
+    cells = {
+        (where.addr.disp, where.width)
+        for one in got.insns
+        if one.what is not None
+        for where in (*one.what.dests, *one.what.sources)
+        if isinstance(where, ir.Mem) and where.addr is not None and where.addr.space is Space.FRAME
+    }
     assert cells and all(-frame.size <= disp and disp + width <= 0 for disp, width in cells), (cells, frame.size)
     spans = {disp: max(width for other, width in cells if other == disp) for disp, _ in cells}
     assert all(a + spans[a] <= b or b + spans[b] <= a for a in spans for b in spans if a != b), spans
 
 
-@pytest.mark.parametrize("between", ["call sparing the frame", "call", "call unstated",
-                                     "pointer store sparing the frame", "pointer store"])
+@pytest.mark.parametrize(
+    "between", ["call sparing the frame", "call", "call unstated", "pointer store sparing the frame", "pointer store"]
+)
 def test_parameter_is_reloaded_across_what_spares_the_frame(between):
     """ent_move_plats copied `world`, loaded from [bp+6], to a slot of its own:
     a call, and a store through a pointer like `mov es:[bx+10],ax`, were taken
@@ -72,67 +83,105 @@ def test_parameter_is_reloaded_across_what_spares_the_frame(between):
     from qbopt.model import mir
 
     param = ir.Mem(Addr(Space.FRAME, 6), 2, Register.BP, 0, 2)
-    load = lir.Insn(at=0x100, covers=(0x100, 0x100), op=None, defines=(1,), uses=(),
-                    what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),), (param,)))
+    load = lir.Insn(
+        at=0x100,
+        covers=(0x100, 0x100),
+        op=None,
+        defines=(1,),
+        uses=(),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),), (param,)),
+    )
     spared = (mir.WHOLE_FRAME,) if between.endswith("sparing the frame") else ()
     if between.startswith("call"):
         reach = () if between == "call unstated" else (mir.MemRef(None, 4, excludes=spared),)
         site = mir.Op(0x101, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.CALL, stores=reach)
-        middle = lir.Insn(at=0x101, covers=(0x101, 0x101), op=site, defines=(), uses=(),
-                          what=ir.Semantics(ir.Operation.CALL, "call", (), ()), clobbers=frozenset({Register.EAX}))
+        middle = lir.Insn(
+            at=0x101,
+            covers=(0x101, 0x101),
+            op=site,
+            defines=(),
+            uses=(),
+            what=ir.Semantics(ir.Operation.CALL, "call", (), ()),
+            clobbers=frozenset({Register.EAX}),
+        )
     else:
         base = mir.Value(9, 0)
         ref = mir.MemRef(Addr(Space.LITERAL, 10), 2, base=base, space=Space.LITERAL, base_width=2, excludes=spared)
         site = mir.Op(0x101, ir.Operation.NOTHING, "", (), (base,), kind=mir.Kind.STORE, stores=(ref,))
         cell = ir.Mem(Addr(Space.LITERAL, 10), 2, Register.BX, 10, 2)
-        middle = lir.Insn(at=0x101, covers=(0x101, 0x101), op=site, defines=(), uses=(),
-                          what=ir.Semantics(ir.Operation.MOVE, "mov", (cell,), (ir.Imm(0, 2),)))
+        middle = lir.Insn(
+            at=0x101,
+            covers=(0x101, 0x101),
+            op=site,
+            defines=(),
+            uses=(),
+            what=ir.Semantics(ir.Operation.MOVE, "mov", (cell,), (ir.Imm(0, 2),)),
+        )
     got = _out(_body(load, middle, _add(2, 1, at=0x102)), {1})
-    slots = [where for one in got if one.what is not None for where in one.what.dests
-             if isinstance(where, ir.Mem) and where.addr is not None and where.addr.space is Space.FRAME]
+    slots = [
+        where
+        for one in got
+        if one.what is not None
+        for where in one.what.dests
+        if isinstance(where, ir.Mem) and where.addr is not None and where.addr.space is Space.FRAME
+    ]
     assert (slots == []) == bool(spared), [one.what for one in got]
 
 
 def test_nbody_reads_spilled_position_directly_in_subtraction():
     """NBODY loaded [BP-2Ch] into EAX solely for SUB ESI,EAX on every force pair."""
     from qbopt import wholeseg
+
     states = []
+
     def watch(stage, name, body):
         if stage == "peephole" and body.entry == 0x30:
             states.append(body)
+
     result = wholeseg.emitted(Path("fixtures/bench/nbody-v-g3.obj").read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
-    assert any(one.at == 0x122 and one.what is not None and one.what.name == "sub"
-               and isinstance(one.what.sources[-1], ir.Mem) for one in states[0].insns)
+    assert any(
+        one.at == 0x122 and one.what is not None and one.what.name == "sub" and isinstance(one.what.sources[-1], ir.Mem)
+        for one in states[0].insns
+    )
 
 
 def test_nbody_compares_spilled_bound_without_scratch_reload():
     """NBODY reloaded its saved step bound into EBX solely for the outer-loop CMP."""
     from qbopt import wholeseg
+
     states = []
+
     def watch(stage, name, body):
         if stage == "peephole" and body.entry == 0x30:
             states.append(body)
+
     result = wholeseg.emitted(Path("fixtures/bench/nbody-v-g3.obj").read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
-    header = next(block for block in states[0].blocks if block.at == 0x2f0)
-    assert any(one.what is not None and one.what.name == "cmp" and isinstance(one.what.sources[-1], ir.Mem)
-               for one in header.insns)
+    header = next(block for block in states[0].blocks if block.at == 0x2F0)
+    assert any(
+        one.what is not None and one.what.name == "cmp" and isinstance(one.what.sources[-1], ir.Mem)
+        for one in header.insns
+    )
 
 
 def test_nbody_loop_initializers_do_not_reload_a_spilled_zero():
     """NBODY stored zero at [BP-1Ch] and read it for five separate loop initializers."""
     from qbopt import wholeseg
+
     states = []
+
     def watch(stage, name, body):
         if stage == "peephole" and body.entry == 0x30:
             states.append(body)
+
     result = wholeseg.emitted(Path("fixtures/bench/nbody-v-g3.obj").read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
-    initializer = next(block for block in states[0].blocks if block.at == 0x5f)
-    assert not any(one.at == 0x5f and one.what is not None
-                   and any(isinstance(dest, ir.Mem) for dest in one.what.dests)
-                   for one in initializer.insns)
+    initializer = next(block for block in states[0].blocks if block.at == 0x5F)
+    assert not any(
+        one.at == 0x5F and one.what is not None and any(isinstance(dest, ir.Mem) for dest in one.what.dests)
+        for one in initializer.insns
+    )
 
 
 @pytest.mark.parametrize("width", [2, 4])
@@ -140,9 +189,11 @@ def test_nbody_loop_initializers_do_not_reload_a_spilled_zero():
 def test_untied_spill_source_is_read_directly_by_arithmetic(name, width):
     """NBODY reloaded spilled position/acceleration operands into scratch registers before arithmetic."""
     from dataclasses import replace
+
     op = _add(1, 2)
-    op = replace(op, what=replace(op.what, name=name, dests=(ir.Held(1, width),),
-                                 sources=(ir.Held(1, width), ir.Held(2, width))))
+    op = replace(
+        op, what=replace(op.what, name=name, dests=(ir.Held(1, width),), sources=(ir.Held(1, width), ir.Held(2, width)))
+    )
     result = _out(_body(op), {2})
     assert len(result) == 1
     assert result[0].what.sources[0] == ir.Held(1, width)
@@ -171,10 +222,13 @@ def test_repeated_operand_reloads_a_spill_only_once() -> None:
         at=0x57,
         covers=(0x57, 0x5A),
         what=ir.Semantics(
-            ir.Operation.BINARY, "imul", (ir.Held(2, 2),),
+            ir.Operation.BINARY,
+            "imul",
+            (ir.Held(2, 2),),
             (ir.Held(1, 2), ir.Held(1, 2), ir.Imm(6, 2)),
         ),
-        defines=(2,), uses=(1, 1),
+        defines=(2,),
+        uses=(1, 1),
     )
     result = _out(_body(multiply), {1})
     assert len(result) == 2
@@ -184,11 +238,14 @@ def test_repeated_operand_reloads_a_spill_only_once() -> None:
     assert product.what.sources[:2] == reload.what.dests * 2
 
 
-@pytest.mark.parametrize("name, expected", [("add", 15000), ("sub", 9000), ("and", 12000 & 3000),
-                                          ("or", 12000 | 3000), ("xor", 12000 ^ 3000)])
+@pytest.mark.parametrize(
+    "name, expected",
+    [("add", 15000), ("sub", 9000), ("and", 12000 & 3000), ("or", 12000 | 3000), ("xor", 12000 ^ 3000)],
+)
 def test_two_spilled_operands_keep_the_accumulator_value(name, expected) -> None:
     """LNGMXX printed 169330 instead of 142900 after a tied spill discarded its loaded accumulator."""
     from dataclasses import replace
+
     frame = frames.Frame(0)
     op = _add(1, 2)
     op = replace(op, what=replace(op.what, name=name))
@@ -197,19 +254,26 @@ def test_two_spilled_operands_keep_the_accumulator_value(name, expected) -> None
     for one in body.insns:
         args = [values[arg] for arg in one.what.sources]
         match one.what.name:
-            case "mov": result = args[0]
-            case "add": result = args[0] + args[1]
-            case "sub": result = args[0] - args[1]
-            case "and": result = args[0] & args[1]
-            case "or": result = args[0] | args[1]
-            case "xor": result = args[0] ^ args[1]
-            case _: pytest.fail(str(one.what))
-        values[one.what.dests[0]] = result & 0xffff
+            case "mov":
+                result = args[0]
+            case "add":
+                result = args[0] + args[1]
+            case "sub":
+                result = args[0] - args[1]
+            case "and":
+                result = args[0] & args[1]
+            case "or":
+                result = args[0] | args[1]
+            case "xor":
+                result = args[0] ^ args[1]
+            case _:
+                pytest.fail(str(one.what))
+        values[one.what.dests[0]] = result & 0xFFFF
     assert values[frame.cell(1, 2)] == expected
     assert values[frame.cell(2, 2)] == 3000
 
 
-@pytest.mark.xfail(reason='both spilled operands are reloaded into scratch registers', strict=True)
+@pytest.mark.xfail(reason="both spilled operands are reloaded into scratch registers", strict=True)
 def test_two_spilled_operands_do_not_need_two_scratch_registers():
     """LNGMXX's two spilled operands must retain the accumulator but need only one scratch."""
     result = _out(_body(_add(1, 2)), {1, 2})
@@ -221,8 +285,9 @@ def test_two_spilled_operands_do_not_need_two_scratch_registers():
 @pytest.mark.parametrize("both", [False, True])
 def test_spilled_compare_preserves_order_flags_and_frame_address(width, both):
     """NBODY's spilled bound must not swap CMP operands or inherit its old global relocation."""
-    op = lir.Insn(0, (0, 3), ir.Semantics(ir.Operation.COMPARE, "cmp", (),
-                                        (ir.Held(1, width), ir.Held(2, width))), (3,), (1, 2))
+    op = lir.Insn(
+        0, (0, 3), ir.Semantics(ir.Operation.COMPARE, "cmp", (), (ir.Held(1, width), ir.Held(2, width))), (3,), (1, 2)
+    )
     result = _out(_body(op), {1, 2} if both else {2})
     assert len(result) == (2 if both else 1)
     comparison = result[-1]
@@ -257,8 +322,7 @@ def test_spilled_constant_is_rematerialized_without_a_frame_slot() -> None:
 @pytest.mark.parametrize("destination_spilled", [False, True])
 def test_grouped_constant_rematerializes_without_splitting_parallel_copy(destination_spilled):
     """NBODY's literal zero was spilled because its loop initializers belonged to parallel copies."""
-    constant = lir.Insn(0, (0, 0), ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),),
-                                              (ir.Imm(0, 2),)), (1,), ())
+    constant = lir.Insn(0, (0, 0), ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),), (ir.Imm(0, 2),)), (1,), ())
     body = _body(constant, _move(2, 1, group=7), _move(3, 4, group=7))
     frame = frames.Frame(0)
     done, _ = spiller.spilled(body, frozenset({1, 2} if destination_spilled else {1}), frame)
@@ -274,8 +338,7 @@ def test_grouped_constant_rematerializes_without_splitting_parallel_copy(destina
 
 def test_parallel_copy_destination_is_not_mistaken_for_a_constant():
     """A grouped assignment to the same value invalidates a literal seed."""
-    constant = lir.Insn(0, (0, 0), ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),),
-                                              (ir.Imm(0, 2),)), (1,), ())
+    constant = lir.Insn(0, (0, 0), ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),), (ir.Imm(0, 2),)), (1,), ())
     body = _body(constant, _move(1, 4, group=7), _move(2, 1, group=7))
     assert spiller._constants(body, frozenset({1})) == {}
 
@@ -283,16 +346,25 @@ def test_parallel_copy_destination_is_not_mistaken_for_a_constant():
 @pytest.mark.parametrize("redefined", [False, True])
 def test_copied_constant_rematerializes_only_with_a_unique_definition(redefined):
     """A copy of MATRIX's invariant 20 must not need a stack reload; a later redefinition invalidates it."""
-    constant = lir.Insn(at=0, covers=(0, 3),
-                        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),), (ir.Imm(20, 2),)),
-                        defines=(1,), uses=())
+    constant = lir.Insn(
+        at=0,
+        covers=(0, 3),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),), (ir.Imm(20, 2),)),
+        defines=(1,),
+        uses=(),
+    )
     operations = [constant, _move(2, 1), _move(3, 2)]
     if redefined:
         operations.append(_add(1, 4))
     operations.append(_add(5, 3))
     result = _out(_body(*operations), {3})
-    memory = [operand for one in result if one.what for operand in (*one.what.dests, *one.what.sources)
-              if isinstance(operand, ir.Mem)]
+    memory = [
+        operand
+        for one in result
+        if one.what
+        for operand in (*one.what.dests, *one.what.sources)
+        if isinstance(operand, ir.Mem)
+    ]
     assert bool(memory) is redefined
     if not redefined:
         assert result[-2].what.sources == (ir.Imm(20, 2),)
@@ -392,6 +464,7 @@ def test_a_grouped_move_with_both_ends_spilled_stays_grouped() -> None:
 def test_an_unhandled_arithmetic_form_keeps_its_reload() -> None:
     """Carry-dependent arithmetic is outside the explicit spill-source folding forms."""
     from dataclasses import replace
+
     add = _add(1, 2)
     got = _out(_body(replace(add, what=replace(add.what, name="adc"))), {2})
     assert len(got) == 2, [one.what.name for one in got]
@@ -409,7 +482,7 @@ def _binary(name: str, into: int, other: int, at: int = 0x200) -> lir.Insn:
     return lir.Insn(at=at, covers=(at, at + 2), what=what, defines=(into,), uses=(into, other), op=None)
 
 
-@pytest.mark.xfail(reason='the tied value is reloaded and stored around the add, not updated in memory', strict=True)
+@pytest.mark.xfail(reason="the tied value is reloaded and stored around the add, not updated in memory", strict=True)
 def test_a_tied_value_is_spilled_into_the_operand_itself() -> None:
     """pressx spilled 207, then 212, then 215, at one `add`, two
     instructions added every round. Spilling a value an instruction both
@@ -523,18 +596,18 @@ def test_the_body_that_never_settled_allocates() -> None:
     """
     from pathlib import Path
 
-    from qbopt.objectfile import omf
     from qbopt import flow
-    from qbopt.backend import lower
-    from qbopt.objectfile import module
-    from qbopt.backend import phielim
     from qbopt.abi import runtime
+    from qbopt.backend import lower
+    from qbopt.objectfile import omf
+    from qbopt.backend import phielim
     from qbopt.backend import twoaddr
     from qbopt.backend import allocate
     from qbopt.backend import coalesce
+    from qbopt.objectfile import module
     from qbopt.model import mir as raise_
-    from qbopt.frontend import blocks as split
     from qbopt.backend import frame as frames
+    from qbopt.frontend import blocks as split
     from qbopt.frontend.blocks import code_map
 
     records = omf.parse(Path("fixtures/omf/nested-p-g2.obj").read_bytes())
@@ -581,8 +654,8 @@ def test_nbody_accumulates_in_the_slots_it_spills() -> None:
     `mov eax,[s] / mov [s],ecx / add [s],eax`.
     """
     from iced_x86 import OpKind
-    from iced_x86 import Register
     from iced_x86 import Mnemonic
+    from iced_x86 import Register
     from test_observers import _nbody_inner_loop
 
     loop = _nbody_inner_loop()
@@ -605,7 +678,6 @@ def test_no_qbdemo_loop_compares_through_a_reload_of_a_cell_it_adds_to() -> None
     """
     from iced_x86 import OpKind
     from iced_x86 import Mnemonic
-
     from test_observers import _loops
 
     def cell(one):
@@ -624,6 +696,88 @@ def test_no_qbdemo_loop_compares_through_a_reload_of_a_cell_it_adds_to() -> None
         assert all(cell(one) != cell(loaded) for one in updated), f"{loaded} / {compared}"
 
 
+def test_a_value_defined_twice_keeps_its_increment_in_its_home() -> None:
+    """UNWHITEFADE's frame counter, coalesced with its initial zero, lost its increment.
+
+    Homed in its own local, the increment was renamed to a reload while the
+    store kept reading the value, whose only definition left was the zero.
+    The next round rebuilt that zero at the store and the fade never ended.
+    """
+    from iced_x86 import Register
+
+    home = ir.Mem(Addr(Space.FRAME, -0x2A), 2, Register.BP, -0x2A, 1)
+
+    def insn(at, what, defines=(), uses=()):
+        return lir.Insn(at, (at, at + 2), what, defines, uses)
+
+    body = lir.LirBody(
+        "one",
+        0,
+        (
+            lir.LirBlock(
+                0,
+                (
+                    insn(0, ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),), (ir.Imm(0, 2),)), (1,)),
+                    insn(2, ir.Semantics(ir.Operation.JUMP, "jmp", (), (), 0x20)),
+                ),
+                succ=(0x20,),
+            ),
+            lir.LirBlock(
+                0x10,
+                (
+                    insn(0x10, ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Held(1, 2),)), (), (1,)),
+                    insn(
+                        0x12,
+                        ir.Semantics(ir.Operation.BINARY, "add", (ir.Held(1, 2),), (ir.Held(1, 2), ir.Imm(1, 2))),
+                        (1,),
+                        (1,),
+                    ),
+                ),
+                succ=(0x20,),
+            ),
+            lir.LirBlock(
+                0x20,
+                (
+                    insn(0x20, ir.Semantics(ir.Operation.MOVE, "mov", (home,), (ir.Held(1, 2),)), (), (1,)),
+                    insn(
+                        0x22, ir.Semantics(ir.Operation.COMPARE, "cmp", (), (ir.Held(1, 2), ir.Imm(5, 2))), (9,), (1,)
+                    ),
+                    insn(0x24, ir.Semantics(ir.Operation.BRANCH, "jl", (), (), 0x10), (), (9,)),
+                ),
+                succ=(0x10, 0x30),
+            ),
+            lir.LirBlock(0x30, (insn(0x30, ir.Semantics(ir.Operation.RETURN, "ret", (), ())),), succ=()),
+        ),
+        origin={},
+        pins={},
+    )
+    done, _made = spiller.spilled(body, frozenset({1}), frames.Frame(0))
+    held, memory, pushed = {}, {}, []
+
+    def read(operand):
+        if isinstance(operand, ir.Imm):
+            return operand.value
+        if isinstance(operand, ir.Mem):
+            return memory[operand.addr.disp]
+        return held[operand.value]
+
+    blocks = {block.at: block for block in done.blocks}
+    for at in (0, 0x20, 0x10, 0x20, 0x10, 0x20):
+        for one in blocks[at].insns:
+            what = one.what
+            if what.op in (ir.Operation.MOVE, ir.Operation.BINARY):
+                result = sum(read(source) for source in what.sources)
+                dest = what.dests[0]
+                if isinstance(dest, ir.Mem):
+                    memory[dest.addr.disp] = result
+                else:
+                    held[dest.value] = result
+            elif what.op is ir.Operation.PUSH:
+                pushed.append(read(what.sources[0]))
+    assert pushed == [0, 1]
+    assert memory[-0x2A] == 2
+
+
 def test_a_stable_load_stored_to_a_local_keeps_its_store_defined() -> None:
     """A value reloadable from its cell and homed in a local lost the value its store read.
 
@@ -637,9 +791,15 @@ def test_a_stable_load_stored_to_a_local_keeps_its_store_defined() -> None:
     def cell(disp):
         return ir.Mem(Addr(Space.FRAME, disp), 2, Register.BP, disp, 1)
 
-    load = lir.Insn(0x10, (0x10, 0x13), ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),), (cell(-0x3C),)), (1,), ())
-    store = lir.Insn(0x13, (0x13, 0x16), ir.Semantics(ir.Operation.MOVE, "mov", (cell(-0x4E),), (ir.Held(1, 2),)), (), (1,))
-    limit = lir.Insn(0x16, (0x16, 0x18), ir.Semantics(ir.Operation.COMPARE, "cmp", (), (ir.Held(2, 2), ir.Held(1, 2))), (3,), (2, 1))
+    load = lir.Insn(
+        0x10, (0x10, 0x13), ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),), (cell(-0x3C),)), (1,), ()
+    )
+    store = lir.Insn(
+        0x13, (0x13, 0x16), ir.Semantics(ir.Operation.MOVE, "mov", (cell(-0x4E),), (ir.Held(1, 2),)), (), (1,)
+    )
+    limit = lir.Insn(
+        0x16, (0x16, 0x18), ir.Semantics(ir.Operation.COMPARE, "cmp", (), (ir.Held(2, 2), ir.Held(1, 2))), (3,), (2, 1)
+    )
     out = _out(_body(load, store, limit), {1})
     defined = {value for one in out for value in one.defines}
     assert all(value in defined for one in out for value in one.uses if value != 2), [str(one.what) for one in out]

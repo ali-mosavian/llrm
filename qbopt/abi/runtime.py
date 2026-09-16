@@ -1142,6 +1142,11 @@ def barrier(routine: Contract) -> bool:
     return routine.enters_user_code or routine.error_handling or not routine.established
 
 
+def handles_errors(routines) -> bool:
+    """Whether the module has an ON ERROR handler, so a raised error can reach user code."""
+    return any(routine.error_handling for routine in routines)
+
+
 # helpi4.asm is the model the four shipped contracts in calls.py and stack.py
 # were read off, and nothing below contradicts them. cProc's parm declarations
 # give the cleanup directly: cEnd emits `ret <parameter bytes>` under the PL/M

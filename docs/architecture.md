@@ -40,7 +40,7 @@ flowchart LR
         Lower["Instruction selection<br/>backend/lower.py"] --> LIR["LirBody<br/>virtual values + constraints"]
         LIR --> Machine["Machine phases<br/>flow.machine()"]
         Machine --> Physical["Allocated LIR<br/>physical registers + frame slots"]
-        Physical --> Write["Select, layout, relocate<br/>objectfile/objwrite.py"]
+        Physical --> Write["Select, layout, fresh OMF<br/>backend/omfwrite.py"]
     end
 
     Write -->|"OMF .OBJ"| Link["LINK.EXE"]
@@ -416,7 +416,7 @@ the MIR boundary.
 | `allocate.py` | `RegAllocGreedy` + `VirtRegRewriter` | IRA + LRA |
 | `spiller.py` | `InlineSpiller` | LRA spill/reload insertion |
 | `prologue.py` | `PrologEpilogInserter` | prologue/epilogue RTL passes |
-| `asm.py`, `select.py`, `objwrite.py` | MC assembler, code emitter and object writer | final / assembler output |
+| `asm.py`, `select.py`, `omfwrite.py` | MC assembler, code emitter and object writer | final / assembler output |
 
 Machine-specific ideas copied from either compiler belong in lowering, target
 description, allocation or peephole. Their high-level proofs and value
@@ -430,18 +430,18 @@ segment lengths and possibly LEDATA boundaries.
 
 ```mermaid
 flowchart TD
-    Bodies["allocated LIR bodies"] --> Bridge["objwrite._as_mir<br/>temporary layout compatibility seam"]
+    Bodies["allocated LIR bodies"] --> Bridge["omfwrite._as_mir<br/>temporary layout compatibility seam"]
     Bridge --> Select["select.py<br/>encode instruction forms"]
     Select --> Layout["layout.py / asm.py<br/>order bodies, choose lengths,<br/>relax branches to a fixed point"]
     Tables["inline tables and preserved padding"] --> Layout
     Layout --> Image["new code image + movement map"]
 
-    Original["original OMF records"] --> Relocate["relocate.as_records"]
-    Image --> Relocate
-    Relocate --> Fix["move FIXUPP sites and zero addends"]
-    Relocate --> Symbols["move PUBDEF, LINNUM and entry offsets"]
-    Relocate --> Segment["rewrite SEGDEF length and LEDATA spans"]
-    Fix --> Output["serialized output .OBJ"]
+    Frontend["BC object declarations,<br/>data, symbols and relocations"] --> Write["omfwrite.py<br/>fresh OMF serialization"]
+    Image --> Write
+    Write --> Fix["emit explicit FIXUPP sites and zero addends"]
+    Write --> Symbols["emit moved PUBDEF and LINNUM offsets"]
+    Write --> Segment["emit SEGDEF and fresh LEDATA spans"]
+    Fix --> Output["new output .OBJ"]
     Symbols --> Output
     Segment --> Output
 ```
@@ -456,9 +456,9 @@ Important invariants:
 - LINK adds the encoded addend to a fixup target, so a generated relocated field
   is zero-filled before its fixup is applied.
 - A branch target may not land inside a replaced region.
-- A phi reaching `objwrite` is a hard bug: phis have no encoding.
+- A phi reaching `omfwrite` is a hard bug: phis have no encoding.
 
-`objwrite._as_mir` is explicitly a compatibility seam: layout still consumes
+`omfwrite._as_mir` is explicitly a compatibility seam: layout still consumes
 MIR-shaped operations after LIR has already been allocated. The intended end
 state is for layout and selection to consume `LirBody` directly, removing this
 back-conversion and the duplicate assignment channel.
@@ -1111,7 +1111,7 @@ knowledge:
    fixup identity and `MirBody.origin`). Passes should see only the parts needed
    to preserve semantics; byte/fixup provenance belongs in a side map owned by
    lowering and emission.
-3. `objwrite._as_mir()` converts allocated LIR back into MIR-shaped operations
+3. `omfwrite._as_mir()` converts allocated LIR back into MIR-shaped operations
    because layout has not yet been made a direct LIR consumer.
 4. Target costing is narrower than LLVM/GCC's formula selection. Loop strength
    reduction and unrolling need register-pressure and target-cost comparisons,

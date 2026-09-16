@@ -1,11 +1,10 @@
 """
 An object whose code segment this pass wrote, rather than edited.
 
-Every other path in qbopt patches BC's own bytes in place -- a region here,
-an instruction there -- and lives with the layout BC chose. This one does
-not: `layout.rebuild` places every body afresh and `relocate.as_records`
-writes the records to match, so chunk boundaries, branch displacements and
-fixup offsets are all produced rather than preserved.
+BC's object is a frontend, not an output template. `layout.rebuild` places
+every body afresh and `backend.omfwrite` serializes a complete new object, so
+record boundaries, branch displacements and fixup offsets are all produced
+rather than preserved. The C frontend converges on that same writer.
 
 That is what per-body splicing could not do. Fitting a laid-out body back
 into BC's own layout works for 1 of the corpus's 171 bodies -- the rest
@@ -41,7 +40,7 @@ class Emission(StrEnum):
     """Which emitter produced an object, or that none did.
 
     `rebuilt` says only whether it worked, and two emitters are coming:
-    the one below, from MIR, and objwrite.py's, from LIR. A caller that
+    the one below, from MIR, and omfwrite.py's, from LIR. A caller that
     has to tell them apart -- one whose output is a program rather than a
     body, and must not be raised again -- cannot ask a boolean, and "it
     worked" would treat a fallback as the other's own output.
@@ -303,7 +302,7 @@ def _through_lir(
     """Every body lowered, placed and written, or why one could not be.
 
     `qbopt/flow.py` names the phases and their order; this runs them and
-    hands the result to objwrite.py, which converges on the same layout
+    hands the result to omfwrite.py, which converges on the same layout
     and relocation the MIR path uses. A refusal comes back as its own
     words rather than as a fallback taken quietly -- what refuses and why
     is the measurement the phase order is judged by.
@@ -314,10 +313,10 @@ def _through_lir(
     from qbopt.backend import parcopy
     from qbopt.backend import spiller
     from qbopt.backend import allocate
+    from qbopt.backend import omfwrite
     from qbopt.backend import pointers
     from qbopt.backend import prologue
     from qbopt.analysis import noreturn
-    from qbopt.objectfile import objwrite
     from qbopt.objectfile.module import Addr
     from qbopt.backend import frame as frames
     from qbopt.objectfile.module import Space
@@ -391,7 +390,7 @@ def _through_lir(
             # cannot place.
             return f"{name}: Tangled: {short}"
         done.append(low)
-    return objwrite.written(found, done, records, {}, mapped.tables, fields, reached, native_fpu)
+    return omfwrite.written_bc(found, done, records, {}, mapped.tables, fields, reached, native_fpu)
 
 
 REBUILT = "rebuilt"

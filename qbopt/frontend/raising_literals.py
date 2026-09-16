@@ -76,7 +76,7 @@ def initialized(
         return body
     protected = _numeric_ranges(values, data, ambiguous, fixups, module.escaped(found), far_strings)
     selected = runtime.for_module(found) if contracts is None else contracts
-    handles_errors = any(contract.error_handling for contract in selected.values())
+    handles_errors = runtime.handles_errors(selected.values())
 
     def annotate(op: mir.Op) -> mir.Op:
         if op.kind is not mir.Kind.CALL or not protected:

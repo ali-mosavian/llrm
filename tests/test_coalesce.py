@@ -301,6 +301,30 @@ def test_a_join_that_would_make_a_class_uncolourable_is_refused() -> None:
     assert low, "the allocator refused the body"
 
 
+@pytest.mark.parametrize("pinned", [False, True])
+def test_a_pinned_neighbour_does_not_stop_georges_join(pinned) -> None:
+    """NBODYS's loop counters went `mov si,dx / inc si / cmp si,5 / mov dx,si`.
+
+    Briggs refused the counter's copy and George was never asked, because a
+    pinned half of `push ebx / pop cx / pop dx` neighboured it. George holds
+    around a pin when the pinned value counts as significant.
+    """
+    from iced_x86 import Register
+
+    long_lived = range(10, 16)
+    insns = [
+        *(_define(at, one) for at, one in enumerate(long_lived)),
+        _define(0x10, 50),
+        _define(0x13, 1),
+        _move(0x16, 2, 1),
+        _use(0x18, 2),
+        *(_use(0x20 + at, one) for at, one in enumerate((*long_lived, 50))),
+    ]
+    pins = {50: Register.BX} if pinned else {}
+    body = lir.LirBody("counter", 0, (lir.LirBlock(0, tuple(insns)),), {}, pins)
+    assert len(coalesce.joined(body).insns) == len(insns) - 1
+
+
 def test_nbody_shifts_each_product_where_it_multiplied_it() -> None:
     """nbody's accumulated products went `mov edx,esi / sar edx,9 / add [bp-8],edx`.
 

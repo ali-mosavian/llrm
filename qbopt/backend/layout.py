@@ -357,7 +357,7 @@ def _padding_runs(
     illegal `FE`. Padding is still carried; falling into `90` is harmless.
 
     A computed jump into a discarded gap would name an offset whose
-    interior is not in the placement map, so relocate.as_records still
+    interior is not in the placement map, so fresh OMF emission still
     refuses the object, as it did when the gap was carried.
 
     `reached` is what makes the question askable here. Without it only
@@ -508,7 +508,7 @@ def allocated(bodies: list, plain: list | None = None, settle=None) -> tuple[lis
 
     Out of the assembler. Colouring is a phase, and one that runs inside
     emission is one nothing downstream can be told has already happened --
-    objwrite.py had no way to say so and was allocated over a second time,
+    omfwrite.py had no way to say so and was allocated over a second time,
     which produced a call encoding with no field for its own fixup.
     """
     was = dict(plain or ())
@@ -578,7 +578,7 @@ def rebuild(
     # a body is a phase, and one that runs inside emission is one nothing
     # downstream can be told has already happened. `allocated()` below is
     # the same work, and `wholeseg.py` calls it before this -- which is
-    # what let objwrite.py stop being allocated over a second time.
+    # what let omfwrite.py stop being allocated over a second time.
     sequenced = frozenset(body.entry for _, body in bodies) if ordered else ordered_entries
     bodies = [(name, _fallen(_fallthroughs(_threaded(body)))) for name, body in bodies]
     held = asm._held(assignment)

@@ -1,15 +1,18 @@
-from dataclasses import replace
 from functools import cache
+from dataclasses import replace
 
-from qbopt.analysis import loops
 from qbopt.model import mir
-from qbopt.analysis import induction
-from qbopt.analysis import ranges
+from qbopt.analysis import loops
 from qbopt.analysis import consts
+from qbopt.analysis import ranges
+from qbopt.analysis import effects
+from qbopt.analysis import induction
 from qbopt.objectfile.module import Space
 
 
-def sunk_stores(body: mir.MirBody, dgroup: frozenset[int], bounds: dict | None = None) -> mir.MirBody:
+def sunk_stores(
+    body: mir.MirBody, dgroup: frozenset[int], bounds: dict | None = None, handles_errors: bool = True
+) -> mir.MirBody:
     predecessors = loops.predecessors(body.blocks)
     for loop in loops.loops(body.blocks, body.entry):
         scoped = ranges.bounded(body)
@@ -29,7 +32,8 @@ def sunk_stores(body: mir.MirBody, dgroup: frozenset[int], bounds: dict | None =
             continue
         operations = [op for block in inside for op in block.ops]
         if any(
-            op.floating is not None or op.barrier
+            effects.exposes_memory(op, handles_errors)
+            or op.barrier
             or op.kind in {mir.Kind.CALL, mir.Kind.ARG, mir.Kind.OPAQUE, mir.Kind.ESCAPE, mir.Kind.RETURN}
             for op in operations
         ):
@@ -38,12 +42,15 @@ def sunk_stores(body: mir.MirBody, dgroup: frozenset[int], bounds: dict | None =
         if not exit_block.ops:
             continue
         dominators = loops.dominators(body.blocks, body.entry)
-        address_values = {value for block in body.blocks
-                          if block.at not in loop.body and block.at in dominators.get(loop.header, ())
-                          for value in (*[phi.result for phi in block.phis],
-                                        *[value for op in block.ops for value in op.defines])}
-        moved = [op for op in blocks[source].ops
-                 if _unobserved(op, operations, dgroup, bounds, intervals, address_values)]
+        address_values = {
+            value
+            for block in body.blocks
+            if block.at not in loop.body and block.at in dominators.get(loop.header, ())
+            for value in (*[phi.result for phi in block.phis], *[value for op in block.ops for value in op.defines])
+        }
+        moved = [
+            op for op in blocks[source].ops if _unobserved(op, operations, dgroup, bounds, intervals, address_values)
+        ]
         relocated = {id(op): op for op in moved}
         if len(loop.latches) == 1 and source == loop.header:
             latch = next(iter(loop.latches))
@@ -53,7 +60,9 @@ def sunk_stores(body: mir.MirBody, dgroup: frozenset[int], bounds: dict | None =
                 nonempty = induction.nonempty(body, loop)
                 invariant = induction.invariant(body, set(loop.body)) if nonempty else set()
                 for op in operations:
-                    if id(op) not in relocated and _unobserved(op, operations, dgroup, bounds, intervals, address_values):
+                    if id(op) not in relocated and _unobserved(
+                        op, operations, dgroup, bounds, intervals, address_values
+                    ):
                         value = _exit_value(op, blocks[source], blocks[entry], latch, body, dgroup, bounds)
                         if value is None and any(op is one for one in blocks[latch].ops):
                             value = _invariant_value(op, invariant, nonempty)
@@ -64,8 +73,17 @@ def sunk_stores(body: mir.MirBody, dgroup: frozenset[int], bounds: dict | None =
                             relocated[id(op)] = replace(
                                 op,
                                 args=tuple(value if isinstance(arg, mir.Held) else arg for arg in op.args),
-                                uses=tuple(dict.fromkeys(([value.value] if isinstance(value, mir.Held) else [])
-                                    + [part for ref in op.stores for part in (ref.base, ref.segment) if part is not None])),
+                                uses=tuple(
+                                    dict.fromkeys(
+                                        ([value.value] if isinstance(value, mir.Held) else [])
+                                        + [
+                                            part
+                                            for ref in op.stores
+                                            for part in (ref.base, ref.segment)
+                                            if part is not None
+                                        ]
+                                    )
+                                ),
                             )
         if not moved:
             continue
@@ -149,8 +167,12 @@ def _exit_value(
 
     @cache
     def memory():
-        barriers = {one.at: "" for block in body.blocks for one in block.ops
-                    if one.barrier or one.kind in {mir.Kind.CALL, mir.Kind.ESCAPE, mir.Kind.OPAQUE}}
+        barriers = {
+            one.at: ""
+            for block in body.blocks
+            for one in block.ops
+            if one.barrier or one.kind in {mir.Kind.CALL, mir.Kind.ESCAPE, mir.Kind.OPAQUE}
+        }
         return consts.cells(body, dgroup, barriers), barriers
 
     def stored_at(at: int, expected: mir.Arg, active: frozenset) -> bool:
@@ -197,13 +219,21 @@ def _exit_value(
         if set(phi.incoming) != {entry.at, latch}:
             continue
         seed = root(mir.Held(phi.incoming[entry.at], stored.width))
-        if stored_at(entry.at, seed, frozenset()) and stored_at(latch, mir.Held(phi.incoming[latch], stored.width), frozenset()):
+        if stored_at(entry.at, seed, frozenset()) and stored_at(
+            latch, mir.Held(phi.incoming[latch], stored.width), frozenset()
+        ):
             return mir.Held(phi.result, stored.width)
     return None
 
 
-def _unobserved(op: mir.Op, operations: list[mir.Op], dgroup: frozenset[int], bounds: dict | None,
-                intervals: dict | None = None, address_values: set | frozenset = frozenset()) -> bool:
+def _unobserved(
+    op: mir.Op,
+    operations: list[mir.Op],
+    dgroup: frozenset[int],
+    bounds: dict | None,
+    intervals: dict | None = None,
+    address_values: set | frozenset = frozenset(),
+) -> bool:
     if op.kind is not mir.Kind.STORE or op.loads or op.defines or len(op.stores) != 1:
         return False
     ref = op.stores[0]
@@ -212,8 +242,9 @@ def _unobserved(op: mir.Op, operations: list[mir.Op], dgroup: frozenset[int], bo
     if ref.base is not None and (ref.base not in address_values or not ref.excludes):
         return False
     return not any(
-        mir.overlapping(ref, other, dgroup, bounds, known=(intervals or {}).get(id(op)),
-                        other_known=(intervals or {}).get(id(one)))
+        mir.overlapping(
+            ref, other, dgroup, bounds, known=(intervals or {}).get(id(op)), other_known=(intervals or {}).get(id(one))
+        )
         for one in operations
         if one is not op
         for other in (*one.loads, *one.stores)

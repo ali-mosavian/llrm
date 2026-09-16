@@ -4,17 +4,24 @@ from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.model import mir
 from qbopt.backend import lower
-from qbopt.objectfile import objwrite
+from qbopt.backend import omfwrite
 
 
 def test_restore_declares_its_input_and_high_result() -> None:
     """Nbody's preserved high half must reach its assigned location instead of an uninitialized spill."""
     from iced_x86 import Register
+
     source, high = mir.Value(1, 0), mir.Value(2, 0)
-    op = mir.Op(0, ir.Operation.BARRIER, "restore", (high,), (source,),
-                kind=mir.Kind.OPAQUE, node=ir.Restore(at=0, end=4, pair=0, effects=ir.RESTORE_EFFECTS[0]))
-    body = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),),
-                       {source: Register.EAX, high: Register.EDX})
+    op = mir.Op(
+        0,
+        ir.Operation.BARRIER,
+        "restore",
+        (high,),
+        (source,),
+        kind=mir.Kind.OPAQUE,
+        node=ir.Restore(at=0, end=4, pair=0, effects=ir.RESTORE_EFFECTS[0]),
+    )
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),), {source: Register.EAX, high: Register.EDX})
     lowering = lower.Lowering(body, {source.id, high.id}, {}, ())
     assert lowering._abi(op) == ((ir.Held(source.id, 4), Register.EAX),)
     assert lowering._idiom(op) == ((ir.Held(high.id, 2), Register.DX),)
@@ -22,7 +29,8 @@ def test_restore_declares_its_input_and_high_result() -> None:
 
 def test_lowering_preserves_relocated_store_ownership() -> None:
     """NESTED printed T=0 instead of 675 when its promoted store lost its fixup."""
-    from qbopt.objectfile.module import Addr, Space
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     value = mir.Value(1, 0)
     cell = mir.MemRef(Addr(Space.SEGMENT, 0x88, 5), 2)
@@ -44,7 +52,7 @@ def test_lowering_preserves_relocated_store_ownership() -> None:
     (instruction,) = lower.Lowering(body, {value.id}, {}, ()).expand(op)
     assert instruction.what.op is ir.Operation.MOVE
     assert instruction.symbol is True
-    carried = objwrite._carried(instruction)
+    carried = omfwrite._carried(instruction)
     assert carried.symbol is True and carried.id == 31
 
 
@@ -70,7 +78,7 @@ def test_high_word_extraction_lowers_without_clobbering_flags() -> None:
     assert expanded[0].covers == (10, 14)
     assert all(one.covers == (10, 10) for one in expanded[1:])
     assert expanded[1].defines[0] not in (source.id, result.id)
-    carried = objwrite._carried(expanded[1])
+    carried = omfwrite._carried(expanded[1])
     assert carried.node is None
     assert carried.id is None
     assert carried.covers == (10, 10)
@@ -82,7 +90,7 @@ def test_inserted_move_does_not_inherit_disjoint_input_bytes() -> None:
     parent = mir.Op(0x71, ir.Operation.MOVE, "mov", (), (), covers=(0x71, 0x76), extra_covers=((0x5F, 0x6B),), id=14)
     move = ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(2, 2),), (ir.Held(1, 2),))
     inserted = lir.Insn(0x71, (0x71, 0x71), move, (2,), (1,), op=parent)
-    carried = objwrite._carried(inserted)
+    carried = omfwrite._carried(inserted)
     assert carried.covers == (0x71, 0x71)
     assert carried.extra_covers == ()
     assert carried.id is None

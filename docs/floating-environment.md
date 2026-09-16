@@ -79,9 +79,10 @@ flags, and unsupported live-out values reject the transformation.
 
 This preserves initial memory at the first check and reproduces the final
 iteration's floating operands, operation order and conversions. It does not
-delete the floating sequence or assume a rounding mode. Strict floating
-operations also stop dead-store elimination and loop-store sinking: an
-exception can expose memory before a later overwrite.
+delete the floating sequence or assume a rounding mode. In a module with an
+ON ERROR handler, operations that can trap also stop dead-store elimination
+and loop-store sinking: the handler can read memory before a later
+overwrite. Without a handler a trap ends the program.
 
 FPCSE now executes one such iteration, seeded with SINGLE 438.75
 after its first load, and still prints 487.5. The numeric proof does not yet

@@ -12,15 +12,15 @@ from pathlib import Path
 
 import pytest
 
+from qbopt import flow
 from qbopt.model import lir
 from qbopt.model import mir
-from qbopt.objectfile import omf
-from qbopt import flow
-from qbopt.backend import lower
-from qbopt.objectfile import module
-from qbopt.backend import phielim
 from qbopt.abi import runtime
+from qbopt.backend import lower
+from qbopt.objectfile import omf
+from qbopt.backend import phielim
 from qbopt.backend import allocate
+from qbopt.objectfile import module
 from qbopt.analysis import intervals
 from qbopt.frontend import blocks as split
 from qbopt.frontend.blocks import code_map
@@ -314,14 +314,14 @@ def test_an_inserted_instruction_carries_no_fixup() -> None:
     instruction an operation was raised from, and every question answered
     by reading the original bytes goes through it.
     """
-    from qbopt.objectfile import objwrite
+    from qbopt.backend import omfwrite
 
     _found, _blocks, bodies, contracts = _raised("divmod-p-g2-zd")
     for name, body in bodies:
         low = lower.lowered(name, body, _found.calls, set(_found.absorbed), contracts)
         for phase in flow.machine(flow._pinned(body), None, _found.calls):
             low = phase.transform(low)
-        as_mir = objwrite._as_mir(low)
+        as_mir = omfwrite._as_mir(low)
         for block in as_mir.blocks:
             for op in block.ops:
                 if op.covers is not None and op.covers[0] == op.covers[1]:
@@ -531,8 +531,8 @@ def test_promotion_takes_a_variable_out_of_memory() -> None:
     from pathlib import Path
 
     from qbopt.objectfile import omf
-    from qbopt.objectfile import module
     from qbopt.optimize import promote
+    from qbopt.objectfile import module
     from qbopt.frontend import blocks as split
     from qbopt.frontend.blocks import code_map
 
@@ -558,10 +558,10 @@ def test_promotion_is_only_sound_because_the_runtime_was_measured() -> None:
     reach. With every call conceding `ANY`, nothing is promotable."""
     from pathlib import Path
 
-    from qbopt.objectfile import omf
-    from qbopt.objectfile import module
-    from qbopt.optimize import promote
     from qbopt.abi import runtime
+    from qbopt.objectfile import omf
+    from qbopt.optimize import promote
+    from qbopt.objectfile import module
     from qbopt.frontend import blocks as split
     from qbopt.frontend.blocks import code_map
 
@@ -604,10 +604,10 @@ def test_no_phi_survives_elimination_on_a_critical_edge() -> None:
     """bools-q-O had three, and every one was silently discarded. harr-q-O has three now."""
     from pathlib import Path
 
-    from qbopt.objectfile import omf
     from qbopt.backend import lower
-    from qbopt.objectfile import module
+    from qbopt.objectfile import omf
     from qbopt.backend import phielim
+    from qbopt.objectfile import module
     from qbopt.optimize import transform
     from qbopt.frontend import blocks as split
     from qbopt.frontend.blocks import code_map
@@ -634,7 +634,7 @@ def test_no_phi_survives_elimination_on_a_critical_edge() -> None:
 def test_emission_refuses_a_body_that_still_has_a_phi() -> None:
     """A phi is not an instruction, so emitting one emits nothing."""
     from qbopt.model import lir
-    from qbopt.objectfile import objwrite
+    from qbopt.backend import omfwrite
 
     stuck = lir.LirBody(
         name="one",
@@ -643,8 +643,8 @@ def test_emission_refuses_a_body_that_still_has_a_phi() -> None:
         origin={},
         pins={},
     )
-    with pytest.raises(objwrite.Survived):
-        objwrite._as_mir(stuck)
+    with pytest.raises(omfwrite.Survived):
+        omfwrite._as_mir(stuck)
 
 
 def test_verification_catches_a_cell_left_on_a_value_the_rename_ended() -> None:
@@ -655,9 +655,9 @@ def test_verification_catches_a_cell_left_on_a_value_the_rename_ended() -> None:
 
     from qbopt.model import lir
     from qbopt.backend import verify
+    from qbopt.model import ir as machine
     from qbopt.objectfile.module import Addr
     from qbopt.objectfile.module import Space
-    from qbopt.model import ir as machine
 
     where = Addr(Space.SEGMENT, 0x10, base=Register.SI)
     stale = machine.Mem(where, 2, Register.NONE, 0, 2, base=machine.Held(3, 2))
@@ -748,8 +748,8 @@ def test_invariant_divides_execute_before_the_loop(stem: str) -> None:
     """
     from iced_x86 import Mnemonic
 
-    from qbopt.analysis import loops
     from qbopt import wholeseg
+    from qbopt.analysis import loops
 
     result = wholeseg.emitted(Path(f"fixtures/omf/{stem}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.fallback_reason

@@ -65,6 +65,163 @@ def _pointer_across_a_loop() -> lir.LirBody:
     )
 
 
+def test_a_piece_leaves_its_region_after_its_last_use() -> None:
+    """PLASMA's outer counter piece was copied back at its preheader's jump.
+
+    Live past its last use, the piece overlapped the pixel pointer defined
+    after it there, so keeping the counter in a register cost the pointer
+    its register and the split was refused. LLVM leaves the interval after
+    the last use.
+    """
+    from qbopt.analysis import intervals
+
+    def move(at, into, value):
+        return _insn(at, ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(into, 2),), (ir.Imm(value, 2),)), (into,), ())
+
+    def push(at, value):
+        return _insn(at, ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Held(value, 2),)), (), (value,))
+
+    add = ir.Semantics(ir.Operation.BINARY, "add", (ir.Held(3, 2),), (ir.Held(3, 2), ir.Imm(1, 2)))
+    body = lir.LirBody(
+        name="one",
+        entry=0,
+        blocks=(
+            lir.LirBlock(
+                at=0,
+                insns=(move(0, 3, 1), _insn(2, ir.Semantics(ir.Operation.JUMP, "jmp", (), (), 0x10))),
+                succ=(0x10,),
+            ),
+            lir.LirBlock(
+                at=0x10,
+                insns=(
+                    _insn(0x10, add, (3,), (3,)),
+                    move(0x12, 7, 2),
+                    _insn(0x14, ir.Semantics(ir.Operation.JUMP, "jmp", (), (), 0x20)),
+                ),
+                succ=(0x20,),
+            ),
+            lir.LirBlock(at=0x20, insns=(push(0x20, 3), push(0x21, 7)), succ=()),
+        ),
+        origin={},
+        pins={},
+    )
+    cut = splitkit._carved(body, 3, 9, 2, splitkit.Region(frozenset({0x10}), None))
+    live = intervals.intervals(cut)
+    assert not live[9].overlaps(live[7])
+
+
+def _pushed(body: lir.LirBody, path: tuple[int, ...]) -> list[int]:
+    """What the pushes along `path` write, running moves, adds and pushes."""
+    held: dict[int, int] = {}
+    pushed = []
+
+    def read(operand):
+        return operand.value if isinstance(operand, ir.Imm) else held[operand.value]
+
+    blocks = {block.at: block for block in body.blocks}
+    for at in path:
+        for one in blocks[at].insns:
+            what = one.what
+            if what.op is ir.Operation.MOVE:
+                held[what.dests[0].value] = read(what.sources[0])
+            elif what.op is ir.Operation.BINARY:
+                held[what.dests[0].value] = read(what.sources[0]) + read(what.sources[1])
+            elif what.op is ir.Operation.PUSH:
+                pushed.append(read(what.sources[0]))
+    return pushed
+
+
+def test_a_region_block_also_reached_from_inside_it_keeps_the_inside_value() -> None:
+    """RENDER's row counter was copied in again at a block its own increment reached.
+
+    The block was entered from outside the region as well, and the copy at
+    its top overwrote the incremented piece with the stale original on the
+    inside path, so the loop never ended.
+    """
+
+    def move(at, into, value):
+        return _insn(at, ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(into, 2),), (ir.Imm(value, 2),)), (into,), ())
+
+    add = ir.Semantics(ir.Operation.BINARY, "add", (ir.Held(3, 2),), (ir.Held(3, 2), ir.Imm(1, 2)))
+    push = ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Held(3, 2),))
+    body = lir.LirBody(
+        name="one",
+        entry=0,
+        blocks=(
+            lir.LirBlock(
+                at=0,
+                insns=(move(0, 3, 1), _insn(2, ir.Semantics(ir.Operation.BRANCH, "jne", (), (), 0x20))),
+                succ=(0x10, 0x20),
+            ),
+            lir.LirBlock(
+                at=0x10,
+                insns=(_insn(0x10, add, (3,), (3,)), _insn(0x12, ir.Semantics(ir.Operation.JUMP, "jmp", (), (), 0x20))),
+                succ=(0x20,),
+            ),
+            lir.LirBlock(at=0x20, insns=(_insn(0x20, push, (), (3,)),), succ=()),
+        ),
+        origin={},
+        pins={},
+    )
+    cut = splitkit._carved(body, 3, 9, 2, splitkit.Region(frozenset({0x10, 0x20}), None))
+    assert _pushed(cut, (0, 0x10, 0x20)) == [2]
+    assert _pushed(cut, (0, 0x20)) == [1]
+
+
+def test_a_cut_range_renames_what_an_instruction_requires_and_delivers() -> None:
+    """SETCROSFADEPAL's `out dx,al` still required the counter after its piece took over.
+
+    A requirement names the value the instruction reads in a register it
+    does not mention, and a delivery the one it writes there. Left on the
+    original, the allocator pinned a value the instruction no longer reads
+    and left the piece it does read wherever it fell.
+    """
+    from iced_x86 import Register as R
+
+    call = lir.Insn(
+        at=0x10,
+        covers=(0x10, 0x12),
+        what=ir.Semantics(ir.Operation.CALL, "call", (), ()),
+        defines=(3,),
+        uses=(),
+        delivers=((ir.Held(3, 2), R.DI),),
+        widths=((3, 2),),
+    )
+    out = lir.Insn(
+        at=0x12,
+        covers=(0x12, 0x13),
+        what=None,
+        defines=(),
+        uses=(3,),
+        requires=((ir.Held(3, 1), R.AL),),
+        widths=((3, 1),),
+    )
+    body = lir.LirBody(
+        name="one",
+        entry=0,
+        blocks=(
+            lir.LirBlock(at=0, insns=(_insn(0, ir.Semantics(ir.Operation.JUMP, "jmp", (), (), 0x10)),), succ=(0x10,)),
+            lir.LirBlock(
+                at=0x10,
+                insns=(call, out, _insn(0x14, ir.Semantics(ir.Operation.JUMP, "jmp", (), (), 0x20))),
+                succ=(0x20,),
+            ),
+            lir.LirBlock(
+                at=0x20,
+                insns=(_insn(0x20, ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Held(3, 2),)), (), (3,)),),
+                succ=(),
+            ),
+        ),
+        origin={},
+        pins={},
+    )
+    cut = splitkit._carved(body, 3, 9, 2, splitkit.Region(frozenset({0x10}), None))
+    for one in (one for block in cut.blocks for one in block.insns):
+        assert {held.value for held, _register in one.requires} <= set(one.uses), one
+        assert {held.value for held, _register in one.delivers} <= set(one.defines), one
+        assert {value for value, _width in one.widths} <= {*one.uses, *one.defines}, one
+
+
 def test_a_cut_range_renames_the_cell_it_is_the_base_of() -> None:
     """A cut renamed `uses` and left the cell naming the old value.
 
@@ -109,7 +266,9 @@ def _counting_loop() -> lir.LirBody:
             lir.LirBlock(
                 at=0x10,
                 insns=(
-                    _insn(0x10, ir.Semantics(ir.Operation.COMPARE, "cmp", (), (ir.Held(4, 2), ir.Imm(10, 2))), (), (4,)),
+                    _insn(
+                        0x10, ir.Semantics(ir.Operation.COMPARE, "cmp", (), (ir.Held(4, 2), ir.Imm(10, 2))), (), (4,)
+                    ),
                     _insn(0x12, ir.Semantics(ir.Operation.BRANCH, "jge", (), (), 0x30)),
                 ),
                 succ=(0x20, 0x30),

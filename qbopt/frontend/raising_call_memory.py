@@ -80,7 +80,7 @@ def spared(found, decoded, contracts: dict[int, runtime.Contract]) -> dict[int, 
         return {}
 
     defined = module.defines(found.records, found.seg)
-    handles = any(one.error_handling for one in contracts.values())
+    handles = runtime.handles_errors(contracts.values())
     procedures = {body.body.name: body for body in decoded if body.body.name}
 
     def calling(at: int, index: int, writes: dict[str, set[int]]) -> bool:

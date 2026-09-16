@@ -5,7 +5,7 @@ from qbopt.model import mir
 from qbopt.backend import asm
 from qbopt.backend import lower
 from qbopt.frontend import blocks
-from qbopt.objectfile import objwrite
+from qbopt.backend import omfwrite
 
 
 def test_carried_float_compare_keeps_its_constant_relocation() -> None:
@@ -19,7 +19,7 @@ def test_carried_float_compare_keeps_its_constant_relocation() -> None:
     op = next(op for block in body.blocks for op in block.ops if op.at == 0x566)
     isolated = mir.MirBody(op.at, (mir.MirBlock(op.at, (), (op,), ()),), origin=body.origin)
     lowered = lower.lowered("compare", isolated, {}, {}, {})
-    carried = objwrite._as_mir(lowered).blocks[0].ops
+    carried = omfwrite._as_mir(lowered).blocks[0].ops
     laid = asm.assemble(list(carried), 0, found, native_fpu=True)
     assert isinstance(laid, asm.Laid), laid
     assert laid.code == found.code[0x566:0x56A]

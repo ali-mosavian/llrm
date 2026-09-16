@@ -388,7 +388,7 @@ def allocate(
     cost model right at a price that grows with the body.
     """
     index = ranges.indexed(body)
-    live = _sibling_priced(body, ranges.intervals(body, index))
+    live = _fold_priced(body, _sibling_priced(body, ranges.intervals(body, index)))
     masks = _masks(body, index)
     widths = _widest(body)
     # A reload's value is live across one instruction and must have a
@@ -422,6 +422,13 @@ def allocate(
     stage: dict[int, Stage] = {}
     spilled: set[int] = set()
     cost = 0.0
+    # LLVM's eviction cascades. An evicted range goes back to ASSIGN and may
+    # evict again, but only ranges of an older cascade or of none: without
+    # that, the counter PLASMA evicted in favour of inner-loop temporaries
+    # never evicted the cheaper accumulator that had taken a register since,
+    # and it went to memory. The cascade order is what terminates.
+    cascades: dict[int, int] = {}
+    newest = 1
 
     def queued(value: int) -> tuple[bool, float, int]:
         # Fixed intervals have no alternative placement. Reserve them before
@@ -464,13 +471,27 @@ def allocate(
             return _free(live[other], elsewhere, union, live, masks, widths.get(other, 4)) is not None
 
         if at is Stage.ASSIGN or mine.weight == float("inf"):
-            evicted = _evict(mine, order, union, live, masks, movable, widths.get(value, 4))
+            evicted = _evict(
+                mine,
+                order,
+                union,
+                live,
+                masks,
+                movable,
+                widths.get(value, 4),
+                cascades.get(value, newest),
+                cascades,
+            )
             if evicted is not None:
                 got, victims = evicted
+                if value not in cascades:
+                    cascades[value] = newest
+                    newest += 1
                 for one in victims:
                     union[_whole(got)].remove(one)
                     del where[one]
-                    stage[one] = Stage.SPLIT  # it failed here once; do not send it back to ASSIGN
+                    cascades[one] = cascades[value]
+                    stage[one] = Stage.ASSIGN
                     heapq.heappush(queue, queued(one))
                 where[value] = got
                 union.setdefault(_whole(got), []).append(value)
@@ -613,6 +634,8 @@ def _evict(
     masks: list[tuple[int, frozenset[Register_]]],
     movable=lambda other, register: False,
     width: int = 4,
+    cascade: int | None = None,
+    cascades: "dict[int, int] | None" = None,
 ) -> tuple[Register_, list[int]] | None:
     """The cheapest register to take, and what has to move out of it.
 
@@ -622,6 +645,8 @@ def _evict(
     it is live, and the expensive one wins. A victim another register is
     free for costs nothing, since it moves rather than splits: a reload
     confined to BX stayed unplaced behind a source reload that SI would take.
+    A victim must also belong to an older eviction cascade, or to none, so
+    two ranges cannot evict each other forever.
     """
     best = None
     for register in order:
@@ -629,6 +654,8 @@ def _evict(
             continue
         victims = [other for other in union.get(_whole(register), ()) if other in live and live[other].overlaps(one)]
         if not victims:
+            continue
+        if cascade is not None and any((cascades or {}).get(other, 0) >= cascade for other in victims):
             continue
         bill = sum(0.0 if movable(other, register) else live[other].weight for other in victims)
         if bill >= one.weight:
@@ -766,24 +793,30 @@ class RegAlloc(LIRTransform):
             # and a load. Only the values that failed -- splitting every
             # crossing range on principle cost 12,329 bytes over the
             # corpus and freed nothing.
-            cut = splitkit.split(body, got.spilled, already)
-            if cut is not body:
-                # Progress, not perfection. `RegAllocGreedy` requeues the
-                # pieces of a split range and asks again; demanding that
-                # one cut place the whole body meant a cut that halved the
-                # spill set was thrown away because one other value still
-                # wanted a slot. Fewer spilled, or the same number at a
-                # lower cost, is the same test LLVM's stage ladder makes.
+            # One range at a time, as `RegAllocGreedy` splits one and
+            # requeues its pieces. Cut together, PLASMA's pieces in its
+            # pixel loop spilled anyway and outweighed the one cut that
+            # kept the outer counter in a register, and the batch was
+            # thrown away with it. Progress is less memory traffic, not
+            # fewer values: a cut makes more values whatever it achieves,
+            # and traffic -- references weighted by loop depth, not
+            # divided by length -- does not fall for a cut that placed
+            # nothing, which only adds its copies.
+            improved = False
+            sizes = ranges.intervals(body)
+            for value in sorted(got.spilled, key=lambda one: (-(sizes[one].size if one in sizes else 0), one)):
+                if value in already:
+                    continue
+                cut = splitkit.split(body, frozenset({value}), already, got.where)
+                if cut is body:
+                    continue
                 after = allocate(cut, {**prefer, **constrain.required(cut)}, reloads)
                 if not after.spilled:
                     return applied(cut, after)
-                # Count, not cost. A shorter range is a cheaper range
-                # whether or not it became placeable, so accepting a cost
-                # improvement accepts a cut that achieved nothing -- the
-                # same livelock `already` guards from the other side.
-                if len(after.spilled) < len(got.spilled):
-                    body = cut
-                    continue
+                if _traffic(cut, after.spilled) < _traffic(body, got.spilled):
+                    body, got, improved = cut, after, True
+            if improved:
+                continue
             # A cheap value with an independently reproducible definition is
             # not a stack object.  Recreate those first, then ask allocation
             # again before committing any of the values they conflicted with
@@ -865,6 +898,45 @@ def _sibling_priced(body: lir.LirBody, live: dict) -> dict:
     return {
         value: replace(one, weight=max(0.0, one.weight - free[value] / (one.size + ranges.GRACE)))
         if value in free
+        else one
+        for value, one in live.items()
+    }
+
+
+def _traffic(body: lir.LirBody, spilled: "frozenset[int]") -> float:
+    """The memory references spilling these values costs, weighted by loop depth."""
+    deep = ranges.depths(body)
+    return sum(
+        float(ranges.PER_LEVEL ** deep.get(block.at, 0))
+        for block in body.blocks
+        for one in block.insns
+        for value in (*one.defines, *one.uses)
+        if value in spilled
+    )
+
+
+def _fold_priced(body: lir.LirBody, live: dict) -> dict:
+    """Intervals whose reads the spill folds into a memory operand cost nothing for those reads.
+
+    `cmp si,[limit]` is one instruction whether the limit has a register or
+    a slot, so that read is no reason to keep it. Priced as references,
+    PLASMA's inner limit, compared once per pixel, outbid the outer counter
+    it was computed from, and the counter was added to and reloaded in
+    memory instead.
+    """
+    from qbopt.backend import spiller
+
+    deep = ranges.depths(body)
+    free: dict[int, float] = {}
+    for block in body.blocks:
+        each = float(ranges.PER_LEVEL ** deep.get(block.at, 0))
+        for one in block.insns:
+            for value in one.uses:
+                if spiller.folded_source(one, frozenset({value})) is not None:
+                    free[value] = free.get(value, 0.0) + each
+    return {
+        value: replace(one, weight=max(0.0, one.weight - free[value] / (one.size + ranges.GRACE)))
+        if value in free and one.weight != float("inf")
         else one
         for value, one in live.items()
     }

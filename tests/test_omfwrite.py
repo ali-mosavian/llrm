@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from qbopt import wholeseg
 from qbopt.backend import masm
 from qbopt.objectfile import omf
 from qbopt.backend import omfwrite
@@ -16,6 +17,31 @@ ROOT = Path(__file__).resolve().parents[1]
 JWASM = shutil.which("jwasm") or str(Path.home() / "work/other/d32x/toolchains/native/bin/jwasm")
 sys.path.insert(0, str(ROOT / "tools"))
 import objcmp  # noqa: E402
+
+
+def test_the_bc_frontend_uses_the_fresh_object_writer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """hotlop used to finish by rewriting BC's record stream in place.
+
+    BC OBJ remains an input frontend, but no output is allowed to depend on
+    the record rewriter: both frontends must construct a complete new OMF
+    object through this module.
+    """
+    from qbopt.objectfile import relocate
+
+    def old_path(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("the record-rewriting emitter was used")
+
+    monkeypatch.setattr(relocate, "as_records", old_path, raising=False)
+    source = (ROOT / "fixtures" / "omf" / "hotlop-p-g2.obj").read_bytes()
+    got = wholeseg.emitted(source)
+    assert got.outcome is wholeseg.Emission.LIR
+    records = omf.parse(got.data)
+    assert records[0].type == omf.THEADR
+    # BC's first FIXUPP defines THREAD state (lead bit clear). A serializer
+    # built from decoded relocation semantics has no reason to preserve that
+    # record-local compression and emits every relocation explicitly.
+    assert any(not one.body[0] & 0x80 for one in omf.parse(source) if one.type & 0xFE == omf.FIXUPP)
+    assert all(one.body[0] & 0x80 for one in records if one.type & 0xFE == omf.FIXUPP)
 
 
 def test_an_obj_output_uses_the_native_writer(tmp_path: Path) -> None:

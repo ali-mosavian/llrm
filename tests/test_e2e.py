@@ -88,7 +88,7 @@ def test_a_segment_this_pass_wrote_links_and_runs(tag: str, prog: str) -> None:
     """The first code MIR produced end to end, rather than edited.
 
     Everything else in this suite checks a rewrite of BC's own bytes. Here
-    layout.rebuild placed every instruction and relocate.as_records wrote
+    layout.rebuild placed every instruction and omfwrite serialized
     the records, so the chunk boundaries, branch displacements and fixup
     offsets are all this pass's.
 
@@ -171,9 +171,9 @@ def test_every_compiled_object_round_trips_through_the_selector(tag: str) -> Non
 
     from qbopt.model import ir
     from qbopt.model import mir
+    from qbopt.backend import select
     from qbopt.objectfile import omf
     from qbopt.objectfile import module
-    from qbopt.backend import select
     from qbopt.frontend.declen import BITNESS
     from qbopt.frontend import blocks as split
     from qbopt.frontend.blocks import code_map

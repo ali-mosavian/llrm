@@ -3,10 +3,11 @@ Matched BC and qbopt runs of the phatcode Spring 2002 QuickBASIC demos.
 
 Each demo is compiled from one instrumented source and linked twice: as BC
 left it, and after `qbopt.rewrite` over the object and BCOM45.LIB. Both
-builds run the same frames under a fixed-cycle DOSBox, so emulated PIT time
-is the measure. Each mark records the PIT ticks since the previous mark and
-an Adler-32 of video memory plus the DAC palette; the two builds must agree
-on every checksum before any timing is reported.
+builds run the same frames under a fixed-cycle DOSBox, and RDTSC, which
+DOSBox-X scales by that rate, is the measure in emulated milliseconds. Each
+mark records the time-stamp counter since the previous mark and an Adler-32
+of video memory plus the DAC palette; the two builds must agree on every
+checksum before any timing is reported.
 
 The instrumentation is measurement, not optimization: vertical-retrace
 WAITs would hide CPU cost behind the 70 Hz refresh, TIMER-driven work and
@@ -28,14 +29,18 @@ from dataclasses import dataclass
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import subprocess
+
 from dosbox import launch
 from configs import CONFIGS
 from dosbox import read_dos
 
+from bench import NATIVE
 from qbopt import rewrite
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / "build" / "demobench"
+TSCSNAP = ROOT / "bench" / "tscsnap.asm"
 
 MEASURE = """\
 [sdl]
@@ -59,8 +64,8 @@ nosound=true
 
 PRELUDE = """\
 DECLARE SUB BenchMark (phase AS INTEGER)
-DECLARE SUB BenchSnap (tick AS LONG, count AS LONG)
-DIM SHARED benchTick AS LONG, benchCount AS LONG, benchFrame AS LONG
+DECLARE SUB TscSnap (hi AS LONG, lo AS LONG)
+DIM SHARED benchHi AS LONG, benchLo AS LONG, benchFrame AS LONG
 """
 
 # Types spelled out: the demos' own DEFxxx statements reach this far.
@@ -68,11 +73,10 @@ EPILOGUE = """
 REM $DYNAMIC
 SUB BenchMark (phase AS INTEGER)
     ' Far, so a demo whose DGROUP is nearly full still links.
-    DIM tint(767) AS INTEGER, taken(2) AS LONG
-    DIM tick AS LONG, count AS LONG, elapsed AS LONG, offset AS LONG
+    DIM tint(767) AS INTEGER, taken(5) AS LONG
+    DIM hi AS LONG, lo AS LONG, offset AS LONG
     DIM low AS LONG, high AS LONG, entry AS INTEGER
-    CALL BenchSnap(tick, count)
-    elapsed = (tick - benchTick) * 65536& + (benchCount - count)
+    CALL TscSnap(hi, lo)
     low = 1: high = 0
     DEF SEG = &HA000
     FOR offset = 0 TO 63999
@@ -89,41 +93,14 @@ SUB BenchMark (phase AS INTEGER)
     BSAVE "P" + LTRIM$(STR$(phase)) + ".BIN", VARPTR(tint(0)), 1536
     ' BSAVE, not OPEN: a file buffer comes out of DGROUP string space, and
     ' deedlines has too little left -- its text$ assignments hit error 14.
-    taken(0) = elapsed: taken(1) = high: taken(2) = low
+    ' Both stamps raw: the counter passes 2^32 in under a minute, so the
+    ' host does the 64-bit subtraction.
+    taken(0) = benchHi: taken(1) = benchLo: taken(2) = hi: taken(3) = lo
+    taken(4) = high: taken(5) = low
     DEF SEG = VARSEG(taken(0))
-    BSAVE "T" + LTRIM$(STR$(phase)) + ".BIN", VARPTR(taken(0)), 12
+    BSAVE "T" + LTRIM$(STR$(phase)) + ".BIN", VARPTR(taken(0)), 24
     DEF SEG
-    CALL BenchSnap(benchTick, benchCount)
-END SUB
-
-SUB BenchSnap (tick AS LONG, count AS LONG)
-    ' bench/nbody.bas's PitSnap, without the mask. Masking IRQ0 across the
-    ' read stops the BIOS tick from moving, which is not the same as making
-    ' it right: a tick already pending is not counted, and the reading is a
-    ' whole 65536 short with the down-counter nowhere near an edge, where no
-    ' edge guard can see it. qbdemo's mark 4 read 305304 against 370838 for
-    ' two programs whose mark-4 code is the same instructions.
-    ' Reading the tick either side and retrying while they differ is the
-    ' fact wanted: no tick landed during this reading.
-    ' One byte either side, not the whole count: `tick` is a reference
-    ' parameter, and reading it back to compare made the guard a question
-    ' about a far load rather than about the clock. The low byte of the
-    ' BIOS tick changes on every tick and wraps in 14 seconds, which is
-    ' all "did a tick land during this reading" needs.
-    DIM low AS INTEGER, high AS INTEGER, raw AS LONG
-    DIM first AS INTEGER, second AS INTEGER
-    DO
-        DEF SEG = &H40
-        first = PEEK(&H6C)
-        OUT &H43, &H0
-        low = INP(&H40)
-        high = INP(&H40)
-        second = PEEK(&H6C)
-        tick = CLNG(PEEK(&H6C)) + CLNG(PEEK(&H6D)) * 256& + CLNG(PEEK(&H6E)) * 65536&
-        DEF SEG
-        raw = CLNG(low) + CLNG(high) * 256&
-    LOOP WHILE first <> second OR raw > 65536& - 12000 OR raw < 12000
-    count = raw
+    CALL TscSnap(benchHi, benchLo)
 END SUB
 """
 
@@ -267,16 +244,31 @@ def build(name: str, demos: Path, cpu: str) -> Path:
     compiled = launch(work, cfg.mount, [f"{cfg.bc} {SWITCHES} DEMO.BAS, DEMO.OBJ; > BC.OUT"], env={"LIB": r"V:\LIB"})
     if not compiled.finished or re.findall(r"(\d+)\s+Severe\s+Error", read_dos(work, "BC.OUT")) != ["0"]:
         raise SystemExit(f"BC failed; see {work / 'BC.OUT'}")
+    assembled = subprocess.run(
+        [str(NATIVE / "jwasm"), "-c", "-Cp", "-Zg", "-omf", f"-Fo{work / 'TSCSNAP.OBJ'}", str(TSCSNAP)],
+        capture_output=True,
+        text=True,
+    )
+    if assembled.returncode != 0:
+        raise SystemExit(f"jwasm failed on {TSCSNAP}:\n{assembled.stdout}{assembled.stderr}")
+    # TSCSNAP is in the link unit so the rewrite can resolve it, and allowed
+    # through unchanged because it is not BC's. Both builds link the object
+    # jwasm made; the demo itself must have been rewritten.
     runtime = cfg.mount / "LIB" / "BCOM45.LIB"
-    if rewrite.main([str(work / "DEMO.OBJ"), str(runtime), "-o", str(work / "DEMOQ.OBJ"), "--cpu", cpu]):
+    rewritten = work / "rewritten"
+    inputs = [str(work / "DEMO.OBJ"), str(work / "TSCSNAP.OBJ"), str(runtime)]
+    if rewrite.main([*inputs, "--output-dir", str(rewritten), "--cpu", cpu, "--allow-unchanged"]):
         raise SystemExit(f"qbopt failed on {name}")
-
+    optimized = (rewritten / "DEMO.OBJ").read_bytes()
+    if optimized == (work / "DEMO.OBJ").read_bytes():
+        raise SystemExit(f"qbopt left {name} unchanged")
+    (work / "DEMOQ.OBJ").write_bytes(optimized)
     linked = launch(
         work,
         cfg.mount,
         [
-            f"{cfg.link} DEMO.OBJ, BASE.EXE,, {cfg.runtime}; > LINK.OUT",
-            f"{cfg.link} DEMOQ.OBJ, OPT.EXE,, {cfg.runtime}; >> LINK.OUT",
+            f"{cfg.link} DEMO.OBJ+TSCSNAP.OBJ, BASE.EXE,, {cfg.runtime}; > LINK.OUT",
+            f"{cfg.link} DEMOQ.OBJ+TSCSNAP.OBJ, OPT.EXE,, {cfg.runtime}; >> LINK.OUT",
         ],
         env={"LIB": r"V:\LIB"},
     )
@@ -307,13 +299,20 @@ def collect(work: Path, build: str) -> Path:
     return into
 
 
-def marks(into: Path) -> dict[int, tuple[int, tuple[int, int], bytes | None]]:
-    """Per mark: ticks, the checksum the program computed, and the dumped screen and palette."""
+def _counts_per_ms() -> int:
+    """DOSBox-X's RDTSC advances by the fixed cycle rate per emulated millisecond."""
+    return int(re.search(r"^cycles=(?:fixed\s+)?(\d+)$", MEASURE, re.MULTILINE).group(1))
+
+
+def marks(into: Path) -> dict[int, tuple[float, tuple[int, int], bytes | None]]:
+    """Per mark: emulated ms since the previous one, the checksum the program computed, and the dumped screen and palette."""
     found = {}
     for taken in sorted(into.glob("T*.BIN")):
         mark = int(taken.stem[1:])
         # BSAVE prefixes a seven-byte header.
-        elapsed, high, low = struct.unpack("<3i", taken.read_bytes()[7:19])
+        before_hi, before_lo, hi, lo, high, low = struct.unpack("<6i", taken.read_bytes()[7:31])
+        stamp = lambda upper, lower: (upper & 0xFFFFFFFF) << 32 | (lower & 0xFFFFFFFF)  # noqa: E731
+        elapsed = (stamp(hi, lo) - stamp(before_hi, before_lo)) / _counts_per_ms()
         screen, palette = into / f"V{mark}.BIN", into / f"P{mark}.BIN"
         dumped = screen.read_bytes()[7:] + palette.read_bytes()[7:] if screen.is_file() and palette.is_file() else None
         found[mark] = (elapsed, (high, low), dumped)
@@ -344,11 +343,11 @@ def report(name: str, work: Path) -> bool:
         total_base, total_opt = total_base + base_ticks, total_opt + opt_ticks
         ratio = base_ticks / opt_ticks if opt_ticks > 0 else 0
         print(
-            f"  mark {mark}: {base_ticks:>10d} -> {opt_ticks:>10d}  {ratio:5.2f}x  "
+            f"  mark {mark}: {base_ticks:>12.3f} ms -> {opt_ticks:>12.3f} ms  {ratio:5.2f}x  "
             f"{'same output' if same else 'OUTPUT DIFFERS'}  {probes}"
         )
     if total_opt:
-        print(f"  total : {total_base:>10d} -> {total_opt:>10d}  {total_base / total_opt:5.2f}x")
+        print(f"  total : {total_base:>12.3f} ms -> {total_opt:>12.3f} ms  {total_base / total_opt:5.2f}x")
     return same_everywhere
 
 

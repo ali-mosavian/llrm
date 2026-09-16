@@ -6,8 +6,8 @@ import subprocess
 from pathlib import Path
 
 from qbopt.objectfile import omf
+from qbopt.backend import omfwrite
 from qbopt.objectfile import module
-from qbopt.objectfile import relocate
 
 
 def built(source: bytes, assembled: bytes, expected_digest: str) -> bytes:
@@ -37,7 +37,7 @@ def built(source: bytes, assembled: bytes, expected_digest: str) -> bytes:
         else:
             relocations.setdefault(old, []).append(new)
     image = found.code[:0x30] + assembled[:split]
-    written = relocate.as_records(
+    written = omfwrite._bc_object(
         records,
         found.seg,
         0x30,
@@ -49,7 +49,7 @@ def built(source: bytes, assembled: bytes, expected_digest: str) -> bytes:
     )
     if isinstance(written, str):
         raise ValueError(written)
-    return b"".join(record.emit() for record in written)
+    return written
 
 
 def main() -> None:

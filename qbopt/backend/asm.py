@@ -9,7 +9,7 @@ ended up.
 
 Split out of `layout.py`, which held this and the allocation and the
 byte-preservation check in one module. The split is not cosmetic. Layout
-colours a body when it is handed no assignment, and `objwrite.py` -- which
+colours a body when it is handed no assignment, and `omfwrite.py` -- which
 runs after a real allocator -- had no way to say "already done": passing
 nothing made layout allocate a second time over operands that were already
 physical registers, and the remap that followed produced a call encoding

@@ -4,22 +4,11 @@ The shift map, and the branches that have no record to lean on.
 
 from pathlib import Path
 
-
-def test_expanded_operation_can_cross_records_without_splitting_fixups():
-    """NDMAX's 60-dimensional HARY expansion exceeded one LEDATA and was refused."""
-    from qbopt.objectfile.relocate import _boundaries, LEDATA_LIMIT
-    size = LEDATA_LIMIT * 3
-    fields = ((LEDATA_LIMIT - 1, LEDATA_LIMIT + 3), (2 * LEDATA_LIMIT - 2, 2 * LEDATA_LIMIT + 4))
-    cuts = _boundaries(bytes(size), {}, 0, fields)
-    assert cuts[0] == 0 and cuts[-1] == size
-    assert all(0 < right - left <= LEDATA_LIMIT for left, right in zip(cuts, cuts[1:]))
-    assert not any(low < cut < high for cut in cuts for low, high in fields)
-
 import pytest
 
 import corpus
-from qbopt.objectfile import omf
 from helpers import hx
+from qbopt.objectfile import omf
 from qbopt.frontend.declen import run
 from qbopt.frontend.declen import decode
 from qbopt.objectfile.relocate import Edit
@@ -35,6 +24,26 @@ from qbopt.objectfile.relocate import branches
 from qbopt.objectfile.relocate import relocate
 from qbopt.objectfile.relocate import retarget
 from qbopt.objectfile.relocate import retarget_branches
+
+
+def test_expanded_operation_can_cross_records_without_splitting_fixups() -> None:
+    """NDMAX's 60-dimensional HARY expansion exceeded one LEDATA and was refused."""
+    from qbopt.backend import omfwrite
+
+    size = omfwrite.CHUNK * 3
+    starts = (omfwrite.CHUNK - 1, 2 * omfwrite.CHUNK - 2)
+    fixups = []
+    for at in starts:
+        one = omf.target_offset_fixup(1, at, "segment", 1, 0)
+        one.loc = omf.LOC_PTR32
+        fixups.append((at, one, 0))
+    records = omfwrite._fresh_segment(1, bytes(size), [(0, size)], fixups)
+    assert not isinstance(records, str)
+    chunks = [(at, at + len(data)) for _record, _seg, at, data in omf.ledata(records)]
+    assert chunks[0][0] == 0 and chunks[-1][1] == size
+    assert all(0 < right - left <= omfwrite.CHUNK for left, right in chunks)
+    assert not any(low < cut < low + 4 for cut in (right for _left, right in chunks) for low in starts)
+
 
 # 0x20..0x30 shrinks to 8 bytes, 0x40..0x50 to 4
 SHRUNK = Shift.of([Edit(0x20, 0x30, bytes(8)), Edit(0x40, 0x50, bytes(4))])
@@ -243,11 +252,11 @@ def test_a_fixup_naming_an_offset_the_layout_did_not_place_is_refused(monkeypatc
     removed from the map after the records have had theirs, so the fixup
     loop is the only thing that can see it missing.
     """
-    from qbopt.objectfile import relocate
+    from qbopt.backend import omfwrite
     from qbopt.wholeseg import REBUILT
     from qbopt.wholeseg import rebuilt
 
-    real = relocate._mapped
+    real = omfwrite._mapped
     seen: list[int] = []
 
     def watch(offset: int, kept: int, moved: dict[int, int]) -> int | None:
@@ -267,7 +276,7 @@ def test_a_fixup_naming_an_offset_the_layout_did_not_place_is_refused(monkeypatc
             for fixup in omf.fixups(records)
         )
 
-    monkeypatch.setattr(relocate, "_mapped", watch)
+    monkeypatch.setattr(omfwrite, "_mapped", watch)
     obj = None
     for one in FIXTURES:
         seen.clear()
@@ -288,7 +297,7 @@ def test_a_fixup_naming_an_offset_the_layout_did_not_place_is_refused(monkeypatc
         calls += 1
         return None if calls - 1 == last else real(offset, kept, moved)
 
-    monkeypatch.setattr(relocate, "_mapped", missing)
+    monkeypatch.setattr(omfwrite, "_mapped", missing)
     why = rebuilt(obj.read_bytes())[1]
     assert why != REBUILT, "a fixup naming an unplaceable offset was written anyway"
     assert "a fixup names" in why, why
@@ -302,12 +311,12 @@ def test_every_rebuilt_object_maps_every_code_offset_it_names(obj: Path, monkeyp
     to an instruction the layout placed. If one did not, the refusal above
     would fire -- so a rebuild that succeeds is the assertion.
     """
-    from qbopt.objectfile import relocate
+    from qbopt.backend import omfwrite
     from qbopt.wholeseg import REBUILT
     from qbopt.wholeseg import rebuilt
 
     unmapped: list[int] = []
-    real = relocate._mapped
+    real = omfwrite._mapped
 
     def watch(offset: int, kept: int, moved: dict[int, int]) -> int | None:
         out = real(offset, kept, moved)
@@ -315,7 +324,7 @@ def test_every_rebuilt_object_maps_every_code_offset_it_names(obj: Path, monkeyp
             unmapped.append(offset)
         return out
 
-    monkeypatch.setattr(relocate, "_mapped", watch)
+    monkeypatch.setattr(omfwrite, "_mapped", watch)
     why = rebuilt(obj.read_bytes())[1]
     if why == REBUILT:
         assert not unmapped, f"{obj.stem}: rebuilt while {len(unmapped)} offsets did not map"

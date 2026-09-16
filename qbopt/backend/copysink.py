@@ -90,36 +90,37 @@ def _between(at_of, inside: set, copy_at: int, exit_from: int) -> "set | None":
     return forward & backward
 
 
-def _read_inside(at_of, inside: set, block, index: int, written: set) -> bool:
-    """Whether a path from after the copy that stays in the loop reads `written` before writing it.
+def _round(at_of: dict[int, lir.LirBlock], inside: set, universe: frozenset) -> dict[int, frozenset]:
+    """Per loop block, the lanes live on entry along paths that stay in the loop.
 
-    Not the same as asking the exit block's successors: an inner loop can read
-    the copy and come back to it without ever passing the exit test.
+    The exit is left out: a lane only the exit reads is what the sunk copy is
+    for, and a lane a nested loop reads again is not.
     """
-    seen: set[int] = set()
-    queue = [(block.at, index + 1)]
-    while queue:
-        at, start = queue.pop()
-        for other in at_of[at].insns[start:]:
-            if _touches(other, written, reading=True):
-                return True
-            if _touches(other, written, reading=False):
-                break
-        else:
-            for to in at_of[at].succ:
-                if to in inside and to not in seen:
-                    seen.add(to)
-                    queue.append((to, 0))
-    return False
+    from qbopt.backend.liveness import _backwards
+
+    into = {at: frozenset() for at in inside}
+    changing = True
+    while changing:
+        changing = False
+        for at in inside:
+            after = frozenset().union(*(into[to] for to in at_of[at].succ if to in inside))
+            before = _backwards(at_of[at], after, universe)
+            if before != into[at]:
+                into[at] = before
+                changing = True
+    return into
 
 
 def sunk(body: lir.LirBody) -> lir.LirBody:
     """`body` with each such copy moved from inside its loop to the exit."""
     from qbopt.backend.peephole import _lanes
+    from qbopt.backend.liveness import _universe
+    from qbopt.backend.liveness import _backwards
 
     found = loopy.loops(list(body.blocks), body.entry)
     if not found:
         return body
+    universe = _universe()
     at_of = {block.at: block for block in body.blocks}
     predecessors: dict[int, list[int]] = {at: [] for at in at_of}
     for block in body.blocks:
@@ -140,6 +141,7 @@ def sunk(body: lir.LirBody) -> lir.LirBody:
         ((source_at, exit_at),) = leaving
         if exit_at not in at_of or predecessors[exit_at] != [source_at]:
             continue
+        round_into = _round(at_of, inside, universe)
         for block in (at_of[at] for at in sorted(inside)):
             for index, one in enumerate(block.insns):
                 pair = _copy(one)
@@ -149,7 +151,11 @@ def sunk(body: lir.LirBody) -> lir.LirBody:
                 written, read = _lanes(dest.register), _lanes(register.register)
                 if not written or not read or written & read:
                     continue
-                if _read_inside(at_of, inside, block, index, written):
+                # Dead on every way round, nested loops included. Asked only at
+                # the header, PRECALCULATIONS' inner loop read the copy again
+                # and the copy left both loops.
+                after = frozenset().union(*(round_into[to] for to in block.succ if to in inside))
+                if written & _backwards(replace(block, insns=block.insns[index + 1 :]), after, universe):
                     continue
                 rest = _between(at_of, inside, block.at, source_at)
                 if rest is None:
