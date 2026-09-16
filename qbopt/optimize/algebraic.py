@@ -21,6 +21,7 @@ def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) 
     def simplify(op):
         op = _recombined(op, definitions)
         op = _redundant_extension(op, definitions)
+        op = _zero_difference(op, definitions)
         op = _negated_difference(op, definitions, wanted | mentioned, uses)
         op = _shift_chain(op, definitions, wanted | mentioned)
         op = _product(op, wanted | mentioned, wide)
@@ -231,6 +232,39 @@ def _redundant_extension(op: mir.Op, definitions: dict) -> mir.Op:
     known = mir.Held(viewed.value, result.width)
     return replace(op, kind=mir.Kind.COPY, args=(known,), uses=(viewed.value,),
                    merges={}, node=None, made=None, raised=None)
+
+
+def _zero_difference(op: mir.Op, definitions: dict) -> mir.Op:
+    """``0 - x`` is the unary modular negation of x, with identical flags."""
+    if (op.kind is not mir.Kind.SUB or op.loads or op.stores or op.barrier or op.merges
+        or len(op.args) != 2 or len(op.results) != 1
+        or not isinstance(op.args[1], mir.Held) or not isinstance(op.results[0], mir.Held)
+        or any(not value.flags for value in op.defines if value != op.results[0].value)):
+        return op
+    zero, source = op.args
+    result = op.results[0]
+    if (zero.width != source.width or source.width != result.width
+        or set(op.uses) != {arg.value for arg in op.args if isinstance(arg, mir.Held)}
+        or not _copied_zero(zero, definitions)):
+        return op
+    return replace(op, kind=mir.Kind.NEG, name="neg", op=ir.Operation.UNARY,
+                   args=(source,), uses=(source.value,), node=None, made=None, raised=None)
+
+
+def _copied_zero(arg: mir.Arg, definitions: dict) -> bool:
+    """Whether an operand is zero through width-preserving, effect-free copies."""
+    width = arg.width
+    seen = set()
+    while isinstance(arg, mir.Held) and arg.value not in seen:
+        seen.add(arg.value)
+        made = definitions.get(arg.value)
+        if (made is None or made.kind is not mir.Kind.COPY
+            or made.loads or made.stores or made.barrier or made.merges
+            or made.results != (arg,) or made.defines != (arg.value,)
+            or len(made.args) != 1 or getattr(made.args[0], "width", None) != width):
+            return False
+        arg = made.args[0]
+    return isinstance(arg, mir.Const) and arg.width == width and consts.masked(arg.n, width) == 0
 
 
 def _halves(op: mir.Op):

@@ -51,6 +51,8 @@ def tied(body: lir.LirBody) -> lir.LirBody:
 
     _, leaving = allocate.live(body)
     copies = _copy_destinations(body)
+    from qbopt.backend import coalesce
+    interference = coalesce._interference(body)
     blocks = []
     for block in body.blocks:
         alive = set(leaving[block.at])
@@ -61,7 +63,7 @@ def tied(body: lir.LirBody) -> lir.LirBody:
             alive.update(one.uses)
         insns: list[lir.Insn] = []
         for one in block.insns:
-            chosen = _commuted(one, live_after[id(one)], copies)
+            chosen = _commuted(one, live_after[id(one)], copies, interference)
             changed |= chosen is not one
             one = chosen
             fix = _untied(one, mint)
@@ -108,7 +110,7 @@ def _distance(copies: dict[int, set[int]], start: int, goal: int, limit: int = 8
     return float("inf")
 
 
-def _commuted(one: lir.Insn, alive: frozenset[int], copies=None) -> lir.Insn:
+def _commuted(one: lir.Insn, alive: frozenset[int], copies=None, interference=None) -> lir.Insn:
     what = one.what
     if (
         what is None
@@ -133,10 +135,21 @@ def _commuted(one: lir.Insn, alive: frozenset[int], copies=None) -> lir.Insn:
     # elimination put between them: `acc := d + acc` has to tie `acc` for
     # the three to be one value, and nbody's accY tied `d` and copied the
     # sum back into its slot on every pass.
+    affinities = (copies or {}).get(into.value, set())
+
+    def blocked(source: int) -> int:
+        return sum(other in (interference or {}).get(source, set()) for other in affinities)
+
     reusable = (
         first.value not in alive
         and second.value not in alive
-        and _distance(copies or {}, into.value, second.value) < _distance(copies or {}, into.value, first.value)
+        and (
+            blocked(second.value),
+            _distance(copies or {}, into.value, second.value),
+        ) < (
+            blocked(first.value),
+            _distance(copies or {}, into.value, first.value),
+        )
     )
     if second.value == into.value or first.value in alive and second.value not in alive or reusable:
         return replace(one, what=replace(what, sources=(second, first)))

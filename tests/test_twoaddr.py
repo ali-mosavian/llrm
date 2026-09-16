@@ -54,6 +54,22 @@ def test_result_copy_affinity_does_not_override_liveness(alive, swapped):
     assert chosen.what.sources == (tuple(reversed(one.what.sources)) if swapped else one.what.sources)
 
 
+def test_crc32_ties_the_operand_that_can_join_its_loop_phi() -> None:
+    """CRC32 tied XOR to its shifted temporary, then copied the result around the backedge.
+
+    Both operands die at XOR, but only the masked operand can share the
+    result's loop-carried value: the shifted operand overlaps it earlier in
+    the iteration.  Prefer the tie that leaves phi coalescing legal.
+    """
+    one = addition("xor")
+    copies = {3: {4}, 4: {3}}
+    interference = {1: {4}, 4: {1}}
+
+    chosen = twoaddr._commuted(one, frozenset({3}), copies, interference)
+
+    assert chosen.what.sources == tuple(reversed(one.what.sources))
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_localp_updates_the_accumulator_without_a_loop_copy(tag):
     """LOCALP copied every LONG sum back because ADD tied to the temporary index."""

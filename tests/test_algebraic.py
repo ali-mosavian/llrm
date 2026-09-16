@@ -695,3 +695,43 @@ def test_redundant_extension_requires_every_output_bit_to_be_known(guard: str) -
             second = replace(second, defines=(result, flags))
 
     assert algebraic._redundant_extension(second, {middle: first}) == second
+
+
+def test_subtracting_from_a_copied_zero_is_negation() -> None:
+    """C CRC32 copied an invariant zero before `0 - (crc & 1)` in every bit iteration."""
+    zero, source, result, flags = (mir.Value(index, 0, flags=index == 4) for index in range(1, 5))
+    constant = mir.Op(1, ir.Operation.MOVE, "", (zero,), (), kind=mir.Kind.COPY,
+                      args=(mir.Const(0, 4),), results=(mir.Held(zero, 4),))
+    subtract = mir.Op(2, ir.Operation.BINARY, "", (result, flags), (zero, source), kind=mir.Kind.SUB,
+                      args=(mir.Held(zero, 4), mir.Held(source, 4)), results=(mir.Held(result, 4),))
+
+    changed = algebraic._zero_difference(subtract, {zero: constant})
+
+    assert changed.kind is mir.Kind.NEG
+    assert changed.args == (mir.Held(source, 4),)
+    assert changed.defines == (result, flags)
+    assert changed.uses == (source,)
+
+
+@pytest.mark.parametrize("guard", ["nonzero", "width", "effect", "extra_result", "untracked_use", "cycle"])
+def test_zero_difference_requires_a_complete_pure_value(guard: str) -> None:
+    zero, source, result, extra = (mir.Value(index, 0) for index in range(1, 5))
+    constant = mir.Op(1, ir.Operation.MOVE, "", (zero,), (), kind=mir.Kind.COPY,
+                      args=(mir.Const(0, 4),), results=(mir.Held(zero, 4),))
+    subtract = mir.Op(2, ir.Operation.BINARY, "", (result,), (zero, source), kind=mir.Kind.SUB,
+                      args=(mir.Held(zero, 4), mir.Held(source, 4)), results=(mir.Held(result, 4),))
+    match guard:
+        case "nonzero":
+            constant = replace(constant, args=(mir.Const(1, 4),))
+        case "width":
+            subtract = replace(subtract, results=(mir.Held(result, 2),))
+        case "effect":
+            constant = replace(constant, op=ir.Operation.BARRIER)
+        case "extra_result":
+            subtract = replace(subtract, defines=(result, extra))
+        case "untracked_use":
+            subtract = replace(subtract, uses=(source,))
+        case "cycle":
+            constant = replace(constant, args=(mir.Held(zero, 4),), uses=(zero,))
+
+    assert algebraic._zero_difference(subtract, {zero: constant}) == subtract
