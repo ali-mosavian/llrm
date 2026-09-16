@@ -366,7 +366,7 @@ def run_one(mutation: Mutation, into: Path, marker: str) -> Outcome:
     target.write_text(text.replace(mutation.before, mutation.after))
 
     done = subprocess.run(
-        [sys.executable, "-m", "pytest", "-x", "-q", "-p", "no:cacheprovider", "-m", marker],
+        [sys.executable, "-m", "pytest", "-x", "-q", "-p", "no:cacheprovider", "--full", "-m", marker],
         cwd=tree,
         capture_output=True,
         check=False,

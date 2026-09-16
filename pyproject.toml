@@ -65,17 +65,15 @@ unresolved-import = "ignore"
 unresolved-import = "error"
 
 [tool.pytest.ini_options]
-# Measured on an 8-core machine with the corpus cache warm, best of several
-# interleaved runs of `-m "not e2e"`: 4 workers 3.3s, no workers 4.8s, `-n auto`
-# (8) 9.0s -- eight workers each pay a second of interpreter and conftest
-# startup and then contend for the same eight cores. worksteal rather than the
-# default `load` because the durations are uneven: one corpus-wide test against
-# five thousand sub-millisecond ones is exactly what an up-front chunking
-# scheduler mis-splits.
-addopts = ["-ra", "--showlocals", "--strict-markers", "-n", "4", "--dist", "worksteal"]
+# Tier 1 is deliberately too small for worker startup to pay for itself. The
+# documented Tier 2 command adds four workers with work stealing: its durations
+# are uneven, so the default up-front chunking scheduler mis-splits the corpus.
+addopts = ["-ra", "--showlocals", "--strict-markers"]
 testpaths = ["tests"]
 pythonpath = ["tools", "tests"]
 markers = [
+    "fast: Tier 1 tests selected by default; hermetic or focused regressions",
+    "full: Tier 2 exhaustive corpus or integration tests; selected with --full",
     "corpus: runs the rewriter over the committed .OBJ fixtures (no emulator)",
     "e2e: compiles, links and runs under DOSBox-X (needs the DOS toolchains)",
     "slow: measurement runs",

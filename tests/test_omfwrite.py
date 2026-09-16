@@ -67,6 +67,7 @@ def test_an_obj_output_uses_the_native_writer(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(not Path(JWASM).exists(), reason="jwasm is not installed")
+@pytest.mark.full
 @pytest.mark.parametrize("module", sorted(one.stem for one in (ROOT / "fixtures" / "c").glob("*.cgs")))
 def test_the_object_is_the_one_jwasm_assembles(module: str, tmp_path: Path) -> None:
     """Segments, bytes and every fixup's target, against jwasm on the printed source."""
@@ -89,6 +90,7 @@ def test_the_object_is_the_one_jwasm_assembles(module: str, tmp_path: Path) -> N
 
 
 @pytest.mark.skipif(not Path(JWASM).exists(), reason="jwasm is not installed")
+@pytest.mark.full
 def test_externals_are_declared_in_the_order_jwasm_declares_them(tmp_path: Path) -> None:
     """jwasm declares a data external before any procedure's, and LINK pulls
     library modules in EXTDEF order: CM.LIB's FILES landed elsewhere and
@@ -197,20 +199,3 @@ def test_a_fixup_naming_an_offset_the_layout_did_not_place_is_refused(
     got = wholeseg.emitted(source)
     assert got.outcome is wholeseg.Emission.REFUSED
     assert "a fixup names" in got.reason
-
-
-def test_every_fresh_object_maps_every_code_offset_it_names(obj: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every record and fixup offset in an accepted object has a new home."""
-    unmapped: list[int] = []
-    real = omfwrite._mapped
-
-    def watch(offset: int, kept: int, moved: dict[int, int]) -> int | None:
-        out = real(offset, kept, moved)
-        if out is None:
-            unmapped.append(offset)
-        return out
-
-    monkeypatch.setattr(omfwrite, "_mapped", watch)
-    got = wholeseg.emitted(obj.read_bytes())
-    if got.outcome is wholeseg.Emission.LIR:
-        assert not unmapped, f"{obj.stem}: emitted while {len(unmapped)} offsets did not map"

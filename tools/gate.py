@@ -66,7 +66,7 @@ PROGRAMS = ("hotlop", "pressx", "lngmix", "nested", "harr", "nots")
 
 def _tests() -> tuple[bool, str]:
     got = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", *TESTS],
+        [sys.executable, "-m", "pytest", "-q", "--full", "-n", "4", "--dist", "worksteal", *TESTS],
         cwd=HERE,
         capture_output=True,
         text=True,
@@ -84,11 +84,7 @@ def _rebuild() -> tuple[bool, str]:
     from qbopt import wholeseg
 
     objects = sorted((HERE / "fixtures" / "omf").glob("*.obj"))
-    refused = [
-        one.name
-        for one in objects
-        if wholeseg.rebuilt(one.read_bytes())[1] != wholeseg.REBUILT
-    ]
+    refused = [one.name for one in objects if wholeseg.rebuilt(one.read_bytes())[1] != wholeseg.REBUILT]
     if refused:
         return False, f"{len(objects) - len(refused)} of {len(objects)}: {refused[:3]}"
     return True, f"{len(objects)} of {len(objects)}"

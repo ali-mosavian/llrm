@@ -156,8 +156,9 @@ recurrences; `si` is the `row + column` recurrence.
 ## Validate
 
 ```sh
-uv run pytest -m "not e2e"
-uv run pytest tests/test_array_access.py
+uv run pytest
+uv run pytest --full -n 4 -m "not e2e"
+uv run pytest --full tests/test_array_access.py
 uv run python tools/e2e.py p-g2 --prog harr
 uv run python -m qbopt.price PROGRAM.OBJ
 ```

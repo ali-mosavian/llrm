@@ -1,11 +1,23 @@
 # Running the tests
 
-    uv run pytest                                  everything
-    uv run pytest -m "not e2e"                     host only, no emulator
-    uv run pytest -m corpus                        the rewriter over the fixtures
+    uv run pytest                                  Tier 1: fast development suite
+    uv run pytest --full -n 4 --dist worksteal     Tier 1 + Tier 2: everything
+    uv run pytest --full -n 4 -m "not e2e"         full host suite, no emulator
+    uv run pytest --full -n 4 -m corpus            exhaustive fixture corpus
 
-`pre-commit` runs the whole suite, end-to-end tier included, and runs it in
-parallel (`pytest-xdist`, `-n auto` in `addopts`). Every `tools/cache.py`
+Tier 1 is the command to run after an ordinary change. It consists of focused
+unit tests, regression tests, and representative object integrations, and is
+kept to a 1--3 second wall-clock budget on the development machine. Tier 2 is
+for phase boundaries, changes to broad compiler invariants, and release gates.
+It adds every exhaustive object parametrization, corpus sweep, measurement,
+toolchain, and DOSBox test. Pass `--full` when selecting any Tier 2 test by
+path or marker; this prevents a broad test from silently joining the fast tier.
+Tier 1 modules are an allow-list in `tests/conftest.py`: a new test module
+starts in Tier 2 until it is deliberately admitted to the bounded inner loop.
+
+`pre-commit` runs Tier 1 in one process because worker startup costs more than
+the small suite. The Tier 2 commands use four `pytest-xdist` workers. Every
+`tools/cache.py`
 compile/link/run is memoized on disk under `build/launch-cache/`, keyed off
 the exact bytes DOSBox is about to see -- a warm commit (nothing a `.bas`
 fixture, a switch, or the pass itself touches has changed) takes single-digit
@@ -17,10 +29,11 @@ toolchain reinstall or a dosbox-x upgrade that didn't change any file the key
 already covers (see `tools/cache.py`'s own docstring for exactly what the key
 does and does not cover).
 
-## Tiers
+## Tier 2 groups
 
-**Hermetic** -- `tests/test_omf.py`, `test_declen.py`, `test_lift.py`. Bytes
-built in the test. Milliseconds, no dependencies.
+**Full host** (`full`) -- exhaustive object parametrizations, broad invariant
+scans, and specialized regressions outside the representative Tier 1 modules.
+Needs nothing beyond the repository unless a narrower marker says otherwise.
 
 **Corpus** (`corpus`) -- `tests/test_rewrite.py`, the rewriter over
 `fixtures/omf/*.obj`, which are real BC output. Needs nothing but the repo.
@@ -28,6 +41,12 @@ built in the test. Milliseconds, no dependencies.
 **End to end** (`e2e`) -- `tests/test_e2e.py`. BC compiles `suite/*.bas`, qbopt
 rewrites the object, LINK links it, the program runs, and its output is
 compared. Needs `dosbox-x` and the three DOS toolchains; skips without them.
+
+The `full` marker covers expensive checks inside an otherwise fast module.
+Every module outside the Tier 1 allow-list is classified as full automatically,
+as are tests parametrized by the shared `obj`, `mapped_obj`, or `operator_obj`
+fixtures or directly by fixture-object paths. `tests/test_test_tiers.py` is the
+regression for this instrument.
 
 ## What belongs in the suite
 
