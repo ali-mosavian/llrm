@@ -61,7 +61,7 @@ def test_an_explicit_body_input_satisfies_the_definition_rule() -> None:
     assert not verify.verify(body)
 
 
-@pytest.mark.parametrize("covers", [None, (1, 1)])
+@pytest.mark.parametrize("covers", [None, (1, 1), (1, 3)])
 def test_register_allocation_keeps_the_definition_of_an_elided_identity(
     covers: tuple[int, int] | None,
 ) -> None:
@@ -77,6 +77,7 @@ def test_register_allocation_keeps_the_definition_of_an_elided_identity(
         what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(2, 2),), (ir.Held(1, 2),)),
         defines=(2,),
         uses=(1,),
+        symbol=covers == (1, 3),
     )
     returning = lir.Insn(
         at=2,
@@ -99,6 +100,8 @@ def test_register_allocation_keeps_the_definition_of_an_elided_identity(
     placed = allocate.applied(body, assignment)
 
     assert not verify.verify(placed)
+    assert placed.insns[0].what.op is ir.Operation.NOTHING
+    assert placed.insns[0].symbol is not True
 
 
 def test_parallel_copy_identity_keeps_its_virtual_definition() -> None:

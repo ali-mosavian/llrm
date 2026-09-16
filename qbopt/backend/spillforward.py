@@ -168,6 +168,9 @@ def forwarded(body: lir.LirBody) -> lir.LirBody:
     for block in body.blocks:
         redundant = set(_transfer(block, into[block.at])[0])
         if redundant:
-            block = replace(block, insns=tuple(lir.without(block.insns, lambda one: id(one) in redundant)))
+            block = replace(
+                block,
+                insns=tuple(lir.anchor(one) if id(one) in redundant else one for one in block.insns),
+            )
         blocks.append(block)
     return replace(body, blocks=tuple(blocks))

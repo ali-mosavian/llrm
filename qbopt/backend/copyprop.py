@@ -14,15 +14,35 @@ def forwarded(body: lir.LirBody) -> lir.LirBody:
 
     if any(block.phis for block in body.blocks):
         return body
-    lanes = sorted({lane for register in (Register.EAX, Register.EBX, Register.ECX,
-                    Register.EDX, Register.ESI, Register.EDI, Register.EBP) for lane in _lanes(register)})
+    lanes = sorted(
+        {
+            lane
+            for register in (
+                Register.EAX,
+                Register.EBX,
+                Register.ECX,
+                Register.EDX,
+                Register.ESI,
+                Register.EDI,
+                Register.EBP,
+            )
+            for lane in _lanes(register)
+        }
+    )
     universe = frozenset(combinations(lanes, 2))
     recipes = {}
     for one in body.insns:
         what = one.what
-        if (what is not None and what.op in (ir.Operation.BRANCH, ir.Operation.JUMP)
-            and isinstance(what.target, int) and not what.sources and not what.dests
-            and not one.clobbers and not one.requires and not one.delivers):
+        if (
+            what is not None
+            and what.op in (ir.Operation.BRANCH, ir.Operation.JUMP)
+            and isinstance(what.target, int)
+            and not what.sources
+            and not what.dests
+            and not one.clobbers
+            and not one.requires
+            and not one.delivers
+        ):
             recipes[id(one)] = ((), ())
             continue
         effects = _register_effects(one, may_write=True)
@@ -47,8 +67,11 @@ def forwarded(body: lir.LirBody) -> lir.LirBody:
         writes, copies = recipe
         if copies:
             sources = dict(copies)
-            return frozenset((left, right) for left, right in universe
-                             if equal(facts, sources.get(left, left), sources.get(right, right)))
+            return frozenset(
+                (left, right)
+                for left, right in universe
+                if equal(facts, sources.get(left, left), sources.get(right, right))
+            )
         return frozenset(pair for pair in facts if not writes.intersection(pair)) if writes else facts
 
     blocks = {block.at: block for block in body.blocks}
@@ -71,8 +94,11 @@ def forwarded(body: lir.LirBody) -> lir.LirBody:
             if block.at not in reachable:
                 continue
             parents = predecessors[block.at] & reachable
-            incoming = (frozenset.intersection(*(exits[at] for at in parents))
-                        if parents and block.at != body.entry else frozenset())
+            incoming = (
+                frozenset.intersection(*(exits[at] for at in parents))
+                if parents and block.at != body.entry
+                else frozenset()
+            )
             entries[block.at] = incoming
             facts = incoming
             for one in block.insns:
@@ -86,11 +112,23 @@ def forwarded(body: lir.LirBody) -> lir.LirBody:
         facts, redundant = entries.get(block.at, frozenset()), set()
         for one in block.insns:
             recipe = recipes[id(one)]
-            if (recipe is not None and recipe[1] and block.at in reachable
-                and not one.requires and not one.delivers and not one.spread
-                and one.group is None and one.symbol is not True
-                and all(equal(facts, left, right) for left, right in recipe[1])):
+            if (
+                recipe is not None
+                and recipe[1]
+                and block.at in reachable
+                and not one.requires
+                and not one.delivers
+                and not one.spread
+                and one.group is None
+                and one.symbol is not True
+                and all(equal(facts, left, right) for left, right in recipe[1])
+            ):
                 redundant.add(id(one))
             facts = after(facts, one)
-        result.append(replace(block, insns=tuple(lir.without(block.insns, lambda one: id(one) in redundant))))
+        result.append(
+            replace(
+                block,
+                insns=tuple(lir.anchor(one) if id(one) in redundant else one for one in block.insns),
+            )
+        )
     return replace(body, blocks=tuple(result))

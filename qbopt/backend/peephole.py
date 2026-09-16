@@ -588,7 +588,9 @@ def _fused(load, work, store, dead_work, dead_store) -> "tuple[lir.Insn, int] | 
         case ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg() as register,), (ir.Mem() as cell,)):
             if register.width != cell.width:
                 return None
-        case ir.Semantics(ir.Operation.EXTEND, "movsx" | "movzx" as extension, (ir.Reg() as register,), (ir.Mem() as cell,)):
+        case ir.Semantics(
+            ir.Operation.EXTEND, "movsx" | "movzx" as extension, (ir.Reg() as register,), (ir.Mem() as cell,)
+        ):
             if register.width <= cell.width:
                 return None
         case _:
@@ -599,7 +601,9 @@ def _fused(load, work, store, dead_work, dead_store) -> "tuple[lir.Insn, int] | 
     lanes = _lanes(register.register)
 
     def operand(one: ir.Loc) -> bool:
-        return isinstance(one, ir.Imm) and one.address is None or isinstance(one, ir.Reg) and ir.root(one.register) != root
+        return (
+            isinstance(one, ir.Imm) and one.address is None or isinstance(one, ir.Reg) and ir.root(one.register) != root
+        )
 
     def stored() -> bool:
         return (
@@ -626,11 +630,23 @@ def _fused(load, work, store, dead_work, dead_store) -> "tuple[lir.Insn, int] | 
                 other = ir.Imm(0, cell.width)
             made, used = ir.Semantics(ir.Operation.COMPARE, "cmp", (), (cell, other)), 2
         case ir.Semantics(ir.Operation.BINARY, name, (ir.Reg() as dest,), (ir.Reg() as source, other)):
-            if extension is not None or name not in _FUSED_BINARY or not dest == source == register or not operand(other) or not stored():
+            if (
+                extension is not None
+                or name not in _FUSED_BINARY
+                or not dest == source == register
+                or not operand(other)
+                or not stored()
+            ):
                 return None
             made, used = ir.Semantics(ir.Operation.BINARY, name, (cell,), (cell, other)), 3
         case ir.Semantics(ir.Operation.UNARY, name, (ir.Reg() as dest,), sources):
-            if extension is not None or name not in _FUSED_UNARY or dest != register or any(one != register for one in sources) or not stored():
+            if (
+                extension is not None
+                or name not in _FUSED_UNARY
+                or dest != register
+                or any(one != register for one in sources)
+                or not stored()
+            ):
                 return None
             made, used = ir.Semantics(ir.Operation.UNARY, name, (cell,), tuple(cell for _ in sources)), 3
         case _:
@@ -704,7 +720,9 @@ def _far_load(first: lir.Insn, second: lir.Insn) -> "lir.Insn | None":
             return None
     elif ir.root(written.register) in {ir.root(one) for one in (read.through, read.index_through)}:
         return None
-    made = ir.Semantics(ir.Operation.MOVE, select.FAR_LOADS[segment.register][0], (offset, segment), (replace(low, width=4),))
+    made = ir.Semantics(
+        ir.Operation.MOVE, select.FAR_LOADS[segment.register][0], (offset, segment), (replace(low, width=4),)
+    )
     if select.emit(made) is None:
         return None
     return replace(
@@ -865,7 +883,11 @@ def _flags_before(one: lir.Insn, flags_dead: bool) -> bool:
             return flags_dead
         case ir.Semantics(ir.Operation.PUSH, "push") | ir.Semantics(ir.Operation.POP, "pop"):
             return flags_dead
-        case ir.Semantics(ir.Operation.NOTHING, None | "") | ir.Semantics(ir.Operation.JUMP) | ir.Semantics(ir.Operation.FILL):
+        case (
+            ir.Semantics(ir.Operation.NOTHING, None | "")
+            | ir.Semantics(ir.Operation.JUMP)
+            | ir.Semantics(ir.Operation.FILL)
+        ):
             return flags_dead
     return False
 
@@ -882,6 +904,8 @@ _BRANCH_FLAGS = {
     "jbe": RflagsBits.CF | RflagsBits.ZF,
     "ja": RflagsBits.CF | RflagsBits.ZF,
 }
+
+
 def _branch_reads(what: ir.Semantics) -> set[tuple[int, int]]:
     """The flags a conditional jump reads: those its condition names, or all where this does not know it."""
     return _flag_lanes(_BRANCH_FLAGS.get(what.name or "", 0xFFFFFFFF))
@@ -925,14 +949,33 @@ def tested(body: lir.LirBody) -> lir.LirBody:
                 and _sets_from(before, register)
                 and not live[block.at] & _DIFFERING
             ):
-                insns[work[test_at]] = replace(test, what=ir.Semantics(ir.Operation.NOTHING, ""), defines=(), uses=(), widths=())
+                insns[work[test_at]] = replace(
+                    test, what=ir.Semantics(ir.Operation.NOTHING, ""), defines=(), uses=(), widths=()
+                )
         blocks.append(replace(block, insns=tuple(insns)))
     return replace(body, blocks=tuple(blocks))
 
 
 _ADJUST = _flag_lanes(RflagsBits.AF)
 _FLAG_READERS = frozenset(
-    {"adc", "sbb", "rcl", "rcr", "lahf", "pushf", "pushfd", "daa", "das", "aaa", "aas", "into", "int", "iret", "cmc", "salc"}
+    {
+        "adc",
+        "sbb",
+        "rcl",
+        "rcr",
+        "lahf",
+        "pushf",
+        "pushfd",
+        "daa",
+        "das",
+        "aaa",
+        "aas",
+        "into",
+        "int",
+        "iret",
+        "cmc",
+        "salc",
+    }
 )
 
 
@@ -969,7 +1012,9 @@ def zero_compares(body: lir.LirBody) -> lir.LirBody:
                 and branch.what.name in _BRANCH_FLAGS
                 and test.what.name == "cmp"
             ):
-                insns[work[at]] = replace(test, what=ir.Semantics(ir.Operation.BINARY, "or", (register,), (register, register)))
+                insns[work[at]] = replace(
+                    test, what=ir.Semantics(ir.Operation.BINARY, "or", (register,), (register, register))
+                )
         blocks.append(replace(block, insns=tuple(insns)))
     return replace(body, blocks=tuple(blocks))
 
@@ -993,7 +1038,9 @@ def _zero_tested(one: lir.Insn) -> "Register_ | None":
     match one.what:
         case ir.Semantics(ir.Operation.COMPARE, "cmp", _, (ir.Reg() as register, ir.Imm(0, _, None))):
             return register
-        case ir.Semantics(ir.Operation.COMPARE, "test", _, (ir.Reg() as register, ir.Reg() as other)) if other == register:
+        case ir.Semantics(ir.Operation.COMPARE, "test", _, (ir.Reg() as register, ir.Reg() as other)) if (
+            other == register
+        ):
             return register
     return None
 
@@ -1033,7 +1080,9 @@ def _flags_live_out(body: lir.LirBody) -> dict[int, set]:
                 return set(), set()
             return every, set()
         reads, writes = found
-        return {lane for lane in reads if lane[0] == Register.NONE}, {lane for lane in writes if lane[0] == Register.NONE}
+        return {lane for lane in reads if lane[0] == Register.NONE}, {
+            lane for lane in writes if lane[0] == Register.NONE
+        }
 
     steps = {block.at: [effects(one) for one in block.insns] for block in body.blocks}
     live_in = {block.at: set() for block in body.blocks}
@@ -1167,7 +1216,6 @@ def constants(body: lir.LirBody) -> lir.LirBody:
                 and not what.sources
                 and what.target is None
                 and not one.clobbers
-                and not one.defines
             ):
                 continue
             move = what is not None and what.op is ir.Operation.MOVE and what.name == "mov"
@@ -1206,5 +1254,10 @@ def constants(body: lir.LirBody) -> lir.LirBody:
             }
             if candidate is not None and not one.clobbers:
                 held[candidate[0]] = candidate[1]
-        blocks.append(replace(block, insns=tuple(lir.without(block.insns, lambda one: id(one) in redundant))))
+        blocks.append(
+            replace(
+                block,
+                insns=tuple(lir.anchor(one) if id(one) in redundant else one for one in block.insns),
+            )
+        )
     return replace(body, blocks=tuple(blocks))

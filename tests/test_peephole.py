@@ -149,6 +149,67 @@ def test_entry_reload_requires_agreement_on_every_edge(mismatch):
     assert kept == (mismatch not in ("none", "unowned"))
 
 
+def test_forwarded_spill_reload_retains_its_virtual_definition():
+    """BASIC nbody's store read value#979 after spill forwarding removed its reload."""
+    from qbopt.backend import spillforward, verify
+    from qbopt.objectfile.module import Addr, Space
+
+    register = ir.Reg(Register.EAX, 4)
+    source = ir.Mem(Addr(Space.FRAME, -4), 4, through=Register.BP)
+    destination = ir.Mem(Addr(Space.SEGMENT, 8), 4)
+    establish = lir.Insn(1, (1, 1), ir.Semantics(ir.Operation.MOVE, "mov", (source,), (register,)), (), ())
+    reload = lir.Insn(
+        2,
+        (2, 2),
+        ir.Semantics(ir.Operation.MOVE, "mov", (register,), (source,)),
+        (2,),
+        (),
+        spill_reload=True,
+    )
+    consume = lir.Insn(
+        3,
+        (3, 4),
+        ir.Semantics(ir.Operation.MOVE, "mov", (destination,), (register,)),
+        (),
+        (2,),
+    )
+    body = lir.LirBody("forwarded-definition", 1, (lir.LirBlock(1, (establish, reload, consume)),), {}, {})
+
+    done = spillforward.forwarded(body)
+
+    assert not verify.verify(done)
+    assert sum(one.what.op is ir.Operation.MOVE for one in done.insns) == 2
+
+
+def test_forwarded_register_copy_retains_its_virtual_definition():
+    """PITSNAP's IN read value#188 after copy propagation removed its AL setup."""
+    from qbopt.backend import copyprop, verify
+
+    al = ir.Reg(Register.AL, 1)
+    ah = ir.Reg(Register.AH, 1)
+    establish = lir.Insn(
+        1,
+        (1, 2),
+        ir.Semantics(ir.Operation.MOVE, "mov", (al,), (ah,)),
+        (),
+        (),
+    )
+    define = replace(establish, at=2, covers=(2, 3), defines=(2,))
+    consume = lir.Insn(3, (3, 4), None, (3,), (2,))
+    body = lir.LirBody(
+        "forwarded-copy-definition",
+        1,
+        (lir.LirBlock(1, (establish, define, consume)),),
+        {},
+        {},
+    )
+
+    done = copyprop.forwarded(body)
+
+    assert not verify.verify(done)
+    assert sum(one.what is not None and one.what.op is ir.Operation.MOVE for one in done.insns) == 1
+
+
 def test_nbody_accumulator_does_not_copy_its_addend_over_its_running_sum():
     """NBODY copied ECX to ESI and EAX to ECX before ADD ECX,ESI on every force pair."""
     import corpus
@@ -587,7 +648,9 @@ def test_zero_compare_before_its_branch_is_or(variant, rewritten):
         "call": ir.Semantics(ir.Operation.CALL, "call"),
         "return": ir.Semantics(ir.Operation.RETURN, ""),
         "relocated": ir.Semantics(ir.Operation.MOVE, "mov", (ax,), (ir.Imm(0, 2, Addr(Space.SEGMENT, 0, 1)),)),
-        "x87": ir.Semantics(ir.Operation.COMPARE, "fcomp", (), (ir.Mem(ir.Addr(Space.FRAME, -4), 4, Register.BP, 0, 2),)),
+        "x87": ir.Semantics(
+            ir.Operation.COMPARE, "fcomp", (), (ir.Mem(ir.Addr(Space.FRAME, -4), 4, Register.BP, 0, 2),)
+        ),
         "pushf": ir.Semantics(ir.Operation.NOTHING, "pushf", (), (ir.Imm(0, 2, Addr(Space.SEGMENT, 0, 1)),)),
     }.get(variant, after)
     head = (compare, between, branch) if variant in ("moves", "between") else (compare, branch)
@@ -599,7 +662,11 @@ def test_zero_compare_before_its_branch_is_or(variant, rewritten):
     result = peephole.zero_compares(lir.LirBody("zero", 0, blocks, {}, {})).insns[0]
     if rewritten:
         assert (result.what.op, result.what.name, result.what.dests, result.what.sources) == (
-            ir.Operation.BINARY, "or", (ax,), (ax, ax))
+            ir.Operation.BINARY,
+            "or",
+            (ax,),
+            (ax, ax),
+        )
     else:
         assert result.what == compare.what
 
@@ -706,8 +773,10 @@ def test_far_pointer_loaded_in_one_instruction(variant, printed):
         base = Register.BX
     if variant.startswith("override"):
         # As lowered and allocated: the offset value placed in si.
-        low, high = (ir.Mem(Addr(Space.FAR, disp, segment=Register.ES), 2, Register.SI, 0, 2, base=ir.Held(1, 2))
-                     for disp in (16, 18))
+        low, high = (
+            ir.Mem(Addr(Space.FAR, disp, segment=Register.ES), 2, Register.SI, 0, 2, base=ir.Held(1, 2))
+            for disp in (16, 18)
+        )
         base = Register.SI
 
     def move(at, dest, cell):
@@ -779,7 +848,7 @@ def test_repeated_copy_requires_unchanged_source_and_destination(change):
     final = replace(move, at=2, covers=(2, 3))
     body = lir.LirBody("copies", 0, (lir.LirBlock(0, (move, extend, final), ()),), {}, {})
     result = peephole.constants(body)
-    assert len(result.insns) == (2 if change is None else 3)
+    assert sum(one.what == move.what for one in result.insns) == (1 if change is None else 2)
 
 
 def test_copied_value_survives_overwriting_its_original_register():
@@ -797,7 +866,8 @@ def test_copied_value_survives_overwriting_its_original_register():
     )
     body = lir.LirBody("snapshot", 0, (lir.LirBlock(0, insns, ()),), {}, {})
     result = peephole.constants(body)
-    assert [one.what for one in result.insns] == [one.what for one in insns if one.at != 3]
+    emitted = [one.what for one in result.insns if one.what.op is not ir.Operation.NOTHING]
+    assert emitted == [one.what for one in insns if one.at != 3]
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
@@ -863,6 +933,34 @@ def test_empty_ownership_marker_preserves_register_knowledge(clobbers):
     assert sum(one.what == what for one in result.insns) == (2 if clobbers else 1)
 
 
+def test_virtual_identity_marker_does_not_reload_nbody_dividend_constant():
+    """C nbody emitted MOV EAX,512 twice around CDQ before one IDIV.
+
+    Allocation retains an elided identity's virtual definition as an unnamed
+    NOTHING marker.  That metadata changes no physical register and therefore
+    must not erase the constant known to remain in EAX across CDQ.
+    """
+    from qbopt.backend import verify
+
+    move = ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.EAX, 4),), (ir.Imm(512, 4),))
+    first = lir.Insn(0, (0, 0), move, (1,), ())
+    extend = lir.Insn(
+        1,
+        (1, 1),
+        ir.Semantics(ir.Operation.EXTEND, "cdq", (ir.Reg(Register.EDX, 4),), (ir.Reg(Register.EAX, 4),)),
+        (2,),
+        (1,),
+    )
+    marker = lir.Insn(2, (2, 2), ir.Semantics(ir.Operation.NOTHING, "", (), ()), (3,), (1,))
+    again = lir.Insn(3, (3, 3), move, (4,), ())
+    body = lir.LirBody("nbody-dividend", 0, (lir.LirBlock(0, (first, extend, marker, again), ()),), {}, {})
+
+    result = peephole.constants(body)
+
+    assert sum(one.what == move for one in result.insns) == 1
+    assert not verify.verify(result)
+
+
 @pytest.mark.parametrize(
     "interruption",
     ["none", "extend", "extend_write", "extend_clobber", "call", "clobber", "unknown", "relocation", "block"],
@@ -902,7 +1000,9 @@ def test_constant_knowledge_is_local_and_invalidated(interruption):
     if interruption == "block":
         blocks = (lir.LirBlock(0, (first, middle), (2,)), lir.LirBlock(2, (last,), ()))
     result = peephole.constants(lir.LirBody("constants", 0, blocks, {}, {}))
-    assert sum(len(block.insns) for block in result.blocks) == (2 if interruption in ("none", "extend") else 3)
+    assert sum(one.what == what for block in result.blocks for one in block.insns) == (
+        1 if interruption in ("none", "extend") else 2
+    )
 
 
 def test_a_string_fill_reading_the_direction_flag_leaves_zero_as_xor():
@@ -915,12 +1015,20 @@ def test_a_string_fill_reading_the_direction_flag_leaves_zero_as_xor():
         return lir.Insn(at, (at, at), ir.Semantics(op, name, dests, sources, target), (), ())
 
     blocks = (
-        lir.LirBlock(0, (insn(0, ir.Operation.MOVE, "mov", (ax,), (ir.Imm(0, 2),)), insn(1, ir.Operation.JUMP, "jmp", target=2)), (2,)),
-        lir.LirBlock(2, (
-            insn(2, ir.Operation.FILL, "stosb", (ir.Mem(None, 0),)),
-            insn(3, ir.Operation.COMPARE, "cmp", (), (ax, bx)),
-            insn(4, ir.Operation.JUMP, "jmp", target=0),
-        ), (0,)),
+        lir.LirBlock(
+            0,
+            (insn(0, ir.Operation.MOVE, "mov", (ax,), (ir.Imm(0, 2),)), insn(1, ir.Operation.JUMP, "jmp", target=2)),
+            (2,),
+        ),
+        lir.LirBlock(
+            2,
+            (
+                insn(2, ir.Operation.FILL, "stosb", (ir.Mem(None, 0),)),
+                insn(3, ir.Operation.COMPARE, "cmp", (), (ax, bx)),
+                insn(4, ir.Operation.JUMP, "jmp", target=0),
+            ),
+            (0,),
+        ),
     )
     result = peephole.zeroes(lir.LirBody("zero", 0, blocks, {}, {})).blocks[0].insns[0]
     assert (result.what.op, result.what.name) == (ir.Operation.BINARY, "xor")

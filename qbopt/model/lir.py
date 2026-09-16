@@ -183,6 +183,32 @@ class LirBody:
         return tuple(one for block in self.blocks for one in block.insns)
 
 
+def anchor(one: Insn) -> Insn:
+    """Keep virtual dataflow and byte ownership for an elided machine op.
+
+    Register allocation and the physical cleanup passes can prove that an
+    instruction changes no machine state.  Its virtual definition is a
+    separate fact: later opaque LIR may still name that value.  An anchor emits
+    no bytes, retains ``defines``/``uses`` and ownership, and carries none of
+    the physical side effects of the instruction it replaces.
+    """
+    from dataclasses import replace
+
+    return replace(
+        one,
+        what=ir.Semantics(ir.Operation.NOTHING, "", (), ()),
+        clobbers=frozenset(),
+        clobbers_high=frozenset(),
+        group=None,
+        requires=(),
+        delivers=(),
+        symbol=False,
+        spill_reload=False,
+        spill_store=False,
+        frame_adjust=False,
+    )
+
+
 def without(insns, drop, made=None) -> "list[Insn]":
     """`insns` without the ones `drop` picks, their bytes given to a survivor.
 

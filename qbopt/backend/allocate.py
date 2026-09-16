@@ -1046,15 +1046,16 @@ def _discardable_identity(one: lir.Insn) -> bool:
 def _placed_for_rewrite(one: lir.Insn, held: dict, origin: dict) -> lir.Insn:
     """Place one instruction without discarding an inserted definition.
 
-    A fixed-register split can become an identity after placement.  Its empty
-    span means it emits no bytes, but its definition still explains the value
-    named by the constrained instruction beside it.  Turn only that inserted
-    identity into a zero-cost semantic marker before ``lir.without`` decides
-    which machine copies can disappear.
+    A copy can become an identity after placement.  It emits no instruction,
+    but its definition still explains the value named by later LIR.  Turn it
+    into a zero-cost semantic marker before ``lir.without`` decides which
+    machine copies can disappear.  This applies equally to inserted copies and
+    copies that own original bytes; the marker retains byte ownership while its
+    now-absent symbolic operand no longer owns a relocation.
     """
     placed = _placed(one, held, origin)
-    if placed.group is None and (placed.covers is None or placed.covers[0] == placed.covers[1]) and _pointless(placed):
-        return replace(placed, what=ir.Semantics(ir.Operation.NOTHING, "", (), ()))
+    if placed.group is None and _pointless(placed):
+        return lir.anchor(placed)
     return placed
 
 
