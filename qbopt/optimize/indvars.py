@@ -54,13 +54,6 @@ def simplified(body: mir.MirBody) -> mir.MirBody:
             following = {at for at in blocks if exit_at in dominators.get(at, ())}
             if any(value in transform._leaving(body) for value in (phi.result, update)):
                 continue
-            if any(
-                phi.result in op.uses and op is not compare and update not in op.defines
-                for block in body.blocks
-                if block.at not in following
-                for op in block.ops
-            ):
-                continue
             if any(update in op.uses for block in body.blocks for op in block.ops):
                 continue
             if any(
@@ -97,6 +90,16 @@ def simplified(body: mir.MirBody) -> mir.MirBody:
                     if block.at in loop.body
                     for op in block.ops
                 ):
+                    continue
+                rebased = _rebased_equalities(
+                    body,
+                    phi.result,
+                    update,
+                    compare,
+                    value,
+                    following,
+                )
+                if rebased is None:
                     continue
                 serial = max(value.id for value in ssa.values(body)) + 1
                 variable = max(value.variable for value in ssa.values(body)) + 1
@@ -157,12 +160,174 @@ def simplified(body: mir.MirBody) -> mir.MirBody:
                                 made=None,
                                 raised=((), ()),
                             )
+                        else:
+                            op = rebased.get(id(op), op)
                         ops.append(op)
                     if block.at == preheader:
                         _before_leaving(ops, [seed])
                     out.append(replace(block, ops=tuple(ops)))
                 return replace(changed, blocks=tuple(out))
     return body
+
+
+def _recurrences(body: mir.MirBody, facts: dict) -> dict[int, tuple[induction.Affine, int, int | None, int | None]]:
+    """Every basic recurrence, with its width and proven domain when finite."""
+    out = {}
+    for loop in loops.loops(body.blocks, body.entry):
+        for affine in induction.basics(body, loop).values():
+            width = affine.start.width
+            start = induction._signed(affine.start, facts, width)
+            last = induction._last_counter(body, loop, affine, facts, width)
+            domain = (min(start, last), max(start, last)) if start is not None and last is not None else (None, None)
+            out[affine.value] = (affine, width, *domain)
+    return out
+
+
+def _relation(
+    source: tuple[induction.Affine, int, int | None, int | None],
+    target: tuple[induction.Affine, int, int | None, int | None],
+    facts: dict,
+) -> tuple[int, int] | None:
+    """The constant affine map from one recurrence to the other."""
+    source_affine, width, _, _ = source
+    target_affine, target_width, _, _ = target
+    if target_width != width:
+        return None
+    source_start = induction._signed(source_affine.start, facts, width)
+    source_step = induction._signed(source_affine.step, facts, width)
+    target_start = induction._signed(target_affine.start, facts, width)
+    target_step = induction._signed(target_affine.step, facts, width)
+    if None in (source_start, source_step, target_start, target_step) or not source_step:
+        return None
+    if target_step % source_step:
+        return None
+    scale = target_step // source_step
+    if not scale:
+        return None
+    mask = (1 << (width * 8)) - 1
+    return scale, (target_start - scale * source_start) & mask
+
+
+def _rebased_equalities(
+    body: mir.MirBody,
+    counter: mir.Value,
+    update: mir.Value,
+    control: mir.Op,
+    alternative: mir.Value,
+    following: set[int],
+) -> dict[int, mir.Op] | None:
+    """Rewrite equality-only body uses through an injective recurrence.
+
+    Strength reduction commonly leaves both ``i`` and ``i * element_size``
+    live.  The scaled recurrence may control the loop, but only if every other
+    use of ``i`` can use it too.  Equality with another finite recurrence is
+    such a use when both sides have the same affine map and their combined
+    proven domain is shorter than the map's modular period.
+    """
+    extra = [
+        op
+        for block in body.blocks
+        if block.at not in following
+        for op in block.ops
+        if counter in op.uses and op is not control and update not in op.defines
+    ]
+    if not extra:
+        # The original IndVarSimplify case: any sufficiently long-lived
+        # recurrence can terminate the loop when the old counter has no other
+        # purpose.  No affine relationship between them is required.
+        return {}
+    facts = consts.known(body)
+    recurrences = _recurrences(body, facts)
+    source = recurrences.get(counter.id)
+    target = recurrences.get(alternative.id)
+    if (
+        source is None
+        or target is None
+        or source[2] is None
+        or source[3] is None
+        or (relation := _relation(source, target, facts)) is None
+    ):
+        return None
+    scale, offset = relation
+    width = source[1]
+    modulus = 1 << (width * 8)
+    period = modulus // gcd(abs(scale), modulus)
+    flags_readers = {
+        value: [op for block in body.blocks for op in block.ops if value in op.uses]
+        for block in body.blocks
+        for op in block.ops
+        for value in op.defines
+        if value.flags
+    }
+    replacements = {}
+    for block in body.blocks:
+        if block.at in following:
+            continue
+        for op in block.ops:
+            if counter not in op.uses or op is control or update in op.defines:
+                continue
+            if (
+                op.kind is not mir.Kind.SUB
+                or op.results
+                or op.loads
+                or op.stores
+                or op.barrier
+                or op.merges
+                or len(op.args) != 2
+                or len(op.defines) != 1
+                or not op.defines[0].flags
+                or not flags_readers.get(op.defines[0])
+                or any(
+                    reader.kind is not mir.Kind.BRANCH or reader.test not in (mir.Kind.EQ, mir.Kind.NE)
+                    for reader in flags_readers[op.defines[0]]
+                )
+            ):
+                return None
+            positions = [
+                index
+                for index, arg in enumerate(op.args)
+                if isinstance(arg, mir.Held) and arg.value == counter and arg.width == width
+            ]
+            if len(positions) != 1:
+                return None
+            other_at = 1 - positions[0]
+            other = op.args[other_at]
+            if not isinstance(other, mir.Held) or other.width != width:
+                return None
+            other_source = recurrences.get(other.value.id)
+            if other_source is None or other_source[2] is None or other_source[3] is None:
+                return None
+            partner_id = next(
+                (
+                    value
+                    for value, candidate in recurrences.items()
+                    if value != other.value.id
+                    and candidate[0].header == other_source[0].header
+                    and _relation(other_source, candidate, facts) == (scale, offset)
+                ),
+                None,
+            )
+            if partner_id is None:
+                return None
+            low = min(source[2], other_source[2])
+            high = max(source[3], other_source[3])
+            if high - low >= period:
+                return None
+            actual = next(
+                value
+                for block in body.blocks
+                for phi in block.phis
+                for value in (phi.result,)
+                if value.id == partner_id
+            )
+            args = list(op.args)
+            args[positions[0]] = mir.Held(alternative, width)
+            args[other_at] = mir.Held(actual, width)
+            uses = tuple(
+                alternative if value == counter else actual if value == other.value else value for value in op.uses
+            )
+            replacements[id(op)] = replace(op, args=tuple(args), uses=uses, node=None, made=None, raised=None)
+    return replacements
 
 
 def _before_leaving(ops: list, inserted: list) -> None:
@@ -219,7 +384,12 @@ def zeroed(body: mir.MirBody) -> mir.MirBody:
                 continue
             initial, update = phi.incoming[preheader], phi.incoming[latch]
             seed, stepping = made.get(initial), made.get(update)
-            if seed is None or stepping is None or not stepping.results or not isinstance(stepping.results[0], mir.Held):
+            if (
+                seed is None
+                or stepping is None
+                or not stepping.results
+                or not isinstance(stepping.results[0], mir.Held)
+            ):
                 continue
             width = stepping.results[0].width
             if seed.kind is not mir.Kind.COPY or len(seed.args) != 1 or not isinstance(seed.args[0], mir.Const):
@@ -258,7 +428,9 @@ def zeroed(body: mir.MirBody) -> mir.MirBody:
                 continue
             if any(update in op.uses for block in body.blocks for op in block.ops) or initial in read:
                 continue
-            if any(set(compare.defines) & set(op.uses) and op is not branch for block in body.blocks for op in block.ops):
+            if any(
+                set(compare.defines) & set(op.uses) and op is not branch for block in body.blocks for op in block.ops
+            ):
                 continue
             (exit_at,) = [at for at in header.succ if at not in inside]
             if set(predecessors.get(exit_at, ())) != {header.at} or not blocks[exit_at].ops:
@@ -274,7 +446,9 @@ def zeroed(body: mir.MirBody) -> mir.MirBody:
             if any(value in transform._leaving(body) for value in (phi.result, update)):
                 continue
             if any(
-                other is not phi and other not in closed.values() and {phi.result, update} & set(other.incoming.values())
+                other is not phi
+                and other not in closed.values()
+                and {phi.result, update} & set(other.incoming.values())
                 for block in body.blocks
                 for other in block.phis
             ):
@@ -303,7 +477,9 @@ def zeroed(body: mir.MirBody) -> mir.MirBody:
                         ending,
                     )
                 )
-                args = tuple(mir.Held(moved, base.width) if index == position else arg for index, arg in enumerate(op.args))
+                args = tuple(
+                    mir.Held(moved, base.width) if index == position else arg for index, arg in enumerate(op.args)
+                )
                 rebased[id(op)] = replace(
                     op, args=args, uses=tuple(moved if value == base.value else value for value in op.uses)
                 )
@@ -313,11 +489,21 @@ def zeroed(body: mir.MirBody) -> mir.MirBody:
             seeded = seed.args[0].width
             seeds.append(
                 strength._made(
-                    mir.Kind.COPY, "", begun, (mir.Const(consts.masked(start - final, seeded), seeded),), ending.at, ending
+                    mir.Kind.COPY,
+                    "",
+                    begun,
+                    (mir.Const(consts.masked(start - final, seeded), seeded),),
+                    ending.at,
+                    ending,
                 )
             )
             finish = strength._made(
-                mir.Kind.COPY, "", finished, (mir.Const(consts.masked(final, width), width),), exit_at, blocks[exit_at].ops[0]
+                mir.Kind.COPY,
+                "",
+                finished,
+                (mir.Const(consts.masked(final, width), width),),
+                exit_at,
+                blocks[exit_at].ops[0],
             )
             swap = {counter.value: finished}
             removed = {other.result for value, other in closed.items() if value in (phi.result, update)}
@@ -353,7 +539,9 @@ def zeroed(body: mir.MirBody) -> mir.MirBody:
                         block,
                         ops=tuple(ops),
                         phis=tuple(
-                            replace(other, incoming={**other.incoming, preheader: begun}) if other.result == phi.result else other
+                            replace(other, incoming={**other.incoming, preheader: begun})
+                            if other.result == phi.result
+                            else other
                             for other in block.phis
                             if other.result not in removed
                         ),

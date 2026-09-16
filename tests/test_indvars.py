@@ -6,6 +6,7 @@ import pytest
 
 import corpus
 from qbopt import wholeseg
+from qbopt.model import ir, mir
 from qbopt.analysis import loops
 
 
@@ -57,11 +58,41 @@ def test_harr_reuses_an_existing_recurrence_for_termination(
 
 def test_harr_initializes_the_reused_counter_before_its_exit_bound():
     """HARR printed 12327 instead of 1100 when the bound read SI before SI was initialized."""
+    from iced_x86 import Mnemonic, OpKind
+
     result = wholeseg.emitted(Path("fixtures/omf/harr-v-g3.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
-    instructions = [str(one.insn) for block in corpus.partitioned(result.data) for one in block.insns]
-    bound = instructions.index("mov dx,si")
-    assert any(text.startswith("mov si,") for text in instructions[:bound]), instructions[:bound]
+    instructions = [one.insn for block in corpus.partitioned(result.data) for one in block.insns]
+    branch_at, branch = next(
+        (index, one)
+        for index, one in enumerate(instructions)
+        if one.mnemonic == Mnemonic.JNE and one.near_branch_target < one.ip
+    )
+    compare_at = branch_at - 1
+    compare = instructions[compare_at]
+    assert compare.mnemonic == Mnemonic.CMP
+    wanted = {compare.op0_register, compare.op1_register}
+    containing = [
+        one.near_branch_target
+        for one in instructions[branch_at + 1 :]
+        if one.near_branch_target and one.near_branch_target <= branch.near_branch_target < one.ip
+    ]
+    start_ip = min((branch.near_branch_target, *containing))
+    start = next(index for index, one in enumerate(instructions) if one.ip == start_ip)
+    defined = set()
+    for one in instructions[start:compare_at]:
+        if one.op0_kind != OpKind.REGISTER or one.op0_register not in wanted:
+            continue
+        reads = set()
+        if one.mnemonic == Mnemonic.MOV and one.op1_kind == OpKind.REGISTER:
+            reads.add(one.op1_register)
+        elif one.mnemonic in (Mnemonic.ADD, Mnemonic.SUB, Mnemonic.INC, Mnemonic.DEC):
+            reads.add(one.op0_register)
+            if one.op1_kind == OpKind.REGISTER:
+                reads.add(one.op1_register)
+        assert not (reads & wanted) - defined, f"{one} reads the loop bound before it is initialized"
+        defined.add(one.op0_register)
+    assert defined == wanted
 
 
 def test_indvar_simplify_reads_through_an_lcssa_exit(monkeypatch) -> None:
@@ -139,6 +170,166 @@ def test_counter_elimination_requires_a_complete_trip_count_and_no_body_use(monk
     assert indvars.simplified(body) is body
 
 
+@pytest.mark.parametrize("hazard", [None, "different-map", "ordered", "short-period"])
+def test_scaled_recurrences_replace_nested_counter_equality(hazard: str | None) -> None:
+    """C nbody carried `other` beside `other*4` only for `other != body`.
+
+    The inner and outer byte offsets are injective over their proven 0..5
+    domains, so they can answer both equality and loop termination.  Keeping
+    the scalar inner counter added an increment, compare and spill traffic to
+    every interaction.
+    """
+    from qbopt.optimize import indvars
+
+    def value(serial: int, at: int, variable: int) -> mir.Value:
+        return mir.Value(serial, at, variable=variable)
+
+    def copy(at: int, result: mir.Value, number: int) -> mir.Op:
+        return mir.Op(
+            at,
+            ir.Operation.NOTHING,
+            "",
+            (result,),
+            (),
+            kind=mir.Kind.COPY,
+            args=(mir.Const(number, 2),),
+            results=(mir.Held(result, 2),),
+        )
+
+    def add(at: int, result: mir.Value, source: mir.Value, amount: int) -> mir.Op:
+        return mir.Op(
+            at,
+            ir.Operation.NOTHING,
+            "",
+            (result,),
+            (source,),
+            kind=mir.Kind.ADD,
+            args=(mir.Held(source, 2), mir.Const(amount, 2)),
+            results=(mir.Held(result, 2),),
+        )
+
+    def compare(at: int, left: mir.Value, right: mir.Arg) -> tuple[mir.Op, mir.Value]:
+        flag = value(100 + at, at, 100 + at)
+        flag = mir.Value(flag.id, flag.at, flags=True, variable=flag.variable)
+        operand = right if isinstance(right, (mir.Held, mir.Const)) else mir.Held(right, 2)
+        uses = (left, operand.value) if isinstance(operand, mir.Held) else (left,)
+        return (
+            mir.Op(
+                at,
+                ir.Operation.NOTHING,
+                "",
+                (flag,),
+                uses,
+                kind=mir.Kind.SUB,
+                args=(mir.Held(left, 2), operand),
+                results=(),
+            ),
+            flag,
+        )
+
+    def branch(at: int, flag: mir.Value, test: mir.Kind, target: int) -> mir.Op:
+        return mir.Op(
+            at,
+            ir.Operation.NOTHING,
+            "",
+            (),
+            (flag,),
+            kind=mir.Kind.BRANCH,
+            test=test,
+            target=target,
+        )
+
+    outer_start, outer_offset_start = value(1, 0, 1), value(2, 0, 2)
+    outer, outer_offset = value(3, 1, 1), value(4, 1, 2)
+    outer_next, outer_offset_next = value(5, 6, 1), value(6, 6, 2)
+    inner_start, inner_offset_start = value(7, 2, 3), value(8, 2, 4)
+    inner, inner_offset = value(9, 3, 3), value(10, 3, 4)
+    inner_next, inner_offset_next = value(11, 5, 3), value(12, 5, 4)
+    outer_test, outer_flag = compare(1, outer, mir.Const(6, 2))
+    inner_test, inner_flag = compare(3, inner, mir.Const(6, 2))
+    unequal, unequal_flag = compare(4, inner, outer)
+    observed = value(20, 7, 20)
+    use_offset = mir.Op(
+        7,
+        ir.Operation.NOTHING,
+        "",
+        (observed,),
+        (inner_offset,),
+        kind=mir.Kind.COPY,
+        args=(mir.Held(inner_offset, 2),),
+        results=(mir.Held(observed, 2),),
+    )
+    built = mir.MirBody(
+        0,
+        (
+            mir.MirBlock(0, (), (copy(0, outer_start, 0), copy(0, outer_offset_start, 0)), (1,)),
+            mir.MirBlock(
+                1,
+                (
+                    mir.Phi(outer, {0: outer_start, 6: outer_next}),
+                    mir.Phi(outer_offset, {0: outer_offset_start, 6: outer_offset_next}),
+                ),
+                (outer_test, branch(1, outer_flag, mir.Kind.GE, 9)),
+                (2, 9),
+            ),
+            mir.MirBlock(2, (), (copy(2, inner_start, 0), copy(2, inner_offset_start, 0)), (3,)),
+            mir.MirBlock(
+                3,
+                (
+                    mir.Phi(inner, {2: inner_start, 5: inner_next}),
+                    mir.Phi(inner_offset, {2: inner_offset_start, 5: inner_offset_next}),
+                ),
+                (inner_test, branch(3, inner_flag, mir.Kind.GE, 6)),
+                (4, 6),
+            ),
+            mir.MirBlock(
+                4,
+                (),
+                (unequal, branch(4, unequal_flag, mir.Kind.LT if hazard == "ordered" else mir.Kind.EQ, 5)),
+                (5, 7),
+            ),
+            mir.MirBlock(
+                5,
+                (),
+                (
+                    add(5, inner_next, inner, 1),
+                    add(5, inner_offset_next, inner_offset, 32768 if hazard == "short-period" else 4),
+                ),
+                (3,),
+            ),
+            mir.MirBlock(
+                6,
+                (),
+                (
+                    add(6, outer_next, outer, 1),
+                    add(
+                        6,
+                        outer_offset_next,
+                        outer_offset,
+                        5 if hazard == "different-map" else 32768 if hazard == "short-period" else 4,
+                    ),
+                ),
+                (1,),
+            ),
+            mir.MirBlock(7, (), (use_offset,), (5,)),
+            mir.MirBlock(9, (), (), ()),
+        ),
+    )
+
+    changed = indvars.simplified(built)
+    header = next(block for block in changed.blocks if block.at == 3)
+    condition = next(op for op in header.ops if op.kind is mir.Kind.SUB)
+    inner_branch = next(block for block in changed.blocks if block.at == 4)
+    equality = next(op for op in inner_branch.ops if op.kind is mir.Kind.SUB)
+
+    if hazard is None:
+        assert condition.args[0] == mir.Held(inner_offset, 2)
+        assert equality.args == (mir.Held(inner_offset, 2), mir.Held(outer_offset, 2))
+    else:
+        assert condition.args[0] == mir.Held(inner, 2)
+        assert equality.args == (mir.Held(inner, 2), mir.Held(outer, 2))
+
+
 def _trip_counts(data: bytes) -> list[int]:
     """How often each emitted counted loop runs: its counter's start, step and exit test, simulated."""
     from iced_x86 import Mnemonic
@@ -146,6 +337,24 @@ def _trip_counts(data: bytes) -> list[int]:
 
     insns = [one.insn for block in corpus.partitioned(data) for one in block.insns]
     immediates = (OpKind.IMMEDIATE8, OpKind.IMMEDIATE8TO16, OpKind.IMMEDIATE16)
+
+    def initialized(register, before, seen=frozenset()):
+        """The first-iteration constant in ``register``, following copies."""
+        if register in seen:
+            return None
+        for index in range(len(before) - 1, -1, -1):
+            one = before[index]
+            if one.op0_kind != OpKind.REGISTER or one.op0_register != register:
+                continue
+            if one.mnemonic == Mnemonic.MOV and one.op1_kind in immediates:
+                return (one.immediate16 ^ 0x8000) - 0x8000
+            if one.mnemonic == Mnemonic.MOV and one.op1_kind == OpKind.REGISTER:
+                return initialized(one.op1_register, before[:index], seen | {register})
+            if one.mnemonic == Mnemonic.XOR and one.op1_kind == OpKind.REGISTER and one.op1_register == register:
+                return 0
+            return None
+        return None
+
     counts = []
     for index, branch in enumerate(insns):
         if branch.mnemonic not in (Mnemonic.JLE, Mnemonic.JL, Mnemonic.JNE) or branch.near_branch_target >= branch.ip:
@@ -160,29 +369,34 @@ def _trip_counts(data: bytes) -> list[int]:
         register, delta = step.op0_register, 1 if step.mnemonic == Mnemonic.INC else -1
         # The counter can move between registers inside the loop: `mov dx,cx / inc dx / mov cx,dx`.
         held = {register} | {
-            one.op1_register for one in inside
+            one.op1_register
+            for one in inside
             if one.mnemonic == Mnemonic.MOV and one.op1_kind == OpKind.REGISTER and one.op0_register == register
         }
         test = insns[index - 1]
         if test.mnemonic == Mnemonic.MOV and test.op0_kind == OpKind.REGISTER and test.op0_register in held:
             test = insns[index - 2]
-        if test.mnemonic == Mnemonic.CMP and test.op0_kind == OpKind.REGISTER and test.op0_register in held \
-                and test.op1_kind in immediates:
+        if (
+            test.mnemonic == Mnemonic.CMP
+            and test.op0_kind == OpKind.REGISTER
+            and test.op0_register in held
+            and test.op1_kind in immediates
+        ):
             bound = (test.immediate16 ^ 0x8000) - 0x8000
         # `or r,r` tests for zero as `test r,r` does; the peephole writes it for `cmp r,0`.
-        elif test is step or (test.mnemonic in (Mnemonic.TEST, Mnemonic.OR) and test.op0_register in held
-                              and test.op0_kind == test.op1_kind == OpKind.REGISTER
-                              and test.op0_register == test.op1_register):
+        elif test is step or (
+            test.mnemonic in (Mnemonic.TEST, Mnemonic.OR)
+            and test.op0_register in held
+            and test.op0_kind == test.op1_kind == OpKind.REGISTER
+            and test.op0_register == test.op1_register
+        ):
             bound = 0
         else:
             continue
-        before = [one for one in insns[:index] if one.ip < branch.near_branch_target]
-        start = next((one for one in reversed(before)
-                      if one.mnemonic == Mnemonic.MOV and one.op0_kind == OpKind.REGISTER
-                      and one.op0_register in held and one.op1_kind in immediates), None)
-        if start is None:
+        value = initialized(register, insns[: insns.index(step)])
+        if value is None:
             continue
-        value, trips = (start.immediate16 ^ 0x8000) - 0x8000, 0
+        trips = 0
         while trips < 1 << 17:
             trips += 1
             value = ((value + delta + 0x8000) & 0xFFFF) - 0x8000
