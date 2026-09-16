@@ -336,12 +336,10 @@ def _renamed(one: lir.Insn, swap: dict[int, int]) -> lir.Insn:
     what = one.what
     return replace(
         one,
-        what=ir.Semantics(
-            what.op,
-            what.name,
-            tuple(_settled(x, swap) for x in what.dests),
-            tuple(_settled(x, swap) for x in what.sources),
-            what.target,
+        what=replace(
+            what,
+            dests=tuple(_settled(x, swap) for x in what.dests),
+            sources=tuple(_settled(x, swap) for x in what.sources),
         ),
         defines=tuple(swap.get(v, v) for v in one.defines),
         uses=tuple(swap.get(v, v) for v in one.uses),

@@ -196,8 +196,10 @@ def constrained(
                     one,
                     what=what
                     if what is None
-                    else ir.Semantics(
-                        what.op, what.name, tuple(map(address, dests)), tuple(map(address, sources)), what.target
+                    else replace(
+                        what,
+                        dests=tuple(map(address, dests)),
+                        sources=tuple(map(address, sources)),
                     ),
                     defines=tuple(defines),
                     uses=tuple(uses),

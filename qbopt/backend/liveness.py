@@ -41,7 +41,6 @@ def _universe() -> frozenset:
 
 def _backwards(block, live: frozenset, universe: frozenset) -> frozenset:
     """The lanes live before `block`, given those live after it."""
-    from qbopt.backend.peephole import _flag_lanes
     from qbopt.backend.peephole import _branch_reads
     from qbopt.backend.peephole import _register_effects
 
@@ -83,6 +82,18 @@ def _declared(one) -> "tuple[frozenset, frozenset] | None":
     if not one.clobbers or one.symbol is True:
         return None
     reads = {lane for held, register in one.requires for lane in _lanes(register)}
+    # A transfer's decoded effects are unavailable, but its explicit operands
+    # are still real reads. In particular an indirect `call bx` reads BX
+    # before the calling convention clobbers it.
+    for source in one.what.sources if one.what is not None else ():
+        if isinstance(source, ir.Reg):
+            reads |= _lanes(source.register)
+        elif isinstance(source, (ir.Mem, ir.Address)):
+            reads |= _lanes(source.through)
+            reads |= _lanes(source.index_through if isinstance(source, ir.Mem) else source.index)
+            selector = getattr(source, "selector", None)
+            if isinstance(selector, ir.Reg):
+                reads |= _lanes(selector.register)
     writes = {lane for held, register in one.delivers for lane in _lanes(register)}
     for register in one.clobbers:
         writes |= _lanes(register)

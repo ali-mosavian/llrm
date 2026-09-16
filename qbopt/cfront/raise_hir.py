@@ -742,6 +742,14 @@ class _Raise:
         got = got.value if isinstance(got, Restricted) else got
         if isinstance(got, mir.Held) and got.width == 10:
             return got  # a float call's result, already a value
+        if type_ in self.unit.types:
+            if isinstance(got, Aggregate):
+                if got.size != self.unit.types[type_]:
+                    raise Unsupported(
+                        f"{self.symbol.name}: {got.size}-byte aggregate used as {self.unit.types[type_]} bytes"
+                    )
+                return got
+            return Aggregate(self.address(got), self.unit.types[type_])
         if isinstance(got, mir.Held) and got.width == self.width(type_) == 8:
             return got  # an int64 call's result is likewise already a whole MIR value
         if isinstance(got, Returned):
@@ -756,8 +764,6 @@ class _Raise:
                 raise Unsupported(f"{self.symbol.name}: a DX:AX result cannot provide an 8-byte value")
             return self.extended(mir.Held(got.low, 2), type_)
         address = self.address(got)
-        if type_ in self.unit.types:
-            return Aggregate(address, self.unit.types[type_])
         if type_ in FLOATS:
             return FloatCell(address, self.width(type_))
         if self.far_pointer(type_):
@@ -994,7 +1000,7 @@ class _Raise:
         self.op(K.FSTORE, (mir.Cell(ref),), (self.floating(got),), stores=(ref,), floating=_stored(FORMATS[width]))
         return FloatCell(address, width)
 
-    def aggregate(self, target, source) -> None:
+    def aggregate(self, target, source) -> Aggregate:
         if not isinstance(source, Aggregate):
             raise Unsupported(f"{self.symbol.name}: aggregate assignment from {source}")
         into = self.address(target)
@@ -1007,17 +1013,27 @@ class _Raise:
             put = self.cell(replace(into, disp=into.disp + done), width)
             self.op(K.STORE, (mir.Cell(put),), (mir.Held(moved, width),), stores=(put,))
             done += width
+        return Aggregate(into, source.size)
 
     def call(self, call: hir.Call):
         target = self.eval(call.target)
-        if not isinstance(target, Function):
-            raise Unsupported(f"{self.symbol.name}: indirect call")
-        if target.symbol.name in EMITTED:
+        if isinstance(target, Function) and target.symbol.name in EMITTED:
             values = [self.eval(node) for node, _ in reversed(call.parms)]
             if not all(isinstance(one, mir.Const) and 0 <= one.n < 256 for one in values):
                 raise Unsupported(f"{self.symbol.name}: {target.symbol.name} of anything but constant bytes")
             return self.inline_code(replace(target.symbol, code=hir.Code(bytes(one.n for one in values), ())))
-        return self.invoke(target.symbol, [(self.eval(node), type_) for node, type_ in call.parms], call.type)
+        if isinstance(target, Function):
+            callee, indirect = target.symbol, None
+        else:
+            callee, indirect = self.unit.symbols[call.symbol], target
+            if not isinstance(indirect, mir.Held) or indirect.width != 2 or callee.far:
+                raise Unsupported(f"{self.symbol.name}: indirect call through anything but a near code pointer")
+        return self.invoke(
+            callee,
+            [(self.eval(node), type_) for node, type_ in call.parms],
+            call.type,
+            indirect=indirect,
+        )
 
     def library(self, name: str, arguments: list, type_: str):
         """A C runtime routine taking and returning doubles, for an operator."""
@@ -1029,7 +1045,7 @@ class _Raise:
         doubles = [(self.convert(value, self.type_of(node), "TY_DOUBLE"), "TY_DOUBLE") for node, value in arguments]
         return self.convert(self.invoke(callee, doubles, "TY_DOUBLE"), "TY_DOUBLE", type_)
 
-    def invoke(self, callee: hir.Symbol, arguments: list, type_: str):
+    def invoke(self, callee: hir.Symbol, arguments: list, type_: str, *, indirect: mir.Held | None = None):
         """A call, with `arguments` last first; a float result arrives on the x87."""
         if callee.code is not None:
             if arguments or type_ in FLOATS:
@@ -1043,17 +1059,22 @@ class _Raise:
         if callee.call_class & hir.REVERSE_PARMS:
             arguments = arguments[::-1]
         pushed = sum(self.push(value, type_) for value, type_ in arguments)
+        call_args = (indirect,) if indirect is not None else ()
+        call_uses = (indirect.value,) if indirect is not None else ()
+        call_extra = {"symbol": False, "indirect": True} if indirect is not None else {}
         if type_ in FLOATS:
             result = self.fresh()
             site = self.op(
                 K.CALL,
                 (mir.Held(result, 10),),
+                call_args,
                 defines=(result,),
-                uses=(),
+                uses=call_uses,
                 loads=CALLEE,
                 stores=CALLEE,
                 memory_complete=True,
                 reads_complete=True,
+                **call_extra,
             )
             returned = mir.Held(result, 10)
         elif self.width(type_) == 8:
@@ -1061,12 +1082,14 @@ class _Raise:
             site = self.op(
                 K.CALL,
                 (mir.Held(result, 8),),
+                call_args,
                 defines=(result,),
-                uses=(),
+                uses=call_uses,
                 loads=CALLEE,
                 stores=CALLEE,
                 memory_complete=True,
                 reads_complete=True,
+                **call_extra,
             )
             returned = mir.Held(result, 8)
         else:
@@ -1074,17 +1097,20 @@ class _Raise:
             site = self.op(
                 K.CALL,
                 (mir.Held(low, 2), mir.Held(high, 2)),
+                call_args,
                 defines=(low, high),
-                uses=(),
+                uses=call_uses,
                 loads=CALLEE,
                 stores=CALLEE,
                 memory_complete=True,
                 reads_complete=True,
+                **call_extra,
             )
             returned = Returned(low, high)
         caller_pops = bool(callee.call_class & hir.CALLER_POPS)
         self.calls[site.at] = callee.object_name
-        self.callees[site.at] = callee
+        if indirect is None:
+            self.callees[site.at] = callee
         self.arguments[site.at] = tuple(self._call_actual(value, arg_type) for value, arg_type in source_arguments)
         canonical = self.unit.canonical_type(type_)
         if canonical in POINTERS and isinstance(returned, Returned):
@@ -1214,6 +1240,19 @@ class _Raise:
                     cell = self.cell(replace(value.address, disp=value.address.disp + at), 4)
                     self.op(K.ARG, (), (self.load(cell, "TY_UINT_4"),))
             return width
+        if isinstance(value, Aggregate):
+            size = self.size(type_)
+            if value.size != size:
+                raise Unsupported(f"{self.symbol.name}: {value.size}-byte aggregate used as {size} bytes")
+            stacked = _even(size)
+            at = stacked
+            while at:
+                width = 2 if at > size or at < 4 else 4
+                at -= width
+                loaded = min(width, size - at)
+                cell = self.cell(replace(value.address, disp=value.address.disp + at), loaded)
+                self.op(K.ARG, (), (self.load(cell, f"TY_UINT_{loaded}"),))
+            return stacked
         if isinstance(value, Far):
             if value.whole is not None and value.disp == 0:
                 self.op(K.ARG, (), (mir.Held(value.whole, 4),))

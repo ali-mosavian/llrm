@@ -883,12 +883,10 @@ def _renamed(one: lir.Insn, rename: dict[int, int]) -> lir.Insn:
         )
     return replace(
         one,
-        what=ir.Semantics(
-            what.op,
-            what.name,
-            tuple(_settled(x, rename) for x in what.dests),
-            tuple(_settled(x, rename) for x in what.sources),
-            what.target,
+        what=replace(
+            what,
+            dests=tuple(_settled(x, rename) for x in what.dests),
+            sources=tuple(_settled(x, rename) for x in what.sources),
         ),
         defines=tuple(rename.get(v, v) for v in one.defines),
         uses=tuple(rename.get(v, v) for v in one.uses),
@@ -942,11 +940,10 @@ def _in_place(one: lir.Insn, values: "frozenset[int]", frame) -> "lir.Insn | Non
     if into and outof:
         return replace(
             one,
-            what=ir.Semantics(
-                what.op,
-                what.name,
-                (frame.cell(into[0], _width(one, into[0])),),
-                (frame.cell(outof[0], _width(one, outof[0])),),
+            what=replace(
+                what,
+                dests=(frame.cell(into[0], _width(one, into[0])),),
+                sources=(frame.cell(outof[0], _width(one, outof[0])),),
             ),
             defines=tuple(value for value in one.defines if value not in into),
             uses=tuple(value for value in one.uses if value not in outof),
@@ -956,12 +953,12 @@ def _in_place(one: lir.Insn, values: "frozenset[int]", frame) -> "lir.Insn | Non
     if into:
         return replace(
             one,
-            what=ir.Semantics(what.op, what.name, (cell,), what.sources),
+            what=replace(what, dests=(cell,)),
             defines=tuple(v for v in one.defines if v != value),
         )
     return replace(
         one,
-        what=ir.Semantics(what.op, what.name, what.dests, (cell,)),
+        what=replace(what, sources=(cell,)),
         uses=tuple(v for v in one.uses if v != value),
     )
 
@@ -1003,13 +1000,7 @@ def _memory_source_read_first(
     return load, replace(
         one,
         symbol=False,
-        what=ir.Semantics(
-            what.op,
-            what.name,
-            what.dests,
-            tuple(held if x is cell else x for x in what.sources),
-            what.target,
-        ),
+        what=replace(what, sources=tuple(held if x is cell else x for x in what.sources)),
         uses=tuple(one.uses) + (fresh,),
     )
 
@@ -1056,8 +1047,10 @@ def _tied(one: lir.Insn, values: "frozenset[int]", frame) -> "lir.Insn | None":
             return None
     cell = frame.cell(value, _width(one, value))
     swap = lambda x: cell if isinstance(x, ir.Held) and x.value == value else x  # noqa: E731
-    made = ir.Semantics(
-        what.op, what.name, tuple(swap(x) for x in what.dests), tuple(swap(x) for x in what.sources), what.target
+    made = replace(
+        what,
+        dests=tuple(swap(x) for x in what.dests),
+        sources=tuple(swap(x) for x in what.sources),
     )
     if not _encodable(made):
         return None

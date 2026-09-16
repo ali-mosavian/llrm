@@ -202,12 +202,10 @@ def _renamed(one: lir.Insn, rename: dict[int, int]) -> lir.Insn:
         return one
     what = one.what
     if what is not None:
-        what = ir.Semantics(
-            what.op,
-            what.name,
-            tuple(_settled(x, rename) for x in what.dests),
-            tuple(_settled(x, rename) for x in what.sources),
-            what.target,
+        what = replace(
+            what,
+            dests=tuple(_settled(x, rename) for x in what.dests),
+            sources=tuple(_settled(x, rename) for x in what.sources),
         )
     return replace(
         one,
@@ -449,7 +447,7 @@ def _retargeted(one: lir.Insn, landing: dict, here: int) -> lir.Insn:
     at = landing.get((here, what.target))
     if at is None:
         return one
-    return replace(one, what=ir.Semantics(what.op, what.name, what.dests, what.sources, at))
+    return replace(one, what=replace(what, target=at))
 
 
 def unsplit(body: lir.LirBody) -> lir.LirBody:
@@ -468,7 +466,13 @@ def unsplit(body: lir.LirBody) -> lir.LirBody:
         live = [
             one
             for one in block.insns
-            if not (one.what is not None and one.what.op is ir.Operation.NOTHING and not one.what.name)
+            if not (
+                one.what is not None
+                and one.what.op is ir.Operation.NOTHING
+                and not one.what.name
+                and not one.defines
+                and not one.uses
+            )
         ]
         if (
             len(live) == 1

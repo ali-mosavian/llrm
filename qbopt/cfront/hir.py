@@ -23,6 +23,15 @@ FAR_CALL = 0x4
 BIG_DATA = 0x2
 BIG_CODE = 0x4
 
+# Borland headers expose these as compiler intrinsics, while their callable
+# medium-model fallbacks use the ordinary runtime entry-point names.
+INTRINSIC_RUNTIME = {
+    "__inportb__": "inportb",
+    "__inportw__": "inport",
+    "__outportb__": "outportb",
+    "__outportw__": "outport",
+}
+
 STATEMENTS = frozenset(
     {"CGDone", "CGTrash", "CGControl", "CGReturn", "CGSelCase", "CGSelRange", "CGSelOther", "CGSelect", "CGBigLabel"}
 )
@@ -84,7 +93,8 @@ class Symbol:
     def object_name(self) -> str:
         if self.pattern == "^":
             return self.base.upper()
-        return self.pattern.replace("*", self.base) if self.pattern else self.base
+        base = INTRINSIC_RUNTIME.get(self.base, self.base)
+        return self.pattern.replace("*", base) if self.pattern else base
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +149,10 @@ class Unit:
 
     def grouped(self, symbol: Symbol) -> bool:
         """Whether the symbol is in DGROUP, reached through DS."""
+        if symbol.imported and symbol.segment < 0:
+            # Open Watcom reports -1 for an explicitly far imported object;
+            # its selector is the external itself, never DGROUP.
+            return False
         segment = self.segments.get(symbol.segment)
         return segment is None or not segment.attr & PRIVATE
 

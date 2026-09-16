@@ -68,7 +68,7 @@ def scheduled(body: lir.LirBody) -> lir.LirBody:
 
 def _expanded(one: lir.Insn) -> tuple[lir.Insn, ...]:
     """An ordered frame copy needs no scratch register and preserves flags."""
-    if one.what is not None and one.what.op is ir.Operation.NOTHING:
+    if one.what is not None and one.what.op is not ir.Operation.MOVE:
         return (one,)
     into, source = one.what.dests[0], one.what.sources[0]
     if not isinstance(into, ir.Mem) or not isinstance(source, ir.Mem):
@@ -125,16 +125,14 @@ def _ordered(moves: list[lir.Insn]) -> list[lir.Insn]:
 
 
 def _rotated(left: list[lir.Insn]) -> "tuple[list[lir.Insn], list[lir.Insn]] | None":
-    """One cycle out of `left`, as the exchanges that perform it.
+    """One cycle out of `left`, using exchanges or the machine stack.
 
     A cycle `p1 <- p2 <- ... <- pn <- p1` is `xchg p1,p2` then `xchg p2,p3`
     and so on: n-1 instructions, no scratch register, and xchg writes no
-    flags, which is why this can run after allocation where there is
-    neither a spare register nor a spare flag.
-
-    None where the machine cannot say it: xchg takes at most one memory
-    operand, so two memory places adjacent in the chain have no
-    instruction and the caller refuses as before.
+    flags. When adjacent places are both spilled, save the first on the
+    machine stack, perform the remaining moves, then pop into the last.
+    Every intermediate memory copy is itself a balanced push/pop, so the
+    saved value stays below it and no spare register is needed.
     """
     writes = {_into(one): one for one in left}
     start = left[0]
@@ -153,8 +151,6 @@ def _rotated(left: list[lir.Insn]) -> "tuple[list[lir.Insn], list[lir.Insn]] | N
 
     if any(isinstance(one, ir.Reg) and one.register in target.SEGMENTS for one in operands):
         return None  # no `xchg` names a segment register
-    if any(isinstance(a, ir.Mem) and isinstance(b, ir.Mem) for a, b in pairs):
-        return None
     # One width across the whole chain. `_named` keys a register by its
     # root, which is right for the ordering -- writing ax really does
     # clobber eax's low half, so the dependency is real -- but it makes
@@ -165,22 +161,44 @@ def _rotated(left: list[lir.Insn]) -> "tuple[list[lir.Insn], list[lir.Insn]] | N
     # key either.
     if len({one.width for one in operands}) != 1:
         return None
-    # The last move contributes no instruction, so it must stand for no
-    # bytes -- every copy a group holds is inserted, and `lir.without`
-    # relies on the same fact.
     last = cycle[-1]
-    if last.covers and last.covers[0] != last.covers[1]:
-        return None
+    if not any(isinstance(a, ir.Mem) and isinstance(b, ir.Mem) for a, b in pairs):
+        # The last move contributes no instruction, so it must stand for no
+        # bytes -- every copy a group holds is inserted, and `lir.without`
+        # relies on the same fact.
+        if last.covers and last.covers[0] != last.covers[1]:
+            return None
+        made = [
+            replace(
+                one,
+                what=ir.Semantics(ir.Operation.EXCHANGE, "xchg", (a, b), (b, a)),
+                group=None,
+                defines=(),
+                uses=(),
+            )
+            for one, (a, b) in zip(cycle, pairs)
+        ]
+        return made, cycle
 
+    if operands[0].width not in (2, 4):
+        return None
+    saved = operands[0]
     made = [
         replace(
-            one,
-            what=ir.Semantics(ir.Operation.EXCHANGE, "xchg", (a, b), (b, a)),
+            start,
+            what=ir.Semantics(ir.Operation.PUSH, "push", (), (saved,)),
             group=None,
             defines=(),
             uses=(),
-        )
-        for one, (a, b) in zip(cycle, pairs)
+        ),
+        *(replace(one, group=None) for one in cycle[:-1]),
+        replace(
+            last,
+            what=ir.Semantics(ir.Operation.POP, "pop", (operands[-1],), ()),
+            group=None,
+            defines=(),
+            uses=(),
+        ),
     ]
     return made, cycle
 

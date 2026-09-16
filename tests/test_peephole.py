@@ -151,8 +151,10 @@ def test_entry_reload_requires_agreement_on_every_edge(mismatch):
 
 def test_forwarded_spill_reload_retains_its_virtual_definition():
     """BASIC nbody's store read value#979 after spill forwarding removed its reload."""
-    from qbopt.backend import spillforward, verify
-    from qbopt.objectfile.module import Addr, Space
+    from qbopt.backend import verify
+    from qbopt.backend import spillforward
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     register = ir.Reg(Register.EAX, 4)
     source = ir.Mem(Addr(Space.FRAME, -4), 4, through=Register.BP)
@@ -183,7 +185,8 @@ def test_forwarded_spill_reload_retains_its_virtual_definition():
 
 def test_forwarded_register_copy_retains_its_virtual_definition():
     """PITSNAP's IN read value#188 after copy propagation removed its AL setup."""
-    from qbopt.backend import copyprop, verify
+    from qbopt.backend import verify
+    from qbopt.backend import copyprop
 
     al = ir.Reg(Register.AL, 1)
     ah = ir.Reg(Register.AH, 1)
@@ -361,6 +364,30 @@ def test_dead_reload_requires_allocator_ownership_and_no_read(owned, read):
     insns = (load, use, write) if read else (load, write)
     body = lir.LirBody("reload", 0, (lir.LirBlock(0, insns, ()),), {}, {})
     assert (load not in peephole.overwritten(body).insns) == (owned and not read)
+
+
+def test_overwritten_reload_keeps_virtual_definition() -> None:
+    """mdl_draw_tris kept a zero-cost copy of a spilled selector after its
+    reload was physically dead; dropping the reload orphaned that value."""
+    from qbopt.backend import verify
+    from qbopt.backend.frame import Frame
+
+    ax = ir.Reg(Register.AX, 2)
+    load = lir.Insn(
+        0,
+        (0, 0),
+        ir.Semantics(ir.Operation.MOVE, "mov", (ax,), (Frame(0).cell(1, 2),)),
+        (1,),
+        (),
+        spill_reload=True,
+    )
+    copy = lir.anchor(lir.Insn(1, (1, 1), ir.Semantics(ir.Operation.MOVE, "mov", (ax,), (ax,)), (2,), (1,)))
+    overwrite = lir.Insn(2, (2, 2), ir.Semantics(ir.Operation.MOVE, "mov", (ax,), (ir.Imm(0, 2),)), (), ())
+    body = lir.LirBody("reload", 0, (lir.LirBlock(0, (load, copy, overwrite), ()),), {}, {})
+
+    result = peephole.overwritten(body)
+    assert not verify.verify(result, in_ssa=False)
+    assert any(one.what.op is ir.Operation.NOTHING and one.defines == (1,) for one in result.insns)
 
 
 @pytest.mark.parametrize("middle,removed", [(Register.CX, True), (Register.AL, False), (Register.AH, False)])
@@ -738,6 +765,94 @@ def test_register_round_trip_through_memory_is_one_instruction(variant, printed)
         assert [line for one in result.insns for line in masm._instruction(one.what, {}, 0)] == printed
 
 
+def test_fusion_does_not_cross_a_virtual_dataflow_anchor():
+    """qcport's ls_animate lost value#207 when fusion skipped an anchor,
+    removed the spill reload defining it, and left the anchor reading it."""
+    from qbopt.backend import verify
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
+    bx, cx = ir.Reg(Register.BX, 2), ir.Reg(Register.CX, 2)
+    cell = ir.Mem(Addr(Space.FRAME, -4), 2, Register.BP, 0, 2)
+    load = lir.Insn(
+        1,
+        None,
+        ir.Semantics(ir.Operation.MOVE, "mov", (bx,), (cell,)),
+        (2,),
+        (),
+        spill_reload=True,
+    )
+    anchor = lir.Insn(2, None, ir.Semantics(ir.Operation.NOTHING, "", (), ()), (3,), (2,))
+    compare = lir.Insn(
+        3,
+        None,
+        ir.Semantics(ir.Operation.COMPARE, "cmp", (), (bx, ir.Imm(0, 2))),
+        (),
+        (3,),
+    )
+    branch = lir.Insn(4, None, ir.Semantics(ir.Operation.BRANCH, "je", (), (), 2), (), ())
+    overwrite = lir.Insn(5, None, ir.Semantics(ir.Operation.MOVE, "mov", (bx,), (cx,)), (), ())
+    body = lir.LirBody(
+        "anchored-fusion",
+        0,
+        (
+            lir.LirBlock(0, (load, anchor, compare, branch), (1, 2)),
+            lir.LirBlock(1, (overwrite,), ()),
+            lir.LirBlock(2, (overwrite,), ()),
+        ),
+        {},
+        {},
+    )
+
+    done = peephole.fused(body)
+
+    assert not verify.verify(done)
+
+
+def test_indirect_call_target_is_physically_live_into_the_call():
+    """qcport's mdl_ai lost value#47 after fusion removed the function
+    pointer load: call BX was counted only as clobbering BX, not reading it."""
+    from qbopt.backend import verify
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
+    bx, cx = ir.Reg(Register.BX, 2), ir.Reg(Register.CX, 2)
+    cell = ir.Mem(Addr(Space.FRAME, -4), 2, Register.BP, 0, 2)
+    load = lir.Insn(1, None, ir.Semantics(ir.Operation.MOVE, "mov", (bx,), (cell,)), (47,), ())
+    compare = lir.Insn(
+        2,
+        None,
+        ir.Semantics(ir.Operation.COMPARE, "cmp", (), (bx, ir.Imm(0, 2))),
+        (),
+        (47,),
+    )
+    branch = lir.Insn(3, None, ir.Semantics(ir.Operation.BRANCH, "je", (), (), 2), (), ())
+    call = lir.Insn(
+        4,
+        None,
+        ir.Semantics(ir.Operation.CALL, "call", (), (bx,)),
+        (),
+        (47,),
+        clobbers=frozenset({Register.EBX}),
+    )
+    overwrite = lir.Insn(5, None, ir.Semantics(ir.Operation.MOVE, "mov", (bx,), (cx,)), (), ())
+    body = lir.LirBody(
+        "indirect-call-liveness",
+        0,
+        (
+            lir.LirBlock(0, (load, compare, branch), (1, 2)),
+            lir.LirBlock(1, (call,), ()),
+            lir.LirBlock(2, (overwrite,), ()),
+        ),
+        {},
+        {},
+    )
+
+    done = peephole.fused(body)
+
+    assert not verify.verify(done)
+
+
 @pytest.mark.parametrize(
     "variant,printed",
     [
@@ -969,7 +1084,8 @@ def test_crc32_reads_a_byte_directly_into_its_dword_value() -> None:
     not leave a later virtual use without a definition.
     """
     from qbopt.backend import verify
-    from qbopt.objectfile.module import Addr, Space
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
 
     cell = ir.Mem(Addr(Space.SEGMENT, 1, 0), 1, through=Register.BX)
     narrow = lir.Insn(

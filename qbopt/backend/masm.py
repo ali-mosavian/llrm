@@ -89,13 +89,15 @@ def text(module: Module) -> str:
     for segment, items in module.data:
         private = segment in module.private
         out.append(SEGMENTS.get(segment, f"{segment} segment word public '{'FAR_DATA' if private else 'DATA'}'"))
-        out += [f"extern {name}:{kind}" for name, kind in module.externs if kind == "byte"]
+        out += [f"extern {name}:byte" for name, kind in module.externs if kind == "byte"]
         out += [line for item in items for line in datum(item)]
         if segment not in SEGMENTS:
             out.append(f"{segment} ends")
             if not private:
                 out.append(f"DGROUP group {segment}")
-    out += [f"extern {name}:{kind}" for name, kind in module.externs if kind != "byte"]
+    out += [
+        f"extern {name}:{'byte' if kind == 'far-byte' else kind}" for name, kind in module.externs if kind != "byte"
+    ]
     out.append(f".code {module.code}")
     for number, procedure in enumerate(module.procedures):
         out += _procedure(procedure, module.names, number)
@@ -160,10 +162,13 @@ def listing(procedure: Procedure, number: int) -> list[Item]:
                         ir.Semantics(ir.Operation.POP, "pop", what.dests),
                     ]
                 case ir.Operation.CALL:
-                    callee = procedure.callees.get(one.at)
-                    if callee is None:
-                        raise Unprintable(f"{procedure.name} at {one.at}: a call with no callee")
-                    out.append(callee)
+                    if what.indirect:
+                        out.append(what)
+                    else:
+                        callee = procedure.callees.get(one.at)
+                        if callee is None:
+                            raise Unprintable(f"{procedure.name} at {one.at}: a call with no callee")
+                        out.append(callee)
                 case ir.Operation.RETURN:
                     out += [*leave, replace(what, name=what.name or ("retf" if procedure.far else "ret"))]
                 case _:
@@ -274,6 +279,8 @@ def _instruction(what: ir.Semantics, names: dict, number: int) -> list[str]:
             if what.target is None:
                 raise Unprintable(f"{name or 'jump'} with no target")
             return [f"{name} {label(number, what.target)}"]
+        case ir.Operation.CALL if what.indirect and len(sources) == 1:
+            return [f"call {sources[0]}"]
         case ir.Operation.BARRIER:
             return [f"{name} {(dests or sources)[0]}"]
         case ir.Operation.FLOAT_LOAD:
@@ -304,7 +311,13 @@ def _code(parts: tuple):
 
 
 def _segment(where) -> bool:
-    return isinstance(where, ir.Reg) and where.register in (Register.ES, Register.DS, Register.SS, Register.FS, Register.GS)
+    return isinstance(where, ir.Reg) and where.register in (
+        Register.ES,
+        Register.DS,
+        Register.SS,
+        Register.FS,
+        Register.GS,
+    )
 
 
 def _operand(where, names: dict) -> str:

@@ -581,7 +581,12 @@ def overwritten(body: lir.LirBody) -> lir.LirBody:
                         continue
             reads, writes = effects
             dead = (dead | writes) - reads
-        blocks.append(replace(block, insns=tuple(lir.without(block.insns, lambda one: id(one) in redundant))))
+        blocks.append(
+            replace(
+                block,
+                insns=tuple(lir.anchor(one) if id(one) in redundant else one for one in block.insns),
+            )
+        )
     return replace(body, blocks=tuple(blocks))
 
 
@@ -618,7 +623,7 @@ def fused(body: lir.LirBody) -> lir.LirBody:
                 continue
             reads, writes = effects
             dead = (dead | writes) - reads
-        work = [index for index, one in enumerate(insns) if not _nothing(one)]
+        work = [index for index, one in enumerate(insns) if not _skippable_nothing(one)]
         removed = set()
         at = 0
         while at + 1 < len(work):
@@ -747,7 +752,7 @@ def far_loads(body: lir.LirBody) -> lir.LirBody:
     blocks = []
     for block in body.blocks:
         insns = list(block.insns)
-        work = [index for index, one in enumerate(insns) if not _nothing(one)]
+        work = [index for index, one in enumerate(insns) if not _skippable_nothing(one)]
         removed = set()
         at = 0
         while at + 1 < len(work):
@@ -1012,7 +1017,7 @@ def tested(body: lir.LirBody) -> lir.LirBody:
     for block in body.blocks:
         insns = list(block.insns)
         # Moves change no flag, so the three may have a phi's copies between them.
-        work = [index for index, one in enumerate(insns) if not _nothing(one)]
+        work = [index for index, one in enumerate(insns) if not _skippable_nothing(one)]
         test_at = len(work) - 2
         while test_at >= 1 and _moves(insns[work[test_at]]):
             test_at -= 1
@@ -1076,7 +1081,7 @@ def zero_compares(body: lir.LirBody) -> lir.LirBody:
     blocks = []
     for block in body.blocks:
         insns = list(block.insns)
-        work = [index for index, one in enumerate(insns) if not _nothing(one)]
+        work = [index for index, one in enumerate(insns) if not _skippable_nothing(one)]
         at = len(work) - 2
         # Moves change no flag, so a phi's copies may stand between the two.
         while at >= 0 and _moves(insns[work[at]]):
@@ -1110,6 +1115,11 @@ def _moves(one: lir.Insn, register: "ir.Reg | None" = None) -> bool:
 
 def _nothing(one: lir.Insn) -> bool:
     return one.what is not None and one.what.op is ir.Operation.NOTHING and not one.what.name
+
+
+def _skippable_nothing(one: lir.Insn) -> bool:
+    """A no-op with no virtual edge, safe to skip for physical adjacency."""
+    return _nothing(one) and not one.defines and not one.uses
 
 
 def _zero_tested(one: lir.Insn) -> "Register_ | None":

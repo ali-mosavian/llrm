@@ -1080,7 +1080,7 @@ def _placed(one: lir.Insn, held: dict, origin: dict) -> lir.Insn:
     # `compare=False`, so a cell that just gained the register its base was
     # given compares equal to the one without it, and the shortcut returned
     # the unresolved instruction it had already replaced.
-    return replace(one, what=ir.Semantics(what.op, what.name, dests, sources, what.target))
+    return replace(one, what=replace(what, dests=dests, sources=sources))
 
 
 def _settled(where: ir.Loc | ir.Held, held: dict, origin: dict) -> ir.Loc:

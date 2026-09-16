@@ -180,6 +180,22 @@ def named(body: "mir.MirBody") -> "mir.MirBody":
     return replace(body, blocks=tuple(replace(block, ops=tuple(map(one, block.ops))) for block in body.blocks))
 
 
+def _indirect_call(op: mir.Op) -> bool:
+    """Whether a generated CALL's sole encoded operand is its target.
+
+    The frontend records this control-flow fact explicitly.  Inferring it
+    from `symbol` confused a call whose relocation moved with an indirect
+    call; inferring it from the argument count confused B$PSSD's implicit DI
+    input with a target.  Stack arguments are preceding ARG operations, so
+    the one argument here is solely the encoded destination.
+    """
+    if not op.indirect:
+        return False
+    if op.kind is not mir.Kind.CALL or len(op.args) != 1 or not isinstance(op.args[0], mir.Held):
+        raise Unlowered(f"{op.at:#06x}: indirect call needs exactly one value target")
+    return True
+
+
 def semantics(op: mir.Op, was: ir.Semantics | None = None, place=None) -> ir.Semantics | None:
     """What this operation computes, in machine form, or None for verbatim.
 
@@ -208,9 +224,12 @@ def semantics(op: mir.Op, was: ir.Semantics | None = None, place=None) -> ir.Sem
         and op.kind in (mir.Kind.CALL, mir.Kind.RETURN)
         and op.op in (ir.Operation.CALL, ir.Operation.RETURN)
     ):
-        # Named from its kind: results arrive and values leave in the
-        # registers the ABI says, which origin and pins carry, not operands.
-        return ir.Semantics(op.op, op.name, (), ())
+        # Results arrive and return values leave in registers the ABI says,
+        # rather than encoded operands. An indirect call's target is the one
+        # exception: it is the r/m16 source named by the call instruction.
+        located = place or _place
+        sources = tuple(located(one, (), i) for i, one in enumerate(op.args)) if _indirect_call(op) else ()
+        return ir.Semantics(op.op, op.name, (), sources, indirect=op.indirect)
     if not op.args and not op.results and op.raised is None and op.kind is not mir.Kind.BRANCH:
         return None  # nothing to build one from
     # A value resolves to the register the original instruction had in the
@@ -291,12 +310,10 @@ def _valueized(what: "ir.Semantics", op: "mir.Op") -> "ir.Semantics":
                 out.append(one)
         return tuple(out)
 
-    return ir.Semantics(
-        what.op,
-        what.name,
-        named(what.dests, op.results),
-        named(what.sources, op.args),
-        what.target,
+    return replace(
+        what,
+        dests=named(what.dests, op.results),
+        sources=named(what.sources, op.args),
     )
 
 
@@ -389,7 +406,7 @@ def _located(what: "ir.Semantics | None", was: "ir.Semantics | None") -> "ir.Sem
     sources = tuple(_machine(one, was.sources if was else (), index) for index, one in enumerate(what.sources))
     if dests == what.dests and sources == what.sources:
         return what
-    return ir.Semantics(what.op, what.name, dests, sources, what.target)
+    return replace(what, dests=dests, sources=sources)
 
 
 def _machine(one, had: tuple, index: int):
@@ -1124,6 +1141,11 @@ class Lowering:
             )
         if op.kind is not mir.Kind.CALL:
             return self._unencoded(op)
+        if _indirect_call(op):
+            # An indirect call names its target as an ordinary encoded source.
+            # The stack arguments are separate ARG operations, so there are no
+            # hidden register inputs for this list to constrain.
+            return ()
         # The raise's own answer first: `args_known` is false for a call
         # whose contract declares nothing and for one to the program's own
         # code, which has no runtime contract at all -- not for a routine

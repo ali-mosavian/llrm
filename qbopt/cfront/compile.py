@@ -127,7 +127,10 @@ def compiled(text: str, module: str, *, optimise: bool = False, dump: Path | Non
 
 def _externs(unit: hir.Unit) -> tuple[tuple[str, str], ...]:
     return tuple(
-        (one.object_name, ("far" if one.far else "near") if one.proc else "byte")
+        (
+            one.object_name,
+            ("far" if one.far else "near") if one.proc else "byte" if unit.grouped(one) else "far-byte",
+        )
         for one in unit.symbols.values()
         if one.imported and one.code is None and one.name not in raise_hir.EMITTED
     )

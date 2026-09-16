@@ -52,6 +52,7 @@ def tied(body: lir.LirBody) -> lir.LirBody:
     _, leaving = allocate.live(body)
     copies = _copy_destinations(body)
     from qbopt.backend import coalesce
+
     interference = coalesce._interference(body)
     blocks = []
     for block in body.blocks:
@@ -146,7 +147,8 @@ def _commuted(one: lir.Insn, alive: frozenset[int], copies=None, interference=No
         and (
             blocked(second.value),
             _distance(copies or {}, into.value, second.value),
-        ) < (
+        )
+        < (
             blocked(first.value),
             _distance(copies or {}, into.value, first.value),
         )
@@ -190,7 +192,7 @@ def _untied(one: lir.Insn, mint) -> "list[lir.Insn] | None":
         uses=(first.value,) if isinstance(first, ir.Held) else (),
         op=one.op,
     )
-    fixed = replace(one, what=ir.Semantics(what.op, what.name, what.dests, (into, *what.sources[1:]), what.target))
+    fixed = replace(one, what=replace(what, sources=(into, *what.sources[1:])))
     remaining = {value.value for operand in what.sources[1:] for value in ir.values(operand)}
     uses = tuple(
         value for value in one.uses if not isinstance(first, ir.Held) or value != first.value or value in remaining
@@ -222,7 +224,7 @@ def _through_register(one: lir.Insn, what: ir.Semantics, into: ir.Mem, mint) -> 
     )
     computed = replace(
         one,
-        what=ir.Semantics(what.op, what.name, (held,), (held, *what.sources[1:]), what.target),
+        what=replace(what, dests=(held,), sources=(held, *what.sources[1:])),
         defines=(held.value,),
         uses=tuple(
             dict.fromkeys((held.value, *(value.value for source in what.sources[1:] for value in ir.values(source))))

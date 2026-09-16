@@ -909,6 +909,10 @@ class Op:
     memory_complete: bool = False
     # Complete value reads do not imply movable or removable side effects.
     reads_complete: bool = False
+    # Whether CALL takes its destination from a value rather than a named
+    # procedure.  This is control-flow meaning established by the frontend,
+    # not an encoding choice: lowering decides how that value is addressed.
+    indirect: bool = False
 
     @property
     def barrier(self) -> bool:

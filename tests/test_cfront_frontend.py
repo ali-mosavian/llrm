@@ -43,6 +43,20 @@ def test_inline_assembly_takes_387_instructions(tmp_path):
     assert "CGProcDecl" in _stream(tmp_path, source)
 
 
+def test_inline_assembly_frame_fixups_are_not_indirect_call_targets(tmp_path):
+    """qcport's fsin inline body carries its input and output frame addresses
+    on a call-like MIR node; they are fixups, not two indirect call targets."""
+    text = _stream(
+        tmp_path,
+        "double s(double r) { double x; __asm { fld r\n fsin\n fstp x } return x; }\n",
+    )
+
+    assembly = cfront.compiled(text, "inline_fsin", optimise=True)
+
+    assert "_s proc far" in assembly
+    assert "call word ptr" not in assembly
+
+
 def test_relative_source_and_include(tmp_path, monkeypatch):
     """wccq runs in its scratch directory, where `fixtures/c/x.c` and `-I src`
     no longer resolved: E1051 unable to open."""
@@ -68,6 +82,25 @@ def test_stdc_is_undefined_as_in_bcc(tmp_path):
     assert "CGProcDecl" in stream and "FP_OFF" not in stream
 
 
+def test_borland_conditional_keeps_explicit_far_pointer_stores(tmp_path):
+    """qcport's CMD_FAR follows __BORLANDC__; without that target macro,
+    cmd_init treated its far allocation as near and zeroed DGROUP instead."""
+    text = _stream(
+        tmp_path,
+        "#ifdef __BORLANDC__\n"
+        "#define TARGET_FAR far\n"
+        "#else\n"
+        "#define TARGET_FAR\n"
+        "#endif\n"
+        "void clear(unsigned char TARGET_FAR *p) { *p = 0; }\n",
+    )
+
+    assembly = cfront.compiled(text, "far_store", optimise=True)
+
+    assert "TY_LONG_POINTER" in text
+    assert "es:" in assembly
+
+
 def test_long_long_reaches_the_stream_as_signed_and_unsigned_int64(tmp_path):
     stream = _stream(
         tmp_path,
@@ -77,6 +110,88 @@ def test_long_long_reaches_the_stream_as_signed_and_unsigned_int64(tmp_path):
     parameters = [line.split()[-1] for line in stream.splitlines() if "CGParmDecl" in line]
     assert declarations == ["TY_INT_8", "TY_UINT_8"]
     assert parameters == ["TY_INT_8", "TY_UINT_8"]
+
+
+def test_aggregate_copy_through_pointers_reaches_mir(tmp_path):
+    """qcport's combat_brush_points stopped at `no scalar width for T51`
+    while compiling `*target = *center`."""
+    text = _stream(
+        tmp_path,
+        "typedef struct { float x, y, z; } Vec;\nvoid copy(Vec *a, Vec *b, Vec *src) { *a = *b = *src; }\n",
+    )
+
+    from qbopt.cfront import hir
+    from qbopt.cfront import stream
+    from qbopt.cfront import raise_hir
+
+    unit = hir.unit(stream.parse(text))
+    body = raise_hir.raised(unit, unit.procs[0]).body
+    loads = [op for block in body.blocks for op in block.ops if op.kind is cfront.mir.Kind.LOAD]
+    stores = [op for block in body.blocks for op in block.ops if op.kind is cfront.mir.Kind.STORE]
+    assert sum(ref.width for op in loads for ref in op.loads if ref.width == 4) == 24
+    assert sum(ref.width for op in stores for ref in op.stores) == 24
+
+
+def test_aggregate_argument_is_pushed_by_value(tmp_path):
+    """qcport's combat_radius passes a BspVec3 by value; the frontend stopped
+    at `no scalar width for T51` instead of laying its 12 bytes on the stack."""
+    text = _stream(
+        tmp_path,
+        "typedef struct { float x, y, z; } Vec;\nextern void take(Vec v);\nvoid pass(Vec *src) { take(*src); }\n",
+    )
+
+    from qbopt.cfront import hir
+    from qbopt.cfront import stream
+    from qbopt.cfront import raise_hir
+
+    unit = hir.unit(stream.parse(text))
+    body = raise_hir.raised(unit, unit.procs[0]).body
+    args = [op for block in body.blocks for op in block.ops if op.kind is cfront.mir.Kind.ARG]
+    assert [op.args[0].width for op in args] == [4, 4, 4]
+
+
+def test_near_function_pointer_call_reaches_the_emitter(tmp_path):
+    """qcport's pl_items_touch calls ItemInfo.take through a near pointer;
+    the frontend stopped at `indirect call` instead of emitting `call r/m16`."""
+    text = _stream(
+        tmp_path,
+        "typedef int (near *Take)(int);\nint apply(Take take, int value) { return take(value); }\n",
+    )
+
+    assembly = cfront.compiled(text, "indirect", optimise=True)
+    assert any(line.strip().startswith("call ") and "_take" not in line for line in assembly.splitlines())
+
+
+def test_external_far_object_uses_its_own_selector(tmp_path):
+    """qcport linked mon_facts against DGROUP even though its declaration is
+    far; the linker rejected the offset's group frame as a different segment."""
+    text = _stream(tmp_path, "extern int far y;\nvoid far *address(void) { return &y; }\n")
+
+    from qbopt.backend import masm
+    from qbopt.objectfile import omf
+    from qbopt.backend import omfwrite
+
+    built = cfront.assembled(text, "far_object", optimise=True)
+    assembly = masm.text(built)
+    records = omf.parse(omfwrite.written(built, "far_object.c"))
+    externals = omf.externals(records)
+    y = externals.index("_y")
+    relocations = [one for one in omf.fixups(records) if one.target == "external" and one.index == y]
+
+    assert "mov dx, seg _y" in assembly
+    assert "mov dx, DGROUP" not in assembly
+    assert relocations and all(one.frame_method != 1 for one in relocations)
+
+
+def test_borland_intrinsic_runtime_name_is_normalized(tmp_path):
+    """dos.h spells outportb as compiler intrinsic __outportb__, while the
+    Borland medium-model runtime exports the callable fallback as _outportb."""
+    text = _stream(tmp_path, "#include <dos.h>\nvoid send(void) { outportb(0x3f8, 'x'); }\n")
+
+    assembly = cfront.compiled(text, "outport", optimise=True)
+
+    assert "call far ptr _outportb" in assembly
+    assert "___outportb__" not in assembly
 
 
 def test_restrict_reaches_mir_as_distinct_noalias_roots(tmp_path):

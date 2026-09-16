@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 from iced_x86 import OpKind
 from iced_x86 import Decoder
@@ -98,3 +100,37 @@ def test_a_rename_does_not_merge_the_producers_other_operand():
     )
     result = regthrash.thrashed(body)
     assert _run(result.blocks[0], {Register.ECX: 5, Register.EDX: 7})[Register.EDX] == 12
+
+
+def test_removed_copy_keeps_its_virtual_definition() -> None:
+    """mdl_draw_tris lost the selector value used by later far-memory reads
+    when regthrash removed its physical copy after allocation."""
+    ax, di = _reg(Register.EAX), _reg(Register.EDI)
+    producer = replace(
+        _insn(0, "mov", ir.Operation.MOVE, (ax,), (ir.Imm(7, 4),)),
+        defines=(1,),
+    )
+    copy = replace(
+        _insn(1, "mov", ir.Operation.MOVE, (di,), (ax,)),
+        defines=(2,),
+        uses=(1,),
+    )
+    body = _body((producer, copy), Register.EDI)
+    following = body.blocks[1]
+    body = replace(
+        body,
+        blocks=(
+            body.blocks[0],
+            replace(
+                following,
+                insns=(replace(following.insns[0], uses=(2,)), *following.insns[1:]),
+            ),
+        ),
+    )
+
+    result = regthrash.thrashed(body)
+    from qbopt.backend import verify
+
+    assert not verify.verify(result, in_ssa=False)
+    anchor = next(one for one in result.blocks[0].insns if one.defines == (2,))
+    assert anchor.what.op is ir.Operation.NOTHING and anchor.uses == (1,)

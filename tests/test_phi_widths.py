@@ -9,6 +9,47 @@ from qbopt.backend import phielim
 from qbopt.optimize import transform
 
 
+def test_unsplit_keeps_virtual_edge_copy_anchors() -> None:
+    """qcport's snd_mix lost value#259 when unsplit treated two no-byte
+    edge-copy anchors as empty and bypassed the blocks defining the phi."""
+    from iced_x86 import Register
+
+    from qbopt.backend import verify
+
+    branch = lir.Insn(1, None, ir.Semantics(ir.Operation.BRANCH, "je", (), (), 1 << 33), (), ())
+    anchor = lir.Insn(2, None, ir.Semantics(ir.Operation.NOTHING, "", (), ()), (259,), (85,))
+    jump = lir.Insn(3, None, ir.Semantics(ir.Operation.JUMP, "jmp", (), (), 33), (), ())
+    compare = lir.Insn(
+        4,
+        None,
+        ir.Semantics(
+            ir.Operation.COMPARE,
+            "cmp",
+            (),
+            (ir.Reg(Register.CX, 2), ir.Imm(8, 2)),
+        ),
+        (),
+        (259,),
+    )
+    body = lir.LirBody(
+        "anchored-split-edge",
+        0,
+        (
+            lir.LirBlock(0, (branch,), (1 << 32, 1 << 33)),
+            lir.LirBlock(1 << 32, (anchor, jump), (33,)),
+            lir.LirBlock(1 << 33, (anchor, jump), (33,)),
+            lir.LirBlock(33, (compare,), ()),
+        ),
+        {},
+        {},
+        inputs=frozenset({85}),
+    )
+
+    done = phielim.unsplit(body)
+
+    assert not verify.verify(done, in_ssa=False)
+
+
 def test_split_fallthrough_gets_an_explicit_jump() -> None:
     """EVTRAP's split exit edge was emitted unreachable after the handler."""
     branch = lir.Insn(

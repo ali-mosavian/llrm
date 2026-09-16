@@ -398,6 +398,10 @@ class Semantics:
     dests: tuple[Loc, ...] = ()
     sources: tuple[Loc, ...] = ()
     target: int | None = None
+    # CALL takes its encoded destination from `sources[0]`, rather than a
+    # direct symbol/relative target. Runtime calls may also have sources,
+    # but those are implicit ABI inputs and are not encoded by CALL itself.
+    indirect: bool = False
 
 
 # Named for what it claims -- nothing -- where Operation.BARRIER is named for

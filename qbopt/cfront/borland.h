@@ -2,6 +2,11 @@
    is Borland's, cdecl, while Open Watcom's headers declare their own with
    __watcall. One definition moves every runtime declaration to the target's. */
 #define __watcall __cdecl
+/* Source conditionals must see the compiler ABI we emit. qcport uses this
+   to retain explicit far data pointers in its Borland medium-model build. */
+#ifndef __BORLANDC__
+#define __BORLANDC__ 0x0410
+#endif
 /* The one Open Watcom keyword Borland's headers use as a plain name: dos.h's
    parameters. Borland's own sources never mean Open Watcom's segment type. */
 #define __segment __borland_segment

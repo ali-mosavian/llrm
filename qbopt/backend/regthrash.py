@@ -112,8 +112,12 @@ def _block(block: lir.LirBlock, dead: set) -> "lir.LirBlock | None":
             continue
         if not tied:
             # The producer never read Y, so writing Z instead is the whole
-            # of it and the move has nothing left to do.
-            insns = [rewritten if one == at else insn for one, insn in enumerate(block.insns) if one != position]
+            # physical operation. Keep the copy's virtual definition as an
+            # anchor: later opaque operands can still name that SSA value.
+            insns = [
+                rewritten if index == at else lir.anchor(insn) if index == position else insn
+                for index, insn in enumerate(block.insns)
+            ]
             return replace(block, insns=tuple(insns))
         # Two-address: the producer reads Y as well as writing it, so the
         # renamed form reads Z and Z has to arrive first. Watcom's

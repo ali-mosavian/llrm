@@ -200,7 +200,7 @@ def _retargeted(what: ir.Semantics, moved: dict[int, int]) -> ir.Semantics | Non
     landed = moved.get(what.target)
     if landed is None:
         return None
-    return ir.Semantics(what.op, what.name, what.dests, what.sources, landed)
+    return replace(what, target=landed)
 
 
 def _still_has_an_operand_for_it(op: mir.Op) -> bool:

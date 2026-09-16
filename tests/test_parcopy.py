@@ -117,11 +117,9 @@ def test_two_groups_are_scheduled_apart() -> None:
     assert got == [f"{di}<-{parcopy._named(_slot(8))}", f"{bp}<-{di}"], got
 
 
-def test_a_register_cycle_is_exchanged_and_a_slot_cycle_refused_by_name() -> None:
-    """Two moves that each read the other's destination need a temporary or
-    an exchange. Registers get the exchange; no instruction exchanges two
-    slots, so that is refused rather than written in an order that computes
-    something else."""
+def test_register_and_spilled_cycles_are_preserved() -> None:
+    """mdl_draw_tris exchanged two spilled phi values in frame slots. A
+    register cycle uses xchg; a slot cycle uses the balanced machine stack."""
     swapped = (
         parcopy.scheduled(
             _body(
@@ -133,8 +131,12 @@ def test_a_register_cycle_is_exchanged_and_a_slot_cycle_refused_by_name() -> Non
         .insns
     )
     assert [one.what.name for one in swapped] == ["xchg"]
-    with pytest.raises(parcopy.Tangled, match="temporary"):
-        parcopy.scheduled(_body(_move(_slot(4), _slot(8), group=1), _move(_slot(8), _slot(4), group=1)))
+    spilled = (
+        parcopy.scheduled(_body(_move(_slot(4), _slot(8), group=1), _move(_slot(8), _slot(4), group=1))).blocks[0].insns
+    )
+    assert [one.what.name for one in spilled] == ["push", "push", "pop", "pop"]
+    assert spilled[0].what.sources == (_slot(4),)
+    assert spilled[-1].what.dests == (_slot(8),)
 
 
 def test_something_that_is_not_a_move_in_a_group_is_refused() -> None:

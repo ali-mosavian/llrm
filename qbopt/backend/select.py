@@ -279,7 +279,9 @@ def _scaled_operand(what: ir.Mem) -> tuple[MemoryOperand, bool] | None:
         size = 0
     else:
         size = 1 if -128 <= disp <= 127 else 4
-    operand = MemoryOperand(base=base, index=what.index_through, scale=what.scale, displ=disp, displ_size=size, seg=segment)
+    operand = MemoryOperand(
+        base=base, index=what.index_through, scale=what.scale, displ=disp, displ_size=size, seg=segment
+    )
     return operand, False
 
 
@@ -1333,7 +1335,11 @@ def multiply_into(dest: Register_, source: Register_ | ir.Mem, value: int | None
 
 
 # Each segment register a far pointer can be loaded into with its offset, and the instruction that does it.
-FAR_LOADS = {Register.ES: ("les", "LES_R16_M1616"), Register.FS: ("lfs", "LFS_R16_M1616"), Register.GS: ("lgs", "LGS_R16_M1616")}
+FAR_LOADS = {
+    Register.ES: ("les", "LES_R16_M1616"),
+    Register.FS: ("lfs", "LFS_R16_M1616"),
+    Register.GS: ("lgs", "LGS_R16_M1616"),
+}
 
 
 def far_load(name: str, into: Register_, segment: Register_, cell: ir.Mem, at: int = 0) -> Emitted | None:
@@ -1631,6 +1637,14 @@ def emit(
             return branch(what.name or "", what.target, at, short)
         case ir.Operation.JUMP if what.target is not None:
             return jump(what.target, at, short)
+        case ir.Operation.CALL if what.indirect and len(sources) == 1:
+            match sources[0]:
+                case ir.Reg(register=one, width=2):
+                    return _assemble(Instruction.create_reg(Code.CALL_RM16, one), at)
+                case ir.Mem(width=2) as cell:
+                    built = operand_of(cell)
+                    if built is not None:
+                        return _assemble(Instruction.create_mem(Code.CALL_RM16, built[0]), at, built[1])
         case ir.Operation.CALL:
             return call_far(at) if what.target is None else call_near(what.target, at)
         case ir.Operation.ESCAPE if what.target is None:
