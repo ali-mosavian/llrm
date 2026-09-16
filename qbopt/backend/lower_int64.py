@@ -25,7 +25,11 @@ class Legalized:
     inline: dict[int, tuple[bytes, ...]]
 
 
-def _helper(name: str) -> runtime.Contract:
+def _helper(
+    name: str,
+    inputs: frozenset[runtime.Reg],
+    clobbers: frozenset[runtime.Reg],
+) -> runtime.Contract:
     return runtime.Contract(
         name=name,
         cleanup=0,
@@ -35,38 +39,91 @@ def _helper(name: str) -> runtime.Contract:
         error_handling=False,
         writes=runtime.Memory.NONE,
         reads=runtime.Memory.NONE,
-        clobbers=frozenset({runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX, runtime.Reg.DX, runtime.Reg.FLAGS}),
+        clobbers=clobbers,
         established=True,
         evidence="qbopt's inline 386 int64 helper; operands and results follow Open Watcom's register ABI",
-        inputs=frozenset({runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX, runtime.Reg.DX}),
+        inputs=inputs,
         clobbers_reached=True,
-        i386=True,
+        # This is not a separately called 386 routine under a 16-bit ABI:
+        # the inline bytes' full-width preservation is exactly described by
+        # ``clobbers``.  Setting i386 would conservatively kill the high
+        # halves of every otherwise-preserved register.
+        i386=False,
     )
 
 
-# __U8M's register ABI is EDX:EAX * ECX:EBX -> EDX:EAX.  This is straight
-# line code at the call site (there is deliberately no RET).
-_MUL = bytes.fromhex("66 50 66 52 66 f7 e1 66 89 c1 66 58 66 f7 e3 66 01 c1 66 58 66 f7 e3 66 01 ca")
+# __U8M's register ABI is EDX:EAX * ECX:EBX -> EDX:EAX.  Only the low
+# dword of each cross product contributes to the result, so two-operand IMUL
+# avoids computing and saving their unused high halves.  There is deliberately
+# no RET: all helpers here are straight-line at the call site.
+_MUL = bytes.fromhex(
+    "66 50 "  # push eax
+    "66 0f af c8 "  # imul ecx,eax
+    "66 0f af d3 "  # imul edx,ebx
+    "66 01 d1 "  # add ecx,edx
+    "66 58 "  # pop eax
+    "66 f7 e3 "  # mul ebx
+    "66 01 ca"  # add edx,ecx
+)
+
+# EDX:EAX * EBX when the other operand is known to fit one dword.  This is
+# the usual shape for C integer constants.  The general helper needs three
+# multiplies; this one needs the low product and one cross product only.
+_MUL32 = bytes.fromhex(
+    "66 0f af d3 "  # imul edx,ebx
+    "66 89 d1 "  # mov ecx,edx
+    "66 f7 e3 "  # mul ebx
+    "66 01 ca"  # add edx,ecx
+)
 
 
-# Restoring division over EDX:EAX / ECX:EBX.  Both helpers preserve BP, ESI,
-# EDI and SP, return quotient in EDX:EAX and remainder in ECX:EBX, and contain
-# no RET because a Callee with code is laid down at the call site.
+# EDX:EAX / ECX:EBX, using the Open Watcom runtime's leading-bit division
+# rather than doing 64 rounds for every input.  A dword divisor takes one or
+# two hardware DIVs; a wider divisor iterates only over significant quotient
+# bits and returns immediately for divisor >= dividend.  BP, ESI, EDI and SP
+# are preserved.  The unsigned outer helper contains no RET; the signed helper
+# has local CALL/RET pairs but every outer path falls through its final byte.
 _UDIV = bytes.fromhex(
-    "55 89 e5 66 56 66 57 66 51 66 53 66 89 c6 66 89 d7 66 31 c0 66 31 d2 b9 40 00 "
-    "66 d1 e6 66 d1 d7 66 d1 d0 66 d1 d2 36 66 3b 56 f4 77 09 72 15 36 66 3b 46 f0 "
-    "72 0e 36 66 2b 46 f0 36 66 1b 56 f4 66 83 ce 01 49 75 d3 66 89 d1 66 89 c3 "
-    "66 89 fa 66 89 f0 36 66 8b 76 fc 36 66 8b 7e f8 89 ec 5d"
+    "66 09 c9 75 2a 66 4b 0f 84 c2 00 66 43 66 39 d3 77 0e 66 89 c1 66 89 d0 66 31 d2 "
+    "66 f7 f3 66 91 66 f7 f3 66 89 d3 66 89 ca 66 31 c9 e9 9e 00 66 39 d1 72 28 75 19 "
+    "66 39 c3 77 14 66 29 d8 66 89 c3 66 31 c9 66 31 d2 66 b8 01 00 00 00 eb 7e 66 31 "
+    "c9 66 31 db 66 93 66 87 d1 eb 71 66 55 66 56 66 57 66 31 f6 66 89 f7 66 89 f5 "
+    "66 d1 e3 66 d1 d1 72 19 66 45 66 39 d1 72 f1 77 05 66 39 c3 76 ea f8 66 d1 d6 "
+    "66 d1 d7 66 4d 78 2f 66 d1 d9 66 d1 db 66 29 d8 66 19 ca f5 72 e7 66 d1 e6 66 d1 "
+    "d7 66 4d 78 10 66 d1 e9 66 d1 db 66 01 d8 66 11 ca 73 e8 eb cd 66 01 d8 66 11 ca "
+    "66 89 c3 66 89 d1 66 89 f0 66 89 fa 66 5f 66 5e 66 5d"
 )
 _SDIV = bytes.fromhex(
-    "55 89 e5 66 56 66 57 66 89 d6 66 31 ce 66 89 d7 66 85 d2 79 0a 66 f7 da 66 f7 d8 "
-    "66 83 da 00 66 85 c9 79 0a 66 f7 d9 66 f7 db 66 83 d9 00 66 56 66 57 66 51 66 53 "
-    "66 89 c6 66 89 d7 66 31 c0 66 31 d2 b9 40 00 66 d1 e6 66 d1 d7 66 d1 d0 66 d1 d2 "
-    "36 66 3b 56 ec 77 09 72 15 36 66 3b 46 e8 72 0e 36 66 2b 46 e8 36 66 1b 56 ec "
-    "66 83 ce 01 49 75 d3 66 89 d1 66 89 c3 66 89 fa 66 89 f0 36 66 83 7e f4 00 7d 0a "
-    "66 f7 da 66 f7 d8 66 83 da 00 36 66 83 7e f0 00 7d 0a 66 f7 d9 66 f7 db 66 83 d9 00 "
-    "36 66 8b 76 fc 36 66 8b 7e f8 89 ec 5d"
+    "66 09 d2 78 25 66 09 c9 78 06 e8 60 00 e9 27 01 66 f7 d9 66 f7 db 66 83 d9 00 e8 "
+    "50 00 66 f7 da 66 f7 d8 66 83 da 00 e9 0d 01 66 f7 da 66 f7 d8 66 83 da 00 66 09 c9 "
+    "79 1a 66 f7 d9 66 f7 db 66 83 d9 00 e8 27 00 66 f7 d9 66 f7 db 66 83 d9 00 e9 e4 "
+    "00 e8 17 00 66 f7 d9 66 f7 db 66 83 d9 00 66 f7 da 66 f7 d8 66 83 da 00 e9 ca 00 "
+    "66 09 c9 75 28 66 4b 0f 84 be 00 66 43 66 39 d3 77 0e 66 89 c1 66 89 d0 66 31 "
+    "d2 66 f7 f3 66 91 66 f7 f3 66 89 d3 66 89 ca 66 31 c9 c3 66 39 d1 72 26 75 18 "
+    "66 39 c3 77 13 66 29 d8 66 89 c3 66 31 c9 66 31 d2 66 b8 01 00 00 00 c3 66 31 "
+    "c9 66 31 db 66 93 66 87 d1 c3 66 55 66 56 66 57 66 31 f6 66 89 f7 66 89 f5 "
+    "66 d1 e3 66 d1 d1 72 19 66 45 66 39 d1 72 f1 77 05 66 39 c3 76 ea f8 66 d1 d6 "
+    "66 d1 d7 66 4d 78 2f 66 d1 d9 66 d1 db 66 29 d8 66 19 ca f5 72 e7 66 d1 e6 66 "
+    "d1 d7 66 4d 78 10 66 d1 e9 66 d1 db 66 01 d8 66 11 ca 73 e8 eb cd 66 01 d8 66 "
+    "11 ca 66 89 c3 66 89 d1 66 89 f0 66 89 fa 66 5f 66 5e 66 5d c3"
 )
+
+# A compile-time dword divisor does not need the general helper's 64-bit
+# normalization loop.  The high dividend dword is divided first when needed,
+# then the low dword with that remainder: at most two hardware divisions.
+_UDIV_CONST32 = bytes.fromhex(
+    "66 31 c9 66 39 d3 77 0e 66 89 c1 66 89 d0 66 31 d2 66 f7 f3 66 91 66 f7 f3 66 89 d3 66 89 ca 66 31 c9"
+)
+_SDIV_CONST32 = bytes.fromhex(
+    "66 09 d2 78 24 66 31 c9 66 39 d3 77 0e 66 89 c1 66 89 d0 66 31 d2 66 f7 f3 66 91 "
+    "66 f7 f3 66 89 d3 66 89 ca 66 31 c9 eb 40 66 f7 da 66 f7 d8 66 83 da 00 66 31 c9 "
+    "66 39 d3 77 0e 66 89 c1 66 89 d0 66 31 d2 66 f7 f3 66 91 66 f7 f3 66 89 d3 66 "
+    "89 ca 66 31 c9 66 f7 d9 66 f7 db 66 83 d9 00 66 f7 da 66 f7 d8 66 83 da 00"
+)
+
+
+_FOUR_INPUTS = frozenset({runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX, runtime.Reg.DX})
+_FOUR_CLOBBERS = _FOUR_INPUTS | {runtime.Reg.FLAGS}
 
 
 class _Legalizer:
@@ -227,6 +284,35 @@ class _Legalizer:
             self.op(source, high_kind, (value[1], mir.Const(amount, 1)), (out[1],)),
         ]
 
+    def materialize(self, source: mir.Op, incoming: tuple[mir.Arg, ...]) -> tuple[list[mir.Op], tuple[mir.Held, ...]]:
+        prefix = []
+        arguments = []
+        for arg in incoming:
+            if isinstance(arg, mir.Held):
+                arguments.append(arg)
+                continue
+            value = self.fresh(source.at)
+            held = mir.Held(value, arg.width)
+            prefix.append(self.op(source, mir.Kind.COPY, (arg,), (held,)))
+            arguments.append(held)
+        return prefix, tuple(arguments)
+
+    def inline_helper(
+        self,
+        source: mir.Op,
+        name: str,
+        code: bytes,
+        args: tuple[mir.Held, ...],
+        results: tuple[mir.Arg, ...],
+        inputs: frozenset[runtime.Reg],
+        clobbers: frozenset[runtime.Reg],
+    ) -> mir.Op:
+        made = self.op(source, mir.Kind.CALL, args, results)
+        self.calls[made.at] = name
+        self.contracts[made.at] = _helper(name, inputs, clobbers)
+        self.inline[made.at] = (code,)
+        return made
+
     def call_helper(self, source: mir.Op, name: str, code: bytes) -> list[mir.Op]:
         left = self.pair(source.args[0])
         right = self.pair(source.args[1])
@@ -234,26 +320,70 @@ class _Legalizer:
         results = quotient
         if len(source.results) == 2:
             results += self.pair(source.results[1])
-        prefix = []
-        arguments = []
-        for arg in (left[0], right[0], right[1], left[1]):
-            if isinstance(arg, mir.Held):
-                arguments.append(arg)
-                continue
-            value = self.fresh(source.at)
-            held = mir.Held(value, 4)
-            prefix.append(self.op(source, mir.Kind.COPY, (arg,), (held,)))
-            arguments.append(held)
-        args = tuple(arguments)
-        made = self.op(source, mir.Kind.CALL, args, results)
-        self.calls[made.at] = name
-        self.contracts[made.at] = _helper(name)
-        self.inline[made.at] = (code,)
+        prefix, args = self.materialize(source, (left[0], right[0], right[1], left[1]))
+        made = self.inline_helper(source, name, code, args, results, _FOUR_INPUTS, _FOUR_CLOBBERS)
         if len(results) == 4:
             origin = dict(self.body.origin)
             origin[results[2].value] = Register.EBX
             origin[results[3].value] = Register.ECX
             self.body = replace(self.body, origin=origin)
+        return [*prefix, made]
+
+    def multiply(self, source: mir.Op) -> list[mir.Op]:
+        left = self.pair(source.args[0])
+        right = self.pair(source.args[1])
+        out = self.pair(source.results[0])
+        if isinstance(right[1], mir.Const) and right[1].n == 0:
+            prefix, args = self.materialize(source, (left[0], right[0], left[1]))
+            made = self.inline_helper(
+                source,
+                "__U8M32",
+                _MUL32,
+                args,
+                out,
+                frozenset({runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.DX}),
+                frozenset({runtime.Reg.AX, runtime.Reg.CX, runtime.Reg.DX, runtime.Reg.FLAGS}),
+            )
+            return [*prefix, made]
+        if isinstance(left[1], mir.Const) and left[1].n == 0:
+            prefix, args = self.materialize(source, (right[0], left[0], right[1]))
+            made = self.inline_helper(
+                source,
+                "__U8M32",
+                _MUL32,
+                args,
+                out,
+                frozenset({runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.DX}),
+                frozenset({runtime.Reg.AX, runtime.Reg.CX, runtime.Reg.DX, runtime.Reg.FLAGS}),
+            )
+            return [*prefix, made]
+        return self.call_helper(source, "__U8M", _MUL)
+
+    def divide(self, source: mir.Op) -> list[mir.Op]:
+        left = self.pair(source.args[0])
+        right = self.pair(source.args[1])
+        if not (isinstance(right[1], mir.Const) and right[1].n == 0):
+            signed = source.kind is mir.Kind.DIVMOD
+            return self.call_helper(source, "__I8D" if signed else "__U8D", _SDIV if signed else _UDIV)
+
+        results = self.pair(source.results[0]) + self.pair(source.results[1])
+        prefix, args = self.materialize(source, (left[0], right[0], left[1]))
+        signed = source.kind is mir.Kind.DIVMOD
+        name = "__I8D32" if signed else "__U8D32"
+        code = _SDIV_CONST32 if signed else _UDIV_CONST32
+        made = self.inline_helper(
+            source,
+            name,
+            code,
+            args,
+            results,
+            frozenset({runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.DX}),
+            _FOUR_CLOBBERS,
+        )
+        origin = dict(self.body.origin)
+        origin[results[2].value] = Register.EBX
+        origin[results[3].value] = Register.ECX
+        self.body = replace(self.body, origin=origin)
         return [*prefix, made]
 
     def compare(self, source: mir.Op) -> list[mir.Op]:
@@ -310,10 +440,9 @@ class _Legalizer:
         if source.kind in (mir.Kind.SHL, mir.Kind.SHR, mir.Kind.SAR):
             return self.shift(source)
         if source.kind is mir.Kind.MUL:
-            return self.call_helper(source, "__U8M", _MUL)
+            return self.multiply(source)
         if source.kind in (mir.Kind.DIVMOD, mir.Kind.UDIVMOD):
-            signed = source.kind is mir.Kind.DIVMOD
-            return self.call_helper(source, "__I8D" if signed else "__U8D", _SDIV if signed else _UDIV)
+            return self.divide(source)
         if source.kind in (mir.Kind.ZERO_EXTEND, mir.Kind.SIGN_EXTEND):
             low, high = self.pair(source.results[0])
             arg = source.args[0]

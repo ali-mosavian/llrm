@@ -223,6 +223,48 @@ def test_int64_number_crunching_programs_survive_the_mir_pipeline(module, kinds)
     assert "_main proc" in assembly
 
 
+def test_int64_hot_helpers_do_work_proportional_to_the_operands() -> None:
+    """signedCrunch64 used to run 64 restoring rounds for every `/ 7`.
+
+    Its `* 5` and `* 11` also computed three full dword products although a
+    dword constant has only one cross product.  Keep the generated helper
+    shapes honest: constant division uses hardware DIV, general division has
+    no fixed 64-round counter, and narrow multiplication emits two products.
+    """
+    from iced_x86 import Decoder
+    from iced_x86 import Mnemonic
+
+    def helpers(module: str) -> dict[str, list[bytes]]:
+        path = FIXTURES / "mir" / f"{module}.cgs"
+        built = cfront.assembled(path.read_text(), module, optimise=True)
+        found: dict[str, list[bytes]] = {}
+        for procedure in built.procedures:
+            for callee in procedure.callees.values():
+                if callee.code:
+                    found.setdefault(callee.name, []).append(b"".join(callee.code))
+        return found
+
+    mix = helpers("mix64")
+    euclid = helpers("euclid64")
+
+    general_multiply = list(Decoder(16, mix["__U8M"][0]))
+    narrow_multiply = list(Decoder(16, euclid["__U8M32"][0]))
+    assert len(general_multiply) == 7
+    assert sum(one.mnemonic in (Mnemonic.IMUL, Mnemonic.MUL) for one in general_multiply) == 3
+    assert len(narrow_multiply) == 4
+    assert sum(one.mnemonic in (Mnemonic.IMUL, Mnemonic.MUL) for one in narrow_multiply) == 2
+
+    constant_divide = euclid["__I8D32"][0]
+    general_divide = euclid["__U8D"][0]
+    signed_divide = euclid["__I8D"][0]
+    assert sum(one.mnemonic is Mnemonic.DIV for one in Decoder(16, constant_divide)) == 4
+    assert sum(one.mnemonic is Mnemonic.DIV for one in Decoder(16, general_divide)) == 2
+    assert sum(one.mnemonic is Mnemonic.DIV for one in Decoder(16, signed_divide)) == 2
+    assert b"\xb9\x40\x00" not in constant_divide
+    assert b"\xb9\x40\x00" not in general_divide
+    assert b"\xb9\x40\x00" not in signed_divide
+
+
 def test_float_cast_truncates():
     """`(long)(anim_time * 10.0f)`: fistp rounds by the control word, so it is
     set to toward-zero around the store and put back. The raise refused

@@ -23,11 +23,23 @@ i64 signedCrunch64(i64 value, unsigned rounds)
     return value;
 }
 
-/* 0 means that both known-answer tests passed. */
+/* Exercise every sign path with a divisor that does not fit one dword. */
+i64 signedWide64(i64 left, i64 right)
+{
+    i64 quotient = left / right;
+    i64 remainder = left % right;
+    return quotient * 3 + remainder;
+}
+
+/* 0 means that every known-answer test passed. */
 int euclid64Check(void)
 {
     return gcd64(0xfedcba9876543210ULL, 0x1234567890abcdefULL) != 15
-        || signedCrunch64(-123456789012345LL, 19) != -206577158321LL;
+        || signedCrunch64(-123456789012345LL, 19) != -206577158321LL
+        || signedWide64(0x7123456789abcdefLL, 0x100000003LL) != 0x189abcdefLL
+        || signedWide64(0x7123456789abcdefLL, -0x100000003LL) != -4784116341LL
+        || signedWide64(-0x7123456789abcdefLL, -0x100000003LL) != 0x11d27d275LL
+        || signedWide64(-0x7123456789abcdefLL, 0x100000003LL) != -6604705263LL;
 }
 
 int main(void)

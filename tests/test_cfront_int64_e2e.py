@@ -46,6 +46,8 @@ def test_int64_number_crunching_programs_return_success(tmp_path: Path) -> None:
     qbopt, write OMF directly, link each module to a minimal DOS entry point,
     and require its self-checking ``main`` to return zero.  fib64 specifically
     returned 1 when liveness treated a parallel phi-copy group as sequential.
+    euclid64 also checks wide signed division with every dividend/divisor sign
+    combination, alongside its constant-divisor recurrence.
     """
     start = tmp_path / "START.ASM"
     start.write_text(START)
