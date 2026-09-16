@@ -577,6 +577,7 @@ def lowered(
         held.value for insns in made.values() for one in insns for held, _ in one.requires if held.value not in one.uses
     )
     uses.update(value.id for block in body.blocks for phi in block.phis for value in phi.incoming.values())
+    made = {at: _memory_arguments(insns, uses, making._exposed) for at, insns in made.items()}
     made = {at: _immediate_arguments(insns, uses) for at, insns in made.items()}
     made = {at: _rematerialized_arguments(insns, uses, making._exposed) for at, insns in made.items()}
     live = _phis_worth_keeping(body, made)
@@ -665,6 +666,81 @@ def _rematerialized_arguments(insns, uses, exposed):
         if consumed[value] == uses[value] and consumed[value] and value not in exposed
     }
     return tuple(lir.without(out, lambda one: id(one) in dead))
+
+
+def _memory_arguments(insns, uses, exposed):
+    """Fold a single-use load into the PUSH that consumes it.
+
+    This is instruction selection, not memory forwarding: the read stays at
+    the call site, and candidates survive only instructions that cannot write
+    memory or a fixed address register.  Start with incoming frame arguments,
+    whose storage and address are stable across the call setup.  Folding an
+    arbitrary local can instead extend an address live range and increase
+    pressure (FPDEEP spilled all nine float conversions that way).
+    """
+    from qbopt.model import lir
+
+    loaded = {}
+    consumed = Counter()
+    out = []
+    for one in insns:
+        folded = False
+        match one.what:
+            case ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Held(value, width),)) if value in loaded:
+                definition, source = loaded[value]
+                if (
+                    width == source.width in (2, 4)
+                    and uses[value] == 1
+                    and value not in exposed
+                    and not (one.defines or one.clobbers or one.requires or one.delivers or one.spread)
+                ):
+                    one = replace(
+                        one,
+                        what=replace(one.what, sources=(source,)),
+                        uses=(),
+                        op=definition.op,
+                        symbol=definition.symbol,
+                    )
+                    consumed[value] += 1
+                    folded = True
+
+        what = one.what
+        writes_memory = what is None or any(isinstance(dest, ir.Mem) for dest in what.dests)
+        writes_memory = writes_memory or bool(getattr(one.op, "stores", ()))
+        writes_fixed = what is None or any(isinstance(dest, ir.Reg) for dest in what.dests)
+        barrier = what is None or what.op in (
+            ir.Operation.BARRIER,
+            ir.Operation.CALL,
+            ir.Operation.RETURN,
+        )
+        if writes_memory or writes_fixed or barrier or one.clobbers:
+            loaded.clear()
+
+        for value in one.defines:
+            loaded.pop(value, None)
+        if not folded:
+            match what:
+                case ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(value, width),), (ir.Mem() as source,)):
+                    if (
+                        width == source.width in (2, 4)
+                        and source.addr is not None
+                        and source.addr.space is mir.Space.FRAME
+                        and source.addr.disp >= 4
+                        and ir.root(source.through) is not Register.ESP
+                        and ir.root(source.index_through) is not Register.ESP
+                        and not source.stack_argument
+                        and one.defines == (value,)
+                        and not (one.uses or one.clobbers or one.requires or one.delivers or one.spread)
+                    ):
+                        loaded[value] = (one, source)
+        out.append(one)
+
+    dead = {value for value in consumed if consumed[value] == uses[value] and consumed[value] and value not in exposed}
+    previous = None
+    while previous != tuple(id(one) for one in out):
+        previous = tuple(id(one) for one in out)
+        out = lir.without(out, lambda one: any(value in dead for value in one.defines))
+    return tuple(out)
 
 
 def _immediate_arguments(insns, uses):

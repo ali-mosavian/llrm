@@ -1130,6 +1130,15 @@ one documented target without materially regressing another.
   The comparison instrument now reports only loads whose temporary is dead on
   every CFG path: six superficially identical but register-live sites were not
   opportunities and BCC retained their loads too.
+- [x] Fold single-use incoming stack arguments into their `push` during
+  selection.  The read may cross only non-writing call-setup instructions;
+  calls, stores, fixed-register writes, exposed values and SP-relative cells
+  are barriers.  Local cells stay materialized until the allocator has a
+  pressure-aware fold decision: folding them early made QB FPDEEP spill all
+  nine floating conversions.  This is the target fold-table boundary used by
+  LLVM and the register/memory alternative used by GCC, not a C-source idiom.
+  The recorded qcport C set falls from 768 to 761 instructions (`ls` 612 to
+  608, `qglsurf` 75 to 72, and `pal` unchanged at 81).
 - [ ] Add machine CSE and dead-machine-instruction elimination over allocated
   LIR.
 - [ ] Add branch folding and tail merging after final block placement.
