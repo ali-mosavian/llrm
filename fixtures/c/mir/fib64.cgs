@@ -1,0 +1,130 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+f1 DBSrcFile "fixtures/c/mir/fib64.c"
+- DBSrcCue f1 3 1
+SYM y1 name="fibonacci64" base="fibonacci64" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_UINT_8
+SYM y2 name="count" base="count" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_UNSIGNED
+l2 CGLastParm
+t3 CGTemp TY_UINT_8
+SYM y3 name="previous" base="previous" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y3 TY_UINT_8
+SYM y4 name="current" base="current" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y4 TY_UINT_8
+SYM y5 name="i" base="i" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y5 TY_UNSIGNED
+l4 BENewLabel
+l5 BENewLabel
+- DBSrcCue f1 5 1
+n6 CGFEName y3 TY_UINT_8
+n7 CGInteger 0 TY_INTEGER
+n8 CGAssign n6 n7 TY_UINT_8
+- CGDone n8
+- DBSrcCue f1 6 1
+n9 CGFEName y4 TY_UINT_8
+n10 CGInteger 1 TY_INTEGER
+n11 CGAssign n9 n10 TY_UINT_8
+- CGDone n11
+- DBSrcCue f1 9 1
+n12 CGFEName y5 TY_UNSIGNED
+n13 CGInteger 0 TY_INTEGER
+n14 CGAssign n12 n13 TY_UNSIGNED
+- CGDone n14
+- CGControl O_LABEL n0 l4
+n15 CGFEName y5 TY_UNSIGNED
+n16 CGUnary O_POINTS n15 TY_UNSIGNED
+n17 CGFEName y2 TY_UNSIGNED
+n18 CGUnary O_POINTS n17 TY_UNSIGNED
+n19 CGCompare O_LT n16 n18 TY_UNSIGNED
+- CGControl O_IF_FALSE n19 l5
+SYM y6 name="next" base="next" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y6 TY_UINT_8
+- DBSrcCue f1 10 1
+n20 CGFEName y6 TY_UINT_8
+n21 CGFEName y3 TY_UINT_8
+n22 CGUnary O_POINTS n21 TY_UINT_8
+n23 CGFEName y4 TY_UINT_8
+n24 CGUnary O_POINTS n23 TY_UINT_8
+n25 CGBinary O_PLUS n22 n24 TY_UINT_8
+n26 CGAssign n20 n25 TY_UINT_8
+- CGDone n26
+- DBSrcCue f1 11 1
+n27 CGFEName y3 TY_UINT_8
+n28 CGFEName y4 TY_UINT_8
+n29 CGUnary O_POINTS n28 TY_UINT_8
+n30 CGAssign n27 n29 TY_UINT_8
+- CGDone n30
+- DBSrcCue f1 12 1
+n31 CGFEName y4 TY_UINT_8
+n32 CGFEName y6 TY_UINT_8
+n33 CGUnary O_POINTS n32 TY_UINT_8
+n34 CGAssign n31 n33 TY_UINT_8
+- CGDone n34
+- DBSrcCue f1 13 1
+n35 CGFEName y5 TY_UNSIGNED
+n36 CGInteger 1 TY_INTEGER
+n37 CGPreGets O_PLUS n35 n36 TY_UNSIGNED
+- CGDone n37
+- CGControl O_GOTO n0 l4
+- CGControl O_LABEL n0 l5
+- DBSrcCue f1 14 1
+n38 CGFEName y3 TY_UINT_8
+n39 CGUnary O_POINTS n38 TY_UINT_8
+n40 CGUnary O_CONVERT n39 TY_UINT_8
+n41 CGTempName t3 TY_UINT_8
+n42 CGAssign n41 n40 TY_UINT_8
+- CGDone n42
+- DBSrcCue f1 15 1
+n43 CGTempName t3 TY_UINT_8
+n44 CGUnary O_POINTS n43 TY_UINT_8
+- CGReturn n44 TY_UINT_8
+- DBSrcCue f1 18 1
+SYM y7 name="fibonacci64Check" base="fibonacci64Check" pattern="_*" attr=0x7 seg=1
+CALLCONV y7 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y7 TY_INTEGER
+l45 CGLastParm
+t46 CGTemp TY_INTEGER
+- DBSrcCue f1 20 1
+n47 CGFEName y1 TY_CODE_PTR
+c48 CGInitCall n47 TY_UINT_8 y1
+n49 CGInteger 93 TY_UNSIGNED
+- CGAddParm c48 n49 TY_UNSIGNED
+n50 CGCall c48
+n51 CGUnary O_POINTS n50 TY_UINT_8
+n52 CGInt64 -6246583658587674878 TY_UINT_8
+n53 CGCompare O_NE n51 n52 TY_UINT_8
+n54 CGUnary O_CONVERT n53 TY_INTEGER
+n55 CGTempName t46 TY_INTEGER
+n56 CGAssign n55 n54 TY_INTEGER
+- CGDone n56
+- DBSrcCue f1 21 1
+n57 CGTempName t46 TY_INTEGER
+n58 CGUnary O_POINTS n57 TY_INTEGER
+- CGReturn n58 TY_INTEGER
+- DBSrcCue f1 23 1
+SYM y8 name="main" base="main" pattern="_*" attr=0x7 seg=1
+CALLCONV y8 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y8 TY_INTEGER
+l59 CGLastParm
+t60 CGTemp TY_INTEGER
+- DBSrcCue f1 25 1
+n61 CGFEName y7 TY_CODE_PTR
+c62 CGInitCall n61 TY_INTEGER y7
+n63 CGCall c62
+n64 CGUnary O_POINTS n63 TY_INTEGER
+n65 CGUnary O_CONVERT n64 TY_INTEGER
+n66 CGTempName t60 TY_INTEGER
+n67 CGAssign n66 n65 TY_INTEGER
+- CGDone n67
+- DBSrcCue f1 26 1
+n68 CGTempName t60 TY_INTEGER
+n69 CGUnary O_POINTS n68 TY_INTEGER
+- CGReturn n69 TY_INTEGER
+STOP
+FINI

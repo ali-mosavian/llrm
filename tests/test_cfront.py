@@ -164,6 +164,48 @@ def test_int64_stream_raises_whole_signed_and_unsigned_mir_values():
         cfront.lower.lowered("int64", bodies["i64Add"], {}, (), {})
 
 
+@pytest.mark.parametrize(
+    ("module", "kinds"),
+    [
+        ("mix64", {cfront.mir.Kind.SHR, cfront.mir.Kind.XOR, cfront.mir.Kind.MUL}),
+        ("euclid64", {cfront.mir.Kind.UDIVMOD, cfront.mir.Kind.DIVMOD, cfront.mir.Kind.MUL}),
+        ("fib64", {cfront.mir.Kind.ADD}),
+    ],
+)
+def test_int64_number_crunching_programs_survive_the_mir_pipeline(module, kinds):
+    """Self-checking kernels used to stop at the first TY_{U,}INT_8 value.
+
+    Each fixture has a known-answer `*Check` procedure that returns zero.
+    Until int64 machine lowering lands, keep the stronger available gate:
+    every procedure raises and optimizes as valid SSA, and the arithmetic
+    kernel still contains the distinct 64-bit work it was written to test.
+    """
+    from qbopt.optimize import transform
+
+    path = FIXTURES / "mir" / f"{module}.cgs"
+    unit = cfront.hir.unit(cfront.stream.parse(path.read_text()))
+    observed = set()
+    checks = []
+    for proc in unit.procs:
+        raised = cfront.raise_hir.raised(unit, proc)
+        assert not cfront.mir.verify(raised.body), (module, raised.name)
+        optimised = transform.applied(raised.body, frozenset(), raised.calls, found=None)
+        assert not cfront.mir.verify(optimised), (module, raised.name)
+        ops = [op for block in raised.body.blocks for op in block.ops]
+        observed.update(
+            op.kind
+            for op in ops
+            if any(isinstance(value, (cfront.mir.Held, cfront.mir.Const)) and value.width == 8
+                   for value in (*op.args, *op.results))
+        )
+        if raised.name.endswith("Check"):
+            checks.extend(ops)
+
+    assert kinds <= observed
+    assert any(op.kind is cfront.mir.Kind.CALL and op.results and op.results[0].width == 8 for op in checks)
+    assert any(op.kind is cfront.mir.Kind.BRANCH for op in checks)
+
+
 def test_float_cast_truncates():
     """`(long)(anim_time * 10.0f)`: fistp rounds by the control word, so it is
     set to toward-zero around the store and put back. The raise refused
