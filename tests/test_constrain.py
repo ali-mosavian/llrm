@@ -284,6 +284,33 @@ def test_one_value_required_in_two_registers_is_refused() -> None:
         constrain.constrained(_body(_insn(what, (1, 7), (7, 3))))
 
 
+def test_an_explicit_word_requirement_and_its_root_are_one_register() -> None:
+    """PROCS-P-OT crashed rebuilding TWICE's `rep stosw`: lowering required
+    its value in AX while the target described the same operand at its EAX
+    allocation root, and constrain called those two registers at once."""
+    value, count, address = ir.Held(11, 2), ir.Held(8, 2), ir.Held(9, 2)
+    what = ir.Semantics(
+        ir.Operation.FILL,
+        "stosw",
+        (ir.Mem(None, 0), ir.Held(12, 2), ir.Held(13, 2)),
+        (value, count, address, ir.Reg(Register.ES, 2)),
+    )
+    fill = lir.Insn(
+        at=0x104,
+        covers=(0x104, 0x106),
+        what=what,
+        defines=(12, 13),
+        uses=(11, 8, 9),
+        requires=((value, Register.AX), (count, Register.CX), (address, Register.DI)),
+    )
+
+    got, pins = constrain.constrained(_body(fill))
+
+    filled = next(one for one in got.insns if one.what.op is ir.Operation.FILL)
+    assert len(filled.what.sources) == 4
+    assert {ir.ROOT[where] for where in pins.values()} == {Register.EAX, Register.ECX, Register.EDI}
+
+
 def test_the_helper_moves_belong_to_no_parallel_copy() -> None:
     got, _pins = constrain.constrained(_body(_shift(7)))
     assert all(one.group is None for one in got.blocks[0].insns)

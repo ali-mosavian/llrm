@@ -31,6 +31,22 @@ class Impossible(Exception):
     """One value an instruction requires in two different registers."""
 
 
+def _same_register(one: "Register_", other: "Register_", width: int) -> bool:
+    """Whether two requirement names mean the same register at `width`.
+
+    Target requirements name allocation roots while ABI requirements name
+    the bytes the instruction reads. AX and EAX are consequently one answer
+    for a word, but AH and EAX are not: EAX's byte name is AL.
+    """
+    if one == other:
+        return True
+    if target.width_of(one) == width:
+        return one == target.named(other, width)
+    if target.width_of(other) == width:
+        return other == target.named(one, width)
+    return ir.ROOT.get(one, one) == ir.ROOT.get(other, other)
+
+
 def _already_there(pinned: "dict[int, Register_]", value: int, register: "Register_", width: int) -> bool:
     """Whether this value is pinned to the register the instruction wants.
 
@@ -247,7 +263,7 @@ def _wanted(one: lir.Insn) -> dict:
     # routine's arguments. No occurrence to split, so no places.
     out: dict[int, tuple[object, list]] = {}
     for held, register in one.requires:
-        if held.value in out and out[held.value][0] != register:
+        if held.value in out and not _same_register(out[held.value][0], register, held.width):
             raise Impossible(f"{one.at:#06x}: unsplit input value#{held.value} requires two registers")
         out[held.value] = (register, [])
     if what is None:
@@ -263,7 +279,7 @@ def _wanted(one: lir.Insn) -> dict:
         if not isinstance(operand, ir.Held):
             continue
         held, places = out.get(operand.value, (register, []))
-        if held != register:
+        if not _same_register(held, register, operand.width):
             raise Impossible(f"{one.at:#06x}: value#{operand.value} is required in two registers at once")
         if (where.side, where.index) not in places:
             places.append((where.side, where.index))
