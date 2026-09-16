@@ -122,8 +122,7 @@ def eliminated(body: lir.LirBody) -> lir.LirBody:
             # forced four values live at once, and spilled the hotter loop
             # counter instead.
             if any(
-                _observed(body, at_of, where, block.at, result)
-                or _observed(body, at_of, where, block.at, value)
+                _observed(body, at_of, where, block.at, result) or _observed(body, at_of, where, block.at, value)
                 for result, value in pairs
             ):
                 split.setdefault((where, block.at), []).extend(pairs)
@@ -144,7 +143,7 @@ def eliminated(body: lir.LirBody) -> lir.LirBody:
             replace(
                 block,
                 insns=tuple(_renamed(one, rename) for one in _before_the_terminator(block, copies.get(block.at, []))),
-                phis=kept[block.at],
+                phis=tuple(_renamed_phi(phi, rename) for phi in kept[block.at]),
             )
             for block in body.blocks
         ),
@@ -160,11 +159,7 @@ def _observed(body: lir.LirBody, at_of: dict, where: int, into: int, value: int)
     # A phi reads on the incoming edge, before any instruction in its block.
     # The walk below sees phis on later edges, but an immediate alternate
     # successor has no intervening block from which to discover this one.
-    if any(
-        (where, value) in phi.incoming
-        for at in pending
-        for phi in getattr(at_of.get(at), "phis", ())
-    ):
+    if any((where, value) in phi.incoming for at in pending for phi in getattr(at_of.get(at), "phis", ())):
         return True
     seen = set(pending)
     while pending:
@@ -219,14 +214,8 @@ def _renamed(one: lir.Insn, rename: dict[int, int]) -> lir.Insn:
         what=what,
         defines=tuple(_name(v, rename) for v in one.defines),
         uses=tuple(_name(v, rename) for v in one.uses),
-        requires=tuple(
-            (ir.Held(_name(held.value, rename), held.width), register)
-            for held, register in one.requires
-        ),
-        delivers=tuple(
-            (ir.Held(_name(held.value, rename), held.width), register)
-            for held, register in one.delivers
-        ),
+        requires=tuple((ir.Held(_name(held.value, rename), held.width), register) for held, register in one.requires),
+        delivers=tuple((ir.Held(_name(held.value, rename), held.width), register) for held, register in one.delivers),
         widths=tuple((_name(value, rename), width) for value, width in one.widths),
     )
 
@@ -242,7 +231,7 @@ def _name(value: int, rename: dict[int, int]) -> int:
     return value
 
 
-def _settled(where, rename: dict[int, int]):
+def _settled(where: ir.Loc | ir.Held, rename: dict[int, int]) -> ir.Loc | ir.Held:
     """One operand with every value it names put through the rename.
 
     Through `ir.mapped` rather than a case per operand shape: a cell names
@@ -251,6 +240,15 @@ def _settled(where, rename: dict[int, int]):
     been a register since lowering stopped putting values there.
     """
     return ir.mapped(where, lambda one: ir.Held(_name(one.value, rename), one.width))
+
+
+def _renamed_phi(phi: lir.Phi, rename: dict[int, int]) -> lir.Phi:
+    """A surviving phi with every trivial-phi identity made final."""
+    return replace(
+        phi,
+        result=_name(phi.result, rename),
+        incoming=tuple((where, _name(value, rename)) for where, value in phi.incoming),
+    )
 
 
 def _widths(body: lir.LirBody) -> dict[int, int]:
@@ -340,14 +338,25 @@ def placed_on_edges(body: lir.LirBody, transfers: dict[tuple[int, int], list[lir
         else:
             copies.setdefault(where, []).extend(insns)
     if not split:
-        return replace(body, blocks=tuple(replace(block, insns=_before_the_terminator(
-            block, copies.get(block.at, []))) for block in body.blocks))
-    return _split_edges(body, split, copies, {}, {block.at: block.phis for block in body.blocks}, {},
-                        selected=True)
+        return replace(
+            body,
+            blocks=tuple(
+                replace(block, insns=_before_the_terminator(block, copies.get(block.at, []))) for block in body.blocks
+            ),
+        )
+    return _split_edges(body, split, copies, {}, {block.at: block.phis for block in body.blocks}, {}, selected=True)
 
 
-def _split_edges(body, split: dict, copies: dict, rename: dict, kept: dict, widths: dict,
-                 *, selected=False) -> lir.LirBody:
+def _split_edges(
+    body: lir.LirBody,
+    split: dict,
+    copies: dict,
+    rename: dict,
+    kept: dict,
+    widths: dict,
+    *,
+    selected: bool = False,
+) -> lir.LirBody:
     """A block of its own on each critical edge, holding that edge's copies.
 
     The copies cannot go at the end of the predecessor -- it has another
@@ -367,17 +376,34 @@ def _split_edges(body, split: dict, copies: dict, rename: dict, kept: dict, widt
         at = max((body.entry + 1) << 32, max(at_of)) + number
         landing[(where, into)] = at
         beside = at_of[where].insns[-1]
-        insns = [replace(one, at=at, covers=(at, at)) for one in pairs] if selected else [
-            replace(
-                _made(
-                    beside, at, ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(a, widths[a]),), (ir.Held(b, widths[a]),)), (a,), (b,)
-                ),
-                group=number,
-            )
-            for a, b in pairs
-        ]
+        insns = (
+            [replace(one, at=at, covers=(at, at)) for one in pairs]
+            if selected
+            else [
+                replace(
+                    _made(
+                        beside,
+                        at,
+                        ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(a, widths[a]),), (ir.Held(b, widths[a]),)),
+                        (a,),
+                        (b,),
+                    ),
+                    group=number,
+                )
+                for a, b in pairs
+            ]
+        )
         insns.append(_made(beside, at, ir.Semantics(ir.Operation.JUMP, "jmp", (), (), into), (), ()))
-        made[(where, into)] = lir.LirBlock(at=at, insns=tuple(insns), succ=(into,), phis=())
+        # These instructions live outside `body.blocks` until the end of the
+        # transformation, so the ordinary rename walk below cannot see them.
+        # A critical-edge copy that reads a one-input phi's old identity then
+        # names a value whose only definition this pass just removed.
+        made[(where, into)] = lir.LirBlock(
+            at=at,
+            insns=tuple(_renamed(one, rename) for one in insns),
+            succ=(into,),
+            phis=(),
+        )
 
     blocks = []
     for block in body.blocks:
@@ -389,10 +415,23 @@ def _split_edges(body, split: dict, copies: dict, rename: dict, kept: dict, widt
             if (edge := landing.get((block.at, fallthrough))) is not None:
                 insns.append(_made(last, last.at, ir.Semantics(ir.Operation.JUMP, "jmp", (), (), edge), (), ()))
         blocks.append(
-            replace(block, insns=tuple(_renamed(one, rename) for one in insns), succ=succ,
-                    phis=tuple(replace(phi, incoming=tuple(
-                        (landing.get((where, block.at), where), value) for where, value in phi.incoming))
-                        for phi in kept[block.at]))
+            replace(
+                block,
+                insns=tuple(_renamed(one, rename) for one in insns),
+                succ=succ,
+                phis=tuple(
+                    _renamed_phi(
+                        replace(
+                            phi,
+                            incoming=tuple(
+                                (landing.get((where, block.at), where), value) for where, value in phi.incoming
+                            ),
+                        ),
+                        rename,
+                    )
+                    for phi in kept[block.at]
+                ),
+            )
         )
     return replace(body, blocks=tuple([*blocks, *made.values()]))
 
@@ -426,8 +465,17 @@ def unsplit(body: lir.LirBody) -> lir.LirBody:
     for block in body.blocks:
         if block.at < floor or block.phis or len(block.succ) != 1:
             continue
-        live = [one for one in block.insns if not (one.what is not None and one.what.op is ir.Operation.NOTHING and not one.what.name)]
-        if len(live) == 1 and live[0].what is not None and live[0].what.op is ir.Operation.JUMP and live[0].what.target == block.succ[0]:
+        live = [
+            one
+            for one in block.insns
+            if not (one.what is not None and one.what.op is ir.Operation.NOTHING and not one.what.name)
+        ]
+        if (
+            len(live) == 1
+            and live[0].what is not None
+            and live[0].what.op is ir.Operation.JUMP
+            and live[0].what.target == block.succ[0]
+        ):
             bypass[block.at] = block.succ[0]
     if not bypass:
         return body
@@ -449,6 +497,8 @@ def unsplit(body: lir.LirBody) -> lir.LirBody:
             else one
             for one in block.insns
         )
-        phis = tuple(replace(phi, incoming=tuple((where(at), value) for at, value in phi.incoming)) for phi in block.phis)
+        phis = tuple(
+            replace(phi, incoming=tuple((where(at), value) for at, value in phi.incoming)) for phi in block.phis
+        )
         blocks.append(replace(block, insns=insns, succ=tuple(where(at) for at in block.succ), phis=phis))
     return replace(body, blocks=tuple(blocks))

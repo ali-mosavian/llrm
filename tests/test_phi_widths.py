@@ -3,19 +3,20 @@
 import pytest
 
 from qbopt.model import ir
-from qbopt.model import mir
-from qbopt.optimize import transform
 from qbopt.model import lir
+from qbopt.model import mir
 from qbopt.backend import phielim
+from qbopt.optimize import transform
 
 
-def test_split_fallthrough_gets_an_explicit_jump():
+def test_split_fallthrough_gets_an_explicit_jump() -> None:
     """EVTRAP's split exit edge was emitted unreachable after the handler."""
-    branch = lir.Insn(at=0, covers=(0, 2), defines=(), uses=(),
-                     what=ir.Semantics(ir.Operation.BRANCH, "jz", (), (), 20))
-    body = lir.LirBody(name="edge", entry=0, blocks=(
-        lir.LirBlock(at=0, insns=(branch,), succ=(10, 20), phis=()),
-    ), origin={}, pins={})
+    branch = lir.Insn(
+        at=0, covers=(0, 2), defines=(), uses=(), what=ir.Semantics(ir.Operation.BRANCH, "jz", (), (), 20)
+    )
+    body = lir.LirBody(
+        name="edge", entry=0, blocks=(lir.LirBlock(at=0, insns=(branch,), succ=(10, 20), phis=()),), origin={}, pins={}
+    )
     done = phielim._split_edges(body, {(0, 10): [(2, 1)]}, {}, {}, {0: ()}, {2: 2})
     edge = done.blocks[-1]
     last = done.blocks[0].insns[-1]
@@ -25,18 +26,36 @@ def test_split_fallthrough_gets_an_explicit_jump():
 
 
 @pytest.mark.parametrize("critical", [False, True])
-def test_phi_elimination_copies_the_whole_scalar(critical):
+def test_phi_elimination_copies_the_whole_scalar(critical: bool) -> None:
     """VBDOS nbody printed PX0=285219921 for 1258: phi copies truncated 32-bit accumulators."""
-    def load(at, value):
-        return lir.Insn(at=at, covers=(at, at+1), defines=(value,), uses=(),
-                        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(value, 4),), (ir.Imm(0x12345678, 4),)))
-    read = lir.Insn(at=2, covers=(2, 3), defines=(4,), uses=(3, 1),
-                    what=ir.Semantics(ir.Operation.BINARY, "add", (ir.Held(4, 4),), (ir.Held(3, 4), ir.Held(1, 4))))
-    body = lir.LirBody(name="wide", entry=0, blocks=(
-        lir.LirBlock(at=0, insns=(load(0, 1),), succ=(2, 1) if critical else (2,), phis=()),
-        lir.LirBlock(at=1, insns=(load(1, 2),), succ=(2,), phis=()),
-        lir.LirBlock(at=2, insns=(read,), succ=(), phis=(lir.Phi(3, ((0, 1), (1, 2))),)),
-    ), origin={}, pins={})
+
+    def load(at: int, value: int) -> lir.Insn:
+        return lir.Insn(
+            at=at,
+            covers=(at, at + 1),
+            defines=(value,),
+            uses=(),
+            what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(value, 4),), (ir.Imm(0x12345678, 4),)),
+        )
+
+    read = lir.Insn(
+        at=2,
+        covers=(2, 3),
+        defines=(4,),
+        uses=(3, 1),
+        what=ir.Semantics(ir.Operation.BINARY, "add", (ir.Held(4, 4),), (ir.Held(3, 4), ir.Held(1, 4))),
+    )
+    body = lir.LirBody(
+        name="wide",
+        entry=0,
+        blocks=(
+            lir.LirBlock(at=0, insns=(load(0, 1),), succ=(2, 1) if critical else (2,), phis=()),
+            lir.LirBlock(at=1, insns=(load(1, 2),), succ=(2,), phis=()),
+            lir.LirBlock(at=2, insns=(read,), succ=(), phis=(lir.Phi(3, ((0, 1), (1, 2))),)),
+        ),
+        origin={},
+        pins={},
+    )
     done = phielim.eliminated(body)
     copies = [op for block in done.blocks for op in block.insns if op.group is not None]
     assert len(copies) == 2
@@ -130,6 +149,64 @@ def test_phi_source_live_on_the_other_branch_gets_an_edge_copy() -> None:
     assert edge.insns[0].group is not None
     assert edge.insns[0].defines == (3,)
     assert edge.insns[0].uses == (1,)
+
+
+def test_critical_edge_copy_uses_the_final_trivial_phi_name() -> None:
+    """C crc32 returned -1141145971 instead of 778214622.
+
+    Promotion put the CRC through a one-input loop-exit phi before a
+    critical-edge phi.  Phi elimination renamed ordinary instructions to
+    the original value, but left the synthetic edge copy reading the
+    intermediate phi result.  Nothing defined that result after the phi was
+    removed, so allocation emitted a reload from a spill slot nothing had
+    ever stored.
+    """
+
+    def move(at: int, result: int, source: ir.Held | ir.Imm) -> lir.Insn:
+        return lir.Insn(
+            at=at,
+            covers=(at, at + 1),
+            defines=(result,),
+            uses=(source.value,) if isinstance(source, ir.Held) else (),
+            what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(result, 4),), (source,)),
+        )
+
+    branch = lir.Insn(
+        at=1,
+        covers=(1, 2),
+        defines=(),
+        uses=(),
+        what=ir.Semantics(ir.Operation.BRANCH, "jz", (), (), 3),
+    )
+    body = lir.LirBody(
+        name="trivial-before-critical",
+        entry=0,
+        blocks=(
+            lir.LirBlock(at=0, insns=(move(0, 1, ir.Imm(7, 4)),), succ=(1,)),
+            lir.LirBlock(at=1, insns=(branch,), succ=(2, 3), phis=(lir.Phi(2, ((0, 1),)),)),
+            # Reading the source down the other arm requires a real edge copy.
+            lir.LirBlock(at=2, insns=(move(2, 4, ir.Held(2, 4)),), succ=()),
+            lir.LirBlock(
+                at=3,
+                insns=(move(3, 7, ir.Held(6, 4)),),
+                succ=(),
+                phis=(lir.Phi(6, ((1, 2), (4, 5))),),
+            ),
+            lir.LirBlock(at=4, insns=(move(4, 5, ir.Imm(9, 4)),), succ=(3,)),
+        ),
+        origin={},
+        pins={},
+    )
+
+    done = phielim.eliminated(body)
+
+    edge = next(block for block in done.blocks if block.at > 4)
+    copy = edge.insns[0]
+    assert copy.uses == (1,)
+    assert copy.what.sources == (ir.Held(1, 4),)
+    defined = {value for block in done.blocks for insn in block.insns for value in insn.defines}
+    used = {value for block in done.blocks for insn in block.insns for value in insn.uses}
+    assert used <= defined, f"phi elimination left undefined values {used - defined}"
 
 
 def test_phi_observation_on_an_immediate_alternate_edge_is_visible() -> None:
