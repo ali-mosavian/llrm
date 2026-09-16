@@ -1,6 +1,8 @@
-"""C through Open Watcom's front end and qbopt's backend, to jwasm source.
+"""C through Open Watcom's front end and qbopt's backend, to an object or jwasm source.
 
-    python -m qbopt.cfront pal.c -o pal.asm -I src [--dump DIR] [--opt]
+    python -m qbopt.cfront pal.c -o pal.obj -I src [--dump DIR] [--opt]
+
+An `.obj` output is written here; anything else is jwasm source.
 
 The front end is owshim/bin/wccq (owshim/build.sh). A `.cgs` stream it
 already wrote is accepted in place of the source.
@@ -11,6 +13,7 @@ import argparse
 import tempfile
 import subprocess
 from pathlib import Path
+from collections.abc import Iterator
 
 from qbopt import flow
 from qbopt.model import mir
@@ -19,6 +22,7 @@ from qbopt.backend import masm
 from qbopt.backend import jumps
 from qbopt.backend import lower
 from qbopt.cfront import stream
+from qbopt.backend import omfwrite
 from qbopt.backend import prologue
 from qbopt.cfront import raise_hir
 from qbopt.backend import frame as frames
@@ -47,7 +51,7 @@ def recorded(source: Path, includes: list[str]) -> str:
         return out.read_text()
 
 
-def compiled(text: str, module: str, *, optimise: bool = False, dump: Path | None = None) -> str:
+def assembled(text: str, module: str, *, optimise: bool = False, dump: Path | None = None) -> masm.Module:
     unit = hir.unit(stream.parse(text))
     _write(dump, "stream", text)
     _write(dump, "hir", hir.text(unit))
@@ -85,19 +89,22 @@ def compiled(text: str, module: str, *, optimise: bool = False, dump: Path | Non
         procedures.append(masm.Procedure(raised.name, raised.symbol.exported, raised.symbol.far, low, reserve, callees))
     _write(dump, "mir", "\n".join(mirs))
     _write(dump, "lir", "\n".join(lirs))
-    text = masm.text(
-        masm.Module(
-            code=f"{module.upper()}_TEXT",
-            names=raise_hir.names(unit, shared),
-            externs=_externs(unit) + tuple((one.object_name, "far") for one in shared.runtime.values()),
-            publics=tuple(one.object_name for one in unit.symbols.values() if one.exported),
-            data=(*_data(unit), *_literals(shared)),
-            procedures=tuple(procedures),
-            private=frozenset(one.name for one in unit.segments.values() if one.attr & hir.PRIVATE),
-        )
+    built = masm.Module(
+        code=f"{module.upper()}_TEXT",
+        names=raise_hir.names(unit, shared),
+        externs=_externs(unit) + tuple((one.object_name, "far") for one in shared.runtime.values()),
+        publics=tuple(one.object_name for one in unit.symbols.values() if one.exported),
+        data=(*_data(unit), *_literals(shared)),
+        procedures=tuple(procedures),
+        private=frozenset(one.name for one in unit.segments.values() if one.attr & hir.PRIVATE),
     )
-    _write(dump, "asm", text)
-    return text
+    _write(dump, "asm", masm.text(built))
+    return built
+
+
+def compiled(text: str, module: str, *, optimise: bool = False, dump: Path | None = None) -> str:
+    """The module as jwasm source."""
+    return masm.text(assembled(text, module, optimise=optimise, dump=dump))
 
 
 def _externs(unit: hir.Unit) -> tuple[tuple[str, str], ...]:
@@ -108,53 +115,46 @@ def _externs(unit: hir.Unit) -> tuple[tuple[str, str], ...]:
     )
 
 
-def _data(unit: hir.Unit):
-    """Each data segment's items as jwasm lines."""
-    widths = {1: "db", 2: "dw", 4: "dd"}
+def _data(unit: hir.Unit) -> Iterator[tuple[str, tuple[masm.Datum, ...]]]:
+    """Each data segment's items."""
     for segment in unit.segments.values():
         if not segment.items or segment.attr & 0x1:  # EXEC: code has no data items
             continue
-        lines = []
+        items = []
         for call, args in segment.items:
             match call, args:
                 case "DGLabel", (back,):
                     symbol = unit.backs[hir.handle(back)]
-                    label = unit.symbols[symbol].object_name if symbol else f"L_b{hir.handle(back)}"
-                    lines.append(f"{label} label byte")
+                    items.append(masm.Label(unit.symbols[symbol].object_name if symbol else f"L_b{hir.handle(back)}"))
                 case "DGUBytes", (size,):
-                    lines.append(f"    db {size} dup (?)" if segment.name == "_BSS" else f"    db {size} dup (0)")
+                    items.append(masm.Fill(int(size), None if segment.name == "_BSS" else 0))
                 case "DGIBytes", (size, byte):
-                    lines.append(f"    db {size} dup ({byte})")
-                case "DGBytes", (size, data):
-                    lines += [
-                        "    db " + ",".join(f"0{data[i:i + 2]}h" for i in range(start, min(len(data), start + 32), 2))
-                        for start in range(0, len(data), 32)
-                    ]
+                    items.append(masm.Fill(int(size), int(byte)))
+                case "DGBytes", (_size, data):
+                    items.append(bytes.fromhex(data))
                 case "DGInteger", (value, type_):
                     # The shim prints a negative item as its 32-bit two's complement.
                     width = raise_hir.WIDTHS.get(type_, 2)
-                    lines.append(f"    {widths[width]} {int(value) & ((1 << (8 * width)) - 1)}")
+                    items.append((int(value) & ((1 << (8 * width)) - 1)).to_bytes(width, "little"))
                 case "DGFEPtr", (symbol, type_, offset):
-                    name = unit.symbols[hir.handle(symbol)].object_name
                     far = type_ in raise_hir.FAR_POINTERS or type_ in ("TY_LONG_CODE_PTR", "TY_CODE_PTR")
-                    lines.append(f"    {'dd' if far else 'dw'} {name}{'+' + offset if offset != '0' else ''}")
+                    items.append(masm.Pointer(unit.symbols[hir.handle(symbol)].object_name, int(offset), far))
                 case "DGBackPtr", (back, _segment, offset, type_):
                     symbol = unit.backs[hir.handle(back)]
                     name = unit.symbols[symbol].object_name if symbol else f"L_b{hir.handle(back)}"
-                    far = type_ in raise_hir.FAR_POINTERS
-                    lines.append(f"    {'dd' if far else 'dw'} {name}{'+' + offset if offset != '0' else ''}")
+                    items.append(masm.Pointer(name, int(offset), type_ in raise_hir.FAR_POINTERS))
                 case "DGAlign", (align,):
-                    lines.append(f"    align {align}")
+                    items.append(masm.Align(int(align)))
                 case _:
                     raise hir.Unsupported(f"data item {call} {' '.join(args)}")
-        yield segment.name, tuple(lines)
+        yield segment.name, tuple(items)
 
 
-def _literals(shared: raise_hir.Shared):
+def _literals(shared: raise_hir.Shared) -> tuple[tuple[str, tuple[masm.Datum, ...]], ...]:
     """The float constants the raise placed, in DGROUP's constant segment."""
     lines = []
     for packed, number in shared.literals.items():
-        lines += [f"L_f{number} label byte", "    db " + ",".join(f"0{byte:02x}h" for byte in packed)]
+        lines += [masm.Label(f"L_f{number}"), bytes(packed)]
     return (("CONST", tuple(lines)),) if lines else ()
 
 
@@ -194,5 +194,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     text = args.source.read_text() if args.source.suffix == ".cgs" else recorded(args.source, args.include)
     output = args.output or args.source.with_suffix(".asm")
-    output.write_text(compiled(text, args.source.stem, optimise=args.opt, dump=args.dump))
+    built = assembled(text, args.source.stem, optimise=args.opt, dump=args.dump)
+    if output.suffix.lower() == ".obj":
+        output.write_bytes(omfwrite.written(built, args.source.name))
+    else:
+        output.write_text(masm.text(built))
     return 0

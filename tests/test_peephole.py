@@ -487,12 +487,12 @@ def test_zeroing_requires_flags_overwritten_before_observation(following, zeroed
 
 def test_harr_uses_short_zeroing_before_overwritten_flags():
     """HARR's CX initialization cost three bytes despite ADD replacing its flags."""
-    import corpus
-    from qbopt import wholeseg
-
     import re
 
-    from qbopt.objectfile import module, omf
+    import corpus
+    from qbopt import wholeseg
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
 
     result = wholeseg.emitted(Path("fixtures/omf/harr-p-g2.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
@@ -668,7 +668,7 @@ def test_register_round_trip_through_memory_is_one_instruction(variant, printed)
     if printed is None:
         assert result.insns == head
     else:
-        assert [line for one in result.insns for line in masm._instruction(one, None, {}, 0, [])] == printed
+        assert [line for one in result.insns for line in masm._instruction(one.what, {}, 0)] == printed
 
 
 @pytest.mark.parametrize(
@@ -690,6 +690,7 @@ def test_far_pointer_loaded_in_one_instruction(variant, printed):
     because ES also reached the cell. Refused only when the register written
     first addresses the second read, and for words of two different cells."""
     from iced_x86 import Decoder
+
     from qbopt.backend import masm
     from qbopt.backend import select
     from qbopt.objectfile.module import Addr
@@ -720,7 +721,7 @@ def test_far_pointer_loaded_in_one_instruction(variant, printed):
     if printed is None:
         assert result == pair
         return
-    assert [line for one in result for line in masm._instruction(one, None, {}, 0, [])] == [printed]
+    assert [line for one in result for line in masm._instruction(one.what, {}, 0)] == [printed]
     from iced_x86 import Mnemonic
 
     decoded = next(iter(Decoder(16, select.emit(result[0].what).code)))

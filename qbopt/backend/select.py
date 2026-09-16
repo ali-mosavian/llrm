@@ -393,7 +393,11 @@ def _operand(one: ir.Loc, where: dict[Register_, Register_] | None, held: dict |
 
 
 def _immediate(value: int, width: int) -> int:
-    return ((value & 0xFFFFFFFF) ^ 0x80000000) - 0x80000000 if width == 4 else value
+    """Signed at its width: a word's -1 arrives as 65535 as often as -1."""
+    if width not in (2, 4):
+        return value
+    sign = 1 << (8 * width - 1)
+    return ((value & (2 * sign - 1)) ^ sign) - sign
 
 
 def load(into: Register_, value: int, at: int = 0) -> Emitted | None:
@@ -739,7 +743,10 @@ BARE = {
     "fld1": "FLD1",
     "fldz": "FLDZ",
     "fcompp": "FCOMPP",
+    "sahf": "SAHF",
 }
+# The x87 control and status words, each against a word of memory.
+CONTROL_WORD = {"fldcw": "FLDCW_M2BYTE", "fnstcw": "FNSTCW_M2BYTE"}
 
 
 def bare(name: str, at: int = 0) -> Emitted | None:
@@ -1644,6 +1651,21 @@ def emit(
                     return exchange(one, other, at)
                 case (ir.Reg(register=one), ir.Mem() as cell) | (ir.Mem() as cell, ir.Reg(register=one)):
                     return exchange_mem(one, cell, at)
+        case ir.Operation.COMPARE if (what.name or "").startswith("f"):
+            # st(0) is implicit; what is encoded is the memory operand, if any.
+            memory = [one for one in sources if isinstance(one, ir.Mem)]
+            name = what.name or ""
+            return float_memory(name, memory[0], at) if memory else bare(name, at)
+        case ir.Operation.BARRIER if what.name == "fnstsw" and dests == (ir.Reg(Register.AX, 2),):
+            return _assemble(Instruction.create_reg(Code.FNSTSW_AX, Register.AX), at)
+        case ir.Operation.BARRIER if what.name in CONTROL_WORD and len(dests + sources) == 1:
+            match (dests + sources)[0]:
+                case ir.Mem(width=2) as cell:
+                    built = operand_of(cell)
+                    code = _code(CONTROL_WORD[what.name])
+                    if built is not None and code is not None:
+                        return _assemble(Instruction.create_mem(code, built[0]), at, built[1])
+            return None
         case ir.Operation.COMPARE if len(sources) == 2:
             match (sources[0], sources[1]):
                 case (_, ir.Imm(value=value)) if what.name == "test":

@@ -7,6 +7,7 @@ does not know produces a working program that computes something else.
 """
 
 from pathlib import Path
+from collections.abc import Callable
 from collections.abc import Iterator
 
 import pytest
@@ -24,7 +25,8 @@ from qbopt.backend import select
 @pytest.mark.parametrize("memory_first", [False, True])
 def test_pl_move_exchange_with_frame_memory(register, width, memory_first):
     """PL_MOVE refused at 2f4b: XCHG AX,[BP-1Ch] lacked a memory encoding."""
-    from qbopt.objectfile.module import Addr, Space
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
     cell = ir.Mem(Addr(Space.FRAME, -28), width)
     held = ir.Reg(register, width)
     dests = (cell, held) if memory_first else (held, cell)
@@ -83,7 +85,8 @@ from qbopt.frontend.declen import BITNESS
 
 def test_store_accepts_unsigned_dword_bit_pattern():
     """CHAIN refused its whole 0xc1747c23 initializer at 0x48 instead of emitting it."""
-    from qbopt.objectfile.module import Addr, Space
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
     cell = ir.Mem(Addr(Space.FRAME, -4), 4)
     emitted = select.store_imm(cell, 0xc1747c23)
     assert emitted is not None
@@ -381,6 +384,22 @@ def test_a_narrow_push_that_does_not_fit_a_byte_stays_wide(value: int) -> None:
     assert len(made.code) == 3
 
 
+@pytest.mark.parametrize(
+    ("made", "want"),
+    [
+        (lambda: select.push_imm(0xFFFF, 2), "6aff"),
+        (lambda: select.push_imm(0xFF80, 2), "6a80"),
+        (lambda: select.arith_imm("add", Register.BX, 0xFFFF), "83c3ff"),
+    ],
+)
+def test_a_word_immediate_written_unsigned_still_fits_a_byte(
+    made: Callable[[], select.Emitted | None], want: str
+) -> None:
+    """`push 65535` was `68 ff ff` where jwasm writes `6a ff`: the C path hands
+    a word's -1 over unsigned, and only a dword was read back as signed."""
+    assert _made(made()).code.hex() == want
+
+
 def test_a_literal_address_through_a_register_uses_the_byte_displacement() -> None:
     """`add bx,[si+0Ah]` is `03 5c 0a`, not `03 9c 0a 00`.
 
@@ -460,7 +479,8 @@ def test_a_shift_by_more_than_one_keeps_the_immediate_form() -> None:
 @pytest.mark.parametrize(("count", "hex_bytes"), [(1, "d166de"), (3, "c166de03"), (None, "d366de")])
 def test_spilled_shift_is_encodable(count, hex_bytes) -> None:
     """Nbody refused a hoisted index spilled to [bp-22h] because memory SHL was missing."""
-    from qbopt.objectfile.module import Addr, Space
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
     cell = ir.Mem(Addr(Space.FRAME, -0x22), 2)
     source = ir.Reg(Register.CL, 1) if count is None else ir.Imm(count, 1)
     made = select.emit(ir.Semantics(ir.Operation.BINARY, "shl", (cell,), (cell, source)))
@@ -615,8 +635,8 @@ def test_a_relocated_field_never_changes_width(obj: Path) -> None:
     program to 31 lines and diffing the two linked images, where one said
     `add ax,0DCh` and the other `add ax,0FFDCh`.
     """
-    from qbopt.backend import asm
     from qbopt.model import mir
+    from qbopt.backend import asm
     from qbopt.objectfile import omf
     from qbopt.frontend import declen
     from qbopt.frontend import blocks as split
@@ -831,11 +851,11 @@ def test_an_absorbed_site_comes_back_with_a_field_for_every_fixup() -> None:
     """
     from pathlib import Path
 
-    from qbopt.objectfile import omf
     from qbopt.legacy import calls
     from qbopt.analysis import flags
-    from qbopt.objectfile import module
     from qbopt.backend import select
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
     from qbopt.frontend import blocks as split
     from qbopt.frontend.blocks import code_map
 
@@ -1061,11 +1081,11 @@ def test_an_instruction_holding_a_moved_operand_is_not_the_site_it_came_from() -
     fixup or none -- two means the operation had two relocated operands
     and only one moved, and the count cannot say which is which.
     """
-    from qbopt.backend import asm
     from qbopt.model import ir
     from qbopt.model import mir
-    from qbopt.objectfile import module
+    from qbopt.backend import asm
     from qbopt.objectfile import omf
+    from qbopt.objectfile import module
     from qbopt.frontend import blocks as split
     from qbopt.frontend.blocks import code_map
 

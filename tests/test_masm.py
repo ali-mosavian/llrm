@@ -4,10 +4,11 @@ from iced_x86 import Register
 
 from qbopt.model import ir
 from qbopt.model import lir
+from qbopt.model import mir
 from qbopt.backend import masm
 from qbopt.backend import lower
-from qbopt.model import mir
-from qbopt.objectfile.module import Addr, Space
+from qbopt.objectfile.module import Addr
+from qbopt.objectfile.module import Space
 
 
 def test_frame_address_displacement_once():
@@ -28,7 +29,7 @@ def test_x87_exchange_is_fxch():
     """FloatAlloc's `fxch st(1)` printed as `xchg st(0), st(1)`, which jwasm
     refuses: 122 errors over qcport."""
     swap = ir.Semantics(ir.Operation.EXCHANGE, "fxch", (ir.St(0), ir.St(1)), (ir.St(0), ir.St(1)))
-    assert masm._instruction(lir.Insn(1, (1, 1), swap, (), ()), None, {}, 0, []) == ["fxch st(1)"]
+    assert masm._instruction(swap, {}, 0) == ["fxch st(1)"]
 
 
 def _printed(sources: tuple, reserve: int) -> list[str]:

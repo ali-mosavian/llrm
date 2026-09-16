@@ -50,8 +50,9 @@ def test_choose_joins_both_arms_in_one_cell():
 def test_data_pointer_to_a_literal():
     """ls's style table points at its pattern strings; DGBackPtr was refused."""
     unit = cfront.hir.unit(cfront.stream.parse((FIXTURES / "ls.cgs").read_text()))
-    lines = dict(cfront._data(unit))
-    assert "    dw L_b2" in next(items for items in lines.values() if "    dw L_b3" in items)
+    segments = dict(cfront._data(unit))
+    pointer = cfront.masm.Pointer
+    assert pointer("L_b2", 0, False) in next(items for items in segments.values() if pointer("L_b3", 0, False) in items)
 
 
 def test_negative_data_fits_its_width():
@@ -59,7 +60,7 @@ def test_negative_data_fits_its_width():
     negative item as 32 bits, and jwasm refused the initializer."""
     unit = cfront.hir.Unit()
     unit.segments[1] = cfront.hir.Segment(1, "_DATA", 0, [("DGInteger", ("4294967295", "TY_INT_2"))])
-    assert dict(cfront._data(unit))["_DATA"] == ("    dw 65535",)
+    assert dict(cfront._data(unit))["_DATA"] == (b"\xff\xff",)
 
 
 def test_float_moves_as_its_bits():

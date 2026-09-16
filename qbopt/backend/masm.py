@@ -1,10 +1,11 @@
 """Allocated LIR as jwasm source.
 
-The C path's emitter while there is no OMF writer that builds a module from
-nothing: jwasm owns segments, fixups and encodings, and the output reads as
-what it is. Every operand is already placed; an unplaced one is an error.
+`listing` is the procedure as emitted, frame and all; this prints it and
+omfwrite.py encodes it, so the two cannot drift. Every operand is already
+placed; an unplaced one is an error.
 """
 
+from dataclasses import replace
 from dataclasses import dataclass
 
 from iced_x86 import Register
@@ -12,6 +13,7 @@ from iced_x86 import Register
 from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.backend import target
+from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
 
 SIZES = {1: "byte", 2: "word", 4: "dword", 8: "qword", 10: "tbyte"}
@@ -30,7 +32,7 @@ class Callee:
     name: str
     far: bool
     # Inline assembly laid down in place of a call: bytes, and (kind, symbol, offset) for a fixup.
-    code: tuple = ()
+    code: tuple["InlinePart", ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,12 +46,39 @@ class Procedure:
 
 
 @dataclass(frozen=True, slots=True)
+class Label:
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class Fill:
+    size: int
+    byte: int | None  # None: uninitialised
+
+
+@dataclass(frozen=True, slots=True)
+class Pointer:
+    name: str
+    offset: int
+    far: bool
+
+
+@dataclass(frozen=True, slots=True)
+class Align:
+    to: int
+
+
+type Datum = Label | Fill | Pointer | Align | bytes
+type InlinePart = bytes | tuple[str, str, int]
+
+
+@dataclass(frozen=True, slots=True)
 class Module:
     code: str  # the code segment's name, MODULE_TEXT
     names: dict[tuple[Space, int], str]
     externs: tuple[tuple[str, str], ...]  # (name, "far" | "near" | "byte")
     publics: tuple[str, ...]
-    data: tuple[tuple[str, tuple[str, ...]], ...]  # (segment, lines)
+    data: tuple[tuple[str, tuple[Datum, ...]], ...]  # (segment, items)
     procedures: tuple[Procedure, ...]
     private: frozenset[str] = frozenset()  # data segments outside DGROUP
 
@@ -57,11 +86,11 @@ class Module:
 def text(module: Module) -> str:
     out = [".model medium", ".386", ""]
     out += [f"public {name}" for name in module.publics]
-    for segment, lines in module.data:
+    for segment, items in module.data:
         private = segment in module.private
         out.append(SEGMENTS.get(segment, f"{segment} segment word public '{'FAR_DATA' if private else 'DATA'}'"))
         out += [f"extern {name}:{kind}" for name, kind in module.externs if kind == "byte"]
-        out += lines
+        out += [line for item in items for line in datum(item)]
         if segment not in SEGMENTS:
             out.append(f"{segment} ends")
             if not private:
@@ -74,40 +103,106 @@ def text(module: Module) -> str:
     return "\n".join(out) + "\n"
 
 
-def _procedure(procedure: Procedure, names: dict, number: int) -> list[str]:
+def datum(item: Datum) -> list[str]:
+    match item:
+        case Label(name=name):
+            return [f"{name} label byte"]
+        case Fill(size=size, byte=byte):
+            return [f"    db {size} dup ({'?' if byte is None else byte})"]
+        case Pointer(name=name, offset=offset, far=far):
+            return [f"    {'dd' if far else 'dw'} {name}{_signed(offset)}"]
+        case Align(to=to):
+            return [f"    align {to}"]
+    return list(_code((item,)))
+
+
+type Item = Label | Callee | ir.Semantics
+
+
+def listing(procedure: Procedure, number: int) -> list[Item]:
+    """The procedure as emitted, frame included: what this prints and omfwrite encodes.
+
+    A branch's target is still a block; `label(number, at)` names it.
+    """
     saved = [low for whole, low in SAVED.items() if whole in _roots(procedure.body)]
     reserve = procedure.reserve + (procedure.reserve & 1)
     # Inline code is bytes this printer cannot read, so it may address the frame.
-    framed = bool(reserve) or Register.EBP in _roots(procedure.body) or any(one.code for one in procedure.callees.values())
-    leave = [f"pop {target.name_of(one)}" for one in reversed(saved)]
-    leave += ["leave"] if reserve else ["pop bp"] * framed
-    out = [f"{procedure.name} proc {'far' if procedure.far else 'near'}"]
-    if framed:
-        out += ["    push bp", "    mov bp, sp"]
+    framed = (
+        bool(reserve) or Register.EBP in _roots(procedure.body) or any(one.code for one in procedure.callees.values())
+    )
+    bp, sp = ir.Reg(Register.BP, 2), ir.Reg(Register.SP, 2)
+    leave = [ir.Semantics(ir.Operation.POP, "pop", (ir.Reg(one, 2),)) for one in reversed(saved)]
     if reserve:
-        out.append(f"    sub sp, {reserve}")
-    out += [f"    push {target.name_of(one)}" for one in saved]
+        leave.append(ir.Semantics(ir.Operation.NOTHING, "leave"))
+    elif framed:
+        leave.append(ir.Semantics(ir.Operation.POP, "pop", (bp,)))
+    out: list[Item] = []
+    if framed:
+        out += [
+            ir.Semantics(ir.Operation.PUSH, "push", (), (bp,)),
+            ir.Semantics(ir.Operation.MOVE, "mov", (bp,), (sp,)),
+        ]
+    if reserve:
+        out.append(ir.Semantics(ir.Operation.BINARY, "sub", (sp,), (sp, ir.Imm(reserve, 2))))
+    out += [ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Reg(one, 2),)) for one in saved]
     blocks = procedure.body.blocks
     for index, block in enumerate(blocks):
-        out.append(f"L{number}_{block.at}:")
+        out.append(Label(label(number, block.at)))
         for one in block.insns:
-            if one.what is None:
+            what = one.what
+            if what is None:
                 raise Unprintable(f"{procedure.name} at {one.at}: an instruction with no semantics")
-            try:
-                lines = _instruction(one, procedure, names, number, leave)
-            except Unprintable as error:
-                raise Unprintable(f"{procedure.name} at {one.at}: {error}") from error
-            out += [f"    {line}" for line in lines]
+            match what.op:
+                case ir.Operation.MOVE if _segment(what.dests[0]) and isinstance(what.sources[0], ir.Imm):
+                    # x86 has no immediate move into a segment register; the stack holds it for one instruction.
+                    out += [
+                        ir.Semantics(ir.Operation.PUSH, "push", (), (replace(what.sources[0], width=2),)),
+                        ir.Semantics(ir.Operation.POP, "pop", what.dests),
+                    ]
+                case ir.Operation.CALL:
+                    callee = procedure.callees.get(one.at)
+                    if callee is None:
+                        raise Unprintable(f"{procedure.name} at {one.at}: a call with no callee")
+                    out.append(callee)
+                case ir.Operation.RETURN:
+                    out += [*leave, replace(what, name=what.name or ("retf" if procedure.far else "ret"))]
+                case _:
+                    out.append(what)
         fall = _falls_to(block, procedure.name)
         if fall is not None and (index + 1 == len(blocks) or blocks[index + 1].at != fall):
-            out.append(f"    jmp L{number}_{fall}")
+            out.append(ir.Semantics(ir.Operation.JUMP, "jmp", target=fall))
+    return out
+
+
+def label(number: int, at: int) -> str:
+    return f"L{number}_{at}"
+
+
+def _procedure(procedure: Procedure, names: dict, number: int) -> list[str]:
+    out = [f"{procedure.name} proc {'far' if procedure.far else 'near'}"]
+    for item in listing(procedure, number):
+        match item:
+            case Label(name=name):
+                out.append(f"{name}:")
+            case Callee(code=code) if code:
+                out += [f"    {line}" for line in _code(code)]
+            case Callee(name=name, far=far):
+                out.append(f"    call {'far ptr ' if far else ''}{name}")
+            case _:
+                try:
+                    out += [f"    {line}" for line in _instruction(item, names, number)]
+                except Unprintable as error:
+                    raise Unprintable(f"{procedure.name}: {error}") from error
     out.append(f"{procedure.name} endp")
     return out
 
 
 def _falls_to(block: lir.LirBlock, name: str) -> int | None:
     """The successor control reaches by running off the block's end, if any."""
-    last = next((one.what for one in reversed(block.insns) if one.what.op is not ir.Operation.NOTHING), None)
+    last = next(
+        (one.what for one in reversed(block.insns) if one.what is not None and one.what.op is not ir.Operation.NOTHING),
+        None,
+    )
     if last is not None and last.op in (ir.Operation.JUMP, ir.Operation.RETURN):
         return None
     taken = last.target if last is not None and last.op is ir.Operation.BRANCH else None
@@ -131,8 +226,7 @@ def _roots(body: lir.LirBody) -> set:
     return found
 
 
-def _instruction(one: lir.Insn, procedure: Procedure, names: dict, number: int, leave: list) -> list[str]:
-    what = one.what
+def _instruction(what: ir.Semantics, names: dict, number: int) -> list[str]:
     name = what.name or ""
     if what.op is ir.Operation.FILL:
         # Its operands are the registers the instruction names in its opcode.
@@ -142,9 +236,6 @@ def _instruction(one: lir.Insn, procedure: Procedure, names: dict, number: int, 
     match what.op:
         case ir.Operation.NOTHING:
             return [name] if name not in ("", "nop") else []
-        case ir.Operation.MOVE if _segment(what.dests[0]) and isinstance(what.sources[0], ir.Imm):
-            # x86 has no immediate move into a segment register; the stack holds it for one instruction.
-            return [f"pushw {sources[0]}", f"pop {dests[0]}"]
         case ir.Operation.MOVE | ir.Operation.ADDRESS:
             return [f"{name} {dests[0]}, {sources[0]}"]
         case ir.Operation.BINARY:
@@ -152,7 +243,7 @@ def _instruction(one: lir.Insn, procedure: Procedure, names: dict, number: int, 
         case ir.Operation.UNARY:
             return [f"{name} {dests[0]}"]
         case ir.Operation.COMPARE if name.startswith("f"):
-            memory = [text for text, source in zip(sources, what.sources) if isinstance(source, ir.Mem)]
+            memory = [text for text, source in zip(sources, what.sources, strict=True) if isinstance(source, ir.Mem)]
             return [f"{name} {memory[0]}" if memory else name]
         case ir.Operation.COMPARE:
             return [f"{name or 'cmp'} {sources[0]}, {sources[1]}"]
@@ -167,8 +258,9 @@ def _instruction(one: lir.Insn, procedure: Procedure, names: dict, number: int, 
         case ir.Operation.EXTEND:
             return [f"{name} {dests[0]}, {sources[0]}"] if name in ("movsx", "movzx") else [name]
         case ir.Operation.PUSH:
-            if isinstance(what.sources[0], ir.Imm) and what.sources[0].address is None:
-                return [f"push{'d' if what.sources[0].width == 4 else 'w'} {sources[0]}"]
+            match what.sources[0]:
+                case ir.Imm(address=None, width=width) | ir.Imm(address=Addr(space=Space.GROUP), width=width):
+                    return [f"push{'d' if width == 4 else 'w'} {sources[0]}"]
             return [f"push {sources[0]}"]
         case ir.Operation.POP:
             return [f"pop {dests[0]}"]
@@ -179,14 +271,9 @@ def _instruction(one: lir.Insn, procedure: Procedure, names: dict, number: int, 
         case ir.Operation.FUNNEL:
             return [f"{name} {dests[0]}, {sources[1]}, {sources[2]}"]
         case ir.Operation.BRANCH | ir.Operation.JUMP:
-            return [f"{name} L{number}_{what.target}"]
-        case ir.Operation.CALL:
-            callee = procedure.callees.get(one.at)
-            if callee is None:
-                raise Unprintable("a call with no callee")
-            if callee.code:
-                return list(_code(callee.code))
-            return [f"call {'far ptr ' if callee.far else ''}{callee.name}"]
+            if what.target is None:
+                raise Unprintable(f"{name or 'jump'} with no target")
+            return [f"{name} {label(number, what.target)}"]
         case ir.Operation.BARRIER:
             return [f"{name} {(dests or sources)[0]}"]
         case ir.Operation.FLOAT_LOAD:
@@ -200,7 +287,7 @@ def _instruction(one: lir.Insn, procedure: Procedure, names: dict, number: int, 
         case ir.Operation.FLOAT_UNARY:
             return [name]
         case ir.Operation.RETURN:
-            return [*leave, name or ("retf" if procedure.far else "ret")]
+            return [name]
     raise Unprintable(f"{what}")
 
 
