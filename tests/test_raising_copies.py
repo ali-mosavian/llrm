@@ -137,7 +137,7 @@ def test_copy_does_not_advance_a_symbol_beyond_its_segment():
 
 
 def test_proven_copy_unlocks_strict_floating_cse():
-    """FPDEEP's repeated DOUBLE load can be shared once d=12 is represented."""
+    """FPDEEP's repeated DOUBLE load becomes one value once d=12 is represented."""
     from qbopt.optimize import transform
 
     found, body = _copy()
@@ -155,8 +155,14 @@ def test_proven_copy_unlocks_strict_floating_cse():
     low = lower.lowered("copy", result, {}, {}, {})
     from qbopt.backend import floatalloc
     low = floatalloc.allocated(low)
-    assert any(one.what and one.what.name == "fld" and one.what.sources == (ir.St(0),)
-               for one in low.insns)
+    memory_arithmetic = [
+        one.what.name
+        for one in low.insns
+        if one.what
+        and one.what.op is ir.Operation.FLOAT_ARITH
+        and any(isinstance(source, ir.Mem) for source in one.what.sources)
+    ]
+    assert memory_arithmetic == ["fdivr", "fmul"]
 
 
 @pytest.mark.parametrize("change", ["unknown_direction", "unknown_selector", "changed_data_segment", "call"])

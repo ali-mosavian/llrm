@@ -75,7 +75,7 @@ def test_an_opaque_address_keeps_the_registers_it_is_written_in() -> None:
         one
         for block in lowered.blocks
         for one in block.insns
-        if one.op is not None and one.op.kind is mir.Kind.ADDRESS and one.op.at == 0x51
+        if one.op is not None and one.op.kind is mir.Kind.ADDRESS
     ]
     assert {ir.ROOT[register] for _, register in lea.requires} == {Register.EBX}
 
