@@ -26,6 +26,7 @@ FAST_MODULES = frozenset(
         "test_arithmetic_immediates.py",
         "test_constant_carry.py",
         "test_lower_conditions.py",
+        "test_lir_verify.py",
         "test_mir_alias.py",
         "test_omfwrite.py",
         "test_parcopy.py",

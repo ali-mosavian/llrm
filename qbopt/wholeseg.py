@@ -311,6 +311,7 @@ def _through_lir(
     from qbopt.model import ir
     from qbopt.backend import lower
     from qbopt.backend import parcopy
+    from qbopt.backend import phielim
     from qbopt.backend import spiller
     from qbopt.backend import allocate
     from qbopt.backend import omfwrite
@@ -343,16 +344,20 @@ def _through_lir(
     done = []
     for name, body in bodies:
         try:
-            low = lower.lowered(
-                name,
-                body,
-                found.calls,
-                found.absorbed,
-                contracts,
-                found.coverage,
-                cpu,
-                pointer_model=pointer_model,
-                noreturn=body.entry in no_return,
+            low = flow.verified(
+                lower.lowered(
+                    name,
+                    body,
+                    found.calls,
+                    found.absorbed,
+                    contracts,
+                    found.coverage,
+                    cpu,
+                    pointer_model=pointer_model,
+                    noreturn=body.entry in no_return,
+                ),
+                "lower",
+                in_ssa=True,
             )
             if (native := (native_frames or {}).get(body.entry)) is not None:
                 low = nativeframe.bound(low, native)
@@ -361,8 +366,11 @@ def _through_lir(
             frame = frames.of(
                 low, found.calls, family=module.family(found.records), native=(native_frames or {}).get(body.entry)
             )
+            in_ssa = True
             for phase in flow.machine(flow._pinned(low), frame, found.calls, basic_semantics=basic_semantics):
-                low = phase.transform(low)
+                if isinstance(phase, phielim.PhiElimination):
+                    in_ssa = False
+                low = flow.checked(low, phase, in_ssa=in_ssa)
                 if watch is not None:
                     watch(phase.name, name, low)
         except (lower.Unlowered, mir.Unraisable, frames.Refused, prologue.Refused) as short:

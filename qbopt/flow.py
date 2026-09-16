@@ -29,9 +29,11 @@ The machine half, against LLVM's own order:
 answer questions and change nothing, which is why nothing here lists them.
 """
 
+from qbopt.model import lir
 from qbopt.model import mir
 from qbopt.abi import runtime
 from qbopt.backend import lower
+from qbopt.backend import verify
 from qbopt.objectfile import omf
 from qbopt.backend import parcopy
 from qbopt.backend import phielim
@@ -73,6 +75,23 @@ def machine(
     ]
 
 
+def verified(body: lir.LirBody, stage: str, *, in_ssa: bool) -> lir.LirBody:
+    """Return a well-formed body or name the phase boundary that is not.
+
+    This is deliberately in the production driver rather than in individual
+    phases: every phase is checked under the same contract, including a newly
+    added one whose author did not remember to opt in.
+    """
+    if complaints := verify.verify(body, in_ssa=in_ssa):
+        raise verify.Malformed(f"{stage}: {complaints[0]}")
+    return body
+
+
+def checked(body: lir.LirBody, phase: LIRTransform, *, in_ssa: bool) -> lir.LirBody:
+    """Run one machine phase and verify what it returned."""
+    return verified(phase.transform(body), phase.name or type(phase).__name__, in_ssa=in_ssa)
+
+
 def run(data: bytes, native_fpu: bool = False, optimise: bool = True) -> tuple[bytes, str]:
     """The object, rewritten, and what happened. The input back on refusal."""
     records = omf.parse(data)
@@ -98,10 +117,17 @@ def run(data: bytes, native_fpu: bool = False, optimise: bool = True) -> tuple[b
                 body, found.dgroup, found.calls, blocks=blocks, found=found, promote_=False, strength_=False
             )
             body = transform.widened(rotate.entered(body))
-        low = lower.lowered(name, body, found.calls, set(found.absorbed), contracts)
+        low = verified(
+            lower.lowered(name, body, found.calls, set(found.absorbed), contracts),
+            "lower",
+            in_ssa=True,
+        )
         frame = frames.of(low, found.calls)
+        in_ssa = True
         for phase in machine(_pinned(low), frame, found.calls):
-            low = phase.transform(low)
+            if isinstance(phase, phielim.PhiElimination):
+                in_ssa = False
+            low = checked(low, phase, in_ssa=in_ssa)
         done.append(low)
 
     reached = frozenset(at for block in blocks for insn in block.insns for at in range(insn.at, insn.end))

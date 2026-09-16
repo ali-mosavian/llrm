@@ -13,8 +13,8 @@ from iced_x86 import Register
 
 from qbopt.model import ir
 from qbopt.model import lir
-from qbopt.backend import parcopy
 from qbopt.backend import select
+from qbopt.backend import parcopy
 
 
 def _move(into, out_of, group=None, at=0x100) -> lir.Insn:
@@ -70,6 +70,7 @@ def _order(body) -> list[str]:
         else one.what.name
         for block in parcopy.scheduled(body).blocks
         for one in block.insns
+        if one.what.op is not ir.Operation.NOTHING or one.what.name
     ]
 
 
@@ -121,12 +122,16 @@ def test_a_register_cycle_is_exchanged_and_a_slot_cycle_refused_by_name() -> Non
     an exchange. Registers get the exchange; no instruction exchanges two
     slots, so that is refused rather than written in an order that computes
     something else."""
-    swapped = parcopy.scheduled(
-        _body(
-            _move(_reg(Register.AX), _reg(Register.CX), group=1),
-            _move(_reg(Register.CX), _reg(Register.AX), group=1),
+    swapped = (
+        parcopy.scheduled(
+            _body(
+                _move(_reg(Register.AX), _reg(Register.CX), group=1),
+                _move(_reg(Register.CX), _reg(Register.AX), group=1),
+            )
         )
-    ).blocks[0].insns
+        .blocks[0]
+        .insns
+    )
     assert [one.what.name for one in swapped] == ["xchg"]
     with pytest.raises(parcopy.Tangled, match="temporary"):
         parcopy.scheduled(_body(_move(_slot(4), _slot(8), group=1), _move(_slot(8), _slot(4), group=1)))
@@ -155,15 +160,15 @@ def test_the_scheduler_runs_after_the_allocation_and_before_the_prologue() -> No
 def test_nothing_leaves_the_machine_pipeline_still_grouped() -> None:
     from pathlib import Path
 
-    from qbopt.model import mir
-    from qbopt.objectfile import omf
     from qbopt import flow
-    from qbopt.backend import lower
-    from qbopt.objectfile import module
+    from qbopt.model import mir
     from qbopt.abi import runtime
+    from qbopt.backend import lower
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
     from qbopt.optimize import transform
-    from qbopt.frontend import blocks as split
     from qbopt.backend import frame as frames
+    from qbopt.frontend import blocks as split
     from qbopt.frontend.blocks import code_map
 
     # pressx-p-g2 rather than pressx-v-evt: the event build calls a
@@ -185,8 +190,8 @@ def test_a_tangled_copy_is_refused_and_says_so() -> None:
     order. BC's own object comes back, unmarked."""
     from pathlib import Path
 
-    from qbopt.objectfile import omf
     from qbopt import wholeseg
+    from qbopt.objectfile import omf
 
     was = parcopy.ParallelCopy.transform
 
@@ -202,5 +207,3 @@ def test_a_tangled_copy_is_refused_and_says_so() -> None:
     assert got.data == Path("fixtures/omf/pressx-p-g2.obj").read_bytes()
     assert "Tangled" in got.reason
     assert omf.finalised_at(omf.parse(got.data)) is None
-
-

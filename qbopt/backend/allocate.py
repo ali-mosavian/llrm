@@ -976,7 +976,11 @@ def applied(body: lir.LirBody, got: Assignment) -> lir.LirBody:
                 # instructions` at a `mov bx,ax`.
                 insns=tuple(
                     _identity_anchor(one)
-                    for one in lir.without(block.insns, _pointless, lambda one: _placed(one, held, body.origin))
+                    for one in lir.without(
+                        block.insns,
+                        _discardable_identity,
+                        lambda one: _placed_for_rewrite(one, held, body.origin),
+                    )
                 ),
                 succ=block.succ,
                 phis=block.phis,
@@ -1029,9 +1033,29 @@ def _dead_insertions(body: lir.LirBody) -> lir.LirBody:
 
 def _identity_anchor(one: lir.Insn) -> lir.Insn:
     """Retain byte ownership without requiring an encodable register self-copy."""
-    if not _pointless(one):
+    if one.group is not None or not _pointless(one):
         return one
     return replace(one, what=ir.Semantics(ir.Operation.NOTHING, "nop", (), ()))
+
+
+def _discardable_identity(one: lir.Insn) -> bool:
+    """An identity that is not still owned by the parallel-copy scheduler."""
+    return one.group is None and _pointless(one)
+
+
+def _placed_for_rewrite(one: lir.Insn, held: dict, origin: dict) -> lir.Insn:
+    """Place one instruction without discarding an inserted definition.
+
+    A fixed-register split can become an identity after placement.  Its empty
+    span means it emits no bytes, but its definition still explains the value
+    named by the constrained instruction beside it.  Turn only that inserted
+    identity into a zero-cost semantic marker before ``lir.without`` decides
+    which machine copies can disappear.
+    """
+    placed = _placed(one, held, origin)
+    if placed.group is None and (placed.covers is None or placed.covers[0] == placed.covers[1]) and _pointless(placed):
+        return replace(placed, what=ir.Semantics(ir.Operation.NOTHING, "", (), ()))
+    return placed
 
 
 def _pointless(one: lir.Insn) -> bool:

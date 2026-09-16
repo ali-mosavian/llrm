@@ -24,8 +24,8 @@ from qbopt.backend import division
 from qbopt.analysis import liveness
 from qbopt.backend import arithmetic
 from qbopt.model.floating import Format
-from qbopt.model.floating import Rounding
 from qbopt.objectfile.module import Addr
+from qbopt.model.floating import Rounding
 
 
 def operand(arg: mir.Arg) -> ir.Loc:
@@ -163,7 +163,9 @@ def named(body: "mir.MirBody") -> "mir.MirBody":
     """
     from dataclasses import replace
 
-    compared = {value for block in body.blocks for op in block.ops if op.kind is mir.Kind.FCOMPARE for value in op.defines}
+    compared = {
+        value for block in body.blocks for op in block.ops if op.kind is mir.Kind.FCOMPARE for value in op.defines
+    }
 
     def one(op: mir.Op) -> mir.Op:
         if op.kind is mir.Kind.BRANCH and op.test in _UNORDERED and compared.intersection(op.uses):
@@ -201,7 +203,11 @@ def semantics(op: mir.Op, was: ir.Semantics | None = None, place=None) -> ir.Sem
         return ir.Semantics(ir.Operation.NOTHING, "wait", (), ())
     if op.kind is mir.Kind.JUMP and op.target is not None:
         return ir.Semantics(ir.Operation.JUMP, "jmp", (), (), op.target)
-    if op.node is None and op.kind in (mir.Kind.CALL, mir.Kind.RETURN) and op.op in (ir.Operation.CALL, ir.Operation.RETURN):
+    if (
+        op.node is None
+        and op.kind in (mir.Kind.CALL, mir.Kind.RETURN)
+        and op.op in (ir.Operation.CALL, ir.Operation.RETURN)
+    ):
         # Named from its kind: results arrive and values leave in the
         # registers the ABI says, which origin and pins carry, not operands.
         return ir.Semantics(op.op, op.name, (), ())
@@ -578,6 +584,7 @@ def lowered(
             for block in body.blocks
         ),
         origin=dict(body.origin),
+        inputs=frozenset(value.id for value in liveness.entry_values(body) if not value.flags and value.id is not None),
         ordered=True,
         pins={**body.pins, **{value: Register.ES for value in body.values if body.origin.get(value) == Register.ES}},
     )
@@ -1311,12 +1318,13 @@ class Lowering:
     def expand(self, op: "mir.Op", *, preserve_flags: bool = True) -> "tuple[lir.Insn, ...]":
         """Every instruction this operation becomes, the leader first."""
         from qbopt.model import lir
-
         from qbopt.backend import addressforms
 
         if any(one.id in self._folded for one in op.defines):
             # The address is its cells' base and index now; see addressforms.indexed.
-            op = replace(op, kind=mir.Kind.NOTHING, name="", args=(), results=(), defines=(), uses=(), node=None, made=None)
+            op = replace(
+                op, kind=mir.Kind.NOTHING, name="", args=(), results=(), defines=(), uses=(), node=None, made=None
+            )
         made = _EXPANDS.get(op.kind)
         parts = made(op, self) if made is not None else _pointer_access(op, self)
         parts = _flag_test(op, self) or parts

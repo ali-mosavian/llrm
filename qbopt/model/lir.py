@@ -170,6 +170,11 @@ class LirBody:
     # answer, and the fallback for an operand it could not place.
     origin: dict
     pins: dict
+    # Values supplied by the caller in registers rather than defined by an
+    # instruction in this body.  Keeping this explicit is what lets the
+    # verifier distinguish a real ABI input from a transform that lost a
+    # definition.
+    inputs: frozenset[int] = frozenset()
     ordered: bool = False
     noreturn: bool = False
 

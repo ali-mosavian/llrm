@@ -146,6 +146,7 @@ def joined(body: lir.LirBody, pinned: dict | None = None) -> lir.LirBody:
     swap.update({one: find(one) for one in parent})
     return replace(
         body,
+        inputs=frozenset(swap.get(value, value) for value in body.inputs),
         blocks=tuple(
             replace(
                 block,

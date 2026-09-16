@@ -22,6 +22,7 @@ from qbopt.backend import masm
 from qbopt.backend import jumps
 from qbopt.backend import lower
 from qbopt.cfront import stream
+from qbopt.backend import phielim
 from qbopt.backend import omfwrite
 from qbopt.backend import prologue
 from qbopt.cfront import raise_hir
@@ -82,12 +83,19 @@ def assembled(text: str, module: str, *, optimise: bool = False, dump: Path | No
         body = legalized.body
         if dump and body is not raised.body:
             _write(dump, f"passes/{raised.name}.int64-lower", _mir_text(raised.name, body))
-        low = lower.lowered(raised.name, body, legalized.calls, {}, legalized.contracts, {}, "386")
+        low = flow.verified(
+            lower.lowered(raised.name, body, legalized.calls, {}, legalized.contracts, {}, "386"),
+            "lower",
+            in_ssa=True,
+        )
         lirs.append(_lir_text(raised.name, low))
         frame = frames.of(low, legalized.calls)
+        in_ssa = True
         for number, phase in enumerate(flow.machine(flow._pinned(low), frame, legalized.calls)):
             if not isinstance(phase, prologue.Prologue):
-                low = phase.transform(low)
+                if isinstance(phase, phielim.PhiElimination):
+                    in_ssa = False
+                low = flow.checked(low, phase, in_ssa=in_ssa)
                 _write(dump, f"phases/{raised.name}.{number:02d}-{type(phase).__name__}", _lir_text(raised.name, low))
         low = jumps.threaded(jumps.placed(low))
         lirs.append(_lir_text(raised.name + " (allocated)", low))

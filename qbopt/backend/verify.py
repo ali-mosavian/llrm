@@ -22,6 +22,10 @@ from qbopt.model import lir
 from qbopt.backend import target
 
 
+class Malformed(Exception):
+    """A machine phase produced LIR that violates an established invariant."""
+
+
 def verify(body: lir.LirBody, *, in_ssa: bool = False) -> list[str]:
     """Everything wrong with this body, as sentences. Empty is well formed."""
     out: list[str] = []
@@ -33,7 +37,16 @@ def verify(body: lir.LirBody, *, in_ssa: bool = False) -> list[str]:
 
 
 def _blocks(body: lir.LirBody) -> list[str]:
-    """The entry exists, every successor exists, every block is reachable."""
+    """The entry and successors exist; unreachable work is rejected.
+
+    A resolved branch keeps the original bytes of its dead arm in blocks of
+    empty ``NOTHING`` markers.  Those blocks own bytes for layout, but are no
+    longer part of the executable control-flow graph.  Treating them as
+    executable made the verifier reject exactly the representation the
+    optimiser deliberately produces.  The exception is intentionally narrow:
+    an unreachable block containing any value, effect, edge, or instruction
+    other than an unnamed ``NOTHING`` remains malformed.
+    """
     out = []
     at_of = {block.at: block for block in body.blocks}
     if body.entry not in at_of:
@@ -51,9 +64,36 @@ def _blocks(body: lir.LirBody) -> list[str]:
         seen.add(at)
         todo += list(at_of[at].succ)
     for block in body.blocks:
-        if block.at not in seen:
+        if block.at not in seen and not _ownership_only(block):
             out.append(f"block {block.at:#06x} is not reachable from the entry")
     return out
+
+
+def _ownership_only(block: lir.LirBlock) -> bool:
+    """Whether an unreachable block exists only to retain original bytes."""
+    if block.succ or block.phis or not block.insns:
+        return False
+    return all(
+        one.what is not None
+        and one.what.op is ir.Operation.NOTHING
+        and not one.what.name
+        and not one.what.dests
+        and not one.what.sources
+        and one.what.target is None
+        and not one.defines
+        and not one.uses
+        and not one.clobbers
+        and not one.clobbers_high
+        and one.group is None
+        and not one.requires
+        and not one.delivers
+        and not one.widths
+        and one.symbol in (None, False)
+        and not one.spill_reload
+        and not one.spill_store
+        and not one.frame_adjust
+        for one in block.insns
+    )
 
 
 def _spans(body: lir.LirBody) -> list[str]:
@@ -139,6 +179,10 @@ def _values(body: lir.LirBody, in_ssa: bool) -> list[str]:
     # one the caller supplied. A value read and never written anywhere is a
     # renaming that lost half of itself.
     read = {value for block in body.blocks for one in block.insns for value in one.uses}
+    read.update(held.value for block in body.blocks for one in block.insns for held, _ in one.requires)
+    read.update(value for block in body.blocks for phi in block.phis for _, value in phi.incoming)
+    for value in sorted(read - set(written) - body.inputs):
+        out.append(f"value#{value} is read but never defined or supplied by the caller")
     named = set()
     for block in body.blocks:
         for one in block.insns:

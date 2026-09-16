@@ -68,6 +68,8 @@ def scheduled(body: lir.LirBody) -> lir.LirBody:
 
 def _expanded(one: lir.Insn) -> tuple[lir.Insn, ...]:
     """An ordered frame copy needs no scratch register and preserves flags."""
+    if one.what is not None and one.what.op is ir.Operation.NOTHING:
+        return (one,)
     into, source = one.what.dests[0], one.what.sources[0]
     if not isinstance(into, ir.Mem) or not isinstance(source, ir.Mem):
         return (one,)
@@ -93,8 +95,15 @@ def _expanded(one: lir.Insn) -> tuple[lir.Insn, ...]:
 
 def _ordered(moves: list[lir.Insn]) -> list[lir.Insn]:
     """One group, in an order where no move reads what an earlier one wrote."""
-    left = [one for one in moves if _into(one) != _outof(one)]  # identities do nothing
-    out: list[lir.Insn] = []
+    identities = [one for one in moves if _into(one) == _outof(one)]
+    left = [one for one in moves if _into(one) != _outof(one)]
+    # An identity emits no machine instruction.  It still defines the
+    # virtual value represented by its destination, which later LIR safety
+    # analyses read from ``defines``/``uses``.  Retain that fact as a
+    # zero-cost marker rather than deleting the whole instruction.
+    out: list[lir.Insn] = [
+        replace(one, what=ir.Semantics(ir.Operation.NOTHING, "", (), ()), group=None) for one in identities
+    ]
     while left:
         # Free where nothing still to come reads the place it writes.
         wanted = {_outof(one) for one in left}
