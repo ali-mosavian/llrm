@@ -1074,10 +1074,16 @@ one documented target without materially regressing another.
 
 ### Machine backend
 
-- [ ] Add global machine copy propagation after allocation.
-  `backend/copyprop.py` eliminates equal-register copies using byte-level
-  agreement over all reachable incoming edges. Operand substitution and
-  demonstrated target improvement remain open.
+- [x] Add global machine copy propagation after allocation.
+  `backend/copyprop.py` eliminates equal-register copies and forwards explicit
+  uses to their reaching copy source using byte-level agreement over every
+  reachable incoming edge. Source and destination clobbers invalidate the
+  direction lane by lane; fixed, implicit and unencodable operands are refused
+  by re-selection and decoded-effect comparison. This follows LLVM's physical
+  register-unit tracker and GCC's validate-after-hard-register-substitution
+  rule. On the same recorded Watcom streams, `ls_face_key` loses its hot
+  `mov bx,ax` before `cmp bx,116`: 54 → 53 instructions, and the 15-function C
+  comparison set falls 793 → 792 against BCC's 939.
 - [ ] Add machine CSE and dead-machine-instruction elimination over allocated
   LIR.
 - [ ] Add branch folding and tail merging after final block placement.
