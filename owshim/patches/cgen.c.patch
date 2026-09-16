@@ -1,0 +1,20 @@
+--- a/bld/cc/c/cgen.c
++++ b/bld/cc/c/cgen.c
+@@ -579,6 +579,17 @@
+     } else {
+         name = CGFEName( (CGSYM_HANDLE)node->u2.sym_handle, dtype );
+     }
++    /*
++     * qbopt: the original code generator never received C99 restrict --
++     * FLAG_RESTRICT was parsed and then discarded.  Attribute 3 is a private
++     * extension of the recording shim and marks the loaded pointer's noalias
++     * root; a stock Open Watcom code generator never sees this stream.
++     */
++    SKIP_TYPEDEFS( typ );
++    if( (typ->decl_type == TYP_POINTER && (typ->u.p.decl_flags & FLAG_RESTRICT))
++      || (sym.mods & FLAG_RESTRICT) ) {
++        name = CGAttr( name, (cg_sym_attr)3 );
++    }
+     if( node->flags & OPFLAG_UNALIGNED ) {
+         name = CGAttr( name, CG_SYM_UNALIGNED );
+     }

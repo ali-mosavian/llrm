@@ -731,6 +731,12 @@ one documented target without materially regressing another.
   are uses, and complete write footprints are definitions.
 - [x] Refine alias, object-identity, escape and per-argument mod/ref facts used
   by `MemorySSA`.
+  The C path now carries the complete source-level model described in
+  [strong-alias.md](strong-alias.md): canonical allocation/subobject identity,
+  flow-sensitive points-to and escape, fixed-point interprocedural mod/ref and
+  capture summaries, strided range dependences, TBAA and restrict roots. An
+  unknown C callee reaches nonlocals, pointer actuals and previously escaped
+  objects rather than every local in the activation.
   Promotion and constant-memory facts now share MemorySSA's conservative rule
   for unspecified call writes and opaque barriers. Promotion previously kept
   a value when an effect had no explicit store range; partial constant stores

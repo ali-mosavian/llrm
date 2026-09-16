@@ -58,9 +58,13 @@ def assembled(text: str, module: str, *, optimise: bool = False, dump: Path | No
     _write(dump, "hir", hir.text(unit))
     procedures, mirs, lirs = [], [], []
     shared = raise_hir.Shared()
-    for proc in unit.procs:
-        raised = raise_hir.raised(unit, proc, shared)
-        body = raised.body
+    raised_procedures = [raise_hir.raised(unit, proc, shared) for proc in unit.procs]
+    from qbopt.analysis import alias
+
+    aliases = {one.name: alias.Procedure(one.body, one.calls, one.arguments) for one in raised_procedures}
+    modref = alias.summaries(aliases)
+    for raised in raised_procedures:
+        body = alias.calls_annotated(aliases[raised.name], modref)
         mirs.append(_mir_text(raised.name, body))
         if optimise:
             from qbopt.optimize import rotate

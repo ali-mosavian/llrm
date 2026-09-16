@@ -100,6 +100,7 @@ arithmetic; and an exclusion can name one symbol and no other.
 
 from dataclasses import dataclass
 
+from qbopt.model import memory
 from qbopt.objectfile import module
 from qbopt.objectfile.module import Space
 
@@ -299,10 +300,11 @@ def regions(ref, bounds: dict | None = None, known: dict | None = None, layout=N
 def typed_apart(one, other) -> bool:
     """Axiom 5: a declared object is reached only through its own type class.
 
-    An access of another class may still be a union's other member, so two
-    accesses say nothing; a character or untyped access carries no class."""
+    Two incompatible typed lvalues cannot legally designate the same C
+    object. Character, aggregate and otherwise untyped accesses carry no
+    class and therefore retain the conservative answer."""
     a, b = getattr(one, "typed", None), getattr(other, "typed", None)
-    return a is not None and b is not None and a[0] != b[0] and (a[1] or b[1])
+    return a is not None and b is not None and a[0] != b[0]
 
 
 def may_alias(
@@ -311,6 +313,33 @@ def may_alias(
     """Whether two references can name the same byte."""
     if typed_apart(one, other):
         return False
+    if one.provenance is not None and other.provenance is not None:
+
+        def narrowed(ref, provenance, facts):
+            interval = (facts or {}).get(ref.base)
+            if (
+                ref.base is None
+                or ref.addr is None
+                or interval is None
+                or interval.width != ref.base_width
+                or len(provenance.slices) != 1
+            ):
+                return provenance
+            source = next(iter(provenance.slices))
+            # Whole-object provenance is the shape an indexed lvalue carries.
+            # Its bounded index narrows that object to the bytes this program
+            # point can actually touch.
+            low = ref.addr.disp + interval.low
+            high = ref.addr.disp + interval.high + 1
+            end = high + max(ref.width, 1) - 1
+            if source.object.extent is not None and not (0 <= low < high and end <= source.object.extent):
+                return provenance
+            return memory.Provenance(
+                frozenset({memory.Slice(source.object, low, high, width=max(ref.width, 1))}),
+                provenance.restrict,
+            )
+
+        return narrowed(one, one.provenance, known).intersects(narrowed(other, other.provenance, other_known))
     return regions(one, bounds, known, layout).intersects(regions(other, bounds, other_known, layout))
 
 

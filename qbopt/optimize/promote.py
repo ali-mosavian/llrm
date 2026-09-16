@@ -63,6 +63,12 @@ CELLS = frozenset({Space.SEGMENT, Space.FRAME})
 def _key(ref):
     if ref.addr is None or ref.segment is not None or ref.addr.space not in CELLS:
         return None
+    # Keep canonical object identity on the promoted cell. Reducing a direct
+    # reference back to Addr here made an explicitly nonlocal call effect
+    # meet a provenance-less frame reference, falling through to the legacy
+    # conservative query and losing the proof the frontend supplied.
+    if ref.provenance is not None:
+        return replace(ref, width=0)
     if ref.base is None:
         return ref.addr
     if ref.addr.space is Space.SEGMENT and ref.excludes:

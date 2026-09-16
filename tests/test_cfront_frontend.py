@@ -71,10 +71,56 @@ def test_stdc_is_undefined_as_in_bcc(tmp_path):
 def test_long_long_reaches_the_stream_as_signed_and_unsigned_int64(tmp_path):
     stream = _stream(
         tmp_path,
-        "long long s(long long a) { return a + 1; }\n"
-        "unsigned long long u(unsigned long long a) { return a * 3; }\n",
+        "long long s(long long a) { return a + 1; }\nunsigned long long u(unsigned long long a) { return a * 3; }\n",
     )
     declarations = [line.split()[-1] for line in stream.splitlines() if "CGProcDecl" in line]
     parameters = [line.split()[-1] for line in stream.splitlines() if "CGParmDecl" in line]
     assert declarations == ["TY_INT_8", "TY_UINT_8"]
     assert parameters == ["TY_INT_8", "TY_UINT_8"]
+
+
+def test_restrict_reaches_mir_as_distinct_noalias_roots(tmp_path):
+    """OW parsed restrict but discarded it before CG; the shim now records it."""
+    source = "void add(int *__restrict out, const int *__restrict a, const int *__restrict b) {\n  *out = *a + *b;\n}\n"
+    text = _stream(tmp_path, source)
+    assert text.count(" CGAttr ") == 3
+
+    from qbopt.cfront import hir
+    from qbopt.cfront import stream
+    from qbopt.cfront import raise_hir
+
+    unit = hir.unit(stream.parse(text))
+    body = raise_hir.raised(unit, unit.procs[0]).body
+    roots = {
+        next(iter(ref.provenance.restrict))
+        for block in body.blocks
+        for op in block.ops
+        for ref in (*op.loads, *op.stores)
+        if ref.provenance is not None and ref.provenance.restrict
+    }
+    assert len(roots) == 3
+
+
+def test_standard_allocator_return_has_fresh_object_identity(tmp_path):
+    """A pointer returned by malloc is an allocation-site object, not an unknown pointer."""
+    text = _stream(
+        tmp_path,
+        "extern void *malloc(unsigned n);\nint *make(void) { return (int *)malloc(8); }\n",
+    )
+
+    from qbopt.cfront import hir
+    from qbopt.model import memory
+    from qbopt.cfront import stream
+    from qbopt.cfront import raise_hir
+
+    unit = hir.unit(stream.parse(text))
+    body = raise_hir.raised(unit, unit.procs[0]).body
+    allocations = {
+        slice_.object
+        for provenance in body.pointer_seeds.values()
+        for slice_ in provenance.slices
+        if slice_.object.kind is memory.Kind.ALLOCATION
+    }
+
+    assert len(allocations) == 1
+    assert next(iter(allocations)).extent == 8

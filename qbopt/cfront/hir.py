@@ -131,6 +131,7 @@ class Unit:
     symbols: dict[int, Symbol] = field(default_factory=dict)
     backs: dict[int, int] = field(default_factory=dict)  # back handle -> symbol, 0 for a literal
     types: dict[str, int] = field(default_factory=dict)
+    aliases: dict[str, str] = field(default_factory=dict)
     segments: dict[int, Segment] = field(default_factory=dict)
     nodes: dict[int, Node] = field(default_factory=dict)
     calls: dict[int, Call] = field(default_factory=dict)
@@ -140,6 +141,13 @@ class Unit:
         """Whether the symbol is in DGROUP, reached through DS."""
         segment = self.segments.get(symbol.segment)
         return segment is None or not segment.attr & PRIVATE
+
+    def canonical_type(self, type_: str) -> str:
+        seen = set()
+        while type_ in self.aliases and type_ not in seen:
+            seen.add(type_)
+            type_ = self.aliases[type_]
+        return type_
 
 
 def handle(token: str) -> int:
@@ -164,6 +172,8 @@ def unit(records: list[Record]) -> Unit:
                 segment = int(args[0])
             case "TYPE":
                 made.types[args[0]] = int(fields["size"])
+            case "ALIAS":
+                made.aliases[args[0]] = args[1]
             case "SYM":
                 made.symbols[handle(args[0])] = Symbol(
                     handle(args[0]),

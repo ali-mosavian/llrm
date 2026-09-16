@@ -72,6 +72,7 @@ from iced_x86 import RegisterExt
 
 from qbopt.model import ir
 from qbopt.abi import runtime
+from qbopt.model import memory
 from qbopt.analysis import loops
 from qbopt.frontend import stack
 from qbopt.analysis import regions
@@ -258,6 +259,9 @@ class MemRef:
     typed: "tuple[str, bool] | None" = field(default=None, compare=False)
     # The frame objects' bytes (from bp) an address the body took of them stays inside, where the language says so.
     within: "tuple[tuple[int, int], ...] | None" = field(default=None, compare=False)
+    # Canonical object/subobject identity. Legacy frontends are normalized by
+    # analysis.regions; source frontends attach this directly.
+    provenance: "memory.Provenance | None" = None
 
     @property
     def where(self) -> "Space | None":
@@ -958,6 +962,9 @@ class MirBody:
     # resumes inside the body. The raise's to say -- BC's error and event
     # handlers do resume inside one, C has nothing that does.
     sealed: bool = False
+    # Source-language pointer facts. These are semantic metadata, not places.
+    pointer_values: frozenset[Value] = frozenset()
+    pointer_seeds: dict[Value, "memory.Provenance"] = field(default_factory=dict)
 
     def block(self, at: int) -> MirBlock | None:
         return next((one for one in self.blocks if one.at == at), None)
@@ -2105,6 +2112,8 @@ def same_bytes(one: MemRef, other: MemRef) -> bool:
     this the load I already did"), and its negation is not a disjointness
     proof. `regions` still answers that one.
     """
+    if one.provenance is not None and other.provenance is not None and one.provenance != other.provenance:
+        return False
     if one.pointer or other.pointer:
         return (
             one.pointer
@@ -2151,6 +2160,11 @@ def overlapping(
     """
     if regions.typed_apart(one, other):
         return False
+    # Canonical references carry their own object identity. Keep their base
+    # value available to the canonical range query; the legacy covering
+    # rewrite below erases it after widening the address to a byte hull.
+    if one.provenance is not None and other.provenance is not None:
+        return regions.may_alias(one, other, bounds, known, other_known, dgroup)
     if not (one.pointer or other.pointer):
         if known or other_known:
             from qbopt.analysis import ranges
@@ -2208,7 +2222,13 @@ def _through_frame(body: MirBody, framed: dict) -> MirBody:
         return body
 
     def tag(ref: MemRef) -> MemRef:
-        if ref.base in framed and ref.segment is None and not ref.pointer and ref.addr is not None and ref.addr.space is Space.LITERAL:
+        if (
+            ref.base in framed
+            and ref.segment is None
+            and not ref.pointer
+            and ref.addr is not None
+            and ref.addr.space is Space.LITERAL
+        ):
             return replace(ref, within=tuple(sorted(framed[ref.base])))
         return ref
 
@@ -2379,7 +2399,6 @@ def bodies(
         return []
     nodes = {ir.span(node)[0]: node for body in result for node in body.nodes}
     from qbopt.frontend import blocks as split
-
     from qbopt.frontend import raising_returns
 
     header = split.has_header(found)
@@ -2496,12 +2515,15 @@ def bodies(
                 error_handlers.append(built)
     if error_handlers:
         summaries = [
-            raising_call_memory.handler_effects(one, found.calls, contracts, unreached)
-            for one in error_handlers
+            raising_call_memory.handler_effects(one, found.calls, contracts, unreached) for one in error_handlers
         ]
-        summary = None if any(one is None for one in summaries) else (
-            tuple(ref for one in summaries for ref in one[0]),
-            tuple(ref for one in summaries for ref in one[1]),
+        summary = (
+            None
+            if any(one is None for one in summaries)
+            else (
+                tuple(ref for one in summaries for ref in one[0]),
+                tuple(ref for one in summaries for ref in one[1]),
+            )
         )
         out = [
             (

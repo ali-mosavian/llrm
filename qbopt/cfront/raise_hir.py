@@ -16,11 +16,12 @@ from dataclasses import field
 from dataclasses import replace
 from dataclasses import dataclass
 
-from qbopt.abi import runtime
 from qbopt.model import ir
-from qbopt.model import floating
 from qbopt.model import mir
 from qbopt.cfront import hir
+from qbopt.abi import runtime
+from qbopt.model import memory
+from qbopt.model import floating
 from qbopt.cfront.hir import Unsupported
 from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
@@ -63,7 +64,7 @@ LIBRARY = {
 # Borland's pseudo-function laying its constant arguments down as code.
 EMITTED = frozenset({"__emit__"})
 EXTENDED = floating.Format.EXTENDED80
-FORMATS ={4: floating.Format.BINARY32, 8: floating.Format.BINARY64}
+FORMATS = {4: floating.Format.BINARY32, 8: floating.Format.BINARY64}
 INTEGER_FORMATS = {2: floating.Format.SIGNED16, 4: floating.Format.SIGNED32, 8: floating.Format.SIGNED64}
 # What each float operation computes, which MIR states and lowering spells.
 ARITH_RULE = floating.Semantics((EXTENDED, EXTENDED), EXTENDED, floating.Precision.DYNAMIC, floating.Rounding.DYNAMIC)
@@ -80,8 +81,15 @@ def _stored(result: floating.Format) -> floating.Semantics:
 
 def _packed(value: float, width: int) -> bytes:
     return struct.pack("<f" if width == 4 else "<d", value)
+
+
 SIGNED = frozenset({"TY_INT_1", "TY_INT_2", "TY_INT_4", "TY_INT_8", "TY_INTEGER"})
 FAR_POINTERS = frozenset({"TY_LONG_POINTER", "TY_HUGE_POINTER"})
+POINTERS = frozenset({"TY_POINTER", "TY_NEAR_POINTER", "TY_LONG_POINTER", "TY_HUGE_POINTER"})
+# Standard allocation contracts. These names are language-library semantics,
+# not fixture recognition; wrappers acquire the same fact through future
+# return summaries rather than by adding their names here.
+FRESH_ALLOCATORS = frozenset({"malloc", "_malloc", "calloc", "_calloc"})
 # C's aliasing classes: a declared object is read and written only through its own, or a character type.
 CLASSES = {
     "TY_INT_2": "int2", "TY_UINT_2": "int2", "TY_INTEGER": "int2", "TY_UNSIGNED": "int2",
@@ -176,6 +184,14 @@ class Returned:
 
 
 @dataclass(frozen=True, slots=True)
+class Restricted:
+    """The lvalue of a pointer declared restrict, before it is loaded."""
+
+    value: object
+    root: object
+
+
+@dataclass(frozen=True, slots=True)
 class Function:
     symbol: hir.Symbol
 
@@ -196,6 +212,8 @@ class Raised:
     calls: dict[int, str]  # call site -> callee object name
     callees: dict[int, hir.Symbol]
     contracts: dict[int, runtime.Contract]
+    # Source-order actual pointer provenance: Provenance, (value, offset), or None.
+    arguments: dict[int, tuple[object, ...]]
     # A site whose callee is inline assembly: its bytes, and (kind, name, offset) where a symbol goes.
     inline: dict[int, tuple]
 
@@ -233,7 +251,11 @@ def names(unit: hir.Unit, shared: Shared | None = None) -> dict[tuple[Space, int
     out = {(_space(one), one.id): one.object_name for one in unit.symbols.values()}
     out[(Space.GROUP, 0)] = "DGROUP"
     out.update(
-        {(Space.GROUP, SELECTOR + one.id): f"seg {one.object_name}" for one in unit.symbols.values() if not unit.grouped(one)}
+        {
+            (Space.GROUP, SELECTOR + one.id): f"seg {one.object_name}"
+            for one in unit.symbols.values()
+            if not unit.grouped(one)
+        }
     )
     out.update({(Space.SEGMENT, LITERAL + back): f"L_b{back}" for back, symbol in unit.backs.items() if not symbol})
     out.update({(Space.SEGMENT, POOL + n): f"L_f{n}" for n in (shared.literals.values() if shared else ())})
@@ -267,13 +289,18 @@ class _Raise:
         self.calls: dict[int, str] = {}
         self.callees: dict[int, hir.Symbol] = {}
         self.contracts: dict[int, runtime.Contract] = {}
+        self.arguments: dict[int, tuple[object, ...]] = {}
         self.inline: dict[int, tuple] = {}
         self.frame: dict[str, int] = {}
         self.objects: list[tuple[int, int]] = []  # each frame object's bytes
+        self.pointer_values: set[mir.Value] = set()
+        self.pointer_seeds: dict[mir.Value, memory.Provenance] = {}
+        self.parameter_at: dict[int, int] = {}
         self.selects: dict[str, tuple[list[tuple[int, str]], str | None]] = {}
         at = 6 if self.symbol.far else 4
-        for symbol, type_ in proc.parms:
+        for number, (symbol, type_) in enumerate(proc.parms):
             self.frame[f"y{symbol}"] = at
+            self.parameter_at[at] = number
             size = _even(max(2, self.size(type_)))
             self.objects.append((at, at + size))
             at += size
@@ -294,6 +321,7 @@ class _Raise:
     # ---- types ----
 
     def width(self, type_: str) -> int:
+        type_ = self.unit.canonical_type(type_)
         if type_ == "TY_POINTER":
             return 4 if self.unit.target & hir.BIG_DATA else 2
         if type_ == "TY_CODE_PTR":
@@ -303,9 +331,11 @@ class _Raise:
         raise Unsupported(f"{self.symbol.name}: no scalar width for {type_}")
 
     def size(self, type_: str) -> int:
+        type_ = self.unit.canonical_type(type_)
         return self.unit.types[type_] if type_ in self.unit.types else self.width(type_)
 
     def far_pointer(self, type_: str) -> bool:
+        type_ = self.unit.canonical_type(type_)
         return type_ in FAR_POINTERS or (type_ == "TY_POINTER" and bool(self.unit.target & hir.BIG_DATA))
 
     # ---- blocks and operations ----
@@ -346,7 +376,16 @@ class _Raise:
             ]
             uses = tuple(dict.fromkeys(read))
         made = mir.Op(
-            self.at, ir.Operation.NOTHING, "", defines, uses, kind=kind, args=args, results=results, id=next(mir._IDS), **extra
+            self.at,
+            ir.Operation.NOTHING,
+            "",
+            defines,
+            uses,
+            kind=kind,
+            args=args,
+            results=results,
+            id=next(mir._IDS),
+            **extra,
         )
         self.current.ops.append(made)
         return made
@@ -380,12 +419,36 @@ class _Raise:
             )
             for block in kept
         )
-        body = mir.MirBody(blocks[0].at, blocks, origin=dict(self.origin), pins=dict(self.pins), sealed=True)
+        body = mir.MirBody(
+            blocks[0].at,
+            blocks,
+            origin=dict(self.origin),
+            pins=dict(self.pins),
+            sealed=True,
+            pointer_values=frozenset(self.pointer_values),
+            pointer_seeds=dict(self.pointer_seeds),
+        )
         body = mir._frame_bounded(body, pointers=True)
+        from qbopt.analysis import alias
+
+        body = alias.annotated(body)
+        # Even an unknown C callee has a precise language-level boundary: it
+        # can reach nonlocal storage, pointer actuals and frame objects that
+        # escaped before the call, but not every byte of this activation.
+        body = alias.calls_annotated(alias.Procedure(body, self.calls, self.arguments), {})
         problems = mir.verify(body)
         if problems:
             raise Unsupported(f"{self.symbol.name}: raised MIR is not SSA: {problems[:3]}")
-        return Raised(self.symbol.object_name, self.symbol, body, self.calls, self.callees, self.contracts, self.inline)
+        return Raised(
+            self.symbol.object_name,
+            self.symbol,
+            body,
+            self.calls,
+            self.callees,
+            self.contracts,
+            self.arguments,
+            self.inline,
+        )
 
     # ---- statements ----
 
@@ -557,7 +620,9 @@ class _Raise:
                 address = self.address(self.eval(target))
                 width = self.width(type_)
                 old = self.floating(FloatCell(address, width))
-                new = self.float_arithmetic(cg_op, old, self.floating(self.convert(self.eval(source), self.type_of(source), type_)))
+                new = self.float_arithmetic(
+                    cg_op, old, self.floating(self.convert(self.eval(source), self.type_of(source), type_))
+                )
                 self.put_float(address, width, new)
                 return old if tree.call == "CGPostGets" else FloatCell(address, width)
             case "CGPostGets" | "CGPreGets", (cg_op, target, source, type_):
@@ -575,6 +640,18 @@ class _Raise:
                 return self.truth(node)
             case "CGEval" | "CGVolatile", (inner,):
                 return self.eval(inner)
+            case "CGAttr", (inner, "3"):
+                got = self.eval(inner)
+                match got:
+                    case Frame(disp):
+                        root = ("frame", disp)
+                    case Global(index=index):
+                        root = ("global", index)
+                    case Far(named=named) if named:
+                        root = ("far", named)
+                    case _:
+                        root = ("node", hir.handle(inner))
+                return Restricted(got, root)
             case "CGAttr", (inner, _):
                 return self.eval(inner)
         raise Unsupported(f"{self.symbol.name}: {tree.call} {' '.join(tree.args)}")
@@ -588,7 +665,10 @@ class _Raise:
                 type_,
             )
         return self.joined(
-            test, lambda: self.coerced(self.eval(yes), yes, type_), lambda: self.coerced(self.eval(no), no, type_), type_
+            test,
+            lambda: self.coerced(self.eval(yes), yes, type_),
+            lambda: self.coerced(self.eval(no), no, type_),
+            type_,
         )
 
     def truth(self, test: str):
@@ -652,11 +732,14 @@ class _Raise:
 
     def aliasing(self, type_: str | None) -> str | None:
         """A scalar type's aliasing class; None for a character, an aggregate or no type, which reach anything."""
+        type_ = self.unit.canonical_type(type_) if type_ is not None else None
         if type_ == "TY_POINTER":
             return f"pointer{self.width(type_)}"
         return CLASSES.get(type_)
 
     def points(self, got, type_: str):
+        restricted = got.root if isinstance(got, Restricted) else None
+        got = got.value if isinstance(got, Restricted) else got
         if isinstance(got, mir.Held) and got.width == 10:
             return got  # a float call's result, already a value
         if isinstance(got, mir.Held) and got.width == self.width(type_) == 8:
@@ -667,6 +750,7 @@ class _Raise:
             if self.width(type_) == 4:
                 whole = self.fresh()
                 self.op(K.CONCAT, (mir.Held(whole, 4),), (mir.Held(got.high, 2), mir.Held(got.low, 2)))
+                self.pointer_values.add(whole)
                 return mir.Held(whole, 4)
             if self.width(type_) == 8:
                 raise Unsupported(f"{self.symbol.name}: a DX:AX result cannot provide an 8-byte value")
@@ -678,7 +762,12 @@ class _Raise:
             return FloatCell(address, self.width(type_))
         if self.far_pointer(type_):
             return self.far_loaded(address, type_)
-        return self.load(self.cell(address, self.width(type_), type_), type_)
+        loaded = self.load(self.cell(address, self.width(type_), type_), type_)
+        if restricted is not None:
+            fact = self.pointer_seeds.get(loaded.value, memory.Provenance.one(memory.Object(memory.Kind.UNKNOWN)))
+            self.pointer_seeds[loaded.value] = memory.Provenance(fact.slices, frozenset({restricted}))
+            self.pointer_values.add(loaded.value)
+        return loaded
 
     def convert(self, got, source: str, type_: str):
         # An address's node is typed by what it addresses: `(void far *) &a_float`.
@@ -710,7 +799,13 @@ class _Raise:
                 self.store(self.cell(replace(quad, disp=quad.disp + 4), 4), mir.Const(0, 4))
                 ref = self.cell(quad, 8)
                 result = self.fresh()
-                self.op(K.FLOAD, (mir.Held(result, 10),), (mir.Cell(ref),), loads=(ref,), floating=_loaded(floating.Format.SIGNED64))
+                self.op(
+                    K.FLOAD,
+                    (mir.Held(result, 10),),
+                    (mir.Cell(ref),),
+                    loads=(ref,),
+                    floating=_loaded(floating.Format.SIGNED64),
+                )
                 return mir.Held(result, 10)
             if self.width(source) == 1 or source not in SIGNED:
                 whole = self.convert(whole, source, "TY_INT_4")
@@ -767,7 +862,11 @@ class _Raise:
             x = self.floating(self.convert(a, self.type_of(left), type_))
             y = self.floating(self.convert(b, self.type_of(right), type_))
             return self.float_arithmetic(cg_op, x, y)
-        if cg_op in ("O_PLUS", "O_MINUS") and type_ in ("TY_POINTER", "TY_NEAR_POINTER") and not self.far_pointer(type_):
+        if (
+            cg_op in ("O_PLUS", "O_MINUS")
+            and type_ in ("TY_POINTER", "TY_NEAR_POINTER")
+            and not self.far_pointer(type_)
+        ):
             # A loaded near pointer is an address too, so its constant steps fold into cells.
             a, b = (self.loaded(one, node) for one, node in ((a, left), (b, right)))
         if cg_op in ("O_PLUS", "O_MINUS") and isinstance(b, (Frame, Global, Near, Far)) and cg_op == "O_PLUS":
@@ -794,18 +893,24 @@ class _Raise:
             index = mir.Held(negated, 2)
         if isinstance(address, Far):
             moved = self.add(mir.Held(address.offset, 2), index)
+            self.pointer_values.add(moved)
             return Far(address.segment, moved, address.disp, named=address.named)
         if isinstance(address, Global):
             # The symbol stays named, so its cells alias only the symbol's own.
             moved = index.value if address.base is None else self.add(mir.Held(address.base, 2), index)
+            self.pointer_values.add(moved)
             return replace(address, base=moved)
         if isinstance(address, Near):
-            return Near(self.add(mir.Held(address.base, 2), index), address.disp)
+            moved = self.add(mir.Held(address.base, 2), index)
+            self.pointer_values.add(moved)
+            return Near(moved, address.disp)
         # From the object's first byte, so the address says which object it is in.
         extent = self.extent(address.disp)
         start = extent[0] if extent is not None else 0
         base = self.near(replace(address, disp=start))
-        return Near(self.add(mir.Held(base, 2), index), address.disp - start)
+        moved = self.add(mir.Held(base, 2), index)
+        self.pointer_values.add(moved)
+        return Near(moved, address.disp - start)
 
     def float_arithmetic(self, cg_op: str, x: mir.Held, y: mir.Held) -> mir.Held:
         if cg_op not in FLOAT_ARITHMETIC:
@@ -934,26 +1039,63 @@ class _Raise:
         stacked = callee.call_class & (hir.CALLER_POPS | hir.REVERSE_PARMS) in (hir.CALLER_POPS, hir.REVERSE_PARMS)
         if callee.register_parms or not stacked:
             raise Unsupported(f"{self.symbol.name}: {callee.object_name} has a register calling convention")
+        source_arguments = tuple(reversed(arguments))
         if callee.call_class & hir.REVERSE_PARMS:
             arguments = arguments[::-1]
         pushed = sum(self.push(value, type_) for value, type_ in arguments)
         if type_ in FLOATS:
             result = self.fresh()
-            site = self.op(K.CALL, (mir.Held(result, 10),), defines=(result,), uses=(), loads=CALLEE, stores=CALLEE)
+            site = self.op(
+                K.CALL,
+                (mir.Held(result, 10),),
+                defines=(result,),
+                uses=(),
+                loads=CALLEE,
+                stores=CALLEE,
+                memory_complete=True,
+                reads_complete=True,
+            )
             returned = mir.Held(result, 10)
         elif self.width(type_) == 8:
             result = self.fresh()
-            site = self.op(K.CALL, (mir.Held(result, 8),), defines=(result,), uses=(), loads=CALLEE, stores=CALLEE)
+            site = self.op(
+                K.CALL,
+                (mir.Held(result, 8),),
+                defines=(result,),
+                uses=(),
+                loads=CALLEE,
+                stores=CALLEE,
+                memory_complete=True,
+                reads_complete=True,
+            )
             returned = mir.Held(result, 8)
         else:
             low, high = self.fresh(), self.fresh()
             site = self.op(
-                K.CALL, (mir.Held(low, 2), mir.Held(high, 2)), defines=(low, high), uses=(), loads=CALLEE, stores=CALLEE
+                K.CALL,
+                (mir.Held(low, 2), mir.Held(high, 2)),
+                defines=(low, high),
+                uses=(),
+                loads=CALLEE,
+                stores=CALLEE,
+                memory_complete=True,
+                reads_complete=True,
             )
             returned = Returned(low, high)
         caller_pops = bool(callee.call_class & hir.CALLER_POPS)
         self.calls[site.at] = callee.object_name
         self.callees[site.at] = callee
+        self.arguments[site.at] = tuple(self._call_actual(value, arg_type) for value, arg_type in source_arguments)
+        canonical = self.unit.canonical_type(type_)
+        if canonical in POINTERS and isinstance(returned, Returned):
+            self.pointer_values.add(returned.low)
+            name = callee.object_name
+            if name in FRESH_ALLOCATORS:
+                extent = self._allocation_extent(name, source_arguments)
+                object_ = memory.Object(memory.Kind.ALLOCATION, (name, site.at), generation=site.at, extent=extent)
+                self.pointer_seeds[returned.low] = memory.Provenance.one(object_, 0, 1)
+            else:
+                self.pointer_seeds[returned.low] = memory.Provenance.one(memory.Object(memory.Kind.UNKNOWN))
         self.contracts[site.at] = runtime.Contract(
             name=callee.object_name,
             cleanup=0 if caller_pops else pushed,
@@ -963,7 +1105,9 @@ class _Raise:
             error_handling=False,
             writes=runtime.Memory.ANY,
             reads=runtime.Memory.ANY,
-            clobbers=frozenset({runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX, runtime.Reg.DX, runtime.Reg.ES, runtime.Reg.FLAGS}),
+            clobbers=frozenset(
+                {runtime.Reg.AX, runtime.Reg.BX, runtime.Reg.CX, runtime.Reg.DX, runtime.Reg.ES, runtime.Reg.FLAGS}
+            ),
             established=True,
             evidence="Borland medium model: stack arguments, result in AX or DX:AX; SI, DI, BP and DS kept as 16-bit registers",
             i386=True,
@@ -971,6 +1115,34 @@ class _Raise:
             caller_cleanup=pushed if caller_pops else 0,
         )
         return returned
+
+    def _call_actual(self, value, type_: str):
+        """A pointer actual without emitting another address computation."""
+        type_ = self.unit.canonical_type(type_)
+        if type_ not in POINTERS:
+            return None
+        match value:
+            case (Frame() | Global()) as address:
+                return self.placed(address, 1).provenance
+            case Near(base, disp):
+                return (base, disp)
+            case Far(whole=whole, disp=disp) if whole is not None:
+                return (whole, disp)
+            case Far(named=named, disp=disp) if named:
+                return memory.Provenance.one(memory.Object(memory.Kind.NAMED, named), disp, disp + 1)
+            case mir.Held(value=pointer):
+                return (pointer, 0)
+        return memory.Provenance.one(memory.Object(memory.Kind.UNKNOWN))
+
+    @staticmethod
+    def _allocation_extent(name: str, arguments: tuple) -> int | None:
+        numbers = [value.n for value, _ in arguments if isinstance(value, mir.Const)]
+        if name in {"malloc", "_malloc"} and numbers:
+            return numbers[0] if numbers[0] > 0 else None
+        if name in {"calloc", "_calloc"} and len(numbers) >= 2:
+            extent = numbers[0] * numbers[1]
+            return extent if extent > 0 else None
+        return None
 
     def inline_code(self, callee: hir.Symbol) -> Returned:
         """Inline assembly, as a call whose callee is laid down at the site.
@@ -998,7 +1170,13 @@ class _Raise:
         low, high = self.fresh(), self.fresh()
         addresses = tuple(mir.FrameAddress(disp, 2, self.extent(disp)) for disp in dict.fromkeys(named))
         site = self.op(
-            K.CALL, (mir.Held(low, 2), mir.Held(high, 2)), addresses, defines=(low, high), uses=(), loads=CALLEE, stores=CALLEE
+            K.CALL,
+            (mir.Held(low, 2), mir.Held(high, 2)),
+            addresses,
+            defines=(low, high),
+            uses=(),
+            loads=CALLEE,
+            stores=CALLEE,
         )
         self.inline[site.at] = tuple(parts)
         self.calls[site.at] = callee.object_name
@@ -1060,6 +1238,7 @@ class _Raise:
                 whole = self.fresh()
                 offset = self.near(Near(got.offset, got.disp))
                 self.op(K.CONCAT, (mir.Held(whole, 4),), (mir.Held(got.segment, 2), mir.Held(offset, 2)))
+                self.pointer_values.add(whole)
                 return mir.Held(whole, 4)
             case Frame() | Global() | Near():
                 return mir.Held(self.near(got), 2)
@@ -1083,13 +1262,17 @@ class _Raise:
             case FloatCell(address=address, width=width):
                 ref = self.cell(address, width)
                 result = self.fresh()
-                self.op(K.FLOAD, (mir.Held(result, 10),), (mir.Cell(ref),), loads=(ref,), floating=_loaded(FORMATS[width]))
+                self.op(
+                    K.FLOAD, (mir.Held(result, 10),), (mir.Cell(ref),), loads=(ref,), floating=_loaded(FORMATS[width])
+                )
                 return mir.Held(result, 10)
             # fldz and fld1 load these with no operand; any other constant costs a
             # slot write before `fild` from the stack, where the pool is one operand.
             case Real(value=value) if value in (0.0, 1.0) and math.copysign(1, value) > 0:
                 result = self.fresh()
-                self.op(K.FLOAD, (mir.Held(result, 10),), (mir.Const(int(value), 2),), floating=_loaded(INTEGER_FORMATS[2]))
+                self.op(
+                    K.FLOAD, (mir.Held(result, 10),), (mir.Const(int(value), 2),), floating=_loaded(INTEGER_FORMATS[2])
+                )
                 return mir.Held(result, 10)
             case Real(value=value):
                 # A constant in memory, at the narrowest width that holds it exactly.
@@ -1156,10 +1339,19 @@ class _Raise:
             case Frame(disp):
                 result = self.fresh()
                 self.op(K.ADDRESS, (mir.Held(result, 2),), (mir.FrameAddress(disp, 2, self.extent(disp)),))
+                self.pointer_values.add(result)
+                extent = self.extent(disp)
+                if extent is not None:
+                    low, high = extent
+                    object_ = memory.Object(memory.Kind.FRAME, (self.symbol.id, low, high), extent=high - low)
+                    self.pointer_seeds[result] = memory.Provenance.one(object_, disp - low, disp - low + 1)
                 return result
             case Global(space, index, disp, None):
                 result = self.fresh()
                 self.op(K.COPY, (mir.Held(result, 2),), (mir.Symbol(space, index, disp, 2),))
+                self.pointer_values.add(result)
+                kind = memory.Kind.EXTERNAL if space is Space.EXTERNAL else memory.Kind.GLOBAL
+                self.pointer_seeds[result] = memory.Provenance.one(memory.Object(kind, (space, index)), disp, disp + 1)
                 return result
             case Global(space, index, disp, base):
                 return self.add(mir.Held(self.near(Global(space, index, disp)), 2), mir.Held(base, 2))
@@ -1187,14 +1379,27 @@ class _Raise:
     def placed(self, address: Address, width: int) -> mir.MemRef:
         match address:
             case Frame(disp):
-                return mir.MemRef(Addr(Space.FRAME, disp), width, space=Space.FRAME)
+                extent = self.extent(disp)
+                provenance = None
+                if extent is not None:
+                    low, high = extent
+                    object_ = memory.Object(memory.Kind.FRAME, (self.symbol.id, low, high), extent=high - low)
+                    provenance = memory.Provenance.one(object_, disp - low, disp - low + width)
+                return mir.MemRef(Addr(Space.FRAME, disp), width, space=Space.FRAME, provenance=provenance)
             case Global(space, index, disp, None):
-                return mir.MemRef(Addr(space, disp, index), width, space=space)
+                kind = memory.Kind.EXTERNAL if space is Space.EXTERNAL else memory.Kind.GLOBAL
+                provenance = memory.Provenance.one(memory.Object(kind, (space, index)), disp, disp + width)
+                return mir.MemRef(Addr(space, disp, index), width, space=space, provenance=provenance)
             case Global(space, index, disp, base):
-                return mir.MemRef(Addr(space, disp, index), width, base=base, space=space, base_width=2)
+                kind = memory.Kind.EXTERNAL if space is Space.EXTERNAL else memory.Kind.GLOBAL
+                provenance = memory.Provenance.one(memory.Object(kind, (space, index)))
+                return mir.MemRef(
+                    Addr(space, disp, index), width, base=base, space=space, base_width=2, provenance=provenance
+                )
             case Near(base, disp):
                 return mir.MemRef(Addr(Space.LITERAL, disp), width, base=base, space=Space.LITERAL, base_width=2)
             case Far(segment, offset, disp, _, named):
+                provenance = memory.Provenance.one(memory.Object(memory.Kind.NAMED, named)) if named else None
                 return mir.MemRef(
                     Addr(Space.FAR, disp, named),
                     width,
@@ -1202,6 +1407,7 @@ class _Raise:
                     segment=segment,
                     space=Space.FAR,
                     base_width=2,
+                    provenance=provenance,
                 )
 
     def load(self, ref: mir.MemRef, type_: str) -> mir.Held:
@@ -1209,9 +1415,22 @@ class _Raise:
         if ref.width == 1:
             kind = K.SIGN_EXTEND if type_ in SIGNED else K.ZERO_EXTEND
             self.op(kind, (mir.Held(result, 2),), (mir.Cell(ref),), loads=(ref,))
-            return mir.Held(result, 2)
+            held = mir.Held(result, 2)
+            self._pointer_loaded(held, ref, type_)
+            return held
         self.op(K.LOAD, (mir.Held(result, ref.width),), (mir.Cell(ref),), loads=(ref,))
-        return mir.Held(result, ref.width)
+        held = mir.Held(result, ref.width)
+        self._pointer_loaded(held, ref, type_)
+        return held
+
+    def _pointer_loaded(self, held: mir.Held, ref: mir.MemRef, type_: str) -> None:
+        type_ = self.unit.canonical_type(type_)
+        if type_ not in POINTERS:
+            return
+        self.pointer_values.add(held.value)
+        if ref.addr is not None and ref.addr.space is Space.FRAME and ref.addr.disp in self.parameter_at:
+            number = self.parameter_at[ref.addr.disp]
+            self.pointer_seeds[held.value] = memory.Provenance.one(memory.Object(memory.Kind.PARAMETER, number), 0, 1)
 
     def store(self, ref: mir.MemRef, value: Operand | mir.Value) -> None:
         if isinstance(value, mir.Value):
