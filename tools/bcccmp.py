@@ -7,14 +7,16 @@ functions have no public, so a function begins where bcc put the first line of
 its definition (LINNUM), checked against publics and Borland's debug scopes.
 """
 
-import argparse
-import json
 import re
+import json
 import struct
-from collections import Counter
+import argparse
 from pathlib import Path
+from collections import Counter
 
-from iced_x86 import Decoder, Formatter, FormatterSyntax
+from iced_x86 import Decoder
+from iced_x86 import Formatter
+from iced_x86 import FormatterSyntax
 
 from qbopt.objectfile import omf
 
@@ -99,7 +101,9 @@ def extents(image: bytes, begun: list[tuple[int, str]], ends: dict[int, int]) ->
     for (lo, name), (hi, _) in zip(begun, [*begun[1:], (len(image), "")]):
         hi = min(hi, ends.get(lo, hi))
         code = " ".join(FORMAT.format(one) for one in Decoder(16, image[lo:hi], ip=lo))
-        tables = [int(t[:-1], 16) if t.endswith("h") else int(t) for t in re.findall(r"cs:\[\w+\+([0-9A-F]+h?)\]", code)]
+        tables = [
+            int(t[:-1], 16) if t.endswith("h") else int(t) for t in re.findall(r"cs:\[\w+\+([0-9A-F]+h?)\]", code)
+        ]
         out[name] = (lo, min([hi, *(t for t in tables if lo < t < hi)]))
     return out
 
@@ -153,7 +157,9 @@ def bcc(path: Path, source: str, names) -> tuple[dict[str, list[str]], list[str]
                 text = FORMAT.format(insn)
                 fix = next((fixed[at] for at in range(insn.ip + 1, insn.ip + insn.len) if at in fixed), None)
                 if fix is not None and fix.target == "external" and 0 < fix.index < len(externs):
-                    text = text.replace("0:0", externs[fix.index]) if "0:0" in text else f"{text} ; {externs[fix.index]}"
+                    text = (
+                        text.replace("0:0", externs[fix.index]) if "0:0" in text else f"{text} ; {externs[fix.index]}"
+                    )
                 elif (m := re.fullmatch(r"call ([0-9A-F]+)h", text)) and int(m.group(1), 16) in named:
                     text += f" ; {named[int(m.group(1), 16)]}"
                 listing.append(f"{insn.ip:04x} {text}")
@@ -164,10 +170,14 @@ def bcc(path: Path, source: str, names) -> tuple[dict[str, list[str]], list[str]
 # Each cause as a pattern over cfront's printed instructions, and what one site costs beyond bcc's form.
 CAUSES = (
     ("far pointer split through shr", r"mov (e\w\w), (e\w\w)\nshr \1, 16\n", 2),
-    ("halves joined through the stack", r"push \w\w\npush \w\w\npop e\w\w\n", 2),
+    ("halves joined through the stack", r"push \w\w\npush \w\w\npop e\w\w\n", 1),
     ("inline float to int", r"fnstcw [^\n]+\nfnstcw [^\n]+\nor [^\n]+\nfldcw [^\n]+\nfistp [^\n]+\nfldcw [^\n]+\n", 5),
     ("int constant to x87 through a slot", r"mov word ptr \[bp-\w+\], -?\d+\nfi\w+ word ptr \[bp-\w+\]\n", 1),
-    ("slot load, op, store back", r"mov (\w\w), word ptr (\[bp-\w+\])\n(add|sub|and|or|xor|shl|shr) \1, [^\n]+\nmov word ptr \2, \1\n", 2),
+    (
+        "slot load, op, store back",
+        r"mov (\w\w), word ptr (\[bp-\w+\])\n(add|sub|and|or|xor|shl|shr) \1, [^\n]+\nmov word ptr \2, \1\n",
+        2,
+    ),
     ("slot load then test or compare", r"mov (\w\w), (word ptr )?\[bp[-+]\w+\]\n(or \1, \1|cmp \1, -?\w+)\n", 1),
     ("constant stored to slot and register", r"mov word ptr \[bp-\w+\], -?\d+\n(mov \w\w, -?\d+|xor (\w\w), \2)\n", 1),
     ("mov sp,bp; pop bp", r"mov sp, bp\npop bp\n", 1),

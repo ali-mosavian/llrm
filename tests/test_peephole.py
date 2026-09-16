@@ -6,6 +6,7 @@ from iced_x86 import Register
 
 from qbopt.model import ir
 from qbopt.model import lir
+from qbopt.model import mir
 from qbopt.backend import peephole
 
 
@@ -26,6 +27,63 @@ def test_screen_argument_reuses_its_required_register_constant(width, register, 
     )
     assert result.insns[0].defines == (7,)
     assert result.insns[1].uses == (7,)
+
+
+def test_word_pair_concat_uses_the_386_funnel_sequence() -> None:
+    """qgl_surf_from_member used push DX/push AX/pop EAX; BCC needs only SHL/SHRD.
+
+    TEST makes AF undefined as well as replacing the five ordinary condition
+    flags. Treating undefined as unchanged made the old flags look live here
+    and hid the legal replacement.
+    """
+    high, low, result = ir.Reg(Register.DX, 2), ir.Reg(Register.AX, 2), ir.Reg(Register.EAX, 4)
+    marker = mir.Op(0, ir.Operation.MOVE, "concat", (), (), kind=mir.Kind.CONCAT)
+    parts = (
+        lir.Insn(0, (0, 0), ir.Semantics(ir.Operation.PUSH, "push", (), (high,)), (), (1,), op=marker),
+        lir.Insn(0, (0, 0), ir.Semantics(ir.Operation.PUSH, "push", (), (low,)), (), (2,)),
+        lir.Insn(0, (0, 0), ir.Semantics(ir.Operation.POP, "pop", (result,), ()), (3,), ()),
+        lir.Insn(
+            1,
+            (1, 1),
+            ir.Semantics(ir.Operation.COMPARE, "cmp", (), (result, ir.Imm(0, 4))),
+            (),
+            (3,),
+        ),
+    )
+    body = lir.LirBody("qgl_surf_from_member", 0, (lir.LirBlock(0, parts),), {}, {})
+
+    transformed = peephole.Peephole().transform(body)
+    emitted = [one.what.name for one in transformed.insns if one.what.op is not ir.Operation.NOTHING]
+
+    assert emitted[:2] == ["shl", "shrd"]
+    assert not any(one.what.op in (ir.Operation.PUSH, ir.Operation.POP) for one in transformed.insns)
+
+
+def test_word_pair_concat_keeps_the_stack_sequence_when_flags_are_live() -> None:
+    """SHL/SHRD modify flags; a branch reading the incoming flags must keep the flag-neutral stack join."""
+    high, low, result = ir.Reg(Register.DX, 2), ir.Reg(Register.AX, 2), ir.Reg(Register.EAX, 4)
+    marker = mir.Op(0, ir.Operation.MOVE, "concat", (), (), kind=mir.Kind.CONCAT)
+    parts = (
+        lir.Insn(0, (0, 0), ir.Semantics(ir.Operation.PUSH, "push", (), (high,)), (), (1,), op=marker),
+        lir.Insn(0, (0, 0), ir.Semantics(ir.Operation.PUSH, "push", (), (low,)), (), (2,)),
+        lir.Insn(0, (0, 0), ir.Semantics(ir.Operation.POP, "pop", (result,), ()), (3,), ()),
+        lir.Insn(1, (1, 1), ir.Semantics(ir.Operation.BRANCH, "je", (), (), 10), (), ()),
+    )
+    body = lir.LirBody(
+        "flagged",
+        0,
+        (lir.LirBlock(0, parts, (10,)), lir.LirBlock(10, (), ())),
+        {},
+        {},
+    )
+
+    transformed = peephole.Peephole().transform(body)
+
+    assert [one.what.op for one in transformed.blocks[0].insns[:3]] == [
+        ir.Operation.PUSH,
+        ir.Operation.PUSH,
+        ir.Operation.POP,
+    ]
 
 
 @pytest.mark.parametrize(

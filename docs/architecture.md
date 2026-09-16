@@ -1084,6 +1084,15 @@ one documented target without materially regressing another.
   rule. On the same recorded Watcom streams, `ls_face_key` loses its hot
   `mov bx,ax` before `cmp bx,116`: 54 → 53 instructions, and the 15-function C
   comparison set falls 793 → 792 against BCC's 939.
+- [x] Select a register-only word-pair concatenation after allocation.
+  Lowering's portable `push high; push low; pop wide` becomes BCC's exact
+  `shl wide,16; shrd wide,high,16` form when allocation put the low word and
+  result in the same physical register and the flags modified by both shifts
+  are dead. The check uses the decoder's complete modified-flag mask, including
+  undefined flags, matching LLVM's treatment of both defined and undefined
+  physical flags as clobbered. Across the same 15 recorded Watcom streams all
+  eight stack joins disappear: 792 → 784 instructions (`ls_selftest` 327 →
+  320 and `qgl_surf_from_member` 76 → 75), against BCC's 939 total.
 - [ ] Add machine CSE and dead-machine-instruction elimination over allocated
   LIR.
 - [ ] Add branch folding and tail merging after final block placement.

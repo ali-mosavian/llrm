@@ -36,6 +36,7 @@ class Peephole(LIRTransform):
         # everything below to reason about, and it is the only pass here
         # that can remove a copy the coalescer refused on colourability.
         body = regthrash.thrashed(phielim.unsplit(body))
+        body = concatenated(body)
         body = copyprop.forwarded(body)
         body = extensions(body)
         body = copysink.sunk(body)
@@ -74,6 +75,83 @@ class Peephole(LIRTransform):
                 for block in body.blocks
             ),
         )
+
+
+def concatenated(body: lir.LirBody) -> lir.LirBody:
+    """Pack two word halves without using the stack.
+
+    CONCAT_LOW lowers portably to ``push high; push low; pop wide`` before
+    allocation.  Once the low word and the wide result share a physical root,
+    a 386 has BCC's two-instruction answer instead: shift the unknown upper
+    half away, then funnel the high word in with SHRD.  The original sequence
+    preserves flags, so this is legal only where physical flag liveness proves
+    the SHRD flags dead.
+    """
+    from qbopt.model import mir
+    from qbopt.backend import select
+    from qbopt.backend import target
+    from qbopt.backend import liveness
+    from qbopt.backend import regthrash
+
+    exits = liveness.dead_at_exit(body)
+    blocks = []
+    for block in body.blocks:
+        dead_after = regthrash._dead_after(block, set(exits[block.at]))
+        insns = list(block.insns)
+        for index in range(len(insns) - 2):
+            high_push, low_push, wide_pop = insns[index : index + 3]
+            if getattr(high_push.op, "kind", None) is not mir.Kind.CONCAT or any(
+                one.what is None
+                or one.clobbers
+                or one.clobbers_high
+                or one.requires
+                or one.delivers
+                or one.spread
+                or one.group is not None
+                or one.symbol is True
+                or one.frame_adjust
+                or one.spill_reload
+                or one.spill_store
+                for one in (high_push, low_push, wide_pop)
+            ):
+                continue
+            match high_push.what, low_push.what, wide_pop.what:
+                case (
+                    ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Reg() as high,)),
+                    ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Reg() as low,)),
+                    ir.Semantics(ir.Operation.POP, "pop", (ir.Reg() as result,), ()),
+                ):
+                    if (
+                        high.width != low.width
+                        or high.width != 2
+                        or result.width != 4
+                        or ir.root(low.register) != ir.root(result.register)
+                        or ir.root(high.register) == ir.root(result.register)
+                    ):
+                        continue
+                case _:
+                    continue
+            count = ir.Imm(16, 1)
+            wide_high = ir.Reg(target.named(high.register, 4), 4)
+            shifted = ir.Semantics(ir.Operation.BINARY, "shl", (result,), (result, count))
+            funnelled = ir.Semantics(ir.Operation.FUNNEL, "shrd", (result,), (result, wide_high, count))
+            encoded = tuple(select.emit(one) for one in (shifted, funnelled))
+            if any(one is None for one in encoded):
+                continue
+            modified_flags = set().union(
+                *(
+                    _flag_lanes(insn.rflags_modified)
+                    for made in encoded
+                    for insn in Decoder(16, made.code if made is not None else b"")
+                )
+            )
+            if not modified_flags <= dead_after[id(wide_pop)]:
+                continue
+            insns[index] = lir.anchor(high_push)
+            insns[index + 1] = replace(low_push, what=shifted)
+            insns[index + 2] = replace(wide_pop, what=funnelled)
+        blocks.append(replace(block, insns=tuple(insns)))
+    return replace(body, blocks=tuple(blocks))
 
 
 def extensions(body: lir.LirBody) -> lir.LirBody:
@@ -423,25 +501,11 @@ def _register_effects(one, *, may_write=False, flags: bool = False):
             return None
         if flags:
             reads.update(_flag_lanes(insn.rflags_read) - writes)
-            if insn.mnemonic in {
-                Mnemonic.ADD,
-                Mnemonic.SUB,
-                Mnemonic.AND,
-                Mnemonic.OR,
-                Mnemonic.XOR,
-                Mnemonic.CMP,
-                Mnemonic.TEST,
-                Mnemonic.INC,
-                Mnemonic.DEC,
-                Mnemonic.NEG,
-                Mnemonic.ADC,
-                Mnemonic.SBB,
-                Mnemonic.SAHF,
-                Mnemonic.CLC,
-                Mnemonic.STC,
-                Mnemonic.CMC,
-            }:
-                writes.update(_flag_lanes(insn.rflags_written | insn.rflags_cleared | insn.rflags_set))
+            # An undefined flag is no more the incoming flag than a defined
+            # result is. LLVM models both as physical-register definitions;
+            # omitting Iced's undefined mask made TEST appear to preserve AF
+            # and shifts appear to preserve every flag.
+            writes.update(_flag_lanes(insn.rflags_modified))
         for access in INFO.info(insn).used_registers():
             lanes = _lanes(access.register)
             if access.access in READS:

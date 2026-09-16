@@ -6,7 +6,9 @@ from tools import bcccmp
 def test_function_begins_at_its_definition_not_its_prototype():
     """Starts taken from the line cued before each declaration put sys_rdtsc_hz
     in no region, and 31 bcc regions ran on into the next function."""
-    source = "static short f( void );\n\nshort g( void ) { return f(); }\n\nstatic short f( void )\n{\n    return 1;\n}\n"
+    source = (
+        "static short f( void );\n\nshort g( void ) { return f(); }\n\nstatic short f( void )\n{\n    return 1;\n}\n"
+    )
     assert bcccmp.definitions(source, ["f", "g"]) == {"f": 5, "g": 3}
 
 
@@ -38,3 +40,9 @@ def test_fwait_is_not_an_instruction_choice():
 def test_inline_bytes_are_decoded():
     """ftol_short's two `db` lines stood for eleven instructions and counted as two."""
     assert bcccmp.instructions(["db 066h,053h", "db 00fh,031h"], listing=False) == ["push ebx", "rdtsc"]
+
+
+def test_stack_join_costs_only_its_one_excess_instruction():
+    """The scoreboard charged two for push/push/pop, although BCC's SHL/SHRD replacement saves one."""
+    cost = next(cost for cause, _pattern, cost in bcccmp.CAUSES if cause == "halves joined through the stack")
+    assert cost == 1
