@@ -101,6 +101,29 @@ def test_borland_conditional_keeps_explicit_far_pointer_stores(tmp_path):
     assert "es:" in assembly
 
 
+def test_compound_far_pointer_advance_preserves_its_segment(tmp_path):
+    """qcport's ``srow += stride`` added ``DGROUP:stride`` to the packed
+    pointer, changing its segment on every row; e1m1 wrote texture bytes into
+    ROM after walking exposed a surface that took that lightmap-copy path.
+    A far-pointer increment advances its offset and leaves its selector alone.
+    """
+    text = _stream(
+        tmp_path,
+        "void advance(unsigned char far **slot, unsigned stride) { *slot += stride; }\n",
+    )
+
+    assembly = cfront.compiled(text, "far_advance", optimise=True)
+    body = assembly[assembly.index("_advance proc far") : assembly.index("_advance endp")]
+    instructions = [line.strip() for line in body.splitlines()]
+
+    assert "DGROUP" not in body, body
+    assert any(
+        line.startswith("add ") and not line.startswith(("add eax", "add ebx", "add ecx", "add edx"))
+        for line in instructions
+    ), body
+    assert not any(line.startswith(("pop eax", "pop ebx", "pop ecx", "pop edx")) for line in instructions), body
+
+
 def test_long_long_reaches_the_stream_as_signed_and_unsigned_int64(tmp_path):
     stream = _stream(
         tmp_path,

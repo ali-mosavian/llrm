@@ -625,6 +625,15 @@ class _Raise:
                 )
                 self.put_float(address, width, new)
                 return old if tree.call == "CGPostGets" else FloatCell(address, width)
+            case "CGPostGets" | "CGPreGets", ("O_PLUS" | "O_MINUS" as cg_op, target, source, type_) if self.far_pointer(
+                type_
+            ):
+                address = self.address(self.eval(target))
+                old = self.far_loaded(address, type_)
+                delta = self.operand(self.eval(source), self.type_of(source))
+                new = self.offset(old, delta, cg_op == "O_MINUS")
+                self.put_pointer(address, new, type_)
+                return old if tree.call == "CGPostGets" else new
             case "CGPostGets" | "CGPreGets", (cg_op, target, source, type_):
                 address = self.address(self.eval(target))
                 width = self.width(type_)
@@ -968,18 +977,22 @@ class _Raise:
         value = self.eval(source)
         address = self.address(self.eval(target))
         width = self.width(type_)
-        if isinstance(value, Far) and value.whole is not None and value.disp == 0:
-            self.store(self.cell(address, 4, type_), mir.Held(value.whole, 4))
-            return value
         if isinstance(value, Far):
-            self.store(self.cell(address, 2, type_), self.near(Near(value.offset, value.disp)))
-            self.store(self.cell(replace(address, disp=address.disp + 2), 2, type_), mir.Held(value.segment, 2))
+            self.put_pointer(address, value, type_)
             return value
         if type_ in FLOATS:
             return self.put_float(address, width, self.convert(value, self.type_of(source), type_))
         operand = self.coerced(value, source, type_)
         self.store(self.cell(address, width, type_), operand)
         return operand
+
+    def put_pointer(self, address: Address, value: Far, type_: str) -> None:
+        """Store a far pointer without turning its selector and offset into integer arithmetic."""
+        if value.whole is not None and value.disp == 0:
+            self.store(self.cell(address, 4, type_), mir.Held(value.whole, 4))
+            return
+        self.store(self.cell(address, 2, type_), self.near(Near(value.offset, value.disp)))
+        self.store(self.cell(replace(address, disp=address.disp + 2), 2, type_), mir.Held(value.segment, 2))
 
     def put_float(self, address: Address, width: int, got):
         """A float into a cell of `width` bytes, and the value the assignment is."""
