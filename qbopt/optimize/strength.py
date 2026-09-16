@@ -41,12 +41,12 @@ from dataclasses import replace
 from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.analysis import ssa
-from qbopt.analysis import consts
-from qbopt.objectfile.module import Space
 from qbopt.model.mir import Op
+from qbopt.analysis import consts
 from qbopt.model.mir import MirBody
 from qbopt.analysis import induction
 from qbopt.model.passes import Where
+from qbopt.objectfile.module import Space
 from qbopt.model.passes import MIRTransform
 
 
@@ -64,7 +64,14 @@ class Strength(MIRTransform):
         from qbopt.optimize import floatloop
         from qbopt.optimize import transform
 
-        body = reduced(body, self.where.dgroup, self.where.bounds, self.where.registers, self.where.index_scales)
+        body = reduced(
+            body,
+            self.where.dgroup,
+            self.where.bounds,
+            self.where.registers,
+            self.where.index_scales,
+            self.where.call_registers,
+        )
         body = exitsink.sunk(transform.dead(ivshare.shared(body)))
         body = loopexit.evaluated(body)
         body = indvars.simplified(floatloop.specialized(body, self.where.dgroup, self.where.calls))
@@ -77,6 +84,7 @@ def reduced(
     bounds: dict | None = None,
     registers: int = 0,
     scales: frozenset[int] = frozenset(),
+    call_registers: int = 0,
 ) -> MirBody:
     """`body` with every multiply of a counter by an invariant made an add."""
     from qbopt.optimize import transform as passes
@@ -139,7 +147,11 @@ def reduced(
         # end the loop in its place, and the index then costs the register
         # the counter would have given back.
         stepped = {one.of.value for one in candidates if id(one.op) not in indexes}
-        indexes = {id(one.op): indexes[id(one.op)] for one in candidates if id(one.op) in indexes and one.of.value not in stepped}
+        indexes = {
+            id(one.op): indexes[id(one.op)]
+            for one in candidates
+            if id(one.op) in indexes and one.of.value not in stepped
+        }
         counter_ops = _widened(body, loop, facts) if any(scale > 1 for scale in indexes.values()) else None
         if counter_ops is None:
             indexes = {key: scale for key, scale in indexes.items() if scale == 1}
@@ -169,17 +181,31 @@ def reduced(
             )
             if scale == 1:
                 replacements[id(one.op)] = replace(
-                    one.op, uses=(base, counter), args=(mir.Held(base, 2), mir.Held(counter, 2)), results=(mir.Held(answer, 2),), **address
+                    one.op,
+                    uses=(base, counter),
+                    args=(mir.Held(base, 2), mir.Held(counter, 2)),
+                    results=(mir.Held(answer, 2),),
+                    **address,
                 )
                 continue
             taken += 1
             extended = mir.Value(id=_next(body, taken), at=preheader, variable=taken, version=1)
             ahead[preheader].append(
-                replace(_made(mir.Kind.ZERO_EXTEND, "movzx", extended, (mir.Held(base, 2),), preheader, one.op), results=(mir.Held(extended, 4),))
+                replace(
+                    _made(mir.Kind.ZERO_EXTEND, "movzx", extended, (mir.Held(base, 2),), preheader, one.op),
+                    results=(mir.Held(extended, 4),),
+                )
             )
             taken += 1
             product = mir.Value(id=_next(body, taken), at=one.op.at, variable=taken, version=1)
-            shift = _made(mir.Kind.SHL, "shl", product, (mir.Held(counter, 4), mir.Const(scale.bit_length() - 1, 1)), one.op.at, one.op)
+            shift = _made(
+                mir.Kind.SHL,
+                "shl",
+                product,
+                (mir.Held(counter, 4), mir.Const(scale.bit_length() - 1, 1)),
+                one.op.at,
+                one.op,
+            )
             replacements[id(one.op)] = (
                 shift,
                 replace(
@@ -192,9 +218,23 @@ def reduced(
             )
             wide.add(answer)
         candidates = [one for one in candidates if id(one.op) not in indexes]
+        # An address recurrence replaces the basic counter's repeated
+        # multiply/add chain and gives indvars an equivalent loop-control
+        # value; it does not consume an additional recurrence slot. Scalar
+        # products do, and are priced against the registers that survive a
+        # call below. This is the small form of LLVM LSR's formula choice:
+        # distinguish a replacement formula from another live IV.
+        replacements_for_iv = {
+            id(one.op)
+            for one in candidates
+            if one.op.kind is mir.Kind.ADD and one.offsets and _multiplies(one, derived)
+        }
         room = len(candidates)
-        if registers:
-            room = max(0, registers - _recurrences(body, loop) - _RESERVE)
+        capacity = registers
+        if call_registers and any(op.kind is mir.Kind.CALL for at in loop.body for op in at_of[at].ops):
+            capacity = min(capacity, call_registers) if capacity else call_registers
+        if capacity:
+            room = max(0, capacity - _recurrences(body, loop) - _RESERVE)
         added = 0
         # One counter an expression. Reads of `t[j]` through two counters
         # stepping alike are one recurrence, and given one each, a round at a
@@ -212,7 +252,7 @@ def reduced(
             if key in shared:
                 replacements[id(one.op)] = _copying(one.op, shared[key], answer, width)
                 continue
-            if added >= room:
+            if id(one.op) not in replacements_for_iv and added >= room:
                 continue
             if _times(one.of.step, one.by, width) is None:
                 continue
@@ -245,7 +285,8 @@ def reduced(
             )
             replacements[id(one.op)] = _copying(one.op, start, answer, width)
             shared[key] = start
-            added += 1
+            if id(one.op) not in replacements_for_iv:
+                added += 1
 
     if not replacements:
         return body

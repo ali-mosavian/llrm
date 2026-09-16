@@ -54,6 +54,14 @@ replace that footprint with their instantiated summary. Standard fresh
 allocation routines create allocation-site objects with a distinct generation
 and a constant extent when their size is known.
 
+Established C library semantics enter the same fixed point as defined
+procedures. The initial catalog records `strlen` as readonly argument memory
+and nocapture: GCC's local source marks it pure and constrains its use set to
+argument zero, LLVM assigns `readonly`, `argmemonly` and `nocapture(0)`, and
+Open Watcom's implementation contains only the advancing read loop. A local
+definition overrides the catalog; object-name decoration alone never grants a
+contract.
+
 ## 4. Fields, indices and dependences
 
 Direct frame and global references carry the containing object and exact field

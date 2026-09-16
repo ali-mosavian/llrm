@@ -323,6 +323,16 @@ def test_optimised_locals_lose_their_dead_stores():
     assert stored == []
 
 
+def test_strlen_does_not_force_a_counter_reload() -> None:
+    """ls_init reloaded ``i`` after strlen although strlen only reads its string argument."""
+    text = cfront.compiled((FIXTURES / "ls.cgs").read_text(), "ls", optimise=True)
+    body = _proc([line.strip() for line in text.splitlines()], "_ls_init")
+    call = body.index("call far ptr _strlen")
+    length_store = next(index for index in range(call + 1, len(body)) if "mov word ptr [si+2]" in body[index])
+
+    assert not any(line.startswith("mov ") and "[bp-" in line for line in body[call + 1 : length_store]), body
+
+
 def _proc(lines: list[str], name: str) -> list[str]:
     return lines[lines.index(f"{name} proc far") : lines.index(f"{name} endp")]
 

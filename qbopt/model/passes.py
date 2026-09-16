@@ -115,6 +115,11 @@ class Where:
     blocks: list | None = None
     found: object | None = None
     registers: int = 0
+    # Values the target can keep live across an ordinary call. Like
+    # ``registers``, this is a capacity rather than a register name. A loop
+    # containing a call cannot spend the volatile part of the register file
+    # on recurrences that live around its backedge.
+    call_registers: int = 0
     # The multipliers an address may apply to an index register, empty where
     # nothing was said. Like `registers`, a fact about the target that names
     # no register: a pass told "an address may be base + index*2" still

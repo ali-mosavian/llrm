@@ -2869,6 +2869,7 @@ def applied(
     unswitch_: bool = False,
     only: str | None = None,
     registers: int | None = None,
+    call_registers: int = 0,
     watch=None,
 ) -> MirBody:
     """Every transform this module has, or the one `only` names.
@@ -2913,6 +2914,7 @@ def applied(
         # From the model, which is where MIR's register knowledge already
         # is. It belongs to the caller once the drivers thread it.
         registers=len(mir.TRACKED) if registers is None else registers,
+        call_registers=call_registers,
         # 32-bit registers are tracked, so the target is a 386 and has SIB.
         index_scales=frozenset({1, 2, 4, 8}),
     )

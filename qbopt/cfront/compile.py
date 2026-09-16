@@ -22,6 +22,7 @@ from qbopt.backend import masm
 from qbopt.backend import jumps
 from qbopt.backend import lower
 from qbopt.cfront import stream
+from qbopt.cfront import libfunc
 from qbopt.backend import phielim
 from qbopt.backend import omfwrite
 from qbopt.backend import prologue
@@ -63,7 +64,8 @@ def assembled(text: str, module: str, *, optimise: bool = False, dump: Path | No
     from qbopt.analysis import alias
 
     aliases = {one.name: alias.Procedure(one.body, one.calls, one.arguments) for one in raised_procedures}
-    modref = alias.summaries(aliases)
+    callees = {name for one in raised_procedures for name in one.calls.values()}
+    modref = alias.summaries(aliases, libfunc.summaries(callees))
     for raised in raised_procedures:
         body = alias.calls_annotated(aliases[raised.name], modref)
         mirs.append(_mir_text(raised.name, body))
@@ -74,7 +76,17 @@ def assembled(text: str, module: str, *, optimise: bool = False, dump: Path | No
             def watch(stage: str, after: mir.MirBody, name: str = raised.name) -> None:
                 _write(dump, f"passes/{name}.{stage}", _mir_text(name, after))
 
-            body = transform.applied(body, frozenset(), raised.calls, found=None, watch=watch if dump else None)
+            body = transform.applied(
+                body,
+                frozenset(),
+                raised.calls,
+                found=None,
+                # Borland's medium-model C ABI preserves SI and DI from the
+                # six value registers. A recurrence live through a call has
+                # two places available, not the full register file.
+                call_registers=2,
+                watch=watch if dump else None,
+            )
             body = rotate.entered(body)
             if dump:
                 watch("rotate", body)

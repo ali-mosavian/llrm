@@ -200,9 +200,16 @@ def _coalesced(items) -> frozenset[memory.Slice]:
     )
 
 
-def summaries(procedures: dict[str, Procedure]) -> dict[str, Summary]:
-    """Transitive per-procedure mod/ref and capture summaries to a fixed point."""
-    result = {name: _direct_summary(one.body) for name, one in procedures.items()}
+def summaries(
+    procedures: dict[str, Procedure],
+    known: dict[str, Summary] | None = None,
+) -> dict[str, Summary]:
+    """Transitive per-procedure mod/ref and capture summaries to a fixed point.
+
+    ``known`` supplies established external semantics, such as C library
+    functions. A body in this compilation unit always takes precedence.
+    """
+    result = {**(known or {}), **{name: _direct_summary(one.body) for name, one in procedures.items()}}
     recursive = _recursive_edges(procedures)
     while True:
         changed = False

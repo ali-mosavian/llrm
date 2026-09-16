@@ -979,6 +979,13 @@ one documented target without materially regressing another.
 
 - [ ] Add register-pressure and target-cost formula selection to induction
   strength reduction; never create a recurrence merely because one is legal.
+  The first call-aware capacity is now explicit: the C ABI exposes two value
+  registers across a call, rather than the six available between calls, and a
+  scalar recurrence must fit that smaller budget. Address recurrences that
+  replace the basic counter's multiply/add formula remain eligible rather than
+  being charged as another live induction variable. This is the bounded form
+  of LLVM LSR's distinction between alternative formulas and added registers;
+  complete per-use target costing remains open.
 - [ ] Hoist invariant bounds checks into loop preguards when checks are enabled.
   Checked dynamic accesses already become native arithmetic when every index
   is proven within the live descriptor's bounds. Unknown indices or descriptor
@@ -1072,6 +1079,16 @@ one documented target without materially regressing another.
 
 ### Interprocedural optimization
 
+- [x] Feed established C library memory semantics into the same fixed-point
+  summaries as defined procedures. The initial catalog contains `strlen`,
+  cross-checked against local GCC (`pure`, argument-zero use), LLVM
+  (`readonly`, `argmemonly`, `nocapture(0)`) and Open Watcom's implementation.
+  `_ls_init` can now keep its derived table address across `strlen` instead of
+  reloading the counter and rebuilding the address; combined with call-aware
+  strength-reduction costing, it falls 54 → 47 instructions while
+  `_ls_animate` retains its profitable pointer recurrence. The exact
+  15-function Watcom comparison set falls 779 → 772 instructions against
+  BCC's 939 total, with no function growing.
 - [ ] Infer user-procedure attributes: `readonly`, `writeonly`, `nocapture`,
   `noreturn`, argument constants and precise mod/ref effects.
 - [ ] Propagate constants and effects across procedure boundaries (`IPSCCP`).
