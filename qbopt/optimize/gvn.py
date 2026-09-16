@@ -1,9 +1,43 @@
-"""Reuse scalar expressions at joins, completing availability on dedicated edges."""
+"""Global value numbering and partial redundancy elimination.
+
+One pass owns reuse, whether the value came from arithmetic or memory.  The
+older pipeline ran ``forward``, ``drop_loads``, ``reuse`` and ``cse`` as four
+separately iterated answers to that one question.  Keeping their proven local
+mechanisms behind this entry point lets the value graph reach a fixed point as
+one transform and gives new reuse rules one home.
+"""
 
 from dataclasses import replace
 
 from qbopt.analysis import loops, ssa
 from qbopt.model import ir, mir
+
+
+def optimized(body: mir.MirBody, where) -> mir.MirBody:
+    """Number values, reuse dominating providers, and complete join PRE.
+
+    Memory providers are exposed first, so scalar numbering sees a load as
+    the value it denotes rather than as a second, unrelated computation.
+    Join PRE comes after local numbering: it combines the providers that
+    survived on each incoming edge and inserts only on non-speculative edges.
+    The outer MIR fixed point rebuilds MemorySSA after every changed body.
+    """
+    # Imported here to avoid a module cycle: transform owns byte provenance
+    # rewrites; this module owns the pass and its ordering.
+    from qbopt.optimize import floatfold, loadjoins, transform
+
+    body = transform.forwarded(body, where.dgroup, where.named)
+    body = transform.without_redundant_loads(body, where.dgroup, where.named)
+    body = transform.reused_divides(body, where.dgroup, where.found)
+    canonical = transform.subexpressions(body, where.dgroup)
+    # PRE may add work to a previously missing path.  Do that only after
+    # local numbering has stabilized; otherwise a transient spelling can
+    # acquire an insertion that prevents the next fixed-point round from
+    # seeing the two existing providers.  GVNJN used to keep three IMULs
+    # instead of two when these decisions were conflated.
+    combined = joined(canonical, insert=canonical == body)
+    loaded = loadjoins.reused(combined, where.dgroup, insert=combined == canonical)
+    return floatfold.checks(loaded)
 
 
 def _on_edge(op: mir.Op, phis: tuple[mir.Phi, ...], predecessor: int) -> mir.Op | None:

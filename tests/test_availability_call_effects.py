@@ -81,3 +81,17 @@ def test_opaque_memory_footprint_preserves_only_disjoint_values(
     barrier = replace(call, op=ir.Operation.BARRIER, kind=mir.Kind.OPAQUE, memory_complete=complete)
     body = replace(body, blocks=(replace(body.blocks[0], ops=(store, barrier, load)),))
     assert bool(avail.forwardable(body, frozenset({1}), {}, frozenset({2}))) is reused
+
+
+def test_complete_write_only_call_does_not_make_prior_store_observable() -> None:
+    """A setter with a complete disjoint footprint used to read all memory.
+
+    That kept a caller-local store alive even though the call neither read nor
+    wrote it and the following store overwrote it.
+    """
+    body = body_with_call(mir.MemRef(Addr(Space.SEGMENT, 18, 1), 2))
+    store, call, _load = body.blocks[0].ops
+    call = replace(call, loads=(), memory_complete=True)
+    body = replace(body, blocks=(replace(body.blocks[0], ops=(store, call, replace(store, at=2))),))
+
+    assert avail.dead_stores(body, frozenset({1}), {}) == (store,)

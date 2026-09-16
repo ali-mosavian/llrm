@@ -2753,26 +2753,6 @@ class Hoist(MIRTransform):
         return loopmotion.sunk_stores(body, self.where.dgroup, self.where.bounds, _handles_errors(self.where))
 
 
-class Forward(MIRTransform):
-    name = "forward"
-
-    def __init__(self, where: Where) -> None:
-        self.where = where
-
-    def transform(self, body: MirBody) -> MirBody:
-        return forwarded(body, self.where.dgroup, self.where.named)
-
-
-class DropLoads(MIRTransform):
-    name = "drop_loads"
-
-    def __init__(self, where: Where) -> None:
-        self.where = where
-
-    def transform(self, body: MirBody) -> MirBody:
-        return without_redundant_loads(body, self.where.dgroup, self.where.named)
-
-
 class DropStores(MIRTransform):
     name = "drop_stores"
 
@@ -2794,40 +2774,18 @@ def _handles_errors(where: Where) -> bool:
     return runtime.handles_errors(map(runtime.contract, where.named.values()))
 
 
-class Reuse(MIRTransform):
-    """Not in `pipeline` below, and must not be until the copy it leaves
-    behind is emitted as one. Wired in, lngmix's second divide became the
-    original `call` bytes carried verbatim -- the site's own -- and the
-    program stopped early under DOSBox (e2e NODONE). The fold itself is
-    right: one idiv leaves the loop and the image is 899 bytes against
-    915. What is missing is the emission of an operation a pass invented
-    standing at an absorbed site's address.
-    """
+class Gvn(MIRTransform):
+    """The single value-reuse pass: scalar GVN and memory-aware PRE."""
 
-    name = "reuse"
-
-    def __init__(self, where: Where) -> None:
-        self.where = where
-
-    def transform(self, body: MirBody) -> MirBody:
-        return reused_divides(body, self.where.dgroup, self.where.found)
-
-
-class Cse(MIRTransform):
-    name = "cse"
+    name = "gvn"
 
     def __init__(self, where: Where) -> None:
         self.where = where
 
     def transform(self, body: MirBody) -> MirBody:
         from qbopt.optimize import gvn
-        from qbopt.optimize import floatfold
-        from qbopt.optimize import loadjoins
 
-        canonical = subexpressions(body, self.where.dgroup)
-        # Finish exposing existing providers before making a supposedly missing one.
-        joined = gvn.joined(canonical, insert=canonical == body)
-        return floatfold.checks(loadjoins.reused(joined, self.where.dgroup, insert=joined == body))
+        return gvn.optimized(body, self.where)
 
 
 class Place(MIRTransform):
@@ -2862,11 +2820,8 @@ def pipeline(where: Where, **wanted) -> list[MIRTransform]:
         loopsimplify.LoopSimplify(),
         lcssa.LoopClosedSSA(),
         Hoist(where),
-        Forward(where),
-        DropLoads(where),
         DropStores(where),
-        Reuse(where),
-        Cse(where),
+        Gvn(where),
         promote.Promote(where),
         strength.Strength(where),
         Algebraic(),
@@ -2938,8 +2893,7 @@ def applied(
         "decide": decide,
         "dead": dead,
         "hoist": hoist,
-        "forward": forward,
-        "drop_loads": drop_loads,
+        "gvn": forward and drop_loads,
         "drop_stores": drop_stores,
         # Recurrences currently replace multiplication chains in innermost
         # loops. Shift-only and outer-loop formulas need pressure costing.
@@ -2960,6 +2914,11 @@ def applied(
         # 32-bit registers are tracked, so the target is a 386 and has SIB.
         index_scales=frozenset({1, 2, 4, 8}),
     )
+    # These names were public debugging selectors before value reuse became
+    # one pass.  Keep them as aliases rather than accepting a command that
+    # now runs no pass at all; stage output itself uses the canonical name.
+    if only in {"forward", "drop_loads", "reuse", "cse"}:
+        only = "gvn"
     passes = [one for one in pipeline(where, **wanted) if only is None or one.name == only]
     if found is not None:
         body = replace(

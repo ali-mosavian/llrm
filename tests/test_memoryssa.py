@@ -114,6 +114,42 @@ def test_a_call_with_no_named_cells_still_defines_memory() -> None:
     assert graph.at(memoryssa.Site(0, 1)).defining == graph.at(memoryssa.Site(0, 0)).id
 
 
+def test_a_complete_read_only_call_uses_but_does_not_define_memory() -> None:
+    """A proven readonly callee used to become an unknown MemoryDef anyway.
+
+    The call's empty store list is meaningful only with a complete footprint;
+    without that distinction, every readonly helper killed store-to-load
+    forwarding and LICM exactly like an unknown indirect call.
+    """
+    call = mir.Op(
+        0,
+        ir.Operation.CALL,
+        "",
+        (),
+        (),
+        kind=mir.Kind.CALL,
+        loads=(CELL,),
+        memory_complete=True,
+    )
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (call, operation(1, loads=(CELL,))), ()),))
+
+    graph = memoryssa.built(body)
+
+    assert graph.at(memoryssa.Site(0, 0)).kind is memoryssa.Kind.USE
+    assert graph.at(memoryssa.Site(0, 1)).defining == graph.live.id
+
+
+def test_a_complete_memory_free_call_has_no_memoryssa_access() -> None:
+    """A pure call is still a value/control operation, but not a memory version."""
+    call = mir.Op(0, ir.Operation.CALL, "", (), (), kind=mir.Kind.CALL, memory_complete=True)
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (call, operation(1, loads=(CELL,))), ()),))
+
+    graph = memoryssa.built(body)
+
+    assert memoryssa.Site(0, 0) not in graph.sites
+    assert graph.at(memoryssa.Site(0, 1)).defining == graph.live.id
+
+
 def test_entry_backedge_keeps_the_invocation_memory_state() -> None:
     body = mir.MirBody(0, (mir.MirBlock(0, (), (operation(0, stores=(CELL,)),), (0,)),))
     graph = memoryssa.built(body)

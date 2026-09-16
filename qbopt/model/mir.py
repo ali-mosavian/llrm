@@ -1593,6 +1593,13 @@ def raise_body(
             )
             if calling:
                 stores += (MemRef(None, 4, None, None, None, write_reach, excludes=(spared or {}).get(insn.at, ())),)
+            # For a call the decoder's footprint describes only the CALL
+            # instruction.  The selected contract supplies the callee's real
+            # footprint.  Both halves must be bounded before an empty list can
+            # mean "none" rather than "unknown" to MemorySSA and its users.
+            memory_complete = node.effects.memory_complete or (
+                calling and read_reach is not None and write_reach is not None
+            )
             holds = dict(zip(sorted(uses, key=lambda o: (o is not FLAGS, o)), used))
             # What each variable held before this instruction writes
             # anything. The half an absorbed divide hands back is a
@@ -1685,7 +1692,7 @@ def raise_body(
                     target=node.semantics.target,
                     id=next(_IDS),
                     args_known=_called[1],
-                    memory_complete=node.effects.memory_complete,
+                    memory_complete=memory_complete,
                     reads_complete=node.effects.uses is not None and _called[1],
                 )
             )

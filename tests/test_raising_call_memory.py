@@ -28,6 +28,7 @@ def test_angle_compare_does_not_clobber_program_data() -> None:
     ]
     assert calls
     for op in calls:
+        assert op.memory_complete, "the selected read/write contract is the complete callee footprint"
         program = mir.MemRef(Addr(Space.SEGMENT, 6, found.program_data), 2)
         scratch = mir.MemRef(Addr(Space.LITERAL, 0), 2)
         for effects in (op.stores, op.loads):
@@ -86,6 +87,7 @@ def test_selected_unknown_contract_keeps_program_data_live() -> None:
         if op.kind is mir.Kind.CALL and found.calls.get(op.at) == "B$FCMP"
     ]
     assert calls
+    assert not any(op.memory_complete for op in calls)
     assert all(ref.beyond is None for op in calls for ref in (*op.loads, *op.stores))
 
 

@@ -320,6 +320,12 @@ def test_widening_is_on_and_runs_after_the_memory_passes() -> None:
     assert "drop_stores" in transform.PASSES
 
 
+def test_value_reuse_is_one_gvn_pre_pass() -> None:
+    """Four separately iterated reuse passes made ordering part of semantics."""
+    assert "gvn" in transform.PASSES
+    assert not {"forward", "drop_loads", "reuse", "cse"} & set(transform.PASSES)
+
+
 def test_the_rename_alone_is_what_was_unsound() -> None:
     """The concrete fact the chain and the restore exist to handle.
 
@@ -1307,4 +1313,3 @@ def test_one_idiv_serves_both_of_lngmix_s_divides_in_the_image(monkeypatch) -> N
     seen = [one.mnemonic for one in Decoder(16, code)]
     assert seen.count(Mnemonic.IDIV) == 1, "one divide does the work of both"
     assert seen.count(Mnemonic.CALL) == 4, "and no divide is left as a call"
-

@@ -149,7 +149,7 @@ memory versions. Entry blocks with backedges retain an invocation input.
     for block in body.blocks:
         current = entries[block.at]
         for index, op in enumerate(block.ops):
-            defines = bool(op.stores or _unknown_write(op) or op.kind is mir.Kind.CALL)
+            defines = bool(op.stores or _unknown_write(op))
             if not (op.loads or defines):
                 continue
             kind = Kind.DEF if defines else Kind.USE

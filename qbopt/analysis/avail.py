@@ -357,7 +357,7 @@ def _dead_in(
             # outside the idiom reads the cells it passed through.
             continue
         exception = effects.exposes_memory(op, handles_errors)
-        if exception or effects.unmodeled_write(op) or (op.kind is Kind.CALL and not op.loads):
+        if exception or effects.unmodeled_write(op) or effects.unmodeled_read(op):
             # A float exception's handler runs outside the body, and in a
             # sealed one resumes nowhere inside: a private cell is as safe as
             # across a call, and the op's own cells are read as any op's.
