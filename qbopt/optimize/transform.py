@@ -2181,9 +2181,15 @@ def _constant_update(op: Op, facts: dict, memory: dict, wanted: set) -> Op:
 
 
 def _symbol_copies(body: MirBody) -> dict:
-    """Values that are a symbol's address and nothing else: a literal, as a number is."""
+    """Values that are a symbol's address, with the op that owns its fixup.
+
+    Unlike a number, a symbol is not completely described by its literal
+    value: the defining operation's identity leads emission back to the OMF
+    fixup, including its frame.  A consumer that substitutes the symbol must
+    take that identity with it.
+    """
     return {
-        op.defines[0]: op.args[0]
+        op.defines[0]: (op.args[0], op)
         for block in body.blocks
         for op in block.ops
         if op.kind is mir.Kind.COPY
@@ -2200,7 +2206,8 @@ def _literal_of(arg, facts: dict, symbols: dict) -> "mir.Const | mir.Symbol | No
     fact = facts.get(arg.value)
     if fact is not None and fact.width >= arg.width:
         return mir.Const(consts.masked(fact.n, arg.width), arg.width)
-    symbol = symbols.get(arg.value)
+    known = symbols.get(arg.value)
+    symbol = known[0] if known is not None else None
     return symbol if symbol is not None and symbol.width == arg.width else None
 
 
@@ -2304,11 +2311,15 @@ def _constant_argument(op: Op, facts: dict, memory: dict, symbols: dict | None =
     if isinstance(arg, mir.Cell) and (op.loads != (arg.ref,) or arg.ref in op.stores):
         return op
     width = arg.ref.width if isinstance(arg, mir.Cell) else arg.width
+    owner = None
     fact = consts._operand(op, arg, facts, memory)
     if fact is not None and fact.width >= width:
         literal = mir.Const(consts.masked(fact.n, width), width)
-    elif (literal := _literal_of(arg, {}, symbols or {})) is None:
-        return op
+    else:
+        known = (symbols or {}).get(arg.value) if isinstance(arg, mir.Held) else None
+        if known is None or known[0].width != width:
+            return op
+        literal, owner = known
     kept = tuple(ref for ref in op.loads if not isinstance(arg, mir.Cell) or ref != arg.ref)
     uses = tuple(
         dict.fromkeys(value for ref in (*kept, *op.stores) for value in (ref.base, ref.segment) if value is not None)
@@ -2321,7 +2332,13 @@ def _constant_argument(op: Op, facts: dict, memory: dict, symbols: dict | None =
         node=None,
         made=None,
         raised=None,
-        symbol=False,
+        # A number owns no relocation.  A symbol takes the defining copy's
+        # identity as well as its value: that is how emission moves the
+        # original fixup, including its frame, onto this argument.  Keeping
+        # the argument's id instead emitted `push 0`; inventing a fresh
+        # fixup instead mistook DIVMOD's CS-relative handler for DGROUP data.
+        id=owner.id if owner is not None else op.id,
+        symbol=owner is not None,
     )
 
 

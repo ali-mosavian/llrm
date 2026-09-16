@@ -40,3 +40,53 @@ def test_argument_folding_requires_every_byte_and_keeps_stack_write(known_width)
     else:
         assert result.args == (mir.Const(0x12345678, 4),)
         assert result.stores == (stack,) and result.loads == ()
+
+
+def test_pressx_read_destinations_remain_relocated_after_argument_folding():
+    """PRESSX /G3 printed 0 instead of 7500 when READ was passed address zero.
+
+    Each B$RDI2 call receives the offset of one input variable.  Check the
+    relocated operand at the call site, rather than the literal zero stored
+    in an object before LINK applies that relocation.
+    """
+    data = Path("fixtures/omf/pressx-v-g3.obj").read_bytes()
+    result = wholeseg.emitted(data)
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    found = module.of(omf.parse(result.data))
+    insns = blocks.instructions(found)
+    fixups = [one for one in omf.fixups(omf.parse(result.data)) if one.seg == found.seg]
+
+    destinations = []
+    for index, call in enumerate(insns):
+        if found.calls.get(call.at) != "B$RDI2":
+            continue
+        argument = insns[index - 1]
+        owned = [one for one in fixups if argument.at <= one.offset < call.at]
+        assert len(owned) == 1, f"READ argument at {argument.at:#x} owns {owned}"
+        destinations.append((owned[0].target, owned[0].index, owned[0].disp))
+
+    assert destinations == [("segment", 5, offset) for offset in range(6, 22, 2)]
+
+
+def test_divmod_error_handler_argument_keeps_its_original_code_fixup():
+    """DIVMOD /G3 was refused when its error-handler offset became a data reference.
+
+    B$OEGA receives a CS-relative handler offset.  Folding that offset into
+    the push must move its original fixup, including its segment frame; a
+    newly invented DGROUP-framed reference means something different.
+    """
+    data = Path("fixtures/omf/divmod-v-g3.obj").read_bytes()
+    result = wholeseg.emitted(data)
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+    found = module.of(omf.parse(result.data))
+    insns = blocks.instructions(found)
+    setup = next(index for index, one in enumerate(insns) if found.calls.get(one.at) == "B$OEGA")
+    handler = next(one.at for one in insns if found.calls.get(one.at) == "B$FERR")
+    argument, call = insns[setup - 1], insns[setup]
+    owned = [
+        one
+        for one in omf.fixups(omf.parse(result.data))
+        if one.seg == found.seg and argument.at <= one.offset < call.at
+    ]
+    assert len(owned) == 1
+    assert (owned[0].target, owned[0].index, owned[0].disp) == ("segment", found.seg, handler)
