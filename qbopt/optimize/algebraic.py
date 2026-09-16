@@ -20,6 +20,7 @@ def simplified(body: mir.MirBody, wanted: set[mir.Value], wide: set[mir.Value]) 
 
     def simplify(op):
         op = _recombined(op, definitions)
+        op = _redundant_extension(op, definitions)
         op = _negated_difference(op, definitions, wanted | mentioned, uses)
         op = _shift_chain(op, definitions, wanted | mentioned)
         op = _product(op, wanted | mentioned, wide)
@@ -195,6 +196,40 @@ def _recombined(op: mir.Op, definitions: dict) -> mir.Op:
     if original is None:
         return op
     return replace(op, kind=mir.Kind.COPY, args=(original,), uses=(original.value,),
+                   merges={}, node=None, made=None, raised=None)
+
+
+def _redundant_extension(op: mir.Op, definitions: dict) -> mir.Op:
+    """Reuse bits an earlier same-kind extension has already established.
+
+    A value zero-extended from 8 to 16 bits remains zero-extended when viewed
+    through any 8..16-bit slice. Extending that view to at most 16 bits is a
+    copy. The corresponding statement is true for sign extension because
+    every added bit equals the original sign bit. Mixed signedness is not
+    interchangeable and is deliberately excluded.
+    """
+    if (op.kind not in (mir.Kind.ZERO_EXTEND, mir.Kind.SIGN_EXTEND)
+        or op.loads or op.stores or op.barrier or op.merges
+        or len(op.args) != 1 or len(op.results) != 1
+        or not isinstance(op.args[0], mir.Held)
+        or not isinstance(op.results[0], mir.Held)
+        or op.defines != (op.results[0].value,)):
+        return op
+    viewed, result = op.args[0], op.results[0]
+    previous = definitions.get(viewed.value)
+    if (previous is None or previous.kind is not op.kind
+        or previous.loads or previous.stores or previous.barrier or previous.merges
+        or len(previous.args) != 1 or len(previous.results) != 1
+        or not isinstance(previous.results[0], mir.Held)
+        or previous.results[0].value != viewed.value
+        or previous.defines != (viewed.value,)):
+        return op
+    source_width = getattr(previous.args[0], "width", None)
+    established = previous.results[0].width
+    if source_width is None or not source_width <= viewed.width < result.width <= established:
+        return op
+    known = mir.Held(viewed.value, result.width)
+    return replace(op, kind=mir.Kind.COPY, args=(known,), uses=(viewed.value,),
                    merges={}, node=None, made=None, raised=None)
 
 

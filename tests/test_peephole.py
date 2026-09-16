@@ -961,6 +961,113 @@ def test_virtual_identity_marker_does_not_reload_nbody_dividend_constant():
     assert not verify.verify(result)
 
 
+def test_crc32_reads_a_byte_directly_into_its_dword_value() -> None:
+    """C CRC32 emitted `movzx dx,[buf+bx]; movzx edx,dx` for every byte.
+
+    The two unsigned extensions are one target instruction.  Keep the final
+    SSA definition on that instruction so removing the second encoding does
+    not leave a later virtual use without a definition.
+    """
+    from qbopt.backend import verify
+    from qbopt.objectfile.module import Addr, Space
+
+    cell = ir.Mem(Addr(Space.SEGMENT, 1, 0), 1, through=Register.BX)
+    narrow = lir.Insn(
+        0,
+        (0, 3),
+        ir.Semantics(ir.Operation.EXTEND, "movzx", (ir.Reg(Register.DX, 2),), (cell,)),
+        (1,),
+        (),
+        symbol=True,
+    )
+    wide = lir.Insn(
+        3,
+        (3, 6),
+        ir.Semantics(
+            ir.Operation.EXTEND,
+            "movzx",
+            (ir.Reg(Register.EDX, 4),),
+            (ir.Reg(Register.DX, 2),),
+        ),
+        (2,),
+        (1,),
+    )
+    use = lir.Insn(
+        6,
+        (6, 6),
+        ir.Semantics(
+            ir.Operation.BINARY,
+            "xor",
+            (ir.Reg(Register.EAX, 4),),
+            (ir.Reg(Register.EAX, 4), ir.Reg(Register.EDX, 4)),
+        ),
+        (3,),
+        (2,),
+    )
+    body = lir.LirBody("crc32", 0, (lir.LirBlock(0, (narrow, wide, use)),), {}, {})
+
+    result = peephole.extensions(body)
+    emitted = [one for one in result.insns if one.what.op is not ir.Operation.NOTHING]
+
+    assert emitted[0].what == ir.Semantics(
+        ir.Operation.EXTEND,
+        "movzx",
+        (ir.Reg(Register.EDX, 4),),
+        (cell,),
+    )
+    assert emitted[0].defines == (2,)
+    assert emitted[0].symbol is True
+    assert len(emitted) == 2
+    assert not verify.verify(result)
+
+
+@pytest.mark.parametrize("guard", ["signedness", "register", "shared", "clobber", "symbol"])
+def test_transitive_extension_preserves_nonlocal_machine_state(guard: str) -> None:
+    cell = ir.Mem(None, 1, through=Register.BX)
+    narrow = lir.Insn(
+        0,
+        (0, 3),
+        ir.Semantics(ir.Operation.EXTEND, "movzx", (ir.Reg(Register.DX, 2),), (cell,)),
+        (1,),
+        (),
+    )
+    wide = lir.Insn(
+        3,
+        (3, 6),
+        ir.Semantics(
+            ir.Operation.EXTEND,
+            "movzx",
+            (ir.Reg(Register.EDX, 4),),
+            (ir.Reg(Register.DX, 2),),
+        ),
+        (2,),
+        (1,),
+    )
+    tail = ()
+    match guard:
+        case "signedness":
+            wide = replace(wide, what=replace(wide.what, name="movsx"))
+        case "register":
+            wide = replace(wide, what=replace(wide.what, dests=(ir.Reg(Register.EAX, 4),)))
+        case "shared":
+            tail = (
+                lir.Insn(
+                    6,
+                    (6, 6),
+                    ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Reg(Register.DX, 2),)),
+                    (),
+                    (1,),
+                ),
+            )
+        case "clobber":
+            narrow = replace(narrow, clobbers=frozenset({Register.AX}))
+        case "symbol":
+            wide = replace(wide, symbol=True)
+    body = lir.LirBody("guarded", 0, (lir.LirBlock(0, (narrow, wide, *tail)),), {}, {})
+
+    assert peephole.extensions(body) == body
+
+
 @pytest.mark.parametrize(
     "interruption",
     ["none", "extend", "extend_write", "extend_clobber", "call", "clobber", "unknown", "relocation", "block"],

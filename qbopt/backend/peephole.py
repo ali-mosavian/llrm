@@ -1,5 +1,6 @@
 """Simplifications that depend on the final physical register assignment."""
 
+from collections import Counter
 from dataclasses import replace
 
 from iced_x86 import Decoder
@@ -36,6 +37,7 @@ class Peephole(LIRTransform):
         # that can remove a copy the coalescer refused on colourability.
         body = regthrash.thrashed(phielim.unsplit(body))
         body = copyprop.forwarded(body)
+        body = extensions(body)
         body = copysink.sunk(body)
         body = spillforward.forwarded(body)
         body = storecombine.combined(body)
@@ -72,6 +74,84 @@ class Peephole(LIRTransform):
                 for block in body.blocks
             ),
         )
+
+
+def extensions(body: lir.LirBody) -> lir.LirBody:
+    """Fold a transitive signed or unsigned extension into one instruction.
+
+    This is deliberately post-allocation.  MIR says that both conversions
+    happen; x86 says that ``movzx edx,byte ptr [m]`` can implement the same
+    value as ``movzx dx,byte ptr [m]; movzx edx,dx``.  Requiring one physical
+    register root for both results also preserves every incidental register
+    byte, rather than relying only on the virtual result being equivalent.
+    """
+    users = Counter(value for block in body.blocks for one in block.insns for value in one.uses)
+    users.update(value for block in body.blocks for phi in block.phis for _, value in phi.incoming)
+    blocks = []
+    for block in body.blocks:
+        insns = list(block.insns)
+        for index in range(len(insns) - 1):
+            first, second = insns[index : index + 2]
+            made = _extension(first, second, users)
+            if made is None:
+                continue
+            insns[index] = made
+            # The first instruction now defines the final value.  The anchor
+            # keeps the second instruction's byte ownership without leaving a
+            # second virtual definition behind.
+            insns[index + 1] = replace(lir.anchor(second), defines=(), uses=())
+        blocks.append(replace(block, insns=tuple(insns)))
+    return replace(body, blocks=tuple(blocks))
+
+
+def _extension(first: lir.Insn, second: lir.Insn, users: Counter[int]) -> "lir.Insn | None":
+    from qbopt.backend import select
+
+    if (
+        any(
+            one.what is None
+            or one.clobbers
+            or one.clobbers_high
+            or one.requires
+            or one.delivers
+            or one.spread
+            or one.group is not None
+            or one.frame_adjust
+            or one.spill_reload
+            or one.spill_store
+            for one in (first, second)
+        )
+        or second.symbol is True
+    ):
+        return None
+    match first.what, second.what:
+        case (
+            ir.Semantics(ir.Operation.EXTEND, "movsx" | "movzx" as first_name, (ir.Reg() as middle,), (source,)),
+            ir.Semantics(
+                ir.Operation.EXTEND,
+                "movsx" | "movzx" as second_name,
+                (ir.Reg() as destination,),
+                (ir.Reg() as repeated,),
+            ),
+        ):
+            if (
+                first_name != second_name
+                or middle != repeated
+                or ir.root(middle.register) != ir.root(destination.register)
+                or not getattr(source, "width", 0) < middle.width < destination.width
+                or len(first.defines) != 1
+                or second.uses != first.defines
+                or users[first.defines[0]] != 1
+            ):
+                return None
+        case _:
+            return None
+    what = ir.Semantics(ir.Operation.EXTEND, first_name, (destination,), (source,))
+    if select.emit(what) is None:
+        return None
+    uses = tuple(dict.fromkeys((*first.uses, *(value for value in second.uses if value not in first.defines))))
+    widths = tuple(dict((*first.widths, *second.widths)).items())
+    return replace(first, what=what, defines=second.defines, uses=uses, widths=widths)
 
 
 def pushed_constants(body: lir.LirBody) -> lir.LirBody:

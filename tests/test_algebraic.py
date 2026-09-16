@@ -652,3 +652,46 @@ def test_a_symbol_plus_zero_is_the_symbol() -> None:
                  args=(mir.Const(0, 2), symbol), results=(mir.Held(result, 2),))
     done = algebraic._simplified(add, set(), set())
     assert (done.kind, done.args) == (mir.Kind.COPY, (symbol,))
+
+
+def test_reextending_an_already_zero_extended_low_byte_is_a_copy() -> None:
+    """C CRC32 emitted `movzx cx,al; movzx cx,cl` while filling its buffer.
+
+    The first value already has zeroes above the byte. Viewing that same
+    value through its low byte and extending it to the same width changes
+    nothing, so the allocator should see a copy it can coalesce.
+    """
+    source, middle, result = (mir.Value(index, 0) for index in range(1, 4))
+    first = mir.Op(1, ir.Operation.EXTEND, "", (middle,), (source,), kind=mir.Kind.ZERO_EXTEND,
+                   args=(mir.Held(source, 1),), results=(mir.Held(middle, 2),))
+    second = mir.Op(2, ir.Operation.EXTEND, "", (result,), (middle,), kind=mir.Kind.ZERO_EXTEND,
+                    args=(mir.Held(middle, 1),), results=(mir.Held(result, 2),))
+    use = mir.Op(3, ir.Operation.PUSH, "", (), (result,), kind=mir.Kind.ARG,
+                 args=(mir.Held(result, 1),))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (first, second, use), ()),))
+
+    done = algebraic.simplified(body, set(), set())
+    changed = done.blocks[0].ops[1]
+
+    assert changed.kind is mir.Kind.COPY
+    assert changed.args == (mir.Held(middle, 2),)
+
+
+@pytest.mark.parametrize("guard", ["signedness", "discarded_bits", "unknown_upper", "extra_result"])
+def test_redundant_extension_requires_every_output_bit_to_be_known(guard: str) -> None:
+    source, middle, result, flags = (mir.Value(index, 0, flags=index == 4) for index in range(1, 5))
+    first = mir.Op(1, ir.Operation.EXTEND, "", (middle,), (source,), kind=mir.Kind.ZERO_EXTEND,
+                   args=(mir.Held(source, 1),), results=(mir.Held(middle, 2),))
+    second = mir.Op(2, ir.Operation.EXTEND, "", (result,), (middle,), kind=mir.Kind.ZERO_EXTEND,
+                    args=(mir.Held(middle, 1),), results=(mir.Held(result, 2),))
+    match guard:
+        case "signedness":
+            second = replace(second, kind=mir.Kind.SIGN_EXTEND)
+        case "discarded_bits":
+            first = replace(first, args=(mir.Held(source, 2),))
+        case "unknown_upper":
+            second = replace(second, results=(mir.Held(result, 4),))
+        case "extra_result":
+            second = replace(second, defines=(result, flags))
+
+    assert algebraic._redundant_extension(second, {middle: first}) == second
