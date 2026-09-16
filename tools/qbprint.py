@@ -30,7 +30,7 @@ def seq(*vals: int) -> str:
 def qbfloat(v: float) -> str:
     """A DOUBLE the way QuickBASIC's PRINT writes one.
 
-    Measured off suite/fixmul.bas on VBDOS: 15 significant digits, no leading
+    Measured on VBDOS: 15 significant digits, no leading
     zero before the point (`.999984741210938`, not `0.999984741210938`), no
     point at all when the value is whole (`2`, not `2.0`) -- %.15g gives all
     three for free except the leading zero, which is BASIC's own habit and

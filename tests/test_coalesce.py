@@ -140,6 +140,29 @@ def test_parallel_copy_sources_interfere_before_any_destination_is_written() -> 
     assert live[1].overlaps(live[2])
 
 
+def test_parallel_copy_destinations_interfere_after_all_are_written() -> None:
+    """crosscall's total and counter became one value because both began at zero.
+
+    Phi elimination copied that zero to both loop-carried values in one
+    parallel group.  Coalescing both destinations with their common source
+    made the loop compare its accumulated total with the bound instead of
+    comparing its counter.
+    """
+    from dataclasses import replace
+
+    group = (replace(_move(1, 2, 1), group=1), replace(_move(1, 3, 1), group=1))
+    body = lir.LirBody(
+        "parallel-destinations",
+        0,
+        (lir.LirBlock(0, (_define(0, 1), *group, _use(4, 2), _use(5, 3))),),
+        {},
+        {},
+    )
+    assert 3 in coalesce._interference(body)[2]
+    done = coalesce.joined(body)
+    assert done.insns[-2].uses != done.insns[-1].uses
+
+
 def test_different_entry_values_cannot_share_even_if_copied_later() -> None:
     insns = (_use(0, 1), _use(1, 2), _move(2, 2, 1), _use(4, 2))
     body = lir.LirBody("inputs", 0, (lir.LirBlock(0, insns),), {}, {})

@@ -5,7 +5,6 @@ import pytest
 
 import corpus
 from qbopt.abi import runtime
-from qbopt.legacy.calls import ARITY
 from qbopt.abi.runtime import Reg
 from qbopt.legacy.calls import DIVIDE
 from qbopt.legacy.calls import COMPARE
@@ -259,7 +258,7 @@ def test_the_routines_that_do_not_come_back_say_so(name: str) -> None:
 # declarations in rt/helpi4.asm. They have to land on the same number.
 @pytest.mark.parametrize("name", ABSORBED)
 def test_cleanup_agrees_with_the_arity_calls_py_measured(name: str) -> None:
-    assert runtime.CONTRACTS[name].cleanup == 4 * ARITY.get(name, 2)
+    assert runtime.CONTRACTS[name].cleanup == 8
 
 
 @pytest.mark.parametrize("name", ABSORBED)

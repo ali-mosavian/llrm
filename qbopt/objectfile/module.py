@@ -89,6 +89,16 @@ class Addr:
     # agrees. See Space.FAR's own comment.
     segment: Register_ = Register.NONE
 
+    @property
+    def direct(self) -> bool:
+        """Whether the address names bytes without a run-time index.
+
+        The machine representation uses ``Register.NONE`` for this, but
+        MIR analyses need only the semantic fact.  Keeping the translation
+        here prevents passes from naming a physical-register sentinel.
+        """
+        return self.base == Register.NONE
+
     def plus(self, bytes_along: int) -> "Addr":
         return replace(self, disp=self.disp + bytes_along)
 

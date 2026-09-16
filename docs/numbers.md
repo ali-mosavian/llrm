@@ -516,9 +516,9 @@ coordinate. It ran faster because it was doing less, and less was wrong.
 All 21 of `bench/nbody.bas`'s arithmetic call sites -- 11 `B$MUI4`, 6
 `B$DVI4`, 4 `B$CPI4` -- are absorbed; the rewritten object contains none of
 them. Base is unchanged, as it must be
--- BC's own build does not move. `bench/nbody.bas` avoids `fixMul&` by
-construction (Q23.9, see `suite/nbody.bas`'s own comment) specifically so BC
-alone can build the base half of this comparison.
+-- BC's own build does not move. `bench/nbody.bas` uses Q23.9 (see
+`suite/nbody.bas`'s own comment), and BC alone builds the base half of this
+comparison.
 
 Re-measured, not reasoned: opt dropped from 4649876 to 4519562 ticks (2.8%
 faster) once E and F actually landed, superseding the earlier note that

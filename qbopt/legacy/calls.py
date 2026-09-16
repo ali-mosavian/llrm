@@ -49,30 +49,9 @@ REMAINDER = "B$RMI4"
 # not in LEFT_FIRST and never reaches here; it must stay that way unless
 # absorb() is taught the different flag meaning.
 
-# A user-declared `declare function fixMul& (byval a as long, byval b as long,
-# byval fixShift as long)` has no body anywhere -- LINK never sees it, because
-# absorbing the call drops its only fixup. BC never emits a type suffix into
-# the EXTDEF, so the name it writes is the identifier alone, uppercased the
-# way every BASIC identifier is. Measured: BC pushes a `declare`d function's
-# arguments in the order written, first argument first -- the runtime's own
-# routines do not, which is what the module docstring above is about, and is
-# unrelated to this one.
-#
-# The shift is a third argument rather than a fixed constant: N.M times N.M is
-# N.2M, which does not fit back in 32 bits without the shift that undoes the
-# doubled fraction, and the width of that fraction is the caller's format to
-# choose, not this pass's to assume. fixShift is `as long` only so it reaches
-# the stack the same way a and b do -- one_operand() already knows every shape
-# that arrives in.
-FIX_MULTIPLY = "FIXMUL"
-
 # True where the left operand is pushed first. Uniform across the compilers,
-# opposite between the two runtime routines. FIX_MULTIPLY is not the runtime's:
-# it is pushed in the order written, which happens to agree with COMPARE's.
-LEFT_FIRST = {COMPARE: True, MULTIPLY: False, DIVIDE: False, REMAINDER: False, FIX_MULTIPLY: True}
-
-# Every routine here takes two long arguments except fixMul&, which takes three.
-ARITY = {FIX_MULTIPLY: 3}
+# opposite between comparison and the arithmetic routines.
+LEFT_FIRST = {COMPARE: True, MULTIPLY: False, DIVIDE: False, REMAINDER: False}
 
 
 def _arity(name: str | None) -> int | None:
@@ -80,7 +59,7 @@ def _arity(name: str | None) -> int | None:
     absorption knows how to handle at all."""
     if name is None or name not in LEFT_FIRST:
         return None
-    return ARITY.get(name, 2)
+    return 2
 
 
 # one dword per argument under VBDOS /G3, two words everywhere else
@@ -235,7 +214,7 @@ def match(module: Module, reached: list[Insn], index: int) -> CallSite | None:
     name = module.calls.get(call.at)
     if name not in LEFT_FIRST:
         return None
-    arity = ARITY.get(name, 2)
+    arity = 2
 
     found: list[Operand] = []
     last = index - 1
@@ -267,7 +246,7 @@ def _classified(module: Module, pushed: "tuple[Insn, ...]", name: str) -> "tuple
     """
     if name not in LEFT_FIRST:
         return ()
-    arity = ARITY.get(name, 2)
+    arity = 2
     found: list[Operand] = []
     last = len(pushed) - 1
     while len(found) < arity and last >= 0:
@@ -461,7 +440,7 @@ def absorb(site: CallSite, live: Flag, restore: bool = True) -> Emitted | str:
     relying on that anywhere around the call, not only in the flags.
 
     `restore=False` drops the trailing high-half restore MULTIPLY (and
-    consume()/dividing()/fix_multiply(), below) would otherwise emit -- for a
+    consume()/dividing(), below) would otherwise emit -- for a
     site lift.tail() has already proven BC's own following code widens
     against, so putting the high half back only to immediately re-derive it
     from eax would be the round trip docs/residue.md calls G and H. COMPARE
@@ -474,8 +453,6 @@ def absorb(site: CallSite, live: Flag, restore: bool = True) -> Emitted | str:
         # second divide -- and reloading those two from where they already
         # are is `dividing()`'s own case, not this one's.
         return consume(site, live, restore)
-    if site.name == FIX_MULTIPLY:
-        return fix_multiply(site, live, restore)
     if site.name in DIVIDES:
         return dividing(site, live, restore)
     if site.name not in ABSORBED:
@@ -588,11 +565,6 @@ def grouped(pushed: tuple[Insn, ...]) -> list[tuple[Insn, ...]] | None:
 # clobbering an array index BC's own code is still holding across this call.
 # For the four runtime routines that rests on the QuickBASIC 4.5 runtime
 # source (stack.py's own docstring): callee-cleanup, clobbers only ax/cx/dx/bx.
-# fixMul& is not a runtime routine -- it is a user-declared FUNCTION this pass
-# invents a body for, and nothing here has measured what BC assumes survives a
-# call to one. No fixMul& site in fixtures/omf or build/ ever reaches Consume
-# (every one there is address-or-immediate, absorbed by match() already), so
-# this is unexercised, not merely untested.
 
 
 def popped_into(target: Register_) -> Instruction:
@@ -618,7 +590,6 @@ CONSUME_TARGETS = {
     MULTIPLY: (Register.EAX, Register.ECX),
     DIVIDE: (Register.EAX, Register.ECX),
     REMAINDER: (Register.EAX, Register.ECX),
-    FIX_MULTIPLY: (Register.ECX, Register.EDX, Register.EAX),
 }
 
 
@@ -688,11 +659,6 @@ def consume(site: CallSite, live: Flag, restore: bool = True) -> Emitted | str:
     leak four bytes of stack per call, forever, since nothing else here ever
     removes a push.
 
-    fixShift always goes through cl here, even when it turns out to have been
-    a compile-time constant -- shrd's own immediate form needs the value at
-    codegen time, which a popped operand never has. shrd masks its count
-    modulo 32 regardless, so the range refusal fix_multiply() applies to a
-    known-constant shift does not apply and is not needed.
     """
     if site.name == COMPARE and live & SYNTHESISED:
         return f"the site's {live & SYNTHESISED!r} comes from the runtime, not from a comparison"
@@ -738,9 +704,6 @@ def consume(site: CallSite, live: Flag, restore: bool = True) -> Emitted | str:
         steps.extend(keeping_the_other(site.name))
         if site.name == REMAINDER:
             steps.append(Instruction.create_reg_reg(Code.MOV_R32_RM32, RESULT, Register.EDX))
-    elif site.name == FIX_MULTIPLY:
-        steps.append(Instruction.create_reg(Code.IMUL_RM32, Register.EDX))
-        steps.append(Instruction.create_reg_reg_reg(Code.SHRD_RM32_R32_CL, RESULT, Register.EDX, Register.CL))
     if restore:
         steps.extend(restoring())
     return assemble(steps, {})
@@ -869,68 +832,6 @@ def dividing(site: CallSite, live: Flag, restore: bool = True) -> Emitted | str:
         add(insn)
     if site.name == REMAINDER:
         add(Instruction.create_reg_reg(Code.MOV_R32_RM32, RESULT, Register.EDX))
-    if restore:
-        for insn in restoring():
-            add(insn)
-
-    return assemble(steps, relocated)
-
-
-def fix_multiply(site: CallSite, live: Flag, restore: bool = True) -> Emitted | str:
-    """`fixMul&(a, b, fixShift)`, as C would write the shift it means:
-    `(int32)(((int64)a * b) >> fixShift)`.
-
-    One `imul` against the register form gives the full 64-bit product in
-    `edx:eax`, and `shrd` is a pure bit shift across the pair -- extracting a
-    32-bit window of a two's-complement value needs no sign correction, so it
-    is right whatever the signs of `a` and `b` are. Multiplication commutes
-    exactly in two's complement, so which of `a`/`b` loads into `eax` cannot
-    change the result; `LEFT_FIRST` records the order BC actually pushed them
-    in, but nothing here depends on it.
-
-    `fixShift` is always known at compile time in practice -- nobody picks
-    their fixed-point format at runtime -- so a literal goes straight into
-    `shrd`'s own immediate byte. A variable still works: it loads into `cl`,
-    the one register `shrd` can take a shift count from.
-    """
-    if live & ALL:
-        return f"something reads {live & ALL!r} after it, and imul leaves the flags undefined"
-
-    a, b, shift = site.pushed
-    factor = Register.ECX
-    steps: list[Instruction] = []
-    relocated: dict[int, int] = {}
-
-    def add(insn: Instruction) -> int:
-        steps.append(insn)
-        return len(steps) - 1
-
-    where = add(load_of(a))
-    if a.kind is Kind.STATIC and a.at is not None:
-        relocated[where] = a.at
-
-    if b.kind is Kind.CONSTANT:
-        add(Instruction.create_reg_i32(Code.MOV_R32_IMM32, factor, b.value))
-        add(Instruction.create_reg(Code.IMUL_RM32, factor))
-    else:
-        # memory_of raises for anything without a relocated address, rather
-        # than treating a kind that is not CONSTANT as license to assume it
-        # must be STATIC -- the one other kind there is today, but not
-        # necessarily the only one there ever will be
-        where = add(Instruction.create_mem(Code.IMUL_RM32, memory_of(b)))
-        if b.at is not None:
-            relocated[where] = b.at
-
-    if shift.kind is Kind.CONSTANT:
-        if not 0 <= shift.value < 32:
-            return f"a shift of {shift.value} normalises nothing back into 32 bits"
-        add(Instruction.create_reg_reg_i32(Code.SHRD_RM32_R32_IMM8, RESULT, Register.EDX, shift.value))
-    else:
-        where = add(Instruction.create_reg_mem(Code.MOV_R16_RM16, Register.CX, memory_of(shift)))
-        if shift.at is not None:
-            relocated[where] = shift.at
-        add(Instruction.create_reg_reg_reg(Code.SHRD_RM32_R32_CL, RESULT, Register.EDX, Register.CL))
-
     if restore:
         for insn in restoring():
             add(insn)

@@ -54,6 +54,18 @@ def test_bools_known_accumulator_does_not_need_memory_arithmetic(tag):
     assert not any(one.startswith(("add ", "inc ")) for one in instructions)
 
 
+def test_fpemu_double_constant_is_not_mistaken_for_c_int64() -> None:
+    """fpemu was refused as "64-bit integer lowering is not implemented".
+
+    Operand width alone cannot identify a C integer: BASIC's folded DOUBLE
+    initializer is also eight bytes, and generic lowering already emits that
+    bit pattern as two dword stores.  C's frontend legalizes its actual int64
+    values before it reaches this boundary.
+    """
+    result = wholeseg.emitted(Path("fixtures/omf/fpemu-p-g2.obj").read_bytes())
+    assert result.outcome is wholeseg.Emission.LIR, result.reason
+
+
 @pytest.mark.parametrize("width", [None, 2, 4])
 @pytest.mark.parametrize("address_uses_value", [False, True])
 def test_constant_store_requires_full_width_and_retains_address_uses(width, address_uses_value):

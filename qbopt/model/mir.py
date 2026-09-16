@@ -621,8 +621,7 @@ def _absorbed_loads(args: tuple, namer: "_Namer", at: int) -> tuple[MemRef, ...]
 
 
 def absorbs(name: str) -> "Kind | None":
-    """The kind a site of this name raises as, or None where it has no one
-    kind of its own -- fixMul& is absorbed and is still a call."""
+    """The kind a site of this name raises as, or None if it stays a call."""
     return _ABSORBS.get(name.upper())
 
 
@@ -1162,7 +1161,6 @@ CONSUMES = {
     "B$DVI4": 8,
     "B$RMI4": 8,
     "B$CPI4": 8,
-    "FIXMUL": 12,
 }
 
 

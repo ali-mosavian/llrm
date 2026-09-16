@@ -84,9 +84,7 @@ used to follow it to whatever LEDATA happened to precede it after the drop,
 which failed on 72 of the 73 cases. Measured first, not assumed: every one of
 those 73 crossings spans records in plain file order, never one of BC's own
 backpatch records, which is what the fix leans on and does not attempt to
-generalise past. `suite/fixmul.bas` no longer needs the padding statement it
-once did to dodge a call site landing on a flush point. See AGENTS.md's
-"Moving code across a LEDATA boundary".
+generalise past. See AGENTS.md's "Moving code across a LEDATA boundary".
 
 **qbopt has been run on qb-qrender, end to end.** All 15 modules rewritten
 between BC and LINK, linked against the patched uGL, run under the pinned
@@ -127,8 +125,8 @@ eighteen bytes for the divide, twenty-one for the remainder, against fifteen
 under `/G3` and twenty-one elsewhere. `calls.py`'s emitter is `dividing` now.
 
 **A real dynamic number exists.** `bench/nbody.bas` is `suite/nbody.bas`'s
-integrator in Q23.9 rather than 16.16, specifically so it needs no `fixMul&`
-and BC alone can build the base half of the comparison. `tools/bench.py` reads
+Q23.9 integrator, and BC alone builds the base half of the comparison.
+`tools/bench.py` reads
 the 8253 the way `docs/measurement.md` prescribes; getting a repeatable
 reading out of it took an IRQ0 mask and a guard band, and even then DOSBox-X's
 own tick bookkeeping keeps an absolute noise floor of about one 18.2 Hz period

@@ -25,8 +25,6 @@ from dataclasses import replace
 from dataclasses import dataclass
 from collections.abc import Callable
 
-from iced_x86 import Register
-
 from qbopt.model import mir
 from qbopt.model.mir import Op
 from qbopt.analysis import loops
@@ -327,7 +325,7 @@ def _fixed(ref: MemRef) -> bool:
     address of it escaped, so a pointer, an index or a selector reaches it
     no more than a call does.
     """
-    return ref.addr is not None and ref.addr.base == Register.NONE and ref.base is None and ref.segment is None
+    return ref.addr is not None and ref.addr.direct and ref.base is None and ref.segment is None
 
 
 def _dead_in(

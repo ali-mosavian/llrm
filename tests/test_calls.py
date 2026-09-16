@@ -36,8 +36,6 @@ from qbopt.frontend.declen import BITNESS
 from qbopt.legacy.calls import REMAINDER
 from qbopt.legacy.calls import LEFT_FIRST
 from qbopt.legacy.calls import popped_into
-from qbopt.legacy.calls import FIX_MULTIPLY
-from qbopt.legacy.calls import fix_multiply
 
 
 def found_sites(obj: Path) -> dict[str, tuple]:
@@ -70,8 +68,8 @@ def test_both_push_shapes_reach_the_same_operands(fixtures: Path) -> None:
 
 
 @pytest.mark.parametrize(("name", "left_first"), sorted(LEFT_FIRST.items()))
-def test_only_comparison_and_fix_multiply_push_their_left_operand_first(name: str, left_first: bool) -> None:
-    assert left_first == (name in (COMPARE, FIX_MULTIPLY))
+def test_only_comparison_pushes_its_left_operand_first(name: str, left_first: bool) -> None:
+    assert left_first == (name == COMPARE)
 
 
 def test_a_call_with_anything_between_the_pushes_is_refused(fixtures: Path) -> None:
@@ -192,12 +190,6 @@ def test_absorbed_compare_against_a_constant_wraps_eax_too() -> None:
     assert Mnemonic.CMP in {insn.mnemonic for insn in decoded}
 
 
-# the opcode's third byte is the only difference between the shrd forms:
-# AC takes an imm8 count, AD takes cl
-SHRD_IMM8 = bytes.fromhex("660fac")
-SHRD_CL = bytes.fromhex("660fad")
-
-
 def static_operand(offset: int, base: Register_ = Register.NONE) -> Operand:
     return Operand(Kind.STATIC, module.Addr(module.Space.SEGMENT, offset, base=base), at=offset, length=1)
 
@@ -214,80 +206,6 @@ def test_squaring_the_same_address_loads_it_once() -> None:
     # mov eax,ds:[x] / imul eax,eax / push eax,pop ax,pop dx -- one load, not two
     assert emitted.code == hx("66 A1 00 00  66 0F AF C0  66 50 58 5A")
     assert emitted.relocations == ((2, 0x76),), "one fixup, not two, for the one address read"
-
-
-def test_fix_multiply_is_one_imul_and_one_shrd_against_a_static() -> None:
-    # mov eax,[a] / imul dword [b] / shrd eax,edx,16, then the high-half
-    # restore BC reads through dx:ax the same way it does after a multiply.
-    site = CallSite(
-        at=0, end=0, start=0, name=FIX_MULTIPLY, pushed=(static_operand(4), static_operand(0), constant_operand(16))
-    )
-    emitted = fix_multiply(site, Flag.NONE)
-    assert not isinstance(emitted, str)
-    assert len(emitted.code) == 18, "mov eax,[a] / imul dword [b] / shrd eax,edx,16, then the restore"
-    assert FIXUP[0] in emitted.code
-    assert len(emitted.relocations) == 2
-
-
-def test_fix_multiply_against_a_constant_loads_it_first() -> None:
-    # imul has no immediate form that keeps the high half, so a constant b
-    # goes into a register before the multiply.
-    site = CallSite(
-        at=0, end=0, start=0, name=FIX_MULTIPLY, pushed=(static_operand(4), constant_operand(3), constant_operand(16))
-    )
-    emitted = fix_multiply(site, Flag.NONE)
-    assert not isinstance(emitted, str)
-    assert len(emitted.relocations) == 1, "only a's fixup is there to reuse"
-
-
-def test_fix_multiply_with_a_variable_shift_loads_cl() -> None:
-    # fixShift is always known at compile time in practice, but a variable
-    # still has to work: shrd's only other source for a count is cl.
-    site = CallSite(
-        at=0, end=0, start=0, name=FIX_MULTIPLY, pushed=(static_operand(4), static_operand(0), static_operand(8))
-    )
-    emitted = fix_multiply(site, Flag.NONE)
-    assert not isinstance(emitted, str)
-    assert len(emitted.relocations) == 3, "a, b and the shift each reuse a fixup"
-    assert SHRD_CL in emitted.code
-    assert SHRD_IMM8 not in emitted.code
-
-
-def test_fix_multiply_refuses_a_shift_that_cannot_normalise_32_bits() -> None:
-    site = CallSite(
-        at=0, end=0, start=0, name=FIX_MULTIPLY, pushed=(static_operand(4), static_operand(0), constant_operand(32))
-    )
-    refused = fix_multiply(site, Flag.NONE)
-    assert isinstance(refused, str)
-
-
-def test_fix_multiply_refuses_a_site_whose_flags_are_read() -> None:
-    site = CallSite(
-        at=0, end=0, start=0, name=FIX_MULTIPLY, pushed=(static_operand(4), static_operand(0), constant_operand(16))
-    )
-    refused = fix_multiply(site, Flag.ZF)
-    assert isinstance(refused, str)
-
-
-@pytest.mark.parametrize(
-    ("a", "b", "shift"),
-    [
-        (65536, 131072, 16),
-        (-65536, 131072, 16),
-        (-65536, -131072, 16),
-        (2147483647, 2, 16),
-        (-2147483648, 65536, 16),
-        (65536, 131072, 8),
-        (65536, 131072, 0),
-    ],
-)
-def test_fix_multiply_matches_the_64_bit_shift_it_means(a: int, b: int, shift: int) -> None:
-    # (int32)(((int64)a * b) >> shift), truncated to 32 bits the way C does it
-    # and the way SHRD does it: no sign extension, because a 64-bit two's
-    # complement value's bits do not depend on its sign for a shift like this.
-    want = ((a * b) >> shift) & 0xFFFFFFFF
-    want = want - 0x100000000 if want >= 0x80000000 else want
-    assert -(2**31) <= want < 2**31
 
 
 def test_grouped_splits_mixed_shapes_by_byte_count() -> None:
@@ -493,28 +411,6 @@ def test_absorb_reloads_a_classified_frame_site_rather_than_popping_it(fixtures:
     assert first.mnemonic == Mnemonic.MOV, (
         f"first instruction was {first.mnemonic!r}, not a load -- the operand was popped, not reloaded"
     )
-
-
-def test_fix_multiply_consume_uses_edx_and_the_variable_shift_form() -> None:
-    # All three arguments stack-only: shift can never use shrd's immediate
-    # form here (that needs the value at codegen time, which a popped operand
-    # never has), and b has nowhere to go but edx once a and shift take
-    # eax and ecx -- imul's one-operand form reads edx before it writes
-    # edx:eax, so b survives exactly long enough to be multiplied. Pushes are
-    # identical bytes on purpose: only the pop ORDER (a deepest, pushed in
-    # source order first; shift topmost) can distinguish a correct target
-    # mapping from a role swap, since nothing in a bare `pop eax` names which
-    # argument it came from.
-    a, b, shift = (decode(hx("66 FF 36 00 00"), 0) for _ in range(3))
-    assert a is not None and b is not None and shift is not None
-    site = CallSite(at=0, end=0, start=0, name=FIX_MULTIPLY, consume=(a, b, shift))
-    emitted = consume(site, Flag.NONE)
-    assert not isinstance(emitted, str)
-    # pop ecx (shift) / pop edx (b) / pop eax (a) / imul edx / shrd eax,edx,cl / restore
-    assert emitted.code == hx("66 59  66 5A  66 58  66 F7 EA  66 0F AD D0  66 50 58 5A")
-    assert SHRD_CL in emitted.code
-    assert SHRD_IMM8 not in emitted.code
-    assert bytes([0x66, 0xF7, 0xEA]) in emitted.code, "imul edx, the one-operand form"
 
 
 def test_consume_refuses_a_compare_whose_synthesised_flags_are_read() -> None:

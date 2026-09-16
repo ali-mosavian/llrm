@@ -60,14 +60,8 @@ class Result:
         return all(v.ok for v in self.verdicts)
 
 
-# fixmul declares a routine nothing defines: the differential needs a base BC
-# alone can link, and no library ever provides FIXMUL. tests/test_fix_multiply
-# covers it, without a base, the way its own docstring explains.
-NO_BASE = {"fixmul"}
-
-
 def programs(source_dir: Path = SUITE) -> list[str]:
-    return sorted(p.stem for p in source_dir.glob("*.bas") if p.stem not in NO_BASE)
+    return sorted(p.stem for p in source_dir.glob("*.bas"))
 
 
 def lines(text: str) -> list[str]:

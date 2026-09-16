@@ -222,6 +222,17 @@ def _interference(body: lir.LirBody) -> dict[int, set[int]]:
                 while first > 0 and block.insns[first - 1].group == one.group:
                     first -= 1
                 group = block.insns[first : index + 1]
+                # The values live after a parallel copy all coexist.  This
+                # is normally recorded one instruction at a time below, but
+                # a group deliberately has no instruction order: treating
+                # its destinations as though one were written before the
+                # next let two loop phis with the same initial value become
+                # one value.  crosscall's running total and loop counter
+                # both started at zero, then the generated loop compared the
+                # total against its bound instead of the counter.
+                for value in alive:
+                    for other in alive:
+                        edge(value, other)
                 # A phi-copy group happens simultaneously: every source is
                 # live before any destination is written.  Reading the
                 # printed order as execution order let fibonacci64 merge

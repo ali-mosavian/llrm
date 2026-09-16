@@ -154,19 +154,26 @@ def _nbody_inner_loop():
 
 
 def test_nbody_counts_its_inner_loop_in_one_register() -> None:
-    """nbody's `other` went `mov cx,bx / inc cx / cmp cx,5 / mov bx,cx` on every pass.
+    """nbody's `other` was incremented and compared in a frame slot.
 
-    The dead writes kept their values live across the loop, and the counter's
-    copy into its increment could not be coalesced.
+    Exit-phi copies extended both accumulators across the branch and made the
+    allocator spill the hotter counter.  Locate the latch by its back branch,
+    not by assuming scheduling leaves the compare adjacent to it.
     """
-    from iced_x86 import Mnemonic
     from iced_x86 import FlowControl
+    from iced_x86 import Mnemonic
+    from iced_x86 import OpKind
 
     loop = _nbody_inner_loop()
-    step = next(index for index, one in enumerate(loop) if one.mnemonic == Mnemonic.INC)
-    counted, compared, branch = loop[step : step + 3]
-    assert compared.mnemonic == Mnemonic.CMP and compared.op0_register == counted.op0_register
-    assert branch.flow_control == FlowControl.CONDITIONAL_BRANCH
+    branch_at = max(index for index, one in enumerate(loop) if one.flow_control == FlowControl.CONDITIONAL_BRANCH)
+    compare_at = max(index for index, one in enumerate(loop[:branch_at]) if one.mnemonic == Mnemonic.CMP)
+    compared = loop[compare_at]
+    assert compared.op0_kind == OpKind.REGISTER
+    counter = compared.op0_register
+    assert any(
+        one.mnemonic == Mnemonic.INC and one.op0_kind == OpKind.REGISTER and one.op0_register == counter
+        for one in loop[:compare_at]
+    )
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])

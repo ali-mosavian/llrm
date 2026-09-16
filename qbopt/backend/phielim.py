@@ -113,10 +113,19 @@ def eliminated(body: lir.LirBody) -> lir.LirBody:
                     )
                 )
         for where, pairs in crossing.items():
-            # A loop entered at its body has its back edge here: the copies
-            # define only what the loop reads, so they run before the branch
-            # instead of from a block placed out of line.
-            if any(_observed(body, at_of, where, block.at, result) for result, _ in pairs):
+            # A copy may run in the predecessor only when neither end needs
+            # a distinct value on its other paths.  A result observed there
+            # makes the early write wrong outright; a source observed there
+            # makes source and result overlap, preventing the coalescer from
+            # proving the copy free.  Put either shape on its actual edge.
+            # nbody's two accumulator exits stayed in the branching block,
+            # forced four values live at once, and spilled the hotter loop
+            # counter instead.
+            if any(
+                _observed(body, at_of, where, block.at, result)
+                or _observed(body, at_of, where, block.at, value)
+                for result, value in pairs
+            ):
                 split.setdefault((where, block.at), []).extend(pairs)
                 continue
             for result, value in pairs:
@@ -148,6 +157,15 @@ def _observed(body: lir.LirBody, at_of: dict, where: int, into: int, value: int)
     `into` defines it, so a path through `into` reads a new one.
     """
     pending = [at for at in at_of[where].succ if at != into]
+    # A phi reads on the incoming edge, before any instruction in its block.
+    # The walk below sees phis on later edges, but an immediate alternate
+    # successor has no intervening block from which to discover this one.
+    if any(
+        (where, value) in phi.incoming
+        for at in pending
+        for phi in getattr(at_of.get(at), "phis", ())
+    ):
+        return True
     seen = set(pending)
     while pending:
         block = at_of.get(pending.pop())

@@ -349,30 +349,6 @@ def nbody() -> list[str]:
     return [*lines, "DONE"]
 
 
-def fixmul() -> list[str]:
-    """(int32)(((int64) a * b) >> fixShift) -- SHRD across edx:eax, not BASIC's \\.
-
-    Python's >> on an int of any sign is a floor shift, which is exactly what
-    SHRD produces for the corresponding 32-bit window of a two's-complement
-    value: extracting it needs no sign correction of its own, at any width.
-    """
-    cases = [
-        (65536, 131072, 16),
-        (-65536, 131072, 16),
-        (-65536, -131072, 16),
-        (2147483647, 2, 16),
-        (-2147483648, 65536, 16),
-        (65536, 131072, 8),
-        (65536, 131072, 16),
-    ]
-    lines = []
-    for n, (a, b, shift) in enumerate(cases, start=1):
-        result = s32((a * b) >> shift)
-        lines.append(f"M{n}={num(result)}")
-        lines.append(f"F{n}={qbfloat(result / (1 << shift))}")
-    return [*lines, "DONE"]
-
-
 def arrays() -> list[str]:
     """suite/arrays.bas: array elements and a chained, unstored subexpression.
 
@@ -554,7 +530,6 @@ PROGRAMS = {
     "fpdeep": fpdeep,
     "chain": chain,
     "nbody": nbody,
-    "fixmul": fixmul,
     "arrays": arrays,
     "udt": udt,
     "arrudt": arrudt,

@@ -140,8 +140,8 @@ what the popped value is then used for: `push <hi>/push <lo>/pop <root>`
 reconstructs the exact bit pattern the register pair held before the restore
 ran, as a mechanical fact about the stack, not about any one absorbed
 routine's own semantics -- so this fires identically whether the next edit
-is `MULTIPLY`/`DIVIDE`/`REMAINDER`'s single pop or `FIX_MULTIPLY`'s first of
-three. On `bench/nbody.bas` (measured after D and I, both below, are already
+is `MULTIPLY`/`DIVIDE`/`REMAINDER`'s single pop. On `bench/nbody.bas`
+(measured after D and I, both below, are already
 in): all 3 instances gone, 24 bytes, the object's own code segment 1419 ->
 1395 bytes, and `tools/residue_census.py`'s own B count on the freshly
 rewritten object is 0. Not exercised by any of the 110 `fixtures/omf` objects: the shape
@@ -595,7 +595,7 @@ seeds pair 0 with it and re-runs `lift()`'s own pairing rules
 (`_negate_step`/`_pair_step`, extracted unchanged so `tests/test_lift.py` is
 the regression proof nothing about ordinary widening moved) -- so the NEGATE
 idiom in the worked example above is covered for free. `calls.py`'s
-`absorb()`/`consume()`/`dividing()`/`fix_multiply()` gain a `restore: bool =
+`absorb()`/`consume()`/`dividing()` gain a `restore: bool =
 True` parameter, so a call folded into a wider region drops its own trailing
 restore rather than putting the high half back only to immediately re-derive
 it from eax. `qbopt/rewrite.py`'s new `tail_widened_calls()` composes the

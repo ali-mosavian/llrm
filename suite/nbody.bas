@@ -6,9 +6,8 @@
 ' the quantity squared here is a position delta, and this simulation never
 ' lets one exceed about 5,500 raw, so deltaX * deltaX stays under 15 per
 ' cent of a long -- exactly what BC's own `*` compiles to, a call to
-' B$MUI4, which qbopt absorbs into one imul. Nothing here needs a callee
-' with no library body, which is the point: this program has a base build
-' BC alone can link, and fixMul& never does.
+' B$MUI4, which qbopt absorbs into one imul. This program keeps a base build
+' that BC can link by itself.
 '
 ' Measured rather than picked round: 9 is the most fraction bits this
 ' simulation's own range affords before a bare `*` overflows. 8 was tried

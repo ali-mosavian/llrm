@@ -597,12 +597,19 @@ def test_loop_tests_at_its_bottom(name):
 
 
 def test_short_value_crosses_a_call_in_si_or_di():
-    """A call was said to destroy every register, so the running total lived
-    in a slot and each pass wrote `add word ptr [bp-4], ax`. The callee keeps
-    SI and DI as 16-bit registers."""
+    """crosscall's total and counter were merged because both started at zero.
+
+    Besides producing the wrong loop condition, that left `add ax,si / mov
+    si,ax` in place of an update to the callee-saved accumulator. Parallel
+    phi destinations must remain distinct, and the total should cross MAP in
+    SI or DI without a frame round trip or a result copy.
+    """
     text = cfront.compiled((FIXTURES / "crosscall.cgs").read_text(), "crosscall", optimise=True)
     body = _proc([line.strip() for line in text.splitlines()], "_total")
-    assert any(line in ("add si, ax", "add di, ax") for line in body), body
+    updates = [line for line in body if line in ("add si, ax", "add di, ax")]
+    assert len(updates) == 1, body
+    accumulator = updates[0].split()[1].rstrip(",")
+    assert not any(line == f"mov {accumulator}, ax" for line in body), body
 
 
 def test_loaded_far_pointer_moves_whole():

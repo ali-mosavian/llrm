@@ -500,23 +500,10 @@ def lowered(
     from qbopt.backend import lower_floats
     from qbopt.backend import lower_switches
 
-    wide = next(
-        (
-            (op, operand)
-            for block in body.blocks
-            for op in block.ops
-            for operand in (*op.args, *op.results)
-            if isinstance(operand, (mir.Held, mir.Const)) and operand.width == 8
-        ),
-        None,
-    )
-    if wide is not None:
-        op, _operand = wide
-        # MIR deliberately keeps int64 whole.  Splitting it into the target
-        # ABI's words or register pairs belongs here, and until that lowering
-        # exists a hard refusal is safer than handing an impossible width to
-        # the 16/32-bit allocator as though EAX were eight bytes wide.
-        raise Unlowered(f"{name}: 64-bit integer lowering is not implemented ({op.kind} at {op.at:#x})")
+    # Width does not identify a type here: a folded DOUBLE store and C's
+    # int64 are both eight bytes.  The C path runs lower_int64 before this
+    # generic boundary; `_constant_store` below splits an eight-byte memory
+    # bit pattern without pretending it is integer arithmetic.
 
     try:
         body = lower_switches.expanded(body)
