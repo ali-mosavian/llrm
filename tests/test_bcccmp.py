@@ -46,3 +46,26 @@ def test_stack_join_costs_only_its_one_excess_instruction():
     """The scoreboard charged two for push/push/pop, although BCC's SHL/SHRD replacement saves one."""
     cost = next(cost for cause, _pattern, cost in bcccmp.CAUSES if cause == "halves joined through the stack")
     assert cost == 1
+
+
+def test_load_compare_gap_requires_the_loaded_register_to_die():
+    """Six reported load/compare gaps kept the register live; BCC kept those loads too."""
+    live = [
+        "mov si, word ptr [bp+14]",
+        "or si, si",
+        "je L0_8",
+        "mov dword ptr [si], 0",
+        "L0_8:",
+        "mov ax, word ptr [bp+8]",
+    ]
+    dead = [
+        "mov ax, word ptr [bp-16]",
+        "or ax, ax",
+        "jg L0_8",
+        "retf",
+        "L0_8:",
+        "mov eax, dword ptr [bp+8]",
+    ]
+
+    assert bcccmp.dead_load_compares(live) == 0
+    assert bcccmp.dead_load_compares(dead) == 1

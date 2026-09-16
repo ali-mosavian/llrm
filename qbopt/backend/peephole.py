@@ -687,8 +687,11 @@ def fused(body: lir.LirBody) -> lir.LirBody:
                 continue
             reads, writes = effects
             dead = (dead | writes) - reads
-        work = [index for index, one in enumerate(insns) if not _skippable_nothing(one)]
-        removed = set()
+        # A NOTHING is no machine instruction even when it still carries an
+        # SSA edge.  Allocation leaves such anchors behind for identity
+        # copies; looking only through edge-free anchors made physically
+        # adjacent loads and compares invisible here.
+        work = [index for index, one in enumerate(insns) if not _nothing(one)]
         at = 0
         while at + 1 < len(work):
             store = work[at + 2] if at + 2 < len(work) else None
@@ -704,11 +707,15 @@ def fused(body: lir.LirBody) -> lir.LirBody:
                 continue
             replacement, used = made
             insns[work[at + 1]] = replacement
-            removed.add(work[at])
+            # Keep the virtual definitions and byte ownership.  The fused
+            # machine instruction replaces the physical load/store only;
+            # deleting either instruction also deletes SSA edges carried by
+            # intervening identity-copy anchors.
+            insns[work[at]] = lir.anchor(insns[work[at]])
             if used == 3:
-                removed.add(work[at + 2])
+                insns[work[at + 2]] = lir.anchor(insns[work[at + 2]])
             at += used
-        blocks.append(replace(block, insns=tuple(one for index, one in enumerate(insns) if index not in removed)))
+        blocks.append(replace(block, insns=tuple(insns)))
     return replace(body, blocks=tuple(blocks))
 
 
@@ -802,8 +809,7 @@ def _fused(load, work, store, dead_work, dead_store) -> "tuple[lir.Insn, int] | 
             return None
     if select.emit(made) is None:
         return None
-    uses = tuple(one for one in work.uses if one not in load.defines)
-    return replace(work, what=made, defines=(), uses=uses), used
+    return replace(work, what=made), used
 
 
 def far_loads(body: lir.LirBody) -> lir.LirBody:

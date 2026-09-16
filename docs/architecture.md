@@ -1093,6 +1093,17 @@ one documented target without materially regressing another.
   physical flags as clobbered. Across the same 15 recorded Watcom streams all
   eight stack joins disappear: 792 → 784 instructions (`ls_selftest` 327 →
   320 and `qgl_surf_from_member` 76 → 75), against BCC's 939 total.
+- [x] Fold allocated one-use loads into x86 memory operands across metadata
+  anchors. Identity copies remain in LIR as zero-byte anchors carrying their
+  SSA definitions; they are not machine instructions and therefore do not
+  separate a load from its consumer. The fold anchors the replaced load/store
+  instead of deleting its virtual edges, then relies on instruction selection
+  to validate the memory form, following LLVM's target fold-table boundary.
+  `ls_animate` now matches BCC's `cmp word ptr [bp-16],0` instead of
+  `mov ax,[bp-16]; or ax,ax`; the recorded C set falls 784 → 783 instructions.
+  The comparison instrument now reports only loads whose temporary is dead on
+  every CFG path: six superficially identical but register-live sites were not
+  opportunities and BCC retained their loads too.
 - [ ] Add machine CSE and dead-machine-instruction elimination over allocated
   LIR.
 - [ ] Add branch folding and tail merging after final block placement.

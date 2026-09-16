@@ -823,9 +823,14 @@ def test_register_round_trip_through_memory_is_one_instruction(variant, printed)
         assert [line for one in result.insns for line in masm._instruction(one.what, {}, 0)] == printed
 
 
-def test_fusion_does_not_cross_a_virtual_dataflow_anchor():
-    """qcport's ls_animate lost value#207 when fusion skipped an anchor,
-    removed the spill reload defining it, and left the anchor reading it."""
+def test_fusion_preserves_a_virtual_dataflow_anchor():
+    """ls_animate emitted MOV AX,[bp-16]; OR AX,AX although BCC compares the slot.
+
+    The two physical instructions are adjacent, but an identity copy already
+    removed by allocation leaves a zero-byte anchor between them.  Folding
+    across it must retain both virtual definitions; deleting the reload used
+    to leave value#207 undefined.
+    """
     from qbopt.backend import verify
     from qbopt.objectfile.module import Addr
     from qbopt.objectfile.module import Space
@@ -865,6 +870,12 @@ def test_fusion_does_not_cross_a_virtual_dataflow_anchor():
     done = peephole.fused(body)
 
     assert not verify.verify(done)
+    physical = [one for one in done.blocks[0].insns if one.what.op is not ir.Operation.NOTHING]
+    assert len(physical) == 2
+    assert physical[0].what == ir.Semantics(ir.Operation.COMPARE, "cmp", (), (cell, ir.Imm(0, 2)))
+    assert done.blocks[0].insns[0].what.op is ir.Operation.NOTHING
+    assert done.blocks[0].insns[0].defines == (2,)
+    assert done.blocks[0].insns[1].defines == (3,)
 
 
 def test_indirect_call_target_is_physically_live_into_the_call():

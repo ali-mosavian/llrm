@@ -178,7 +178,6 @@ CAUSES = (
         r"mov (\w\w), word ptr (\[bp-\w+\])\n(add|sub|and|or|xor|shl|shr) \1, [^\n]+\nmov word ptr \2, \1\n",
         2,
     ),
-    ("slot load then test or compare", r"mov (\w\w), (word ptr )?\[bp[-+]\w+\]\n(or \1, \1|cmp \1, -?\w+)\n", 1),
     ("constant stored to slot and register", r"mov word ptr \[bp-\w+\], -?\d+\n(mov \w\w, -?\d+|xor (\w\w), \2)\n", 1),
     ("mov sp,bp; pop bp", r"mov sp, bp\npop bp\n", 1),
     # The loop header's label sits between the constant and its compare.
@@ -210,11 +209,96 @@ def jumps(lines: list[str]) -> Counter:
     return found
 
 
+_REGISTER_ROOTS = {
+    alias: root
+    for root, aliases in {
+        "a": ("al", "ah", "ax", "eax"),
+        "b": ("bl", "bh", "bx", "ebx"),
+        "c": ("cl", "ch", "cx", "ecx"),
+        "d": ("dl", "dh", "dx", "edx"),
+        "si": ("si", "esi"),
+        "di": ("di", "edi"),
+        "bp": ("bp", "ebp"),
+        "sp": ("sp", "esp"),
+    }.items()
+    for alias in aliases
+}
+
+
+def _register_dies(lines: list[str], start: int, register: str, labels: dict[str, int]) -> bool:
+    """Whether every textual path kills `register` before reading it.
+
+    This is deliberately conservative.  The comparison scoreboard must not
+    call a load excess merely because it happens to sit before a comparison;
+    a later use on either successor makes the register form necessary.  Pure
+    full-register writes end a path, while any other mention is a read.
+    """
+    root = _REGISTER_ROOTS.get(register)
+    if root is None:
+        return False
+    aliases = {name for name, one in _REGISTER_ROOTS.items() if one == root}
+    words = re.compile(r"\b(" + "|".join(sorted(aliases, key=len, reverse=True)) + r")\b")
+    pending, seen = [start], set()
+    while pending:
+        at = pending.pop()
+        if at in seen:
+            return False
+        seen.add(at)
+        if at >= len(lines):
+            continue
+        line = lines[at].lower()
+        if line.endswith(":"):
+            pending.append(at + 1)
+            continue
+        opcode, _, operands = line.partition(" ")
+        parts = [one.strip() for one in operands.split(",")]
+        destination = parts[0] if parts else ""
+        source = ",".join(parts[1:])
+        width = 4 if destination.startswith("e") else 1 if destination.endswith(("l", "h")) else 2
+        pure_write = opcode in {"mov", "movsx", "movzx", "lea", "pop"} and destination in aliases and width >= 2
+        zero_idiom = opcode in {"xor", "sub"} and len(parts) == 2 and parts[0] == parts[1] in aliases
+        if (pure_write and not words.search(source)) or zero_idiom:
+            continue
+        if words.search(line):
+            return False
+        if opcode in {"ret", "retf", "iret"}:
+            continue
+        target = parts[0] if parts else ""
+        if opcode == "jmp":
+            if target not in labels:
+                return False
+            pending.append(labels[target])
+        elif opcode.startswith("j"):
+            if target not in labels:
+                return False
+            pending.extend((at + 1, labels[target]))
+        else:
+            pending.append(at + 1)
+    return True
+
+
+def dead_load_compares(lines: list[str]) -> int:
+    """Loads folded by a memory comparison: the temporary dies on every path."""
+    labels = {match.group(1).lower(): at for at, line in enumerate(lines) if (match := LABEL.match(line))}
+    found = 0
+    for at in range(len(lines) - 1):
+        load = re.fullmatch(r"mov (\w+), (?:word ptr )?\[bp[-+]\w+\]", lines[at].lower())
+        if load is None:
+            continue
+        register = load.group(1)
+        if not re.fullmatch(rf"(?:or {register}, {register}|cmp {register}, -?\w+)", lines[at + 1].lower()):
+            continue
+        found += _register_dies(lines, at + 2, register, labels)
+    return found
+
+
 def counted(lines: list[str]) -> Counter:
     """Each cause's sites in one procedure's printed lines."""
     # Labels stay in: a pattern across one spans two blocks, which nothing local can fuse.
-    printed = "\n" + "\n".join(instructions(lines, listing=False, labels=True)) + "\n"
+    decoded = instructions(lines, listing=False, labels=True)
+    printed = "\n" + "\n".join(decoded) + "\n"
     found = Counter({cause: len(re.findall(pattern, printed)) for cause, pattern, _cost in CAUSES})
+    found["dead slot load before test or compare"] = dead_load_compares(decoded)
     found.update(jumps(lines))
     return found
 
