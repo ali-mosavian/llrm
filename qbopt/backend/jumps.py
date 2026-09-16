@@ -24,17 +24,27 @@ def placed(body: lir.LirBody) -> lir.LirBody:
     branch back to the body.
     """
     from qbopt.backend import masm
+    from qbopt.analysis import loops
 
     explicit = []
     for block in body.blocks:
         fall = masm._falls_to(block, body.name)
         if fall is not None:
             at = block.insns[-1].at if block.insns else block.at
-            jump = lir.Insn(at=at, covers=(at, at), what=ir.Semantics(ir.Operation.JUMP, "jmp", (), (), fall), defines=(), uses=())
+            jump = lir.Insn(
+                at=at, covers=(at, at), what=ir.Semantics(ir.Operation.JUMP, "jmp", (), (), fall), defines=(), uses=()
+            )
             block = replace(block, insns=(*block.insns, jump))
         explicit.append(block)
     by_at = {block.at: block for block in explicit}
-    tests = _tests(explicit, body.entry, by_at)
+    natural = loops.loops(explicit, body.entry)
+    tests = _tests(natural, body.entry, by_at)
+    # loops() is innermost first.  A block in nested loops follows the nearest
+    # loop's trace before an exit from it; the outer trace resumes afterwards.
+    inside: dict[int, frozenset[int]] = {}
+    for loop in natural:
+        for at in loop.body:
+            inside.setdefault(at, loop.body)
     order: list[lir.LirBlock] = []
     done: set[int] = set()
     current: int | None = body.entry
@@ -50,11 +60,11 @@ def placed(body: lir.LirBody) -> lir.LirBody:
         block = by_at[current]
         order.append(block)
         done.add(current)
-        current, source = _onward(block, done), current
+        current, source = _onward(block, done, inside.get(block.at, frozenset())), current
     return replace(body, blocks=tuple(order))
 
 
-def _onward(block: lir.LirBlock, done: set[int]) -> int | None:
+def _onward(block: lir.LirBlock, done: set[int], inside: frozenset[int] = frozenset()) -> int | None:
     """The block to place next: where the final jump goes, or else where the branch before it goes.
 
     The branch's target second, so that `jcc target; jmp placed` becomes one inverted branch.
@@ -62,19 +72,25 @@ def _onward(block: lir.LirBlock, done: set[int]) -> int | None:
     real = [one.what for one in block.insns if one.what.op is not ir.Operation.NOTHING]
     if not real or real[-1].op is not ir.Operation.JUMP:
         return None
-    if real[-1].target not in done:
-        return real[-1].target
-    if len(real) > 1 and real[-2].op is ir.Operation.BRANCH and real[-2].target not in done:
-        return real[-2].target
+    targets = [real[-1].target]
+    if len(real) > 1 and real[-2].op is ir.Operation.BRANCH:
+        targets.append(real[-2].target)
+    # Keep a loop chain together before following an exit.  The final jump is
+    # still preferred when both edges stay in the loop, preserving the source
+    # fall-through unless doing so would strand the rest of the loop.
+    for target in targets:
+        if target not in done and target in inside:
+            return target
+    for target in targets:
+        if target not in done:
+            return target
     return None
 
 
-def _tests(blocks: list, entry: int, by_at: dict) -> dict[int, tuple[int, frozenset[int]]]:
+def _tests(natural: list, entry: int, by_at: dict) -> dict[int, tuple[int, frozenset[int]]]:
     """Each loop header that only decides whether to go round: its one successor inside, and its latches."""
-    from qbopt.analysis import loops
-
     found = {}
-    for loop in loops.loops(blocks, entry):
+    for loop in natural:
         block = by_at[loop.header]
         real = [one.what for one in block.insns if one.what.op is not ir.Operation.NOTHING]
         inner = [at for at in block.succ if at in loop.body and at != loop.header]
