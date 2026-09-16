@@ -98,7 +98,7 @@ def test_a_rebuilt_object_keeps_every_code_fixup_it_still_has_a_home_for(obj: Pa
     Not every one survives now, and exactly one kind may not: the high half
     of a widened pair reads `[x+2]`, and folding the pair takes that
     relocation with it because there is no longer an instruction with that
-    operand. layout.py reports which, relocate.py drops only those, and one
+    operand. layout.py reports which, omfwrite.py drops only those, and one
     it cannot explain is still refused outright -- so the count is checked
     against what was deliberately dropped rather than relaxed.
     """
@@ -418,7 +418,9 @@ def test_rebuilt_still_answers_exactly_what_it_used_to(stem: str) -> None:
     assert isinstance(out, bytes) and isinstance(why, str)
 
 
-def test_a_spilled_copy_stays_grouped_and_legacy_refusals_are_reported() -> None:
+def test_a_spilled_copy_stays_grouped_and_backend_refusals_are_reported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """`mov [bp-2],[bp-4]` is not an instruction, and a phi's copies happen
     at once, so breaking it into a load and a store puts an ungrouped one
     inside the group. Keep both slots in one grouped move for scheduling.
@@ -454,19 +456,19 @@ def test_a_spilled_copy_stays_grouped_and_legacy_refusals_are_reported() -> None
     assert isinstance(grouped[0].what.dests[0], ir.Mem)
     assert isinstance(grouped[0].what.sources[0], ir.Mem)
 
-    # And the emitter catches it rather than letting it escape: five
-    # objects crashed the rewrite before it was caught by name. Provoked
-    # on an object that does reach the spiller, so the path is the real one.
-    real = spiller.spilled
+    # And the emitter catches it rather than letting it escape: five objects
+    # crashed before it was caught by name. Inject through the machine-phase
+    # list rather than assuming a particular fixture will always spill.
+    from qbopt import flow
 
-    def refusing(*args, **kwargs):
-        raise spiller.Simultaneous("both ends in slots")
+    class Refusing:
+        name = "refusing"
 
-    spiller.spilled = refusing
-    try:
-        got = wholeseg.emitted((Path("fixtures/omf") / "matrix-v-g3.obj").read_bytes())
-    finally:
-        spiller.spilled = real
+        def transform(self, _body):
+            raise spiller.Simultaneous("both ends in slots")
+
+    monkeypatch.setattr(flow, "machine", lambda *_args, **_kwargs: [Refusing()])
+    got = wholeseg.emitted((Path("fixtures/omf") / "matrix-v-g3.obj").read_bytes())
     assert got.outcome is wholeseg.Emission.REFUSED
     assert got.data == Path("fixtures/omf/matrix-v-g3.obj").read_bytes()
     assert "Simultaneous" in got.reason

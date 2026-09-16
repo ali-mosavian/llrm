@@ -42,14 +42,12 @@ from collections.abc import Callable
 
 from qbopt.model import ir
 from qbopt.objectfile import omf
+from qbopt.rewrite import Region
 from qbopt.frontend import blocks
 from qbopt.frontend import extent
+from qbopt.rewrite import rewrite
 from qbopt.objectfile import module
 from qbopt.frontend.declen import Insn
-from qbopt.objectfile.relocate import Shift
-from qbopt.rewrite import Region
-from qbopt.rewrite import rewrite
-from qbopt.objectfile.relocate import relocate
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE_ROOT = ROOT / "build" / "corpus-cache"
@@ -207,21 +205,6 @@ def rewritten(
     return out, list(regions)
 
 
-def relocated(source: Path | bytes, shift: Shift) -> list[omf.Record] | str:
-    data = _bytes(source)
-
-    def compute() -> list[omf.Record] | str:
-        records = omf.parse(data)
-        segment = omf.code_segment(records)
-        assert segment is not None
-        seg, _name, size = segment
-        return relocate(records, seg, omf.segment_image(records, seg, size), shift)
-
-    # a Shift is plain data too, so pickling it is a content key like any other
-    out = _on_disk(_key("relocate", data, pickle.dumps(shift, protocol=5)), compute)
-    return out if isinstance(out, str) else list(out)
-
-
 def mappable(source: Path | bytes) -> bool:
     data = _bytes(source)
     return _on_disk(_key("mappable", data), lambda: loaded(data) is not None and not isinstance(mapped(data), str))
@@ -233,7 +216,9 @@ def runtime_library(obj: Path) -> Path:
     import re
 
     import pytest
-    from configs import PDS71, QB45, VBDOS
+    from configs import QB45
+    from configs import PDS71
+    from configs import VBDOS
 
     compiler = re.search(r"-([pqv])-", Path(obj).name).group(1)
     library = {

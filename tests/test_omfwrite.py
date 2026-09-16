@@ -19,19 +19,13 @@ sys.path.insert(0, str(ROOT / "tools"))
 import objcmp  # noqa: E402
 
 
-def test_the_bc_frontend_uses_the_fresh_object_writer(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_bc_frontend_uses_the_fresh_object_writer() -> None:
     """hotlop used to finish by rewriting BC's record stream in place.
 
     BC OBJ remains an input frontend, but no output is allowed to depend on
     the record rewriter: both frontends must construct a complete new OMF
     object through this module.
     """
-    from qbopt.objectfile import relocate
-
-    def old_path(*_args: object, **_kwargs: object) -> object:
-        raise AssertionError("the record-rewriting emitter was used")
-
-    monkeypatch.setattr(relocate, "as_records", old_path, raising=False)
     source = (ROOT / "fixtures" / "omf" / "hotlop-p-g2.obj").read_bytes()
     got = wholeseg.emitted(source)
     assert got.outcome is wholeseg.Emission.LIR
@@ -42,6 +36,23 @@ def test_the_bc_frontend_uses_the_fresh_object_writer(monkeypatch: pytest.Monkey
     # record-local compression and emits every relocation explicitly.
     assert any(not one.body[0] & 0x80 for one in omf.parse(source) if one.type & 0xFE == omf.FIXUPP)
     assert all(one.body[0] & 0x80 for one in records if one.type & 0xFE == omf.FIXUPP)
+
+
+def test_expanded_operation_can_cross_records_without_splitting_fixups() -> None:
+    """NDMAX's 60-dimensional HARY expansion exceeded one LEDATA and was refused."""
+    size = omfwrite.CHUNK * 3
+    starts = (omfwrite.CHUNK - 1, 2 * omfwrite.CHUNK - 2)
+    fixups = []
+    for at in starts:
+        one = omf.target_offset_fixup(1, at, "segment", 1, 0)
+        one.loc = omf.LOC_PTR32
+        fixups.append((at, one, 0))
+    records = omfwrite._fresh_segment(1, bytes(size), [(0, size)], fixups)
+    assert not isinstance(records, str)
+    chunks = [(at, at + len(data)) for _record, _seg, at, data in omf.ledata(records)]
+    assert chunks[0][0] == 0 and chunks[-1][1] == size
+    assert all(0 < right - left <= omfwrite.CHUNK for left, right in chunks)
+    assert not any(low < cut < low + 4 for cut in (right for _left, right in chunks) for low in starts)
 
 
 def test_an_obj_output_uses_the_native_writer(tmp_path: Path) -> None:
@@ -151,3 +162,55 @@ def test_the_object_comparison_sees_a_different_public_definition(tmp_path: Path
     theirs.write_bytes(omfwrite.written(public, "m.c"))
 
     assert objcmp.compared(str(ours), str(theirs)) == ["publics {} != {'_cell': (2, 0)}"]
+
+
+def test_a_fixup_naming_an_offset_the_layout_did_not_place_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A generated fixup may never retain an obsolete code displacement.
+
+    ADDRM is a stable witness: it emits freshly while a same-segment fixup
+    names a code offset. Remove the final mapping answer and the whole object
+    must be refused rather than silently point at the old layout.
+    """
+    source = (ROOT / "fixtures" / "omf" / "addrm-v-evt.obj").read_bytes()
+    real = omfwrite._mapped
+    seen: list[int] = []
+
+    def watch(offset: int, kept: int, moved: dict[int, int]) -> int | None:
+        seen.append(offset)
+        return real(offset, kept, moved)
+
+    monkeypatch.setattr(omfwrite, "_mapped", watch)
+    assert wholeseg.emitted(source).outcome is wholeseg.Emission.LIR
+    assert seen, "the witness no longer asks the writer to map an offset"
+
+    last = len(seen) - 1
+    calls = 0
+
+    def missing(offset: int, kept: int, moved: dict[int, int]) -> int | None:
+        nonlocal calls
+        calls += 1
+        return None if calls - 1 == last else real(offset, kept, moved)
+
+    monkeypatch.setattr(omfwrite, "_mapped", missing)
+    got = wholeseg.emitted(source)
+    assert got.outcome is wholeseg.Emission.REFUSED
+    assert "a fixup names" in got.reason
+
+
+def test_every_fresh_object_maps_every_code_offset_it_names(obj: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every record and fixup offset in an accepted object has a new home."""
+    unmapped: list[int] = []
+    real = omfwrite._mapped
+
+    def watch(offset: int, kept: int, moved: dict[int, int]) -> int | None:
+        out = real(offset, kept, moved)
+        if out is None:
+            unmapped.append(offset)
+        return out
+
+    monkeypatch.setattr(omfwrite, "_mapped", watch)
+    got = wholeseg.emitted(obj.read_bytes())
+    if got.outcome is wholeseg.Emission.LIR:
+        assert not unmapped, f"{obj.stem}: emitted while {len(unmapped)} offsets did not map"

@@ -1,7 +1,7 @@
 """The assembler: instructions in, one image and its relocations out.
 
 LLVM's `MCAssembler`. `select.py` is the `MCCodeEmitter` above it -- what
-one instruction's bytes are -- and `relocate.py` the `MCObjectWriter`
+one instruction's bytes are -- and `omfwrite.py` the `MCObjectWriter`
 below, which turns the image and its relocations into records. This is the
 middle: how long each instruction is, where each therefore lands, which
 branches can shrink now that everything is closer, and where each fixup
@@ -60,7 +60,7 @@ class Laid:
     # Fixups that belonged to an instruction this body no longer contains --
     # the high half of a widened pair reads `[x+2]` and folding it away
     # takes that relocation with it. Reported rather than silently omitted:
-    # relocate.py refuses a fixup it cannot place, which is what catches a
+    # omfwrite.py refuses a fixup it cannot place, which is what catches a
     # dropped one, and it can only tell the two apart if told which were
     # meant to go.
     dropped: frozenset[int] = frozenset()
@@ -507,7 +507,7 @@ def _field_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -
     # on the very byte of a far call whose target is a fixup. Both would be
     # found by the search below and neither belongs to it. The fixup itself
     # is not lost -- it falls inside the covers of whatever stands for those
-    # bytes, which is what `Laid.dropped` reports and relocate.py skips.
+    # bytes, which is what `Laid.dropped` reports and omfwrite.py skips.
     if isinstance(op.node, ir.Restore):
         return None
     if op.symbol is False:
@@ -940,7 +940,7 @@ def assemble(
     # Every fixup inside a surviving op's `covers` but outside its own
     # node's span belonged to something a transform folded away. One
     # outside every op's covers is not explained by anything here, and
-    # relocate.py still refuses it.
+    # omfwrite.py still refuses it.
     kept_fields = {one for _where, one in relocations}
     explained: set[int] = set()
     known = fields or frozenset(found.fixup_at)

@@ -141,41 +141,6 @@ MUTATIONS = (
         "BC's backpatch records overwritten by the earlier ones",
     ),
     Mutation(
-        "shift-boundary",
-        "qbopt/objectfile/relocate.py",
-        "            if offset >= edit.hi:",
-        "            if offset > edit.hi:",
-        "an offset exactly at a region's end is treated as inside it",
-    ),
-    Mutation(
-        "branch-from-start",
-        "qbopt/objectfile/relocate.py",
-        "    return shift.at(branch.target) - shift.before(branch.end)",
-        "    return shift.at(branch.target) - shift.before(branch.at)",
-        "a branch mapped from its own start rather than its end",
-    ),
-    Mutation(
-        "rel8-truncated",
-        "qbopt/objectfile/relocate.py",
-        "        if not reaches(branch, moved):",
-        "        if False:",
-        "a rel8 that no longer reaches, truncated instead of refused",
-    ),
-    Mutation(
-        "target-not-shifted",
-        "qbopt/objectfile/relocate.py",
-        "                disp = shift.at(fixup.disp) if into_code else None",
-        "                disp = fixup.disp if into_code else None",
-        "a fixup's offset moved but not what it points at",
-    ),
-    Mutation(
-        "branch-end-not-before-insertion",
-        "qbopt/objectfile/relocate.py",
-        "    return shift.at(branch.target) - shift.before(branch.end)",
-        "    return shift.at(branch.target) - shift.at(branch.end)",
-        "a branch ending exactly at a pure insertion shifted past it instead of left in front",
-    ),
-    Mutation(
         "divergence-gate",
         "qbopt/analysis/flags.py",
         "DIVERGENT = Flag.ZF | Flag.PF | Flag.AF",
@@ -243,8 +208,7 @@ MUTATIONS = (
         "qbopt/legacy/lift.py",
         "            return MemoryOperand(base=base, displ=disp, displ_size=2, seg=segment)",
         "            return MemoryOperand(base=base, displ=disp, displ_size=2)",
-        "`es:[bx]` widened to `ds:[bx]` -- the override dropped, so the pair "
-        "reads and writes the wrong segment",
+        "`es:[bx]` widened to `ds:[bx]` -- the override dropped, so the pair reads and writes the wrong segment",
     ),
     Mutation(
         "group-address-not-refused",
@@ -266,21 +230,6 @@ MUTATIONS = (
         "    Register.AL: Register.EAX,",
         "",
         "a sub-register no longer normalised to its root -- a node's own def/use set narrowed by one register",
-    ),
-    Mutation(
-        "bodyedit-range-edge",
-        "qbopt/optimize/bodyedit.py",
-        "    if at == hi and at in owner:",
-        "    if False:",
-        "an insertion exactly on a body range's own edge accepted -- unreachable from a branch "
-        "targeting the leading edge, ambiguous with whatever follows the trailing edge",
-    ),
-    Mutation(
-        "bodyedit-table-not-skipped",
-        "qbopt/optimize/bodyedit.py",
-        "        if isinstance(node, ir.Data):",
-        "        if False:",
-        "an inline table's own start considered as a candidate insertion point instead of skipped",
     ),
     Mutation(
         "tail-seed-not-preserved",

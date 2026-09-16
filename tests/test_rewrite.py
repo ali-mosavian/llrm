@@ -10,93 +10,36 @@ settles.
 from pathlib import Path
 
 import pytest
-from iced_x86 import Code
 
 import corpus
 from qbopt.objectfile import omf
 
 pytestmark = pytest.mark.corpus
 
-# The only opcodes calls.absorb() ever replaces a non-COMPARE call with, so
-# a combined edit's own bytes must decode to at least one of them or the
-# call's own arithmetic never actually happened.
-#
-# SHL and LEA are here because a multiply by a constant the 386 can do
-# without multiplying does not emit an imul at all -- calls.SCALES and
-# _without_multiplying(). They belong to this set for the same reason the
-# imul forms do: they ARE the arithmetic, not something around it.
-CALL_REPLACEMENT_OPCODES = {
-    Code.IMUL_R32_RM32,
-    Code.IMUL_R32_RM32_IMM8,
-    Code.IMUL_R32_RM32_IMM32,
-    Code.IMUL_RM32,
-    Code.IDIV_RM32,
-    Code.SHRD_RM32_R32_CL,
-    Code.SHRD_RM32_R32_IMM8,
-    Code.SHL_RM32_IMM8,
-    Code.LEA_R32_M,
-}
 
+def test_a_real_pass_writes_a_complete_fresh_object(obj: Path) -> None:
+    """Every accepted corpus object is a self-contained OMF module.
 
-def test_a_real_pass_rewrites_the_code_and_keeps_the_records_readable(obj: Path) -> None:
-    data = obj.read_bytes()
-    out, _ = corpus.rewritten(obj, dry_run=False)
-    before, after = omf.code_segment(omf.parse(data)), omf.code_segment(omf.parse(out))
-    assert before is not None and after is not None
-    # The segment may grow. Widening never makes it longer, but absorbing a
-    # call can: a divide is eighteen bytes against fifteen under /G3, and what
-    # it buys is a far call and the routine behind it.
-    assert after[2] <= before[2] * 2, "and never by more than the code it replaces"
-    before_names, after_names = omf.externals(omf.parse(data)), omf.externals(omf.parse(out))
-    assert len(after_names) == len(before_names), "an absorbed call may drop its fixup but never its EXTDEF slot"
-    live = {f.index for f in omf.fixups(omf.parse(out)) if f.target == "external"}
-    assert all(after_names[i] == before_names[i] for i in live), (
-        "a still-referenced external must keep the name its fixups were resolved against"
-    )
-    # an orphaned entry may be left with its own name -- the routine's own
-    # .LIB satisfies it regardless of whether anything here still calls it --
-    # or renamed to one something in the object still actually does call, but
-    # never to a third, unrelated, unresolvable name
-    for index in range(1, len(after_names)):
-        if index in live:
-            continue
-        assert after_names[index] in (before_names[index], *(after_names[i] for i in live))
-
-
-def test_rewriting_the_output_widens_or_absorbs_nothing_new(obj: Path) -> None:
-    """A second pass finds no widening and no call left to absorb.
-
-    It may find a load to delete, and that is not a failure of idempotence
-    but the point: absorbing a call removes a barrier, and a store and
-    reload the call used to sit between becomes visible only afterwards.
-    procs-q-O ends up with `mov [bp-12h],eax` immediately followed by
-    `mov eax,[bp-12h]`, which the first pass could not see because the call
-    was still there when it looked.
-
-    So the invariant is narrowed rather than dropped: everything that
-    rewrites bytes in place must still reach a fixed point in one pass, and
-    only deletion -- which is what a later pass creates work for -- may
-    appear on the second. Running the pass to a fixed point would collect
-    those too, and is its own piece of work.
+    The retired test compared the output's record count and EXTDEF slots with
+    BC's input. A fresh writer owns both and may choose either. What LINK needs
+    is an intact module whose live external fixups all resolve.
     """
     out, _ = corpus.rewritten(obj, dry_run=False)
-    _, again = corpus.rewritten(out, dry_run=False)
-    left = [r for r in again if r.taken and r.after != ""]
-    assert left == [], f"a second pass rewrote {len(left)} regions in place"
+    records = omf.parse(out)
+    assert records[0].type == omf.THEADR
+    assert records[-1].type & 0xFE == omf.MODEND
+    assert omf.code_segment(records) is not None
+    assert omf.finalised_at(records) is not None
+    names = omf.externals(records)
+    live = [fixup for fixup in omf.fixups(records) if fixup.target == "external"]
+    assert all(0 < fixup.index < len(names) and names[fixup.index] for fixup in live)
 
 
 def test_rewriting_reaches_a_fixed_point(obj: Path) -> None:
-    """Rewriting the output changes nothing further.
-
-    One pass is not a fixed point: absorbing a call removes a barrier, and
-    a store and reload the call used to sit between only becomes visible
-    afterwards. Nine of the corpus's objects change bytes on a second pass
-    and none on a third.
-    """
+    """A finalized program is returned byte-for-byte without being raised."""
     out, _ = corpus.rewritten(obj, dry_run=False)
-    again, regions = corpus.rewritten(out, dry_run=False)
+    again, _ = corpus.rewritten(out, dry_run=False)
     assert again == out
-    assert [one for one in regions if one.taken] == []
 
 
 def test_a_finalised_object_is_given_back_before_anything_decodes_it() -> None:
@@ -139,8 +82,8 @@ def test_exactly_one_marker_and_one_frame() -> None:
     from iced_x86 import FormatterSyntax
 
     from qbopt.objectfile import omf
-    from qbopt.objectfile import module
     from qbopt.rewrite import rewrite
+    from qbopt.objectfile import module
 
     raw = Path("fixtures/omf/hotlop-q-evt.obj").read_bytes()
     out, _ = rewrite(raw, dry_run=False, absorb_calls=False)
@@ -154,10 +97,10 @@ def test_exactly_one_marker_and_one_frame() -> None:
 
 def test_a_fallback_is_not_finalised_or_raised_again() -> None:
     """Re-raising fallback machine code loses SSA and can reserve a second frame."""
-    from qbopt.objectfile import omf
-    from qbopt.backend import allocate
     from qbopt import wholeseg
+    from qbopt.objectfile import omf
     from qbopt.rewrite import rewrite
+    from qbopt.backend import allocate
 
     raw = Path("fixtures/omf/hotlop-q-evt.obj").read_bytes()
     was_alloc, was_emit = allocate.RegAlloc.transform, wholeseg.emitted
@@ -185,9 +128,10 @@ def test_a_fallback_is_not_finalised_or_raised_again() -> None:
 def test_a_refusal_is_unmarked_non_terminal_and_does_not_loop_for_nothing() -> None:
     """A refusal raises. Kept only when asked for: BC's own bytes, unmarked,
     and asked once."""
-    from qbopt.objectfile import omf
     from qbopt import wholeseg
-    from qbopt.rewrite import Unsupported, rewrite
+    from qbopt.objectfile import omf
+    from qbopt.rewrite import rewrite
+    from qbopt.rewrite import Unsupported
 
     raw = Path("fixtures/omf/hotlop-q-evt.obj").read_bytes()
     was = wholeseg.emitted

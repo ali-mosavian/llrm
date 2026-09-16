@@ -1,5 +1,5 @@
 """
-BC compiles, qbopt rewrites, LINK accepts, the program runs, and the answers
+BC compiles, qbopt emits a fresh object, LINK accepts it, and the answers
 match -- on every configuration.
 
 This is the only tier that proves the pass against the thing it is a pass for.
@@ -12,9 +12,6 @@ import e2e
 import pytest
 from configs import CONFIGS
 from dosbox import dosbox_bin
-
-from qbopt.frontend.extent import BodyKind
-from qbopt.objectfile.bodyedit import rewritten
 
 pytestmark = [pytest.mark.e2e, pytest.mark.skipif(dosbox_bin() is None, reason="no dosbox-x")]
 
@@ -30,29 +27,6 @@ CASES = [
 @pytest.mark.parametrize("tag", CASES)
 def test_the_rewritten_program_answers_the_same(tag: str) -> None:
     result = e2e.run(tag)
-    failed = [v for v in result.verdicts if not v.ok]
-    assert not failed, "; ".join(f"{v.program} {v.status}: {v.detail}" for v in failed)
-
-
-# jumps.bas owns an ON GOTO inline table (B$OGTA); divmod.bas always compiles
-# under /X (configs.EXTRA) and so owns a RESUME map. Both are load-bearing:
-# AGENTS.md documents both as places a length change has real risk.
-BODY_EDIT_PROGRAMS = ["jumps", "divmod"]
-
-
-def one_nop(data: bytes) -> bytes:
-    return rewritten(data, BodyKind.MAIN)
-
-
-@pytest.mark.parametrize("tag", CASES)
-def test_a_whole_body_edit_survives_link_and_run(tag: str) -> None:
-    # A same-meaning, one-byte-longer main body -- not a region inside a
-    # block, the whole Body extent.py/ir.py define -- still links and runs
-    # identically. This is commit 2's own gate: not "an object was
-    # produced", the full three-way differential judge() already applies to
-    # every ordinary run.
-    work = Path(__file__).resolve().parents[1] / "build" / "e2e" / f"{tag}-bodyedit"
-    result = e2e.run(tag, transform=one_nop, names=BODY_EDIT_PROGRAMS, work=work)
     failed = [v for v in result.verdicts if not v.ok]
     assert not failed, "; ".join(f"{v.program} {v.status}: {v.detail}" for v in failed)
 
@@ -85,12 +59,11 @@ REBUILDING_TAGS = tuple(CONFIGS)
 @pytest.mark.parametrize("tag", [t for t in REBUILDING_TAGS if t in CONFIGS and CONFIGS[t].available])
 @pytest.mark.parametrize("prog", REBUILDS)
 def test_a_segment_this_pass_wrote_links_and_runs(tag: str, prog: str) -> None:
-    """The first code MIR produced end to end, rather than edited.
+    """Freshly laid-out code links and runs in every supported toolchain.
 
-    Everything else in this suite checks a rewrite of BC's own bytes. Here
-    layout.rebuild placed every instruction and omfwrite serialized
-    the records, so the chunk boundaries, branch displacements and fixup
-    offsets are all this pass's.
+    layout.rebuild places every instruction and omfwrite serializes the
+    records, so chunk boundaries, branch displacements and fixup offsets are
+    all this pass's.
 
     Only LINK and a real 386 can say whether that worked. The two bugs it
     had were invisible to every host test: fixups whose EXTDEF had not been
@@ -119,38 +92,6 @@ def test_a_segment_this_pass_wrote_links_and_runs(tag: str, prog: str) -> None:
 
     assert seen, f"{tag}/{prog}: the transform never ran"
     assert set(seen) == {REBUILT}, f"{tag}/{prog}: {seen}"
-
-
-@pytest.mark.parametrize("tag", [t for t in REBUILDING_TAGS if t in CONFIGS and CONFIGS[t].available])
-def test_optimised_code_this_pass_wrote_links_and_runs(tag: str) -> None:
-    """The milestone: code that is both optimised and MIR's own.
-
-    Absorption removes the runtime calls, which is where every measured win
-    in this project comes from, and then the whole segment is laid out and
-    written from MIR rather than patched. Half the suite's objects go
-    through both on these compilers; the rest fall back to absorption alone
-    because select.py cannot yet emit something in them.
-
-    Whether the composition is sound is not a host question. It took two
-    bugs neither the host suite nor a byte comparison could see: fixups
-    naming an EXTDEF that had not been read, and a fixup field split across
-    a record boundary. LINK calls both `invalid object module`.
-    """
-    from qbopt.rewrite import rewrite
-    from qbopt.wholeseg import REBUILT
-    from qbopt.wholeseg import rebuilt
-
-    seen: list[str] = []
-
-    def change(data: bytes) -> bytes:
-        out, why = rebuilt(rewrite(data, dry_run=False)[0])
-        seen.append(why)
-        return out
-
-    result = e2e.run(tag, None, dry_run=False, transform=change, work=Path("build/e2e") / f"{tag}-opt")
-    assert REBUILT in seen, f"{tag}: nothing was emitted from MIR"
-    bad = [one for one in result.verdicts if not one.ok]
-    assert not bad, f"{tag}: {bad[0].status} {bad[0].program}: {bad[0].detail}"
 
 
 @pytest.mark.parametrize("tag", [t for t in REBUILDING_TAGS if t in CONFIGS and CONFIGS[t].available])

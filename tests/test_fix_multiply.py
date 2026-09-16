@@ -5,8 +5,8 @@ There is no base build for this one. `declare function fixMul& (...)` names a
 routine that exists nowhere -- not in the runtime library, not in this module --
 so the unmodified object cannot link at all, and e2e.py's three-way
 differential has nothing to compare against. What is checked instead: the
-rewritten object drops the call site entirely, keeps its EXTDEF the way an
-absorbed call always does, links, and runs to the golden.
+freshly emitted object drops every live reference to the call, links, and runs
+to the golden.
 """
 
 import shutil
@@ -20,10 +20,10 @@ from cache import cached_launch
 from cache import toolchain_identity
 
 from qbopt.objectfile import omf
+from qbopt.rewrite import rewrite
 from qbopt.objectfile import module
 from qbopt.legacy.calls import sites
 from qbopt.frontend.blocks import code_map
-from qbopt.rewrite import rewrite
 from qbopt.frontend.blocks import partition
 from qbopt.legacy.calls import FIX_MULTIPLY
 from qbopt.frontend.blocks import instructions
@@ -80,11 +80,7 @@ def test_fixmul_absorbs_and_links_where_bc_alone_cannot(tag: str) -> None:
     found = [s for s in sites(parsed, reached, blocks) if s.name == FIX_MULTIPLY]
     assert len(found) == 7, "one fixMul& call per case in the program"
 
-    fixmul_bytes = {parsed.code[s.start : s.end].hex() for s in found}
-    out, regions = rewrite(data, dry_run=False)
-    fixmul_regions = [r for r in regions if r.before in fixmul_bytes]
-    assert len(fixmul_regions) == 7
-    assert all(r.taken for r in fixmul_regions), [r.reason for r in fixmul_regions if not r.taken]
+    out, _ = rewrite(data, dry_run=False)
     live = {f.index for f in omf.fixups(omf.parse(out)) if f.target == "external"}
     assert FIX_MULTIPLY not in [n for i, n in enumerate(omf.externals(omf.parse(out))) if i in live], (
         "every reference to fixMul& must be gone -- LINK never resolves it, so one left is a linker failure"

@@ -41,7 +41,7 @@ class Insn:
     what a fixup and a branch target are still keyed on.
 
     `op` is the MIR operation it came from. It is here because select.py,
-    layout.py and relocate.py all still ask MIR questions of a machine
+    layout.py and omfwrite.py all still ask MIR questions of a machine
     instruction, and taking that away is a change to three modules rather
     than to this one. Nothing above LIR may read it.
     """
