@@ -786,6 +786,15 @@ one documented target without materially regressing another.
   bases and constant byte offsets to exclude disjoint writes. Exact dominating
   stores supply constants or SSA values; unknown roots and unbounded offsets
   remain conservative. Facts are rebuilt after MIR changes.
+  Pointer-spill invalidation, escape analysis and procedure mod/ref summaries
+  now resolve indirect references through the same flow-sensitive points-to
+  facts. `_ls_switch` stores through parameter zero no longer erase the
+  disjoint frame slot holding that parameter, so all four field stores remain
+  parameter writes instead of degrading the procedure to `unknown_write`.
+  Promotion consequently keeps `_ls_hold`'s loop counter in SI across the
+  call, matching BCC's strategy and reducing that function by four
+  instructions. On the same 15 recorded Watcom streams used by the backend
+  audit, cfront falls 783 → 779 instructions against BCC's 939 total.
   At raise time, forward must-facts retain fixed array extents and bounded
   pointer offsets across unknown branches. Accesses are annotated per
   occurrence only when every incoming path proves ownership. Calls, descriptor

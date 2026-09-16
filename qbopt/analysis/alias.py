@@ -38,19 +38,27 @@ class PointsTo:
 
     def reference(self, ref: mir.MemRef) -> memory.Provenance | None:
         """Canonical bytes reached by a reference through an analysed value."""
-        if ref.provenance is not None:
-            return ref.provenance
-        if ref.base is None or ref.base not in self.values:
-            return None
-        source = self.values[ref.base]
-        displacement = ref.addr.disp if ref.addr is not None else 0
-        slices = set()
-        for one in source.slices:
-            low, high = one.low + displacement, one.high + displacement
-            # A singleton address names `width` consecutive bytes. A set of
-            # indexed addresses retains its stride and widens its final lane.
-            slices.add(memory.Slice(one.object, low, high, one.stride, max(ref.width, 1)))
-        return memory.Provenance(frozenset(slices), source.restrict)
+        return _resolved_reference(ref, self.values)
+
+
+def _resolved_reference(
+    ref: mir.MemRef,
+    values: dict[mir.Value, memory.Provenance],
+) -> memory.Provenance | None:
+    """Resolve a memory operand through the current pointer-value facts."""
+    if ref.provenance is not None:
+        return ref.provenance
+    if ref.base is None or ref.base not in values:
+        return None
+    source = values[ref.base]
+    displacement = ref.addr.disp if ref.addr is not None else 0
+    slices = set()
+    for one in source.slices:
+        low, high = one.low + displacement, one.high + displacement
+        # A singleton address names `width` consecutive bytes. A set of
+        # indexed addresses retains its stride and widens its final lane.
+        slices.add(memory.Slice(one.object, low, high, one.stride, max(ref.width, 1)))
+    return memory.Provenance(frozenset(slices), source.restrict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,12 +131,13 @@ def _actuals(procedure: Procedure, facts: PointsTo, at: int) -> tuple[memory.Pro
 def _direct_summary(body: mir.MirBody) -> Summary:
     reads, writes = set(), set()
     unknown_read = unknown_write = False
+    facts = points_to(body)
     for block in body.blocks:
         for op in block.ops:
             if op.kind is mir.Kind.CALL:
                 continue
             for ref, destination in (*((ref, reads) for ref in op.loads), *((ref, writes) for ref in op.stores)):
-                provenance = ref.provenance
+                provenance = facts.reference(ref)
                 if provenance is None:
                     if destination is reads:
                         unknown_read = True
@@ -143,7 +152,6 @@ def _direct_summary(body: mir.MirBody) -> Summary:
                             unknown_read = True
                         else:
                             unknown_write = True
-    facts = points_to(body)
     captures = frozenset(
         one.identity for one in facts.escaped if one.kind is memory.Kind.PARAMETER and isinstance(one.identity, int)
     )
@@ -399,7 +407,8 @@ def points_to(
                 if op.stores:
                     source = _union(values.get(arg.value) for arg in op.args if isinstance(arg, mir.Held))
                     for ref in op.stores:
-                        key = _cell_key(ref)
+                        provenance = _resolved_reference(ref, values)
+                        key = _cell_key(replace(ref, provenance=provenance))
                         # Any possibly overlapping write invalidates prior cell
                         # contents; an exact pointer store then defines it.
                         state = {old: fact for old, fact in state.items() if old == key or not _keys_overlap(old, key)}
@@ -434,7 +443,9 @@ def points_to(
                         if value in values:
                             newly.update(one.object for one in values[value].slices)
                 if op.stores:
-                    destinations = [ref.provenance for ref in op.stores if ref.provenance is not None]
+                    destinations = [
+                        provenance for ref in op.stores if (provenance := _resolved_reference(ref, values)) is not None
+                    ]
                     outside = not destinations or any(
                         one.object.kind is not memory.Kind.FRAME
                         for provenance in destinations

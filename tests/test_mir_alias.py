@@ -100,6 +100,76 @@ def test_points_to_flows_through_memory_and_a_phi() -> None:
     assert facts.values[joined] == facts.values[root]
 
 
+def test_store_through_parameter_keeps_disjoint_frame_pointer_spill() -> None:
+    """ls_switch lost its saved parameter after storing field 0, so fields 2/4/6 became unknown writes."""
+    root, first, second = (mir.Value(n, n, variable=n, version=1) for n in range(1, 4))
+    parameter = memory.Object(memory.Kind.PARAMETER, 0)
+    frame = memory.Object(memory.Kind.FRAME, ("ls_switch", -4), extent=2)
+    slot = mir.MemRef(
+        Addr(Space.FRAME, -4),
+        2,
+        space=Space.FRAME,
+        provenance=memory.Provenance.one(frame, 0, 2),
+    )
+
+    def op(
+        at: int,
+        kind: mir.Kind,
+        *,
+        defines: tuple[mir.Value, ...] = (),
+        uses: tuple[mir.Value, ...] = (),
+        args: tuple[mir.Arg, ...] = (),
+        results: tuple[mir.Arg, ...] = (),
+        loads: tuple[mir.MemRef, ...] = (),
+        stores: tuple[mir.MemRef, ...] = (),
+    ) -> mir.Op:
+        return mir.Op(
+            at, ir.Operation.MOVE, "", defines, uses, kind=kind, args=args, results=results, loads=loads, stores=stores
+        )
+
+    saved = op(
+        1,
+        mir.Kind.STORE,
+        uses=(root,),
+        args=(mir.Held(root, 2),),
+        results=(mir.Cell(slot),),
+        stores=(slot,),
+    )
+    loaded = op(
+        2,
+        mir.Kind.LOAD,
+        defines=(first,),
+        args=(mir.Cell(slot),),
+        results=(mir.Held(first, 2),),
+        loads=(slot,),
+    )
+    field0 = mir.MemRef(Addr(Space.LITERAL, 0), 2, base=first)
+    written = op(3, mir.Kind.STORE, args=(mir.Const(1, 2),), results=(mir.Cell(field0),), stores=(field0,))
+    reloaded = op(
+        4,
+        mir.Kind.LOAD,
+        defines=(second,),
+        args=(mir.Cell(slot),),
+        results=(mir.Held(second, 2),),
+        loads=(slot,),
+    )
+    field2 = mir.MemRef(Addr(Space.LITERAL, 2), 2, base=second)
+    written_again = op(5, mir.Kind.STORE, args=(mir.Const(2, 2),), results=(mir.Cell(field2),), stores=(field2,))
+    body = mir.MirBody(
+        0,
+        (mir.MirBlock(0, (), (saved, loaded, written, reloaded, written_again), ()),),
+        pointer_values=frozenset({root, first, second}),
+        pointer_seeds={root: memory.Provenance.one(parameter)},
+    )
+
+    facts = alias.points_to(body)
+    summary = alias._direct_summary(body)
+
+    assert facts.values[second] == facts.values[root]
+    assert not summary.unknown_write
+    assert {one.object for one in summary.writes} == {parameter}
+
+
 def test_pointer_phi_with_an_unknown_arm_is_unknown() -> None:
     """A known arm must not erase the other arm: that falsely made the joined pointer disjoint from real objects."""
     known, unknown, joined = (mir.Value(n, n, variable=n, version=1) for n in range(1, 4))

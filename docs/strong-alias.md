@@ -26,6 +26,11 @@ pointer arithmetic and phis. A missing phi arm produces `UNKNOWN`; one known
 arm can never erase it. Exact pointer spill slots are tracked as memory state:
 an exact store is a strong update, an overlapping or unresolved store kills the
 fact, and CFG joins retain a slot only when every incoming edge defines it.
+Indirect references are resolved through those same value facts before a store
+invalidates spill state. A write through a parameter can therefore kill cells
+in that parameter object without discarding a pointer saved in a disjoint frame
+object. The resolved reference also feeds escape and mod/ref analysis; the
+three consumers cannot disagree about what an indirect operand reaches.
 
 Escape is a second forward dataflow. Publishing a pointer outside the frame,
 returning it, or passing it to a capturing callee exposes its object only from
@@ -38,6 +43,9 @@ Procedure summaries describe reads, writes and captured formal pointer
 indices. They are solved to a fixed point, so recursion and mutually recursive
 calls are conservative without losing effects already known. At a call site,
 parameter slices are rebased onto each actual pointer's object and offset.
+The direct summary resolves base-plus-displacement operands through the
+procedure's points-to solution, rather than requiring provenance to have been
+stamped statically on every dereference.
 
 An unknown C callee has a complete, explicit footprint: all nonlocal storage,
 the whole object behind each pointer actual, and objects already escaped on
