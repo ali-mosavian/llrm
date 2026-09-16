@@ -9,6 +9,7 @@ from qbopt.model.floating import Format, Precision
 type Bounds = tuple[int, int]
 
 _SIGNED = {Format.SIGNED16: 16, Format.SIGNED32: 32, Format.SIGNED64: 64}
+_UNSIGNED = {Format.UNSIGNED64: 64}
 
 
 def evaluated(kind, rule, inputs: tuple[Bounds, ...]) -> Bounds | None:
@@ -33,6 +34,9 @@ def evaluated(kind, rule, inputs: tuple[Bounds, ...]) -> Bounds | None:
     if rule.result in _SIGNED:
         limit = 1 << (_SIGNED[rule.result] - 1)
         return result if -limit <= result[0] <= result[1] < limit else None
+    if rule.result in _UNSIGNED:
+        limit = 1 << _UNSIGNED[rule.result]
+        return result if 0 <= result[0] <= result[1] < limit else None
     match rule.result:
         case Format.BINARY32:
             precision = 24

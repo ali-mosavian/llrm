@@ -11,6 +11,7 @@ class Format(StrEnum):
     SIGNED16 = "signed16"
     SIGNED32 = "signed32"
     SIGNED64 = "signed64"
+    UNSIGNED64 = "unsigned64"
 
 
 class Precision(StrEnum):

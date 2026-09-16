@@ -1605,7 +1605,7 @@ def _comparison(block, op: Op):
         and len(compare.args) == 2
         and len(compare.results) == 1
         and isinstance(result := compare.results[0], mir.Held)
-        and result.width in (2, 4)
+        and result.width in (2, 4, 8)
         and all(isinstance(arg, (mir.Held, mir.Const)) and arg.width == result.width for arg in compare.args)
     ):
         return index, compare
@@ -1628,7 +1628,8 @@ def _outcome(block, op: Op, facts: dict, held: dict) -> bool | None:
     if any(one is None for one in parts):
         return None
     left, right = parts
-    return _TAKEN[op.test](_signed(left), _signed(right), lambda n: n & 0xFFFFFFFF)
+    width = max(left.width, right.width)
+    return _TAKEN[op.test](_signed(left), _signed(right), lambda n: consts.masked(n, width))
 
 
 def _switch_target(op: mir.Op, facts: dict[mir.Value, consts.Known]) -> int | None:

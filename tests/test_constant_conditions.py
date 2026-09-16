@@ -8,6 +8,7 @@ import pytest
 
 from qbopt import wholeseg
 from qbopt.model import ir, mir
+from qbopt.analysis import consts
 from qbopt.optimize import transform
 
 
@@ -31,6 +32,23 @@ def test_zero_condition_uses_the_logical_result(kind, name, answer, width):
                     test=mir.Kind.NE, target=10)
     block = mir.MirBlock(0, (), (logical, branch), (10, 20))
     assert transform._outcome(block, branch, {}, {}) is answer
+
+
+def test_unsigned_int64_comparison_does_not_discard_the_high_dword():
+    """2^32 > 0 folded false when unsigned comparisons masked both to 32 bits."""
+    left, right, flags = mir.Value(1, 0), mir.Value(2, 0), mir.Value(3, 0, flags=True)
+    compare = mir.Op(
+        0,
+        ir.Operation.NOTHING,
+        "",
+        (flags,),
+        (left, right),
+        kind=mir.Kind.SUB,
+        args=(mir.Held(left, 8), mir.Held(right, 8)),
+    )
+    branch = mir.Op(1, ir.Operation.NOTHING, "", (), (flags,), kind=mir.Kind.BRANCH, test=mir.Kind.ABOVE, target=10)
+    facts = {left: consts.Known(1 << 32, 8), right: consts.Known(0, 8)}
+    assert transform._outcome(mir.MirBlock(0, (), (compare, branch), (10, 20)), branch, facts, {}) is True
 
 
 @pytest.mark.parametrize("hazard", ["unknown", "width", "relational", "other_condition", "barrier"])

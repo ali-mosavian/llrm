@@ -32,6 +32,8 @@ WIDTHS = {
     "TY_INT_2": 2,
     "TY_UINT_4": 4,
     "TY_INT_4": 4,
+    "TY_UINT_8": 8,
+    "TY_INT_8": 8,
     "TY_INTEGER": 2,
     "TY_UNSIGNED": 2,
     "TY_BOOLEAN": 2,
@@ -62,7 +64,7 @@ LIBRARY = {
 EMITTED = frozenset({"__emit__"})
 EXTENDED = floating.Format.EXTENDED80
 FORMATS ={4: floating.Format.BINARY32, 8: floating.Format.BINARY64}
-INTEGER_FORMATS = {2: floating.Format.SIGNED16, 4: floating.Format.SIGNED32}
+INTEGER_FORMATS = {2: floating.Format.SIGNED16, 4: floating.Format.SIGNED32, 8: floating.Format.SIGNED64}
 # What each float operation computes, which MIR states and lowering spells.
 ARITH_RULE = floating.Semantics((EXTENDED, EXTENDED), EXTENDED, floating.Precision.DYNAMIC, floating.Rounding.DYNAMIC)
 EXACT_UNARY = floating.Semantics((EXTENDED,), EXTENDED, floating.Precision.EXACT, floating.Rounding.NONE)
@@ -78,12 +80,13 @@ def _stored(result: floating.Format) -> floating.Semantics:
 
 def _packed(value: float, width: int) -> bytes:
     return struct.pack("<f" if width == 4 else "<d", value)
-SIGNED = frozenset({"TY_INT_1", "TY_INT_2", "TY_INT_4", "TY_INTEGER"})
+SIGNED = frozenset({"TY_INT_1", "TY_INT_2", "TY_INT_4", "TY_INT_8", "TY_INTEGER"})
 FAR_POINTERS = frozenset({"TY_LONG_POINTER", "TY_HUGE_POINTER"})
 # C's aliasing classes: a declared object is read and written only through its own, or a character type.
 CLASSES = {
     "TY_INT_2": "int2", "TY_UINT_2": "int2", "TY_INTEGER": "int2", "TY_UNSIGNED": "int2",
-    "TY_INT_4": "int4", "TY_UINT_4": "int4", "TY_SINGLE": "float4", "TY_DOUBLE": "float8",
+    "TY_INT_4": "int4", "TY_UINT_4": "int4", "TY_INT_8": "int8", "TY_UINT_8": "int8",
+    "TY_SINGLE": "float4", "TY_DOUBLE": "float8",
     "TY_NEAR_POINTER": "pointer2", "TY_LONG_POINTER": "pointer4", "TY_HUGE_POINTER": "pointer4",
 }  # fmt: skip
 # What a callee reads and writes: no byte this body can name, bounded later
@@ -421,6 +424,14 @@ class _Raise:
             self.op(K.RETURN, args=(value,), uses=(value.value,), reads_complete=True)
             self.end()
             return
+        if node != "n0" and self.width(type_) == 8:
+            value = self.operand(self.eval(node), type_)
+            if isinstance(value, mir.Const):
+                value = mir.Held(self.copy(value), 8)
+            value = self.narrowed(value, 8)
+            self.op(K.RETURN, args=(value,), uses=(value.value,), reads_complete=True)
+            self.end()
+            return
         last = self.current.ops[-1] if self.current is not None and self.current.ops else None
         if node == "n0" and type_ in WIDTHS and last is not None and last.kind is K.CALL and len(last.results) == 2:
             # A value-less return from a function that has one: the value is
@@ -509,6 +520,8 @@ class _Raise:
         match tree.call, tree.args:
             case "CGInteger", (value, type_):
                 return mir.Const(int(value), max(2, self.width(type_)))
+            case "CGInt64", (value, type_):
+                return mir.Const(self.wrapped(int(value), type_), 8)
             case "CGFloat", (text, type_) if type_ in FLOATS:
                 return self.real(float(text), self.width(type_))
             case "CGFEName", (symbol, type_):
@@ -646,6 +659,8 @@ class _Raise:
     def points(self, got, type_: str):
         if isinstance(got, mir.Held) and got.width == 10:
             return got  # a float call's result, already a value
+        if isinstance(got, mir.Held) and got.width == self.width(type_) == 8:
+            return got  # an int64 call's result is likewise already a whole MIR value
         if isinstance(got, Returned):
             if self.far_pointer(type_):
                 return Far(got.high, got.low)
@@ -653,6 +668,8 @@ class _Raise:
                 whole = self.fresh()
                 self.op(K.CONCAT, (mir.Held(whole, 4),), (mir.Held(got.high, 2), mir.Held(got.low, 2)))
                 return mir.Held(whole, 4)
+            if self.width(type_) == 8:
+                raise Unsupported(f"{self.symbol.name}: a DX:AX result cannot provide an 8-byte value")
             return self.extended(mir.Held(got.low, 2), type_)
         address = self.address(got)
         if type_ in self.unit.types:
@@ -677,6 +694,15 @@ class _Raise:
             if isinstance(got, mir.Const):
                 return self.real(float(self.wrapped(got.n, source)), self.width(type_))
             whole = self.operand(got, source)
+            if source == "TY_UINT_8":
+                result = self.fresh()
+                self.op(
+                    K.FLOAD,
+                    (mir.Held(result, 10),),
+                    (whole,),
+                    floating=_loaded(floating.Format.UNSIGNED64),
+                )
+                return mir.Held(result, 10)
             if source not in SIGNED and self.width(source) == 4:
                 # No 32-bit integer load reads it unsigned; its zero extension as a quad does.
                 quad = Frame(self.slot(8))
@@ -700,11 +726,16 @@ class _Raise:
             return Far(self.dgroup(), got.value)
         if isinstance(got, mir.Const):
             return mir.Const(self.wrapped(got.n, type_), max(2, to))
-        if to == 4 and got.width < 4:
+        if to > got.width:
             wide = self.fresh()
             kind = K.SIGN_EXTEND if source in SIGNED else K.ZERO_EXTEND
-            self.op(kind, (mir.Held(wide, 4),), (mir.Held(got.value, 2),))
-            return mir.Held(wide, 4)
+            self.op(kind, (mir.Held(wide, to),), (mir.Held(got.value, got.width),))
+            return mir.Held(wide, to)
+        if got.width == 8 and to < 8:
+            narrow = self.fresh()
+            width = max(2, to)
+            self.op(K.EXTRACT, (mir.Held(narrow, width),), (got, mir.Const(0, 1)))
+            return self.extended(mir.Held(narrow, width), type_)
         if to == 1:
             return self.extended(mir.Held(got.value, 2), type_)
         if to == 2 and got.width == 4:
@@ -910,6 +941,10 @@ class _Raise:
             result = self.fresh()
             site = self.op(K.CALL, (mir.Held(result, 10),), defines=(result,), uses=(), loads=CALLEE, stores=CALLEE)
             returned = mir.Held(result, 10)
+        elif self.width(type_) == 8:
+            result = self.fresh()
+            site = self.op(K.CALL, (mir.Held(result, 8),), defines=(result,), uses=(), loads=CALLEE, stores=CALLEE)
+            returned = mir.Held(result, 8)
         else:
             low, high = self.fresh(), self.fresh()
             site = self.op(
@@ -1070,13 +1105,16 @@ class _Raise:
         """C's float-to-integer cast rounds toward zero, whatever the environment says."""
         width = max(2, self.width(type_))
         result = self.fresh()
+        format_ = floating.Format.UNSIGNED64 if type_ == "TY_UINT_8" else INTEGER_FORMATS[width]
         rule = floating.Semantics(
             (floating.Format.EXTENDED80,),
-            floating.Format.SIGNED32 if width == 4 else floating.Format.SIGNED16,
+            format_,
             floating.Precision.DESTINATION,
             floating.Rounding.TOWARD_ZERO,
         )
         self.op(K.FSTORE, (mir.Held(result, width),), (value,), floating=rule)
+        if width == 8:
+            return mir.Held(result, width)
         return self.convert(mir.Held(result, width), "TY_INT_4" if width == 4 else "TY_INT_2", type_)
 
     def address(self, got) -> Address:
@@ -1211,6 +1249,13 @@ class _Raise:
 
 
 def _fold(cg_op: str, a: int, b: int, signed: bool) -> int:
+    def quotient() -> int:
+        # C truncates signed division toward zero.  Going through Python's
+        # float did that accidentally for 16/32-bit values, but loses low
+        # bits as soon as a long long exceeds binary64's exact range.
+        magnitude = abs(a) // abs(b)
+        return -magnitude if signed and (a < 0) != (b < 0) else magnitude
+
     match cg_op:
         case "O_PLUS":
             return a + b
@@ -1229,7 +1274,7 @@ def _fold(cg_op: str, a: int, b: int, signed: bool) -> int:
         case "O_RSHIFT":
             return a >> b
         case "O_DIV" if b:
-            return int(a / b)
+            return quotient()
         case "O_MOD" if b:
-            return a - int(a / b) * b
+            return a - quotient() * b
     raise Unsupported(f"constant {cg_op}")

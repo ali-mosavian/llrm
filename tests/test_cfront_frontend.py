@@ -66,3 +66,15 @@ def test_stdc_is_undefined_as_in_bcc(tmp_path):
     called an undefined `_FP_OFF` and QCPORT.EXE did not link."""
     stream = _stream(tmp_path, "#include <dos.h>\nunsigned off( void far *p ) { return FP_OFF( p ); }\n")
     assert "CGProcDecl" in stream and "FP_OFF" not in stream
+
+
+def test_long_long_reaches_the_stream_as_signed_and_unsigned_int64(tmp_path):
+    stream = _stream(
+        tmp_path,
+        "long long s(long long a) { return a + 1; }\n"
+        "unsigned long long u(unsigned long long a) { return a * 3; }\n",
+    )
+    declarations = [line.split()[-1] for line in stream.splitlines() if "CGProcDecl" in line]
+    parameters = [line.split()[-1] for line in stream.splitlines() if "CGParmDecl" in line]
+    assert declarations == ["TY_INT_8", "TY_UINT_8"]
+    assert parameters == ["TY_INT_8", "TY_UINT_8"]

@@ -20,6 +20,7 @@ class Finite:
 
 _BINARY = {Format.BINARY32: (24, 8, 127), Format.BINARY64: (53, 11, 1023)}
 _INTEGER = {Format.SIGNED16: 16, Format.SIGNED32: 32, Format.SIGNED64: 64}
+_UNSIGNED = {Format.UNSIGNED64: 64}
 
 
 def decoded(bits: int, format: Format) -> Finite | None:
@@ -29,6 +30,9 @@ def decoded(bits: int, format: Format) -> Finite | None:
             return None
         sign = 1 << (width - 1)
         return Finite(Fraction((bits ^ sign) - sign))
+    if format in _UNSIGNED:
+        width = _UNSIGNED[format]
+        return Finite(Fraction(bits)) if 0 <= bits < 1 << width else None
     if format not in _BINARY:
         return None
     precision, exponent_bits, bias = _BINARY[format]
@@ -89,6 +93,9 @@ def evaluated(kind: mir.Kind, rule: Semantics, inputs: tuple[Finite, ...]) -> Fi
     if rule.result in _INTEGER:
         width = _INTEGER[rule.result]
         return result if result.value.denominator == 1 and -(1 << (width - 1)) <= result.value < 1 << (width - 1) else None
+    if rule.result in _UNSIGNED:
+        width = _UNSIGNED[rule.result]
+        return result if result.value.denominator == 1 and 0 <= result.value < 1 << width else None
     if rule.result in _BINARY:
         precision, _, bias = _BINARY[rule.result]
         return result if _fits(result.value, precision, 1 - bias, bias) else None

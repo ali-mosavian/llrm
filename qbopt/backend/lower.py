@@ -139,6 +139,10 @@ _RETURNED = (Register.EAX, Register.EDX)
 def _instruction(op: mir.Op) -> tuple[ir.Operation, str] | None:
     if op.kind is mir.Kind.SUB and not op.results:
         return ir.Operation.COMPARE, "cmp"
+    if op.kind is mir.Kind.FLOAD and op.floating is not None and op.floating.inputs[0] is Format.UNSIGNED64:
+        raise Unlowered("unsigned 64-bit floating load needs target-specific expansion")
+    if op.kind is mir.Kind.FSTORE and op.floating is not None and op.floating.result is Format.UNSIGNED64:
+        raise Unlowered("unsigned 64-bit floating store needs target-specific expansion")
     if op.kind is mir.Kind.FLOAD and op.floating is not None:
         return ir.Operation.FLOAT_LOAD, "fild" if op.floating.inputs[0] in _INTEGERS else "fld"
     if op.kind is mir.Kind.FSTORE and op.floating is not None:
@@ -495,6 +499,24 @@ def lowered(
     from qbopt.analysis import ssa
     from qbopt.backend import lower_floats
     from qbopt.backend import lower_switches
+
+    wide = next(
+        (
+            (op, operand)
+            for block in body.blocks
+            for op in block.ops
+            for operand in (*op.args, *op.results)
+            if isinstance(operand, (mir.Held, mir.Const)) and operand.width == 8
+        ),
+        None,
+    )
+    if wide is not None:
+        op, _operand = wide
+        # MIR deliberately keeps int64 whole.  Splitting it into the target
+        # ABI's words or register pairs belongs here, and until that lowering
+        # exists a hard refusal is safer than handing an impossible width to
+        # the 16/32-bit allocator as though EAX were eight bytes wide.
+        raise Unlowered(f"{name}: 64-bit integer lowering is not implemented ({op.kind} at {op.at:#x})")
 
     try:
         body = lower_switches.expanded(body)

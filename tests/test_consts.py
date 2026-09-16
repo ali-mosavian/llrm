@@ -47,6 +47,28 @@ def test_signed_widening_produces_a_whole_long_constant(number):
     assert folded.blocks[0].ops[0].args == (mir.Const(expected, 4),)
 
 
+@pytest.mark.parametrize(
+    ("kind", "number", "expected"),
+    [
+        (mir.Kind.SIGN_EXTEND, 0x8001, 0xFFFFFFFFFFFF8001),
+        (mir.Kind.ZERO_EXTEND, 0x8001, 0x8001),
+    ],
+)
+def test_word_extension_to_int64_preserves_signedness(kind, number, expected):
+    source, result = mir.Value(1, 0), mir.Value(2, 0)
+    op = mir.Op(
+        0,
+        ir.Operation.NOTHING,
+        "",
+        (result,),
+        (source,),
+        kind=kind,
+        args=(mir.Held(source, 2),),
+        results=(mir.Held(result, 8),),
+    )
+    assert consts._result(op, {source: consts.Known(number, 2)}) == consts.Known(expected, 8)
+
+
 @pytest.mark.parametrize(("high", "low", "answer"), [(4, 0, 262144), (0, 512, 512), (-1, -1, 0xffffffff)])
 def test_recovered_argument_constants(high: int, low: int, answer: int) -> None:
     """Nbody kept its 262144 and 512 divisors hidden behind recovered word copies."""
@@ -206,6 +228,23 @@ def test_a_narrow_shift_cannot_pull_bits_from_outside_its_operand(width: int, nu
     )
     facts = {source: consts.Known(number, 4)}
     assert consts._result(op, facts) == consts.Known(answer, width)
+
+
+def test_int64_shift_uses_all_six_count_bits():
+    """Shifting by 36 was treated as shifting by four through the old 32-bit mask."""
+    source, result = mir.Value(1, 0), mir.Value(2, 0)
+    op = mir.Op(
+        1,
+        ir.Operation.NOTHING,
+        "",
+        (result,),
+        (source,),
+        kind=mir.Kind.SHR,
+        args=(mir.Held(source, 8), mir.Const(36, 1)),
+        results=(mir.Held(result, 8),),
+    )
+    number = 0xFEDCBA9876543210
+    assert consts._result(op, {source: consts.Known(number, 8)}) == consts.Known(number >> 36, 8)
 
 
 def test_flags_do_not_stop_an_operation_being_folded() -> None:

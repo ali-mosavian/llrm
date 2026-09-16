@@ -68,21 +68,29 @@ def masked(n: int, width: int) -> int:
 
 
 def division(op: mir.Op, known: dict, here: Cells) -> tuple[int, int] | None:
-    """Signed quotient and remainder, excluding the two faulting cases."""
-    if op.kind is not mir.Kind.DIVMOD or len(op.args) != 2 or len(op.results) != 2 or op.stores:
+    """Integer quotient and remainder, excluding the faulting cases."""
+    if op.kind not in (mir.Kind.DIVMOD, mir.Kind.UDIVMOD) or len(op.args) != 2 or len(op.results) != 2 or op.stores:
         return None
-    if any(not isinstance(result, mir.Held) or result.width != 4 for result in op.results):
+    if any(not isinstance(result, mir.Held) for result in op.results):
         return None
+    widths = {result.width for result in op.results}
+    if len(widths) != 1 or not widths <= {2, 4, 8}:
+        return None
+    width = widths.pop()
     operands = [_operand(op, arg, known, here) for arg in op.args]
-    if any(fact is None or fact.width < 4 for fact in operands):
+    if any(fact is None or fact.width < width for fact in operands):
         return None
-    dividend, divisor = [((fact.n & 0xFFFFFFFF) ^ 0x80000000) - 0x80000000 for fact in operands]
-    if divisor == 0 or (dividend == -0x80000000 and divisor == -1):
+    if op.kind is mir.Kind.DIVMOD:
+        sign = 1 << (width * 8 - 1)
+        dividend, divisor = [((masked(fact.n, width) ^ sign) - sign) for fact in operands]
+    else:
+        dividend, divisor = [masked(fact.n, width) for fact in operands]
+    if divisor == 0 or (op.kind is mir.Kind.DIVMOD and dividend == -(1 << (width * 8 - 1)) and divisor == -1):
         return None
     quotient = abs(dividend) // abs(divisor)
-    if (dividend < 0) != (divisor < 0):
+    if op.kind is mir.Kind.DIVMOD and (dividend < 0) != (divisor < 0):
         quotient = -quotient
-    return masked(quotient, 4), masked(dividend - quotient * divisor, 4)
+    return masked(quotient, width), masked(dividend - quotient * divisor, width)
 
 
 def _put(op: mir.Op, known: dict[mir.Value, Known]) -> Known | None:
@@ -439,18 +447,20 @@ def _result(
         parts.append(got)
     if not parts:
         return None
-    if op.kind is mir.Kind.SIGN_EXTEND and len(parts) == len(op.results) == 1:
+    if op.kind in (mir.Kind.SIGN_EXTEND, mir.Kind.ZERO_EXTEND) and len(parts) == len(op.results) == 1:
         source, result = op.args[0], op.results[0]
         if (
             not isinstance(source, (mir.Held, mir.Const))
             or not isinstance(result, mir.Held)
-            or not 0 < source.width < result.width <= 4
+            or not 0 < source.width < result.width <= 8
             or parts[0].width < source.width
         ):
             return None
-        sign = 1 << (source.width * 8 - 1)
-        signed = (masked(parts[0].n, source.width) ^ sign) - sign
-        return Known(masked(signed, result.width), result.width)
+        number = masked(parts[0].n, source.width)
+        if op.kind is mir.Kind.SIGN_EXTEND:
+            sign = 1 << (source.width * 8 - 1)
+            number = (number ^ sign) - sign
+        return Known(masked(number, result.width), result.width)
     if op.kind is mir.Kind.CONCAT and len(parts) == 2 and len(op.results) == 1:
         high, low = op.args
         width = high.width + low.width
@@ -466,7 +476,10 @@ def _result(
             or parts[0].width < source.width
         ):
             return None
-        return Known(masked(ARITH[op.kind](parts[0].n, parts[1].n), result.width), result.width)
+        count = parts[1].n & (result.width * 8 - 1)
+        number = masked(parts[0].n, result.width)
+        shifted = number << count if op.kind is mir.Kind.SHL else number >> count
+        return Known(masked(shifted, result.width), result.width)
     width = min(one.width for one in parts)
     if op.kind is mir.Kind.SMULHI and len(parts) == 2 and len(op.results) == 1:
         result = op.results[0]

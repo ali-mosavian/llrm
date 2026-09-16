@@ -89,6 +89,81 @@ def test_raised_mir_names_no_instruction():
                             assert (ref.addr.base, ref.addr.segment) == (0, 0), (module, ref)
 
 
+def test_int64_stream_raises_whole_signed_and_unsigned_mir_values():
+    """Watcom emits TY_{U,}INT_8, but qbopt stopped at `no scalar width`.
+
+    Keep the value whole at the MIR boundary.  Argument and result splitting
+    is a target ABI decision for lowering, not a reason to represent C's
+    arithmetic as four unrelated words in the optimizer.
+    """
+    from qbopt.optimize import transform
+    from qbopt.model import floating
+
+    unit = cfront.hir.unit(cfront.stream.parse((FIXTURES / "mir" / "int64.cgs").read_text()))
+    bodies = {}
+    for proc in unit.procs:
+        name = unit.symbols[proc.symbol].name
+        raised = cfront.raise_hir.raised(unit, proc)
+        assert not cfront.mir.verify(raised.body), name
+        bodies[name] = raised.body
+        optimised = transform.applied(raised.body, frozenset(), raised.calls, found=None)
+        assert not cfront.mir.verify(optimised), name
+
+    def operations(name):
+        return [op for block in bodies[name].blocks for op in block.ops]
+
+    add = next(op for op in operations("i64Add") if op.kind is cfront.mir.Kind.ADD)
+    assert [one.width for one in (*add.args, *add.results)] == [8, 8, 8]
+
+    unsigned = operations("u64Math")
+    assert any(op.kind is cfront.mir.Kind.MUL and op.results[0].width == 8 for op in unsigned)
+    assert any(op.kind is cfront.mir.Kind.UDIVMOD and all(one.width == 8 for one in op.results) for op in unsigned)
+    assert any(op.kind is cfront.mir.Kind.SHR and op.args[0].width == 8 for op in unsigned)
+
+    signed_test = next(op for op in operations("i64Less") if op.kind is cfront.mir.Kind.BRANCH)
+    unsigned_test = next(op for op in operations("u64Less") if op.kind is cfront.mir.Kind.BRANCH)
+    # The value-producing comparison branches to its false arm, hence the
+    # inverse tests.  The important distinction is signed GE against the
+    # unsigned ABOVE_EQ over the same eight-byte operands.
+    assert signed_test.test is cfront.mir.Kind.GE
+    assert unsigned_test.test is cfront.mir.Kind.ABOVE_EQ
+
+    signed_extend = next(op for op in operations("i64Extend") if op.kind is cfront.mir.Kind.SIGN_EXTEND)
+    unsigned_extend = next(op for op in operations("u64Extend") if op.kind is cfront.mir.Kind.ZERO_EXTEND)
+    assert (signed_extend.args[0].width, signed_extend.results[0].width) == (2, 8)
+    assert (unsigned_extend.args[0].width, unsigned_extend.results[0].width) == (2, 8)
+
+    narrow_store = next(
+        op for op in operations("i64Narrow") if op.kind is cfront.mir.Kind.STORE and op.stores[0].width == 4
+    )
+    assert narrow_store.args[0].width == 4
+
+    called = operations("i64Call")
+    assert any(op.kind is cfront.mir.Kind.ARG and op.args[0].width == 8 for op in called)
+    assert any(op.kind is cfront.mir.Kind.CALL and op.results[0].width == 8 for op in called)
+    assert any(op.kind is cfront.mir.Kind.RETURN and op.args[0].width == 8 for op in called)
+
+    signed_load = next(op for op in operations("i64ToDouble") if op.kind is cfront.mir.Kind.FLOAD)
+    unsigned_load = next(op for op in operations("u64ToDouble") if op.kind is cfront.mir.Kind.FLOAD)
+    signed_store = next(op for op in operations("doubleToI64") if op.kind is cfront.mir.Kind.FSTORE)
+    unsigned_store = next(op for op in operations("doubleToU64") if op.kind is cfront.mir.Kind.FSTORE)
+    assert signed_load.floating.inputs == (floating.Format.SIGNED64,)
+    assert unsigned_load.floating.inputs == (floating.Format.UNSIGNED64,)
+    assert signed_store.floating.result is floating.Format.SIGNED64
+    assert unsigned_store.floating.result is floating.Format.UNSIGNED64
+    assert signed_store.results[0].width == unsigned_store.results[0].width == 8
+
+    # Constant evaluation must not round a 64-bit dividend through Python's
+    # binary64 float on the way to C's toward-zero quotient and remainder.
+    dividend = -(2**63) + 17
+    quotient = -1844674407370955158
+    assert cfront.raise_hir._fold("O_DIV", dividend, 5, True) == quotient
+    assert cfront.raise_hir._fold("O_MOD", dividend, 5, True) == dividend - quotient * 5
+
+    with pytest.raises(cfront.lower.Unlowered, match="64-bit integer lowering"):
+        cfront.lower.lowered("int64", bodies["i64Add"], {}, (), {})
+
+
 def test_float_cast_truncates():
     """`(long)(anim_time * 10.0f)`: fistp rounds by the control word, so it is
     set to toward-zero around the store and put back. The raise refused

@@ -39,6 +39,28 @@ def test_signed_division(dividend: int, divisor: int, expected: tuple[int, int] 
     )
 
 
+@pytest.mark.parametrize(
+    ("kind", "dividend", "divisor", "expected"),
+    [
+        (mir.Kind.DIVMOD, -(2**63) + 17, 5, (-1844674407370955158, -1)),
+        (mir.Kind.UDIVMOD, 2**64 - 1, 7, (2635249153387078802, 1)),
+    ],
+)
+def test_int64_division_never_rounds_through_binary64(kind, dividend, divisor, expected) -> None:
+    """A float intermediary changed the quotient once an integer exceeded 53 bits."""
+    op = mir.Op(
+        0,
+        ir.Operation.NOTHING,
+        "",
+        (),
+        (),
+        kind=kind,
+        args=(mir.Const(dividend, 8), mir.Const(divisor, 8)),
+        results=(mir.Held(mir.Value(1, 0), 8), mir.Held(mir.Value(2, 0), 8)),
+    )
+    assert consts.division(op, {}, {}) == tuple(number & ((1 << 64) - 1) for number in expected)
+
+
 def test_lngmix_emits_without_constant_divides() -> None:
     """LNGMIX retained both constant divides; deleting them then lost 12 push bytes."""
     result = wholeseg.emitted(Path("fixtures/omf/lngmix-p-g2.obj").read_bytes())
