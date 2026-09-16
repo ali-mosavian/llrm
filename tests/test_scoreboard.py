@@ -69,6 +69,56 @@ def test_chain_reference_preserves_signed_remainders_and_output_states():
     assert opportunity.TARGETS.get("CHAIN") == stores + output == 482
 
 
+def test_divmod_reference_keeps_error_registration_resume_and_mutable_caught_state(capsys):
+    """DIVMOD's old objects omitted nine rows; a plain print-only target also lost ON ERROR."""
+    assert len(Path("suite/golden/divmod.txt").read_text().splitlines()) == 21
+    error_registration = 2 * (2 + opportunity.TOUCH) + opportunity.CALL
+    output = 20 * 2 * (2 + opportunity.TOUCH + opportunity.CALL)
+    # caught=0 remains observable if printing MULOVF's label raises and
+    # RESUME NEXT reaches the numeric print.  Store plus memory-push premium.
+    caught_state = (2 + opportunity.TOUCH) + opportunity.TOUCH
+    done = (2 + opportunity.TOUCH + opportunity.CALL) + opportunity.CALL
+    handler = opportunity.CALL + (2 + opportunity.TOUCH) + opportunity.CALL
+    assert opportunity.TARGETS["DIVMOD"] == error_registration + output + caught_state + done + handler == 1174
+    assert opportunity.against_targets([Path("fixtures/omf/divmod-p-g2.obj")]) == 0
+    report = capsys.readouterr().out
+    assert "divmod-p-g2" in report and "PROVISIONAL" not in report
+
+
+def test_fpemu_reference_folds_only_exact_exception_free_results(capsys):
+    """FPEMU's positive square root and binary-power arithmetic have exact constant answers."""
+    rows = Path("suite/golden/fpemu.txt").read_text().splitlines()
+    assert rows[-2] == "FCMP=-1  0" and len(rows) == 13
+    ordinary_rows = 11 * 2 * (2 + opportunity.TOUCH + opportunity.CALL)
+    comparison_row = 3 * (2 + opportunity.TOUCH + opportunity.CALL)
+    done = (2 + opportunity.TOUCH + opportunity.CALL) + opportunity.CALL
+    assert opportunity.TARGETS["FPEMU"] == ordinary_rows + comparison_row + done == 696
+    assert opportunity.against_targets([Path("fixtures/omf/fpemu-p-g2.obj")]) == 0
+    report = capsys.readouterr().out
+    assert "fpemu-p-g2" in report and "PROVISIONAL" not in report
+
+
+def test_procs_reference_preserves_public_bodies_and_string_temporary_failures():
+    """Whole-module folding may specialize calls, but public procedures and SASS/STDL remain."""
+    # Main: three SASS/call/STDL sequences, each retaining a numeric byref
+    # temporary, followed by DONE.  Generic TWICE and REPORT bodies retain
+    # their BASIC ABI prologue/epilogue and are costed independently.
+    main = 3 * 96 + 46
+    twice = 63
+    report = 136
+    assert opportunity.TARGETS["PROCS"] == main + twice + report == 533
+
+
+def test_non_benchmark_fixtures_are_explicitly_scoped_out(monkeypatch, capsys):
+    """Format/debug fixtures must be neither missing targets nor silent benchmark members."""
+    from collections import Counter
+
+    monkeypatch.setattr(opportunity, "counted", lambda *args: Counter(cost=1))
+    assert opportunity.against_targets([Path("byref2-q-O.obj")]) == 0
+    report = capsys.readouterr().out
+    assert "OUT OF SCOPE" in report and "CodeView" in report
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_chain_legacy_objects_cannot_pass_a_seven_row_reference(tag, capsys, tmp_path):
     """Five-row CHAIN fixtures must not look cheaper by omitting CONST and CONST2 output."""
@@ -312,22 +362,23 @@ def test_float_conversion_helpers_are_not_priced_as_empty_calls(name, body_cost)
 
 
 @pytest.mark.parametrize("tag", ["p-evt", "q-evt", "v-evt"])
-def test_event_build_does_not_use_a_plain_program_target(tag, tmp_path, capsys):
-    """BOOLS /V/W was scored against a reference with no event checks (QB read as 4.57x)."""
+def test_event_build_is_outside_the_plain_release_code_gate(tag, tmp_path, capsys):
+    """BOOLS /V/W is a correctness configuration, not a failed release-code target."""
     path = tmp_path / "bools-renamed.obj"
     path.write_bytes(Path(f"fixtures/omf/bools-{tag}.obj").read_bytes())
-    assert opportunity.against_targets([path], raw=True) != 0
+    assert opportunity.against_targets([path], raw=True) == 0
     report = capsys.readouterr().out
-    assert "PROVISIONAL" in report and "event" in report
+    assert "OUT OF SCOPE" in report and "event" in report
     assert "x " not in report
 
 
-def test_event_configuration_cannot_pass_even_below_plain_target(monkeypatch, capsys):
+def test_event_configuration_cannot_claim_a_plain_target_ratio(monkeypatch, capsys):
     from collections import Counter
 
     monkeypatch.setattr(opportunity, "counted", lambda *args: Counter({"cost": 1, "event-enabled configuration": 1}))
-    assert opportunity.against_targets([Path("bools-q-O.obj")]) != 0
-    assert "PROVISIONAL" in capsys.readouterr().out
+    assert opportunity.against_targets([Path("bools-q-O.obj")]) == 0
+    report = capsys.readouterr().out
+    assert "OUT OF SCOPE" in report and "x " not in report
 
 
 def test_a_fallback_is_not_scored_as_success(monkeypatch) -> None:

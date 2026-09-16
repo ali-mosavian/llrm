@@ -429,6 +429,7 @@ class Kind(StrEnum):
     FDIV = "fdiv"
     FNEG = "fneg"
     FABS = "fabs"
+    FSQRT = "fsqrt"
     FLOAD = "fload"
     FSTORE = "fstore"
     FCOMPARE = "fcompare"
@@ -483,6 +484,7 @@ _BY_NAME: dict[str, Kind] = {
     "fdivrp": Kind.FDIV,
     "fchs": Kind.FNEG,
     "fabs": Kind.FABS,
+    "fsqrt": Kind.FSQRT,
     "fcom": Kind.FCOMPARE,
     "fcomp": Kind.FCOMPARE,
     "fcompp": Kind.FCOMPARE,
@@ -2390,6 +2392,7 @@ def bodies(
 
     spared = raising_call_memory.spared(found, result, contracts)
     out: list[tuple[str, MirBody]] = []
+    error_handlers: list[MirBody] = []
     for body in result:
         mine = [one for one in blocks if any(lo <= one.at < hi for lo, hi in body.body.ranges)]
         from qbopt.frontend import raising_control
@@ -2489,6 +2492,26 @@ def bodies(
             if held:
                 built = replace(built, pins={**built.pins, **held})
             out.append((f"{body.body.kind} {body.body.name or '(main)'}", built))
+            if body.body.kind == "error-handler":
+                error_handlers.append(built)
+    if error_handlers:
+        summaries = [
+            raising_call_memory.handler_effects(one, found.calls, contracts, unreached)
+            for one in error_handlers
+        ]
+        summary = None if any(one is None for one in summaries) else (
+            tuple(ref for one in summaries for ref in one[0]),
+            tuple(ref for one in summaries for ref in one[1]),
+        )
+        out = [
+            (
+                name,
+                _frame_bounded(
+                    raising_call_memory.with_handler_effects(body, summary, found.calls, contracts, unreached)
+                ),
+            )
+            for name, body in out
+        ]
     return out
 
 

@@ -677,11 +677,13 @@ raises_error = false
 error_handling = true
 writes = "ANY"
 reads = "ANY"
+direct_writes = "STRINGS"
+direct_reads = "OWN"
 clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
 established = true
 inputs = []
 evidence = '''
-rt/error.asm: `cProc B$RESN,<FAR,PUBLIC,FORCEFRAME>,SI`, no parameters -- RESUME NEXT. It searches the module's statement-address table for the entry after b$erradr and leaves through RESRET to resume there, or `JMP B$CEND` when it runs off the bottom. It never comes back to the byte after the call. A /X construct, which the optimiser does not support.
+rt/error.asm: `cProc B$RESN,<FAR,PUBLIC,FORCEFRAME>,SI`, no parameters -- RESUME NEXT. It calls B$RES_SETUP, reads b$erradr and the module's statement-address table, then leaves through RESRET to resume there, or `JMP B$CEND` when it runs off the bottom. RESRET calls B$EXSA while unwinding the abandoned frame; that may release string temporaries, hence STRINGS rather than NONE, but the routine neither receives nor constructs a pointer to arbitrary numeric caller data. It never comes back to the byte after the call; `enters_user_code` and `control=never` describe that transfer separately from its own memory footprint.
 '''
 
 ["B$RMI4"]

@@ -1740,6 +1740,41 @@ dominated by these calls costs, and every real BASIC program is -- floating
 point, strings, dynamic arrays, long arithmetic. The integer loops here are
 the part BC does *least* badly.
 
+## DIVMOD — resumable errors with constant integer arithmetic
+
+The current source prints twenty numeric results, then `DONE`; older fixture
+objects printed only eleven numeric rows and are not comparable.  The optimal
+normal path folds every proven nonzero constant divide, remainder and multiply.
+It still installs the ON ERROR handler, retains `caught = 0` because a printing
+error can resume into an observation of it, and retains the handler itself.
+
+Target: **1174 modeled units** = 32 for error registration, 1040 for twenty
+label/value output pairs, 10 for the observable `caught` state, 46 for DONE and
+termination, and 46 for ERR/store/RESUME.  The handler's mod/ref summary is part
+of the proof: error-capable calls may write `caught` and escaped string state,
+but do not thereby write unrelated numeric globals.
+
+## FPEMU — exact finite floating results
+
+Eleven label/value rows contain exact binary-power arithmetic.  The FCMP row
+prints one label and two booleans, followed by DONE.  `sqrt(1048576)` is the
+exact rational square 1024; non-squares, negative values and inexact results are
+not licensed by this reference.  Pending exception checks remain wherever an
+operation is not proven exact and exception-free.
+
+Target: **696 modeled units** = 572 for eleven ordinary rows, 78 for FCMP's
+three outputs, and 46 for DONE and termination.
+
+## PROCS — public BASIC procedure bodies remain link-visible
+
+Whole-module facts may specialize the three calls in main, but they may not
+delete the public `TWICE` and `REPORT` implementations.  String assignment and
+temporary disposal retain their allocation-failure behavior, as do the numeric
+by-reference temporaries at each call site.
+
+Target: **533 modeled units** = 334 for main, 63 for the generic `TWICE` body,
+and 136 for the generic `REPORT` body.
+
 ## The scoreboard
 
 Every target below is hand-derived from the full listing, both sides: BC's

@@ -116,6 +116,7 @@ _NAMED: dict[mir.Kind, tuple[ir.Operation, str]] = {
     mir.Kind.FDIV: (ir.Operation.FLOAT_ARITH, "fdiv"),
     mir.Kind.FNEG: (ir.Operation.FLOAT_UNARY, "fchs"),
     mir.Kind.FABS: (ir.Operation.FLOAT_UNARY, "fabs"),
+    mir.Kind.FSQRT: (ir.Operation.FLOAT_UNARY, "fsqrt"),
     # FloatAlloc picks fcom, fcomp or fcompp by what dies.
     mir.Kind.FCOMPARE: (ir.Operation.COMPARE, "fcom"),
     mir.Kind.FCHECK: (ir.Operation.NOTHING, "fwait"),

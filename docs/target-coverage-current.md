@@ -1,5 +1,32 @@
 # Current target coverage
 
+## Coverage completion — 2026-09-16
+
+All **38** source identities currently present in `fixtures/omf` now have an
+explicit scoreboard classification.  Thirty-two are optimization programs
+with source-derived targets.  Six are explicitly out of scope: BYREF2 and
+NESTUD are CodeView/ABI fixtures, CM and JT are inherited OMF fixtures, and
+RCFLIP/WENDGO are single-toolchain regressions.  There are no silent
+`NO TARGET` programs.  Event and checked objects are correctness
+configurations and are reported OUT OF SCOPE rather than compared with a plain
+release-code denominator.  FPCSEX remains visibly provisional.
+
+DIVMOD and PROCS fixtures were rebuilt from the current sources after the old
+objects were found to omit output rows/call sites.  Source-shape guards reject
+those stale objects.  Representative ordinary release configurations now
+measure:
+
+| Program | QB `/O` | PDS `/G2` | VBDOS `/G3` | Target |
+|---|---:|---:|---:|---:|
+| DIVMOD | 1192 (1.02x) | 1192 (1.02x) | 1192 (1.02x) | 1174 |
+| FPEMU | 868 (1.25x) | 868 (1.25x) | 868 (1.25x) | 696 |
+| PROCS | 750 (1.41x) | 748 (1.40x) | 770 (1.44x) | 533 |
+
+These are modeled instruction costs from emitted objects, not hardware timing.
+DIVMOD's prior 2014/1174 miss closed through a precise resumable-handler
+mod/ref summary. FPEMU's prior 1054/696 miss closed by representing FSQRT in
+MIR and folding only exact rational squares.
+
 ## Native-FPU PDS refresh — 2026-09-11
 
 Current worktree, 29 target-bearing ordinary PDS `/G2` fixtures, rewritten
@@ -291,19 +318,9 @@ snapshot has not been rerun; its redundancy counts use the older instrument.
 
 ## Missing references
 
-| Source program | Configurations without targets |
-|---|---:|
-| CHAIN | 15 |
-| DIVMOD | 15 |
-| FPEMU | 15 |
-| JUMPS | 15 |
-| PROCS | 16 |
-| CM | 4 |
-| JT | 1 |
-
-Names come from object source headers, not filename prefixes. Event-enabled
-configurations with existing plain targets also need event-preserving
-references; their plain-program denominator is not comparable.
+There are no unclassified source programs in the current OMF fixture set.
+FPCSEX remains provisional rather than missing; its strict floating reference
+still needs the independent optimality and unmasked-exception audit below.
 
 ## Next work
 

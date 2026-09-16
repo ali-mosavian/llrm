@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, replace
 from fractions import Fraction
+from math import isqrt
 
 from qbopt.analysis import consts, induction, loops
 from qbopt.model import mir
@@ -73,6 +74,14 @@ def evaluated(kind: mir.Kind, rule: Semantics, inputs: tuple[Finite, ...]) -> Fi
             result = Finite(-value.value, not value.negative_zero if not value.value else False)
         case mir.Kind.FABS, (value,):
             result = Finite(abs(value.value))
+        case mir.Kind.FSQRT, (value,):
+            if value.value < 0:
+                return None
+            numerator = isqrt(value.value.numerator)
+            denominator = isqrt(value.value.denominator)
+            if numerator * numerator != value.value.numerator or denominator * denominator != value.value.denominator:
+                return None
+            result = Finite(Fraction(numerator, denominator), value.negative_zero)
         case mir.Kind.FADD | mir.Kind.FSUB, (left, right):
             right_value = right.value if kind is mir.Kind.FADD else -right.value
             value = left.value + right_value

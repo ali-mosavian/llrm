@@ -239,6 +239,14 @@ def test_the_dispatchers_can_do_anything(name: str) -> None:
     assert dispatcher.clobbers == EVERY
 
 
+def test_resume_separates_its_direct_footprint_from_resumed_user_code() -> None:
+    """B$RESN is transitively ANY, but its pre-transfer work touches only runtime/string state."""
+    resume = runtime.CONTRACTS["B$RESN"]
+    assert resume.reads is Memory.ANY and resume.writes is Memory.ANY
+    assert resume.direct_reads is Memory.OWN
+    assert resume.direct_writes is Memory.STRINGS
+
+
 # B$FERR is two instructions and cannot itself reach a handler; what it proves
 # is that the module has ON ERROR, which is the property that refuses the body.
 def test_the_err_function_refuses_the_body_without_claiming_to_dispatch() -> None:

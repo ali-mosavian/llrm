@@ -165,6 +165,11 @@ class Contract:
     # 386 code: a register kept under the 8086 convention keeps only its
     # 16-bit half, and FS and GS are not kept at all.
     i386: bool = field(default=False)
+    # A control-transfer routine's own footprint before it invokes or resumes
+    # user code. `reads`/`writes` remain the transitive effect, which is ANY;
+    # handler summarization stops at the transfer and consumes these instead.
+    direct_writes: Memory | None = field(default=None)
+    direct_reads: Memory | None = field(default=None)
 
 
 def worst(name: str) -> Contract:
@@ -1300,6 +1305,8 @@ def _contracts(path: Path | None = None) -> dict[str, Contract]:
             evidence=row["evidence"].strip(),
             documented=frozenset(Reg(x) for x in row["documented"]) if "documented" in row else None,
             inputs=frozenset(Reg(x) for x in row["inputs"]) if "inputs" in row else None,
+            direct_writes=Memory[row["direct_writes"]] if "direct_writes" in row else None,
+            direct_reads=Memory[row["direct_reads"]] if "direct_reads" in row else None,
         )
         out[name] = replace(one, control=Control.INLINE_TABLE) if name in INLINE_TABLE else one
     return out

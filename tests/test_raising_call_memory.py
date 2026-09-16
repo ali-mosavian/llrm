@@ -123,3 +123,23 @@ def test_error_capability_is_not_an_unconditional_callback() -> None:
     escaped = (5, frozenset({(5, 6)}))
     assert raising_call_memory.reachable(routine, routine.writes, escaped, handles_errors=False) == escaped
     assert raising_call_memory.reachable(routine, routine.writes, escaped, handles_errors=True) is None
+
+
+def test_resumable_handler_summary_invalidates_only_cells_the_handler_modifies() -> None:
+    """DIVMOD's handler writes `caught`; treating it as writing `a` left every constant divide live."""
+    path = Path("fixtures/omf/divmod-p-g2.obj")
+    found = corpus.loaded(path)
+    bodies = dict(mir.bodies(found, corpus.partitioned(path)))
+    main = bodies["main (main)"]
+    handler = bodies["error-handler error handler"]
+    a = next(op.stores[0] for block in main.blocks for op in block.ops if op.at == 0x3A and op.stores)
+    caught = next(op.stores[0] for block in handler.blocks for op in block.ops if op.kind is mir.Kind.STORE)
+    printing = next(
+        op
+        for block in main.blocks
+        for op in block.ops
+        if op.kind is mir.Kind.CALL and found.calls.get(op.at) == "B$PSSD"
+    )
+    assert printing.memory_complete
+    assert any(mir.overlapping(caught, ref, found.dgroup) for ref in printing.stores)
+    assert not any(mir.overlapping(a, ref, found.dgroup) for ref in printing.stores)

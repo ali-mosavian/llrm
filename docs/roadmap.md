@@ -12,7 +12,7 @@ are dissolved.**
 
 - `absorb` moves into the raise. A `B$MUI4` call is a `MULTIPLY` the moment
   the body is raised, and then there is nothing to absorb.
-- `forward`, `segments` and `drop_loads` are one pass, `cse`. A read served
+- `forward`, `segments` and `drop_loads` are one pass, `gvn`. A read served
   from a value already held, a descriptor word loaded once and a redundant
   load are the same question asked three ways.
 - `drop_stores` is `dse`. `strength` splits: `x * 8 -> x << 3` is algebraic
@@ -24,7 +24,13 @@ are dissolved.**
 
 There is no LIR optimisation tier. If a pass has done its job on MIR there
 is nothing left for one to do, and the only things below `opt` are lower,
-regalloc and peephole.
+  regalloc and peephole.
+
+The consolidation is now implemented: `gvn` owns scalar numbering, load/store
+forwarding, quotient/remainder reuse and scalar/load PRE.  The old command-line
+pass names remain compatibility aliases only.  Complete call footprints feed
+the same MemorySSA state, including precise mod/ref summaries for resumable
+error handlers.
 
 ## Goal
 

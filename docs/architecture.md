@@ -267,13 +267,12 @@ Unknown readers and live flag dependencies retain the original computation.
 
 ```mermaid
 flowchart LR
-    In["raised MirBody"] --> Fold["fold"] --> Decide["decide"] --> Segments["segments"]
-    Segments --> LCSSA["lcssa"] --> Hoist["hoist<br/>+ sink stores"] --> Forward["forward"]
-    Forward --> DL["drop_loads"] --> DS["drop_stores"] --> Reuse["reuse"]
-    Reuse --> CSE["cse<br/>+ FP check folding"] --> Promote["promote"]
+    In["raised MirBody"] --> Fold["fold"] --> Decide["decide"] --> LoopSimplify["loopsimplify"]
+    LoopSimplify --> LCSSA["lcssa"] --> Hoist["hoist<br/>+ sink stores"] --> DS["drop_stores"]
+    DS --> GVN["gvn<br/>scalar + memory PRE<br/>divide reuse"] --> Promote["promote"]
     Promote --> Strength["strength"] --> Algebraic["algebraic"]
     Algebraic --> Dead["dead"] --> Place["place"] --> Unroll["unroll"]
-    Unroll --> Changed{"body changed?"}
+    Unroll --> Fill["fill"] --> Changed{"body changed?"}
     Changed -->|"yes, round < 16"| Fold
     Changed -->|"no"| Wide["temporary post-pass widening seam"]
     Changed -->|"still changing at 16"| Error["hard convergence error"]
@@ -285,10 +284,10 @@ Pass responsibilities are intentionally narrow:
 | Family | Passes | Question answered |
 | --- | --- | --- |
 | Scalar simplification | `fold`, `decide`, `algebraic`, `dead` | What value or control edge is already determined? |
-| Memory/value reuse | `segments`, `forward`, `drop_loads`, `drop_stores`, `cse`, `promote` | Can existing data replace work here? |
+| Memory/value reuse | `drop_stores`, `gvn`, `promote` | Can existing data replace work here? |
 | Loop optimization | `hoist`, `strength`, `unroll`, `lcssa` | What can leave, stride through, duplicate around, or cross the exit of a loop? |
 | Placement in program order | `place` | Where may a surviving definition execute without changing meaning? |
-| Division reuse | `reuse` | Can an existing quotient/remainder serve another use? |
+| Division reuse | `gvn` | Can an existing quotient/remainder serve another use? |
 
 `qbopt/analysis/` contains analyses, not phases. Liveness, intervals, loops,
 induction, ranges, float facts and available values answer questions without
@@ -728,9 +727,9 @@ one documented target without materially regressing another.
   terms rather than masquerading as recurrence seeds.
 - [x] Build `MemorySSA`: one def-use graph for loads, stores and call effects.
   `analysis/memoryssa.py` provides live-on-entry, memory uses/definitions and
-  join/backedge phis. Calls conservatively define memory. This is an analysis
-  foundation; optimization consumers and precise clobber queries remain below.
-- [ ] Refine alias, object-identity, escape and per-argument mod/ref facts used
+  join/backedge phis. Pure calls have no memory access, complete read-only calls
+  are uses, and complete write footprints are definitions.
+- [x] Refine alias, object-identity, escape and per-argument mod/ref facts used
   by `MemorySSA`.
   Promotion and constant-memory facts now share MemorySSA's conservative rule
   for unspecified call writes and opaque barriers. Promotion previously kept
@@ -746,7 +745,11 @@ one documented target without materially regressing another.
   Call reachability now uses the selected per-site contract, independently
   for reads and writes. Audited NONE/ARGUMENTS effects exclude BC_DATA even
   when its addresses escape, but still alias runtime scratch and stack.
-  Unknown contracts, callbacks and handled errors retain unknown effects.
+  Unknown contracts and callbacks retain unknown effects. Resumable error
+  handlers now contribute a separate complete mod/ref summary to every
+  error-capable call: DIVMOD's handler invalidates `caught` and escaped string
+  state without pretending it writes `a`, `b` or `r`. The same summary feeds
+  constant memory, availability and MemorySSA.
   `B$FCMP` is not stack-only: its `fnstsw` writes runtime-owned DGROUP.
   Fail-first regressions cover PL_MOVE's comparisons and contract overrides;
   restoring the old reachability makes both fail. Native PL_MOVE assembly is
@@ -871,7 +874,7 @@ one documented target without materially regressing another.
   pairs. LOCALP's signed INTEGER addition now enters MIR as one LONG addition
   and store, and promotion keeps the whole accumulator. Costs fall further to
   QB/PDS 380 and VBDOS 368; no machine-pair recognition was added to a pass.
-- [ ] Implement global value numbering with partial redundancy elimination
+- [x] Implement global value numbering with partial redundancy elimination
   (`GVN-PRE`) for scalar and memory expressions.
   Scalar full redundancy at joins is implemented: when every incoming edge
   has a dominating provider, a phi replaces the repeated computation; input
@@ -900,8 +903,11 @@ one documented target without materially regressing another.
   than a second load/add, retaining both SINGLE stores and accumulation order.
   PDS code saves six bytes; 144 QEMU precision/rounding/input cases match exact
   output state. See `native-fpu-waits.md` for before/after assembly.
-- [ ] Replace the separate load/store cleanup rules with MemorySSA-based load
-  elimination and dead-store elimination.
+  The former `forward`, `drop_loads`, `reuse` and `cse` transforms are now one
+  `gvn` pass and one fixed-point value-numbering state. Legacy `--only` spellings
+  map to that pass instead of selecting overlapping implementations.
+- [x] Replace the separate load cleanup rules with GVN/MemorySSA-based load
+  elimination. Dead-store elimination remains its own ordered transform.
 - [x] Implement sparse conditional constant propagation (`SCCP`) over values
   and executable CFG edges.
   `analysis/constant_cycles.py` combines its sparse value worklist with

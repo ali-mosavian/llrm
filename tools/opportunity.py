@@ -608,6 +608,10 @@ TARGETS = {
     "CHAIN": 482,  # Twelve numeric stores, seven label/result rows, DONE and termination.
     "JUMPS": 742,  # Three expanded iterations, twelve stores and six four-call output rows.
     "FPDEEP": 1317,  # PDS: 1086 output + 21 stores + 21 pending-exception checks.
+    # Complete source-derived listings are documented in docs/targets.md.
+    "DIVMOD": 1174,
+    "FPEMU": 696,
+    "PROCS": 533,
 }
 
 
@@ -615,6 +619,38 @@ PROVISIONAL_TARGETS = {
     "FPCSEX": "reference reassociates the sum and omits SINGLE rounding",
     "FPDEEP": "complete reference is verified only for ordinary non-resumable PDS builds",
 }
+
+
+# These objects establish decoding, OMF, debug-type or historical regression
+# behavior.  They are correctness fixtures, not members of the cross-compiler
+# optimization matrix.  Keeping the classification beside TARGETS prevents a
+# new fixture from silently appearing as a missing performance denominator.
+NON_BENCHMARK_PROGRAMS = {
+    "BYREF2": "CodeView/by-reference ABI fixture; only QB debug builds exist",
+    "CM": "inherited compiler-module OMF fixture, not a suite program",
+    "JT": "inherited jump-table OMF fixture, not a suite program",
+    "NESTUD": "CodeView nested-type fixture; only QB debug builds exist",
+    "RCFLIP": "single-toolchain regression fixture, outside the cross-compiler matrix",
+    "WENDGO": "single-toolchain CFG regression fixture, outside the cross-compiler matrix",
+}
+
+
+def _scope(program: str, found: Counter) -> str | None:
+    """Why a row is outside the release-code optimization comparison.
+
+    Event polling and checked builds deliberately execute work absent from the
+    plain reference.  Calling their plain denominator provisional mixed a
+    correctness configuration into the optimization gate; excluding it here
+    keeps both gates exact.  Strict runtime-input FP remains visible as
+    provisional below because it is a release-code optimization question.
+    """
+    if program in NON_BENCHMARK_PROGRAMS:
+        return NON_BENCHMARK_PROGRAMS[program]
+    if found.get("event-enabled configuration"):
+        return "event instrumentation requires its own correctness run, not a plain-code cost target"
+    if found.get("checked configuration"):
+        return "checked instrumentation requires its own correctness run, not a plain-code cost target"
+    return None
 
 
 def against_targets(paths: list[Path], raw: bool = False) -> int:
@@ -635,8 +671,12 @@ def against_targets(paths: list[Path], raw: bool = False) -> int:
             continue
         cost = found.pop("cost", 0)
         program = _program(path)
+        scope = _scope(program, found)
         want = TARGETS.get(program)
         left = sum(count for name, count in found.items() if name.startswith(("load ", "store ", "read ")))
+        if scope:
+            print(f"  {path.stem:10s} {cost:7d} {'--':>7s} {'--':>6s}   {left}  OUT OF SCOPE: {scope}")
+            continue
         if want is None:
             failed = True
             print(f"  {path.stem:10s} {cost:7d} {'--':>7s} {'--':>6s}   {left}  NO TARGET")
@@ -658,16 +698,23 @@ def against_targets(paths: list[Path], raw: bool = False) -> int:
                 reason = (
                     "CHAIN reference requires the current seven-row source; this object has different output coverage"
                 )
+        if program == "DIVMOD":
+            reference_module = module.load(path)
+            numeric = sum(
+                name in {"B$PEI2", "B$PEI4"} for name in reference_module.calls.values()
+            )
+            if numeric != 20:
+                reason = "DIVMOD reference requires the current twenty-result source"
+        if program == "PROCS":
+            reference_module = module.load(path)
+            if sum(name == "REPORT" for name in reference_module.calls.values()) != 3:
+                reason = "PROCS reference requires all three source calls"
         if program == "FPCSE":
             family = module.family(omf.parse(path.read_bytes())) if path.is_file() else module.Family.UNKNOWN
             if family is module.Family.QUICKBASIC:
                 want = 145  # Entry checkpoint precedes initialization: seven final stores.
             elif family not in (module.Family.PDS, module.Family.VBDOS):
                 reason = "FPCSE requires an identified compiler for its entry-checkpoint reference"
-        if found.get("event-enabled configuration"):
-            reason = "event-enabled build requires a reference retaining event checks; the plain-program target is not comparable"
-        if found.get("checked configuration"):
-            reason = "/D build requires a reference retaining line tracking and subscript checks; the plain-program target is not comparable"
         if reason:
             failed = True
             print(f"  {path.stem:10s} {cost:7d} {want:7d} {'--':>6s}   {left}  PROVISIONAL: {reason}")

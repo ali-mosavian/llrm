@@ -607,6 +607,7 @@ def _computation(op: Op, stands: dict[int, mir.Value], whole: dict[int, int]) ->
         mir.Kind.FSUB,
         mir.Kind.FMUL,
         mir.Kind.FDIV,
+        mir.Kind.FSQRT,
     )
     if (op.kind not in _PURE | {mir.Kind.LOAD} and not floating) or op.stores or op.merges or op.barrier:
         return None
@@ -1449,6 +1450,7 @@ _OBSERVED = frozenset(
         mir.Kind.FDIV,
         mir.Kind.FNEG,
         mir.Kind.FABS,
+        mir.Kind.FSQRT,
         mir.Kind.FCOMPARE,
         mir.Kind.FCHECK,
     }

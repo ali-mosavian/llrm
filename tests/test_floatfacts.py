@@ -61,6 +61,23 @@ def test_single_store_does_not_keep_an_extended_intermediate():
     assert floatfacts.evaluated(mir.Kind.FSTORE, rule, (floatfacts.Finite(Fraction(2**24 + 1)),)) is None
 
 
+@pytest.mark.parametrize("number,negative_zero,expected", [
+    (1048576, False, floatfacts.Finite(Fraction(1024))),
+    (Fraction(9, 16), False, floatfacts.Finite(Fraction(3, 4))),
+    (0, True, floatfacts.Finite(Fraction(0), True)),
+    (2, False, None),
+    (-1, False, None),
+])
+def test_sqrt_facts_require_an_exact_rational_square(number, negative_zero, expected):
+    """FPEMU retained FSQRT for sqrt(1048576), leaving it just over its 1.5x target."""
+    rule = Semantics((Format.EXTENDED80,), Format.EXTENDED80, Precision.DYNAMIC, Rounding.DYNAMIC)
+    assert floatfacts.evaluated(
+        mir.Kind.FSQRT,
+        rule,
+        (floatfacts.Finite(Fraction(number), negative_zero),),
+    ) == expected
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_fpcse_known_inputs_reach_float_computations(tag):
     """FPCSE's 2+4, product 48 and quotient 0.75 should not remain opaque facts."""
