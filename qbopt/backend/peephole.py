@@ -4,7 +4,6 @@ from collections import Counter
 from dataclasses import replace
 
 from iced_x86 import Decoder
-from iced_x86 import Mnemonic
 from iced_x86 import OpAccess
 from iced_x86 import Register
 from iced_x86 import Register_
@@ -694,29 +693,96 @@ def fused(body: lir.LirBody) -> lir.LirBody:
         work = [index for index, one in enumerate(insns) if not _nothing(one)]
         at = 0
         while at + 1 < len(work):
-            store = work[at + 2] if at + 2 < len(work) else None
-            made = _fused(
-                insns[work[at]],
-                insns[work[at + 1]],
-                insns[store] if store is not None else None,
-                dead_after[work[at + 1]],
-                dead_after[store] if store is not None else frozenset(),
-            )
-            if made is None:
+            load_at = work[at]
+            candidate = at + 1
+            changed = False
+            while candidate < len(work):
+                work_at = work[candidate]
+                store_at = work[candidate + 1] if candidate + 1 < len(work) else None
+                made = _fused(
+                    insns[load_at],
+                    insns[work_at],
+                    insns[store_at] if store_at is not None else None,
+                    dead_after[work_at],
+                    dead_after[store_at] if store_at is not None else frozenset(),
+                )
+                if made is not None:
+                    replacement, used = made
+                    insns[work_at] = replacement
+                    # Keep the virtual definitions and byte ownership.  The
+                    # fused machine instruction replaces the physical
+                    # load/store only; deleting either instruction also
+                    # deletes SSA edges carried by identity-copy anchors.
+                    insns[load_at] = lir.anchor(insns[load_at])
+                    if used == 3:
+                        insns[store_at] = lir.anchor(insns[store_at])
+                    at = candidate + used - 1
+                    changed = True
+                    break
+                if not _delays_memory_read(insns[load_at], insns[work_at]):
+                    break
+                candidate += 1
+            if not changed:
                 at += 1
-                continue
-            replacement, used = made
-            insns[work[at + 1]] = replacement
-            # Keep the virtual definitions and byte ownership.  The fused
-            # machine instruction replaces the physical load/store only;
-            # deleting either instruction also deletes SSA edges carried by
-            # intervening identity-copy anchors.
-            insns[work[at]] = lir.anchor(insns[work[at]])
-            if used == 3:
-                insns[work[at + 2]] = lir.anchor(insns[work[at + 2]])
-            at += used
         blocks.append(replace(block, insns=tuple(insns)))
     return replace(body, blocks=tuple(blocks))
+
+
+def _delays_memory_read(load: lir.Insn, crossed: lir.Insn) -> bool:
+    """Whether `load` may read its cell after this register materialization.
+
+    A load of the other arithmetic operand commonly separates a cell's own
+    load from its operation.  Delaying the cell read is safe when the crossed
+    instruction only materializes a register, does not consume or replace the
+    loaded register, and does not change anything used to address the cell.
+    Memory-writing instructions are deliberately outside this rule: proving
+    their disjointness belongs in MIR, not in a machine peephole.
+    """
+    if (
+        crossed.what is None
+        or crossed.clobbers
+        or crossed.requires
+        or crossed.delivers
+        or crossed.spread
+        or crossed.group is not None
+        or crossed.symbol is True
+        or crossed.frame_adjust
+    ):
+        return False
+    match crossed.what:
+        case ir.Semantics(
+            ir.Operation.MOVE | ir.Operation.EXTEND | ir.Operation.ADDRESS,
+            _,
+            (ir.Reg(),),
+            _,
+        ):
+            pass
+        case _:
+            return False
+    loaded = _register_effects(load, flags=True)
+    materialized = _register_effects(crossed, flags=True)
+    if loaded is None or materialized is None:
+        return False
+    load_reads, load_writes = loaded
+    crossed_reads, crossed_writes = materialized
+    match load.what:
+        case ir.Semantics(_, _, _, (ir.Mem() as cell,)):
+            address_registers = {cell.through, cell.index_through}
+            if cell.addr is not None:
+                address_registers.add(cell.addr.segment)
+                # Once MIR computed a base value, allocation's `through` is
+                # the encoded register and BC's original `addr.base` is only
+                # provenance.  A cell with no value still encodes that base.
+                if cell.base is None:
+                    address_registers.add(cell.addr.base)
+            address_lanes = {lane for register in address_registers for lane in _lanes(register)}
+        case _:
+            return False
+    return not (
+        load_writes & (crossed_reads | crossed_writes)
+        or (load_reads | address_lanes) & crossed_writes
+        or set(load.defines) & set(crossed.uses)
+    )
 
 
 def _fused(load, work, store, dead_work, dead_store) -> "tuple[lir.Insn, int] | None":

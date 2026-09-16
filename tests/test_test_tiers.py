@@ -70,5 +70,6 @@ def test_fast_manifest_covers_each_compiler_layer() -> None:
         "test_sccp.py",  # MIR optimization
         "test_lower_conditions.py",  # lowering boundary
         "test_parcopy.py",  # allocation
+        "test_memory_folding.py",  # final machine folding
     }
     assert required <= FAST_MODULES
