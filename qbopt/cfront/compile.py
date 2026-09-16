@@ -25,6 +25,7 @@ from qbopt.cfront import stream
 from qbopt.backend import omfwrite
 from qbopt.backend import prologue
 from qbopt.cfront import raise_hir
+from qbopt.backend import lower_int64
 from qbopt.backend import frame as frames
 
 WCCQ = Path(__file__).resolve().parents[2] / "owshim" / "bin" / "wccq"
@@ -73,10 +74,14 @@ def assembled(text: str, module: str, *, optimise: bool = False, dump: Path | No
             if dump:
                 watch("rotate", body)
             mirs.append(_mir_text(raised.name + " (opt)", body))
-        low = lower.lowered(raised.name, body, raised.calls, {}, raised.contracts, {}, "386")
+        legalized = lower_int64.expanded(body, raised.calls, raised.contracts)
+        body = legalized.body
+        if dump and body is not raised.body:
+            _write(dump, f"passes/{raised.name}.int64-lower", _mir_text(raised.name, body))
+        low = lower.lowered(raised.name, body, legalized.calls, {}, legalized.contracts, {}, "386")
         lirs.append(_lir_text(raised.name, low))
-        frame = frames.of(low, raised.calls)
-        for number, phase in enumerate(flow.machine(flow._pinned(low), frame, raised.calls)):
+        frame = frames.of(low, legalized.calls)
+        for number, phase in enumerate(flow.machine(flow._pinned(low), frame, legalized.calls)):
             if not isinstance(phase, prologue.Prologue):
                 low = phase.transform(low)
                 _write(dump, f"phases/{raised.name}.{number:02d}-{type(phase).__name__}", _lir_text(raised.name, low))
@@ -86,6 +91,7 @@ def assembled(text: str, module: str, *, optimise: bool = False, dump: Path | No
         callees = {
             at: masm.Callee(one.object_name, one.far, raised.inline.get(at, ())) for at, one in raised.callees.items()
         }
+        callees.update({at: masm.Callee(legalized.calls[at], False, code) for at, code in legalized.inline.items()})
         procedures.append(masm.Procedure(raised.name, raised.symbol.exported, raised.symbol.far, low, reserve, callees))
     _write(dump, "mir", "\n".join(mirs))
     _write(dump, "lir", "\n".join(lirs))

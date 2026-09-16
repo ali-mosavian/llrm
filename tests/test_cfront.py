@@ -96,8 +96,8 @@ def test_int64_stream_raises_whole_signed_and_unsigned_mir_values():
     is a target ABI decision for lowering, not a reason to represent C's
     arithmetic as four unrelated words in the optimizer.
     """
-    from qbopt.optimize import transform
     from qbopt.model import floating
+    from qbopt.optimize import transform
 
     unit = cfront.hir.unit(cfront.stream.parse((FIXTURES / "mir" / "int64.cgs").read_text()))
     bodies = {}
@@ -160,8 +160,16 @@ def test_int64_stream_raises_whole_signed_and_unsigned_mir_values():
     assert cfront.raise_hir._fold("O_DIV", dividend, 5, True) == quotient
     assert cfront.raise_hir._fold("O_MOD", dividend, 5, True) == dividend - quotient * 5
 
-    with pytest.raises(cfront.lower.Unlowered, match="64-bit integer lowering"):
-        cfront.lower.lowered("int64", bodies["i64Add"], {}, (), {})
+    from qbopt.backend import lower_int64
+
+    legalized = lower_int64.expanded(bodies["i64Add"])
+    assert not any(
+        getattr(arg, "width", None) == 8
+        for block in legalized.body.blocks
+        for op in block.ops
+        for arg in (*op.args, *op.results)
+    )
+    cfront.lower.lowered("int64", legalized.body, legalized.calls, (), legalized.contracts)
 
 
 @pytest.mark.parametrize(
@@ -176,9 +184,10 @@ def test_int64_number_crunching_programs_survive_the_mir_pipeline(module, kinds)
     """Self-checking kernels used to stop at the first TY_{U,}INT_8 value.
 
     Each fixture has a known-answer `*Check` procedure that returns zero.
-    Until int64 machine lowering lands, keep the stronger available gate:
-    every procedure raises and optimizes as valid SSA, and the arithmetic
-    kernel still contains the distinct 64-bit work it was written to test.
+    Every procedure raises and optimizes as valid SSA, the arithmetic kernel
+    retains the distinct 64-bit work it was written to test, and target
+    lowering emits all procedures.  The DOS semantic gate lives beside this
+    test in test_cfront_int64_e2e.py.
     """
     from qbopt.optimize import transform
 
@@ -195,8 +204,10 @@ def test_int64_number_crunching_programs_survive_the_mir_pipeline(module, kinds)
         observed.update(
             op.kind
             for op in ops
-            if any(isinstance(value, (cfront.mir.Held, cfront.mir.Const)) and value.width == 8
-                   for value in (*op.args, *op.results))
+            if any(
+                isinstance(value, (cfront.mir.Held, cfront.mir.Const)) and value.width == 8
+                for value in (*op.args, *op.results)
+            )
         )
         if raised.name.endswith("Check"):
             checks.extend(ops)
@@ -204,6 +215,12 @@ def test_int64_number_crunching_programs_survive_the_mir_pipeline(module, kinds)
     assert kinds <= observed
     assert any(op.kind is cfront.mir.Kind.CALL and op.results and op.results[0].width == 8 for op in checks)
     assert any(op.kind is cfront.mir.Kind.BRANCH for op in checks)
+
+    # These are programs, not parser samples: the machine half must accept
+    # the same optimized bodies and emit every procedure, including main.
+    assembly = cfront.compiled(path.read_text(), module, optimise=True)
+    assert "64Check proc" in assembly
+    assert "_main proc" in assembly
 
 
 def test_float_cast_truncates():
@@ -256,7 +273,11 @@ def test_optimised_locals_lose_their_dead_stores():
     text = cfront.compiled((FIXTURES / "pal.cgs").read_text(), "pal", optimise=True)
     lines = [line.strip() for line in text.splitlines()]
     body = lines[lines.index("_pal_bestfit proc far") : lines.index("_pal_bestfit endp")]
-    stored = [one for one in body if one.startswith("mov dword ptr [bp-") and one.split("[bp-")[1].split("]")[0] in ("14", "18", "22", "26")]
+    stored = [
+        one
+        for one in body
+        if one.startswith("mov dword ptr [bp-") and one.split("[bp-")[1].split("]")[0] in ("14", "18", "22", "26")
+    ]
     assert stored == []
 
 
@@ -270,7 +291,13 @@ def test_float_compare_moves_the_status_word_into_the_flags():
     lines = _asm("floats")
     pick = _proc(lines, "_pick")
     at = pick.index("fnstsw ax")
-    assert pick[at - 2 : at + 3] == ["fld dword ptr [bp+6]", "fcomp dword ptr [bp+10]", "fnstsw ax", "sahf", "jae L1_10"]
+    assert pick[at - 2 : at + 3] == [
+        "fld dword ptr [bp+6]",
+        "fcomp dword ptr [bp+10]",
+        "fnstsw ax",
+        "sahf",
+        "jae L1_10",
+    ]
     sign = _proc(lines, "_sign")
     at = sign.index("fcompp")
     assert sign[at - 2 : at + 4] == ["fldz", "fld qword ptr [bp+6]", "fcompp", "fnstsw ax", "sahf", "jb L2_9"]
@@ -484,7 +511,10 @@ def test_local_stored_before_a_call_is_promoted_after_it():
         for block in body.blocks
         for op in block.ops
         if op.kind is cfront.mir.Kind.LOAD
-        and any(ref.addr is not None and ref.addr.space is cfront.raise_hir.Space.FRAME and ref.addr.disp < 0 for ref in op.loads)
+        and any(
+            ref.addr is not None and ref.addr.space is cfront.raise_hir.Space.FRAME and ref.addr.disp < 0
+            for ref in op.loads
+        )
     ]
     assert local == []
 
@@ -495,7 +525,9 @@ def test_symbol_argument_is_pushed_as_a_literal():
     or a slot where `push offset _tag` needs neither."""
     text = cfront.compiled((FIXTURES / "loopaddr.cgs").read_text(), "loopaddr", optimise=True)
     body = _proc([line.strip() for line in text.splitlines()], "_sum")
-    assert "push offset _tag" in body and not any(line.startswith("mov ") and "offset _tag" in line for line in body), body
+    assert "push offset _tag" in body and not any(line.startswith("mov ") and "offset _tag" in line for line in body), (
+        body
+    )
 
 
 def test_stored_symbol_is_forwarded_to_its_reload():
@@ -514,7 +546,11 @@ def test_loop_tests_at_its_bottom(name):
     text = cfront.compiled((FIXTURES / "rotate.cgs").read_text(), "rotate", optimise=True)
     body = _proc([line.strip() for line in text.splitlines()], name)
     labels = {line[:-1]: index for index, line in enumerate(body) if line.endswith(":")}
-    back = [line for index, line in enumerate(body) if line.startswith("jmp ") and labels.get(line.split()[1], index) < index]
+    back = [
+        line
+        for index, line in enumerate(body)
+        if line.startswith("jmp ") and labels.get(line.split()[1], index) < index
+    ]
     assert back == [], body
 
 
@@ -610,10 +646,26 @@ def test_verify_reports_a_use_before_its_definition_in_one_block():
     read before its start, in the same block, passed as SSA."""
     mir, ir = cfront.mir, cfront.raise_hir.ir
     start, limit = mir.Value(1, 1), mir.Value(2, 1)
-    add = mir.Op(1, ir.Operation.NOTHING, "", (limit,), (start,), kind=mir.Kind.ADD,
-                 args=(mir.Held(start, 2), mir.Const(100, 2)), results=(mir.Held(limit, 2),))
-    copy = mir.Op(1, ir.Operation.NOTHING, "", (start,), (), kind=mir.Kind.COPY,
-                  args=(mir.Const(0, 2),), results=(mir.Held(start, 2),))
+    add = mir.Op(
+        1,
+        ir.Operation.NOTHING,
+        "",
+        (limit,),
+        (start,),
+        kind=mir.Kind.ADD,
+        args=(mir.Held(start, 2), mir.Const(100, 2)),
+        results=(mir.Held(limit, 2),),
+    )
+    copy = mir.Op(
+        1,
+        ir.Operation.NOTHING,
+        "",
+        (start,),
+        (),
+        kind=mir.Kind.COPY,
+        args=(mir.Const(0, 2),),
+        results=(mir.Held(start, 2),),
+    )
     body = mir.MirBody(1, (mir.MirBlock(1, (), (add, copy), ()),))
     assert any("before its definition" in problem for problem in mir.verify(body))
 
@@ -629,9 +681,15 @@ def test_signed_word_division_by_a_power_of_two_shifts(name):
 
 @pytest.mark.parametrize(
     ("name", "strings"),
-    [("_fill_bytes", ("rep stosb",)), ("_fill_words", ("rep stosw",)), ("_fill_far", ("rep stosw", "rep stosb")),
-     ("_fill_counted", ("rep stosw",)), ("_fill_local", ("rep stosw",)),
-     ("_fill_through", ("rep stosw",)), ("_fill_voices", ("rep stosw",))],
+    [
+        ("_fill_bytes", ("rep stosb",)),
+        ("_fill_words", ("rep stosw",)),
+        ("_fill_far", ("rep stosw", "rep stosb")),
+        ("_fill_counted", ("rep stosw",)),
+        ("_fill_local", ("rep stosw",)),
+        ("_fill_through", ("rep stosw",)),
+        ("_fill_voices", ("rep stosw",)),
+    ],
 )
 def test_counted_store_of_one_value_is_a_string_fill(name, strings):
     """A loop storing one value into consecutive cells took a compare, a
@@ -644,7 +702,11 @@ def test_counted_store_of_one_value_is_a_string_fill(name, strings):
     text = cfront.compiled((FIXTURES / "fill.cgs").read_text(), "fill", optimise=True)
     body = _proc([line.strip() for line in text.splitlines()], name)
     labels = {line[:-1]: index for index, line in enumerate(body) if line.endswith(":")}
-    back = [line for index, line in enumerate(body) if line.startswith("j") and labels.get(line.split()[-1], index + 1) <= index]
+    back = [
+        line
+        for index, line in enumerate(body)
+        if line.startswith("j") and labels.get(line.split()[-1], index + 1) <= index
+    ]
     assert all(one in body for one in strings) and back == [], body
 
 

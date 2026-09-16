@@ -84,9 +84,17 @@ def live(body: lir.LirBody) -> tuple[dict[int, set[int]], dict[int, set[int]]]:
     exposed = {}
     for block in body.blocks:
         alive: set[int] = set()
-        for one in reversed(block.insns):
-            alive -= set(one.defines)
-            alive |= set(one.uses)
+        index = len(block.insns) - 1
+        while index >= 0:
+            one = block.insns[index]
+            first = index
+            if one.group is not None:
+                while first > 0 and block.insns[first - 1].group == one.group:
+                    first -= 1
+            group = block.insns[first : index + 1]
+            alive -= {value for item in group for value in item.defines}
+            alive |= {value for item in group for value in item.uses}
+            index = first - 1
         exposed[block.at] = alive - set(block.arrives)
 
     live_in = {block.at: set() for block in body.blocks}
@@ -177,10 +185,18 @@ def interference(body: lir.LirBody) -> dict[int, frozenset[int]]:
             graph.setdefault(value, set())
         alive = set(out_of[block.at])
         meet(alive)
-        for one in reversed(block.insns):
-            alive -= set(one.defines)
-            alive |= set(one.uses)
+        index = len(block.insns) - 1
+        while index >= 0:
+            one = block.insns[index]
+            first = index
+            if one.group is not None:
+                while first > 0 and block.insns[first - 1].group == one.group:
+                    first -= 1
+            group = block.insns[first : index + 1]
+            alive -= {value for item in group for value in item.defines}
+            alive |= {value for item in group for value in item.uses}
             meet(alive)
+            index = first - 1
     return {one: frozenset(others) for one, others in graph.items()}
 
 
@@ -508,8 +524,11 @@ def _widest(body: lir.LirBody) -> dict[int, int]:
     """How wide each value is anywhere it is read or written."""
     out: dict[int, int] = {}
     for one in body.insns:
-        held = [where for operand in ((*one.what.dests, *one.what.sources) if one.what is not None else ())
-                for where in ir.values(operand)]
+        held = [
+            where
+            for operand in ((*one.what.dests, *one.what.sources) if one.what is not None else ())
+            for where in ir.values(operand)
+        ]
         held += [where for where, _register in (*one.requires, *one.delivers)]
         for where in held:
             out[where.value] = max(out.get(where.value, 0), where.width)
@@ -518,7 +537,9 @@ def _widest(body: lir.LirBody) -> dict[int, int]:
     return out
 
 
-def _masks(body: lir.LirBody, index: "ranges.Indexes") -> "list[tuple[int, frozenset[Register_], frozenset[Register_]]]":
+def _masks(
+    body: lir.LirBody, index: "ranges.Indexes"
+) -> "list[tuple[int, frozenset[Register_], frozenset[Register_]]]":
     """Every point a register is destroyed without being named, and which.
 
     LLVM's `LiveIntervals::getRegMaskSlots()`. A call is the only one here.
@@ -530,8 +551,13 @@ def _masks(body: lir.LirBody, index: "ranges.Indexes") -> "list[tuple[int, froze
     for block in body.blocks:
         for one in block.insns:
             if one.clobbers or one.clobbers_high:
-                out.append((index.at[id(one)], frozenset(_whole(register) for register in one.clobbers),
-                            frozenset(_whole(register) for register in one.clobbers_high)))
+                out.append(
+                    (
+                        index.at[id(one)],
+                        frozenset(_whole(register) for register in one.clobbers),
+                        frozenset(_whole(register) for register in one.clobbers_high),
+                    )
+                )
     return out
 
 
@@ -567,7 +593,9 @@ def _clobbered(one: "ranges.Interval", register: Register_, masks: list, width: 
     return False
 
 
-def _free(one: "ranges.Interval", order: tuple, union: dict, live: dict, masks: list, width: int = 4) -> "Register_ | None":
+def _free(
+    one: "ranges.Interval", order: tuple, union: dict, live: dict, masks: list, width: int = 4
+) -> "Register_ | None":
     """A register nothing live at the same time is using, and no call kills."""
     for register in order:
         if _clobbered(one, register, masks, width):
@@ -599,7 +627,7 @@ def _evict(
     for register in order:
         if _clobbered(one, register, masks, width):
             continue
-        victims =[other for other in union.get(_whole(register), ()) if other in live and live[other].overlaps(one)]
+        victims = [other for other in union.get(_whole(register), ()) if other in live and live[other].overlaps(one)]
         if not victims:
             continue
         bill = sum(0.0 if movable(other, register) else live[other].weight for other in victims)
@@ -821,7 +849,9 @@ def _sibling_priced(body: lir.LirBody, live: dict) -> dict:
             and not any(isinstance(x, ir.Mem) for x in (*what.dests, *what.sources))
         )
         impure.update(
-            value for value in (*one.defines, *one.uses) if not (in_place and value in one.defines and value in one.uses)
+            value
+            for value in (*one.defines, *one.uses)
+            if not (in_place and value in one.defines and value in one.uses)
         )
     near = coalesce._interference(body)
     deep = ranges.depths(body)

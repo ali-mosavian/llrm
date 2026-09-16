@@ -18,8 +18,8 @@ early-clobber, and inventing the distinction before a pass asks for it
 would be four times the indices for none of the answers.
 """
 
-from dataclasses import dataclass
 from dataclasses import replace
+from dataclasses import dataclass
 
 from qbopt.model import lir
 from qbopt.analysis import loops as loopy
@@ -131,13 +131,28 @@ def _ranges(body: lir.LirBody, index: Indexes) -> dict[int, Interval]:
         first, last = index.span[block.at]
         alive: dict[int, int] = {one: last for one in live_out[block.at]}
         written: set[int] = set()
-        for one in reversed(block.insns):
-            slot = index.at[id(one)]
-            for value in one.defines:
+        position = len(block.insns) - 1
+        while position >= 0:
+            one = block.insns[position]
+            first_in_group = position
+            if one.group is not None:
+                while first_in_group > 0 and block.insns[first_in_group - 1].group == one.group:
+                    first_in_group -= 1
+            group = block.insns[first_in_group : position + 1]
+            # A phi copy group is one parallel boundary, however many moves
+            # spell it.  All its sources coexist before that boundary and all
+            # its destinations after it.  Giving each move its printed slot
+            # let the allocator put fibonacci64's old `current` and `next` in
+            # one register even though a later move in the same group still
+            # needed the old value.
+            slot = index.at[id(group[-1])] if one.group is not None else index.at[id(one)]
+            boundary = slot + DEF
+            for value in {value for item in group for value in item.defines}:
                 written.add(value)
-                pieces.setdefault(value, []).append(Segment(slot + DEF, alive.pop(value, slot + DEF + 1)))
-            for value in one.uses:
-                alive.setdefault(value, slot + USE + 1)
+                pieces.setdefault(value, []).append(Segment(boundary, alive.pop(value, boundary + 1)))
+            for value in {value for item in group for value in item.uses}:
+                alive.setdefault(value, boundary)
+            position = first_in_group - 1
         # A phi's result is defined at the top of the block, on the edge
         # rather than by any instruction in it.
         for phi in block.phis:

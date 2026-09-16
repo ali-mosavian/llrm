@@ -30,8 +30,8 @@ from dataclasses import replace
 from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.backend import target
-from qbopt.analysis import intervals as ranges
 from qbopt.model.passes import LIRTransform
+from qbopt.analysis import intervals as ranges
 
 
 class Coalescer(LIRTransform):
@@ -102,9 +102,16 @@ def joined(body: lir.LirBody, pinned: dict | None = None) -> lir.LirBody:
             # Keep the established test around pins, where recolouring is
             # not free and the heterogeneous-palette argument does not apply.
             constrained = any(value in held for value in (*neighbours, here, there))
-            if len([o for o in neighbours if may.get(o, everything) & allowed
-                    and len(near.get(o, ())) >= (k if constrained else len(may.get(o, everything)))]) >= k and (
-                constrained or not (_george(here, there, allowed, near, may) or _george(there, here, allowed, near, may))
+            if len(
+                [
+                    o
+                    for o in neighbours
+                    if may.get(o, everything) & allowed
+                    and len(near.get(o, ())) >= (k if constrained else len(may.get(o, everything)))
+                ]
+            ) >= k and (
+                constrained
+                or not (_george(here, there, allowed, near, may) or _george(there, here, allowed, near, may))
             ):
                 continue  # Briggs and George: the merged class would not be colourable
             # Allocation receives pins keyed by the original value ids.
@@ -203,7 +210,31 @@ def _interference(body: lir.LirBody) -> dict[int, set[int]]:
                 for other in incoming[block.at]:
                     edge(value, other)
         alive = set(outgoing[block.at])
-        for one in reversed(block.insns):
+        index = len(block.insns) - 1
+        while index >= 0:
+            one = block.insns[index]
+            if one.group is not None:
+                first = index
+                while first > 0 and block.insns[first - 1].group == one.group:
+                    first -= 1
+                group = block.insns[first : index + 1]
+                # A phi-copy group happens simultaneously: every source is
+                # live before any destination is written.  Reading the
+                # printed order as execution order let fibonacci64 merge
+                # `next` with the still-needed `current`; its check returned
+                # 1 instead of 0.
+                before = (alive - {value for item in group for value in item.defines}) | {
+                    value for item in group for value in item.uses
+                }
+                for value in before:
+                    for other in before:
+                        edge(value, other)
+                for item in group:
+                    for value in item.defines:
+                        graph.setdefault(value, set())
+                alive = before
+                index = first - 1
+                continue
             copy = _copy(one)
             equal = None
             if copy is not None and one.defines == (copy[0],) and one.uses == (copy[1],):
@@ -216,6 +247,7 @@ def _interference(body: lir.LirBody) -> dict[int, set[int]]:
                         edge(value, other)
             alive.difference_update(one.defines)
             alive.update(one.uses)
+            index -= 1
         for value in block.arrives:
             for other in alive:
                 edge(value, other)

@@ -3,40 +3,50 @@ qbopt/backend/coalesce.py's own gate: a join is a claim that two values are one,
 and the claim has to hold for every reader of either of them.
 """
 
+import pytest
+
 from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.backend import coalesce
-import pytest
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_matrix_diagonal_stride_needs_no_register_copies(tag):
     """MATRIX copied its diagonal pointer out and back on each of twenty iterations."""
     from pathlib import Path
-    from iced_x86 import Mnemonic, OpKind
-    from qbopt.frontend import blocks
-    from qbopt.analysis import loops
-    from qbopt.objectfile import module, omf
+
+    from iced_x86 import OpKind
+    from iced_x86 import Mnemonic
+
     from qbopt import wholeseg
+    from qbopt.analysis import loops
+    from qbopt.objectfile import omf
+    from qbopt.frontend import blocks
+    from qbopt.objectfile import module
 
     result = wholeseg.emitted(Path(f"fixtures/omf/matrix-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
     partition = blocks.partition(found, blocks.code_map(found))
     diagonal = max(loops.loops(partition, 0x30), key=lambda loop: loop.header)
-    copies = [one for block in partition if block.at in diagonal.body for one in block.insns
-              if one.insn.mnemonic == Mnemonic.MOV
-              and one.insn.op0_kind == one.insn.op1_kind == OpKind.REGISTER]
+    copies = [
+        one
+        for block in partition
+        if block.at in diagonal.body
+        for one in block.insns
+        if one.insn.mnemonic == Mnemonic.MOV and one.insn.op0_kind == one.insn.op1_kind == OpKind.REGISTER
+    ]
     assert not copies
 
 
 def test_retained_resource_identity_has_a_legal_encoding():
     """HARR's hoisted selector copy became unencodable mov es,es across a coverage gap."""
     from iced_x86 import Register
-    from qbopt.backend import allocate, select
 
-    body = lir.LirBody("resource-copy", 0,
-                       (lir.LirBlock(0, (_move(3, 1, 1),)),), {}, {1: Register.ES})
+    from qbopt.backend import select
+    from qbopt.backend import allocate
+
+    body = lir.LirBody("resource-copy", 0, (lir.LirBlock(0, (_move(3, 1, 1),)),), {}, {1: Register.ES})
     result = allocate.applied(body, allocate.allocate(body, body.pins))
     assert len(result.insns) == 1
     assert result.insns[0].covers == body.insns[0].covers
@@ -46,17 +56,26 @@ def test_retained_resource_identity_has_a_legal_encoding():
 
 def test_equal_resource_values_coalesce_without_consuming_a_gpr():
     """Address-space values pinned to ES were excluded by the GPR-only coalescing domain."""
-    from iced_x86 import Register
-    from qbopt.backend import allocate, target
     from dataclasses import replace
 
-    load = replace(_define(0, 1), what=ir.Semantics(ir.Operation.MOVE, "mov",
-                   (ir.Held(1, 2),), (ir.Mem(None, 2, Register.BP, 0, 2),)))
+    from iced_x86 import Register
+
+    from qbopt.backend import target
+    from qbopt.backend import allocate
+
+    load = replace(
+        _define(0, 1),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),), (ir.Mem(None, 2, Register.BP, 0, 2),)),
+    )
     general = tuple(_define(3 + index * 3, 10 + index) for index in range(6))
     reads = tuple(_use(30 + index * 3, 10 + index) for index in range(6))
-    body = lir.LirBody("resources", 0, (lir.LirBlock(0,
-           (load, *general, _move(21, 2, 1), _use(26, 1), _use(28, 2), *reads)),),
-           {}, {1: Register.ES, 2: Register.ES})
+    body = lir.LirBody(
+        "resources",
+        0,
+        (lir.LirBlock(0, (load, *general, _move(21, 2, 1), _use(26, 1), _use(28, 2), *reads)),),
+        {},
+        {1: Register.ES, 2: Register.ES},
+    )
     done = coalesce.joined(body)
     assert len(done.insns) == len(body.insns) - 1
     result = allocate.allocate(done, done.pins)
@@ -68,13 +87,15 @@ def test_equal_resource_values_coalesce_without_consuming_a_gpr():
 @pytest.mark.parametrize("other", ["different_resource", "clobber"])
 def test_resource_constraints_survive_coalescing(other):
     from iced_x86 import Register
+
     from qbopt.backend import allocate
-    from dataclasses import replace
+
     insns = (_define(0, 1), _move(3, 2, 1), _use(6, 2))
     pins = {1: Register.ES, 2: Register.FS if other == "different_resource" else Register.ES}
     if other == "clobber":
-        call = lir.Insn(5, (5, 5), ir.Semantics(ir.Operation.CALL, "call", (), ()), (), (),
-                        clobbers=frozenset({Register.ES}))
+        call = lir.Insn(
+            5, (5, 5), ir.Semantics(ir.Operation.CALL, "call", (), ()), (), (), clobbers=frozenset({Register.ES})
+        )
         insns = (*insns[:2], call, insns[2])
     body = lir.LirBody("resource-safety", 0, (lir.LirBlock(0, insns),), {}, pins)
     done = coalesce.joined(body)
@@ -97,6 +118,26 @@ def test_a_source_redefined_while_its_copy_is_live_cannot_share() -> None:
     done = coalesce.joined(body)
     assert len(done.insns) == len(insns)
     assert done.insns[-1].uses != done.insns[-2].uses
+
+
+def test_parallel_copy_sources_interfere_before_any_destination_is_written() -> None:
+    """fibonacci64 returned failure (1) instead of success (0).
+
+    Its backedge simultaneously assigned `current = next` and
+    `previous = current`.  Liveness read those phi copies in printed order,
+    so it missed that old `current` and `next` coexist before the group and
+    coalesced them.  Both Fibonacci state variables then advanced to `next`.
+    """
+    from dataclasses import replace
+
+    group = (replace(_move(8, 1, 2), group=1), replace(_move(8, 3, 1), group=1))
+    insns = (_define(0, 1), _define(1, 3), _move(3, 2, 1), _define(5, 2), *group, _use(9, 1), _use(10, 3))
+    body = lir.LirBody("parallel-sources", 0, (lir.LirBlock(0, insns),), {}, {})
+    assert 2 in coalesce._interference(body)[1]
+    from qbopt.analysis import intervals
+
+    live = intervals.intervals(body)
+    assert live[1].overlaps(live[2])
 
 
 def test_different_entry_values_cannot_share_even_if_copied_later() -> None:
@@ -138,13 +179,18 @@ def test_pinned_return_cannot_absorb_an_incompatible_address_class() -> None:
     """nbody's FVAL pointer lost its AX-to-SI copy, leaving FLD with an invalid base."""
     from iced_x86 import Register
 
-    load = lir.Insn(at=5, covers=(5, 7),
-                    what=ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ir.St(0),),
-                                      (ir.Mem(None, 8, base=ir.Held(2, 2)),)),
-                    defines=(), uses=(2,), op=None)
+    load = lir.Insn(
+        at=5,
+        covers=(5, 7),
+        what=ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ir.St(0),), (ir.Mem(None, 8, base=ir.Held(2, 2)),)),
+        defines=(),
+        uses=(2,),
+        op=None,
+    )
     body = lir.LirBody("pointer", 0, (lir.LirBlock(0, (_define(0, 1), _move(3, 2, 1), load)),), {}, {})
     assert len(coalesce.joined(body, {1: Register.EAX}).insns) == 3
     from dataclasses import replace
+
     assert len(coalesce.joined(replace(body, pins={1: Register.EAX})).insns) == 3
 
 
@@ -152,12 +198,12 @@ def test_coalescing_keeps_the_pinned_return_as_representative() -> None:
     """nbody read FIST's result from BX, making its 100-step limit 1857."""
     from iced_x86 import Register
 
-    body = lir.LirBody("return", 0,
-                       (lir.LirBlock(0, (_define(0, 1), _move(3, 2, 1), _use(5, 2))),), {}, {})
+    body = lir.LirBody("return", 0, (lir.LirBlock(0, (_define(0, 1), _move(3, 2, 1), _use(5, 2))),), {}, {})
     done = coalesce.joined(body, {2: Register.EAX})
     assert done.insns[0].defines == (2,)
     assert done.insns[-1].uses == (2,)
-    from qbopt.backend import allocate, target
+    from qbopt.backend import target
+    from qbopt.backend import allocate
 
     for register in (Register.EAX, Register.EBX, Register.ECX, Register.EDX):
         pins = {2: register}
@@ -236,12 +282,12 @@ def test_a_join_that_would_make_a_class_uncolourable_is_refused() -> None:
     """
     from pathlib import Path
 
-    from qbopt.model import mir
-    from qbopt.objectfile import omf
     from qbopt import flow
-    from qbopt.backend import lower
-    from qbopt.objectfile import module
+    from qbopt.model import mir
     from qbopt.abi import runtime
+    from qbopt.backend import lower
+    from qbopt.objectfile import omf
+    from qbopt.objectfile import module
     from qbopt.frontend import blocks as split
     from qbopt.frontend.blocks import code_map
 
@@ -262,9 +308,8 @@ def test_nbody_shifts_each_product_where_it_multiplied_it() -> None:
     test accepts it, since every neighbour of the shift already neighbours
     the product.
     """
-    from iced_x86 import Mnemonic
     from iced_x86 import OpKind
-
+    from iced_x86 import Mnemonic
     from test_observers import _nbody_inner_loop
 
     loop = _nbody_inner_loop()
