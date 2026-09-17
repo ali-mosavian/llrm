@@ -255,3 +255,19 @@ register budget must account for loop-invariant address bases and actual
 transient live pressure, not only a fixed two-register reserve.  The next
 iteration will add that MIR-level pressure model with a fail-first regression;
 it must not hard-code `r_walk` or any particular register assignment.
+
+### 14. Formula-ablation result — 2026-09-18
+
+Compiling the far-load loop with the entire `strength` transform suppressed
+removes the carried `i * 2` recurrence, but still emits a frame reload of each
+near owner before its `les`.  It therefore does **not** recover BCC's retained
+owner shape.  This is direct evidence that changing the formula alone is not
+the first fix: current allocation treats the invariant owner loads as cheap
+to rematerialize and spills them despite their repeated address uses.
+
+The next implementation target is phase 4's weighted spill policy.  It needs
+to charge a loop-invariant address base for every dynamic reload and for the
+far-field load it prevents, then compare that benefit against the best
+available recurrence or transient spill.  Formula selection remains necessary
+afterward, but the regression must first prove that an allocator can retain a
+generic invariant address base rather than reserve DI/SI for this function.
