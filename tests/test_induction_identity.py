@@ -141,6 +141,136 @@ def test_sign_extended_recurrence_requires_no_narrow_wrap(offset, accepted, monk
     assert (got is not None) == accepted
 
 
+@pytest.mark.parametrize(("offset", "accepted"), [(-2, True), (-1, False)])
+def test_zero_extended_recurrence_cannot_cross_unsigned_wrap(offset, accepted, monkeypatch):
+    """Widening 65535,0 is not the wide recurrence 65535,65536."""
+    from qbopt import wholeseg
+    from qbopt.analysis import consts
+
+    monkeypatch.setattr(strength, "reduced", lambda body, *args: body)
+    monkeypatch.setattr(indvars, "zeroed", lambda body: body)
+    monkeypatch.setattr(rotate, "entered", lambda body: body)
+    _keep_loops(monkeypatch)
+    states = []
+
+    def watch(stage, name, state):
+        if stage == "mir-widen":
+            states.append(state)
+
+    wholeseg.emitted(Path("fixtures/regressions/hugelp-p-g2.obj").read_bytes(), watch=watch)
+    built = states[0]
+    loop = loops.loops(built.blocks, built.entry)[0]
+    counter = next(iter(induction.basics(built, loop).values()))
+    source, result = mir.Value(9000, 0), mir.Value(9001, 0)
+    extension = mir.Op(
+        0,
+        ir.Operation.EXTEND,
+        "",
+        (result,),
+        (source,),
+        kind=mir.Kind.ZERO_EXTEND,
+        args=(mir.Held(source, 2),),
+        results=(mir.Held(result, 4),),
+    )
+    form = (counter, 1, ((mir.Const(offset, 2), 1),))
+    got = induction._extended(built, loop, extension, {source.id: form}, consts.known(built))
+    assert (got is not None) == accepted
+
+
+def test_zero_extended_counter_product_is_carried_as_a_wide_recurrence() -> None:
+    """Shellsort executed a 32-bit ``i * 109`` on all 64 initialization iterations."""
+    start = mir.Value(1, 0, variable=1)
+    counter = mir.Value(2, 1, variable=1)
+    following = mir.Value(3, 2, variable=1)
+    flags = mir.Value(4, 1, flags=True)
+    extended = mir.Value(5, 2, variable=2)
+    product = mir.Value(6, 2, variable=3)
+
+    define = mir.Op(
+        0,
+        ir.Operation.MOVE,
+        "",
+        (start,),
+        (),
+        kind=mir.Kind.COPY,
+        args=(mir.Const(0, 2),),
+        results=(mir.Held(start, 2),),
+    )
+    compare = mir.Op(
+        1,
+        ir.Operation.COMPARE,
+        "",
+        (flags,),
+        (counter,),
+        kind=mir.Kind.SUB,
+        args=(mir.Held(counter, 2), mir.Const(64, 2)),
+    )
+    branch = mir.Op(
+        1,
+        ir.Operation.BRANCH,
+        "",
+        (),
+        (flags,),
+        kind=mir.Kind.BRANCH,
+        test=mir.Kind.ABOVE_EQ,
+        target=3,
+    )
+    widen = mir.Op(
+        2,
+        ir.Operation.EXTEND,
+        "",
+        (extended,),
+        (counter,),
+        kind=mir.Kind.ZERO_EXTEND,
+        args=(mir.Held(counter, 2),),
+        results=(mir.Held(extended, 4),),
+    )
+    multiply = mir.Op(
+        2,
+        ir.Operation.MULTIPLY,
+        "",
+        (product,),
+        (extended,),
+        kind=mir.Kind.MUL,
+        args=(mir.Held(extended, 4), mir.Const(109, 4)),
+        results=(mir.Held(product, 4),),
+    )
+    consume = mir.Op(
+        2,
+        ir.Operation.PUSH,
+        "",
+        (),
+        (product,),
+        kind=mir.Kind.ARG,
+        args=(mir.Held(product, 4),),
+    )
+    step = mir.Op(
+        2,
+        ir.Operation.BINARY,
+        "",
+        (following,),
+        (counter,),
+        kind=mir.Kind.ADD,
+        args=(mir.Held(counter, 2), mir.Const(1, 2)),
+        results=(mir.Held(following, 2),),
+    )
+    jump = mir.Op(2, ir.Operation.JUMP, "", (), (), kind=mir.Kind.JUMP, target=1)
+    built = mir.MirBody(
+        0,
+        (
+            mir.MirBlock(0, (), (define,), (1,)),
+            mir.MirBlock(1, (mir.Phi(counter, {0: start, 2: following}),), (compare, branch), (2, 3)),
+            mir.MirBlock(2, (), (widen, multiply, consume, step, jump), (1,)),
+            mir.MirBlock(3, (), (), ()),
+        ),
+    )
+
+    result = strength.reduced(built, registers=6)
+    latch = next(block for block in result.blocks if block.at == 2)
+    assert not any(op.kind is mir.Kind.MUL for op in latch.ops)
+    assert any(op.kind is mir.Kind.ADD and mir.Const(109, 4) in op.args for op in latch.ops)
+
+
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
 def test_matrix_reduced_stride_keeps_its_multiplier_address(tag):
     """MATRIX printed T=190 instead of T=380 after its stride read DS:0 instead of w."""

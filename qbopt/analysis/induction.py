@@ -458,7 +458,7 @@ def _composed(body: mir.MirBody, loop, found: dict[int, Affine], made: dict[int,
             for op in block.ops:
                 if (
                     block.at != loop.header
-                    and op.kind is mir.Kind.SIGN_EXTEND
+                    and op.kind in (mir.Kind.SIGN_EXTEND, mir.Kind.ZERO_EXTEND)
                     and op.results
                     and isinstance(op.results[0], mir.Held)
                     and op.results[0].value.id not in forms
@@ -556,7 +556,7 @@ def _composed(body: mir.MirBody, loop, found: dict[int, Affine], made: dict[int,
 
 
 def _extended(body, loop, op, forms, facts):
-    """Sign extension preserves a recurrence only across a proven non-wrapping range."""
+    """An extension preserves a recurrence only where its narrow value cannot wrap."""
     if len(op.args) != 1 or len(op.results) != 1 or op.loads or op.stores or op.barrier or op.merges:
         return None
     source, result = op.args[0], op.results[0]
@@ -569,18 +569,54 @@ def _extended(body, loop, op, forms, facts):
     width = source.width
     if counter.start.width != width:
         return None
-    start = _signed(counter.start, facts, width)
-    step = _signed(counter.step, facts, width)
+    raw_start = _constant(counter.start, facts, width)
+    raw_step = _constant(counter.step, facts, width)
     last = _last_counter(body, loop, counter, facts, width)
-    constants = tuple((_signed(arg, facts, width), coefficient) for arg, coefficient in offsets)
-    if start is None or step is None or last is None or any(value is None for value, _ in constants):
+    constants = tuple((_constant(arg, facts, width), coefficient) for arg, coefficient in offsets)
+    if raw_start is None or raw_step is None or last is None or any(value is None for value, _ in constants):
         return None
-    offset = sum(value * coefficient for value, coefficient in constants)
+    step = _as_signed(raw_step, width)
+    if not step:
+        return None
+    if op.kind is mir.Kind.SIGN_EXTEND:
+        start = _as_signed(raw_start, width)
+    elif op.kind is mir.Kind.ZERO_EXTEND and last >= 0:
+        start = raw_start
+    else:
+        return None
+    distance = last - start
+    if distance * step < 0 or distance % step:
+        return None
+    count = distance // step + 1
+    if count <= 0:
+        return None
+
+    mask = (1 << (width * 8)) - 1
     sign = 1 << (width * 8 - 1)
-    if not all(-sign <= value * scale + offset < sign for value in (start, last)):
+    if op.kind is mir.Kind.SIGN_EXTEND:
+        signed_scale = _as_signed(scale & mask, width)
+        initial = start * signed_scale + sum(_as_signed(value, width) * coefficient for value, coefficient in constants)
+        stride = step * signed_scale
+        limits = -sign, sign
+    else:
+        initial = (raw_start * scale + sum(value * coefficient for value, coefficient in constants)) & mask
+        raw_stride = (raw_step * scale) & mask
+        # Half the modulus has two equally valid directions. Without another
+        # semantic fact, choosing either would invent a wide recurrence.
+        if raw_stride == sign and count > 1:
+            return None
+        stride = _as_signed(raw_stride, width)
+        limits = 0, mask + 1
+    final = initial + (count - 1) * stride
+    if not all(limits[0] <= value < limits[1] for value in (initial, final)):
         return None
-    widened = Affine(counter.value, mir.Const(start, result.width), mir.Const(step, result.width), loop.header)
-    return widened, scale, tuple((mir.Const(value, result.width), coefficient) for value, coefficient in constants)
+    widened = Affine(
+        result.value.id,
+        mir.Const(consts.masked(initial, result.width), result.width),
+        mir.Const(consts.masked(stride, result.width), result.width),
+        loop.header,
+    )
+    return widened, 1, ()
 
 
 def _multiplier(op: "mir.Op", by: "mir.Arg") -> "mir.Arg":

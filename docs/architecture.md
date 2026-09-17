@@ -725,6 +725,14 @@ one documented target without materially regressing another.
   Affine starts and strides are typed as scalar SSA values or constants,
   matching every constructor; memory operands remain in derived invariant
   terms rather than masquerading as recurrence seeds.
+  Narrow recurrences now survive either sign or zero extension when the exact
+  loop range proves the extended sequence cannot cross the corresponding
+  signed or unsigned discontinuity. C shellsort consequently carries
+  `i*109+37` as a 32-bit recurrence instead of executing a 32-bit multiply on
+  every initialization iteration. Its 386 result falls from 206 to 204 bytes,
+  75 to 74 instructions, and 303 to 279 weighted units; all seven C benchmark
+  answers pass through fresh OMF emission, LINK and DOSBox. A separate
+  boundary test rejects widening the sequence 65535,0 as 65535,65536.
 - [x] Build `MemorySSA`: one def-use graph for loads, stores and call effects.
   `analysis/memoryssa.py` provides live-on-entry, memory uses/definitions and
   join/backedge phis. Pure calls have no memory access, complete read-only calls
