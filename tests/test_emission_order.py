@@ -133,6 +133,18 @@ def test_cloned_far_call_keeps_its_relocation_without_claiming_input_bytes():
     assert asm._field_in(found, replace(clone, symbol=False), frozenset({1})) is None
 
 
+def test_layout_uses_disjoint_ranges_resolved_onto_lir() -> None:
+    """A folded site's push run and call must survive after MIR coverage is gone."""
+    what = ir.Semantics(ir.Operation.NOTHING, "")
+    source = mir.Op(20, ir.Operation.NOTHING, "", (), (), covers=None, id=8, absorbed=(7, 8))
+    ranges = ((10, 12), (20, 23))
+    instruction = lir.Insn(20, (20, 23), what, (), (), spread=ranges, op=source)
+    found = SimpleNamespace(coverage={})
+
+    assert asm._ranges_of(instruction, found) == ranges
+    assert asm._length_of(instruction, found) == 5
+
+
 def test_block_entry_is_not_the_first_clone_of_its_source_address():
     """FPDEEP's entry jump landed in a cloned header before its first iteration."""
 

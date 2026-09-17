@@ -358,6 +358,7 @@ def _through_lir(
                     source.coverage,
                     cpu,
                     nodes=source.nodes,
+                    occurrences=source.occurrences,
                     pointer_model=pointer_model,
                     noreturn=body.entry in no_return,
                 ),

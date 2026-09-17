@@ -39,7 +39,8 @@ A. `Op.id` and the module's `refs` table.               done
 D. `args`/`results`, and `lower.py` as the boundary.    done
 B. `node` into the side table.                            done
 C. `covers` -> `absorbed`.                                shadow model done;
-                                                          remove `covers` next
+   lowering resolves occurrences onto LIR.                done
+   migrate pass ownership and remove `covers`.            next
 E. `origin`.
 
 ## Measuring it

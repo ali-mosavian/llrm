@@ -200,6 +200,54 @@ def test_mir_names_owned_source_occurrences_without_repeating_their_byte_ranges(
                         owners[source_id] = op.at
 
 
+def test_lowering_resolves_source_byte_ownership_without_mir_ranges() -> None:
+    """LNGMIX lowering must reproduce its old ranges from opaque occurrence ids."""
+    from dataclasses import replace
+
+    import corpus
+    from qbopt.abi import runtime
+    from qbopt.backend import lower
+
+    path = Path("fixtures/omf/lngmix-p-g2.obj")
+    found = corpus.loaded(path)
+    blocks = corpus.partitioned(path)
+    contracts = runtime.for_module(found)
+    raised = mir.bodies(found, blocks, contracts)
+    name, body = raised[0]
+    baseline = lower.lowered(
+        name,
+        body,
+        found.calls,
+        raised.source.absorbed,
+        contracts,
+        raised.source.coverage,
+        nodes=raised.source.nodes,
+    )
+    stripped = replace(
+        body,
+        blocks=tuple(
+            replace(
+                block,
+                ops=tuple(replace(op, covers=None, extra_covers=()) if op.absorbed else op for op in block.ops),
+            )
+            for block in body.blocks
+        ),
+    )
+    migrated = lower.lowered(
+        name,
+        stripped,
+        found.calls,
+        raised.source.absorbed,
+        contracts,
+        raised.source.coverage,
+        nodes=raised.source.nodes,
+        occurrences=raised.source.occurrences,
+    )
+    old_ranges = tuple((one.covers, one.spread) for one in baseline.insns)
+    new_ranges = tuple((one.covers, one.spread) for one in migrated.insns)
+    assert new_ranges == old_ranges
+
+
 def test_a_pass_is_a_transform_and_nothing_else() -> None:
     """The contract, as a fact rather than a convention.
 

@@ -117,6 +117,8 @@ def _ranges_of(op, found: Module, source: SourceMap | None = None) -> tuple[tupl
     """
     if isinstance(op, Table):
         return ((op.lo, op.hi),)
+    if spread := getattr(op, "spread", ()):
+        return spread
     if op.extra_covers:
         ranges = []
         for lo, hi in sorted((*op.extra_covers, *((op.covers,) if op.covers is not None else ()))):
@@ -177,6 +179,8 @@ def _length_of(op: lir.Insn, found: Module, source: SourceMap | None = None) -> 
     """
     if op.inserted:
         return 0
+    if spread := getattr(op, "spread", ()):
+        return sum(hi - lo for lo, hi in spread)
     if op.extra_covers:
         return sum(hi - lo for lo, hi in _ranges_of(op, found, source))
     full = _source(found, source).coverage.get(op.id) if op.id is not None else None

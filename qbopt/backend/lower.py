@@ -500,6 +500,7 @@ def lowered(
     cpu: str | targets.Profile = "386",
     *,
     nodes: dict[int, object] | None = None,
+    occurrences: dict[int, tuple[tuple[int, int], ...]] | None = None,
     pointer_model=None,
     noreturn: bool = False,
 ) -> "lir.LirBody":
@@ -557,6 +558,7 @@ def lowered(
         coverage,
         cpu,
         nodes=nodes,
+        occurrences=occurrences,
         pointer_model=pointer_model,
     )
     # Once: expanding twice would build two of every instruction, and the
@@ -1343,6 +1345,7 @@ class Lowering:
         cpu: str | targets.Profile = "386",
         *,
         nodes: dict[int, object] | None = None,
+        occurrences: dict[int, tuple[tuple[int, int], ...]] | None = None,
         pointer_model=None,
     ) -> None:
         self.cpu = targets.profile(cpu)
@@ -1382,6 +1385,7 @@ class Lowering:
 
         self._exposed = {value.id for value in leaving(body)}
         self._coverage = coverage or {}
+        self._occurrences = occurrences
         self._nodes = nodes or {}
         self._origin = body.origin
         self._calls = calls
@@ -1417,6 +1421,44 @@ class Lowering:
         self._next += 1
         return self._next - 1
 
+    def ownership(self, op: "mir.Op") -> tuple[tuple[int, int] | None, tuple[tuple[int, int], ...]]:
+        """The source ranges this operation owns, resolved at the boundary.
+
+        An explicit occurrence table makes ``Op.absorbed`` authoritative.
+        The legacy MIR ranges remain only for callers that have not yet
+        threaded provenance and for source-free instructions inserted by a
+        pass.  LIR receives concrete ranges because layout is the first tier
+        that is allowed to reason about source bytes.
+        """
+        if self._occurrences is None or not op.absorbed:
+            spread = (
+                ()
+                if op.inserted
+                else (op.covers, *op.extra_covers)
+                if op.extra_covers
+                else self._coverage.get(op.id, ())
+            )
+            return op.covers, spread
+
+        missing = tuple(identity for identity in op.absorbed if identity not in self._occurrences)
+        if missing:
+            raise Unlowered(f"{op.at:#06x}: source occurrences {missing} have no byte ranges")
+        spans = sorted(span for identity in op.absorbed for span in self._occurrences[identity] if span[0] < span[1])
+        ranges: list[tuple[int, int]] = []
+        for low, high in spans:
+            if ranges and low <= ranges[-1][1]:
+                ranges[-1] = (ranges[-1][0], max(ranges[-1][1], high))
+            else:
+                ranges.append((low, high))
+        if not ranges:
+            return (op.at, op.at), ()
+
+        identity_ranges = self._occurrences.get(op.id, ()) if op.id is not None else ()
+        anchor = identity_ranges[0][0] if identity_ranges else op.at
+        primary = next((span for span in ranges if span[0] <= anchor < span[1]), ranges[0])
+        resolved = tuple(ranges)
+        return primary, resolved if len(resolved) > 1 else ()
+
     def sign_extended(self, value: int) -> "mir.Held | None":
         """The word this dword is the sign extension of, if it is one."""
         return self._extended.get(value)
@@ -1439,6 +1481,8 @@ class Lowering:
         """Every instruction this operation becomes, the leader first."""
         from qbopt.model import lir
         from qbopt.backend import addressforms
+
+        covers, spread = self.ownership(op)
 
         if any(one.id in self._folded for one in op.defines):
             # The address is its cells' base and index now; see addressforms.indexed.
@@ -1524,7 +1568,7 @@ class Lowering:
                 *before,
                 lir.Insn(
                     at=op.at,
-                    covers=op.covers,
+                    covers=covers,
                     what=what,
                     defines=made
                     if speaks and op.kind is not mir.Kind.CALL
@@ -1535,11 +1579,7 @@ class Lowering:
                     requires=requires,
                     clobbers=_clobbers(op, self._calls, self._contracts, node=node),
                     clobbers_high=_clobbered_high(op, self._calls, self._contracts),
-                    spread=()
-                    if op.inserted
-                    else (op.covers, *op.extra_covers)
-                    if op.extra_covers
-                    else self._coverage.get(op.id, ()),
+                    spread=spread,
                     delivers=delivers,
                     widths=self._widths(op) if what is None else (),
                     op=op,
@@ -1560,11 +1600,12 @@ class Lowering:
         return (
             lir.Insn(
                 at=op.at,
-                covers=op.covers,
+                covers=covers,
                 what=parts[0],
                 defines=tuple(_written(parts[0].dests)),
                 uses=tuple(_read(parts[0])),
                 clobbers=frozenset(),
+                spread=spread,
                 op=op,
                 node=self.node(op),
             ),

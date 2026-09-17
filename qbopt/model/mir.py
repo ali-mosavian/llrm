@@ -1060,22 +1060,52 @@ def _record_provenance(body: MirBody, source: module.SourceMap) -> tuple[int, ..
     return tuple(recorded)
 
 
-def _absorbed_ids(op: Op, source: module.SourceMap, candidates: tuple[int, ...]) -> tuple[int, ...]:
+def _absorbed_ids(
+    op: Op,
+    source: module.SourceMap,
+    candidates: tuple[int, ...],
+    owned: tuple[tuple[int, int], ...] | None = None,
+) -> tuple[int, ...]:
     """Raise-time occurrences wholly represented by this operation's owned ranges."""
-    if op.absorbed:
+    ranges = owned or (*((op.covers,) if op.covers is not None else ()), *op.extra_covers)
+    ranges = tuple(span for span in ranges if span[0] < span[1])
+    if not ranges:
         return op.absorbed
-    owned = (*((op.covers,) if op.covers is not None else ()), *op.extra_covers)
-    owned = tuple(span for span in owned if span[0] < span[1])
-    if not owned:
-        return ()
 
     def within(span: tuple[int, int]) -> bool:
-        return any(low <= span[0] and span[1] <= high for low, high in owned)
+        return any(low <= span[0] and span[1] <= high for low, high in ranges)
 
-    return tuple(
+    found = tuple(
         identity
         for identity in candidates
         if (spans := source.occurrences.get(identity, ())) and all(within(span) for span in spans)
+    )
+    return tuple(dict.fromkeys((*op.absorbed, *found)))
+
+
+def _completed_ownership(
+    body: MirBody,
+    source: module.SourceMap,
+    candidates: tuple[int, ...],
+    coverage: dict[int, tuple[tuple[int, int], ...]],
+) -> MirBody:
+    """Include disjoint folded-site ranges discovered after recognition."""
+    if not coverage:
+        return body
+    return replace(
+        body,
+        blocks=tuple(
+            replace(
+                block,
+                ops=tuple(
+                    replace(op, absorbed=_absorbed_ids(op, source, candidates, coverage[op.id]))
+                    if op.id in coverage
+                    else op
+                    for op in block.ops
+                ),
+            )
+            for block in body.blocks
+        ),
     )
 
 
@@ -2592,6 +2622,7 @@ def bodies(
             built = _externalized(built, source, provenance)
             built = _frame_bounded(built)
             folded, absorbed, refs, coverage = _folded(built, found, blocks)
+            built = _completed_ownership(built, source, provenance, coverage)
             source.absorbed.update(absorbed)
             source.refs.update(refs)
             source.coverage.update(coverage)
