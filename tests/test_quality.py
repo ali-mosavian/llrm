@@ -158,3 +158,40 @@ def test_structural_comparison_matches_c_and_medium_model_symbol_spellings() -> 
         "calls": None,
         "address_calculations": 2.0,
     }
+
+
+def test_gap_attribution_names_the_first_stage_after_which_excess_stays() -> None:
+    """A temporary excess is not the stage responsible for the emitted gap."""
+    stages = [
+        {"stage": "lir-lower", "loads": 8},
+        {"stage": "lir-coalesce", "loads": 4},
+        {"stage": "lir-regalloc", "loads": 7},
+        {"stage": "lir-peephole", "loads": 6},
+    ]
+    assert quality._first_excess_stage(stages, "loads", 5) == "lir-regalloc"
+    assert quality._first_excess_stage(stages, "loads", 7) is None
+
+
+def test_stage_metrics_do_not_count_non_emitting_lir_markers() -> None:
+    """nbody's final LIR reported 286 instructions for the 204 actually emitted."""
+    from qbopt.model import ir
+    from qbopt.model import lir
+
+    live = lir.Insn(0, (0, 1), ir.Semantics(ir.Operation.MOVE, "mov"), (), ())
+    marker = lir.Insn(1, (1, 1), ir.Semantics(ir.Operation.NOTHING, ""), (), ())
+    body = lir.LirBody("markers", 0, (lir.LirBlock(0, (live, marker)),), {}, {})
+    assert quality._stage_metrics(body)["instructions"] == 1
+
+
+def test_gap_attribution_refuses_a_stage_measure_that_disagrees_with_emitted_bytes() -> None:
+    """nbody's LIR counted 99 loads where decoding the emitted bytes counted 62."""
+    stages = [
+        {"stage": "lir-lower", "form": "lir", "loads": 70},
+        {"stage": "lir-layout", "form": "lir", "loads": 99},
+    ]
+    assert quality._gap_attribution(stages, "loads", reference=44, emitted=62) == {
+        "status": "unmapped",
+        "stage": None,
+        "last_stage": 99,
+        "emitted": 62,
+    }

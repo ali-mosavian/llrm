@@ -13,9 +13,11 @@ import argparse
 import tempfile
 import subprocess
 from pathlib import Path
+from collections.abc import Callable
 from collections.abc import Iterator
 
 from qbopt import flow
+from qbopt.model import lir
 from qbopt.model import mir
 from qbopt.cfront import hir
 from qbopt.backend import masm
@@ -40,6 +42,8 @@ FLAGS = (
     f"-fi={Path(__file__).with_name('borland.h')}",
 )  # fmt: skip
 
+type Watch = Callable[[str, str, object], None]
+
 
 def recorded(source: Path, includes: list[str]) -> str:
     """The code-generator stream wccq records for one C file."""
@@ -62,6 +66,7 @@ def assembled(
     optimise: bool = False,
     dump: Path | None = None,
     cpu: str | targets.Profile = "386",
+    watch: Watch | None = None,
 ) -> masm.Module:
     target = targets.profile(cpu)
     unit = hir.unit(stream.parse(text))
@@ -77,13 +82,17 @@ def assembled(
     modref = alias.summaries(aliases, libfunc.summaries(callees))
     for raised in raised_procedures:
         body = alias.calls_annotated(aliases[raised.name], modref)
+        if watch is not None:
+            watch("mir-raised", raised.name, body)
         mirs.append(_mir_text(raised.name, body))
         if optimise:
             from qbopt.optimize import rotate
             from qbopt.optimize import transform
 
-            def watch(stage: str, after: mir.MirBody, name: str = raised.name) -> None:
+            def observe(stage: str, after: mir.MirBody, name: str = raised.name) -> None:
                 _write(dump, f"passes/{name}.{stage}", _mir_text(name, after))
+                if watch is not None:
+                    watch(f"mir-{stage}", name, after)
 
             body = transform.applied(
                 body,
@@ -95,11 +104,11 @@ def assembled(
                 # two places available, not the full register file.
                 registers=target.register_capacity,
                 call_registers=target.call_register_capacity,
-                watch=watch if dump else None,
+                watch=observe if dump is not None or watch is not None else None,
             )
             body = rotate.entered(body)
-            if dump:
-                watch("rotate", body)
+            if dump is not None or watch is not None:
+                observe("rotate", body)
             mirs.append(_mir_text(raised.name + " (opt)", body))
         legalized = lower_int64.expanded(body, raised.calls, raised.contracts)
         body = legalized.body
@@ -110,6 +119,8 @@ def assembled(
             "lower",
             in_ssa=True,
         )
+        if watch is not None:
+            watch("lir-lower", raised.name, low)
         lirs.append(_lir_text(raised.name, low))
         frame = frames.of(low, legalized.calls)
         in_ssa = True
@@ -119,7 +130,11 @@ def assembled(
                     in_ssa = False
                 low = flow.checked(low, phase, in_ssa=in_ssa)
                 _write(dump, f"phases/{raised.name}.{number:02d}-{type(phase).__name__}", _lir_text(raised.name, low))
+                if watch is not None:
+                    watch(f"lir-{phase.name or type(phase).__name__}", raised.name, low)
         low = jumps.threaded(jumps.placed(low))
+        if watch is not None:
+            watch("lir-layout", raised.name, low)
         lirs.append(_lir_text(raised.name + " (allocated)", low))
         reserve = -min(min(frame.slots.values(), default=0), frame.floor)
         callees = {
@@ -149,9 +164,10 @@ def compiled(
     optimise: bool = False,
     dump: Path | None = None,
     cpu: str | targets.Profile = "386",
+    watch: Watch | None = None,
 ) -> str:
     """The module as jwasm source."""
-    return masm.text(assembled(text, module, optimise=optimise, dump=dump, cpu=cpu))
+    return masm.text(assembled(text, module, optimise=optimise, dump=dump, cpu=cpu, watch=watch))
 
 
 def _externs(unit: hir.Unit) -> tuple[tuple[str, str], ...]:
@@ -219,7 +235,7 @@ def _mir_text(name: str, body: mir.MirBody) -> str:
     return "\n".join(out) + "\n"
 
 
-def _lir_text(name: str, body) -> str:
+def _lir_text(name: str, body: lir.LirBody) -> str:
     out = [f"== {name}"]
     for block in body.blocks:
         out.append(f"block {block.at} -> {block.succ}")

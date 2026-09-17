@@ -21,6 +21,9 @@ from iced_x86 import Decoder
 from iced_x86 import Formatter
 from iced_x86 import FormatterSyntax
 
+from qbopt.model import ir
+from qbopt.model import lir
+from qbopt.model import mir
 from qbopt.backend import masm
 from qbopt.cycles import cycles
 from qbopt.backend import allocate
@@ -274,7 +277,13 @@ def apply_target(function: dict, target: dict) -> dict:
     }
 
 
-def module_report(module: masm.Module, source: Path, cpu: str, target_data: dict | None = None) -> dict:
+def module_report(
+    module: masm.Module,
+    source: Path,
+    cpu: str,
+    target_data: dict | None = None,
+    stages: dict[str, list[dict]] | None = None,
+) -> dict:
     target = targets.profile(cpu)
     functions = []
     registered = (target_data or {}).get("targets", {})
@@ -283,6 +292,7 @@ def module_report(module: masm.Module, source: Path, cpu: str, target_data: dict
         key = f"{source.stem}.{procedure.name}.{target.name}"
         if key in registered:
             measured = apply_target(measured, registered[key])
+        measured["stages"] = (stages or {}).get(procedure.name, [])
         functions.append(measured)
     return {
         "schema": 1,
@@ -357,6 +367,10 @@ def _comparisons(reports: list[dict], references: list[dict]) -> list[dict]:
                 ratios = {
                     metric: function[metric] / other[metric] if other[metric] else None for metric in STRUCTURAL_METRICS
                 }
+                attribution = {
+                    metric: _gap_attribution(function.get("stages", []), metric, other[metric], function[metric])
+                    for metric in STRUCTURAL_METRICS
+                }
                 out.append(
                     {
                         "source": report["source"],
@@ -367,9 +381,87 @@ def _comparisons(reports: list[dict], references: list[dict]) -> list[dict]:
                         "qbopt": {metric: function[metric] for metric in STRUCTURAL_METRICS},
                         "reference": {metric: other[metric] for metric in STRUCTURAL_METRICS},
                         "ratios": ratios,
+                        "gap_attribution": attribution,
+                        "first_excess_stage": {
+                            metric: result["stage"] if result["status"] == "attributed" else None
+                            for metric, result in attribution.items()
+                        },
                     }
                 )
     return out
+
+
+def _first_excess_stage(stages: list[dict], metric: str, reference: int) -> str | None:
+    """First stage after which a structural excess remains through emission."""
+    relevant = [one for one in stages if metric in one]
+    if not relevant or relevant[-1][metric] <= reference:
+        return None
+    for index, stage in enumerate(relevant):
+        if all(one[metric] > reference for one in relevant[index:]):
+            return stage["stage"]
+    return None
+
+
+def _gap_attribution(stages: list[dict], metric: str, reference: int, emitted: int) -> dict:
+    """Attribute only when the last stage and emitted-byte instruments agree."""
+    if emitted <= reference:
+        return {"status": "no_excess", "stage": None}
+    relevant = [one for one in stages if one.get("form") == "lir" and metric in one]
+    if not relevant:
+        return {"status": "unmeasured", "stage": None}
+    last = relevant[-1][metric]
+    if last != emitted:
+        return {
+            "status": "unmapped",
+            "stage": None,
+            "last_stage": last,
+            "emitted": emitted,
+        }
+    return {"status": "attributed", "stage": _first_excess_stage(relevant, metric, reference)}
+
+
+def _stage_metrics(state: object) -> dict:
+    """Comparable structural counts at one MIR or LIR boundary."""
+    if isinstance(state, mir.MirBody):
+        ops = [one for block in state.blocks for one in block.ops]
+        return {
+            "form": "mir",
+            "operations": len(ops),
+            "loads": sum(len(one.loads) for one in ops),
+            "stores": sum(len(one.stores) for one in ops),
+            "branches": sum(one.kind in (mir.Kind.JUMP, mir.Kind.BRANCH) for one in ops),
+            "calls": sum(one.kind is mir.Kind.CALL for one in ops),
+            "address_calculations": sum(one.kind is mir.Kind.ADDRESS for one in ops),
+        }
+    if not isinstance(state, lir.LirBody):
+        return {}
+    all_insns = [one for block in state.blocks for one in block.insns]
+    insns = [one for one in all_insns if one.what is not None and one.what.op is not ir.Operation.NOTHING]
+    loads = stores = branches = calls = addresses = 0
+    for one in insns:
+        what = one.what
+        if what is None:
+            continue
+        memory_dests = sum(isinstance(operand, ir.Mem) for operand in what.dests)
+        memory_sources = sum(isinstance(operand, ir.Mem) for operand in what.sources)
+        stores += memory_dests
+        loads += memory_sources
+        if memory_dests and what.op not in (ir.Operation.MOVE, ir.Operation.FLOAT_STORE):
+            loads += memory_dests
+        branches += what.op in (ir.Operation.JUMP, ir.Operation.BRANCH)
+        calls += what.op is ir.Operation.CALL
+        addresses += what.name.lower() == "lea"
+    return {
+        "form": "lir",
+        "instructions": len(insns),
+        "loads": loads,
+        "stores": stores,
+        "branches": branches,
+        "calls": calls,
+        "address_calculations": addresses,
+        "spill_reloads": sum(one.spill_reload for one in all_insns),
+        "spill_stores": sum(one.spill_store for one in all_insns),
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -390,11 +482,20 @@ def main(argv: list[str] | None = None) -> int:
     for source in args.sources:
         text = source.read_text() if source.suffix == ".cgs" else cfront.recorded(source, [])
         for name in cpus:
-            module = cfront.assembled(text, source.stem, optimise=True, cpu=name)
+            stages: dict[str, list[dict]] = {}
+
+            def watch(stage: str, function: str, state: object, sink: dict[str, list[dict]] = stages) -> None:
+                measured = _stage_metrics(state)
+                if measured:
+                    sink.setdefault(function, []).append({"stage": stage, **measured})
+
+            stage_dump = args.dump / f"{source.stem}-{name}-stages"
+            module = cfront.assembled(text, source.stem, optimise=True, cpu=name, dump=stage_dump, watch=watch)
             assembly = args.dump / f"{source.stem}-{name}.asm"
             assembly.write_text(masm.text(module))
-            report = module_report(module, source, name, target_data)
+            report = module_report(module, source, name, target_data, stages)
             report["assembly"] = str(assembly)
+            report["stage_dump"] = str(stage_dump)
             reports.append(report)
         if args.references and source.suffix == ".c":
             for compiler in REFERENCE_COMPILERS:
