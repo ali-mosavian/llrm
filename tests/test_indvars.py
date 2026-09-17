@@ -330,6 +330,177 @@ def test_scaled_recurrences_replace_nested_counter_equality(hazard: str | None) 
         assert equality.args == (mir.Held(inner, 2), mir.Held(outer, 2))
 
 
+@pytest.mark.parametrize(("coordinate_width", "stride", "reused"), [(4, 24, True), (1, 64, False)])
+def test_cross_width_recurrence_replaces_counter_only_for_its_full_period(
+    coordinate_width: int, stride: int, reused: bool
+) -> None:
+    """C Mandelbrot kept 16-bit ``px``/``py`` counters beside the 32-bit
+    ``cx``/``cy`` recurrences that already advance once per iteration.
+
+    Their two update stores survive allocation. Loop termination may use a
+    wider recurrence when its modular period proves that the computed final
+    value cannot occur on an earlier iteration. The first implementation lost
+    the positive trip-count proof and left Mandel with six branches and a
+    redundant entry test; a symbolic sentinel must retain that proof.
+    """
+    from qbopt.optimize import indvars
+
+    coordinate_argument = mir.Value(0, 0, variable=0)
+    control_start = mir.Value(1, 0, variable=1)
+    coordinate_start = mir.Value(2, 0, variable=2)
+    control = mir.Value(3, 1, variable=1)
+    coordinate = mir.Value(4, 1, variable=2)
+    control_next = mir.Value(5, 2, variable=1)
+    coordinate_next = mir.Value(6, 2, variable=2)
+    observed = mir.Value(7, 2, variable=3)
+    flags = mir.Value(8, 1, flags=True, variable=4)
+
+    def copy(at: int, result: mir.Value, value: int, width: int) -> mir.Op:
+        return mir.Op(
+            at,
+            ir.Operation.NOTHING,
+            "",
+            (result,),
+            (),
+            kind=mir.Kind.COPY,
+            args=(mir.Const(value, width),),
+            results=(mir.Held(result, width),),
+        )
+
+    def copy_argument(at: int, result: mir.Value, value: mir.Value, width: int) -> mir.Op:
+        return mir.Op(
+            at,
+            ir.Operation.NOTHING,
+            "",
+            (result,),
+            (value,),
+            kind=mir.Kind.COPY,
+            args=(mir.Held(value, width),),
+            results=(mir.Held(result, width),),
+        )
+
+    def add(at: int, result: mir.Value, source: mir.Value, value: int, width: int) -> mir.Op:
+        return mir.Op(
+            at,
+            ir.Operation.NOTHING,
+            "",
+            (result,),
+            (source,),
+            kind=mir.Kind.ADD,
+            args=(mir.Held(source, width), mir.Const(value, width)),
+            results=(mir.Held(result, width),),
+        )
+
+    compare = mir.Op(
+        1,
+        ir.Operation.NOTHING,
+        "",
+        (flags,),
+        (control,),
+        kind=mir.Kind.SUB,
+        args=(mir.Held(control, 2), mir.Const(4, 2)),
+        results=(),
+    )
+    branch = mir.Op(
+        1,
+        ir.Operation.NOTHING,
+        "",
+        (),
+        (flags,),
+        kind=mir.Kind.BRANCH,
+        test=mir.Kind.GE,
+        target=9,
+    )
+    use = mir.Op(
+        2,
+        ir.Operation.NOTHING,
+        "",
+        (observed,),
+        (coordinate,),
+        kind=mir.Kind.COPY,
+        args=(mir.Held(coordinate, coordinate_width),),
+        results=(mir.Held(observed, coordinate_width),),
+    )
+    jump = mir.Op(2, ir.Operation.JUMP, "", (), (), kind=mir.Kind.JUMP, target=1)
+    returned = mir.Op(9, ir.Operation.RETURN, "", (), (), kind=mir.Kind.RETURN)
+    body = mir.MirBody(
+        0,
+        (
+            mir.MirBlock(
+                0,
+                (),
+                (
+                    copy(0, control_start, 0, 2),
+                    copy_argument(0, coordinate_start, coordinate_argument, coordinate_width),
+                ),
+                (1,),
+            ),
+            mir.MirBlock(
+                1,
+                (
+                    mir.Phi(control, {0: control_start, 2: control_next}),
+                    mir.Phi(coordinate, {0: coordinate_start, 2: coordinate_next}),
+                ),
+                (compare, branch),
+                (2, 9),
+            ),
+            mir.MirBlock(
+                2,
+                (),
+                (
+                    use,
+                    add(2, control_next, control, 1, 2),
+                    add(2, coordinate_next, coordinate, stride, coordinate_width),
+                    jump,
+                ),
+                (1,),
+            ),
+            mir.MirBlock(9, (), (returned,), ()),
+        ),
+    )
+
+    changed = indvars.simplified(body)
+    condition = next(op for op in changed.blocks[1].ops if op.kind is mir.Kind.SUB)
+
+    if reused:
+        assert condition.args[0] == mir.Held(coordinate, coordinate_width)
+        assert isinstance(condition.args[1], mir.Held) and condition.args[1].width == coordinate_width
+        from qbopt.analysis import consts, induction, loops
+        from qbopt.optimize import rotate
+
+        loop = loops.loops(changed.blocks, changed.entry)[0]
+        assert induction.trip_count(changed, loop, consts.known(changed)) == 4
+        assert induction.nonempty(changed, loop)
+        assert rotate.rotated(changed).block(0).succ == (2,)
+    else:
+        assert condition.args[0] == mir.Held(control, 2)
+
+
+def test_c_mandel_reuses_coordinate_recurrences_for_both_outer_loops() -> None:
+    """C Mandelbrot advanced ``px`` and ``py`` beside ``cx`` and ``cy``.
+
+    The selected code had three unit increments: the required iteration count
+    and two redundant coordinate counters. A target-independent induction
+    proof should leave only the iteration increment regardless of which
+    registers or spill slots allocation later chooses.
+    """
+    from qbopt.cfront import compile as cfront
+    from tools import quality
+
+    source = Path("bench/c/mandel.c")
+    module = cfront.assembled(cfront.recorded(source, []), source.stem, optimise=True)
+    procedure = next(one for one in module.procedures if one.name == "_bench_mandel")
+    rows = quality._rows(quality._blob(module, procedure, 0))
+    unit_steps = [
+        (mnemonic, operands)
+        for _raw, mnemonic, operands in rows
+        if mnemonic == "inc" or mnemonic == "add" and operands.rsplit(",", 1)[-1].strip() == "1"
+    ]
+
+    assert len(unit_steps) == 1, unit_steps
+    assert "[" not in unit_steps[0][1]
+
+
 def _trip_counts(data: bytes) -> list[int]:
     """How often each emitted counted loop runs: its counter's start, step and exit test, simulated."""
     from iced_x86 import Mnemonic

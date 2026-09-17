@@ -76,12 +76,13 @@ def simplified(body: mir.MirBody) -> mir.MirBody:
             ):
                 continue
             for alternative in counters.values():
-                stride = induction._signed(alternative.step, facts, width)
+                alternative_width = alternative.start.width
+                stride = induction._signed(alternative.step, facts, alternative_width)
+                modulus = 1 << (8 * alternative_width)
                 if (
                     alternative.value == counter.value
-                    or alternative.start.width != width
                     or not stride
-                    or count >= (1 << (8 * width)) // gcd(abs(stride), 1 << (8 * width))
+                    or count >= modulus // gcd(abs(stride), modulus)
                 ):
                     continue
                 alternative_phi = next(phi for phi in header.phis if phi.result.id == alternative.value)
@@ -113,7 +114,10 @@ def simplified(body: mir.MirBody) -> mir.MirBody:
                     mir.Kind.ADD,
                     "",
                     bound,
-                    (alternative.start, mir.Const(consts.masked(stride * count, width), width)),
+                    (
+                        alternative.start,
+                        mir.Const(consts.masked(stride * count, alternative_width), alternative_width),
+                    ),
                     seed_at,
                     blocks[preheader].ops[-1],
                 )
@@ -144,7 +148,7 @@ def simplified(body: mir.MirBody) -> mir.MirBody:
                         if op is compare:
                             op = replace(
                                 op,
-                                args=(mir.Held(value, width), mir.Held(bound, width)),
+                                args=(mir.Held(value, alternative_width), mir.Held(bound, alternative_width)),
                                 kind=mir.Kind.SUB,
                                 results=(),
                                 defines=tuple(value for value in op.defines if value.flags),

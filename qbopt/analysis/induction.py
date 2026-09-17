@@ -20,6 +20,7 @@ time round, because it compiles a statement at a time.
 """
 
 from dataclasses import dataclass
+from math import gcd
 
 from qbopt.model import mir
 from qbopt.analysis import consts
@@ -367,17 +368,85 @@ def trip_count(body: mir.MirBody, loop: loopy.Loop, facts: dict) -> int | None:
         start = _signed(counter.start, facts, width)
         step = _signed(counter.step, facts, width)
         last = _last_counter(body, loop, counter, facts, width)
-        if start is None or not step or last is None:
-            continue
-        distance = last - start
-        if distance % step:
-            continue
-        count = distance // step + 1
-        if count > 0:
-            counts.add(count)
+        if start is not None and step and last is not None:
+            distance = last - start
+            if not distance % step:
+                count = distance // step + 1
+                if count > 0:
+                    counts.add(count)
+        symbolic = _sentinel_trip_count(body, loop, counter, facts, width)
+        if symbolic is not None:
+            counts.add(symbolic)
     if len(counts) != 1:
         return None
     return next(iter(counts))
+
+
+def _sentinel_trip_count(body: mir.MirBody, loop: loopy.Loop, counter: Affine, facts: dict, width: int) -> int | None:
+    """Trips to an invariant ``start + step * count`` equality sentinel.
+
+    The start itself need not be constant.  The modular period proves both
+    that the sentinel is reached and that it cannot be reached earlier.  This
+    is the form left when indvar simplification reuses a pointer or coordinate
+    recurrence and removes a narrower constant counter.
+    """
+    blocks = {block.at: block for block in body.blocks}
+    if len(loop.latches) != 1:
+        return None
+    header, latch = blocks[loop.header], blocks[next(iter(loop.latches))]
+    if latch.succ != (header.at,) or not header.ops or len(header.succ) != 2:
+        return None
+    branch = header.ops[-1]
+    if branch.kind is not mir.Kind.BRANCH or branch.target not in header.succ:
+        return None
+    inside = set(loop.body)
+    if any(not blocks[at].succ or any(to not in inside for to in blocks[at].succ) for at in inside if at != header.at):
+        return None
+    test = branch.test
+    if branch.target not in inside:
+        test = {mir.Kind.EQ: mir.Kind.NE, mir.Kind.NE: mir.Kind.EQ}.get(test)
+    if test is not mir.Kind.NE:
+        return None
+
+    made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
+    owners = {value.id: block.at for block in body.blocks for op in block.ops for value in op.defines}
+    comparisons = [
+        bound
+        for op in header.ops[:-1]
+        if (bound := _counter_bound(op, branch, counter, width, made)) is not None
+    ]
+    if len(comparisons) != 1 or not isinstance(comparisons[0], mir.Held):
+        return None
+    bound = comparisons[0]
+    definition = made.get(bound.value.id)
+    if (
+        definition is None
+        or owners.get(bound.value.id) in inside
+        or definition.kind is not mir.Kind.ADD
+        or definition.loads
+        or definition.stores
+        or definition.barrier
+        or definition.merges
+        or len(definition.args) != 2
+        or len(definition.results) != 1
+        or definition.results[0] != bound
+    ):
+        return None
+    starts = [arg for arg in definition.args if arg == counter.start]
+    offsets = [arg for arg in definition.args if arg != counter.start]
+    if len(starts) != 1 or len(offsets) != 1:
+        return None
+    raw_step = _constant(counter.step, facts, width)
+    delta = _constant(offsets[0], facts, width)
+    if raw_step in (None, 0) or delta is None:
+        return None
+    modulus = 1 << (8 * width)
+    divisor = gcd(raw_step, modulus)
+    if delta % divisor:
+        return None
+    period = modulus // divisor
+    count = (delta // divisor) * pow(raw_step // divisor, -1, period) % period
+    return count or None
 
 
 def _constant(arg: mir.Arg, facts: dict, width: int) -> int | None:
@@ -461,10 +530,7 @@ def _quotients(body: mir.MirBody, loop, found: dict[int, Affine]) -> list[Derive
 def nonempty(body: mir.MirBody, loop) -> bool:
     """A canonical counted loop whose first iteration and finite exit are proven."""
     facts = consts.known(body)
-    return any(
-        _last_counter(body, loop, counter, facts, counter.start.width) is not None
-        for counter in basics(body, loop).values()
-    )
+    return trip_count(body, loop, facts) is not None
 
 
 def _composed(body: mir.MirBody, loop, found: dict[int, Affine], made: dict[int, mir.Op], settled) -> list[Derived]:
