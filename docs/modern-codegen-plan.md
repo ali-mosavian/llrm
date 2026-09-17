@@ -52,3 +52,22 @@ qbopt commits, every input source, CPU profile, output listing and stage dump.
 It rejects a dirty source tree rather than comparing stale binaries to edited
 loops.  The next run must use a clean QCport worktree and retain the manifest
 with any loop-level regression or performance claim.
+
+### 3. QCport `r_walk` evidence — 2026-09-18
+
+The harness was run on a detached, clean QCport worktree at `18f5e1f`, for
+`src/render/r_walk.c` SHA-256
+`e5abf5f8fb67c3cac011579fcb980bff446ab068c130dd2c196652bbf802fef0`.
+BCC's CodeView listing maps the marked-face loop directly to line 50.  Its
+complete loop body is 16 instructions: it retains `world` in DI and `rdr` in
+SI, then uses `les` and a byte RMW.  qbopt emits 24 instructions for the same
+iteration: it reloads both incoming pointer bases from the frame, reloads their
+selectors, and widens the byte RMW through word temporaries.
+
+The first excess is present in MIR, where the loop still loads `world->lfc`
+and `rdr->pflag`; allocation makes the incoming pointer values cheap frame
+rematerializations instead of splitting their live ranges around the call-free
+loop.  This confirms a general phase-4 region-splitting and pressure issue.
+Do not add a `r_walk` special case: the next implementation must preserve
+profitable invariant values across any call-free loop and include a
+source-independent fail-first regression.
