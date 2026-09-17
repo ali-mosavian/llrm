@@ -74,6 +74,19 @@ def test_reference_compilers_name_the_i686_gcc_not_the_host_gcc() -> None:
     assert quality.REFERENCE_COMPILERS == ("clang", "i686-elf-gcc")
 
 
+def test_reference_compilers_erase_watcom_memory_model_qualifiers(tmp_path: Path) -> None:
+    """The installed i686 GCC rejected choose.c at its first ``near`` and
+    quality.py silently recorded a failed reference instead of assembly.
+    """
+    compiler = "i686-elf-gcc"
+    if quality.shutil.which(compiler) is None:
+        pytest.skip(f"{compiler} is not installed")
+    report = quality._reference(FIXTURES / "choose.c", compiler, tmp_path / "choose.s")
+    assert report["status"] == "generated", report["diagnostic"]
+    assert {"-Dnear=", "-Dfar=", "-Dhuge=", "-Dcdecl=", "-Dpascal="} <= set(report["flags"])
+    assert {function["name"] for function in report["functions"]} == {"choose"}
+
+
 def test_reference_assembly_is_measured_per_function_without_directives_or_comments() -> None:
     """Saving GCC's assembly path alone left every structural comparison manual."""
     assembly = """

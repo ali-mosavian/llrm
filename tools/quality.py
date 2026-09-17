@@ -36,6 +36,10 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TARGETS = ROOT / "bench" / "c" / "targets.json"
 FORMAT = Formatter(FormatterSyntax.MASM)
 REFERENCE_COMPILERS = ("clang", "i686-elf-gcc")
+# Open Watcom accepts these memory-model and calling-convention qualifiers as
+# keywords. GCC and Clang do not; erase only their spelling so the reference
+# remains a structural 32-bit comparison rather than failing before codegen.
+REFERENCE_QUALIFIERS = ("near", "far", "huge", "cdecl", "pascal")
 STRUCTURAL_METRICS = ("instructions", "loads", "stores", "branches", "calls", "address_calculations")
 
 _FUNCTION_TYPE = re.compile(r'^\.type\s+"?([^",]+)"?\s*,\s*[@%]function$')
@@ -302,9 +306,7 @@ def _block_instruction_counts(
     return prologue, counts, rows
 
 
-def _dynamic_operations(
-    module: masm.Module, procedure: masm.Procedure, number: int
-) -> tuple[float | None, str]:
+def _dynamic_operations(module: masm.Module, procedure: masm.Procedure, number: int) -> tuple[float | None, str]:
     """Estimate executed instructions only when every visible cost is bounded."""
     prologue, counts, rows = _block_instruction_counts(module, procedure, number)
     if any(mnemonic in {"call", "int", "into"} for _raw, mnemonic, _operands in rows):
@@ -440,6 +442,7 @@ def _reference(source: Path, compiler: str, dump: Path) -> dict:
         "-fno-asynchronous-unwind-tables",
         "-S",
         "-masm=intel",
+        *(f"-D{qualifier}=" for qualifier in REFERENCE_QUALIFIERS),
     ]
     if clang:
         flags += ["--target=i386-unknown-linux-gnu", "-mno-sse", "-mno-sse2", "-fno-vectorize", "-fno-slp-vectorize"]
