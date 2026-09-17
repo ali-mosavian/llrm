@@ -105,6 +105,25 @@ def test_constant_return_propagates_across_a_direct_call():
     body = lines[lines.index("_add_answer proc far") : lines.index("_add_answer endp")]
     assert "call _answer" not in body
     assert any(line.startswith("add ") and line.endswith(", 37") for line in body)
+    assert "_answer proc near" not in lines
+
+
+def test_global_dce_keeps_an_address_taken_private_procedure():
+    """A static function absent from the direct-call graph may still be reached
+    through a function pointer or an initialized relocation.
+    """
+    unit = cfront.hir.Unit()
+    unit.symbols[1] = cfront.hir.Symbol(1, "callback", "callback", "_*", cfront.hir.FE_PROC)
+    unit.nodes[1] = cfront.hir.Node("CGFEName", ("y1", "TY_CODE_PTR"))
+    unit.calls[1] = cfront.hir.Call("n1", "TY_INT_2", 1)
+    assert cfront._address_taken_procedures(unit) == frozenset()
+
+    unit.nodes[2] = cfront.hir.Node("CGUnary", ("O_CONVERT", "n1", "TY_POINTER"))
+    assert cfront._address_taken_procedures(unit) == frozenset({"_callback"})
+
+    del unit.nodes[2]
+    unit.backs[1] = 1
+    assert cfront._address_taken_procedures(unit) == frozenset({"_callback"})
 
 
 def test_int64_stream_raises_whole_signed_and_unsigned_mir_values():

@@ -45,6 +45,79 @@ FLAGS = (
 type Watch = Callable[[str, str, object], None]
 
 
+def _address_taken_procedures(unit: hir.Unit) -> frozenset[str]:
+    """Internal procedure symbols used as values rather than direct callees."""
+    direct = set()
+    for call in unit.calls.values():
+        if not call.target.startswith("n"):
+            continue
+        target = hir.handle(call.target)
+        node = unit.nodes.get(target)
+        if (
+            node is not None
+            and node.call == "CGFEName"
+            and node.args
+            and node.args[0].startswith("y")
+            and hir.handle(node.args[0]) == call.symbol
+        ):
+            direct.add(target)
+
+    referenced = set()
+    sequences = [node.args for node in unit.nodes.values()]
+    sequences += [statement.args for proc in unit.procs for statement in proc.body]
+    sequences += [(node,) for call in unit.calls.values() for node, _type in call.parms]
+    for args in sequences:
+        referenced.update(hir.handle(arg) for arg in args if arg.startswith("n") and arg[1:].isdigit())
+
+    taken = {
+        symbol.object_name
+        for at, node in unit.nodes.items()
+        if node.call == "CGFEName"
+        and node.args
+        and node.args[0].startswith("y")
+        and (symbol := unit.symbols.get(hir.handle(node.args[0]))) is not None
+        and symbol.proc
+        and (at not in direct or at in referenced)
+    }
+    taken.update(
+        unit.symbols[symbol].object_name
+        for symbol in unit.backs.values()
+        if symbol in unit.symbols and unit.symbols[symbol].proc
+    )
+    taken.update(
+        unit.symbols[fixup.symbol].object_name
+        for symbol in unit.symbols.values()
+        if symbol.code is not None
+        for fixup in symbol.code.fixups
+        if fixup.symbol in unit.symbols and unit.symbols[fixup.symbol].proc
+    )
+    return frozenset(taken)
+
+
+def _reachable_procedures(
+    procedures: list[raise_hir.Raised], bodies: dict[str, mir.MirBody], roots: frozenset[str]
+) -> frozenset[str]:
+    """Defined procedure bodies reachable through calls that survived MIR."""
+    defined = {one.name for one in procedures}
+    if not roots:
+        return frozenset(defined)
+    by_name = {one.name: one for one in procedures}
+    reached, pending = set(), list(roots & defined)
+    while pending:
+        name = pending.pop()
+        if name in reached:
+            continue
+        reached.add(name)
+        procedure = by_name[name]
+        sites = {op.at for block in bodies[name].blocks for op in block.ops if op.kind is mir.Kind.CALL}
+        pending.extend(
+            target
+            for at, target in procedure.calls.items()
+            if at in sites and target in defined and target not in reached
+        )
+    return frozenset(reached)
+
+
 def recorded(source: Path, includes: list[str]) -> str:
     """The code-generator stream wccq records for one C file."""
     with tempfile.TemporaryDirectory() as scratch:
@@ -141,6 +214,11 @@ def assembled(
             after = interprocedural.remove_dead_pure_calls(before, raised.calls, pure, call_arguments[raised.name])
             if after is not before:
                 bodies[raised.name] = run_optimiser(raised, after, "ipa-pure.")
+        roots = frozenset(one.name for one in raised_procedures if one.symbol.exported) | _address_taken_procedures(
+            unit
+        )
+        reachable = _reachable_procedures(raised_procedures, bodies, roots)
+        raised_procedures = [one for one in raised_procedures if one.name in reachable]
 
     for raised in raised_procedures:
         body = bodies[raised.name]

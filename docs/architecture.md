@@ -1105,7 +1105,10 @@ one documented target without materially regressing another.
   runtime-idiom recognition in the raise rather than implementing it as
   generic inlining.
 - [ ] Remove unreachable procedures and unused public/internal definitions
-  where OMF linkage permits it (`GlobalDCE`).
+  where OMF linkage permits it (`GlobalDCE`).  Unreachable private C
+  procedures are now removed after call deletion. Exported procedures,
+  function values referenced outside a direct call, data relocations and
+  inline-code fixups are roots; private data elimination remains open.
 
 ### Machine backend
 
