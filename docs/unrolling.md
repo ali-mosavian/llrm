@@ -138,6 +138,35 @@ receive the corresponding carried substitution. The focused regression rejects
 any exposed procedure input, and the seven-program DOS known-answer corpus
 passes with the expansion enabled.
 
+## Exact CFG peeling and dependent bounds
+
+Straight-line expansion cannot prove C nbody's triangular inner loop directly:
+``j`` starts at ``i + 1``, so its trip count is unknown until the four-trip
+outer ``i`` loop is specialized. The production peeling pass now uses the
+existing CFG cloner for that case. It first closes loop live-outs, clones every
+block for the one proven trip count shared by the loop's recurrences, retains a
+residual correctness loop, and submits the candidate to the ordinary scalar
+fixed point. Acceptance requires that simplification remove the residual loop
+and that target-priced dynamic savings exceed the semantic growth charge.
+
+That exposes three-, two-, and one-trip inner loops, which the ordinary exact
+unroller removes. On 386, `_bench_nbody` changes from 33,632 to 5,063 estimated
+dynamic operations. The first emitted candidate exposed a separate memory-form
+gap: chained fixed frame addresses such as ``&x[4] - 16`` occupied registers
+and produced 23 spill reloads plus 10 spill stores. Address selection now folds
+the complete pure constant chain to a single BP displacement. The final result
+is 280 instructions, 1,095 bytes, zero address calculations and zero allocator
+spills, versus the strict i686 GCC reference's 267 instructions and roughly
+5,132 estimated operations. The independent nbody answer remains 4,774,160,
+and all seven C corpus answers pass through OMF, LINK and DOSBox.
+
+Peeling also exposed a correctness defect in dead-block cleanup. Once SCCP
+proved the residual floating loop unreachable, the old partial erasure left
+x87 semantics attached to a `nothing` marker and lowering refused it. Dead CFG
+blocks now use the same complete inert-operation constructor as all other MIR
+deletion. A focused fail-first regression checks both the retained source owner
+and the absence of stale floating computation.
+
 Larger-than-four-trip loops may now expand within that same operation budget
 when every extended floating result in the expanded loop is proven exact.
 FPCSE's ten ordered iterations satisfy this; FPCSEX's runtime-input loop does

@@ -13,6 +13,63 @@ from qbopt.analysis import constant_cycles
 from qbopt.analysis import interprocedural
 
 
+def test_unreachable_floating_work_becomes_a_complete_inert_marker() -> None:
+    """Nbody peeling left x87 semantics on ``nothing`` and failed before lowering."""
+    from qbopt.backend import lower_floats
+    from qbopt.model.floating import Format
+    from qbopt.model.floating import Rounding
+    from qbopt.model.floating import Precision
+    from qbopt.model.floating import Semantics
+
+    flags = mir.Value(1, 0, flags=True)
+    compare = mir.Op(
+        1,
+        ir.Operation.COMPARE,
+        "cmp",
+        (flags,),
+        (),
+        kind=mir.Kind.SUB,
+        args=(mir.Const(0, 2), mir.Const(1, 2)),
+    )
+    branch = mir.Op(
+        2,
+        ir.Operation.BRANCH,
+        "jne",
+        (),
+        (flags,),
+        kind=mir.Kind.BRANCH,
+        test=mir.Kind.EQ,
+        target=10,
+    )
+    rule = Semantics((Format.BINARY64,), Format.EXTENDED80, Precision.EXACT, Rounding.NONE)
+    floating = mir.Op(
+        10,
+        ir.Operation.FLOAT_LOAD,
+        "fld",
+        (),
+        (),
+        kind=mir.Kind.FLOAD,
+        floating=rule,
+        absorbed=(10,),
+    )
+    body = mir.MirBody(
+        0,
+        (
+            mir.MirBlock(0, (), (compare, branch), (10, 20)),
+            mir.MirBlock(10, (), (floating,), (20,)),
+            mir.MirBlock(20, (), (), ()),
+        ),
+    )
+
+    changed = transform.decided(body, frozenset(), {})
+
+    marker = changed.block(10).ops[0]
+    assert marker.kind is mir.Kind.NOTHING
+    assert marker.absorbed == (10,)
+    assert marker.floating is None
+    lower_floats.checked(changed)
+
+
 def diamond():
     left, right, joined = (mir.Value(index, 0) for index in range(1, 4))
 

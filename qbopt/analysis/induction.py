@@ -352,6 +352,34 @@ def _last_counter(body: mir.MirBody, loop, counter: Affine, facts: dict, width: 
     return last if -sign <= after < sign else None
 
 
+def trip_count(body: mir.MirBody, loop: loopy.Loop, facts: dict) -> int | None:
+    """The one proven positive execution count shared by every loop counter.
+
+    A loop may carry an integer counter, a byte address and one or more
+    derived counters at once.  They are evidence for the same trip count,
+    not alternatives from which a transform may pick the convenient one.
+    Refusing disagreement keeps cloning transforms independent of which
+    recurrence happened to be visited first.
+    """
+    counts = set()
+    for counter in basics(body, loop).values():
+        width = counter.start.width
+        start = _signed(counter.start, facts, width)
+        step = _signed(counter.step, facts, width)
+        last = _last_counter(body, loop, counter, facts, width)
+        if start is None or not step or last is None:
+            continue
+        distance = last - start
+        if distance % step:
+            continue
+        count = distance // step + 1
+        if count > 0:
+            counts.add(count)
+    if len(counts) != 1:
+        return None
+    return next(iter(counts))
+
+
 def _constant(arg: mir.Arg, facts: dict, width: int) -> int | None:
     """An exact width-limited bit pattern, without imposing signedness."""
     if not isinstance(arg, (mir.Held, mir.Const)) or arg.width != width:

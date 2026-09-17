@@ -6,14 +6,15 @@ import pytest
 
 import corpus
 from qbopt.model import mir
+from qbopt.backend import cpu
 from qbopt.backend import lower
 from qbopt.analysis import loops
 from qbopt.optimize import unroll
+from qbopt.model.passes import Where
 from qbopt.optimize import transform
 from qbopt.analysis import floatfacts
-from qbopt.backend import cpu
 from qbopt.backend import lower_floats
-from qbopt.model.passes import OperationCosts, Where
+from qbopt.model.passes import OperationCosts
 
 
 def test_unroll_rejects_growth_not_paid_for_by_dynamic_work(monkeypatch) -> None:
@@ -103,6 +104,21 @@ def test_c_crc_unroll_keeps_the_inner_result_on_the_outer_backedge() -> None:
 
     assert sum(mnemonic == "shr" for _raw, mnemonic, _operands in rows) >= 8
     assert any("EDB88320" in operands.upper() for _raw, _mnemonic, operands in rows)
+
+
+def test_c_nbody_peels_the_fixed_triangular_interaction_loop() -> None:
+    """Nbody retained 33,632 estimated operations because ``j = i + 1`` hid its six fixed interactions."""
+    from tools import quality
+    from qbopt.cfront import compile as cfront
+
+    source = Path("bench/c/nbody.c")
+    module = cfront.assembled(cfront.recorded(source, []), source.stem, optimise=True)
+    procedure = next(one for one in module.procedures if one.name == "_bench_nbody")
+    dynamic, status = quality._dynamic_operations(module, procedure, 0)
+
+    assert not procedure.body.inputs
+    assert status.startswith("estimated:")
+    assert dynamic is not None and dynamic < 20_000
 
 
 @pytest.mark.parametrize("checkpoint", [False, True])

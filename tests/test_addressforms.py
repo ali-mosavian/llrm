@@ -227,6 +227,73 @@ def test_constant_frame_array_address_folds_to_a_displacement() -> None:
     assert instruction.insn.memory_displacement & 65535 == (-28) & 65535
 
 
+def test_chained_constant_frame_addresses_fold_to_one_displacement() -> None:
+    """Peeled C nbody spilled ``&x[4] - 16`` instead of encoding ``[bp-20]``.
+
+    Strength reduction writes a convenient one-past-the-end address and
+    derives several fixed elements from it.  The intermediate address is an
+    implementation detail, not a value that needs a register.
+    """
+    frame, end, element, loaded = (mir.Value(index, 0) for index in range(1, 5))
+    frame_address = mir.Op(
+        1,
+        ir.Operation.ADDRESS,
+        "lea",
+        (frame,),
+        (),
+        kind=mir.Kind.ADDRESS,
+        args=(mir.FrameAddress(-36, 2, (-36, -4)),),
+        results=(mir.Held(frame, 2),),
+    )
+
+    def add(at: int, result: mir.Value, source: mir.Value, amount: int) -> mir.Op:
+        return mir.Op(
+            at,
+            ir.Operation.BINARY,
+            "add",
+            (result,),
+            (source,),
+            kind=mir.Kind.ADD,
+            args=(mir.Held(source, 2), mir.Const(amount, 2)),
+            results=(mir.Held(result, 2),),
+        )
+
+    ref = mir.MemRef(
+        Addr(Space.LITERAL, 0),
+        8,
+        base=element,
+        space=Space.FRAME,
+        base_width=2,
+        within=((-36, -4),),
+    )
+    load = mir.Op(
+        4,
+        ir.Operation.FLOAT_LOAD,
+        "fld",
+        (loaded,),
+        (element,),
+        kind=mir.Kind.FLOAD,
+        args=(mir.Cell(ref),),
+        results=(mir.Held(loaded, 10),),
+        loads=(ref,),
+    )
+    body = mir.MirBody(
+        0,
+        (mir.MirBlock(0, (), (frame_address, add(2, end, frame, 32), add(3, element, end, 65520), load), ()),),
+    )
+
+    forms, folded = addressforms.indexed(body, set())
+    cell = ir.Mem(Addr(Space.LITERAL, 0, segment=Register.SS), 8, base=ir.Held(element.id, 2))
+    changed = addressforms.scaled(ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ir.St(0),), (cell,)), forms)
+
+    assert folded == frozenset({frame.id, end.id, element.id})
+    assert changed is not None
+    direct = changed.sources[0]
+    assert isinstance(direct, ir.Mem)
+    assert direct.addr == Addr(Space.FRAME, -20)
+    assert direct.base is None
+
+
 def test_direct_frame_array_address_folds_into_its_memory_operand() -> None:
     """Unrolled C nbody emitted six LEAs for element zero's fixed addresses."""
     frame = mir.Value(1, 0)

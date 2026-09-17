@@ -26,6 +26,7 @@ from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.model.mir import Op
 from qbopt.optimize import fill
+from qbopt.optimize import peel
 from qbopt.analysis import avail
 from qbopt.optimize import lcssa
 from qbopt.analysis import consts
@@ -34,12 +35,13 @@ from qbopt.optimize import promote
 from qbopt.model.mir import MirBody
 from qbopt.objectfile import module
 from qbopt.optimize import strength
-from qbopt.model.passes import OperationCosts, Where
+from qbopt.model.passes import Where
 from qbopt.optimize import algebraic
 from qbopt.optimize import loopmotion
 from qbopt.optimize import loopsimplify
 from qbopt.analysis import loops as loopy
 from qbopt.model.passes import MIRTransform
+from qbopt.model.passes import OperationCosts
 from qbopt.analysis import liveness as alive_at
 from qbopt.analysis.ssa import provider as _provider
 from qbopt.analysis.ssa import pruned_phis as _pruned_phis
@@ -1761,25 +1763,12 @@ def _unreachable(body: MirBody) -> MirBody:
                 block,
                 succ=(),
                 phis=(),
-                ops=tuple(
-                    replace(
-                        op,
-                        kind=mir.Kind.NOTHING,
-                        name="",
-                        defines=(),
-                        uses=(),
-                        loads=(),
-                        stores=(),
-                        args=(),
-                        results=(),
-                        merges={},
-                        target=None,
-                        test=None,
-                        stack=None,
-                        symbol=False,
-                    )
-                    for op in block.ops
-                ),
+                # One definition of an inert source owner.  The former
+                # partial spelling forgot floating semantics (and several
+                # other semantic fields), producing a NOTHING operation
+                # that lowering correctly refused after exact loop peeling
+                # made an x87 residual body unreachable.
+                ops=tuple(_empty_operation(op) for op in block.ops),
             )
             for block in body.blocks
         ),
@@ -2681,6 +2670,7 @@ def pipeline(where: Where, **wanted) -> list[MIRTransform]:
         Dead(),
         Place(where),
         unroll.Unroll(where),
+        peel.Peel(where),
         fill.Fill(),
     ]
     return [one for one in every if wanted.get(one.name, True)]
@@ -2716,6 +2706,7 @@ def applied(
     promote_: bool = True,
     strength_: bool = True,
     unroll_: bool = True,
+    peel_: bool = True,
     fill_: bool = True,
     unswitch_: bool = False,
     only: str | None = None,
@@ -2758,6 +2749,7 @@ def applied(
         "promote": promote_,
         "strength": strength_,
         "unroll": unroll_,
+        "peel": peel_,
         "fill": fill_,
     }
     where = Where(
@@ -2788,6 +2780,8 @@ def applied(
     passes = [one for one in passes if not isinstance(one, promote.Sroa)]
     unrollers = [one for one in passes if isinstance(one, unroll.Unroll)]
     passes = [one for one in passes if not isinstance(one, unroll.Unroll)]
+    peelers = [one for one in passes if isinstance(one, peel.Peel)]
+    passes = [one for one in passes if not isinstance(one, peel.Peel)]
     for one in boundary:
         body = one.transform(body)
         if watch is not None:
@@ -2798,6 +2792,11 @@ def applied(
         body = unrollers[0].transform(body)
         if watch is not None:
             watch("r01-unroll", body)
+        return body
+    if only is not None and peelers:
+        body = peelers[0].transform(body)
+        if watch is not None:
+            watch("r01-peel", body)
         return body
 
     def fixed(state: MirBody, *, consider_unroll: bool = False) -> MirBody:
@@ -2832,6 +2831,13 @@ def applied(
         raise RuntimeError(f"MIR optimization did not converge after {limit} size-scaled rounds")
 
     body = fixed(body, consider_unroll=bool(unrollers))
+    if peelers:
+        body = peel.optimized(
+            body,
+            where,
+            optimize=lambda candidate: fixed(candidate, consider_unroll=bool(unrollers)),
+            watch=watch,
+        )
     if unswitch_:
         from qbopt.optimize import unswitch
 

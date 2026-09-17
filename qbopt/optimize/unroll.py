@@ -13,11 +13,11 @@ from qbopt.model import mir
 from qbopt.analysis import ssa
 from qbopt.analysis import loops
 from qbopt.analysis import consts
+from qbopt.optimize import profit
 from qbopt.analysis import induction
 from qbopt.model.passes import Where
 from qbopt.analysis import floatfacts
 from qbopt.model.passes import MIRTransform
-from qbopt.optimize import profit
 
 
 class Unroll(MIRTransform):
@@ -112,17 +112,9 @@ def expanded(
         )
         if invalid_header:
             continue
-        counts = set()
-        for counter in induction.basics(body, loop).values():
-            width = counter.start.width
-            start = induction._signed(counter.start, facts, width)
-            step = induction._signed(counter.step, facts, width)
-            last = induction._last_counter(body, loop, counter, facts, width)
-            if start is not None and step and last is not None:
-                counts.add((last - start) // step + 1)
-        if len(counts) != 1:
+        count = induction.trip_count(body, loop, facts)
+        if count is None:
             continue
-        count, = counts
         # This is only a compile-time/resource guard.  Whether the expanded
         # body is worth keeping is decided below with the selected CPU's
         # operation costs.  Keep enough room to evaluate a useful multi-block

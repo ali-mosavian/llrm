@@ -92,6 +92,52 @@ def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, FoldedForm]
         and isinstance((result := op.results[0]), mir.Held)
         and result.width == 2
     }
+    # Strength reduction may choose a convenient fixed address and derive
+    # several elements from it (for example ``&x[4] - 16``).  They are all
+    # the same encodable BP displacement.  Discover the complete pure
+    # constant chain before use classification, so an intermediate address
+    # is not mistaken for a value that needs a register merely because a
+    # second address expression reads it.
+    fixed_candidates = dict(frame_bases)
+    while True:
+        before = len(fixed_candidates)
+        for op in made.values():
+            if (
+                op.loads
+                or op.stores
+                or op.merges
+                or op.barrier
+                or len(op.results) != 1
+                or not isinstance(op.results[0], mir.Held)
+                or op.results[0].width != 2
+            ):
+                continue
+            source = None
+            amount = 0
+            if (
+                op.kind is mir.Kind.COPY
+                and len(op.args) == 1
+                and isinstance(op.args[0], mir.Held)
+                and op.args[0].width == 2
+            ):
+                source = op.args[0]
+            elif op.kind is mir.Kind.ADD and len(op.args) == 2:
+                held = [one for one in op.args if isinstance(one, mir.Held) and one.width == 2]
+                constants = [one for one in op.args if isinstance(one, mir.Const) and one.width == 2]
+                if len(held) == len(constants) == 1:
+                    source, amount = held[0], constants[0].n
+            if source is None or source.value.id not in fixed_candidates:
+                continue
+            fixed = fixed_candidates[source.value.id]
+            displacement = (fixed.offset + amount + 32768) % 65536 - 32768
+            fixed_candidates[op.results[0].value.id] = replace(
+                fixed,
+                addr=replace(fixed.addr, disp=displacement) if fixed.addr is not None else None,
+                offset=displacement,
+                disp_width=1 if -128 <= displacement <= 127 else 2,
+            )
+        if len(fixed_candidates) == before:
+            break
     bases: dict[int, int] = {}
     other: dict[int, int] = {}
     for block in body.blocks:
@@ -125,9 +171,30 @@ def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, FoldedForm]
             and not any(one.flags and (one.id in other or one.id in bases) for one in op.defines)
         )
 
+    # A candidate whose arithmetic flags are observable is a value
+    # computation, not merely an address spelling.  Admit derived fixed
+    # addresses in dependency order only when deleting their operation is
+    # legal; the use classification above is what makes that answer exact.
+    fixed_frames = dict(frame_bases)
+    while True:
+        before = len(fixed_frames)
+        for op in made.values():
+            if (
+                op.kind not in (mir.Kind.COPY, mir.Kind.ADD)
+                or not plain(op, op.kind)
+                or len(op.results) != 1
+                or not isinstance(op.results[0], mir.Held)
+                or op.results[0].value.id not in fixed_candidates
+                or not any(isinstance(one, mir.Held) and one.value.id in fixed_frames for one in op.args)
+            ):
+                continue
+            fixed_frames[op.results[0].value.id] = fixed_candidates[op.results[0].value.id]
+        if len(fixed_frames) == before:
+            break
+
     forms: dict[int, FoldedForm] = {}
     folded: set[int] = set()
-    for value, fixed in frame_bases.items():
+    for value, fixed in fixed_frames.items():
         if value not in bases:
             continue
         # A frame address consumed directly as a cell base is already the
@@ -143,24 +210,18 @@ def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, FoldedForm]
                 continue
             held = [one for one in op.args if isinstance(one, mir.Held) and one.width == address.width]
             constants = [one for one in op.args if isinstance(one, mir.Const) and one.width == address.width]
-            if len(held) == len(constants) == 1 and (fixed := frame_bases.get(held[0].value.id)) is not None:
+            if len(held) == len(constants) == 1 and (fixed := fixed_frames.get(address.value.id)) is not None:
                 # `&local[0] + 8` is an address spelling, not a value worth
                 # carrying.  Full unrolling exposes many of these with a
                 # literal subscript; keep the 16-bit wrapping arithmetic and
                 # put the result straight in the BP displacement.
-                displacement = (fixed.offset + constants[0].n + 32768) % 65536 - 32768
-                forms[address.value.id] = replace(
-                    fixed,
-                    addr=replace(fixed.addr, disp=displacement) if fixed.addr is not None else None,
-                    offset=displacement,
-                    disp_width=1 if -128 <= displacement <= 127 else 2,
-                )
+                forms[address.value.id] = fixed
                 folded.add(address.value.id)
                 continue
             if not all(isinstance(one, mir.Held) and one.width == address.width for one in op.args):
                 continue
             base, index = op.args
-            fixed = frame_bases.get(base.value.id)
+            fixed = fixed_frames.get(base.value.id)
             form = (fixed or ir.Held(base.value.id, base.width), ir.Held(index.value.id, index.width), 1)
             for base, index in (op.args, op.args[::-1]):
                 shift = made.get(index.value.id)
@@ -176,7 +237,7 @@ def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, FoldedForm]
                     and index.value.id not in bases
                 ):
                     counter = shift.args[0]
-                    fixed = frame_bases.get(base.value.id)
+                    fixed = fixed_frames.get(base.value.id)
                     form = (
                         fixed or ir.Held(base.value.id, base.width),
                         ir.Held(counter.value.id, counter.width),
@@ -188,7 +249,7 @@ def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, FoldedForm]
             folded.add(address.value.id)
 
     phi_reads = {value.id for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
-    for value in frame_bases:
+    for value in fixed_frames:
         if value in exposed or value in phi_reads:
             continue
         for block in body.blocks:
@@ -201,7 +262,11 @@ def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, FoldedForm]
                     if isinstance(one, mir.Cell) and one.ref.base is not None
                 }
                 held = any(isinstance(one, mir.Held) and one.value.id == value for one in op.args)
-                if (held and not any(one.id in folded for one in op.defines)) or (not held and value not in based):
+                # Reading one fixed address solely to define another fixed
+                # address is part of the fold even when the chain spans
+                # several blocks.  Any ordinary value use still keeps it.
+                derived = held and any(one.id in fixed_frames or one.id in folded for one in op.defines)
+                if (held and not derived) or (not held and value not in based):
                     break
             else:
                 continue

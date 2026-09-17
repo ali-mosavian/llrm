@@ -1098,9 +1098,14 @@ one documented target without materially regressing another.
   fresh SSA values, cloned branch joins and early-exit phis, followed by the
   residual loop. It requires loop-closed live-outs and rejects opaque dispatch
   terminators. Two peeled iterations of real IVARM produce valid SSA/phi edges
-  on QB/PDS/VBDOS. This is not enabled in production: bounded unrolling still
-  needs candidate simplification, profitability and branching-layout support.
-  No emitted assembly or performance change is claimed for the cloning primitive.
+  on QB/PDS/VBDOS. Exact-count peeling is now enabled at the post-fixed-point
+  loop boundary. Each candidate is simplified by the ordinary MIR pipeline;
+  it is retained only when the residual loop disappears and the selected CPU's
+  dynamic saving pays the same semantic-growth charge as straight-line
+  unrolling. Rejected latches are skipped so they cannot hide a later candidate.
+  C nbody is the production case: peeling its four-trip outer interaction loop
+  makes the dependent ``j = i + 1`` bound constant, after which ordinary exact
+  unrolling exposes the six fixed body pairs.
   A peeled IVARM emission probe exposed an operandless-branch lowering defect:
   cloned semantic conditions now select conditional jumps without depending on
   an original instruction snapshot. Ordered backend layout also materializes
@@ -1132,6 +1137,18 @@ one documented target without materially regressing another.
   replaces the counter updates with stores of 7, 10, ..., 34. It remains off:
   invariant-branch specialization should expose one selected accumulator loop,
   allowing promotion and loop deletion instead of duplicating both arms ten times.
+
+  On the 386 profile, C nbody falls from 33,632 to 5,063 estimated dynamic
+  operations. Its final output is 280 instructions / 1,095 bytes with no
+  allocator spill reloads or stores. The strict i686 GCC reference is 267
+  instructions and about 5,132 estimated operations; the qbopt result is thus
+  within 5% statically and slightly below the reference's measured CFG work.
+  The first accepted candidate was 339 instructions / 1,310 bytes with 23/10
+  spill reload/store sites. Stage inspection showed fixed local addresses such
+  as ``&x[4] - 16`` surviving as register values. Transitive constant frame
+  address folding now emits those as direct ``SS:[BP+disp]`` operands, removing
+  all 33 spill sites and four address calculations. The seven-program C DOS
+  known-answer corpus passes with the production peel and address fold enabled.
 - [ ] Delete provably unobservable loops and retain required final stores,
   synchronization and exceptional behavior.
 
@@ -1306,8 +1323,10 @@ These are boundary defects with an owner, not permission to add more cross-layer
 knowledge:
 
 1. Target costing remains narrower than LLVM/GCC's formula selection. Strength
-   reduction and exact full unrolling now use target costs, but partial unroll,
-   peeling and rotation still need exact code-size and spill forecasts.
+   reduction, exact full unrolling and exact CFG peeling now use target costs,
+   but partial unroll and rotation still need exact code-size and spill
+   forecasts; peeling's current growth charge is semantic rather than encoded
+   bytes.
 2. Strict numeric behavior and checked-loop preguards are incomplete. Policy is
    already separate (`--basic-semantics`, `--bounds-checks`); broader lowering
    coverage must preserve that separation.

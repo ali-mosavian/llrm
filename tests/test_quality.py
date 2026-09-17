@@ -98,13 +98,15 @@ def test_machine_cse_reuses_c_nbody_frame_addresses() -> None:
         and "fld qword ptr" in block
         and "fstp qword ptr" in block
     ]
-    assert len(candidates) == 1, candidates
-    hot = candidates[0]
-
-    assert "fld qword ptr" in hot and "fstp qword ptr" in hot, hot
-    for displacement in ("[bp-100]", "[bp-132]"):
-        addresses = [line for line in hot.splitlines() if "lea " in line and displacement in line]
-        assert len(addresses) <= 1, hot
+    # Exact CFG peeling exposes one block per fixed interaction rather than
+    # one shared pair loop.  The regression is address reuse within each hot
+    # region; the number of regions is deliberately not part of it.
+    assert candidates
+    for hot in candidates:
+        assert "fld qword ptr" in hot and "fstp qword ptr" in hot, hot
+        for displacement in ("[bp-100]", "[bp-132]"):
+            addresses = [line for line in hot.splitlines() if "lea " in line and displacement in line]
+            assert len(addresses) <= 1, hot
 
 
 def test_nbody_strength_reduction_respects_the_address_register_budget() -> None:
