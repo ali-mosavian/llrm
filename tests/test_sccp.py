@@ -2,9 +2,14 @@
 
 from dataclasses import replace
 
-from qbopt.analysis import constant_cycles, consts
-from qbopt.model import ir, mir
+from qbopt.model import ir
+from qbopt.model import mir
+from qbopt.analysis import consts
 from qbopt.optimize import transform
+from qbopt.objectfile.module import Addr
+from qbopt.objectfile.module import Space
+from qbopt.analysis import constant_cycles
+from qbopt.analysis import interprocedural
 
 
 def diamond():
@@ -98,3 +103,74 @@ def test_entry_phi_keeps_unknown_caller_input():
     ))
     facts = constant_cycles.propagated(body, {}, lambda block, facts, states: block.succ)
     assert joined not in facts
+
+
+def _returned(number: int, *, at: int = 1) -> mir.MirBody:
+    value = mir.Value(at, at, variable=at, version=1)
+    copy = mir.Op(
+        at,
+        ir.Operation.NOTHING,
+        "",
+        (value,),
+        (),
+        kind=mir.Kind.COPY,
+        args=(mir.Const(number, 2),),
+        results=(mir.Held(value, 2),),
+    )
+    ret = mir.Op(at + 1, ir.Operation.NOTHING, "", (), (value,), kind=mir.Kind.RETURN, args=(mir.Held(value, 2),))
+    return mir.MirBody(at, (mir.MirBlock(at, (), (copy, ret), ()),), sealed=True)
+
+
+def test_module_constant_returns_require_every_exit_to_agree():
+    """One convenient return must not become the result of the whole procedure."""
+    agrees = _returned(37)
+    left, right = agrees.blocks[0], _returned(38, at=10).blocks[0]
+    disagrees = replace(agrees, blocks=(replace(left, succ=(10,)), right))
+    assert interprocedural.constant_returns({"yes": agrees, "no": disagrees}) == {
+        "yes": (mir.Const(37, 2),)
+    }
+
+
+def test_pure_call_removal_drops_its_exact_argument_pushes():
+    """Deleting a cdecl call but leaving its ARG changed SP at every iteration."""
+    argument = mir.Op(1, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.ARG, args=(mir.Const(9, 2),))
+    result = mir.Value(2, 2, variable=2, version=1)
+    call = mir.Op(
+        2,
+        ir.Operation.NOTHING,
+        "",
+        (result,),
+        (),
+        kind=mir.Kind.CALL,
+        results=(mir.Held(result, 2),),
+    )
+    ret = mir.Op(3, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.RETURN)
+    body = mir.MirBody(1, (mir.MirBlock(1, (), (argument, call, ret), ()),), sealed=True)
+
+    class Contract:
+        cleanup = 0
+        caller_cleanup = 2
+
+    sites = interprocedural.argument_sites(body, {2: Contract()})
+    made = interprocedural.remove_dead_pure_calls(body, {2: "leaf"}, frozenset({"leaf"}), sites)
+    assert [op.kind for op in made.blocks[0].ops] == [mir.Kind.RETURN]
+
+
+def test_purity_refuses_nontermination_and_nonlocal_stores():
+    """A constant return does not license deleting a loop or a global write."""
+    looping = mir.MirBody(1, (mir.MirBlock(1, (), (), (1,)),), sealed=True)
+    global_ = mir.MemRef(Addr(Space.SEGMENT, 0, 1), 2, space=Space.SEGMENT)
+    store = mir.Op(
+        1,
+        ir.Operation.NOTHING,
+        "",
+        (),
+        (),
+        kind=mir.Kind.STORE,
+        args=(mir.Const(1, 2),),
+        results=(mir.Cell(global_),),
+        stores=(global_,),
+    )
+    returned = _returned(1).blocks[0].ops[-1]
+    writing = mir.MirBody(1, (mir.MirBlock(1, (), (store, returned), ()),), sealed=True)
+    assert interprocedural.pure_procedures({"loop": (looping, {}), "write": (writing, {})}) == frozenset()

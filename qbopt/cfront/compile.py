@@ -80,35 +80,72 @@ def assembled(
     aliases = {one.name: alias.Procedure(one.body, one.calls, one.arguments) for one in raised_procedures}
     callees = {name for one in raised_procedures for name in one.calls.values()}
     modref = alias.summaries(aliases, libfunc.summaries(callees))
+    bodies = {one.name: alias.calls_annotated(aliases[one.name], modref) for one in raised_procedures}
+    from qbopt.analysis import interprocedural
+
+    call_arguments = {
+        one.name: interprocedural.argument_sites(bodies[one.name], one.contracts) for one in raised_procedures
+    }
     for raised in raised_procedures:
-        body = alias.calls_annotated(aliases[raised.name], modref)
         if watch is not None:
-            watch("mir-raised", raised.name, body)
+            watch("mir-raised", raised.name, bodies[raised.name])
+
+    def run_optimiser(raised: raise_hir.Raised, body: mir.MirBody, prefix: str = "") -> mir.MirBody:
+        from qbopt.optimize import rotate
+        from qbopt.optimize import transform
+
+        def observe(stage: str, after: mir.MirBody, name: str = raised.name) -> None:
+            stage = f"{prefix}{stage}"
+            _write(dump, f"passes/{name}.{stage}", _mir_text(name, after))
+            if watch is not None:
+                watch(f"mir-{stage}", name, after)
+
+        body = transform.applied(
+            body,
+            frozenset(),
+            raised.calls,
+            found=None,
+            # Borland's medium-model C ABI preserves SI and DI from the
+            # six value registers. A recurrence live through a call has
+            # two places available, not the full register file.
+            registers=target.register_capacity,
+            call_registers=target.call_register_capacity,
+            watch=observe if dump is not None or watch is not None else None,
+        )
+        body = rotate.entered(body)
+        if dump is not None or watch is not None:
+            observe("rotate", body)
+        return body
+
+    if optimise:
+        bodies = {one.name: run_optimiser(one, bodies[one.name]) for one in raised_procedures}
+        propagated = {one.name: frozenset() for one in raised_procedures}
+        round_ = 0
+        while True:
+            returns = interprocedural.constant_returns(bodies)
+            changed = False
+            for raised in raised_procedures:
+                before = bodies[raised.name]
+                after, done = interprocedural.propagate_returns(before, raised.calls, returns, propagated[raised.name])
+                propagated[raised.name] = done
+                if after is before:
+                    continue
+                bodies[raised.name] = run_optimiser(raised, after, f"ipa{round_}.")
+                changed = True
+            if not changed:
+                break
+            round_ += 1
+        pure = interprocedural.pure_procedures({one.name: (bodies[one.name], one.calls) for one in raised_procedures})
+        for raised in raised_procedures:
+            before = bodies[raised.name]
+            after = interprocedural.remove_dead_pure_calls(before, raised.calls, pure, call_arguments[raised.name])
+            if after is not before:
+                bodies[raised.name] = run_optimiser(raised, after, "ipa-pure.")
+
+    for raised in raised_procedures:
+        body = bodies[raised.name]
         mirs.append(_mir_text(raised.name, body))
         if optimise:
-            from qbopt.optimize import rotate
-            from qbopt.optimize import transform
-
-            def observe(stage: str, after: mir.MirBody, name: str = raised.name) -> None:
-                _write(dump, f"passes/{name}.{stage}", _mir_text(name, after))
-                if watch is not None:
-                    watch(f"mir-{stage}", name, after)
-
-            body = transform.applied(
-                body,
-                frozenset(),
-                raised.calls,
-                found=None,
-                # Borland's medium-model C ABI preserves SI and DI from the
-                # six value registers. A recurrence live through a call has
-                # two places available, not the full register file.
-                registers=target.register_capacity,
-                call_registers=target.call_register_capacity,
-                watch=observe if dump is not None or watch is not None else None,
-            )
-            body = rotate.entered(body)
-            if dump is not None or watch is not None:
-                observe("rotate", body)
             mirs.append(_mir_text(raised.name + " (opt)", body))
         legalized = lower_int64.expanded(body, raised.calls, raised.contracts)
         body = legalized.body

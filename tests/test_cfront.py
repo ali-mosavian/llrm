@@ -94,6 +94,19 @@ def test_raised_mir_names_no_instruction():
                             assert (ref.addr.base, ref.addr.segment) == (0, 0), (module, ref)
 
 
+def test_constant_return_propagates_across_a_direct_call():
+    """add_answer used the opaque AX result of answer() even though every
+    returning path produces 37.  Local SCCP cannot cross that procedure
+    boundary; the caller must receive the module summary's constant.
+    """
+    lines = [line.strip() for line in cfront.compiled(
+        (FIXTURES / "ipconst.cgs").read_text(), "ipconst", optimise=True
+    ).splitlines()]
+    body = lines[lines.index("_add_answer proc far") : lines.index("_add_answer endp")]
+    assert "call _answer" not in body
+    assert any(line.startswith("add ") and line.endswith(", 37") for line in body)
+
+
 def test_int64_stream_raises_whole_signed_and_unsigned_mir_values():
     """Watcom emits TY_{U,}INT_8, but qbopt stopped at `no scalar width`.
 

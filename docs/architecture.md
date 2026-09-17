@@ -1089,9 +1089,18 @@ one documented target without materially regressing another.
   `_ls_animate` retains its profitable pointer recurrence. The exact
   15-function Watcom comparison set falls 779 → 772 instructions against
   BCC's 939 total, with no function growing.
-- [ ] Infer user-procedure attributes: `readonly`, `writeonly`, `nocapture`,
-  `noreturn`, argument constants and precise mod/ref effects.
+- [ ] Infer all user-procedure attributes: `readonly`, `writeonly`, `nocapture`,
+  `noreturn`, argument constants and precise mod/ref effects.  Direct bodies now
+  also receive a conservative `pure` proof: only acyclic, returning procedures
+  with frame-local memory, non-trapping integer work and already-proven-pure
+  callees qualify.  Recursive SCCs, floating point, division, opaque work and
+  nonlocal memory remain observable.
 - [ ] Propagate constants and effects across procedure boundaries (`IPSCCP`).
+  Common integer return tuples now flow through direct calls to a fixed point.
+  The call stays until its independently proven effects and result liveness
+  permit deletion; its exact stack-argument operations are deleted with it.
+  Argument specialization, unreachable call-edge pruning and procedure-local
+  global propagation remain open.
 - [ ] Inline selectively when doing so exposes a measured optimization; keep
   runtime-idiom recognition in the raise rather than implementing it as
   generic inlining.

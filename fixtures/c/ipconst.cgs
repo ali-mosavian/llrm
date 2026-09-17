@@ -1,0 +1,48 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+f1 DBSrcFile "fixtures/c/ipconst.c"
+- DBSrcCue f1 2 1
+SYM y1 name="answer" base="answer" pattern="_*" attr=0x43 seg=1
+CALLCONV y1 class=0x80 target=0x712 parms=[] ret=0:0
+- CGProcDecl y1 TY_INT_2
+l2 CGLastParm
+t3 CGTemp TY_INT_2
+- DBSrcCue f1 4 1
+n4 CGInteger 37 TY_INT_2
+n5 CGTempName t3 TY_INT_2
+n6 CGAssign n5 n4 TY_INT_2
+- CGDone n6
+- DBSrcCue f1 5 1
+n7 CGTempName t3 TY_INT_2
+n8 CGUnary O_POINTS n7 TY_INT_2
+- CGReturn n8 TY_INT_2
+- DBSrcCue f1 7 1
+SYM y2 name="add_answer" base="add_answer" pattern="_*" attr=0x7 seg=1
+CALLCONV y2 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y2 TY_INT_2
+SYM y3 name="value" base="value" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y3 TY_INT_2
+l9 CGLastParm
+t10 CGTemp TY_INT_2
+- DBSrcCue f1 9 1
+n11 CGFEName y3 TY_INT_2
+n12 CGUnary O_POINTS n11 TY_INT_2
+n13 CGFEName y1 TY_CODE_PTR
+c14 CGInitCall n13 TY_INT_2 y1
+n15 CGCall c14
+n16 CGUnary O_POINTS n15 TY_INT_2
+n17 CGBinary O_PLUS n12 n16 TY_INTEGER
+n18 CGUnary O_CONVERT n17 TY_INT_2
+n19 CGTempName t10 TY_INT_2
+n20 CGAssign n19 n18 TY_INT_2
+- CGDone n20
+- DBSrcCue f1 10 1
+n21 CGTempName t10 TY_INT_2
+n22 CGUnary O_POINTS n21 TY_INT_2
+- CGReturn n22 TY_INT_2
+STOP
+FINI
