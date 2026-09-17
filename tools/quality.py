@@ -16,6 +16,7 @@ import hashlib
 import argparse
 import subprocess
 from pathlib import Path
+from collections.abc import Callable
 
 from iced_x86 import Decoder
 from iced_x86 import Formatter
@@ -50,6 +51,11 @@ def _normalized_hash(instructions: tuple[str, ...]) -> str:
     return hashlib.sha256(("\n".join(instructions) + "\n").encode()).hexdigest()
 
 
+def _pure_memory_store(mnemonic: str) -> bool:
+    """Whether a named memory destination is written without being read."""
+    return mnemonic.startswith(("mov", "fst", "fist", "fnst", "stmx")) or mnemonic == "pop"
+
+
 def _reference_memory(mnemonic: str, operands: str) -> tuple[int, int]:
     """Conservative load/store counts for normalized Intel-syntax assembly.
 
@@ -64,13 +70,79 @@ def _reference_memory(mnemonic: str, operands: str) -> tuple[int, int]:
     later_memory = any("[" in one for one in parts[1:])
     if not first_memory:
         return int(later_memory), 0
-    pure_store = mnemonic.startswith(("mov", "fst", "fist", "fnst", "stmx")) or mnemonic == "pop"
+    pure_store = _pure_memory_store(mnemonic)
     read_only = mnemonic.startswith(
         ("cmp", "test", "fld", "fild", "fadd", "fsub", "fmul", "fdiv", "fiadd", "fisub", "fimul", "fidiv")
     ) or mnemonic in {"push", "call", "jmp"}
     loads = int(later_memory or read_only or not pure_store)
     stores = int(not read_only)
     return loads, stores
+
+
+_SAVED_REGISTERS = frozenset({"bx", "bp", "si", "di", "ebx", "ebp", "esi", "edi"})
+
+
+def _abi_body[T](instructions: list[T], form: Callable[[T], tuple[str, str]]) -> list[T]:
+    """Remove recognized ABI-only setup/teardown without losing RET itself.
+
+    Reference compilers and qbopt implement different ABIs. Their frame setup,
+    callee-save traffic, and multi-instruction return sequences are therefore
+    not useful structural comparisons. Raw totals remain untouched. Teardown
+    is recognized before every return because cold blocks may be laid out after
+    the principal return rather than making it the function's last instruction.
+    """
+    shaped = [form(one) for one in instructions]
+
+    def compact(operands: str) -> str:
+        return operands.replace(" ", "")
+
+    low = 0
+    if len(shaped) >= 2:
+        first, second = shaped[:2]
+        frame = first[0] == "push" and first[1] in {"bp", "ebp"}
+        establishes = second[0] == "mov" and compact(second[1]) in {"bp,sp", "ebp,esp"}
+        if frame and establishes:
+            low = 2
+    while low < len(shaped):
+        mnemonic, operands = shaped[low]
+        saves = mnemonic == "push" and operands in _SAVED_REGISTERS
+        reserves = mnemonic == "sub" and compact(operands).startswith(("sp,", "esp,"))
+        if not (saves or reserves):
+            break
+        low += 1
+
+    drop = set(range(low))
+    for returned, (return_name, _return_operands) in enumerate(shaped):
+        if return_name not in {"ret", "retf"}:
+            continue
+        at = returned - 1
+        while at >= low and at not in drop:
+            mnemonic, operands = shaped[at]
+            restores = mnemonic == "pop" and operands in _SAVED_REGISTERS
+            releases = mnemonic == "add" and compact(operands).startswith(("sp,", "esp,"))
+            frame = mnemonic == "leave" or (mnemonic == "mov" and compact(operands) in {"sp,bp", "esp,ebp"})
+            if not (restores or releases or frame):
+                break
+            drop.add(at)
+            at -= 1
+    return [one for index, one in enumerate(instructions) if index not in drop]
+
+
+def _reference_metrics(instructions: list[str]) -> dict[str, int]:
+    loads = stores = 0
+    for line in instructions:
+        mnemonic, _, operands = line.partition(" ")
+        read, written = _reference_memory(mnemonic, operands)
+        loads += read
+        stores += written
+    return {
+        "instructions": len(instructions),
+        "loads": loads,
+        "stores": stores,
+        "branches": sum(line.split(None, 1)[0].startswith("j") for line in instructions),
+        "calls": sum(line.split(None, 1)[0] == "call" for line in instructions),
+        "address_calculations": sum(line.split(None, 1)[0] == "lea" for line in instructions),
+    }
 
 
 def _reference_functions(assembly: str) -> list[dict]:
@@ -84,21 +156,13 @@ def _reference_functions(assembly: str) -> list[dict]:
         nonlocal current, instructions
         if current is None:
             return
-        loads = stores = 0
-        for line in instructions:
-            mnemonic, _, operands = line.partition(" ")
-            read, written = _reference_memory(mnemonic, operands)
-            loads += read
-            stores += written
+        raw = _reference_metrics(instructions)
+        body = _abi_body(instructions, lambda line: line.partition(" ")[::2])
         functions.append(
             {
                 "name": current,
-                "instructions": len(instructions),
-                "loads": loads,
-                "stores": stores,
-                "branches": sum(line.split(None, 1)[0].startswith("j") for line in instructions),
-                "calls": sum(line.split(None, 1)[0] == "call" for line in instructions),
-                "address_calculations": sum(line.split(None, 1)[0] == "lea" for line in instructions),
+                **raw,
+                "comparison": _reference_metrics(body),
                 "normalized_sha256": _normalized_hash(tuple(instructions)),
             }
         )
@@ -211,6 +275,18 @@ def _memory(rows: list[tuple[str, str, str]]) -> tuple[int, int]:
         loads += read
         stores += written
     return loads, stores
+
+
+def _row_metrics(rows: list[tuple[str, str, str]]) -> dict[str, int]:
+    loads, stores = _memory(rows)
+    return {
+        "instructions": len(rows),
+        "loads": loads,
+        "stores": stores,
+        "branches": sum(mnemonic.startswith("j") for _raw, mnemonic, _operands in rows),
+        "calls": sum(mnemonic == "call" for _raw, mnemonic, _operands in rows),
+        "address_calculations": sum(mnemonic == "lea" for _raw, mnemonic, _operands in rows),
+    }
 
 
 def _transitions(body: lir.LirBody) -> dict[int, dict[int, float]]:
@@ -348,6 +424,7 @@ def function_report(module: masm.Module, procedure: masm.Procedure, number: int,
     code = _blob(module, procedure, number)
     rows = _rows(code)
     loads, stores = _memory(rows)
+    body_rows = _abi_body(rows, lambda row: (row[1], row[2]))
     instructions = tuple(one for block in procedure.body.blocks for one in block.insns)
     dynamic_operations, dynamic_status = _dynamic_operations(module, procedure, number)
     weighted_cost, weighted_status, unpriced_forms = _cost_report(rows, target)
@@ -365,6 +442,7 @@ def function_report(module: masm.Module, procedure: masm.Procedure, number: int,
         "branches": sum(mnemonic.startswith("j") for _raw, mnemonic, _operands in rows),
         "calls": sum(mnemonic == "call" for _raw, mnemonic, _operands in rows),
         "address_calculations": sum(mnemonic == "lea" for _raw, mnemonic, _operands in rows),
+        "comparison": _row_metrics(body_rows),
         "peak_live_values": _peak_live(procedure),
         "spill_reloads": sum(one.spill_reload for one in instructions),
         "spill_stores": sum(one.spill_store for one in instructions),
@@ -497,11 +575,19 @@ def _comparisons(reports: list[dict], references: list[dict]) -> list[dict]:
                 other = theirs.get(name)
                 if other is None:
                     continue
+                candidate_metrics = function.get("comparison", function)
+                reference_metrics = other.get("comparison", other)
                 ratios = {
-                    metric: function[metric] / other[metric] if other[metric] else None for metric in STRUCTURAL_METRICS
+                    metric: candidate_metrics[metric] / reference_metrics[metric] if reference_metrics[metric] else None
+                    for metric in STRUCTURAL_METRICS
                 }
                 attribution = {
-                    metric: _gap_attribution(function.get("stages", []), metric, other[metric], function[metric])
+                    metric: _gap_attribution(
+                        function.get("stages", []),
+                        metric,
+                        reference_metrics[metric],
+                        candidate_metrics[metric],
+                    )
                     for metric in STRUCTURAL_METRICS
                 }
                 out.append(
@@ -511,8 +597,8 @@ def _comparisons(reports: list[dict], references: list[dict]) -> list[dict]:
                         "function": name,
                         "compiler": reference["compiler"],
                         "reference_assembly": reference.get("assembly"),
-                        "qbopt": {metric: function[metric] for metric in STRUCTURAL_METRICS},
-                        "reference": {metric: other[metric] for metric in STRUCTURAL_METRICS},
+                        "qbopt": {metric: candidate_metrics[metric] for metric in STRUCTURAL_METRICS},
+                        "reference": {metric: reference_metrics[metric] for metric in STRUCTURAL_METRICS},
                         "ratios": ratios,
                         "gap_attribution": attribution,
                         "first_excess_stage": {
@@ -579,7 +665,7 @@ def _stage_metrics(state: object) -> dict:
         memory_sources = tuple(operand for operand in what.sources if isinstance(operand, ir.Mem))
         stores += len(memory_dests)
         loads += len(memory_sources)
-        if what.op not in (ir.Operation.MOVE, ir.Operation.FLOAT_STORE):
+        if what.op not in (ir.Operation.MOVE, ir.Operation.FLOAT_STORE) and not _pure_memory_store(what.name):
             loads += sum(operand not in memory_sources for operand in memory_dests)
         branches += what.op in (ir.Operation.JUMP, ir.Operation.BRANCH)
         calls += what.op is ir.Operation.CALL

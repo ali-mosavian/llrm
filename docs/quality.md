@@ -26,6 +26,10 @@ that fails to return without mistaking a timeout for a wrong answer.
 - `bytes` and `instructions` cover the exact selected function body after
   branch relaxation.  Relocation fields are normalized to zero, as they are in
   a fresh object before linking.
+- `comparison` contains structural counts after recognized ABI-only frame
+  setup, callee-save traffic, and teardown are removed while one return remains.
+  Raw totals above are never changed. GCC/Clang comparisons use these normalized
+  counts so a 32-bit flat-ABI prologue is not judged against a 16-bit far one.
 - `weighted_cost` is a ranking from the selected CPU profile. A missing form
   makes it `null`; `weighted_status` and `unpriced_forms` name the reason and
   the table prints it as `UNPRICED[...]`. It is never silently assigned zero.

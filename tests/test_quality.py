@@ -27,6 +27,7 @@ def test_report_measures_each_emitted_function_and_names_its_profile() -> None:
     for function in report["functions"]:
         assert function["bytes"] > 0
         assert function["instructions"] > 0
+        assert function["comparison"]["instructions"] < function["instructions"]
         assert function["peak_live_values"] >= 0
         assert function["rematerializations"] >= 0
         assert function["dynamic_operations"] is not None
@@ -175,6 +176,14 @@ def test_reference_assembly_is_measured_per_function_without_directives_or_comme
             "branches": 1,
             "calls": 1,
             "address_calculations": 0,
+            "comparison": {
+                "instructions": 5,
+                "loads": 2,
+                "stores": 1,
+                "branches": 1,
+                "calls": 1,
+                "address_calculations": 0,
+            },
             "normalized_sha256": quality._normalized_hash(
                 (
                     "mov eax, dword ptr [esp+4]",
@@ -192,6 +201,40 @@ def test_reference_assembly_is_measured_per_function_without_directives_or_comme
 def test_reference_memory_sources_are_not_counted_as_stores(mnemonic: str) -> None:
     """nbody's x87 memory operands made the reference report more stores than instructions."""
     assert quality._reference_memory(mnemonic, "qword ptr [esp+4]") == (1, 0)
+
+
+def test_reference_comparison_excludes_abi_frame_scaffolding() -> None:
+    """Shellsort's LIR/body comparison was ``unmapped`` by prologue instructions."""
+    assembly = """
+        .type bench_one, @function
+        bench_one:
+        push ebp
+        mov ebp, esp
+        push esi
+        sub esp, 16
+        mov eax, DWORD PTR [ebp+8]
+        add eax, 1
+        add esp, 16
+        pop esi
+        pop ebp
+        ret
+        .Lcold:
+        xor ecx, ecx
+        jmp .Ljoin
+        .size bench_one, .-bench_one
+    """
+
+    function = quality._reference_functions(assembly)[0]
+
+    assert function["instructions"] == 12, "the raw report must retain the exact emitted total"
+    assert function["comparison"] == {
+        "instructions": 5,
+        "loads": 1,
+        "stores": 0,
+        "branches": 1,
+        "calls": 0,
+        "address_calculations": 0,
+    }
 
 
 def test_structural_comparison_matches_c_and_medium_model_symbol_spellings() -> None:
@@ -368,6 +411,19 @@ def test_stage_metrics_count_a_two_address_memory_operand_once() -> None:
     body = lir.LirBody("rmw", 0, (lir.LirBlock(0, (insn,)),), {}, {})
     metrics = quality._stage_metrics(body)
     assert (metrics["loads"], metrics["stores"]) == (1, 1)
+
+
+def test_stage_metrics_do_not_count_control_word_store_as_a_load() -> None:
+    """C floats reported two unmapped loads because FNSTCW was treated as RMW."""
+    from qbopt.model import ir
+    from qbopt.model import lir
+
+    cell = ir.Mem(None, 2)
+    what = ir.Semantics(ir.Operation.BARRIER, "fnstcw", (cell,), ())
+    insn = lir.Insn(0, (0, 3), what, (), ())
+    body = lir.LirBody("control-store", 0, (lir.LirBlock(0, (insn,)),), {}, {})
+
+    assert quality._stage_metrics(body)["loads"] == 0
 
 
 def test_stage_metrics_count_rematerialized_instructions() -> None:
