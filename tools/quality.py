@@ -295,8 +295,19 @@ def _version(command: str) -> str | None:
 
 
 def _revision() -> str | None:
-    done = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True)
-    return done.stdout.strip() if done.returncode == 0 else None
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True)
+    if head.returncode != 0:
+        return None
+    dirty = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=no"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if dirty.returncode != 0:
+        return None
+    suffix = "-dirty" if dirty.stdout else ""
+    return f"{head.stdout.strip()}{suffix}"
 
 
 def _image(module: masm.Module, procedure: masm.Procedure, number: int) -> tuple[bytes, dict[str, int]]:

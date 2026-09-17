@@ -3,6 +3,7 @@
 import json
 import hashlib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -140,6 +141,24 @@ def test_shellsort_folds_indexed_frame_array_addresses() -> None:
 
 def test_reference_compilers_name_the_i686_gcc_not_the_host_gcc() -> None:
     assert quality.REFERENCE_COMPILERS == ("clang", "i686-elf-gcc")
+
+
+def test_report_revision_marks_a_dirty_worktree(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A performance run made with uncommitted optimizer fixes claimed its old HEAD.
+
+    That made the report look reproducible from a revision which did not contain
+    the code it measured.  Dirty tracked input must be explicit in the recorded
+    revision instead of silently inheriting the last commit's identity.
+    """
+    results = iter(
+        [
+            SimpleNamespace(returncode=0, stdout="0123456789abcdef\n"),
+            SimpleNamespace(returncode=0, stdout=" M qbopt/optimize/fold.py\n"),
+        ]
+    )
+    monkeypatch.setattr(quality.subprocess, "run", lambda *args, **kwargs: next(results))
+
+    assert quality._revision() == "0123456789abcdef-dirty"
 
 
 def test_reference_compilers_erase_watcom_memory_model_qualifiers(tmp_path: Path) -> None:
