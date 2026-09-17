@@ -816,3 +816,31 @@ def test_a_hard_register_assignment_is_not_an_eviction_victim() -> None:
         protected=frozenset({1}),
     )
     assert got is None, got
+
+
+def test_an_unspillable_range_without_a_register_is_unplaceable() -> None:
+    """farloadloop's forced pressure plan left reload v118 unassigned.
+
+    Every general register was occupied by a hard range and the short reload
+    could not be spilled again.  The allocator retried that impossible value
+    until its queue budget expired, then returned it in neither ``where`` nor
+    ``spilled``; final rewriting failed much later with ``no register``.
+    The allocation boundary must report the impossible pressure directly.
+    """
+    from qbopt.backend import allocate
+    from qbopt.backend import target
+    from qbopt.model import ir
+
+    holds = tuple(_mov(value, value, 2 * (value - 1)) for value in range(1, 8))
+    use_all = lir.Insn(
+        at=14,
+        covers=(14, 16),
+        what=ir.Semantics(ir.Operation.NOTHING, "", (), ()),
+        defines=(),
+        uses=tuple(range(1, 8)),
+        op=None,
+    )
+    pins = {value: register for value, register in zip(range(1, 7), target.AVAILABLE, strict=True)}
+
+    with pytest.raises(allocate.Unplaced, match=r"value#7 cannot be spilled"):
+        allocate.allocate(_one_block(*holds, use_all), pinned=pins, unspillable=frozenset({7}))

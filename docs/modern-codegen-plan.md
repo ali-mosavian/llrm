@@ -371,3 +371,19 @@ use, which BCC deliberately stores before reusing its register as the bitmap
 index.  The next implementation is a general pressure-plan representation
 and evaluator; it may not encode this loop, its values, DI/SI, or a source
 procedure name.
+
+### 20. Unplaceable reloads stop at allocation — 2026-09-18
+
+Tracing the rejected joint plan through the spill/reload loop found an
+independent allocator defect.  A short reload marked unspillable, with no
+register free after its one eviction attempt, re-entered the assignment stage
+forever because its infinite weight retried eviction on every visit.  On queue
+budget exhaustion `allocate()` returned it in neither `where` nor `spilled`,
+and final rewriting reported an unrelated missing-register error.
+
+A fail-first allocator regression fills the register file with hard ranges
+and asks for one unspillable reload.  Allocation now raises `Unplaced` at the
+actual pressure boundary after its assignment attempt; it cannot return a
+partial assignment.  This does not make the experimental retained-owner plan
+profitable, but it makes all subsequent joint-plan candidates auditable and
+prevents the same missing-value failure in any frontend.

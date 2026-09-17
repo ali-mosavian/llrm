@@ -474,7 +474,7 @@ def allocate(
             elsewhere = tuple(one for one in target.order(confined.get(other)) if _whole(one) != _whole(register))
             return _free(live[other], elsewhere, union, live, masks, widths.get(other, 4)) is not None
 
-        if at is Stage.ASSIGN or mine.weight == float("inf"):
+        if at is Stage.ASSIGN:
             evicted = _evict(
                 mine,
                 order,
