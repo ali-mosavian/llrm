@@ -315,6 +315,21 @@ def test_lowering_consumes_external_allocation_hints() -> None:
     assert actual and all(actual[variable] == register for variable, register in hints.origins.items() if variable in actual)
 
 
+@pytest.mark.parametrize("relative", ["flow.py", "wholeseg.py"])
+def test_basic_production_lowering_supplies_external_allocation_hints(relative: str) -> None:
+    """A compatibility fallback must not become the production data path."""
+    tree = ast.parse((HERE / relative).read_text())
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "lowered"
+    ]
+    assert calls
+    assert all(any(keyword.arg == "hints" for keyword in call.keywords) for call in calls)
+
+
 def test_a_pass_is_a_transform_and_nothing_else() -> None:
     """The contract, as a fact rather than a convention.
 

@@ -199,6 +199,7 @@ def _rebuilt(
     raised = mir.bodies(found, blocks, contracts, basic_semantics=basic_semantics, bounds_checks=bounds_checks)
     bodies = list(raised)
     source = raised.source
+    hints = raised.hints
     if not bodies:
         return data, "no bodies were raised", None
     if not bounds_checks:
@@ -267,6 +268,7 @@ def _rebuilt(
         blocks,
         bodies,
         source,
+        hints,
         mapped,
         fields,
         reached,
@@ -292,6 +294,7 @@ def _through_lir(
     blocks: list[split.Block],
     bodies: list[tuple[str, mir.MirBody]],
     source: module.SourceMap,
+    hints: dict[int, mir.AllocationHints],
     mapped: split.CodeMap,
     fields: frozenset[int],
     reached: frozenset[int],
@@ -359,6 +362,7 @@ def _through_lir(
                     cpu,
                     nodes=source.nodes,
                     occurrences=source.occurrences,
+                    hints=hints[body.entry],
                     pointer_model=pointer_model,
                     noreturn=body.entry in no_return,
                 ),

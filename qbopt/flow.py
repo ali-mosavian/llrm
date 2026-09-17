@@ -143,6 +143,7 @@ def run(data: bytes, native_fpu: bool = False, optimise: bool = True) -> tuple[b
                 source.coverage,
                 nodes=source.nodes,
                 occurrences=source.occurrences,
+                hints=result.hints[body.entry],
             ),
             "lower",
             in_ssa=True,
