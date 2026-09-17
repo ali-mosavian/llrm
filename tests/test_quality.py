@@ -362,6 +362,8 @@ def test_gap_attribution_ignores_rejected_structural_candidate_stages() -> None:
         ("mir-candidate-peel-unroll-accepted", True),
         ("mir-peel-candidate", True),
         ("mir-unroll-candidate", True),
+        ("mir-peel-rejected-residual-loops", True),
+        ("mir-unroll-rejected-growth", True),
         ("mir-peel-accepted", False),
         ("mir-r01-promote", False),
     ],

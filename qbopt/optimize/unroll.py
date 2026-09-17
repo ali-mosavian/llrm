@@ -147,17 +147,35 @@ def _profitable(
     where: Where,
 ) -> bool:
     """Whether exact dynamic savings pay for the optimized straight-line body."""
+    return _rejection(before, after, latch, count, where) is None
+
+
+def _rejection(
+    before: mir.MirBody,
+    after: mir.MirBody,
+    latch: int,
+    count: int,
+    where: Where,
+) -> str | None:
+    """Why a structural candidate loses, or ``None`` when it wins.
+
+    Keep the decision inspectable rather than returning an unexplained false:
+    matmul's locally cheaper rejected peel was first mistaken for a later
+    production pass because nothing recorded which gate had refused it.
+    """
     if len(loops.loops(after.blocks, after.entry)) >= len(loops.loops(before.blocks, before.entry)):
-        return False
+        return "residual-loops"
     dynamic_before = profit.weighted(before, where.costs, {latch: count})
     dynamic_after = profit.weighted(after, where.costs)
-    if dynamic_before is None or dynamic_after is None or dynamic_after >= dynamic_before:
-        return False
+    if dynamic_before is None or dynamic_after is None:
+        return "unpriced"
+    if dynamic_after >= dynamic_before:
+        return "no-saving"
     # MIR cannot know final encoding bytes. Charge one register move per added
     # semantic operation: target-priced, bounded, and never an implicit free
     # expansion. Later selection still supplies the exact size measurement.
     growth = max(0, _size(after) - _size(before)) * where.costs.move
-    return dynamic_before - dynamic_after > growth
+    return "growth" if dynamic_before - dynamic_after <= growth else None
 
 
 def optimized(body: mir.MirBody, where: Where, *, optimize, watch=None) -> mir.MirBody:
@@ -176,7 +194,10 @@ def optimized(body: mir.MirBody, where: Where, *, optimize, watch=None) -> mir.M
         if watch is not None:
             watch("unroll-candidate", candidate)
         result = optimize(candidate)
-        if not _profitable(body, result, latch, count, where):
+        rejection = _rejection(body, result, latch, count, where)
+        if rejection is not None:
+            if watch is not None:
+                watch(f"unroll-rejected-{rejection}", result)
             rejected.add(latch)
             continue
         body = result

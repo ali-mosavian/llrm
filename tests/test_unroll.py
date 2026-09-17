@@ -39,8 +39,18 @@ def test_unroll_rejects_growth_not_paid_for_by_dynamic_work(monkeypatch) -> None
     )
     monkeypatch.setattr(unroll, "expanded", lambda *_args, **_kwargs: candidate)
     where = Where(costs=OperationCosts(add=1, branch=2, move=1))
+    stages = []
 
-    assert unroll.optimized(original, where, optimize=lambda body: body) is original
+    assert (
+        unroll.optimized(
+            original,
+            where,
+            optimize=lambda body: body,
+            watch=lambda stage, _body: stages.append(stage),
+        )
+        is original
+    )
+    assert "unroll-rejected-growth" in stages
 
 
 def test_unroll_profitability_uses_the_selected_cpu() -> None:
@@ -66,6 +76,34 @@ def test_unroll_profitability_uses_the_selected_cpu() -> None:
 
     assert unroll._profitable(original, result, 1, 2, Where(costs=cpu.profile("386").operations))
     assert not unroll._profitable(original, result, 1, 2, Where(costs=cpu.profile("P5").operations))
+
+
+def test_peel_reports_the_gate_that_rejected_its_candidate(monkeypatch) -> None:
+    """Matmul's rejected peel had no final event explaining why it lost."""
+    from dataclasses import replace
+
+    from qbopt.optimize import peel
+
+    original = mir.MirBody(0, (mir.MirBlock(0, (), (), ()),))
+    candidate = replace(original, cloned=True)
+
+    def found(_body, _where, *, skip=frozenset()):
+        return None if skip else (candidate, 7, 2)
+
+    monkeypatch.setattr(peel, "_candidate", found)
+    monkeypatch.setattr(unroll, "_rejection", lambda *_args: "residual-loops")
+    stages = []
+
+    assert (
+        peel.optimized(
+            original,
+            Where(),
+            optimize=lambda body: body,
+            watch=lambda stage, _body: stages.append(stage),
+        )
+        is original
+    )
+    assert stages == ["peel-rejected-residual-loops"]
 
 
 def test_c_matmul_unrolls_exact_multiblock_loops() -> None:

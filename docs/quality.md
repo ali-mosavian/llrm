@@ -41,7 +41,9 @@ that fails to return without mistaking a timeout for a wrong answer.
   mark them `tentative: true`. Gap attribution ignores those entries until an
   explicit `*-accepted` state enters the production pipeline. This distinction
   matters when a rejected peel or unroll briefly looks better than the body
-  ultimately emitted.
+  ultimately emitted. Their final optimized state is recorded as
+  `mir-{unroll,peel}-rejected-*`; the suffix names the deciding gate:
+  `residual-loops`, `unpriced`, `no-saving`, or `growth`.
 - dynamic operations are a profile-free CFG estimate: ordinary branches divide
   evenly and natural loops use the allocator's ten-iteration convention. The
   same basic-block construction, natural-loop analysis and frequency solver run

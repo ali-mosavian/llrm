@@ -725,7 +725,11 @@ def _first_excess_stage(stages: list[dict], metric: str, reference: int) -> str 
 
 def _tentative_stage(stage: str) -> bool:
     """Whether a watched state belongs to a not-yet-accepted transaction."""
-    return stage.startswith("mir-candidate-") or stage.endswith("-candidate")
+    return (
+        stage.startswith("mir-candidate-")
+        or stage.endswith("-candidate")
+        or stage.startswith(("mir-peel-rejected-", "mir-unroll-rejected-"))
+    )
 
 
 def _gap_attribution(stages: list[dict], metric: str, reference: int, emitted: int) -> dict:

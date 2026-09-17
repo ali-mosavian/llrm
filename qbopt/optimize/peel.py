@@ -88,7 +88,10 @@ def optimized(
             return body
         candidate, latch, count = found
         result = optimize(candidate)
-        if not unroll._profitable(body, result, latch, count, where):
+        rejection = unroll._rejection(body, result, latch, count, where)
+        if rejection is not None:
+            if watch is not None:
+                watch(f"peel-rejected-{rejection}", result)
             rejected.add(latch)
             continue
         if watch is not None:
