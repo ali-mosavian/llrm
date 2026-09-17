@@ -59,6 +59,7 @@ def test_long_extraction_preserves_the_far_store_selector():
     from qbopt.frontend import raising_addresses
     from qbopt.backend import lower
     from qbopt.objectfile.module import Addr, Space
+    from types import SimpleNamespace
 
     descriptor = mir.MemRef(Addr(Space.SEGMENT, 2, 5), 2)
     element = mir.MemRef(Addr(Space.FAR, 0, segment=Register.ES), 4)
@@ -70,8 +71,14 @@ def test_long_extraction_preserves_the_far_store_selector():
                      results=(mir.Held(low, 2),))
     store = mir.Op(3, ir.Operation.MOVE, "mov", (), (whole,), stores=(element,),
                    kind=mir.Kind.STORE, args=(mir.Held(whole, 4),), results=(mir.Cell(element),),
-                   made=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Mem(element.addr, 4, Register.BX),),
-                                     (ir.Reg(Register.EAX, 4),)))
+                   node=SimpleNamespace(
+                       semantics=ir.Semantics(
+                           ir.Operation.MOVE,
+                           "mov",
+                           (ir.Mem(element.addr, 4, Register.BX),),
+                           (ir.Reg(Register.EAX, 4),),
+                       )
+                   ))
     body = mir.MirBody(0, (mir.MirBlock(0, (), (selector, extract, store), ()),), {})
     raised = raising_addresses.loaded(body)
     first, _, last = raised.blocks[0].ops

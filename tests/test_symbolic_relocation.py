@@ -2,7 +2,21 @@ from types import SimpleNamespace
 from iced_x86 import Register
 
 from qbopt.backend import asm
-from qbopt.model import ir, mir
+from qbopt.model import ir, lir, mir
+
+
+def _selected(op: mir.Op) -> lir.Insn:
+    from qbopt.backend import lower
+
+    return lir.Insn(
+        op.at,
+        op.covers,
+        lower.current(op),
+        tuple(one.id for one in op.defines),
+        tuple(one.id for one in op.uses),
+        op=op,
+        symbol=op.symbol,
+    )
 
 
 def test_load_hoisted_to_call_does_not_acquire_call_fixup():
@@ -17,9 +31,9 @@ def test_load_hoisted_to_call_does_not_acquire_call_fixup():
     call = next(op for op in ops if op.at == 0x941)
     load = next(op for op in ops if op.at == 0x946)
     fields = frozenset({0x942})
-    assert asm._field_in(found, call, fields) == 0x942
-    assert asm._field_in(found, load, fields) is None
-    assert asm._field_in(found, replace(load, at=call.at), fields) is None
+    assert asm._field_in(found, _selected(call), fields) == 0x942
+    assert asm._field_in(found, _selected(load), fields) is None
+    assert asm._field_in(found, replace(_selected(load), at=call.at), fields) is None
 
 
 def test_promoted_symbolic_load_drops_its_old_fixup():
@@ -28,13 +42,18 @@ def test_promoted_symbolic_load_drops_its_old_fixup():
     op = mir.Op(0x1b7, ir.Operation.MOVE, "mov", (result,), (source,), kind=mir.Kind.COPY,
                 args=(mir.Held(source, 4),), results=(mir.Held(result, 4),), id=1, symbol=True)
     found = SimpleNamespace(refs={1: (0x1b9,)})
-    assert asm._fields_in(found, op) == ()
+    assert asm._fields_in(found, _selected(op)) == ()
 
 
 def test_inserted_instruction_never_reads_original_interrupt_bytes():
     """VBDOS nbody crashed emission when a synthetic instruction's address exceeded BC's bytes."""
-    op = mir.Op(100, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY, covers=(100, 100),
-                made=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.AX, 2),), (ir.Imm(1, 2),)))
+    op = lir.Insn(
+        100,
+        (100, 100),
+        ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.AX, 2),), (ir.Imm(1, 2),)),
+        (),
+        (),
+    )
     found = SimpleNamespace(code=b"\x90", absorbed={}, fixup_at={}, calls={}, refs={}, float_protocols={})
     done = asm.assemble([op], 0, found)
     assert not isinstance(done, str), done

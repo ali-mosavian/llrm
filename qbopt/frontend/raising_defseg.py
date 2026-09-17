@@ -52,7 +52,6 @@ def _zeroed(op):
         args=(mir.Const(0, op.args[0].width),),
         uses=(),
         node=None,
-        made=None,
         symbol=False,
         covers=op.covers or (op.at, op.at),
     )
@@ -203,7 +202,6 @@ def raised(body: mir.MirBody, found, contracts) -> mir.MirBody:
                     stores=(ref,),
                     merges={},
                     node=None,
-                    made=None,
                     raised=None,
                     symbol=True,
                     covers=(pushed_span[0], span[1]),

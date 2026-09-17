@@ -94,7 +94,6 @@ def evaluated(body: mir.MirBody) -> mir.MirBody:
             args=(),
             results=(),
             target=exit_at,
-            made=None,
             raised=((), ()),
             test=None,
         )
@@ -369,7 +368,6 @@ def _cleared(op):
         args=(),
         results=(),
         merges={},
-        made=None,
         raised=None,
         target=None,
         test=None,

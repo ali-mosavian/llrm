@@ -7,12 +7,8 @@ when it runs, so the signature cannot quietly grow a way to ask the machine
 a question -- which is how `hoisted(body, dgroup, calls, bounds)` came to
 take the module's layout and end up choosing registers.
 
-Rule 5 is the reason this exists, and the rule is not yet true. What still
-ties MIR to the machine, in the order it has to go:
-
-  Op.made      an ir.Semantics over ir.Reg -- machine form, inside MIR.
-               ir.Held is the operand kind that says a value instead, and
-               the passes that write `made` have to use it.
+Rule 5 is the reason this exists. Selected instruction semantics now begin
+on ``lir.Insn.what``; what still ties MIR to its source machine is:
 
   Op.node      the instruction this was raised from. Lowering reads it, and
                so does anything asking what BC originally wrote.
@@ -27,8 +23,8 @@ ties MIR to the machine, in the order it has to go:
                which of BC's bytes this stands for, and which fixup it
                carries. Facts about an object file, not about a program.
 
-Each of those is a separate step with its own measurement. The class is
-first because it is what makes the others checkable: a pass whose only
+Each is a separate step with its own measurement. The class is what makes
+them checkable: a pass whose only
 entry point is `transform(body)` cannot reach anything else by accident.
 """
 

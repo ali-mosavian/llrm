@@ -872,14 +872,14 @@ def test_inserted_stack_move_keeps_the_anchor_emulator_mode(native):
     from pathlib import Path
 
     import corpus
-    from qbopt.model import mir
+    from qbopt.model import lir
     from qbopt.backend import asm
 
     found = corpus.loaded(Path("fixtures/omf/fpcse-p-g2.obj"))
     at = 0x66
     assert found.code[at : at + 2] == bytes.fromhex("cd35")
     what = ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ir.St(0),), (ir.St(0),))
-    op = mir.Op(at, what.op, what.name, (), (), made=what, covers=(at, at))
+    op = lir.Insn(at, (at, at), what, (), ())
     result = asm.assemble([op], at, found, native_fpu=native)
     assert not isinstance(result, str), result
     assert result.code == bytes.fromhex("d9c0" if native else "cd35c0")

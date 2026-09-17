@@ -117,15 +117,15 @@ it and collapses the two into the diagram at the top.
                            honouring a substituted value
 ```
 
-**MIR itself still carries four machine facts.** `Op.node` (the decoded
-instruction), `Op.made` (`ir.Semantics` over `ir.Reg`), `Op.covers` (a
-range of BC's bytes) and `MirBody.origin`. The passes barely touch them;
-the data structure holds them, so nothing stops a pass from starting.
+**MIR itself still carries three source-machine facts.** `Op.node` (the
+decoded instruction), `Op.covers` (a range of BC's bytes) and
+`MirBody.origin`. Selected machine semantics have moved to LIR. The passes
+barely touch the remaining provenance; the data structure still holds it.
 
-**No LIR form.** `lir.py` is a requirements table -- `tied`, `reads`,
-`writes` -- and lowering goes `mir.Op` → `ir.Semantics` → `select`. There
-is no third representation and no peephole, so nothing runs after
-allocation.
+**LIR is now the backend form.** It owns selected machine semantics and
+allocation requirements (`tied`, `reads`, `writes`), and layout plus fresh
+OMF emission consume allocated LIR directly. There is still no peephole or
+post-allocation optimization pass.
 
 **Long-pair recognition is not a pass.** `raising_longs` turns BC's adjacent
 word operations into whole scalar MIR before the fixed point. The old
@@ -136,10 +136,10 @@ been deleted.
 
 1. **Phase D** -- absorption at the raise, then the machine arm retires:
    `lift.py`, `calls.py`'s emission, `memory.py`, `forward.py`.
-2. `node`, `made` and `covers` leave `mir.Op` for a side table keyed on
-   `Op.id`; `origin` last, because lowering and the allocator's identity
-   baseline are built on it.
-3. LIR becomes a form, and peephole has somewhere to live.
+2. `node` and `covers` leave `mir.Op` for a side table keyed on `Op.id`;
+   `origin` last, because lowering and the allocator's identity baseline are
+   built on it. (`made` has already moved to LIR.)
+3. Add the post-allocation peephole now that LIR has become a real form.
 
 Until then, every one of those is a debt with a name, and none of them is a
 licence to add another.

@@ -83,9 +83,9 @@ def _specialized(body, copied, loop, entry, selected, compare, branch):
     anchor = last.at if last is not None else entry
     guard = replace(compare, at=anchor, defines=tuple(definitions[value.id] for value in compare.defines),
                     results=tuple(replace(result, value=definitions[result.value.id]) for result in compare.results),
-                    node=None, made=None, raised=None, covers=(anchor, anchor), extra_covers=(), id=None, symbol=False)
+                    node=None, raised=None, covers=(anchor, anchor), extra_covers=(), id=None, symbol=False)
     dispatch = replace(ssa.substituted(branch, definitions), at=anchor, target=cloned_header,
-                       node=None, made=None, raised=None, name="", id=None, symbol=False,
+                       node=None, raised=None, name="", id=None, symbol=False,
                        covers=last.covers if replaces_jump else (anchor, anchor),
                        extra_covers=last.extra_covers if replaces_jump else ())
     parent = replace(parent, ops=(*(parent.ops[:-1] if replaces_jump else parent.ops), guard, dispatch),
@@ -108,7 +108,7 @@ def _specialized(body, copied, loop, entry, selected, compare, branch):
             taken = block.ops[-1].target
             destination = taken if block.at == labels[selected.at] else next(at for at in block.succ if at != taken)
             jump = replace(block.ops[-1], kind=mir.Kind.JUMP, target=destination, test=None,
-                           name="", uses=(), args=(), defines=(), results=(), made=None, raised=None)
+                           name="", uses=(), args=(), defines=(), results=(), raised=None)
             block = replace(block, ops=(*block.ops[:-1], jump), succ=(destination,))
         changed.append(block)
     def metadata(original):

@@ -204,7 +204,6 @@ def _filled(body: mir.MirBody, loop) -> mir.MirBody | None:
         # Cells nothing names one by one: an effect that reaches anything.
         stores=(mir.MemRef(None, ref.width),),
         node=None,
-        made=None,
         raised=None,
     )
     ops = []

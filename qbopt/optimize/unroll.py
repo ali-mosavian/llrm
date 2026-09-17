@@ -126,7 +126,7 @@ def _expanded(body, loop, header, latch, exit_at, entry, count):
     anchor = latch.ops[-1].at
     expanded.append(replace(header.ops[-1], at=anchor, kind=mir.Kind.JUMP, name="",
                             args=(), results=(), uses=(), defines=(), loads=(), stores=(),
-                            merges={}, node=None, made=None, raised=((), ()),
+                            merges={}, node=None, raised=((), ()),
                             covers=(anchor, anchor), extra_covers=(), target=exit_at, test=None, symbol=False))
     changed = []
     dominators = loops.dominators(body.blocks, body.entry)

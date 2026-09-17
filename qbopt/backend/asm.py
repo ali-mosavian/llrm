@@ -35,9 +35,9 @@ from iced_x86 import OpKind
 from iced_x86 import Register
 
 from qbopt.model import ir
+from qbopt.model import lir
 from qbopt.model import mir
 from qbopt.backend import fpu
-from qbopt.backend import lower
 from qbopt.backend import select
 from qbopt.backend import target
 from qbopt.objectfile.module import Addr
@@ -149,12 +149,12 @@ def _stands_for(op, found: Module) -> tuple[int, int] | None:
     return (min(lo for lo, _ in ranges), max(hi for _, hi in ranges)) if ranges else None
 
 
-def _raw_span(op: mir.Op) -> tuple[int, int] | None:
+def _raw_span(op: lir.Insn) -> tuple[int, int] | None:
     """The original instruction bytes, independent of replaced-byte ownership."""
     return ir.span(op.node) if op.node is not None and not op.inserted else None
 
 
-def _length_of(op: mir.Op, found: Module) -> int | None:
+def _length_of(op: lir.Insn, found: Module) -> int | None:
     """How many bytes the op occupied in the image it came from.
 
     From the node's own span rather than from an instruction, because not
@@ -203,7 +203,7 @@ def _retargeted(what: ir.Semantics, moved: dict[int, int]) -> ir.Semantics | Non
     return replace(what, target=landed)
 
 
-def _still_has_an_operand_for_it(op: mir.Op) -> bool:
+def _still_has_an_operand_for_it(op: lir.Insn) -> bool:
     """Whether the operand the fixup named is still in this operation.
 
     A transform that serves a read from a register removes the only operand
@@ -216,11 +216,8 @@ def _still_has_an_operand_for_it(op: mir.Op) -> bool:
     touched the operation: hoisting rewrites `mov ax,offset x` to name
     another register and its relocated immediate is still its own.
     """
-    # What rewrote it, or None for an operation nothing did -- the question
-    # this asks. `op.made` used to be that marker; a pass that says what it
-    # computes in MIR's own operands sets nothing, so ask lower.
-    what = lower.rewritten(op)
-    if what is None or (what.op is ir.Operation.BARRIER and _raw_span(op) is not None):
+    what = op.what
+    if not op.rewritten or what is None or (what.op is ir.Operation.BARRIER and _raw_span(op) is not None):
         return True
     holds = [one for one in (*what.dests, *what.sources) if isinstance(one, (ir.Mem, ir.Address, ir.Imm))]
     if not holds:
@@ -268,7 +265,7 @@ def _absorbed(site, read):
     return None if isinstance(made, str) else made
 
 
-def _folded_site(op: mir.Op, found: Module):
+def _folded_site(op: lir.Insn, found: Module):
     """The site this op stands for, where it still stands for one.
 
     The record is what says to emit a divide rather than the call BC
@@ -316,7 +313,7 @@ def _folded_site(op: mir.Op, found: Module):
     return folded
 
 
-def _seats(op: mir.Op, assignment: dict | None, origin: dict | None) -> "tuple | None":
+def _seats(op: lir.Insn, assignment: dict | None, origin: dict | None) -> "tuple | None":
     """Which register each of an operation's results is in.
 
     The allocation where there is one, and where BC had it otherwise --
@@ -349,7 +346,7 @@ def _seats(op: mir.Op, assignment: dict | None, origin: dict | None) -> "tuple |
     return tuple(seats) if len(seats) == 2 else None
 
 
-def _divide_fields(op: mir.Op, found: Module, fields: frozenset[int]) -> "tuple[int, ...] | None":
+def _divide_fields(op: lir.Insn, found: Module, fields: frozenset[int]) -> "tuple[int, ...] | None":
     """The fixup each of this op's memory operands still names, in order.
 
     A fixup belongs to the operand it was read off. The raise recorded them
@@ -386,7 +383,7 @@ def _divide_fields(op: mir.Op, found: Module, fields: frozenset[int]) -> "tuple[
     return tuple(out)
 
 
-def _selected_divide(op: mir.Op, found: Module, assignment, origin, fields):
+def _selected_divide(op: lir.Insn, found: Module, assignment, origin, fields):
     """A divide emitted from its own operands: (bytes, its fixups), or why not.
 
     A string is a refusal of the whole emission and never a signal to fall
@@ -394,7 +391,7 @@ def _selected_divide(op: mir.Op, found: Module, assignment, origin, fields):
     the operation would run the operands BC pushed as if they were the new
     ones -- a wrong answer rather than a refusal. An operation nothing has
     rewritten is the one case where the two are the same program, and
-    mir.rewritten() is what says so.
+    The LIR occurrence retains that provenance in ``op.rewritten``.
     """
     if op.kind is not mir.Kind.DIVMOD:
         return None
@@ -411,13 +408,13 @@ def _selected_divide(op: mir.Op, found: Module, assignment, origin, fields):
     wanted = _divide_fields(op, found, fields)
     if not isinstance(made, str) and wanted is not None and len(made.places) == len(wanted):
         return made, wanted
-    if mir.rewritten(op):
+    if op.rewritten:
         why = made if isinstance(made, str) else "no fixup here names the operands it now reads"
         return f"{op.at:#06x}: {why}, and the bytes the site was raised with are not this operation"
     return None
 
 
-def _fields_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -> tuple[int, ...]:
+def _fields_in(found: Module, op: lir.Insn, fields: frozenset[int] = frozenset()) -> tuple[int, ...]:
     """Every fixup this operation's own operands carry, in operand order.
 
     One for one instruction, which is every operation the raise makes. An
@@ -455,7 +452,7 @@ def _generated_immediate(op, what: ir.Semantics | None) -> "Addr | None":
     return found[0] if len(found) == 1 else None
 
 
-def _field_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -> int | None:
+def _field_in(found: Module, op: lir.Insn, fields: frozenset[int] = frozenset()) -> int | None:
     """The address of the one relocated field inside `op`'s own bytes.
 
     Asked of the module rather than taken from the instruction's `disp_at`,
@@ -550,7 +547,7 @@ def _field_in(found: Module, op: mir.Op, fields: frozenset[int] = frozenset()) -
         # segment was refused.
         was = getattr(op.node, "semantics", None)
         had = was is not None and any(isinstance(one, (ir.Mem, ir.Address)) for one in (*was.dests, *was.sources))
-        rewrote = op.made is not None or lower.semantics(op, was) is not None
+        rewrote = op.rewritten
         if rewrote and had and not any(isinstance(one, (ir.Mem, ir.Address)) for one in holds):
             return None
     inside = [one for one in known if lo <= one < hi]
@@ -578,7 +575,7 @@ def _placed(
     at: int,
     lengths: list[int],
     labels: dict[int, int] | None = None,
-    anchors: dict[int, mir.Op] | None = None,
+    anchors: dict[int, lir.Insn] | None = None,
 ) -> tuple[list[int], dict[int, int]]:
     """Where each op lands, given what each one measures.
 
@@ -620,8 +617,8 @@ def _emulator_protocol(op, found, native_fpu):
     if (
         not native_fpu
         and op.id in found.float_protocols
-        and op.made is not None
-        and op.made.op is ir.Operation.FLOAT_LOAD
+        and op.what is not None
+        and op.what.op is ir.Operation.FLOAT_LOAD
     ):
         return found.float_protocols[op.id]
     if native_fpu or not fpu.emulated_at(found.code, op.at):
@@ -632,7 +629,7 @@ def _emulator_protocol(op, found, native_fpu):
     # protocol its newly selected bytes speak.  Wrapping Deedlines' spill move
     # as though its 89h MOV opcode were an ESC instruction refused the entire
     # object after selection had succeeded.
-    what = op.made
+    what = op.what
     if (
         what is not None
         and what.op not in _FLOATING_MACHINE
@@ -666,7 +663,7 @@ def assemble(
     assignment: dict | None = None,
     origin: dict | None = None,
     labels: dict[int, int] | None = None,
-    anchors: dict[int, mir.Op] | None = None,
+    anchors: dict[int, lir.Insn] | None = None,
 ) -> Laid | str:
     """Every item in order from `at`, shrunk to a fixed point and emitted.
 
@@ -865,6 +862,12 @@ def assemble(
                 relocations.append((len(out) + (field - span[0]), field))
             out += found.code[span[0] : span[1]]
             continue
+        # A source-level NOTHING may own bytes deleted by a transform while
+        # emitting no replacement instruction.  Coverage and emission are
+        # separate facts: retaining the former is how the final accounting
+        # proves those bytes were deliberately removed.
+        if _semantics(op) is None and op.node is None and op.kind is mir.Kind.NOTHING:
+            continue
         folded = _folded_site(op, found)
         chosen = _selected_divide(op, found, assignment, origin, fields)
         if isinstance(chosen, str):
@@ -958,14 +961,14 @@ def assemble(
     return Laid(bytes(out), moved, tuple(relocations), frozenset(explained - kept_fields), folded, tuple(symbols))
 
 
-def _semantics(op: mir.Op) -> ir.Semantics | None:
+def _semantics(op: lir.Insn) -> ir.Semantics | None:
     """What to select for this op, or None to carry its bytes.
 
     An op a MIR transform built has no node and no bytes to carry, so its
     own `made` is the only answer. An op raised from BC's code has a node,
     and that node's semantics is the authority.
     """
-    what = lower.current(op)
+    what = op.what
     return None if what is None or what.op is ir.Operation.BARRIER else what
 
 
@@ -1008,7 +1011,7 @@ def _held(assignment: dict | None) -> dict | None:
     return {value.id: register for value, register in assignment.items()}
 
 
-def _where(op: mir.Op, assignment: dict | None, origin: dict | None) -> tuple[dict, dict] | None:
+def _where(op: lir.Insn, assignment: dict | None, origin: dict | None) -> tuple[dict, dict] | None:
     """This op's register remap, by side, out of a whole-body allocation.
 
     An allocation is per value and an instruction names registers, so the

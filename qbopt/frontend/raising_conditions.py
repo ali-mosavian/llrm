@@ -40,6 +40,6 @@ def loaded(body: mir.MirBody) -> mir.MirBody:
             args = tuple(held if isinstance(arg, mir.Cell) else arg for arg in op.args)
             ops.append(replace(op, args=args, loads=(),
                 uses=tuple(dict.fromkeys(arg.value for arg in args if isinstance(arg, mir.Held))),
-                node=None, made=None, raised=None))
+                node=None, raised=None))
         blocks.append(replace(block, ops=tuple(ops)))
     return replace(body, blocks=tuple(blocks))

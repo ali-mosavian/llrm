@@ -33,37 +33,34 @@ import collections
 from dataclasses import replace
 
 from qbopt.model import ir
+from qbopt.model import lir
 from qbopt.model import mir
 from qbopt.backend import asm
-from qbopt.backend import lower
-from qbopt.legacy import regalloc
-from qbopt.model.mir import MirBody
 from qbopt.objectfile.module import Module
 
 # The assembler's, re-exported: this module builds them and hands them over.
 Laid = asm.Laid
 Table = asm.Table
-selectable = mir.rewritable
 
 
 def _emits(block) -> bool:
     """Whether this block puts any byte in the output."""
-    return any(_emitting(op) for op in block.ops)
+    return any(_emitting(op) for op in block.insns)
 
 
-def _emitting(op: mir.Op) -> bool:
+def _emitting(op: lir.Insn) -> bool:
     """Whether `op` puts bytes out, which its machine form answers and its kind does not.
 
     A phi's copy placed after allocation rides on a NOTHING op. Asked by kind,
     deedlines' `IF ... THEN rc% = -1` read as an empty block, the jump over it
     went, and the copy ran on both paths.
     """
-    if op.made is not None:
-        return op.made.op is not ir.Operation.NOTHING
+    if op.what is not None:
+        return op.what.op is not ir.Operation.NOTHING
     return op.kind is not mir.Kind.NOTHING
 
 
-def _following(body: MirBody) -> dict[int, int]:
+def _following(body: lir.LirBody) -> dict[int, int]:
     """Per block, the next one that emits anything.
 
     Skipping the ones that do not is the whole point: a block whose every
@@ -83,12 +80,12 @@ def _following(body: MirBody) -> dict[int, int]:
     return out
 
 
-def _fallthroughs(body: MirBody) -> MirBody:
+def _fallthroughs(body: lir.LirBody) -> lir.LirBody:
     """Make implicit CFG edges explicit when address-order placement breaks them."""
     following = _following(body)
     changed = []
     for block in body.blocks:
-        last = lower.current(block.ops[-1]) if block.ops else None
+        last = block.insns[-1].what if block.insns else None
         destination = None
         if len(block.succ) == 1 and (
             last is None or last.op not in (ir.Operation.JUMP, ir.Operation.BRANCH, ir.Operation.RETURN)
@@ -102,20 +99,16 @@ def _fallthroughs(body: MirBody) -> MirBody:
             if turned is not None:
                 changed.append(turned)
                 continue
-            anchor = block.ops[-1].at if block.ops else block.at
-            jump = mir.Op(
-                anchor,
-                ir.Operation.JUMP,
-                "jmp",
-                (),
-                (),
-                kind=mir.Kind.JUMP,
-                target=destination,
-                made=ir.Semantics(ir.Operation.JUMP, "jmp", target=destination),
+            anchor = block.insns[-1].at if block.insns else block.at
+            jump = lir.Insn(
+                at=anchor,
                 covers=(anchor, anchor),
+                what=ir.Semantics(ir.Operation.JUMP, "jmp", target=destination),
+                defines=(),
+                uses=(),
                 symbol=False,
             )
-            block = replace(block, ops=(*block.ops, jump))
+            block = replace(block, insns=(*block.insns, jump))
         changed.append(block)
     return replace(body, blocks=tuple(changed))
 
@@ -164,22 +157,22 @@ def _inverted(block, name: "str | None", target: "int | None" = None):
     `loop` forms do not, and they keep their jump.
     """
     opposite = _OPPOSITE.get((name or "").lower())
-    if opposite is None or not block.ops:
+    if opposite is None or not block.insns:
         return None
-    branch = block.ops[-1]
-    if branch.made is None or branch.made.op is not ir.Operation.BRANCH:
+    branch = block.insns[-1]
+    if branch.what is None or branch.what.op is not ir.Operation.BRANCH:
         return None
-    where = branch.target if target is None else target
+    where = branch.what.target if target is None else target
     return replace(
         block,
-        ops=(
-            *block.ops[:-1],
-            replace(branch, name=opposite, target=where, made=replace(branch.made, name=opposite, target=where)),
+        insns=(
+            *block.insns[:-1],
+            replace(branch, what=replace(branch.what, name=opposite, target=where)),
         ),
     )
 
 
-def _threaded(body: MirBody) -> MirBody:
+def _threaded(body: lir.LirBody) -> lir.LirBody:
     """Branch past a block that only jumps somewhere else.
 
     Blocks stay in BC's address order -- `_ordered` says so -- so which of a
@@ -206,9 +199,9 @@ def _threaded(body: MirBody) -> MirBody:
     at_of = {block.at: block for block in body.blocks}
     reached = collections.Counter(at for block in body.blocks for at in block.succ)
 
-    turned: dict[int, mir.MirBlock] = {}
+    turned: dict[int, lir.LirBlock] = {}
     for block in body.blocks:
-        last = lower.current(block.ops[-1]) if block.ops else None
+        last = block.insns[-1].what if block.insns else None
         if last is None or last.op is not ir.Operation.BRANCH or len(block.succ) != 2:
             continue
         if last.target not in block.succ:
@@ -219,7 +212,7 @@ def _threaded(body: MirBody) -> MirBody:
         middle = at_of.get(through)
         if middle is None or last.target != following.get(through):
             continue
-        alive = [op for op in middle.ops if _emitting(op)]
+        alive = [op for op in middle.insns if _emitting(op)]
         if len(alive) != 1 or alive[0].kind is not mir.Kind.JUMP or len(middle.succ) != 1:
             continue
         (beyond,) = middle.succ
@@ -229,52 +222,45 @@ def _threaded(body: MirBody) -> MirBody:
         if inverted is None:
             continue
         turned[block.at] = replace(inverted, succ=(beyond, last.target))
-        turned[through] = replace(middle, succ=(), ops=tuple(_emptied(op) for op in middle.ops))
+        turned[through] = replace(middle, succ=(), insns=tuple(_emptied(op) for op in middle.insns))
     if not turned:
         return body
     return replace(body, blocks=tuple(turned.get(block.at, block) for block in body.blocks))
 
 
-def _emptied(op: mir.Op) -> mir.Op:
+def _emptied(op: lir.Insn) -> lir.Insn:
     """`op` emitting nothing, still owning the bytes it covers."""
     return replace(
         op,
-        kind=mir.Kind.NOTHING,
-        name="",
         defines=(),
         uses=(),
-        loads=(),
-        stores=(),
-        args=(),
-        results=(),
-        merges={},
-        made=None,
-        raised=None,
-        target=None,
-        test=None,
-        stack=None,
+        what=ir.Semantics(ir.Operation.NOTHING, "", (), ()),
+        clobbers=frozenset(),
+        clobbers_high=frozenset(),
+        requires=(),
+        delivers=(),
         symbol=False,
     )
 
 
-def _fallen(body: MirBody) -> MirBody:
+def _fallen(body: lir.LirBody) -> lir.LirBody:
     """A jump to the block placed next emits nothing: control falls through to it."""
     following = _following(body)
     changed = []
     for block in body.blocks:
-        last = lower.current(block.ops[-1]) if block.ops else None
+        last = block.insns[-1].what if block.insns else None
         if (
             last is not None
             and last.op is ir.Operation.JUMP
             and block.succ == (last.target,)
             and last.target == following.get(block.at)
         ):
-            block = replace(block, ops=(*block.ops[:-1], _emptied(block.ops[-1])))
+            block = replace(block, insns=(*block.insns[:-1], _emptied(block.insns[-1])))
         changed.append(block)
     return replace(body, blocks=tuple(changed))
 
 
-def _ordered(body: MirBody, *, linear: bool = False) -> list[mir.Op]:
+def _ordered(body: lir.LirBody, *, linear: bool = False) -> list[lir.Insn]:
     """Every op, in the order they are emitted.
 
     Blocks in address order, and within a block the order the block lists
@@ -303,14 +289,14 @@ def _ordered(body: MirBody, *, linear: bool = False) -> list[mir.Op]:
                     blocks = chain
                 break
             at = block.succ[0]
-    return [op for block in blocks for op in block.ops]
+    return [op for block in blocks for op in block.insns]
 
 
 # A root at each width an instruction can name it. ir.ROOT goes the other
 # way; an allocation is per value and a value's register is its root.
 
 
-def _trailing_zeros(found: Module, ops: list[mir.Op]) -> "Table | None":
+def _trailing_zeros(found: Module, ops: list[lir.Insn]) -> "Table | None":
     """The run of zero bytes the ops end on, where it reaches the segment's end.
 
     Only at the very end, and only all-zero: anything else that happens to
@@ -333,7 +319,7 @@ PADDING = frozenset({0x90, 0x00})
 
 def _padding_runs(
     found: Module,
-    ops: list[mir.Op],
+    ops: list[lir.Insn],
     carried: list["Table"],
     lowest: int,
     highest: int,
@@ -385,7 +371,7 @@ def _padding_runs(
     return out
 
 
-def selectable(op: mir.Op) -> bool:
+def selectable(op: lir.Insn) -> bool:
     """Whether this op's bytes come from select.py rather than from the image.
 
     An op emitted verbatim -- a barrier, calls.py's restore idiom, an
@@ -400,144 +386,40 @@ def selectable(op: mir.Op) -> bool:
     them stopped coming back its own length -- qb-qrender's SCREEN.OBJ, and
     the only object in either corpus with the shape.
     """
-    return mir.rewritable(op)
+    return op.what is not None and op.what.op is not ir.Operation.BARRIER
 
 
-def lay_out(body: MirBody, at: int, found: Module, fields: frozenset[int] = frozenset()) -> Laid | str:
+def lay_out(body: lir.LirBody, at: int, found: Module, fields: frozenset[int] = frozenset()) -> Laid | str:
     """Every op in `body`, emitted in order from `at`, or why it could not be."""
     return asm.assemble(_ordered(body), at, found, fields, labels=_labels(body))
 
 
-def _labels(body: MirBody) -> dict[int, int]:
+def _labels(body: lir.LirBody) -> dict[int, int]:
     labels: dict[int, int] = {}
     following: int | None = None
     for block in sorted(body.blocks, key=lambda one: one.at, reverse=True):
-        if block.ops:
-            following = block.ops[0].at
+        if block.insns:
+            following = block.insns[0].at
         if following is not None:
             labels[block.at] = following
     return labels
 
 
-def _anchors(body: MirBody) -> dict[int, mir.Op]:
+def _anchors(body: lir.LirBody) -> dict[int, lir.Insn]:
     """Block labels designate occurrences, not repeated source addresses."""
     labels = {}
     following = None
     for block in sorted(body.blocks, key=lambda one: one.at, reverse=True):
-        if block.ops:
-            following = block.ops[0]
+        if block.insns:
+            following = block.insns[0]
         if following is not None:
             labels[block.at] = following
     return labels
 
 
-def _names_a_value(body) -> bool:
-    """Whether any operand in this body names a value rather than a place."""
-    return any(
-        any(isinstance(one, mir.Held) for one in (*op.args, *op.results))
-        or (op.made is not None and any(isinstance(one, ir.Held) for one in (*op.made.dests, *op.made.sources)))
-        for block in body.blocks
-        for op in block.ops
-    )
-
-
-def _grounded(body: MirBody, held: dict | None) -> MirBody:
-    """Every operand naming a value nothing placed, given a register anyway.
-
-    Machine-side on purpose. MIR says `this value`; where the allocation has
-    no answer -- about seventy bodies in the corpus that the allocator
-    refuses outright -- the operand the original instruction had in the same
-    position is the one the pass took away, so that is what goes back. It is
-    written into `made`, which is the emission form and not MIR.
-
-    Reverting the whole operation instead costs 693 bytes: a fold emitted
-    from the load it replaced is not a fold.
-    """
-    covered = set(held or {})
-
-    def settle(one, was):
-        if not isinstance(one, ir.Held) or one.value in covered:
-            return one
-        return was if isinstance(was, ir.Reg) and was.width == one.width else None
-
-    def resolve(op):
-        if op.kind is mir.Kind.DIVMOD:
-            # Emitted from its own operands by asm, which reads the seats
-            # out of the allocation itself -- so there is no ir.Held here
-            # for this to settle, and the fallback below would be a wrong
-            # answer rather than a conservative one: stripping the operands
-            # off an operation a pass rewrote emits the bytes BC wrote,
-            # which divide the cell the operation no longer names.
-            return op
-        what = lower.current(op)
-        if what is None or not any(
-            isinstance(one, ir.Held) and one.value not in covered for one in (*what.dests, *what.sources)
-        ):
-            return op
-        node = getattr(op.node, "semantics", None)
-        dests = [
-            settle(one, node.dests[i] if node is not None and i < len(node.dests) else None)
-            for i, one in enumerate(what.dests)
-        ]
-        sources = [
-            settle(one, node.sources[i] if node is not None and i < len(node.sources) else None)
-            for i, one in enumerate(what.sources)
-        ]
-        if any(one is None for one in (*dests, *sources)):
-            return replace(op, made=None, args=(), results=(), raised=None) if op.node is not None else op
-        return replace(op, made=replace(what, dests=tuple(dests), sources=tuple(sources)))
-
-    return replace(
-        body,
-        blocks=tuple(replace(block, ops=tuple(resolve(op) for op in block.ops)) for block in body.blocks),
-    )
-
-
-def allocated(bodies: list, plain: list | None = None, settle=None) -> tuple[list, dict | None]:
-    """The bodies with a register for every value, and the assignment.
-
-    A body the allocator refuses is handed back as it was *raised*, not as
-    the passes left it: every operand is remapped through the assignment
-    and there is none, so each operation would be written with the register
-    BC had -- while a pass has moved the operations that made that true.
-
-    `plain` is the raised bodies, not yet widened. Widening one costs a
-    walk of every pair chain in it and the fallback wants about one body in
-    seven, so `settle` is applied to the one that needs it rather than to
-    all of them: 68 calls became 10 over the corpus.
-
-    Out of the assembler. Colouring is a phase, and one that runs inside
-    emission is one nothing downstream can be told has already happened --
-    omfwrite.py had no way to say so and was allocated over a second time,
-    which produced a call encoding with no field for its own fixup.
-    """
-    was = dict(plain or ())
-    got: dict = {}
-    settled = []
-    for name, body in bodies:
-        fixed = regalloc.untangled(body)
-        one = regalloc.colour(fixed, fixed.pins)
-        if isinstance(one, str):
-            fixed, one = body, regalloc.colour(body, body.pins)
-        if not isinstance(one, str):
-            got.update(one)
-            settled.append((name, fixed))
-            continue
-        # Nothing can colour it. Without this the hoist had to allocate: it
-        # moved a run out of a loop and had to find the result a register
-        # itself, because nothing downstream would. That is 90 of
-        # transform.py's machine references and where every hoist bug came
-        # from.
-        instead = was.get(name)
-        if instead is not None and settle is not None:
-            instead = settle(instead)
-        settled.append((name, instead if instead is not None else body))
-    return settled, got or None
-
-
 def rebuild(
     found: Module,
-    bodies: list[tuple[str, MirBody]],
+    bodies: list[tuple[str, lir.LirBody]],
     tables: tuple[tuple[int, int], ...] = (),
     fields: frozenset[int] = frozenset(),
     reached: frozenset[int] | None = None,
@@ -564,26 +446,10 @@ def rebuild(
     the only thing in the corpus's code segments that is not in a body --
     is the caller's to keep.
     """
-    # An ir.Held names a value and resolves through the assignment. A caller
-    # that supplied none is not saying "no registers", it is saying "you
-    # decide" -- so colour here, or this path and wholeseg's compile the
-    # same body two different ways. One the allocation still cannot cover
-    # goes back to what its node says: a refusal for the whole module is
-    # the wrong answer to one operand.
-    # A class two of whose members are live at once cannot be moved, and a
-    # copy is what breaks it -- on the phi edge, or before a two-address
-    # operation whose source outlives it. Per body, and only where it helps:
-    # a body the allocator refuses even untangled is laid out as it was.
-    # No allocation here. An assembler emits what it is handed; colouring
-    # a body is a phase, and one that runs inside emission is one nothing
-    # downstream can be told has already happened. `allocated()` below is
-    # the same work, and `wholeseg.py` calls it before this -- which is
-    # what let omfwrite.py stop being allocated over a second time.
+    # Bodies are allocated LIR.  Layout changes placement and branches; it
+    # never chooses registers or reconstructs machine form from MIR.
     sequenced = frozenset(body.entry for _, body in bodies) if ordered else ordered_entries
     bodies = [(name, _fallen(_fallthroughs(_threaded(body)))) for name, body in bodies]
-    held = asm._held(assignment)
-    bodies = [(name, _grounded(body, held)) for name, body in bodies]
-
     # Sorted on the address an operation's bytes start at. This tried to
     # honour the order a pass returned instead -- `place` moves a store out
     # of a call's push run and layout put it straight back -- with a key
@@ -597,7 +463,7 @@ def rebuild(
     # Keep the legacy default until every caller's input ordering is proven.
     groups = []
     for _, body in bodies:
-        end = max((op.covers[1] for block in body.blocks for op in block.ops if op.covers), default=body.entry)
+        end = max((op.covers[1] for block in body.blocks for op in block.insns if op.covers), default=body.entry)
         embedded = any(start < end and stop > body.entry for start, stop in tables)
         sequence = _ordered(body, linear=body.entry in sequenced and not embedded)
         if ordered or body.entry in sequenced:
@@ -620,7 +486,10 @@ def rebuild(
     dead_dispatch_ends = {
         op.node.insn.end
         for op in ops
-        if op.kind is mir.Kind.NOTHING and isinstance(op.node, ir.Call) and op.node.name == "B$OGTA"
+        if op.what is not None
+        and op.what.op is ir.Operation.NOTHING
+        and isinstance(op.node, ir.Call)
+        and op.node.name == "B$OGTA"
     }
     inside = [
         Table(lo, hi, discarded=lo in dead_dispatch_ends) for lo, hi in tables if lowest <= lo and hi <= found.end
@@ -689,7 +558,7 @@ def rebuild(
     )
 
 
-def _starts_at(op: mir.Op) -> int:
+def _starts_at(op: lir.Insn) -> int:
     """The first original byte this operation stands for.
 
     `covers`, not `at`. The raise gives every operation folded out of one

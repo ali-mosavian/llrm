@@ -25,7 +25,7 @@ def test_last_counter_store_requires_an_exact_nonempty_trip_count(tag, bound, ex
                     if block.at in loop.body and block.at != loop.header and len(block.succ) == 2)
     branch = selected.ops[-1]
     selected = replace(selected, succ=(branch.target,), ops=(*selected.ops[:-1], replace(
-        branch, kind=mir.Kind.JUMP, uses=(), args=(), test=None, name="", made=None, raised=None)))
+        branch, kind=mir.Kind.JUMP, uses=(), args=(), test=None, name="", raised=None)))
     body = replace(body, blocks=tuple(selected if block.at == selected.at else block for block in body.blocks))
     with patch.object(loopmotion, "sunk_stores", lambda body, *args: body):
         body = transform.applied(body, found.dgroup, found.calls, unroll_=False)

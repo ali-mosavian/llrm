@@ -25,9 +25,8 @@ def test_preselected_memory_keeps_its_address_value() -> None:
     pointer, result = mir.Value(1, 0, 0, 1, 1), mir.Value(2, 0, 0, 1, 2)
     addr = Addr(Space.SEGMENT, 0, base=Register.SI)
     cell = mir.Cell(mir.MemRef(addr, 4, base=pointer, base_width=2))
-    what = ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg(Register.EAX, 4),), (ir.Mem(addr, 4),))
     op = mir.Op(0, ir.Operation.MOVE, "mov", (result,), (pointer,), (cell.ref,), (), None,
-                made=what, kind=mir.Kind.COPY, args=(cell,), results=(mir.Held(result, 4),))
+                kind=mir.Kind.COPY, args=(cell,), results=(mir.Held(result, 4),))
     selected = lower.current(op, lower.as_a_value)
     assert selected.sources[0].base == ir.Held(pointer.id, 2)
 
@@ -101,7 +100,9 @@ def test_a_procedure_hands_back_dx_ax() -> None:
 
 
 def _semantics(op: mir.Op) -> ir.Semantics | None:
-    return op.made if op.made is not None else getattr(op.node, "semantics", None)
+    from qbopt.backend import lower
+
+    return lower.current(op)
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)

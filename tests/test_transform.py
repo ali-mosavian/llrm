@@ -401,9 +401,7 @@ def _absorbed_ops(obj, found, blocks):
         for block in after.blocks:
             for at, site in sites.items():
                 ops = [one for one in block.ops if site.start <= one.at < site.end]
-                if len(ops) > 1 and all(
-                    one.made is not None or one.node is None or one.name == "restore" for one in ops
-                ):
+                if len(ops) > 1 and all(mir.rewritten(one) or one.node is None or one.name == "restore" for one in ops):
                     yield at, ops
 
 
@@ -570,7 +568,6 @@ def test_an_operand_nothing_writes_down_may_leave_with_its_run() -> None:
             (mir.MemRef(None, 2),),
             (),
             kind=mir._kind_of(what, (), ()),
-            made=what,
         )
 
     moving = ir.Semantics(ir.Operation.MOVE, "mov", dests=(ax,), sources=(cell,))
@@ -604,22 +601,15 @@ def test_a_definition_a_phi_carries_and_the_loop_rewrites_does_not_leave_it() ->
     written twice" refuses hotlop's load of `n`, also safe: the loop writes
     ax on every line and the load is consumed where it stands.
     """
-    from iced_x86 import Register
-
     from qbopt.model import ir
     from qbopt.model import mir
-
-    ax = ir.Reg(register=Register.AX, width=2)
-    setup = ir.Semantics(ir.Operation.MOVE, "mov", dests=(ax,), sources=(ir.Imm(value=1, width=2),))
-    step = ir.Semantics(ir.Operation.UNARY, "inc", dests=(ax,), sources=(ax,))
 
     start = mir.Value(1, 0x10)
     again = mir.Value(2, 0x14)
     merged = mir.Value(3, 0x14)
-    origin = {start: Register.EAX, again: Register.EAX, merged: Register.EAX}
 
-    begins = mir.Op(0x10, ir.Operation.MOVE, "mov", (start,), (), kind=mir.Kind.COPY, made=setup)
-    counts = mir.Op(0x14, ir.Operation.UNARY, "inc", (again,), (merged,), kind=mir.Kind.ADD, made=step)
+    begins = mir.Op(0x10, ir.Operation.MOVE, "mov", (start,), (), kind=mir.Kind.COPY)
+    counts = mir.Op(0x14, ir.Operation.UNARY, "inc", (again,), (merged,), kind=mir.Kind.ADD)
     carried = [mir.Phi(merged, {0x00: start, 0x14: again})]
 
     assert transform._starts(carried) == {start, again}, "a phi carries both"
@@ -806,9 +796,6 @@ def test_dead_code_goes_and_the_bytes_are_still_accounted_for() -> None:
     layout.py refuses a body it cannot account for every byte of, so a
     deletion hands its bytes to the operation before it.
     """
-    into = ir.Reg(register=Register.BX, width=2)
-    from_ax = ir.Semantics(ir.Operation.MOVE, "mov", dests=(into,), sources=(ir.Reg(register=Register.AX, width=2),))
-    imm = ir.Semantics(ir.Operation.MOVE, "mov", dests=(into,), sources=(ir.Imm(value=7, width=2),))
     live_one = mir.Op(
         0x10,
         ir.Operation.MOVE,
@@ -816,7 +803,6 @@ def test_dead_code_goes_and_the_bytes_are_still_accounted_for() -> None:
         (mir.Value(1, 0x10),),
         (),
         kind=mir.Kind.COPY,
-        made=imm,
         covers=(0x10, 0x13),
     )
     doomed = mir.Op(
@@ -826,10 +812,8 @@ def test_dead_code_goes_and_the_bytes_are_still_accounted_for() -> None:
         (mir.Value(2, 0x13),),
         (),
         kind=mir.Kind.COPY,
-        made=from_ax,
         covers=(0x13, 0x15),
     )
-    body = mir.MirBody(0x10, (mir.MirBlock(0x10, (), (live_one, doomed), ()),), {})
     assert transform._removable(doomed, set()), "nothing reads it"
     assert not transform._removable(live_one, {mir.Value(1, 0x10)}), "and this is read"
 
@@ -840,14 +824,13 @@ def test_dead_code_leaves_a_body_it_cannot_read_alone() -> None:
     byref2 printed 0 for 16 when its argument setup was deleted on the
     strength of a use list that could not have been complete.
     """
-    what = ir.Semantics(ir.Operation.MOVE, "mov", dests=(ir.Reg(register=Register.BX, width=2),), sources=())
     # Something before it, so the deletion has a survivor to give its bytes
     # to -- without one _absorb refuses and the guard is never reached.
     first = mir.Op(
-        0x10, ir.Operation.MOVE, "mov", (mir.Value(1, 0x10),), (), kind=mir.Kind.COPY, made=what, covers=(0x10, 0x12)
+        0x10, ir.Operation.MOVE, "mov", (mir.Value(1, 0x10),), (), kind=mir.Kind.COPY, covers=(0x10, 0x12)
     )
     doomed = mir.Op(
-        0x12, ir.Operation.MOVE, "mov", (mir.Value(2, 0x12),), (), kind=mir.Kind.COPY, made=what, covers=(0x12, 0x14)
+        0x12, ir.Operation.MOVE, "mov", (mir.Value(2, 0x12),), (), kind=mir.Kind.COPY, covers=(0x12, 0x14)
     )
     plain = mir.MirBody(0x10, (mir.MirBlock(0x10, (), (first, doomed), ()),), {})
     assert transform.dead(plain) is not plain, "a dead move goes when the body is readable"

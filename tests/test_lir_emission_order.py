@@ -12,7 +12,6 @@ from qbopt.model import mir
 from qbopt.backend import asm
 from qbopt.backend import lower
 from qbopt.backend import layout
-from qbopt.backend import omfwrite
 from qbopt.backend import peephole
 
 
@@ -34,7 +33,7 @@ def test_zeroing_stays_before_the_comparison_in_emitted_bytes() -> None:
     body = peephole.zeroes(body)
     laid = layout.rebuild(
         found,
-        [(body.name, omfwrite._as_mir(body))],
+        [(body.name, body)],
         ordered_entries=frozenset({body.entry}) if body.ordered else frozenset(),
     )
     assert isinstance(laid, asm.Laid), laid

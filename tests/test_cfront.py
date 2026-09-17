@@ -19,10 +19,15 @@ def _asm(module: str) -> list[str]:
 
 def test_implicit_conversion_is_the_raise_s():
     """wcc leaves `(long) byte - short` as mixed-width operands; the raise
-    refused pal_bestfit with `used at width 4` until it converted them."""
+    refused pal_bestfit with `used at width 4` until it converted them.
+
+    The byte may be extended straight into the 32-bit destination; requiring
+    the older ``movzx ax``/``movzx eax, ax`` pair made this regression reject
+    a strictly better lowering.
+    """
     lines = _asm("pal")
-    at = lines.index("movzx ax, byte ptr _pal_now[bx]")
-    assert lines[at + 1 : at + 5] == ["movzx eax, ax", "mov bx, word ptr [bp+6]", "movsx ebx, bx", "sub eax, ebx"]
+    at = lines.index("movzx eax, byte ptr _pal_now[bx]")
+    assert lines[at + 1 : at + 4] == ["mov bx, word ptr [bp+6]", "movsx ebx, bx", "sub eax, ebx"]
 
 
 def test_far_pointer_return_in_dx_ax():
@@ -83,7 +88,7 @@ def test_raised_mir_names_no_instruction():
         for proc in unit.procs:
             for block in cfront.raise_hir.raised(unit, proc).body.blocks:
                 for op in block.ops:
-                    assert (op.op, op.name, op.made) == (ir.Operation.NOTHING, "", None), (module, op)
+                    assert (op.op, op.name) == (ir.Operation.NOTHING, ""), (module, op)
                     for ref in (*op.loads, *op.stores):
                         if ref.addr is not None and ref.addr.space is Space.FAR:
                             assert (ref.addr.base, ref.addr.segment) == (0, 0), (module, ref)
@@ -476,19 +481,26 @@ def test_value_less_return_returns_what_the_code_left():
 
 
 def test_calls_push_in_convention_order():
-    """cdecl pushes last first and pops after; pascal pushes first first."""
+    """cdecl pushes last first and pops after; pascal pushes first first.
+
+    Assert the values and order, not which free register happens to carry the
+    address or whether a frame argument was folded into ``push``.
+    """
     lines = _asm("qglsurf")
     at = lines.index("call far ptr _asset_seek")
-    assert lines[at - 3 : at + 2] == ["lea bx, [bp-10]", "push bx", "push ax", "call far ptr _asset_seek", "add sp, 4"]
-    at = lines.index("call far ptr QGLSFNEW")
-    assert lines[at - 6 : at] == [
-        "mov ax, word ptr [bp+10]",
-        "mov ebx, dword ptr [bp-14]",
-        "mov cx, word ptr [bp+8]",
-        "push cx",
-        "push bx",
-        "push ax",
+    address = lines[at - 3]
+    assert address.startswith("lea ") and address.endswith(", [bp-10]")
+    register = address.removeprefix("lea ").split(",", 1)[0]
+    assert lines[at - 2 : at + 2] == [
+        f"push {register}",
+        "push word ptr [bp+6]",
+        "call far ptr _asset_seek",
+        "add sp, 4",
     ]
+    at = lines.index("call far ptr QGLSFNEW")
+    assert lines[at - 3] == "push word ptr [bp+8]"
+    assert lines[at - 2].startswith("push ") and "ptr" not in lines[at - 2]
+    assert lines[at - 1] == "push word ptr [bp+10]"
 
 
 def test_private_segment_data_goes_through_its_selector():

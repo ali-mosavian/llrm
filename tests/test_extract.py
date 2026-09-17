@@ -4,7 +4,6 @@ from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.model import mir
 from qbopt.backend import lower
-from qbopt.backend import omfwrite
 
 
 def test_restore_declares_its_input_and_high_result() -> None:
@@ -52,8 +51,7 @@ def test_lowering_preserves_relocated_store_ownership() -> None:
     (instruction,) = lower.Lowering(body, {value.id}, {}, ()).expand(op)
     assert instruction.what.op is ir.Operation.MOVE
     assert instruction.symbol is True
-    carried = omfwrite._carried(instruction)
-    assert carried.symbol is True and carried.id == 31
+    assert instruction.symbol is True and instruction.id == 31
 
 
 def test_high_word_extraction_lowers_without_clobbering_flags() -> None:
@@ -78,11 +76,9 @@ def test_high_word_extraction_lowers_without_clobbering_flags() -> None:
     assert expanded[0].covers == (10, 14)
     assert all(one.covers == (10, 10) for one in expanded[1:])
     assert expanded[1].defines[0] not in (source.id, result.id)
-    carried = omfwrite._carried(expanded[1])
-    assert carried.node is None
-    assert carried.id is None
-    assert carried.covers == (10, 10)
-    assert carried.made == expanded[1].what
+    assert expanded[1].node is None
+    assert expanded[1].id is None
+    assert expanded[1].covers == (10, 10)
 
 
 def test_inserted_move_does_not_inherit_disjoint_input_bytes() -> None:
@@ -90,7 +86,6 @@ def test_inserted_move_does_not_inherit_disjoint_input_bytes() -> None:
     parent = mir.Op(0x71, ir.Operation.MOVE, "mov", (), (), covers=(0x71, 0x76), extra_covers=((0x5F, 0x6B),), id=14)
     move = ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(2, 2),), (ir.Held(1, 2),))
     inserted = lir.Insn(0x71, (0x71, 0x71), move, (2,), (1,), op=parent)
-    carried = omfwrite._carried(inserted)
-    assert carried.covers == (0x71, 0x71)
-    assert carried.extra_covers == ()
-    assert carried.id is None
+    assert inserted.covers == (0x71, 0x71)
+    assert inserted.extra_covers == ()
+    assert inserted.id is None

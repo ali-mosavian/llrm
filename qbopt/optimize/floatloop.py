@@ -107,7 +107,7 @@ def _store(beside, ref, value):
 def _jump(beside, destination):
     return replace(beside, kind=mir.Kind.JUMP, name="", args=(), results=(),
                    uses=(), defines=(), loads=(), stores=(), merges={}, node=None,
-                   made=None, raised=((), ()), target=destination, test=None)
+                   raised=((), ()), target=destination, test=None)
 
 
 def _rewritten(body, header, latch, exit_at, checkpoint, seeds, counter, final):

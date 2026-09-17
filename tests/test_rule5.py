@@ -26,6 +26,8 @@ from pathlib import Path
 
 import pytest
 
+from qbopt.model import mir
+
 HERE = Path(__file__).resolve().parent.parent / "qbopt"
 
 # Discover every optimization module, including new passes and subpackages.
@@ -134,6 +136,11 @@ def test_the_allow_list_names_nothing_that_has_already_gone() -> None:
         actual = set(_named_in(HERE / name))
         stale = allowed - actual
         assert not stale, f"{name}: {sorted(stale)} no longer name a register; take them off the list"
+
+
+def test_mir_has_no_slot_for_selected_machine_semantics() -> None:
+    """MIR used to carry ``Op.made`` and let backend encodings leak into passes."""
+    assert "made" not in mir.Op.__dataclass_fields__
 
 
 def test_a_pass_is_a_transform_and_nothing_else() -> None:

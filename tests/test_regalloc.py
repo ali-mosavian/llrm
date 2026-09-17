@@ -144,7 +144,7 @@ def test_a_flags_phi_does_not_enter_the_interference_graph() -> None:
     one = ir.Imm(value=1, width=2)
 
     def op(at: int, what: ir.Semantics, defines: tuple, uses: tuple = ()) -> mir.Op:
-        return mir.Op(at, what.op, what.name or "", defines, uses, made=what)
+        return mir.Op(at, what.op, what.name or "", defines, uses)
 
     moving = ir.Semantics(ir.Operation.MOVE, "mov", dests=(ax,), sources=(one,))
     comparing = ir.Semantics(ir.Operation.COMPARE, "cmp", dests=(), sources=(ax, one))
@@ -193,12 +193,8 @@ def test_moving_one_side_of_a_phi_moves_the_whole_class() -> None:
     again = mir.Value(2, 0x20)
     merged = mir.Value(3, 0x20)
 
-    ax = ir.Reg(register=Register.AX, width=2)
-    one = ir.Imm(value=1, width=2)
-    moving = ir.Semantics(ir.Operation.MOVE, "mov", dests=(ax,), sources=(one,))
-
     def op(at: int, defines: tuple, uses: tuple = ()) -> mir.Op:
-        return mir.Op(at, ir.Operation.MOVE, "mov", defines, uses, made=moving)
+        return mir.Op(at, ir.Operation.MOVE, "mov", defines, uses)
 
     head = mir.MirBlock(0x10, (), (op(0x10, (start,)),), (0x20,))
     latch = mir.MirBlock(
@@ -233,12 +229,8 @@ def test_a_class_wanted_across_its_own_phi_may_stay_but_may_not_move() -> None:
     again = mir.Value(2, 0x20)
     merged = mir.Value(3, 0x20)
 
-    ax = ir.Reg(register=Register.AX, width=2)
-    one = ir.Imm(value=1, width=2)
-    moving = ir.Semantics(ir.Operation.MOVE, "mov", dests=(ax,), sources=(one,))
-
     def op(at: int, defines: tuple, uses: tuple = ()) -> mir.Op:
-        return mir.Op(at, ir.Operation.MOVE, "mov", defines, uses, made=moving)
+        return mir.Op(at, ir.Operation.MOVE, "mov", defines, uses)
 
     head = mir.MirBlock(0x10, (), (op(0x10, (start,)),), (0x20,))
     # `again` is read after the phi that carries it, so it is live where the

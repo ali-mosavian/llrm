@@ -556,12 +556,8 @@ def consumed(op: "Op") -> "set[Value]":
 def rewritten(op: "Op") -> bool:
     """Whether a pass has changed what this operation computes.
 
-    The question every caller used to ask as `op.made is not None`, which
-    named the machine form a pass wrote down. What it means is that the
-    operands are not the ones the raise gave it.
+    The operands, not a selected instruction, say whether a pass changed it.
     """
-    if op.made is not None:
-        return True
     return op.raised is not None and (op.args, op.results) != op.raised
 
 
@@ -827,13 +823,6 @@ class Op:
     loads: tuple[MemRef, ...] = ()
     stores: tuple[MemRef, ...] = ()
     node: ir.Node | None = None  # what it came from, so lowering can be verbatim
-    # What a transform decided this op should be, overriding the node's own
-    # semantics. The node stays rather than being replaced: it is what
-    # layout.py asks for the op's original bytes and, more importantly, for
-    # the fixup inside them. A widened `add eax,[x]` reads the same
-    # relocated address the pair's low half did, and an op with no node has
-    # no fixup to find -- that address would come out a bare zero.
-    made: ir.Semantics | None = None
     # Which of the original bytes this op stands for, when that is not just
     # its own node's span. A transform that replaces two instructions with
     # one leaves the second's bytes belonging to nothing, and layout.py
@@ -842,9 +831,8 @@ class Op:
     # replacement says what it replaced.
     covers: tuple[int, int] | None = None
     # What this operation reads and writes, in its own order, as values,
-    # constants and cells. This is what `made` was for and what a pass
-    # rewriting an operation now says instead -- ir.Semantics over ir.Reg
-    # is machine form, and MIR holding it is the whole of rule 5's problem.
+    # constants and cells. A pass rewriting an operation says it here;
+    # selected machine semantics live only on LIR.
     # What this computes, in MIR's own vocabulary. `op` and `name` are the
     # machine's and are on their way out; nothing new may read them.
     kind: Kind = Kind.OPAQUE
@@ -1538,8 +1526,6 @@ def raise_body(
         for variable in sorted(needed[block.at], key=lambda one: (one is not FLAGS, one)):
             phis[block.at][variable] = Phi(namer.fresh(variable, block.at), {})
 
-    again: dict[Value, Value] = {}
-
     def rename(at: int) -> None:
         block = by_at[at]
         pushed: list[Register_] = []
@@ -1741,14 +1727,10 @@ def raise_body(
 
 
 def _touched_op(op: Op, calls: dict[int, str] | None = None) -> tuple[frozenset[Register_], frozenset[Register_]]:
-    """(defines, uses) for an operation, after a transform may have changed it.
+    """The source instruction's conservative register effects.
 
-    The node's own Effects are iced's conservative answer about the
-    instruction BC wrote. A pass that gave the op new semantics changed what
-    it touches -- serving a read from a register adds a use of that register
-    and `_touched` would never know -- so the two are unioned rather than
-    chosen between. Over-approximating a use costs a phi; missing one is a
-    value read where nothing wrote it.
+    Rewritten MIR carries value dataflow directly. Machine semantics are not
+    available here; lowering is the first phase allowed to choose them.
     """
     defines: set[Register_] = set()
     uses: set[Register_] = set()
@@ -1756,31 +1738,6 @@ def _touched_op(op: Op, calls: dict[int, str] | None = None) -> tuple[frozenset[
         was, read = _touched(op.node, calls)
         defines, uses = set(was), set(read)
 
-    what = op.made
-    if what is None:
-        return frozenset(defines), frozenset(uses)
-
-    def tracked(one: Register_ | None) -> Register_ | None:
-        if one is None or one == Register.NONE:
-            return None
-        root = ir.ROOT.get(one, one)
-        return root if root in TRACKED else None
-
-    for one in what.dests:
-        if isinstance(one, ir.Reg) and (root := tracked(one.register)) is not None:
-            defines.add(root)
-    for one in what.sources:
-        if isinstance(one, ir.Reg) and (root := tracked(one.register)) is not None:
-            uses.add(root)
-    # A cell is reached by a register, and reaching it is a read.
-    for one in (*what.dests, *what.sources):
-        for where in (
-            getattr(one, "through", None),
-            getattr(one, "index_through", None),
-            getattr(getattr(one, "addr", None), "base", None),
-        ):
-            if (root := tracked(where)) is not None:
-                uses.add(root)
     return frozenset(defines), frozenset(uses)
 
 

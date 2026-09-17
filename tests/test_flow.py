@@ -314,16 +314,13 @@ def test_an_inserted_instruction_carries_no_fixup() -> None:
     instruction an operation was raised from, and every question answered
     by reading the original bytes goes through it.
     """
-    from qbopt.backend import omfwrite
-
     _found, _blocks, bodies, contracts = _raised("divmod-p-g2-zd")
     for name, body in bodies:
         low = lower.lowered(name, body, _found.calls, set(_found.absorbed), contracts)
         for phase in flow.machine(flow._pinned(body), None, _found.calls):
             low = phase.transform(low)
-        as_mir = omfwrite._as_mir(low)
-        for block in as_mir.blocks:
-            for op in block.ops:
+        for block in low.blocks:
+            for op in block.insns:
                 if op.covers is not None and op.covers[0] == op.covers[1]:
                     assert op.node is None, f"{op.at:#06x} was inserted and still has a node"
                     assert op.id is None, f"{op.at:#06x} was inserted and still has an id"
@@ -644,7 +641,7 @@ def test_emission_refuses_a_body_that_still_has_a_phi() -> None:
         pins={},
     )
     with pytest.raises(omfwrite.Survived):
-        omfwrite._as_mir(stuck)
+        omfwrite._require_no_phis((stuck,))
 
 
 def test_verification_catches_a_cell_left_on_a_value_the_rename_ended() -> None:

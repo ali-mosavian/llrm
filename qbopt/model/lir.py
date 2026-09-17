@@ -128,6 +128,79 @@ class Insn:
     spill_store: bool = False
     frame_adjust: bool = False
 
+    @property
+    def inserted(self) -> bool:
+        """Whether this occurrence owns no source bytes of its own.
+
+        Lowering may expand one MIR operation into several instructions.  The
+        followers share its source address but deliberately cover an empty
+        range.  A restore is the exception: it is an idiom represented by
+        one source node and must retain that node while being emitted.
+        """
+        idiom = (
+            self.op is not None
+            and isinstance(getattr(self.op, "node", None), ir.Restore)
+            and getattr(self.what, "op", None) is ir.Operation.RESTORE
+        )
+        return not idiom and self.covers is not None and self.covers[0] == self.covers[1]
+
+    @property
+    def source(self):
+        """The MIR provenance this occurrence still represents, if any."""
+        return None if self.inserted else self.op
+
+    @property
+    def node(self):
+        return getattr(self.source, "node", None)
+
+    @property
+    def id(self):
+        if self.inserted and self.symbol is not True:
+            return None
+        return getattr(self.op, "id", None)
+
+    @property
+    def kind(self):
+        """Program operation kind, distinct from selected machine form."""
+        from qbopt.model import mir
+
+        source = self.source
+        if source is None:
+            return mir._kind_of(self.what, (), ()) if self.what is not None else mir.Kind.NOTHING
+        if source.kind is mir.Kind.DIVMOD and self.what is not None:
+            return mir._kind_of(self.what, (), ())
+        return source.kind
+
+    @property
+    def name(self) -> str:
+        source = self.source
+        if source is not None:
+            return source.name
+        return self.what.name if self.what is not None else ""
+
+    @property
+    def args(self) -> tuple:
+        return getattr(self.source, "args", ())
+
+    @property
+    def results(self) -> tuple:
+        return getattr(self.source, "results", ())
+
+    @property
+    def raised(self):
+        return getattr(self.source, "raised", None)
+
+    @property
+    def extra_covers(self) -> tuple:
+        return getattr(self.source, "extra_covers", ())
+
+    @property
+    def rewritten(self) -> bool:
+        """Whether optimization changed the source-level operation."""
+        from qbopt.model import mir
+
+        return self.source is None or self.source.node is None or mir.rewritten(self.source)
+
 
 @dataclass(frozen=True, slots=True)
 class Phi:
@@ -209,7 +282,7 @@ def anchor(one: Insn) -> Insn:
     )
 
 
-def without(insns, drop, made=None) -> "list[Insn]":
+def without(insns, drop, rewrite=None) -> "list[Insn]":
     """`insns` without the ones `drop` picks, their bytes given to a survivor.
 
     An identity copy emits nothing, but it may still stand for bytes BC
@@ -229,7 +302,7 @@ def without(insns, drop, made=None) -> "list[Insn]":
 
     out: list[Insn] = []
     for one in insns:
-        kept = made(one) if made is not None else one
+        kept = rewrite(one) if rewrite is not None else one
         if not drop(kept):
             out.append(kept)
             continue

@@ -296,13 +296,11 @@ def untangled(body: mir.MirBody) -> mir.MirBody:
                         # naming registers here writes `mov dx,dx`, which
                         # lir.tied reads as two-address and congruent()
                         # ties straight back into the class this exists to
-                        # break. ir.Held leaves both to the assignment.
-                        made=ir.Semantics(
-                            ir.Operation.MOVE,
-                            "mov",
-                            dests=(ir.Held(value=copy.id, width=2),),
-                            sources=(ir.Held(value=value.id, width=2),),
-                        ),
+                        # break. MIR operands leave both to lowering and
+                        # allocation without storing a selected instruction.
+                        results=(mir.Held(copy, 2),),
+                        args=(mir.Held(value, 2),),
+                        raised=((), ()),
                         covers=(came, came),
                     )
                 )
@@ -343,12 +341,9 @@ def untangled(body: mir.MirBody) -> mir.MirBody:
                             name="mov",
                             defines=(copy,),
                             uses=(other,),
-                            made=ir.Semantics(
-                                ir.Operation.MOVE,
-                                "mov",
-                                dests=(ir.Held(value=copy.id, width=2),),
-                                sources=(ir.Held(value=other.id, width=2),),
-                            ),
+                            results=(mir.Held(copy, 2),),
+                            args=(mir.Held(other, 2),),
+                            raised=((), ()),
                             covers=(op.at, op.at),
                         )
                     )

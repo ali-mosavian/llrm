@@ -34,7 +34,6 @@ def _capture(push, arg, held):
         results=(held,),
         loads=(arg.ref,) if memory else (),
         stores=(),
-        made=None,
         raised=None,
         merges={},
         stack=None,

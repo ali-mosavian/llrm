@@ -13,10 +13,12 @@ from collections import Counter
 from dataclasses import replace
 
 from iced_x86 import Register
+from iced_x86 import Register_
 from iced_x86 import RegisterExt
 from iced_x86 import InstructionInfoFactory
 
 from qbopt.model import ir
+from qbopt.model import lir
 from qbopt.model import mir
 from qbopt.abi import runtime
 from qbopt.backend import target
@@ -171,7 +173,7 @@ def named(body: "mir.MirBody") -> "mir.MirBody":
     def one(op: mir.Op) -> mir.Op:
         if op.kind is mir.Kind.BRANCH and op.test in _UNORDERED and compared.intersection(op.uses):
             op = replace(op, test=_UNORDERED[op.test])
-        if op.op is not ir.Operation.NOTHING or op.name or op.kind is mir.Kind.NOTHING or op.made is not None:
+        if op.op is not ir.Operation.NOTHING or op.name or op.kind is mir.Kind.NOTHING:
             return op
         found = _instruction(op)
         if found is None:
@@ -342,32 +344,16 @@ def rewritten(op, place=None) -> "ir.Semantics | None":
     fixup, accumulating into offset zero, T= 0 for 210).
     """
     was = getattr(op.node, "semantics", None)
-    if op.made is not None:
-        if place is None:
-            return op.made
-        # Valueized in place. Older raised bodies may carry a rewritten
-        # machine form, and returning it untouched would leave BC's original
-        # registers among abstract values with nothing for the allocator to
-        # rewrite.
-        #
-        # Its own operands, not rebuilt from the operation: passing it
-        # back through `semantics` gave the restore idiom -- which has
-        # none, and whose pair the node names -- three operands it never
-        # had, and select emitted nothing for it.
-        return _valueized(op.made, op)
     return _located(semantics(op, was, place), was)
 
 
 def current(op, place=None) -> "ir.Semantics | None":
     """What this operation computes now, in machine form.
 
-    The one answer to the question every consumer used to ask as
-    `op.made if op.made is not None else op.node.semantics` -- which read
-    the *original* instruction for an operation a pass had rewritten in
-    MIR's own operands, and so told twenty callers the fold had not
-    happened.
+    Rewritten operations are selected from MIR operands; untouched ones may
+    retain their source instruction's semantics.
     """
-    if place is None and op.made is None and any(ref.pointer for ref in (*op.loads, *op.stores)):
+    if place is None and any(ref.pointer for ref in (*op.loads, *op.stores)):
         return None
     return rewritten(op, place) or getattr(op.node, "semantics", None)
 
@@ -1420,7 +1406,7 @@ class Lowering:
         if any(one.id in self._folded for one in op.defines):
             # The address is its cells' base and index now; see addressforms.indexed.
             op = replace(
-                op, kind=mir.Kind.NOTHING, name="", args=(), results=(), defines=(), uses=(), node=None, made=None
+                op, kind=mir.Kind.NOTHING, name="", args=(), results=(), defines=(), uses=(), node=None
             )
         made = _EXPANDS.get(op.kind)
         parts = made(op, self) if made is not None else _pointer_access(op, self)

@@ -40,7 +40,7 @@ def raised(body, found, contracts):
             result = mir.Held(mir.Value(serial, op.at, variable=variable, version=1), width)
             converted = replace(op, kind=mir.Kind.FSTORE, op=ir.Operation.FLOAT_STORE, name="fistp",
                 args=(mir.Opaque(ir.St(0), "st0"),), results=(result,), defines=(result.value,),
-                uses=(), loads=(), stores=(), merges={}, node=None, made=None, raised=None,
+                uses=(), loads=(), stores=(), merges={}, node=None, raised=None,
                 stack=-1, symbol=False)
             ops.append(converted)
             found.float_protocols[op.id] = 0x34

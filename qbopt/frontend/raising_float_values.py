@@ -83,7 +83,6 @@ def loaded(body: mir.MirBody) -> mir.MirBody:
                     floating_origin=None,
                     stack=None,
                     node=None,
-                    made=None,
                     raised=None,
                     symbol=None,
                     covers=(op.at, op.at),

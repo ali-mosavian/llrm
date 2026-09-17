@@ -27,7 +27,6 @@ def _checked(op):
         stores=(),
         merges={},
         node=None,
-        made=None,
         raised=None,
         floating=None,
         stack=None,
@@ -100,7 +99,7 @@ def checks(body: mir.MirBody) -> mir.MirBody:
         for op in block.ops:
             after = _observed_after(op, observed)
             if op.kind is mir.Kind.FCHECK and observed and after:
-                op = replace(op, kind=mir.Kind.NOTHING, node=None, made=None, raised=None, symbol=False)
+                op = replace(op, kind=mir.Kind.NOTHING, node=None, raised=None, symbol=False)
             observed = after
             ops.append(op)
         blocks.append(replace(block, ops=tuple(ops)))
@@ -149,7 +148,6 @@ def stored(body: mir.MirBody, facts: dict) -> mir.MirBody:
                             loads=(),
                             merges={},
                             node=None,
-                            made=None,
                             raised=None,
                             floating=None,
                             floating_origin=None,

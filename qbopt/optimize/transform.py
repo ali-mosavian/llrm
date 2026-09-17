@@ -444,7 +444,6 @@ def _erased_floating(op: Op) -> Op:
         stores=(),
         merges={},
         node=None,
-        made=None,
         raised=None,
         floating=None,
         stack=None,
@@ -707,7 +706,6 @@ def reused_divides(body: MirBody, dgroup: frozenset[int], found=None) -> MirBody
             args=(served,),
             results=(wanted,),
             node=None,
-            made=None,
         )
     if not into:
         return body
@@ -903,7 +901,6 @@ def _empty_operation(op: Op) -> Op:
         stores=(),
         merges={},
         node=None,
-        made=None,
         raised=None,
         symbol=False,
     )
@@ -984,7 +981,6 @@ def forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> M
                         loads=(),
                         uses=op.uses,
                         node=None,
-                        made=None,
                         raised=None,
                         symbol=False,
                         covers=op.covers or mir_span(op),
@@ -1003,7 +999,6 @@ def forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> M
                         loads=(),
                         uses=op.uses + (holder,),
                         node=None,
-                        made=None,
                         raised=None,
                         symbol=False,
                         covers=op.covers or mir_span(op),
@@ -1751,7 +1746,6 @@ def _threaded(body: MirBody) -> MirBody:
                     args=(),
                     results=(),
                     test=None,
-                    made=None,
                     target=successors[0],
                     covers=last.covers or _span_of(last),
                 )
@@ -1806,7 +1800,6 @@ def decided(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
                 defines=(),
                 results=(),
                 name="",
-                made=None,
                 raised=None,
             )
             out.append(replace(block, ops=(*block.ops[:-1], jump), succ=(target,)))
@@ -1833,7 +1826,6 @@ def decided(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
                 args=(),
                 results=(),
                 target=target,
-                made=None,
                 covers=last.covers or _span_of(last),
             )
             out.append(replace(block, ops=block.ops[:-1] + (jump,), succ=(target,)))
@@ -1880,7 +1872,6 @@ def _unreachable(body: MirBody) -> MirBody:
                         args=(),
                         results=(),
                         merges={},
-                        made=None,
                         target=None,
                         test=None,
                         stack=None,
@@ -2054,7 +2045,6 @@ def _folded_division(op: Op, numbers: tuple[int, int], wanted: set) -> tuple[Op,
             uses=(),
             loads=(),
             merges={},
-            made=None,
             raised=None,
             symbol=False,
             node=None,
@@ -2149,7 +2139,6 @@ def _constant_update(op: Op, facts: dict, memory: dict, wanted: set) -> Op:
         loads=(),
         args=(mir.Const(fact.n, fact.width),),
         node=None,
-        made=None,
         raised=None,
         symbol=False,
     )
@@ -2210,7 +2199,6 @@ def _constant_operands(op: Op, facts: dict, memory: dict | None = None, symbols:
             op,
             args=(literal,),
             uses=tuple(value for value in op.uses if value != arg.value or value in address_values),
-            made=None,
             raised=None,
         )
     if (
@@ -2268,7 +2256,6 @@ def _constant_operands(op: Op, facts: dict, memory: dict | None = None, symbols:
         args=tuple(args),
         loads=tuple(ref for ref in op.loads if ref not in removed),
         node=None if removed else op.node,
-        made=None if removed else op.made,
         raised=None if removed else op.raised,
         uses=tuple(value for value in op.uses if value not in replaced or value in op.merges or value in retained),
     )
@@ -2305,7 +2292,6 @@ def _constant_argument(op: Op, facts: dict, memory: dict, symbols: dict | None =
         uses=uses,
         loads=kept,
         node=None,
-        made=None,
         raised=None,
         # A number owns no relocation.  A symbol takes the defining copy's
         # identity as well as its value: that is how emission moves the
@@ -2363,7 +2349,6 @@ def _folded_op(op: Op, facts: dict, wanted: set) -> Op:
         args=(mir.Const(fact.n, into.width),),
         results=(mir.Held(target, into.width),),
         symbol=False,
-        made=None,
         node=None,
         raised=None,
     )

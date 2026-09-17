@@ -10,7 +10,6 @@ else names its EXTDEF.
 
 import struct
 from dataclasses import field
-from dataclasses import replace
 from dataclasses import dataclass
 from collections.abc import Sequence
 
@@ -18,7 +17,6 @@ from iced_x86 import Register
 
 from qbopt.model import ir
 from qbopt.model import lir
-from qbopt.model import mir
 from qbopt.backend import masm
 from qbopt.backend import layout
 from qbopt.backend import select
@@ -114,11 +112,12 @@ def written_bc(
     never made by splicing LEDATA or FIXUPP records back into BC's record
     stream; ``_bc_records`` serializes a new stream from those semantics.
     """
+    _require_no_phis(bodies)
     if bodies and all(body.ordered for body in bodies):
         ordered = True
     laid = layout.rebuild(
         found,
-        [(one.name, _as_mir(one)) for one in bodies],
+        [(one.name, one) for one in bodies],
         tables,
         fields,
         reached,
@@ -170,45 +169,13 @@ def written_bc(
     )
 
 
-def _as_mir(body: "lir.LirBody") -> mir.MirBody:
-    """Carry allocated LIR through the layout interface until it accepts LIR."""
-    stuck = [block.at for block in body.blocks if block.phis]
+def _require_no_phis(bodies: "Sequence[lir.LirBody]") -> None:
+    """Reject SSA joins before anything attempts to encode instructions."""
+    stuck = [block.at for body in bodies for block in body.blocks if block.phis]
     if stuck:
         raise Survived(
             "a phi survives at " + ", ".join(f"{one:#06x}" for one in stuck) + "; nothing below can emit one"
         )
-    return mir.MirBody(
-        entry=body.entry,
-        blocks=tuple(
-            mir.MirBlock(
-                at=block.at,
-                phis=(),
-                ops=tuple(_carried(one) for one in block.insns),
-                succ=block.succ,
-            )
-            for block in body.blocks
-        ),
-        origin=body.origin,
-        pins=body.pins,
-    )
-
-
-def _carried(one: "lir.Insn") -> mir.Op:
-    if one.op is None:
-        return mir.Op(one.at, one.what.op, one.what.name, (), (), made=one.what, covers=one.covers)
-    idiom = isinstance(one.op.node, ir.Restore) and getattr(one.what, "op", None) is ir.Operation.RESTORE
-    inserted = not idiom and one.covers is not None and one.covers[0] == one.covers[1]
-    return replace(
-        one.op,
-        kind=mir._kind_of(one.what, (), ()) if one.op.kind is mir.Kind.DIVMOD and one.what is not None else one.op.kind,
-        made=one.what,
-        at=one.at,
-        covers=one.covers,
-        extra_covers=() if inserted else one.op.extra_covers,
-        node=None if inserted else one.op.node,
-        id=None if inserted and one.symbol is not True else one.op.id,
-        symbol=one.symbol,
-    )
 
 
 def _mapped(offset: int, kept: int, moved: dict[int, int]) -> int | None:

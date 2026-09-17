@@ -44,6 +44,7 @@ def test_a_sign_extension_from_a_segment_register_is_not_a_long() -> None:
     the reason underneath that.
     """
     from iced_x86 import Register
+    from types import SimpleNamespace
 
     from qbopt.model import ir
 
@@ -55,7 +56,7 @@ def test_a_sign_extension_from_a_segment_register_is_not_a_long() -> None:
             name="mov",
             defines=(mir.Value(1, 0x100),),
             uses=(),
-            made=ir.Semantics(ir.Operation.MOVE, "mov", dests=(into,), sources=(source,)),
+            node=SimpleNamespace(semantics=ir.Semantics(ir.Operation.MOVE, "mov", dests=(into,), sources=(source,))),
         )
         high = mir.Op(
             at=0x103,
@@ -63,7 +64,11 @@ def test_a_sign_extension_from_a_segment_register_is_not_a_long() -> None:
             name="cwd",
             defines=(mir.Value(2, 0x103),),
             uses=(mir.Value(1, 0x100),),
-            made=ir.Semantics(ir.Operation.MOVE, "cwd", dests=(ir.Reg(register=Register.DX, width=2),), sources=()),
+            node=SimpleNamespace(
+                semantics=ir.Semantics(
+                    ir.Operation.MOVE, "cwd", dests=(ir.Reg(register=Register.DX, width=2),), sources=()
+                )
+            ),
         )
         return low, high
 
@@ -90,6 +95,7 @@ def test_two_negates_without_the_borrow_are_not_one_long_negate() -> None:
     """
     from iced_x86 import Register
     from iced_x86 import Register_
+    from types import SimpleNamespace
 
     from qbopt.model import ir
 
@@ -101,7 +107,9 @@ def test_two_negates_without_the_borrow_are_not_one_long_negate() -> None:
             name=name,
             defines=(mir.Value(value, at),),
             uses=(),
-            made=ir.Semantics(ir.Operation.UNARY, name, dests=(where,), sources=(where,)),
+            node=SimpleNamespace(
+                semantics=ir.Semantics(ir.Operation.UNARY, name, dests=(where,), sources=(where,))
+            ),
         )
 
     low = unary(0x100, "neg", Register.AX, 1)
@@ -114,11 +122,13 @@ def test_two_negates_without_the_borrow_are_not_one_long_negate() -> None:
         name="adc",
         defines=(mir.Value(2, 0x103),),
         uses=(),
-        made=ir.Semantics(
-            ir.Operation.BINARY,
-            "adc",
-            dests=(ir.Reg(register=Register.DX, width=2),),
-            sources=(ir.Reg(register=Register.DX, width=2), ir.Imm(value=0, width=2)),
+        node=SimpleNamespace(
+            semantics=ir.Semantics(
+                ir.Operation.BINARY,
+                "adc",
+                dests=(ir.Reg(register=Register.DX, width=2),),
+                sources=(ir.Reg(register=Register.DX, width=2), ir.Imm(value=0, width=2)),
+            )
         ),
     )
     assert pairs._negate([low, borrow, high], 0, origin) is not None, "the real idiom"

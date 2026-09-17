@@ -49,7 +49,6 @@ def scalar(body: mir.MirBody) -> mir.MirBody:
             uses=(before,),
             merges={before: after},
             node=None,
-            made=None,
             raised=None,
         )
 

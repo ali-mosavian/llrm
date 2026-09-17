@@ -35,7 +35,7 @@ def sign_fills(body: mir.MirBody) -> mir.MirBody:
                               args=op.args, results=(whole,), covers=(op.at, op.at)))
             ops.append(replace(op, kind=mir.Kind.EXTRACT, op=mir.Synth.HALF_TO_LOW,
                                name="extract", args=(whole, mir.Const(16, 4)),
-                               uses=(whole.value,), merges={}, node=None, made=None, raised=None))
+                               uses=(whole.value,), merges={}, node=None, raised=None))
         blocks.append(replace(block, ops=tuple(ops)))
     return replace(body, blocks=tuple(blocks))
 
@@ -60,7 +60,7 @@ def arguments(body: mir.MirBody) -> mir.MirBody:
                     ops[-1] = replace(high, args=(source,), uses=(source.value,),
                                       stores=(replace(high.stores[0], width=4),),
                                       covers=(high.covers[0], low.covers[1]),
-                                      node=None, made=None, raised=None)
+                                      node=None, raised=None)
                     continue
             ops.append(low)
         blocks.append(replace(block, ops=tuple(ops)))
@@ -277,7 +277,7 @@ def scalar(body: mir.MirBody) -> mir.MirBody:
             widened = replace(low, kind=kind, args=args, results=results, uses=uses,
                               defines=() if stores else (results[0].value,),
                               loads=() if stores or ref is None else (ref,), stores=(ref,) if stores else (),
-                              merges={}, made=None, raised=None,
+                              merges={}, raised=None,
                               covers=(min(low.covers[0], high.covers[0]), max(low.covers[1], high.covers[1])))
             if pair.kind is pairs.Kind.ALU:
                 loaded = fresh(low.at)

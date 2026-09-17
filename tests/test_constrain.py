@@ -110,6 +110,7 @@ def test_far_read_restores_its_forwarded_selector(selected_site):
     from qbopt.backend import allocate
     from qbopt.objectfile.module import Addr
     from qbopt.objectfile.module import Space
+    from types import SimpleNamespace
 
     segment, result = mir.Value(1, 0), mir.Value(2, 8)
     addr = Addr(Space.FAR, 0, segment=Register.ES)
@@ -125,7 +126,8 @@ def test_far_read_restores_its_forwarded_selector(selected_site):
         args=(mir.Cell(ref),),
         results=(mir.Held(result, 2),),
         loads=(ref,),
-        made=machine,
+        node=SimpleNamespace(semantics=machine),
+        raised=((), ()),
     )
     context = mir.MirBody(0, (mir.MirBlock(0, (), (op,), ()),), origin={segment: Register.ES})
     sites = {op.id: ()} if selected_site else {}

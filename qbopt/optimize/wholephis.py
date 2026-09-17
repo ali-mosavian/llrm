@@ -85,7 +85,7 @@ def joined(body: mir.MirBody) -> mir.MirBody:
                     kind=mir.Kind.EXTRACT, args=(mir.Held(result, 4), mir.Const(offset, 4)),
                     results=(mir.Held(phi.result, 2),), covers=(block.at, block.at)))
             replacements[id(op)] = replace(op, kind=mir.Kind.COPY, args=(mir.Held(result, 4),),
-                                            uses=(result,), merges={}, node=None, made=None, raised=None)
+                                            uses=(result,), merges={}, node=None, raised=None)
     if not replacements:
         return body
     changed = []

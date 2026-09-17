@@ -85,7 +85,7 @@ def test_moving_a_preserved_value_does_not_rewrite_the_destination() -> None:
 
     ax = ir.Reg(register=Register.AX, width=2)
     what = ir.Semantics(ir.Operation.MOVE, "mov", dests=(ax,), sources=(ir.Imm(value=1, width=2),))
-    op = mir.Op(0x10, ir.Operation.MOVE, "mov", (kept,), (older,), made=what)
+    op = mir.Op(0x10, ir.Operation.MOVE, "mov", (kept,), (older,))
 
     origin = {kept: Register.EAX, older: Register.EAX}
     # The older value moves; the one this instruction defines does not.
@@ -120,6 +120,7 @@ def test_a_two_address_operation_keeps_both_halves_in_one_register() -> None:
     """
     ax = ir.Reg(register=Register.AX, width=2)
     cell = ir.Mem(None, 2)
+    from types import SimpleNamespace
 
     what = ir.Semantics(ir.Operation.BINARY, "add", dests=(ax,), sources=(ax, cell))
     assert target.tied(what) is Register.EAX, "the destination and the first source are one register"
@@ -131,7 +132,19 @@ def test_a_two_address_operation_keeps_both_halves_in_one_register() -> None:
     # allocation moves both or neither.
     made = mir.Value(1, 0x10)
     read = mir.Value(2, 0x08)
-    op = mir.Op(0x10, ir.Operation.BINARY, "add", (made,), (read,), made=what)
+    ref = mir.MemRef(None, 2)
+    op = mir.Op(
+        0x10,
+        ir.Operation.BINARY,
+        "add",
+        (made,),
+        (read,),
+        loads=(ref,),
+        kind=mir.Kind.ADD,
+        args=(mir.Held(read, 2), mir.Cell(ref)),
+        results=(mir.Held(made, 2),),
+        node=SimpleNamespace(semantics=what),
+    )
     body = mir.MirBody(0x10, (mir.MirBlock(0x10, (), (op,), ()),), {made: Register.EAX, read: Register.EAX}, {})
     klass = regalloc.congruent(body)
     # Both present, not both absent: `.get` on two values neither of which
@@ -223,11 +236,6 @@ def test_resolving_after_a_move_relinks_by_register() -> None:
     Recorded rather than fixed: this is the right behaviour when raising and
     the wrong thing to call afterwards.
     """
-    ax = ir.Reg(register=Register.AX, width=2)
-    cell = ir.Mem(None, 2)
-    load = ir.Semantics(ir.Operation.MOVE, "mov", dests=(ax,), sources=(cell,))
-    use = ir.Semantics(ir.Operation.BINARY, "add", dests=(ax,), sources=(ax, cell))
-
     first = mir.Value(1, 0x10)
     second = mir.Value(2, 0x14)
     third = mir.Value(3, 0x18)
@@ -237,9 +245,9 @@ def test_resolving_after_a_move_relinks_by_register() -> None:
         0x10,
         (),
         (
-            mir.Op(0x10, ir.Operation.MOVE, "mov", (first,), (), (mir.MemRef(None, 2),), made=load),
-            mir.Op(0x14, ir.Operation.MOVE, "mov", (second,), (), (mir.MemRef(None, 2),), made=load),
-            mir.Op(0x18, ir.Operation.BINARY, "add", (third,), (first,), (mir.MemRef(None, 2),), made=use),
+            mir.Op(0x10, ir.Operation.MOVE, "mov", (first,), (), (mir.MemRef(None, 2),)),
+            mir.Op(0x14, ir.Operation.MOVE, "mov", (second,), (), (mir.MemRef(None, 2),)),
+            mir.Op(0x18, ir.Operation.BINARY, "add", (third,), (first,), (mir.MemRef(None, 2),)),
         ),
         (),
     )

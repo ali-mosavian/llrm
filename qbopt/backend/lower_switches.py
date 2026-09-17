@@ -61,7 +61,7 @@ def expanded(body: mir.MirBody) -> mir.MirBody:
                 mask = (1 << (8 * selector.width)) - 1
                 target = next((target for number, target in op.cases if number & mask == selector.n & mask), target)
             jump = replace(
-                op, kind=mir.Kind.JUMP, target=target, args=(), uses=(), cases=(), name="", made=None, raised=None
+                op, kind=mir.Kind.JUMP, target=target, args=(), uses=(), cases=(), name="", raised=None
             )
             replacements[block.at] = [replace(block, ops=(*block.ops[:-1], jump), succ=(target,))]
             for successor in block.succ:

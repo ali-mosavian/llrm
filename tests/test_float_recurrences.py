@@ -23,7 +23,7 @@ def test_proved_exit_folds_a_read_without_removing_strict_operations():
     value = mir.Value(10000, exit_block.at, variable=10000)
     read = replace(exit_block.ops[0], kind=mir.Kind.LOAD, args=(mir.Cell(accumulator),),
                    results=(mir.Held(value, 4),), defines=(value,), uses=(),
-                   loads=(accumulator,), stores=(), merges={}, node=None, made=None, raised=None)
+                   loads=(accumulator,), stores=(), merges={}, node=None, raised=None)
     body = replace(body, blocks=tuple(replace(block, ops=(read, *block.ops))
                                      if block is exit_block else block for block in body.blocks))
     changed = transform.folded(body, found.dgroup, found.calls)
@@ -143,7 +143,15 @@ def test_recurrence_requires_known_exact_steps_and_bounded_work(change):
     ops, count = latch.ops, 10
     match change:
         case "inexact":
-            divisor = next(op.args[1].ref for op in ops if op.kind is mir.Kind.FDIV)
+            divisor_arg = next(op.args[1] for op in ops if op.kind is mir.Kind.FDIV)
+            if isinstance(divisor_arg, mir.Cell):
+                divisor = divisor_arg.ref
+            else:
+                assert isinstance(divisor_arg, mir.Held)
+                producer = next(
+                    op for block in body.blocks for op in block.ops if divisor_arg.value in op.defines
+                )
+                divisor = next(arg.ref for arg in producer.args if isinstance(arg, mir.Cell))
             initial = {**initial, **consts._fragments(divisor, consts.Known(0x40e00000, 4))}
         case "unknown":
             initial = {}

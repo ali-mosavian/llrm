@@ -280,7 +280,9 @@ def test_nothing_redundant_is_an_accumulate(obj: Path) -> None:
             for op in block.ops:
                 if op.at not in gone:
                     continue
-                what = op.made if op.made is not None else getattr(op.node, "semantics", None)
+                from qbopt.backend import lower
+
+                what = lower.current(op)
                 assert what is not None and what.op is ir.Operation.MOVE, (
                     f"{obj.stem} {op.at:#x}: {op.name} is not a move and was proposed for deletion"
                 )
@@ -294,13 +296,10 @@ def test_preserved_allows_a_move_and_refuses_a_binary() -> None:
     that cell, which only happens in longer code than the suite writes. The
     corpus test above is the invariant; this is what discriminates.
     """
-    from iced_x86 import Register
-
     from qbopt.model import ir
 
     old = mir.Value(1, 0x100)
     new = mir.Value(2, 0x100)
-    origin = {old: Register.EAX, new: Register.EAX}
     cell = mir.MemRef(addr=Addr(Space.LITERAL, 0, 0), width=2)
     where = ir.Mem(addr=Addr(Space.LITERAL, 0, 0), width=2)
     into = ir.Reg(register=Register.AX, width=2)
@@ -316,7 +315,7 @@ def test_preserved_allows_a_move_and_refuses_a_binary() -> None:
             kind=mir._kind_of(what, args, results),
             args=args,
             results=results,
-            made=what,
+            raised=((), ()),
         )
 
     # In MIR's own operands: a load's only argument is the cell, so the use

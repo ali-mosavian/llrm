@@ -31,7 +31,7 @@ def joined(body: mir.MirBody) -> mir.MirBody:
                                                      *((op.covers,) if op.covers is not None else ()))))
                         ops[-1] = replace(low, op=ir.Operation.MOVE, name="mov", args=(whole,),
                                           results=(mir.Cell(ref),), stores=(ref,), uses=uses,
-                                          merges={}, node=None, made=None, raised=None, extra_covers=spans)
+                                          merges={}, node=None, raised=None, extra_covers=spans)
                         continue
             ops.append(op)
         blocks.append(replace(block, ops=tuple(ops)))
