@@ -366,6 +366,7 @@ def allocate(
     body: lir.LirBody,
     pinned: dict[int, Register_] | None = None,
     unspillable: "frozenset[int] | None" = None,
+    protected: "frozenset[int] | None" = None,
     *,
     cpu: "str | targets.Profile" = "386",
 ) -> Assignment:
@@ -408,6 +409,15 @@ def allocate(
     # no register is free for it`.
     for one in unspillable or ():
         if one in live and live[one].size <= RELOAD:
+            live[one] = replace(live[one], weight=float("inf"))
+    # A pressure plan may retain a long-lived value because spilling it
+    # would recreate a loop-invariant address every iteration.  Unlike a
+    # reload, its length is not evidence it may be spilled: the candidate
+    # evaluator established a legal alternative for the values it displaces.
+    # Keep this separate from `unspillable`, whose short-range restriction is
+    # what prevents an accidental long reload from making a body impossible.
+    for one in protected or ():
+        if one in live:
             live[one] = replace(live[one], weight=float("inf"))
     # Values no slot can hold, which is a different fact from a reload
     # being too short to spill again: spiller.py owns which spills are
@@ -482,7 +492,7 @@ def allocate(
                 live,
                 masks,
                 movable,
-                frozenset(fixed),
+                frozenset(fixed) | frozenset(protected or ()),
                 widths.get(value, 4),
                 cascades.get(value, newest),
                 cascades,
@@ -800,6 +810,18 @@ class RegAlloc(LIRTransform):
         # says the same as `LiveInterval::markNotSpillable`, and the
         # reloads below are already handed back the same way.
         reloads: frozenset[int] = frozenset(fixed)
+        # A joint pressure plan may retain a loop-invariant frame-loaded
+        # address base and spill the short index it otherwise displaced.
+        # The set is chosen only after comparing the baseline allocation to
+        # a legal recovery plan below; it is not a preferred physical
+        # register or a frontend-specific hint.
+        retained: frozenset[int] = frozenset()
+
+        def assigned(current: lir.LirBody) -> Assignment:
+            if retained:
+                return allocate(current, self.pinned, reloads, protected=retained, cpu=self.cpu)
+            return allocate(current, self.pinned, reloads, cpu=self.cpu)
+
         # Which values have already been cut. Splitting is bounded per
         # value, not merely per round.
         already: set[int] = set()
@@ -813,9 +835,40 @@ class RegAlloc(LIRTransform):
             # requirement is about the instruction rather than about the
             # value that happened to be there when the splitter ran.
             self.pinned = {**prefer, **constrain.required(body)}
-            got = allocate(body, self.pinned, reloads, cpu=self.cpu)
+            got = assigned(body)
+            if not retained and got.spilled:
+                keep = _retainable_bases(body, got.spilled)
+                if keep:
+                    try:
+                        trial = allocate(body, self.pinned, reloads, protected=keep, cpu=self.cpu)
+                    except Unplaced:
+                        trial = None
+                    # A retained invariant is accepted only when every new
+                    # spill has a target-legal direct recovery: it is either
+                    # rematerialized, or its word index folds into the base
+                    # that access kills.  This compares whole allocations,
+                    # rather than raising an owner's priority and hoping the
+                    # spiller later finds room for whatever it displaced.
+                    if (
+                        trial is not None
+                        and keep.isdisjoint(trial.spilled)
+                        and trial.spilled
+                        <= spiller.rematerializable(body, trial.spilled)
+                        | spiller.foldable_indexes(body, trial.spilled)
+                    ):
+                        retained, got = keep, trial
             if not got.spilled:
                 return applied(body, got)
+            # A retained-base plan is admitted only when every displaced
+            # value has the direct recovery proven above.  Its complete
+            # alternative is therefore the spill rewrite itself: ordinary
+            # splitting or spill-web expansion would replace that evaluated
+            # plan with a different one and can consume the register the
+            # direct fold intentionally freed.
+            if retained:
+                body, made = spiller.spilled(body, got.spilled, self.frame)
+                reloads |= made
+                continue
             # Split before spilling, which is the order RegAllocGreedy
             # uses: a range cut at a loop it never touches may fit where
             # the whole of it did not, and a copy is cheaper than a store
@@ -865,11 +918,13 @@ class RegAlloc(LIRTransform):
             # touched. Rematerialization is a preference, not progress; when
             # it made no structural change, spill the values allocation
             # actually selected in this same round.
-            chosen = got.spilled | spiller.siblings(body, got.spilled, self.frame, frozenset(self.pinned) | reloads)
+            chosen = got.spilled | spiller.siblings(
+                body, got.spilled, self.frame, frozenset(self.pinned) | reloads | retained
+            )
             body, made = spiller.spilled(body, chosen, self.frame)
             reloads |= made
         self.pinned = {**prefer, **constrain.required(body)}
-        return applied(body, allocate(body, self.pinned, reloads, cpu=self.cpu))
+        return applied(body, assigned(body))
 
 
 def _sibling_priced(body: lir.LirBody, live: dict) -> dict:
@@ -942,6 +997,36 @@ def _traffic(body: lir.LirBody, spilled: "frozenset[int]") -> float:
         for value in (*one.defines, *one.uses)
         if value in spilled
     )
+
+
+def _retainable_bases(body: lir.LirBody, spilled: "frozenset[int]") -> frozenset[int]:
+    """Spilled invariant frame loads that repeatedly form hot addresses.
+
+    A stable frame load ordinarily rematerializes cheaply, which is exactly
+    right for an occasional use.  It is wrong for a loop-invariant pointer
+    whose only useful role is as the base of a memory operand in a hot block:
+    every rematerialization then reconstructs the same address.  This names
+    the semantic shape, not a procedure, source register, or physical
+    register; allocation still chooses a legal member of the address class.
+    """
+    if not spilled:
+        return frozenset()
+    from qbopt.backend import spiller
+
+    stable = frozenset(spiller._stable_loads(body, spilled))
+    if not stable:
+        return frozenset()
+    deep = ranges.depths(body)
+    hot_bases = {
+        where.base.value
+        for block in body.blocks
+        if deep.get(block.at, 0) > 0
+        for one in block.insns
+        if one.what is not None
+        for where in (*one.what.dests, *one.what.sources)
+        if isinstance(where, ir.Mem) and isinstance(where.base, ir.Held)
+    }
+    return stable & hot_bases
 
 
 def _fold_discount(one: lir.Insn, profile: targets.Profile) -> float:

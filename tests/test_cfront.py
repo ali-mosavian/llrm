@@ -783,6 +783,26 @@ def test_hot_loop_loads_far_fields_before_owner_address_splits():
     assert not any("[bp+6]" in line for line in loads), body
 
 
+def test_hot_loop_retains_invariant_far_field_owners_under_pressure():
+    """r_walk loaded `world` and `rdr` from BP on every marked face.
+
+    Both pointers are loop-invariant near owners of far fields.  Once the
+    displaced word indexes can fold into their dying field bases, keeping the
+    owners costs no extra reload register; the allocator must choose that
+    complete pressure plan rather than rematerializing the owners per pass.
+    """
+    text = cfront.compiled((FIXTURES / "farloadloop.cgs").read_text(), "farloadloop", optimise=True)
+    body = _proc([line.strip() for line in text.splitlines()], "_mark")
+    jump = next(line for line in body if line.startswith("jl "))
+    loop_label = jump.split()[1] + ":"
+    loop = body[body.index(loop_label) : body.index(jump)]
+
+    assert not any("[bp+6]" in line or "[bp+8]" in line for line in loop), loop
+    before = body[: body.index(loop_label)]
+    assert any("[bp+6]" in line for line in before), body
+    assert any("[bp+8]" in line for line in before), body
+
+
 @pytest.mark.parametrize("name", ["_grab", "_pass"])
 def test_long_call_result_is_consumed_as_its_two_words(name):
     """A long returned in DX:AX was joined through `push dx; push ax; pop eax`

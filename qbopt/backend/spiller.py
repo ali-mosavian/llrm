@@ -900,18 +900,23 @@ def _base_uses(body: lir.LirBody) -> dict[int, int]:
     return out
 
 
-def _indexed_source(
-    one: lir.Insn, values: frozenset[int], frame, base_uses: dict[int, int]
-) -> "tuple[lir.Insn, lir.Insn] | None":
-    """Fold a spilled word index into a base the current access kills.
+def foldable_indexes(body: lir.LirBody, values: frozenset[int]) -> frozenset[int]:
+    """Spilled word indexes that can become a direct frame add.
 
-    A 16-bit effective address cannot name a frame slot as its index, but
-    ``add bx,[bp-slot]`` followed by ``es:[bx]`` names exactly the same byte
-    address.  The destructive add is safe only when *all* remaining encoded
-    uses of the virtual base are the matching operands in this instruction;
-    otherwise it would silently move a later access.  A read-modify-write
-    appears twice (destination and source) and is one safe final access.
+    This is deliberately the pure half of `_indexed_source`: allocation's
+    pressure-plan chooser may ask whether a candidate has a legal recovery
+    without reserving a frame slot or mutating the body it is comparing.
     """
+    bases = _base_uses(body)
+    return frozenset(
+        found[1].value
+        for one in body.insns
+        if (found := _indexed_pattern(one, values, bases)) is not None
+    )
+
+
+def _indexed_pattern(one: lir.Insn, values: frozenset[int], base_uses: dict[int, int]):
+    """The base, index and matching cells of one legal direct-index fold."""
     if one.what is None or one.group is not None or one.requires or one.delivers or one.clobbers:
         return None
     cells = [
@@ -932,6 +937,25 @@ def _indexed_source(
         return None
     if base_uses.get(base.value, 0) != len(cells):
         return None
+    return base, index, cells
+
+
+def _indexed_source(
+    one: lir.Insn, values: frozenset[int], frame, base_uses: dict[int, int]
+) -> "tuple[lir.Insn, lir.Insn] | None":
+    """Fold a spilled word index into a base the current access kills.
+
+    A 16-bit effective address cannot name a frame slot as its index, but
+    ``add bx,[bp-slot]`` followed by ``es:[bx]`` names exactly the same byte
+    address.  The destructive add is safe only when *all* remaining encoded
+    uses of the virtual base are the matching operands in this instruction;
+    otherwise it would silently move a later access.  A read-modify-write
+    appears twice (destination and source) and is one safe final access.
+    """
+    found = _indexed_pattern(one, values, base_uses)
+    if found is None:
+        return None
+    base, index, _cells = found
     slot = frame.cell(index.value, index.width)
     if slot is None:
         return None

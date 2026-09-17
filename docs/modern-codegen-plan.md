@@ -404,3 +404,23 @@ unplaceable index reloads and yields retained near owners with the expected
 `les; add base,[bp-slot]` structure.  No owner is automatically protected by
 this commit: selection between the baseline and that full joint plan remains
 the next phase-4 mechanism, to be priced rather than assumed.
+
+### 22. Conservative joint invariant/index pressure plan — 2026-09-18
+
+Allocation now evaluates a complete alternative when its baseline spills a
+stable frame-loaded value that is a hot-loop memory base.  It protects those
+invariant bases, re-runs allocation, and admits the alternative only if no
+protected base spills and *every* displaced value has a direct, target-legal
+recovery: existing rematerialization or the dead-base word-index fold from
+iteration 21.  The candidate never names a source procedure or physical
+register; normal register-class allocation chooses the actual locations.
+
+Once admitted, the evaluated direct recoveries are applied as one plan rather
+than mixed with speculative range splits or spill-web expansion.  That is
+important: either rewrite would introduce a different set of pressure values
+after the candidate was priced.  The end-to-end C regression first failed
+with both `[bp+6]` and `[bp+8]` owner loads inside the loop; it now verifies
+that they are preheader loads and that the loop uses retained owners plus
+folded frame indexes.  This is phase-4 progress, not a claim of final
+allocator quality; broader CPU and corpus evaluation remains a phase-boundary
+gate.
