@@ -7,6 +7,10 @@ import pytest
 from qbopt.analysis import loops
 from qbopt.model import ir, mir
 from qbopt.optimize import loopclone
+from qbopt.model.floating import Format
+from qbopt.model.floating import Precision
+from qbopt.model.floating import Rounding
+from qbopt.model.floating import Semantics
 
 
 def diamond():
@@ -86,6 +90,35 @@ def test_clones_read_their_own_values_and_do_not_duplicate_byte_ownership():
             if op.results:
                 assert op.results[0].value == op.defines[0]
     assert changed.block(3).ops == body.block(3).ops
+
+
+def test_peeling_refuses_floating_work_behind_an_internal_branch() -> None:
+    """NBODYS made every interaction's falloff 0.5 after peeling ``other <> body``.
+
+    The x87 allocator can preserve a straight-line cloned region, but does
+    not yet prove stack equivalence when integer folding removes branches
+    inside the cloned loop.  Such a loop is not a legal peel candidate.
+    """
+    body, _ = diamond()
+    floating = Semantics(
+        (Format.EXTENDED80,),
+        Format.EXTENDED80,
+        Precision.DYNAMIC,
+        Rounding.DYNAMIC,
+    )
+    work = body.block(3)
+    body = replace(
+        body,
+        blocks=tuple(
+            replace(block, ops=(replace(block.ops[0], floating=floating), *block.ops[1:]))
+            if block is work
+            else block
+            for block in body.blocks
+        ),
+    )
+    (loop,) = loops.loops(body.blocks, body.entry)
+
+    assert loopclone.peeled(body, loop, 2) is None
 
 
 def test_peeling_clones_pointer_identity_and_seed_facts() -> None:

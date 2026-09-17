@@ -1757,20 +1757,24 @@ def _unreachable(body: MirBody) -> MirBody:
     return replace(
         body,
         blocks=tuple(
-            block
-            if block.at in reached
-            else replace(
-                block,
-                succ=(),
-                phis=(),
-                # One definition of an inert source owner.  The former
-                # partial spelling forgot floating semantics (and several
-                # other semantic fields), producing a NOTHING operation
-                # that lowering correctly refused after exact loop peeling
-                # made an x87 residual body unreachable.
-                ops=tuple(_empty_operation(op) for op in block.ops),
-            )
+            normalized
             for block in body.blocks
+            if block.at in reached or block.ops
+            for normalized in (
+                block
+                if block.at in reached
+                else replace(
+                    block,
+                    succ=(),
+                    phis=(),
+                    # One definition of an inert source owner.  The former
+                    # partial spelling forgot floating semantics (and several
+                    # other semantic fields), producing a NOTHING operation
+                    # that lowering correctly refused after exact loop peeling
+                    # made an x87 residual body unreachable.
+                    ops=tuple(_empty_operation(op) for op in block.ops),
+                ),
+            )
         ),
     )
 
@@ -2796,17 +2800,17 @@ def applied(
 
     body = scalarized(body, "r01")
     if only is not None and boundary:
-        return body
+        return _unreachable(body)
     if only is not None and unrollers:
         body = unrollers[0].transform(body)
         if watch is not None:
             watch("r01-unroll", body)
-        return body
+        return _unreachable(body)
     if only is not None and peelers:
         body = peelers[0].transform(body)
         if watch is not None:
             watch("r01-peel", body)
-        return body
+        return _unreachable(body)
 
     def fixed(state: MirBody, *, consider_unroll: bool = False, prefix: str = "") -> MirBody:
         # A monotone chain may expose one simplification per operation.
@@ -2836,7 +2840,12 @@ def applied(
                     watch=(None if watch is None else lambda stage, candidate: watch(f"{prefix}{stage}", candidate)),
                 )
             if only is not None or state == before:
-                return state
+                # A structural candidate can make its last cloned region
+                # unreachable on the same round that reaches the scalar
+                # fixed point.  No later Decide pass then has a reason to
+                # run `_unreachable`, so normalize the public boundary
+                # itself: detached blocks retain ownership and no work.
+                return _unreachable(state)
             if any(state == previous for previous in history):
                 raise RuntimeError(f"MIR optimization did not converge: cycle after {iteration + 1} rounds")
             history.append(state)
@@ -2867,4 +2876,4 @@ def applied(
             costs=where.costs,
             watch=watch,
         )
-    return body
+    return _unreachable(body)

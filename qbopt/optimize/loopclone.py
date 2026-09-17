@@ -30,6 +30,19 @@ def peeled(body: mir.MirBody, loop: loops.Loop, count: int) -> mir.MirBody | Non
     if any(set(predecessors[at]) - loop.body for at in loop.body if at != loop.header):
         return None
     originals = [block for block in body.blocks if block.at in loop.body]
+    # A straight-line floating region can be cloned and allocated as one x87
+    # sequence.  An internal conditional is different: folding the cloned
+    # selector can delete a different arm in every copy, and the current x87
+    # region model has no equivalence proof for the resulting stack joins.
+    # NBODYS demonstrated the unsound case by turning every computed falloff
+    # into 0.5 after its ``other <> body`` loop was peeled.  Keep this as a
+    # legality boundary until conditional floating regions carry an explicit
+    # stack state on every CFG edge.
+    if (
+        any(op.floating is not None for block in originals for op in block.ops)
+        and any(block.at != loop.header and len(block.succ) > 1 for block in originals)
+    ):
+        return None
     if any(
         len(block.succ) > 1
         and (

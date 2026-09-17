@@ -21,6 +21,49 @@ from qbopt.objectfile import module
 from qbopt.optimize import transform
 
 
+def test_final_pipeline_inerts_unreachable_executable_blocks() -> None:
+    """NBODYS could not be emitted after peeling left clone 0x310000002b unreachable.
+
+    Structural candidates may make an entire cloned region dead on their last
+    simplifying round.  The optimizer's public result must retain those
+    blocks only as byte-ownership markers, never as detached executable work.
+    """
+    dead_store = mir.Op(9, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.STORE)
+    body = mir.MirBody(
+        0,
+        (
+            mir.MirBlock(0, (), (), ()),
+            mir.MirBlock(0x310000002B, (), (dead_store,), ()),
+        ),
+    )
+
+    result = transform.applied(body, frozenset(), {}, only="no-such-pass")
+
+    orphan = result.block(0x310000002B)
+    assert orphan is not None
+    assert not orphan.succ
+    assert all(op.kind is mir.Kind.NOTHING and not op.stores for op in orphan.ops)
+
+
+def test_final_pipeline_drops_unreachable_empty_blocks() -> None:
+    """Fresh NBODYS retained empty clone 0x310000002b and failed LIR verification.
+
+    A detached block with no operations owns no source bytes, so unlike an
+    ownership marker it has no reason to survive the MIR boundary.
+    """
+    body = mir.MirBody(
+        0,
+        (
+            mir.MirBlock(0, (), (), ()),
+            mir.MirBlock(0x310000002B, (), (), ()),
+        ),
+    )
+
+    result = transform.applied(body, frozenset(), {}, only="no-such-pass")
+
+    assert result.block(0x310000002B) is None
+
+
 @pytest.mark.parametrize("guard", ["none", "phi", "store", "cycle"])
 def test_empty_jump_threading_preserves_phi_inputs_and_effects(guard):
     """Collapsed FPCSE's trampoline is removable; a phi edge or store is not."""
