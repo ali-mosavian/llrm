@@ -768,6 +768,21 @@ def test_far_pointer_in_memory_is_read_as_its_two_words():
     assert body[2] == "les bx, dword ptr _table", body
 
 
+def test_hot_loop_loads_far_fields_before_owner_address_splits():
+    """r_walk reloaded each far field as two words after allocation had
+    rematerialized its near owner separately.  BCC selects `les` while the
+    words still share their owner, avoiding one address reconstruction per
+    field per iteration."""
+    text = cfront.compiled((FIXTURES / "farloadloop.cgs").read_text(), "farloadloop", optimise=True)
+    body = _proc([line.strip() for line in text.splitlines()], "_mark")
+    loads = [line for line in body if line.startswith("les ")]
+    assert len(loads) >= 2, body
+    # `world` and `rdr` are adjacent *near* arguments.  They must never be
+    # mistaken for the two words of one far pointer merely because their
+    # frame slots touch.
+    assert not any("[bp+6]" in line for line in loads), body
+
+
 @pytest.mark.parametrize("name", ["_grab", "_pass"])
 def test_long_call_result_is_consumed_as_its_two_words(name):
     """A long returned in DX:AX was joined through `push dx; push ax; pop eax`

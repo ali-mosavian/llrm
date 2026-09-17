@@ -519,6 +519,7 @@ def lowered(
     without anything having been optimised.
     """
     from qbopt.model import lir
+    from qbopt.backend import farload
     from qbopt.backend import rmw
     from qbopt.analysis import ssa
     from qbopt.backend import lower_floats
@@ -599,6 +600,11 @@ def lowered(
         made[block.at] = tuple(
             one for op in scheduled[block.at] for one in making.expand(op, preserve_flags=id(op) in preserve)
         )
+    # A far-pointer field is two language-visible word loads but one target
+    # instruction.  Select it before allocation can rematerialize its owner
+    # into unrelated physical bases; the final peephole retains the analogous
+    # source-byte-backed fusion.
+    made = {at: farload.selected(insns) for at, insns in made.items()}
     uses = Counter(value for insns in made.values() for one in insns for value in one.uses)
     uses.update(
         held.value for insns in made.values() for one in insns for held, _ in one.requires if held.value not in one.uses

@@ -1,0 +1,88 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+TYPE T25 size=1018 align=1
+TYPE T26 size=42 align=1
+f1 DBSrcFile "/Users/alim/work/personal/qbopt/fixtures/c/farloadloop.c"
+- DBSrcCue f1 14 1
+SYM y1 name="mark" base="mark" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0
+- CGProcDecl y1 TY_INTEGER
+SYM y2 name="world" base="world" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_POINTER
+SYM y3 name="rdr" base="rdr" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y3 TY_POINTER
+SYM y4 name="first" base="first" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y4 TY_INT_2
+SYM y5 name="last" base="last" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y5 TY_INT_2
+l2 CGLastParm
+t3 CGTemp TY_INTEGER
+SYM y6 name="i" base="i" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y6 TY_INT_2
+SYM y7 name="value" base="value" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y7 TY_INT_2
+l4 BENewLabel
+l5 BENewLabel
+- DBSrcCue f1 19 1
+n6 CGFEName y6 TY_INT_2
+n7 CGFEName y4 TY_INT_2
+n8 CGUnary O_POINTS n7 TY_INT_2
+n9 CGAssign n6 n8 TY_INT_2
+- CGDone n9
+- CGControl O_LABEL n0 l4
+n10 CGFEName y6 TY_INT_2
+n11 CGUnary O_POINTS n10 TY_INT_2
+n12 CGFEName y5 TY_INT_2
+n13 CGUnary O_POINTS n12 TY_INT_2
+n14 CGCompare O_LT n11 n13 TY_INTEGER
+- CGControl O_IF_FALSE n14 l5
+- DBSrcCue f1 20 1
+n15 CGFEName y7 TY_INT_2
+n16 CGFEName y2 TY_POINTER
+n17 CGUnary O_POINTS n16 TY_POINTER
+n18 CGInteger 38 TY_UNSIGNED
+n19 CGBinary O_PLUS n17 n18 TY_POINTER
+n20 CGUnary O_POINTS n19 TY_LONG_POINTER
+n21 CGFEName y6 TY_INT_2
+n22 CGUnary O_POINTS n21 TY_INT_2
+n23 CGInteger 2 TY_INTEGER
+n24 CGBinary O_TIMES n22 n23 TY_INTEGER
+n25 CGBinary O_PLUS n20 n24 TY_LONG_POINTER
+n26 CGUnary O_POINTS n25 TY_UINT_2
+n27 CGAssign n15 n26 TY_INT_2
+- CGDone n27
+- DBSrcCue f1 21 1
+n28 CGFEName y3 TY_POINTER
+n29 CGUnary O_POINTS n28 TY_POINTER
+n30 CGInteger 1014 TY_UNSIGNED
+n31 CGBinary O_PLUS n29 n30 TY_POINTER
+n32 CGUnary O_POINTS n31 TY_LONG_POINTER
+n33 CGFEName y7 TY_INT_2
+n34 CGUnary O_POINTS n33 TY_INT_2
+n35 CGInteger 3 TY_INTEGER
+n36 CGBinary O_RSHIFT n34 n35 TY_INTEGER
+n37 CGBinary O_PLUS n32 n36 TY_LONG_POINTER
+n38 CGInteger 1 TY_INTEGER
+n39 CGFEName y7 TY_INT_2
+n40 CGUnary O_POINTS n39 TY_INT_2
+n41 CGInteger 7 TY_INTEGER
+n42 CGBinary O_AND n40 n41 TY_INTEGER
+n43 CGBinary O_LSHIFT n38 n42 TY_INTEGER
+n44 CGUnary O_CONVERT n43 TY_UINT_1
+n45 CGPreGets O_OR n37 n44 TY_UINT_1
+- CGDone n45
+- DBSrcCue f1 22 1
+n46 CGFEName y6 TY_INT_2
+n47 CGInteger 1 TY_INTEGER
+n48 CGPreGets O_PLUS n46 n47 TY_INT_2
+- CGDone n48
+- CGControl O_GOTO n0 l4
+- CGControl O_LABEL n0 l5
+- DBSrcCue f1 23 1
+- CGReturn n0 TY_INTEGER
+STOP
+FINI

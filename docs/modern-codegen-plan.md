@@ -186,3 +186,31 @@ That is the expected result for this loop: `i * 2` has no legal scaled
 register-recurrence fallback.  The profile correction prevents future MIR
 formula selection from incorrectly pricing a SIB-scale option; it is not
 claimed as a performance change here.
+
+### 11. Pre-allocation far-pointer load selection — 2026-09-18
+
+The next raw C loop regression, `fixtures/c/farloadloop.c`, reproduces the
+relevant `r_walk` shape: near `World` and `Renderer` owners, each with a far
+field used in an indexed hot loop.  It failed first with no `les` at all:
+allocation had already rematerialized each owner for its offset word and its
+selector word, so the final physical `far_loads()` peephole could no longer
+prove a shared base.
+
+`backend/farload.py` now performs this exact instruction selection within
+lowering, before allocation.  It requires both the normal address proof
+(adjacent words reached identically) and a semantic proof from the C raise:
+the words must be consecutive, non-volatile `pointer4` provenance slices of
+the same source object.  The latter is essential: the initial address-only
+version visibly miscompiled the adjacent near `world` and `rdr` frame
+arguments as `les cx, dword ptr [bp+6]`.  The regression now checks both
+outcomes: two field `les` loads are present and no `les` reads that near
+argument pair.
+
+The corrected emitted loop is structurally closer to the BCC medium-model
+listing: `mov bx,[bp+6]; les bx,[bx+38]` and the corresponding `rdr` field
+load replace four independent owner/word moves.  This is a lowering-side
+target form, not an MIR pass or a post-allocation optimization tier.  GCC and
+LLVM listings remain best-case flat-i386 structural references; BCC remains
+the ABI-constrained reference for this comparison.  No timing claim is made
+until the committed qbopt revision can be used to produce a clean paired
+QCport manifest.
