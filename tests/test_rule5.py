@@ -127,6 +127,28 @@ def test_a_pass_names_nothing_about_the_machine(name: str) -> None:
     )
 
 
+@pytest.mark.parametrize("name", [name for name in PASSES if not name.startswith("frontend/")])
+def test_a_pass_cannot_read_or_write_allocation_hints(name: str) -> None:
+    """Placement history belongs to the raise/lower side table, not MIR.
+
+    Checking both attributes and keyword arguments prevents a pass from
+    silently propagating the metadata with ``replace(body, origin=...)`` even
+    when it never branches on the physical register itself.
+    """
+    tree = ast.parse((HERE / name).read_text())
+    found = [
+        (node.lineno, node.attr)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and node.attr in {"origin", "pins"}
+    ]
+    found += [
+        (node.lineno, node.arg)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.keyword) and node.arg in {"origin", "pins"}
+    ]
+    assert not found, f"{name}: allocation metadata crosses the MIR pass boundary at {found}"
+
+
 def test_the_allow_list_names_nothing_that_has_already_gone() -> None:
     """A permission for a function that no longer names anything is a
     permission nobody is checking, and it hides the next one."""

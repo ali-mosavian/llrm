@@ -135,7 +135,7 @@ def renumbered(body: MirBody, variable: int) -> MirBody:
             for op in block.ops
         )
         blocks.append(replace(block, phis=phis, ops=ops))
-    return replace(body, blocks=tuple(blocks), origin={named(one): where for one, where in body.origin.items()})
+    return replace(body, blocks=tuple(blocks))
 
 
 def constructed(body: MirBody, variables: frozenset[int]) -> MirBody:
@@ -154,8 +154,6 @@ def constructed(body: MirBody, variables: frozenset[int]) -> MirBody:
 
     skeleton = replace(
         body,
-        origin={},
-        pins={},
         blocks=tuple(
             replace(
                 block,

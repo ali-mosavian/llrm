@@ -30,8 +30,12 @@ pass that rewrites an operation can say what it now computes without
 writing `ir.Semantics`. `made` goes when `lower()` can build it from `op`,
 `args` and the allocation.
 
-**`origin` last.** Lowering and the allocator's identity baseline are built
-on it, and it is the one field `Value`'s docstring sanctions reading.
+**`AllocationHints`.** Raise exports soft origins by semantic variable and
+hard result pins by `(operation id, result index)`.  Lowering consumes that
+side table directly.  MIR transforms neither inspect nor copy it: ordinary
+SSA reconstruction preserves a variable identity, source clones preserve an
+operation identity, and a newly synthesized definition deliberately has no
+historical placement.
 
 ## Order
 
@@ -43,6 +47,9 @@ C. `covers` -> `absorbed`.                                shadow model done;
    passes transfer only opaque ownership ids.             done
    remove the compatibility fields from `Op`.             done
 E. `origin`.
+   production BASIC and C lowering use the external side table. done
+   optimization and shared analysis do not read or propagate it. done
+   remove the compatibility fields from public `MirBody`. pending
 
 ## Measuring it
 

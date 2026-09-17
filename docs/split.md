@@ -108,14 +108,11 @@ optimiser that has already done the work by the time MIR sees anything,
 which is why the MIR arm never meets an absorbable call. Phase D retires
 it and collapses the two into the diagram at the top.
 
-**Twelve machine references in the passes**, all named:
-
-```
-  transform._leaving   8   what the caller sees is a statement about
-                           registers, and Value's docstring sanctions it
-  avail.redundant      4   a register-level map, waiting on the allocator
-                           honouring a substituted value
-```
+**No optimization or shared-analysis pass reads or writes placement
+history.**  Origins and fixed-result pins are captured at the raise in the
+external `AllocationHints` table.  The old register-sensitive redundant-load
+path has been deleted, and CFG/SSA cloning relies on stable semantic variable
+and operation identities instead of copying physical locations.
 
 **MIR itself still carries one source-machine fact:** `MirBody.origin`.
 Decoded instructions leave the raise in `SourceMap.nodes`, keyed by the
@@ -141,8 +138,10 @@ been deleted.
 
 1. **Phase D** -- absorption at the raise, then the machine arm retires:
    `lift.py`, `calls.py`'s emission, `memory.py`, `forward.py`.
-2. `origin` leaves `MirBody` last, because lowering and the allocator's
-   identity baseline are built on it. (`made` and concrete byte coverage have
+2. Remove the compatibility `origin` and `pins` fields from public `MirBody`.
+   Production lowering already receives `AllocationHints` explicitly; the
+   remaining work is to make the raise's temporary machine view private and
+   migrate legacy/test constructors. (`made` and concrete byte coverage have
    already moved to LIR; `node` and source occurrences are in `SourceMap`.)
 3. Add the post-allocation peephole now that LIR has become a real form.
 

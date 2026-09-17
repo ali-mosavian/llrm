@@ -357,13 +357,6 @@ def _at(
             )
         blocks.append(block)
 
-    origin = dict(body.origin)
-    pins = dict(body.pins)
-    for old, new in ((old, swap[old.id]) for old in callee_values if old.id in swap):
-        if new not in origin and old in callee.origin:
-            origin[new] = callee.origin[old]
-        if new not in pins and old in callee.pins:
-            pins[new] = callee.pins[old]
     pointer_values = set(body.pointer_values)
     pointer_values.update(swap[value.id] for value in callee.pointer_values if value.id in swap)
     pointer_seeds = dict(body.pointer_seeds)
@@ -375,8 +368,6 @@ def _at(
     return replace(
         body,
         blocks=tuple(blocks),
-        origin=origin,
-        pins=pins,
         cloned=True,
         pointer_values=frozenset(pointer_values),
         pointer_seeds=pointer_seeds,

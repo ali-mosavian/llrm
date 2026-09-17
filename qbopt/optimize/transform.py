@@ -2341,13 +2341,6 @@ def _reparented(body: MirBody, crossed: set) -> MirBody:
             )
             for block in body.blocks
         ),
-        # The renamed values keep their origin. "Where BC had it" is still
-        # true of them and is what layout remaps an operand through -- drop
-        # it and the operand keeps the register the instruction was raised
-        # with, whatever the allocator decided. What the rename changes is
-        # which variable a value is a version of, and nothing else.
-        origin={value(one): where for one, where in body.origin.items()},
-        pins={value(one): where for one, where in body.pins.items()},
     )
 
 

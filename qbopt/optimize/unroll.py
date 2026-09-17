@@ -125,7 +125,6 @@ def _expanded(body, loop, header, latch, latch_ops, exit_at, entry, count):
     values = tuple(ssa.values(body))
     next_id = max(value.id for value in values) + 1
     next_variable = max(value.variable for value in values) + 1
-    origin, pins = dict(body.origin), dict(body.pins)
     swap = {phi.result.id: phi.incoming[entry] for phi in header.phis}
     initial = dict(swap)
 
@@ -138,10 +137,6 @@ def _expanded(body, loop, header, latch, latch_ops, exit_at, entry, count):
             next_id += 1
             next_variable += 1
             defined[value.id] = fresh
-            if value in origin:
-                origin[fresh] = origin[value]
-            if value in pins:
-                pins[fresh] = pins[value]
         swap.update(defined)
         results = tuple(replace(arg, value=defined.get(arg.value.id, arg.value))
                         if isinstance(arg, mir.Held) else arg for arg in read.results)
@@ -189,5 +184,4 @@ def _expanded(body, loop, header, latch, latch_ops, exit_at, entry, count):
                    if exit_at in dominators.get(block.at, ()) else block.ops)
             block = replace(block, ops=ops, phis=phis)
         changed.append(block)
-    return replace(body, blocks=tuple(changed), origin=origin, pins=pins,
-                   repetitions=(*body.repetitions, (latch.at, count)))
+    return replace(body, blocks=tuple(changed), repetitions=(*body.repetitions, (latch.at, count)))

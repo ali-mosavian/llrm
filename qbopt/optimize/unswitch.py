@@ -110,10 +110,7 @@ def _specialized(body, copied, loop, entry, selected, compare, branch):
                            name="", uses=(), args=(), defines=(), results=(), raised=None)
             block = replace(block, ops=(*block.ops[:-1], jump), succ=(destination,))
         changed.append(block)
-    def metadata(original):
-        return {**original, **{definitions[value.id]: location for value, location in original.items()
-                              if value.id in definitions}}
-    result = replace(copied, blocks=tuple(changed), origin=metadata(copied.origin), pins=metadata(copied.pins))
+    result = replace(copied, blocks=tuple(changed))
     for header in (loop.header, cloned_header):
         result = edges.split(result, entry, header, edges.fresh(result), ())
     for version in (set(loop.body), set(labels.values())):

@@ -110,13 +110,7 @@ def _entered(body, loop, preheader, header, first, ops) -> mir.MirBody:
             return replace(changed, phis=entry)
         return changed
 
-    origin = dict(body.origin)
-    pins = dict(body.pins)
-    for phi in header.phis:
-        for table in (origin, pins):
-            if phi.result in table:
-                table[moved[phi.result.id]] = table.pop(phi.result)
-    return replace(body, blocks=tuple(rewired(block) for block in body.blocks), origin=origin, pins=pins)
+    return replace(body, blocks=tuple(rewired(block) for block in body.blocks))
 
 
 def _swapped(op: mir.Op, swap: dict[int, mir.Value]) -> mir.Op:
