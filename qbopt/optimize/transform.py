@@ -97,7 +97,10 @@ def _without(ops: list[Op], drop) -> list[Op]:
             if out and mir.rewritable(out[-1]) and _end_of(out[-1]) == start:
                 lo = out[-1].covers[0] if out[-1].covers is not None else out[-1].at
                 out[-1] = replace(
-                    out[-1], covers=(lo, _end_of(op)), extra_covers=out[-1].extra_covers + op.extra_covers
+                    out[-1],
+                    covers=(lo, _end_of(op)),
+                    extra_covers=out[-1].extra_covers + op.extra_covers,
+                    absorbed=tuple(dict.fromkeys((*out[-1].absorbed, *op.absorbed))),
                 )
                 continue
             out.append(op)
@@ -117,6 +120,7 @@ def _without(ops: list[Op], drop) -> list[Op]:
                 at=first.at,
                 covers=(start, _end_of(survivor)),
                 extra_covers=survivor.extra_covers + first.extra_covers,
+                absorbed=tuple(dict.fromkeys((*first.absorbed, *survivor.absorbed))),
             )
         ]
     return out
@@ -475,6 +479,7 @@ def _reclaimed(body: MirBody, gone: set[int]) -> MirBody:
                 ends[op.covers[1]] = op
     grown: dict[int, tuple[int, int]] = {}
     extra: dict[int, tuple] = {}
+    absorbed: dict[int, tuple[int, ...]] = {}
     dropped: set[int] = set()
     # In byte order, so a run of deletions collapses onto the one operation
     # standing before all of them. Taken in block order, the second of two
@@ -490,6 +495,7 @@ def _reclaimed(body: MirBody, gone: set[int]) -> MirBody:
         span = grown.get(id(taker), taker.covers)
         grown[id(taker)] = (span[0], op.covers[1])
         extra[id(taker)] = extra.get(id(taker), taker.extra_covers) + op.extra_covers
+        absorbed[id(taker)] = tuple(dict.fromkeys((*absorbed.get(id(taker), taker.absorbed), *op.absorbed)))
         ends.pop(op.covers[0], None)
         ends[op.covers[1]] = taker
         dropped.add(id(op))
@@ -501,7 +507,14 @@ def _reclaimed(body: MirBody, gone: set[int]) -> MirBody:
             replace(
                 block,
                 ops=tuple(
-                    replace(op, covers=grown[id(op)], extra_covers=extra[id(op)]) if id(op) in grown else op
+                    replace(
+                        op,
+                        covers=grown[id(op)],
+                        extra_covers=extra[id(op)],
+                        absorbed=absorbed[id(op)],
+                    )
+                    if id(op) in grown
+                    else op
                     for op in block.ops
                     if id(op) not in dropped
                 ),
@@ -2102,6 +2115,7 @@ def _folded_division(op: Op, numbers: tuple[int, int], wanted: set) -> tuple[Op,
             covers=op.covers if index == 0 else (op.at, op.at),
             id=op.id if index == 0 else None,
             extra_covers=op.extra_covers if index == 0 else (),
+            absorbed=op.absorbed if index == 0 else (),
         )
         for index, (result, number) in enumerate(zip(op.results, numbers, strict=True))
     )

@@ -148,6 +148,58 @@ def test_mir_has_no_slot_for_decoded_instruction_nodes() -> None:
     assert "node" not in mir.Op.__dataclass_fields__
 
 
+@pytest.mark.parametrize(
+    ("path", "only"),
+    [
+        (Path("fixtures/omf/lngmix-p-g2.obj"), None),
+        (Path("fixtures/omf/fpemu-p-g2.obj"), "fold"),
+    ],
+)
+def test_mir_names_owned_source_occurrences_without_repeating_their_byte_ranges(path: Path, only: str | None) -> None:
+    """Folded integer and FP companions must not claim the source bytes twice."""
+    import corpus
+    from qbopt.optimize import transform
+
+    def merged(spans: tuple[tuple[int, int], ...]) -> tuple[tuple[int, int], ...]:
+        out: list[tuple[int, int]] = []
+        for low, high in sorted(span for span in spans if span[0] < span[1]):
+            if out and low == out[-1][1]:
+                out[-1] = (out[-1][0], high)
+            else:
+                out.append((low, high))
+        return tuple(out)
+
+    found = corpus.loaded(path)
+    blocks = corpus.partitioned(path)
+    raised = mir.bodies(found, blocks)
+    for _name, original in raised:
+        optimized = transform.applied(
+            original,
+            found.dgroup,
+            found.calls,
+            blocks=blocks,
+            found=found,
+            coverage=raised.source.coverage,
+            only=only,
+        )
+        for body in (original, optimized):
+            owners: dict[int, int] = {}
+            for block in body.blocks:
+                for op in block.ops:
+                    explicit = (*((op.covers,) if op.covers is not None else ()), *op.extra_covers)
+                    recorded = raised.source.coverage.get(op.id, ()) if op.id is not None else ()
+                    expected = merged((*explicit, *recorded[1:]))
+                    actual = merged(
+                        tuple(span for source_id in op.absorbed for span in raised.source.occurrences[source_id])
+                    )
+                    assert actual == expected, f"{op.at:#06x}: {op.absorbed} resolves to {actual}, expected {expected}"
+                    for source_id in op.absorbed:
+                        assert source_id not in owners, (
+                            f"source occurrence {source_id} is owned by both {owners[source_id]:#06x} and {op.at:#06x}"
+                        )
+                        owners[source_id] = op.at
+
+
 def test_a_pass_is_a_transform_and_nothing_else() -> None:
     """The contract, as a fact rather than a convention.
 

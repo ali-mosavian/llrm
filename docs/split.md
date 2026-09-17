@@ -118,11 +118,14 @@ it and collapses the two into the diagram at the top.
 ```
 
 **MIR itself still carries two source-machine facts.** `Op.covers` (a range
-of BC's bytes) and `MirBody.origin`. Decoded instructions now leave the raise
-in `SourceMap.nodes`, keyed by the operation's stable id, and lowering
-transfers each required node to LIR. Selected machine semantics also live
-only on LIR. The passes barely touch the remaining provenance; the data
-structure still holds it.
+of source bytes) and `MirBody.origin`. Decoded instructions now leave the
+raise in `SourceMap.nodes`, keyed by the operation's stable id, and lowering
+transfers each required node to LIR. Byte ownership is also represented by
+opaque `Op.absorbed` identities whose immutable raw ranges live in
+`SourceMap.occurrences`; the existing `coverage` map keeps its legacy folded-
+operation meaning until lowering is migrated. The old ranges remain
+temporarily as an executable equivalence check while each pass is migrated.
+Selected machine semantics live only on LIR.
 
 **LIR is now the backend form.** It owns selected machine semantics and
 allocation requirements (`tied`, `reads`, `writes`), and layout plus fresh

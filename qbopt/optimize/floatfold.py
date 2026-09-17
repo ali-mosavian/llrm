@@ -154,6 +154,7 @@ def stored(body: mir.MirBody, facts: dict) -> mir.MirBody:
                             stack=None,
                             covers=(op.at, op.at),
                             extra_covers=(),
+                            absorbed=(),
                             symbol=True,
                         )
                     )

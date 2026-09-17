@@ -908,6 +908,10 @@ class Op:
     # locations. None means every such resource.
     opaque_defs: frozenset[str] | None = frozenset()
     opaque_uses: frozenset[str] | None = frozenset()
+    # Opaque identities of raise-time occurrences whose bytes this operation
+    # replaces. SourceMap owns the actual ranges; passes may only transfer
+    # identities when combining or deleting operations.
+    absorbed: tuple[int, ...] = ()
     # Whether CALL takes its destination from a value rather than a named
     # procedure.  This is control-flow meaning established by the frontend,
     # not an encoding choice: lowering decides how that value is addressed.
@@ -1040,7 +1044,42 @@ def _opaque_effects(node: ir.Node | None) -> tuple[frozenset[str] | None, frozen
     return outside(node.effects.defs), outside(node.effects.uses)
 
 
-def _externalized(body: MirBody, source: module.SourceMap) -> MirBody:
+def _record_provenance(body: MirBody, source: module.SourceMap) -> tuple[int, ...]:
+    """Record every raise-time occurrence before recognition removes or combines it."""
+    recorded = []
+    for block in body.blocks:
+        for op in block.ops:
+            if op.id is None:
+                continue
+            recorded.append(op.id)
+            node = getattr(op, "node", None)
+            if node is not None:
+                source.nodes[op.id] = node
+            spans = (*((op.covers,) if op.covers is not None else ()), *op.extra_covers)
+            source.occurrences[op.id] = tuple(span for span in spans if span[0] < span[1])
+    return tuple(recorded)
+
+
+def _absorbed_ids(op: Op, source: module.SourceMap, candidates: tuple[int, ...]) -> tuple[int, ...]:
+    """Raise-time occurrences wholly represented by this operation's owned ranges."""
+    if op.absorbed:
+        return op.absorbed
+    owned = (*((op.covers,) if op.covers is not None else ()), *op.extra_covers)
+    owned = tuple(span for span in owned if span[0] < span[1])
+    if not owned:
+        return ()
+
+    def within(span: tuple[int, int]) -> bool:
+        return any(low <= span[0] and span[1] <= high for low, high in owned)
+
+    return tuple(
+        identity
+        for identity in candidates
+        if (spans := source.occurrences.get(identity, ())) and all(within(span) for span in spans)
+    )
+
+
+def _externalized(body: MirBody, source: module.SourceMap, candidates: tuple[int, ...]) -> MirBody:
     """Move every decoded node out of a completed raise and into ``source``."""
 
     names = tuple(one.name for one in fields(Op))
@@ -1055,6 +1094,7 @@ def _externalized(body: MirBody, source: module.SourceMap) -> MirBody:
             source_backed=node is not None,
             opaque_defs=opaque_defs,
             opaque_uses=opaque_uses,
+            absorbed=_absorbed_ids(op, source, candidates),
         )
         return Op(**values)
 
@@ -2477,6 +2517,7 @@ def bodies(
             spared,
         )
         if not isinstance(built, str):
+            provenance = _record_provenance(built, source)
             from qbopt.frontend import raising_frame
 
             built = raising_frame.annotated(built, found, mine, contracts)
@@ -2548,7 +2589,7 @@ def bodies(
 
             built = raising_dispatch.raised(built, found, mine)
             source.refs.update(_referenced(built, found))
-            built = _externalized(built, source)
+            built = _externalized(built, source, provenance)
             built = _frame_bounded(built)
             folded, absorbed, refs, coverage = _folded(built, found, blocks)
             source.absorbed.update(absorbed)

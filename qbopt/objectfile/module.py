@@ -258,6 +258,11 @@ class SourceMap:
     float_protocols: dict[int, int] = field(default_factory=dict)
     absorbed: dict[int, object] = field(default_factory=dict)
     coverage: dict[int, tuple[tuple[int, int], ...]] = field(default_factory=dict)
+    # Immutable byte ranges of each raw raise-time occurrence. Unlike the
+    # legacy ``coverage`` map above, this is never rewritten to describe a
+    # recognized or optimized operation: MIR names entries through
+    # ``Op.absorbed`` and lowering will eventually resolve those identities.
+    occurrences: dict[int, tuple[tuple[int, int], ...]] = field(default_factory=dict)
 
     @classmethod
     def from_module(cls, found: Module) -> "SourceMap":

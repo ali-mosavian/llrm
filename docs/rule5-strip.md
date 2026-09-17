@@ -1,13 +1,13 @@
 # Getting the machine out of MIR itself
 
-The passes are the easy half. `mir.Op` is the hard half: four of its fields
-are machine facts, and `MirBody.origin` is a fifth.
+The passes are the easy half. `mir.Op` was the hard half: four of its fields
+were machine facts, and `MirBody.origin` is a fifth.
 
 ```
-  Op.node    ir.Node -- the decoded x86 instruction
-  Op.made    ir.Semantics over ir.Reg -- machine operands
-  Op.covers  a range of BC's bytes
-  Op.ref     the address of a fixup in BC's bytes
+  Op.node    ir.Node -- the decoded x86 instruction              removed
+  Op.made    ir.Semantics over ir.Reg -- machine operands         removed
+  Op.covers  a range of BC's bytes                                remains
+  Op.symbol  whether this operation still owns its source fixup       remains
   MirBody.origin  Value -> Register_
 ```
 
@@ -36,10 +36,10 @@ on it, and it is the one field `Value`'s docstring sanctions reading.
 ## Order
 
 A. `Op.id` and the module's `refs` table.               done
-D. `args`/`results`, and `lower.py` as the boundary.    done for fold,
-   forward and decide; widen, absorb and the hoist still write `made`.
-B. `node` into the side table.
-C. `covers` -> `absorbed`.
+D. `args`/`results`, and `lower.py` as the boundary.    done
+B. `node` into the side table.                            done
+C. `covers` -> `absorbed`.                                shadow model done;
+                                                          remove `covers` next
 E. `origin`.
 
 ## Measuring it
