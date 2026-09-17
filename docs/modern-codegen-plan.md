@@ -139,3 +139,24 @@ the existing region split still cannot satisfy the residual interference and
 must be traced from the allocated LIR/intervals.  Keep GCC/LLVM flat-i386
 listings as best-case structural references only; this BCC medium-model pair
 is the candidate-ABI evidence for any near-term allocation change.
+
+### 8. Residual loop-pressure trace — 2026-09-18
+
+The pre-allocation LIR pinpoints the remaining conflict.  The loop carries
+both the source counter (`v347`) and a strength-reduced `i * 2` recurrence
+(`v1028`), while an iteration also needs the face value, shifted bitmap index,
+bit count and mask.  At the marked store those live demands already occupy the
+six general registers available to the 16-bit addressing model, before either
+incoming `world` (`v35`) or `rdr` (`v65`) can be retained.  The allocator's
+frame reloads are consequently legal, deliberate spill/rematerialization—not
+a failed alias proof.
+
+BCC instead keeps `world` in DI and `rdr` in SI, retains one loop counter in
+DX, and keeps the scaled leaf offset in a frame cell.  It trades an `add bx,
+[bp-12]` for one long-lived recurrence, freeing capacity for the two invariant
+bases.  The general next mechanism is phase-5 formula selection: price
+recompute, stack-carried, and register recurrence forms against complete
+per-iteration pressure *including invariant bases and address temporaries*.
+Do not disable this particular recurrence or reserve registers by procedure
+name; first add a source-independent pressure regression that demonstrates
+the winning formula and then make `strength` choose it by target cost.
