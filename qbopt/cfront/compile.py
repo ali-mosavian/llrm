@@ -209,6 +209,41 @@ def assembled(
 
     if optimise:
         bodies = {one.name: run_optimiser(one, bodies[one.name]) for one in raised_procedures}
+
+        # Inline only after each independent body has reached its local fixed
+        # point.  The splice itself is MIR, and its result goes straight back
+        # through that same pipeline; there is no second interprocedural
+        # optimizer hidden below the MIR boundary.
+        from qbopt.optimize import inline
+
+        pure = interprocedural.pure_procedures({one.name: (bodies[one.name], one.calls) for one in raised_procedures})
+        inline_round = 0
+        while True:
+            counts = inline.call_counts(bodies, {one.name: one.calls for one in raised_procedures})
+            available = inline.candidates(
+                bodies,
+                {one.name: one.parameters for one in raised_procedures},
+                counts,
+                private,
+                pure,
+                target.cost("call_far"),
+            )
+            changed = False
+            for raised in raised_procedures:
+                before = bodies[raised.name]
+                after = inline.expanded(before, raised.calls, call_arguments[raised.name], available)
+                if after is before:
+                    continue
+                stage = f"inline{inline_round}"
+                _write(dump, f"passes/{raised.name}.{stage}", _mir_text(raised.name, after))
+                if watch is not None:
+                    watch(f"mir-{stage}", raised.name, after)
+                bodies[raised.name] = run_optimiser(raised, after, f"{stage}.")
+                changed = True
+                inline_round += 1
+            if not changed:
+                break
+
         propagated = {one.name: frozenset() for one in raised_procedures}
         round_ = 0
         while True:

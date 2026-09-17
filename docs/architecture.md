@@ -1112,7 +1112,20 @@ one documented target without materially regressing another.
   procedure-local global propagation remain open.
 - [ ] Inline selectively when doing so exposes a measured optimization; keep
   runtime-idiom recognition in the raise rather than implementing it as
-  generic inlining.
+  generic inlining. Private, non-address-taken, pure leaf procedures with one
+  surviving call now inline as MIR CFGs. Formal frame loads bind to the
+  caller's SSA actuals, return edges define the original call result, and the
+  continuation replaces the old call block as a successor-phi predecessor.
+  Floating point, traps, non-parameter memory, observed ABI-only results and
+  multiply-called bodies remain conservative. The size bound receives only
+  the selected CPU's numeric call cost; the transform sees no opcode or
+  register name. On `fixtures/c/choose.cgs`, the one-use `pick` and `which`
+  bodies disappear and their six pushes, two calls and two cleanups vanish:
+  the whole module falls from 93 bytes / 44 instructions to 48 bytes / 22
+  instructions on every CPU profile. GCC 16.2's installed i686 compiler also
+  inlines both, then if-converts the resulting choices into a compare,
+  `sbb`, mask and add; the remaining code-shape gap is an if-conversion and
+  algebraic-selection target, not attributed to inlining.
 - [ ] Remove unreachable procedures and unused public/internal definitions
   where OMF linkage permits it (`GlobalDCE`).  Unreachable private C
   procedures are now removed after call deletion. Exported procedures,
