@@ -143,6 +143,20 @@ def test_reference_compilers_name_the_i686_gcc_not_the_host_gcc() -> None:
     assert quality.REFERENCE_COMPILERS == ("clang", "i686-elf-gcc")
 
 
+def test_reference_contract_keeps_flat_i386_listings_advisory() -> None:
+    """A flat GCC listing was once easy to read as an achievable medium-model
+    result, silently ignoring far pointers and segment loads.
+
+    The report must carry the ABI difference with the generated listing, not
+    merely mention it in prose beside the command that produced it.
+    """
+    contract = quality.REFERENCE_CONTRACT
+
+    assert contract["kind"] == "best-case-flat-i386-structural-reference"
+    assert "16-bit medium-model" in contract["candidate_abi"]
+    assert "Not an ABI-equivalent performance target" in contract["caveat"]
+
+
 def test_report_revision_marks_a_dirty_worktree(monkeypatch: pytest.MonkeyPatch) -> None:
     """A performance run made with uncommitted optimizer fixes claimed its old HEAD.
 

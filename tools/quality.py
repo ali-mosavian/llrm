@@ -38,6 +38,24 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TARGETS = ROOT / "bench" / "c" / "targets.json"
 FORMAT = Formatter(FormatterSyntax.MASM)
 REFERENCE_COMPILERS = ("clang", "i686-elf-gcc")
+# These listings answer a deliberately narrow question: what does a current
+# optimizing compiler do for the C algorithm on 32-bit i386 when it is freed
+# from our 16-bit medium-model ABI?  They are the best structural reference we
+# have, but not an object-level target.  Keep this fact in every report so a
+# downstream table cannot quietly turn a flat-address-space result into a
+# claim about far pointers, segment reloads, or our calling convention.
+REFERENCE_CONTRACT = {
+    "kind": "best-case-flat-i386-structural-reference",
+    "purpose": "advisory GCC/LLVM assembly listing for algorithm and expression structure",
+    "abi": "32-bit flat i386 freestanding C",
+    "candidate_abi": "16-bit medium-model far-call C ABI with segmented data",
+    "caveat": (
+        "Not an ABI-equivalent performance target: segment selection, far-pointer "
+        "traffic, address legality, call sequences, and frame layout differ. "
+        "Use it to inspect loop shape, expression count, and memory traffic; "
+        "register a hard target only after a hand audit for the candidate ABI."
+    ),
+}
 # Open Watcom accepts these memory-model and calling-convention qualifiers as
 # keywords. GCC and Clang do not; erase only their spelling so the reference
 # remains a structural 32-bit comparison rather than failing before codegen.
@@ -650,6 +668,7 @@ def _reference(source: Path, compiler: str, dump: Path) -> dict:
     return {
         "source": str(source),
         "compiler": compiler,
+        "reference_contract": REFERENCE_CONTRACT,
         "version": _version(compiler),
         "status": "generated" if generated else "failed",
         "assembly": str(dump) if generated else None,
@@ -703,6 +722,7 @@ def _comparisons(reports: list[dict], references: list[dict]) -> list[dict]:
                         "cpu": report["cpu"],
                         "function": name,
                         "compiler": reference["compiler"],
+                        "reference_contract": reference.get("reference_contract", REFERENCE_CONTRACT),
                         "reference_assembly": reference.get("assembly"),
                         "qbopt": {
                             **{metric: candidate_metrics[metric] for metric in STRUCTURAL_METRICS},
@@ -847,6 +867,7 @@ def main(argv: list[str] | None = None) -> int:
     result = {
         "schema": 1,
         "revision": _revision(),
+        "reference_contract": REFERENCE_CONTRACT,
         "compilers": {name: _version(name) for name in REFERENCE_COMPILERS},
         "reports": reports,
         "references": references,

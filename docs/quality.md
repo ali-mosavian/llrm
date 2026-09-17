@@ -54,11 +54,21 @@ that fails to return without mistaking a timeout for a wrong answer.
   unmeasured because their hidden work is unbounded. A `null` here is not zero.
 
 The report always writes raw qbopt assembly.  With `--references`, it also asks
-Clang and `i686-elf-gcc` for freestanding i386 `-O3` assembly with SSE and
-vectorization disabled.  GCC's reported target is checked before it is used.
-A compiler without an i386 backend is reported as failed or unavailable;
-output from the host architecture is not substituted.  Reference assembly is
-advisory and does not become the target automatically.
+LLVM/Clang and `i686-elf-gcc` for freestanding i386 `-O3` assembly with SSE and
+vectorization disabled.  Those listings are the **best-case structural
+reference**: they show the loop shape, expression count and memory traffic a
+modern optimizer chooses when it is free of the medium-model ABI.  GCC's
+reported target is checked before it is used.  A compiler without an i386
+backend is reported as failed or unavailable; output from the host architecture
+is not substituted.
+
+They are deliberately not ABI-equivalent targets.  The references use flat
+32-bit i386 addressing; qbopt emits a 16-bit medium-model ABI with far calls,
+segmented data, restricted address forms and different frame layout.  A lower
+count in a reference therefore cannot erase required segment, far-pointer or
+ABI work in our output.  Every JSON report and structural comparison now carries
+this contract explicitly.  Reference assembly remains advisory until a
+candidate-ABI target has been inspected and derived by hand.
 
 The one-line reference comparison prefers estimated executed instructions when
 both functions have a complete estimate and says so in the label. It falls back
