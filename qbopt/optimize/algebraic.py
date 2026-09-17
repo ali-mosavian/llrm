@@ -336,7 +336,7 @@ def _halved(body: mir.MirBody) -> mir.MirBody:
             return (op,)
         high, low = split[whole]
         fresh = dict(source_backed=False, raised=None, merges={})
-        later = dict(fresh, covers=(op.at, op.at), id=None, extra_covers=())
+        later = dict(fresh, absorbed=(), id=None)
 
         def reads(*args, ref=None):
             held = [arg.value for arg in args if isinstance(arg, mir.Held)]
@@ -432,9 +432,8 @@ def _divisions(body: mir.MirBody) -> mir.MirBody:
                     op.at, ir.Operation.BINARY, kind.value, (result.value,),
                     tuple(arg.value for arg in args if isinstance(arg, mir.Held)),
                     kind=kind, args=args, results=(result,),
-                    covers=op.covers if not sequence else (op.at, op.at),
                     id=op.id if not sequence else None,
-                    extra_covers=op.extra_covers if not sequence else (),
+                    absorbed=op.absorbed if not sequence else (),
                 ))
                 return result
 

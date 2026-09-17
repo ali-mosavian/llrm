@@ -148,6 +148,21 @@ def test_mir_has_no_slot_for_decoded_instruction_nodes() -> None:
     assert "node" not in mir.Op.__dataclass_fields__
 
 
+def test_optimization_passes_never_mention_source_byte_ranges() -> None:
+    """Passes transfer opaque occurrence ids; only lowering resolves byte ranges."""
+    offending: dict[str, list[tuple[int, str]]] = {}
+    for path in sorted((HERE / "optimize").rglob("*.py")):
+        found = []
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.keyword) and node.arg in {"covers", "extra_covers"}:
+                found.append((node.lineno, node.arg))
+            if isinstance(node, ast.Attribute) and node.attr in {"covers", "extra_covers"}:
+                found.append((node.lineno, node.attr))
+        if found:
+            offending[path.relative_to(HERE).as_posix()] = found
+    assert not offending, f"MIR passes named source byte ranges: {offending}"
+
+
 @pytest.mark.parametrize(
     ("path", "only"),
     [
@@ -173,6 +188,7 @@ def test_mir_names_owned_source_occurrences_without_repeating_their_byte_ranges(
     blocks = corpus.partitioned(path)
     raised = mir.bodies(found, blocks)
     for _name, original in raised:
+        original_ids = {source_id for block in original.blocks for op in block.ops for source_id in op.absorbed}
         optimized = transform.applied(
             original,
             found.dgroup,
@@ -186,18 +202,22 @@ def test_mir_names_owned_source_occurrences_without_repeating_their_byte_ranges(
             owners: dict[int, int] = {}
             for block in body.blocks:
                 for op in block.ops:
-                    explicit = (*((op.covers,) if op.covers is not None else ()), *op.extra_covers)
-                    recorded = raised.source.coverage.get(op.id, ()) if op.id is not None else ()
-                    expected = merged((*explicit, *recorded[1:]))
-                    actual = merged(
-                        tuple(span for source_id in op.absorbed for span in raised.source.occurrences[source_id])
-                    )
-                    assert actual == expected, f"{op.at:#06x}: {op.absorbed} resolves to {actual}, expected {expected}"
+                    if body is original:
+                        explicit = (*((op.covers,) if op.covers is not None else ()), *op.extra_covers)
+                        recorded = raised.source.coverage.get(op.id, ()) if op.id is not None else ()
+                        expected = merged((*explicit, *recorded[1:]))
+                        actual = merged(
+                            tuple(span for source_id in op.absorbed for span in raised.source.occurrences[source_id])
+                        )
+                        assert actual == expected, (
+                            f"{op.at:#06x}: {op.absorbed} resolves to {actual}, expected {expected}"
+                        )
                     for source_id in op.absorbed:
                         assert source_id not in owners, (
                             f"source occurrence {source_id} is owned by both {owners[source_id]:#06x} and {op.at:#06x}"
                         )
                         owners[source_id] = op.at
+            assert set(owners) == original_ids
 
 
 def test_lowering_resolves_source_byte_ownership_without_mir_ranges() -> None:

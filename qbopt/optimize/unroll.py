@@ -146,8 +146,7 @@ def _expanded(body, loop, header, latch, latch_ops, exit_at, entry, count):
         results = tuple(replace(arg, value=defined.get(arg.value.id, arg.value))
                         if isinstance(arg, mir.Held) else arg for arg in read.results)
         return replace(read, defines=tuple(defined[value.id] for value in op.defines), results=results,
-                       covers=op.covers if owns else (op.at, op.at),
-                       extra_covers=op.extra_covers if owns else (), raised=None,
+                       absorbed=op.absorbed if owns else (), raised=None,
                        symbol=op.symbol if owns else op.symbol is not False)
 
     expanded = []
@@ -161,8 +160,8 @@ def _expanded(body, loop, header, latch, latch_ops, exit_at, entry, count):
     anchor = latch.ops[-1].at
     expanded.append(replace(header.ops[-1], at=anchor, kind=mir.Kind.JUMP, name="",
                             args=(), results=(), uses=(), defines=(), loads=(), stores=(),
-                            merges={}, source_backed=False, raised=((), ()),
-                            covers=(anchor, anchor), extra_covers=(), target=exit_at, test=None, symbol=False))
+                            merges={}, source_backed=False, raised=((), ()), absorbed=(),
+                            target=exit_at, test=None, symbol=False))
     changed = []
     dominators = loops.dominators(body.blocks, body.entry)
     for block in body.blocks:

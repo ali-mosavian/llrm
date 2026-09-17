@@ -270,8 +270,6 @@ def promoted(
                             exact,
                             source_backed=False,
                             id=None,
-                            covers=(op.at, op.at),
-                            extra_covers=(),
                             absorbed=(),
                             symbol=False,
                         )
@@ -294,8 +292,6 @@ def promoted(
                             source_backed=False,
                             raised=None,
                             id=None,
-                            covers=(op.at, op.at),
-                            extra_covers=(),
                             absorbed=(),
                             symbol=False,
                         )
@@ -317,7 +313,6 @@ def promoted(
                     made,
                     source_backed=False,
                     id=None,
-                    covers=(op.at, op.at),
                     absorbed=(),
                     symbol=False,
                 )
@@ -363,8 +358,6 @@ def _separated(body: MirBody) -> MirBody:
                     uses=(result,),
                     source_backed=False,
                     raised=None,
-                    covers=(op.at, op.at),
-                    extra_covers=(),
                     absorbed=(),
                     merges={},
                     symbol=True,

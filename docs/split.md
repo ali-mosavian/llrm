@@ -125,9 +125,11 @@ opaque `Op.absorbed` identities whose immutable raw ranges live in
 `SourceMap.occurrences`; the existing `coverage` map keeps its legacy folded-
 operation meaning for MIR compatibility. Lowering now resolves the opaque
 identities into concrete LIR `covers` and disjoint `spread` ranges, and layout
-consumes those LIR ranges directly. The old MIR ranges remain temporarily as
-an executable equivalence check while each pass is migrated. Selected machine
-semantics live only on LIR.
+consumes those LIR ranges directly. Optimization modules are mechanically
+forbidden from naming the old MIR ranges: deletion leaves an inert owner and
+semantic combination transfers only opaque identities. The compatibility
+fields now remain solely at the raise/lower edges until they are deleted from
+`Op`. Selected machine semantics live only on LIR.
 
 **LIR is now the backend form.** It owns selected machine semantics and
 allocation requirements (`tied`, `reads`, `writes`), and layout plus fresh

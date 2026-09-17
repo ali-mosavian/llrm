@@ -1430,7 +1430,9 @@ class Lowering:
         pass.  LIR receives concrete ranges because layout is the first tier
         that is allowed to reason about source bytes.
         """
-        if self._occurrences is None or not op.absorbed:
+        if self._occurrences is not None and not op.absorbed:
+            return (op.at, op.at), ()
+        if self._occurrences is None:
             spread = (
                 ()
                 if op.inserted

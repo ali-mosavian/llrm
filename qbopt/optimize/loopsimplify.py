@@ -63,7 +63,7 @@ def grouped(body: mir.MirBody, target: int, sources: frozenset[int]) -> mir.MirB
             )
         )
     jump = mir.Op(
-        label, ir.Operation.JUMP, "", (), (), kind=mir.Kind.JUMP, target=target, covers=(label, label), symbol=False
+        label, ir.Operation.JUMP, "", (), (), kind=mir.Kind.JUMP, target=target, symbol=False
     )
     bridge = mir.MirBlock(label, tuple(bridge_phis), (jump,), (target,))
     changed = []

@@ -131,7 +131,7 @@ def reused(body: mir.MirBody, dgroup: frozenset[int] = frozenset(), *, insert: b
                 fresh += 1
                 load = mir.Op(at, ir.Operation.MOVE, "", (value,), uses, kind=mir.Kind.LOAD,
                               args=(mir.Cell(translated),), results=(mir.Held(value, result.width),),
-                              loads=(translated,), covers=(at, at), symbol=False)
+                              loads=(translated,), symbol=False)
                 if critical:
                     bridges[edge][1].append(load)
                 else:

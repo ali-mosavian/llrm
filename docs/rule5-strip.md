@@ -40,7 +40,8 @@ D. `args`/`results`, and `lower.py` as the boundary.    done
 B. `node` into the side table.                            done
 C. `covers` -> `absorbed`.                                shadow model done;
    lowering resolves occurrences onto LIR.                done
-   migrate pass ownership and remove `covers`.            next
+   passes transfer only opaque ownership ids.             done
+   remove the compatibility fields from `Op`.             next
 E. `origin`.
 
 ## Measuring it

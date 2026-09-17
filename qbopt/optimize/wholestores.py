@@ -27,11 +27,10 @@ def joined(body: mir.MirBody) -> mir.MirBody:
                         ref = replace(ref, width=4)
                         uses = tuple(dict.fromkeys(value for value in (whole.value, ref.base, ref.segment)
                                                   if value is not None))
-                        spans = tuple(dict.fromkeys((*low.extra_covers, *op.extra_covers,
-                                                     *((op.covers,) if op.covers is not None else ()))))
                         ops[-1] = replace(low, op=ir.Operation.MOVE, name="mov", args=(whole,),
                                           results=(mir.Cell(ref),), stores=(ref,), uses=uses,
-                                          merges={}, source_backed=False, raised=None, extra_covers=spans)
+                                          merges={}, source_backed=False, raised=None,
+                                          absorbed=tuple(dict.fromkeys((*low.absorbed, *op.absorbed))))
                         continue
             ops.append(op)
         blocks.append(replace(block, ops=tuple(ops)))

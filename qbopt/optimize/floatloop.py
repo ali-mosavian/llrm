@@ -82,7 +82,7 @@ def specialized(body: mir.MirBody, dgroup: frozenset[int], calls: dict) -> mir.M
                 break
             owner = next(op for op in latch.ops if ref in op.stores)
             seed = _store(owner, ref, mir.Const(fact.n, fact.width))
-            seeds.append(replace(seed, at=checkpoint.at, covers=(checkpoint.at, checkpoint.at)))
+            seeds.append(replace(seed, at=checkpoint.at, absorbed=()))
         else:
             final = mir.Const(consts.masked(start + step * proof.count, width), width)
             return _rewritten(body, header, latch, exit_at, checkpoint, seeds, phi.result, final)
@@ -101,7 +101,7 @@ def _carried(ref, ops, dgroup):
 def _store(beside, ref, value):
     return mir.Op(at=beside.at, op=beside.op, name="", defines=(), uses=(),
                   loads=(), stores=(ref,), kind=mir.Kind.STORE, args=(value,), results=(mir.Cell(ref),),
-                  covers=(beside.at, beside.at), id=beside.id, symbol=True)
+                  id=beside.id, symbol=True)
 
 
 def _jump(beside, destination):
@@ -116,7 +116,7 @@ def _rewritten(body, header, latch, exit_at, checkpoint, seeds, counter, final):
     result = mir.Value(max(value.id for value in values) + 1, exit_at,
                        variable=max(value.variable for value in values) + 1)
     copy = strength._made(mir.Kind.COPY, "", result, (final,), exit_at, exit_block.ops[0])
-    final_stores = tuple(replace(_store(op, ref, final), at=exit_at, covers=(exit_at, exit_at))
+    final_stores = tuple(replace(_store(op, ref, final), at=exit_at, absorbed=())
                          for op in header.ops for ref in op.stores)
     dominators = loops.dominators(body.blocks, body.entry)
     following = {block.at for block in body.blocks if exit_at in dominators.get(block.at, ())}
@@ -132,7 +132,7 @@ def _rewritten(body, header, latch, exit_at, checkpoint, seeds, counter, final):
                     ops.extend(seeds)
             end = block.ops[-1].at
             jump = _jump(header.ops[-1], exit_at)
-            block = replace(block, succ=(exit_at,), ops=(*ops, replace(jump, at=end, covers=(end, end))))
+            block = replace(block, succ=(exit_at,), ops=(*ops, replace(jump, at=end, absorbed=())))
         elif block.at in following:
             ops = tuple(ssa.substituted(op, {counter.id: result}) for op in block.ops)
             block = replace(block, ops=(copy, *final_stores, *ops) if block.at == exit_at else ops)

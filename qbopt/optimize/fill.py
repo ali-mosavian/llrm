@@ -168,7 +168,7 @@ def _filled(body: mir.MirBody, loop) -> mir.MirBody | None:
         prefix.append(mir.Op(
             at, operation, kind.value, (result.value,),
             tuple(arg.value for arg in args if isinstance(arg, mir.Held)),
-            kind=kind, args=args, results=(result,), covers=(at, at),
+            kind=kind, args=args, results=(result,),
         ))  # fmt: skip
         return result
 

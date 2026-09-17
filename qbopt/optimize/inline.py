@@ -290,8 +290,7 @@ def _at(
                     source_backed=False,
                     id=None,
                     raised=None,
-                    covers=(call.at, call.at),
-                    extra_covers=(),
+                    absorbed=(),
                     symbol=False,
                     target=labels.get(op.target, op.target),
                     cases=tuple((number, labels.get(target, target)) for number, target in op.cases),
@@ -394,7 +393,6 @@ def _copy(at: int, source: mir.Arg, result: mir.Held, value: mir.Value) -> mir.O
         kind=mir.Kind.COPY,
         args=(source,),
         results=(result,),
-        covers=(at, at),
         symbol=isinstance(source, mir.Symbol),
         reads_complete=True,
     )
@@ -409,7 +407,6 @@ def _jump(at: int, target: int) -> mir.Op:
         (),
         kind=mir.Kind.JUMP,
         target=target,
-        covers=(at, at),
         symbol=False,
         reads_complete=True,
     )

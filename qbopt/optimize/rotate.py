@@ -55,9 +55,9 @@ def rotated(body: mir.MirBody) -> mir.MirBody:
         if ops and ops[-1].kind is mir.Kind.JUMP:
             ops[-1] = replace(ops[-1], target=first.at)
         else:
-            at = ops[-1].covers[1] if ops and ops[-1].covers else entry.at
+            at = ops[-1].at if ops else entry.at
             ops.append(
-                mir.Op(at, ir.Operation.JUMP, "", (), (), kind=mir.Kind.JUMP, target=first.at, covers=(at, at), symbol=False)
+                mir.Op(at, ir.Operation.JUMP, "", (), (), kind=mir.Kind.JUMP, target=first.at, symbol=False)
             )
         return rotated(_entered(body, loop, preheader, header, first, ops))
     return body

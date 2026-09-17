@@ -24,7 +24,7 @@ def split(body: mir.MirBody, source: int, target: int, label: int,
     if parent is None or not conditional(parent, target) or body.block(label) is not None:
         raise ValueError("edge split does not identify a fresh conditional edge")
     jump = mir.Op(label, ir.Operation.JUMP, "", (), (), kind=mir.Kind.JUMP,
-                  target=target, covers=(label, label), symbol=False)
+                  target=target, symbol=False)
     bridge = mir.MirBlock(label, (), (*ops, jump), (target,))
     blocks = []
     for block in body.blocks:

@@ -1242,10 +1242,11 @@ knowledge:
    and `MirBody.origin`). Decoded nodes have moved to `SourceMap`, and opaque
    `Op.absorbed` identities now reproduce byte ownership from its immutable
    occurrence table; the duplicate `Op.covers` ranges and legacy folded-
-   coverage map remain only until every MIR pass uses those identities.
-   Lowering already resolves them into concrete LIR ranges, which layout and
-   emission consume directly. Fixup provenance belongs in the same side map.
-   Selected machine semantics already live only on LIR.
+   coverage map remain only as edge compatibility fields. Every MIR pass now
+   transfers opaque identities without naming byte ranges, and lowering
+   resolves them into concrete LIR ranges for layout and emission. Fixup
+   provenance belongs in the same side map. Selected machine semantics already
+   live only on LIR.
 2. Layout and fresh OMF emission consume allocated LIR directly; the former
    allocated-LIR-to-MIR adapter has been removed.
 3. Target costing is narrower than LLVM/GCC's formula selection. Loop strength

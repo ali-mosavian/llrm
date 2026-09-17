@@ -10,13 +10,10 @@ Long pairs and runtime arithmetic are recognized while raising, before any
 transform sees the body.  A transform therefore never reconstructs a source
 operation from BC's register convention.
 
-**Every byte of the original body has to stay accounted for.** layout.py
-refuses a body it cannot cover, which is how it catches data BC put between
-the instructions, and a transform that deletes an op leaves a hole in that
-arithmetic. So nothing here deletes bytes: a survivor takes over the range,
-through `Op.covers`, and the ops that were there are gone from the list.
-That is bookkeeping about the *input*, not about what gets emitted -- the
-output is whatever the surviving ops select to, which is shorter.
+**Every source occurrence stays accounted for.** A transform that deletes
+computation leaves an inert operation owning the same opaque identities, or
+transfers those identities to its semantic replacement. Byte ranges exist
+only in the external source map and are resolved after this tier, in lowering.
 
 Each transform is separately switchable, deliberately. They interact -- a
 widened pair changes which loads are redundant -- and a wrong answer from
@@ -49,80 +46,25 @@ from qbopt.analysis.ssa import pruned_phis as _pruned_phis
 from qbopt.analysis.ssa import substituted as _substituted
 
 
-def _end_of(op: Op) -> int:
-    """One past this op's last original byte.
-
-    `covers` is filled at the raise for every operation, so this no longer
-    has to decode the instruction to find out where it ended.
-    """
-    return op.covers[1] if op.covers is not None else op.at
-
-
 def _absorb(ops: list[Op], gone: set[int]) -> list[Op]:
-    """`ops` without the ones whose address is in `gone`."""
+    """Erase the operations whose address is in ``gone``."""
     return _without(ops, lambda one: one.at in gone)
 
 
 def _without(ops: list[Op], drop) -> list[Op]:
-    """`ops` without the ones `drop` picks, their bytes given to a survivor.
+    """Remove selected computation while retaining exact source ownership.
 
-    Backwards, so a run of deletions collapses onto the one op before them
-    rather than each taking the next. The first op in a block has nothing
-    before it, so a deletion there is refused by giving it to the op after
-    -- and where there is neither, the body is one op long and there is
-    nothing to delete.
+    A deleted source occurrence becomes an inert marker instead of donating
+    a byte interval to a neighbour.  The marker owns the same opaque ids and
+    lowers to no instruction; source-free operations disappear completely.
+    This preserves disjoint ownership without any pass learning byte ranges.
     """
-    out: list[Op] = []
+    out = []
     for op in ops:
-        if drop(op):
-            # Inserted, or raised from no bytes at all: nothing to hand on.
-            if (
-                (op.covers is not None and op.covers[0] == op.covers[1]
-                 or op.covers is None and not op.source_backed)
-                and not op.extra_covers
-                and op.floating_origin is None
-            ):
-                continue
-            # The bytes go to the op immediately before, and only if that op
-            # is adjacent and gets its length from select.py. Anything
-            # further back would span the survivors in between and count
-            # their bytes twice; anything emitted verbatim is exactly as long
-            # as the bytes it copies, so giving it more to account for makes
-            # it disagree with itself -- qb-qrender's SCREEN.OBJ, whose
-            # restore idiom stopped coming back its own length.
-            #
-            # Where neither holds the op simply stays. A deletion this cannot
-            # account for is not one worth making.
-            start = op.covers[0] if op.covers is not None else op.at
-            if out and mir.rewritable(out[-1]) and _end_of(out[-1]) == start:
-                lo = out[-1].covers[0] if out[-1].covers is not None else out[-1].at
-                out[-1] = replace(
-                    out[-1],
-                    covers=(lo, _end_of(op)),
-                    extra_covers=out[-1].extra_covers + op.extra_covers,
-                    absorbed=tuple(dict.fromkeys((*out[-1].absorbed, *op.absorbed))),
-                )
-                continue
+        if not drop(op):
             out.append(op)
-            continue
-        out.append(op)
-    if (
-        len(out) > 1
-        and drop(out[0])
-        and mir.rewritable(out[1])
-        and _end_of(out[0]) == (out[1].covers[0] if out[1].covers is not None else out[1].at)
-    ):
-        first, survivor = out[:2]
-        start = first.covers[0] if first.covers is not None else first.at
-        out[:2] = [
-            replace(
-                survivor,
-                at=first.at,
-                covers=(start, _end_of(survivor)),
-                extra_covers=survivor.extra_covers + first.extra_covers,
-                absorbed=tuple(dict.fromkeys((*first.absorbed, *survivor.absorbed))),
-            )
-        ]
+        elif op.absorbed or op.floating_origin is not None:
+            out.append(_empty_operation(op))
     return out
 
 
@@ -457,67 +399,13 @@ def _erased_floating(op: Op) -> Op:
 
 
 def _reclaimed(body: MirBody, gone: set[int]) -> MirBody:
-    """`body` without those operations, their bytes given to a neighbour.
-
-    Whole-body rather than within a block, which is what `_without` does and
-    why it could not be used here. The raise gives every operation folded
-    out of a runtime call the same `at` -- the site's first push -- so `at`
-    says nothing about which bytes an operation stands for, and the
-    operation before it in its own block is routinely somewhere else
-    entirely. `covers` is the fact; the op that ends where this one starts
-    is its neighbour wherever it lives.
-
-    An operation whose bytes nothing can take simply stays. Its uses are
-    still substituted, so it computes something nothing reads and the next
-    round's `dead` sees it -- a deletion this cannot account for is not one
-    worth making.
-    """
-    ends: dict[int, Op] = {}
-    for block in body.blocks:
-        for op in block.ops:
-            if id(op) not in gone and mir.rewritable(op) and op.covers is not None:
-                ends[op.covers[1]] = op
-    grown: dict[int, tuple[int, int]] = {}
-    extra: dict[int, tuple] = {}
-    absorbed: dict[int, tuple[int, ...]] = {}
-    dropped: set[int] = set()
-    # In byte order, so a run of deletions collapses onto the one operation
-    # standing before all of them. Taken in block order, the second of two
-    # adjacent deletions looks for a neighbour that is itself going.
-    going = sorted(
-        (op for block in body.blocks for op in block.ops if id(op) in gone and op.covers is not None),
-        key=lambda one: one.covers,
-    )
-    for op in going:
-        taker = ends.get(op.covers[0])
-        if taker is None:
-            continue
-        span = grown.get(id(taker), taker.covers)
-        grown[id(taker)] = (span[0], op.covers[1])
-        extra[id(taker)] = extra.get(id(taker), taker.extra_covers) + op.extra_covers
-        absorbed[id(taker)] = tuple(dict.fromkeys((*absorbed.get(id(taker), taker.absorbed), *op.absorbed)))
-        ends.pop(op.covers[0], None)
-        ends[op.covers[1]] = taker
-        dropped.add(id(op))
-    if not dropped:
-        return body
+    """Erase redundant computations without moving source provenance."""
     return replace(
         body,
         blocks=tuple(
             replace(
                 block,
-                ops=tuple(
-                    replace(
-                        op,
-                        covers=grown[id(op)],
-                        extra_covers=extra[id(op)],
-                        absorbed=absorbed[id(op)],
-                    )
-                    if id(op) in grown
-                    else op
-                    for op in block.ops
-                    if id(op) not in dropped
-                ),
+                ops=tuple(_empty_operation(op) if id(op) in gone else op for op in block.ops),
             )
             for block in body.blocks
         ),
@@ -904,7 +792,7 @@ def _meets(one: frozenset | None, other: frozenset | None) -> bool:
 
 
 def _empty_operation(op: Op) -> Op:
-    """Keep provenance and owned byte ranges, but no computation or memory effect."""
+    """Keep opaque source ownership, but no computation or memory effect."""
     return replace(
         op,
         op=ir.Operation.NOTHING,
@@ -912,6 +800,10 @@ def _empty_operation(op: Op) -> Op:
         kind=mir.Kind.NOTHING,
         defines=(),
         uses=(),
+        array=None,
+        memory_values=(),
+        floating=None,
+        floating_origin=None,
         args=(),
         results=(),
         loads=(),
@@ -919,7 +811,17 @@ def _empty_operation(op: Op) -> Op:
         merges={},
         source_backed=False,
         raised=None,
+        target=None,
+        cases=(),
         symbol=False,
+        args_known=True,
+        memory_complete=True,
+        reads_complete=True,
+        opaque_defs=frozenset(),
+        opaque_uses=frozenset(),
+        stack=None,
+        test=None,
+        indirect=False,
     )
 
 
@@ -940,10 +842,7 @@ def without_dead_stores(
         blocks=tuple(
             replace(
                 one,
-                ops=tuple(
-                    _empty_operation(op) if id(op) in gone else op
-                    for op in _without(list(one.ops), lambda op: id(op) in gone)
-                ),
+                ops=tuple(_without(list(one.ops), lambda op: id(op) in gone)),
             )
             for one in body.blocks
         ),
@@ -1000,7 +899,6 @@ def forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> M
                         source_backed=False,
                         raised=None,
                         symbol=False,
-                        covers=op.covers or mir_span(op),
                     )
                 )
             elif op.kind is mir.Kind.LOAD:
@@ -1018,18 +916,12 @@ def forwarded(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> M
                         source_backed=False,
                         raised=None,
                         symbol=False,
-                        covers=op.covers or mir_span(op),
                     )
                 )
             else:
                 ops.append(replace(op, args=args, loads=(), uses=op.uses + (holder,)))
         out.append(replace(block, ops=tuple(ops)))
     return replace(body, blocks=tuple(out))
-
-
-def mir_span(op):
-    """The bytes an op stood for, without consulting decoded provenance."""
-    return op.covers
 
 
 def _served(op: Op, holder) -> "tuple[mir.Arg, ...] | None":
@@ -1392,11 +1284,6 @@ def _crossed_values(run: list, rest: list, phis: list | None, wanted: set | None
     if wanted is not None:
         taken &= wanted
     return {value for one in run for value in one.defines if value in taken}
-
-
-def _span_of(op: Op) -> tuple[int, int] | None:
-    """The bytes this operation occupied before anything moved it."""
-    return op.covers
 
 
 # Operations the body can be observed through, whatever they define. A
@@ -1777,7 +1664,6 @@ def _threaded(body: MirBody) -> MirBody:
                     results=(),
                     test=None,
                     target=successors[0],
-                    covers=last.covers or _span_of(last),
                 )
             ops = (*ops[:-1], last)
         blocks.append(replace(block, ops=ops, succ=successors))
@@ -1808,7 +1694,6 @@ def _threaded(body: MirBody) -> MirBody:
             results=(),
             test=None,
             target=target,
-            covers=last.covers or _span_of(last),
         )
         converged.append(replace(block, ops=(*block.ops[:-1], jump), succ=(target,)))
         changed = True
@@ -1823,9 +1708,9 @@ def decided(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
     that cannot be taken. bools is three of them over four constants and
     nothing else.
 
-    Taken becomes an unconditional jump and not-taken goes entirely, its
-    bytes handed to the operation before it. What becomes unreachable is
-    dropped by resolving the body afterwards rather than here.
+    Taken becomes an unconditional jump and not-taken becomes an inert owner.
+    What becomes unreachable is dropped by resolving the body afterwards
+    rather than here.
     """
     body = _threaded(body)
     facts = consts.known(body, dgroup, calls)
@@ -1890,12 +1775,11 @@ def decided(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> Mir
                 args=(),
                 results=(),
                 target=target,
-                covers=last.covers or _span_of(last),
             )
             out.append(replace(block, ops=block.ops[:-1] + (jump,), succ=(target,)))
         else:
             kept = _absorb(list(block.ops), {last.at})
-            if len(kept) == len(block.ops):
+            if kept == list(block.ops):
                 out.append(block)
                 continue
             out.append(replace(block, ops=tuple(kept), succ=tuple(at for at in block.succ if at != target)))
@@ -2112,9 +1996,7 @@ def _folded_division(op: Op, numbers: tuple[int, int], wanted: set) -> tuple[Op,
             raised=None,
             symbol=False,
             source_backed=False,
-            covers=op.covers if index == 0 else (op.at, op.at),
             id=op.id if index == 0 else None,
-            extra_covers=op.extra_covers if index == 0 else (),
             absorbed=op.absorbed if index == 0 else (),
         )
         for index, (result, number) in enumerate(zip(op.results, numbers, strict=True))
@@ -2671,7 +2553,7 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
             # `at`, which are now the hoisted operation's, and both would
             # claim them.
             first = ops[0]
-            ops = [replace(first, at=block.ops[0].at, covers=first.covers or _span_of(first))] + ops[1:]
+            ops = [replace(first, at=block.ops[0].at)] + ops[1:]
         if block.at in moved:
             leaves = bool(ops) and ops[-1].kind in (mir.Kind.JUMP, mir.Kind.BRANCH)
             lifted = list(moved[block.at])
@@ -2687,7 +2569,7 @@ def hoisted(body: MirBody, dgroup: frozenset[int], calls: dict[int, str], bounds
                 index = max(0, len(ops) - 1)
             if ops:
                 anchor = ops[index].at if index < len(ops) else ops[-1].at
-                lifted = [replace(one, at=anchor, covers=one.covers or _span_of(one)) for one in lifted]
+                lifted = [replace(one, at=anchor) for one in lifted]
             ops = ops[:index] + lifted + ops[index:]
         out.append(replace(block, ops=tuple(ops)))
 
@@ -2942,22 +2824,6 @@ def applied(
     if only in {"forward", "drop_loads", "reuse", "cse"}:
         only = "gvn"
     passes = [one for one in pipeline(where, **wanted) if only is None or one.name == only]
-    if coverage:
-        body = replace(
-            body,
-            blocks=tuple(
-                replace(
-                    block,
-                    ops=tuple(
-                        replace(op, extra_covers=coverage[op.id][1:])
-                        if not op.extra_covers and op.id in coverage
-                        else op
-                        for op in block.ops
-                    ),
-                )
-                for block in body.blocks
-            ),
-        )
     for iteration in range(16):
         before = body
         for one in passes:

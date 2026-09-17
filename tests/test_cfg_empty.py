@@ -87,6 +87,45 @@ def test_converged_branch_keeps_its_destination_even_when_condition_is_false():
     assert not result.blocks[0].ops[-1].uses
 
 
+def test_owned_false_branch_becomes_a_marker_without_blocking_decision() -> None:
+    """CMPORD retained 24 known-false branches when ownership kept list length unchanged."""
+    flags = mir.Value(1, 0, True)
+    compare = mir.Op(
+        0,
+        ir.Operation.COMPARE,
+        "cmp",
+        (flags,),
+        (),
+        kind=mir.Kind.SUB,
+        args=(mir.Const(0, 2), mir.Const(1, 2)),
+        absorbed=(1,),
+    )
+    branch = mir.Op(
+        2,
+        ir.Operation.BRANCH,
+        "",
+        (),
+        (flags,),
+        kind=mir.Kind.BRANCH,
+        test=mir.Kind.EQ,
+        target=10,
+        absorbed=(2,),
+    )
+    body = mir.MirBody(
+        0,
+        (
+            mir.MirBlock(0, (), (compare, branch), (10, 20)),
+            mir.MirBlock(10, (), (), ()),
+            mir.MirBlock(20, (), (), ()),
+        ),
+    )
+
+    result = transform.decided(body, frozenset(), {})
+
+    assert all(op.kind is not mir.Kind.BRANCH for block in result.blocks for op in block.ops)
+    assert any(op.kind is mir.Kind.NOTHING and op.absorbed == (2,) for block in result.blocks for op in block.ops)
+
+
 def test_implicit_edge_keeps_the_jump_that_changes_physical_flow():
     """FPDEEP skipped its entire calculation when a fallthrough trampoline lost its jump."""
     jump = mir.Op(10, ir.Operation.JUMP, "jmp", (), (), kind=mir.Kind.JUMP, target=30, covers=(10, 12))

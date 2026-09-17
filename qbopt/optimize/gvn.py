@@ -168,7 +168,7 @@ def joined(body: mir.MirBody, *, insert: bool = True) -> mir.MirBody:
                 made = mir.Op(at, op.op, "", (value,),
                               tuple(dict.fromkeys(arg.value for arg in translated.args if isinstance(arg, mir.Held))),
                               kind=op.kind, args=translated.args,
-                              results=(mir.Held(value, op.results[0].width),), covers=(at, at))
+                              results=(mir.Held(value, op.results[0].width),))
                 insertions.setdefault(parent, []).append((cut, made))
                 incoming[parent] = value
             result = mir.Value(fresh, block.at)

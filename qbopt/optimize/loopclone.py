@@ -114,8 +114,7 @@ def peeled(body: mir.MirBody, loop: loops.Loop, count: int) -> mir.MirBody | Non
                         ),
                         target=destination(op.target, block.at, iteration),
                         cases=tuple((number, destination(target, block.at, iteration)) for number, target in op.cases),
-                        covers=(op.at, op.at),
-                        extra_covers=(),
+                        absorbed=(),
                         raised=None,
                         symbol=op.symbol is not False,
                     )

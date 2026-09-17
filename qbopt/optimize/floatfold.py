@@ -152,8 +152,6 @@ def stored(body: mir.MirBody, facts: dict) -> mir.MirBody:
                             floating=None,
                             floating_origin=None,
                             stack=None,
-                            covers=(op.at, op.at),
-                            extra_covers=(),
                             absorbed=(),
                             symbol=True,
                         )

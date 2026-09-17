@@ -465,15 +465,12 @@ def _woven(block, ahead: list, behind: list, replacements: dict[int, Op]) -> lis
         while cut and kept[cut - 1].kind in (mir.Kind.JUMP, mir.Kind.BRANCH):
             cut -= 1
         if cut < len(kept):
-            at = kept[cut].covers[0] if kept[cut].covers else kept[cut].at
-            boundary = at
+            at = kept[cut].at
         elif kept:
             at = kept[-1].at
-            boundary = kept[-1].covers[1] if kept[-1].covers else at
         else:
             at = block.at
-            boundary = at
-        inserted = [replace(op, at=at, covers=(boundary, boundary)) for op in (*ahead, *behind)]
+        inserted = [replace(op, at=at, absorbed=()) for op in (*ahead, *behind)]
         kept = kept[:cut] + inserted + kept[cut:]
     return kept
 
@@ -634,7 +631,6 @@ def _made(kind, name: str, into, args: tuple, at: int, beside: Op) -> Op:
         loads=loads,
         stores=(),
         source_backed=False,
-        covers=(at, at),
         kind=kind,
         args=args,
         results=(mir.Held(into, _widest(args)),),

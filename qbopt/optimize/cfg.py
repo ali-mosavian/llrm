@@ -13,23 +13,6 @@ def _empty(op):
             and op.floating_origin is None)
 
 
-def _owns_interval(blocks, start, end):
-    """Layout cannot compact a body's chain across bytes owned by another body."""
-    spans = sorted(span for block in blocks for op in block.ops
-                   for span in (*((op.covers,) if op.covers is not None else ()), *op.extra_covers)
-                   if span[0] < span[1])
-    covered = start
-    for low, high in spans:
-        if high <= covered:
-            continue
-        if low > covered:
-            break
-        covered = high
-        if covered >= end:
-            return True
-    return False
-
-
 def merged(body: mir.MirBody) -> mir.MirBody:
     """Merge forward single-entry chains, retaining every original byte owner.
 
@@ -54,11 +37,6 @@ def merged(body: mir.MirBody) -> mir.MirBody:
             if set(predecessors[target]) != {first.at}:
                 continue
             between = ordered[index + 1:positions[target]]
-            inserted = all(op.covers is not None and op.covers[0] == op.covers[1]
-                           and all(low == high for low, high in op.extra_covers)
-                           for block in (first, *between, second) for op in block.ops)
-            if not inserted and not _owns_interval(body.blocks, first.at, target):
-                continue
             if any(block.at == body.entry or block.at in repeated or block.phis or block.succ or predecessors[block.at]
                    or any(not _empty(op) for op in block.ops) for block in between):
                 continue
@@ -78,8 +56,7 @@ def merged(body: mir.MirBody) -> mir.MirBody:
             swaps = {phi.result.id: phi.incoming[first.at] for phi in second.phis}
             if any(value.id in swaps for value in swaps.values()):
                 continue
-            marker = mir.Op(target, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.NOTHING,
-                            covers=(target, target))
+            marker = mir.Op(target, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.NOTHING)
             moved = (*ops, *(op for block in between for op in block.ops), marker, *second.ops)
             combined = replace(first, ops=moved, succ=second.succ)
             removed = {target, *(block.at for block in between)}

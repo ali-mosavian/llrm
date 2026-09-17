@@ -73,8 +73,7 @@ def joined(body: mir.MirBody) -> mir.MirBody:
                 additions.setdefault(at, []).append(mir.Op(
                     position, ir.Operation.MOVE, "mov", (value,),
                     (source.value,) if isinstance(source, mir.Held) else (),
-                    kind=mir.Kind.COPY, args=(source,), results=(mir.Held(value, 4),),
-                    covers=(position, position)))
+                    kind=mir.Kind.COPY, args=(source,), results=(mir.Held(value, 4),)))
             result = fresh(block.at)
             new_phis.setdefault(block.at, []).append(mir.Phi(result, incoming))
             for phi, offset in ((high, 16), (low, 0)):
@@ -83,7 +82,7 @@ def joined(body: mir.MirBody) -> mir.MirBody:
                 extracts.setdefault(block.at, []).append(mir.Op(
                     block.at, mir.Synth.HALF_TO_LOW, "extract", (phi.result,), (result,),
                     kind=mir.Kind.EXTRACT, args=(mir.Held(result, 4), mir.Const(offset, 4)),
-                    results=(mir.Held(phi.result, 2),), covers=(block.at, block.at)))
+                    results=(mir.Held(phi.result, 2),)))
             replacements[id(op)] = replace(op, kind=mir.Kind.COPY, args=(mir.Held(result, 4),),
                                             uses=(result,), merges={}, source_backed=False, raised=None)
     if not replacements:
