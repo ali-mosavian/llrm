@@ -8,6 +8,8 @@ had already overwritten -- `r24 <- [bp-8]` and then `r27 <- r24`. R came out
 6460 for 7500, and nothing structural about the object was wrong.
 """
 
+from dataclasses import replace
+
 import pytest
 from iced_x86 import Register
 
@@ -137,6 +139,38 @@ def test_register_and_spilled_cycles_are_preserved() -> None:
     assert [one.what.name for one in spilled] == ["push", "push", "pop", "pop"]
     assert spilled[0].what.sources == (_slot(4),)
     assert spilled[-1].what.dests == (_slot(8),)
+
+
+def test_register_cycle_retains_covered_bytes_as_an_anchor() -> None:
+    """sieve's shared array base made a three-register phi cycle whose final move owned original bytes."""
+    closing = _move(_reg(Register.CX), _reg(Register.DX), group=1)
+    closing = replace(closing, covers=(0x100, 0x102))
+    body = _body(
+        _move(_reg(Register.DX), _reg(Register.SI), group=1),
+        _move(_reg(Register.SI), _reg(Register.CX), group=1),
+        closing,
+    )
+
+    got = parcopy.scheduled(body).blocks[0].insns
+
+    assert [one.what.name for one in got] == ["xchg", "xchg", ""]
+    assert got[-1].what.op is ir.Operation.NOTHING
+    assert got[-1].covers == (0x100, 0x102)
+
+
+def test_mixed_width_register_cycle_uses_a_balanced_temporary() -> None:
+    """sieve rotates EDX->CX->SI->EDX without exchanging incompatible register widths."""
+    body = _body(
+        _move(ir.Reg(Register.EDX, 4), ir.Reg(Register.ESI, 4), group=1),
+        _move(ir.Reg(Register.CX, 2), ir.Reg(Register.DX, 2), group=1),
+        _move(ir.Reg(Register.SI, 2), ir.Reg(Register.CX, 2), group=1),
+    )
+
+    got = parcopy.scheduled(body).blocks[0].insns
+
+    assert [one.what.name for one in got] == ["push", "mov", "mov", "pop"]
+    assert got[0].what.sources == (ir.Reg(Register.DX, 2),)
+    assert got[-1].what.dests == (ir.Reg(Register.CX, 2),)
 
 
 def test_something_that_is_not_a_move_in_a_group_is_refused() -> None:

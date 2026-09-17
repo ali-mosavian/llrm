@@ -159,15 +159,42 @@ def _rotated(left: list[lir.Insn]) -> "tuple[list[lir.Insn], list[lir.Insn]] | N
     # encoding at all or the low halves swapped and ebx's upper half
     # quietly wrong. Mem has the same hole, its width being no part of the
     # key either.
-    if len({one.width for one in operands}) != 1:
-        return None
     last = cycle[-1]
-    if not any(isinstance(a, ir.Mem) and isinstance(b, ir.Mem) for a, b in pairs):
-        # The last move contributes no instruction, so it must stand for no
-        # bytes -- every copy a group holds is inserted, and `lir.without`
-        # relies on the same fact.
-        if last.covers and last.covers[0] != last.covers[1]:
+    widths = {one.width for one in operands}
+    if len(widths) != 1:
+        # Partial-register destinations cannot be exchanged as their roots:
+        # `xchg edx,si` has no encoding and widening it would overwrite the
+        # high halves that the word moves preserve.  Save exactly the slice
+        # consumed by the closing move, rotate the other moves in dependency
+        # order, and restore that slice into the final destination.
+        if not all(
+            isinstance(one.what.dests[0], ir.Reg)
+            and isinstance(one.what.sources[0], ir.Reg)
+            and one.what.dests[0].width == one.what.sources[0].width
+            for one in cycle
+        ):
             return None
+        closing_width = last.what.sources[0].width
+        saved = ir.Reg(target.named(operands[0].register, closing_width), closing_width)
+        made = [
+            replace(
+                start,
+                what=ir.Semantics(ir.Operation.PUSH, "push", (), (saved,)),
+                group=None,
+                defines=(),
+                uses=(),
+            ),
+            *(replace(one, group=None) for one in cycle[:-1]),
+            replace(
+                last,
+                what=ir.Semantics(ir.Operation.POP, "pop", (last.what.dests[0],), ()),
+                group=None,
+                defines=(),
+                uses=(),
+            ),
+        ]
+        return made, cycle
+    if not any(isinstance(a, ir.Mem) and isinstance(b, ir.Mem) for a, b in pairs):
         made = [
             replace(
                 one,
@@ -178,6 +205,12 @@ def _rotated(left: list[lir.Insn]) -> "tuple[list[lir.Insn], list[lir.Insn]] | N
             )
             for one, (a, b) in zip(cycle, pairs)
         ]
+        # The closing logical move contributes no machine instruction.  It
+        # may still own original bytes transferred to it by an earlier MIR
+        # rewrite, so retain that bookkeeping as a zero-cost anchor instead
+        # of refusing an otherwise ordinary register rotation.
+        if last.covers and last.covers[0] != last.covers[1]:
+            made.append(lir.anchor(last))
         return made, cycle
 
     if operands[0].width not in (2, 4):
