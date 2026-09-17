@@ -44,6 +44,10 @@ class Frame:
     slots: dict[SlotKey, int] = field(default_factory=dict)
     native: Plan | None = None
     native_pins: dict[int, int] = field(default_factory=dict)
+    # Capacity belongs to the stack object, not to whichever virtual value
+    # first received it.  Slot coloring may assign later non-overlapping
+    # values to the same displacement, including across allocation rounds.
+    capacities: dict[int, int] = field(default_factory=dict)
 
     @property
     def size(self) -> int:
@@ -56,7 +60,9 @@ class Frame:
             raise Refused("a frameless native procedure cannot hold a spill below its caller's BP")
         if value not in self.slots:
             lowest = min(self.slots.values(), default=self.floor)
-            self.slots[value] = lowest - max(width, WORD)
+            capacity = max(width, WORD)
+            self.slots[value] = lowest - capacity
+            self.capacities[self.slots[value]] = capacity
         return self.slots[value]
 
     def cell(self, value: SlotKey, width: int) -> ir.Mem:

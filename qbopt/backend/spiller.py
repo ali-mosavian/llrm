@@ -348,7 +348,21 @@ def _color_slots(
     slot without growing into an already allocated neighbour.
     """
     live = ranges.intervals(body)
-    colors: list[tuple[int, int, list[ranges.Interval]]] = []
+    colors = _existing_colors(body, frame)
+    by_home = {home: (capacity, occupants) for home, capacity, occupants in colors}
+    # `siblings()` may reserve one home for a copy web before this spill batch
+    # is materialized.  Those members are still virtual, so no frame operand
+    # exists for `_existing_colors` to discover yet.  They nevertheless occupy
+    # the color: omitting them put Mandelbrot's live `work` accumulator and
+    # `cy` recurrence in the same `[bp-8]` slot.
+    for value in values:
+        home = frame.slots.get(value)
+        interval = live.get(value)
+        if home is None or interval is None:
+            continue
+        capacity, occupants = by_home[home]
+        occupants.append(interval)
+        frame.capacities[home] = max(frame.capacities.get(home, frames.WORD), capacity)
     pending = sorted(
         (value for value in values if value not in frame.slots),
         key=lambda value: (-max(widths[value], frames.WORD), value),
@@ -375,7 +389,78 @@ def _color_slots(
             continue
         home, _capacity, occupants = color
         frame.slots[value] = home
+        frame.capacities[home] = max(frame.capacities.get(home, frames.WORD), capacity)
         occupants.append(interval)
+
+
+def _existing_colors(body: lir.LirBody, frame: frames.Frame) -> list[tuple[int, int, list[ranges.Interval]]]:
+    """Spill-slot colors already present in the current rewritten body.
+
+    Allocation spills in rounds.  The virtual value from an earlier round is
+    gone, so retaining its old slot-index interval would compare positions in
+    two different instruction streams.  Model each existing spill cell as a
+    temporary pseudo-value instead: memory destinations define it, memory
+    sources use it, and the ordinary interval analysis recomputes its lifetime
+    in the current CFG.  Multiple values already sharing one home naturally
+    become disjoint segments of the same interval.
+    """
+    homes = sorted(set(frame.slots.values()))
+    if not homes:
+        return []
+    held = {
+        value
+        for one in body.insns
+        for value in (*one.defines, *one.uses)
+    } | set(body.inputs)
+    first = min(held, default=0) - len(homes) - 1
+    pseudo = {home: first + index for index, home in enumerate(homes)}
+    capacities = {home: frame.capacities.get(home, frames.WORD) for home in homes}
+    unknown = False
+
+    def slot(operand: object) -> int | None:
+        nonlocal unknown
+        if not isinstance(operand, ir.Mem) or operand.addr is None or operand.addr.space is not Space.FRAME:
+            return None
+        home = operand.addr.disp
+        if home in pseudo:
+            capacities[home] = max(capacities[home], operand.width, frames.WORD)
+            return pseudo[home]
+        # Original frame objects are at or above ``floor``. Anything below it
+        # is part of spill storage; an unrecognized offset may be a partial
+        # access into a known slot, so no existing slot may be reused safely.
+        if home < frame.floor:
+            unknown = True
+        return None
+
+    blocks = []
+    for block in body.blocks:
+        insns = []
+        for one in block.insns:
+            if one.what is None:
+                insns.append(one)
+                continue
+            defined = {found for operand in one.what.dests if (found := slot(operand)) is not None}
+            used = {found for operand in one.what.sources if (found := slot(operand)) is not None}
+            insns.append(
+                replace(
+                    one,
+                    defines=tuple(dict.fromkeys((*one.defines, *sorted(defined)))),
+                    uses=tuple(dict.fromkeys((*one.uses, *sorted(used)))),
+                )
+            )
+        blocks.append(replace(block, insns=tuple(insns)))
+    tracked = replace(body, blocks=tuple(blocks))
+    live = ranges.intervals(tracked)
+    end = max((last for _first, last in ranges.indexed(tracked).span.values()), default=1)
+    colors = []
+    for home in homes:
+        interval = live.get(pseudo[home])
+        occupants = [interval] if interval is not None else []
+        if unknown:
+            occupants = [ranges.Interval(pseudo[home], (ranges.Segment(0, end),))]
+        frame.capacities[home] = capacities[home]
+        colors.append((home, capacities[home], occupants))
+    return colors
 
 
 def rematerializable(body: lir.LirBody, values: frozenset[int]) -> frozenset[int]:

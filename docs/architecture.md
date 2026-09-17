@@ -1300,6 +1300,17 @@ one documented target without materially regressing another.
   The greedy allocator also uses soft copy-neighbor preferences, including
   copies inserted after coalescing. It prefers fixed or already assigned
   neighbors without relaxing interference, clobbers, classes or pins.
+  Spill-slot coloring now also survives allocation rounds. Earlier spill
+  homes are re-read from the current LIR as memory definitions and uses, so
+  their intervals are recomputed after inserted reloads instead of carrying
+  stale slot indices. Copy-web members reserved in the current round occupy
+  the color through their still-virtual intervals. The latter condition is
+  load-bearing: omitting it aliased Mandelbrot's live `work` and `cy` values
+  at `[bp-8]`, returning 1654 instead of the independent 8873. The corrected
+  implementation retains Mandelbrot's previous 20-byte frame and emitted
+  metrics; focused two-round fixtures demonstrate safe reuse, overlapping
+  refusal, and width-compatible reuse. This is allocator infrastructure, not
+  a benchmark speedup claim.
   The current uncommitted qrender rollout removes 10,590 code bytes across
   all 21 BASIC modules and restores E1M1 screenshot completion. Three dedicated
   QGL checks match baseline; broader renderer acceptance remains open. See

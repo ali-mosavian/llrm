@@ -399,6 +399,104 @@ def test_nonoverlapping_spills_share_one_compatible_frame_slot() -> None:
     assert frame.size == 2
 
 
+def test_nonoverlapping_spills_from_later_rounds_reuse_the_frame_slot() -> None:
+    """Matmul allocated a new slot in every spill round even after the
+    previous slot's value was dead.
+
+    RegAlloc rewrites one spill batch before choosing the next. Slot coloring
+    therefore has to recover the earlier slot's live range from the rewritten
+    LIR rather than forgetting every color at the end of one batch.
+    """
+    frame = frames.Frame(0)
+    body = _body(_move(1, 10, at=0x10), _add(11, 1, at=0x12), _move(2, 20, at=0x14), _add(21, 2, at=0x16))
+
+    first, _made = spiller.spilled(body, frozenset({1}), frame)
+    spiller.spilled(first, frozenset({2}), frame)
+
+    assert frame.slots[1] == frame.slots[2]
+    assert frame.size == 2
+
+
+def test_overlapping_spills_from_later_rounds_keep_distinct_slots() -> None:
+    """Cross-round coloring must not overwrite an earlier value still live."""
+    frame = frames.Frame(0)
+    body = _body(_move(1, 10, at=0x10), _move(2, 20, at=0x12), _add(11, 1, at=0x14), _add(21, 2, at=0x16))
+
+    first, _made = spiller.spilled(body, frozenset({1}), frame)
+    spiller.spilled(first, frozenset({2}), frame)
+
+    assert frame.slots[1] != frame.slots[2]
+
+
+def test_cross_round_coloring_includes_current_preassigned_spill_webs() -> None:
+    """Mandelbrot returned 1654 instead of 8873 when `work` and `cy` shared
+    `[bp-8]`.
+
+    Sibling spilling reserves a home for part of the current batch before slot
+    coloring runs. That home has no memory operations yet, so recovering only
+    materialized slot lifetimes makes it look empty. Its still-virtual members
+    must occupy the color while the remaining spills are assigned.
+    """
+    frame = frames.Frame(0, slots={1: -2}, capacities={-2: 2})
+    body = _body(_move(1, 10, at=0x10), _move(2, 20, at=0x12), _add(11, 1, at=0x14), _add(21, 2, at=0x16))
+
+    spiller._color_slots(body, frozenset({1, 2}), {1: 2, 2: 2}, frame)
+
+    assert frame.slots[1] != frame.slots[2]
+
+
+def test_later_narrow_spill_reuses_a_dead_wider_slot() -> None:
+    """Cross-round coloring preserves the stack object's capacity."""
+    frame = frames.Frame(0)
+    wide = lir.Insn(
+        0x10,
+        (0x10, 0x10),
+        ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 4),), (ir.Held(10, 4),)),
+        (1,),
+        (10,),
+    )
+    use_wide = lir.Insn(
+        0x12,
+        (0x12, 0x12),
+        ir.Semantics(ir.Operation.BINARY, "add", (ir.Held(11, 4),), (ir.Held(11, 4), ir.Held(1, 4))),
+        (11,),
+        (11, 1),
+    )
+    body = _body(wide, use_wide, _move(2, 20, at=0x14), _add(21, 2, at=0x16))
+
+    first, _made = spiller.spilled(body, frozenset({1}), frame)
+    spiller.spilled(first, frozenset({2}), frame)
+
+    assert frame.slots[1] == frame.slots[2]
+    assert frame.size == 4
+
+
+def test_later_wide_spill_does_not_outgrow_a_narrow_slot() -> None:
+    """A dead word is not four bytes of storage merely because it is free."""
+    frame = frames.Frame(0)
+    wide = lir.Insn(
+        0x14,
+        (0x14, 0x14),
+        ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(2, 4),), (ir.Held(20, 4),)),
+        (2,),
+        (20,),
+    )
+    use_wide = lir.Insn(
+        0x16,
+        (0x16, 0x16),
+        ir.Semantics(ir.Operation.BINARY, "add", (ir.Held(21, 4),), (ir.Held(21, 4), ir.Held(2, 4))),
+        (21,),
+        (21, 2),
+    )
+    body = _body(_move(1, 10, at=0x10), _add(11, 1, at=0x12), wide, use_wide)
+
+    first, _made = spiller.spilled(body, frozenset({1}), frame)
+    spiller.spilled(first, frozenset({2}), frame)
+
+    assert frame.slots[1] != frame.slots[2]
+    assert frame.size == 6
+
+
 def test_overlapping_spills_keep_distinct_frame_slots() -> None:
     """Slot coloring must follow liveness, not merely source instruction order."""
     frame = frames.Frame(0)
