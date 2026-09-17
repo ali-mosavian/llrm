@@ -237,7 +237,7 @@ def function_report(module: masm.Module, procedure: masm.Procedure, number: int,
         "peak_live_values": _peak_live(procedure),
         "spill_reloads": sum(one.spill_reload for one in instructions),
         "spill_stores": sum(one.spill_store for one in instructions),
-        "rematerializations": None,
+        "rematerializations": sum(one.rematerialized for one in instructions),
         "assembly_sha256": hashlib.sha256(code).hexdigest(),
         "target_status": "missing",
         "target": None,
@@ -453,6 +453,7 @@ def _stage_metrics(state: object) -> dict:
         "address_calculations": addresses,
         "spill_reloads": sum(one.spill_reload for one in all_insns),
         "spill_stores": sum(one.spill_store for one in all_insns),
+        "rematerializations": sum(one.rematerialized for one in all_insns),
     }
 
 

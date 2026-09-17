@@ -316,6 +316,7 @@ def test_spilled_constant_is_rematerialized_without_a_frame_slot() -> None:
         isinstance(operand, ir.Mem) for one in result if one.what for operand in (*one.what.dests, *one.what.sources)
     )
     assert result[-2].what.sources == (ir.Imm(20, 2),)
+    assert result[-2].rematerialized
     assert result[-1].what.sources[1].value == result[-2].defines[0]
 
 

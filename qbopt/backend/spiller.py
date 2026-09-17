@@ -105,17 +105,20 @@ def spilled(
                 if value in constants:
                     constant = constants[value]
                     insns.append(
-                        _inserted(
-                            one,
-                            ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(fresh, constant.width),), (constant,)),
-                            (fresh,),
-                            (),
+                        replace(
+                            _inserted(
+                                one,
+                                ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(fresh, constant.width),), (constant,)),
+                                (fresh,),
+                                (),
+                            ),
+                            rematerialized=True,
                         )
                     )
                 elif value in frame_loads:
-                    insns.append(_reload(one, fresh, frame_loads[value]))
+                    insns.append(replace(_reload(one, fresh, frame_loads[value]), rematerialized=True))
                 else:
-                    insns.append(_reload(one, fresh, frame_homes[value][0]))
+                    insns.append(replace(_reload(one, fresh, frame_homes[value][0]), rematerialized=True))
                 made.add(fresh)
                 fresh += 1
             if remade:

@@ -54,6 +54,7 @@ def test_shared_literal_pushes_keep_each_site_and_address(symbolic, width):
     for one in (first, last):
         assert one.what.sources == (immediate,)
         assert one.op is owner and one.symbol is symbolic
+        assert one.rematerialized
         assert not one.uses and not one.defines
 
 

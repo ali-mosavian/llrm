@@ -127,6 +127,10 @@ class Insn:
     # say: it carries the `op` of whatever it stands beside, stores and all.
     spill_store: bool = False
     frame_adjust: bool = False
+    # This instruction reconstructs a value at its use instead of preserving
+    # it in a register or an allocator-owned spill slot. A stable source-cell
+    # reconstruction may also be a ``spill_reload`` for ownership purposes.
+    rematerialized: bool = False
 
     @property
     def inserted(self) -> bool:
@@ -279,6 +283,7 @@ def anchor(one: Insn) -> Insn:
         spill_reload=False,
         spill_store=False,
         frame_adjust=False,
+        rematerialized=False,
     )
 
 

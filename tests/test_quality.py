@@ -28,6 +28,7 @@ def test_report_measures_each_emitted_function_and_names_its_profile() -> None:
         assert function["bytes"] > 0
         assert function["instructions"] > 0
         assert function["peak_live_values"] >= 0
+        assert function["rematerializations"] >= 0
         assert function["target_status"] == "missing"
         assert function["ratio"] is None
 
@@ -219,3 +220,14 @@ def test_stage_metrics_count_a_two_address_memory_operand_once() -> None:
     body = lir.LirBody("rmw", 0, (lir.LirBlock(0, (insn,)),), {}, {})
     metrics = quality._stage_metrics(body)
     assert (metrics["loads"], metrics["stores"]) == (1, 1)
+
+
+def test_stage_metrics_count_rematerialized_instructions() -> None:
+    """A reconstructed value was reported as null even after the allocator made it."""
+    from qbopt.model import ir
+    from qbopt.model import lir
+
+    what = ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(1, 2),), (ir.Imm(20, 2),))
+    insn = lir.Insn(0, (0, 0), what, (1,), (), rematerialized=True)
+    body = lir.LirBody("remat", 0, (lir.LirBlock(0, (insn,)),), {}, {})
+    assert quality._stage_metrics(body)["rematerializations"] == 1

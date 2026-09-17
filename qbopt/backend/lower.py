@@ -632,6 +632,7 @@ def _rematerialized_arguments(insns, uses, exposed):
                             uses=(),
                             op=definition.op,
                             symbol=True if immediate.address is not None else False,
+                            rematerialized=True,
                         )
                         consumed[value] += 1
         for value in one.defines:
