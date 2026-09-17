@@ -107,6 +107,27 @@ def test_refusal_is_not_benchmarked_as_optimization(monkeypatch):
         bench.optimized(b"original", False, "386")
 
 
+def test_benchmark_defaults_to_the_only_supported_native_fpu_path(monkeypatch):
+    """The performance suite stopped before timing when its stale default
+    requested the retired software-FPU rewrite path.
+
+    Native x87 is now the production path, so an ordinary benchmark run must
+    request it without relying on every caller to remember a compatibility
+    flag.
+    """
+    observed = []
+
+    monkeypatch.setattr(
+        bench.wholeseg,
+        "emitted",
+        lambda data, **options: observed.append(options["native_fpu"])
+        or SimpleNamespace(outcome=bench.wholeseg.Emission.LIR, reason="rebuilt", data=data),
+    )
+
+    assert bench.optimized(b"object") == b"object"
+    assert observed == [True]
+
+
 def test_wrong_answer_is_not_a_speedup(monkeypatch):
     """A faster but wrong floating benchmark previously supplied a quoted speedup."""
     monkeypatch.setattr(bench, "launch", lambda *a, **kw: SimpleNamespace(finished=True, timed_out=False))

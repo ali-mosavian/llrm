@@ -52,7 +52,11 @@ def elapsed_ms(text: str) -> float | None:
 
 
 def optimized(
-    data: bytes, native_fpu: bool, cpu: str, basic_semantics: bool = False, bounds_checks: bool = False
+    data: bytes,
+    native_fpu: bool = True,
+    cpu: str = "386",
+    basic_semantics: bool = False,
+    bounds_checks: bool = False,
 ) -> bytes:
     result = wholeseg.emitted(
         data, native_fpu=native_fpu, cpu=cpu, basic_semantics=basic_semantics, bounds_checks=bounds_checks
@@ -76,7 +80,7 @@ def output_name(exe: Path, repetition: int) -> str:
 def build(
     tag: str,
     prog: str = "nbody",
-    native_fpu: bool = False,
+    native_fpu: bool = True,
     transform=None,
     cpu: str = "386",
     basic_semantics: bool = False,
@@ -177,7 +181,9 @@ def main(argv: list[str] | None = None) -> int:
     from qbopt.backend import cpu as targets
 
     ap.add_argument("--cpu", choices=targets.names(), default="386")
-    ap.add_argument("--native-fpu", action="store_true")
+    # Kept as an accepted compatibility spelling. Native x87 is now the only
+    # production path, and an ordinary benchmark must exercise that path too.
+    ap.add_argument("--native-fpu", action="store_true", default=True, help=argparse.SUPPRESS)
     ap.add_argument("--basic-semantics", action="store_true")
     ap.add_argument("--bounds-checks", action="store_true")
     ap.add_argument("--steps", type=int, default=2000)
@@ -185,9 +191,6 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     if args.steps <= 0 or args.reps <= 0:
         ap.error("steps and reps must be positive")
-    if args.basic_semantics and args.native_fpu:
-        ap.error("--basic-semantics cannot be combined with --native-fpu")
-
     cfg = CONFIGS[args.config]
     base_exe, opt_exe = build(
         args.config,
