@@ -79,6 +79,7 @@ def spilled(
     abandoned: set[int] = set()
     rematerialized_definitions: set[int] = set()
     identities: set[int] = set()
+    base_uses = _base_uses(body)
 
     blocks = []
     for block in body.blocks:
@@ -88,6 +89,17 @@ def spilled(
                 identities.add(id(one))
                 insns.append(one)
                 continue
+            # A word index held only for one final memory access does not
+            # need its own reload register when that access is also the last
+            # use of its base: `add base,[slot]` consumes the spill directly,
+            # then the unchanged cell reads through the updated base.  This
+            # is an allocation fold, like `_source`, not a new program-level
+            # address formula; it is valid only where the original base dies
+            # at this instruction and the 16-bit address form is unscaled.
+            indexed = _indexed_source(one, stored, frame, base_uses)
+            if indexed is not None:
+                add, one = indexed
+                insns.append(add)
             source = _group_source(one)
             if source is not None and source.value in constants:
                 one = replace(one, what=replace(one.what, sources=(constants[source.value],)), uses=(), symbol=False)
@@ -874,6 +886,73 @@ class _Cells:
     def cell(self, value: int, width: int) -> "ir.Mem | None":
         found = self._cells.get(value)
         return found if found is not None and found.width == width else None
+
+
+def _base_uses(body: lir.LirBody) -> dict[int, int]:
+    """How many encoded memory operands still need each address base."""
+    out: dict[int, int] = {}
+    for one in body.insns:
+        if one.what is None:
+            continue
+        for where in (*one.what.dests, *one.what.sources):
+            if isinstance(where, ir.Mem) and isinstance(where.base, ir.Held):
+                out[where.base.value] = out.get(where.base.value, 0) + 1
+    return out
+
+
+def _indexed_source(
+    one: lir.Insn, values: frozenset[int], frame, base_uses: dict[int, int]
+) -> "tuple[lir.Insn, lir.Insn] | None":
+    """Fold a spilled word index into a base the current access kills.
+
+    A 16-bit effective address cannot name a frame slot as its index, but
+    ``add bx,[bp-slot]`` followed by ``es:[bx]`` names exactly the same byte
+    address.  The destructive add is safe only when *all* remaining encoded
+    uses of the virtual base are the matching operands in this instruction;
+    otherwise it would silently move a later access.  A read-modify-write
+    appears twice (destination and source) and is one safe final access.
+    """
+    if one.what is None or one.group is not None or one.requires or one.delivers or one.clobbers:
+        return None
+    cells = [
+        where
+        for where in (*one.what.dests, *one.what.sources)
+        if isinstance(where, ir.Mem)
+        and isinstance(where.base, ir.Held)
+        and isinstance(where.index, ir.Held)
+        and where.base.width == where.index.width == 2
+        and where.scale == 1
+    ]
+    if not cells:
+        return None
+    base, index = cells[0].base, cells[0].index
+    if base.value in values or index.value not in values:
+        return None
+    if any(where.base != base or where.index != index for where in cells):
+        return None
+    if base_uses.get(base.value, 0) != len(cells):
+        return None
+    slot = frame.cell(index.value, index.width)
+    if slot is None:
+        return None
+
+    def rebased(where):
+        if isinstance(where, ir.Mem) and where.base == base and where.index == index:
+            return replace(where, index=None, scale=1, index_through=0)
+        return where
+
+    rewritten = replace(
+        one,
+        what=replace(one.what, dests=tuple(map(rebased, one.what.dests)), sources=tuple(map(rebased, one.what.sources))),
+        uses=tuple(value for value in one.uses if value != index.value),
+    )
+    add = _inserted(
+        one,
+        ir.Semantics(ir.Operation.BINARY, "add", (base,), (base, slot)),
+        (base.value,),
+        (base.value,),
+    )
+    return add, rewritten
 
 
 def folded_source(one: lir.Insn, values: frozenset[int]) -> "ir.Held | None":

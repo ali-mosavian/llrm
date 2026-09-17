@@ -1012,6 +1012,88 @@ def test_a_dword_index_is_reloaded_as_a_dword():
     assert reloads and all(one.what.dests[0].width == 4 for one in reloads), [one.what for one in out]
 
 
+def test_a_spilled_word_index_folds_into_a_dead_address_base():
+    """farloadloop reloaded a carried word index solely to address one cell.
+
+    When the base dies at that cell, ``add base,[slot]`` is legal and leaves
+    the same address without consuming a reload register.  Reloading the
+    index first made the retained-invariant pressure plan unplaceable even
+    though the medium-model encoding can consume the slot directly.
+    """
+    update = _add(1, 2)
+    cell = ir.Mem(
+        Addr(Space.FAR, 0, segment=Register.ES),
+        2,
+        base=ir.Held(5, 2),
+        index=ir.Held(1, 2),
+    )
+    read = lir.Insn(
+        at=0x102,
+        covers=(0x102, 0x104),
+        what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(4, 2),), (cell,)),
+        defines=(4,),
+        uses=(5, 1),
+        op=None,
+    )
+
+    result = _out(_body(update, read), {1})
+    folded = [
+        one
+        for one in result
+        if one.what is not None
+        and one.what.name == "add"
+        and len(one.what.sources) == 2
+        and isinstance(one.what.sources[1], ir.Mem)
+    ]
+    assert len(folded) == 1, [one.what for one in result]
+    addressed = next(
+        one
+        for one in result
+        if one.what is not None
+        and one.what.name == "mov"
+        and isinstance(one.what.sources[0], ir.Mem)
+        and one.what.sources[0].addr is not None
+        and one.what.sources[0].addr.space is Space.FAR
+    )
+    cell_after = addressed.what.sources[0]
+    assert isinstance(cell_after, ir.Mem) and cell_after.index is None, addressed.what
+    assert not any(one.spill_reload for one in result), [one.what for one in result]
+
+
+def test_a_spilled_word_index_does_not_mutate_a_base_used_later():
+    """The index fold may not move a second access through the same base."""
+    update = _add(1, 2)
+    first = ir.Mem(Addr(Space.FAR, 0, segment=Register.ES), 2, base=ir.Held(5, 2), index=ir.Held(1, 2))
+    later = ir.Mem(Addr(Space.FAR, 2, segment=Register.ES), 2, base=ir.Held(5, 2))
+    reads = (
+        lir.Insn(
+            at=0x102,
+            covers=(0x102, 0x104),
+            what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(4, 2),), (first,)),
+            defines=(4,),
+            uses=(5, 1),
+            op=None,
+        ),
+        lir.Insn(
+            at=0x104,
+            covers=(0x104, 0x106),
+            what=ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(6, 2),), (later,)),
+            defines=(6,),
+            uses=(5,),
+            op=None,
+        ),
+    )
+
+    result = _out(_body(update, *reads), {1})
+    assert not any(
+        one.what is not None
+        and one.what.name == "add"
+        and len(one.what.sources) == 2
+        and isinstance(one.what.sources[1], ir.Mem)
+        for one in result
+    ), [one.what for one in result]
+
+
 def test_nbody_accumulates_in_the_slots_it_spills() -> None:
     """accX and accY were reloaded on the skipping edge and stored at the latch.
 

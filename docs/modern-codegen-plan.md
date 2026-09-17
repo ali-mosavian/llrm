@@ -387,3 +387,20 @@ actual pressure boundary after its assignment attempt; it cannot return a
 partial assignment.  This does not make the experimental retained-owner plan
 profitable, but it makes all subsequent joint-plan candidates auditable and
 prevents the same missing-value failure in any frontend.
+
+### 21. Fold a spilled index into its dying address base — 2026-09-18
+
+The medium-model register-pressure trace exposes one target-legal fold that
+the ordinary spill path lacked.  A word held only as `[base+index]` cannot use
+a frame slot as the index, but if the base dies at that exact access, the
+spiller may emit `add base,[slot]` and read the unchanged cell through the
+updated base.  This consumes the spill directly and eliminates the reload
+register.  It applies equally to loads and read-modify-write cells.
+
+The fail-first standalone regression verifies the fold and a paired safety
+case verifies that it refuses when the base reaches a later access.  In the
+controlled `r_walk` pressure experiment, the fold removes both formerly
+unplaceable index reloads and yields retained near owners with the expected
+`les; add base,[bp-slot]` structure.  No owner is automatically protected by
+this commit: selection between the baseline and that full joint plan remains
+the next phase-4 mechanism, to be priced rather than assumed.
