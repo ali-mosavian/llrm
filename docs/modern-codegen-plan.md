@@ -424,3 +424,36 @@ that they are preheader loads and that the loop uses retained owners plus
 folded frame indexes.  This is phase-4 progress, not a claim of final
 allocator quality; broader CPU and corpus evaluation remains a phase-boundary
 gate.
+
+### 23. QCport recursive-loop pressure audit — 2026-09-18
+
+The compact acceptance loop is necessary but not sufficient.  A fresh clean
+paired listing at qbopt `b99ecfe20e9b9c45f09657e910b3bdb3e3f7f24f`, CPU
+`386`, against QCport `18f5e1f9e8d4ad54622da847dd5a412e6726ab50` has the
+same source hash and the same qbopt listing hash
+`21d841130f6445e2c403b3e82fe995f6ba711f659c3bd244b702e08d8aa0204f` as the
+prior audited listing.  The real `_r_recursive_world_node` loop still emits
+`mov bx,[bp+6]` before its first `les` on every marked face.  BCC's
+medium-model listing instead keeps the near owners in DI/SI and uses BX only
+for each transient far-field address.
+
+The stage dumps locate the first loss exactly.  Optimized MIR block 49 has
+already loaded `world` as `v35`; LIR block 77 uses that value as the base of
+the `les`.  At `04-RegAlloc`, `v35` has been rematerialized to
+`mov bx,[bp+6]`.  The value also crosses the later recursive/call path, so a
+whole-function retained-base trial protects `v35` but forces unrelated,
+non-recoverable far-address values out of registers and is correctly
+rejected.  `rdr` is not even eligible for that trial: it is stable only over
+this loop, not across the later call.
+
+Forcing the current regional split for one or both owners does not improve
+the generated loop: its fresh loop value is itself spilled under the
+simultaneous face-value, shift-count, bitmap-index and far-address pressure.
+This rejects both a looser split-feasibility gate and a whole-function
+priority tweak.  The next phase-4 mechanism must construct and price a
+**loop-scoped** invariant materialization/split together with the competing
+short-lived values' legal recovery.  It must be generic over loop blocks and
+stable source cells; it may not name `r_walk`, its arguments, or BCC's DI/SI
+assignment.  The compact loop remains the positive regression; the clean
+QCport listing is the real-world negative acceptance evidence for the next
+iteration.
