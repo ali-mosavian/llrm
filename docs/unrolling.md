@@ -109,6 +109,35 @@ nbody instructions / 598 bytes. Their profile costs differ as intended; their
 hard targets are still missing, so this is cross-target consistency evidence,
 not a completed GCC/Clang parity gate.
 
+The next exact-loop boundary was structural rather than arithmetic: after the
+eight-term dot product was expanded, the enclosing column loop had useful work
+spread over a straight-line chain of MIR blocks. The old expander admitted only
+empty bridge blocks, so it never submitted that known eight-trip loop to the
+per-CPU profitability transaction. Straight-line multi-block bodies now clone
+in execution order; internal branches, calls, barriers, phis, and multiple
+successors remain refusals. A 512-operation construction guard is a compile-time
+bound, not a profitability decision.
+
+Every CPU profile accepts the same speed-first expansion. The emitted matmul
+body changes from 6,726 to 5,046 estimated operations on 386/486/P5 and 5,136
+on P6/K5/K6/K7/Core. Static size grows from 165 instructions and 642/646 bytes
+to 519 instructions and 2,176/2,180 bytes; static branches fall from nine to
+eight. This 25% hot-work reduction for 239% byte growth is an explicit audited
+tradeoff, not final parity: Clang's scalar i386 reference still executes much
+less work, and later loop/SROA work must recover the size. The regression names
+the former 6,726-operation symptom and leaves room for a different future
+mechanism to satisfy it.
+
+The first multi-block expansion returned `4252537476` instead of matmul's
+independent `353712` answer. Its original first-iteration bridge still read the
+header phi values after the phis had been removed, so lowering exposed three
+undefined array-address inputs and allocation emitted an uninitialized spill
+reload. Stage validation found the defect in the raw second unroll candidate.
+Entry substitution now applies to every original bridge, while cloned bridges
+receive the corresponding carried substitution. The focused regression rejects
+any exposed procedure input, and the seven-program DOS known-answer corpus
+passes with the expansion enabled.
+
 Larger-than-four-trip loops may now expand within that same operation budget
 when every extended floating result in the expanded loop is proven exact.
 FPCSE's ten ordered iterations satisfy this; FPCSEX's runtime-input loop does

@@ -57,16 +57,25 @@ def expanded(
             or any(set(phi.incoming) != {header.at} for phi in blocks[exit_at].phis)):
             continue
         bridges = [blocks[at] for at in loop.body if at not in (header.at, latch.at)]
-        if any(block.phis or len(block.succ) != 1 or any(
-            op.kind not in (mir.Kind.NOTHING, mir.Kind.JUMP) for op in block.ops) for block in bridges):
+        if any(block.phis or len(block.succ) != 1 for block in bridges):
             continue
-        path = set()
+        path = []
         at, = set(header.succ) & loop.body
         while at != latch.at and at not in path:
-            path.add(at)
+            path.append(at)
             at = blocks[at].succ[0]
-        if at != latch.at or path != {block.at for block in bridges}:
+        if at != latch.at or set(path) != {block.at for block in bridges}:
             continue
+        ordered_bridges = tuple(blocks[at] for at in path)
+        bridge_ops = tuple(
+            op
+            for block in ordered_bridges
+            for op in (
+                block.ops[:-1]
+                if block.ops and block.ops[-1].kind is mir.Kind.JUMP and block.ops[-1].target == block.succ[0]
+                else block.ops
+            )
+        )
         # The object frontend may express the backedge only in CFG while the
         # C frontend carries an explicit terminal JUMP.  They are the same
         # loop.  The jump is control, not one iteration's work, and the
@@ -74,14 +83,15 @@ def expanded(
         latch_ops = latch.ops
         if latch_ops and latch_ops[-1].kind is mir.Kind.JUMP and latch_ops[-1].target == header.at:
             latch_ops = latch_ops[:-1]
-        floating_loop = any(op.floating for op in latch_ops)
+        repeated_ops = (*bridge_ops, *latch_ops)
+        floating_loop = any(op.floating for op in repeated_ops)
         invalid_latch = (
-            any(op.barrier or op.kind in (mir.Kind.OPAQUE, mir.Kind.BRANCH, mir.Kind.JUMP) for op in latch_ops)
+            any(op.barrier or op.kind in (mir.Kind.OPAQUE, mir.Kind.BRANCH, mir.Kind.JUMP) for op in repeated_ops)
             if floating_loop
             else any(op.barrier or op.kind in (
                 mir.Kind.OPAQUE, mir.Kind.CALL, mir.Kind.RETURN,
                 mir.Kind.BRANCH, mir.Kind.JUMP, mir.Kind.SWITCH,
-            ) for op in latch_ops)
+            ) for op in repeated_ops)
         )
         if invalid_latch:
             continue
@@ -113,13 +123,16 @@ def expanded(
         if len(counts) != 1:
             continue
         count, = counts
-        # The budget is what the expansion emits; an erased marker emits nothing.
-        emitted = sum(op.kind is not mir.Kind.NOTHING for op in (*latch_ops, *header.ops))
-        if count < 2 or count * emitted > 256:
+        # This is only a compile-time/resource guard.  Whether the expanded
+        # body is worth keeping is decided below with the selected CPU's
+        # operation costs.  Keep enough room to evaluate a useful multi-block
+        # loop while bounding the quadratic scalar analyses on cloned MIR.
+        emitted = sum(op.kind is not mir.Kind.NOTHING for op in (*repeated_ops, *header.ops))
+        if count < 2 or count * emitted > 512:
             continue
         if any(set(phi.incoming) != {entry, latch.at} for phi in header.phis):
             continue
-        candidate = _expanded(body, loop, header, latch, latch_ops, exit_at, entry, count)
+        candidate = _expanded(body, loop, header, latch, bridge_ops, latch_ops, exit_at, entry, count)
         if count > 4 and floating_loop:
             exact = floatfacts.known(candidate, dgroup, calls)
             results = [arg.value for op in candidate.block(latch.at).ops if op.floating
@@ -180,7 +193,7 @@ def optimized(body: mir.MirBody, where: Where, *, optimize, watch=None) -> mir.M
         rejected.clear()
 
 
-def _expanded(body, loop, header, latch, latch_ops, exit_at, entry, count):
+def _expanded(body, loop, header, latch, bridge_ops, latch_ops, exit_at, entry, count):
     values = tuple(ssa.values(body))
     next_id = max(value.id for value in values) + 1
     next_variable = max(value.variable for value in values) + 1
@@ -207,6 +220,7 @@ def _expanded(body, loop, header, latch, latch_ops, exit_at, entry, count):
     for iteration in range(count):
         if iteration:
             expanded.extend(clone(op, False) for op in header.ops[:-1])
+            expanded.extend(clone(op, False) for op in bridge_ops)
         expanded.extend(clone(op, iteration == 0) for op in latch_ops)
         carried = {phi.result.id: ssa.provider(phi.incoming[latch.at], swap) for phi in header.phis}
         swap.update(carried)
@@ -223,6 +237,13 @@ def _expanded(body, loop, header, latch, latch_ops, exit_at, entry, count):
             block = replace(block, phis=(), ops=tuple(ssa.substituted(op, initial) for op in block.ops))
         elif block.at == latch.at:
             block = replace(block, ops=tuple(expanded), succ=(exit_at,))
+        elif block.at in loop.body:
+            # The first iteration still reaches the original straight-line
+            # bridge blocks.  Once the header phis are removed, those blocks
+            # must read the entry values just as the cloned later iterations
+            # read their carried values.  Leaving their phi operands behind
+            # made C matmul lower three undefined address inputs.
+            block = replace(block, ops=tuple(ssa.substituted(op, initial) for op in block.ops))
         elif block.at not in loop.body:
             # A phi reads on its incoming edge, not in the block containing
             # it.  An enclosing loop's header is not dominated by this exit,

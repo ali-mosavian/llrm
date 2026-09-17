@@ -67,8 +67,8 @@ def test_unroll_profitability_uses_the_selected_cpu() -> None:
     assert not unroll._profitable(original, result, 1, 2, Where(costs=cpu.profile("P5").operations))
 
 
-def test_c_matmul_unrolls_an_exact_integer_inner_loop() -> None:
-    """Matmul retained 12 branches: copied counters hid its exact eight-trip inner loops."""
+def test_c_matmul_unrolls_exact_multiblock_loops() -> None:
+    """Matmul stayed at 6,726 ops; then a stale bridge phi made it return 4252537476, not 353712."""
     from tools import quality
     from qbopt.cfront import compile as cfront
 
@@ -77,8 +77,12 @@ def test_c_matmul_unrolls_an_exact_integer_inner_loop() -> None:
     module = cfront.assembled(stream, source.stem, optimise=True)
     procedure = next(one for one in module.procedures if one.name == "_bench_matmul")
     rows = quality._rows(quality._blob(module, procedure, 0))
+    dynamic, status = quality._dynamic_operations(module, procedure, 0)
 
-    assert sum(mnemonic.startswith("j") for _raw, mnemonic, _operands in rows) < 12
+    assert not procedure.body.inputs
+    assert sum(mnemonic.startswith("j") for _raw, mnemonic, _operands in rows) < 9
+    assert status.startswith("estimated:")
+    assert dynamic is not None and dynamic < 6_000
 
 
 def test_c_crc_unroll_keeps_the_inner_result_on_the_outer_backedge() -> None:
