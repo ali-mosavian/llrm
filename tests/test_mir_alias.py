@@ -284,6 +284,38 @@ def test_pointer_phi_with_an_unknown_arm_is_unknown() -> None:
     assert alias.points_to(body).values[joined] == alias.UNKNOWN
 
 
+def test_pointer_recurrence_at_a_loop_header_widens_and_terminates() -> None:
+    """qcport con_print advanced its text pointer one byte per solver round instead of compiling."""
+    root, current, advanced = (mir.Value(n, n, variable=n, version=1) for n in range(1, 4))
+    parameter = memory.Object(memory.Kind.PARAMETER, 0)
+    increment = mir.Op(
+        2,
+        ir.Operation.BINARY,
+        "",
+        (advanced,),
+        (current,),
+        kind=mir.Kind.ADD,
+        args=(mir.Held(current, 2), mir.Const(1, 2)),
+        results=(mir.Held(advanced, 2),),
+    )
+    body = mir.MirBody(
+        0,
+        (
+            mir.MirBlock(0, (), (), (10,)),
+            mir.MirBlock(10, (mir.Phi(current, {0: root, 20: advanced}),), (), (20,)),
+            mir.MirBlock(20, (), (increment,), (10,)),
+        ),
+        pointer_values=frozenset({root, current, advanced}),
+        pointer_seeds={root: memory.Provenance.one(parameter, 0, 1)},
+    )
+
+    facts = alias.points_to(body)
+
+    expected = memory.Provenance(alias.UNKNOWN.slices | memory.Provenance.one(parameter).slices)
+    assert facts.values[current] == expected
+    assert facts.values[advanced] == expected
+
+
 def test_parameter_modref_is_instantiated_at_a_call_site() -> None:
     """A callee writing parameter zero clobbers its actual object and no neighbour."""
     param = memory.Object(memory.Kind.PARAMETER, 0)

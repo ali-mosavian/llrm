@@ -334,6 +334,26 @@ def _union(parts) -> memory.Provenance | None:
     return result
 
 
+def _widened(provenance: memory.Provenance) -> memory.Provenance:
+    """The whole object after a loop-carried pointer fact changes.
+
+    A finite set of exact offsets is not a finite lattice for ``p = p + n``:
+    every trip around the back edge manufactures another offset.  At a
+    natural-loop header, use the standard abstract-interpretation widening
+    instead.  Keeping object identity and restrict roots still proves the
+    important disjointness facts; only the changing subrange is forgotten.
+    """
+    return memory.Provenance(
+        frozenset(
+            memory.Slice(one.object, 0, one.object.extent)
+            if one.object.extent is not None
+            else memory.Slice(one.object)
+            for one in provenance.slices
+        ),
+        provenance.restrict,
+    )
+
+
 def _cell_key(ref: mir.MemRef):
     if ref.provenance is not None and len(ref.provenance.slices) == 1:
         one = next(iter(ref.provenance.slices))
@@ -400,6 +420,17 @@ def points_to(
     for block in body.blocks:
         for successor in block.succ:
             predecessors.setdefault(successor, set()).add(block.at)
+    # A pointer value is otherwise an exact byte slice.  Natural-loop joins
+    # are the one place those exact facts can grow without a program bound.
+    from qbopt.analysis import loops
+
+    dominators = loops.dominators(body.blocks, body.entry)
+    back_edges = frozenset(
+        (block.at, successor)
+        for block in body.blocks
+        for successor in block.succ
+        if successor in dominators.get(block.at, ())
+    )
     incoming: dict[int, dict] = {block.at: {} for block in body.blocks}
     outgoing: dict[int, dict] = {block.at: {} for block in body.blocks}
 
@@ -408,6 +439,8 @@ def points_to(
         before_outgoing = {at: dict(state) for at, state in outgoing.items()}
         for block in body.blocks:
             parents = [outgoing[one] for one in predecessors.get(block.at, ())]
+            previous_incoming = incoming[block.at]
+            has_back_edge = any((parent, block.at) in back_edges for parent in predecessors.get(block.at, ()))
             state = {}
             if parents:
                 keys = set().union(*(one.keys() for one in parents))
@@ -415,12 +448,22 @@ def points_to(
                     # A missing fact on one incoming edge is unknown, not an
                     # invitation to retain the other edge's pointer.
                     if all(key in one for one in parents):
-                        state[key] = _union(one[key] for one in parents)
+                        fact = _union(one[key] for one in parents)
+                        if has_back_edge and key in previous_incoming and fact != previous_incoming[key]:
+                            fact = _widened(previous_incoming[key].union(fact))
+                        state[key] = fact
             incoming[block.at] = dict(state)
             for phi in block.phis:
                 parts = [values.get(one) for one in phi.incoming.values()]
                 if phi.result in pointer_values or parts and all(one is not None for one in parts):
                     fact = UNKNOWN if any(one is None for one in parts) else _union(parts)
+                    if (
+                        fact is not None
+                        and any((parent, block.at) in back_edges for parent in phi.incoming)
+                        and (previous := values.get(phi.result)) is not None
+                        and fact != previous
+                    ):
+                        fact = _widened(previous.union(fact))
                     if fact is not None:
                         values[phi.result] = fact
                         pointer_values.add(phi.result)

@@ -103,7 +103,16 @@ class Provenance:
         return cls(frozenset({Slice(object_, low, high, stride, width)}), roots)
 
     def shifted(self, amount: int) -> "Provenance":
-        return Provenance(frozenset(one.shifted(amount) for one in self.slices), self.restrict)
+        def shifted(one: Slice) -> Slice:
+            # A whole object is the top element for offsets within that
+            # object.  Repeatedly adding a loop stride to it must remain top:
+            # otherwise a pointer recurrence creates a new spelling of the
+            # same conservative fact on every dataflow round.
+            whole = one.low == -(1 << 31) and one.high == 1 << 31
+            bounded_whole = one.object.extent is not None and one.low == 0 and one.high == one.object.extent
+            return one if whole or bounded_whole else one.shifted(amount)
+
+        return Provenance(frozenset(shifted(one) for one in self.slices), self.restrict)
 
     def union(self, other: "Provenance") -> "Provenance":
         return Provenance(self.slices | other.slices, self.restrict | other.restrict)
