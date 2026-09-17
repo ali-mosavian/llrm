@@ -17,6 +17,7 @@ from qbopt.model import ir
 from qbopt.model import lir
 from qbopt.backend import select
 from qbopt.backend import parcopy
+from qbopt.backend import verify
 
 
 def _move(into, out_of, group=None, at=0x100) -> lir.Insn:
@@ -132,13 +133,46 @@ def test_register_and_spilled_cycles_are_preserved() -> None:
         .blocks[0]
         .insns
     )
-    assert [one.what.name for one in swapped] == ["xchg"]
+    assert [one.what.name for one in swapped if one.what.op is not ir.Operation.NOTHING] == ["xchg"]
+    assert swapped[-1].what.op is ir.Operation.NOTHING
     spilled = (
         parcopy.scheduled(_body(_move(_slot(4), _slot(8), group=1), _move(_slot(8), _slot(4), group=1))).blocks[0].insns
     )
     assert [one.what.name for one in spilled] == ["push", "push", "pop", "pop"]
     assert spilled[0].what.sources == (_slot(4),)
     assert spilled[-1].what.dests == (_slot(8),)
+
+
+def test_register_cycle_retains_every_virtual_definition() -> None:
+    """R_WALK stopped at parcopy: values 11 and 12 were read but undefined.
+
+    A physical exchange implements a parallel-copy cycle in fewer machine
+    instructions than logical moves.  The omitted closing move must remain as
+    a zero-byte dataflow anchor, or later LIR users lose the value it defines.
+    """
+    first = replace(
+        _move(_reg(Register.AX), _reg(Register.CX), group=1),
+        defines=(11,),
+        uses=(1,),
+    )
+    closing = replace(
+        _move(_reg(Register.CX), _reg(Register.AX), group=1),
+        defines=(12,),
+        uses=(2,),
+    )
+    consumer = lir.Insn(
+        at=0x102,
+        covers=(0x102, 0x102),
+        what=ir.Semantics(ir.Operation.PUSH, "push", (), (_reg(Register.CX),)),
+        defines=(),
+        uses=(12,),
+    )
+    body = replace(_body(first, closing, consumer), inputs=frozenset({1, 2}))
+
+    got = parcopy.scheduled(body)
+
+    assert not verify.verify(got, in_ssa=False)
+    assert {value for one in got.insns for value in one.defines} == {11, 12}
 
 
 def test_register_cycle_retains_covered_bytes_as_an_anchor() -> None:

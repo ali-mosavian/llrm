@@ -189,8 +189,6 @@ def _rotated(left: list[lir.Insn]) -> "tuple[list[lir.Insn], list[lir.Insn]] | N
                 last,
                 what=ir.Semantics(ir.Operation.POP, "pop", (last.what.dests[0],), ()),
                 group=None,
-                defines=(),
-                uses=(),
             ),
         ]
         return made, cycle
@@ -200,17 +198,15 @@ def _rotated(left: list[lir.Insn]) -> "tuple[list[lir.Insn], list[lir.Insn]] | N
                 one,
                 what=ir.Semantics(ir.Operation.EXCHANGE, "xchg", (a, b), (b, a)),
                 group=None,
-                defines=(),
-                uses=(),
             )
             for one, (a, b) in zip(cycle, pairs)
         ]
-        # The closing logical move contributes no machine instruction.  It
-        # may still own original bytes transferred to it by an earlier MIR
-        # rewrite, so retain that bookkeeping as a zero-cost anchor instead
-        # of refusing an otherwise ordinary register rotation.
-        if last.covers and last.covers[0] != last.covers[1]:
-            made.append(lir.anchor(last))
+        # The closing logical move contributes no machine instruction, but
+        # it still defines the virtual value consumed after this edge.  Keep
+        # that dataflow as well as any source-byte ownership in a zero-cost
+        # anchor.  Dropping an inserted closing move made R_WALK's values 11
+        # and 12 appear to be read without a definition after this pass.
+        made.append(lir.anchor(last))
         return made, cycle
 
     if operands[0].width not in (2, 4):
@@ -229,8 +225,6 @@ def _rotated(left: list[lir.Insn]) -> "tuple[list[lir.Insn], list[lir.Insn]] | N
             last,
             what=ir.Semantics(ir.Operation.POP, "pop", (operands[-1],), ()),
             group=None,
-            defines=(),
-            uses=(),
         ),
     ]
     return made, cycle
