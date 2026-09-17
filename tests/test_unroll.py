@@ -28,6 +28,26 @@ def test_c_matmul_unrolls_an_exact_integer_inner_loop() -> None:
     assert sum(mnemonic.startswith("j") for _raw, mnemonic, _operands in rows) < 12
 
 
+def test_c_crc_unroll_keeps_the_inner_result_on_the_outer_backedge() -> None:
+    """CRC returned ``salt ^ ~0`` after its eight-round inner loop was unrolled.
+
+    The inner loop's final CRC value feeds a phi on the enclosing loop's
+    backedge.  Dropping that edge use made the whole polynomial calculation
+    dead, leaving four instructions that returned the initial complement.
+    """
+    from tools import quality
+    from qbopt.cfront import compile as cfront
+
+    source = Path("bench/c/crc.c")
+    stream = cfront.recorded(source, [])
+    module = cfront.assembled(stream, source.stem, optimise=True)
+    procedure = next(one for one in module.procedures if one.name == "_bench_crc")
+    rows = quality._rows(quality._blob(module, procedure, 0))
+
+    assert sum(mnemonic == "shr" for _raw, mnemonic, _operands in rows) >= 8
+    assert any("EDB88320" in operands.upper() for _raw, _mnemonic, operands in rows)
+
+
 @pytest.mark.parametrize("checkpoint", [False, True])
 def test_dead_inserted_store_needs_no_neighbor_to_take_its_bytes(checkpoint):
     """FPCSE retained dead unrolled stores because a zero-byte clone could not donate bytes to its neighbor."""

@@ -171,18 +171,24 @@ def _expanded(body, loop, header, latch, latch_ops, exit_at, entry, count):
         elif block.at == latch.at:
             block = replace(block, ops=tuple(expanded), succ=(exit_at,))
         elif block.at not in loop.body:
-            # Only dominated exits read the final iteration's definitions.
-            if exit_at in dominators.get(block.at, ()):
-                phis = tuple(replace(phi, incoming={at: ssa.provider(value, swap)
-                              for at, value in phi.incoming.items()}) for phi in block.phis)
-                if block.at == exit_at:
-                    # The entry test still owns its exit edge until branch folding.
-                    # The expanded latch reaches the exit with the final iteration.
-                    phis = tuple(replace(phi, incoming={
-                        header.at: ssa.provider(phi.incoming[header.at], initial),
-                        latch.at: ssa.provider(phi.incoming[header.at], swap),
-                    }) for phi in block.phis)
-                block = replace(block, ops=tuple(ssa.substituted(op, swap) for op in block.ops), phis=phis)
+            # A phi reads on its incoming edge, not in the block containing
+            # it.  An enclosing loop's header is not dominated by this exit,
+            # but its backedge predecessor can be; substitute precisely those
+            # edge uses. Ordinary operations still require block dominance.
+            phis = tuple(replace(phi, incoming={
+                at: ssa.provider(value, swap) if exit_at in dominators.get(at, ()) else value
+                for at, value in phi.incoming.items()
+            }) for phi in block.phis)
+            if block.at == exit_at:
+                # The entry test still owns its exit edge until branch folding.
+                # The expanded latch reaches the exit with the final iteration.
+                phis = tuple(replace(phi, incoming={
+                    header.at: ssa.provider(phi.incoming[header.at], initial),
+                    latch.at: ssa.provider(phi.incoming[header.at], swap),
+                }) for phi in block.phis)
+            ops = (tuple(ssa.substituted(op, swap) for op in block.ops)
+                   if exit_at in dominators.get(block.at, ()) else block.ops)
+            block = replace(block, ops=ops, phis=phis)
         changed.append(block)
     return replace(body, blocks=tuple(changed), origin=origin, pins=pins,
                    repetitions=(*body.repetitions, (latch.at, count)))
