@@ -181,7 +181,7 @@ pass that cannot cross an edge is not worth writing.
 |---|---|---|
 | store-to-load forwarding | 618 corpus sites, the largest single count | arridx, ivchan, fpcse |
 | copy propagation | `mov bx,ax` then uses of bx | subexp, matrix, arridx, fpcse |
-| redundant load elimination, cross-block | `avail.redundant()` finds 30 of ~780 | all |
+| load reuse, cross-block | `avail.forwardable()` plus GVN/MemorySSA | all |
 | dead store elimination, cross-block | `avail.dead_stores()`, 42 of memory.py's 43 | ivchan's p and q |
 | constant propagation with a consumer | `consts.known()` proves 2,233 and nothing emits | subexp, press, bools |
 | constant folding | every result comes out longer alone; pays after LICM | hotlop, press, lngmix |
@@ -424,8 +424,8 @@ None of it was visible to what this file called a measurement:
 
 - **CSE "0 sites over SSA values"** -- BC never recomputes, it reloads, so
   there is nothing to CSE by construction. The redundancy is in the loads
-- **redundant loads** -- `avail.redundant()` asks for a load into the
-  register that already holds the cell. BC reloads into a *different* one
+- **redundant loads** -- the old measurement asked for a load into the
+  register that already held the cell. BC reloads into a *different* one
 - **every one of them block-scoped** -- the value `mov cx,[0]` reloads
   arrives over the back-edge, and the block starts at the branch target
 
@@ -756,23 +756,19 @@ six and `B$CPI4` ten.
       refused the body rather than corrupted it, and reachable for the first
       time here
 
-- [x] load forwarding — `avail.redundant()`, 12 of 12. It also needed the
-      register's current value tracked: `holders()` maps a cell to the value
-      put there and says nothing about whether that value is still in its
-      register, so after `mov ax,[x]` then `mov ax,[y]` the entry for `[x]`
-      still names a value whose origin is eax. What blocked it first was
-      `loaded_into` refusing a partial write: `mov ax,[x]` writes sixteen
-      bits of a thirty-two bit variable, so the high half survives and MIR
-      records a read of the old `eax`. A real read, and not the instruction
-      consulting memory, which is the question being asked -- so all 36
-      sites came back "not a plain load" and none was anything else.
+- [x] load forwarding — `avail.forwardable()` and GVN/MemorySSA. The old
+      `avail.redundant()` subpass tracked which source register still held a
+      value; the value pipeline made that both redundant and a MIR-boundary
+      violation. It was deleted after all three ARRIDX variants emitted
+      byte-identically without it. `holders()` now states only which SSA
+      value holds a cell and allocation decides where that value lives.
 
-      Allowing that partial write then let an *accumulate* through, because
-      `sub ax,[x]` reads the old eax the same way: one use whose origin is
-      the destination's own register. `redundant()` deleted
-      `sub ax,ds:[0]` and `adc dx,[si+2]` before the semantics were asked
-      instead of the values -- a binary operation names its destination
-      among its sources and a move does not
+      The retired register-sensitive form also once let an *accumulate*
+      through: `sub ax,[x]` reads its destination as data, while a partial
+      load reads the prior value only to preserve untouched bits. The
+      current value analysis distinguishes those shapes from MIR operands;
+      a binary operation names its destination among its inputs and a load
+      does not.
 - [x] dead stores — `avail.dead_stores()`, block-scoped and starting empty
       at each block's end, which costs a store that spans an edge and can
       never invent one that does not

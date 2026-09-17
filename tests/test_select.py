@@ -764,8 +764,7 @@ def test_a_comparison_against_zero_takes_the_test_form(reg: Register_, want: str
 
     `or reg,reg` would save the same byte and was the other candidate. It
     writes the register -- the same value, but MIR records a definition --
-    and three consumers here key on which value is in a register:
-    avail.redundant's map, simplify._target_survives, and transform.placed.
+    and downstream liveness would have to track that artificial definition.
     `test` writes nothing.
     """
     made = select.compare(ir.Reg(register=reg, width=4 if reg in (Register.EAX, Register.ECX) else 2), 0)

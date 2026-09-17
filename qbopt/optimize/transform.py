@@ -68,51 +68,6 @@ def _without(ops: list[Op], drop) -> list[Op]:
     return out
 
 
-def without_redundant_loads(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> MirBody:
-    """Every load whose destination already held what it loads, removed.
-
-    The removal is the easy half. The load *defined* a value, and deleting
-    it takes away that value's only definition -- so every later reader has
-    to be told to read the provider instead, and told through every route a
-    value reaches a reader by: an ordinary use, a `Held` operand, the base
-    or segment of a memory operand, and a phi's incoming edge.
-
-    Substituting by value, not by register. The two agree here -- the load
-    is redundant precisely because the provider is already in the
-    destination -- but saying it that way would make the deletion depend on
-    an allocation that has not happened, and `origin` is what a body was
-    raised with rather than what it will be emitted as.
-
-    Without the substitution arridx miscompiled in all nine ordinary
-    configurations: the add after the deleted load went on naming a value
-    nobody wrote, allocation had no constraint to honour and put that
-    phantom in bx, and `mov ax,bx` overwrote the product `imul` had just
-    left in ax. VBDOS answered -26096, PDS 0 and QuickBASIC 4.5 11008,
-    where the program prints 1260.
-    """
-    found = avail.redundant(body, dgroup, calls)
-    if not found:
-        return body
-    gone = {at for at, _made, _who in found}
-    swap = {made.id: who for _at, made, who in found}
-    return replace(
-        body,
-        blocks=tuple(
-            replace(
-                one,
-                phis=tuple(_phi_reading(phi, swap) for phi in one.phis),
-                ops=tuple(_reading(op, swap) for op in _absorb(list(one.ops), gone)),
-            )
-            for one in body.blocks
-        ),
-    )
-
-
-def _reading(op: Op, swap: dict) -> Op:
-    """One operation reading the provider wherever it read the deleted load."""
-    return _substituted(op, swap)
-
-
 def _phi_reading(phi, swap: dict):
     """One phi taking the provider along any edge that named the load."""
     if not any(one.id in swap for one in phi.incoming.values()):

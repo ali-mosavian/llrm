@@ -227,74 +227,12 @@ def test_a_stack_slot_never_survives_a_call(obj: Path) -> None:
                     )
 
 
-def test_an_accumulate_is_not_a_load_however_its_values_look() -> None:
-    """`sub ax,[x]` reads the old ax as data; `mov ax,[x]` does not.
-
-    Both are one use whose origin is the destination's own register, so
-    values alone cannot tell them apart -- which is how allowing the
-    preserved high half of a narrow write let an accumulate through.
-    redundant() then deleted `sub ax,ds:[0]` and `adc dx,[si+2]` from a
-    generated program.
-
-    The semantics can tell them apart: a binary operation names its
-    destination among its sources and a move does not. This is the same
-    thing forward._loads_only exists to stop, arrived at from the other
-    side.
-    """
-    from qbopt.model import ir
-    from qbopt.frontend import declen
-    from qbopt.objectfile.module import Addr
-    from qbopt.objectfile.module import Space
-
-    def somewhere(*_args: object, **_kwargs: object) -> Addr:
-        return Addr(Space.LITERAL, 0, 0)
-
-    def semantics(hexs: str) -> ir.Semantics:
-        insn = declen.decode(bytes.fromhex(hexs), 0)
-        assert insn is not None
-        return ir.instruction_semantics(insn, somewhere)
-
-    made = semantics("2b060000")  # sub ax,[x]
-    moved = semantics("a1000000")  # mov ax,[x]
-    assert made.dests[0] in made.sources, "a subtract reads its own destination"
-    assert moved.dests[0] not in moved.sources, "a move does not"
-    assert made.op is not ir.Operation.MOVE
-    assert moved.op is ir.Operation.MOVE
-
-
-@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
-def test_nothing_redundant_is_an_accumulate(obj: Path) -> None:
-    """Corpus-wide: every deletion redundant() proposes is a move."""
-    from qbopt.model import ir
-    from qbopt.model import mir
-    from qbopt.frontend.blocks import code_map
-
-    found = corpus.loaded(obj)
-    assert found is not None
-    mapped = code_map(found)
-    if isinstance(mapped, str):
-        return
-    for _name, body in mir.bodies(found, blockmod.partition(found, mapped)):
-        gone = set(avail.redundant(body, found.dgroup, found.calls))
-        for block in body.blocks:
-            for op in block.ops:
-                if op.at not in gone:
-                    continue
-                from qbopt.backend import lower
-
-                what = lower.current(op)
-                assert what is not None and what.op is ir.Operation.MOVE, (
-                    f"{obj.stem} {op.at:#x}: {op.name} is not a move and was proposed for deletion"
-                )
-
-
 def test_preserved_allows_a_move_and_refuses_a_binary() -> None:
     """The guard itself, on the two shapes it has to separate.
 
-    Built here rather than found in a fixture, because no fixture has the
-    shape: `sub ax,[x]` reaching redundant() needs the memory map to hold
-    that cell, which only happens in longer code than the suite writes. The
-    corpus test above is the invariant; this is what discriminates.
+    A partial load reads the previous value only to preserve its untouched
+    half.  An accumulate reads that value as data.  Memory value numbering
+    must distinguish the two without consulting their former registers.
     """
     from iced_x86 import Register
 
@@ -322,8 +260,7 @@ def test_preserved_allows_a_move_and_refuses_a_binary() -> None:
 
     # In MIR's own operands: a load's only argument is the cell, so the use
     # of the old value is a preserved half; a subtract names it as an input
-    # and it is not. This asked the instruction whether it was a MOVE and
-    # looked the register up in `origin`.
+    # and it is not.  The distinction is entirely in MIR operands.
     moved = op(
         ir.Semantics(ir.Operation.MOVE, "mov", dests=(into,), sources=(where,)),
         (mir.Cell(cell),),
@@ -338,79 +275,6 @@ def test_preserved_allows_a_move_and_refuses_a_binary() -> None:
     )
     assert avail._preserved(accumulated) == set(), "a subtract reads its destination as data"
     assert avail.loaded_into(accumulated) is None, "and so is not a load"
-
-
-@pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
-def test_a_partial_write_is_recorded_only_where_it_is_asked_for(obj: Path) -> None:
-    """`holders(partial=True)` sees more cells, and only redundant() may.
-
-    `mov ax,[x]` writes sixteen bits of a thirty-two bit variable, so the
-    value holding that cell holds it in its *low half*. That is exactly
-    right for deciding the load is a no-op -- the instruction changes
-    nothing, so the high half is preserved either way -- and wrong for
-    serving some other read from that register, which is what
-    rewrite._substituted does with the same map.
-
-    Letting it leak made a generated program read the wrong cell. The
-    switch is the whole fix, so the two answers have to stay different
-    wherever a partial write exists at all.
-    """
-    found = corpus.loaded(obj)
-    assert found is not None
-    mapped = code_map(found)
-    if isinstance(mapped, str):
-        return
-    for _name, body in mir.bodies(found, blockmod.partition(found, mapped)):
-        strict = avail.holders(body, found.dgroup, found.calls)
-        loose = avail.holders(body, found.dgroup, found.calls, partial=True)
-        for block in body.blocks:
-            a, b = strict.outof[block.at], loose.outof[block.at]
-            assert set(a) <= set(b), "asking for partial writes may only add cells, never remove one"
-
-
-def test_only_redundant_asks_the_map_for_partial_writes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Which caller asks for what, recorded rather than grepped for.
-
-    A cell established by `mov ax,[x]` is held in its value's *low half*.
-    Deleting that load is sound -- the instruction changes nothing, so the
-    high half is preserved either way -- and serving some other read from
-    the whole register is not. rewrite._substituted uses forwardable(), so
-    a leak there reads the wrong bytes, and a generated program did.
-
-    The switch is the entire fix, so this pins who turns it on.
-    """
-    from qbopt.analysis import avail as under_test
-
-    obj = FIXTURES[0]
-    found = corpus.loaded(obj)
-    assert found is not None
-    mapped = code_map(found)
-    assert not isinstance(mapped, str)
-    body = next(b for _n, b in mir.bodies(found, blockmod.partition(found, mapped)))
-
-    asked: list[bool] = []
-    real = under_test.holders
-
-    def watch(
-        body: MirBody, dgroup: frozenset[int], calls: dict[int, str] | None = None, partial: bool = False
-    ) -> avail.Held:
-        asked.append(partial)
-        return real(body, dgroup, calls, partial)
-
-    monkeypatch.setattr(under_test, "holders", watch)
-    asked.clear()
-    under_test.redundant(body, found.dgroup, found.calls)
-    assert asked == [True], f"redundant() asked {asked}"
-
-    asked.clear()
-    under_test.forwardable(body, found.dgroup, found.calls, frozenset())
-    assert asked == [False], f"forwardable() asked {asked} -- it serves reads from the register"
-
-    asked.clear()
-    read = next((one for block in body.blocks for one in block.ops if one.loads), None)
-    assert read is not None, "this body reads no memory, so provider() would not be asked"
-    under_test.provider(body, found.dgroup, 0, read.loads[0], found.calls)
-    assert asked == [False], f"provider() asked {asked}"
 
 
 def _defined(body) -> set[int]:

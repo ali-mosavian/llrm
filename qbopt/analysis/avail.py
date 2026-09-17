@@ -245,19 +245,8 @@ def holders(
     body: MirBody,
     dgroup: frozenset[int],
     calls: dict[int, str] | None = None,
-    partial: bool = False,
 ) -> Held:
-    """Which value each cell holds, at every block's entry and exit.
-
-    `partial` also records a cell loaded by a *partial* write --
-    `mov ax,[x]`, which writes sixteen bits of a thirty-two bit variable
-    and leaves the high half alone. Off by default, and the default is
-    the one that matters: such an entry names a 32-bit value that holds
-    the cell only in its low half, which is exactly right for deciding
-    the load is a no-op and wrong for serving some other read from that
-    register. redundant() asks for it; forwardable() must not, and a
-    generated program caught it doing so.
-    """
+    """Which value each cell holds, at every block's entry and exit."""
     from qbopt.analysis import ranges
 
     calls = calls or {}
@@ -312,8 +301,7 @@ class Forward:
 
     at: int
     # The value holding them. Which register that is, is the allocator's
-    # answer; a caller that has no values -- the machine arm -- looks it up
-    # in the body's own `origin`, which is where that question belongs.
+    # answer; this analysis never asks where either value used to live.
     value: "mir.Value | mir.Const | mir.Symbol"
     op: Op | None = None
 
@@ -488,72 +476,6 @@ def dead_stores(
                 changing = True
             entry[block.at] = start
     return tuple(op for block in body.blocks for op in block.ops if id(op) in found)
-
-
-def redundant(body: MirBody, dgroup: frozenset[int], calls: dict[int, str]) -> tuple[tuple[int, Value, Value], ...]:
-    """Loads that put back into a register exactly what it already held.
-
-    `(where, what the load defined, the value that already held it)`. The
-    third is the point: deleting the load removes the only definition of
-    the second, and every later reader has to be told to read the provider
-    instead. This used to return the address alone, so the caller deleted
-    the instruction and substituted nothing -- arridx's add went on naming
-    a value nobody wrote, allocation gave that phantom a register of its
-    own, and the program answered 0 where it should answer 1260.
-
-    forward.py's deletion, restated over MIR. `mov ax,[x]` where ax already
-    holds [x] computes nothing, so removing it leaves every later
-    instruction reading what it expected -- the same argument the machine
-    pass makes, over values rather than over a backward scan of registers.
-
-    The two are not the same question as forwardable()'s. That one serves a
-    read from a *different* register and substitutes the operand; this one
-    finds a read whose answer is already in its own destination and drops
-    the instruction. An accumulate can never be one of these: `and cx,[x]`
-    does not leave [x] in cx, and loaded_into refuses it for that reason.
-
-    Whole registers only. `mov ax,[x]` writes half of eax and the other half
-    survives, which is exactly why the deletion is safe -- the instruction
-    is a no-op, so the preserved half is preserved either way -- but the
-    holder has to be the same variable BC would have read, not a wider one
-    that merely contains it. loaded_into's own _preserved() is what lets
-    this see the load at all.
-    """
-    held = holders(body, dgroup, calls, partial=True)
-    found: list[tuple[int, Value, Value]] = []
-    for block in body.blocks:
-        current = dict(held.into[block.at])
-        # Which value each register actually holds right now. holders() is a
-        # map from a cell to the value that was put there, and it says
-        # nothing about whether that value is still in its register: after
-        # `mov ax,[x]` then `mov ax,[y]`, the entry for [x] still names a
-        # value whose origin is eax, and eax holds [y]. Deleting a later
-        # `mov ax,[x]` on the strength of that entry is how this read the
-        # wrong cell. SSA forwarding instead retains the load's definition
-        # and replaces its memory operand with the known value.
-        inside: dict[int, Value] = {}
-        for op in block.ops:
-            # A call clobbers ax, cx, dx and bx whatever it does to memory,
-            # so a value that was in one of them is not there afterwards.
-            # _after() keeps disjoint memory facts across calls, which makes this
-            # separate bookkeeping necessary: the cell is still that value
-            # and the register is not.
-            if op.kind is Kind.CALL or op.barrier:
-                inside = {}
-                continue
-            got = loaded_into(op)
-            if got is not None:
-                ref, made = got
-                into = body.origin.get(made)
-                who = next((w for cell, w in current.items() if mir.same_bytes(cell, ref)), None)
-                if who is not None and into is not None and body.origin.get(who) is into and inside.get(into) is who:
-                    found.append((op.at, made, who))
-            for value in op.defines:
-                where = body.origin.get(value)
-                if where is not None:
-                    inside[where] = value
-            current = _after(op, current, dgroup, calls, held.known)
-    return tuple(found)
 
 
 def forwardable(

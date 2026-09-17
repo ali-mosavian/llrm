@@ -27,7 +27,6 @@ def optimized(body: mir.MirBody, where) -> mir.MirBody:
     from qbopt.optimize import floatfold, loadjoins, transform
 
     body = transform.forwarded(body, where.dgroup, where.named)
-    body = transform.without_redundant_loads(body, where.dgroup, where.named)
     body = transform.reused_divides(body, where.dgroup, where.found)
     canonical = transform.subexpressions(body, where.dgroup)
     # PRE may add work to a previously missing path.  Do that only after

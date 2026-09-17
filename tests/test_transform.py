@@ -93,7 +93,7 @@ def test_hoisted_variables_do_not_collide_with_promoted_cells() -> None:
     assert renamed.variable > max(one.variable for one in body.values)
 
 
-def test_redundant_load_chains_keep_a_defined_return_value() -> None:
+def test_gvn_load_chains_keep_a_defined_return_value() -> None:
     """procs-q-O's return named a deleted intermediate reload and could not allocate."""
     from qbopt.abi import runtime
     from qbopt.frontend import blocks
@@ -103,14 +103,13 @@ def test_redundant_load_chains_keep_a_defined_return_value() -> None:
     body = next(
         body for name, body in mir.bodies(found, partition, runtime.for_module(found)) if name == "procedure TWICE"
     )
-    done = transform.without_redundant_loads(body, found.dgroup, found.calls)
+    done = transform.applied(body, found.dgroup, found.calls, blocks=partition, found=found, only="gvn")
     defined = {value for block in done.blocks for op in block.ops for value in op.defines}
     exit_call = next(op for block in done.blocks for op in block.ops if op.at == 0x12F)
     assert all(arg.value in defined for arg in exit_call.args if isinstance(arg, mir.Held))
 
 
-@pytest.mark.parametrize("substitute", [transform._substituted, transform._reading])
-def test_substitution_preserves_memory_address_edges(substitute) -> None:
+def test_substitution_preserves_memory_address_edges() -> None:
     """Removing a join must not leave memory addressing its deleted value."""
     old, survivor = mir.Value(901, 0), mir.Value(902, 0)
     ref = mir.MemRef(None, 2, base=old, segment=old)
@@ -125,7 +124,7 @@ def test_substitution_preserves_memory_address_edges(substitute) -> None:
         args=(mir.Cell(ref),),
         results=(mir.Cell(ref),),
     )
-    done = substitute(op, {old.id: survivor})
+    done = transform._substituted(op, {old.id: survivor})
     assert done.loads[0].base == survivor
     assert done.loads[0].segment == survivor
     assert done.args == (mir.Cell(done.loads[0]),)
