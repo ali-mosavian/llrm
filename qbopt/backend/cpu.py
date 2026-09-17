@@ -22,7 +22,10 @@ class Profile:
     partial_register_stall: int
     register_capacity: int = 6
     call_register_capacity: int = 2
-    address_scales: frozenset[int] = frozenset({1, 2, 4, 8})
+    # The CPU executes 386 instructions, but this compiler's medium-model
+    # ABI uses 16-bit effective addresses.  That encoding has [base+index]
+    # only; 32-bit SIB scales would require a different address-size model.
+    address_scales: frozenset[int] = frozenset({1})
     _costs: tuple[tuple[str, int], ...] = ()
     _latencies: tuple[tuple[str, int], ...] = ()
     # Appended so the positional shape of the pre-profile interface remains

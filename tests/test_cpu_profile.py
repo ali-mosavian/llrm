@@ -49,6 +49,16 @@ def test_operation_costs_do_not_change_the_existing_profile_positional_shape() -
     assert target.operations == OperationCosts()
 
 
+def test_medium_model_profiles_only_offer_unscaled_index_addressing() -> None:
+    """The old profile offered 386's flat 32-bit scales to 16-bit medium code.
+
+    Our ABI has only the 16-bit ``[base+index]`` form.  Advertising scaled
+    forms let MIR formula selection price encodings lowering cannot legally
+    use, exactly the wrong reference model for the QCport loop audit.
+    """
+    assert {target.address_scales for target in map(cpu.profile, cpu.names())} == {frozenset({1})}
+
+
 def test_unknown_cpu_is_rejected_at_the_shared_boundary() -> None:
     with pytest.raises(ValueError, match="unknown CPU target"):
         cpu.profile("pentium")

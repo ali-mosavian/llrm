@@ -160,3 +160,19 @@ per-iteration pressure *including invariant bases and address temporaries*.
 Do not disable this particular recurrence or reserve registers by procedure
 name; first add a source-independent pressure regression that demonstrates
 the winning formula and then make `strength` choose it by target cost.
+
+### 9. Medium-model address-form legality — 2026-09-18
+
+The pressure investigation found that every CPU profile advertised flat-386
+scaled address forms `{1,2,4,8}` to MIR.  This compiler emits 16-bit
+medium-model effective addresses, whose legal indexed form is only
+`[base+index]`; a 32-bit SIB scale would require a different address-size and
+pointer model.  The profiles now expose `{1}` consistently.  The new
+fail-first CPU-profile regression verifies that contract for every supported
+CPU, and the focused profile plus C RMW tests pass.
+
+This corrects the target interface rather than choosing a QCport formula.  It
+does not itself remove `r_walk`'s word-offset recurrence: that recurrence is
+the legal fallback for `i * 2` under 16-bit addressing.  The next iteration
+still needs pressure-aware selection between that register recurrence and a
+stack/recomputed offset, with BCC's medium-model listing as the ABI reference.
