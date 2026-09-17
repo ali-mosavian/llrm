@@ -24,7 +24,6 @@ def operation(
         kind=kind,
         args=args,
         results=results,
-        covers=(at, at),
     )
 
 

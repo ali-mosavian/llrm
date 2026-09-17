@@ -83,17 +83,18 @@ def test_lngmix_dividend_is_known_after_production_passes() -> None:
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
-def test_spill_folds_the_invariant_sum_without_reloading_seven(tag):
-    """SPILL reloaded h3=7 a hundred times; the inner loop now adds 10*(3*5+7)."""
-    from qbopt.frontend import blocks
+def test_spill_keeps_the_invariant_cell_out_of_repeated_work(tag):
+    """SPILL reloaded h3=7 a hundred times before its loops were folded away.
+
+    The exact final constants are covered by the algebraic regression.  This
+    test owns the memory fact: no emitted computation may reload h3, whether
+    the consumer is hoisted, folded, or eliminated entirely.
+    """
     from qbopt.objectfile import module, omf
     from qbopt import wholeseg
-    from iced_x86 import Code
     result = wholeseg.emitted(Path(f"fixtures/omf/spill-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
-    assert any(one.insn.code == Code.ADD_RM16_IMM16 and one.insn.immediate16 == 220
-               for one in blocks.instructions(found))
     body = mir.bodies(found, corpus.partitioned(result.data))[0][1]
     h3 = Addr(Space.SEGMENT, 10, 5)
     assert not any(ref.addr == h3 for block in body.blocks for op in block.ops for ref in op.loads)

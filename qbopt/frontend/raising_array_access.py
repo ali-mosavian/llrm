@@ -319,7 +319,7 @@ def _native(body, found, *, bounds_checks):
                         result = fresh(op.at, source.width)
                         expanded.append(mir.Op(op.at, ir.Operation.MOVE, "mov", (result.value,), (),
                             kind=mir.Kind.LOAD, args=(mir.Cell(source),), results=(result,),
-                            loads=(source,), covers=(op.at, op.at), symbol=True))
+                            loads=(source,), symbol=True))
                         return result
 
                     def arithmetic(kind, left, right, result=None):
@@ -327,7 +327,7 @@ def _native(body, found, *, bounds_checks):
                         uses = tuple(arg.value for arg in (left, right) if isinstance(arg, mir.Held))
                         expanded.append(mir.Op(op.at, ir.Operation.BINARY, kind.value,
                             (result.value,), uses, kind=kind, args=(left, right), results=(result,),
-                            covers=(op.at, op.at), symbol=isinstance(right, mir.Symbol)))
+                            symbol=isinstance(right, mir.Symbol)))
                         return result
 
                     def extended(source, unsigned=False):
@@ -339,7 +339,7 @@ def _native(body, found, *, bounds_checks):
                         result = fresh(op.at, 4)
                         expanded.append(mir.Op(op.at, ir.Operation.EXTEND, "sign_extend",
                             (result.value,), (source.value,), kind=mir.Kind.SIGN_EXTEND,
-                            args=(source,), results=(result,), covers=(op.at, op.at)))
+                            args=(source,), results=(result,)))
                         return arithmetic(mir.Kind.AND, result, mir.Const(0xffff, 4)) if unsigned else result
 
                     offset = None
@@ -365,8 +365,8 @@ def _native(body, found, *, bounds_checks):
                             merges={}, symbol=True)
                         if consumer.kind is mir.Kind.ARG:
                             value = fresh(consumer.at, ref.width)
-                            load = replace(changed, kind=mir.Kind.LOAD, defines=(value.value,),
-                                results=(value,), stores=(), covers=(consumer.at, consumer.at), id=None, raised=None)
+                            load = mir.source_free(changed, kind=mir.Kind.LOAD, defines=(value.value,),
+                                results=(value,), stores=(), id=None, raised=None)
                             argument = replace(consumer, args=(value,), uses=(value.value,), loads=())
                             replacements[consumer_position] = (load, argument)
                         else:
@@ -376,8 +376,8 @@ def _native(body, found, *, bounds_checks):
                         expanded.append(mir.Op(op.at, ir.Operation.MOVE, "mov", (), (),
                             kind=mir.Kind.LOAD, args=(mir.Cell(shape.selector),),
                             results=(mir.Opaque(ir.Reg(Register.ES, 2), "es"),), loads=(shape.selector,),
-                            covers=(op.at, op.at), symbol=True))
-                    expanded[0] = replace(expanded[0], covers=op.covers, extra_covers=op.extra_covers)
+                            symbol=True))
+                    expanded[0] = mir.raising_owned(expanded[0], op)
                     ops.extend(expanded)
                     arguments.clear()
                     continue

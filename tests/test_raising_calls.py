@@ -4,8 +4,8 @@ from dataclasses import replace
 import pytest
 
 import corpus
-from qbopt.backend import asm
-from qbopt.model import ir, mir
+from qbopt.backend import asm, lower
+from qbopt.model import ir, lir, mir
 from qbopt.objectfile import module, omf
 from qbopt.frontend import raising_calls
 from qbopt.optimize import transform
@@ -70,12 +70,13 @@ def test_nbody_all_runtime_multiplies_are_scalar_values():
     """Nbody's classified memory multiplies remained frozen machine sites, blocking forwarding."""
     path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
     found = corpus.loaded(path)
-    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    raised = mir.bodies(found, corpus.partitioned(path))
+    body = raised[0][1]
     for at, name in found.calls.items():
         if name != calls.MULTIPLY:
             continue
         op = next(op for block in body.blocks for op in block.ops if op.at == at and op.kind is mir.Kind.MUL)
-        assert op.node is None and not op.loads
+        assert not op.source_backed and not op.loads
         assert len(op.results) == 1 and op.results[0].width == 4
         assert all(isinstance(arg, mir.Held) and arg.width == 4 for arg in op.args)
 
@@ -86,8 +87,11 @@ def test_memory_argument_capture_requires_adjacent_pushes(separated):
     low = mir.MemRef(module.Addr(module.Space.SEGMENT, 4, 5), 2)
     high = replace(low, addr=low.addr.plus(2))
     def push(at, ref):
-        return mir.Op(at, ir.Operation.PUSH, "push", (), (), kind=mir.Kind.ARG,
-                      args=(mir.Cell(ref),), loads=(ref,), covers=(at, at+3))
+        return mir.raising_occurrence(
+            mir.Op(at, ir.Operation.PUSH, "push", (), (), kind=mir.Kind.ARG,
+                   args=(mir.Cell(ref),), loads=(ref,)),
+            (at, at + 3),
+        )
     answer = raising_calls._whole_memory([push(0, high), push(6 if separated else 3, low)])
     assert answer == (None if separated else replace(low, width=4))
 
@@ -126,30 +130,46 @@ def test_divide_relocation_survives_index_value_replacement() -> None:
     """Nbody refused its velocity divide after LICM renamed an index without changing its relocation."""
     path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
     found = corpus.loaded(path)
-    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    raised = mir.bodies(found, corpus.partitioned(path))
+    body = raised[0][1]
     # The scalar divide now owns no address; its argument capture owns it.
     # Keep exercising the legacy operand-binding guard on that real operand.
     op = next(op for block in body.blocks for op in block.ops if op.at == 0x267 and op.kind is mir.Kind.LOAD)
     op = replace(op, raised=(op.args, op.results))
+    node = raised.source.nodes[op.id]
+    owned = tuple(span for identity in op.absorbed for span in raised.source.occurrences[identity])
+    selected = lir.Insn(
+        op.at,
+        owned[0],
+        lower.current(op, node=node),
+        tuple(value.id for value in op.defines),
+        tuple(value.id for value in op.uses),
+        op=op,
+        node=node,
+        symbol=op.symbol,
+        spread=owned,
+    )
     fields = frozenset(one.offset for one in omf.fixups(found.records) if one.seg == found.seg)
-    expected = asm._divide_fields(op, found, fields)
+    expected = asm._divide_fields(selected, found, fields, raised.source)
     assert expected
     cell = op.args[0]
     moved = replace(cell, ref=replace(cell.ref, base=mir.Value(99999, 0)))
-    renamed = replace(op, args=(moved, *op.args[1:]))
-    assert asm._divide_fields(renamed, found, fields) == expected
+    renamed = replace(selected, op=replace(op, args=(moved, *op.args[1:])))
+    assert asm._divide_fields(renamed, found, fields, raised.source) == expected
     different = replace(moved, ref=replace(moved.ref, addr=moved.ref.addr.plus(4)))
-    assert asm._divide_fields(replace(op, args=(different, *op.args[1:])), found, fields) is None
+    changed = replace(selected, op=replace(op, args=(different, *op.args[1:])))
+    assert asm._divide_fields(changed, found, fields, raised.source) is None
 
 
 def test_nbody_classified_divide_consumes_captured_values() -> None:
     """Forwarded nbody velocity refused at 0x25f when frozen division required memory."""
     path = Path("fixtures/regressions/nbody-stack-p-g2.obj")
     found = corpus.loaded(path)
-    body = mir.bodies(found, corpus.partitioned(path))[0][1]
+    raised = mir.bodies(found, corpus.partitioned(path))
+    body = raised[0][1]
     ops = [op for block in body.blocks for op in block.ops]
     divide = next(op for op in ops if op.at == 0x26b and op.kind is mir.Kind.DIVMOD)
-    assert divide.node is None and not divide.loads
+    assert not divide.source_backed and not divide.loads
     assert all(isinstance(arg, mir.Held) and arg.width == 4 for arg in divide.args)
     captured = next(op for op in ops if op.at == 0x267 and op.kind is mir.Kind.LOAD)
     assert captured.results[0] == divide.args[0]
@@ -165,7 +185,7 @@ def test_computed_divisions_are_values_not_runtime_calls(tag: str) -> None:
         for _, body in bodies
         for block in body.blocks
         for op in block.ops
-        if op.kind is mir.Kind.DIVMOD and op.node is None
+        if op.kind is mir.Kind.DIVMOD and not op.source_backed
     ]
     assert divisions
     for op in divisions:
@@ -208,7 +228,7 @@ def test_nested_multiply_consumes_values_without_stealing_outer_arguments() -> N
     ops = [op for block in body.blocks for op in block.ops]
     product = next(op for op in ops if op.at == 0x1cd and op.kind is mir.Kind.MUL)
     division = next(op for op in ops if op.at == 0x1d4 and op.kind is mir.Kind.DIVMOD)
-    assert product.node is None and len(product.results) == 1
+    assert not product.source_backed and len(product.results) == 1
     assert product.results[0].width == 4
     assert len(product.args) == 2 and all(isinstance(arg, mir.Held) and arg.width == 4 for arg in product.args)
     definitions = {value: op for op in ops for value in op.defines}

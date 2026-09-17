@@ -102,11 +102,11 @@ def test_localp_keeps_termination_after_interleaved_procedure(tag):
 def chain():
     value, joined = mir.Value(1, 0), mir.Value(2, 10)
     copy = mir.Op(0, ir.Operation.MOVE, "mov", (value,), (), kind=mir.Kind.COPY,
-                  args=(mir.Const(7, 2),), results=(mir.Held(value, 2),), covers=(0, 3))
-    jump = mir.Op(3, ir.Operation.JUMP, "jmp", (), (), kind=mir.Kind.JUMP, target=10, covers=(3, 5),
-                  extra_covers=((5, 10),))
+                  args=(mir.Const(7, 2),), results=(mir.Held(value, 2),), absorbed=(1,))
+    jump = mir.Op(3, ir.Operation.JUMP, "jmp", (), (), kind=mir.Kind.JUMP,
+                  target=10, absorbed=(2, 3))
     argument = mir.Op(10, ir.Operation.PUSH, "push", (), (joined,), kind=mir.Kind.ARG,
-                      args=(mir.Held(joined, 2),), covers=(10, 12))
+                      args=(mir.Held(joined, 2),), absorbed=(4,))
     return mir.MirBody(0, (mir.MirBlock(0, (), (copy, jump), (10,)),
                           mir.MirBlock(10, (mir.Phi(joined, {0: value}),), (argument,), ())))
 
@@ -118,7 +118,7 @@ def test_single_entry_phi_is_replaced_and_jump_bytes_are_retained():
     block = result.blocks[0]
     assert not block.phis and not block.succ
     assert block.ops[-1].args == (mir.Held(mir.Value(1, 0), 2),)
-    assert block.ops[1].kind is mir.Kind.NOTHING and block.ops[1].covers == (3, 5)
+    assert block.ops[1].kind is mir.Kind.NOTHING and block.ops[1].absorbed == (2, 3)
     assert cfg.merged(result) == result
 
 
@@ -126,7 +126,7 @@ def test_cloned_chain_without_source_bytes_merges():
     """IVARM's cloned store and increment remained separate, blocking loop evaluation."""
     body = chain()
     body = replace(body, blocks=tuple(replace(block, ops=tuple(
-        replace(op, covers=(op.at, op.at), extra_covers=()) for op in block.ops))
+        replace(op, absorbed=()) for op in block.ops))
         for block in body.blocks))
     result = cfg.merged(body)
     assert len(result.blocks) == 1
@@ -138,16 +138,16 @@ def test_transferred_byte_ownership_does_not_block_chain_merge():
     body = chain()
     first = body.blocks[0]
     owner = mir.Op(-1, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.NOTHING,
-                   covers=(5, 10))
+                   absorbed=(3,))
     body = replace(body, blocks=(mir.MirBlock(-1, (), (owner,), ()),
-        replace(first, ops=(first.ops[0], replace(first.ops[1], extra_covers=()))), body.blocks[1]))
+        replace(first, ops=(first.ops[0], replace(first.ops[1], absorbed=(2,)))), body.blocks[1]))
     result = cfg.merged(body)
     assert len(result.blocks) == 2
     assert result.block(0).ops[-1].args == (mir.Held(mir.Value(1, 0), 2),)
     assert result.block(-1).ops == (owner,)
 
 
-@pytest.mark.parametrize("guard", ["entry", "other_predecessor", "repetition", "intervening", "unowned_gap"])
+@pytest.mark.parametrize("guard", ["entry", "other_predecessor", "repetition", "intervening"])
 def test_merge_preserves_alternate_entries_and_layout(guard):
     body = chain()
     if guard == "entry":
@@ -158,10 +158,6 @@ def test_merge_preserves_alternate_entries_and_layout(guard):
         body = replace(body, repetitions=((10, 2),))
     if guard == "intervening":
         body = replace(body, blocks=(*body.blocks, mir.MirBlock(5, (), (body.blocks[1].ops[0],), ())))
-    if guard == "unowned_gap":
-        first = body.blocks[0]
-        body = replace(body, blocks=(replace(first, ops=(first.ops[0], replace(first.ops[1], extra_covers=()))),
-                                     body.blocks[1]))
     assert cfg.merged(body) == body
 
 
@@ -182,11 +178,11 @@ def test_unreachable_ownership_between_blocks_moves_without_losing_spans():
     """BOOLS's eliminated arms still own original object bytes after merging."""
     body = chain()
     first = body.blocks[0]
-    body = replace(body, blocks=(replace(first, ops=(first.ops[0], replace(first.ops[1], extra_covers=()))),
+    body = replace(body, blocks=(replace(first, ops=(first.ops[0], replace(first.ops[1], absorbed=(2,)))),
                                  body.blocks[1]))
-    empty = mir.Op(5, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.NOTHING, covers=(5, 10))
+    empty = mir.Op(5, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.NOTHING, absorbed=(3,))
     body = replace(body, blocks=(*body.blocks, mir.MirBlock(5, (), (empty,), ())))
     result = cfg.merged(body)
     assert len(result.blocks) == 1
-    assert [(op.at, op.covers) for op in result.blocks[0].ops] == [
-        (0, (0, 3)), (3, (3, 5)), (5, (5, 10)), (10, (10, 10)), (10, (10, 12))]
+    assert [(op.at, op.absorbed) for op in result.blocks[0].ops] == [
+        (0, (1,)), (3, (2,)), (5, (3,)), (10, ()), (10, (4,))]

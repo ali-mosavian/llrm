@@ -148,6 +148,18 @@ def test_mir_has_no_slot_for_decoded_instruction_nodes() -> None:
     assert "node" not in mir.Op.__dataclass_fields__
 
 
+def test_mir_has_no_slot_for_source_byte_ranges() -> None:
+    """Raw object-byte ownership belongs to raise provenance and allocated LIR.
+
+    Keeping ``covers`` on public MIR let every new transform accidentally make
+    physical layout decisions.  Opaque occurrence identities are the complete
+    ownership vocabulary above lowering; concrete ranges exist only on the
+    private raising occurrence and the LIR instruction that will be emitted.
+    """
+    assert "covers" not in mir.Op.__dataclass_fields__
+    assert "extra_covers" not in mir.Op.__dataclass_fields__
+
+
 def test_optimization_passes_never_mention_source_byte_ranges() -> None:
     """Passes transfer opaque occurrence ids; only lowering resolves byte ranges."""
     offending: dict[str, list[tuple[int, str]]] = {}
@@ -163,6 +175,16 @@ def test_optimization_passes_never_mention_source_byte_ranges() -> None:
     assert not offending, f"MIR passes named source byte ranges: {offending}"
 
 
+def _merged_ranges(spans: tuple[tuple[int, int], ...]) -> tuple[tuple[int, int], ...]:
+    out: list[tuple[int, int]] = []
+    for low, high in sorted(span for span in spans if span[0] < span[1]):
+        if out and low <= out[-1][1]:
+            out[-1] = (out[-1][0], max(high, out[-1][1]))
+        else:
+            out.append((low, high))
+    return tuple(out)
+
+
 @pytest.mark.parametrize(
     ("path", "only"),
     [
@@ -174,15 +196,6 @@ def test_mir_names_owned_source_occurrences_without_repeating_their_byte_ranges(
     """Folded integer and FP companions must not claim the source bytes twice."""
     import corpus
     from qbopt.optimize import transform
-
-    def merged(spans: tuple[tuple[int, int], ...]) -> tuple[tuple[int, int], ...]:
-        out: list[tuple[int, int]] = []
-        for low, high in sorted(span for span in spans if span[0] < span[1]):
-            if out and low == out[-1][1]:
-                out[-1] = (out[-1][0], high)
-            else:
-                out.append((low, high))
-        return tuple(out)
 
     found = corpus.loaded(path)
     blocks = corpus.partitioned(path)
@@ -203,15 +216,10 @@ def test_mir_names_owned_source_occurrences_without_repeating_their_byte_ranges(
             for block in body.blocks:
                 for op in block.ops:
                     if body is original:
-                        explicit = (*((op.covers,) if op.covers is not None else ()), *op.extra_covers)
-                        recorded = raised.source.coverage.get(op.id, ()) if op.id is not None else ()
-                        expected = merged((*explicit, *recorded[1:]))
-                        actual = merged(
+                        actual = _merged_ranges(
                             tuple(span for source_id in op.absorbed for span in raised.source.occurrences[source_id])
                         )
-                        assert actual == expected, (
-                            f"{op.at:#06x}: {op.absorbed} resolves to {actual}, expected {expected}"
-                        )
+                        assert not op.absorbed or actual, f"{op.at:#06x}: {op.absorbed} resolves to no source bytes"
                     for source_id in op.absorbed:
                         assert source_id not in owners, (
                             f"source occurrence {source_id} is owned by both {owners[source_id]:#06x} and {op.at:#06x}"
@@ -221,9 +229,7 @@ def test_mir_names_owned_source_occurrences_without_repeating_their_byte_ranges(
 
 
 def test_lowering_resolves_source_byte_ownership_without_mir_ranges() -> None:
-    """LNGMIX lowering must reproduce its old ranges from opaque occurrence ids."""
-    from dataclasses import replace
-
+    """LNGMIX LIR ranges must be exactly those named by opaque MIR identities."""
     import corpus
     from qbopt.abi import runtime
     from qbopt.backend import lower
@@ -234,28 +240,9 @@ def test_lowering_resolves_source_byte_ownership_without_mir_ranges() -> None:
     contracts = runtime.for_module(found)
     raised = mir.bodies(found, blocks, contracts)
     name, body = raised[0]
-    baseline = lower.lowered(
+    lowered = lower.lowered(
         name,
         body,
-        found.calls,
-        raised.source.absorbed,
-        contracts,
-        raised.source.coverage,
-        nodes=raised.source.nodes,
-    )
-    stripped = replace(
-        body,
-        blocks=tuple(
-            replace(
-                block,
-                ops=tuple(replace(op, covers=None, extra_covers=()) if op.absorbed else op for op in block.ops),
-            )
-            for block in body.blocks
-        ),
-    )
-    migrated = lower.lowered(
-        name,
-        stripped,
         found.calls,
         raised.source.absorbed,
         contracts,
@@ -263,9 +250,15 @@ def test_lowering_resolves_source_byte_ownership_without_mir_ranges() -> None:
         nodes=raised.source.nodes,
         occurrences=raised.source.occurrences,
     )
-    old_ranges = tuple((one.covers, one.spread) for one in baseline.insns)
-    new_ranges = tuple((one.covers, one.spread) for one in migrated.insns)
-    assert new_ranges == old_ranges
+    for insn in lowered.insns:
+        source = insn.source
+        if source is None or not source.absorbed:
+            continue
+        expected = _merged_ranges(
+            tuple(span for source_id in source.absorbed for span in raised.source.occurrences[source_id])
+        )
+        actual = insn.spread or ((insn.covers,) if insn.covers is not None else ())
+        assert actual == expected
 
 
 def test_a_pass_is_a_transform_and_nothing_else() -> None:

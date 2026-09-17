@@ -45,7 +45,6 @@ def test_lowering_preserves_relocated_store_ownership() -> None:
         args=(mir.Held(value, 2),),
         results=(mir.Cell(cell),),
         stores=(cell,),
-        covers=(10, 10),
         id=31,
         symbol=True,
     )
@@ -68,10 +67,16 @@ def test_high_word_extraction_lowers_without_clobbering_flags() -> None:
         kind=mir.Kind.EXTRACT,
         args=(mir.Held(source, 4), mir.Const(16, 4)),
         results=(mir.Held(result, 2),),
-        covers=(10, 14),
+        absorbed=(10,),
     )
     body = mir.MirBody(10, (mir.MirBlock(10, (), (op,), ()),))
-    expanded = lower.Lowering(body, {source.id, result.id}, {}, ()).expand(op)
+    expanded = lower.Lowering(
+        body,
+        {source.id, result.id},
+        {},
+        (),
+        occurrences={10: ((10, 14),)},
+    ).expand(op)
     assert [one.what.name if one.what else None for one in expanded] == ["push", "pop", "pop"]
     assert expanded[0].uses == (source.id,)
     assert expanded[-1].defines == (result.id,)
@@ -85,7 +90,7 @@ def test_high_word_extraction_lowers_without_clobbering_flags() -> None:
 
 def test_inserted_move_does_not_inherit_disjoint_input_bytes() -> None:
     """LNGMIX deletion refused because an inserted move also claimed 12 push bytes."""
-    parent = mir.Op(0x71, ir.Operation.MOVE, "mov", (), (), covers=(0x71, 0x76), extra_covers=((0x5F, 0x6B),), id=14)
+    parent = mir.Op(0x71, ir.Operation.MOVE, "mov", (), (), id=14, absorbed=(13, 14))
     move = ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(2, 2),), (ir.Held(1, 2),))
     inserted = lir.Insn(0x71, (0x71, 0x71), move, (2,), (1,), op=parent)
     assert inserted.covers == (0x71, 0x71)

@@ -40,7 +40,22 @@ def _raised(name: str):
     blocks = split.partition(found, code_map(found))
     contracts = runtime.for_module(found)
     raised = mir.bodies(found, blocks, contracts)
-    return raised.source.applied(found), blocks, list(raised), contracts
+    return raised.source.applied(found), blocks, raised, contracts
+
+
+def _lowered(found, raised, contracts, name, body):
+    """Cross the public MIR boundary with its external source map."""
+    source = raised.source
+    return lower.lowered(
+        name,
+        body,
+        found.calls,
+        source.absorbed,
+        contracts,
+        source.coverage,
+        nodes=source.nodes,
+        occurrences=source.occurrences,
+    )
 
 
 @pytest.mark.corpus
@@ -80,7 +95,7 @@ def test_every_machine_phase_takes_lir_and_gives_lir_back() -> None:
     """
     _found, _blocks, bodies, contracts = _raised("nested-p-g2")
     for name, body in bodies:
-        low = lower.lowered(name, body, _found.calls, set(_found.absorbed), contracts)
+        low = _lowered(_found, bodies, contracts, name, body)
         for phase in flow.machine(flow._pinned(body)):
             assert isinstance(phase, LIRTransform), f"{phase} is not a LIR phase"
             try:
@@ -96,7 +111,7 @@ def test_phi_elimination_takes_the_body_out_of_ssa() -> None:
     docs/hoist-blocker.md spent a week on."""
     _found, _blocks, bodies, contracts = _raised("nested-p-g2")
     for name, body in bodies:
-        low = lower.lowered(name, body, _found.calls, set(_found.absorbed), contracts)
+        low = _lowered(_found, bodies, contracts, name, body)
         assert sum(len(block.phis) for block in low.blocks), "nested has phis; the lowering lost them"
         out = phielim.eliminated(low)
         assert not sum(len(block.phis) for block in out.blocks), "a phi survived elimination"
@@ -110,7 +125,7 @@ def test_lowering_leaves_no_mir_operand_behind() -> None:
     """
     _found, _blocks, bodies, contracts = _raised("flags-p-g2-zd")
     for name, body in bodies:
-        for one in lower.lowered(name, body, _found.calls, set(_found.absorbed), contracts).insns:
+        for one in _lowered(_found, bodies, contracts, name, body).insns:
             if one.what is None:
                 continue
             for where in (*one.what.dests, *one.what.sources):
@@ -129,7 +144,7 @@ def test_a_value_in_a_loop_costs_more_than_one_outside() -> None:
     """
     _found, _blocks, bodies, contracts = _raised("lngmix-p-g2")
     ((name, body),) = bodies
-    low = lower.lowered(name, body, _found.calls, set(_found.absorbed), contracts)
+    low = _lowered(_found, bodies, contracts, name, body)
     deep = intervals.depths(low)
     assert set(deep.values()) >= {0, 1}, "lngmix has a loop; the depths say otherwise"
 
@@ -149,9 +164,7 @@ def test_the_allocation_is_searched_and_says_whether_it_is_optimal(name: str) ->
     budget says so rather than claiming an optimum it did not prove."""
     _found, _blocks, bodies, contracts = _raised(name)
     for who, body in bodies:
-        got = allocate.allocate(
-            lower.lowered(who, body, _found.calls, set(_found.absorbed), contracts), flow._pinned(body)
-        )
+        got = allocate.allocate(_lowered(_found, bodies, contracts, who, body), flow._pinned(body))
         assert got.optimal or got.why, "an unproven assignment has to say why"
         if got.optimal:
             assert got.why == ""
@@ -162,7 +175,7 @@ def test_lowering_gives_back_lir_and_allocation_gives_back_lir() -> None:
     """Each step's output is the next step's input, and nothing else."""
     _found, _blocks, bodies, contracts = _raised("hotlop-p-g2")
     for name, body in bodies:
-        low = lower.lowered(name, body, _found.calls, set(_found.absorbed), contracts)
+        low = _lowered(_found, bodies, contracts, name, body)
         assert isinstance(low, lir.LirBody)
         after = allocate.applied(low, allocate.allocate(low, flow._pinned(body)))
         assert isinstance(after, lir.LirBody)
@@ -189,7 +202,7 @@ def test_lir_says_what_each_instruction_defines_and_uses() -> None:
     register nothing is placed in."""
     _found, _blocks, bodies, contracts = _raised("lngmix-p-g2")
     for name, body in bodies:
-        low = lower.lowered(name, body, _found.calls, set(_found.absorbed), contracts)
+        low = _lowered(_found, bodies, contracts, name, body)
         assert any(one.defines for one in low.insns), "no instruction defines anything"
         assert any(one.uses for one in low.insns), "no instruction uses anything"
         assert any(block.arrives for block in low.blocks), "no phi result arrives anywhere"
@@ -223,8 +236,10 @@ def test_a_value_that_addresses_memory_is_confined_to_a_base_register() -> None:
     for path in CORPUS[:12]:
         found = module.of(omf.parse(path.read_bytes()))
         blocks = split.partition(found, code_map(found))
-        for name, body in mir.bodies(found, blocks):
-            low = lower.lowered(name, body, found.calls, set(found.absorbed), runtime.for_module(found))
+        contracts = runtime.for_module(found)
+        raised = mir.bodies(found, blocks, contracts)
+        for name, body in raised:
+            low = _lowered(found, raised, contracts, name, body)
             for value, where in allocate.classes(low).items():
                 assert where, f"value#{value} is confined to nothing"
                 assert set(target.order(where)) <= set(target.AVAILABLE) | set(target.SELECTORS)
@@ -245,7 +260,7 @@ def test_the_verifier_objects_to_a_body_that_claims_a_byte_twice() -> None:
 
     _found, _blocks, bodies, contracts = _raised("hotlop-p-g2")
     ((name, body),) = bodies
-    low = lower.lowered(name, body, _found.calls, set(_found.absorbed), contracts)
+    low = _lowered(_found, bodies, contracts, name, body)
     assert not verify.verify(low, in_ssa=True), "a freshly lowered body is not well formed"
 
     first = low.blocks[0]
@@ -266,7 +281,7 @@ def test_a_spilled_value_gets_a_slot_and_the_prologue_reserves_it() -> None:
     # divmod stopped, then jumptable did.
     _found, _blocks, bodies, contracts = _raised("harr-p-evt")
     name, body = bodies[0]
-    low = lower.lowered(name, body, _found.calls, set(_found.absorbed), contracts)
+    low = _lowered(_found, bodies, contracts, name, body)
     # Everything up to the allocator, which now owns the spill loop -- so
     # asking it after that phase would see the spilling already done.
     for phase in flow.machine(flow._pinned(body)):
@@ -322,7 +337,7 @@ def test_an_inserted_instruction_carries_no_fixup() -> None:
     """
     _found, _blocks, bodies, contracts = _raised("divmod-p-g2-zd")
     for name, body in bodies:
-        low = lower.lowered(name, body, _found.calls, set(_found.absorbed), contracts)
+        low = _lowered(_found, bodies, contracts, name, body)
         for phase in flow.machine(flow._pinned(body), None, _found.calls):
             low = phase.transform(low)
         for block in low.blocks:
@@ -350,7 +365,7 @@ def test_a_reload_cannot_be_spilled_again() -> None:
     _found, _blocks, bodies, contracts = _raised("harr-p-evt")
     ran = False
     for name, body in bodies:
-        low = lower.lowered(name, body, _found.calls, set(_found.absorbed), contracts)
+        low = _lowered(_found, bodies, contracts, name, body)
         for phase in flow.machine(flow._pinned(body)):
             if phase.name == "regalloc":
                 break
@@ -383,8 +398,9 @@ def test_the_allocator_settles_on_every_program() -> None:
         # does not -- which left a pin naming a value the body no longer
         # held, reported as `value#19 at width 4 has no register`.
         contracts = runtime.for_module(found)
-        for name, body in mir.bodies(found, blocks, contracts):
-            low = lower.lowered(name, body, found.calls, set(found.absorbed), contracts)
+        raised = mir.bodies(found, blocks, contracts)
+        for name, body in raised:
+            low = _lowered(found, raised, contracts, name, body)
             for phase in flow.machine(flow._pinned(body), frames.of(low), found.calls):
                 low = phase.transform(low)
 
@@ -401,8 +417,10 @@ def test_the_allocator_evicts_rather_than_spilling_a_costlier_range() -> None:
     for path in CORPUS[:16]:
         found = module.of(omf.parse(path.read_bytes()))
         blocks = split.partition(found, code_map(found))
-        for name, body in mir.bodies(found, blocks):
-            low = lower.lowered(name, body, found.calls, set(found.absorbed), runtime.for_module(found))
+        contracts = runtime.for_module(found)
+        raised = mir.bodies(found, blocks, contracts)
+        for name, body in raised:
+            low = _lowered(found, raised, contracts, name, body)
             got = allocate.allocate(low, {})
             # Nothing is in two places, and nothing is somewhere it may not be.
             confined = allocate.classes(low)
@@ -431,7 +449,7 @@ def test_a_call_carries_a_mask_rather_than_defining_a_value_per_register() -> No
     _found, _blocks, bodies, contracts = _raised("lngmix-p-g2")
     masked = 0
     for name, body in bodies:
-        low = lower.lowered(name, body, _found.calls, set(_found.absorbed), contracts)
+        low = _lowered(_found, bodies, contracts, name, body)
         for block in low.blocks:
             for one in block.insns:
                 if not one.clobbers:
@@ -446,7 +464,7 @@ def test_a_call_carries_a_mask_rather_than_defining_a_value_per_register() -> No
     # And nothing the allocator seats sits in a register a call it crosses
     # destroys.
     for name, body in bodies:
-        low = lower.lowered(name, body, _found.calls, set(_found.absorbed), contracts)
+        low = _lowered(_found, bodies, contracts, name, body)
         for phase in flow.machine(flow._pinned(body), None, _found.calls):
             if phase.name == "regalloc":
                 break
@@ -496,16 +514,10 @@ def test_strength_reduction_replaces_a_loop_multiply_with_an_add() -> None:
         was = [op for block in body.blocks for op in block.ops if op.kind is mir.Kind.MUL]
         now = [op for block in out.blocks for op in block.ops if op.kind is mir.Kind.MUL]
         assert len(now) == len(was), "a multiply should move, not multiply"
-        assert any(op.node is None for op in now), "the preheader multiply was not inserted"
-        adds = [op for block in out.blocks for op in block.ops if op.kind is mir.Kind.ADD and op.node is None]
+        assert any(op.inserted for op in now), "the preheader multiply was not inserted"
+        adds = [op for block in out.blocks for op in block.ops if op.kind is mir.Kind.ADD and op.inserted]
         assert adds, "no add advances the new counter"
-        # And every inserted operation claims none of BC's own bytes; one that
-        # replaced an operation keeps exactly the bytes that one had.
-        claimed = {op.covers for block in body.blocks for op in block.ops}
-        for block in out.blocks:
-            for op in block.ops:
-                if op.node is None and op.covers is not None and op.covers not in claimed:
-                    assert op.covers[0] == op.covers[1], f"{op.at:#06x} claims bytes it did not stand for"
+        assert all(not op.absorbed for op in adds), "an invented recurrence claimed a source occurrence"
     assert fired, "matrix multiplies its counter by a width it never changes"
 
 
@@ -619,12 +631,11 @@ def test_no_phi_survives_elimination_on_a_critical_edge() -> None:
     blocks = split.partition(found, code_map(found))
     result = mir.bodies(found, blocks)
     found = result.source.applied(found)
-    raised = list(result)
-    absorbed = set(found.absorbed)
     critical = 0
-    for name, body in raised:
+    contracts = runtime.for_module(found)
+    for name, body in result:
         body = transform.applied(body, found.dgroup, found.calls, blocks=blocks, found=found)
-        low = lower.lowered(name, body, found.calls, absorbed, runtime.for_module(found))
+        low = _lowered(found, result, contracts, name, body)
         at_of = {block.at: block for block in low.blocks}
         for block in low.blocks:
             for phi in block.phis:

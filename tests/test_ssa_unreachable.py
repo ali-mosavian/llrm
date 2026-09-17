@@ -8,10 +8,10 @@ def test_reconstruction_matches_blocks_by_identity_not_position():
     """FPDEEP crashed in SSA repair after CFG cleanup left an unreachable byte owner."""
     value = mir.Value(1, 0, variable=1, version=1)
     define = mir.Op(0, ir.Operation.MOVE, "mov", (value,), (), kind=mir.Kind.COPY,
-                    args=(mir.Const(7, 2),), results=(mir.Held(value, 2),), covers=(0, 5))
-    dead = mir.Op(5, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.NOTHING, covers=(5, 10))
+                    args=(mir.Const(7, 2),), results=(mir.Held(value, 2),))
+    dead = mir.Op(5, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.NOTHING)
     read = mir.Op(10, ir.Operation.PUSH, "push", (), (value,), kind=mir.Kind.ARG,
-                  args=(mir.Held(value, 2),), covers=(10, 12))
+                  args=(mir.Held(value, 2),))
     body = mir.MirBody(0, (mir.MirBlock(0, (), (define,), (10,)),
                           mir.MirBlock(5, (), (dead,), ()), mir.MirBlock(10, (), (read,), ())))
     result = ssa.constructed(body, frozenset({1}))

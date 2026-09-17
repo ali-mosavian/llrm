@@ -36,7 +36,7 @@ def loaded(body: mir.MirBody) -> mir.MirBody:
             ops.append(mir.Op(op.at, ir.Operation.MOVE, "", (value,),
                 tuple(part for part in (ref.base, ref.segment) if part is not None),
                 kind=mir.Kind.LOAD, loads=(ref,), args=(cells[0],), results=(held,),
-                covers=(op.at, op.at), id=next(mir._IDS), symbol=False))
+                id=next(mir._IDS), symbol=False))
             args = tuple(held if isinstance(arg, mir.Cell) else arg for arg in op.args)
             ops.append(mir.detached(op, args=args, loads=(),
                 uses=tuple(dict.fromkeys(arg.value for arg in args if isinstance(arg, mir.Held))),

@@ -12,6 +12,8 @@ from qbopt.backend import allocate
 from qbopt.optimize import transform
 from qbopt.backend import lower_switches
 
+OCCURRENCES = {5: ((5, 12),)}
+
 
 def switched() -> mir.MirBody:
     selector = mir.Value(1, 0, variable=1, version=1)
@@ -26,7 +28,7 @@ def switched() -> mir.MirBody:
         args=(mir.Held(selector, 2),),
         target=30,
         cases=((1, 20), (2, 20), (3, 30)),
-        covers=(5, 12),
+        absorbed=(5,),
     )
     return mir.MirBody(
         0,
@@ -64,7 +66,7 @@ def test_switch_expansion_keeps_cases_default_and_shared_destination_phis() -> N
     assert target is not None
     assert set(target.phis[0].incoming) == set(predecessors[20])
     assert len(target.phis[0].incoming) == 2
-    assert sum(op.covers == (5, 12) for block in body.blocks for op in block.ops) == 1
+    assert sum(op.absorbed == (5,) for block in body.blocks for op in block.ops) == 1
 
 
 def test_switch_is_observable_to_dead_code_elimination() -> None:
@@ -76,22 +78,22 @@ def test_switch_comparisons_cannot_overwrite_a_live_condition() -> None:
     body = switched()
     flags = mir.Value(9, 0, flags=True)
     branch = mir.Op(
-        20, ir.Operation.BRANCH, "", (), (flags,), kind=mir.Kind.BRANCH, test=mir.Kind.EQ, target=30, covers=(20, 20)
+        20, ir.Operation.BRANCH, "", (), (flags,), kind=mir.Kind.BRANCH, test=mir.Kind.EQ, target=30
     )
     body = replace(body, blocks=(body.blocks[0], replace(body.blocks[1], ops=(branch,), succ=(30,)), body.blocks[2]))
     with pytest.raises(lower.Unlowered, match="live condition"):
-        lower.lowered("condition", body, {}, set(), {})
+        lower.lowered("condition", body, {}, set(), {}, occurrences=OCCURRENCES)
 
 
 def test_lowering_consumes_switches_as_compare_and_branch_operations() -> None:
-    body = lower.lowered("switch", switched(), {}, set(), {})
+    body = lower.lowered("switch", switched(), {}, set(), {}, occurrences=OCCURRENCES)
     operations = [insn.what for block in body.blocks for insn in block.insns]
     assert sum(op is not None and op.name == "cmp" for op in operations) == 2
     assert sum(op is not None and op.name == "je" for op in operations) == 2
 
 
 def test_lowered_switch_comparisons_encode_after_allocation() -> None:
-    body = lower.lowered("switch", switched(), {}, set(), {})
+    body = lower.lowered("switch", switched(), {}, set(), {}, occurrences=OCCURRENCES)
     assignment = allocate.allocate(body, {1: Register.EAX})
     assert not assignment.spilled
     body = allocate.applied(body, assignment)
@@ -110,7 +112,7 @@ def test_constant_switch_emits_only_a_jump(value: int, target: int) -> None:
     source = body.blocks[0]
     op = replace(source.ops[0], args=(mir.Const(value, 2),), uses=())
     body = replace(body, blocks=(replace(source, ops=(op,)), *body.blocks[1:]))
-    lowered = lower.lowered("constant", body, {}, set(), {})
+    lowered = lower.lowered("constant", body, {}, set(), {}, occurrences=OCCURRENCES)
     (jump,) = lowered.blocks[0].insns
     assert jump.what is not None
     assert jump.what.name == "jmp"
@@ -144,5 +146,5 @@ def test_invalid_switch_is_rejected_atomically(invalid: str) -> None:
             block = replace(block, succ=(20,))
     changed = replace(body, blocks=(replace(block, ops=(op,)), *body.blocks[1:]))
     with pytest.raises(lower.Unlowered):
-        lower.lowered("invalid", changed, {}, set(), {})
+        lower.lowered("invalid", changed, {}, set(), {}, occurrences=OCCURRENCES)
     assert body == switched()

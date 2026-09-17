@@ -24,9 +24,9 @@ def diamond():
         flags = mir.Value(at + 100, at, True)
         uses = (first.value,) if isinstance(first, mir.Held) else ()
         compare = mir.Op(at, ir.Operation.COMPARE, "cmp", (flags,), uses, kind=mir.Kind.SUB,
-                         args=(first, second), covers=(at, at + 1))
+                         args=(first, second))
         jump = mir.Op(at + 1, ir.Operation.BRANCH, "", (), (flags,), kind=mir.Kind.BRANCH,
-                      test=mir.Kind.EQ, target=target, covers=(at + 1, at + 2))
+                      test=mir.Kind.EQ, target=target)
         return compare, jump
 
     return mir.MirBody(0, (
@@ -68,7 +68,6 @@ def test_nullable_pointer_parameter_keeps_both_null_test_edges():
         (pointer,),
         kind=mir.Kind.SUB,
         args=(mir.Held(pointer, 2), mir.Const(0, 2)),
-        covers=(1, 2),
     )
     branch = mir.Op(
         2,
@@ -79,7 +78,6 @@ def test_nullable_pointer_parameter_keeps_both_null_test_edges():
         kind=mir.Kind.BRANCH,
         test=mir.Kind.EQ,
         target=10,
-        covers=(2, 3),
     )
     body = mir.MirBody(
         0,

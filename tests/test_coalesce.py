@@ -40,7 +40,11 @@ def test_matrix_diagonal_stride_needs_no_register_copies(tag):
 
 
 def test_retained_resource_identity_has_a_legal_encoding():
-    """HARR's hoisted selector copy became unencodable mov es,es across a coverage gap."""
+    """HARR's hoisted selector copy became unencodable mov es,es across a coverage gap.
+
+    The retained ownership/dataflow anchor emits no instruction; requiring a
+    NOP would turn removal of a redundant copy into a permanent code-size cost.
+    """
     from iced_x86 import Register
 
     from qbopt.backend import select
@@ -51,7 +55,7 @@ def test_retained_resource_identity_has_a_legal_encoding():
     assert len(result.insns) == 1
     assert result.insns[0].covers == body.insns[0].covers
     assert select.emit(result.insns[0].what, 3) is not None
-    assert select.emit(result.insns[0].what, 3).code == b"\x90"
+    assert select.emit(result.insns[0].what, 3).code == b""
 
 
 def test_equal_resource_values_coalesce_without_consuming_a_gpr():

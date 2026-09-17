@@ -39,9 +39,9 @@ def test_bools_live_cfg_has_no_empty_transit_blocks(tag):
 def test_edges_bypass_empty_fallthrough_blocks(explicit, marker):
     """BOOLS's deleted conditions must not keep empty nodes on live paths."""
     jump = mir.Op(0, ir.Operation.JUMP, "jmp", (), (), kind=mir.Kind.JUMP,
-                  target=10, covers=(0, 2))
+                  target=10, absorbed=(1,))
     empty = mir.Op(10, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.NOTHING,
-                   covers=(10, 20))
+                   absorbed=(2,))
     body = mir.MirBody(0, (mir.MirBlock(0, (), (jump,) if explicit else (), (10,)),
                           mir.MirBlock(10, (), (empty,) if marker else (), (20,)),
                           mir.MirBlock(20, (), (), ())))
@@ -51,7 +51,7 @@ def test_edges_bypass_empty_fallthrough_blocks(explicit, marker):
         assert result.blocks[0].ops[-1].target == 20
     assert result.blocks[1].succ == ()
     if marker:
-        assert result.blocks[1].ops[0].covers == (10, 20)
+        assert result.blocks[1].ops[0].absorbed == (2,)
 
 
 @pytest.mark.parametrize("guard", ["phi", "cycle", "input", "checkpoint"])
@@ -74,9 +74,9 @@ def test_converged_branch_keeps_its_destination_even_when_condition_is_false():
     """Both empty arms reach PRINT; folding false must not make PRINT unreachable."""
     flags = mir.Value(1, 0, True)
     compare = mir.Op(0, ir.Operation.COMPARE, "cmp", (flags,), (), kind=mir.Kind.SUB,
-                     args=(mir.Const(0, 2), mir.Const(1, 2)), covers=(0, 2))
+                     args=(mir.Const(0, 2), mir.Const(1, 2)))
     branch = mir.Op(2, ir.Operation.BRANCH, "", (), (flags,), kind=mir.Kind.BRANCH,
-                    test=mir.Kind.EQ, target=10, covers=(2, 4))
+                    test=mir.Kind.EQ, target=10)
     body = mir.MirBody(0, (mir.MirBlock(0, (), (compare, branch), (10, 20)),
                           mir.MirBlock(10, (), (), (30,)),
                           mir.MirBlock(20, (), (), (30,)),
@@ -128,7 +128,7 @@ def test_owned_false_branch_becomes_a_marker_without_blocking_decision() -> None
 
 def test_implicit_edge_keeps_the_jump_that_changes_physical_flow():
     """FPDEEP skipped its entire calculation when a fallthrough trampoline lost its jump."""
-    jump = mir.Op(10, ir.Operation.JUMP, "jmp", (), (), kind=mir.Kind.JUMP, target=30, covers=(10, 12))
+    jump = mir.Op(10, ir.Operation.JUMP, "jmp", (), (), kind=mir.Kind.JUMP, target=30)
     effect = mir.Op(20, ir.Operation.PUSH, "push", (), (), kind=mir.Kind.ARG, args=(mir.Const(7, 2),))
     body = mir.MirBody(0, (mir.MirBlock(0, (), (), (10,)),
                           mir.MirBlock(10, (), (jump,), (30,)),

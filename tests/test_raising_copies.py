@@ -60,7 +60,7 @@ def test_only_observed_pointer_results_cross_the_raise_boundary():
     last = original[-1].defines[0]
     cell = mir.MemRef(None, 4)
     observe = mir.Op(0x158, ir.Operation.MOVE, "mov", (), (last,), kind=mir.Kind.STORE,
-                     args=(mir.Held(last, 4),), stores=(cell,), results=(mir.Cell(cell),), covers=(0x158, 0x158))
+                     args=(mir.Held(last, 4),), stores=(cell,), results=(mir.Cell(cell),))
     body = replace(body, blocks=(replace(body.blocks[0], ops=(*original, observe)),))
     result = raising_copies.scalar(body, found)
     updates = [op for op in result.blocks[0].ops if op.kind is mir.Kind.COPY and op.at >= 0x154]

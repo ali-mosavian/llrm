@@ -638,7 +638,7 @@ def test_a_reduced_counter_has_its_own_loop_phi_and_fresh_variable(address: bool
     header = built.blocks[1]
     counter = header.phis[0].result
     answer = header.ops[1].defines[0]
-    multiply = replace(header.ops[1], uses=(counter,), args=(mir.Held(counter, 2), mir.Const(2, 2)), covers=(2, 4))
+    multiply = replace(header.ops[1], uses=(counter,), args=(mir.Held(counter, 2), mir.Const(2, 2)))
     livein = mir.Value(99, 0, variable=77)
     use = mir.Op(
         4,
@@ -648,7 +648,6 @@ def test_a_reduced_counter_has_its_own_loop_phi_and_fresh_variable(address: bool
         (answer, livein),
         kind=mir.Kind.ARG,
         args=(mir.Held(answer, 2), mir.Held(livein, 2)),
-        covers=(4, 6),
     )
     if address:
         memory = mir.MemRef(Addr(Space.SEGMENT, 0x20, 1), 2, answer)
@@ -657,7 +656,7 @@ def test_a_reduced_counter_has_its_own_loop_phi_and_fresh_variable(address: bool
         built,
         blocks=(
             built.blocks[0],
-            replace(header, ops=(replace(header.ops[0], covers=(1, 2)), multiply, use)),
+            replace(header, ops=(header.ops[0], multiply, use)),
             built.blocks[2],
         ),
     )
@@ -716,16 +715,16 @@ def test_reduction_does_not_speculate_on_a_loop_bypass(bypass: bool) -> None:
     answer = header.ops[1].defines[0]
     memory = mir.MemRef(Addr(Space.SEGMENT, 0x20, 1), 2)
     product = replace(
-        header.ops[1], uses=(counter,), args=(mir.Held(counter, 2), mir.Cell(memory)), loads=(memory,), covers=(2, 4)
+        header.ops[1], uses=(counter,), args=(mir.Held(counter, 2), mir.Cell(memory)), loads=(memory,)
     )
     consume = mir.Op(
-        4, ir.Operation.PUSH, "", (), (answer,), kind=mir.Kind.ARG, args=(mir.Held(answer, 2),), covers=(4, 6)
+        4, ir.Operation.PUSH, "", (), (answer,), kind=mir.Kind.ARG, args=(mir.Held(answer, 2),)
     )
     built = replace(
         built,
         blocks=(
             replace(built.blocks[0], succ=(1, 2) if bypass else (1,)),
-            replace(header, ops=(replace(header.ops[0], covers=(1, 2)), product, consume)),
+            replace(header, ops=(header.ops[0], product, consume)),
             built.blocks[2],
         ),
     )
@@ -775,7 +774,7 @@ def test_reduced_product_keeps_the_current_iteration_on_exit() -> None:
     built, _loop = body()
     header = built.blocks[1]
     counter = header.phis[0].result
-    product = replace(header.ops[1], uses=(counter,), args=(mir.Held(counter, 2), mir.Const(3, 2)), covers=(2, 4))
+    product = replace(header.ops[1], uses=(counter,), args=(mir.Held(counter, 2), mir.Const(3, 2)))
     answer = product.defines[0]
     exit_value = mir.Value(40, 2, variable=10)
     consume = mir.Op(5, ir.Operation.PUSH, "", (), (exit_value,), kind=mir.Kind.ARG, args=(mir.Held(exit_value, 2),))
@@ -783,7 +782,7 @@ def test_reduced_product_keeps_the_current_iteration_on_exit() -> None:
         built,
         blocks=(
             built.blocks[0],
-            replace(header, ops=(replace(header.ops[0], covers=(1, 2)), product)),
+            replace(header, ops=(header.ops[0], product)),
             mir.MirBlock(2, (mir.Phi(exit_value, {1: answer}),), (consume,), ()),
         ),
     )
@@ -802,24 +801,24 @@ def test_inserted_counter_operations_own_their_insertion_location() -> None:
     built, _loop = body()
     header = built.blocks[1]
     counter = header.phis[0].result
-    product = replace(header.ops[1], uses=(counter,), args=(mir.Held(counter, 2), mir.Const(3, 2)), covers=(2, 4))
+    product = replace(header.ops[1], uses=(counter,), args=(mir.Held(counter, 2), mir.Const(3, 2)))
     answer = product.defines[0]
     consume = mir.Op(
-        4, ir.Operation.PUSH, "", (), (answer,), kind=mir.Kind.ARG, args=(mir.Held(answer, 2),), covers=(4, 6)
+        4, ir.Operation.PUSH, "", (), (answer,), kind=mir.Kind.ARG, args=(mir.Held(answer, 2),)
     )
     built = replace(
         built,
         blocks=(
             built.blocks[0],
-            replace(header, ops=(replace(header.ops[0], covers=(1, 2)), product, consume)),
+            replace(header, ops=(header.ops[0], product, consume)),
             built.blocks[2],
         ),
     )
     result = strength.reduced(built)
     setup = result.blocks[0].ops[0]
     update = result.blocks[1].ops[-1]
-    assert setup.at == 0 and setup.covers == (0, 0)
-    assert update.at == 4 and update.covers == (6, 6)
+    assert setup.at == 0 and setup.inserted
+    assert update.at == 4 and update.inserted
 
 
 @pytest.mark.parametrize("second_variable", [7, 8])
@@ -839,19 +838,19 @@ def test_cse_replaces_phi_uses_of_a_deleted_initializer(second_variable: int, ha
         kind=mir.Kind.COPY,
         args=(mir.Symbol(Space.SEGMENT, 5, 6, 2) if symbolic else mir.Const(0, 2),),
         results=(mir.Held(first, 2),),
-        covers=(0, 2),
         source_backed=has_origin,
         id=10 if has_origin else None,
+        absorbed=(10,) if has_origin else (),
     )
     duplicate = replace(
         define,
         at=2,
         defines=(second,),
         results=(mir.Held(second, 2),),
-        covers=(2, 4),
         id=11 if has_origin else None,
+        absorbed=(11,) if has_origin else (),
     )
-    jump = mir.Op(4, ir.Operation.JUMP, "", (), (), kind=mir.Kind.JUMP, covers=(4, 6), target=6)
+    jump = mir.Op(4, ir.Operation.JUMP, "", (), (), kind=mir.Kind.JUMP, target=6)
     use = mir.Op(6, ir.Operation.PUSH, "", (), (result,), kind=mir.Kind.ARG, args=(mir.Held(result, 2),))
     direct = replace(use, at=7, uses=(second,), args=(mir.Held(second, 2),))
     built = mir.MirBody(
@@ -881,9 +880,8 @@ def test_cse_keeps_distinct_linker_addresses(other: mir.Arg) -> None:
         kind=mir.Kind.COPY,
         args=(mir.Symbol(Space.SEGMENT, 5, 6, 2),),
         results=(mir.Held(first, 2),),
-        covers=(0, 2),
     )
-    different = replace(define, at=2, defines=(second,), args=(other,), results=(mir.Held(second, 2),), covers=(2, 4))
+    different = replace(define, at=2, defines=(second,), args=(other,), results=(mir.Held(second, 2),))
     use = mir.Op(4, ir.Operation.PUSH, "push", (), (second,), kind=mir.Kind.ARG, args=(mir.Held(second, 2),))
     built = mir.MirBody(0, (mir.MirBlock(0, (), (define, different, use), ()),))
     assert transform.subexpressions(built) == built
@@ -899,14 +897,16 @@ def test_dead_byte_transfer_cannot_span_a_surviving_jump() -> None:
         (),
         kind=mir.Kind.COPY,
         source_backed=True,
-        covers=(0, 4),
         id=1,
+        absorbed=(1,),
     )
-    removed = replace(first, at=4, covers=(8, 10))
-    jump = replace(first, at=4, kind=mir.Kind.JUMP, covers=(4, 8))
+    removed = replace(first, at=8, id=3, absorbed=(3,))
+    jump = replace(first, at=4, kind=mir.Kind.JUMP, id=2, absorbed=(2,))
     result = transform._without([first, removed, jump], lambda op: op is removed)
-    spans = sorted(op.covers for op in result if op.covers)
-    assert all(left[1] <= right[0] for left, right in zip(spans, spans[1:]))
+    owners = [identity for op in result for identity in op.absorbed]
+    assert sorted(owners) == [1, 2, 3]
+    assert len(owners) == len(set(owners))
+    assert next(op for op in result if op.absorbed == (2,)).kind is mir.Kind.JUMP
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])

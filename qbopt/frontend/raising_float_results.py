@@ -51,6 +51,6 @@ def raised(body, found, contracts, source: module.SourceMap | None = None):
                     (target,), (result.value,),
                     kind=mir.Kind.COPY if width == 2 else mir.Kind.EXTRACT,
                     args=(result,) if width == 2 else (result, mir.Const(16 * shift, 4)),
-                    results=(mir.Held(target, 2),), covers=(op.at, op.at), symbol=False))
+                    results=(mir.Held(target, 2),), symbol=False))
         blocks.append(replace(block, ops=tuple(ops)))
     return replace(body, blocks=tuple(blocks))

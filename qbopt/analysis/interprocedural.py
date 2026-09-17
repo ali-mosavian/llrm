@@ -162,7 +162,6 @@ def propagate_returns(
                         kind=mir.Kind.COPY,
                         args=(constant,),
                         results=(result,),
-                        covers=(op.at, op.at),
                         symbol=False,
                     )
                 )

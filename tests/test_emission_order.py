@@ -111,7 +111,7 @@ def test_explicit_emission_order_does_not_group_clones_by_source_address():
 def test_cloned_far_call_keeps_its_relocation_without_claiming_input_bytes():
     """FPDEEP's second and third printed iterations emitted unrelocated call 0:0."""
     what = ir.Semantics(ir.Operation.CALL, "call")
-    source = mir.Op(0, ir.Operation.CALL, "call", (), (), covers=(0, 5), id=7, symbol=True)
+    source = mir.Op(0, ir.Operation.CALL, "call", (), (), id=7, symbol=True, absorbed=(7,))
     original = lir.Insn(0, (0, 5), what, (), (), op=source, symbol=True)
     clone = replace(original, covers=(0, 0))
     found = SimpleNamespace(
@@ -136,7 +136,7 @@ def test_cloned_far_call_keeps_its_relocation_without_claiming_input_bytes():
 def test_layout_uses_disjoint_ranges_resolved_onto_lir() -> None:
     """A folded site's push run and call must survive after MIR coverage is gone."""
     what = ir.Semantics(ir.Operation.NOTHING, "")
-    source = mir.Op(20, ir.Operation.NOTHING, "", (), (), covers=None, id=8, absorbed=(7, 8))
+    source = mir.Op(20, ir.Operation.NOTHING, "", (), (), id=8, absorbed=(7, 8))
     ranges = ((10, 12), (20, 23))
     instruction = lir.Insn(20, (20, 23), what, (), (), spread=ranges, op=source)
     found = SimpleNamespace(coverage={})

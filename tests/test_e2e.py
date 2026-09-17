@@ -132,10 +132,12 @@ def test_every_compiled_object_round_trips_through_the_selector(tag: str) -> Non
         mapped = code_map(found)
         if isinstance(mapped, str):
             continue
-        for _, body in mir.bodies(found, split.partition(found, mapped)):
+        raised = mir.bodies(found, split.partition(found, mapped))
+        for _, body in raised:
             for block in body.blocks:
                 for op in block.ops:
-                    what = getattr(op.node, "semantics", None)
+                    node = raised.source.nodes.get(op.id)
+                    what = getattr(node, "semantics", None)
                     if what is None or what.op is ir.Operation.BARRIER:
                         continue
                     made = select.emit(what, at=op.at)
@@ -143,9 +145,9 @@ def test_every_compiled_object_round_trips_through_the_selector(tag: str) -> Non
                         continue
                     checked += 1
                     back = next(iter(Decoder(BITNESS, made.code, ip=op.at)), None)
-                    if not isinstance(op.node, (ir.Opaque, ir.Long, ir.Call)):
+                    if not isinstance(node, (ir.Opaque, ir.Long, ir.Call)):
                         continue
-                    want = op.node.insn.insn
+                    want = node.insn.insn
                     same = back is not None and (
                         str(back) == str(want)
                         or (back.mnemonic == want.mnemonic and back.near_branch16 == want.near_branch16)

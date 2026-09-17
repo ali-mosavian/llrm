@@ -37,8 +37,8 @@ def diamond():
     cell = mir.MemRef(Addr(Space.SEGMENT, 6, 5), 2)
     before, after = mir.Value(1, 10), mir.Value(2, 30)
     load = mir.Op(10, ir.Operation.MOVE, "", (before,), (), kind=mir.Kind.LOAD,
-                  args=(mir.Cell(cell),), results=(mir.Held(before, 2),), loads=(cell,), covers=(10, 14))
-    repeated = replace(load, at=30, defines=(after,), results=(mir.Held(after, 2),), covers=(30, 34))
+                  args=(mir.Cell(cell),), results=(mir.Held(before, 2),), loads=(cell,))
+    repeated = replace(load, at=30, defines=(after,), results=(mir.Held(after, 2),))
     return mir.MirBody(0, (mir.MirBlock(0, (), (), (10, 20)),
                           mir.MirBlock(10, (), (load,), (30,)),
                           mir.MirBlock(20, (), (), (30,)),
@@ -51,7 +51,7 @@ def test_missing_path_reads_once_and_existing_path_reuses_value():
     assert result.block(10).ops == body.block(10).ops
     inserted, = result.block(20).ops
     assert inserted.loads == body.block(30).ops[0].loads
-    assert inserted.covers == (20, 20)
+    assert inserted.inserted and not inserted.source_backed
     assert not result.block(30).ops[0].loads
     phi, = result.block(30).phis
     assert phi.incoming == {10: body.block(10).ops[0].defines[0], 20: inserted.defines[0]}
@@ -99,7 +99,7 @@ def test_missing_explicit_critical_edge_gets_its_own_load_block():
     """The unrelated arm must not acquire a read that could fault or observe memory."""
     body = diamond()
     condition = mir.Op(20, ir.Operation.BRANCH, "", (), (), kind=mir.Kind.BRANCH,
-                       target=30, test=mir.Kind.EQ, covers=(20, 22))
+                       target=30, test=mir.Kind.EQ)
     body = replace(body, blocks=tuple(replace(block, ops=(condition,), succ=(30, 40))
                                      if block.at == 20 else block for block in body.blocks)
                    + (mir.MirBlock(40, (), (), ()),))

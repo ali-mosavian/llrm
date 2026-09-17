@@ -117,19 +117,15 @@ it and collapses the two into the diagram at the top.
                            honouring a substituted value
 ```
 
-**MIR itself still carries two source-machine facts.** `Op.covers` (a range
-of source bytes) and `MirBody.origin`. Decoded instructions now leave the
-raise in `SourceMap.nodes`, keyed by the operation's stable id, and lowering
-transfers each required node to LIR. Byte ownership is also represented by
-opaque `Op.absorbed` identities whose immutable raw ranges live in
-`SourceMap.occurrences`; the existing `coverage` map keeps its legacy folded-
-operation meaning for MIR compatibility. Lowering now resolves the opaque
-identities into concrete LIR `covers` and disjoint `spread` ranges, and layout
-consumes those LIR ranges directly. Optimization modules are mechanically
-forbidden from naming the old MIR ranges: deletion leaves an inert owner and
-semantic combination transfers only opaque identities. The compatibility
-fields now remain solely at the raise/lower edges until they are deleted from
-`Op`. Selected machine semantics live only on LIR.
+**MIR itself still carries one source-machine fact:** `MirBody.origin`.
+Decoded instructions leave the raise in `SourceMap.nodes`, keyed by the
+operation's stable id. Raw byte ranges exist only on the raise's private
+occurrence type and in `SourceMap.occurrences`; public MIR carries opaque
+`Op.absorbed` identities. Lowering resolves those identities into concrete
+LIR `covers` and disjoint `spread` ranges, and layout consumes those LIR ranges
+directly. Optimization modules are mechanically forbidden from naming byte
+ranges: deletion leaves an inert owner and semantic combination transfers only
+opaque identities. Selected machine semantics live only on LIR.
 
 **LIR is now the backend form.** It owns selected machine semantics and
 allocation requirements (`tied`, `reads`, `writes`), and layout plus fresh
@@ -145,9 +141,9 @@ been deleted.
 
 1. **Phase D** -- absorption at the raise, then the machine arm retires:
    `lift.py`, `calls.py`'s emission, `memory.py`, `forward.py`.
-2. `covers` leaves `mir.Op` for a side table keyed on `Op.id`; `origin` last,
-   because lowering and the allocator's identity baseline are built on it.
-   (`made` has already moved to LIR and `node` is already in `SourceMap`.)
+2. `origin` leaves `MirBody` last, because lowering and the allocator's
+   identity baseline are built on it. (`made` and concrete byte coverage have
+   already moved to LIR; `node` and source occurrences are in `SourceMap`.)
 3. Add the post-allocation peephole now that LIR has become a real form.
 
 Until then, every one of those is a debt with a name, and none of them is a

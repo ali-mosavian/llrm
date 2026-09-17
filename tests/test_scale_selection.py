@@ -17,7 +17,6 @@ def test_power_of_two_product_selection(width: int, scale: int, preserve: bool) 
         kind=mir.Kind.MUL,
         args=(mir.Held(source, width), mir.Const(scale, width)),
         results=(mir.Held(result, width),),
-        covers=(10, 14),
     )
     body = mir.MirBody(10, (mir.MirBlock(10, (), (op,), ()),))
     (instruction,) = lower.Lowering(body, {1, 2}, {}, ()).expand(op, preserve_flags=preserve)

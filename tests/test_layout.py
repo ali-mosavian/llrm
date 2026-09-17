@@ -21,6 +21,7 @@ from qbopt.backend import asm
 from qbopt.model import mir
 from qbopt.objectfile import omf
 from qbopt.backend import layout
+from qbopt.objectfile.module import SourceMap
 from qbopt.frontend import blocks as split
 from qbopt.frontend.blocks import code_map
 
@@ -109,7 +110,7 @@ def test_fallthrough_relaxation_preserves_targets_and_intervening_data(shape):
     elif shape == "data":
         ops, code = [jump(0, 3), asm.Table(2, 3), ret(3)], bytes.fromhex("eb0190c3")
     found = SimpleNamespace(code=code, absorbed={}, fixup_at={}, calls={}, refs={}, float_protocols={})
-    result = asm.assemble(ops, 0, found)
+    result = asm.assemble(ops, 0, found, source=SourceMap())
     assert not isinstance(result, str), result
     if shape in {"next", "chain"}:
         assert result.code == bytes.fromhex("c3")
@@ -130,11 +131,12 @@ def test_emulator_load_uses_the_allocated_address() -> None:
                             (ir.Mem(None, 4, through=Register.SI),))
     changed = ir.Semantics(ir.Operation.FLOAT_LOAD, "fld", (ir.St(0),),
                            (ir.Mem(None, 4, through=Register.DI),))
-    source = mir.Op(0, ir.Operation.FLOAT_LOAD, "fld", (), (), (), (),
-                ir.Opaque(declen.decode(raw, 0), ir.NO_EFFECT, original), covers=(0, 3), kind=mir.Kind.FLOAD)
-    op = lir.Insn(0, (0, 3), changed, (), (), op=source)
+    node = ir.Opaque(declen.decode(raw, 0), ir.NO_EFFECT, original)
+    source = mir.Op(0, ir.Operation.FLOAT_LOAD, "fld", (), (), kind=mir.Kind.FLOAD,
+                    source_backed=True, id=1, absorbed=(1,))
+    op = lir.Insn(0, (0, 3), changed, (), (), op=source, node=node)
     found = SimpleNamespace(code=raw, absorbed={}, fixup_at={}, calls={}, refs={}, float_protocols={})
-    done = asm.assemble([op], 0, found)
+    done = asm.assemble([op], 0, found, source=SourceMap())
     assert not isinstance(done, str), done
     assert done.code == bytes.fromhex("cd3505")
 
@@ -172,11 +174,9 @@ def test_a_tangled_class_is_split_on_the_phi_edge() -> None:
             uses=uses,
             loads=(),
             stores=(),
-            node=None,
             kind=kind,
             args=args,
             results=results,
-            covers=(at, at + 3),
         )
 
     # `made` is defined before the join, arrives at the phi, and is read
@@ -282,12 +282,13 @@ def test_a_moved_operation_keeps_its_fixup() -> None:
     selected = [
         lir.Insn(
             op.at,
-            op.covers,
-            lower.current(op),
-            tuple(one.id for one in op.defines),
-            tuple(one.id for one in op.uses),
-            op=op,
-            symbol=op.symbol,
+            bodies.source.occurrences[op.id][0],
+            lower.current(op, node=bodies.source.nodes.get(op.id)),
+                tuple(one.id for one in op.defines),
+                tuple(one.id for one in op.uses),
+                op=op,
+                node=bodies.source.nodes.get(op.id),
+                symbol=op.symbol,
         )
         for _, body in bodies
         for block in body.blocks

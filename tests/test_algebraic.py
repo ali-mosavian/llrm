@@ -163,19 +163,30 @@ def test_hotlpx_scales_by_twenty_without_a_second_multiply(tag):
 
 
 @pytest.mark.parametrize("tag", ["p-g2", "q-O", "v-g3"])
-def test_spill_combines_constant_accumulator_steps(tag):
-    """SPILL added 150 and then 70 to the same accumulator on every outer iteration."""
+def test_spill_folds_closed_loops_to_their_exact_final_constants(tag):
+    """SPILL once added 150 then 70 per iteration; it now needs no loop or ADD.
+
+    Requiring the intermediate ``add 220`` became stale when recurrence
+    evaluation proved both printed answers. Check the stronger observable code
+    shape: the independent answers 2200 and 220 are passed to PRINT directly,
+    with no residual addition.
+    """
     from iced_x86 import OpKind
     from iced_x86 import Mnemonic
 
     from qbopt import wholeseg
     result = wholeseg.emitted(Path(f"fixtures/omf/spill-{tag}.obj").read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
-    additions = [one.insn.immediate(1) for block in corpus.partitioned(result.data) for one in block.insns
-                 if one.insn.mnemonic == Mnemonic.ADD and one.insn.op1_kind in
-                 (OpKind.IMMEDIATE8TO16, OpKind.IMMEDIATE16)]
-    assert 220 in additions
-    assert 150 not in additions and 70 not in additions
+    instructions = [one.insn for block in corpus.partitioned(result.data) for one in block.insns]
+    assert not any(one.mnemonic == Mnemonic.ADD for one in instructions)
+    printed = [
+        one.immediate(0)
+        for one in instructions
+        if one.mnemonic == Mnemonic.PUSH
+        and one.op0_kind in (OpKind.IMMEDIATE8TO16, OpKind.IMMEDIATE16)
+        and one.immediate(0)
+    ]
+    assert printed == [2200, 220]
 
 
 @pytest.mark.parametrize("kind", [mir.Kind.ADD, mir.Kind.SUB])
@@ -569,7 +580,7 @@ def test_signed_power_division_preserves_quotient_and_remainder(width: int, divi
                   args=(mir.Const(divisor, width),), results=(mir.Held(constant, width),))
     divide = mir.Op(1, ir.Operation.DIVIDE, "idiv", (quotient, remainder), (source, constant),
                     kind=mir.Kind.DIVMOD, args=(mir.Held(source, width), mir.Held(constant, width)),
-                    results=(mir.Held(quotient, width), mir.Held(remainder, width)), covers=(1, 5))
+                    results=(mir.Held(quotient, width), mir.Held(remainder, width)))
     body = mir.MirBody(0, (mir.MirBlock(0, (), (copy, divide), ()),))
     if immediate:
         divide = replace(divide, args=(mir.Held(source, width), mir.Const(divisor, width)), uses=(source,))

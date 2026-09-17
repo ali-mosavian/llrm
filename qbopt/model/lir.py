@@ -195,7 +195,8 @@ class Insn:
 
     @property
     def extra_covers(self) -> tuple:
-        return getattr(self.source, "extra_covers", ())
+        """Disjoint source ranges beyond the primary LIR ownership anchor."""
+        return tuple(span for span in self.spread if span != self.covers)
 
     @property
     def rewritten(self) -> bool:

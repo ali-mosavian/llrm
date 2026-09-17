@@ -296,6 +296,8 @@ def test_preserved_allows_a_move_and_refuses_a_binary() -> None:
     that cell, which only happens in longer code than the suite writes. The
     corpus test above is the invariant; this is what discriminates.
     """
+    from iced_x86 import Register
+
     from qbopt.model import ir
 
     old = mir.Value(1, 0x100)

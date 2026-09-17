@@ -82,7 +82,6 @@ def expanded(body: mir.MirBody) -> mir.MirBody:
                 uses,
                 kind=mir.Kind.SUB,
                 args=(selector, mir.Const(number & ((1 << (8 * selector.width)) - 1), selector.width)),
-                covers=(op.at, op.at),
                 symbol=False,
             )
             branch = mir.Op(
@@ -94,14 +93,12 @@ def expanded(body: mir.MirBody) -> mir.MirBody:
                 kind=mir.Kind.BRANCH,
                 test=mir.Kind.EQ,
                 target=target,
-                covers=(op.at, op.at),
                 symbol=False,
             )
             if index == 0:
                 compare = replace(
                     compare,
-                    covers=op.covers,
-                    extra_covers=op.extra_covers,
+                    absorbed=op.absorbed,
                     id=op.id,
                     source_backed=op.source_backed,
                 )

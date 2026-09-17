@@ -16,8 +16,7 @@ def diamond():
     def product(at):
         value = mir.Value(at, at)
         return mir.Op(at, ir.Operation.MULTIPLY, "imul", (value,), (source,), kind=mir.Kind.MUL,
-                      args=(mir.Held(source, 4), mir.Const(7, 4)), results=(mir.Held(value, 4),),
-                      covers=(at, at + 2))
+                      args=(mir.Held(source, 4), mir.Const(7, 4)), results=(mir.Held(value, 4),))
 
     left, right, merged = map(product, (10, 20, 30))
     use = mir.Op(32, ir.Operation.PUSH, "push", (), merged.defines, kind=mir.Kind.ARG, args=merged.results)

@@ -100,18 +100,21 @@ def scalar(body: mir.MirBody, found) -> mir.MirBody:
                     source, dest = (mir.MemRef(Addr(symbol.space, symbol.offset, symbol.index), 2)
                                     for _, _, symbol in pointers)
                     held = mir.Held(temporary, 2)
-                    ops.append(mir.Op(op.at, ir.Operation.MOVE, "mov", (temporary,), (),
-                                      kind=mir.Kind.LOAD, loads=(source,), args=(mir.Cell(source),),
-                                      results=(held,), covers=op.covers, id=next(mir._IDS)))
+                    ops.append(mir.raising_owned(
+                        mir.Op(op.at, ir.Operation.MOVE, "mov", (temporary,), (),
+                               kind=mir.Kind.LOAD, loads=(source,), args=(mir.Cell(source),),
+                               results=(held,), id=next(mir._IDS)),
+                        op,
+                    ))
                     ops.append(mir.Op(op.at, ir.Operation.MOVE, "mov", (), (temporary,),
                                       kind=mir.Kind.STORE, stores=(dest,), args=(held,),
-                                      results=(mir.Cell(dest),), covers=(op.at, op.at), id=next(mir._IDS)))
+                                      results=(mir.Cell(dest),), id=next(mir._IDS)))
                     for before, after, symbol in pointers:
                         advanced = replace(symbol, offset=symbol.offset + 2 * direction)
                         symbols[after] = advanced
                         setup = definitions.get(before)
                         if (setup is not None and setup.id is not None and setup.kind is mir.Kind.COPY and not setup.loads
-                            and not setup.stores and not setup.extra_covers and setup.defines == (before,)
+                            and not setup.stores and not getattr(setup, "extra_covers", ()) and setup.defines == (before,)
                             and len(setup.args) == 1 and isinstance(setup.args[0], mir.Symbol)):
                             candidates.add(setup.id)
                         before = ancestors.get(before, before)
@@ -120,7 +123,7 @@ def scalar(body: mir.MirBody, found) -> mir.MirBody:
                         candidates.add(identity)
                         ops.append(mir.Op(op.at, ir.Operation.MOVE, "mov", (after,), (before,),
                                           kind=mir.Kind.COPY, args=(advanced,), results=(mir.Held(after, 2),),
-                                          merges={before: after}, covers=(op.at, op.at), id=identity))
+                                          merges={before: after}, id=identity))
                     pushed_data = False
                     continue
             state, pushed_data = _after(op, (direction, same_segment, data_segment), pushed_data)
@@ -154,9 +157,11 @@ def _observed(body, candidates):
         ops = []
         for op in block.ops:
             if op.id in candidates and op.defines[0] not in wanted:
-                if op.covers is not None and op.covers[0] != op.covers[1]:
-                    ops.append(mir.Op(op.at, ir.Operation.NOTHING, "", (), (),
-                                      kind=mir.Kind.NOTHING, covers=op.covers, id=op.id))
+                if not op.inserted:
+                    ops.append(mir.raising_owned(
+                        mir.Op(op.at, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.NOTHING, id=op.id),
+                        op,
+                    ))
             else:
                 ops.append(op)
         blocks.append(replace(block, ops=tuple(ops)))

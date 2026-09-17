@@ -82,7 +82,6 @@ def test_unproved_dispatch_remains_a_call(fixtures: Path, monkeypatch: pytest.Mo
                 (value,),
                 kind=mir.Kind.ARG,
                 args=(mir.Held(value, 2),),
-                covers=(target.at, target.at),
             )
             body = replace(
                 body,

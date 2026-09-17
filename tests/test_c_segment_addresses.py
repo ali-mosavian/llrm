@@ -19,10 +19,11 @@ def test_c_indexed_store_retains_relocated_displacement() -> None:
     assert module is not None
     mapped = blocks.code_map(module)
     assert not isinstance(mapped, str)
-    body = next(body for _, body in mir.bodies(module, list(blocks.partition(module, mapped))) if body.entry == 0x38A)
+    raised = mir.bodies(module, list(blocks.partition(module, mapped)))
+    body = next(body for _, body in raised if body.entry == 0x38A)
     op = next(op for block in body.blocks for op in block.ops if op.at == 0x9F4)
     assert op.stores[0].addr is not None
-    what = lower.current(op)
+    what = lower.current(op, node=raised.source.nodes.get(op.id))
     assert what is not None
     made = select.emit(what)
     assert made is not None
@@ -43,9 +44,10 @@ def test_c_float_load_keeps_far_segment(at: int, register: int) -> None:
     assert module is not None
     mapped = blocks.code_map(module)
     assert not isinstance(mapped, str)
-    body = next(body for _, body in mir.bodies(module, list(blocks.partition(module, mapped))) if body.entry == 0)
+    raised = mir.bodies(module, list(blocks.partition(module, mapped)))
+    body = next(body for _, body in raised if body.entry == 0)
     op = next(op for block in body.blocks for op in block.ops if op.at == at)
-    what = lower.current(op, lower.as_a_value)
+    what = lower.current(op, lower.as_a_value, node=raised.source.nodes.get(op.id))
     assert what is not None
     cell = what.sources[0]
     assert isinstance(cell, ir.Mem) and cell.base is not None

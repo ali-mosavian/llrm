@@ -6,8 +6,8 @@ were machine facts, and `MirBody.origin` is a fifth.
 ```
   Op.node    ir.Node -- the decoded x86 instruction              removed
   Op.made    ir.Semantics over ir.Reg -- machine operands         removed
-  Op.covers  a range of BC's bytes                                remains
-  Op.symbol  whether this operation still owns its source fixup       remains
+  Op.covers  a range of BC's bytes                                removed
+  Op.symbol  whether this operation still owns its source fixup       removed
   MirBody.origin  Value -> Register_
 ```
 
@@ -41,7 +41,7 @@ B. `node` into the side table.                            done
 C. `covers` -> `absorbed`.                                shadow model done;
    lowering resolves occurrences onto LIR.                done
    passes transfer only opaque ownership ids.             done
-   remove the compatibility fields from `Op`.             next
+   remove the compatibility fields from `Op`.             done
 E. `origin`.
 
 ## Measuring it

@@ -13,14 +13,14 @@ def test_sibling_computation_does_not_hide_local_reuse(reverse):
     """A diamond's second visited arm retained a duplicate addition unnecessarily."""
     source = mir.Value(1, 0, variable=1)
     define = mir.Op(0, ir.Operation.MOVE, "mov", (source,), (), kind=mir.Kind.COPY,
-                    args=(mir.Const(3, 2),), results=(mir.Held(source, 2),), covers=(0, 2))
+                    args=(mir.Const(3, 2),), results=(mir.Held(source, 2),))
 
     def arm(at):
         first = mir.Value(at, at, variable=at)
         second = mir.Value(at + 1, at + 2, variable=at + 1)
         ops = tuple(mir.Op(position, ir.Operation.BINARY, "add", (value,), (source,),
                            kind=mir.Kind.ADD, args=(mir.Held(source, 2), mir.Const(7, 2)),
-                           results=(mir.Held(value, 2),), covers=(position, position + 2))
+                           results=(mir.Held(value, 2),))
                     for position, value in ((at, first), (at + 2, second)))
         use = mir.Op(at + 4, ir.Operation.PUSH, "push", (), (second,), kind=mir.Kind.ARG,
                      args=(mir.Held(second, 2),))

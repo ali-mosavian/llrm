@@ -11,7 +11,10 @@ from qbopt.analysis import flags
 
 
 def _discarded(push):
-    return mir.Op(push.at, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.NOTHING, covers=push.covers, id=push.id)
+    return mir.raising_owned(
+        mir.Op(push.at, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.NOTHING, id=push.id),
+        push,
+    )
 
 
 def _capture(push, arg, held):
@@ -45,7 +48,7 @@ def _whole_memory(group):
         return None
     high, low = group
     if (
-        high.covers[1] != low.covers[0]
+        not mir.raising_adjacent(high, low)
         or not isinstance(high.args[0], mir.Cell)
         or not isinstance(low.args[0], mir.Cell)
     ):
@@ -170,7 +173,6 @@ def arithmetic(body: mir.MirBody, found, blocks, *, basic_semantics: bool = Fals
                             kind=mir.Kind.CONCAT,
                             args=tuple(words),
                             results=(mir.Held(value, 4),),
-                            covers=(call.at, call.at),
                         )
                     )
                     arguments.append(mir.Held(value, 4))
@@ -180,16 +182,18 @@ def arithmetic(body: mir.MirBody, found, blocks, *, basic_semantics: bool = Fals
                 continue
             if compare:
                 # CPI4 pushes left first, unlike multiply and divide.
-                comparison = mir.Op(
-                    call.at,
-                    ir.Operation.COMPARE,
-                    "cmp",
-                    call.defines,
-                    tuple(arg.value for arg in arguments),
-                    kind=mir.Kind.SUB,
-                    args=tuple(arguments),
-                    covers=call.covers,
-                    id=call.id,
+                comparison = mir.raising_owned(
+                    mir.Op(
+                        call.at,
+                        ir.Operation.COMPARE,
+                        "cmp",
+                        call.defines,
+                        tuple(arg.value for arg in arguments),
+                        kind=mir.Kind.SUB,
+                        args=tuple(arguments),
+                        id=call.id,
+                    ),
+                    call,
                 )
                 replacements.update(pending)
                 replacements[id(call)] = (*setup, comparison)
@@ -198,17 +202,19 @@ def arithmetic(body: mir.MirBody, found, blocks, *, basic_semantics: bool = Fals
             multiply = site.name == calls.MULTIPLY
             answers = (quotient,) if multiply else (quotient, remainder)
             # These runtime routines push their right operand first.
-            arithmetic = mir.Op(
-                call.at,
-                ir.Operation.MULTIPLY if multiply else ir.Operation.DIVIDE,
-                "imul" if multiply else "idiv",
-                answers,
-                tuple(arg.value for arg in reversed(arguments)),
-                kind=mir.Kind.MUL if multiply else mir.Kind.DIVMOD,
-                args=tuple(reversed(arguments)),
-                results=tuple(mir.Held(value, 4) for value in answers),
-                covers=call.covers,
-                id=call.id,
+            arithmetic = mir.raising_owned(
+                mir.Op(
+                    call.at,
+                    ir.Operation.MULTIPLY if multiply else ir.Operation.DIVIDE,
+                    "imul" if multiply else "idiv",
+                    answers,
+                    tuple(arg.value for arg in reversed(arguments)),
+                    kind=mir.Kind.MUL if multiply else mir.Kind.DIVMOD,
+                    args=tuple(reversed(arguments)),
+                    results=tuple(mir.Held(value, 4) for value in answers),
+                    id=call.id,
+                ),
+                call,
             )
             answer = remainder if site.name == calls.REMAINDER else quotient
             extracts = tuple(
@@ -221,7 +227,6 @@ def arithmetic(body: mir.MirBody, found, blocks, *, basic_semantics: bool = Fals
                     kind=mir.Kind.EXTRACT,
                     args=(mir.Held(answer, 4), mir.Const(offset, 4)),
                     results=(mir.Held(returns[register], 2),),
-                    covers=(call.at, call.at),
                 )
                 for register, offset in ((Register.EAX, 0), (Register.EDX, 16))
             )

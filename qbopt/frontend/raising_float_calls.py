@@ -110,7 +110,7 @@ def raised(body, found, contracts, source_map: module.SourceMap | None = None):
                 variable += 1
                 wide = mir.Value(serial, op.at, variable=variable, version=1)
                 ops.append(
-                    mir.detached(
+                    mir.source_free(
                         op,
                         kind=mir.Kind.SIGN_EXTEND,
                         op=ir.Operation.EXTEND,
@@ -126,11 +126,10 @@ def raised(body, found, contracts, source_map: module.SourceMap | None = None):
                         id=None,
                         stack=None,
                         symbol=None,
-                        covers=(op.at, op.at),
                     )
                 )
                 ops.append(
-                    mir.detached(
+                    mir.source_free(
                         op,
                         kind=mir.Kind.EXTRACT,
                         op=mir.Synth.HALF_TO_LOW,
@@ -146,7 +145,6 @@ def raised(body, found, contracts, source_map: module.SourceMap | None = None):
                         id=None,
                         stack=None,
                         symbol=None,
-                        covers=(op.at, op.at),
                     )
                 )
             if argument is not None:

@@ -20,7 +20,6 @@ def test_sign_extraction_respects_flags_across_blocks(live_flags: bool) -> None:
         kind=mir.Kind.CONVERT,
         args=(mir.Held(source, 2),),
         results=(mir.Held(result, 2),),
-        covers=(0, 1),
     )
     consumer = mir.Op(
         1,

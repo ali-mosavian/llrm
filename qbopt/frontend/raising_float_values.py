@@ -63,7 +63,7 @@ def loaded(body: mir.MirBody) -> mir.MirBody:
             read = mir.Held(mir.Value(serial, op.at, variable=variable, version=1), 10)
             integer = op.name.startswith("fi")
             ops.append(
-                mir.detached(
+                mir.source_free(
                     op,
                     kind=mir.Kind.FLOAD,
                     op=ir.Operation.FLOAT_LOAD,
@@ -84,8 +84,6 @@ def loaded(body: mir.MirBody) -> mir.MirBody:
                     stack=None,
                     raised=None,
                     symbol=None,
-                    covers=(op.at, op.at),
-                    extra_covers=(),
                     id=next(mir._IDS),
                 )
             )

@@ -67,10 +67,11 @@ and can emit the one instruction `select.py` knows, but cannot rebuild a
 body -- and CSE must emit a copy, folding an immediate, LICM a move between
 blocks.
 
-That is done. `rewrite.py` writes the code segment from MIR, an `Op` can
-carry semantics no node produced (`Op.made`) and say which of the original
-bytes it stands for (`Op.covers`), and `layout.py` places the result and
-relaxes its branches. What orders the milestones below now is narrower:
+That is done. `rewrite.py` writes the code segment from MIR, lowering selects
+machine semantics into LIR, and opaque operation identities recover source
+ownership from the module's `SourceMap`. `layout.py` consumes the allocated
+LIR, places the result and relaxes its branches. What orders the milestones
+below now is narrower:
 **nothing moves code between blocks yet**, and `transform.placed()` moves it
 within one but is switched off.
 

@@ -298,11 +298,10 @@ def untangled(body: mir.MirBody) -> mir.MirBody:
                         # ties straight back into the class this exists to
                         # break. MIR operands leave both to lowering and
                         # allocation without storing a selected instruction.
-                        results=(mir.Held(copy, 2),),
-                        args=(mir.Held(value, 2),),
-                        raised=((), ()),
-                        covers=(came, came),
-                    )
+                            results=(mir.Held(copy, 2),),
+                            args=(mir.Held(value, 2),),
+                            raised=((), ()),
+                        )
                 )
                 swaps.setdefault(id(phi), {})[came] = copy
     # And the other way a class tangles, which is not a phi at all. `add
@@ -344,7 +343,6 @@ def untangled(body: mir.MirBody) -> mir.MirBody:
                             results=(mir.Held(copy, 2),),
                             args=(mir.Held(other, 2),),
                             raised=((), ()),
-                            covers=(op.at, op.at),
                         )
                     )
                     reads.setdefault(op.at, {})[other] = copy

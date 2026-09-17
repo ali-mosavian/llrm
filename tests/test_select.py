@@ -177,15 +177,17 @@ def selected(obj: Path) -> Iterator[tuple]:
     mapped = code_map(found)
     if isinstance(mapped, str):
         return
-    for _, body in mir.bodies(found, split.partition(found, mapped)):
+    raised = mir.bodies(found, split.partition(found, mapped))
+    for _, body in raised:
         for block in body.blocks:
             for op in block.ops:
-                what = getattr(op.node, "semantics", None)
+                node = raised.source.nodes.get(op.id)
+                what = getattr(node, "semantics", None)
                 if what is None or what.op is ir.Operation.BARRIER:
                     continue
                 made = select.emit(what, at=op.at)
                 if made is not None:
-                    yield op, made
+                    yield op, node, made
 
 
 @pytest.mark.parametrize("obj", FIXTURES, ids=lambda p: p.stem)
@@ -197,10 +199,10 @@ def test_everything_selected_decodes_to_what_was_asked_for(obj: Path) -> None:
     mnemonic, same operands, same widths. Measured over the corpus: 5,839
     emitted, none different.
     """
-    for op, made in selected(obj):
+    for op, node, made in selected(obj):
         back = next(iter(Decoder(BITNESS, made.code, ip=op.at)), None)
         assert back is not None, f"{obj.stem} {op.at:#x}: emitted bytes do not decode"
-        want = op.node.insn.insn
+        want = node.insn.insn
         # A branch may come back in a different form -- BC writes `e9 0b 00`
         # where `eb 0c` reaches, and choosing between them is layout's call,
         # not selection's. Same mnemonic and same target is the claim.
@@ -635,8 +637,8 @@ def test_a_relocated_field_never_changes_width(obj: Path) -> None:
     program to 31 lines and diffing the two linked images, where one said
     `add ax,0DCh` and the other `add ax,0FFDCh`.
     """
-    from qbopt.model import mir
-    from qbopt.backend import asm
+    from qbopt.model import lir, mir
+    from qbopt.backend import asm, lower
     from qbopt.objectfile import omf
     from qbopt.frontend import declen
     from qbopt.frontend import blocks as split
@@ -648,18 +650,35 @@ def test_a_relocated_field_never_changes_width(obj: Path) -> None:
     if isinstance(mapped, str):
         return
     fields = frozenset(one.offset for one in omf.fixups(omf.parse(obj.read_bytes())) if one.seg == found.seg)
-    for _name, body in mir.bodies(found, split.partition(found, mapped)):
+    raised = mir.bodies(found, split.partition(found, mapped))
+    source = raised.source
+    for _name, body in raised:
         for block in body.blocks:
             for op in block.ops:
-                what = asm._semantics(op)
-                field = asm._field_in(found, op, fields)
+                node = source.nodes.get(op.id)
+                if not op.source_backed or node is None:
+                    continue
+                owned = tuple(span for identity in op.absorbed for span in source.occurrences[identity])
+                selected = lir.Insn(
+                    op.at,
+                    owned[0],
+                    lower.current(op, node=node),
+                    tuple(value.id for value in op.defines),
+                    tuple(value.id for value in op.uses),
+                    op=op,
+                    node=node,
+                    symbol=op.symbol,
+                    spread=owned,
+                )
+                what = asm._semantics(selected)
+                field = asm._field_in(found, selected, fields, source)
                 if what is None or field is None:
                     continue
                 # Not a folded runtime call. Its address is its first push,
                 # so the bytes there are not the instruction its field
                 # belongs to -- and the fields it does have are the
                 # operands' own, reused rather than re-encoded.
-                if op.id is not None and op.id in found.absorbed:
+                if op.id is not None and op.id in source.absorbed:
                     continue
                 was = declen.decode(found.code, op.at)
                 if was is None:

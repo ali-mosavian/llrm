@@ -21,13 +21,13 @@ def test_implicit_conversion_is_the_raise_s():
     """wcc leaves `(long) byte - short` as mixed-width operands; the raise
     refused pal_bestfit with `used at width 4` until it converted them.
 
-    The byte may be extended straight into the 32-bit destination; requiring
-    the older ``movzx ax``/``movzx eax, ax`` pair made this regression reject
-    a strictly better lowering.
+    Both narrow operands may be extended straight into their 32-bit
+    destinations. Requiring either older register-to-register extension pair
+    made this regression reject a strictly better lowering.
     """
     lines = _asm("pal")
     at = lines.index("movzx eax, byte ptr _pal_now[bx]")
-    assert lines[at + 1 : at + 4] == ["mov bx, word ptr [bp+6]", "movsx ebx, bx", "sub eax, ebx"]
+    assert lines[at + 1 : at + 3] == ["movsx ebx, word ptr [bp+6]", "sub eax, ebx"]
 
 
 def test_far_pointer_return_in_dx_ax():

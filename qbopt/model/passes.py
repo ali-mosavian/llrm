@@ -16,9 +16,10 @@ on ``lir.Insn.what``; what still ties MIR to its source machine is:
                came from -- and the last thing to go, because lowering and
                the allocator's identity baseline are built on it.
 
-  Op.covers
-               which of BC's bytes this stands for, and which fixup it
-               carries. Facts about an object file, not about a program.
+  Op.absorbed
+               opaque identities of the raise-time occurrences this stands
+               for. Passes may preserve or combine the identities but cannot
+               resolve them to object bytes; that happens during lowering.
 
 Each is a separate step with its own measurement. The class is what makes
 them checkable: a pass whose only

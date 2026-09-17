@@ -13,10 +13,10 @@ def test_cse_does_not_confuse_word_and_dword_sign_extensions() -> None:
     word = mir.Value(2, 2, variable=2)
     dword = mir.Value(3, 5, variable=3)
     define = mir.Op(0, ir.Operation.MOVE, "mov", (source,), (), kind=mir.Kind.COPY,
-                    args=(mir.Const(255, 1),), results=(mir.Held(source, 1),), covers=(0, 2))
+                    args=(mir.Const(255, 1),), results=(mir.Held(source, 1),))
     first = mir.Op(2, ir.Operation.EXTEND, "movsx", (word,), (source,), kind=mir.Kind.CONVERT,
-                   args=(mir.Held(source, 1),), results=(mir.Held(word, 2),), covers=(2, 5))
-    second = replace(first, at=5, defines=(dword,), results=(mir.Held(dword, 4),), covers=(5, 9))
+                   args=(mir.Held(source, 1),), results=(mir.Held(word, 2),))
+    second = replace(first, at=5, defines=(dword,), results=(mir.Held(dword, 4),))
     use = mir.Op(9, ir.Operation.PUSH, "push", (), (dword,), kind=mir.Kind.ARG,
                  args=(mir.Held(dword, 4),))
     body = mir.MirBody(0, (mir.MirBlock(0, (), (define, first, second, use), ()),))
@@ -38,7 +38,6 @@ def test_copy_elimination_preserves_observed_upper_bits(read_width: int) -> None
         kind=mir.Kind.COPY,
         args=(mir.Const(7, 2),),
         results=(mir.Held(source, 2),),
-        covers=(0, 2),
     )
     copy = replace(
         define,
@@ -48,7 +47,6 @@ def test_copy_elimination_preserves_observed_upper_bits(read_width: int) -> None
         args=(mir.Held(source, 2),),
         results=(mir.Held(result, 2),),
         merges={previous: result},
-        covers=(2, 4),
     )
     use = mir.Op(4, ir.Operation.PUSH, "push", (), (result,), kind=mir.Kind.ARG, args=(mir.Held(result, read_width),))
     body = mir.MirBody(0, (mir.MirBlock(0, (), (define, copy, use), ()),))

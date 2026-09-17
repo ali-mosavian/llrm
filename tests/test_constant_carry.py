@@ -86,7 +86,6 @@ def test_partial_constant_does_not_replace_a_wide_result() -> None:
         kind=mir.Kind.ADD,
         args=(mir.Const(1, 4), mir.Const(2, 4)),
         results=(mir.Held(result, 4),),
-        covers=(0, 4),
     )
     assert transform._folded_op(op, {result: consts.Known(3, 2)}, {result}) == op
     memory = replace(op, results=(mir.Cell(mir.MemRef(None, 4)),))

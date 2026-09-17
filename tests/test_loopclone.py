@@ -16,11 +16,11 @@ def diamond():
     def copy(at, result, source):
         return mir.Op(at, ir.Operation.MOVE, "", (result,), (source,),
                       kind=mir.Kind.COPY, args=(mir.Held(source, 2),),
-                      results=(mir.Held(result, 2),), covers=(at, at + 1))
+                      results=(mir.Held(result, 2),))
 
     def branch(at, target):
         return mir.Op(at, ir.Operation.BRANCH, "", (), (carried,), kind=mir.Kind.BRANCH,
-                      target=target, args=(mir.Held(carried, 2),), covers=(at, at + 1))
+                      target=target, args=(mir.Held(carried, 2),))
 
     body = mir.MirBody(0, (
         mir.MirBlock(0, (), (), (1,)),
@@ -82,8 +82,7 @@ def test_clones_read_their_own_values_and_do_not_duplicate_byte_ownership():
             continue
         for op in block.ops:
             assert set(op.uses) <= fresh
-            assert op.covers == (op.at, op.at)
-            assert not op.extra_covers
+            assert op.inserted and not op.absorbed
             if op.results:
                 assert op.results[0].value == op.defines[0]
     assert changed.block(3).ops == body.block(3).ops

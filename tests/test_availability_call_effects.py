@@ -9,7 +9,7 @@ from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
 
 
-def body_with_call(effect: mir.MemRef) -> mir.MirBody:
+def body_with_call(effect: mir.MemRef, *, complete: bool = False) -> mir.MirBody:
     cell = mir.MemRef(Addr(Space.SEGMENT, 16, 1), 2)
     source, result = mir.Value(1, 0), mir.Value(2, 2)
     store = mir.Op(
@@ -23,7 +23,17 @@ def body_with_call(effect: mir.MemRef) -> mir.MirBody:
         results=(mir.Cell(cell),),
         stores=(cell,),
     )
-    call = mir.Op(1, ir.Operation.CALL, "", (), (), kind=mir.Kind.CALL, loads=(effect,), stores=(effect,))
+    call = mir.Op(
+        1,
+        ir.Operation.CALL,
+        "",
+        (),
+        (),
+        kind=mir.Kind.CALL,
+        loads=(effect,),
+        stores=(effect,),
+        memory_complete=complete,
+    )
     load = mir.Op(
         2,
         ir.Operation.MOVE,
@@ -44,7 +54,7 @@ def test_runtime_name_cannot_override_unknown_mir_effects() -> None:
 
 
 def test_disjoint_mir_effects_keep_values_without_runtime_names() -> None:
-    body = body_with_call(mir.MemRef(None, 0, beyond=(1, frozenset())))
+    body = body_with_call(mir.MemRef(None, 0, beyond=(1, frozenset())), complete=True)
     forwarded = avail.forwardable(body, frozenset({1}), {}, frozenset({2}))
     assert len(forwarded) == 1
     assert forwarded[0].value == body.blocks[0].ops[0].uses[0]
@@ -53,7 +63,7 @@ def test_disjoint_mir_effects_keep_values_without_runtime_names() -> None:
 @pytest.mark.parametrize("disjoint", [False, True])
 def test_dead_store_uses_call_memory_effects(disjoint: bool) -> None:
     effect = mir.MemRef(None, 0, beyond=(1, frozenset()) if disjoint else None)
-    body = body_with_call(effect)
+    body = body_with_call(effect, complete=True)
     store, call, _ = body.blocks[0].ops
     body = replace(body, blocks=(replace(body.blocks[0], ops=(store, call, replace(store, at=2))),))
     removed = avail.dead_stores(body, frozenset({1}), {} if disjoint else {1: "B$MUI4"})

@@ -32,7 +32,7 @@ def sign_fills(body: mir.MirBody) -> mir.MirBody:
             whole = mir.Held(mir.Value(serial, op.at, variable=variable, version=1), 4)
             ops.append(mir.Op(op.at, ir.Operation.EXTEND, "sign_extend", (whole.value,),
                               (op.args[0].value,), kind=mir.Kind.SIGN_EXTEND,
-                              args=op.args, results=(whole,), covers=(op.at, op.at)))
+                              args=op.args, results=(whole,)))
             ops.append(mir.detached(op, kind=mir.Kind.EXTRACT, op=mir.Synth.HALF_TO_LOW,
                                name="extract", args=(whole, mir.Const(16, 4)),
                                uses=(whole.value,), merges={}, raised=None))
@@ -48,7 +48,7 @@ def arguments(body: mir.MirBody) -> mir.MirBody:
         ops = []
         for low in block.ops:
             high = ops[-1] if ops else None
-            if (high is not None and high.covers[1] == low.covers[0]
+            if (high is not None and mir.raising_adjacent(high, low)
                 and all(op.kind is mir.Kind.ARG and not op.defines and not op.loads
                         and not op.barrier and not op.merges and op.stack is None
                         and len(op.args) == len(op.stores) == 1
@@ -57,10 +57,12 @@ def arguments(body: mir.MirBody) -> mir.MirBody:
                         for op in (high, low))):
                 source = mir.extracted_whole(high.args[0], low.args[0], definitions)
                 if source is not None:
-                    ops[-1] = mir.detached(high, args=(source,), uses=(source.value,),
-                                      stores=(replace(high.stores[0], width=4),),
-                                      covers=(high.covers[0], low.covers[1]),
-                                      raised=None)
+                    ops[-1] = mir.raising_owned(
+                        mir.detached(high, args=(source,), uses=(source.value,),
+                                     stores=(replace(high.stores[0], width=4),), raised=None),
+                        high,
+                        low,
+                    )
                     continue
             ops.append(low)
         blocks.append(replace(block, ops=tuple(ops)))
@@ -102,14 +104,17 @@ def _constant_stores(body: mir.MirBody) -> mir.MirBody:
                         and not one.loads and len(one.stores) == len(one.args) == 1
                         and isinstance(one.args[0], mir.Const) and one.args[0].width == 2
                         and one.stores[0].width == 2 for one in (low, op))
-                    and low.covers[1] == op.covers[0]
+                    and mir.raising_adjacent(low, op)
                     and low.stores[0].addr is not None
                     and replace(low.stores[0], addr=low.stores[0].addr.plus(2)) == op.stores[0]):
                     ref = replace(low.stores[0], width=4)
                     value = mir.Const(((op.args[0].n & 0xffff) << 16) | (low.args[0].n & 0xffff), 4)
-                    ops[-1] = replace(low, args=(value,), results=(mir.Cell(ref),), stores=(ref,),
-                                      uses=tuple(dict.fromkeys((*low.uses, *op.uses))), raised=None,
-                                      covers=(low.covers[0], op.covers[1]))
+                    ops[-1] = mir.raising_owned(
+                        replace(low, args=(value,), results=(mir.Cell(ref),), stores=(ref,),
+                                uses=tuple(dict.fromkeys((*low.uses, *op.uses))), raised=None),
+                        low,
+                        op,
+                    )
                     continue
             ops.append(op)
         blocks.append(replace(block, ops=tuple(ops)))
@@ -140,7 +145,7 @@ def unary(body: mir.MirBody) -> mir.MirBody:
                 and all(not op.loads and not op.stores and not op.barrier and not mir.partial(op)
                         and len(op.results) == 1 and isinstance(op.results[0], mir.Held)
                         and op.results[0].width == 2 for op in group)
-                and all(one.covers[1] == other.covers[0] for one, other in zip(group, group[1:]))):
+                and all(mir.raising_adjacent(one, other) for one, other in zip(group, group[1:]))):
                 high = group[-1]
                 if low.kind is mir.Kind.NOT and high.kind is mir.Kind.NOT and len(low.args) == len(high.args) == 1:
                     source = mir.extracted_whole(high.args[0], low.args[0], definitions)
@@ -157,14 +162,15 @@ def unary(body: mir.MirBody) -> mir.MirBody:
             serial += 1
             variable += 1
             result = mir.Held(mir.Value(serial, low.at, variable=variable, version=1), 4)
-            ops.append(mir.Op(low.at, ir.Operation.UNARY, low.kind.value, (result.value,),
-                              (source.value,), kind=low.kind, args=(source,), results=(result,),
-                              covers=(low.covers[0], high.covers[1])))
+            ops.append(mir.raising_owned(
+                mir.Op(low.at, ir.Operation.UNARY, low.kind.value, (result.value,),
+                       (source.value,), kind=low.kind, args=(source,), results=(result,)),
+                *group,
+            ))
             for half, offset in ((low, 0), (high, 16)):
                 extract = mir.Op(high.at, mir.Synth.HALF_TO_LOW, "extract", (half.results[0].value,),
                                  (result.value,), kind=mir.Kind.EXTRACT,
-                                 args=(result, mir.Const(offset, 4)), results=half.results,
-                                 covers=(high.covers[1], high.covers[1]))
+                                 args=(result, mir.Const(offset, 4)), results=half.results)
                 ops.append(extract)
                 definitions[half.results[0].value] = extract
             index += count
@@ -228,7 +234,7 @@ def scalar(body: mir.MirBody) -> mir.MirBody:
                         source = fresh(low.at)
                         ops.append(mir.Op(low.at, ir.Operation.UNARY, "neg", (source.value,),
                                           (original.value,), kind=mir.Kind.NEG,
-                                          args=(original,), results=(source,), covers=(low.at, low.at)))
+                                          args=(original,), results=(source,)))
                 if source is None and len(low.args) == len(high.args) == 1:
                     upper, lower = high.args[0], low.args[0]
                     extension = definitions.get(upper.value) if isinstance(upper, mir.Held) else None
@@ -240,7 +246,7 @@ def scalar(body: mir.MirBody) -> mir.MirBody:
                         source = fresh(low.at)
                         ops.append(mir.Op(low.at, ir.Operation.EXTEND, "sign_extend", (source.value,),
                                           (lower.value,), kind=mir.Kind.SIGN_EXTEND,
-                                          args=(lower,), results=(source,), covers=(low.at, low.at)))
+                                          args=(lower,), results=(source,)))
                 if source is None:
                     ops.append(op)
                     continue
@@ -274,28 +280,29 @@ def scalar(body: mir.MirBody) -> mir.MirBody:
             uses = tuple(dict.fromkeys(
                 [arg.value for arg in args if isinstance(arg, mir.Held)]
                 + ([value for value in (ref.base, ref.segment) if value is not None] if ref else [])))
-            widened = replace(low, kind=kind, args=args, results=results, uses=uses,
-                              defines=() if stores else (results[0].value,),
-                              loads=() if stores or ref is None else (ref,), stores=(ref,) if stores else (),
-                              merges={}, raised=None,
-                              covers=(min(low.covers[0], high.covers[0]), max(low.covers[1], high.covers[1])))
+            widened = mir.raising_owned(
+                replace(low, kind=kind, args=args, results=results, uses=uses,
+                        defines=() if stores else (results[0].value,),
+                        loads=() if stores or ref is None else (ref,), stores=(ref,) if stores else (),
+                        merges={}, raised=None),
+                low,
+                high,
+            )
             if pair.kind is pairs.Kind.ALU:
                 loaded = fresh(low.at)
                 ops.append(replace(widened, op=ir.Operation.MOVE, name="mov", kind=mir.Kind.LOAD,
                                    args=(mir.Cell(ref),), results=(loaded,), defines=(loaded.value,),
                                    uses=tuple(value for value in (ref.base, ref.segment) if value is not None),
                                    symbol=True))
-                widened = mir.detached(widened, args=(args[0], loaded), uses=(args[0].value, loaded.value),
-                                  loads=(), id=None, symbol=False,
-                                  covers=(low.at, low.at), extra_covers=())
+                widened = mir.source_free(widened, args=(args[0], loaded),
+                                          uses=(args[0].value, loaded.value), loads=(), id=None, symbol=False)
             ops.append(widened)
             if not stores:
                 whole[(high.results[0], low.results[0])] = results[0]
                 for half, offset in ((low, 0), (high, 16)):
                     ops.append(mir.Op(high.at, mir.Synth.HALF_TO_LOW, "extract", (half.results[0].value,),
                                       (results[0].value,), kind=mir.Kind.EXTRACT,
-                                      args=(results[0], mir.Const(offset, 4)), results=half.results,
-                                      covers=(high.at, high.at)))
+                                      args=(results[0], mir.Const(offset, 4)), results=half.results))
                     definitions[half.results[0].value] = ops[-1]
             dropped.update((id(low), id(high)))
         blocks.append(replace(block, ops=tuple(ops)))

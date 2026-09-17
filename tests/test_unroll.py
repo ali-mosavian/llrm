@@ -58,7 +58,7 @@ def test_dead_inserted_store_needs_no_neighbor_to_take_its_bytes(checkpoint):
     def store(at, value):
         return mir.Op(at, ir.Operation.MOVE, "", (), (), kind=mir.Kind.STORE,
                       args=(mir.Const(value, 4),), results=(mir.Cell(cell),),
-                      stores=(cell,), covers=(at, at))
+                      stores=(cell,))
     first, last = store(10, 1), store(20, 2)
     middle = (mir.Op(15, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.FCHECK),) if checkpoint else ()
     body = mir.MirBody(0, (mir.MirBlock(0, (), (first, *middle, last), ()),))

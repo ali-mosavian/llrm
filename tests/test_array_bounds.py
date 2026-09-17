@@ -72,10 +72,11 @@ def test_huge_loop_descriptor_loads_leave_the_loop(tag, monkeypatch):
     result = wholeseg.emitted(Path(f"fixtures/regressions/hugelp-{tag}.obj").read_bytes(), watch=watch)
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     after = states[0]
-    loop = loopy.loops(list(after.blocks), after.entry)[0]
+    loops = loopy.loops(list(after.blocks), after.entry)
+    repeated = {at for loop in loops for at in loop.body}
     assert not any(ref.addr is not None and ref.addr.space is Space.SEGMENT
                    and ref.addr.index == found.program_data and 6 <= ref.addr.disp < 28
-                   for block in after.blocks if block.at in loop.body for op in block.ops for ref in op.loads)
+                   for block in after.blocks if block.at in repeated for op in block.ops for ref in op.loads)
 
 
 @pytest.mark.parametrize("failure", ["budget", "out_of_bounds", "descriptor_write", "unknown_call"])

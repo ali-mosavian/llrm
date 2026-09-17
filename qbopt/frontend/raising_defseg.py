@@ -52,7 +52,6 @@ def _zeroed(op):
         args=(mir.Const(0, op.args[0].width),),
         uses=(),
         symbol=False,
-        covers=op.covers or (op.at, op.at),
     )
 
 
@@ -191,8 +190,10 @@ def raised(body: mir.MirBody, found, contracts, source: module.SourceMap | None 
                     ops.append(gone)
                     ops.append(op)
                     continue
-                op = mir.detached(
-                    op,
+                original = op
+                op = mir.raising_owned(
+                    mir.detached(
+                        op,
                     kind=mir.Kind.STORE,
                     op=ir.Operation.MOVE,
                     name="mov",
@@ -205,7 +206,9 @@ def raised(body: mir.MirBody, found, contracts, source: module.SourceMap | None 
                     merges={},
                     raised=None,
                     symbol=True,
-                    covers=(pushed_span[0], span[1]),
+                    ),
+                    gone,
+                    original,
                 )
                 source.refs[op.id] = (field,)
             ops.append(op)

@@ -26,12 +26,14 @@ def test_renderer_zero_loads_are_exact_values_not_memory_barriers() -> None:
     assert found is not None
     mapped = blocks.code_map(found)
     assert not isinstance(mapped, str)
-    body = next(body for _, body in mir.bodies(found, blocks.partition(found, mapped)) if body.entry == 0)
+    raised = mir.bodies(found, blocks.partition(found, mapped))
+    body = next(body for _, body in raised if body.entry == 0)
     constants = [
         op
         for block in body.blocks
         for op in block.ops
-        if isinstance(op.node, ir.Opaque) and op.node.insn.insn.mnemonic == Mnemonic.FLDZ
+        if isinstance(raised.source.nodes.get(op.id), ir.Opaque)
+        and raised.source.nodes[op.id].insn.insn.mnemonic == Mnemonic.FLDZ
     ]
     assert len(constants) == 9
     for op in constants:

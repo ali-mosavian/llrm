@@ -265,14 +265,14 @@ def test_packed_capture_keeps_wide_and_narrow_definitions_and_rejects_unknown_ov
     whole = mir.MemRef(address, 4)
     half = mir.MemRef(address.plus(2), 2)
     first = mir.Op(0, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.STORE,
-                   args=(mir.Const(0x12345678, 4),), stores=(whole,), covers=(0, 8))
+                   args=(mir.Const(0x12345678, 4),), stores=(whole,))
     def load(at, ref):
         result = mir.Value(at, at, variable=at, version=1)
         return mir.Op(at, ir.Operation.MOVE, "mov", (result,), (), kind=mir.Kind.LOAD,
-                      args=(mir.Cell(ref),), results=(mir.Held(result, ref.width),), loads=(ref,), covers=(at, at+2))
+                      args=(mir.Cell(ref),), results=(mir.Held(result, ref.width),), loads=(ref,))
     incoming = mir.Value(100, 0, variable=100, version=1)
     overwrite = mir.Op(14, ir.Operation.MOVE, "mov", (), (incoming,), kind=mir.Kind.STORE,
-                       args=(mir.Held(incoming, 4),), stores=(whole,), covers=(14, 18))
+                       args=(mir.Held(incoming, 4),), stores=(whole,))
     body = mir.MirBody(0, (mir.MirBlock(0, (), (first, load(8, whole), load(10, half),
                       overwrite, load(18, half)), ()),))
     result = promote.promoted(body, frozenset({5}))
@@ -316,10 +316,10 @@ def test_split_initializer_requires_every_byte(complete):
     whole = mir.MemRef(address, 4)
     def store(at, offset, number):
         return mir.Op(at, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.STORE,
-                      args=(mir.Const(number, 2),), stores=(mir.MemRef(address.plus(offset), 2),), covers=(at, at+2))
+                      args=(mir.Const(number, 2),), stores=(mir.MemRef(address.plus(offset), 2),))
     value = mir.Value(10, 10, variable=10, version=1)
     load = mir.Op(10, ir.Operation.MOVE, "mov", (value,), (), kind=mir.Kind.LOAD,
-                  args=(mir.Cell(whole),), results=(mir.Held(value, 4),), loads=(whole,), covers=(10, 12))
+                  args=(mir.Cell(whole),), results=(mir.Held(value, 4),), loads=(whole,))
     stores = (store(0, 0, 0x5678), store(2, 2, 0x1234)) if complete else (store(0, 0, 0x5678),)
     body = mir.MirBody(0, (mir.MirBlock(0, (), (*stores, load), ()),))
     result = promote.promoted(body, frozenset({5}))

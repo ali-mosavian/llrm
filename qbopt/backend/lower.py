@@ -1425,22 +1425,24 @@ class Lowering:
         """The source ranges this operation owns, resolved at the boundary.
 
         An explicit occurrence table makes ``Op.absorbed`` authoritative.
-        The legacy MIR ranges remain only for callers that have not yet
-        threaded provenance and for source-free instructions inserted by a
-        pass.  LIR receives concrete ranges because layout is the first tier
-        that is allowed to reason about source bytes.
+        A private raising occurrence is accepted as a compatibility input for
+        low-level tests that have not threaded provenance.  Public MIR has no
+        concrete-range slot. LIR receives concrete ranges because layout is
+        the first tier that is allowed to reason about source bytes.
         """
         if self._occurrences is not None and not op.absorbed:
             return (op.at, op.at), ()
         if self._occurrences is None:
+            covers = getattr(op, "covers", None)
+            extra = getattr(op, "extra_covers", ())
             spread = (
                 ()
                 if op.inserted
-                else (op.covers, *op.extra_covers)
-                if op.extra_covers
+                else (covers, *extra)
+                if extra
                 else self._coverage.get(op.id, ())
             )
-            return op.covers, spread
+            return covers or (op.at, op.at), spread
 
         missing = tuple(identity for identity in op.absorbed if identity not in self._occurrences)
         if missing:

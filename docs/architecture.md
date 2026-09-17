@@ -1238,15 +1238,12 @@ one documented target without materially regressing another.
 These are boundary defects with an owner, not permission to add more cross-layer
 knowledge:
 
-1. MIR still carries source-machine provenance (byte coverage, fixup identity
-   and `MirBody.origin`). Decoded nodes have moved to `SourceMap`, and opaque
-   `Op.absorbed` identities now reproduce byte ownership from its immutable
-   occurrence table; the duplicate `Op.covers` ranges and legacy folded-
-   coverage map remain only as edge compatibility fields. Every MIR pass now
-   transfers opaque identities without naming byte ranges, and lowering
-   resolves them into concrete LIR ranges for layout and emission. Fixup
-   provenance belongs in the same side map. Selected machine semantics already
-   live only on LIR.
+1. `MirBody.origin` is the remaining source-machine fact on public MIR.
+   Decoded nodes, fixup provenance and immutable source occurrences live in
+   `SourceMap`; public operations transfer only opaque `Op.absorbed`
+   identities. Concrete byte ranges exist on the private raising occurrence
+   and allocated LIR, where lowering resolves them for layout and emission.
+   Selected machine semantics already live only on LIR.
 2. Layout and fresh OMF emission consume allocated LIR directly; the former
    allocated-LIR-to-MIR adapter has been removed.
 3. Target costing is narrower than LLVM/GCC's formula selection. Loop strength

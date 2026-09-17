@@ -829,13 +829,6 @@ class Op:
     # SourceMap.  This says only that lowering may recover its original
     # machine occurrence; the node itself never crosses the raise boundary.
     source_backed: bool = False
-    # Which of the original bytes this op stands for, when that is not just
-    # its own node's span. A transform that replaces two instructions with
-    # one leaves the second's bytes belonging to nothing, and layout.py
-    # refuses a body it cannot account for every byte of -- rightly, since
-    # that is how it catches data BC put between the instructions. So a
-    # replacement says what it replaced.
-    covers: tuple[int, int] | None = None
     # What this operation reads and writes, in its own order, as values,
     # constants and cells. A pass rewriting an operation says it here;
     # selected machine semantics live only on LIR.
@@ -895,9 +888,6 @@ class Op:
     # either way, so no live value is discarded. At the end of the field
     # list because every construction here is positional.
     args_known: bool = True
-    # Noncontiguous input bytes (such as an absorbed call's argument pushes).
-    # Deletion transfers these alongside covers; no machine semantics live here.
-    extra_covers: tuple[tuple[int, int], ...] = ()
     # Complete memory footprints do not imply modeled computation or
     # permission to move/remove an opaque operation.
     memory_complete: bool = False
@@ -923,7 +913,26 @@ class Op:
 
     @property
     def inserted(self) -> bool:
-        """An explicit zero-byte occurrence, even if its operands retain source identity."""
+        """An operation invented above lowering, with no source occurrence."""
+        return not self.absorbed
+
+
+@dataclass(frozen=True, slots=True)
+class _RaisedOp(Op):
+    """An occurrence inside the raise, before machine provenance is externalized.
+
+    These byte ranges are deliberately absent from :class:`Op`. Recognition
+    may inspect and combine physical source occurrences while constructing
+    MIR; the completed body retains only opaque ``absorbed`` identities.
+    """
+
+    node: ir.Node | None = None
+    covers: tuple[int, int] | None = None
+    extra_covers: tuple[tuple[int, int], ...] = ()
+
+    @property
+    def inserted(self) -> bool:
+        """Whether this private raising occurrence owns no input bytes."""
         return (
             not self.source_backed
             and not self.extra_covers
@@ -932,19 +941,69 @@ class Op:
         )
 
 
-@dataclass(frozen=True, slots=True)
-class _RaisedOp(Op):
-    """An operation inside the raise, before machine provenance is externalized."""
-
-    node: ir.Node | None = None
-
-
 def detached(operation: Op, **changes) -> Op:
     """A rewritten raising operation that no longer carries its decoded node."""
     changes["source_backed"] = False
     if isinstance(operation, _RaisedOp):
         changes["node"] = None
     return replace(operation, **changes)
+
+
+def source_free(operation: Op, **changes) -> Op:
+    """A raising rewrite that emits work but owns no input occurrence.
+
+    Recognition sometimes expands one source instruction into several MIR
+    operations.  Exactly one result claims the input occurrence; companions
+    are ordinary public MIR from their creation and therefore cannot leak a
+    private byte range past the raise boundary.
+    """
+    values = {one.name: getattr(operation, one.name) for one in fields(Op)}
+    values.update(changes, source_backed=False, absorbed=())
+    return Op(**values)
+
+
+def raising_occurrence(
+    operation: Op,
+    covers: tuple[int, int],
+    *,
+    extra: tuple[tuple[int, int], ...] = (),
+    node: ir.Node | None = None,
+) -> Op:
+    """Attach raw ownership to an operation that has not crossed the raise.
+
+    The decoder uses ``_RaisedOp`` directly. Focused frontend tests use this
+    constructor so they state explicitly that they are exercising the private
+    recognition form rather than manufacturing invalid completed MIR.
+    """
+    values = {one.name: getattr(operation, one.name) for one in fields(Op)}
+    return _RaisedOp(**values, node=node, covers=covers, extra_covers=extra)
+
+
+def raising_owned(operation: Op, *owners: Op) -> Op:
+    """Give a rewritten raising operation the exact occurrences of ``owners``.
+
+    This helper is intentionally meaningful only before ``_externalized``.
+    It keeps physical range manipulation inside frontend recognition while
+    ensuring the operation handed to optimization is the public range-free
+    :class:`Op`.
+    """
+    ranges = sorted(span for owner in owners for span in _raising_ranges(owner) if span[0] < span[1])
+    merged: list[tuple[int, int]] = []
+    for low, high in ranges:
+        if merged and low <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], high))
+        else:
+            merged.append((low, high))
+    if not merged:
+        return operation
+    values = {one.name: getattr(operation, one.name) for one in fields(Op)}
+    return _RaisedOp(**values, node=getattr(operation, "node", None), covers=merged[0], extra_covers=tuple(merged[1:]))
+
+
+def raising_adjacent(first: Op, second: Op) -> bool:
+    """Whether two single source occurrences touch inside recognition."""
+    before, after = _raising_ranges(first), _raising_ranges(second)
+    return len(before) == len(after) == 1 and before[0][1] == after[0][0]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1044,6 +1103,13 @@ def _opaque_effects(node: ir.Node | None) -> tuple[frozenset[str] | None, frozen
     return outside(node.effects.defs), outside(node.effects.uses)
 
 
+def _raising_ranges(op: Op) -> tuple[tuple[int, int], ...]:
+    """Concrete ownership while recognition is still inside the raise."""
+    if not isinstance(op, _RaisedOp):
+        return ()
+    return (*((op.covers,) if op.covers is not None else ()), *op.extra_covers)
+
+
 def _record_provenance(body: MirBody, source: module.SourceMap) -> tuple[int, ...]:
     """Record every raise-time occurrence before recognition removes or combines it."""
     recorded = []
@@ -1055,7 +1121,7 @@ def _record_provenance(body: MirBody, source: module.SourceMap) -> tuple[int, ..
             node = getattr(op, "node", None)
             if node is not None:
                 source.nodes[op.id] = node
-            spans = (*((op.covers,) if op.covers is not None else ()), *op.extra_covers)
+            spans = _raising_ranges(op)
             source.occurrences[op.id] = tuple(span for span in spans if span[0] < span[1])
     return tuple(recorded)
 
@@ -1067,7 +1133,7 @@ def _absorbed_ids(
     owned: tuple[tuple[int, int], ...] | None = None,
 ) -> tuple[int, ...]:
     """Raise-time occurrences wholly represented by this operation's owned ranges."""
-    ranges = owned or (*((op.covers,) if op.covers is not None else ()), *op.extra_covers)
+    ranges = owned or _raising_ranges(op)
     ranges = tuple(span for span in ranges if span[0] < span[1])
     if not ranges:
         return op.absorbed
@@ -2765,8 +2831,9 @@ def _folded(
             if not isinstance(made, str) and made.relocations:
                 refs[op.id] = tuple(field for _where, field in made.relocations)
             pushes = _disjoint(site)
-            if pushes and op.covers is not None:
-                coverage[op.id] = (op.covers, *pushes)
+            ranges = _raising_ranges(op)
+            if pushes and ranges:
+                coverage[op.id] = (ranges[0], *pushes)
     return held, absorbed, refs, coverage
 
 
@@ -2792,9 +2859,8 @@ def rewritable(op: "Op") -> bool:
     """Whether this operation's bytes may be generated rather than copied.
 
     One emitted verbatim -- a barrier, the restore idiom, an emulated x87
-    site -- is exactly as long as the bytes it stands for, so its `covers`
-    and its length are one number and a pass may not make them differ. One
-    that is selected has no such tie.
+    site -- is exactly as long as its source occurrence. One that is selected
+    has no such tie.
 
     Asked before a pass hands a deleted operation's bytes to a survivor. A
     restore idiom that took them stopped coming back its own length --

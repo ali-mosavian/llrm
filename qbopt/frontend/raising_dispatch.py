@@ -70,7 +70,6 @@ def raised(body: mir.MirBody, found: module.Module, machine_blocks: list[Block])
             uses,
             kind=mir.Kind.SUB,
             args=(selector, mir.Const(255, 2)),
-            covers=(op.at, op.at),
             symbol=False,
         )
         guard = mir.Op(
@@ -82,7 +81,6 @@ def raised(body: mir.MirBody, found: module.Module, machine_blocks: list[Block])
             kind=mir.Kind.BRANCH,
             test=mir.Kind.ABOVE,
             target=error,
-            covers=(op.at, op.at),
             symbol=False,
         )
         dispatch = mir.Op(
@@ -95,7 +93,6 @@ def raised(body: mir.MirBody, found: module.Module, machine_blocks: list[Block])
             args=(selector,),
             target=default,
             cases=tuple(enumerate(targets, 1)),
-            covers=(op.at, op.at),
             symbol=False,
         )
         blocks.append(replace(block, ops=(*block.ops[:-1], compare, guard), succ=(error, normal)))

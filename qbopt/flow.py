@@ -142,6 +142,7 @@ def run(data: bytes, native_fpu: bool = False, optimise: bool = True) -> tuple[b
                 contracts,
                 source.coverage,
                 nodes=source.nodes,
+                occurrences=source.occurrences,
             ),
             "lower",
             in_ssa=True,

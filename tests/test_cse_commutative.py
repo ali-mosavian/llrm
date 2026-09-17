@@ -36,12 +36,12 @@ def test_reversed_addition_reuses_value_only_when_flags_are_unobserved(reads_fla
     left, right, first, second = (mir.Value(index, index, variable=index) for index in range(1, 5))
     flags = mir.Value(5, 12, flags=True)
     definitions = tuple(mir.Op(at, ir.Operation.MOVE, "mov", (value,), (), kind=mir.Kind.COPY,
-                               args=(mir.Const(number, 4),), results=(mir.Held(value, 4),), covers=(at, at + 5))
+                               args=(mir.Const(number, 4),), results=(mir.Held(value, 4),))
                         for at, value, number in ((0, left, 7), (5, right, 9)))
     original = mir.Op(10, ir.Operation.BINARY, "add", (first,), (left, right), kind=mir.Kind.ADD,
-                      args=(mir.Held(left, 4), mir.Held(right, 4)), results=(mir.Held(first, 4),), covers=(10, 12))
+                      args=(mir.Held(left, 4), mir.Held(right, 4)), results=(mir.Held(first, 4),))
     other = replace(original, at=12, defines=(second, flags), args=tuple(reversed(original.args)),
-                    results=(mir.Held(second, 4),), covers=(12, 14))
+                    results=(mir.Held(second, 4),))
     original = replace(original, defines=(first, mir.Value(6, 10, flags=True)))
     use = mir.Op(14, ir.Operation.PUSH, "push", (), (second, flags) if reads_flags else (second,),
                  kind=mir.Kind.ARG, args=(mir.Held(second, 4),))

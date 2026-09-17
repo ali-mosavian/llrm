@@ -148,6 +148,6 @@ def test_condition_scheduling_does_not_move_effects_or_other_results(reason: str
 def test_cloned_operandless_branch_selects_its_semantic_condition(test, name):
     """Peeled IVARM refused at 0x73: its cloned conditional jump was carried without semantics."""
     branch = mir.Op(0x73, ir.Operation.BRANCH, "", (), (), kind=mir.Kind.BRANCH,
-                    test=test, target=0x3100000001, covers=(0x73, 0x73), raised=None)
+                    test=test, target=0x3100000001, raised=None)
     expected = ir.Semantics(ir.Operation.BRANCH, name, (), (), branch.target)
     assert lower.semantics(branch, place=lower.as_a_value) == expected

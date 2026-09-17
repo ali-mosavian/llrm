@@ -82,7 +82,12 @@ def test_hoisted_variables_do_not_collide_with_promoted_cells() -> None:
         watch=lambda name, state: stages.setdefault(name, state),
     )
     body = stages["r01-place"]
-    value = next(op for block in body.blocks for op in block.ops if op.at == 0x76).defines[-1]
+    value = next(
+        op
+        for block in body.blocks
+        for op in block.ops
+        if op.at == 0x76 and op.kind is mir.Kind.ADD
+    ).defines[-1]
     after = transform._reparented(body, {value})
     renamed = next(one for one in after.values if one.id == value.id)
     assert renamed.variable > max(one.variable for one in body.values)
@@ -155,7 +160,6 @@ def test_dead_store_does_not_delete_a_load_at_the_same_address() -> None:
         kind=mir.Kind.COPY,
         args=(mir.Const(7, 2),),
         results=(mir.Held(source, 2),),
-        covers=(0, 3),
     )
     store = mir.Op(
         3,
@@ -167,7 +171,6 @@ def test_dead_store_does_not_delete_a_load_at_the_same_address() -> None:
         args=(mir.Held(source, 2),),
         results=(mir.Cell(target),),
         stores=(target,),
-        covers=(3, 3),
     )
     load = mir.Op(
         3,
@@ -179,11 +182,10 @@ def test_dead_store_does_not_delete_a_load_at_the_same_address() -> None:
         args=(mir.Cell(counter),),
         results=(mir.Held(loaded, 2),),
         loads=(counter,),
-        covers=(3, 6),
     )
-    overwrite = replace(store, at=6, covers=(6, 9))
+    overwrite = replace(store, at=6)
     use = mir.Op(
-        9, ir.Operation.PUSH, "push", (), (loaded,), kind=mir.Kind.ARG, args=(mir.Held(loaded, 2),), covers=(9, 10)
+        9, ir.Operation.PUSH, "push", (), (loaded,), kind=mir.Kind.ARG, args=(mir.Held(loaded, 2),)
     )
     body = mir.MirBody(0, (mir.MirBlock(0, (), (first, store, load, overwrite, use), ()),), {})
     done = transform.without_dead_stores(body, frozenset({5}), {})
@@ -270,9 +272,9 @@ def test_divisor_constants_propagate_without_reordering(number, safe):
 
 
 def test_leading_deletion_does_not_delete_its_survivor() -> None:
-    first = mir.Op(0, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY, covers=(0, 3), args=(mir.Const(3, 2),))
-    survivor = mir.Op(3, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY, covers=(3, 6), args=(mir.Const(21, 2),))
-    last = mir.Op(6, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY, covers=(6, 9), args=(mir.Const(5, 2),))
+    first = mir.Op(0, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY, args=(mir.Const(3, 2),))
+    survivor = mir.Op(3, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY, args=(mir.Const(21, 2),))
+    last = mir.Op(6, ir.Operation.MOVE, "mov", (), (), kind=mir.Kind.COPY, args=(mir.Const(5, 2),))
     done = transform._absorb([first, survivor, last], {0})
     assert [op.args for op in done] == [survivor.args, last.args]
 
@@ -339,19 +341,14 @@ def test_the_rename_alone_is_what_was_unsound() -> None:
 
 
 def test_a_transform_accounts_for_every_byte_it_removes() -> None:
-    """layout.py refuses a body it cannot cover, which is how it catches data
-    BC put between the instructions. A deletion has to say what it took."""
+    """A deletion transfers opaque ownership without learning byte ranges."""
     import inspect
 
-    # _absorb is the address-keyed caller; _without holds the donation, and
-    # cse's _reclaimed does it across the whole body because the raise gives
-    # every operation folded out of one call the same `at`.
+    # `_without` and `_reclaimed` preserve deleted occurrences as inert
+    # markers. Lowering resolves those opaque identities to byte ranges.
     source = inspect.getsource(transform._without) + inspect.getsource(transform._reclaimed)
-    assert "covers=" in source, "a deleted op's bytes must go to a survivor"
-    assert "mir.rewritable" in source, (
-        "and only to one whose length comes from selection -- an op emitted "
-        "verbatim is exactly as long as the bytes it copies"
-    )
+    assert "absorbed" in source
+    assert "covers" not in source and "extra_covers" not in source
 
 
 def _corpus():
@@ -401,7 +398,9 @@ def _absorbed_ops(obj, found, blocks):
         for block in after.blocks:
             for at, site in sites.items():
                 ops = [one for one in block.ops if site.start <= one.at < site.end]
-                if len(ops) > 1 and all(mir.rewritten(one) or one.node is None or one.name == "restore" for one in ops):
+                if len(ops) > 1 and all(
+                    mir.rewritten(one) or not one.source_backed or one.name == "restore" for one in ops
+                ):
                     yield at, ops
 
 
@@ -424,7 +423,8 @@ def test_the_invariant_run_never_takes_control_flow_a_flag_or_a_carried_value() 
 
     seen = 0
     for obj, found, blocks in _corpus():
-        for name, body in mir.bodies(found, blocks):
+        raised = mir.bodies(found, blocks)
+        for name, body in raised:
             at_of = {one.at: one for one in body.blocks}
             for loop in loopy.loops(list(body.blocks), body.entry):
                 ops = [one for at in sorted(loop.body) for one in at_of[at].ops]
@@ -439,7 +439,7 @@ def test_the_invariant_run_never_takes_control_flow_a_flag_or_a_carried_value() 
                 rest = [one for one in ops if one not in run]
                 where = f"{obj.stem} {name} loop {loop.header:#x}"
                 for one in run:
-                    what = lower.current(one)
+                    what = lower.current(one, node=raised.source.nodes.get(one.id))
                     assert what is not None and what.op not in (ir.Operation.JUMP, ir.Operation.BRANCH), (
                         f"{where}: {one.at:#x} {one.name} is control flow"
                     )
@@ -473,7 +473,8 @@ def test_hoisting_leaves_every_loop_and_every_terminator_where_it_was() -> None:
 
     seen = 0
     for obj, found, blocks in _corpus():
-        for name, body in mir.bodies(found, blocks):
+        raised = mir.bodies(found, blocks)
+        for name, body in raised:
             was = loopy.loops(list(body.blocks), body.entry)
             if not was:
                 continue
@@ -488,13 +489,15 @@ def test_hoisting_leaves_every_loop_and_every_terminator_where_it_was() -> None:
             for was, now in zip(body.blocks, after.blocks, strict=True):
                 if not was.ops or not now.ops:
                     continue
-                before = lower.current(was.ops[-1])
+                before_op = was.ops[-1]
+                before = lower.current(before_op, node=raised.source.nodes.get(before_op.id))
                 if before is None or before.op not in (ir.Operation.JUMP, ir.Operation.BRANCH):
                     continue
                 # By where it goes, not by its address: taking the first
                 # operation out of a block moves the branch onto the block's
                 # own address, and it is the same branch.
-                after_it = lower.current(now.ops[-1])
+                after_op = now.ops[-1]
+                after_it = lower.current(after_op, node=raised.source.nodes.get(after_op.id))
                 assert after_it is not None and after_it.op is before.op, (
                     f"{obj.stem} {name}: block {was.at:#x} no longer ends in control flow"
                 )
@@ -803,7 +806,7 @@ def test_dead_code_goes_and_the_bytes_are_still_accounted_for() -> None:
         (mir.Value(1, 0x10),),
         (),
         kind=mir.Kind.COPY,
-        covers=(0x10, 0x13),
+        absorbed=(1,),
     )
     doomed = mir.Op(
         0x13,
@@ -812,7 +815,7 @@ def test_dead_code_goes_and_the_bytes_are_still_accounted_for() -> None:
         (mir.Value(2, 0x13),),
         (),
         kind=mir.Kind.COPY,
-        covers=(0x13, 0x15),
+        absorbed=(2,),
     )
     assert transform._removable(doomed, set()), "nothing reads it"
     assert not transform._removable(live_one, {mir.Value(1, 0x10)}), "and this is read"
@@ -827,15 +830,15 @@ def test_dead_code_leaves_a_body_it_cannot_read_alone() -> None:
     # Something before it, so the deletion has a survivor to give its bytes
     # to -- without one _absorb refuses and the guard is never reached.
     first = mir.Op(
-        0x10, ir.Operation.MOVE, "mov", (mir.Value(1, 0x10),), (), kind=mir.Kind.COPY, covers=(0x10, 0x12)
+        0x10, ir.Operation.MOVE, "mov", (mir.Value(1, 0x10),), (), kind=mir.Kind.COPY, absorbed=(1,)
     )
     doomed = mir.Op(
-        0x12, ir.Operation.MOVE, "mov", (mir.Value(2, 0x12),), (), kind=mir.Kind.COPY, covers=(0x12, 0x14)
+        0x12, ir.Operation.MOVE, "mov", (mir.Value(2, 0x12),), (), kind=mir.Kind.COPY, absorbed=(2,)
     )
     plain = mir.MirBody(0x10, (mir.MirBlock(0x10, (), (first, doomed), ()),), {})
     assert transform.dead(plain) is not plain, "a dead move goes when the body is readable"
 
-    opaque = mir.Op(0x14, ir.Operation.BARRIER, "?", (), (), covers=(0x14, 0x16))
+    opaque = mir.Op(0x14, ir.Operation.BARRIER, "?", (), (), absorbed=(3,))
     body = mir.MirBody(0x10, (mir.MirBlock(0x10, (), (first, doomed, opaque), ()),), {})
     assert transform.dead(body) is body, "and stays when the body holds a barrier"
 
@@ -943,7 +946,7 @@ def _bodies(name: str):
     assert found is not None
     mapped = code_map(found)
     assert not isinstance(mapped, str)
-    return found, list(mir.bodies(found, split.partition(found, mapped)))
+    return found, mir.bodies(found, split.partition(found, mapped))
 
 
 def test_a_fold_names_the_value_not_the_register() -> None:
@@ -965,17 +968,14 @@ def test_an_unplaced_held_keeps_its_fold() -> None:
     """Cost of getting this wrong: 693 bytes, then a miscompile.
 
     A fold says `this value gets this constant`. Where the allocation has
-    no register for the value -- the allocator refuses about seventy bodies
-    in the corpus -- the operand the original instruction had in the same
-    position is what the pass took away, so that is what it emits as.
-    Dropping the rewrite instead emits the load it replaced, which is not a
-    fold; handing the choice to the allocation instead disagrees with every
-    operation emitted from its own bytes, and lngmix printed 110 for 142900
-    with its dividend deleted.
+    not yet assigned a register, lowering must preserve both the constant and
+    the abstract destination. Dropping the rewrite instead emits the load it
+    replaced; prematurely grounding the destination disagrees with the later
+    allocator. The original defect made lngmix print 110 for 142900.
     """
     from qbopt.model import ir
     from qbopt.backend import lower
-    from qbopt.backend import layout
+    from qbopt.abi import runtime
 
     found, bodies = _bodies("hotlop-p-g2.obj")
     for name, body in bodies:
@@ -988,15 +988,23 @@ def test_an_unplaced_held_keeps_its_fold() -> None:
         ]
         if not folded:
             continue
-        got = layout._grounded(done, {})  # nothing placed at all
-        by_at = {op.at: op for block in got.blocks for op in block.ops}
+        low = lower.lowered(
+            name,
+            done,
+            found.calls,
+            bodies.source.absorbed,
+            runtime.for_module(found),
+            bodies.source.coverage,
+            nodes=bodies.source.nodes,
+            occurrences=bodies.source.occurrences,
+        )
         for op in folded:
-            what = lower.current(by_at[op.at])
+            what = next(one.what for one in low.insns if one.op is not None and one.op.id == op.id)
             assert what is not None, f"{name}: {op.at:#x} lost its rewrite"
             assert any(isinstance(one, ir.Imm) for one in what.sources), (
                 f"{name}: {op.at:#x} went back to the read it replaced"
             )
-            assert all(not isinstance(one, ir.Held) for one in what.dests), f"{name}: {op.at:#x} names no place at all"
+            assert any(isinstance(one, ir.Held) for one in what.dests), f"{name}: {op.at:#x} was placed before allocation"
         return
     raise AssertionError("no body folded anything; the test measures nothing")
 
@@ -1142,7 +1150,6 @@ def test_cse_propagates_a_complete_narrow_copy_to_an_opaque_reader(preserves_hig
         kind=mir.Kind.COPY,
         args=(mir.Const(7, 2),),
         results=(mir.Held(source, 2),),
-        covers=(0, 2),
     )
     copy = mir.Op(
         2,
@@ -1153,14 +1160,13 @@ def test_cse_propagates_a_complete_narrow_copy_to_an_opaque_reader(preserves_hig
         kind=mir.Kind.COPY,
         args=(mir.Held(source, 2),),
         results=(mir.Held(copied, 2),),
-        covers=(2, 4),
     )
     if preserves_high:
         from dataclasses import replace
 
         previous = mir.Value(3, 0, variable=3, version=1)
         copy = replace(copy, uses=(source, previous), merges={previous: copied})
-    use = mir.Op(4, ir.Operation.PUSH, "push", (), (copied,), kind=mir.Kind.OPAQUE, covers=(4, 6))
+    use = mir.Op(4, ir.Operation.PUSH, "push", (), (copied,), kind=mir.Kind.OPAQUE)
     body = mir.MirBody(0, (mir.MirBlock(0, (), (first, copy, use), ()),), {})
     done = transform.subexpressions(body)
     assert done.blocks[0].ops[-1].uses == (copied if preserves_high else source,)
@@ -1182,7 +1188,6 @@ def test_cse_reuses_one_frame_object_address() -> None:
             kind=mir.Kind.ADDRESS,
             args=(mir.FrameAddress(-132, 2, (-132, -4)),),
             results=(mir.Held(result, 2),),
-            covers=(at, at + 1),
         )
 
     use = mir.Op(2, ir.Operation.PUSH, "push", (), (duplicate,), kind=mir.Kind.OPAQUE, args=(mir.Held(duplicate, 2),))
