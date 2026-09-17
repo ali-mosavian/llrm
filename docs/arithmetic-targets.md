@@ -1,6 +1,9 @@
 # CPU-dependent constant arithmetic
 
 Production CLI: `uv run python -m qbopt.rewrite input.obj -o output.obj --cpu P5`.
+The C frontend accepts the same profiles with
+`uv run python -m qbopt.cfront input.c --opt --cpu P5`. Both drivers resolve
+the public name through one immutable profile and retain `386` as the default.
 `tools/stages.py`, `tools/e2e.py`, and `tools/bench.py` accept the same
 `--cpu` option. The rewrite manifest and completion marker record tuning;
 the legacy marker without an explicit CPU means 386. An already rewritten

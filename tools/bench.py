@@ -7,13 +7,13 @@ fixes the emulated CPU rate, and DOSBox-X scales RDTSC by it, so a count is
 emulated time. Every repetition and its program answers are kept.
 """
 
+import re
 import sys
 import shutil
-import subprocess
 import hashlib
 import argparse
 import statistics
-import re
+import subprocess
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -51,10 +51,12 @@ def elapsed_ms(text: str) -> float | None:
     return (stamps["TSC1"] - stamps["TSC0"]) / _counts_per_ms()
 
 
-def optimized(data: bytes, native_fpu: bool, cpu: str, basic_semantics: bool = False,
-              bounds_checks: bool = False) -> bytes:
-    result = wholeseg.emitted(data, native_fpu=native_fpu, cpu=cpu, basic_semantics=basic_semantics,
-                              bounds_checks=bounds_checks)
+def optimized(
+    data: bytes, native_fpu: bool, cpu: str, basic_semantics: bool = False, bounds_checks: bool = False
+) -> bytes:
+    result = wholeseg.emitted(
+        data, native_fpu=native_fpu, cpu=cpu, basic_semantics=basic_semantics, bounds_checks=bounds_checks
+    )
     if result.outcome is not wholeseg.Emission.LIR:
         raise SystemExit(f"benchmark optimization refused: {result.reason}")
     return result.data
@@ -71,8 +73,15 @@ def output_name(exe: Path, repetition: int) -> str:
     return f"{exe.stem[:4]}{repetition}.TXT"
 
 
-def build(tag: str, prog: str = "nbody", native_fpu: bool = False, transform=None, cpu: str = "386",
-          basic_semantics: bool = False, bounds_checks: bool = False) -> tuple[Path, Path]:
+def build(
+    tag: str,
+    prog: str = "nbody",
+    native_fpu: bool = False,
+    transform=None,
+    cpu: str = "386",
+    basic_semantics: bool = False,
+    bounds_checks: bool = False,
+) -> tuple[Path, Path]:
     cfg = CONFIGS[tag]
     if not cfg.available:
         raise SystemExit(f"no toolchain at {cfg.mount}; see docs/testing.md")
@@ -115,9 +124,12 @@ def build(tag: str, prog: str = "nbody", native_fpu: bool = False, transform=Non
         env={"LIB": r"V:\LIB"},
     )
     report = read_dos(work, "LINK.OUT")
-    if (not linking.finished or linking.timed_out
+    if (
+        not linking.finished
+        or linking.timed_out
         or report.count("Microsoft (R) Segmented Executable Linker") != 2
-        or re.search(r"unresolved external|error\s+L\d+", report, re.IGNORECASE)):
+        or re.search(r"unresolved external|error\s+L\d+", report, re.IGNORECASE)
+    ):
         raise SystemExit(f"LINK did not complete both builds without errors; see {work / 'LINK.OUT'}")
     base, opt = work / "BASE.EXE", work / "OPT.EXE"
     if not base.is_file() or not opt.is_file():
@@ -125,8 +137,9 @@ def build(tag: str, prog: str = "nbody", native_fpu: bool = False, transform=Non
     return base, opt
 
 
-def run(tag: str, exe: Path, steps: int, reps: int, prog: str = "nbody", *,
-        expected: tuple[str, ...] | None = None) -> list[float]:
+def run(
+    tag: str, exe: Path, steps: int, reps: int, prog: str = "nbody", *, expected: tuple[str, ...] | None = None
+) -> list[float]:
     cfg = CONFIGS[tag]
     work = BUILD / tag / prog
     readings = []
@@ -161,8 +174,9 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="bench")
     ap.add_argument("--config", default="v-g3", choices=list(CONFIGS))
     ap.add_argument("--prog", default="nbody")
-    from qbopt.cycles.timings import ARCHS
-    ap.add_argument("--cpu", choices=("386", *ARCHS), default="386")
+    from qbopt.backend import cpu as targets
+
+    ap.add_argument("--cpu", choices=targets.names(), default="386")
     ap.add_argument("--native-fpu", action="store_true")
     ap.add_argument("--basic-semantics", action="store_true")
     ap.add_argument("--bounds-checks", action="store_true")
@@ -175,8 +189,14 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("--basic-semantics cannot be combined with --native-fpu")
 
     cfg = CONFIGS[args.config]
-    base_exe, opt_exe = build(args.config, args.prog, args.native_fpu, cpu=args.cpu,
-                              basic_semantics=args.basic_semantics, bounds_checks=args.bounds_checks)
+    base_exe, opt_exe = build(
+        args.config,
+        args.prog,
+        args.native_fpu,
+        cpu=args.cpu,
+        basic_semantics=args.basic_semantics,
+        bounds_checks=args.bounds_checks,
+    )
     base_ms = run(args.config, base_exe, args.steps, args.reps, args.prog)
     expected = answers(read_dos(BUILD / args.config / args.prog, output_name(base_exe, 0)))
     opt_ms = run(args.config, opt_exe, args.steps, args.reps, args.prog, expected=expected)

@@ -1,6 +1,9 @@
 """Select signed constant division without exposing machine choices to MIR."""
-from qbopt.backend import arithmetic, timing
+
 from qbopt.model import ir
+from qbopt.backend import timing
+from qbopt.backend import arithmetic
+from qbopt.backend import cpu as targets
 
 
 def magic(divisor: int, bits: int) -> tuple[int, int]:
@@ -32,6 +35,7 @@ def magic(divisor: int, bits: int) -> tuple[int, int]:
 
 
 def reciprocal(dividend, divisor, results, fresh, cpu, *, remainder=True):
+    cpu = targets.profile(cpu)
     width = dividend.width
     if width != 4 or not 1 < divisor < 1 << 31:
         return None
@@ -42,17 +46,24 @@ def reciprocal(dividend, divisor, results, fresh, cpu, *, remainder=True):
     multiplier, shift = magic(divisor, 32)
     chain = arithmetic.scale(divisor, cpu)
     cost = lambda name: arithmetic.cost(cpu, name)
-    reconstruction = (sum(cost("shift_ri" if name == "shl" else "alu_rr") for name, _ in chain)
-                      if chain else timing.signed_multiply(cpu, width).maximum)
+    reconstruction = (
+        sum(cost("shift_ri" if name == "shl" else "alu_rr") for name, _ in chain)
+        if chain
+        else timing.signed_multiply(cpu, width).maximum
+    )
     if not remainder:
         reconstruction = 0
     # Materialize magic, seed multiply, preserve dividend and correction,
     # and seed reconstruction. Allocation may eliminate some of these moves.
     copies = 5 if remainder else 4
-    estimate = (copies * cost("mov_rr") + multiply_cost.maximum + reconstruction
-                + (1 + bool(shift)) * cost("shift_ri")
-                + (1 + remainder + (multiplier < 0)) * cost("alu_rr"))
-    if cpu == "P5":
+    estimate = (
+        copies * cost("mov_rr")
+        + multiply_cost.maximum
+        + reconstruction
+        + (1 + bool(shift)) * cost("shift_ri")
+        + (1 + remainder + (multiplier < 0)) * cost("alu_rr")
+    )
+    if cpu.name == "P5":
         # Intel 241430-004 section 24.3: one clock per prefix. Every
         # dword operation needs 66h in this 16-bit code segment. Charge
         # the reserved copies too; do not assume prefix decoding overlaps.
@@ -63,10 +74,12 @@ def reciprocal(dividend, divisor, results, fresh, cpu, *, remainder=True):
     if estimate >= direct:
         return None
     parts = []
+
     def emit(operation, name, sources, into=None):
         into = into or ir.Held(fresh(), width)
         parts.append(ir.Semantics(operation, name, (into,), tuple(sources)))
         return into
+
     constant = emit(ir.Operation.MOVE, "mov", (ir.Imm(multiplier, width),))
     low, high = ir.Held(fresh(), width), ir.Held(fresh(), width)
     parts.append(ir.Semantics(ir.Operation.MULTIPLY, "imul", (low, high), (dividend, constant)))
@@ -81,8 +94,7 @@ def reciprocal(dividend, divisor, results, fresh, cpu, *, remainder=True):
     product = quotient
     if chain:
         for name, amount in chain:
-            product = emit(ir.Operation.BINARY, name,
-                           (product, ir.Imm(amount, 1) if name == "shl" else quotient))
+            product = emit(ir.Operation.BINARY, name, (product, ir.Imm(amount, 1) if name == "shl" else quotient))
     else:
         product = emit(ir.Operation.MULTIPLY, "imul", (quotient, ir.Imm(divisor, width)))
     emit(ir.Operation.BINARY, "sub", (dividend, product), results[1])

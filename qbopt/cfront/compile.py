@@ -28,6 +28,7 @@ from qbopt.backend import omfwrite
 from qbopt.backend import prologue
 from qbopt.cfront import raise_hir
 from qbopt.backend import lower_int64
+from qbopt.backend import cpu as targets
 from qbopt.backend import frame as frames
 
 WCCQ = Path(__file__).resolve().parents[2] / "owshim" / "bin" / "wccq"
@@ -54,7 +55,15 @@ def recorded(source: Path, includes: list[str]) -> str:
         return out.read_text()
 
 
-def assembled(text: str, module: str, *, optimise: bool = False, dump: Path | None = None) -> masm.Module:
+def assembled(
+    text: str,
+    module: str,
+    *,
+    optimise: bool = False,
+    dump: Path | None = None,
+    cpu: str | targets.Profile = "386",
+) -> masm.Module:
+    target = targets.profile(cpu)
     unit = hir.unit(stream.parse(text))
     _write(dump, "stream", text)
     _write(dump, "hir", hir.text(unit))
@@ -84,7 +93,8 @@ def assembled(text: str, module: str, *, optimise: bool = False, dump: Path | No
                 # Borland's medium-model C ABI preserves SI and DI from the
                 # six value registers. A recurrence live through a call has
                 # two places available, not the full register file.
-                call_registers=2,
+                registers=target.register_capacity,
+                call_registers=target.call_register_capacity,
                 watch=watch if dump else None,
             )
             body = rotate.entered(body)
@@ -96,7 +106,7 @@ def assembled(text: str, module: str, *, optimise: bool = False, dump: Path | No
         if dump and body is not raised.body:
             _write(dump, f"passes/{raised.name}.int64-lower", _mir_text(raised.name, body))
         low = flow.verified(
-            lower.lowered(raised.name, body, legalized.calls, {}, legalized.contracts, {}, "386"),
+            lower.lowered(raised.name, body, legalized.calls, {}, legalized.contracts, {}, cpu=target),
             "lower",
             in_ssa=True,
         )
@@ -132,9 +142,16 @@ def assembled(text: str, module: str, *, optimise: bool = False, dump: Path | No
     return built
 
 
-def compiled(text: str, module: str, *, optimise: bool = False, dump: Path | None = None) -> str:
+def compiled(
+    text: str,
+    module: str,
+    *,
+    optimise: bool = False,
+    dump: Path | None = None,
+    cpu: str | targets.Profile = "386",
+) -> str:
     """The module as jwasm source."""
-    return masm.text(assembled(text, module, optimise=optimise, dump=dump))
+    return masm.text(assembled(text, module, optimise=optimise, dump=dump, cpu=cpu))
 
 
 def _externs(unit: hir.Unit) -> tuple[tuple[str, str], ...]:
@@ -224,10 +241,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-I", "--include", action="append", default=[])
     parser.add_argument("--dump", type=Path)
     parser.add_argument("--opt", action="store_true")
+    parser.add_argument("--cpu", choices=targets.names(), default="386", help="code-generation tuning target")
     args = parser.parse_args(argv)
     text = args.source.read_text() if args.source.suffix == ".cgs" else recorded(args.source, args.include)
     output = args.output or args.source.with_suffix(".asm")
-    built = assembled(text, args.source.stem, optimise=args.opt, dump=args.dump)
+    built = assembled(text, args.source.stem, optimise=args.opt, dump=args.dump, cpu=args.cpu)
     if output.suffix.lower() == ".obj":
         output.write_bytes(omfwrite.written(built, args.source.name))
     else:

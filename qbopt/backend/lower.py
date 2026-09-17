@@ -24,6 +24,7 @@ from qbopt.backend import division
 from qbopt.analysis import liveness
 from qbopt.backend import arithmetic
 from qbopt.model.floating import Format
+from qbopt.backend import cpu as targets
 from qbopt.objectfile.module import Addr
 from qbopt.model.floating import Rounding
 
@@ -501,7 +502,7 @@ def lowered(
     absorbed: "set[int] | dict[int, tuple] | None",
     contracts: "dict[int, object]",
     coverage: "dict[int, tuple] | None" = None,
-    cpu: str = "386",
+    cpu: str | targets.Profile = "386",
     *,
     pointer_model=None,
     noreturn: bool = False,
@@ -1319,12 +1320,11 @@ class Lowering:
         absorbed,
         contracts=None,
         coverage=None,
-        cpu="386",
+        cpu: str | targets.Profile = "386",
         *,
         pointer_model=None,
     ) -> None:
-        arithmetic.validate(cpu)
-        self.cpu = cpu
+        self.cpu = targets.profile(cpu)
         self.pointer_model = pointer_model
         self._read = read
         # Which dword values are a word's sign extension, and which word.

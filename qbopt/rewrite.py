@@ -196,9 +196,9 @@ def main(argv: list[str] | None = None) -> int:
         nargs="+",
         help="OMF .OBJ files to optimize and .LIB files used to resolve them, in LINK order",
     )
-    from qbopt.cycles.timings import ARCHS
+    from qbopt.backend import cpu as targets
 
-    ap.add_argument("--cpu", choices=("386", *ARCHS), default="386", help="arithmetic tuning target")
+    ap.add_argument("--cpu", choices=targets.names(), default="386", help="code-generation tuning target")
     ap.add_argument("-o", "--output", type=Path, help="output file; valid for a single input OBJ")
     ap.add_argument("--output-dir", type=Path, help="directory receiving every optimized input OBJ")
     ap.add_argument("--manifest", type=Path)
