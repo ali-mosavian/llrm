@@ -87,6 +87,24 @@ def test_reference_compilers_erase_watcom_memory_model_qualifiers(tmp_path: Path
     assert {function["name"] for function in report["functions"]} == {"choose"}
 
 
+@pytest.mark.parametrize("compiler", quality.REFERENCE_COMPILERS)
+def test_reference_compilers_use_the_same_strict_floating_contract(tmp_path: Path, compiler: str) -> None:
+    """GCC kept nbody's ``double`` temporaries in extended precision, so its
+    apparent load/store advantage was a comparison against different numeric
+    and exception semantics rather than a code-generation opportunity.
+    """
+    if quality.shutil.which(compiler) is None:
+        pytest.skip(f"{compiler} is not installed")
+    report = quality._reference(CORPUS / "nbody.c", compiler, tmp_path / f"nbody-{compiler}.s")
+    assert report["status"] == "generated", report["diagnostic"]
+    assert {
+        "-frounding-math",
+        "-ftrapping-math",
+        "-fexcess-precision=standard",
+        "-ffp-contract=off",
+    } <= set(report["flags"])
+
+
 def test_reference_assembly_is_measured_per_function_without_directives_or_comments() -> None:
     """Saving GCC's assembly path alone left every structural comparison manual."""
     assembly = """

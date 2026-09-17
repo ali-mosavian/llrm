@@ -451,6 +451,15 @@ def _reference(source: Path, compiler: str, dump: Path) -> dict:
         "-fno-pie",
         "-fno-stack-protector",
         "-fno-asynchronous-unwind-tables",
+        # qbopt's default floating contract observes the current rounding
+        # mode, traps, and destination precision.  Without these, GCC kept
+        # nbody's declared doubles as extended x87 values and the report
+        # called the resulting absence of binary64 stores a codegen win.
+        # That is a different program, not a target for this one.
+        "-frounding-math",
+        "-ftrapping-math",
+        "-fexcess-precision=standard",
+        "-ffp-contract=off",
         "-S",
         "-masm=intel",
         *(f"-D{qualifier}=" for qualifier in REFERENCE_QUALIFIERS),
