@@ -43,6 +43,7 @@ from qbopt.backend import target
 from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
 from qbopt.objectfile.module import Module
+from qbopt.objectfile.module import SourceMap
 from qbopt.frontend.declen import STANDS_IN
 
 
@@ -98,10 +99,15 @@ class Table:
         return self.lo
 
 
-def _ranges_of(op, found: Module) -> tuple[tuple[int, int], ...]:
+def _source(found: Module, source: SourceMap | None) -> SourceMap:
+    """Explicit raise provenance, with a compatibility view for unit callers."""
+    return source if source is not None else SourceMap.from_module(found)
+
+
+def _ranges_of(op, found: Module, source: SourceMap | None = None) -> tuple[tuple[int, int], ...]:
     """Every disjoint range of original bytes this op stands for.
 
-    `found.coverage` is the one authoritative record for an op whose bytes
+    `source.coverage` is the one authoritative record for an op whose bytes
     are not a single run -- a site frames() found may push its arguments,
     let BC put a real instruction between the pushes and the call, and only
     then call, so no one interval names both without also claiming the
@@ -121,16 +127,16 @@ def _ranges_of(op, found: Module) -> tuple[tuple[int, int], ...]:
         return tuple(ranges)
     if op.inserted:
         return (op.covers,)  # Explicitly inserted; its id names operands, not owned bytes.
-    full = found.coverage.get(op.id) if op.id is not None else None
+    full = _source(found, source).coverage.get(op.id) if op.id is not None else None
     if full is not None:
         return full
     if op.covers is not None:
         return (op.covers,)
-    length = _length_of(op, found)
+    length = _length_of(op, found, source)
     return () if length is None else ((op.at, op.at + length),)
 
 
-def _stands_for(op, found: Module) -> tuple[int, int] | None:
+def _stands_for(op, found: Module, source: SourceMap | None = None) -> tuple[int, int] | None:
     """The overall span of original bytes this op accounts for.
 
     Placement asks where an op *goes*; coverage asks which of BC's bytes it
@@ -145,7 +151,7 @@ def _stands_for(op, found: Module) -> tuple[int, int] | None:
     ranges themselves, not this: the gap between two of them may be a real
     instruction that owns those bytes on its own account.
     """
-    ranges = _ranges_of(op, found)
+    ranges = _ranges_of(op, found, source)
     return (min(lo for lo, _ in ranges), max(hi for _, hi in ranges)) if ranges else None
 
 
@@ -154,7 +160,7 @@ def _raw_span(op: lir.Insn) -> tuple[int, int] | None:
     return ir.span(op.node) if op.node is not None and not op.inserted else None
 
 
-def _length_of(op: lir.Insn, found: Module) -> int | None:
+def _length_of(op: lir.Insn, found: Module, source: SourceMap | None = None) -> int | None:
     """How many bytes the op occupied in the image it came from.
 
     From the node's own span rather than from an instruction, because not
@@ -164,7 +170,7 @@ def _length_of(op: lir.Insn, found: Module) -> int | None:
 
     `covers` overrides it, and is how a transform accounts for what it
     replaced: an op standing in for two of BC's says so, and the byte
-    arithmetic below still adds up. `found.coverage` is asked first and,
+    arithmetic below still adds up. `source.coverage` is asked first and,
     where it has an answer, is the whole of it: a site whose pushes sit
     apart from its call stands for both runs, and `covers` alone would
     only ever name one of them.
@@ -172,8 +178,8 @@ def _length_of(op: lir.Insn, found: Module) -> int | None:
     if op.inserted:
         return 0
     if op.extra_covers:
-        return sum(hi - lo for lo, hi in _ranges_of(op, found))
-    full = found.coverage.get(op.id) if op.id is not None else None
+        return sum(hi - lo for lo, hi in _ranges_of(op, found, source))
+    full = _source(found, source).coverage.get(op.id) if op.id is not None else None
     if full is not None:
         return sum(hi - lo for lo, hi in full)
     if op.covers is not None:
@@ -265,7 +271,7 @@ def _absorbed(site, read):
     return None if isinstance(made, str) else made
 
 
-def _folded_site(op: lir.Insn, found: Module):
+def _folded_site(op: lir.Insn, found: Module, source: SourceMap | None = None):
     """The site this op stands for, where it still stands for one.
 
     The record is what says to emit a divide rather than the call BC
@@ -292,7 +298,7 @@ def _folded_site(op: lir.Insn, found: Module):
     # `mov` it actually is.
     if op.symbol is True:
         return None
-    folded = found.absorbed.get(op.id)
+    folded = _source(found, source).absorbed.get(op.id)
     if folded is None:
         if op.kind is mir.Kind.DIVMOD:
             return f"{op.at:#06x}: a divide with no site of its own cannot be emitted"
@@ -346,7 +352,9 @@ def _seats(op: lir.Insn, assignment: dict | None, origin: dict | None) -> "tuple
     return tuple(seats) if len(seats) == 2 else None
 
 
-def _divide_fields(op: lir.Insn, found: Module, fields: frozenset[int]) -> "tuple[int, ...] | None":
+def _divide_fields(
+    op: lir.Insn, found: Module, fields: frozenset[int], source: SourceMap | None = None
+) -> "tuple[int, ...] | None":
     """The fixup each of this op's memory operands still names, in order.
 
     A fixup belongs to the operand it was read off. The raise recorded them
@@ -362,7 +370,7 @@ def _divide_fields(op: lir.Insn, found: Module, fields: frozenset[int]) -> "tupl
     and this returns None rather than guessing one.
     """
     was = list(op.raised[0]) if op.raised is not None else list(op.args)
-    recorded = _fields_in(found, op, fields)
+    recorded = _fields_in(found, op, fields, source)
     known = {
         position: recorded[order]
         for order, position in enumerate(index for index, one in enumerate(was) if isinstance(one, mir.Cell))
@@ -383,7 +391,7 @@ def _divide_fields(op: lir.Insn, found: Module, fields: frozenset[int]) -> "tupl
     return tuple(out)
 
 
-def _selected_divide(op: lir.Insn, found: Module, assignment, origin, fields):
+def _selected_divide(op: lir.Insn, found: Module, assignment, origin, fields, source: SourceMap | None = None):
     """A divide emitted from its own operands: (bytes, its fixups), or why not.
 
     A string is a refusal of the whole emission and never a signal to fall
@@ -405,7 +413,7 @@ def _selected_divide(op: lir.Insn, found: Module, assignment, origin, fields):
         return None
     seats = _seats(op, assignment, origin)
     made = select.divides(op, seats, restore=False) if seats is not None else "no register holds a result"
-    wanted = _divide_fields(op, found, fields)
+    wanted = _divide_fields(op, found, fields, source)
     if not isinstance(made, str) and wanted is not None and len(made.places) == len(wanted):
         return made, wanted
     if op.rewritten:
@@ -414,7 +422,9 @@ def _selected_divide(op: lir.Insn, found: Module, assignment, origin, fields):
     return None
 
 
-def _fields_in(found: Module, op: lir.Insn, fields: frozenset[int] = frozenset()) -> tuple[int, ...]:
+def _fields_in(
+    found: Module, op: lir.Insn, fields: frozenset[int] = frozenset(), source: SourceMap | None = None
+) -> tuple[int, ...]:
     """Every fixup this operation's own operands carry, in operand order.
 
     One for one instruction, which is every operation the raise makes. An
@@ -423,12 +433,12 @@ def _fields_in(found: Module, op: lir.Insn, fields: frozenset[int] = frozenset()
     """
     if op.symbol is False:
         return ()  # the operand went to another instruction, and the fixup with it
-    said = found.refs.get(op.id) if op.id is not None else None
+    said = _source(found, source).refs.get(op.id) if op.id is not None else None
     if said is not None and len(said) > 1:
         wanted = tuple(one for one in said if not fields or one in fields)
         if wanted and _still_has_an_operand_for_it(op):
             return wanted
-    one = _field_in(found, op, fields)
+    one = _field_in(found, op, fields, source)
     return () if one is None else (one,)
 
 
@@ -452,7 +462,9 @@ def _generated_immediate(op, what: ir.Semantics | None) -> "Addr | None":
     return found[0] if len(found) == 1 else None
 
 
-def _field_in(found: Module, op: lir.Insn, fields: frozenset[int] = frozenset()) -> int | None:
+def _field_in(
+    found: Module, op: lir.Insn, fields: frozenset[int] = frozenset(), source: SourceMap | None = None
+) -> int | None:
     """The address of the one relocated field inside `op`'s own bytes.
 
     Asked of the module rather than taken from the instruction's `disp_at`,
@@ -490,7 +502,7 @@ def _field_in(found: Module, op: lir.Insn, fields: frozenset[int] = frozenset())
             and op.at + 1 in fields
         ):
             return op.at + 1
-        said = found.refs.get(op.id) if op.id is not None else None
+        said = _source(found, source).refs.get(op.id) if op.id is not None else None
         if said is None or len(said) != 1 or not _still_has_an_operand_for_it(op):
             return None
         ref = said[0]
@@ -512,7 +524,7 @@ def _field_in(found: Module, op: lir.Insn, fields: frozenset[int] = frozenset())
     # What the operation says it carries, established at the raise while the
     # spans were still BC's. Subject to the caller's own set: `fields` is how
     # a caller says which fixups it is accounting for.
-    said = found.refs.get(op.id) if op.id is not None else None
+    said = _source(found, source).refs.get(op.id) if op.id is not None else None
     ref = said[0] if said else None
     if ref is not None and (not fields or ref in fields):
         return ref if _still_has_an_operand_for_it(op) else None
@@ -613,14 +625,10 @@ def _placed(
     return placed, moved
 
 
-def _emulator_protocol(op, found, native_fpu):
-    if (
-        not native_fpu
-        and op.id in found.float_protocols
-        and op.what is not None
-        and op.what.op is ir.Operation.FLOAT_LOAD
-    ):
-        return found.float_protocols[op.id]
+def _emulator_protocol(op, found, native_fpu, source: SourceMap | None = None):
+    protocols = _source(found, source).float_protocols
+    if not native_fpu and op.id in protocols and op.what is not None and op.what.op is ir.Operation.FLOAT_LOAD:
+        return protocols[op.id]
     if native_fpu or not fpu.emulated_at(found.code, op.at):
         return None
     # An inserted or materializing instruction can inherit an emulated x87
@@ -664,6 +672,7 @@ def assemble(
     origin: dict | None = None,
     labels: dict[int, int] | None = None,
     anchors: dict[int, lir.Insn] | None = None,
+    source: SourceMap | None = None,
 ) -> Laid | str:
     """Every item in order from `at`, shrunk to a fixed point and emitted.
 
@@ -691,8 +700,8 @@ def assemble(
         # carried verbatim -- zero bytes in the length pass, three in the
         # emit pass, and layout said it changed length between them.
         emulated = not native_fpu and op.node is not None and found.code[op.at : op.at + 1] == bytes([0xCD])
-        folded = _folded_site(op, found)
-        chosen = _selected_divide(op, found, assignment, origin, fields)
+        folded = _folded_site(op, found, source)
+        chosen = _selected_divide(op, found, assignment, origin, fields, source)
         if isinstance(chosen, str):
             return chosen
         # Selection first, and the refusal only where it had no answer.
@@ -731,9 +740,9 @@ def assemble(
             at=at,
             where=_where(op, assignment, origin),
             held=_held(assignment),
-            relocated=_field_in(found, op, fields) is not None or _generated_immediate(op, what) is not None,
+            relocated=_field_in(found, op, fields, source) is not None or _generated_immediate(op, what) is not None,
         )
-        if made is not None and (protocol := _emulator_protocol(op, found, native_fpu)) is not None:
+        if made is not None and (protocol := _emulator_protocol(op, found, native_fpu, source)) is not None:
             made = fpu.wrapped(made, protocol)
         if made is None:
             return f"{op.at:#06x}: {op.name} is not one select.py can emit"
@@ -765,7 +774,7 @@ def assemble(
                 and what.name == "jmp"
                 and lengths[index] > 0
                 and landed == placed[index] + lengths[index]
-                and not _fields_in(found, op, fields)
+                and not _fields_in(found, op, fields, source)
             ):
                 fallthrough.add(index)
                 lengths[index] = 0
@@ -789,7 +798,8 @@ def assemble(
                 where=_where(op, assignment, origin),
                 held=_held(assignment),
                 short=True,
-                relocated=_field_in(found, op, fields) is not None or _generated_immediate(op, what) is not None,
+                relocated=_field_in(found, op, fields, source) is not None
+                or _generated_immediate(op, what) is not None,
             )
             if made is None:
                 continue  # a call has no short form, and says so by refusing
@@ -832,7 +842,7 @@ def assemble(
         ):
             # Copied, so any fixup inside it keeps its place within the
             # instruction and only the instruction itself has moved.
-            field = _field_in(found, op, fields)
+            field = _field_in(found, op, fields, source)
             if field is not None:
                 relocations.append((len(out) + (field - span[0]), field))
             out += found.code[span[0] : span[1]]
@@ -857,7 +867,7 @@ def assemble(
             found_insn = getattr(op.node, "insn", None)
             if found_insn is not None and found_insn.insn.op0_kind == OpKind.NEAR_BRANCH16:
                 return f"{op.at:#06x}: a branch this cannot model would keep a stale target"
-            field = _field_in(found, op, fields)
+            field = _field_in(found, op, fields, source)
             if field is not None:
                 relocations.append((len(out) + (field - span[0]), field))
             out += found.code[span[0] : span[1]]
@@ -868,8 +878,8 @@ def assemble(
         # proves those bytes were deliberately removed.
         if _semantics(op) is None and op.node is None and op.kind is mir.Kind.NOTHING:
             continue
-        folded = _folded_site(op, found)
-        chosen = _selected_divide(op, found, assignment, origin, fields)
+        folded = _folded_site(op, found, source)
+        chosen = _selected_divide(op, found, assignment, origin, fields, source)
         if isinstance(chosen, str):
             return chosen
         if chosen is None and isinstance(folded, str):
@@ -878,7 +888,7 @@ def assemble(
             made = chosen[0] if chosen is not None else _absorbed(*folded)
             if made is None or len(made.code) != lengths[index]:
                 return f"{op.at:#06x}: the absorbed call changed length between the two passes"
-            binds = chosen[1] if chosen is not None else _fields_in(found, op, fields)
+            binds = chosen[1] if chosen is not None else _fields_in(found, op, fields, source)
             for where, field in zip(made.places, binds, strict=False):
                 relocations.append((len(out) + where, field))
             out += made.code
@@ -895,9 +905,9 @@ def assemble(
             where=_where(op, assignment, origin),
             held=_held(assignment),
             short=index in short,
-            relocated=_field_in(found, op, fields) is not None or _generated_immediate(op, what) is not None,
+            relocated=_field_in(found, op, fields, source) is not None or _generated_immediate(op, what) is not None,
         )
-        if made is not None and (protocol := _emulator_protocol(op, found, native_fpu)) is not None:
+        if made is not None and (protocol := _emulator_protocol(op, found, native_fpu, source)) is not None:
             made = fpu.wrapped(made, protocol)
         if made is None or len(made.code) != lengths[index]:
             return f"{op.at:#06x}: it changed length between the two passes"
@@ -909,7 +919,7 @@ def assemble(
         # Paired in order, because an operation is not always one
         # instruction: absorbing a long divide is four and two of them are
         # relocated, and each fixup belongs to the operand it was read off.
-        wanted = _fields_in(found, op, fields)
+        wanted = _fields_in(found, op, fields, source)
         if wanted and not _relocatable(what):
             # A fixup belongs to an operand, and this instruction has none a
             # relocation could sit in -- no symbolic memory operand and no
@@ -954,7 +964,7 @@ def assemble(
                 explained.update(one for one in known if op.lo <= one < op.hi)
             continue
         landed = moved.get(op.at)
-        for lo, hi in _ranges_of(op, found):
+        for lo, hi in _ranges_of(op, found, source):
             explained.update(one for one in known if lo <= one < hi)
             if landed is not None:
                 folded.update({one: landed for one in range(lo, hi) if one not in moved})

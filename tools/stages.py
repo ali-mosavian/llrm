@@ -66,9 +66,9 @@ def _bodies(
         return found, [], {}
     from qbopt.abi import runtime
 
-    # One map for the whole run, kept on the module the tool passes on, so
-    # the raise and the lowering are given the same object -- built twice
-    # they can differ, which is what wholeseg.py takes care not to do.
+    # One map for the whole run.  The stage tool only prints MIR here; the
+    # production run below raises independently and threads its own source
+    # map all the way to emission.
     contracts = runtime.for_module(found, external=external_contracts)
     raised = mir.bodies(
         found,
@@ -77,7 +77,7 @@ def _bodies(
         basic_semantics=basic_semantics,
         bounds_checks=bounds_checks,
     )
-    return raised.source.applied(found), list(raised), contracts
+    return found, list(raised), contracts
 
 
 def _shape(body) -> str:

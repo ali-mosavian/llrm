@@ -198,7 +198,7 @@ def _rebuilt(
             native_frames[procedure.seed] = layout
     raised = mir.bodies(found, blocks, contracts, basic_semantics=basic_semantics, bounds_checks=bounds_checks)
     bodies = list(raised)
-    found = raised.source.applied(found)
+    source = raised.source
     if not bodies:
         return data, "no bodies were raised", None
     if not bounds_checks:
@@ -239,6 +239,7 @@ def _rebuilt(
                 found.calls,
                 blocks=blocks,
                 found=found,
+                coverage=source.coverage,
                 only=only,
                 unswitch_=True,
                 watch=(lambda stage, state: watch(f"mir-{stage}", name, state)) if watch is not None else None,
@@ -265,6 +266,7 @@ def _rebuilt(
         records,
         blocks,
         bodies,
+        source,
         mapped,
         fields,
         reached,
@@ -289,6 +291,7 @@ def _through_lir(
     records: list[omf.Record],
     blocks: list[split.Block],
     bodies: list[tuple[str, mir.MirBody]],
+    source: module.SourceMap,
     mapped: split.CodeMap,
     fields: frozenset[int],
     reached: frozenset[int],
@@ -350,9 +353,9 @@ def _through_lir(
                     name,
                     body,
                     found.calls,
-                    found.absorbed,
+                    source.absorbed,
                     contracts,
-                    found.coverage,
+                    source.coverage,
                     cpu,
                     pointer_model=pointer_model,
                     noreturn=body.entry in no_return,
@@ -368,9 +371,7 @@ def _through_lir(
                 low, found.calls, family=module.family(found.records), native=(native_frames or {}).get(body.entry)
             )
             in_ssa = True
-            for phase in flow.machine(
-                flow._pinned(low), frame, found.calls, basic_semantics=basic_semantics, cpu=cpu
-            ):
+            for phase in flow.machine(flow._pinned(low), frame, found.calls, basic_semantics=basic_semantics, cpu=cpu):
                 if isinstance(phase, phielim.PhiElimination):
                     in_ssa = False
                 low = flow.checked(low, phase, in_ssa=in_ssa)
@@ -401,7 +402,7 @@ def _through_lir(
             # cannot place.
             return f"{name}: Tangled: {short}"
         done.append(low)
-    return omfwrite.written_bc(found, done, records, {}, mapped.tables, fields, reached, native_fpu)
+    return omfwrite.written_bc(found, done, records, {}, mapped.tables, fields, reached, native_fpu, source=source)
 
 
 REBUILT = "rebuilt"

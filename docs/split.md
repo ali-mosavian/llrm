@@ -163,8 +163,10 @@ Audited 2026-09-05. What was broken, and what it is now:
 `SourceMap` containing relocations, floating protocols, absorbed sites and
 disjoint byte coverage.  `_folded` returns its maps, and the other recognition
 steps write only that fresh result.  The parsed `Module` remains unchanged;
-the backend's temporary `SourceMap.applied()` adapter exists only until its
-remaining readers accept the side table directly.
+optimization coverage, lowering, layout and fresh OMF emission receive that
+same side table explicitly. `SourceMap.applied()` remains only as a compatibility
+helper for focused low-level tests; no production route reconstructs a fused
+module view.
 
 ## What honouring a pass's order would take
 

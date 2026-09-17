@@ -577,3 +577,19 @@ def test_the_half_a_divide_hands_back_does_not_fall_out_of_the_lir_route() -> No
     assert seen, "the LIR route was never tried"
     why = seen[0]
     assert not (isinstance(why, str) and "restore" in why), why
+
+
+def test_production_never_copies_raise_provenance_back_onto_module(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The first external SourceMap still reached emission through
+    ``SourceMap.applied()``, recreating the fused Module interface the split
+    was meant to remove. Production must thread the side table directly.
+    """
+    from qbopt.objectfile import module
+
+    def fused(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("raise provenance was copied back onto Module")
+
+    monkeypatch.setattr(module.SourceMap, "applied", fused)
+    data = Path("fixtures/omf/cmpord-p-evt.obj").read_bytes()
+    result = wholeseg.emitted(data, optimise=True)
+    assert result.outcome is wholeseg.Emission.LIR, result.reason

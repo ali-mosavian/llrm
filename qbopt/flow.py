@@ -113,7 +113,7 @@ def run(data: bytes, native_fpu: bool = False, optimise: bool = True) -> tuple[b
     contracts = runtime.for_module(found)
     result = mir.bodies(found, blocks, contracts)
     raised = list(result)
-    found = result.source.applied(found)
+    source = result.source
     if not raised:
         return data, "nothing to raise"
 
@@ -123,11 +123,18 @@ def run(data: bytes, native_fpu: bool = False, optimise: bool = True) -> tuple[b
     for name, body in raised:
         if optimise:
             body = transform.applied(
-                body, found.dgroup, found.calls, blocks=blocks, found=found, promote_=False, strength_=False
+                body,
+                found.dgroup,
+                found.calls,
+                blocks=blocks,
+                found=found,
+                promote_=False,
+                strength_=False,
+                coverage=source.coverage,
             )
             body = rotate.entered(body)
         low = verified(
-            lower.lowered(name, body, found.calls, set(found.absorbed), contracts),
+            lower.lowered(name, body, found.calls, source.absorbed, contracts, source.coverage),
             "lower",
             in_ssa=True,
         )
@@ -141,7 +148,7 @@ def run(data: bytes, native_fpu: bool = False, optimise: bool = True) -> tuple[b
 
     reached = frozenset(at for block in blocks for insn in block.insns for at in range(insn.at, insn.end))
     fields = frozenset(one.offset for one in omf.fixups(records) if one.seg == found.seg)
-    out = omfwrite.written_bc(found, done, records, {}, mapped.tables, fields, reached, native_fpu)
+    out = omfwrite.written_bc(found, done, records, {}, mapped.tables, fields, reached, native_fpu, source=source)
     return (data, out) if isinstance(out, str) else (out, "written")
 
 

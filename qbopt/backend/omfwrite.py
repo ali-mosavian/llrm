@@ -23,6 +23,7 @@ from qbopt.backend import select
 from qbopt.objectfile import omf
 from qbopt.objectfile.module import Space
 from qbopt.objectfile.module import Module
+from qbopt.objectfile.module import SourceMap
 
 OFFSET, BASE, POINTER = 1, 2, 3  # OMF locations: offset16, segment base, ptr16:16
 WIDE = {OFFSET: 2, BASE: 2, POINTER: 4}
@@ -104,6 +105,7 @@ def written_bc(
     reached: frozenset[int] | None = None,
     native_fpu: bool = False,
     ordered: bool = False,
+    source: SourceMap | None = None,
 ) -> bytes | str:
     """Write a complete fresh object for the BC-object frontend.
 
@@ -125,6 +127,7 @@ def written_bc(
         assignment=assignment or None,
         ordered=ordered,
         ordered_entries=frozenset(body.entry for body in bodies if body.ordered),
+        source=source,
     )
     if isinstance(laid, str):
         return laid

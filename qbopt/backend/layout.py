@@ -37,6 +37,7 @@ from qbopt.model import lir
 from qbopt.model import mir
 from qbopt.backend import asm
 from qbopt.objectfile.module import Module
+from qbopt.objectfile.module import SourceMap
 
 # The assembler's, re-exported: this module builds them and hands them over.
 Laid = asm.Laid
@@ -296,18 +297,18 @@ def _ordered(body: lir.LirBody, *, linear: bool = False) -> list[lir.Insn]:
 # way; an allocation is per value and a value's register is its root.
 
 
-def _trailing_zeros(found: Module, ops: list[lir.Insn]) -> "Table | None":
+def _trailing_zeros(found: Module, ops: list[lir.Insn], source: SourceMap | None = None) -> "Table | None":
     """The run of zero bytes the ops end on, where it reaches the segment's end.
 
     Only at the very end, and only all-zero: anything else that happens to
     decode is code until something proves otherwise.
     """
-    highest = max(one.at + (asm._length_of(one, found) or 0) for one in ops)
+    highest = max(one.at + (asm._length_of(one, found, source) or 0) for one in ops)
     if highest != found.end:
         return None
     lo = found.end
     for one in sorted(ops, key=lambda x: x.at, reverse=True):
-        length = asm._length_of(one, found) or 0
+        length = asm._length_of(one, found, source) or 0
         if one.at + length != lo or any(found.code[one.at : lo]):
             break
         lo = one.at
@@ -324,6 +325,7 @@ def _padding_runs(
     lowest: int,
     highest: int,
     reached: frozenset[int] | None = None,
+    source: SourceMap | None = None,
 ) -> list["Table"]:
     """The gaps between the items that may be carried rather than selected.
 
@@ -351,7 +353,7 @@ def _padding_runs(
     """
     covered = set()
     for one in ops:
-        for span in asm._ranges_of(one, found):
+        for span in asm._ranges_of(one, found, source):
             covered.update(range(*span))
     for one in carried:
         covered.update(range(one.lo, one.hi))
@@ -389,9 +391,15 @@ def selectable(op: lir.Insn) -> bool:
     return op.what is not None and op.what.op is not ir.Operation.BARRIER
 
 
-def lay_out(body: lir.LirBody, at: int, found: Module, fields: frozenset[int] = frozenset()) -> Laid | str:
+def lay_out(
+    body: lir.LirBody,
+    at: int,
+    found: Module,
+    fields: frozenset[int] = frozenset(),
+    source: SourceMap | None = None,
+) -> Laid | str:
     """Every op in `body`, emitted in order from `at`, or why it could not be."""
-    return asm.assemble(_ordered(body), at, found, fields, labels=_labels(body))
+    return asm.assemble(_ordered(body), at, found, fields, labels=_labels(body), source=source)
 
 
 def _labels(body: lir.LirBody) -> dict[int, int]:
@@ -427,6 +435,7 @@ def rebuild(
     assignment: dict | None = None,
     ordered: bool = False,
     ordered_entries: frozenset[int] = frozenset(),
+    source: SourceMap | None = None,
 ) -> Laid | str:
     """Every body in the module, laid out one after another.
 
@@ -475,12 +484,12 @@ def rebuild(
     ops = [op for _, sequence in groups for op in sequence]
     if not ops:
         return "no bodies to rebuild"
-    if any(asm._length_of(one, found) is None for one in ops):
+    if any(asm._length_of(one, found, source) is None for one in ops):
         return f"{ops[0].at:#06x}: an op with no instruction behind it"
 
     lowest = min(body.entry for _, body in bodies)
     highest = max(
-        (span[1] for one in ops if (span := asm._stands_for(one, found)) and span[0] < span[1]),
+        (span[1] for one in ops if (span := asm._stands_for(one, found, source)) and span[0] < span[1]),
         default=lowest,
     )
     dead_dispatch_ends = {
@@ -503,7 +512,7 @@ def rebuild(
     # encode. They are not instructions and are carried rather than
     # selected: the same bytes, in the same place, which is the only thing
     # that can be right about padding.
-    padding = _trailing_zeros(found, ops)
+    padding = _trailing_zeros(found, ops, source)
     if padding is not None:
         inside.append(padding)
         ops = [one for one in ops if one.at < padding.lo]
@@ -516,12 +525,12 @@ def rebuild(
     # what they were and nothing enters them, so where they end up does not
     # matter. Only runs that are entirely padding -- anything else in a gap
     # is bytes this cannot account for, and it says so instead.
-    inside += _padding_runs(found, ops, inside, lowest, highest, reached)
+    inside += _padding_runs(found, ops, inside, lowest, highest, reached, source)
 
     # Every byte between the first item and the last has to be one of them.
     # What is left over is data nothing here can name, and emitting only what
     # it understands would drop it silently along with anything it holds.
-    covered = sum(asm._length_of(one, found) or 0 for one in ops) + sum(one.hi - one.lo for one in inside)
+    covered = sum(asm._length_of(one, found, source) or 0 for one in ops) + sum(one.hi - one.lo for one in inside)
     if covered != highest - lowest:
         # Named where the gap is, not where the layout starts. It used to
         # report `lowest`, which sent every reading of this straight to the
@@ -529,7 +538,7 @@ def rebuild(
         held = set()
         claims: dict[int, list[int]] = {}
         for one in ops:
-            span = asm._stands_for(one, found)
+            span = asm._stands_for(one, found, source)
             if span is not None:
                 held.update(range(*span))
                 for byte in range(*span):
@@ -554,7 +563,16 @@ def rebuild(
     labels = {label: target for _, body in bodies for label, target in _labels(body).items()}
     anchors = {label: op for _, body in bodies for label, op in _anchors(body).items()} if sequenced else None
     return asm.assemble(
-        _interleaved(ops, inside), lowest, found, fields, native_fpu, assignment, origin, labels, anchors
+        _interleaved(ops, inside),
+        lowest,
+        found,
+        fields,
+        native_fpu,
+        assignment,
+        origin,
+        labels,
+        anchors,
+        source,
     )
 
 

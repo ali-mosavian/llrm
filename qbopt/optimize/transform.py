@@ -2873,6 +2873,7 @@ def applied(
     only: str | None = None,
     registers: int | None = None,
     call_registers: int = 0,
+    coverage: dict[int, tuple[tuple[int, int], ...]] | None = None,
     watch=None,
 ) -> MirBody:
     """Every transform this module has, or the one `only` names.
@@ -2927,15 +2928,15 @@ def applied(
     if only in {"forward", "drop_loads", "reuse", "cse"}:
         only = "gvn"
     passes = [one for one in pipeline(where, **wanted) if only is None or one.name == only]
-    if found is not None:
+    if coverage:
         body = replace(
             body,
             blocks=tuple(
                 replace(
                     block,
                     ops=tuple(
-                        replace(op, extra_covers=found.coverage[op.id][1:])
-                        if not op.extra_covers and op.id in found.coverage
+                        replace(op, extra_covers=coverage[op.id][1:])
+                        if not op.extra_covers and op.id in coverage
                         else op
                         for op in block.ops
                     ),

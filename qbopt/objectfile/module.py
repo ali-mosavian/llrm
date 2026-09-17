@@ -248,9 +248,9 @@ class SourceMap:
 
     The parsed :class:`Module` is an input description.  Recognition adds
     facts keyed by the stable MIR operation id, but those facts belong to one
-    particular raise and must not be written back into that input.  The
-    backend still accepts a Module while the provenance migration is
-    incremental; ``applied`` makes that adapter explicit and non-mutating.
+    particular raise and must not be written back into that input.  Production
+    passes this value explicitly through lowering and emission; ``applied``
+    remains only as a non-mutating compatibility helper for low-level tests.
     """
 
     refs: dict[int, tuple[int, ...]] = field(default_factory=dict)
@@ -268,7 +268,7 @@ class SourceMap:
         )
 
     def applied(self, found: Module) -> Module:
-        """A backend view carrying this raise's provenance, without mutation."""
+        """A legacy test view carrying this provenance, without mutation."""
         return replace(
             found,
             refs=dict(self.refs),
