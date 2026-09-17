@@ -83,10 +83,11 @@ class Addr:
     # displacement are not the same address unless that register agrees too.
     # A FAR address's own offset register (always bx, measured) lives here.
     base: Register_ = Register.NONE
-    # NONE everywhere except Space.FAR, where it is the segment register the
-    # access actually goes through -- part of the address's own identity,
-    # since `es:[bx]` and `ds:[bx]` are not the same byte merely because bx
-    # agrees. See Space.FAR's own comment.
+    # NONE except for an address whose selector differs from the default:
+    # Space.FAR names its dynamic segment register, and a backend-created
+    # Space.LITERAL can name SS for an indirect frame-derived pointer.
+    # The selector is part of the machine address's identity: `es:[bx]`,
+    # `ss:[bx]` and `ds:[bx]` are not the same byte merely because bx agrees.
     segment: Register_ = Register.NONE
 
     @property

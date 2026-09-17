@@ -1,5 +1,6 @@
 """Known-answer C benchmark checks through OMF, LINK, and a real 386."""
 
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 import pytest
 from configs import CONFIGS
 from dosbox import dosbox_bin
+from dosbox import dos_file
 from dosbox import launch
 from dosbox import read_dos
 
@@ -17,6 +19,15 @@ from qbopt.cfront import compile as cfront
 ROOT = Path(__file__).resolve().parents[1]
 JWASM = shutil.which("jwasm") or str(Path.home() / "work/other/d32x/toolchains/native/bin/jwasm")
 CFG = CONFIGS["v-g3"]
+BENCHMARKS = (
+    ("sieve", "SIEVE", 1024, 2),
+    ("crc", "CRC", 0, 4),
+    ("matmul", "MATMUL", 0, 2),
+    ("mandel", "MANDEL", 0, 2),
+    ("shellsort", "SHELL", 0, 2),
+    ("floats", "FLOATS", 1000, 2),
+    ("nbody", "NBODY", 200, 2),
+)
 
 pytestmark = [
     pytest.mark.e2e,
@@ -26,25 +37,43 @@ pytestmark = [
 ]
 
 
-CRC_START = """\
+def _start() -> str:
+    declarations = "\n".join(f"extrn _bench_{name}:far" for name, _file, _argument, _width in BENCHMARKS)
+    calls = []
+    for index, (name, _file, argument, width) in enumerate(BENCHMARKS):
+        if width == 4:
+            calls.extend((f"    mov ax, {argument >> 16}", "    push ax"))
+        calls.extend((f"    mov ax, {argument & 0xffff}", "    push ax", f"    call far ptr _bench_{name}"))
+        calls.extend(
+            (
+                f"    add sp, {width}",
+                f"    mov word ptr values+{index * 4}, ax",
+                f"    mov word ptr values+{index * 4 + 2}, dx",
+                "    mov ah, 3ch",
+                "    xor cx, cx",
+                f"    lea dx, markerName{index}",
+                "    int 21h",
+                "    jc failed",
+                "    mov bx, ax",
+                "    mov ah, 3eh",
+                "    int 21h",
+            )
+        )
+    return f"""\
 .model medium
 .386
-.stack 512
-extrn _bench_crc:far
+.stack 4096
+{declarations}
 .data
-value dd ?
+values db {len(BENCHMARKS) * 4} dup (?)
 filename db 'VALUE.BIN', 0
+{chr(10).join(f"markerName{index} db 'P{index}.DAT', 0" for index in range(len(BENCHMARKS)))}
 .code
 start:
     mov ax, @data
     mov ds, ax
-    xor ax, ax
-    push ax
-    push ax
-    call far ptr _bench_crc
-    add sp, 4
-    mov word ptr value, ax
-    mov word ptr value+2, dx
+    cld
+{chr(10).join(calls)}
     mov ah, 3ch
     xor cx, cx
     lea dx, filename
@@ -52,8 +81,8 @@ start:
     jc failed
     mov bx, ax
     mov ah, 40h
-    mov cx, 4
-    lea dx, value
+    mov cx, {len(BENCHMARKS) * 4}
+    lea dx, values
     int 21h
     jc failed
     xor al, al
@@ -67,14 +96,16 @@ end start
 """
 
 
-def test_optimized_crc_returns_the_canonical_check_value(tmp_path: Path) -> None:
-    """CRC returned FFFFFFFF: unrolling orphaned the inner loop's live-out."""
-    source = ROOT / "bench" / "c" / "crc.c"
-    stream = cfront.recorded(source, [])
-    module = cfront.assembled(stream, "crc", optimise=True)
-    (tmp_path / "CRC.OBJ").write_bytes(omfwrite.written(module, source.name))
+def test_optimized_c_benchmarks_return_their_independent_answers(tmp_path: Path) -> None:
+    """CRC returned FFFFFFFF when unrolling orphaned its inner-loop live-out."""
+    expected = json.loads((ROOT / "bench" / "c" / "expected.json").read_text())
+    for name, filename, _argument, _width in BENCHMARKS:
+        source = ROOT / "bench" / "c" / f"{name}.c"
+        stream = cfront.recorded(source, [])
+        module = cfront.assembled(stream, name, optimise=True)
+        (tmp_path / f"{filename}.OBJ").write_bytes(omfwrite.written(module, source.name))
     start = tmp_path / "START.ASM"
-    start.write_text(CRC_START)
+    start.write_text(_start())
     assembled = subprocess.run(
         [JWASM, "-q", "-c", "-Cp", "-Zg", "-omf", f"-Fo{tmp_path / 'START.OBJ'}", str(start)],
         capture_output=True,
@@ -86,14 +117,21 @@ def test_optimized_crc_returns_the_canonical_check_value(tmp_path: Path) -> None
         tmp_path,
         CFG.mount,
         [
-            f"{CFG.link} START.OBJ+CRC.OBJ, CRC.EXE,,; > LINK.OUT",
-            "CRC.EXE",
+            f"{CFG.link} START.OBJ+" + "+".join(f"{filename}.OBJ" for _name, filename, _argument, _width in BENCHMARKS)
+            + ", CBENCH.EXE,,; > LINK.OUT",
+            "CBENCH.EXE",
         ],
         timeout=20,
     )
-    assert run.finished and not run.timed_out, run
+    completed = [index for index in range(len(BENCHMARKS)) if dos_file(tmp_path, f"P{index}.DAT") is not None]
+    assert run.finished and not run.timed_out, (run, completed)
     link = read_dos(tmp_path, "LINK.OUT").lower()
     assert "error l" not in link and "unresolved external" not in link, link
     result = next((tmp_path / name for name in ("VALUE.BIN", "value.bin") if (tmp_path / name).is_file()), None)
     assert result is not None
-    assert int.from_bytes(result.read_bytes(), "little") == 0xCBF43926
+    raw = result.read_bytes()
+    observed = {
+        name: int.from_bytes(raw[index * 4 : index * 4 + 4], "little")
+        for index, (name, _filename, _argument, _width) in enumerate(BENCHMARKS)
+    }
+    assert observed == {name: expected[name]["result"] & 0xffffffff for name, *_rest in BENCHMARKS}

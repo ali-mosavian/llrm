@@ -404,19 +404,29 @@ def _machine(one, had: tuple, index: int):
     if not isinstance(before, ir.Mem):
         before = next((x for x in had if isinstance(x, ir.Mem)), None)
     base = ir.Held(one.base.id, 2) if one.base is not None else None
+    addr = _address(one)
     if base is not None:
         # NONE until something places it. Keeping BC's register here makes
         # an unallocated operand indistinguishable from a placed one, and
         # arrprm's first store passed by luck exactly that way.
         made = (
-            ir.Mem(one.addr, one.width, Register.NONE, before.offset, before.disp_width)
+            ir.Mem(addr, one.width, Register.NONE, before.offset, before.disp_width)
             if before is not None
             else replace(_addressed(one), through=Register.NONE)
         )
         return replace(made, base=base, selector=_selector(one))
     if before is not None:
-        return ir.Mem(one.addr, one.width, before.through, before.offset, before.disp_width, selector=_selector(one))
+        return ir.Mem(addr, one.width, before.through, before.offset, before.disp_width, selector=_selector(one))
     return replace(_addressed(one), selector=_selector(one))
+
+
+def _address(ref: "mir.MemRef") -> "Addr | None":
+    """Attach the machine selector implied by an abstract address space."""
+    from qbopt.objectfile.module import Space
+
+    if ref.addr is not None and ref.addr.space is Space.LITERAL and ref.space is Space.FRAME:
+        return replace(ref.addr, segment=Register.SS)
+    return ref.addr
 
 
 def _selector(ref: "mir.MemRef") -> "ir.Held | None":
@@ -448,7 +458,7 @@ def _addressed(one: "mir.MemRef") -> "ir.Mem":
     """
     from qbopt.objectfile.module import Space
 
-    addr = one.addr
+    addr = _address(one)
     if addr is None:
         raise Unlowered("a cell with no address cannot be encoded: nothing says which register reaches it")
     if addr.space is Space.FRAME:
@@ -970,7 +980,9 @@ def _fill(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]:
     """`rep stos`: the count in cx, the value in the accumulator, the cells through es:di.
 
     A far cell's selector is an operand the allocation places in ES. Otherwise
-    ES is set to DS for the fill and put back, so a selector living in it survives.
+    ES is set to the abstract destination's fixed segment and put back, so a
+    selector living in it survives. Frame-derived near pointers require SS;
+    ordinary near data requires DS.
     """
     value, count, address, *selector = op.args
     name = {1: "stosb", 2: "stosw", 4: "stosd"}.get(value.width)
@@ -990,11 +1002,14 @@ def _fill(op: mir.Op, lowering: "Lowering") -> tuple[ir.Semantics, ...]:
     if selector:
         sources = (stored, counted, through, held(selector[0], 2))
         return (*setup, ir.Semantics(ir.Operation.FILL, name, (ir.Mem(None, 0), stepped, emptied), sources))
+    from qbopt.objectfile.module import Space
+
     extra = ir.Reg(Register.ES, 2)
+    source_segment = Register.SS if any(ref.space is Space.FRAME for ref in op.stores) else Register.DS
     return (
         *setup,
         ir.Semantics(ir.Operation.PUSH, "push", (), (extra,)),
-        ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Reg(Register.DS, 2),)),
+        ir.Semantics(ir.Operation.PUSH, "push", (), (ir.Reg(source_segment, 2),)),
         ir.Semantics(ir.Operation.POP, "pop", (extra,), ()),
         ir.Semantics(ir.Operation.FILL, name, (ir.Mem(None, 0), stepped, emptied), (stored, counted, through, extra)),
         ir.Semantics(ir.Operation.POP, "pop", (extra,), ()),

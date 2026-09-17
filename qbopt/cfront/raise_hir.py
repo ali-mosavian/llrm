@@ -155,6 +155,10 @@ class Global:
 class Near:
     base: mir.Value
     disp: int = 0
+    # The source-language storage whose default selector is required.  A
+    # frame-derived near pointer is an SS address even after arithmetic has
+    # moved it out of BP-relative form; ordinary near pointers remain DS.
+    space: Space = Space.LITERAL
 
 
 @dataclass(frozen=True, slots=True)
@@ -925,14 +929,14 @@ class _Raise:
         if isinstance(address, Near):
             moved = self.add(mir.Held(address.base, 2), index)
             self.pointer_values.add(moved)
-            return Near(moved, address.disp)
+            return Near(moved, address.disp, address.space)
         # From the object's first byte, so the address says which object it is in.
         extent = self.extent(address.disp)
         start = extent[0] if extent is not None else 0
         base = self.near(replace(address, disp=start))
         moved = self.add(mir.Held(base, 2), index)
         self.pointer_values.add(moved)
-        return Near(moved, address.disp - start)
+        return Near(moved, address.disp - start, Space.FRAME)
 
     def float_arithmetic(self, cg_op: str, x: mir.Held, y: mir.Held) -> mir.Held:
         if cg_op not in FLOAT_ARITHMETIC:
@@ -1464,7 +1468,9 @@ class _Raise:
                     Addr(space, disp, index), width, base=base, space=space, base_width=2, provenance=provenance
                 )
             case Near(base, disp):
-                return mir.MemRef(Addr(Space.LITERAL, disp), width, base=base, space=Space.LITERAL, base_width=2)
+                return mir.MemRef(
+                    Addr(Space.LITERAL, disp), width, base=base, space=address.space, base_width=2
+                )
             case Far(segment, offset, disp, _, named):
                 provenance = memory.Provenance.one(memory.Object(memory.Kind.NAMED, named)) if named else None
                 return mir.MemRef(

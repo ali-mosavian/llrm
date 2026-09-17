@@ -366,7 +366,8 @@ def _memory(cell: ir.Mem, names: dict) -> str:
             symbol = names[(address.space, address.index)]
             return f"{size}{symbol}{disp}" + (f"[{registers}]" if registers else "")
         case Space.LITERAL if registers:
-            return f"{size}[{registers}{disp}]"
+            segment = "" if address.segment == Register.NONE else f"{target.name_of(address.segment)}:"
+            return f"{size}{segment}[{registers}{disp}]"
         case Space.FAR if registers:
             return f"{size}{target.name_of(address.segment)}:[{registers}{disp}]"
     raise Unprintable(f"cell {cell}")

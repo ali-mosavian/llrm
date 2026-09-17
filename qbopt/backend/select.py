@@ -244,7 +244,7 @@ def operand_of(what: ir.Mem) -> tuple[MemoryOperand, bool] | None:
             # the collision above for a base that is not there.
             base = what.through if what.base is not None else addr.base
             wide = 2 if base == Register.NONE else _displacement_size(base, addr.disp)
-            return MemoryOperand(base=base, displ=addr.disp, displ_size=wide), False
+            return MemoryOperand(base=base, displ=addr.disp, displ_size=wide, seg=addr.segment), False
         case _:
             return None
 
@@ -267,7 +267,7 @@ def _scaled_operand(what: ir.Mem) -> tuple[MemoryOperand, bool] | None:
     if addr.space is Space.FAR and addr.segment == Register.NONE:
         return None
     base, disp = what.through, addr.disp
-    segment = addr.segment if addr.space is Space.FAR else Register.NONE
+    segment = addr.segment if addr.space in (Space.FAR, Space.LITERAL) else Register.NONE
     if what.index_through in _WORD_INDEXES:
         if what.scale != 1 or base not in _WORD_BASES:
             return None

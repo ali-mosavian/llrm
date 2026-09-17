@@ -201,8 +201,10 @@ def _filled(body: mir.MirBody, loop) -> mir.MirBody | None:
         results=(),
         defines=(),
         uses=tuple(arg.value for arg in args if isinstance(arg, mir.Held)),
-        # Cells nothing names one by one: an effect that reaches anything.
-        stores=(mir.MemRef(None, ref.width),),
+        # The exact cells are no longer named one by one, but the storage
+        # class remains semantic.  Lowering needs it to select SS rather
+        # than DS for a fill reached through a frame-derived near pointer.
+        stores=(mir.MemRef(None, ref.width, space=ref.space, provenance=ref.provenance),),
         node=None,
         raised=None,
     )
