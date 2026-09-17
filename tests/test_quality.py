@@ -340,6 +340,36 @@ def test_gap_attribution_names_the_first_stage_after_which_excess_stays() -> Non
     assert quality._first_excess_stage(stages, "loads", 7) is None
 
 
+def test_gap_attribution_ignores_rejected_structural_candidate_stages() -> None:
+    """Matmul's rejected peel looked like rotate restored 41 loads and 64 stores.
+
+    A candidate is measured so its decision remains auditable, but it never
+    became production code.  Its locally optimized counts must not move the
+    first production stage blamed for an emitted excess.
+    """
+    stages = [
+        {"stage": "mir-r01-promote", "loads": 8},
+        {"stage": "mir-candidate-peel-r01-promote", "loads": 2, "tentative": True},
+        {"stage": "mir-rotate", "loads": 8},
+    ]
+    assert quality._first_excess_stage(stages, "loads", 5) == "mir-r01-promote"
+
+
+@pytest.mark.parametrize(
+    ("stage", "tentative"),
+    [
+        ("mir-candidate-peel-r01-promote", True),
+        ("mir-candidate-peel-unroll-accepted", True),
+        ("mir-peel-candidate", True),
+        ("mir-unroll-candidate", True),
+        ("mir-peel-accepted", False),
+        ("mir-r01-promote", False),
+    ],
+)
+def test_structural_candidate_stage_names_record_transaction_state(stage: str, tentative: bool) -> None:
+    assert quality._tentative_stage(stage) is tentative
+
+
 def test_stage_metrics_do_not_count_non_emitting_lir_markers() -> None:
     """nbody's final LIR reported 286 instructions for the 204 actually emitted."""
     from qbopt.model import ir

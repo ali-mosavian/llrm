@@ -64,6 +64,30 @@ def test_pipeline_reaches_a_fixed_point_without_emission() -> None:
     assert second == first
 
 
+def test_structural_candidate_pass_stages_are_named_tentative(monkeypatch) -> None:
+    """Matmul's rejected peel stages appeared to be the production pipeline."""
+    from qbopt.optimize import unroll
+
+    stages = []
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (), ()),), sealed=True)
+
+    def candidate(original, _where, *, optimize, watch):
+        optimize(original)
+        return original
+
+    monkeypatch.setattr(unroll, "optimized", candidate)
+    transform.applied(
+        body,
+        frozenset(),
+        {},
+        peel_=False,
+        unswitch_=False,
+        watch=lambda stage, _state: stages.append(stage),
+    )
+
+    assert any(stage.startswith("candidate-unroll-r01-") for stage in stages)
+
+
 def test_hoisted_variables_do_not_collide_with_promoted_cells() -> None:
     """lngmix printed 4081664 for 142900 after hoisting reused a promoted variable id."""
     from qbopt.abi import runtime

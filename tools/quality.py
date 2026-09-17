@@ -714,7 +714,7 @@ def _comparisons(reports: list[dict], references: list[dict]) -> list[dict]:
 
 def _first_excess_stage(stages: list[dict], metric: str, reference: int) -> str | None:
     """First stage after which a structural excess remains through emission."""
-    relevant = [one for one in stages if metric in one]
+    relevant = [one for one in stages if metric in one and not one.get("tentative", False)]
     if not relevant or relevant[-1][metric] <= reference:
         return None
     for index, stage in enumerate(relevant):
@@ -723,11 +723,16 @@ def _first_excess_stage(stages: list[dict], metric: str, reference: int) -> str 
     return None
 
 
+def _tentative_stage(stage: str) -> bool:
+    """Whether a watched state belongs to a not-yet-accepted transaction."""
+    return stage.startswith("mir-candidate-") or stage.endswith("-candidate")
+
+
 def _gap_attribution(stages: list[dict], metric: str, reference: int, emitted: int) -> dict:
     """Attribute only when the last stage and emitted-byte instruments agree."""
     if emitted <= reference:
         return {"status": "no_excess", "stage": None}
-    relevant = [one for one in stages if one.get("form") == "lir" and metric in one]
+    relevant = [one for one in stages if one.get("form") == "lir" and metric in one and not one.get("tentative", False)]
     if not relevant:
         return {"status": "unmeasured", "stage": None}
     last = relevant[-1][metric]
@@ -809,7 +814,8 @@ def main(argv: list[str] | None = None) -> int:
             def watch(stage: str, function: str, state: object, sink: dict[str, list[dict]] = stages) -> None:
                 measured = _stage_metrics(state)
                 if measured:
-                    sink.setdefault(function, []).append({"stage": stage, **measured})
+                    tentative = _tentative_stage(stage)
+                    sink.setdefault(function, []).append({"stage": stage, "tentative": tentative, **measured})
 
             stage_dump = args.dump / f"{source.stem}-{name}-stages"
             module = cfront.assembled(text, source.stem, optimise=True, cpu=name, dump=stage_dump, watch=watch)

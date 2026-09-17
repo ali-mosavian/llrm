@@ -37,6 +37,11 @@ that fails to return without mistaking a timeout for a wrong answer.
   allocator spill markers are structural counts.  They are not elapsed time.
 - rematerializations count the final allocated-LIR instructions that rebuild a
   value at its use instead of keeping it live or assigning a spill slot.
+- Structural transactions retain their candidate stage metrics for audit, but
+  mark them `tentative: true`. Gap attribution ignores those entries until an
+  explicit `*-accepted` state enters the production pipeline. This distinction
+  matters when a rejected peel or unroll briefly looks better than the body
+  ultimately emitted.
 - dynamic operations are a profile-free CFG estimate: ordinary branches divide
   evenly and natural loops use the allocator's ten-iteration convention. The
   same basic-block construction, natural-loop analysis and frequency solver run

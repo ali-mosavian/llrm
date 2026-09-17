@@ -2786,6 +2786,7 @@ def applied(
     passes = [one for one in passes if not isinstance(one, unroll.Unroll)]
     peelers = [one for one in passes if isinstance(one, peel.Peel)]
     passes = [one for one in passes if not isinstance(one, peel.Peel)]
+
     def scalarized(state: MirBody, stage: str) -> MirBody:
         for one in boundary:
             state = one.transform(state)
@@ -2807,7 +2808,7 @@ def applied(
             watch("r01-peel", body)
         return body
 
-    def fixed(state: MirBody, *, consider_unroll: bool = False) -> MirBody:
+    def fixed(state: MirBody, *, consider_unroll: bool = False, prefix: str = "") -> MirBody:
         # A monotone chain may expose one simplification per operation.
         # Scale with the body and separately reject a repeated state, so an
         # oscillator fails immediately instead of consuming that allowance.
@@ -2819,7 +2820,7 @@ def applied(
             for one in passes:
                 state = one.transform(state)
                 if watch is not None:
-                    watch(f"r{iteration + 1:02d}-{one.name}", state)
+                    watch(f"{prefix}r{iteration + 1:02d}-{one.name}", state)
             # Ask at the original pipeline boundary. Fully converging the
             # scalar passes first destroys matmul's exact counted-loop shape;
             # accepting the candidate still requires a separately converged
@@ -2828,8 +2829,11 @@ def applied(
                 state = unroll.optimized(
                     state,
                     where,
-                    optimize=lambda candidate: fixed(scalarized(candidate, "unroll")),
-                    watch=watch,
+                    optimize=lambda candidate: fixed(
+                        scalarized(candidate, f"{prefix}candidate-unroll"),
+                        prefix=f"{prefix}candidate-unroll-",
+                    ),
+                    watch=(None if watch is None else lambda stage, candidate: watch(f"{prefix}{stage}", candidate)),
                 )
             if only is not None or state == before:
                 return state
@@ -2844,7 +2848,9 @@ def applied(
             body,
             where,
             optimize=lambda candidate: fixed(
-                scalarized(candidate, "peel"), consider_unroll=bool(unrollers)
+                scalarized(candidate, "candidate-peel"),
+                consider_unroll=bool(unrollers),
+                prefix="candidate-peel-",
             ),
             watch=watch,
         )
