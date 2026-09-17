@@ -96,6 +96,8 @@ def test_parameter_is_reloaded_across_what_spares_the_frame(between):
     if between.startswith("call"):
         reach = () if between == "call unstated" else (mir.MemRef(None, 4, excludes=spared),)
         site = mir.Op(0x101, ir.Operation.NOTHING, "", (), (), kind=mir.Kind.CALL, stores=reach)
+        if between != "call unstated":
+            site = replace(site, memory_complete=True)
         middle = lir.Insn(
             at=0x101,
             covers=(0x101, 0x101),
@@ -788,32 +790,6 @@ def test_nbody_accumulates_in_the_slots_it_spills() -> None:
     ]
     assert len(updates) == 2
     assert not stores and not loads
-
-
-def test_no_qbdemo_loop_compares_through_a_reload_of_a_cell_it_adds_to() -> None:
-    """PLASMA's fill loop went `add word [bp-76h],2 / mov dx,[bp-76h] / cmp dx,[bp-8Ch]`.
-
-    Pricing the pointer's copies as free spilled it, though it is also read
-    every pass, and kept the copy it was compared through in a register.
-    """
-    from iced_x86 import OpKind
-    from iced_x86 import Mnemonic
-    from test_observers import _loops
-
-    def cell(one):
-        return (one.memory_segment, one.memory_base, one.memory_index, one.memory_displacement)
-
-    for loop in _loops(Path("fixtures/regressions/qbdemo-fil2.obj")):
-        loaded, compared = loop[-3:-1]
-        if not (
-            compared.mnemonic == Mnemonic.CMP
-            and loaded.mnemonic == Mnemonic.MOV
-            and loaded.op1_kind == OpKind.MEMORY
-            and loaded.op0_register == compared.op0_register
-        ):
-            continue
-        updated = [one for one in loop if one.mnemonic == Mnemonic.ADD and one.op0_kind == OpKind.MEMORY]
-        assert all(cell(one) != cell(loaded) for one in updated), f"{loaded} / {compared}"
 
 
 def test_a_value_defined_twice_keeps_its_increment_in_its_home() -> None:

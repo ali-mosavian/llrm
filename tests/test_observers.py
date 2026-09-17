@@ -132,17 +132,27 @@ def test_nbody_writes_no_scratch_variable_in_its_inner_loop() -> None:
 
 def _loops(obj: Path) -> list[list]:
     """The rebuilt object's loops: the instructions from each backward branch's target to it."""
+    from iced_x86 import Decoder
     from iced_x86 import FlowControl
     from qbopt.frontend import blocks
 
     result = wholeseg.emitted(obj.read_bytes())
     assert result.outcome is wholeseg.Emission.LIR, result.reason
     found = module.of(omf.parse(result.data))
-    insns = [one for block in blocks.partition(found, blocks.code_map(found)) for one in block.insns]
+    mapped = blocks.code_map(found)
+    # A fresh OMF object deliberately has no BC module header for the legacy
+    # mapper to recognize. Its code segment is entirely emitter-owned machine
+    # code, so a linear decode is exact; retain the CFG-aware path for a future
+    # emitter that preserves or reintroduces a recognized source header.
+    insns = (
+        list(Decoder(16, found.code, ip=0))
+        if isinstance(mapped, str)
+        else [one.insn for block in blocks.partition(found, mapped) for one in block.insns]
+    )
     return [
-        [one.insn for one in insns if back.insn.near_branch_target <= one.at <= back.at]
+        [one for one in insns if back.near_branch_target <= one.ip <= back.ip]
         for back in insns
-        if back.insn.flow_control == FlowControl.CONDITIONAL_BRANCH and back.insn.near_branch_target < back.at
+        if back.flow_control == FlowControl.CONDITIONAL_BRANCH and back.near_branch_target < back.ip
     ]
 
 
