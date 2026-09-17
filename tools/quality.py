@@ -319,14 +319,16 @@ def _dynamic_operations(
 
 
 def _cost(rows: list[tuple[str, str, str]], target: targets.Profile) -> float | None:
+    kinds = [cycles.classify(mnemonic, operands, raw) for raw, mnemonic, operands in rows]
+    if "unknown" in kinds:
+        return None
+    try:
+        for kind in kinds:
+            target.cost(kind)
+    except KeyError:
+        return None
     if target.name == "386":
-        total = 0
-        for raw, mnemonic, operands in rows:
-            try:
-                total += target.cost(cycles.classify(mnemonic, operands, raw))
-            except KeyError:
-                return None
-        return float(total)
+        return float(sum(target.cost(kind) for kind in kinds))
     scored, _detail = cycles.score(rows)
     return float(scored[0][targets.names().index(target.name) - 1])
 

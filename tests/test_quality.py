@@ -210,6 +210,28 @@ def test_emitted_memory_metrics_cover_forms_missing_from_the_cycle_table() -> No
     assert quality._memory(rows) == (3, 2)
 
 
+def test_386_cost_covers_integer_and_x87_forms_in_emitted_c() -> None:
+    """One ordinary load made every 386 corpus cost null; x87 was priced as generic work elsewhere."""
+    from qbopt.backend import cpu
+
+    rows = [
+        ("668b4606", "mov", "eax,[bp+6]"),
+        ("668346f418", "add", "dword ptr [bp-0ch],18h"),
+        ("dd46f4", "fld", "qword ptr [bp-0ch]"),
+        ("d80e0000", "fmul", "dword ptr ds:[0]"),
+        ("dd5ef4", "fstp", "qword ptr [bp-0ch]"),
+        ("c9", "leave", ""),
+    ]
+    assert quality._cost(rows, cpu.profile("386")) == 69
+
+
+def test_unknown_instruction_has_no_invented_default_cost() -> None:
+    """An unclassified instruction used to receive two cycles on every non-386 target."""
+    from qbopt.backend import cpu
+
+    assert quality._cost([("0f0b", "ud2", "")], cpu.profile("P5")) is None
+
+
 def test_stage_metrics_count_a_two_address_memory_operand_once() -> None:
     """The same RMW cell is both a semantic source and destination, but one load."""
     from qbopt.model import ir

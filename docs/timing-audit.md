@@ -186,3 +186,25 @@ without reading their consumer would also lose the unit scale.
 This cross-check changes no selection or emitted assembly. It establishes
 that compiler heuristics and hardware timing evidence must stay separately
 identified; neither validates the other's numbers by resemblance alone.
+
+## Complete 386 static-ranking forms
+
+The shared 386 profile now covers the ordinary integer operand forms emitted
+by the C frontend. Integer register/memory transfer costs are cross-checked
+against Open Watcom's `bld/cg/intel/c/x86regsv.c`: for 386 it uses 4 for a
+load, 2 for a store, 2 for a push and 4 for a pop. Its `x86mul.c` independently
+uses 2 for integer add and 3 for a constant shift. Memory arithmetic in the
+qbopt profile composes those units rather than treating a memory operand as a
+register operand.
+
+The x87 ranking uses GCC's `i386_cost` in
+`gcc/config/i386/x86-tune-costs.h`: 8-unit floating loads/stores and
+23/27/88-unit add/multiply/divide. A memory arithmetic form includes the
+corresponding 8-unit load. These are compiler tuning units, not measured core
+clocks; the report continues to describe them as weighted cost.
+
+`cycles.classify` now names x87 loads, stores, arithmetic, conversions and
+control-word transfers instead of collapsing all of them to `unknown`. A form
+with no entry returns a null weighted cost. In particular, non-386 profiles do
+not inherit the old generic two-unit fallback for an unclassified instruction,
+and `rep` remains unpriced until its runtime count is known.

@@ -106,6 +106,26 @@ def classify(mnem, ops, raw=""):
     mem = lambda o: "[" in o
     if mnem == "nop":
         return "nop"
+    if mnem in ("fld", "fild"):
+        return "x87_load"
+    if mnem in ("fst", "fstp"):
+        return "x87_store"
+    if mnem in ("fist", "fistp"):
+        return "x87_convert_store"
+    if mnem in ("fadd", "faddp", "fsub", "fsubr", "fsubp", "fsubrp"):
+        return "x87_add_m" if any(mem(one) for one in a) else "x87_add"
+    if mnem in ("fmul", "fmulp"):
+        return "x87_mul_m" if any(mem(one) for one in a) else "x87_mul"
+    if mnem in ("fdiv", "fdivr", "fdivp", "fdivrp"):
+        return "x87_div_m" if any(mem(one) for one in a) else "x87_div"
+    if mnem == "fldcw":
+        return "x87_control_load"
+    if mnem in ("fstcw", "fnstcw"):
+        return "x87_control_store"
+    if mnem == "leave":
+        return "leave"
+    if mnem.startswith("rep"):
+        return "rep_string"
     if mnem in ("jmp",):
         return "jmp_short"
     if mnem.startswith("j"):
