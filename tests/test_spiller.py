@@ -381,14 +381,13 @@ def test_c_matmul_multiplies_spilled_rows_directly_from_memory() -> None:
     source = Path("bench/c/matmul.c")
     module = cfront.assembled(cfront.recorded(source, []), source.stem, optimise=True)
     procedure = next(one for one in module.procedures if one.name == "_bench_matmul")
-    multiplies = [
-        operands
-        for _raw, mnemonic, operands in quality._rows(quality._blob(module, procedure, 0))
-        if mnemonic == "imul"
-    ]
+    rows = quality._rows(quality._blob(module, procedure, 0))
+    multiplies = [operands for _raw, mnemonic, operands in rows if mnemonic == "imul"]
+    extensions = [operands for _raw, mnemonic, operands in rows if mnemonic == "movsx"]
 
     assert len(multiplies) >= 8
     assert sum("[bp" in operands.lower() for operands in multiplies) >= 8, multiplies
+    assert sum("[" in operands for operands in extensions) >= 8, extensions
 
 
 def test_nonoverlapping_spills_share_one_compatible_frame_slot() -> None:

@@ -154,13 +154,15 @@ def concatenated(body: lir.LirBody) -> lir.LirBody:
 
 
 def extensions(body: lir.LirBody) -> lir.LirBody:
-    """Fold a transitive signed or unsigned extension into one instruction.
+    """Fold a load or transitive extension into one widening instruction.
 
     This is deliberately post-allocation.  MIR says that both conversions
     happen; x86 says that ``movzx edx,byte ptr [m]`` can implement the same
-    value as ``movzx dx,byte ptr [m]; movzx edx,dx``.  Requiring one physical
-    register root for both results also preserves every incidental register
-    byte, rather than relying only on the virtual result being equivalent.
+    value as either ``mov dx,[m]; movzx edx,dx`` or
+    ``movzx dx,byte ptr [m]; movzx edx,dx``.  A transitive extension requires
+    one physical register root for both results so it preserves every
+    incidental register byte.  A plain load may use another register only
+    when its SSA value has no other reader.
     """
     users = Counter(value for block in body.blocks for one in block.insns for value in one.uses)
     users.update(value for block in body.blocks for phi in block.phis for _, value in phi.incoming)
@@ -198,10 +200,32 @@ def _extension(first: lir.Insn, second: lir.Insn, users: Counter[int]) -> "lir.I
             or one.spill_store
             for one in (first, second)
         )
-        or second.symbol is True
     ):
         return None
+    # The follower forms below have register operands only, so even an
+    # unroller's conservative ``symbol=True`` marker cannot belong to an
+    # encoded relocation there.  The first instruction retains the actual
+    # memory operand and its ownership; its replacement anchor clears the
+    # follower marker.
     match first.what, second.what:
+        case (
+            ir.Semantics(ir.Operation.MOVE, "mov", (ir.Reg() as middle,), (ir.Mem() as source,)),
+            ir.Semantics(
+                ir.Operation.EXTEND,
+                "movsx" | "movzx" as second_name,
+                (ir.Reg() as destination,),
+                (ir.Reg() as repeated,),
+            ),
+        ):
+            if (
+                middle != repeated
+                or not source.width == middle.width < destination.width
+                or len(first.defines) != 1
+                or second.uses != first.defines
+                or users[first.defines[0]] != 1
+            ):
+                return None
+            extension = second_name
         case (
             ir.Semantics(ir.Operation.EXTEND, "movsx" | "movzx" as first_name, (ir.Reg() as middle,), (source,)),
             ir.Semantics(
@@ -221,9 +245,10 @@ def _extension(first: lir.Insn, second: lir.Insn, users: Counter[int]) -> "lir.I
                 or users[first.defines[0]] != 1
             ):
                 return None
+            extension = first_name
         case _:
             return None
-    what = ir.Semantics(ir.Operation.EXTEND, first_name, (destination,), (source,))
+    what = ir.Semantics(ir.Operation.EXTEND, extension, (destination,), (source,))
     if select.emit(what) is None:
         return None
     uses = tuple(dict.fromkeys((*first.uses, *(value for value in second.uses if value not in first.defines))))

@@ -1206,7 +1206,7 @@ def test_crc32_reads_a_byte_directly_into_its_dword_value() -> None:
     assert not verify.verify(result)
 
 
-@pytest.mark.parametrize("guard", ["signedness", "register", "shared", "clobber", "symbol"])
+@pytest.mark.parametrize("guard", ["signedness", "register", "shared", "clobber"])
 def test_transitive_extension_preserves_nonlocal_machine_state(guard: str) -> None:
     cell = ir.Mem(None, 1, through=Register.BX)
     narrow = lir.Insn(
@@ -1246,11 +1246,46 @@ def test_transitive_extension_preserves_nonlocal_machine_state(guard: str) -> No
             )
         case "clobber":
             narrow = replace(narrow, clobbers=frozenset({Register.AX}))
-        case "symbol":
-            wide = replace(wide, symbol=True)
     body = lir.LirBody("guarded", 0, (lir.LirBlock(0, (narrow, wide, *tail)),), {}, {})
 
     assert peephole.extensions(body) == body
+
+
+def test_register_only_extension_clone_does_not_claim_a_relocation() -> None:
+    """Unrolling marked every clone symbolic, including a register-only follower.
+
+    The actual memory operand remains on the first instruction.  Folding must
+    preserve that owner and turn the follower into a non-symbolic anchor.
+    """
+    cell = ir.Mem(None, 1, through=Register.BX)
+    narrow = lir.Insn(
+        0,
+        (0, 3),
+        ir.Semantics(ir.Operation.EXTEND, "movzx", (ir.Reg(Register.DX, 2),), (cell,)),
+        (1,),
+        (),
+        symbol=True,
+    )
+    wide = lir.Insn(
+        3,
+        (3, 3),
+        ir.Semantics(
+            ir.Operation.EXTEND,
+            "movzx",
+            (ir.Reg(Register.EDX, 4),),
+            (ir.Reg(Register.DX, 2),),
+        ),
+        (2,),
+        (1,),
+        symbol=True,
+    )
+    body = lir.LirBody("cloned-extension", 0, (lir.LirBlock(0, (narrow, wide)),), {}, {})
+
+    result = peephole.extensions(body)
+
+    assert result.insns[0].symbol is True
+    assert result.insns[1].symbol is False
+    assert result.insns[0].what.sources == (cell,)
 
 
 @pytest.mark.parametrize(

@@ -1208,7 +1208,11 @@ one documented target without materially regressing another.
   unrolled products now read their long-lived lhs factors directly from spill
   slots. On the 386 profile `_bench_matmul` falls from 717 to 685 bytes, 191 to
   182 instructions, 18 to 9 spill reloads, and 8,588 to 7,787 estimated dynamic
-  operations; the linked DOS benchmark retains its independent answer.
+  operations. Post-allocation load-extension folding then turns the sixteen
+  remaining `mov r16,[cell]; movsx r32,r16` pairs into direct widening loads,
+  taking the same function to 653 bytes, 166 instructions, 865 modeled cost,
+  and 6,907 dynamic operations. The linked DOS benchmark retains its
+  independent answer.
   The greedy allocator also uses soft copy-neighbor preferences, including
   copies inserted after coalescing. It prefers fixed or already assigned
   neighbors without relaxing interference, clobbers, classes or pins.
