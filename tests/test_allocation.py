@@ -790,3 +790,29 @@ def test_conflicting_hard_register_assignments_are_unplaceable_not_spills() -> N
 
     with pytest.raises(allocate.Unplaced, match=r"value#2 cannot be placed"):
         allocate.allocate(_one_block(first, second, both), pinned={1: Register.DX, 2: Register.DX})
+
+
+def test_a_hard_register_assignment_is_not_an_eviction_victim() -> None:
+    """A later expensive range may not take a hard register assignment.
+
+    The far-owner allocation experiment fixed an owner in DI.  A hotter
+    recurrence then evicted that fixed interval because greedy eviction
+    charged its low spill weight, as though a reload in any register could
+    still meet DI's requirement.  A hard assignment has no such recovery;
+    this must be reported as pressure or resolved by an explicit split.
+    """
+    from qbopt.analysis import intervals
+    from qbopt.backend import allocate
+
+    held = intervals.Interval(1, (intervals.Segment(0, 4),), weight=0.1)
+    incoming = intervals.Interval(2, (intervals.Segment(0, 4),), weight=10.0)
+
+    got = allocate._evict(
+        incoming,
+        (Register.DI,),
+        {allocate._whole(Register.DI): [1]},
+        {1: held, 2: incoming},
+        [],
+        protected=frozenset({1}),
+    )
+    assert got is None, got

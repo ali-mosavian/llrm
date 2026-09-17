@@ -327,3 +327,21 @@ pressure solution: no whole-loop owner was pinned and the `r_walk` listing is
 intentionally unchanged.  With impossible hard constraints no longer able to
 masquerade as a spill plan, the next iteration can evaluate an explicit,
 joint invariant-base/competing-range candidate honestly.
+
+### 18. Fixed ranges are eviction-protected — 2026-09-18
+
+The same audit uncovered a second half of the fixed-register invariant.  Even
+after fixed values could not reach the ordinary spill result, a hotter flexible
+range could evict one because eviction charged its normalized spill weight.
+The requeued fixed interval then failed later.  A fail-first allocation
+regression now proves that a protected hard range is never offered as an
+eviction victim.
+
+The allocator passes its fixed set to eviction and rejects a register whose
+overlapping occupants include a protected value.  A controlled far-load
+allocation trace consequently retains both provisional owner bases and spills
+the competing derived index/recurrence instead.  The pins were diagnostics
+only and are not part of production output: this establishes the feasible
+joint-plan alternative, while the next iteration must choose it from
+allocation costs and legal split/recompute alternatives rather than naming
+those two owners or their registers.

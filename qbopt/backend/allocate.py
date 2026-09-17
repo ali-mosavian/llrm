@@ -482,6 +482,7 @@ def allocate(
                 live,
                 masks,
                 movable,
+                frozenset(fixed),
                 widths.get(value, 4),
                 cascades.get(value, newest),
                 cascades,
@@ -647,6 +648,7 @@ def _evict(
     live: dict[int, ranges.Interval],
     masks: list[tuple[int, frozenset[Register_]]],
     movable=lambda other, register: False,
+    protected: frozenset[int] = frozenset(),
     width: int = 4,
     cascade: int | None = None,
     cascades: "dict[int, int] | None" = None,
@@ -668,6 +670,12 @@ def _evict(
             continue
         victims = [other for other in union.get(_whole(register), ()) if other in live and live[other].overlaps(one)]
         if not victims:
+            continue
+        # A fixed register occurrence may have a low ordinary spill price,
+        # but it has no legal spill rewrite: its reload would no longer be
+        # tied to the hardware register.  Do not let a hotter flexible range
+        # price that fact as a cheap eviction candidate.
+        if any(other in protected for other in victims):
             continue
         if cascade is not None and any((cascades or {}).get(other, 0) >= cascade for other in victims):
             continue
