@@ -519,6 +519,7 @@ def lowered(
     without anything having been optimised.
     """
     from qbopt.model import lir
+    from qbopt.backend import rmw
     from qbopt.analysis import ssa
     from qbopt.backend import lower_floats
     from qbopt.backend import lower_switches
@@ -603,6 +604,11 @@ def lowered(
         held.value for insns in made.values() for one in insns for held, _ in one.requires if held.value not in one.uses
     )
     uses.update(value.id for block in body.blocks for phi in block.phis for value in phi.incoming.values())
+    # This is instruction selection: MIR says a byte load, promoted OR and
+    # byte store; x86 can express that exact C update in one memory operand.
+    # It must happen before allocation because the dead promotions otherwise
+    # consume the registers needed by its address and surrounding loop.
+    made = {at: rmw.selected(insns, uses) for at, insns in made.items()}
     made = {at: _memory_arguments(insns, uses, making._exposed) for at, insns in made.items()}
     made = {at: _immediate_arguments(insns, uses) for at, insns in made.items()}
     made = {at: _rematerialized_arguments(insns, uses, making._exposed) for at, insns in made.items()}
@@ -1451,13 +1457,7 @@ class Lowering:
         if self._occurrences is None:
             covers = getattr(op, "covers", None)
             extra = getattr(op, "extra_covers", ())
-            spread = (
-                ()
-                if op.inserted
-                else (covers, *extra)
-                if extra
-                else self._coverage.get(op.id, ())
-            )
+            spread = () if op.inserted else (covers, *extra) if extra else self._coverage.get(op.id, ())
             return covers or (op.at, op.at), spread
 
         missing = tuple(identity for identity in op.absorbed if identity not in self._occurrences)

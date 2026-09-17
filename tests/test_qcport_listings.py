@@ -19,6 +19,19 @@ def test_clean_revision_refuses_dirty_qcport_source(monkeypatch: pytest.MonkeyPa
         qcport_listings.clean_revision(tmp_path)
 
 
+def test_clean_revision_names_a_dirty_qbopt_checkout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A listing made from uncommitted lowering named the previous commit.
+
+    That made the RMW experiment look reproducible at a revision that did not
+    contain it.  The harness must refuse that evidence rather than record a
+    false qbopt revision in its manifest.
+    """
+    monkeypatch.setattr(qcport_listings, "git", lambda _root, *_args: " M qbopt/backend/lower.py\n")
+
+    with pytest.raises(RuntimeError, match="qbopt checkout is dirty"):
+        qcport_listings.clean_revision(tmp_path, "qbopt checkout")
+
+
 def test_source_path_rejects_a_path_outside_the_clean_worktree(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="escapes QCport root"):
         qcport_listings.source_path(tmp_path, "../r_walk.c")

@@ -59,9 +59,7 @@ def test_optimized_branch_result_is_promoted_to_a_phi():
     """
     lines = [
         line.strip()
-        for line in cfront.compiled(
-            (FIXTURES / "choose.cgs").read_text(), "choose", optimise=True
-        ).splitlines()
+        for line in cfront.compiled((FIXTURES / "choose.cgs").read_text(), "choose", optimise=True).splitlines()
     ]
     # Promotion now exposes the one-use helper to inlining, so the strongest
     # result has no _pick body to inspect.  A regression leaves either the
@@ -121,9 +119,10 @@ def test_constant_return_propagates_across_a_direct_call():
     returning path produces 37.  Local SCCP cannot cross that procedure
     boundary; the caller must receive the module summary's constant.
     """
-    lines = [line.strip() for line in cfront.compiled(
-        (FIXTURES / "ipconst.cgs").read_text(), "ipconst", optimise=True
-    ).splitlines()]
+    lines = [
+        line.strip()
+        for line in cfront.compiled((FIXTURES / "ipconst.cgs").read_text(), "ipconst", optimise=True).splitlines()
+    ]
     body = lines[lines.index("_add_answer proc far") : lines.index("_add_answer endp")]
     assert "call _answer" not in body
     assert any(line.startswith("add ") and line.endswith(", 37") for line in body)
@@ -162,16 +161,13 @@ def test_private_constant_argument_specializes_before_local_sccp():
     """
     lines = [
         line.strip()
-        for line in cfront.compiled(
-            (FIXTURES / "iparg.cgs").read_text(), "iparg", optimise=True
-        ).splitlines()
+        for line in cfront.compiled((FIXTURES / "iparg.cgs").read_text(), "iparg", optimise=True).splitlines()
     ]
     assert "_twice proc near" not in lines
-    body = lines[
-        lines.index("_answer_from_argument proc far") : lines.index("_answer_from_argument endp")
-    ]
+    body = lines[lines.index("_answer_from_argument proc far") : lines.index("_answer_from_argument endp")]
     assert "call _twice" not in body
     assert "mov ax, 42" in body
+
 
 def test_int64_stream_raises_whole_signed_and_unsigned_mir_values():
     """Watcom emits TY_{U,}INT_8, but qbopt stopped at `no scalar width`.
@@ -914,3 +910,18 @@ def test_one_expression_through_twin_counters_reaches_a_fixed_point():
     gave each read its own recurrence, one a round, for more than 16 rounds."""
     text = cfront.compiled((FIXTURES / "anims.cgs").read_text(), "anims", optimise=True)
     assert "_link_anims" in text
+
+
+def test_nonvolatile_far_byte_or_is_one_read_modify_write() -> None:
+    """A byte bitmap update widened to three word temporaries before allocation.
+
+    That exhausted the address-register file in QCport's r_walk marked-face
+    loop, preventing the normal hottest-loop live-range split.  The source is
+    intentionally standalone: the rule is a non-volatile byte compound
+    assignment, not a renderer or bitmap-specific exception.
+    """
+    source = FIXTURES / "rmwbyte.c"
+    text = cfront.compiled(cfront.recorded(source, []), source.stem, optimise=True)
+    body = _proc([line.strip() for line in text.splitlines()], "_mark_bit")
+
+    assert any(line.startswith("or byte ptr es:[") for line in body), body

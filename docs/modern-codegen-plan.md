@@ -23,7 +23,7 @@ iteration updates this file in the same commit.
 | Per-CPU measurement | in progress | CPU profiles, C corpus, static/dynamic metrics and reference listings exist; audited targets remain. |
 | MIR/LIR provenance and fresh OMF | largely complete | allocated LIR emits directly with external source maps/allocation hints; legacy object-rewrite compatibility remains. |
 | SROA and scalar promotion | partial | fixed/disjoint leaves and some indexed leaves promote; general aggregate/copy decomposition remains. |
-| Pressure-aware allocation | partial | spilling, slot colouring, selected folds and local rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
+| Pressure-aware allocation | partial | spilling, slot colouring, byte RMW selection and local rematerialization exist; global splitting/rematerialization and x87 allocation remain. |
 | Loop optimization | partial | exact recurrences, formula costing, specialization, peeling and exact unrolling exist; versioning, rotation and broad pressure forecasting remain. |
 | Whole-module optimization | partial | summaries, constant returns, private inlining and private procedure DCE exist; full IPSCCP/cloning and private-data DCE remain. |
 | Post-allocation quality | partial | copy propagation, machine CSE/DCE and C-path tail sharing exist; source-map-aware BC tail sharing and CPU scheduling remain. |
@@ -83,9 +83,41 @@ word temporaries before allocation, while BCC keeps the operation as one byte
 read-modify-write instruction.  Those temporary live ranges consume the
 capacity that the existing splitter needs.
 
-Next implementation: recognize a general, non-volatile byte memory
-read-modify-write chain in MIR/LIR and select a byte RMW form when its address,
-load and store are identical and no intervening effect observes the value.
-The regression must use a standalone C input; after it lowers pressure, rerun
-the paired `r_walk` manifest to establish whether the generic splitter keeps
-the pointer bases.
+Next implementation: select a general byte memory read-modify-write form in
+lowering when its address, load and store are identical and no intervening
+memory effect can be crossed.  The regression must use a standalone C input;
+after it lowers pressure, rerun the paired `r_walk` manifest to establish
+whether the generic splitter keeps the pointer bases.
+
+### 5. Exact byte RMW selection — 2026-09-18
+
+`fixtures/c/rmwbyte.c` first failed its emitted-assembly regression: its far
+byte compound assignment was expanded into a byte load, two zero extensions,
+a word OR, a truncation and a byte store.  `backend/rmw.py` now makes lowering
+select `or byte ptr es:[base+index],reg8` when the load/OR/truncation/store
+values are private, the byte cells are identical, and only integer-only mask
+preparation lies between the original read and write.  The selected operation
+still performs one byte read and one byte write; no arbitrary intervening
+memory read, write, call, branch, or provenance boundary is crossed.
+
+This is deliberately instruction selection inside `lowered()`, before
+allocation—not a MIR pass and not an LIR optimization phase.  MIR keeps its
+language-level promotion semantics and has no target form or register fact.
+The fail-first standalone C regression now emits the byte RMW.  The immediate
+QCport listing visibly replaces the former promoted sequence with `or byte
+ptr es:[bx+di],dl`, but the two pointer bases still reload from their frames:
+this removes pressure, yet does not by itself make the existing regional split
+fit.  The next allocator iteration must explain the remaining occupied
+ranges from a fresh reproducible listing rather than assume the split should
+now succeed.
+
+### 6. Listing provenance guard — 2026-09-18
+
+The first RMW QCport listing exposed a measurement defect: it contained
+uncommitted qbopt code while its manifest named the previous qbopt commit.
+`tools/qcport_listings.py` now rejects a dirty qbopt checkout just as it
+already rejects a dirty QCport worktree.  The new fail-first regression names
+the stale-lowering symptom and verifies the `qbopt checkout is dirty` refusal.
+The next paired `r_walk` run must be made after this iteration is committed;
+the pre-commit manifest is retained only as a visually inspected diagnostic,
+not performance or revision evidence.

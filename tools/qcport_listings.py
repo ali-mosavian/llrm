@@ -10,20 +10,20 @@ QCport revision* before any loop comparison is attempted:
 The BCC side uses QCport's own `tools/bcc.sh` with `LIST=1`; the qbopt side
 uses the same Watcom-front-end flags as the normal QCport wrapper.  The JSON
 manifest binds every listing to the source hash, QCport commit, qbopt commit,
-CPU profile, and listing hash.  A dirty source tree is rejected deliberately:
-matching an old object to edited source is not a measurement.
+CPU profile, and listing hash.  Dirty source *and compiler* trees are rejected
+deliberately: matching an old object to edited source—or naming an
+uncommitted listing as its parent commit—is not a measurement.
 """
 
 from __future__ import annotations
 
-import argparse
-import hashlib
-import json
 import os
-import subprocess
 import sys
+import json
+import hashlib
+import argparse
+import subprocess
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 INCLUDE_DIRS = (
@@ -49,13 +49,11 @@ def git(root: Path, *arguments: str) -> str:
     return done.stdout
 
 
-def clean_revision(root: Path) -> str:
+def clean_revision(root: Path, subject: str = "QCport source tree") -> str:
     """Return the immutable source revision or reject an unprovable input."""
     changed = git(root, "status", "--porcelain=v1")
     if changed:
-        raise RuntimeError(
-            f"QCport source tree is dirty ({root}); create a clean worktree before collecting listings"
-        )
+        raise RuntimeError(f"{subject} is dirty ({root}); create a clean worktree before collecting listings")
     return git(root, "rev-parse", "HEAD").strip()
 
 
@@ -123,6 +121,7 @@ def main(argv: list[str] | None = None) -> int:
 
     qcport = args.qcport.resolve()
     revision = clean_revision(qcport)
+    qbopt_revision = clean_revision(ROOT, "qbopt checkout")
     sources = [source_path(qcport, relative) for relative in args.sources]
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -131,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
         "schema": 1,
         "purpose": "paired source-identical QCport BCC/qbopt listing evidence",
         "qcport_revision": revision,
-        "qbopt_revision": git(ROOT, "rev-parse", "HEAD").strip(),
+        "qbopt_revision": qbopt_revision,
         "cpu": args.cpu,
         "bcc_command": "QCport tools/bcc.sh with LIST=1 (-3 -f87 -mm -Ox)",
         "qbopt_command": "qbopt.cfront --opt with the QCport medium-model include set",
