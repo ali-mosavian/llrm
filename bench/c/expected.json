@@ -1,0 +1,9 @@
+{
+  "sieve": {"arguments": [1024], "result": 11352381},
+  "crc": {"arguments": [0], "result": 3421780262},
+  "matmul": {"arguments": [0], "result": 353712},
+  "mandel": {"arguments": [0], "result": 8873},
+  "shellsort": {"arguments": [0], "result": 6384478},
+  "floats": {"arguments": [1000], "result": 162635},
+  "nbody": {"arguments": [200], "result": 4774160}
+}
