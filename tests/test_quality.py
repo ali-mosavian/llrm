@@ -70,3 +70,91 @@ def test_corpus_has_independent_inputs_and_canonical_crc() -> None:
 
 def test_reference_compilers_name_the_i686_gcc_not_the_host_gcc() -> None:
     assert quality.REFERENCE_COMPILERS == ("clang", "i686-elf-gcc")
+
+
+def test_reference_assembly_is_measured_per_function_without_directives_or_comments() -> None:
+    """Saving GCC's assembly path alone left every structural comparison manual."""
+    assembly = """
+        .type bench_one, @function
+    bench_one:
+        mov eax, DWORD PTR [esp+4] # load the argument
+        add DWORD PTR [esp+8], eax
+        jne .Lagain
+        call helper
+        ret
+        .size bench_one, .-bench_one
+    """
+    assert quality._reference_functions(assembly) == [
+        {
+            "name": "bench_one",
+            "instructions": 5,
+            "loads": 2,
+            "stores": 1,
+            "branches": 1,
+            "calls": 1,
+            "address_calculations": 0,
+            "normalized_sha256": quality._normalized_hash(
+                (
+                    "mov eax, dword ptr [esp+4]",
+                    "add dword ptr [esp+8], eax",
+                    "jne .lagain",
+                    "call helper",
+                    "ret",
+                )
+            ),
+        }
+    ]
+
+
+@pytest.mark.parametrize("mnemonic", ["fld", "fsubr", "cmp", "push"])
+def test_reference_memory_sources_are_not_counted_as_stores(mnemonic: str) -> None:
+    """nbody's x87 memory operands made the reference report more stores than instructions."""
+    assert quality._reference_memory(mnemonic, "qword ptr [esp+4]") == (1, 0)
+
+
+def test_structural_comparison_matches_c_and_medium_model_symbol_spellings() -> None:
+    reports = [
+        {
+            "source": "bench/c/sieve.c",
+            "cpu": "386",
+            "functions": [
+                {
+                    "name": "_bench_sieve",
+                    "instructions": 30,
+                    "loads": 8,
+                    "stores": 4,
+                    "branches": 3,
+                    "calls": 0,
+                    "address_calculations": 2,
+                }
+            ],
+        }
+    ]
+    references = [
+        {
+            "source": "bench/c/sieve.c",
+            "compiler": "i686-elf-gcc",
+            "assembly": "build/sieve-gcc.s",
+            "functions": [
+                {
+                    "name": "bench_sieve",
+                    "instructions": 20,
+                    "loads": 5,
+                    "stores": 4,
+                    "branches": 2,
+                    "calls": 0,
+                    "address_calculations": 1,
+                }
+            ],
+        }
+    ]
+    comparison = quality._comparisons(reports, references)[0]
+    assert comparison["function"] == "bench_sieve"
+    assert comparison["ratios"] == {
+        "instructions": 1.5,
+        "loads": 1.6,
+        "stores": 1.0,
+        "branches": 1.5,
+        "calls": None,
+        "address_calculations": 2.0,
+    }

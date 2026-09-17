@@ -9,6 +9,7 @@ evidence and a different normalized assembly hash.
     uv run python tools/quality.py bench/c/nbody.c --cpu all --references --dump build/quality
 """
 
+import re
 import json
 import shutil
 import hashlib
@@ -31,6 +32,91 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TARGETS = ROOT / "bench" / "c" / "targets.json"
 FORMAT = Formatter(FormatterSyntax.MASM)
 REFERENCE_COMPILERS = ("clang", "i686-elf-gcc")
+STRUCTURAL_METRICS = ("instructions", "loads", "stores", "branches", "calls", "address_calculations")
+
+_FUNCTION_TYPE = re.compile(r'^\.type\s+"?([^",]+)"?\s*,\s*[@%]function$')
+
+
+def _normalized_hash(instructions: tuple[str, ...]) -> str:
+    """A stable identity for a reference function's instruction stream."""
+    return hashlib.sha256(("\n".join(instructions) + "\n").encode()).hexdigest()
+
+
+def _reference_memory(mnemonic: str, operands: str) -> tuple[int, int]:
+    """Conservative load/store counts for normalized Intel-syntax assembly.
+
+    These are structural comparison metrics, not a dependence model.  A
+    read/modify/write memory destination counts once on each side, while LEA
+    is recorded separately as address calculation rather than as a load.
+    """
+    if "[" not in operands or mnemonic == "lea":
+        return 0, 0
+    parts = [one.strip() for one in operands.split(",")]
+    first_memory = bool(parts and "[" in parts[0])
+    later_memory = any("[" in one for one in parts[1:])
+    if not first_memory:
+        return int(later_memory), 0
+    pure_store = mnemonic.startswith(("mov", "fst", "fist", "fnst", "stmx")) or mnemonic == "pop"
+    read_only = mnemonic.startswith(
+        ("cmp", "test", "fld", "fild", "fadd", "fsub", "fmul", "fdiv", "fiadd", "fisub", "fimul", "fidiv")
+    ) or mnemonic in {"push", "call", "jmp"}
+    loads = int(later_memory or read_only or not pure_store)
+    stores = int(not read_only)
+    return loads, stores
+
+
+def _reference_functions(assembly: str) -> list[dict]:
+    """Measure each explicitly delimited function in GCC/Clang assembly."""
+    declared: set[str] = set()
+    current: str | None = None
+    functions: list[dict] = []
+    instructions: list[str] = []
+
+    def finish() -> None:
+        nonlocal current, instructions
+        if current is None:
+            return
+        loads = stores = 0
+        for line in instructions:
+            mnemonic, _, operands = line.partition(" ")
+            read, written = _reference_memory(mnemonic, operands)
+            loads += read
+            stores += written
+        functions.append(
+            {
+                "name": current,
+                "instructions": len(instructions),
+                "loads": loads,
+                "stores": stores,
+                "branches": sum(line.split(None, 1)[0].startswith("j") for line in instructions),
+                "calls": sum(line.split(None, 1)[0] == "call" for line in instructions),
+                "address_calculations": sum(line.split(None, 1)[0] == "lea" for line in instructions),
+                "normalized_sha256": _normalized_hash(tuple(instructions)),
+            }
+        )
+        current, instructions = None, []
+
+    for raw in assembly.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if found := _FUNCTION_TYPE.match(line):
+            declared.add(found.group(1))
+            continue
+        if line.endswith(":") and line[:-1].strip('"') in declared:
+            finish()
+            current = line[:-1].strip('"')
+            continue
+        if current is None:
+            continue
+        if line.startswith(".size"):
+            finish()
+            continue
+        if line.startswith(".") or line.endswith(":"):
+            continue
+        instructions.append(" ".join(line.lower().split()))
+    finish()
+    return functions
 
 
 class UntrustedTarget(ValueError):
@@ -224,19 +310,66 @@ def _reference(source: Path, compiler: str, dump: Path) -> dict:
                 "assembly": None,
                 "diagnostic": f"not an i386-family compiler: {target or 'unknown target'}",
             }
-    flags = ["-O3", "-march=i386", "-ffreestanding", "-S", "-masm=intel"]
+    flags = [
+        "-O3",
+        "-march=i386",
+        "-ffreestanding",
+        "-fno-pic",
+        "-fno-pie",
+        "-fno-stack-protector",
+        "-fno-asynchronous-unwind-tables",
+        "-S",
+        "-masm=intel",
+    ]
     if clang:
         flags += ["--target=i386-unknown-linux-gnu", "-mno-sse", "-mno-sse2", "-fno-vectorize", "-fno-slp-vectorize"]
     else:
         flags += ["-m32", "-mno-sse", "-mno-sse2", "-fno-tree-vectorize"]
     done = subprocess.run([path, *flags, str(source), "-o", str(dump)], capture_output=True, text=True)
+    generated = done.returncode == 0
+    assembly = dump.read_text() if generated else ""
     return {
+        "source": str(source),
         "compiler": compiler,
         "version": _version(compiler),
-        "status": "generated" if done.returncode == 0 else "failed",
-        "assembly": str(dump) if done.returncode == 0 else None,
+        "status": "generated" if generated else "failed",
+        "assembly": str(dump) if generated else None,
+        "flags": flags,
+        "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "functions": _reference_functions(assembly) if generated else [],
         "diagnostic": done.stderr if done.returncode else "",
     }
+
+
+def _comparisons(reports: list[dict], references: list[dict]) -> list[dict]:
+    """Join qbopt and reference functions by source and C symbol identity."""
+    out = []
+    for report in reports:
+        for reference in references:
+            if reference.get("source") != report["source"] or reference.get("status", "generated") != "generated":
+                continue
+            theirs = {one["name"].lstrip("_"): one for one in reference.get("functions", ())}
+            for function in report["functions"]:
+                name = function["name"].lstrip("_")
+                other = theirs.get(name)
+                if other is None:
+                    continue
+                ratios = {
+                    metric: function[metric] / other[metric] if other[metric] else None for metric in STRUCTURAL_METRICS
+                }
+                out.append(
+                    {
+                        "source": report["source"],
+                        "cpu": report["cpu"],
+                        "function": name,
+                        "compiler": reference["compiler"],
+                        "reference_assembly": reference.get("assembly"),
+                        "qbopt": {metric: function[metric] for metric in STRUCTURAL_METRICS},
+                        "reference": {metric: other[metric] for metric in STRUCTURAL_METRICS},
+                        "ratios": ratios,
+                    }
+                )
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -266,12 +399,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.references and source.suffix == ".c":
             for compiler in REFERENCE_COMPILERS:
                 references.append(_reference(source, compiler, args.dump / f"{source.stem}-{compiler}.s"))
+    comparisons = _comparisons(reports, references)
     result = {
         "schema": 1,
         "revision": _revision(),
         "compilers": {name: _version(name) for name in REFERENCE_COMPILERS},
         "reports": reports,
         "references": references,
+        "structural_comparisons": comparisons,
     }
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
@@ -284,6 +419,13 @@ def main(argv: list[str] | None = None) -> int:
                 f"{report['cpu']:>4} {Path(report['source']).stem}.{function['name']:<24} "
                 f"{function['bytes']:>5} bytes {function['instructions']:>4} ins {cost:>7} cost {ratio}"
             )
+    for comparison in comparisons:
+        ratio = comparison["ratios"]["instructions"]
+        measured = "--" if ratio is None else f"{ratio:.2f}x"
+        print(
+            f" ref {comparison['cpu']:>4} {Path(comparison['source']).stem}.{comparison['function']:<24} "
+            f"{comparison['compiler']:<14} {measured:>6} instructions"
+        )
     if not args.gate:
         return 0
     return int(
