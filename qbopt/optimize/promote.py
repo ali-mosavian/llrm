@@ -29,9 +29,11 @@ saying the same thing twice.
 """
 
 from collections import Counter
+from dataclasses import dataclass
 from dataclasses import replace
 
 from qbopt.model import mir
+from qbopt.model import memory
 from qbopt.analysis import ssa
 from qbopt.model.mir import Op
 from qbopt.analysis import loops
@@ -60,7 +62,36 @@ READS = frozenset(
 CELLS = frozenset({Space.SEGMENT, Space.FRAME})
 
 
+@dataclass(frozen=True, slots=True)
+class _Leaf:
+    """One exact scalar leaf of a canonical memory object.
+
+    Address SSA values describe how an operation reaches the leaf, not what
+    the leaf is.  Provenance is authoritative only when it names one dense,
+    exact byte range matching the access width; wider, strided and union
+    provenance stays as ordinary memory.
+    """
+
+    object: memory.Object
+    low: int
+    high: int
+
+
+def _leaf(ref: mir.MemRef) -> _Leaf | None:
+    provenance = ref.provenance
+    if provenance is None or len(provenance.slices) != 1:
+        return None
+    span = next(iter(provenance.slices))
+    if span.stride != 1 or span.width != 1 or span.high - span.low != ref.width:
+        return None
+    if span.object.extent is not None and not (0 <= span.low < span.high <= span.object.extent):
+        return None
+    return _Leaf(span.object, span.low, span.high)
+
+
 def _key(ref):
+    if (leaf := _leaf(ref)) is not None:
+        return leaf
     if ref.addr is None or ref.segment is not None or ref.addr.space not in CELLS:
         return None
     # Keep canonical object identity on the promoted cell. Reducing a direct
@@ -77,12 +108,17 @@ def _key(ref):
 
 
 def _reference(key, width):
+    if isinstance(key, _Leaf):
+        provenance = memory.Provenance.one(key.object, key.low, key.high)
+        return mir.MemRef(None, width, provenance=provenance)
     return replace(key, width=width) if isinstance(key, mir.MemRef) else mir.MemRef(key, width)
 
 
 def _order(key):
+    if isinstance(key, _Leaf):
+        return 1, str(key.object.kind), repr(key.object.identity), key.object.generation, key.low, key.high
     ref = _reference(key, 0)
-    return ref.addr.index, ref.addr.disp, -1 if ref.base is None else ref.base.id
+    return 0, ref.addr.index, ref.addr.disp, -1 if ref.base is None else ref.base.id
 
 
 class Promote(MIRTransform):
@@ -158,7 +194,7 @@ def _initializers(body: MirBody, cells: dict, dgroup: frozenset[int], bounds: di
             initialized[id(op)] = {
                 addr: fact
                 for addr, width in cells.items()
-                if not isinstance(addr, mir.MemRef)
+                if not isinstance(addr, (mir.MemRef, _Leaf))
                 and (addr, width) != (cell.addr, cell.width)
                 and mir.overlapping(mir.MemRef(addr, width), cell, dgroup, bounds)
                 and (fact := consts._cell(after, mir.MemRef(addr, width))) is not None

@@ -74,6 +74,94 @@ def test_frame_promotion_respects_unknown_and_overlapping_writes(clobber, reused
     assert bool(after.loads) is not reused
 
 
+@pytest.mark.parametrize("far", [False, True])
+def test_same_object_leaf_is_promoted_across_equivalent_pointer_values(far: bool) -> None:
+    """Two pointers proved to name one struct field still caused a reload.
+
+    SROA identity is the object and byte range, not the SSA expression used
+    to reach it.  A store through one equivalent pointer must feed a later
+    load through the other without weakening partial-overlap invalidation.
+    """
+    from qbopt.model import ir
+    from qbopt.model import memory
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
+
+    object_ = memory.Object(
+        memory.Kind.NAMED if far else memory.Kind.FRAME,
+        7 if far else ("aggregate", -16),
+        extent=12,
+    )
+    leaf = memory.Provenance.one(object_, 4, 8)
+    first = mir.Value(1, 0, variable=1, version=1)
+    second = mir.Value(2, 2, variable=2, version=1)
+    stored = mir.Value(3, 4, variable=3, version=1)
+    loaded = mir.Value(4, 6, variable=4, version=1)
+    first_segment = mir.Value(5, 0, variable=5, version=1) if far else None
+    second_segment = mir.Value(6, 2, variable=6, version=1) if far else None
+    space = Space.FAR if far else Space.FRAME
+    address = Addr(space, 4 if far else -12, 7 if far else 0)
+    via_first = mir.MemRef(
+        address,
+        4,
+        base=first,
+        segment=first_segment,
+        space=space,
+        provenance=leaf,
+    )
+    via_second = replace(via_first, base=second, segment=second_segment)
+    store = mir.Op(
+        4,
+        ir.Operation.MOVE,
+        "mov",
+        (),
+        tuple(value for value in (stored, first, first_segment) if value is not None),
+        kind=mir.Kind.STORE,
+        args=(mir.Held(stored, 4),),
+        results=(mir.Cell(via_first),),
+        stores=(via_first,),
+    )
+    load = mir.Op(
+        6,
+        ir.Operation.MOVE,
+        "mov",
+        (loaded,),
+        tuple(value for value in (second, second_segment) if value is not None),
+        kind=mir.Kind.LOAD,
+        args=(mir.Cell(via_second),),
+        results=(mir.Held(loaded, 4),),
+        loads=(via_second,),
+    )
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (store, load), ()),))
+
+    result = promote.promoted(body)
+    after = next(op for op in result.blocks[0].ops if op.at == load.at)
+    assert not after.loads
+    assert all(not isinstance(arg, mir.Cell) for arg in after.args)
+
+    upper_half = mir.MemRef(
+        Addr(space, 6 if far else -10, 7 if far else 0),
+        2,
+        space=space,
+        provenance=memory.Provenance.one(object_, 6, 8),
+    )
+    overwrite = mir.Op(
+        5,
+        ir.Operation.MOVE,
+        "mov",
+        (),
+        (),
+        kind=mir.Kind.STORE,
+        args=(mir.Const(0, 2),),
+        results=(mir.Cell(upper_half),),
+        stores=(upper_half,),
+    )
+    clobbered = replace(body, blocks=(replace(body.blocks[0], ops=(store, overwrite, load)),))
+    result = promote.promoted(clobbered)
+    after = next(op for op in result.blocks[0].ops if op.at == load.at)
+    assert after.loads == (via_second,), "an overlapping partial store must invalidate the scalar leaf"
+
+
 @pytest.mark.parametrize("effect", ["call", "barrier"])
 def test_partial_store_does_not_restore_constants_from_before_unknown_effect(effect):
     """A post-clobber low-word store must not resurrect an old high word as a promoted LONG."""
