@@ -1,9 +1,10 @@
 from dataclasses import replace
 
+from iced_x86 import Register
+
 from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.objectfile.module import Space
-from iced_x86 import Register
 
 
 def offsets(body: mir.MirBody) -> dict[int, tuple[ir.Held, int]]:
@@ -62,11 +63,13 @@ _SCALES = {4: (0, 1, 2, 3), 2: (0,)}
 
 
 def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, tuple[ir.Held, ir.Held, int]], frozenset[int]]:
-    """Far addresses `b + (c << k)` read only as cell bases, and what computes them.
+    """Based addresses `b + (c << k)` read only by cells, and what computes them.
 
     The address becomes the cell's `[base+index*scale]` and the add and
     shift that computed it become nothing. Only where no flag they set is
-    read and nothing but a far cell's base reads the address.
+    read and nothing but an encodable cell's base reads the address.  This
+    applies equally to far pointers and near pointers into local or global
+    objects; the address width below decides whether a scale is legal.
     """
     made = {value.id: op for block in body.blocks for op in block.ops for value in op.defines}
     bases: dict[int, int] = {}
@@ -76,14 +79,17 @@ def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, tuple[ir.He
             for value in phi.incoming.values():
                 other[value.id] = other.get(value.id, 0) + 1
         for op in block.ops:
-            far = {
+            based = {
                 one.ref.base.id
                 for one in (*op.args, *op.results)
-                if isinstance(one, mir.Cell) and one.ref.base is not None and one.ref.where is Space.FAR
+                if isinstance(one, mir.Cell)
+                and one.ref.base is not None
+                and one.ref.addr is not None
+                and one.ref.where not in (Space.GROUP, Space.STACK)
             }
             held = [one.value.id for one in op.args if isinstance(one, mir.Held)]
             for value in op.uses:
-                if value.id in far and value.id not in held:
+                if value.id in based and value.id not in held:
                     bases[value.id] = bases.get(value.id, 0) + 1
                 else:
                     other[value.id] = other.get(value.id, 0) + 1

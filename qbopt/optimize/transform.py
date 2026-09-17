@@ -198,6 +198,7 @@ _PURE = frozenset(
         mir.Kind.CONVERT,
         mir.Kind.SIGN_EXTEND,
         mir.Kind.COPY,
+        mir.Kind.ADDRESS,
         mir.Kind.LT,
         mir.Kind.LE,
         mir.Kind.GT,
@@ -591,6 +592,8 @@ def _computation(op: Op, stands: dict[int, mir.Value], whole: dict[int, int]) ->
             named.append(("c", one.n, one.width))
         elif isinstance(one, mir.Symbol):
             named.append(("s", one))
+        elif isinstance(one, mir.FrameAddress):
+            named.append(("a", one))
         elif isinstance(one, mir.Cell):
             ref = mir._symbolic_ref(one.ref)
             if not mir.same_bytes(ref, ref):

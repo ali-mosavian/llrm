@@ -61,10 +61,11 @@ def spilled(
     fresh = _next_value(body)
     made: set[int] = set()
     constants = _constants(body, values)
+    frame_addresses = _frame_addresses(body, values)
     frame_loads = {**_stable_loads(body, values), **_frame_loads(body, values)}
     frame_homes = _frame_homes(body, values - frame_loads.keys())
     rebuilt = {**frame_loads, **{value: home for value, (home, _at) in frame_homes.items()}}
-    stored = values - constants.keys() - frame_loads.keys() - frame_homes.keys()
+    stored = values - constants.keys() - frame_addresses.keys() - frame_loads.keys() - frame_homes.keys()
     # Before any cell names a slot: one made at the first use's width is
     # outgrown by a wider use later, which then writes over its neighbour.
     _color_slots(body, stored, _widest(body, stored), frame)
@@ -95,7 +96,12 @@ def spilled(
             remade = {}
             for value in one.uses:
                 if (
-                    (value not in constants and value not in frame_loads and value not in frame_homes)
+                    (
+                        value not in constants
+                        and value not in frame_addresses
+                        and value not in frame_loads
+                        and value not in frame_homes
+                    )
                     or value in remade
                     or value in frame_homes
                     and id(one) == frame_homes[value][1]
@@ -109,6 +115,24 @@ def spilled(
                             _inserted(
                                 one,
                                 ir.Semantics(ir.Operation.MOVE, "mov", (ir.Held(fresh, constant.width),), (constant,)),
+                                (fresh,),
+                                (),
+                            ),
+                            rematerialized=True,
+                        )
+                    )
+                elif value in frame_addresses:
+                    address = frame_addresses[value]
+                    insns.append(
+                        replace(
+                            _inserted(
+                                one,
+                                ir.Semantics(
+                                    ir.Operation.ADDRESS,
+                                    "lea",
+                                    (ir.Held(fresh, _width(one, value)),),
+                                    (address,),
+                                ),
                                 (fresh,),
                                 (),
                             ),
@@ -159,7 +183,7 @@ def spilled(
                 rematerialized_definitions.add(id(rewritten))
             if (
                 len(one.defines) == 1
-                and one.defines[0] in constants
+                and one.defines[0] in constants.keys() | frame_addresses.keys()
                 and not (one.requires or one.delivers or one.clobbers)
                 and one.group is None
                 and one.symbol is not True
@@ -358,6 +382,7 @@ def rematerializable(body: lir.LirBody, values: frozenset[int]) -> frozenset[int
     """Spill candidates whose value can be reconstructed without a slot."""
     return (
         frozenset(_constants(body, values))
+        | frozenset(_frame_addresses(body, values))
         | frame_rematerializable(body, values)
         | frozenset(_stable_loads(body, values))
         | frozenset(_frame_homes(body, values))
@@ -842,6 +867,50 @@ def _constants(body: lir.LirBody, values: frozenset[int]) -> dict[int, ir.Imm]:
                 result[value] = constant
         if len(result) == before:
             return {value: constant for value, constant in result.items() if value in values}
+
+
+def _frame_addresses(body: lir.LirBody, values: frozenset[int]) -> dict[int, ir.Address]:
+    """Pure frame-relative addresses cheap enough to recreate at every use.
+
+    A shared ``lea`` can span an entire loop nest after CSE. Keeping that
+    pointer in a slot is strictly worse than spelling the same ``lea`` beside
+    each use: the latter reads no memory, needs no store, and has no aliasing
+    state to preserve. Restrict this proof to BP-relative frame objects;
+    relocated addresses own fixups and general register expressions depend on
+    values whose availability must be proved separately.
+    """
+    definitions: dict[int, list[lir.Insn]] = {}
+    for one in body.insns:
+        for value in one.defines:
+            if value in values:
+                definitions.setdefault(value, []).append(one)
+
+    result = {}
+    for value, defining in definitions.items():
+        if len(defining) != 1:
+            continue
+        one = defining[0]
+        match one.what:
+            case ir.Semantics(
+                ir.Operation.ADDRESS,
+                "lea",
+                (ir.Held(value=destination, width=width),),
+                (ir.Address() as source,),
+            ) if (
+                destination == value
+                and width in (2, 4)
+                and one.defines == (value,)
+                and not one.uses
+                and not (one.requires or one.delivers or one.clobbers)
+                and one.group is None
+                and one.symbol is not True
+                and source.addr is not None
+                and source.addr.space is Space.FRAME
+                and source.through == Register.BP
+                and source.index == Register.NONE
+            ):
+                result[value] = source
+    return result
 
 
 def _widest(body: lir.LirBody, values) -> dict[int, int]:

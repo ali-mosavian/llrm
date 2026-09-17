@@ -1167,6 +1167,34 @@ def test_cse_propagates_a_complete_narrow_copy_to_an_opaque_reader(preserves_hig
     assert any(copied in op.defines for op in done.blocks[0].ops) == preserves_high
 
 
+def test_cse_reuses_one_frame_object_address() -> None:
+    """shellsort kept four identical local-array bases live through its nested loops."""
+    first = mir.Value(1, 0)
+    duplicate = mir.Value(2, 1)
+
+    def address(at: int, result: mir.Value) -> mir.Op:
+        return mir.Op(
+            at,
+            ir.Operation.ADDRESS,
+            "lea",
+            (result,),
+            (),
+            kind=mir.Kind.ADDRESS,
+            args=(mir.FrameAddress(-132, 2, (-132, -4)),),
+            results=(mir.Held(result, 2),),
+            covers=(at, at + 1),
+        )
+
+    use = mir.Op(2, ir.Operation.PUSH, "push", (), (duplicate,), kind=mir.Kind.OPAQUE, args=(mir.Held(duplicate, 2),))
+    body = mir.MirBody(0, (mir.MirBlock(0, (), (address(0, first), address(1, duplicate), use), ()),))
+
+    done = transform.subexpressions(body)
+
+    assert sum(op.kind is mir.Kind.ADDRESS for op in done.blocks[0].ops) == 1
+    assert done.blocks[0].ops[-1].uses == (first,)
+    assert done.blocks[0].ops[-1].args == (mir.Held(first, 2),)
+
+
 def test_cse_refuses_an_operand_that_is_only_half_its_value() -> None:
     """nots printed NOTOR= 26390415 for -271601777: right word, wrong word.
 

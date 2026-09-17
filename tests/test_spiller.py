@@ -12,6 +12,7 @@ from pathlib import Path
 from dataclasses import replace
 
 import pytest
+from iced_x86 import Register
 
 from qbopt.model import ir
 from qbopt.model import lir
@@ -317,6 +318,28 @@ def test_spilled_constant_is_rematerialized_without_a_frame_slot() -> None:
     assert result[-2].what.sources == (ir.Imm(20, 2),)
     assert result[-2].rematerialized
     assert result[-1].what.sources[1].value == result[-2].defines[0]
+
+
+def test_spilled_frame_address_is_rematerialized_without_a_frame_slot() -> None:
+    """matmul spilled a shared ``lea bp-84h`` and reloaded the pointer in its inner loop."""
+    source = ir.Address(Addr(Space.FRAME, -132), Register.BP, offset=-132, disp_width=2)
+    address = lir.Insn(
+        at=0,
+        covers=(0, 3),
+        what=ir.Semantics(ir.Operation.ADDRESS, "lea", (ir.Held(1, 2),), (source,)),
+        defines=(1,),
+        uses=(),
+    )
+    frame = frames.Frame(0)
+
+    result, _made = spiller.spilled(_body(address, _add(2, 1)), frozenset({1}), frame)
+
+    assert 1 not in frame.slots
+    recreated = [one for one in result.insns if one.what and one.what.op is ir.Operation.ADDRESS]
+    assert len(recreated) == 1
+    assert recreated[0].what.sources == (source,)
+    assert recreated[0].rematerialized
+    assert result.insns[-1].what.sources[1].value == recreated[0].defines[0]
 
 
 def test_nonoverlapping_spills_share_one_compatible_frame_slot() -> None:
