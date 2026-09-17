@@ -366,6 +366,8 @@ def allocate(
     body: lir.LirBody,
     pinned: dict[int, Register_] | None = None,
     unspillable: "frozenset[int] | None" = None,
+    *,
+    cpu: "str | targets.Profile" = "386",
 ) -> Assignment:
     """A register for every value, by LLVM's `RegAllocGreedy`.
 
@@ -388,8 +390,9 @@ def allocate(
     that finds the same answer by trying everything has only proved the
     cost model right at a price that grows with the body.
     """
+    profile = targets.profile(cpu)
     index = ranges.indexed(body)
-    live = _fold_priced(body, _sibling_priced(body, ranges.intervals(body, index)))
+    live = _fold_priced(body, _sibling_priced(body, ranges.intervals(body, index)), profile)
     masks = _masks(body, index)
     widths = _widest(body)
     # A reload's value is live across one instruction and must have a
@@ -792,7 +795,7 @@ class RegAlloc(LIRTransform):
             # requirement is about the instruction rather than about the
             # value that happened to be there when the splitter ran.
             self.pinned = {**prefer, **constrain.required(body)}
-            got = allocate(body, self.pinned, reloads)
+            got = allocate(body, self.pinned, reloads, cpu=self.cpu)
             if not got.spilled:
                 return applied(body, got)
             # Split before spilling, which is the order RegAllocGreedy
@@ -818,7 +821,7 @@ class RegAlloc(LIRTransform):
                 cut = splitkit.split(body, frozenset({value}), already, got.where)
                 if cut is body:
                     continue
-                after = allocate(cut, {**prefer, **constrain.required(cut)}, reloads)
+                after = allocate(cut, {**prefer, **constrain.required(cut)}, reloads, cpu=self.cpu)
                 if not after.spilled:
                     return applied(cut, after)
                 if _traffic(cut, after.spilled) < _traffic(body, got.spilled):
@@ -848,7 +851,7 @@ class RegAlloc(LIRTransform):
             body, made = spiller.spilled(body, chosen, self.frame)
             reloads |= made
         self.pinned = {**prefer, **constrain.required(body)}
-        return applied(body, allocate(body, self.pinned, reloads))
+        return applied(body, allocate(body, self.pinned, reloads, cpu=self.cpu))
 
 
 def _sibling_priced(body: lir.LirBody, live: dict) -> dict:
@@ -923,14 +926,53 @@ def _traffic(body: lir.LirBody, spilled: "frozenset[int]") -> float:
     )
 
 
-def _fold_priced(body: lir.LirBody, live: dict) -> dict:
-    """Intervals whose reads the spill folds into a memory operand cost nothing for those reads.
+def _fold_discount(one: lir.Insn, profile: targets.Profile) -> float:
+    """How much of a spilled read disappears when it becomes a memory operand.
 
-    `cmp si,[limit]` is one instruction whether the limit has a register or
-    a slot, so that read is no reason to keep it. Priced as references,
-    PLASMA's inner limit, compared once per pixel, outbid the outer counter
-    it was computed from, and the counter was added to and reloaded in
-    memory instead.
+    Interval weights count a memory read as one unit.  Folding removes the
+    standalone load, but the memory form may itself cost more than its
+    register form.  Price that remainder against the load it replaced.  A
+    386 ``add reg,[mem]`` is four cycles dearer than ``add reg,reg`` and a
+    load is four cycles, so the read is not free.  Core prices both ALU forms
+    equally, so the complete read cost disappears.
+
+    Only forms explicitly present in the immutable CPU profile participate.
+    An unpriced encoding is retained at full cost rather than guessed.
+    """
+    if one.what is None:
+        return 0.0
+    match one.what:
+        case ir.Semantics(ir.Operation.BINARY | ir.Operation.COMPARE, name, _, _):
+            if name not in {"add", "sub", "and", "or", "xor", "cmp"}:
+                return 0.0
+            register, memory = "alu_rr", "alu_rm"
+        case ir.Semantics(
+            ir.Operation.MULTIPLY,
+            "imul",
+            _,
+            (ir.Held(width=4), ir.Held(width=4)),
+        ):
+            register, memory = "imul_r32", "imul_m32"
+        case _:
+            return 0.0
+    if not all(profile.prices(form) for form in (register, memory, "mov_rm")):
+        return 0.0
+    load = profile.cost("mov_rm")
+    if load <= 0:
+        return 0.0
+    remainder = max(0, profile.cost(memory) - profile.cost(register))
+    return max(0.0, min(1.0, 1.0 - remainder / load))
+
+
+def _fold_priced(body: lir.LirBody, live: dict, profile: targets.Profile) -> dict:
+    """Discount reads by the target-specific saving from folding them.
+
+    On a target where ``cmp si,[limit]`` costs the same as the register form,
+    the read is no reason to keep the limit in a register.  On an older
+    target the memory-form premium may retain some or all of that reason.
+    Priced uniformly, PLASMA's inner limit, compared once per pixel, outbid
+    the outer counter it was computed from, and the counter was added to and
+    reloaded in memory instead.
     """
     from qbopt.backend import spiller
 
@@ -939,9 +981,12 @@ def _fold_priced(body: lir.LirBody, live: dict) -> dict:
     for block in body.blocks:
         each = float(ranges.PER_LEVEL ** deep.get(block.at, 0))
         for one in block.insns:
+            discount = _fold_discount(one, profile)
+            if discount == 0.0:
+                continue
             for value in one.uses:
                 if spiller.folded_source(one, frozenset({value})) is not None:
-                    free[value] = free.get(value, 0.0) + each
+                    free[value] = free.get(value, 0.0) + each * discount
     return {
         value: replace(one, weight=max(0.0, one.weight - free[value] / (one.size + ranges.GRACE)))
         if value in free and one.weight != float("inf")

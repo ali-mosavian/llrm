@@ -399,6 +399,51 @@ def test_a_half_register_and_its_whole_are_the_same_register() -> None:
         )
 
 
+def test_folded_spill_cost_depends_on_the_selected_cpu() -> None:
+    """A folded source is not free on a 386.
+
+    Seven values are live at the final add, so one must spill.  Value 7 dies
+    in an operand that the spiller can fold.  Treating that read as free on
+    every target made the allocator spill it on a 386 even though
+    ``add reg,[mem]`` costs exactly the ``add reg,reg`` plus explicit load it
+    replaced.  Core prices both ALU forms equally, so value 7 really is the
+    cheapest spill there.
+    """
+    from qbopt.backend import allocate
+    from qbopt.model import ir
+
+    holds = tuple(_mov(value, value, 0x100 + 2 * (value - 1)) for value in range(1, 8))
+    folded = lir.Insn(
+        at=0x110,
+        covers=(0x110, 0x112),
+        what=ir.Semantics(
+            ir.Operation.BINARY,
+            "add",
+            (ir.Held(1, 2),),
+            (ir.Held(1, 2), ir.Held(7, 2)),
+        ),
+        defines=(1,),
+        uses=(1, 7),
+        op=None,
+    )
+    final = lir.Insn(
+        at=0x112,
+        covers=(0x112, 0x114),
+        what=None,
+        defines=(),
+        uses=(1, 2, 3, 4, 5, 6),
+        widths=tuple((value, 2) for value in range(1, 7)),
+        op=None,
+    )
+    body = _one_block(*holds, folded, final)
+
+    on_386 = allocate.allocate(body, cpu="386")
+    on_core = allocate.allocate(body, cpu="Core")
+
+    assert 7 not in on_386.spilled, on_386
+    assert on_core.spilled == frozenset({7}), on_core
+
+
 def test_a_fixed_source_that_is_not_the_multiply_pair_is_honoured() -> None:
     """A variable shift counts from cl and names it nowhere."""
     from iced_x86 import Register
@@ -704,8 +749,8 @@ def test_a_value_minted_for_a_fixed_register_is_not_spilled_out_of_it() -> None:
         minted.update(fixed)
         return got, fixed
 
-    def note_allocate(body, pinned=None, unspillable=None):
-        got = was_a(body, pinned, unspillable)
+    def note_allocate(body, pinned=None, unspillable=None, *, cpu="386"):
+        got = was_a(body, pinned, unspillable, cpu=cpu)
         last.append(got)
         return got
 
