@@ -1006,10 +1006,11 @@ one documented target without materially regressing another.
   ordinary invariant-base additions, never a pressure-heavy mixture of both
   representations. Indexed memory formulas consume no recurrence budget.
   Constant frame addresses exposed by later unrolling fold directly to BP
-  displacements. On C nbody this changes 732 -> 616 bytes, 163 -> 144 emitted
-  instructions, the dynamic-operation estimate 38,793 -> 33,686, and allocator
-  spill reload/store counts 6/6 -> 0/1. The static 386 instruction-price sum is
-  1393 -> 1447 because the fully unrolled four-element update counts its
+  displacements. On C nbody this changes 732 -> 598 bytes, 163 -> 138 emitted
+  instructions, the dynamic-operation estimate 38,793 -> 33,632, address
+  calculations 9 -> 0, and allocator spill reload/store counts 6/6 -> 0/1.
+  The static 386 instruction-price sum is 1393 -> 1435 because the fully
+  unrolled four-element update counts its
   required x87 operations four times where the prior loop body was counted
   once; the raw assembly has less executed address and branch work. Complete
   per-use, per-CPU target costing remains open.

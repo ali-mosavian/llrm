@@ -127,6 +127,13 @@ def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, FoldedForm]
 
     forms: dict[int, FoldedForm] = {}
     folded: set[int] = set()
+    for value, fixed in frame_bases.items():
+        if value not in bases:
+            continue
+        # A frame address consumed directly as a cell base is already the
+        # cell's BP displacement. Whether its ADDRESS operation is dead is
+        # settled after all dependent address expressions have been folded.
+        forms[value] = fixed
     for block in body.blocks:
         for op in block.ops:
             if not plain(op, mir.Kind.ADD) or len(op.args) != 2:
@@ -179,6 +186,28 @@ def indexed(body: mir.MirBody, exposed: set[int]) -> tuple[dict[int, FoldedForm]
                     break
             forms[address.value.id] = form
             folded.add(address.value.id)
+
+    phi_reads = {value.id for block in body.blocks for phi in block.phis for value in phi.incoming.values()}
+    for value in frame_bases:
+        if value in exposed or value in phi_reads:
+            continue
+        for block in body.blocks:
+            for op in block.ops:
+                if not any(one.id == value for one in op.uses):
+                    continue
+                based = {
+                    one.ref.base.id
+                    for one in (*op.args, *op.results)
+                    if isinstance(one, mir.Cell) and one.ref.base is not None
+                }
+                held = any(isinstance(one, mir.Held) and one.value.id == value for one in op.args)
+                if (held and not any(one.id in folded for one in op.defines)) or (not held and value not in based):
+                    break
+            else:
+                continue
+            break
+        else:
+            folded.add(value)
     return forms, frozenset(folded)
 
 
