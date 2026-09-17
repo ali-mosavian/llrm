@@ -612,7 +612,19 @@ def annotated(body: mir.MirBody) -> mir.MirBody:
                     frozenset({memory.Slice(source.object, low, high, stride, max(ref.width, 1))}),
                     got.restrict,
                 )
-        return replace(ref, provenance=got) if got is not None and got != ref.provenance else ref
+        # A near pointer does not encode its selector.  Once it has travelled
+        # through SSA, a phi, or an exact pointer spill, the canonical object
+        # proof is the only reliable source of that selector.  All current-
+        # activation frame objects live in SS; any mixed or unknown set must
+        # retain the ordinary near-data interpretation instead.
+        space = (
+            Space.FRAME
+            if got is not None
+            and got.slices
+            and all(one.object.kind is memory.Kind.FRAME for one in got.slices)
+            else ref.space
+        )
+        return replace(ref, provenance=got, space=space) if got != ref.provenance or space is not ref.space else ref
 
     def operand(arg, at):
         return mir.Cell(tag(arg.ref, at)) if isinstance(arg, mir.Cell) else arg

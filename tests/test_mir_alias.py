@@ -6,6 +6,7 @@ from qbopt.model import ir
 from qbopt.model import mir
 from qbopt.model import memory
 from qbopt.analysis import alias
+from qbopt.backend import lower
 from qbopt.objectfile.module import Addr
 from qbopt.objectfile.module import Space
 
@@ -98,6 +99,100 @@ def test_points_to_flows_through_memory_and_a_phi() -> None:
     facts = alias.points_to(body)
     assert facts.values[loaded] == facts.values[root]
     assert facts.values[joined] == facts.values[root]
+
+
+def test_reloaded_frame_pointer_selects_the_stack_segment() -> None:
+    """A reloaded local pointer emitted ``[bx]`` and overwrote matmul's loop state in DS."""
+    root, loaded = (mir.Value(n, n, variable=n, version=1) for n in range(1, 3))
+    slot = mir.MemRef(Addr(Space.FRAME, -2), 2, space=Space.FRAME)
+    address = mir.Op(
+        1,
+        kind=mir.Kind.ADDRESS,
+        op=ir.Operation.ADDRESS,
+        name="",
+        defines=(root,),
+        uses=(),
+        args=(mir.FrameAddress(-8, 2, (-8, -4)),),
+        results=(mir.Held(root, 2),),
+    )
+    store = mir.Op(
+        2,
+        kind=mir.Kind.STORE,
+        op=ir.Operation.MOVE,
+        name="",
+        defines=(),
+        uses=(root,),
+        args=(mir.Held(root, 2),),
+        results=(mir.Cell(slot),),
+        stores=(slot,),
+    )
+    load = mir.Op(
+        3,
+        kind=mir.Kind.LOAD,
+        op=ir.Operation.MOVE,
+        name="",
+        defines=(loaded,),
+        uses=(),
+        args=(mir.Cell(slot),),
+        results=(mir.Held(loaded, 2),),
+        loads=(slot,),
+    )
+    indirect = mir.MemRef(Addr(Space.LITERAL, 0), 2, base=loaded, space=Space.LITERAL, pointer=True)
+    write = mir.Op(
+        4,
+        kind=mir.Kind.STORE,
+        op=ir.Operation.MOVE,
+        name="",
+        defines=(),
+        uses=(loaded,),
+        args=(mir.Const(7, 2),),
+        results=(mir.Cell(indirect),),
+        stores=(indirect,),
+    )
+    body = mir.MirBody(
+        0,
+        (mir.MirBlock(0, (), (address, store, load, write), ()),),
+        pointer_values=frozenset({root, loaded}),
+    )
+
+    annotated = alias.annotated(body)
+    ref = annotated.blocks[0].ops[-1].stores[0]
+
+    assert ref.provenance is not None
+    assert lower._address(ref).segment == Register.SS
+
+
+def test_a_maybe_nonframe_pointer_keeps_the_default_data_segment() -> None:
+    """SS is valid only when every target is in this activation, never for a mixed pointer phi."""
+    pointer = mir.Value(1, 1, variable=1, version=1)
+    frame = memory.Object(memory.Kind.FRAME, ("f", -4), extent=4)
+    global_ = memory.Object(memory.Kind.GLOBAL, (Space.SEGMENT, 1), extent=4)
+    indirect = mir.MemRef(Addr(Space.LITERAL, 0), 2, base=pointer, space=Space.LITERAL, pointer=True)
+    write = mir.Op(
+        1,
+        kind=mir.Kind.STORE,
+        op=ir.Operation.MOVE,
+        name="",
+        defines=(),
+        uses=(pointer,),
+        args=(mir.Const(7, 2),),
+        results=(mir.Cell(indirect),),
+        stores=(indirect,),
+    )
+    body = mir.MirBody(
+        0,
+        (mir.MirBlock(0, (), (write,), ()),),
+        pointer_values=frozenset({pointer}),
+        pointer_seeds={
+            pointer: memory.Provenance(
+                frozenset({memory.Slice(frame, 0, 1), memory.Slice(global_, 0, 1)})
+            )
+        },
+    )
+
+    ref = alias.annotated(body).blocks[0].ops[0].stores[0]
+
+    assert lower._address(ref).segment == Register.NONE
 
 
 def test_store_through_parameter_keeps_disjoint_frame_pointer_spill() -> None:
