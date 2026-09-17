@@ -245,6 +245,7 @@ def _at(
             number = _parameter(op, parameters)
             if number is not None:
                 swap[op.results[0].value.id] = parameter_values[number]
+    formal_values = frozenset(swap)
     for value in callee_values:
         if value.id in swap:
             continue
@@ -370,7 +371,7 @@ def _at(
     pointer_seeds.update(
         (swap[value.id], seed)
         for value, seed in callee.pointer_seeds.items()
-        if value.id in swap and swap[value.id] not in pointer_seeds
+        if value.id in swap and value.id not in formal_values and swap[value.id] not in pointer_seeds
     )
     return replace(
         body,

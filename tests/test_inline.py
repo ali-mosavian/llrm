@@ -5,6 +5,8 @@ from collections import Counter
 
 from qbopt.model import ir
 from qbopt.model import mir
+from qbopt.model import memory
+from qbopt.analysis import alias
 from qbopt.optimize import inline
 from qbopt.cfront import compile as cfront
 
@@ -135,12 +137,32 @@ def test_small_private_pure_helpers_inline_in_mir() -> None:
     calls paid six argument pushes, two calls and two cleanups, while hiding
     the shared condition from the caller optimizer.
     """
+    stages = []
     lines = [
         line.strip()
-        for line in cfront.compiled((FIXTURES / "choose.cgs").read_text(), "choose", optimise=True).splitlines()
+        for line in cfront.compiled(
+            (FIXTURES / "choose.cgs").read_text(),
+            "choose",
+            optimise=True,
+            watch=lambda stage, name, body: stages.append(body)
+            if name == "_choose" and stage == "mir-inline1"
+            else None,
+        ).splitlines()
     ]
     assert "_pick proc near" not in lines
     assert "_which proc near" not in lines
     body = lines[lines.index("_choose proc far") : lines.index("_choose endp")]
     assert "call _pick" not in body
     assert "call _which" not in body
+
+    facts = alias.points_to(stages[-1])
+    addresses = [
+        result
+        for block in stages[-1].blocks
+        for op in block.ops
+        if op.kind is mir.Kind.COPY and len(op.args) == 1 and isinstance(op.args[0], mir.Symbol)
+        for result in op.defines
+        if result in stages[-1].pointer_values
+    ]
+    assert addresses
+    assert all({one.object.kind for one in facts.values[value].slices} == {memory.Kind.GLOBAL} for value in addresses)
