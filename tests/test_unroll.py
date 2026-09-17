@@ -3,19 +3,37 @@
 from pathlib import Path
 
 import pytest
+
 import corpus
 from qbopt.model import mir
+from qbopt.backend import lower
 from qbopt.analysis import loops
+from qbopt.optimize import unroll
+from qbopt.optimize import transform
 from qbopt.analysis import floatfacts
-from qbopt.backend import lower, lower_floats
-from qbopt.optimize import transform, unroll
+from qbopt.backend import lower_floats
+
+
+def test_c_matmul_unrolls_an_exact_integer_inner_loop() -> None:
+    """Matmul retained all 16 static branches, including its eight-way checksum backedge."""
+    from tools import quality
+    from qbopt.cfront import compile as cfront
+
+    source = Path("bench/c/matmul.c")
+    stream = cfront.recorded(source, [])
+    module = cfront.assembled(stream, source.stem, optimise=True)
+    procedure = next(one for one in module.procedures if one.name == "_bench_matmul")
+    rows = quality._rows(quality._blob(module, procedure, 0))
+
+    assert sum(mnemonic.startswith("j") for _raw, mnemonic, _operands in rows) < 16
 
 
 @pytest.mark.parametrize("checkpoint", [False, True])
 def test_dead_inserted_store_needs_no_neighbor_to_take_its_bytes(checkpoint):
     """FPCSE retained dead unrolled stores because a zero-byte clone could not donate bytes to its neighbor."""
     from qbopt.model import ir
-    from qbopt.objectfile.module import Addr, Space
+    from qbopt.objectfile.module import Addr
+    from qbopt.objectfile.module import Space
     cell = mir.MemRef(Addr(Space.SEGMENT, 0, 5), 4)
     def store(at, value):
         return mir.Op(at, ir.Operation.MOVE, "", (), (), kind=mir.Kind.STORE,
@@ -152,6 +170,7 @@ def test_fpdeep_exact_integer_arguments_keep_floating_checkpoints(monkeypatch):
 def test_fpdeep_exact_stores_remove_their_arithmetic_chains():
     """FPDEEP recomputed exact squares/ratios/mixes even after all inputs were proven."""
     from fractions import Fraction
+
     from qbopt.model.floating import Format
     found, original = body()
     expanded = unroll.expanded(original, found.dgroup, found.calls)
@@ -169,8 +188,8 @@ def test_fpdeep_exact_stores_remove_their_arithmetic_chains():
                                              (2147483648, None), ("1/3", None)])
 def test_integer_conversion_facts_require_exact_in_range_values(monkeypatch, number, expected):
     """FPDEEP's conversion facts must not invent a rounded or overflowing print argument."""
-    from dataclasses import replace
     from fractions import Fraction
+    from dataclasses import replace
     found, original = body()
     op = next(op for block in original.blocks for op in block.ops
               if op.kind is mir.Kind.FSTORE and op.at == 0x9c)

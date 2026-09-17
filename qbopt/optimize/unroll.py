@@ -1,14 +1,22 @@
-"""Bounded full unrolling of small constant-trip floating loops.
+"""Bounded full unrolling of small exact-trip loops.
 
 The MIR sequence is expanded in execution order. Reusing input provenance
 does not give the emitter permission to sort it or discard cloned relocations.
+Integer and floating loops use the same CFG/value mechanism; floating loops
+have one additional gate because large expansions are useful only when exact
+folding removes their cloned arithmetic.
 """
 
 from dataclasses import replace
 
-from qbopt.analysis import consts, floatfacts, induction, loops, ssa
 from qbopt.model import mir
-from qbopt.model.passes import MIRTransform, Where
+from qbopt.analysis import ssa
+from qbopt.analysis import loops
+from qbopt.analysis import consts
+from qbopt.analysis import induction
+from qbopt.model.passes import Where
+from qbopt.analysis import floatfacts
+from qbopt.model.passes import MIRTransform
 
 
 class Unroll(MIRTransform):
@@ -50,13 +58,40 @@ def expanded(body: mir.MirBody, dgroup: frozenset[int], calls: dict) -> mir.MirB
             at = blocks[at].succ[0]
         if at != latch.at or path != {block.at for block in bridges}:
             continue
-        if any(op.barrier or op.kind in (mir.Kind.OPAQUE, mir.Kind.BRANCH, mir.Kind.JUMP)
-               for op in latch.ops):
+        # The object frontend may express the backedge only in CFG while the
+        # C frontend carries an explicit terminal JUMP.  They are the same
+        # loop.  The jump is control, not one iteration's work, and the
+        # expansion replaces it with one jump to the exit.
+        latch_ops = latch.ops
+        if latch_ops and latch_ops[-1].kind is mir.Kind.JUMP and latch_ops[-1].target == header.at:
+            latch_ops = latch_ops[:-1]
+        floating_loop = any(op.floating for op in latch_ops)
+        invalid_latch = (
+            any(op.barrier or op.kind in (mir.Kind.OPAQUE, mir.Kind.BRANCH, mir.Kind.JUMP) for op in latch_ops)
+            if floating_loop
+            else any(op.barrier or op.kind in (
+                mir.Kind.OPAQUE, mir.Kind.CALL, mir.Kind.RETURN,
+                mir.Kind.BRANCH, mir.Kind.JUMP, mir.Kind.SWITCH,
+            ) for op in latch_ops)
+        )
+        if invalid_latch:
             continue
-        if not any(op.floating for op in latch.ops):
+        if not header.ops or header.ops[-1].kind is not mir.Kind.BRANCH:
             continue
-        if any(op.kind not in (mir.Kind.NOTHING, mir.Kind.STORE, mir.Kind.SUB, mir.Kind.BRANCH)
-               or op.barrier or op.floating for op in header.ops):
+        # Keep the established floating-loop contract: compiler bookkeeping
+        # may store its counter in the test block, but no floating operation
+        # may be repeated there.  A new integer expansion accepts any pure
+        # value computation and refuses observable memory/control effects.
+        invalid_header = (
+            any(op.kind not in (mir.Kind.NOTHING, mir.Kind.STORE, mir.Kind.SUB, mir.Kind.BRANCH)
+                or op.barrier or op.floating for op in header.ops)
+            if floating_loop
+            else any(op.barrier or op.stores or op.kind in (
+                mir.Kind.OPAQUE, mir.Kind.CALL, mir.Kind.RETURN, mir.Kind.BRANCH,
+                mir.Kind.JUMP, mir.Kind.SWITCH, mir.Kind.ARG, mir.Kind.RESULT, mir.Kind.ESCAPE,
+            ) for op in header.ops[:-1])
+        )
+        if invalid_header:
             continue
         counts = set()
         for counter in induction.basics(body, loop).values():
@@ -70,13 +105,13 @@ def expanded(body: mir.MirBody, dgroup: frozenset[int], calls: dict) -> mir.MirB
             continue
         count, = counts
         # The budget is what the expansion emits; an erased marker emits nothing.
-        emitted = sum(op.kind is not mir.Kind.NOTHING for op in (*latch.ops, *header.ops))
+        emitted = sum(op.kind is not mir.Kind.NOTHING for op in (*latch_ops, *header.ops))
         if count < 2 or count * emitted > 256:
             continue
         if any(set(phi.incoming) != {entry, latch.at} for phi in header.phis):
             continue
-        candidate = _expanded(body, loop, header, latch, exit_at, entry, count)
-        if count > 4:
+        candidate = _expanded(body, loop, header, latch, latch_ops, exit_at, entry, count)
+        if count > 4 and floating_loop:
             exact = floatfacts.known(candidate, dgroup, calls)
             results = [arg.value for op in candidate.block(latch.at).ops if op.floating
                        for arg in op.results if isinstance(arg, mir.Held) and arg.width == 10]
@@ -86,7 +121,7 @@ def expanded(body: mir.MirBody, dgroup: frozenset[int], calls: dict) -> mir.MirB
     return body
 
 
-def _expanded(body, loop, header, latch, exit_at, entry, count):
+def _expanded(body, loop, header, latch, latch_ops, exit_at, entry, count):
     values = tuple(ssa.values(body))
     next_id = max(value.id for value in values) + 1
     next_variable = max(value.variable for value in values) + 1
@@ -119,7 +154,7 @@ def _expanded(body, loop, header, latch, exit_at, entry, count):
     for iteration in range(count):
         if iteration:
             expanded.extend(clone(op, False) for op in header.ops[:-1])
-        expanded.extend(clone(op, iteration == 0) for op in latch.ops)
+        expanded.extend(clone(op, iteration == 0) for op in latch_ops)
         carried = {phi.result.id: ssa.provider(phi.incoming[latch.at], swap) for phi in header.phis}
         swap.update(carried)
     expanded.extend(clone(op, False) for op in header.ops[:-1])

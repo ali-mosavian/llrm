@@ -302,20 +302,36 @@ def _last_counter(body: mir.MirBody, loop, counter: Affine, facts: dict, width: 
             mir.Kind.LT: mir.Kind.GE,
             mir.Kind.GE: mir.Kind.LT,
             mir.Kind.GT: mir.Kind.LE,
+            mir.Kind.BELOW: mir.Kind.ABOVE_EQ,
+            mir.Kind.BELOW_EQ: mir.Kind.ABOVE,
+            mir.Kind.ABOVE: mir.Kind.BELOW_EQ,
+            mir.Kind.ABOVE_EQ: mir.Kind.BELOW,
             mir.Kind.EQ: mir.Kind.NE,
             mir.Kind.NE: mir.Kind.EQ,
         }.get(test)
     comparisons = [bound for op in header.ops[:-1] if (bound := _counter_bound(op, branch, counter, width)) is not None]
     if len(comparisons) != 1:
         return None
-    start, step, bound = (_signed(arg, facts, width) for arg in (counter.start, counter.step, comparisons[0]))
-    if start is None or step is None or bound is None or step == 0:
+    raw = tuple(_constant(arg, facts, width) for arg in (counter.start, counter.step, comparisons[0]))
+    if any(value is None for value in raw):
         return None
-    if step > 0 and test in (mir.Kind.LE, mir.Kind.LT):
+    raw_start, raw_step, raw_bound = raw
+    assert raw_start is not None and raw_step is not None and raw_bound is not None
+    step = _as_signed(raw_step, width)
+    if step == 0:
+        return None
+    unsigned = test in (mir.Kind.BELOW, mir.Kind.BELOW_EQ, mir.Kind.ABOVE, mir.Kind.ABOVE_EQ)
+    start = raw_start if unsigned else _as_signed(raw_start, width)
+    bound = raw_bound if unsigned else _as_signed(raw_bound, width)
+    if step > 0 and test in (mir.Kind.LE, mir.Kind.LT, mir.Kind.BELOW_EQ, mir.Kind.BELOW):
         limit = bound - (test is mir.Kind.LT)
+        if test is mir.Kind.BELOW:
+            limit = bound - 1
         distance = limit - start
-    elif step < 0 and test in (mir.Kind.GE, mir.Kind.GT):
+    elif step < 0 and test in (mir.Kind.GE, mir.Kind.GT, mir.Kind.ABOVE_EQ, mir.Kind.ABOVE):
         limit = bound + (test is mir.Kind.GT)
+        if test is mir.Kind.ABOVE:
+            limit = bound + 1
         distance = start - limit
     elif test is mir.Kind.NE and (bound - start) * step > 0 and (bound - start) % step == 0:
         distance = abs(bound - start) - abs(step)
@@ -324,8 +340,26 @@ def _last_counter(body: mir.MirBody, loop, counter: Affine, facts: dict, width: 
     if distance < 0:
         return None
     last = start + (distance // abs(step)) * step
+    after = last + step
+    if unsigned:
+        return last if 0 <= after < 1 << (width * 8) else None
     sign = 1 << (width * 8 - 1)
-    return last if -sign <= last + step < sign else None
+    return last if -sign <= after < sign else None
+
+
+def _constant(arg: mir.Arg, facts: dict, width: int) -> int | None:
+    """An exact width-limited bit pattern, without imposing signedness."""
+    if not isinstance(arg, (mir.Held, mir.Const)) or arg.width != width:
+        return None
+    fact = facts.get(arg.value) if isinstance(arg, mir.Held) else arg
+    if fact is None or fact.width < width:
+        return None
+    return fact.n & ((1 << (width * 8)) - 1)
+
+
+def _as_signed(value: int, width: int) -> int:
+    sign = 1 << (width * 8 - 1)
+    return (value ^ sign) - sign
 
 
 def _counter_bound(op, branch, counter, width):

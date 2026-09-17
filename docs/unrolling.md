@@ -2,6 +2,40 @@
 
 ## Current state
 
+Exact-trip analysis now covers unsigned relational tests as well as signed
+ones. This is required by ordinary C loops: `unsigned short i; i < 8` reaches
+the loop body through `jb`, while the former proof understood only `jl`/`jle`.
+The proof interprets start and bound in the comparison's signedness, keeps the
+recurrence step signed, and refuses the expansion when the post-loop update
+would wrap at that width.
+
+The bounded expansion mechanism now accepts integer loops. The C frontend's
+explicit terminal jump back to the header is removed from the repeated work;
+the object frontend's implicit CFG backedge remains equally valid. Integer
+headers must be side-effect free apart from their final branch, and calls,
+opaque control, barriers, and internal branches remain refusals. Existing
+floating-loop legality is unchanged, including its separately validated call
+and checkpoint ordering.
+
+On the 386 quality report, matmul's exact eight-element checksum loop changes
+from a backedge to eight ordered bodies. Emitted metrics change as follows:
+
+| Metric | Before | After |
+|---|---:|---:|
+| Estimated dynamic operations | 11,521 | 10,800 |
+| Static branches | 16 | 12 |
+| Stores | 35 | 31 |
+| Bytes | 412 | 519 |
+| Static weighted cost | 584 | 776 |
+
+This is an explicit speed/size tradeoff: the profile-free hot-operation
+estimate improves 6.3%, while code grows 26.0%. Static weighted cost is the
+sum over the body and therefore also grows; it is not a runtime-frequency
+cost. The inner matrix-product loop is not expanded after strength reduction,
+and the report makes no elapsed-time claim. A future partial-unroll selector
+should compare size and frequency per CPU instead of treating this full
+expansion as a universal final choice.
+
 The follow-up checkpoint/ownership change reduces FPCSE's static costs from
 324/359/314 to **173/182/167** (PDS/QB/VBDOS). SINGLE PRINT is a four-byte
 by-value argument, verified in prnval.asm's PRINTX path; its source address
