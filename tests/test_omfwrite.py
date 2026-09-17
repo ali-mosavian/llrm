@@ -166,6 +166,7 @@ def test_the_object_comparison_sees_a_different_public_definition(tmp_path: Path
     assert objcmp.compared(str(ours), str(theirs)) == ["publics {} != {'_cell': (2, 0)}"]
 
 
+@pytest.mark.full
 def test_a_fixup_naming_an_offset_the_layout_did_not_place_is_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
