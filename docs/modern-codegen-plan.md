@@ -292,3 +292,21 @@ uses but cut around a disjoint high-pressure local region.  Accept a split
 only when re-allocation lowers weighted memory traffic; that is the generic
 phase-4 mechanism, not a function-specific register preference.  The
 far-load regression remains the fail-first acceptance case for that work.
+
+### 16. Assigned-range split experiment — 2026-09-18
+
+The proposed broadening was tested directly, without committing it: after
+the first failed allocation, `splitkit` was offered every assigned range as
+well as the failed owners, then the body was reallocated and scored with the
+existing loop-weighted traffic measure.  No individual assigned-range split
+reduced the baseline traffic (`33`); several were neutral and the splits of
+the far-field offset/value ranges increased it to `44`.  Splitting all
+assigned ranges together was worse (`93` or `103`, depending on whether the
+failed values were also offered).
+
+This rejects the naïve "split more values" extension.  The current acceptance
+criterion is correct, and the next phase-4 mechanism must choose a joint
+pressure plan: retain the valuable invariant base *and* split/relocate a
+specific short competing range as one candidate, then compare its complete
+traffic and copy cost against the original assignment.  It cannot be an
+after-the-fact split of whichever range happened to be allocated.
