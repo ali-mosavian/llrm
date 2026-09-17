@@ -121,3 +121,21 @@ the stale-lowering symptom and verifies the `qbopt checkout is dirty` refusal.
 The next paired `r_walk` run must be made after this iteration is committed;
 the pre-commit manifest is retained only as a visually inspected diagnostic,
 not performance or revision evidence.
+
+### 7. Committed RMW QCport evidence — 2026-09-18
+
+The rerun is now reproducible: clean QCport `18f5e1f` at source hash
+`e5abf5f8fb67c3cac011579fcb980bff446ab068c130dd2c196652bbf802fef0`,
+against qbopt `4352de4`, CPU `386`.  The paired listing manifest records BCC
+listing SHA-256 `ea48ccc713812effbdf57abb6e9b5e1ba00449ab01a00e6faadeb8fd2bbba73c`
+and qbopt listing SHA-256
+`ccbacccfc7ff5f46553d0e8b41dd78652f7bb7ad8ad7aa486dc629c92511badc`.
+Raw assembly confirms qbopt now emits `or byte ptr es:[bx+di],dl` in the
+marked-face loop.  It still reloads `world` and `rdr` from the frame at the
+top of each iteration, whereas BCC retains them in DI and SI.
+
+Therefore the next issue is not byte promotion or a missing split proposal:
+the existing region split still cannot satisfy the residual interference and
+must be traced from the allocated LIR/intervals.  Keep GCC/LLVM flat-i386
+listings as best-case structural references only; this BCC medium-model pair
+is the candidate-ABI evidence for any near-term allocation change.
